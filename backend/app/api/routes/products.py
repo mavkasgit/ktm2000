@@ -29,6 +29,8 @@ class ProductIn(BaseModel):
     cross_section: str | None = None
     photo_thumb: str | None = None
     photo_full: str | None = None
+    source: str | None = None
+    is_catalog_item: bool = False
 
 
 class ProductPatch(BaseModel):
@@ -47,6 +49,8 @@ class ProductPatch(BaseModel):
     cross_section: str | None = None
     photo_thumb: str | None = None
     photo_full: str | None = None
+    source: str | None = None
+    is_catalog_item: bool | None = None
 
 
 class ProductOut(ProductIn):
@@ -62,6 +66,7 @@ async def list_products(
     alloy: str | None = Query(None),
     color: str | None = Query(None),
     is_active: bool | None = Query(None),
+    is_catalog_item: bool | None = Query(None),
     limit: int = Query(500, ge=1, le=2000),
     offset: int = Query(0, ge=0),
 ) -> list[ProductOut]:
@@ -80,6 +85,8 @@ async def list_products(
         stmt = stmt.where(Product.color == color)
     if is_active is not None:
         stmt = stmt.where(Product.is_active == is_active)
+    if is_catalog_item is not None:
+        stmt = stmt.where(Product.is_catalog_item == is_catalog_item)
     
     stmt = stmt.order_by(Product.sku).limit(limit).offset(offset)
     items = (await db.execute(stmt)).scalars().all()

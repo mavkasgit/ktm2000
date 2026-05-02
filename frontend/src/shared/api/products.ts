@@ -20,6 +20,8 @@ export type Product = {
   cross_section: string | null;
   photo_thumb: string | null;
   photo_full: string | null;
+  source: string | null;
+  is_catalog_item: boolean;
 };
 
 export type CreateProductInput = {
@@ -37,6 +39,8 @@ export type CreateProductInput = {
   weight_per_meter?: number | null;
   quantity_per_hanger?: number | null;
   cross_section?: string | null;
+  source?: string | null;
+  is_catalog_item?: boolean;
 };
 
 export type PatchProductInput = Partial<Omit<CreateProductInput, "sku">>;
@@ -48,6 +52,7 @@ export type ProductFilters = {
   alloy?: string;
   color?: string;
   is_active?: boolean;
+  is_catalog_item?: boolean;
   limit?: number;
   offset?: number;
 };

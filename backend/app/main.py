@@ -1,5 +1,8 @@
+from pathlib import Path
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from sqlalchemy import text
 
 from app.api.health import router as health_router
@@ -28,6 +31,10 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Serve static files (product photos, imports)
+storage_dir = Path(settings.PRODUCT_PHOTO_DIR).parent
+app.mount("/static", StaticFiles(directory=str(storage_dir)), name="static")
 
 app.include_router(health_router, prefix="/api")
 app.include_router(auth_router, prefix="/api")

@@ -45,6 +45,7 @@ const TYPE_OPTIONS: { value: ProductType; label: string }[] = [
 
 function getPhotoUrl(path: string | null): string | null {
   if (!path) return null;
+  if (path.startsWith("http")) return path;
   return path.startsWith("/") ? path : `/static/${path}`;
 }
 
@@ -59,6 +60,7 @@ export function ProductsScreen() {
   const [profileTypeFilter, setProfileTypeFilter] = useState("");
   const [alloyFilter, setAlloyFilter] = useState("");
   const [colorFilter, setColorFilter] = useState("");
+  const [catalogOnly, setCatalogOnly] = useState(false);
 
   const [dialogOpen, setDialogOpen] = useState(false);
   const [dialogMode, setDialogMode] = useState<DialogMode>("view");
@@ -74,6 +76,7 @@ export function ProductsScreen() {
         profile_type: profileTypeFilter || undefined,
         alloy: alloyFilter || undefined,
         color: colorFilter || undefined,
+        is_catalog_item: catalogOnly || undefined,
         limit: 500,
       });
       setItems(data);
@@ -82,7 +85,7 @@ export function ProductsScreen() {
     } finally {
       setLoading(false);
     }
-  }, [search, typeFilter, profileTypeFilter, alloyFilter, colorFilter]);
+  }, [search, typeFilter, profileTypeFilter, alloyFilter, colorFilter, catalogOnly]);
 
   useEffect(() => {
     void load();
@@ -120,7 +123,7 @@ export function ProductsScreen() {
     }
   };
 
-  const activeFiltersCount = [typeFilter, profileTypeFilter, alloyFilter, colorFilter].filter(Boolean).length;
+  const activeFiltersCount = [typeFilter, profileTypeFilter, alloyFilter, colorFilter, catalogOnly].filter(Boolean).length;
 
   return (
     <section className="space-y-4">
@@ -214,6 +217,17 @@ export function ProductsScreen() {
                 onChange={(e) => setColorFilter(e.target.value)}
               />
             </div>
+            <div className="flex items-end">
+              <label className="flex items-center gap-2 text-sm cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={catalogOnly}
+                  onChange={(e) => setCatalogOnly(e.target.checked)}
+                  className="h-4 w-4"
+                />
+                Только из каталога
+              </label>
+            </div>
           </div>
           {activeFiltersCount > 0 && (
             <Button
@@ -225,6 +239,7 @@ export function ProductsScreen() {
                 setProfileTypeFilter("");
                 setAlloyFilter("");
                 setColorFilter("");
+                setCatalogOnly(false);
               }}
             >
               Сбросить фильтры
@@ -266,6 +281,7 @@ export function ProductsScreen() {
                 <th className="px-4 py-3 text-left font-medium">Сплав</th>
                 <th className="px-4 py-3 text-left font-medium">Цвет</th>
                 <th className="px-4 py-3 text-left font-medium">Длина</th>
+                <th className="px-4 py-3 text-left font-medium">Источник</th>
                 <th className="px-4 py-3 text-left font-medium w-20"></th>
               </tr>
             </thead>
@@ -294,6 +310,11 @@ export function ProductsScreen() {
                   <td className="px-4 py-2 text-muted-foreground">{product.alloy || "—"}</td>
                   <td className="px-4 py-2 text-muted-foreground">{product.color || "—"}</td>
                   <td className="px-4 py-2 text-muted-foreground">{product.length_mm ? `${product.length_mm} мм` : "—"}</td>
+                  <td className="px-4 py-2">
+                    {product.is_catalog_item && (
+                      <Badge variant="secondary" className="text-xs">Каталог</Badge>
+                    )}
+                  </td>
                   <td className="px-4 py-2">
                     <Button variant="ghost" size="sm" onClick={(e) => { e.stopPropagation(); openEdit(product); }}>
                       <Pencil className="h-4 w-4" />
@@ -363,6 +384,7 @@ function ProductCard({
               <Badge variant="outline" className="text-xs">{TYPE_LABELS[product.type]}</Badge>
               {product.profile_type && <Badge variant="secondary" className="text-xs">{product.profile_type}</Badge>}
               {product.color && <Badge variant="secondary" className="text-xs">{product.color}</Badge>}
+              {product.is_catalog_item && <Badge variant="secondary" className="text-xs bg-blue-100">Каталог</Badge>}
             </div>
           </div>
         </div>
