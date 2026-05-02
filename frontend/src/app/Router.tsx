@@ -1,20 +1,16 @@
 import { createBrowserRouter } from "react-router-dom"
-
-function HomePage() {
-  return (
-    <main style={{ fontFamily: "sans-serif", padding: 24 }}>
-      <h1>Factoryflow</h1>
-      <p>Milestone 1 bootstrap is running.</p>
-    </main>
-  )
-}
+import { Layout, DashboardPage } from "./Layout"
+import { MasterDataPage } from "../features/master-data"
+import { PlanFlowScreen } from "../features/plan-flow"
 
 export const router = createBrowserRouter([
   {
     path: "/",
-    element: <HomePage />,
+    element: <Layout />,
+    children: [
+      { index: true, element: <DashboardPage /> },
+      { path: "master-data", element: <MasterDataPage /> },
+      { path: "plan-flow", element: <PlanFlowScreen /> },
+    ],
   },
 ])
-
-
-

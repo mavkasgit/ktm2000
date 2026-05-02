@@ -1,0 +1,118 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 0 0% 100%;
+    --foreground: 222.2 84% 4.9%;
+    --card: 0 0% 100%;
+    --card-foreground: 222.2 84% 4.9%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 222.2 84% 4.9%;
+    --primary: 222.2 47.4% 11.2%;
+    --primary-foreground: 210 40% 98%;
+    --secondary: 210 40% 96.1%;
+    --secondary-foreground: 222.2 47.4% 11.2%;
+    --muted: 210 40% 96.1%;
+    --muted-foreground: 215.4 16.3% 46.9%;
+    --accent: 210 40% 96.1%;
+    --accent-foreground: 222.2 47.4% 11.2%;
+    --destructive: 0 84.2% 60.2%;
+    --destructive-foreground: 210 40% 98%;
+    --border: 214.3 31.8% 91.4%;
+    --input: 214.3 31.8% 91.4%;
+    --ring: 222.2 84% 4.9%;
+    --radius: 0.5rem;
+  }
+
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-background text-foreground;
+  }
+}
+
+@layer components {
+  .app-shell {
+    @apply flex min-h-screen bg-background;
+  }
+
+  .sidebar {
+    @apply sticky top-0 flex h-screen w-64 shrink-0 flex-col border-r bg-card;
+  }
+
+  .brand {
+    @apply p-6;
+  }
+
+  .brand-title {
+    @apply text-xl font-bold;
+  }
+
+  .brand-caption {
+    @apply text-sm text-muted-foreground;
+  }
+
+  .nav-list {
+    @apply flex-1 space-y-1 px-3;
+  }
+
+  .nav-link {
+    @apply flex items-center gap-3 rounded-md px-3 py-2 text-sm text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground;
+  }
+
+  .nav-link.active {
+    @apply bg-primary text-primary-foreground;
+  }
+
+  .main-area {
+    @apply flex-1 overflow-auto p-6;
+  }
+
+  .page-header {
+    @apply mb-5 flex items-end justify-between gap-4;
+  }
+
+  .page-title {
+    @apply m-0 text-2xl font-bold tracking-tight;
+  }
+
+  .page-subtitle {
+    @apply mt-1 text-sm text-muted-foreground;
+  }
+
+  .dashboard-grid {
+    @apply grid gap-4 md:grid-cols-3;
+  }
+
+  .metric-panel {
+    @apply rounded-lg border bg-card p-5 shadow-sm;
+  }
+
+  .metric-panel span {
+    @apply text-sm text-muted-foreground;
+  }
+
+  .metric-panel strong {
+    @apply mt-2 block text-2xl;
+  }
+
+  .tab-row {
+    @apply mb-4 flex flex-wrap gap-2;
+  }
+
+  .tab-button {
+    @apply rounded-md border bg-background px-3 py-2 text-sm text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground;
+  }
+
+  .tab-button.active {
+    @apply bg-primary text-primary-foreground;
+  }
+
+  .work-panel {
+    @apply rounded-lg border bg-card p-4 shadow-sm;
+  }
+}
