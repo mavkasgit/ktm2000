@@ -184,6 +184,7 @@ Soft delete: для справочников использовать `is_active
 - `source_sku text not null`
 - `source_name text null`
 - `quantity numeric(14,3) not null`
+- `source_payload jsonb not null default '{}'`
 - `due_date date null`
 - `period_start date null`
 - `period_end date null`
@@ -255,6 +256,7 @@ Soft delete: для справочников использовать `is_active
 - `release_quantity numeric(14,3) not null`
 - `route_id bigint not null references production_routes(id)`
 - `route_version text not null`
+- `route_snapshot jsonb not null default '{}'`
 
 Ограничения:
 

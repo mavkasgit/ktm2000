@@ -272,15 +272,15 @@ Expected: all master data tests pass.
 - Create: `backend/alembic/versions/0003_imports_production_plans.py`
 - Test: `backend/tests/test_excel_import.py`
 
-- [ ] **Step 1: Write Excel parser tests**
+- [x] **Step 1: Write Excel parser tests**
 
 Cover required columns, decimal quantity parsing, Russian date format, Excel serial date, empty SKU, unknown SKU, missing BOM, and missing route.
 
-- [ ] **Step 2: Implement file storage**
+- [x] **Step 2: Implement file storage**
 
 Save original `.xlsx` to uploads volume and store SHA-256 in `import_files`.
 
-- [ ] **Step 3: Implement parser**
+- [x] **Step 3: Implement parser**
 
 Read `.xlsx` through `python-calamine`, apply column mapping, normalize rows, and create `plan_positions` linked to an `import_batch`.
 
@@ -294,11 +294,11 @@ Use HRMS `C:\Users\user\VibeCoding\hrms\backend\app\api\import_employees.py` as 
 
 Do not copy HRMS confirm-import behavior. Factoryflow must create `ImportBatch` and `PlanChangeSet` first, then apply only after user confirmation.
 
-- [ ] **Step 4: Implement validation**
+- [x] **Step 4: Implement validation**
 
 Attach blocking errors and warnings to each plan position.
 
-- [ ] **Step 5: Run tests**
+- [x] **Step 5: Run tests**
 
 Run:
 
@@ -316,19 +316,19 @@ Expected: parser and validation tests pass.
 - Create: `backend/app/api/routes/production_plans.py`
 - Test: `backend/tests/test_production_plan_approval.py`
 
-- [ ] **Step 1: Write approval tests**
+- [x] **Step 1: Write approval tests**
 
 Cover draft preview, validation status, approval blocked by errors, successful approval, and released position immutability.
 
-- [ ] **Step 2: Implement preview endpoint**
+- [x] **Step 2: Implement preview endpoint**
 
 Return counts by validation status and position-level errors.
 
-- [ ] **Step 3: Implement approve endpoint**
+- [x] **Step 3: Implement approve endpoint**
 
 Allow position approval only when there are no blocking errors.
 
-- [ ] **Step 4: Run tests**
+- [x] **Step 4: Run tests**
 
 Run:
 
@@ -351,23 +351,23 @@ Expected: approval tests pass.
 - Create: `backend/alembic/versions/0004_internal_plans_tasks.py`
 - Test: `backend/tests/test_plan_generation.py`
 
-- [ ] **Step 1: Write generation tests**
+- [x] **Step 1: Write generation tests**
 
 Cover one product with three route steps, two products with different routes, no duplicate generation on retry, first task `ready`, later tasks `waiting_previous`, route snapshot at release time, and release quantity not exceeding approved position quantity.
 
-- [ ] **Step 2: Implement internal plan models**
+- [x] **Step 2: Implement internal plan models**
 
 Create `release_batches`, `release_batch_positions`, `internal_plans`, `section_plan_lines`, and `work_tasks`.
 
-- [ ] **Step 3: Implement generation service**
+- [x] **Step 3: Implement generation service**
 
 Generate one section plan line and one task for each approved release batch position route step in a single transaction.
 
-- [ ] **Step 4: Implement API endpoint**
+- [x] **Step 4: Implement API endpoint**
 
 Add `POST /api/production-plans/{id}/release-batches` and `POST /api/release-batches/{id}/release`.
 
-- [ ] **Step 5: Run tests**
+- [x] **Step 5: Run tests**
 
 Run:
 
