@@ -1,0 +1,43 @@
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy import text
+
+from app.api.health import router as health_router
+from app.api.routes.auth import router as auth_router
+from app.api.routes.products import router as products_router
+from app.api.routes.sections import router as sections_router
+from app.api.routes.boms import router as boms_router
+from app.api.routes.routes import router as routes_router
+from app.core.config import settings
+from app.core.database import async_session
+
+app = FastAPI(
+    title="Factoryflow",
+    description="Manufacturing planning and execution control system",
+    version="0.1.0",
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[o.strip() for o in settings.CORS_ORIGINS.split(",") if o.strip()],
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+app.include_router(health_router, prefix="/api")
+app.include_router(auth_router, prefix="/api")
+app.include_router(products_router, prefix="/api")
+app.include_router(sections_router, prefix="/api")
+app.include_router(boms_router, prefix="/api")
+app.include_router(routes_router, prefix="/api")
+
+
+@app.get("/api/health")
+async def health_check() -> dict[str, str]:
+    try:
+        async with async_session() as session:
+            await session.execute(text("SELECT 1"))
+        return {"status": "ok", "db": "connected"}
+    except Exception:
+        return {"status": "ok", "db": "disconnected"}
