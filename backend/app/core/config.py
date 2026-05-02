@@ -21,6 +21,7 @@ class Settings(BaseSettings):
 
     CORS_ORIGINS: str = "http://localhost:5202"
     IMPORT_STORAGE_DIR: str = str(BASE_DIR.parent / "storage" / "imports")
+    PRODUCT_PHOTO_DIR: str = str(BASE_DIR.parent / "storage" / "products")
 
     model_config = {"env_file": _env_file, "env_file_encoding": "utf-8", "extra": "ignore"}
 
