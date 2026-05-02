@@ -95,3 +95,51 @@ async def test_inactive_section_rejected_in_route_step(client, session) -> None:
     )
     assert add_step.status_code == 400
     assert "inactive section" in add_step.json()["detail"].lower()
+
+
+@pytest.mark.asyncio
+async def test_create_section_with_sort_order(client) -> None:
+    payload = {"code": "TEST-SORT", "name": "Test Sort", "sort_order": 99}
+    resp = await client.post("/api/sections", json=payload)
+    assert resp.status_code == 201
+    data = resp.json()
+    assert data["sort_order"] == 99
+
+
+@pytest.mark.asyncio
+async def test_get_section_by_id(client) -> None:
+    create_resp = await client.post(
+        "/api/sections",
+        json={"code": "GETME", "name": "Get Me", "sort_order": 5},
+    )
+    section_id = create_resp.json()["id"]
+
+    resp = await client.get(f"/api/sections/{section_id}")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["code"] == "GETME"
+    assert data["sort_order"] == 5
+
+
+@pytest.mark.asyncio
+async def test_get_section_not_found(client) -> None:
+    resp = await client.get("/api/sections/99999")
+    assert resp.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_list_sections_ordered_by_sort_order(client, session) -> None:
+    # Create sections with different sort_order values
+    session.add(Section(code="Z-LAST", name="Z Last", sort_order=30))
+    session.add(Section(code="A-FIRST", name="A First", sort_order=10))
+    session.add(Section(code="M-MIDDLE", name="M Middle", sort_order=20))
+    await session.commit()
+
+    resp = await client.get("/api/sections")
+    assert resp.status_code == 200
+    data = resp.json()
+    
+    # Filter out seeded sections from other tests
+    test_sections = [s for s in data if s["code"] in ("Z-LAST", "A-FIRST", "M-MIDDLE")]
+    codes = [s["code"] for s in test_sections]
+    assert codes == ["A-FIRST", "M-MIDDLE", "Z-LAST"]

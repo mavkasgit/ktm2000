@@ -13,12 +13,14 @@ class SectionIn(BaseModel):
     code: str
     name: str
     description: str | None = None
+    sort_order: int = 0
     is_active: bool = True
 
 
 class SectionPatch(BaseModel):
     name: str | None = None
     description: str | None = None
+    sort_order: int | None = None
     is_active: bool | None = None
 
 
@@ -28,8 +30,16 @@ class SectionOut(SectionIn):
 
 @router.get("", response_model=list[SectionOut])
 async def list_sections(db: AsyncSession = Depends(get_db)) -> list[SectionOut]:
-    items = (await db.execute(select(Section).order_by(Section.id))).scalars().all()
+    items = (await db.execute(select(Section).order_by(Section.sort_order, Section.id))).scalars().all()
     return [SectionOut.model_validate(i, from_attributes=True) for i in items]
+
+
+@router.get("/{section_id}", response_model=SectionOut)
+async def get_section(section_id: int, db: AsyncSession = Depends(get_db)) -> SectionOut:
+    item = await db.get(Section, section_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail="Section not found")
+    return SectionOut.model_validate(item, from_attributes=True)
 
 
 @router.post("", response_model=SectionOut, status_code=status.HTTP_201_CREATED)
