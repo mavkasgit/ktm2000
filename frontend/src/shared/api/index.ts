@@ -4,5 +4,6 @@ export * from "./sections";
 export * from "./boms";
 export * from "./routes";
 export * from "./imports";
+export * from "./importTemplates";
 export * from "./productionPlans";
 export * from "./releaseBatches";

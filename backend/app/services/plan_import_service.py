@@ -8,6 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
+from app.models.bom import BOM, BOMLine
 from app.models.imports import ImportBatch, ImportBatchMode, ImportFile
 from app.models.product import Product
 from app.models.production_plan import (
@@ -15,8 +16,12 @@ from app.models.production_plan import (
     PlanChangeItem,
     PlanChangeItemStatus,
     PlanChangeSet,
+    PlanPosition,
+    PlanPositionStatus,
     ProductionPlan,
 )
+from app.models.route import ProductionRoute, RouteStep
+from app.models.section import Section
 from app.services.excel_import import (
     ParsedPlanRow,
     detect_workbook_format,
@@ -35,11 +40,12 @@ async def create_excel_import_change_set(
     sheet_index: int = 0,
     mode: ImportBatchMode = ImportBatchMode.create_plan,
     production_plan_id: int | None = None,
+    column_mapping: dict | None = None,
 ) -> dict:
     extension = validate_excel_extension(filename)
     file_hash = sha256_bytes(content)
     detected_format = detect_workbook_format(content, filename)
-    parsed = parse_factory_plan_workbook(content, filename, sheet_index=sheet_index)
+    parsed = parse_factory_plan_workbook(content, filename, sheet_index=sheet_index, column_mapping=column_mapping)
 
     import_file = await _get_or_create_import_file(
         db,
@@ -87,13 +93,23 @@ async def create_excel_import_change_set(
     db.add(change_set)
     await db.flush()
 
-    products_by_sku = await _load_products_by_sku(db)
-    item_payloads = []
-    for parsed_row in parsed.parsed_rows:
-        item = _make_change_item(change_set.id, parsed_row, products_by_sku)
-        db.add(item)
-        item_payloads.append(item)
+    existing_positions = []
+    if production_plan_id is not None and mode != ImportBatchMode.create_plan:
+        existing_positions = (
+            await db.execute(
+                select(PlanPosition).where(
+                    PlanPosition.production_plan_id == production_plan_id,
+                    PlanPosition.status != PlanPositionStatus.cancelled,
+                )
+            )
+        ).scalars().all()
 
+    products_by_sku = await _load_products_by_sku(db)
+    item_payloads = await _make_change_items(
+        db, change_set.id, parsed.parsed_rows, products_by_sku, mode, existing_positions
+    )
+    for item in item_payloads:
+        db.add(item)
     await db.flush()
 
     return {
@@ -146,41 +162,155 @@ async def _load_products_by_sku(db: AsyncSession) -> dict[str, Product]:
     return {product.sku.lower(): product for product in products}
 
 
-def _make_change_item(change_set_id: int, row: ParsedPlanRow, products_by_sku: dict[str, Product]) -> PlanChangeItem:
-    warnings = list(row.warnings)
-    errors = list(row.errors)
-    product = products_by_sku.get(row.source_sku.lower())
+async def _make_change_items(
+    db: AsyncSession,
+    change_set_id: int,
+    parsed_rows: list[ParsedPlanRow],
+    products_by_sku: dict[str, Product],
+    mode: ImportBatchMode,
+    existing_positions: list[PlanPosition],
+) -> list[PlanChangeItem]:
+    by_fingerprint: dict[str, PlanPosition] = {}
+    by_row_hash: dict[str, PlanPosition] = {}
+    for pos in existing_positions:
+        if pos.source_fingerprint:
+            by_fingerprint[pos.source_fingerprint] = pos
+        if pos.source_row_hash:
+            by_row_hash[pos.source_row_hash] = pos
 
-    if product is None:
-        if row.payload.get("paired_profile"):
-            if "paired_profile_product_unmapped" not in warnings:
-                warnings.append("paired_profile_product_unmapped")
+    items: list[PlanChangeItem] = []
+    matched_fingerprints: set[str] = set()
+
+    for row in parsed_rows:
+        warnings = list(row.warnings)
+        errors = list(row.errors)
+        product = products_by_sku.get(row.source_sku.lower())
+
+        if product is None:
+            if row.payload.get("paired_profile"):
+                if "paired_profile_product_unmapped" not in warnings:
+                    warnings.append("paired_profile_product_unmapped")
+            else:
+                errors.append("product_not_found")
         else:
-            errors.append("product_not_found")
+            if not product.is_active:
+                errors.append("product_inactive")
 
-    after_data = {
-        "product_id": product.id if product else None,
-        "source_sku": row.source_sku,
-        "source_name": row.source_name,
-        "quantity": str(row.quantity),
-        "source_ref": row.source_ref,
-        "source_row_numbers": row.source_row_numbers,
-        "source_fingerprint": row.source_fingerprint,
-        "source_row_hash": row.source_row_hash,
-        "source_payload": row.payload,
-    }
-    status = PlanChangeItemStatus.invalid if errors else PlanChangeItemStatus.warning if warnings else PlanChangeItemStatus.pending
-    return PlanChangeItem(
-        change_set_id=change_set_id,
-        source_row_number=row.source_row_numbers[0],
-        source_ref=row.source_ref,
-        change_action=PlanChangeAction.create_position,
-        before_data=None,
-        after_data=after_data,
-        status=status,
-        warnings=warnings,
-        errors=errors,
-    )
+            bom = await db.scalar(select(BOM).where(BOM.product_id == product.id, BOM.is_active.is_(True)))
+            if bom is None:
+                errors.append("active_bom_not_found")
+            else:
+                line = await db.scalar(select(BOMLine).where(BOMLine.bom_id == bom.id).limit(1))
+                if line is None:
+                    errors.append("active_bom_has_no_lines")
+
+            route = await db.scalar(
+                select(ProductionRoute).where(ProductionRoute.product_id == product.id, ProductionRoute.is_active.is_(True))
+            )
+            if route is None:
+                errors.append("active_route_not_found")
+            else:
+                steps = (
+                    await db.execute(select(RouteStep).where(RouteStep.route_id == route.id).order_by(RouteStep.sequence))
+                ).scalars().all()
+                if not steps:
+                    errors.append("active_route_has_no_steps")
+                else:
+                    for step in steps:
+                        section = await db.get(Section, step.section_id)
+                        if section is None or not section.is_active:
+                            errors.append("route_contains_inactive_section")
+                            break
+
+        after_data = {
+            "product_id": product.id if product else None,
+            "source_sku": row.source_sku,
+            "source_name": row.source_name,
+            "quantity": str(row.quantity),
+            "source_ref": row.source_ref,
+            "source_row_numbers": row.source_row_numbers,
+            "source_fingerprint": row.source_fingerprint,
+            "source_row_hash": row.source_row_hash,
+            "source_payload": row.payload,
+        }
+
+        change_action = PlanChangeAction.create_position
+        before_data = None
+        plan_position_id = None
+
+        if mode != ImportBatchMode.create_plan:
+            existing_by_fp = by_fingerprint.get(row.source_fingerprint)
+            if existing_by_fp is not None:
+                matched_fingerprints.add(row.source_fingerprint)
+                if existing_by_fp.status == PlanPositionStatus.draft:
+                    if existing_by_fp.source_row_hash == row.source_row_hash:
+                        change_action = PlanChangeAction.ignore_unchanged
+                    else:
+                        change_action = PlanChangeAction.update_draft_position
+                        plan_position_id = existing_by_fp.id
+                        before_data = {
+                            "product_id": existing_by_fp.product_id,
+                            "source_sku": existing_by_fp.source_sku,
+                            "source_name": existing_by_fp.source_name,
+                            "quantity": str(existing_by_fp.quantity),
+                            "source_ref": existing_by_fp.source_ref,
+                            "source_row_numbers": [existing_by_fp.source_row_number],
+                            "source_fingerprint": existing_by_fp.source_fingerprint,
+                            "source_row_hash": existing_by_fp.source_row_hash,
+                            "source_payload": existing_by_fp.source_payload,
+                        }
+                elif existing_by_fp.status == PlanPositionStatus.released:
+                    change_action = PlanChangeAction.mark_possible_duplicate
+                    plan_position_id = existing_by_fp.id
+
+        status = PlanChangeItemStatus.invalid if errors else PlanChangeItemStatus.warning if warnings else PlanChangeItemStatus.pending
+        if change_action == PlanChangeAction.mark_possible_duplicate and status == PlanChangeItemStatus.pending:
+            status = PlanChangeItemStatus.warning
+
+        items.append(
+            PlanChangeItem(
+                change_set_id=change_set_id,
+                source_row_number=row.source_row_numbers[0],
+                source_ref=row.source_ref,
+                change_action=change_action,
+                before_data=before_data,
+                after_data=after_data,
+                status=status,
+                plan_position_id=plan_position_id,
+                warnings=warnings,
+                errors=errors,
+            )
+        )
+
+    if mode == ImportBatchMode.replace_draft_from_same_source:
+        for fp, pos in by_fingerprint.items():
+            if fp not in matched_fingerprints and pos.status == PlanPositionStatus.draft:
+                items.append(
+                    PlanChangeItem(
+                        change_set_id=change_set_id,
+                        source_row_number=pos.source_row_number,
+                        source_ref=pos.source_ref,
+                        change_action=PlanChangeAction.cancel_draft_position,
+                        before_data={
+                            "product_id": pos.product_id,
+                            "source_sku": pos.source_sku,
+                            "source_name": pos.source_name,
+                            "quantity": str(pos.quantity),
+                            "source_ref": pos.source_ref,
+                            "source_row_numbers": [pos.source_row_number],
+                            "source_fingerprint": pos.source_fingerprint,
+                            "source_row_hash": pos.source_row_hash,
+                            "source_payload": pos.source_payload,
+                        },
+                        after_data={},
+                        status=PlanChangeItemStatus.pending,
+                        plan_position_id=pos.id,
+                        warnings=[],
+                        errors=[],
+                    )
+                )
+
+    return items
 
 
 def _serialize_item(item: PlanChangeItem) -> dict:

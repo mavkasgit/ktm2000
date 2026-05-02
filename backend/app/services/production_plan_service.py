@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 from collections import Counter
+from decimal import Decimal
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.bom import BOM, BOMLine
 from app.models.imports import ImportBatchStatus
 from app.models.production_plan import (
+    PlanChangeAction,
     PlanChangeItem,
     PlanChangeItemStatus,
     PlanChangeSet,
@@ -19,8 +20,7 @@ from app.models.production_plan import (
     ProductionPlan,
     ProductionPlanStatus,
 )
-from app.models.route import ProductionRoute, RouteStep
-from app.models.section import Section
+from app.services.plan_validation import validate_plan_position
 
 
 async def apply_change_set(db: AsyncSession, change_set_id: int) -> dict:
@@ -35,39 +35,91 @@ async def apply_change_set(db: AsyncSession, change_set_id: int) -> dict:
     ).scalars().all()
 
     created = 0
+    updated = 0
+    ignored = 0
+    cancelled = 0
     for item in items:
         if item.status == PlanChangeItemStatus.applied:
             continue
-        after = item.after_data
-        validation_errors = list(item.errors or [])
-        if not after.get("product_id") and "product_not_found" not in validation_errors:
-            validation_errors.append("product_not_found")
 
-        position = PlanPosition(
-            production_plan_id=change_set.production_plan_id,
-            product_id=after.get("product_id"),
-            source_type=PlanSourceType.excel_import,
-            source_system="excel",
-            source_ref=after.get("source_ref"),
-            source_fingerprint=after.get("source_fingerprint"),
-            source_row_hash=after.get("source_row_hash"),
-            import_batch_id=change_set.import_batch_id,
-            source_sku=after["source_sku"],
-            source_name=after.get("source_name"),
-            quantity=after["quantity"],
-            source_payload=after.get("source_payload") or {},
-            period_start=_date_from_payload(after, "period_start"),
-            period_end=_date_from_payload(after, "period_end"),
-            source_row_number=(after.get("source_row_numbers") or [item.source_row_number])[0],
-            status=PlanPositionStatus.invalid if validation_errors else PlanPositionStatus.valid,
-            validation_status=PlanPositionValidationStatus.invalid if validation_errors else PlanPositionValidationStatus.valid,
-            validation_errors=validation_errors,
-        )
-        db.add(position)
-        await db.flush()
-        item.plan_position_id = position.id
-        item.status = PlanChangeItemStatus.applied
-        created += 1
+        if item.change_action == PlanChangeAction.ignore_unchanged:
+            item.status = PlanChangeItemStatus.applied
+            ignored += 1
+            continue
+
+        if item.change_action == PlanChangeAction.mark_possible_duplicate:
+            item.status = PlanChangeItemStatus.applied
+            continue
+
+        if item.change_action == PlanChangeAction.cancel_draft_position:
+            if item.plan_position_id:
+                position = await db.get(PlanPosition, item.plan_position_id)
+                if position is not None and position.status == PlanPositionStatus.draft:
+                    position.status = PlanPositionStatus.cancelled
+            item.status = PlanChangeItemStatus.applied
+            cancelled += 1
+            continue
+
+        if item.change_action == PlanChangeAction.update_draft_position:
+            if item.plan_position_id:
+                position = await db.get(PlanPosition, item.plan_position_id)
+                if position is not None and position.status == PlanPositionStatus.draft:
+                    after = item.after_data
+                    position.product_id = after.get("product_id")
+                    position.source_sku = after["source_sku"]
+                    position.source_name = after.get("source_name")
+                    position.quantity = after["quantity"]
+                    position.source_payload = after.get("source_payload") or {}
+                    position.source_ref = after.get("source_ref")
+                    position.source_fingerprint = after.get("source_fingerprint")
+                    position.source_row_hash = after.get("source_row_hash")
+                    position.source_row_number = (after.get("source_row_numbers") or [item.source_row_number])[0]
+                    position.period_start = _date_from_payload(after, "period_start")
+                    position.period_end = _date_from_payload(after, "period_end")
+
+                    validation_errors = await validate_plan_position(db, position)
+                    position.validation_errors = validation_errors
+                    position.validation_status = (
+                        PlanPositionValidationStatus.invalid if validation_errors else PlanPositionValidationStatus.valid
+                    )
+                    position.status = PlanPositionStatus.invalid if validation_errors else PlanPositionStatus.draft
+                    await db.flush()
+            item.status = PlanChangeItemStatus.applied
+            updated += 1
+            continue
+
+        if item.change_action == PlanChangeAction.create_position:
+            after = item.after_data
+            validation_errors = list(item.errors or [])
+            if not after.get("product_id") and "product_not_found" not in validation_errors:
+                validation_errors.append("product_not_found")
+
+            position = PlanPosition(
+                production_plan_id=change_set.production_plan_id,
+                product_id=after.get("product_id"),
+                source_type=PlanSourceType.excel_import,
+                source_system="excel",
+                source_ref=after.get("source_ref"),
+                source_fingerprint=after.get("source_fingerprint"),
+                source_row_hash=after.get("source_row_hash"),
+                import_batch_id=change_set.import_batch_id,
+                source_sku=after["source_sku"],
+                source_name=after.get("source_name"),
+                quantity=after["quantity"],
+                source_payload=after.get("source_payload") or {},
+                period_start=_date_from_payload(after, "period_start"),
+                period_end=_date_from_payload(after, "period_end"),
+                source_row_number=(after.get("source_row_numbers") or [item.source_row_number])[0],
+                status=PlanPositionStatus.invalid if validation_errors else PlanPositionStatus.draft,
+                validation_status=PlanPositionValidationStatus.invalid if validation_errors else PlanPositionValidationStatus.valid,
+                validation_errors=validation_errors,
+            )
+            db.add(position)
+            await db.flush()
+            item.plan_position_id = position.id
+            item.status = PlanChangeItemStatus.applied
+            created += 1
+            continue
 
     change_set.status = PlanChangeSetStatus.applied
     if change_set.import_batch_id:
@@ -77,7 +129,54 @@ async def apply_change_set(db: AsyncSession, change_set_id: int) -> dict:
         if batch is not None:
             batch.status = ImportBatchStatus.applied
 
-    return await get_plan_preview(db, change_set.production_plan_id, extra={"created_positions": created})
+    extra = {
+        "created_positions": created,
+        "updated_positions": updated,
+        "ignored_positions": ignored,
+        "cancelled_positions": cancelled,
+    }
+    return await get_plan_preview(db, change_set.production_plan_id, extra=extra)
+
+
+async def rollback_change_set(db: AsyncSession, change_set_id: int) -> dict:
+    change_set = await db.get(PlanChangeSet, change_set_id)
+    if change_set is None:
+        raise ValueError("Change set not found")
+    if change_set.status != PlanChangeSetStatus.applied:
+        raise ValueError("Only applied change sets can be rolled back")
+
+    items = (
+        await db.execute(select(PlanChangeItem).where(PlanChangeItem.change_set_id == change_set_id))
+    ).scalars().all()
+    for item in items:
+        if item.change_action == PlanChangeAction.create_position and item.plan_position_id:
+            position = await db.get(PlanPosition, item.plan_position_id)
+            if position and position.status == PlanPositionStatus.released:
+                raise ValueError("Cannot rollback: position already released")
+            if position:
+                position.status = PlanPositionStatus.cancelled
+        elif item.change_action == PlanChangeAction.update_draft_position and item.plan_position_id:
+            position = await db.get(PlanPosition, item.plan_position_id)
+            if position and item.before_data:
+                position.quantity = Decimal(item.before_data.get("quantity", str(position.quantity)))
+                position.source_payload = item.before_data.get("source_payload", position.source_payload)
+                position.source_name = item.before_data.get("source_name", position.source_name)
+                position.status = PlanPositionStatus.draft
+        elif item.change_action == PlanChangeAction.cancel_draft_position and item.plan_position_id:
+            position = await db.get(PlanPosition, item.plan_position_id)
+            if position:
+                position.status = PlanPositionStatus.draft
+
+    change_set.status = PlanChangeSetStatus.cancelled
+    if change_set.import_batch_id:
+        from app.models.imports import ImportBatch
+
+        batch = await db.get(ImportBatch, change_set.import_batch_id)
+        if batch:
+            batch.status = ImportBatchStatus.cancelled
+
+    await db.flush()
+    return await get_plan_preview(db, change_set.production_plan_id)
 
 
 async def approve_plan_position(db: AsyncSession, production_plan_id: int, position_id: int) -> PlanPosition:
@@ -102,50 +201,16 @@ async def approve_plan_position(db: AsyncSession, production_plan_id: int, posit
     return position
 
 
-async def validate_plan_position(db: AsyncSession, position: PlanPosition) -> list[str]:
-    errors: list[str] = []
-    if position.product_id is None:
-        errors.append("product_not_found")
-        return errors
-    if position.quantity <= 0:
-        errors.append("quantity_must_be_positive")
-
-    bom = await db.scalar(select(BOM).where(BOM.product_id == position.product_id, BOM.is_active.is_(True)))
-    if bom is None:
-        errors.append("active_bom_not_found")
-    else:
-        line = await db.scalar(select(BOMLine).where(BOMLine.bom_id == bom.id).limit(1))
-        if line is None:
-            errors.append("active_bom_has_no_lines")
-
-    route = await db.scalar(select(ProductionRoute).where(ProductionRoute.product_id == position.product_id, ProductionRoute.is_active.is_(True)))
-    if route is None:
-        errors.append("active_route_not_found")
-    else:
-        steps = (
-            await db.execute(select(RouteStep).where(RouteStep.route_id == route.id).order_by(RouteStep.sequence))
-        ).scalars().all()
-        if not steps:
-            errors.append("active_route_has_no_steps")
-        previous = 0
-        for step in steps:
-            if step.sequence <= previous:
-                errors.append("route_sequence_invalid")
-                break
-            previous = step.sequence
-            section = await db.get(Section, step.section_id)
-            if section is None or not section.is_active:
-                errors.append("route_contains_inactive_section")
-                break
-    return errors
-
-
 async def get_plan_preview(db: AsyncSession, production_plan_id: int, extra: dict | None = None) -> dict:
     plan = await db.get(ProductionPlan, production_plan_id)
     if plan is None:
         raise ValueError("Production plan not found")
     positions = (
-        await db.execute(select(PlanPosition).where(PlanPosition.production_plan_id == production_plan_id).order_by(PlanPosition.id))
+        await db.execute(
+            select(PlanPosition)
+            .where(PlanPosition.production_plan_id == production_plan_id, PlanPosition.status != PlanPositionStatus.cancelled)
+            .order_by(PlanPosition.id)
+        )
     ).scalars().all()
     status_counts = Counter(position.status.value for position in positions)
     validation_counts = Counter(position.validation_status.value for position in positions)

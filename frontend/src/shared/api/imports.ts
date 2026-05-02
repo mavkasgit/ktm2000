@@ -18,6 +18,26 @@ export type ImportExcelInput = {
   sheet_index?: number;
   mode?: ImportBatchMode;
   production_plan_id?: number;
+  template_id?: number;
+  column_mapping?: Record<string, string>;
+};
+
+export type RecentImport = {
+  id: number;
+  production_plan_id: number;
+  change_set_id: number | null;
+  plan_name: string;
+  plan_no: string;
+  original_filename: string;
+  mode: string;
+  status: string;
+  sheet_name: string;
+  parsed_rows: number;
+  total_rows: number;
+  error_count: number;
+  warning_count: number;
+  summary: Record<string, unknown>;
+  created_at: string;
 };
 
 export async function importExcel(input: ImportExcelInput) {
@@ -25,15 +45,24 @@ export async function importExcel(input: ImportExcelInput) {
   formData.append("file", input.file);
 
   const { data } = await apiClient.post<ExcelImportResponse>("/imports/excel", formData, {
-    params: {
-      sheet_index: input.sheet_index ?? 0,
-      mode: input.mode ?? "create_plan",
-      production_plan_id: input.production_plan_id,
-    },
+      params: {
+        sheet_index: input.sheet_index ?? 0,
+        mode: input.mode ?? "create_plan",
+        production_plan_id: input.production_plan_id,
+        template_id: input.template_id,
+        column_mapping: input.column_mapping,
+      },
     headers: {
       "Content-Type": "multipart/form-data",
     },
   });
 
+  return data;
+}
+
+export async function listRecentImports(limit: number = 10) {
+  const { data } = await apiClient.get<RecentImport[]>("/imports/recent", {
+    params: { limit },
+  });
   return data;
 }

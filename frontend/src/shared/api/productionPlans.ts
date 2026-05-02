@@ -43,6 +43,13 @@ export async function applyProductionPlanChangeSet(productionPlanId: number, cha
   return data;
 }
 
+export async function rollbackProductionPlanChangeSet(productionPlanId: number, changeSetId: number) {
+  const { data } = await apiClient.post<ProductionPlanPreview>(
+    `/production-plans/${productionPlanId}/change-sets/${changeSetId}/rollback`,
+  );
+  return data;
+}
+
 export async function approveProductionPlanPosition(productionPlanId: number, positionId: number) {
   const { data } = await apiClient.post<ApprovePositionResponse>(
     `/production-plans/${productionPlanId}/positions/${positionId}/approve`,

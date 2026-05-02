@@ -21,6 +21,7 @@ from .production_plan import (
 from .release_batch import ReleaseBatch, ReleaseBatchPosition, ReleaseBatchStatus, ReleaseBatchType
 from .internal_plan import InternalPlan, InternalPlanStatus, SectionPlanLine
 from .work_task import WorkTask, WorkTaskStatus
+from .import_template import ImportTemplate
 
 __all__ = [
     "Base",
@@ -57,4 +58,5 @@ __all__ = [
     "SectionPlanLine",
     "WorkTask",
     "WorkTaskStatus",
+    "ImportTemplate",
 ]

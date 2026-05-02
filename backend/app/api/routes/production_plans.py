@@ -8,7 +8,7 @@ from app.core.database import get_db
 from app.models.production_plan import PlanChangeSet
 from app.models.release_batch import ReleaseBatchType
 from app.services.plan_generation import create_release_batch
-from app.services.production_plan_service import apply_change_set, approve_plan_position, get_plan_preview
+from app.services.production_plan_service import apply_change_set, approve_plan_position, get_plan_preview, rollback_change_set
 
 router = APIRouter(prefix="/production-plans", tags=["production-plans"])
 
@@ -48,6 +48,23 @@ async def apply_plan_change_set(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return preview
+
+
+@router.post("/{production_plan_id}/change-sets/{change_set_id}/rollback")
+async def rollback_plan_change_set(
+    production_plan_id: int,
+    change_set_id: int,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    change_set = await db.get(PlanChangeSet, change_set_id)
+    if change_set is None:
+        raise HTTPException(status_code=404, detail="Change set not found")
+    if change_set.production_plan_id != production_plan_id:
+        raise HTTPException(status_code=400, detail="Change set does not belong to production plan")
+    try:
+        return await rollback_change_set(db, change_set_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.post("/{production_plan_id}/positions/{position_id}/approve")

@@ -154,6 +154,73 @@ async def test_apply_change_set_and_approve_position(client, session, tmp_path, 
 
 
 @pytest.mark.asyncio
+async def test_apply_change_set_can_be_rolled_back(client, session, tmp_path) -> None:
+    product, _, _ = await _make_ready_product(session, "FG-ROLLBACK")
+    plan = ProductionPlan(plan_no="PLAN-ROLLBACK", name="Plan Rollback", status=ProductionPlanStatus.draft)
+    file = ImportFile(
+        original_filename="plan.xlsx",
+        stored_path=str(tmp_path / "plan.xlsx"),
+        content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        file_extension=".xlsx",
+        detected_format="zip-workbook",
+        file_sha256="a" * 64,
+        size_bytes=10,
+    )
+    session.add_all([plan, file])
+    await session.flush()
+    batch = ImportBatch(
+        source_file_id=file.id,
+        production_plan_id=plan.id,
+        mode=ImportBatchMode.create_plan,
+        sheet_name="План май 26 05",
+        header_row_number=5,
+        total_rows=9,
+        parsed_rows=1,
+        summary={},
+    )
+    session.add(batch)
+    await session.flush()
+    change_set = PlanChangeSet(production_plan_id=plan.id, import_batch_id=batch.id, summary={})
+    session.add(change_set)
+    await session.flush()
+    session.add(
+        PlanChangeItem(
+            change_set_id=change_set.id,
+            source_row_number=6,
+            source_ref="rows:6",
+            change_action=PlanChangeAction.create_position,
+            before_data=None,
+            after_data={
+                "product_id": product.id,
+                "source_sku": product.sku,
+                "source_name": product.name,
+                "quantity": "100",
+                "source_ref": "rows:6",
+                "source_row_numbers": [6],
+                "source_fingerprint": "f" * 64,
+                "source_row_hash": "b" * 64,
+                "source_payload": {"period_start": "2026-05-01", "period_end": "2026-05-31"},
+            },
+            status=PlanChangeItemStatus.pending,
+            warnings=[],
+            errors=[],
+        )
+    )
+    await session.commit()
+
+    apply_response = await client.post(f"/api/production-plans/{plan.id}/change-sets/{change_set.id}/apply")
+    assert apply_response.status_code == 200
+    assert apply_response.json()["created_positions"] == 1
+
+    rollback_response = await client.post(f"/api/production-plans/{plan.id}/change-sets/{change_set.id}/rollback")
+    assert rollback_response.status_code == 200
+
+    preview_response = await client.get(f"/api/production-plans/{plan.id}/preview")
+    assert preview_response.status_code == 200
+    assert preview_response.json()["positions_total"] == 0
+
+
+@pytest.mark.asyncio
 async def test_release_batch_generates_tasks_and_is_idempotent(client, session) -> None:
     product, sections, route = await _make_ready_product(session)
     plan, position = await _make_plan_position(session, product)

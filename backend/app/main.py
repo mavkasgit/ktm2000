@@ -11,6 +11,7 @@ from app.api.routes.imports import router as imports_router
 from app.api.routes.production_plans import router as production_plans_router
 from app.api.routes.release_batches import router as release_batches_router
 from app.api.routes.routes import router as routes_router
+from app.api.routes.import_templates import router as import_templates_router
 from app.core.config import settings
 from app.core.database import async_session
 
@@ -37,6 +38,7 @@ app.include_router(routes_router, prefix="/api")
 app.include_router(imports_router, prefix="/api")
 app.include_router(production_plans_router, prefix="/api")
 app.include_router(release_batches_router, prefix="/api")
+app.include_router(import_templates_router, prefix="/api")
 
 
 @app.get("/api/health")

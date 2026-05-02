@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 from calendar import monthrange
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from io import BytesIO
 from pathlib import Path
@@ -31,6 +31,10 @@ HEADER_ALIASES = {
     "comments": "Комментарии",
     "packaging_1_8_quantity": "Упаковка в 1,8",
     "add_quantity": "добавить",
+    "due_date": "Срок готовности",
+    "customer": "Клиент",
+    "priority": "Приоритет",
+    "order_ref": "Заказ",
 }
 
 MONTHS_RU = {
@@ -93,7 +97,7 @@ def detect_workbook_format(content: bytes, filename: str) -> str:
     return Path(filename).suffix.lower().lstrip(".") or "unknown"
 
 
-def parse_factory_plan_workbook(content: bytes, filename: str, sheet_index: int = 0) -> ParsedWorkbook:
+def parse_factory_plan_workbook(content: bytes, filename: str, sheet_index: int = 0, column_mapping: dict[str, str] | None = None) -> ParsedWorkbook:
     validate_excel_extension(filename)
 
     try:
@@ -110,9 +114,10 @@ def parse_factory_plan_workbook(content: bytes, filename: str, sheet_index: int 
     if not rows:
         raise ValueError("Workbook sheet is empty")
 
-    header_index = _find_header_row(rows)
+    effective_mapping = {**HEADER_ALIASES, **(column_mapping or {})}
+    header_index = _find_header_row(rows, effective_mapping)
     headers = [_cell_text(cell) for cell in rows[header_index]]
-    column_map = _build_column_map(headers)
+    column_map = _build_column_map(headers, effective_mapping)
     _ensure_required_columns(column_map)
 
     period_start, period_end = _parse_period(rows[:header_index], sheet.name)
@@ -133,18 +138,23 @@ def parse_factory_plan_workbook(content: bytes, filename: str, sheet_index: int 
     )
 
 
-def _find_header_row(rows: list[list[Any]]) -> int:
-    required = {"Артикул", "Наименование", "кол-во штук готовой продукции"}
+def _find_header_row(rows: list[list[Any]], mapping: dict[str, str]) -> int:
+    required_keys = ["sku", "product_name"]
+    quantity_key = "quantity" if "quantity" in mapping else "output_quantity"
+    required_keys.append(quantity_key)
+    required_headers = {mapping[key] for key in required_keys if key in mapping}
+    if len(required_headers) < len(required_keys):
+        raise ValueError("Could not determine required headers from mapping")
     for idx, row in enumerate(rows[:30]):
         values = {_cell_text(cell) for cell in row}
-        if required.issubset(values):
+        if required_headers.issubset(values):
             return idx
     raise ValueError("Required header row not found")
 
 
-def _build_column_map(headers: list[str]) -> dict[str, int]:
+def _build_column_map(headers: list[str], mapping: dict[str, str]) -> dict[str, int]:
     result = {}
-    for key, header in HEADER_ALIASES.items():
+    for key, header in mapping.items():
         normalized = _normalize_header(header)
         for index, candidate in enumerate(headers):
             if _normalize_header(candidate) == normalized:
@@ -154,7 +164,9 @@ def _build_column_map(headers: list[str]) -> dict[str, int]:
 
 
 def _ensure_required_columns(column_map: dict[str, int]) -> None:
-    missing = [name for name in ("sku", "output_quantity") if name not in column_map]
+    missing = [name for name in ("sku",) if name not in column_map]
+    if "quantity" not in column_map and "output_quantity" not in column_map:
+        missing.append("quantity/output_quantity")
     if missing:
         raise ValueError(f"Required columns are missing: {', '.join(missing)}")
 
@@ -172,7 +184,7 @@ def _parse_rows(
     for row_number, row in enumerate(rows[header_index + 1 :], start=header_index + 2):
         raw = {key: _cell(row, index) for key, index in column_map.items()}
         sku = _cell_text(raw.get("sku"))
-        quantity = _decimal_or_none(raw.get("output_quantity"))
+        quantity = _decimal_or_none(raw.get("quantity") or raw.get("output_quantity"))
 
         if not sku and quantity is None:
             continue
@@ -245,6 +257,10 @@ def _make_plan_row(
         "comments": _cell_text(raw.get("comments")) or None,
         "packaging_1_8_quantity": _decimal_to_str(_decimal_or_none(raw.get("packaging_1_8_quantity"))),
         "add_quantity": _decimal_to_str(_decimal_or_none(raw.get("add_quantity"))),
+        "due_date": (_parse_date(raw.get("due_date")).isoformat() if _parse_date(raw.get("due_date")) else None),
+        "customer": _cell_text(raw.get("customer")) or None,
+        "priority": _int_or_none(raw.get("priority")),
+        "order_ref": _cell_text(raw.get("order_ref")) or None,
         "period_start": period_start.isoformat() if period_start else None,
         "period_end": period_end.isoformat() if period_end else None,
         "context_inherited": inherited,
@@ -376,6 +392,41 @@ def _decimal_to_str(value: Decimal | None) -> str | None:
     if value is None:
         return None
     return format(value.normalize(), "f")
+
+
+def _parse_date(value: Any) -> date | None:
+    if value is None or value == "":
+        return None
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    if isinstance(value, (int, float)):
+        return _excel_date_to_date(value)
+    text = str(value).strip()
+    for fmt in ("%Y-%m-%d", "%d.%m.%Y"):
+        try:
+            return datetime.strptime(text, fmt).date()
+        except ValueError:
+            continue
+    return None
+
+
+def _excel_date_to_date(serial: int | float) -> date:
+    return date(1899, 12, 30) + timedelta(days=int(serial))
+
+
+def _int_or_none(value: Any) -> int | None:
+    if value is None or value == "":
+        return None
+    try:
+        if isinstance(value, int):
+            return value
+        if isinstance(value, float) and value.is_integer():
+            return int(value)
+        return int(str(value).strip())
+    except (ValueError, TypeError):
+        return None
 
 
 def _normalize_output_kind(value: str) -> str | None:

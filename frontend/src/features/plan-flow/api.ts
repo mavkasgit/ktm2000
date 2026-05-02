@@ -5,6 +5,7 @@ import {
   importExcel,
   previewProductionPlan as loadProductionPlanPreview,
   releaseBatch as releaseReleaseBatch,
+  rollbackProductionPlanChangeSet,
 } from "shared/api"
 
 let lastImport: Record<string, any> | null = null
@@ -19,8 +20,15 @@ function enrichImport(payload: Record<string, any>) {
   }
 }
 
-export async function uploadExcel(file: File) {
-  const payload = await importExcel({ file })
+export async function uploadExcel(
+  file: File,
+  options?: { templateId?: number; columnMapping?: Record<string, string> },
+) {
+  const payload = await importExcel({
+    file,
+    template_id: options?.templateId,
+    column_mapping: options?.columnMapping,
+  })
   lastImport = enrichImport(payload as Record<string, any>)
   return lastImport
 }
@@ -35,14 +43,24 @@ export async function previewDiff() {
   }
 }
 
-export async function applyChangeSet() {
-  if (!lastImport?.production_plan_id || !lastImport?.change_set_id) {
+export async function applyChangeSet(planId?: string, changeSetId?: string) {
+  const resolvedPlanId = planId || lastImport?.production_plan_id
+  const resolvedChangeSetId = changeSetId || lastImport?.change_set_id
+  if (!resolvedPlanId || !resolvedChangeSetId) {
     throw new Error("Нет production_plan_id или change_set_id")
   }
-  const payload = await applyProductionPlanChangeSet(Number(lastImport.production_plan_id), Number(lastImport.change_set_id))
+  const payload = await applyProductionPlanChangeSet(Number(resolvedPlanId), Number(resolvedChangeSetId))
   return {
     ...payload,
-    planId: String((payload as Record<string, any>).production_plan_id ?? lastImport.production_plan_id),
+    planId: String((payload as Record<string, any>).production_plan_id ?? resolvedPlanId),
+  }
+}
+
+export async function rollbackChangeSet(planId: string, changeSetId: string) {
+  const payload = await rollbackProductionPlanChangeSet(Number(planId), Number(changeSetId))
+  return {
+    ...payload,
+    planId: String((payload as Record<string, any>).production_plan_id ?? planId),
   }
 }
 

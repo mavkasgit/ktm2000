@@ -1,9 +1,14 @@
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
+import json
+
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
 from pydantic import BaseModel
+from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
-from app.models.imports import ImportBatchMode
+from app.models.import_template import ImportTemplate
+from app.models.imports import ImportBatch, ImportBatchMode, ImportBatchStatus, ImportFile
+from app.models.production_plan import PlanChangeSet, ProductionPlan
 from app.services.plan_import_service import create_excel_import_change_set
 
 router = APIRouter(prefix="/imports", tags=["imports"])
@@ -23,11 +28,28 @@ class ImportPreviewOut(BaseModel):
 @router.post("/excel", response_model=ImportPreviewOut, status_code=status.HTTP_201_CREATED)
 async def import_excel_plan(
     file: UploadFile = File(...),
-    sheet_index: int = 0,
-    mode: ImportBatchMode = ImportBatchMode.create_plan,
-    production_plan_id: int | None = None,
+    sheet_index: int = Form(0),
+    mode: ImportBatchMode = Form(ImportBatchMode.create_plan),
+    production_plan_id: int | None = Form(None),
+    template_id: int | None = Query(None),
+    column_mapping: str | None = Query(None),
     db: AsyncSession = Depends(get_db),
 ) -> ImportPreviewOut:
+    resolved_mapping = None
+    if template_id is not None:
+        template = await db.get(ImportTemplate, template_id)
+        if template is None:
+            raise HTTPException(status_code=404, detail="Template not found")
+        resolved_mapping = dict(template.column_mapping)
+    if column_mapping is not None:
+        try:
+            parsed_mapping = json.loads(column_mapping)
+        except json.JSONDecodeError as exc:
+            raise HTTPException(status_code=400, detail=f"Invalid column_mapping JSON: {exc}") from exc
+        if not isinstance(parsed_mapping, dict):
+            raise HTTPException(status_code=400, detail="column_mapping must be a JSON object")
+        resolved_mapping = {**(resolved_mapping or {}), **parsed_mapping}
+
     content = await file.read()
     try:
         result = await create_excel_import_change_set(
@@ -38,9 +60,69 @@ async def import_excel_plan(
             sheet_index=sheet_index,
             mode=mode,
             production_plan_id=production_plan_id,
+            column_mapping=resolved_mapping,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except RuntimeError as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
     return ImportPreviewOut(**result)
+
+
+class ImportRecentOut(BaseModel):
+    id: int
+    production_plan_id: int
+    change_set_id: int | None
+    plan_name: str
+    plan_no: str
+    original_filename: str
+    mode: str
+    status: str
+    sheet_name: str
+    parsed_rows: int
+    total_rows: int
+    error_count: int
+    warning_count: int
+    summary: dict
+    created_at: str
+
+    class Config:
+        from_attributes = True
+
+
+@router.get("/recent", response_model=list[ImportRecentOut])
+async def list_recent_imports(
+    limit: int = Query(10, ge=1, le=50),
+    db: AsyncSession = Depends(get_db),
+) -> list[ImportRecentOut]:
+    result = await db.execute(
+        select(ImportBatch, ProductionPlan, ImportFile, PlanChangeSet)
+        .join(ProductionPlan, ImportBatch.production_plan_id == ProductionPlan.id)
+        .join(ImportFile, ImportBatch.source_file_id == ImportFile.id)
+        .outerjoin(PlanChangeSet, PlanChangeSet.import_batch_id == ImportBatch.id)
+        .order_by(desc(ImportBatch.created_at))
+        .limit(limit)
+    )
+    items = []
+    for batch, plan, file, change_set in result.all():
+        summary = batch.summary or {}
+        items.append(
+            ImportRecentOut(
+                id=batch.id,
+                production_plan_id=batch.production_plan_id,
+                change_set_id=change_set.id if change_set else None,
+                plan_name=plan.name,
+                plan_no=plan.plan_no,
+                original_filename=file.original_filename,
+                mode=batch.mode.value,
+                status=batch.status.value,
+                sheet_name=batch.sheet_name,
+                parsed_rows=batch.parsed_rows,
+                total_rows=batch.total_rows,
+                error_count=summary.get("error_count", 0),
+                warning_count=summary.get("warning_count", 0),
+                summary=summary,
+                created_at=batch.created_at.isoformat() if batch.created_at else "",
+            )
+        )
+    return items

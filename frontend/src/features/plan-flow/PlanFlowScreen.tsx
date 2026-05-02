@@ -1,26 +1,40 @@
-import { useMemo, useState } from "react"
-import * as SharedUI from "shared/ui"
+import { useEffect, useMemo, useState } from "react"
+import { ChevronDown, ChevronUp, FileSpreadsheet, RotateCcw } from "lucide-react"
 import {
-  applyChangeSet,
   approvePositions,
   createReleaseBatch,
-  previewDiff,
   previewProductionPlan,
   releaseBatch,
-  uploadExcel,
+  rollbackChangeSet,
 } from "./api"
-import { DenseCard, ErrorBanner, InlineBadge } from "./components/primitives"
+import { ImportWizard } from "./ImportWizard"
+import { listRecentImports } from "shared/api"
+import type { RecentImport } from "shared/api"
+import { Button } from "shared/ui"
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "shared/ui"
+import { Badge } from "shared/ui"
 import type { BackendIssue, FlowIds } from "./types"
 
 type UnknownRecord = Record<string, unknown>
 
-const Button = ((SharedUI as UnknownRecord).Button ?? "button") as any
+const statusLabels: Record<string, string> = {
+  parsed: "Распарсен",
+  applied: "Применён",
+  cancelled: "Отменён",
+  failed: "Ошибка",
+}
 
-const issueLabels: Record<string, string> = {
-  product_not_found: "изделие не найдено",
-  paired_profile_product_unmapped: "парный профиль не сопоставлен с готовым изделием",
-  active_bom_not_found: "нет активного BOM",
-  active_route_not_found: "нет активного маршрута",
+const statusToneMap: Record<string, "neutral" | "success" | "warning" | "danger"> = {
+  parsed: "neutral",
+  applied: "success",
+  cancelled: "warning",
+  failed: "danger",
+}
+
+const modeLabels: Record<string, string> = {
+  create_plan: "Новый план",
+  append_to_plan: "Добавление",
+  replace_draft_from_same_source: "Замена черновика",
 }
 
 function readId(payload: unknown, keys: string[]): string | undefined {
@@ -45,42 +59,50 @@ function readArray(payload: unknown, keys: string[]) {
 
 function collectIssues(payload: unknown): string[] {
   const issueItems = readArray(payload, ["issues", "warnings", "errors"]) as BackendIssue[]
+  const labels: Record<string, string> = {
+    product_not_found: "изделие не найдено",
+    paired_profile_product_unmapped: "парный профиль не сопоставлен",
+    active_bom_not_found: "нет активного BOM",
+    active_route_not_found: "нет активного маршрута",
+  }
   return issueItems.map((issue) => {
     if (issue.code === "product_not_found") {
-      return `${issueLabels.product_not_found}: ${issue.productCode ?? "неизвестно"}`
+      return `${labels.product_not_found}: ${issue.productCode ?? "неизвестно"}`
     }
     if (issue.code === "paired_profile_product_unmapped") {
-      return `${issueLabels.paired_profile_product_unmapped}: ${issue.profileCode ?? "неизвестно"}`
+      return `${labels.paired_profile_product_unmapped}: ${issue.profileCode ?? "неизвестно"}`
     }
     const code = issue.code ?? "issue"
-    return `${issueLabels[String(code)] ?? code}: ${issue.message ?? "нет деталей"}`
+    return `${labels[String(code)] ?? code}: ${issue.message ?? "нет деталей"}`
   })
 }
 
 export function PlanFlowScreen() {
-  const [file, setFile] = useState<File | null>(null)
   const [loading, setLoading] = useState<string | null>(null)
   const [flowIds, setFlowIds] = useState<FlowIds>({})
-  const [diffRows, setDiffRows] = useState<UnknownRecord[]>([])
   const [planRows, setPlanRows] = useState<UnknownRecord[]>([])
   const [selectedPositionIds, setSelectedPositionIds] = useState<Set<string>>(new Set())
   const [issues, setIssues] = useState<string[]>([])
+  const [importOpen, setImportOpen] = useState(false)
+  const [recentImports, setRecentImports] = useState<RecentImport[]>([])
+  const [expandedImports, setExpandedImports] = useState<Set<number>>(new Set())
 
-  const canUpload = !!file && !loading
-  const canPreviewDiff = !!flowIds.importId && !loading
-  const canApply = !!flowIds.changeSetId && !loading
-  const canPreviewPlan = !!flowIds.changeSetId && !loading
+  useEffect(() => {
+    listRecentImports(5).then(setRecentImports).catch(() => setRecentImports([]))
+  }, [importOpen])
+
+  const canPreviewPlan = !!flowIds.planId && !loading
   const canApprove = !!flowIds.planId && selectedPositionIds.size > 0 && !loading
   const canCreateBatch = !!flowIds.planId && !loading
   const canRelease = !!flowIds.releaseBatchId && !loading
+  const canRollback = !!flowIds.planId && !!flowIds.changeSetId && !loading
 
   const rowsSummary = useMemo(() => {
     return {
-      diff: diffRows.length,
       plan: planRows.length,
       approved: selectedPositionIds.size,
     }
-  }, [diffRows.length, planRows.length, selectedPositionIds.size])
+  }, [planRows.length, selectedPositionIds.size])
 
   async function runStep(name: string, action: () => Promise<unknown>, onSuccess: (payload: unknown) => void) {
     setLoading(name)
@@ -108,148 +130,322 @@ export function PlanFlowScreen() {
     })
   }
 
+  function toggleImportExpand(id: number) {
+    setExpandedImports((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) {
+        next.delete(id)
+      } else {
+        next.add(id)
+      }
+      return next
+    })
+  }
+
+  function handleImportSuccess(planId: string, changeSetId: string) {
+    setFlowIds((prev) => ({
+      ...prev,
+      planId,
+      changeSetId,
+    }))
+  }
+
   return (
-    <main style={{ fontFamily: "sans-serif", padding: 12, maxWidth: 1400, margin: "0 auto" }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
-        <h2 style={{ margin: 0 }}>Импорт плана и запуск в производство</h2>
-        <InlineBadge>{loading ? `Выполняется: ${loading}` : "Готово"}</InlineBadge>
+    <div className="max-w-5xl mx-auto p-6 space-y-6">
+      <div className="flex items-center justify-between">
+        <h1 className="text-2xl font-bold tracking-tight">Импорт плана и запуск в производство</h1>
+        <div className="flex items-center gap-3">
+          {loading && (
+            <Badge variant="secondary">Выполняется: {loading}</Badge>
+          )}
+          <Button
+            size="sm"
+            className="gap-2"
+            onClick={() => setImportOpen(true)}
+          >
+            <FileSpreadsheet className="h-4 w-4" />
+            Импорт
+          </Button>
+        </div>
       </div>
 
-      <ErrorBanner lines={issues} />
+      {issues.length > 0 && (
+        <div className="rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-800">
+          <strong>Ошибки / предупреждения</strong>
+          <ul className="mt-2 list-disc pl-4 space-y-1">
+            {issues.map((line, idx) => (
+              <li key={idx}>{line}</li>
+            ))}
+          </ul>
+        </div>
+      )}
 
-      <DenseCard title="Идентификаторы процесса">
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))", gap: 6, fontSize: 13 }}>
-          {Object.entries(flowIds).map(([key, value]) => (
-            <div key={key} style={{ background: "#f9fafb", borderRadius: 6, padding: 6 }}>
-              <div style={{ color: "#4b5563" }}>{key}</div>
-              <div style={{ fontWeight: 700 }}>{value ?? "-"}</div>
+      {/* Import Section */}
+      <Card>
+        <CardContent className="p-6 space-y-4">
+          {flowIds.planId && (
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <Badge tone="success">План загружен (ID: {flowIds.planId})</Badge>
+                {canRollback && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={!!loading}
+                    onClick={() =>
+                      runStep(
+                        "rollback_change_set",
+                        () => rollbackChangeSet(flowIds.planId!, flowIds.changeSetId!),
+                        (payload) => {
+                          setFlowIds((prev) => ({
+                            ...prev,
+                            planId: readId(payload, ["planId"]) ?? prev.planId,
+                          }))
+                        }
+                      )
+                    }
+                  >
+                    <RotateCcw className="h-4 w-4 mr-1" />
+                    Откатить
+                  </Button>
+                )}
+              </div>
             </div>
-          ))}
-        </div>
-      </DenseCard>
+          )}
 
-      <DenseCard title="1. Загрузка Excel">
-        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-          <input type="file" accept=".xlsx,.xls,.xlsm,.xlsb,.ods" onChange={(e) => setFile(e.target.files?.[0] ?? null)} />
-          <Button disabled={!canUpload} onClick={() => runStep("upload_excel", () => uploadExcel(file!), (payload) => {
-            setFlowIds((prev) => ({
-              ...prev,
-              importId: readId(payload, ["importId", "jobId", "id"]),
-              changeSetId: readId(payload, ["changeSetId"]),
-              planId: readId(payload, ["planId"]),
-            }))
-          })}>Загрузить</Button>
-        </div>
-      </DenseCard>
+          {/* Recent Imports */}
+          {recentImports.length > 0 && (
+            <div className="space-y-3">
+              <h3 className="text-sm font-semibold text-muted-foreground">Последние импорты</h3>
+          {recentImports.map((imp) => {
+            const expanded = expandedImports.has(imp.id)
+            const dateStr = new Date(imp.created_at).toLocaleString("ru-RU", {
+              day: "2-digit",
+              month: "2-digit",
+              year: "numeric",
+              hour: "2-digit",
+              minute: "2-digit",
+            })
+            const canRollbackThis = imp.status === "applied" && imp.change_set_id && !loading
+            return (
+              <Card key={imp.id} className="overflow-hidden">
+                <CardHeader className="p-4 pb-0">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                      <FileSpreadsheet className="h-5 w-5 text-muted-foreground" />
+                      <div>
+                        <CardTitle className="text-sm font-medium">
+                          {imp.original_filename}
+                        </CardTitle>
+                        <CardDescription className="text-xs">
+                          {imp.plan_name} · {dateStr}
+                        </CardDescription>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <Badge tone={statusToneMap[imp.status] ?? "neutral"}>
+                        {statusLabels[imp.status] ?? imp.status}
+                      </Badge>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-8 w-8"
+                        onClick={() => toggleImportExpand(imp.id)}
+                      >
+                        {expanded ? (
+                          <ChevronUp className="h-4 w-4" />
+                        ) : (
+                          <ChevronDown className="h-4 w-4" />
+                        )}
+                      </Button>
+                    </div>
+                  </div>
+                </CardHeader>
+                <CardContent className="p-4 pt-3">
+                  {/* Stats row */}
+                  <div className="flex items-center gap-4 text-sm mb-3">
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-muted-foreground">Строк:</span>
+                      <span className="font-medium">{imp.parsed_rows} / {imp.total_rows}</span>
+                    </div>
+                    {imp.error_count > 0 && (
+                      <div className="flex items-center gap-1.5 text-red-600">
+                        <span className="font-medium">{imp.error_count} ошибок</span>
+                      </div>
+                    )}
+                    {imp.warning_count > 0 && (
+                      <div className="flex items-center gap-1.5 text-amber-600">
+                        <span className="font-medium">{imp.warning_count} предупр.</span>
+                      </div>
+                    )}
+                    {imp.error_count === 0 && imp.warning_count === 0 && (
+                      <div className="text-green-600 text-xs">Без ошибок</div>
+                    )}
+                    {canRollbackThis && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="ml-auto h-7 text-xs"
+                        onClick={() =>
+                          runStep(
+                            "rollback_change_set",
+                            () => rollbackChangeSet(String(imp.production_plan_id), String(imp.change_set_id!)),
+                            () => {
+                              listRecentImports(5).then(setRecentImports)
+                            }
+                          )
+                        }
+                      >
+                        <RotateCcw className="h-3 w-3 mr-1" />
+                        Откатить
+                      </Button>
+                    )}
+                  </div>
 
-      <DenseCard title="2. Preview изменений">
-        <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
-          <Button disabled={!canPreviewDiff} onClick={() => runStep("preview_diff", () => previewDiff(), (payload) => {
-            const rows = readArray(payload, ["rows", "changes", "diff"]) as UnknownRecord[]
-            setDiffRows(rows)
-            setFlowIds((prev) => ({
-              ...prev,
-              diffId: readId(payload, ["diffId", "previewId"]),
-              changeSetId: readId(payload, ["changeSetId", "id"]),
-            }))
-          })}>Показать diff</Button>
-          <span style={{ alignSelf: "center", fontSize: 13 }}>Строк: {rowsSummary.diff}</span>
+                  {expanded && (
+                    <div className="text-sm space-y-2 pt-3 border-t">
+                      <div className="grid grid-cols-2 gap-2 text-muted-foreground">
+                        <div>План: <span className="text-foreground">{imp.plan_no}</span></div>
+                        <div>Режим: <span className="text-foreground">{modeLabels[imp.mode] ?? imp.mode}</span></div>
+                        <div>Лист: <span className="text-foreground">{imp.sheet_name}</span></div>
+                        <div>Позиций: <span className="text-foreground">{imp.parsed_rows}</span></div>
+                      </div>
+                      {imp.summary && typeof imp.summary === "object" && Object.keys(imp.summary).length > 0 && (
+                        <div className="mt-2 text-muted-foreground">
+                          <div className="font-medium text-foreground mb-1">Детали:</div>
+                          <div className="grid grid-cols-2 gap-1 text-xs">
+                            {Object.entries(imp.summary).map(([key, value]) => (
+                              <div key={key}>
+                                {key}: <span className="text-foreground">{String(value)}</span>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+            )
+          })}
         </div>
-        <div style={{ maxHeight: 160, overflow: "auto", fontSize: 12, border: "1px solid #e5e7eb", borderRadius: 6 }}>
-          <table style={{ width: "100%", borderCollapse: "collapse" }}>
-            <tbody>
-              {diffRows.map((row, idx) => (
-                <tr key={idx}>
-                  <td style={{ borderBottom: "1px solid #f3f4f6", padding: 4 }}>{JSON.stringify(row)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </DenseCard>
+      )}
+        </CardContent>
+      </Card>
 
-      <DenseCard title="3. Применить change set">
-          <Button disabled={!canApply} onClick={() => runStep("apply_change_set", () => applyChangeSet(), (payload) => {
-            setFlowIds((prev) => ({
-              ...prev,
-              applyJobId: readId(payload, ["applyJobId", "jobId", "id"]),
-              planId: readId(payload, ["planId"]) ?? prev.planId,
-            }))
-          })}>Применить</Button>
-      </DenseCard>
+      {/* Plan Preview */}
+      <Card>
+        <CardHeader>
+          <CardTitle>Производственный план</CardTitle>
+          <CardDescription>
+            Просмотр позиций, утверждение и подготовка к запуску
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="flex items-center gap-3">
+            <Button disabled={!canPreviewPlan} onClick={() => runStep("preview_plan", () => previewProductionPlan(flowIds.planId), (payload) => {
+              const rows = readArray(payload, ["positions", "rows", "plan"]) as UnknownRecord[]
+              setPlanRows(rows)
+              const planId = readId(payload, ["planId", "id"])
+              setFlowIds((prev) => ({ ...prev, planId }))
+              setSelectedPositionIds(new Set(rows.map((row) => String(row.positionId ?? row.id ?? "")).filter(Boolean)))
+            })}>
+              Показать план
+            </Button>
+            <span className="text-sm text-muted-foreground">Позиции: {rowsSummary.plan}</span>
+          </div>
 
-      <DenseCard title="4. Preview производственного плана">
-        <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
-          <Button disabled={!canPreviewPlan} onClick={() => runStep("preview_plan", () => previewProductionPlan(flowIds.planId), (payload) => {
-            const rows = readArray(payload, ["positions", "rows", "plan"]) as UnknownRecord[]
-            setPlanRows(rows)
-            const planId = readId(payload, ["planId", "id"])
-            setFlowIds((prev) => ({ ...prev, planId }))
-            setSelectedPositionIds(new Set(rows.map((row) => String(row.positionId ?? row.id ?? "")).filter(Boolean)))
-          })}>Показать план</Button>
-          <span style={{ alignSelf: "center", fontSize: 13 }}>Позиции: {rowsSummary.plan}</span>
-        </div>
-
-        <div style={{ maxHeight: 240, overflow: "auto", fontSize: 12, border: "1px solid #e5e7eb", borderRadius: 6 }}>
-          <table style={{ width: "100%", borderCollapse: "collapse" }}>
-            <thead>
-              <tr>
-                <th style={{ textAlign: "left", padding: 4 }}>Утвердить</th>
-                <th style={{ textAlign: "left", padding: 4 }}>Позиция</th>
-                <th style={{ textAlign: "left", padding: 4 }}>Данные</th>
-              </tr>
-            </thead>
-            <tbody>
-              {planRows.map((row, idx) => {
-                const positionId = String(row.positionId ?? row.id ?? `row-${idx}`)
-                return (
-                  <tr key={positionId}>
-                    <td style={{ borderBottom: "1px solid #f3f4f6", padding: 4 }}>
-                      <input
-                        type="checkbox"
-                        checked={selectedPositionIds.has(positionId)}
-                        onChange={() => togglePosition(positionId)}
-                      />
-                    </td>
-                    <td style={{ borderBottom: "1px solid #f3f4f6", padding: 4 }}>{positionId}</td>
-                    <td style={{ borderBottom: "1px solid #f3f4f6", padding: 4 }}>{JSON.stringify(row)}</td>
+          {planRows.length > 0 && (
+            <div className="rounded-md border max-h-60 overflow-auto">
+              <table className="w-full text-sm">
+                <thead className="bg-muted sticky top-0">
+                  <tr>
+                    <th className="text-left p-2 font-medium">Утвердить</th>
+                    <th className="text-left p-2 font-medium">Позиция</th>
+                    <th className="text-left p-2 font-medium">Данные</th>
                   </tr>
-                )
+                </thead>
+                <tbody>
+                  {planRows.map((row, idx) => {
+                    const positionId = String(row.positionId ?? row.id ?? `row-${idx}`)
+                    return (
+                      <tr key={positionId} className="border-t">
+                        <td className="p-2">
+                          <input
+                            type="checkbox"
+                            checked={selectedPositionIds.has(positionId)}
+                            onChange={() => togglePosition(positionId)}
+                          />
+                        </td>
+                        <td className="p-2 font-mono text-xs">{positionId}</td>
+                        <td className="p-2 text-xs text-muted-foreground">{JSON.stringify(row)}</td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          <div className="flex items-center gap-3 pt-2">
+            <Button
+              disabled={!canApprove}
+              onClick={() => runStep("approve_positions", () => approvePositions(flowIds.planId!, Array.from(selectedPositionIds)), (payload) => {
+                setFlowIds((prev) => ({
+                  ...prev,
+                  approvalId: readId(payload, ["approvalId", "jobId", "id"]),
+                }))
               })}
-            </tbody>
-          </table>
-        </div>
-      </DenseCard>
+            >
+              Утвердить выбранные
+            </Button>
+            <span className="text-sm text-muted-foreground">Выбрано: {rowsSummary.approved}</span>
+          </div>
+        </CardContent>
+      </Card>
 
-      <DenseCard title="5. Утвердить позиции">
-        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-          <Button disabled={!canApprove} onClick={() => runStep("approve_positions", () => approvePositions(flowIds.planId!, Array.from(selectedPositionIds)), (payload) => {
-            setFlowIds((prev) => ({
-              ...prev,
-              approvalId: readId(payload, ["approvalId", "jobId", "id"]),
-            }))
-          })}>Утвердить выбранные</Button>
-          <span style={{ fontSize: 13 }}>Выбрано: {rowsSummary.approved}</span>
-        </div>
-      </DenseCard>
+      {/* Release */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Пакет запуска</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <Button
+              disabled={!canCreateBatch}
+              onClick={() => runStep("create_release_batch", () => createReleaseBatch(flowIds.planId!), (payload) => {
+                setFlowIds((prev) => ({
+                  ...prev,
+                  releaseBatchId: readId(payload, ["releaseBatchId", "batchId", "id"]),
+                }))
+              })}
+            >
+              Создать пакет
+            </Button>
+          </CardContent>
+        </Card>
 
-      <DenseCard title="6. Создать пакет запуска">
-        <Button disabled={!canCreateBatch} onClick={() => runStep("create_release_batch", () => createReleaseBatch(flowIds.planId!), (payload) => {
-          setFlowIds((prev) => ({
-            ...prev,
-            releaseBatchId: readId(payload, ["releaseBatchId", "batchId", "id"]),
-          }))
-          })}>Создать пакет</Button>
-      </DenseCard>
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Выпуск в производство</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <Button
+              disabled={!canRelease}
+              onClick={() => runStep("release_batch", () => releaseBatch(flowIds.releaseBatchId!), (payload) => {
+                setFlowIds((prev) => ({
+                  ...prev,
+                  releaseJobId: readId(payload, ["releaseJobId", "jobId", "id"]),
+                }))
+              })}
+            >
+              Выпустить
+            </Button>
+          </CardContent>
+        </Card>
+      </div>
 
-      <DenseCard title="7. Выпустить в производство">
-        <Button disabled={!canRelease} onClick={() => runStep("release_batch", () => releaseBatch(flowIds.releaseBatchId!), (payload) => {
-          setFlowIds((prev) => ({
-            ...prev,
-            releaseJobId: readId(payload, ["releaseJobId", "jobId", "id"]),
-          }))
-          })}>Выпустить</Button>
-      </DenseCard>
-    </main>
+      <ImportWizard open={importOpen} onClose={() => setImportOpen(false)} onSuccess={handleImportSuccess} />
+    </div>
   )
 }
