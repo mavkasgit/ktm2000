@@ -1,0 +1,23 @@
+name: factoryflow-prod
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: factoryflow-postgres-prod
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-factoryflow_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-factoryflow_pass_prod}
+      POSTGRES_DB: ${POSTGRES_DB:-factoryflow_prod}
+    ports:
+      - "${PROD_POSTGRES_BIND:-127.0.0.1}:${PROD_POSTGRES_PORT:-5222}:5432"
+    volumes:
+      - ${PROD_POSTGRES_DATA_PATH:-../data/postgres}:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: always
+
+
+

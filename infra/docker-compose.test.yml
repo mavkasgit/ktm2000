@@ -1,0 +1,25 @@
+name: factoryflow-test
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: factoryflow-postgres-test
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-factoryflow_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-factoryflow_pass_test}
+      POSTGRES_DB: ${POSTGRES_DB:-factoryflow_test}
+    ports:
+      - "${TEST_POSTGRES_PORT:-5212}:5432"
+    volumes:
+      - postgres_test_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  postgres_test_data:
+
+
+

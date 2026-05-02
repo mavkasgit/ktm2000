@@ -1,4 +1,4 @@
-# FactoryPlan Milestone 1 Implementation Plan
+# Factoryflow Milestone 1 Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
@@ -31,7 +31,7 @@ This plan does not implement the full shopfloor movement ledger UI. It should st
 
 ## HRMS Reuse Rules
 
-For shared infrastructure and application foundation, do not write from a blank slate. Inspect the working HRMS implementation first and create the FactoryPlan equivalent with the same structure where it fits.
+For shared infrastructure and application foundation, do not write from a blank slate. Inspect the working HRMS implementation first and create the Factoryflow equivalent with the same structure where it fits.
 
 Use HRMS as reference for:
 
@@ -47,7 +47,7 @@ Use HRMS as reference for:
 - TanStack Query entity pattern: `frontend/src/entities/*`;
 - Playwright layout: `e2e/ui`, `e2e/api`, `e2e/domain`, `e2e/pages`, `e2e/fixtures`.
 
-Do not copy HRMS domain logic. FactoryPlan domain services, tables, invariants, import diff, release batches, movements, transfers, defects, and plan adjustments are new domain work.
+Do not copy HRMS domain logic. Factoryflow domain services, tables, invariants, import diff, release batches, movements, transfers, defects, and plan adjustments are new domain work.
 
 ## File Structure
 
@@ -110,12 +110,12 @@ Use these HRMS files as direct references:
 - `C:\Users\user\VibeCoding\hrms\infra\docker-compose.prod.yml`
 - `C:\Users\user\VibeCoding\hrms\scripts\wait-for-container-health.ps1`
 
-Create the same structure for FactoryPlan with renamed containers/databases:
+Create the same structure for Factoryflow with renamed containers/databases:
 
-- `factoryplan-postgres`;
-- `factoryplan_dev`;
-- `factoryplan_test`;
-- `factoryplan_prod`.
+- `factoryflow-postgres`;
+- `factoryflow_dev`;
+- `factoryflow_test`;
+- `factoryflow_prod`.
 
 Do not add Redis/worker in MVP unless a task explicitly needs background execution.
 
@@ -142,7 +142,7 @@ Keep:
 - pytest;
 - pytest-asyncio.
 
-Do not carry HRMS-only document dependencies unless FactoryPlan needs them.
+Do not carry HRMS-only document dependencies unless Factoryflow needs them.
 
 - [ ] **Step 3: Create frontend package from HRMS baseline**
 
@@ -292,7 +292,7 @@ Use HRMS `C:\Users\user\VibeCoding\hrms\backend\app\api\import_employees.py` as 
 - headers and rows preview;
 - column mapping.
 
-Do not copy HRMS confirm-import behavior. FactoryPlan must create `ImportBatch` and `PlanChangeSet` first, then apply only after user confirmation.
+Do not copy HRMS confirm-import behavior. Factoryflow must create `ImportBatch` and `PlanChangeSet` first, then apply only after user confirmation.
 
 - [ ] **Step 4: Implement validation**
 
@@ -377,7 +377,7 @@ pytest backend/tests/test_plan_generation.py -v
 
 Expected: generation tests pass.
 
-Use HRMS `backend/tests/conftest.py` as the reference for async test database setup and factory fixtures. Adapt it to FactoryPlan models and keep `bigint identity` assumptions.
+Use HRMS `backend/tests/conftest.py` as the reference for async test database setup and factory fixtures. Adapt it to Factoryflow models and keep `bigint identity` assumptions.
 
 ## Task 7: Frontend Shell and Master Data Screens
 
@@ -483,8 +483,11 @@ Use these HRMS files as references:
 - `C:\Users\user\VibeCoding\hrms\e2e\pages\*.ts`;
 - `C:\Users\user\VibeCoding\hrms\e2e\fixtures\*.ts`.
 
-Create the FactoryPlan e2e layout with page objects and fixtures. The first flow should cover `create production plan -> import Excel -> apply diff -> approve positions -> create release batch -> release -> see section tasks`.
+Create the Factoryflow e2e layout with page objects and fixtures. The first flow should cover `create production plan -> import Excel -> apply diff -> approve positions -> create release batch -> release -> see section tasks`.
 
 - [ ] **Step 5: Final verification**
 
 Run backend tests, frontend build, and full manual smoke scenario.
+
+
+

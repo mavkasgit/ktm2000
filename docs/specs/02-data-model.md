@@ -10,7 +10,7 @@ ORM: SQLAlchemy 2.x.
 
 Идентификаторы: `bigint generated always as identity primary key`.
 
-FactoryPlan использует числовые `bigint identity` primary keys для внутренней реляционной идентичности, как в HRMS. Человекочитаемые бизнес-номера хранятся отдельно в полях `*_no`. Дедупликация импорта выполняется не через primary key, а через dedicated source поля: `source_system`, `source_ref`, `source_fingerprint`, `file_sha256`, `source_row_hash`, `external_plan_id`.
+Factoryflow использует числовые `bigint identity` primary keys для внутренней реляционной идентичности, как в HRMS. Человекочитаемые бизнес-номера хранятся отдельно в полях `*_no`. Дедупликация импорта выполняется не через primary key, а через dedicated source поля: `source_system`, `source_ref`, `source_fingerprint`, `file_sha256`, `source_row_hash`, `external_plan_id`.
 
 UUID не используется как primary key в MVP. Если позже появится внешний публичный API или интеграции, можно добавить `public_id uuid unique` как отдельное поле без замены внутренних PK.
 
@@ -445,3 +445,6 @@ Soft delete: для справочников использовать `is_active
 - принять передачу -> обновить `transfer`, создать `transfer_receive`, при расхождении создать `defect` или `reject`, обновить доступность следующей задачи и кеши;
 - создать решение по браку -> обновить `defect`, при необходимости создать `rework_task` или `scrap` movement;
 - применить корректировку плана -> создать `plan_adjustment`, применить ее без изменения истории исходной позиции.
+
+
+

@@ -12,7 +12,7 @@
 
 `PlanSource` может быть `manual`, `excel_import`, `api` или `integration`. Excel нужен на первом этапе, но не должен становиться корнем доменной модели.
 
-Логика похожа на связку ERPNext `Production Plan -> Work Order -> Job Card -> Stock Entry`, но в FactoryPlan акцент делается не на складских проводках, а на прозрачном движении количества между участками.
+Логика похожа на связку ERPNext `Production Plan -> Work Order -> Job Card -> Stock Entry`, но в Factoryflow акцент делается не на складских проводках, а на прозрачном движении количества между участками.
 
 Ключевые решения:
 
@@ -353,3 +353,6 @@
 Если нужно показывать техническую готовность по маршруту, это отдельная метрика:
 
 `min(completed_good_by_step / planned_quantity)` по всем этапам.
+
+
+
