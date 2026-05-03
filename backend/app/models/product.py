@@ -1,6 +1,6 @@
 import enum
 
-from sqlalchemy import Boolean, Enum, Float, Integer, String, text, BigInteger, Identity
+from sqlalchemy import Boolean, Enum, Float, Integer, String, text, BigInteger, Identity, ARRAY
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base
@@ -38,3 +38,9 @@ class Product(Base):
     source: Mapped[str | None] = mapped_column(String(50), nullable=True, index=True)
     is_catalog_item: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"), default=False)
     is_paired_profile: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"), default=False)
+
+    # Processing flags
+    skip_shot_blast: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"), default=False)
+
+    # Equivalent SKU aliases
+    aliases: Mapped[list[str]] = mapped_column(ARRAY(String), nullable=False, server_default=text("'{}'"), default=list)
