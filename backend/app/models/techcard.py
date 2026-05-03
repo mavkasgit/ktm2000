@@ -1,4 +1,4 @@
-from sqlalchemy import BigInteger, ForeignKey, Identity, Index, Numeric, String, Boolean, text, UniqueConstraint
+from sqlalchemy import BigInteger, ForeignKey, Identity, Index, Numeric, String, Boolean, Integer, text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base
@@ -17,6 +17,12 @@ class Techcard(Base):
         default="standart_processing",
     )
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default=text("true"))
+    quantity_total: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    quantity_a_per_item: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    quantity_b_per_item: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    hangers_a: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    hangers_b: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    hangers_total: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
     __table_args__ = (
         Index("ix_techcards_active_one_per_product", "product_id", unique=True, postgresql_where=text("is_active = true")),

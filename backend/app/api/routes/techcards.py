@@ -16,6 +16,12 @@ class TechcardCreate(BaseModel):
     version: str
     processing_type: Literal["standart_processing", "paired_processing"] = "standart_processing"
     is_active: bool = True
+    quantity_total: int | None = None
+    quantity_a_per_item: int | None = None
+    quantity_b_per_item: int | None = None
+    hangers_a: int | None = None
+    hangers_b: int | None = None
+    hangers_total: int | None = None
 
 
 class TechcardLineCreate(BaseModel):
@@ -142,7 +148,7 @@ async def patch_techcard(techcard_id: int, payload: dict, db: AsyncSession = Dep
     if item is None:
         raise HTTPException(status_code=404, detail="Техкарта не найдена")
     for key, value in payload.items():
-        if key in {"version", "is_active", "processing_type"}:
+        if key in {"version", "is_active", "processing_type", "quantity_total", "quantity_a_per_item", "quantity_b_per_item", "hangers_a", "hangers_b", "hangers_total"}:
             setattr(item, key, value)
     await db.flush()
     await db.refresh(item)

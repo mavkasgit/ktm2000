@@ -6,6 +6,12 @@ export type Techcard = {
   version: string;
   processing_type: "standart_processing" | "paired_processing";
   is_active: boolean;
+  quantity_total?: number | null;
+  quantity_a_per_item?: number | null;
+  quantity_b_per_item?: number | null;
+  hangers_a?: number | null;
+  hangers_b?: number | null;
+  hangers_total?: number | null;
 };
 
 export type TechcardLine = {
@@ -37,6 +43,12 @@ export type CreateTechcardInput = {
   version: string;
   processing_type?: "standart_processing" | "paired_processing";
   is_active?: boolean;
+  quantity_total?: number | null;
+  quantity_a_per_item?: number | null;
+  quantity_b_per_item?: number | null;
+  hangers_a?: number | null;
+  hangers_b?: number | null;
+  hangers_total?: number | null;
 };
 
 export type CreateTechcardLineInput = {
