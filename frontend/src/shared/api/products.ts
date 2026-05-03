@@ -86,6 +86,21 @@ export async function uploadProductPhoto(productId: number, file: File) {
   return data;
 }
 
+export async function uploadCatalogZip(file: File) {
+  const formData = new FormData();
+  formData.append("file", file);
+  const { data } = await apiClient.post<{
+    imported: number;
+    updated: number;
+    skipped: number;
+    errors: string[];
+    total_in_zip: number;
+  }>("/catalog-import/upload-zip", formData, {
+    headers: { "Content-Type": "multipart/form-data" },
+  });
+  return data;
+}
+
 export async function searchProductSuggestions(
   q: string,
   field: "sku" | "name" | "profile_type" | "alloy" | "color" = "sku",

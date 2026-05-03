@@ -67,4 +67,9 @@ async def validate_plan_position(db: AsyncSession, position: PlanPosition) -> li
     if duplicate is not None:
         errors.append("duplicate_sku_due_date")
 
+    from app.services.route_validation import validate_route_match
+
+    route_errors = await validate_route_match(db, position)
+    errors.extend(route_errors)
+
     return errors

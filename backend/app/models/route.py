@@ -40,6 +40,7 @@ class RouteStep(Base):
     route_id: Mapped[int] = mapped_column(ForeignKey("production_routes.id"), nullable=False)
     sequence: Mapped[int] = mapped_column(Integer, nullable=False)
     section_id: Mapped[int] = mapped_column(ForeignKey("sections.id"), nullable=False)
+    operation_code: Mapped[str | None] = mapped_column(String(100), nullable=True)
     operation_name: Mapped[str] = mapped_column(String(255), nullable=False)
     norm_time_minutes: Mapped[int | None] = mapped_column(Integer, nullable=True)
     requires_acceptance: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default=text("true"))

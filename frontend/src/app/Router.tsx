@@ -10,7 +10,7 @@ export const router = createBrowserRouter([
     children: [
       { index: true, element: <DashboardPage /> },
       { path: "master-data", element: <MasterDataPage /> },
-      { path: "plan-flow", element: <PlanFlowScreen /> },
+      { path: "plan", element: <PlanFlowScreen /> },
     ],
   },
 ])

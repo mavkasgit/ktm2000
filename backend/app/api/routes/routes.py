@@ -27,6 +27,7 @@ class RoutePatch(BaseModel):
 class StepCreate(BaseModel):
     sequence: int
     section_id: int
+    operation_code: str | None = None
     operation_name: str
     norm_time_minutes: int | None = None
     requires_acceptance: bool = True

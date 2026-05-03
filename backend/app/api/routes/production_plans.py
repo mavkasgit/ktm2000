@@ -2,13 +2,18 @@ from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
-from app.models.production_plan import PlanChangeSet
+from app.models.production_plan import PlanChangeSet, PlanPosition
 from app.models.release_batch import ReleaseBatchType
+from app.models.route import ProductionRoute, RouteStep
+from app.models.section import Section
 from app.services.plan_generation import create_release_batch
 from app.services.production_plan_service import apply_change_set, approve_plan_position, get_plan_preview, rollback_change_set
+from app.services.route_resolution import resolve_route_signature
+from app.services.route_validation import validate_route_match
 
 router = APIRouter(prefix="/production-plans", tags=["production-plans"])
 
@@ -22,6 +27,13 @@ class ReleaseBatchCreateIn(BaseModel):
     name: str | None = None
     batch_type: ReleaseBatchType = ReleaseBatchType.manual
     positions: list[ReleasePositionIn] | None = None
+
+
+class RouteCheckOut(BaseModel):
+    expected_signature: dict
+    active_route_snapshot: dict | None
+    match: bool
+    issues: list[str]
 
 
 @router.get("/{production_plan_id}/preview")
@@ -102,3 +114,73 @@ async def create_plan_release_batch(
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/{production_plan_id}/positions/{position_id}/route-check")
+async def route_check(
+    production_plan_id: int,
+    position_id: int,
+    db: AsyncSession = Depends(get_db),
+) -> RouteCheckOut:
+    position = await db.get(PlanPosition, position_id)
+    if position is None:
+        raise HTTPException(status_code=404, detail="Position not found")
+    if position.production_plan_id != production_plan_id:
+        raise HTTPException(status_code=400, detail="Position does not belong to production plan")
+
+    resolved = resolve_route_signature(position.source_payload or {})
+    expected_signature = {
+        "steps": [
+            {
+                "step_id": step.step_id,
+                "operation_code": step.operation_code,
+                "section_kind": step.section_kind,
+                "description": step.description,
+            }
+            for step in resolved.steps
+        ],
+        "primary_operation": resolved.primary_operation,
+        "output_kind": resolved.output_kind,
+        "additional_pack_operations": resolved.additional_pack_operations,
+    }
+
+    issues = await validate_route_match(db, position)
+
+    active_route_snapshot = None
+    if position.product_id:
+        route = await db.scalar(
+            select(ProductionRoute).where(
+                ProductionRoute.product_id == position.product_id,
+                ProductionRoute.is_active.is_(True),
+            )
+        )
+        if route:
+            steps_result = await db.execute(
+                select(RouteStep, Section)
+                .join(Section, RouteStep.section_id == Section.id)
+                .where(RouteStep.route_id == route.id)
+                .order_by(RouteStep.sequence)
+            )
+            active_route_snapshot = {
+                "route_id": route.id,
+                "route_name": route.name,
+                "route_version": route.version,
+                "steps": [
+                    {
+                        "sequence": step.sequence,
+                        "section_id": step.section_id,
+                        "section_code": section.code,
+                        "section_name": section.name,
+                        "section_kind": section.kind,
+                        "operation_name": step.operation_name,
+                    }
+                    for step, section in steps_result.all()
+                ],
+            }
+
+    return RouteCheckOut(
+        expected_signature=expected_signature,
+        active_route_snapshot=active_route_snapshot,
+        match=len(issues) == 0,
+        issues=issues,
+    )

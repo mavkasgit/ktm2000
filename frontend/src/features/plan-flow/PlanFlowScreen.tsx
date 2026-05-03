@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react"
+import { Fragment, useEffect, useMemo, useState } from "react"
 import { ChevronDown, ChevronUp, FileSpreadsheet, RotateCcw } from "lucide-react"
 import {
   approvePositions,
@@ -10,6 +10,7 @@ import {
 import { ImportWizard } from "./ImportWizard"
 import { listRecentImports } from "shared/api"
 import type { RecentImport } from "shared/api"
+import { routeCheck, type RouteCheckResponse, type RouteCheckStep } from "shared/api/productionPlans"
 import { Button } from "shared/ui"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "shared/ui"
 import { Badge } from "shared/ui"
@@ -77,11 +78,16 @@ function collectIssues(payload: unknown): string[] {
   })
 }
 
+function formatExpectedRoute(steps: RouteCheckStep[]) {
+  return steps.map(s => s.step_id.split('/').pop() ?? s.step_id).join(' → ')
+}
+
 export function PlanFlowScreen() {
   const [loading, setLoading] = useState<string | null>(null)
   const [flowIds, setFlowIds] = useState<FlowIds>({})
   const [planRows, setPlanRows] = useState<UnknownRecord[]>([])
   const [selectedPositionIds, setSelectedPositionIds] = useState<Set<string>>(new Set())
+  const [routeChecks, setRouteChecks] = useState<Record<string, RouteCheckResponse>>({})
   const [issues, setIssues] = useState<string[]>([])
   const [importOpen, setImportOpen] = useState(false)
   const [recentImports, setRecentImports] = useState<RecentImport[]>([])
@@ -343,12 +349,27 @@ export function PlanFlowScreen() {
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="flex items-center gap-3">
-            <Button disabled={!canPreviewPlan} onClick={() => runStep("preview_plan", () => previewProductionPlan(flowIds.planId), (payload) => {
+            <Button disabled={!canPreviewPlan} onClick={() => runStep("preview_plan", () => previewProductionPlan(flowIds.planId), async (payload) => {
               const rows = readArray(payload, ["positions", "rows", "plan"]) as UnknownRecord[]
               setPlanRows(rows)
               const planId = readId(payload, ["planId", "id"])
               setFlowIds((prev) => ({ ...prev, planId }))
               setSelectedPositionIds(new Set(rows.map((row) => String(row.positionId ?? row.id ?? "")).filter(Boolean)))
+              setRouteChecks({})
+              // Load route checks for all positions
+              const pid = Number(planId || flowIds.planId)
+              if (pid) {
+                const checks: Record<string, RouteCheckResponse> = {}
+                await Promise.all(rows.map(async (row) => {
+                  const posId = Number(row.id ?? row.positionId)
+                  if (posId) {
+                    try {
+                      checks[posId] = await routeCheck(pid, posId)
+                    } catch { /* ignore */ }
+                  }
+                }))
+                setRouteChecks(checks)
+              }
             })}>
               Показать план
             </Button>
@@ -356,29 +377,74 @@ export function PlanFlowScreen() {
           </div>
 
           {planRows.length > 0 && (
-            <div className="rounded-md border max-h-60 overflow-auto">
+            <div className="rounded-md border max-h-96 overflow-auto">
               <table className="w-full text-sm">
                 <thead className="bg-muted sticky top-0">
                   <tr>
-                    <th className="text-left p-2 font-medium">Утвердить</th>
-                    <th className="text-left p-2 font-medium">Позиция</th>
-                    <th className="text-left p-2 font-medium">Данные</th>
+                    <th className="text-left p-2 font-medium w-10">✓</th>
+                    <th className="text-left p-2 font-medium">Артикул</th>
+                    <th className="text-left p-2 font-medium">Кол-во</th>
+                    <th className="text-left p-2 font-medium">Ожидаемый маршрут</th>
+                    <th className="text-left p-2 font-medium">Активный маршрут</th>
+                    <th className="text-left p-2 font-medium">Статус</th>
+                    <th className="text-left p-2 font-medium">Доп. упаковка</th>
                   </tr>
                 </thead>
                 <tbody>
                   {planRows.map((row, idx) => {
-                    const positionId = String(row.positionId ?? row.id ?? `row-${idx}`)
+                    const positionId = String(row.id ?? row.positionId ?? `row-${idx}`)
+                    const check = routeChecks[Number(positionId)]
+                    const validationErrors = Array.isArray(row.validation_errors) ? row.validation_errors : []
+                    const canSelect = !check || (check.match && validationErrors.length === 0)
                     return (
                       <tr key={positionId} className="border-t">
                         <td className="p-2">
                           <input
                             type="checkbox"
+                            disabled={!canSelect}
                             checked={selectedPositionIds.has(positionId)}
                             onChange={() => togglePosition(positionId)}
                           />
                         </td>
-                        <td className="p-2 font-mono text-xs">{positionId}</td>
-                        <td className="p-2 text-xs text-muted-foreground">{JSON.stringify(row)}</td>
+                        <td className="p-2 text-xs">
+                          <div className="font-medium">{String(row.source_sku ?? row.sku ?? "—")}</div>
+                          <div className="text-muted-foreground truncate max-w-[120px]">{String(row.source_name ?? row.name ?? "")}</div>
+                        </td>
+                        <td className="p-2 text-xs">{String(row.quantity ?? "—")}</td>
+                        <td className="p-2 text-xs">
+                          {check ? (
+                            <div className="truncate max-w-[200px]" title={check.expected_signature.steps.map(s => s.step_id).join(" → ")}>
+                              {check.expected_signature.steps.map(s => s.step_id.split("/").pop() ?? s.step_id).join(" → ")}
+                            </div>
+                          ) : (
+                            <span className="text-muted-foreground">—</span>
+                          )}
+                        </td>
+                        <td className="p-2 text-xs">
+                          {check?.active_route_snapshot ? (
+                            <span>{check.active_route_snapshot.route_name} ({check.active_route_snapshot.route_version})</span>
+                          ) : (
+                            <span className="text-muted-foreground">—</span>
+                          )}
+                        </td>
+                        <td className="p-2">
+                          {check ? (
+                            check.match ? (
+                              <Badge tone="success" className="text-xs">OK</Badge>
+                            ) : (
+                              <Badge tone="danger" className="text-xs">Mismatch</Badge>
+                            )
+                          ) : (
+                            <span className="text-muted-foreground text-xs">—</span>
+                          )}
+                        </td>
+                        <td className="p-2 text-xs">
+                          {check && check.expected_signature.additional_pack_operations.length > 0 ? (
+                            <span>{check.expected_signature.additional_pack_operations.join(", ")}</span>
+                          ) : (
+                            <span className="text-muted-foreground">—</span>
+                          )}
+                        </td>
                       </tr>
                     )
                   })}

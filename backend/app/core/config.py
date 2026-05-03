@@ -19,7 +19,7 @@ class Settings(BaseSettings):
     DB_MAX_OVERFLOW: int = 10
     SQL_ECHO: bool = False
 
-    CORS_ORIGINS: str = "http://localhost:5202"
+    CORS_ORIGINS: str = "http://localhost:5200,http://127.0.0.1:5200"
     IMPORT_STORAGE_DIR: str = str(BASE_DIR.parent / "storage" / "imports")
     PRODUCT_PHOTO_DIR: str = str(BASE_DIR.parent / "storage" / "products")
 

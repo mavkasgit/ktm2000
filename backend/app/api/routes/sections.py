@@ -15,6 +15,7 @@ class SectionIn(BaseModel):
     description: str | None = None
     sort_order: int = 0
     is_active: bool = True
+    kind: str = "production"
 
 
 class SectionPatch(BaseModel):
@@ -22,6 +23,7 @@ class SectionPatch(BaseModel):
     description: str | None = None
     sort_order: int | None = None
     is_active: bool | None = None
+    kind: str | None = None
 
 
 class SectionOut(SectionIn):

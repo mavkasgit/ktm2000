@@ -11,6 +11,8 @@ import {
   Trash2,
   ChevronDown,
   Filter,
+  FileUp,
+  Maximize2,
 } from "lucide-react";
 import * as API from "@/shared/api/products";
 import { Button } from "@/shared/ui/Button";
@@ -46,7 +48,8 @@ const TYPE_OPTIONS: { value: ProductType; label: string }[] = [
 function getPhotoUrl(path: string | null): string | null {
   if (!path) return null;
   if (path.startsWith("http")) return path;
-  return path.startsWith("/") ? path : `/static/${path}`;
+  const normalized = path.replace(/\\/g, "/");
+  return normalized.startsWith("/") ? normalized : `/static/${normalized}`;
 }
 
 export function ProductsScreen() {
@@ -123,6 +126,20 @@ export function ProductsScreen() {
     }
   };
 
+  const handleImportZip = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setError("");
+    try {
+      const result = await API.uploadCatalogZip(file);
+      await load();
+      setError(`Импорт завершён: ${result.imported} создано, ${result.updated} обновлено, ${result.skipped} без изменений`);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Ошибка импорта");
+    }
+    e.target.value = "";
+  };
+
   const activeFiltersCount = [typeFilter, profileTypeFilter, alloyFilter, colorFilter, catalogOnly].filter(Boolean).length;
 
   return (
@@ -134,6 +151,12 @@ export function ProductsScreen() {
           <Button variant="outline" size="sm" onClick={() => setViewMode(viewMode === "grid" ? "table" : "grid")}>
             {viewMode === "grid" ? <List className="h-4 w-4" /> : <Grid className="h-4 w-4" />}
           </Button>
+          <label>
+            <input type="file" accept=".zip" className="hidden" onChange={handleImportZip} />
+            <Button variant="outline" size="sm" asChild>
+              <span><FileUp className="h-4 w-4 mr-1" />Импорт ZIP</span>
+            </Button>
+          </label>
           <Button size="sm" onClick={openCreate}>
             <Plus className="h-4 w-4 mr-1" />
             Добавить
@@ -275,11 +298,6 @@ export function ProductsScreen() {
               <tr>
                 <th className="px-4 py-3 text-left font-medium">Фото</th>
                 <th className="px-4 py-3 text-left font-medium">Артикул</th>
-                <th className="px-4 py-3 text-left font-medium">Наименование</th>
-                <th className="px-4 py-3 text-left font-medium">Тип</th>
-                <th className="px-4 py-3 text-left font-medium">Вид</th>
-                <th className="px-4 py-3 text-left font-medium">Сплав</th>
-                <th className="px-4 py-3 text-left font-medium">Цвет</th>
                 <th className="px-4 py-3 text-left font-medium">Длина</th>
                 <th className="px-4 py-3 text-left font-medium">Источник</th>
                 <th className="px-4 py-3 text-left font-medium w-20"></th>
@@ -302,13 +320,6 @@ export function ProductsScreen() {
                     </div>
                   </td>
                   <td className="px-4 py-2 font-medium">{product.sku}</td>
-                  <td className="px-4 py-2">{product.name}</td>
-                  <td className="px-4 py-2">
-                    <Badge variant="outline">{TYPE_LABELS[product.type]}</Badge>
-                  </td>
-                  <td className="px-4 py-2 text-muted-foreground">{product.profile_type || "—"}</td>
-                  <td className="px-4 py-2 text-muted-foreground">{product.alloy || "—"}</td>
-                  <td className="px-4 py-2 text-muted-foreground">{product.color || "—"}</td>
                   <td className="px-4 py-2 text-muted-foreground">{product.length_mm ? `${product.length_mm} мм` : "—"}</td>
                   <td className="px-4 py-2">
                     {product.is_catalog_item && (
@@ -379,7 +390,6 @@ function ProductCard({
                 <Pencil className="h-4 w-4" />
               </Button>
             </div>
-            <p className="text-sm text-muted-foreground truncate">{product.name}</p>
             <div className="flex gap-1 mt-2 flex-wrap">
               <Badge variant="outline" className="text-xs">{TYPE_LABELS[product.type]}</Badge>
               {product.profile_type && <Badge variant="secondary" className="text-xs">{product.profile_type}</Badge>}
@@ -390,6 +400,195 @@ function ProductCard({
         </div>
       </CardContent>
     </Card>
+  );
+}
+
+function FullscreenPhoto({
+  src,
+  alt,
+  onClose,
+}: {
+  src: string;
+  alt: string;
+  onClose: () => void;
+}) {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const imageRef = useRef<HTMLImageElement>(null);
+  const [scale, setScale] = useState(1);
+  const [translate, setTranslate] = useState({ x: 0, y: 0 });
+  const isDragging = useRef(false);
+  const dragStart = useRef({ x: 0, y: 0 });
+  const translateStart = useRef({ x: 0, y: 0 });
+  const clickStart = useRef({ x: 0, y: 0 });
+  const hasDragged = useRef(false);
+
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    el.requestFullscreen().catch(() => {});
+
+    const handleFullscreenChange = () => {
+      if (!document.fullscreenElement) onClose();
+    };
+    document.addEventListener("fullscreenchange", handleFullscreenChange);
+    return () => {
+      document.removeEventListener("fullscreenchange", handleFullscreenChange);
+      if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
+    };
+  }, [onClose]);
+
+  const zoomToPoint = (clientX: number, clientY: number, newScale: number) => {
+    const container = containerRef.current;
+    if (!container) return;
+    const rect = container.getBoundingClientRect();
+    const px = clientX - rect.left - rect.width / 2;
+    const py = clientY - rect.top - rect.height / 2;
+
+    setTranslate((prev) => ({
+      x: px - (px - prev.x) * (newScale / scale),
+      y: py - (py - prev.y) * (newScale / scale),
+    }));
+    setScale(newScale);
+  };
+
+  const handleWheel = (e: React.WheelEvent) => {
+    e.preventDefault();
+    const delta = e.deltaY > 0 ? -0.15 : 0.15;
+    const newScale = Math.max(0.5, Math.min(10, scale + delta));
+    if (newScale !== scale) {
+      zoomToPoint(e.clientX, e.clientY, newScale);
+    }
+  };
+
+  const handleMouseDown = (e: React.MouseEvent) => {
+    if (e.button !== 0) return;
+    isDragging.current = true;
+    hasDragged.current = false;
+    dragStart.current = { x: e.clientX, y: e.clientY };
+    translateStart.current = { ...translate };
+    clickStart.current = { x: e.clientX, y: e.clientY };
+  };
+
+  const handleMouseMove = (e: React.MouseEvent) => {
+    if (!isDragging.current) return;
+    const dx = e.clientX - dragStart.current.x;
+    const dy = e.clientY - dragStart.current.y;
+    if (Math.abs(dx) > 3 || Math.abs(dy) > 3) {
+      hasDragged.current = true;
+    }
+    setTranslate({
+      x: translateStart.current.x + dx,
+      y: translateStart.current.y + dy,
+    });
+  };
+
+  const handleMouseUp = (e: React.MouseEvent) => {
+    if (!isDragging.current) return;
+    isDragging.current = false;
+
+    // If not dragged, treat as click -> zoom in
+    if (!hasDragged.current) {
+      const dist = Math.hypot(e.clientX - clickStart.current.x, e.clientY - clickStart.current.y);
+      if (dist < 5) {
+        const newScale = scale >= 3 ? 1 : Math.min(10, scale * 1.6);
+        zoomToPoint(e.clientX, e.clientY, newScale);
+      }
+    }
+  };
+
+  const handleContextMenu = (e: React.MouseEvent) => {
+    e.preventDefault();
+    // Right click -> zoom out or reset
+    const newScale = Math.max(0.5, scale / 1.6);
+    if (newScale < 0.7) {
+      setScale(1);
+      setTranslate({ x: 0, y: 0 });
+    } else {
+      zoomToPoint(e.clientX, e.clientY, newScale);
+    }
+  };
+
+  const handleDoubleClick = () => {
+    setScale(1);
+    setTranslate({ x: 0, y: 0 });
+  };
+
+  return (
+    <div
+      ref={containerRef}
+      className="fixed inset-0 z-[100] bg-black flex items-center justify-center overflow-hidden select-none"
+      onWheel={handleWheel}
+      onMouseDown={handleMouseDown}
+      onMouseMove={handleMouseMove}
+      onMouseUp={handleMouseUp}
+      onMouseLeave={handleMouseUp}
+      onContextMenu={handleContextMenu}
+      onDoubleClick={handleDoubleClick}
+    >
+      {/* Controls */}
+      <div className="absolute top-4 right-4 flex gap-2 z-10">
+        <button
+          onClick={() => {
+            const newScale = Math.min(10, scale * 1.5);
+            const rect = containerRef.current?.getBoundingClientRect();
+            if (rect) zoomToPoint(rect.left + rect.width / 2, rect.top + rect.height / 2, newScale);
+          }}
+          className="p-2 bg-black/50 hover:bg-black/70 text-white rounded-full"
+          type="button"
+          title="Приблизить (+)"
+        >
+          <Plus className="w-5 h-5" />
+        </button>
+        <button
+          onClick={() => {
+            const newScale = Math.max(0.5, scale / 1.5);
+            const rect = containerRef.current?.getBoundingClientRect();
+            if (rect) zoomToPoint(rect.left + rect.width / 2, rect.top + rect.height / 2, newScale);
+          }}
+          className="p-2 bg-black/50 hover:bg-black/70 text-white rounded-full"
+          type="button"
+          title="Отдалить (-)"
+        >
+          <X className="w-5 h-5" />
+        </button>
+        <button
+          onClick={handleDoubleClick}
+          className="p-2 bg-black/50 hover:bg-black/70 text-white rounded-full"
+          type="button"
+          title="Сбросить (1:1)"
+        >
+          <Maximize2 className="w-5 h-5" />
+        </button>
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            document.exitFullscreen().catch(() => {});
+          }}
+          className="p-2 bg-black/50 hover:bg-black/70 text-white rounded-full"
+          type="button"
+          title="Закрыть"
+        >
+          <X className="w-5 h-5" />
+        </button>
+      </div>
+
+      {/* Info */}
+      <div className="absolute bottom-4 left-4 text-white/60 text-sm z-10 pointer-events-none">
+        {Math.round(scale * 100)}% • ЛКМ: приблизить/перетащить • Колесико: зум • ПКМ: отдалить • Двойной клик: сброс
+      </div>
+
+      <img
+        ref={imageRef}
+        src={src}
+        alt={alt}
+        draggable={false}
+        className="max-w-none transition-transform duration-75 ease-out"
+        style={{
+          transform: `translate(${translate.x}px, ${translate.y}px) scale(${scale})`,
+          cursor: isDragging.current ? "grabbing" : scale > 1 ? "grab" : "zoom-in",
+        }}
+      />
+    </div>
   );
 }
 
@@ -405,6 +604,7 @@ function ProductForm({
   onCancel: () => void;
 }) {
   const isView = mode === "view";
+  const [fullscreenPhoto, setFullscreenPhoto] = useState<string | null>(null);
   const [form, setForm] = useState<CreateProductInput>({
     sku: product?.sku ?? "",
     name: product?.name ?? "",
@@ -446,16 +646,39 @@ function ProductForm({
 
   return (
     <form onSubmit={handleSubmit} className="space-y-4 mt-4">
-      {/* Photo placeholder */}
+      {/* Photo - full size in dialog */}
       <div className="flex justify-center">
-        <div className="w-32 h-32 bg-muted rounded-lg flex items-center justify-center overflow-hidden">
-          {product?.photo_thumb ? (
-            <img src={getPhotoUrl(product.photo_thumb)!} alt="" className="w-full h-full object-contain" />
+        <div
+          className="relative w-full max-w-md h-64 bg-muted rounded-lg flex items-center justify-center overflow-hidden group/photo cursor-pointer hover:ring-2 ring-primary transition-all"
+          onClick={() => {
+            const full = product?.photo_full || product?.photo_thumb;
+            if (full) setFullscreenPhoto(getPhotoUrl(full)!);
+          }}
+        >
+          {product?.photo_full || product?.photo_thumb ? (
+            <>
+              <img
+                src={getPhotoUrl(product?.photo_full || product?.photo_thumb)!}
+                alt={product?.name || ""}
+                className="w-full h-full object-contain pointer-events-none"
+              />
+              <div className="absolute bottom-2 right-2 p-2 bg-black/50 text-white rounded-full pointer-events-none">
+                <Maximize2 className="w-5 h-5" />
+              </div>
+            </>
           ) : (
-            <Image className="w-10 h-10 text-muted-foreground" />
+            <Image className="w-16 h-16 text-muted-foreground" />
           )}
         </div>
       </div>
+
+      {fullscreenPhoto && (
+        <FullscreenPhoto
+          src={fullscreenPhoto}
+          alt={product?.name || ""}
+          onClose={() => setFullscreenPhoto(null)}
+        />
+      )}
 
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
         <div className="space-y-1">

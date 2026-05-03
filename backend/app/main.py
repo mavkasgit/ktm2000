@@ -15,6 +15,7 @@ from app.api.routes.production_plans import router as production_plans_router
 from app.api.routes.release_batches import router as release_batches_router
 from app.api.routes.routes import router as routes_router
 from app.api.routes.import_templates import router as import_templates_router
+from app.api.routes.catalog_import import router as catalog_import_router
 from app.core.config import settings
 from app.core.database import async_session
 
@@ -34,6 +35,7 @@ app.add_middleware(
 
 # Serve static files (product photos, imports)
 storage_dir = Path(settings.PRODUCT_PHOTO_DIR).parent
+storage_dir.mkdir(parents=True, exist_ok=True)
 app.mount("/static", StaticFiles(directory=str(storage_dir)), name="static")
 
 app.include_router(health_router, prefix="/api")
@@ -46,6 +48,7 @@ app.include_router(imports_router, prefix="/api")
 app.include_router(production_plans_router, prefix="/api")
 app.include_router(release_batches_router, prefix="/api")
 app.include_router(import_templates_router, prefix="/api")
+app.include_router(catalog_import_router, prefix="/api")
 
 
 @app.get("/api/health")

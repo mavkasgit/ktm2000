@@ -174,6 +174,53 @@ def test_factory_plan_parser_with_custom_mapping() -> None:
     assert row.payload["order_ref"] == "ORD-001"
 
 
+def test_factory_plan_parser_maps_additional_pack_operations() -> None:
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "План май 26 05"
+    ws.append(["", "", "Комментарий"])
+    ws.append(["Заявка № 05", "май"])
+    ws.append([])
+    ws.append(["", "", "", "", "", "", "", "", "", "", "", "", "Формирование ящиков"])
+    ws.append(
+        [
+            "Артикул",
+            "пополнение",
+            "Наименование",
+            "остатки сырья на КТМ",
+            "Цвет",
+            "кол-во шт. в 2,7",
+            "Длина, м",
+            "Пробивка/сверловка",
+            "Упаковка",
+            "Примечание ",
+            "Длина после упак, м",
+            "кол-во штук готовой продукции",
+            "Запад",
+            "Восток",
+            "Вид конечного продукта",
+            "Комментарии",
+        ]
+    )
+    ws.append(["SKU-GLUE", "", "Glue Profile", 0, "", 100, 2.7, "клей", "поф", "", 2.7, 100, "", 100, "ГП", ""])
+    ws.append(["SKU-DIFF", "", "Diffuser Profile", 0, "", 200, 2.7, "рассеиватель", "поф", "", 2.7, 200, "", 200, "ГП", ""])
+    out = BytesIO()
+    wb.save(out)
+
+    parsed = parse_factory_plan_workbook(out.getvalue(), "pack_ops.xlsx")
+    assert len(parsed.parsed_rows) == 2
+
+    glue = parsed.parsed_rows[0].payload
+    assert glue["operation_code"] == "PACK"
+    assert glue["operation_name"] == "Упаковка"
+    assert glue["additional_pack_operations"][0]["operation_code"] == "PACK_GLUE"
+
+    diffuser = parsed.parsed_rows[1].payload
+    assert diffuser["operation_code"] == "PACK"
+    assert diffuser["operation_name"] == "Упаковка"
+    assert diffuser["additional_pack_operations"][0]["operation_code"] == "PACK_DIFFUSER"
+
+
 from datetime import date, datetime
 
 from app.services.excel_import import _excel_date_to_date, _parse_date

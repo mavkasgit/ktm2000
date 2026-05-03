@@ -18,41 +18,4 @@ services:
       timeout: 5s
       retries: 5
 
-  backend:
-    build:
-      context: ../backend
-      dockerfile: Dockerfile
-    container_name: factoryflow-backend
-    environment:
-      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-factoryflow_user}:${POSTGRES_PASSWORD:-factoryflow_pass}@postgres:5432/${POSTGRES_DB:-factoryflow_dev}
-      ENV: dev
-      SECRET_KEY: ${SECRET_KEY:-factoryflow-dev-secret-change-me}
-      CORS_ORIGINS: http://localhost:5203
-      PRODUCT_PHOTO_DIR: /app/storage/products
-      IMPORT_STORAGE_DIR: /app/storage/imports
-    ports:
-      - "${DEV_BACKEND_PORT:-5201}:8000"
-    volumes:
-      - ${DEV_STORAGE_PATH:-../storage}:/app/storage
-    depends_on:
-      postgres:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/api/health"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-
-  frontend:
-    build:
-      context: ../frontend
-      dockerfile: Dockerfile
-    container_name: factoryflow-frontend
-    ports:
-      - "${DEV_FRONTEND_PORT:-5203}:80"
-    depends_on:
-      - backend
-
-
-
 

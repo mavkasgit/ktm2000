@@ -19,13 +19,13 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 SECTIONS = [
-    {"code": "WH", "name": "Склад", "sort_order": 10, "description": "Выдача сырья и приём готовой продукции"},
+    {"code": "WH", "name": "Склад сырья", "sort_order": 10, "description": "Стартовая точка выдачи сырья и заготовок"},
     {"code": "DRILL", "name": "Сверловка", "sort_order": 20, "description": "Сверловка отверстий"},
     {"code": "PRESS", "name": "Пресс", "sort_order": 30, "description": "Прессование профилей"},
     {"code": "SHOT", "name": "Дробеструйная обработка", "sort_order": 40, "description": "Подготовка поверхности перед анодированием"},
     {"code": "ANOD", "name": "Анодирование", "sort_order": 50, "description": "Анодирование алюминиевого профиля"},
-    {"code": "SAW", "name": "Пила", "sort_order": 60, "description": "Резка профиля на заданную длину"},
-    {"code": "PACK", "name": "Упаковка", "sort_order": 70, "description": "Упаковка готовой продукции"},
+    {"code": "SAW", "name": "Пила", "sort_order": 70, "description": "Резка профиля на заданную длину"},
+    {"code": "PACK", "name": "Упаковка", "sort_order": 80, "description": "Упаковка готовой продукции"},
 ]
 
 

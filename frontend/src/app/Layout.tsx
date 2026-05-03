@@ -4,7 +4,7 @@ import { Boxes, ClipboardList, Gauge, Factory } from "lucide-react"
 const navItems = [
   { to: "/", label: "Обзор", icon: Gauge },
   { to: "/master-data", label: "Справочники", icon: Boxes },
-  { to: "/plan-flow", label: "План и запуск", icon: ClipboardList },
+  { to: "/plan", label: "План и запуск", icon: ClipboardList },
 ]
 
 export function Layout() {

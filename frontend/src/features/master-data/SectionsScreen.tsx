@@ -7,12 +7,20 @@ type Section = {
   code: string;
   name: string;
   description?: string | null;
+  kind?: string;
 };
 
 type SectionCreate = {
   code: string;
   name: string;
   description: string;
+};
+
+const KIND_LABELS: Record<string, string> = {
+  production: "Производство",
+  raw_stock: "Склад сырья",
+  wip_stock: "Склад полуфабриката",
+  finished_stock: "Склад готовой продукции",
 };
 
 const ui = UI as Record<string, React.ComponentType<any>>;
@@ -100,6 +108,7 @@ export function SectionsScreen() {
             <th align="left">ID</th>
             <th align="left">Код</th>
             <th align="left">Название</th>
+            <th align="left">Тип</th>
             <th align="left">Описание</th>
           </tr>
         </thead>
@@ -109,6 +118,7 @@ export function SectionsScreen() {
               <td>{item.id ?? "-"}</td>
               <td>{item.code}</td>
               <td>{item.name}</td>
+              <td>{KIND_LABELS[item.kind ?? "production"] ?? item.kind ?? "-"}</td>
               <td>{item.description ?? "-"}</td>
             </tr>
           ))}

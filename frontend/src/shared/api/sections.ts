@@ -1,11 +1,14 @@
 import { apiClient } from "./client";
 
+export type SectionKind = "production" | "raw_stock" | "wip_stock" | "finished_stock";
+
 export type Section = {
   id: number;
   code: string;
   name: string;
   description: string | null;
   is_active: boolean;
+  kind: SectionKind;
 };
 
 export type CreateSectionInput = {
@@ -13,9 +16,10 @@ export type CreateSectionInput = {
   name: string;
   description?: string | null;
   is_active?: boolean;
+  kind?: SectionKind;
 };
 
-export type PatchSectionInput = Partial<Pick<CreateSectionInput, "name" | "description" | "is_active">>;
+export type PatchSectionInput = Partial<Pick<CreateSectionInput, "name" | "description" | "is_active" | "kind">>;
 
 export async function listSections() {
   const { data } = await apiClient.get<Section[]>("/sections");

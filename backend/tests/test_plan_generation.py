@@ -59,6 +59,38 @@ async def _make_ready_product(session, sku: str = "FG-1") -> tuple[Product, list
     return product, sections, route
 
 
+async def _make_matching_route_product(session, sku: str = "FG-MATCH") -> tuple[Product, list[Section], ProductionRoute]:
+    product = Product(sku=sku, name=f"Finished {sku}", type=ProductType.finished_good, unit="pcs")
+    sections = [
+        Section(code=f"{sku}-ISSUE", name="Issue", kind="raw_stock"),
+        Section(code=f"{sku}-DRILL", name="Drill", kind="production"),
+        Section(code=f"{sku}-SHOT", name="Shot", kind="production"),
+        Section(code=f"{sku}-ANOD", name="Anod", kind="production"),
+        Section(code=f"{sku}-WIP", name="WIP", kind="wip_stock"),
+        Section(code=f"{sku}-FINAL", name="Final", kind="finished_stock"),
+    ]
+    session.add_all([product, *sections])
+    await session.flush()
+
+    route = ProductionRoute(product_id=product.id, name="Main", version="v1", is_active=True)
+    session.add(route)
+    await session.flush()
+
+    step_ops = ["Issue raw", "DRILL", "SHOT", "ANOD", "Move to WIP", "Accept finished"]
+    for index, (section, op_name) in enumerate(zip(sections, step_ops, strict=True), start=1):
+        session.add(
+            RouteStep(
+                route_id=route.id,
+                sequence=index,
+                section_id=section.id,
+                operation_name=op_name,
+                is_final=index == len(sections),
+            )
+        )
+    await session.flush()
+    return product, sections, route
+
+
 async def _make_plan_position(session, product: Product, quantity: Decimal = Decimal("100")) -> tuple[ProductionPlan, PlanPosition]:
     plan = ProductionPlan(
         plan_no=f"PLAN-{product.sku}",
@@ -281,3 +313,44 @@ async def test_release_quantity_cannot_exceed_approved_quantity(client, session)
     )
     assert response.status_code == 400
     assert "exceeds approved" in response.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_route_check_endpoint(client, session) -> None:
+    product, sections, route = await _make_matching_route_product(session, "FG-ROUTE-CHECK")
+    plan, position = await _make_plan_position(session, product)
+    position.source_payload = {
+        "operation_code": "DRILL",
+        "output_kind": "finished_good",
+        "additional_pack_operations": [],
+    }
+    await session.commit()
+
+    response = await client.get(f"/api/production-plans/{plan.id}/positions/{position.id}/route-check")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["match"] is True
+    assert "expected_signature" in data
+    assert "active_route_snapshot" in data
+    assert data["active_route_snapshot"]["route_id"] == route.id
+    assert data["active_route_snapshot"]["route_name"] == "Main"
+    assert len(data["expected_signature"]["steps"]) > 0
+    assert len(data["active_route_snapshot"]["steps"]) == len(sections)
+
+
+@pytest.mark.asyncio
+async def test_release_blocked_on_route_mismatch(client, session) -> None:
+    product, _, _ = await _make_ready_product(session, "FG-ROUTE-MISMATCH")
+    plan, position = await _make_plan_position(session, product)
+    position.source_payload = {
+        "output_kind": "finished_good",
+        "additional_pack_operations": [{"operation_code": "PACK_GLUE"}],
+    }
+    await session.commit()
+
+    response = await client.post(
+        f"/api/production-plans/{plan.id}/release-batches",
+        json={"positions": [{"plan_position_id": position.id, "release_quantity": "100"}]},
+    )
+    assert response.status_code == 400
+    assert "route_missing_required_step" in response.json()["detail"]

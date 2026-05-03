@@ -47,6 +47,7 @@ Soft delete: для справочников использовать `is_active
 - `code text unique not null`
 - `name text not null`
 - `description text null`
+- `kind text not null default 'production'`
 - `is_active boolean not null default true`
 - `created_at timestamptz not null`
 
@@ -110,6 +111,7 @@ Soft delete: для справочников использовать `is_active
 - `route_id bigint not null references production_routes(id)`
 - `sequence integer not null`
 - `section_id bigint not null references sections(id)`
+- `operation_code text null`
 - `operation_name text not null`
 - `norm_time_minutes integer null`
 - `requires_acceptance boolean not null default true`

@@ -61,3 +61,27 @@ export async function createPlanReleaseBatch(productionPlanId: number, payload: 
   const { data } = await apiClient.post<ReleaseBatchSummary>(`/production-plans/${productionPlanId}/release-batches`, payload);
   return data;
 }
+
+export type RouteCheckStep = { step_id: string; operation_code: string | null; section_kind: string | null; description: string };
+
+export type RouteCheckResponse = {
+  expected_signature: {
+    steps: RouteCheckStep[];
+    primary_operation: string | null;
+    output_kind: string | null;
+    additional_pack_operations: string[];
+  };
+  active_route_snapshot: {
+    route_id: number;
+    route_name: string;
+    route_version: string;
+    steps: { sequence: number; section_id: number; section_code: string; section_name: string; section_kind: string; operation_name: string }[];
+  } | null;
+  match: boolean;
+  issues: string[];
+};
+
+export async function routeCheck(planId: number, positionId: number) {
+  const { data } = await apiClient.get<RouteCheckResponse>(`/production-plans/${planId}/positions/${positionId}/route-check`);
+  return data;
+}

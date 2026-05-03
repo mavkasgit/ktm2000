@@ -13,6 +13,7 @@ from app.models.release_batch import ReleaseBatch, ReleaseBatchPosition, Release
 from app.models.route import ProductionRoute, RouteStep
 from app.models.section import Section
 from app.models.work_task import WorkTask, WorkTaskStatus
+from app.services.route_validation import validate_route_match
 
 
 async def create_release_batch(
@@ -47,6 +48,9 @@ async def create_release_batch(
     for position, release_quantity in selected_positions:
         route = await _get_active_route(db, position)
         await _validate_active_bom(db, position)
+        route_issues = await validate_route_match(db, position)
+        if route_issues:
+            raise ValueError(f"Route mismatch for position {position.id}: " + "; ".join(route_issues))
         steps = await _get_route_steps_with_sections(db, route)
         remaining = await _remaining_quantity(db, position)
         if release_quantity <= 0:
@@ -252,6 +256,8 @@ def _route_snapshot(route: ProductionRoute, steps: list[tuple[RouteStep, Section
                 "section_id": section.id,
                 "section_code": section.code,
                 "section_name": section.name,
+                "section_kind": section.kind,
+                "operation_code": step.operation_code,
                 "operation_name": step.operation_name,
                 "requires_acceptance": step.requires_acceptance,
                 "allow_parallel": step.allow_parallel,

@@ -239,12 +239,17 @@ def _make_plan_row(
     inherited: bool,
 ) -> ParsedPlanRow:
     component = _component_from_raw(row_number, raw)
+    raw_operation = _cell_text(raw.get("operation")) or None
+    operation_code, operation_name, additional_pack_operations = _normalize_operation(raw_operation)
     payload = {
         "row_numbers": [row_number],
         "components": [component],
         "color": _cell_text(raw.get("color")) or None,
         "input_length": _decimal_to_str(_decimal_or_none(raw.get("input_length"))),
-        "operation": _cell_text(raw.get("operation")) or None,
+        "operation": raw_operation,
+        "operation_code": operation_code,
+        "operation_name": operation_name,
+        "additional_pack_operations": additional_pack_operations,
         "packaging": _cell_text(raw.get("packaging")) or None,
         "note": _cell_text(raw.get("note")) or None,
         "output_length": _decimal_to_str(_decimal_or_none(raw.get("output_length"))),
@@ -440,6 +445,23 @@ def _normalize_output_kind(value: str) -> str | None:
     return value
 
 
+def _normalize_operation(value: str | None) -> tuple[str | None, str | None, list[dict[str, str]]]:
+    if not value:
+        return None, None, []
+    normalized = value.lower().replace("ё", "е").strip()
+    if "окн" in normalized:
+        return "PRESS_WINDOW", "Пресс окно", []
+    if "греб" in normalized:
+        return "PRESS_COMB", "Пресс гребенка", []
+    if "сверл" in normalized or "сверло" in normalized:
+        return "DRILL", "Сверловка", []
+    if "клей" in normalized:
+        return "PACK", "Упаковка", [{"operation_code": "PACK_GLUE", "operation_name": "Упаковка с клеевой операцией"}]
+    if "рассеив" in normalized:
+        return "PACK", "Упаковка", [{"operation_code": "PACK_DIFFUSER", "operation_name": "Упаковка с рассеивателем"}]
+    return "PACK", "Упаковка", [{"operation_code": "PACK_CUSTOM", "operation_name": f"Доп. упаковочная операция: {value}"}]
+
+
 def _fingerprint_payload(source_sku: str, quantity: Decimal, payload: dict[str, Any]) -> dict[str, Any]:
     return {
         "source_sku": source_sku,
@@ -448,6 +470,8 @@ def _fingerprint_payload(source_sku: str, quantity: Decimal, payload: dict[str, 
         "color": payload.get("color"),
         "input_length": payload.get("input_length"),
         "operation": payload.get("operation"),
+        "operation_code": payload.get("operation_code"),
+        "additional_pack_operations": payload.get("additional_pack_operations"),
         "packaging": payload.get("packaging"),
         "output_length": payload.get("output_length"),
         "output_kind": payload.get("output_kind"),

@@ -19,6 +19,7 @@ class Section(Base):
         Integer, nullable=False, default=0, server_default=text("0")
     )
     is_active: Mapped[bool] = mapped_column(nullable=False, default=True, server_default=text("true"))
+    kind: Mapped[str] = mapped_column(String(20), nullable=False, default="production", server_default=text("'production'"))
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=text("now()")
     )

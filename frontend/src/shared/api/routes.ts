@@ -13,6 +13,7 @@ export type RouteStep = {
   route_id: number;
   sequence: number;
   section_id: number;
+  operation_code: string | null;
   operation_name: string;
   norm_time_minutes: number | null;
   requires_acceptance: boolean;
@@ -32,6 +33,7 @@ export type PatchRouteInput = Partial<Pick<CreateRouteInput, "name" | "version" 
 export type CreateRouteStepInput = {
   sequence: number;
   section_id: number;
+  operation_code?: string | null;
   operation_name: string;
   norm_time_minutes?: number | null;
   requires_acceptance?: boolean;
