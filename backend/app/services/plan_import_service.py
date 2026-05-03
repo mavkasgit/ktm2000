@@ -31,6 +31,7 @@ from app.services.excel_import import (
     validate_excel_extension,
 )
 from app.services.techcard_pair_resolution import resolve_techcard_pair
+from app.services.route_matcher import find_route
 
 
 async def create_excel_import_change_set(
@@ -224,9 +225,7 @@ async def _make_change_items(
                     if not resolution.resolved:
                         warnings.append("techcard_pair_not_resolved")
 
-            route = await db.scalar(
-                select(ProductionRoute).where(ProductionRoute.product_id == product.id, ProductionRoute.is_active.is_(True))
-            )
+            route = await find_route(db, product) if product else None
             if route is None:
                 errors.append("active_route_not_found")
             else:

@@ -36,31 +36,13 @@ async def test_one_active_techcard_per_product(session) -> None:
 
 
 @pytest.mark.asyncio
-async def test_one_active_route_per_product(session) -> None:
-    section = Section(code="SEC-1", name="Section 1")
-    product = Product(sku="SKU-ROUTE", name="With Route", type=ProductType.finished_good, unit="pcs")
-    session.add_all([section, product])
-    await session.flush()
-
-    route1 = ProductionRoute(product_id=product.id, name="Main", version="v1", is_active=True)
-    session.add(route1)
-    await session.flush()
-    session.add(RouteStep(route_id=route1.id, sequence=1, section_id=section.id, operation_name="Op1", is_final=True))
-    await session.commit()
-
-    session.add(ProductionRoute(product_id=product.id, name="Main2", version="v2", is_active=True))
-    with pytest.raises(IntegrityError):
-        await session.commit()
-
-
-@pytest.mark.asyncio
 async def test_route_step_sequence_uniqueness(session) -> None:
     section = Section(code="SEC-2", name="Section 2")
     product = Product(sku="SKU-SEQ", name="Seq Product", type=ProductType.finished_good, unit="pcs")
     session.add_all([section, product])
     await session.flush()
 
-    route = ProductionRoute(product_id=product.id, name="Route", version="v1", is_active=True)
+    route = ProductionRoute(name="Route", is_active=True)
     session.add(route)
     await session.flush()
 
@@ -79,7 +61,7 @@ async def test_inactive_section_rejected_in_route_step(client, session) -> None:
 
     create_route = await client.post(
         "/api/routes",
-        json={"product_id": product.id, "name": "Route", "version": "v1", "is_active": True},
+        json={"name": "Route", "is_active": True},
     )
     assert create_route.status_code == 201
     route_id = create_route.json()["id"]

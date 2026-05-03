@@ -6,12 +6,14 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
+from app.models.product import Product
 from app.models.production_plan import PlanChangeSet, PlanPosition
 from app.models.release_batch import ReleaseBatchType
 from app.models.route import ProductionRoute, RouteStep
 from app.models.section import Section
 from app.services.plan_generation import create_release_batch
 from app.services.production_plan_service import apply_change_set, approve_plan_position, get_plan_preview, rollback_change_set
+from app.services.route_matcher import find_route
 from app.services.route_resolution import resolve_route_signature
 from app.services.route_validation import validate_route_match
 
@@ -163,12 +165,8 @@ async def route_check(
 
     active_route_snapshot = None
     if position.product_id:
-        route = await db.scalar(
-            select(ProductionRoute).where(
-                ProductionRoute.product_id == position.product_id,
-                ProductionRoute.is_active.is_(True),
-            )
-        )
+        product = await db.get(Product, position.product_id)
+        route = await find_route(db, product) if product else None
         if route:
             steps_result = await db.execute(
                 select(RouteStep, Section)
@@ -179,7 +177,6 @@ async def route_check(
             active_route_snapshot = {
                 "route_id": route.id,
                 "route_name": route.name,
-                "route_version": route.version,
                 "steps": [
                     {
                         "sequence": step.sequence,
@@ -219,12 +216,8 @@ async def section_totals(
     for position in positions:
         if position.product_id is None:
             continue
-        route = await db.scalar(
-            select(ProductionRoute).where(
-                ProductionRoute.product_id == position.product_id,
-                ProductionRoute.is_active.is_(True),
-            )
-        )
+        product = await db.get(Product, position.product_id)
+        route = await find_route(db, product) if product else None
         if route is None:
             continue
 

@@ -6,3 +6,6 @@ export * from "./Card";
 export * from "./Table";
 export * from "./Feedback";
 export * from "./Dialog";
+export * from "./Checkbox";
+export { Toaster } from "./toaster";
+export { ToastProvider, toast } from "./use-toast";

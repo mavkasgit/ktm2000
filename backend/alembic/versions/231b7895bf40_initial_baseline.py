@@ -115,14 +115,27 @@ def upgrade() -> None:
     )
     op.create_table('production_routes',
     sa.Column('id', sa.BigInteger(), sa.Identity(always=True), nullable=False),
-    sa.Column('product_id', sa.BigInteger(), nullable=False),
     sa.Column('name', sa.String(length=255), nullable=False),
-    sa.Column('version', sa.String(length=100), nullable=False),
+    sa.Column('description', sa.Text(), nullable=True),
     sa.Column('is_active', sa.Boolean(), server_default=sa.text('true'), nullable=False),
-    sa.ForeignKeyConstraint(['product_id'], ['products.id'], ),
+    sa.PrimaryKeyConstraint('id'),
+    sa.UniqueConstraint('name')
+    )
+    op.create_table('route_matching_rules',
+    sa.Column('id', sa.BigInteger(), sa.Identity(always=True), nullable=False),
+    sa.Column('route_id', sa.BigInteger(), sa.ForeignKey('production_routes.id'), nullable=False),
+    sa.Column('priority', sa.Integer(), server_default=sa.text('0'), nullable=False),
+    sa.Column('created_at', sa.DateTime(), server_default=sa.func.now()),
     sa.PrimaryKeyConstraint('id')
     )
-    op.create_index('ix_routes_active_one_per_product', 'production_routes', ['product_id'], unique=True, postgresql_where=sa.text('is_active = true'))
+    op.create_table('route_rule_conditions',
+    sa.Column('id', sa.BigInteger(), sa.Identity(always=True), nullable=False),
+    sa.Column('rule_id', sa.BigInteger(), sa.ForeignKey('route_matching_rules.id'), nullable=False),
+    sa.Column('field', sa.String(length=100), nullable=False),
+    sa.Column('operator', sa.String(length=10), nullable=False),
+    sa.Column('value', sa.Text(), nullable=False),
+    sa.PrimaryKeyConstraint('id')
+    )
     op.create_table('users',
     sa.Column('id', sa.BigInteger(), sa.Identity(always=True), autoincrement=True, nullable=False),
     sa.Column('email', sa.String(length=255), nullable=False),
@@ -292,7 +305,6 @@ def upgrade() -> None:
     sa.Column('plan_position_id', sa.BigInteger(), nullable=False),
     sa.Column('release_quantity', sa.Numeric(precision=14, scale=3), nullable=False),
     sa.Column('route_id', sa.BigInteger(), nullable=False),
-    sa.Column('route_version', sa.String(length=100), nullable=False),
     sa.Column('route_snapshot', postgresql.JSONB(astext_type=sa.Text()), server_default=sa.text("'{}'::jsonb"), nullable=False),
     sa.ForeignKeyConstraint(['plan_position_id'], ['plan_positions.id'], ),
     sa.ForeignKeyConstraint(['release_batch_id'], ['release_batches.id'], ),
@@ -376,7 +388,8 @@ def downgrade() -> None:
     op.drop_table('techcard_pairs')
     op.drop_table('techcard_lines')
     op.drop_table('users')
-    op.drop_index('ix_routes_active_one_per_product', table_name='production_routes', postgresql_where=sa.text('is_active = true'))
+    op.drop_table('route_rule_conditions')
+    op.drop_table('route_matching_rules')
     op.drop_table('production_routes')
     op.drop_table('import_batches')
     op.drop_index('ix_techcards_active_one_per_product', table_name='techcards', postgresql_where=sa.text('is_active = true'))

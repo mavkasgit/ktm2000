@@ -1,5 +1,6 @@
 import { NavLink, Outlet } from "react-router-dom"
 import { Boxes, ClipboardList, Gauge, Factory } from "lucide-react"
+import { Toaster } from "@/shared/ui"
 
 const navItems = [
   { to: "/", label: "Обзор", icon: Gauge },
@@ -33,6 +34,7 @@ export function Layout() {
       <main className="main-area">
         <Outlet />
       </main>
+      <Toaster />
     </div>
   )
 }

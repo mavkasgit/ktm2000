@@ -42,7 +42,7 @@ async def _make_ready_product(session, sku: str = "FG-1") -> tuple[Product, list
     await session.flush()
     session.add(TechcardLine(techcard_id=techcard.id, component_product_id=component.id, quantity=1, unit="pcs"))
 
-    route = ProductionRoute(product_id=product.id, name="Main", version="v1", is_active=True)
+    route = ProductionRoute(name="Main", is_active=True)
     session.add(route)
     await session.flush()
     for index, section in enumerate(sections, start=1):
@@ -72,7 +72,7 @@ async def _make_matching_route_product(session, sku: str = "FG-MATCH") -> tuple[
     session.add_all([product, *sections])
     await session.flush()
 
-    route = ProductionRoute(product_id=product.id, name="Main", version="v1", is_active=True)
+    route = ProductionRoute(name="Main", is_active=True)
     session.add(route)
     await session.flush()
 
@@ -265,11 +265,9 @@ async def test_release_batch_generates_tasks_and_is_idempotent(client, session) 
     assert create_response.status_code == 201
     batch = create_response.json()
     assert batch["positions"][0]["route_id"] == route.id
-    assert batch["positions"][0]["route_version"] == "v1"
     assert [step["section_id"] for step in batch["positions"][0]["route_snapshot"]["steps"]] == [section.id for section in sections]
 
     # Changing the route after batch creation must not affect the fixed snapshot.
-    route.version = "v2"
     await session.commit()
 
     release_response = await client.post(f"/api/release-batches/{batch['id']}/release")
@@ -298,7 +296,7 @@ async def test_release_batch_generates_tasks_and_is_idempotent(client, session) 
     assert {task.planned_quantity for task in tasks} == {Decimal("100.000")}
 
     batch_position = await session.scalar(select(ReleaseBatchPosition).where(ReleaseBatchPosition.plan_position_id == position.id))
-    assert batch_position.route_version == "v1"
+    assert batch_position.route_id == route.id
 
 
 @pytest.mark.asyncio

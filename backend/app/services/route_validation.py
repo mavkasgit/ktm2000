@@ -4,9 +4,11 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.production_plan import PlanPosition
+from app.models.product import Product
 from app.models.route import ProductionRoute, RouteStep
 from app.models.section import Section
 from app.services.route_resolution import resolve_route_signature
+from app.services.route_matcher import find_route
 
 
 ROUTE_ERROR_CODES = {
@@ -25,12 +27,8 @@ async def validate_route_match(db: AsyncSession, position: PlanPosition) -> list
     if not position.source_payload or position.source_payload.get("output_kind") is None:
         return []
 
-    route = await db.scalar(
-        select(ProductionRoute).where(
-            ProductionRoute.product_id == position.product_id,
-            ProductionRoute.is_active.is_(True),
-        )
-    )
+    product = await db.get(Product, position.product_id) if position.product_id else None
+    route = await find_route(db, product) if product else None
     if route is None:
         return []
 

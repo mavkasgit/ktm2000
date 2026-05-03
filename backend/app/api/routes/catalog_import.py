@@ -182,3 +182,102 @@ async def import_catalog_from_zip(
         "errors": errors,
         "total_in_zip": len(rows),
     }
+
+
+def _read_zip_profiles(extract_dir: Path):
+    """Extract profiles.db rows and image dir from extracted ZIP."""
+    db_file = extract_dir / "profiles.db"
+    if not db_file.exists():
+        for sub in extract_dir.iterdir():
+            if sub.is_dir() and (sub / "profiles.db").exists():
+                db_file = sub / "profiles.db"
+                extract_dir = sub
+                break
+
+    if not db_file.exists():
+        return None, None
+
+    images_dir = extract_dir / "images"
+
+    conn = sqlite3.connect(str(db_file))
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT name, quantity_per_hanger, length, notes, photo_thumb, photo_full FROM profiles"
+    )
+    rows = cursor.fetchall()
+    conn.close()
+
+    return rows, images_dir
+
+
+@router.post("/preview-zip")
+async def preview_catalog_from_zip(
+    file: UploadFile = File(...),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Upload ZIP and return preview of import changes without writing to DB."""
+    if not file.filename or not file.filename.endswith(".zip"):
+        raise HTTPException(status_code=400, detail="Only .zip files are accepted")
+
+    with TemporaryDirectory() as tmpdir:
+        tmp_path = Path(tmpdir)
+        zip_path = tmp_path / "catalog.zip"
+
+        content = await file.read()
+        zip_path.write_bytes(content)
+
+        extract_dir = tmp_path / "extracted"
+        extract_dir.mkdir()
+        with zipfile.ZipFile(zip_path, "r") as zf:
+            zf.extractall(str(extract_dir))
+
+        rows, images_dir = _read_zip_profiles(extract_dir)
+        if rows is None:
+            raise HTTPException(status_code=400, detail="profiles.db not found in ZIP")
+
+        items = []
+        stats = {"total": 0, "create": 0, "update": 0, "skip": 0}
+
+        for row in rows:
+            sku, qty, length, notes, photo_thumb, photo_full = row
+            stats["total"] += 1
+
+            existing = await db.scalar(select(Product).where(Product.sku == sku))
+
+            # Check if photos exist in ZIP
+            has_photo = False
+            if images_dir:
+                if photo_thumb and (images_dir / Path(photo_thumb).name).exists():
+                    has_photo = True
+                if photo_full and (images_dir / Path(photo_full).name).exists():
+                    has_photo = True
+
+            if existing:
+                # Determine if anything would change
+                would_change = (
+                    existing.type != ProductType.component
+                    or existing.name != sku
+                    or existing.quantity_per_hanger != qty
+                    or existing.length_mm != length
+                    or existing.profile_type != _parse_profile_type(sku)
+                )
+                action = "update" if would_change else "skip"
+                if action == "update":
+                    stats["update"] += 1
+                else:
+                    stats["skip"] += 1
+            else:
+                action = "create"
+                stats["create"] += 1
+
+            items.append({
+                "sku": sku,
+                "name": sku,
+                "profile_type": _parse_profile_type(sku),
+                "length_mm": length,
+                "quantity_per_hanger": qty,
+                "has_photo": has_photo,
+                "action": action,
+            })
+
+        return {"items": items, "stats": stats}

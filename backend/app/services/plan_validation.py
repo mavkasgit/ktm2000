@@ -8,6 +8,7 @@ from app.models.product import Product
 from app.models.production_plan import PlanPosition, PlanPositionStatus
 from app.models.route import ProductionRoute, RouteStep
 from app.models.section import Section
+from app.services.route_matcher import find_route
 
 
 async def validate_plan_position(db: AsyncSession, position: PlanPosition) -> list[str]:
@@ -30,9 +31,8 @@ async def validate_plan_position(db: AsyncSession, position: PlanPosition) -> li
         if line is None:
             errors.append("active_techcard_has_no_lines")
 
-    route = await db.scalar(
-        select(ProductionRoute).where(ProductionRoute.product_id == position.product_id, ProductionRoute.is_active.is_(True))
-    )
+    product = await db.get(Product, position.product_id) if position.product_id else None
+    route = await find_route(db, product) if product else None
     if route is None:
         errors.append("active_route_not_found")
     else:

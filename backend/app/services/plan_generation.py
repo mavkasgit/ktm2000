@@ -9,11 +9,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.techcard import Techcard, TechcardLine
 from app.models.internal_plan import InternalPlan, SectionPlanLine
 from app.models.production_plan import PlanPosition, PlanPositionStatus, ProductionPlan, ProductionPlanStatus
+from app.models.product import Product
 from app.models.release_batch import ReleaseBatch, ReleaseBatchPosition, ReleaseBatchStatus, ReleaseBatchType
 from app.models.route import ProductionRoute, RouteStep
 from app.models.section import Section
 from app.models.work_task import WorkTask, WorkTaskStatus
 from app.services.route_validation import validate_route_match
+from app.services.route_matcher import find_route
 
 
 async def create_release_batch(
@@ -46,7 +48,10 @@ async def create_release_batch(
     await db.flush()
 
     for position, release_quantity in selected_positions:
-        route = await _get_active_route(db, position)
+        product = await db.get(Product, position.product_id) if position.product_id else None
+        route = await find_route(db, product) if product else None
+        if route is None:
+            raise ValueError(f"No route found for position {position.id} (product_id={position.product_id})")
         await _validate_active_techcard(db, position)
         route_issues = await validate_route_match(db, position)
         if route_issues:
@@ -64,7 +69,6 @@ async def create_release_batch(
                 plan_position_id=position.id,
                 release_quantity=release_quantity,
                 route_id=route.id,
-                route_version=route.version,
                 route_snapshot=_route_snapshot(route, steps),
             )
         )
@@ -174,7 +178,6 @@ async def get_release_batch_summary(db: AsyncSession, release_batch_id: int) -> 
                 "plan_position_id": position.plan_position_id,
                 "release_quantity": str(position.release_quantity),
                 "route_id": position.route_id,
-                "route_version": position.route_version,
                 "route_snapshot": position.route_snapshot,
             }
             for position in positions
@@ -209,13 +212,6 @@ async def _select_release_positions(
     return [(position, position.quantity) for position in positions]
 
 
-async def _get_active_route(db: AsyncSession, position: PlanPosition) -> ProductionRoute:
-    route = await db.scalar(select(ProductionRoute).where(ProductionRoute.product_id == position.product_id, ProductionRoute.is_active.is_(True)))
-    if route is None:
-        raise ValueError("Active route not found")
-    return route
-
-
 async def _validate_active_techcard(db: AsyncSession, position: PlanPosition) -> None:
     techcard = await db.scalar(select(Techcard).where(Techcard.product_id == position.product_id, Techcard.is_active.is_(True)))
     if techcard is None:
@@ -248,7 +244,6 @@ def _route_snapshot(route: ProductionRoute, steps: list[tuple[RouteStep, Section
     return {
         "route_id": route.id,
         "route_name": route.name,
-        "route_version": route.version,
         "steps": [
             {
                 "route_step_id": step.id,

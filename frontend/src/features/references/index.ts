@@ -1,5 +1,6 @@
-export { ProductsScreen } from "./ProductsScreen";
-export { SectionsScreen } from "./SectionsScreen";
-export { TechcardsScreen } from "./TechcardsScreen";
-export { RoutesScreen } from "./RoutesScreen";
+export { RawMaterialsPage } from "./pages/RawMaterialsPage";
+export { FinishedGoodsPage } from "./pages/FinishedGoodsPage";
+export { SectionsPage } from "./pages/SectionsPage";
+export { TechcardsPage } from "./pages/TechcardsPage";
+export { RoutesPage } from "./pages/RoutesPage";
 export { ReferencesPage } from "./ReferencesPage";

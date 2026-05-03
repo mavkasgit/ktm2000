@@ -52,7 +52,6 @@ class ReleaseBatchPosition(Base):
     plan_position_id: Mapped[int] = mapped_column(ForeignKey("plan_positions.id"), nullable=False)
     release_quantity: Mapped[Decimal] = mapped_column(Numeric(14, 3), nullable=False)
     route_id: Mapped[int] = mapped_column(ForeignKey("production_routes.id"), nullable=False)
-    route_version: Mapped[str] = mapped_column(String(100), nullable=False)
     route_snapshot: Mapped[dict] = mapped_column(JSONB, nullable=False, server_default=text("'{}'::jsonb"), default=dict)
 
     __table_args__ = (UniqueConstraint("release_batch_id", "plan_position_id", name="uq_release_batch_position"),)

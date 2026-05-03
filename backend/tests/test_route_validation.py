@@ -51,7 +51,7 @@ async def _make_factory_route(
     await session.flush()
 
     route = ProductionRoute(
-        product_id=product.id, name="Main", version="v1", is_active=True
+        name=f"Main-{sku}", is_active=True
     )
     session.add(route)
     await session.flush()

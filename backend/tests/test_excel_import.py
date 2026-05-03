@@ -260,7 +260,7 @@ async def test_replace_draft_mode_creates_cancel_for_missing_rows(client, sessio
     await session.flush()
     session.add(TechcardLine(techcard_id=techcard.id, component_product_id=component.id, quantity=1, unit="pcs"))
 
-    route = ProductionRoute(product_id=product.id, name="Main", version="v1", is_active=True)
+    route = ProductionRoute(name="Main", is_active=True)
     session.add(route)
     await session.flush()
     for index, section in enumerate(sections, start=1):

@@ -55,6 +55,7 @@ export type ProductFilters = {
   color?: string;
   is_active?: boolean;
   is_catalog_item?: boolean;
+  is_paired_profile?: boolean;
   limit?: number;
   offset?: number;
 };
@@ -100,6 +101,32 @@ export async function uploadCatalogZip(file: File) {
   }>("/catalog-import/upload-zip", formData, {
     headers: { "Content-Type": "multipart/form-data" },
   });
+  return data;
+}
+
+export type CatalogPreviewItem = {
+  sku: string;
+  name: string;
+  profile_type: string | null;
+  length_mm: number | null;
+  quantity_per_hanger: number | null;
+  has_photo: boolean;
+  action: "create" | "update" | "skip";
+};
+
+export type CatalogPreview = {
+  items: CatalogPreviewItem[];
+  stats: { total: number; create: number; update: number; skip: number };
+};
+
+export async function previewCatalogZip(file: File) {
+  const formData = new FormData();
+  formData.append("file", file);
+  const { data } = await apiClient.post<CatalogPreview>(
+    "/catalog-import/preview-zip",
+    formData,
+    { headers: { "Content-Type": "multipart/form-data" } }
+  );
   return data;
 }
 
