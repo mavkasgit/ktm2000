@@ -4,6 +4,7 @@ export type Bom = {
   id: number;
   product_id: number;
   version: string;
+  processing_type: "standart_processing" | "paired_processing";
   is_active: boolean;
 };
 
@@ -18,6 +19,7 @@ export type BomLine = {
 export type CreateBomInput = {
   product_id: number;
   version: string;
+  processing_type?: "standart_processing" | "paired_processing";
   is_active?: boolean;
 };
 
@@ -31,6 +33,16 @@ export type PatchBomInput = Partial<Pick<CreateBomInput, "version" | "is_active"
 
 export async function createBom(payload: CreateBomInput) {
   const { data } = await apiClient.post<Bom>("/boms", payload);
+  return data;
+}
+
+export async function listBoms() {
+  const { data } = await apiClient.get<Bom[]>("/boms");
+  return data;
+}
+
+export async function getBom(bomId: number) {
+  const { data } = await apiClient.get<Bom & { product_article: string; lines: BomLine[] }>(`/boms/${bomId}`);
   return data;
 }
 

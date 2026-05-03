@@ -4,7 +4,7 @@ import { BOMsScreen, ProductsScreen, RoutesScreen, SectionsScreen } from "."
 const tabs = [
   { id: "products", label: "Изделия", component: ProductsScreen },
   { id: "sections", label: "Участки", component: SectionsScreen },
-  { id: "boms", label: "BOM", component: BOMsScreen },
+  { id: "boms", label: "Техкарта", component: BOMsScreen },
   { id: "routes", label: "Маршруты", component: RoutesScreen },
 ]
 
@@ -17,7 +17,7 @@ export function MasterDataPage() {
       <header className="page-header">
         <div>
           <h1 className="page-title">Справочники</h1>
-          <p className="page-subtitle">Минимальная настройка изделий, участков, BOM и маршрутов для запуска плана.</p>
+          <p className="page-subtitle">Минимальная настройка изделий, участков, техкарт и маршрутов для запуска плана.</p>
         </div>
       </header>
       <div className="tab-row">

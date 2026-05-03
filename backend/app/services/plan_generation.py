@@ -219,10 +219,10 @@ async def _get_active_route(db: AsyncSession, position: PlanPosition) -> Product
 async def _validate_active_bom(db: AsyncSession, position: PlanPosition) -> None:
     bom = await db.scalar(select(BOM).where(BOM.product_id == position.product_id, BOM.is_active.is_(True)))
     if bom is None:
-        raise ValueError("Active BOM not found")
+        raise ValueError("Активная техкарта не найдена")
     line = await db.scalar(select(BOMLine).where(BOMLine.bom_id == bom.id).limit(1))
     if line is None:
-        raise ValueError("Active BOM has no lines")
+        raise ValueError("Активная техкарта не содержит строк")
 
 
 async def _get_route_steps_with_sections(db: AsyncSession, route: ProductionRoute) -> list[tuple[RouteStep, Section]]:

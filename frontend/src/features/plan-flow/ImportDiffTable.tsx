@@ -18,8 +18,8 @@ const statusLabels: Record<string, string> = {
 const errorLabels: Record<string, string> = {
   product_not_found: "Изделие не найдено",
   product_inactive: "Изделие неактивно",
-  active_bom_not_found: "Нет активного BOM",
-  active_bom_has_no_lines: "BOM пустой",
+  active_bom_not_found: "Нет активной техкарты",
+  active_bom_has_no_lines: "Техкарта пустая",
   active_route_not_found: "Нет активного маршрута",
   active_route_has_no_steps: "Маршрут без этапов",
   route_sequence_invalid: "Неверная последовательность маршрута",
@@ -42,7 +42,7 @@ function translateCodes(codes: string[] | unknown, labels: Record<string, string
 
 const headers = [
   { key: "change_action", label: "Действие" },
-  { key: "source_sku", label: "SKU" },
+  { key: "source_sku", label: "Артикул" },
   { key: "source_name", label: "Наименование" },
   { key: "quantity", label: "Кол-во" },
   { key: "status", label: "Статус" },

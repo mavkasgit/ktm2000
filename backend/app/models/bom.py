@@ -10,6 +10,12 @@ class BOM(Base):
     id: Mapped[int] = mapped_column(BigInteger, Identity(always=True), primary_key=True)
     product_id: Mapped[int] = mapped_column(ForeignKey("products.id"), nullable=False)
     version: Mapped[str] = mapped_column(String(100), nullable=False)
+    processing_type: Mapped[str] = mapped_column(
+        String(50),
+        nullable=False,
+        server_default=text("'standart_processing'"),
+        default="standart_processing",
+    )
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default=text("true"))
 
     __table_args__ = (
