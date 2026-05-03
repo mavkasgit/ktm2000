@@ -100,7 +100,11 @@ async def import_catalog_from_zip(
         for row in rows:
             sku, qty, length, notes, photo_thumb, photo_full = row
 
-            existing = await db.scalar(select(Product).where(Product.sku == sku))
+            existing = await db.scalar(
+                select(Product).where(
+                    (Product.sku == sku) | (Product.aliases.contains([sku]))
+                )
+            )
 
             # Prepare photo paths
             new_thumb = None
@@ -242,7 +246,11 @@ async def preview_catalog_from_zip(
             sku, qty, length, notes, photo_thumb, photo_full = row
             stats["total"] += 1
 
-            existing = await db.scalar(select(Product).where(Product.sku == sku))
+            existing = await db.scalar(
+                select(Product).where(
+                    (Product.sku == sku) | (Product.aliases.contains([sku]))
+                )
+            )
 
             # Check if photos exist in ZIP
             has_photo = False
