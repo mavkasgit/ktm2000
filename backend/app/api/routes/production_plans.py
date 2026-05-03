@@ -36,6 +36,21 @@ class RouteCheckOut(BaseModel):
     issues: list[str]
 
 
+class SectionTotalsLineOut(BaseModel):
+    section_id: int
+    section_code: str
+    section_name: str
+    section_kind: str | None
+    positions_count: int
+    planned_input_quantity: str
+    planned_output_quantity: str
+
+
+class SectionTotalsOut(BaseModel):
+    production_plan_id: int
+    totals: list[SectionTotalsLineOut]
+
+
 @router.get("/{production_plan_id}/preview")
 async def preview_production_plan(production_plan_id: int, db: AsyncSession = Depends(get_db)) -> dict:
     try:
@@ -184,3 +199,72 @@ async def route_check(
         match=len(issues) == 0,
         issues=issues,
     )
+
+
+@router.get("/{production_plan_id}/section-totals")
+async def section_totals(
+    production_plan_id: int,
+    db: AsyncSession = Depends(get_db),
+) -> SectionTotalsOut:
+    positions = (
+        await db.execute(
+            select(PlanPosition).where(PlanPosition.production_plan_id == production_plan_id)
+        )
+    ).scalars().all()
+
+    if not positions:
+        return SectionTotalsOut(production_plan_id=production_plan_id, totals=[])
+
+    totals_by_section: dict[int, dict] = {}
+    for position in positions:
+        if position.product_id is None:
+            continue
+        route = await db.scalar(
+            select(ProductionRoute).where(
+                ProductionRoute.product_id == position.product_id,
+                ProductionRoute.is_active.is_(True),
+            )
+        )
+        if route is None:
+            continue
+
+        steps = (
+            await db.execute(
+                select(RouteStep, Section)
+                .join(Section, RouteStep.section_id == Section.id)
+                .where(RouteStep.route_id == route.id)
+                .order_by(RouteStep.sequence)
+            )
+        ).all()
+        for _, section in steps:
+            bucket = totals_by_section.setdefault(
+                section.id,
+                {
+                    "section_id": section.id,
+                    "section_code": section.code,
+                    "section_name": section.name,
+                    "section_kind": section.kind,
+                    "positions": set(),
+                    "input": 0,
+                    "output": 0,
+                },
+            )
+            bucket["positions"].add(position.id)
+            # MVP assumes 1:1 transformation on route step level.
+            bucket["input"] += position.quantity
+            bucket["output"] += position.quantity
+
+    totals = [
+        SectionTotalsLineOut(
+            section_id=b["section_id"],
+            section_code=b["section_code"],
+            section_name=b["section_name"],
+            section_kind=b["section_kind"],
+            positions_count=len(b["positions"]),
+            planned_input_quantity=str(b["input"]),
+            planned_output_quantity=str(b["output"]),
+        )
+        for b in totals_by_section.values()
+    ]
+    totals.sort(key=lambda item: item.section_code)
+    return SectionTotalsOut(production_plan_id=production_plan_id, totals=totals)

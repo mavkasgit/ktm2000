@@ -10,7 +10,13 @@ import {
 import { ImportWizard } from "./ImportWizard"
 import { listRecentImports } from "shared/api"
 import type { RecentImport } from "shared/api"
-import { routeCheck, type RouteCheckResponse, type RouteCheckStep } from "shared/api/productionPlans"
+import {
+  routeCheck,
+  sectionTotals,
+  type RouteCheckResponse,
+  type RouteCheckStep,
+  type SectionTotalsLine,
+} from "shared/api/productionPlans"
 import { Button } from "shared/ui"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "shared/ui"
 import { Badge } from "shared/ui"
@@ -88,6 +94,8 @@ export function PlanFlowScreen() {
   const [planRows, setPlanRows] = useState<UnknownRecord[]>([])
   const [selectedPositionIds, setSelectedPositionIds] = useState<Set<string>>(new Set())
   const [routeChecks, setRouteChecks] = useState<Record<string, RouteCheckResponse>>({})
+  const [sectionTotalsRows, setSectionTotalsRows] = useState<SectionTotalsLine[]>([])
+  const [expandedPositions, setExpandedPositions] = useState<Set<string>>(new Set())
   const [issues, setIssues] = useState<string[]>([])
   const [importOpen, setImportOpen] = useState(false)
   const [recentImports, setRecentImports] = useState<RecentImport[]>([])
@@ -143,6 +151,18 @@ export function PlanFlowScreen() {
         next.delete(id)
       } else {
         next.add(id)
+      }
+      return next
+    })
+  }
+
+  function togglePositionExpand(positionId: string) {
+    setExpandedPositions((prev) => {
+      const next = new Set(prev)
+      if (next.has(positionId)) {
+        next.delete(positionId)
+      } else {
+        next.add(positionId)
       }
       return next
     })
@@ -356,6 +376,7 @@ export function PlanFlowScreen() {
               setFlowIds((prev) => ({ ...prev, planId }))
               setSelectedPositionIds(new Set(rows.map((row) => String(row.positionId ?? row.id ?? "")).filter(Boolean)))
               setRouteChecks({})
+              setExpandedPositions(new Set())
               // Load route checks for all positions
               const pid = Number(planId || flowIds.planId)
               if (pid) {
@@ -369,6 +390,8 @@ export function PlanFlowScreen() {
                   }
                 }))
                 setRouteChecks(checks)
+                const sectionData = await sectionTotals(pid)
+                setSectionTotalsRows(sectionData.totals)
               }
             })}>
               Показать план
@@ -396,58 +419,110 @@ export function PlanFlowScreen() {
                     const check = routeChecks[Number(positionId)]
                     const validationErrors = Array.isArray(row.validation_errors) ? row.validation_errors : []
                     const canSelect = !check || (check.match && validationErrors.length === 0)
+                    const isExpanded = expandedPositions.has(positionId)
                     return (
-                      <tr key={positionId} className="border-t">
-                        <td className="p-2">
-                          <input
-                            type="checkbox"
-                            disabled={!canSelect}
-                            checked={selectedPositionIds.has(positionId)}
-                            onChange={() => togglePosition(positionId)}
-                          />
-                        </td>
-                        <td className="p-2 text-xs">
-                          <div className="font-medium">{String(row.source_sku ?? row.sku ?? "—")}</div>
-                          <div className="text-muted-foreground truncate max-w-[120px]">{String(row.source_name ?? row.name ?? "")}</div>
-                        </td>
-                        <td className="p-2 text-xs">{String(row.quantity ?? "—")}</td>
-                        <td className="p-2 text-xs">
-                          {check ? (
-                            <div className="truncate max-w-[200px]" title={check.expected_signature.steps.map(s => s.step_id).join(" → ")}>
-                              {check.expected_signature.steps.map(s => s.step_id.split("/").pop() ?? s.step_id).join(" → ")}
-                            </div>
-                          ) : (
-                            <span className="text-muted-foreground">—</span>
-                          )}
-                        </td>
-                        <td className="p-2 text-xs">
-                          {check?.active_route_snapshot ? (
-                            <span>{check.active_route_snapshot.route_name} ({check.active_route_snapshot.route_version})</span>
-                          ) : (
-                            <span className="text-muted-foreground">—</span>
-                          )}
-                        </td>
-                        <td className="p-2">
-                          {check ? (
-                            check.match ? (
-                              <Badge tone="success" className="text-xs">OK</Badge>
+                      <Fragment key={positionId}>
+                        <tr className="border-t">
+                          <td className="p-2">
+                            <input
+                              type="checkbox"
+                              disabled={!canSelect}
+                              checked={selectedPositionIds.has(positionId)}
+                              onChange={() => togglePosition(positionId)}
+                            />
+                          </td>
+                          <td className="p-2 text-xs">
+                            <button className="text-left" onClick={() => togglePositionExpand(positionId)}>
+                              <div className="font-medium">{String(row.source_sku ?? row.sku ?? "—")}</div>
+                              <div className="text-muted-foreground truncate max-w-[120px]">{String(row.source_name ?? row.name ?? "")}</div>
+                            </button>
+                          </td>
+                          <td className="p-2 text-xs">{String(row.quantity ?? "—")}</td>
+                          <td className="p-2 text-xs">
+                            {check ? (
+                              <div className="truncate max-w-[200px]" title={check.expected_signature.steps.map(s => s.step_id).join(" → ")}>
+                                {check.expected_signature.steps.map(s => s.step_id.split("/").pop() ?? s.step_id).join(" → ")}
+                              </div>
                             ) : (
-                              <Badge tone="danger" className="text-xs">Mismatch</Badge>
-                            )
-                          ) : (
-                            <span className="text-muted-foreground text-xs">—</span>
-                          )}
-                        </td>
-                        <td className="p-2 text-xs">
-                          {check && check.expected_signature.additional_pack_operations.length > 0 ? (
-                            <span>{check.expected_signature.additional_pack_operations.join(", ")}</span>
-                          ) : (
-                            <span className="text-muted-foreground">—</span>
-                          )}
-                        </td>
-                      </tr>
+                              <span className="text-muted-foreground">—</span>
+                            )}
+                          </td>
+                          <td className="p-2 text-xs">
+                            {check?.active_route_snapshot ? (
+                              <span>{check.active_route_snapshot.route_name} ({check.active_route_snapshot.route_version})</span>
+                            ) : (
+                              <span className="text-muted-foreground">—</span>
+                            )}
+                          </td>
+                          <td className="p-2">
+                            {check ? (
+                              check.match ? (
+                                <Badge tone="success" className="text-xs">OK</Badge>
+                              ) : (
+                                <Badge tone="danger" className="text-xs">Mismatch</Badge>
+                              )
+                            ) : (
+                              <span className="text-muted-foreground text-xs">—</span>
+                            )}
+                          </td>
+                          <td className="p-2 text-xs">
+                            {check && check.expected_signature.additional_pack_operations.length > 0 ? (
+                              <span>{check.expected_signature.additional_pack_operations.join(", ")}</span>
+                            ) : (
+                              <span className="text-muted-foreground">—</span>
+                            )}
+                          </td>
+                        </tr>
+                        {isExpanded && check && (
+                          <tr className="border-t bg-muted/30">
+                            <td colSpan={7} className="p-3 text-xs">
+                              <div className="grid gap-3 md:grid-cols-2">
+                                <div>
+                                  <div className="font-medium mb-1">Ожидаемый маршрут</div>
+                                  <div>{check.expected_signature.steps.map(s => s.step_id).join(" → ")}</div>
+                                </div>
+                                <div>
+                                  <div className="font-medium mb-1">Активный маршрут</div>
+                                  {check.active_route_snapshot ? (
+                                    <div>{check.active_route_snapshot.steps.map(s => `${s.sequence}:${s.section_code}/${s.operation_name}`).join(" → ")}</div>
+                                  ) : (
+                                    <div className="text-muted-foreground">Нет активного маршрута</div>
+                                  )}
+                                </div>
+                              </div>
+                            </td>
+                          </tr>
+                        )}
+                      </Fragment>
                     )
                   })}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          {sectionTotalsRows.length > 0 && (
+            <div className="rounded-md border max-h-72 overflow-auto">
+              <table className="w-full text-sm">
+                <thead className="bg-muted sticky top-0">
+                  <tr>
+                    <th className="text-left p-2 font-medium">Участок</th>
+                    <th className="text-left p-2 font-medium">Код</th>
+                    <th className="text-left p-2 font-medium">Позиций</th>
+                    <th className="text-left p-2 font-medium">План вход</th>
+                    <th className="text-left p-2 font-medium">План выход</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {sectionTotalsRows.map((item) => (
+                    <tr key={item.section_id} className="border-t">
+                      <td className="p-2 text-xs">{item.section_name}</td>
+                      <td className="p-2 text-xs">{item.section_code}</td>
+                      <td className="p-2 text-xs">{item.positions_count}</td>
+                      <td className="p-2 text-xs">{item.planned_input_quantity}</td>
+                      <td className="p-2 text-xs">{item.planned_output_quantity}</td>
+                    </tr>
+                  ))}
                 </tbody>
               </table>
             </div>

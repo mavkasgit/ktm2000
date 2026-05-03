@@ -85,3 +85,23 @@ export async function routeCheck(planId: number, positionId: number) {
   const { data } = await apiClient.get<RouteCheckResponse>(`/production-plans/${planId}/positions/${positionId}/route-check`);
   return data;
 }
+
+export type SectionTotalsLine = {
+  section_id: number;
+  section_code: string;
+  section_name: string;
+  section_kind: string | null;
+  positions_count: number;
+  planned_input_quantity: string;
+  planned_output_quantity: string;
+};
+
+export type SectionTotalsResponse = {
+  production_plan_id: number;
+  totals: SectionTotalsLine[];
+};
+
+export async function sectionTotals(planId: number) {
+  const { data } = await apiClient.get<SectionTotalsResponse>(`/production-plans/${planId}/section-totals`);
+  return data;
+}
