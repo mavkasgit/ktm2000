@@ -34,14 +34,14 @@ type DialogMode = "view" | "create" | "edit";
 const TYPE_LABELS: Record<ProductType, string> = {
   finished_good: "ГП",
   semi_finished: "П/ф",
-  component: "Комплект",
+  component: "Сырье",
   material: "Материал",
 };
 
 const TYPE_OPTIONS: { value: ProductType; label: string }[] = [
   { value: "finished_good", label: "Готовая продукция" },
   { value: "semi_finished", label: "Полуфабрикат" },
-  { value: "component", label: "Комплект" },
+  { value: "component", label: "Сырье" },
   { value: "material", label: "Материал" },
 ];
 
@@ -52,7 +52,7 @@ function getPhotoUrl(path: string | null): string | null {
   return normalized.startsWith("/") ? normalized : `/static/${normalized}`;
 }
 
-export function ProductsScreen() {
+export function ProductsScreen({ forcedType, title = "Справочник изделий" }: { forcedType?: ProductType; title?: string } = {}) {
   const [items, setItems] = useState<Product[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -75,7 +75,7 @@ export function ProductsScreen() {
     try {
       const data = await API.listProducts({
         q: search || undefined,
-        type: typeFilter || undefined,
+        type: forcedType || typeFilter || undefined,
         profile_type: profileTypeFilter || undefined,
         alloy: alloyFilter || undefined,
         color: colorFilter || undefined,
@@ -88,7 +88,7 @@ export function ProductsScreen() {
     } finally {
       setLoading(false);
     }
-  }, [search, typeFilter, profileTypeFilter, alloyFilter, colorFilter, catalogOnly]);
+  }, [search, typeFilter, profileTypeFilter, alloyFilter, colorFilter, catalogOnly, forcedType]);
 
   useEffect(() => {
     void load();
@@ -140,13 +140,13 @@ export function ProductsScreen() {
     e.target.value = "";
   };
 
-  const activeFiltersCount = [typeFilter, profileTypeFilter, alloyFilter, colorFilter, catalogOnly].filter(Boolean).length;
+  const activeFiltersCount = [forcedType ? "" : typeFilter, profileTypeFilter, alloyFilter, colorFilter, catalogOnly].filter(Boolean).length;
 
   return (
     <section className="space-y-4">
       {/* Header */}
       <div className="flex items-center justify-between">
-        <h2 className="text-xl font-semibold">Справочник изделий</h2>
+        <h2 className="text-xl font-semibold">{title}</h2>
         <div className="flex items-center gap-2">
           <Button variant="outline" size="sm" onClick={() => setViewMode(viewMode === "grid" ? "table" : "grid")}>
             {viewMode === "grid" ? <List className="h-4 w-4" /> : <Grid className="h-4 w-4" />}
@@ -203,7 +203,7 @@ export function ProductsScreen() {
       {filtersOpen && (
         <Card className="p-4">
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
-            <div>
+            {!forcedType && <div>
               <label className="text-sm font-medium mb-1 block">Тип</label>
               <select
                 className="w-full h-10 rounded-md border border-input bg-background px-3 text-sm"
@@ -215,7 +215,7 @@ export function ProductsScreen() {
                   <option key={t.value} value={t.value}>{t.label}</option>
                 ))}
               </select>
-            </div>
+            </div>}
             <div>
               <label className="text-sm font-medium mb-1 block">Вид профиля</label>
               <Input
@@ -248,7 +248,7 @@ export function ProductsScreen() {
                   onChange={(e) => setCatalogOnly(e.target.checked)}
                   className="h-4 w-4"
                 />
-                Только из каталога
+                Только сырье из каталога
               </label>
             </div>
           </div>
@@ -323,7 +323,7 @@ export function ProductsScreen() {
                   <td className="px-4 py-2 text-muted-foreground">{product.length_mm ? `${product.length_mm} мм` : "—"}</td>
                   <td className="px-4 py-2">
                     {product.is_catalog_item && (
-                      <Badge variant="secondary" className="text-xs">Каталог</Badge>
+                      <Badge variant="secondary" className="text-xs bg-blue-100">Сырье (каталог)</Badge>
                     )}
                   </td>
                   <td className="px-4 py-2">
@@ -394,7 +394,7 @@ function ProductCard({
               <Badge variant="outline" className="text-xs">{TYPE_LABELS[product.type]}</Badge>
               {product.profile_type && <Badge variant="secondary" className="text-xs">{product.profile_type}</Badge>}
               {product.color && <Badge variant="secondary" className="text-xs">{product.color}</Badge>}
-              {product.is_catalog_item && <Badge variant="secondary" className="text-xs bg-blue-100">Каталог</Badge>}
+              {product.is_catalog_item && <Badge variant="secondary" className="text-xs bg-blue-100">Сырье (каталог)</Badge>}
             </div>
           </div>
         </div>
@@ -682,7 +682,7 @@ function ProductForm({
 
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
         <div className="space-y-1">
-          <label className="text-sm font-medium">Артикул (SKU) *</label>
+          <label className="text-sm font-medium">Артикул *</label>
           <Input
             value={form.sku}
             onChange={(e) => update("sku", e.target.value)}

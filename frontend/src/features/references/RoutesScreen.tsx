@@ -130,7 +130,7 @@ async function apiCreateRoute(payload: { productId: string; routeCode: string; r
     }
     return;
   }
-  const response = await fetch("/api/master-data/routes", {
+  const response = await fetch("/api/routes", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),

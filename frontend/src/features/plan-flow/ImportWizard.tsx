@@ -227,7 +227,7 @@ export function ImportWizard(props: {
                     variant="outline"
                     size="sm"
                     className="ml-auto h-7 text-xs gap-1"
-                    onClick={() => { navigate("/master-data"); props.onClose() }}
+                    onClick={() => { navigate("/references/raw-materials"); props.onClose() }}
                   >
                     <ExternalLink className="h-3 w-3" />
                     Открыть справочники

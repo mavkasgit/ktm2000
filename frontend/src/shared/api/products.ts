@@ -22,6 +22,7 @@ export type Product = {
   photo_full: string | null;
   source: string | null;
   is_catalog_item: boolean;
+  is_paired_profile: boolean;
 };
 
 export type CreateProductInput = {
@@ -41,6 +42,7 @@ export type CreateProductInput = {
   cross_section?: string | null;
   source?: string | null;
   is_catalog_item?: boolean;
+  is_paired_profile?: boolean;
 };
 
 export type PatchProductInput = Partial<Omit<CreateProductInput, "sku">>;

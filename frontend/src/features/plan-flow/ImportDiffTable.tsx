@@ -18,8 +18,8 @@ const statusLabels: Record<string, string> = {
 const errorLabels: Record<string, string> = {
   product_not_found: "Изделие не найдено",
   product_inactive: "Изделие неактивно",
-  active_bom_not_found: "Нет активной техкарты",
-  active_bom_has_no_lines: "Техкарта пустая",
+  active_techcard_not_found: "Нет активной техкарты",
+  active_techcard_has_no_lines: "Техкарта пустая",
   active_route_not_found: "Нет активного маршрута",
   active_route_has_no_steps: "Маршрут без этапов",
   route_sequence_invalid: "Неверная последовательность маршрута",
@@ -30,6 +30,7 @@ const errorLabels: Record<string, string> = {
 
 const warningLabels: Record<string, string> = {
   paired_profile_product_unmapped: "Парный профиль не сопоставлен",
+  techcard_pair_not_resolved: "Не выбран парный профиль техкарты",
   product_name_missing: "Отсутствует наименование",
   period_not_detected: "Период не определён",
 };
@@ -48,6 +49,7 @@ const headers = [
   { key: "status", label: "Статус" },
   { key: "errors", label: "Ошибки" },
   { key: "warnings", label: "Предупр." },
+  { key: "variant", label: "Вариант" },
 ];
 
 function getString(row: UnknownRecord, ...keys: string[]): string {
@@ -109,6 +111,10 @@ export function ImportDiffTable({ rows, sortConfig, onSort }: ImportDiffTablePro
             const quantity = qtyRaw !== undefined && qtyRaw !== null && qtyRaw !== "" ? String(Number(qtyRaw).toFixed(0)) : "";
             const errors = translateCodes(row.errors, errorLabels);
             const warnings = translateCodes(row.warnings, warningLabels);
+            const variantObj = (getAfter(row, "source_payload") as UnknownRecord | undefined)?.techcard_pair as UnknownRecord | undefined;
+            const variantLabel = variantObj
+              ? (variantObj.resolved ? `${variantObj.pair_name ?? "пара"} (#${variantObj.pair_id ?? "?"})` : "не определен")
+              : "—";
 
             return (
               <tr key={idx}>
@@ -123,6 +129,7 @@ export function ImportDiffTable({ rows, sortConfig, onSort }: ImportDiffTablePro
                 </td>
                 <td style={{ borderBottom: "1px solid #f3f4f6", padding: 8, color: "#dc2626" }}>{errors}</td>
                 <td style={{ borderBottom: "1px solid #f3f4f6", padding: 8, color: "#d97706" }}>{warnings}</td>
+                <td style={{ borderBottom: "1px solid #f3f4f6", padding: 8 }}>{variantLabel}</td>
               </tr>
             );
           })}

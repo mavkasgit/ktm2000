@@ -69,7 +69,7 @@ function collectIssues(payload: unknown): string[] {
   const labels: Record<string, string> = {
     product_not_found: "изделие не найдено",
     paired_profile_product_unmapped: "парный профиль не сопоставлен",
-    active_bom_not_found: "нет активной техкарты",
+    active_techcard_not_found: "нет активной техкарты",
     active_route_not_found: "нет активного маршрута",
   }
   return issueItems.map((issue) => {

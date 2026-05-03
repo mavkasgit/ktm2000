@@ -33,7 +33,7 @@ async function apiListSections(): Promise<Section[]> {
   if (typeof api.listSections === "function") {
     return api.listSections();
   }
-  const response = await fetch("/api/master-data/sections");
+  const response = await fetch("/api/sections");
   if (!response.ok) throw new Error(`Failed to load sections: ${response.status}`);
   return response.json();
 }
@@ -44,7 +44,7 @@ async function apiCreateSection(payload: SectionCreate): Promise<void> {
     await api.createSection(payload);
     return;
   }
-  const response = await fetch("/api/master-data/sections", {
+  const response = await fetch("/api/sections", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
