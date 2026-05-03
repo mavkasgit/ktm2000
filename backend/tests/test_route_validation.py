@@ -3,7 +3,7 @@ from decimal import Decimal
 
 import pytest
 
-from app.models.bom import BOM, BOMLine
+from app.models.techcard import Techcard, TechcardLine
 from app.models.product import Product, ProductType
 from app.models.production_plan import (
     PlanPosition,
@@ -20,7 +20,7 @@ from app.services.route_validation import validate_route_match
 async def _make_factory_route(
     session, sku: str, step_defs: list[tuple[str, str, str]]
 ) -> tuple[Product, ProductionRoute]:
-    """Create a product with BOM, sections, and an active route.
+    """Create a product with techcard, sections, and an active route.
 
     step_defs: list of (logical_code, section_kind, operation_name)
     """
@@ -33,12 +33,12 @@ async def _make_factory_route(
     session.add_all([product, component])
     await session.flush()
 
-    bom = BOM(product_id=product.id, version="v1", is_active=True)
-    session.add(bom)
+    techcard = Techcard(product_id=product.id, version="v1", is_active=True)
+    session.add(techcard)
     await session.flush()
     session.add(
-        BOMLine(
-            bom_id=bom.id, component_product_id=component.id, quantity=1, unit="pcs"
+        TechcardLine(
+            techcard_id=techcard.id, component_product_id=component.id, quantity=1, unit="pcs"
         )
     )
 

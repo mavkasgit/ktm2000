@@ -1,7 +1,7 @@
 import pytest
 from sqlalchemy.exc import IntegrityError
 
-from app.models.bom import BOM, BOMLine
+from app.models.techcard import Techcard, TechcardLine
 from app.models.product import Product, ProductType
 from app.models.route import ProductionRoute, RouteStep
 from app.models.section import Section
@@ -18,19 +18,19 @@ async def test_unique_sku(session) -> None:
 
 
 @pytest.mark.asyncio
-async def test_one_active_bom_per_product(session) -> None:
-    product = Product(sku="SKU-BOM", name="With BOM", type=ProductType.finished_good, unit="pcs")
+async def test_one_active_techcard_per_product(session) -> None:
+    product = Product(sku="SKU-TECHCARD", name="With Techcard", type=ProductType.finished_good, unit="pcs")
     component = Product(sku="CMP-1", name="Component", type=ProductType.component, unit="pcs")
     session.add_all([product, component])
     await session.flush()
 
-    bom1 = BOM(product_id=product.id, version="v1", is_active=True)
-    session.add(bom1)
+    techcard1 = Techcard(product_id=product.id, version="v1", is_active=True)
+    session.add(techcard1)
     await session.flush()
-    session.add(BOMLine(bom_id=bom1.id, component_product_id=component.id, quantity=1, unit="pcs"))
+    session.add(TechcardLine(techcard_id=techcard1.id, component_product_id=component.id, quantity=1, unit="pcs"))
     await session.commit()
 
-    session.add(BOM(product_id=product.id, version="v2", is_active=True))
+    session.add(Techcard(product_id=product.id, version="v2", is_active=True))
     with pytest.raises(IntegrityError):
         await session.commit()
 

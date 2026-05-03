@@ -4,7 +4,7 @@ from decimal import Decimal
 import pytest
 from sqlalchemy import select
 
-from app.models.bom import BOM, BOMLine
+from app.models.techcard import Techcard, TechcardLine
 from app.models.imports import ImportBatch, ImportBatchMode, ImportFile
 from app.models.internal_plan import SectionPlanLine
 from app.models.product import Product, ProductType
@@ -37,10 +37,10 @@ async def _make_ready_product(session, sku: str = "FG-1") -> tuple[Product, list
     session.add_all([product, component, *sections])
     await session.flush()
 
-    bom = BOM(product_id=product.id, version="v1", is_active=True)
-    session.add(bom)
+    techcard = Techcard(product_id=product.id, version="v1", is_active=True)
+    session.add(techcard)
     await session.flush()
-    session.add(BOMLine(bom_id=bom.id, component_product_id=component.id, quantity=1, unit="pcs"))
+    session.add(TechcardLine(techcard_id=techcard.id, component_product_id=component.id, quantity=1, unit="pcs"))
 
     route = ProductionRoute(product_id=product.id, name="Main", version="v1", is_active=True)
     session.add(route)

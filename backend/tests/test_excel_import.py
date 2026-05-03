@@ -241,7 +241,7 @@ def test_date_normalization() -> None:
 async def test_replace_draft_mode_creates_cancel_for_missing_rows(client, session, tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(settings, "IMPORT_STORAGE_DIR", str(tmp_path))
 
-    from app.models.bom import BOM, BOMLine
+    from app.models.techcard import Techcard, TechcardLine
     from app.models.product import Product, ProductType
     from app.models.route import ProductionRoute, RouteStep
     from app.models.section import Section
@@ -255,10 +255,10 @@ async def test_replace_draft_mode_creates_cancel_for_missing_rows(client, sessio
     session.add_all([product, component, *sections])
     await session.flush()
 
-    bom = BOM(product_id=product.id, version="v1", is_active=True)
-    session.add(bom)
+    techcard = Techcard(product_id=product.id, version="v1", is_active=True)
+    session.add(techcard)
     await session.flush()
-    session.add(BOMLine(bom_id=bom.id, component_product_id=component.id, quantity=1, unit="pcs"))
+    session.add(TechcardLine(techcard_id=techcard.id, component_product_id=component.id, quantity=1, unit="pcs"))
 
     route = ProductionRoute(product_id=product.id, name="Main", version="v1", is_active=True)
     session.add(route)

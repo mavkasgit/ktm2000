@@ -3,7 +3,7 @@ from decimal import Decimal
 
 import pytest
 
-from app.models.bom import BOM, BOMLine
+from app.models.techcard import Techcard, TechcardLine
 from app.models.product import Product, ProductType
 from app.models.production_plan import (
     PlanPosition,
@@ -28,10 +28,10 @@ async def _make_ready_product(session, sku: str = "FG-1") -> tuple[Product, list
     session.add_all([product, component, *sections])
     await session.flush()
 
-    bom = BOM(product_id=product.id, version="v1", is_active=True)
-    session.add(bom)
+    techcard = Techcard(product_id=product.id, version="v1", is_active=True)
+    session.add(techcard)
     await session.flush()
-    session.add(BOMLine(bom_id=bom.id, component_product_id=component.id, quantity=1, unit="pcs"))
+    session.add(TechcardLine(techcard_id=techcard.id, component_product_id=component.id, quantity=1, unit="pcs"))
 
     route = ProductionRoute(product_id=product.id, name="Main", version="v1", is_active=True)
     session.add(route)
@@ -242,8 +242,8 @@ async def test_validate_position_detects_product_not_found(session) -> None:
 
 
 @pytest.mark.asyncio
-async def test_validate_position_detects_missing_bom(session) -> None:
-    product = Product(sku="FG-NO-BOM", name="No BOM", type=ProductType.finished_good, unit="pcs")
+async def test_validate_position_detects_missing_techcard(session) -> None:
+    product = Product(sku="FG-NO-TECHCARD", name="No Techcard", type=ProductType.finished_good, unit="pcs")
     session.add(product)
     await session.flush()
 
@@ -251,24 +251,24 @@ async def test_validate_position_detects_missing_bom(session) -> None:
     await session.flush()
 
     errors = await validate_plan_position(session, position)
-    assert "active_bom_not_found" in errors
+    assert "active_techcard_not_found" in errors
 
 
 @pytest.mark.asyncio
-async def test_validate_position_detects_empty_bom(session) -> None:
-    product = Product(sku="FG-EMPTY-BOM", name="Empty BOM", type=ProductType.finished_good, unit="pcs")
+async def test_validate_position_detects_empty_techcard(session) -> None:
+    product = Product(sku="FG-EMPTY-TECHCARD", name="Empty Techcard", type=ProductType.finished_good, unit="pcs")
     session.add(product)
     await session.flush()
 
-    bom = BOM(product_id=product.id, version="v1", is_active=True)
-    session.add(bom)
+    techcard = Techcard(product_id=product.id, version="v1", is_active=True)
+    session.add(techcard)
     await session.flush()
 
     plan, position = await _make_plan_position(session, product)
     await session.flush()
 
     errors = await validate_plan_position(session, position)
-    assert "active_bom_has_no_lines" in errors
+    assert "active_techcard_has_no_lines" in errors
 
 
 @pytest.mark.asyncio
@@ -278,10 +278,10 @@ async def test_validate_position_detects_missing_route(session) -> None:
     session.add_all([product, component])
     await session.flush()
 
-    bom = BOM(product_id=product.id, version="v1", is_active=True)
-    session.add(bom)
+    techcard = Techcard(product_id=product.id, version="v1", is_active=True)
+    session.add(techcard)
     await session.flush()
-    session.add(BOMLine(bom_id=bom.id, component_product_id=component.id, quantity=1, unit="pcs"))
+    session.add(TechcardLine(techcard_id=techcard.id, component_product_id=component.id, quantity=1, unit="pcs"))
     await session.flush()
 
     plan, position = await _make_plan_position(session, product)
@@ -298,10 +298,10 @@ async def test_validate_position_detects_empty_route(session) -> None:
     session.add_all([product, component])
     await session.flush()
 
-    bom = BOM(product_id=product.id, version="v1", is_active=True)
-    session.add(bom)
+    techcard = Techcard(product_id=product.id, version="v1", is_active=True)
+    session.add(techcard)
     await session.flush()
-    session.add(BOMLine(bom_id=bom.id, component_product_id=component.id, quantity=1, unit="pcs"))
+    session.add(TechcardLine(techcard_id=techcard.id, component_product_id=component.id, quantity=1, unit="pcs"))
 
     route = ProductionRoute(product_id=product.id, name="Main", version="v1", is_active=True)
     session.add(route)
@@ -322,10 +322,10 @@ async def test_validate_position_detects_inactive_section(session) -> None:
     session.add_all([product, component, section])
     await session.flush()
 
-    bom = BOM(product_id=product.id, version="v1", is_active=True)
-    session.add(bom)
+    techcard = Techcard(product_id=product.id, version="v1", is_active=True)
+    session.add(techcard)
     await session.flush()
-    session.add(BOMLine(bom_id=bom.id, component_product_id=component.id, quantity=1, unit="pcs"))
+    session.add(TechcardLine(techcard_id=techcard.id, component_product_id=component.id, quantity=1, unit="pcs"))
 
     route = ProductionRoute(product_id=product.id, name="Main", version="v1", is_active=True)
     session.add(route)
