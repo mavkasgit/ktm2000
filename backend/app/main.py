@@ -9,7 +9,7 @@ from app.api.health import router as health_router
 from app.api.routes.auth import router as auth_router
 from app.api.routes.products import router as products_router
 from app.api.routes.sections import router as sections_router
-from app.api.routes.boms import router as boms_router
+from app.api.routes.techcards import router as techcards_router
 from app.api.routes.imports import router as imports_router
 from app.api.routes.production_plans import router as production_plans_router
 from app.api.routes.release_batches import router as release_batches_router
@@ -42,7 +42,7 @@ app.include_router(health_router, prefix="/api")
 app.include_router(auth_router, prefix="/api")
 app.include_router(products_router, prefix="/api")
 app.include_router(sections_router, prefix="/api")
-app.include_router(boms_router, prefix="/api")
+app.include_router(techcards_router, prefix="/api")
 app.include_router(routes_router, prefix="/api")
 app.include_router(imports_router, prefix="/api")
 app.include_router(production_plans_router, prefix="/api")

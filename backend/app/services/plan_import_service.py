@@ -2,13 +2,14 @@ from __future__ import annotations
 
 from collections import Counter
 from datetime import UTC, datetime
+from decimal import Decimal
 from pathlib import Path
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
-from app.models.bom import BOM, BOMLine
+from app.models.techcard import Techcard, TechcardLine
 from app.models.imports import ImportBatch, ImportBatchMode, ImportFile
 from app.models.product import Product
 from app.models.production_plan import (
@@ -29,6 +30,7 @@ from app.services.excel_import import (
     sha256_bytes,
     validate_excel_extension,
 )
+from app.services.techcard_pair_resolution import resolve_techcard_pair
 
 
 async def create_excel_import_change_set(
@@ -170,6 +172,7 @@ async def _make_change_items(
     mode: ImportBatchMode,
     existing_positions: list[PlanPosition],
 ) -> list[PlanChangeItem]:
+    available_by_sku = _build_available_inputs_by_sku(parsed_rows)
     by_fingerprint: dict[str, PlanPosition] = {}
     by_row_hash: dict[str, PlanPosition] = {}
     for pos in existing_positions:
@@ -196,13 +199,30 @@ async def _make_change_items(
             if not product.is_active:
                 errors.append("product_inactive")
 
-            bom = await db.scalar(select(BOM).where(BOM.product_id == product.id, BOM.is_active.is_(True)))
-            if bom is None:
-                errors.append("active_bom_not_found")
+            techcard = await db.scalar(select(Techcard).where(Techcard.product_id == product.id, Techcard.is_active.is_(True)))
+            if techcard is None:
+                errors.append("active_techcard_not_found")
             else:
-                line = await db.scalar(select(BOMLine).where(BOMLine.bom_id == bom.id).limit(1))
+                line = await db.scalar(select(TechcardLine).where(TechcardLine.techcard_id == techcard.id).limit(1))
                 if line is None:
-                    errors.append("active_bom_has_no_lines")
+                    errors.append("active_techcard_has_no_lines")
+                if row.payload.get("paired_profile") and techcard.processing_type == "paired_processing":
+                    resolution = await resolve_techcard_pair(
+                        db,
+                        techcard_id=techcard.id,
+                        available_by_sku=available_by_sku,
+                        target_quantity=row.quantity,
+                    )
+                    row.payload["techcard_pair"] = {
+                        "resolved": resolution.resolved,
+                        "pair_id": resolution.variant_id,
+                        "pair_name": resolution.variant_name,
+                        "priority": resolution.priority,
+                        "reason": resolution.reason,
+                        "inputs": resolution.inputs,
+                    }
+                    if not resolution.resolved:
+                        warnings.append("techcard_pair_not_resolved")
 
             route = await db.scalar(
                 select(ProductionRoute).where(ProductionRoute.product_id == product.id, ProductionRoute.is_active.is_(True))
@@ -339,6 +359,26 @@ def _summary(rows: list[ParsedPlanRow], workbook_warnings: list[str]) -> dict:
         "workbook_warnings": workbook_warnings,
         "quantity_total": str(sum((row.quantity for row in rows), start=rows[0].quantity * 0) if rows else 0),
     }
+
+
+def _build_available_inputs_by_sku(rows: list[ParsedPlanRow]) -> dict[str, Decimal]:
+    totals: dict[str, Decimal] = {}
+    for row in rows:
+        components = row.payload.get("components") or []
+        if isinstance(components, list) and components:
+            for component in components:
+                sku = str(component.get("sku") or "").strip()
+                if not sku:
+                    continue
+                key = sku.lower()
+                current = totals.get(key, Decimal("0"))
+                totals[key] = current + row.quantity
+            continue
+
+        key = row.source_sku.lower()
+        current = totals.get(key, Decimal("0"))
+        totals[key] = current + row.quantity
+    return totals
 
 
 def _make_plan_no(sheet_name: str) -> str:

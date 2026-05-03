@@ -90,7 +90,7 @@ async def import_profiles():
             product = Product(
                 sku=sku,
                 name=sku,  # Use SKU as name initially; user can update later
-                type=ProductType.finished_good,
+                type=ProductType.component,
                 unit="шт",
                 is_active=True,
                 notes=notes or None,

@@ -37,3 +37,4 @@ class Product(Base):
     photo_full: Mapped[str | None] = mapped_column(String(500), nullable=True)
     source: Mapped[str | None] = mapped_column(String(50), nullable=True, index=True)
     is_catalog_item: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"), default=False)
+    is_paired_profile: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"), default=False)

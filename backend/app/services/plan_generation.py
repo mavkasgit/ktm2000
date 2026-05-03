@@ -6,7 +6,7 @@ from decimal import Decimal
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.bom import BOM, BOMLine
+from app.models.techcard import Techcard, TechcardLine
 from app.models.internal_plan import InternalPlan, SectionPlanLine
 from app.models.production_plan import PlanPosition, PlanPositionStatus, ProductionPlan, ProductionPlanStatus
 from app.models.release_batch import ReleaseBatch, ReleaseBatchPosition, ReleaseBatchStatus, ReleaseBatchType
@@ -47,7 +47,7 @@ async def create_release_batch(
 
     for position, release_quantity in selected_positions:
         route = await _get_active_route(db, position)
-        await _validate_active_bom(db, position)
+        await _validate_active_techcard(db, position)
         route_issues = await validate_route_match(db, position)
         if route_issues:
             raise ValueError(f"Route mismatch for position {position.id}: " + "; ".join(route_issues))
@@ -216,11 +216,11 @@ async def _get_active_route(db: AsyncSession, position: PlanPosition) -> Product
     return route
 
 
-async def _validate_active_bom(db: AsyncSession, position: PlanPosition) -> None:
-    bom = await db.scalar(select(BOM).where(BOM.product_id == position.product_id, BOM.is_active.is_(True)))
-    if bom is None:
+async def _validate_active_techcard(db: AsyncSession, position: PlanPosition) -> None:
+    techcard = await db.scalar(select(Techcard).where(Techcard.product_id == position.product_id, Techcard.is_active.is_(True)))
+    if techcard is None:
         raise ValueError("Активная техкарта не найдена")
-    line = await db.scalar(select(BOMLine).where(BOMLine.bom_id == bom.id).limit(1))
+    line = await db.scalar(select(TechcardLine).where(TechcardLine.techcard_id == techcard.id).limit(1))
     if line is None:
         raise ValueError("Активная техкарта не содержит строк")
 

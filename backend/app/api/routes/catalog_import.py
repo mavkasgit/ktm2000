@@ -128,6 +128,9 @@ async def import_catalog_from_zip(
             if existing:
                 # Update existing
                 changed = False
+                if existing.type != ProductType.component:
+                    existing.type = ProductType.component
+                    changed = True
                 if existing.name != sku:
                     existing.name = sku
                     changed = True
@@ -155,7 +158,7 @@ async def import_catalog_from_zip(
                 product = Product(
                     sku=sku,
                     name=sku,
-                    type=ProductType.finished_good,
+                    type=ProductType.component,
                     unit="шт",
                     is_active=True,
                     notes=notes or None,

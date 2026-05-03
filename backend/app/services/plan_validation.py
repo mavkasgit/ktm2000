@@ -3,7 +3,7 @@ from __future__ import annotations
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.bom import BOM, BOMLine
+from app.models.techcard import Techcard, TechcardLine
 from app.models.product import Product
 from app.models.production_plan import PlanPosition, PlanPositionStatus
 from app.models.route import ProductionRoute, RouteStep
@@ -22,13 +22,13 @@ async def validate_plan_position(db: AsyncSession, position: PlanPosition) -> li
     if product is None or not product.is_active:
         errors.append("product_inactive")
 
-    bom = await db.scalar(select(BOM).where(BOM.product_id == position.product_id, BOM.is_active.is_(True)))
-    if bom is None:
-        errors.append("active_bom_not_found")
+    techcard = await db.scalar(select(Techcard).where(Techcard.product_id == position.product_id, Techcard.is_active.is_(True)))
+    if techcard is None:
+        errors.append("active_techcard_not_found")
     else:
-        line = await db.scalar(select(BOMLine).where(BOMLine.bom_id == bom.id).limit(1))
+        line = await db.scalar(select(TechcardLine).where(TechcardLine.techcard_id == techcard.id).limit(1))
         if line is None:
-            errors.append("active_bom_has_no_lines")
+            errors.append("active_techcard_has_no_lines")
 
     route = await db.scalar(
         select(ProductionRoute).where(ProductionRoute.product_id == position.product_id, ProductionRoute.is_active.is_(True))

@@ -31,6 +31,7 @@ class ProductIn(BaseModel):
     photo_full: str | None = None
     source: str | None = None
     is_catalog_item: bool = False
+    is_paired_profile: bool = False
 
 
 class ProductPatch(BaseModel):
@@ -51,6 +52,7 @@ class ProductPatch(BaseModel):
     photo_full: str | None = None
     source: str | None = None
     is_catalog_item: bool | None = None
+    is_paired_profile: bool | None = None
 
 
 class ProductOut(ProductIn):
