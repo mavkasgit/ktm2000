@@ -8,5 +8,8 @@ export * from "./Feedback";
 export * from "./Dialog";
 export * from "./AlertDialog";
 export * from "./Checkbox";
+export * from "./Popover";
+export { EntityDialog, renderIcon } from "./EntityDialog";
+export type { EntityDialogProps, EntityDialogField } from "./EntityDialog";
 export { Toaster } from "./toaster";
 export { ToastProvider, toast } from "./use-toast";
