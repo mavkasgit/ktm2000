@@ -3,6 +3,8 @@ import { Layout, DashboardPage } from "./Layout"
 import { ReferencesPage, RawMaterialsPage, FinishedGoodsPage, SectionsPage, TechcardsPage, RoutesPage } from "../features/references"
 import { DevPage } from "../features/references/pages/DevPage"
 import { PlanPage } from "../features/plan-flow/pages/PlanPage"
+import { SettingsPage } from "../features/settings/SettingsPage"
+import { BackupsPage } from "../features/settings/SettingsBackupsPage"
 
 export const router = createBrowserRouter([
   {
@@ -23,6 +25,14 @@ export const router = createBrowserRouter([
         ],
       },
       { path: "plan", element: <PlanPage /> },
+      {
+        path: "settings",
+        element: <SettingsPage />,
+      },
+      {
+        path: "settings/backups",
+        element: <BackupsPage />,
+      },
       { path: "dev", element: <DevPage /> },
     ],
   },

@@ -1,13 +1,12 @@
 import { NavLink, Outlet } from "react-router-dom"
-import { Boxes, ClipboardList, Gauge, Factory, Wrench } from "lucide-react"
+import { Boxes, ClipboardList, Gauge, Factory, Cog } from "lucide-react"
 
 const navItems = [
   { to: "/", label: "Обзор", icon: Gauge },
   { to: "/references", label: "Справочники", icon: Boxes },
   { to: "/plan", label: "План и запуск", icon: ClipboardList },
+  { to: "/settings", label: "Настройки", icon: Cog },
 ]
-
-const devItem = { to: "/dev", label: "Dev", icon: Wrench }
 
 export function Layout() {
   return (
@@ -30,10 +29,6 @@ export function Layout() {
               </NavLink>
             )
           })}
-          <NavLink key={devItem.to} to={devItem.to} className="nav-link">
-            <devItem.icon size={18} />
-            <span>{devItem.label}</span>
-          </NavLink>
         </nav>
       </aside>
       <main className="main-area">

@@ -22,6 +22,8 @@ class Settings(BaseSettings):
     CORS_ORIGINS: str = "http://localhost:5200,http://127.0.0.1:5200"
     IMPORT_STORAGE_DIR: str = str(BASE_DIR.parent / "storage" / "imports")
     PRODUCT_PHOTO_DIR: str = str(BASE_DIR.parent / "storage" / "products")
+    BACKUPS_PATH: str = str(BASE_DIR.parent / "storage" / "backups")
+    POSTGRES_CONTAINER_NAME: str = "factoryflow-postgres"
 
     model_config = {"env_file": _env_file, "env_file_encoding": "utf-8", "extra": "ignore"}
 
