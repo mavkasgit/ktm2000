@@ -241,14 +241,8 @@ export function TechcardsPage() {
     setLoading(true);
     setStatus("Создание парной техкарты...");
     try {
-      const product = await api.createProduct({
-        sku: pairProfileSku.trim(),
-        name: pairProfileName.trim(),
-        type: "component",
-        is_paired_profile: true,
-      });
       const card = await api.createTechcard({
-        product_id: product.id,
+        product_id: null,
         version: "A",
         processing_type: "paired_processing",
         is_active: true,
@@ -274,7 +268,7 @@ export function TechcardsPage() {
         quantity: parseInt(quantityBPerItem) || 1,
         unit: "pcs",
       });
-      setStatus(`Парная техкарта создана: ${product.sku} (#${card.id}), общее кол-во: ${quantityTotal}`);
+      setStatus(`Парная техкарта создана: ${pairProfileSku} (#${card.id}), общее кол-во: ${quantityTotal}`);
       setSkuA("");
       setSkuB("");
       setQuantityTotal(1);

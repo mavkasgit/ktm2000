@@ -8,7 +8,7 @@ class Techcard(Base):
     __tablename__ = "techcards"
 
     id: Mapped[int] = mapped_column(BigInteger, Identity(always=True), primary_key=True)
-    product_id: Mapped[int] = mapped_column(ForeignKey("products.id"), nullable=False)
+    product_id: Mapped[int | None] = mapped_column(ForeignKey("products.id"), nullable=True)
     version: Mapped[str] = mapped_column(String(100), nullable=False)
     processing_type: Mapped[str] = mapped_column(
         String(50),
@@ -23,10 +23,6 @@ class Techcard(Base):
     hangers_a: Mapped[int | None] = mapped_column(Integer, nullable=True)
     hangers_b: Mapped[int | None] = mapped_column(Integer, nullable=True)
     hangers_total: Mapped[int | None] = mapped_column(Integer, nullable=True)
-
-    __table_args__ = (
-        Index("ix_techcards_active_one_per_product", "product_id", unique=True, postgresql_where=text("is_active = true")),
-    )
 
 
 class TechcardLine(Base):

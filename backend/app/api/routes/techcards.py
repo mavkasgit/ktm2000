@@ -12,7 +12,7 @@ router = APIRouter(prefix="/techcards", tags=["techcards"])
 
 
 class TechcardCreate(BaseModel):
-    product_id: int
+    product_id: int | None = None
     version: str
     processing_type: Literal["standart_processing", "paired_processing"] = "standart_processing"
     is_active: bool = True
@@ -30,8 +30,18 @@ class TechcardLineCreate(BaseModel):
     unit: str
 
 
-class TechcardOut(TechcardCreate):
+class TechcardOut(BaseModel):
     id: int
+    product_id: int | None = None
+    version: str
+    processing_type: str
+    is_active: bool
+    quantity_total: int | None = None
+    quantity_a_per_item: int | None = None
+    quantity_b_per_item: int | None = None
+    hangers_a: int | None = None
+    hangers_b: int | None = None
+    hangers_total: int | None = None
 
 
 class TechcardLineOut(TechcardLineCreate):
@@ -82,9 +92,10 @@ class TechcardPairDetailOut(TechcardPairOut):
 
 @router.post("", response_model=TechcardOut, status_code=status.HTTP_201_CREATED)
 async def create_techcard(payload: TechcardCreate, db: AsyncSession = Depends(get_db)) -> TechcardOut:
-    product = await db.get(Product, payload.product_id)
-    if product is None:
-        raise HTTPException(status_code=404, detail="Product not found")
+    if payload.product_id is not None:
+        product = await db.get(Product, payload.product_id)
+        if product is None:
+            raise HTTPException(status_code=404, detail="Product not found")
     item = Techcard(**payload.model_dump())
     db.add(item)
     await db.flush()
@@ -103,7 +114,7 @@ async def get_techcard(techcard_id: int, db: AsyncSession = Depends(get_db)) -> 
     item = await db.get(Techcard, techcard_id)
     if item is None:
         raise HTTPException(status_code=404, detail="Техкарта не найдена")
-    product = await db.get(Product, item.product_id)
+    product = await db.get(Product, item.product_id) if item.product_id else None
     lines = (
         await db.execute(select(TechcardLine).where(TechcardLine.techcard_id == techcard_id).order_by(TechcardLine.id))
     ).scalars().all()
@@ -113,7 +124,7 @@ async def get_techcard(techcard_id: int, db: AsyncSession = Depends(get_db)) -> 
     return TechcardDetailOut(
         id=item.id,
         product_id=item.product_id,
-        product_article=product.sku if product else str(item.product_id),
+        product_article=product.sku if product else "—",
         version=item.version,
         processing_type=item.processing_type,
         is_active=item.is_active,
