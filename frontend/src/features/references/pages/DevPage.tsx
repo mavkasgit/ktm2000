@@ -1,5 +1,6 @@
 import React from "react";
 import { renderIcon } from "@/shared/ui/EntityDialog";
+import { IconCalendarCode, IconCalendarClock, IconCalendarCheck, IconCalendarEvent } from "@tabler/icons-react";
 import { IconBlade, IconSpray, IconFlask2, IconAtom2, IconWashPress, IconBuildingFactory2, IconCut, IconWaveSawTool, IconWood, IconHammer, IconPick, IconAxe, IconScissors } from "@tabler/icons-react";
 
 type SectionPreview = {
@@ -115,11 +116,62 @@ function TablerIconsTable() {
   );
 }
 
+function FaviconCandidates() {
+  const candidates = [
+    { id: 1, name: "Календарь + код", icon: IconCalendarCode, color: "#3B82F6", desc: "План и спецификация" },
+    { id: 2, name: "Календарь + часы", icon: IconCalendarClock, color: "#8B5CF6", desc: "Расписание и тайминг" },
+    { id: 3, name: "Календарь + галочка", icon: IconCalendarCheck, color: "#10B981", desc: "Выполненный план" },
+    { id: 4, name: "Календарь", icon: IconCalendarEvent, color: "#06B6D4", desc: "Классический календарь" },
+    { id: 5, name: "Текущая (без иконки)", icon: null, color: "#F59E0B", desc: "Стандартная заглушка" },
+  ];
+
+  return (
+    <div className="space-y-4">
+      <p className="text-sm text-muted-foreground">Нажмите на иконку, чтобы увидеть превью в реальном размере фавиконки (16px, 32px)</p>
+      <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-4">
+        {candidates.map((c) => (
+          <div key={c.id} className="flex flex-col items-center gap-2 p-4 border rounded-lg">
+            {/* Large preview */}
+            <div className="w-16 h-16 flex items-center justify-center rounded-lg" style={{ backgroundColor: c.color + "20" }}>
+              {c.icon ? (
+                <c.icon size={40} stroke={1.5} color={c.color} />
+              ) : (
+                <div className="w-10 h-10 rounded" style={{ backgroundColor: c.color }} />
+              )}
+            </div>
+            {/* Real-size favicon previews */}
+            <div className="flex items-center gap-3">
+              {c.icon ? (
+                <>
+                  <c.icon size={16} stroke={1.5} color={c.color} />
+                  <c.icon size={32} stroke={1.5} color={c.color} />
+                </>
+              ) : (
+                <>
+                  <div className="w-4 h-4 rounded-sm" style={{ backgroundColor: c.color }} />
+                  <div className="w-8 h-8 rounded-sm" style={{ backgroundColor: c.color }} />
+                </>
+              )}
+            </div>
+            <span className="text-xs font-medium text-center">{c.name}</span>
+            <span className="text-xs text-muted-foreground text-center">{c.desc}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 const DEV_SECTIONS: { id: string; title: string; component: React.ReactNode }[] = [
   {
     id: "final-sections",
     title: "Итоговый вариант",
     component: <TablerIconsTable />,
+  },
+  {
+    id: "favicon-candidates",
+    title: "Варианты фавиконок (планирование)",
+    component: <FaviconCandidates />,
   },
 ];
 
