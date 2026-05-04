@@ -203,8 +203,8 @@ export function RawMaterialsPage() {
   const handleSort = (field: SortField) => {
     setSortConfigs((prev) => {
       const existing = prev.find((c) => c.field === field);
-      if (!existing) return [...prev, { field, order: "asc" }];
-      if (existing.order === "asc") return prev.map((c) => c.field === field ? { ...c, order: "desc" } : c);
+      if (!existing) return [...prev, { field, order: "desc" }];
+      if (existing.order === "desc") return prev.map((c) => c.field === field ? { ...c, order: "asc" } : c);
       return prev.filter((c) => c.field !== field);
     });
   };

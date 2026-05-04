@@ -39,3 +39,8 @@ export async function patchSection(sectionId: number, payload: PatchSectionInput
   const { data } = await apiClient.patch<Section>(`/sections/${sectionId}`, payload);
   return data;
 }
+
+export async function seedSections() {
+  const { data } = await apiClient.post<Section[]>("/sections-seed");
+  return data;
+}

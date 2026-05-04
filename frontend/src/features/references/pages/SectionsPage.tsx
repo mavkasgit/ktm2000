@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useState } from "react";
-import { Plus } from "lucide-react";
+import { Plus, Download } from "lucide-react";
 import * as API from "shared/api";
 import * as UI from "shared/ui";
 import { Button } from "@/shared/ui/Button";
@@ -89,7 +89,24 @@ async function apiDeleteSection(id: number): Promise<void> {
     return;
   }
   const response = await fetch(`/api/sections/${id}`, { method: "DELETE" });
-  if (!response.ok) throw new Error(`Failed to delete section: ${response.status}`);
+  if (!response.ok) {
+    let msg = `Failed to delete section: ${response.status}`;
+    try {
+      const body = await response.json();
+      if (body?.detail) msg = body.detail;
+    } catch {}
+    throw new Error(msg);
+  }
+}
+
+async function apiSeedSections(): Promise<Section[]> {
+  const api = API as Record<string, any>;
+  if (typeof api.seedSections === "function") {
+    return api.seedSections();
+  }
+  const response = await fetch("/api/sections-seed", { method: "POST" });
+  if (!response.ok) throw new Error(`Failed to seed sections: ${response.status}`);
+  return response.json();
 }
 
 export function SectionsPage() {
@@ -100,6 +117,8 @@ export function SectionsPage() {
   const [dialogMode, setDialogMode] = useState<"add" | "edit">("add");
   const [editingItem, setEditingItem] = useState<Section | null>(null);
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
+  const [seedDialogOpen, setSeedDialogOpen] = useState(false);
+  const [seeding, setSeeding] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -162,6 +181,20 @@ export function SectionsPage() {
     }
   };
 
+  const handleSeed = async () => {
+    setSeeding(true);
+    try {
+      const result = await apiSeedSections();
+      setItems(result);
+      toast({ title: "Участки загружены", description: `Создано/обновлено: ${result.length}`, variant: "success" });
+    } catch (e) {
+      toast({ title: "Ошибка", description: e instanceof Error ? e.message : "Не удалось загрузить участки", variant: "destructive" });
+    } finally {
+      setSeeding(false);
+      setSeedDialogOpen(false);
+    }
+  };
+
   const initialValues = dialogMode === "edit"
     ? {
         code: editingItem?.code ?? "",
@@ -177,10 +210,16 @@ export function SectionsPage() {
     <section style={{ display: "grid", gap: 12 }}>
       <div className="flex items-center justify-between">
         <h2 className="text-lg font-semibold">Участки</h2>
-        <Button size="sm" onClick={openAdd}>
-          <Plus className="h-4 w-4 mr-1" />
-          Добавить участок
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button size="sm" variant="outline" onClick={() => setSeedDialogOpen(true)}>
+            <Download className="h-4 w-4 mr-1" />
+            Загрузить участки
+          </Button>
+          <Button size="sm" onClick={openAdd}>
+            <Plus className="h-4 w-4 mr-1" />
+            Добавить участок
+          </Button>
+        </div>
       </div>
 
       <EntityDialog
@@ -211,6 +250,23 @@ export function SectionsPage() {
             <AlertDialogCancel>Отмена</AlertDialogCancel>
             <AlertDialogAction onClick={handleDelete} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">
               Удалить
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog open={seedDialogOpen} onOpenChange={setSeedDialogOpen}>
+        <AlertDialogContent className="max-w-sm">
+          <AlertDialogHeader>
+            <AlertDialogTitle>Загрузить стандартные участки?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Будет создано 9 стандартных участков (склады, производство). Существующие участки будут обновлены.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter className="flex-col-reverse sm:flex-row gap-2">
+            <AlertDialogCancel>Отмена</AlertDialogCancel>
+            <AlertDialogAction onClick={handleSeed} disabled={seeding}>
+              {seeding ? "Загрузка..." : "Загрузить"}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

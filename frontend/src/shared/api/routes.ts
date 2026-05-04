@@ -108,3 +108,8 @@ export async function addRule(routeId: number, payload: RuleInput) {
 export async function deleteRule(routeId: number, ruleId: number) {
   await apiClient.delete(`/routes/${routeId}/rules/${ruleId}`);
 }
+
+export async function seedRoutes() {
+  const { data } = await apiClient.post<RouteDetail>("/routes-seed");
+  return data;
+}
