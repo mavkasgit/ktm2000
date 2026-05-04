@@ -24,8 +24,8 @@ class ProductionRoute(Base):
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default=text("true"))
 
-    steps: Mapped[list["RouteStep"]] = relationship("RouteStep", back_populates="route", cascade="all, delete-orphan", lazy="selectin")
-    rules: Mapped[list["RouteMatchingRule"]] = relationship("RouteMatchingRule", back_populates="route", cascade="all, delete-orphan", lazy="selectin")
+    steps: Mapped[list["RouteStep"]] = relationship("RouteStep", back_populates="route", lazy="selectin")
+    rules: Mapped[list["RouteMatchingRule"]] = relationship("RouteMatchingRule", back_populates="route", lazy="selectin")
 
 
 class RouteStep(Base):
@@ -58,7 +58,7 @@ class RouteMatchingRule(Base):
     created_at: Mapped[None] = mapped_column(DateTime, server_default=func.now())
 
     route: Mapped["ProductionRoute"] = relationship("ProductionRoute", back_populates="rules")
-    conditions: Mapped[list["RouteRuleCondition"]] = relationship("RouteRuleCondition", back_populates="rule", cascade="all, delete-orphan", lazy="selectin")
+    conditions: Mapped[list["RouteRuleCondition"]] = relationship("RouteRuleCondition", back_populates="rule", lazy="selectin")
 
 
 class RouteRuleCondition(Base):

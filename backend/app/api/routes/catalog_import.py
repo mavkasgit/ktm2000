@@ -5,7 +5,8 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
-from sqlalchemy import select
+from sqlalchemy import String, cast, select
+from sqlalchemy.dialects.postgresql import ARRAY as pg_ARRAY
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
@@ -102,7 +103,7 @@ async def import_catalog_from_zip(
 
             existing = await db.scalar(
                 select(Product).where(
-                    (Product.sku == sku) | (Product.aliases.contains([sku]))
+                    (Product.sku == sku) | (Product.aliases.op("@>")(cast([sku], pg_ARRAY(String))))
                 )
             )
 
@@ -248,7 +249,7 @@ async def preview_catalog_from_zip(
 
             existing = await db.scalar(
                 select(Product).where(
-                    (Product.sku == sku) | (Product.aliases.contains([sku]))
+                    (Product.sku == sku) | (Product.aliases.op("@>")(cast([sku], pg_ARRAY(String))))
                 )
             )
 

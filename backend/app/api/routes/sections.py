@@ -4,6 +4,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
+from app.models.route import ProductionRoute, RouteStep
 from app.models.section import Section
 
 router = APIRouter(prefix="/sections", tags=["sections"])
@@ -77,5 +78,12 @@ async def delete_section(section_id: int, db: AsyncSession = Depends(get_db)):
     item = await db.get(Section, section_id)
     if item is None:
         raise HTTPException(status_code=404, detail="Section not found")
+    # Check if any route steps reference this section
+    steps = (await db.execute(select(RouteStep).where(RouteStep.section_id == section_id))).scalars().all()
+    if steps:
+        route_ids = list({s.route_id for s in steps})
+        routes = (await db.execute(select(ProductionRoute).where(ProductionRoute.id.in_(route_ids)))).scalars().all()
+        route_names = ", ".join(f"«{r.name}»" for r in routes)
+        raise HTTPException(status_code=409, detail=f"Нельзя удалить: участок используется в маршрутах {route_names}")
     await db.delete(item)
     await db.flush()
