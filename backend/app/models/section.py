@@ -20,6 +20,8 @@ class Section(Base):
     )
     is_active: Mapped[bool] = mapped_column(nullable=False, default=True, server_default=text("true"))
     kind: Mapped[str] = mapped_column(String(20), nullable=False, default="production", server_default=text("'production'"))
+    icon: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    icon_color: Mapped[str | None] = mapped_column(String(7), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=text("now()")
     )

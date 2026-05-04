@@ -9,6 +9,8 @@ export type Section = {
   description: string | null;
   is_active: boolean;
   kind: SectionKind;
+  icon: string | null;
+  icon_color: string | null;
 };
 
 export type CreateSectionInput = {
@@ -17,9 +19,11 @@ export type CreateSectionInput = {
   description?: string | null;
   is_active?: boolean;
   kind?: SectionKind;
+  icon?: string | null;
+  icon_color?: string | null;
 };
 
-export type PatchSectionInput = Partial<Pick<CreateSectionInput, "name" | "description" | "is_active" | "kind">>;
+export type PatchSectionInput = Partial<Pick<CreateSectionInput, "name" | "description" | "is_active" | "kind" | "icon" | "icon_color">>;
 
 export async function listSections() {
   const { data } = await apiClient.get<Section[]>("/sections");

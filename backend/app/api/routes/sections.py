@@ -16,6 +16,8 @@ class SectionIn(BaseModel):
     sort_order: int = 0
     is_active: bool = True
     kind: str = "production"
+    icon: str | None = None
+    icon_color: str | None = None
 
 
 class SectionPatch(BaseModel):
@@ -24,6 +26,8 @@ class SectionPatch(BaseModel):
     sort_order: int | None = None
     is_active: bool | None = None
     kind: str | None = None
+    icon: str | None = None
+    icon_color: str | None = None
 
 
 class SectionOut(SectionIn):
@@ -66,3 +70,12 @@ async def patch_section(section_id: int, payload: SectionPatch, db: AsyncSession
     await db.flush()
     await db.refresh(item)
     return SectionOut.model_validate(item, from_attributes=True)
+
+
+@router.delete("/{section_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_section(section_id: int, db: AsyncSession = Depends(get_db)):
+    item = await db.get(Section, section_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail="Section not found")
+    await db.delete(item)
+    await db.flush()
