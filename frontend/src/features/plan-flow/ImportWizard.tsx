@@ -1,7 +1,7 @@
 import { useMemo, useRef, useState } from "react"
 import { Check, ExternalLink, Upload } from "lucide-react"
 import { useNavigate } from "react-router-dom"
-import { uploadExcel, applyChangeSet } from "./api"
+import { uploadExcel, uploadTestExcel, applyChangeSet } from "./api"
 import { ImportDiffTable } from "./ImportDiffTable"
 import { Button } from "shared/ui"
 import {
@@ -19,6 +19,7 @@ export function ImportWizard(props: {
   open: boolean
   onClose: () => void
   onSuccess: (planId: string, changeSetId: string) => void
+  mode?: "normal" | "test"
 }) {
   const [step, setStep] = useState<"upload" | "preview" | "result">("upload")
   const [file, setFile] = useState<File | null>(null)
@@ -97,6 +98,20 @@ export function ImportWizard(props: {
     }
   }
 
+  async function handleTestImport() {
+    setLoading(true)
+    setError(null)
+    try {
+      const data = await uploadTestExcel()
+      setPreviewData(data)
+      setStep("preview")
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Ошибка тестового импорта")
+    } finally {
+      setLoading(false)
+    }
+  }
+
   async function handleApply() {
     if (!previewData) return
     const planId = String(previewData.planId ?? previewData.production_plan_id ?? "")
@@ -149,9 +164,13 @@ export function ImportWizard(props: {
     <Dialog open={props.open} onOpenChange={(open) => { if (!open) handleClose() }}>
       <DialogContent className={`w-full max-h-[95vh] overflow-hidden flex flex-col ${step === "preview" ? "max-w-[95vw]" : "max-w-2xl"}`}>
         <DialogHeader>
-          <DialogTitle>Импорт производственного плана</DialogTitle>
+          <DialogTitle>
+            {props.mode === "test" ? "Тестовый импорт плана" : "Импорт производственного плана"}
+          </DialogTitle>
           <DialogDescription>
-            Загрузите файл Excel и проверьте изменения перед применением
+            {props.mode === "test"
+              ? "Загрузка тестового плана (ЮП-2630) для проверки"
+              : "Загрузите файл Excel и проверьте изменения перед применением"}
           </DialogDescription>
         </DialogHeader>
 
@@ -163,28 +182,40 @@ export function ImportWizard(props: {
 
         {step === "upload" && (
           <div className="space-y-4">
-            <div
-              className="border-2 border-dashed rounded-lg p-8 text-center cursor-pointer hover:bg-accent/50 transition-colors"
-              onClick={() => fileInputRef.current?.click()}
-            >
-              <input
-                ref={fileInputRef}
-                type="file"
-                accept=".xlsx,.xls,.xlsm,.xlsb,.ods"
-                className="hidden"
-                onChange={handleFileSelect}
-              />
-              <Upload className="mx-auto h-12 w-12 text-muted-foreground mb-4" />
-              <p className="text-sm text-muted-foreground">
-                {loading ? "Загрузка…" : "Нажмите или перетащите заполненный файл Excel"}
-              </p>
-              <p className="text-xs text-muted-foreground mt-2">
-                Поддерживаются .xlsx, .xls, .xlsm, .xlsb, .ods
-              </p>
-              {file && !loading && (
-                <p className="text-xs text-blue-600 mt-2 font-medium">{file.name}</p>
-              )}
-            </div>
+            {props.mode === "test" ? (
+              <div className="text-center py-6">
+                <p className="text-sm text-muted-foreground mb-4">
+                  Будет загружен тестовый план с одной позицией ЮП-2630
+                </p>
+                <Button onClick={handleTestImport} disabled={loading}>
+                  <Upload className="h-4 w-4 mr-2" />
+                  {loading ? "Загрузка…" : "Загрузить тестовый план"}
+                </Button>
+              </div>
+            ) : (
+              <div
+                className="border-2 border-dashed rounded-lg p-8 text-center cursor-pointer hover:bg-accent/50 transition-colors"
+                onClick={() => fileInputRef.current?.click()}
+              >
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept=".xlsx,.xls,.xlsm,.xlsb,.ods"
+                  className="hidden"
+                  onChange={handleFileSelect}
+                />
+                <Upload className="mx-auto h-12 w-12 text-muted-foreground mb-4" />
+                <p className="text-sm text-muted-foreground">
+                  {loading ? "Загрузка…" : "Нажмите или перетащите заполненный файл Excel"}
+                </p>
+                <p className="text-xs text-muted-foreground mt-2">
+                  Поддерживаются .xlsx, .xls, .xlsm, .xlsb, .ods
+                </p>
+                {file && !loading && (
+                  <p className="text-xs text-blue-600 mt-2 font-medium">{file.name}</p>
+                )}
+              </div>
+            )}
           </div>
         )}
 

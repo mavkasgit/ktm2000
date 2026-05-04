@@ -4,8 +4,9 @@ from collections import Counter
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
+from typing import Iterable
 
-from sqlalchemy import select
+from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
@@ -30,7 +31,6 @@ from app.services.excel_import import (
     sha256_bytes,
     validate_excel_extension,
 )
-from app.services.techcard_pair_resolution import resolve_techcard_pair
 from app.services.route_matcher import find_route
 
 
@@ -162,7 +162,65 @@ async def _get_or_create_import_file(
 
 async def _load_products_by_sku(db: AsyncSession) -> dict[str, Product]:
     products = (await db.execute(select(Product))).scalars().all()
-    return {product.sku.lower(): product for product in products}
+    result: dict[str, Product] = {}
+    for product in products:
+        for key in _sku_lookup_keys(product.sku):
+            result[key] = product
+    return result
+
+
+def _sku_lookup_keys(sku: str) -> set[str]:
+    raw = (sku or "").strip()
+    if not raw:
+        return set()
+
+    keys = {raw.lower(), _normalize_sku(raw)}
+
+    # Heuristic mojibake recovery for legacy CP1251/Latin-1 mismatch.
+    try:
+        recovered = raw.encode("latin-1").decode("cp1251")
+        keys.add(recovered.lower())
+        keys.add(_normalize_sku(recovered))
+    except Exception:
+        pass
+    return {k for k in keys if k}
+
+
+def _normalize_sku(sku: str) -> str:
+    s = (sku or "").strip().lower()
+    dash_variants = "\u2010\u2011\u2012\u2013\u2014\u2212\u2043\uFE58\uFE63\uFF0D"
+    for d in dash_variants:
+        s = s.replace(d, "-")
+    s = s.replace(" ", "").replace("\u00A0", "")
+    return s
+
+
+async def _find_active_techcard_by_sku(db: AsyncSession, sku: str) -> tuple[Techcard | None, Product | None]:
+    for key in _sku_lookup_keys(sku):
+        normalized_product_sku = func.lower(
+            func.replace(
+                func.replace(
+                    func.replace(
+                        Product.sku,
+                        " ",
+                        "",
+                    ),
+                    "\u00A0",
+                    "",
+                ),
+                "—",
+                "-",
+            )
+        )
+        product = await db.scalar(select(Product).where(normalized_product_sku == key).limit(1))
+        if product is None:
+            continue
+        techcard = await db.scalar(
+            select(Techcard).where(Techcard.product_id == product.id, Techcard.is_active.is_(True)).limit(1)
+        )
+        if techcard is not None:
+            return techcard, product
+    return None, None
 
 
 async def _make_change_items(
@@ -188,10 +246,17 @@ async def _make_change_items(
     for row in parsed_rows:
         warnings = list(row.warnings)
         errors = list(row.errors)
-        product = products_by_sku.get(row.source_sku.lower())
+        product = None
+        for key in _sku_lookup_keys(row.source_sku):
+            product = products_by_sku.get(key)
+            if product is not None:
+                break
 
         if product is None:
-            if row.payload.get("paired_profile"):
+            techcard, matched_product = await _find_active_techcard_by_sku(db, row.source_sku)
+            if techcard is not None and matched_product is not None:
+                product = matched_product
+            elif row.payload.get("paired_profile"):
                 if "paired_profile_product_unmapped" not in warnings:
                     warnings.append("paired_profile_product_unmapped")
             else:
@@ -204,25 +269,42 @@ async def _make_change_items(
             if techcard is None:
                 errors.append("active_techcard_not_found")
             else:
-                line = await db.scalar(select(TechcardLine).where(TechcardLine.techcard_id == techcard.id).limit(1))
+                line = await db.scalar(select(TechcardLine.id).where(TechcardLine.techcard_id == techcard.id).limit(1))
                 if line is None:
                     errors.append("active_techcard_has_no_lines")
+
                 if row.payload.get("paired_profile") and techcard.processing_type == "paired_processing":
-                    resolution = await resolve_techcard_pair(
-                        db,
-                        techcard_id=techcard.id,
-                        available_by_sku=available_by_sku,
-                        target_quantity=row.quantity,
-                    )
+                    lines = (
+                        await db.execute(
+                            select(TechcardLine, Product)
+                            .join(Product, Product.id == TechcardLine.component_product_id)
+                            .where(TechcardLine.techcard_id == techcard.id)
+                            .order_by(TechcardLine.id)
+                        )
+                    ).all()
+                    resolved_inputs = []
+                    all_fit = True
+                    for tc_line, comp_product in lines:
+                        sku_key = comp_product.sku.lower()
+                        required = row.quantity * Decimal(str(tc_line.quantity))
+                        available = available_by_sku.get(sku_key, Decimal("0"))
+                        resolved_inputs.append({
+                            "product_id": comp_product.id,
+                            "sku": comp_product.sku,
+                            "required_quantity": str(required),
+                            "available_quantity": str(available),
+                            "unit": tc_line.unit,
+                        })
+                        if available < required:
+                            all_fit = False
                     row.payload["techcard_pair"] = {
-                        "resolved": resolution.resolved,
-                        "pair_id": resolution.variant_id,
-                        "pair_name": resolution.variant_name,
-                        "priority": resolution.priority,
-                        "reason": resolution.reason,
-                        "inputs": resolution.inputs,
+                        "resolved": all_fit and len(resolved_inputs) > 0,
+                        "reason": None if all_fit else "insufficient_components",
+                        "inputs": resolved_inputs,
                     }
-                    if not resolution.resolved:
+                    if all_fit:
+                        warnings = [w for w in warnings if w != "paired_profile_product_unmapped"]
+                    else:
                         warnings.append("techcard_pair_not_resolved")
 
             route = await find_route(db, product) if product else None

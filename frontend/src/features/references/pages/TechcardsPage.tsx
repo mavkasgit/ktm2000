@@ -1,8 +1,11 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
+import { Plus, Trash2 } from "lucide-react";
 import * as API from "shared/api";
 import * as UI from "shared/ui";
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/shared/ui/Dialog";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/shared/ui/Dialog";
+import { AlertDialog, AlertDialogContent, AlertDialogHeader, AlertDialogTitle, AlertDialogDescription, AlertDialogFooter, AlertDialogCancel, AlertDialogAction } from "@/shared/ui/AlertDialog";
 import { ProductSearchMulti } from "../components/ProductSearchMulti";
+import { toast } from "@/shared/ui/use-toast";
 
 type ProcessingType = "standart_processing" | "paired_processing";
 
@@ -14,54 +17,46 @@ export function TechcardsPage() {
   const api = API as Record<string, any>;
   const [rawItems, setRawItems] = useState<any[]>([]);
   const [techcards, setTechcards] = useState<any[]>([]);
-  const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
-  const [processingType, setProcessingType] = useState<ProcessingType>("standart_processing");
-  const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(false);
   const [status, setStatus] = useState("");
-  const [selectedTechcardId, setSelectedTechcardId] = useState<number | null>(null);
-  const [pairName, setPairName] = useState("");
-  const [pairPriority, setPairPriority] = useState(100);
-  const [selectedPairId, setSelectedPairId] = useState<number | null>(null);
-  const [pairLinesSku, setPairLinesSku] = useState("");
-  const [pairLinesQty, setPairLinesQty] = useState(1);
-  const [pairDetails, setPairDetails] = useState<any[]>([]);
 
+  // Visibility toggles
+  const [showOneToOne, setShowOneToOne] = useState(false);
+
+  // Bulk dialog
+  const [bulkDialogOpen, setBulkDialogOpen] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
+  const [search, setSearch] = useState("");
+
+  // Paired creation dialog
+  const [pairedDialogOpen, setPairedDialogOpen] = useState(false);
   const [skuA, setSkuA] = useState("");
   const [skuB, setSkuB] = useState("");
-  const [quantityTotal, setQuantityTotal] = useState(1);
   const [quantityPerItem, setQuantityPerItem] = useState<string>("");
   const [quantityAPerItem, setQuantityAPerItem] = useState<string>("");
   const [quantityBPerItem, setQuantityBPerItem] = useState<string>("");
   const [differentQuantities, setDifferentQuantities] = useState(false);
-  const [quantityTotalBulk, setQuantityTotalBulk] = useState(1);
-  const [pairedDialogOpen, setPairedDialogOpen] = useState(false);
-  const [bulkDialogOpen, setBulkDialogOpen] = useState(false);
 
-  const loadData = async () => {
-    setLoading(true);
-    try {
-      const [products, cards] = await Promise.all([
-        api.listProducts({ type: "component", limit: 2000 }),
-        api.listTechcards(),
-      ]);
-      setRawItems(products ?? []);
-      setTechcards(cards ?? []);
-    } catch (e) {
-      setStatus(e instanceof Error ? e.message : "Ошибка загрузки");
-    } finally {
-      setLoading(false);
-    }
-  };
+  // View/Edit dialog
+  const [viewTechcardId, setViewTechcardId] = useState<number | null>(null);
+  const [viewDetail, setViewDetail] = useState<any>(null);
+  const [editQuantityTotal, setEditQuantityTotal] = useState(1);
+  const [editQuantityAPerItem, setEditQuantityAPerItem] = useState(1);
+  const [editQuantityBPerItem, setEditQuantityBPerItem] = useState(1);
+  const [editDifferentQuantities, setEditDifferentQuantities] = useState(false);
 
-  useEffect(() => {
-    loadData().catch(() => {});
-  }, []);
+  // Delete confirmation
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<{ type: "techcard"; id: number } | null>(null);
+
+  // Derived data
+  const pairedTechcards = useMemo(() => techcards.filter((t: any) => t.product_id === null && t.processing_type === "paired_processing"), [techcards]);
+  const oneToOneTechcards = useMemo(() => techcards.filter((t: any) => t.product_id !== null), [techcards]);
 
   const techcardByProductId = useMemo(() => {
     const map = new Map<number, any>();
     for (const card of techcards) {
-      if (card.is_active) {
+      if (card.is_active && card.product_id != null) {
         map.set(card.product_id, card);
       }
     }
@@ -76,42 +71,90 @@ export function TechcardsPage() {
     });
   }, [rawItems, search]);
 
-  const hangerCalc = useMemo(() => {
-    if (!skuA.trim() || !skuB.trim()) return null;
-    const qtyA = parseInt(quantityAPerItem) || 1;
-    const qtyB = parseInt(quantityBPerItem) || 1;
-    const productA = rawItems.find((item) => String(item.sku).toLowerCase() === skuA.trim().toLowerCase());
-    const productB = rawItems.find((item) => String(item.sku).toLowerCase() === skuB.trim().toLowerCase());
-    if (!productA || !productB) return null;
-    const qtyAPerHanger = productA.quantity_per_hanger || 1;
-    const qtyBPerHanger = productB.quantity_per_hanger || 1;
-    const totalA = quantityTotal * qtyA;
-    const totalB = quantityTotal * qtyB;
-    const hangersA = Math.ceil(totalA / qtyAPerHanger);
-    const hangersB = Math.ceil(totalB / qtyBPerHanger);
-    return {
-      productA,
-      productB,
-      qtyAPerHanger,
-      qtyBPerHanger,
-      totalA,
-      totalB,
-      hangersA,
-      hangersB,
-      hangersTotal: hangersA + hangersB,
-    };
-  }, [skuA, skuB, rawItems, quantityTotal, quantityAPerItem, quantityBPerItem]);
-
   const { pairProfileSku, pairProfileName } = useMemo(() => {
     const a = skuA.trim();
     const b = skuB.trim();
     if (!a || !b) return { pairProfileSku: "", pairProfileName: "" };
     const sorted = [a, b].sort();
-    return {
-      pairProfileSku: sorted.join("+"),
-      pairProfileName: sorted.join(" + "),
-    };
+    return { pairProfileSku: sorted.join("+"), pairProfileName: sorted.join(" + ") };
   }, [skuA, skuB]);
+
+  const loadData = useCallback(async () => {
+    setLoading(true);
+    try {
+      const [products, cards] = await Promise.all([
+        api.listProducts({ limit: 2000 }),
+        api.listTechcards(),
+      ]);
+      setRawItems(products ?? []);
+      setTechcards(cards ?? []);
+    } catch (e) {
+      setStatus(e instanceof Error ? e.message : "Ошибка загрузки");
+    } finally {
+      setLoading(false);
+    }
+  }, [api]);
+
+  useEffect(() => {
+    loadData().catch(() => {});
+  }, [loadData]);
+
+  const openView = async (techcardId: number) => {
+    setViewTechcardId(techcardId);
+    try {
+      const detail = await api.getTechcard(techcardId);
+      setViewDetail(detail);
+      setEditQuantityTotal(detail.quantity_total ?? 1);
+      setEditQuantityAPerItem(detail.quantity_a_per_item ?? 1);
+      setEditQuantityBPerItem(detail.quantity_b_per_item ?? 1);
+      setEditDifferentQuantities((detail.quantity_a_per_item ?? 1) !== (detail.quantity_b_per_item ?? 1));
+    } catch (e) {
+      toast({ title: "Ошибка", description: e instanceof Error ? e.message : "Не удалось загрузить техкарту", variant: "destructive" });
+    }
+  };
+
+  const saveTechcard = async () => {
+    if (!viewTechcardId || !viewDetail) return;
+    try {
+      if (viewDetail.product_id === null) {
+        await api.patchTechcard(viewTechcardId, {
+          quantity_total: editQuantityTotal,
+          quantity_a_per_item: editQuantityAPerItem,
+          quantity_b_per_item: editQuantityBPerItem,
+        });
+      } else {
+        await api.patchTechcard(viewTechcardId, {
+          quantity_total: editQuantityTotal,
+        });
+      }
+      toast({ title: "Сохранено", description: "Техкарта обновлена", variant: "success" });
+      await loadData();
+      await openView(viewTechcardId);
+    } catch (e) {
+      toast({ title: "Ошибка", description: e instanceof Error ? e.message : "Не удалось сохранить", variant: "destructive" });
+    }
+  };
+
+  const confirmDelete = (target: { type: "techcard"; id: number }) => {
+    setDeleteTarget(target);
+    setDeleteDialogOpen(true);
+  };
+
+  const handleDelete = async () => {
+    if (!deleteTarget) return;
+    try {
+      await api.deleteTechcard(deleteTarget.id);
+      toast({ title: "Удалено", description: `Техкарта #${deleteTarget.id} удалена`, variant: "success" });
+      setViewTechcardId(null);
+      setViewDetail(null);
+      await loadData();
+    } catch (e) {
+      toast({ title: "Ошибка", description: e instanceof Error ? e.message : "Не удалось удалить", variant: "destructive" });
+    } finally {
+      setDeleteDialogOpen(false);
+      setDeleteTarget(null);
+    }
+  };
 
   const toggleSelect = (id: number) => {
     setSelectedIds((prev) => {
@@ -135,89 +178,29 @@ export function TechcardsPage() {
       for (const productId of selectedIds) {
         const existing = techcardByProductId.get(productId);
         const product = rawItems.find((item) => Number(item.id) === productId);
-        const qtyPerHanger = product?.quantity_per_hanger || 1;
-        const hangersTotal = processingType === "standart_processing" ? Math.ceil(quantityTotalBulk / qtyPerHanger) : null;
+        const qty = product?.quantity_per_hanger || 1;
         if (!existing) {
-          const card = await api.createTechcard({
+          await api.createTechcard({
             product_id: productId,
             version: "A",
-            processing_type: processingType,
+            processing_type: "standart_processing",
             is_active: true,
-            quantity_total: processingType === "standart_processing" ? quantityTotalBulk : null,
-            hangers_total: hangersTotal,
+            quantity_total: qty,
           });
-          if (processingType === "standart_processing") {
-            await api.createTechcardLine(Number(card.id), {
-              component_product_id: productId,
-              quantity: 1,
-              unit: "pcs",
-            });
-          }
           created += 1;
         } else {
           await api.patchTechcard(Number(existing.id), {
-            processing_type: processingType,
-            quantity_total: processingType === "standart_processing" ? quantityTotalBulk : null,
-            hangers_total: hangersTotal,
+            quantity_total: qty,
           });
           updated += 1;
         }
       }
-      setStatus(`Готово: создано ${created}, обновлено ${updated}`);
+      toast({ title: "Готово", description: `Создано: ${created}, обновлено: ${updated}`, variant: "success" });
       setBulkDialogOpen(false);
       await loadData();
       clearSelection();
     } catch (e) {
-      setStatus(e instanceof Error ? e.message : "Ошибка обработки");
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const createPairedProfile = async () => {
-    if (selectedIds.size < 2) {
-      setStatus("Выберите минимум 2 артикула сырья");
-      return;
-    }
-    const selectedSkus = Array.from(selectedIds)
-      .map((id) => rawItems.find((i) => Number(i.id) === id)?.sku)
-      .filter(Boolean)
-      .sort() as string[];
-    const generatedSku = selectedSkus.join("+");
-    const generatedName = selectedSkus.join(" + ");
-    setLoading(true);
-    setStatus("Создание парного профиля...");
-    try {
-      const product = await api.createProduct({
-        sku: generatedSku,
-        name: generatedName,
-        type: "component",
-        is_paired_profile: true,
-      });
-      const card = await api.createTechcard({
-        product_id: product.id,
-        version: "A",
-        processing_type: "paired_processing",
-        is_active: true,
-      });
-      const pair = await api.createTechcardPair(Number(card.id), {
-        name: "Базовая",
-        priority: 100,
-        is_active: true,
-      });
-      for (const productId of selectedIds) {
-        await api.createTechcardPairLine(Number(card.id), Number(pair.id), {
-          component_product_id: Number(productId),
-          quantity: 1,
-          unit: "pcs",
-        });
-      }
-      setStatus(`Парный профиль создан: ${product.sku} (#${card.id})`);
-      setBulkDialogOpen(false);
-      await loadData();
-      clearSelection();
-    } catch (e) {
-      setStatus(e instanceof Error ? e.message : "Ошибка создания парного профиля");
+      toast({ title: "Ошибка", description: e instanceof Error ? e.message : "Ошибка обработки", variant: "destructive" });
     } finally {
       setLoading(false);
     }
@@ -225,405 +208,390 @@ export function TechcardsPage() {
 
   const createPairedTechcard = async () => {
     if (!skuA.trim() || !skuB.trim()) {
-      setStatus("Выберите 2 артикула профиля");
+      toast({ title: "Ошибка", description: "Выберите 2 артикула", variant: "destructive" });
       return;
     }
     const productA = rawItems.find((item) => String(item.sku).toLowerCase() === skuA.trim().toLowerCase());
     const productB = rawItems.find((item) => String(item.sku).toLowerCase() === skuB.trim().toLowerCase());
     if (!productA || !productB) {
-      setStatus("Один или оба артикула не найдены");
+      toast({ title: "Ошибка", description: "Один или оба артикула не найдены", variant: "destructive" });
       return;
     }
     if (productA.id === productB.id) {
-      setStatus("Артикулы должны быть разными");
+      toast({ title: "Ошибка", description: "Артикулы должны быть разными", variant: "destructive" });
+      return;
+    }
+    if (!productA.is_paired_profile || !productB.is_paired_profile) {
+      toast({ title: "Ошибка", description: "Оба артикула должны быть парными профилями", variant: "destructive" });
+      return;
+    }
+    const qtyA = parseInt(quantityAPerItem) || 1;
+    const qtyB = parseInt(quantityBPerItem) || 1;
+    const calcTotal = differentQuantities ? qtyA + qtyB : (parseInt(quantityPerItem) || 1) * 2;
+    if (calcTotal < 1) {
+      toast({ title: "Ошибка", description: "Кол-во должно быть > 0", variant: "destructive" });
       return;
     }
     setLoading(true);
-    setStatus("Создание парной техкарты...");
     try {
       const card = await api.createTechcard({
         product_id: null,
         version: "A",
         processing_type: "paired_processing",
         is_active: true,
-        quantity_total: quantityTotal,
-        quantity_a_per_item: parseInt(quantityAPerItem) || 1,
-        quantity_b_per_item: parseInt(quantityBPerItem) || 1,
-        hangers_a: hangerCalc?.hangersA ?? null,
-        hangers_b: hangerCalc?.hangersB ?? null,
-        hangers_total: hangerCalc?.hangersTotal ?? null,
+        quantity_total: calcTotal,
+        quantity_a_per_item: qtyA,
+        quantity_b_per_item: qtyB,
       });
-      const pair = await api.createTechcardPair(Number(card.id), {
-        name: "Базовая",
-        priority: 100,
-        is_active: true,
-      });
-      await api.createTechcardPairLine(Number(card.id), Number(pair.id), {
-        component_product_id: Number(productA.id),
-        quantity: parseInt(quantityAPerItem) || 1,
-        unit: "pcs",
-      });
-      await api.createTechcardPairLine(Number(card.id), Number(pair.id), {
-        component_product_id: Number(productB.id),
-        quantity: parseInt(quantityBPerItem) || 1,
-        unit: "pcs",
-      });
-      setStatus(`Парная техкарта создана: ${pairProfileSku} (#${card.id}), общее кол-во: ${quantityTotal}`);
-      setSkuA("");
-      setSkuB("");
-      setQuantityTotal(1);
-      setQuantityPerItem("");
-      setQuantityAPerItem("");
-      setQuantityBPerItem("");
-      setDifferentQuantities(false);
-      setPairedDialogOpen(false);
+      await api.createTechcardLine(Number(card.id), { component_product_id: Number(productA.id), quantity: qtyA, unit: "pcs" });
+      await api.createTechcardLine(Number(card.id), { component_product_id: Number(productB.id), quantity: qtyB, unit: "pcs" });
+      toast({ title: "Создано", description: `Парная техкарта: ${pairProfileSku} (#${card.id})`, variant: "success" });
+      setSkuA(""); setSkuB(""); setQuantityPerItem(""); setQuantityAPerItem(""); setQuantityBPerItem(""); setDifferentQuantities(false); setPairedDialogOpen(false);
       await loadData();
     } catch (e) {
-      setStatus(e instanceof Error ? e.message : "Ошибка создания парной техкарты");
+      toast({ title: "Ошибка", description: e instanceof Error ? e.message : "Ошибка создания парной техкарты", variant: "destructive" });
     } finally {
       setLoading(false);
     }
   };
 
-  const openPairs = async (techcardId: number) => {
-    setSelectedTechcardId(techcardId);
-    setSelectedPairId(null);
-    setPairDetails([]);
-    const detail = await api.getTechcard(techcardId);
-    const pairs = detail.techcard_pairs ?? [];
-    const full = await Promise.all(pairs.map((p: any) => api.getTechcardPair(techcardId, Number(p.id))));
-    setPairDetails(full);
-  };
-
-  const createPair = async () => {
-    if (!selectedTechcardId || !pairName.trim()) return;
-    await api.createTechcardPair(selectedTechcardId, { name: pairName.trim(), priority: pairPriority, is_active: true });
-    setPairName("");
-    await openPairs(selectedTechcardId);
-  };
-
-  const addPairLine = async () => {
-    if (!selectedTechcardId || !selectedPairId || !pairLinesSku.trim()) return;
-    const found = rawItems.find((item) => String(item.sku).toLowerCase() === pairLinesSku.trim().toLowerCase());
-    if (!found) {
-      setStatus(`Сырье не найдено: ${pairLinesSku}`);
-      return;
-    }
-    await api.createTechcardPairLine(selectedTechcardId, selectedPairId, {
-      component_product_id: Number(found.id),
-      quantity: pairLinesQty,
-      unit: "pcs",
+  const resolvePairSkus = (detail: any): { skuA: string; skuB: string } => {
+    const lines = detail?.lines ?? [];
+    const skus = lines.map((l: any) => {
+      const product = rawItems.find((p) => Number(p.id) === Number(l.component_product_id));
+      return product?.sku ?? String(l.component_product_id);
     });
-    setPairLinesSku("");
-    setPairLinesQty(1);
-    await openPairs(selectedTechcardId);
+    return { skuA: skus[0] ?? "—", skuB: skus[1] ?? "—" };
   };
 
   return (
-    <section style={{ display: "grid", gap: 12 }}>
-      <h2 className="text-lg font-semibold">Техкарты: массовое назначение</h2>
-
-      <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-        <Input className="w-52" value={search} placeholder="Поиск по артикулу/названию" onChange={(e: any) => setSearch(e.target.value)} />
-        <Button type="button" variant="outline" onClick={selectVisible}>Выбрать видимые</Button>
-        <Button type="button" variant="outline" onClick={clearSelection}>Сбросить</Button>
-        <Button type="button" disabled={selectedIds.size === 0} onClick={() => setBulkDialogOpen(true)}>
-          Массовое назначение ({selectedIds.size})
-        </Button>
+    <section style={{ display: "grid", gap: 16 }}>
+      <div className="flex items-center justify-between">
+        <h2 className="text-lg font-semibold">Техкарты</h2>
+        <div className="flex gap-2">
+          <Button size="sm" variant="outline" onClick={() => setBulkDialogOpen(true)}>
+            <Plus className="h-4 w-4 mr-1" />
+            Массовое создание
+          </Button>
+          <Button size="sm" variant="outline" onClick={() => setPairedDialogOpen(true)}>
+            <Plus className="h-4 w-4 mr-1" />
+            Создать парную
+          </Button>
+          <Button size="sm" variant="outline" onClick={() => setShowOneToOne(!showOneToOne)}>
+            {showOneToOne ? "Скрыть стандартные" : "Показать стандартные"}
+          </Button>
+        </div>
       </div>
 
+      {/* Paired techcards table */}
+      <div>
+        <h3 className="text-sm font-medium text-muted-foreground mb-2">Парные техкарты</h3>
+        <div style={{ border: "1px solid #e5e7eb", borderRadius: 6, overflow: "auto", maxHeight: 400 }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+            <thead>
+              <tr style={{ background: "#f9fafb", position: "sticky", top: 0 }}>
+                <th style={{ textAlign: "left", padding: 8 }}>Парный артикул</th>
+                <th style={{ textAlign: "left", padding: 8 }}>Кол-во</th>
+                <th style={{ textAlign: "left", padding: 8, width: 80 }}></th>
+              </tr>
+            </thead>
+            <tbody>
+              {pairedTechcards.map((card: any) => {
+                const { skuA: cardSkuA, skuB: cardSkuB } = resolvePairSkus(card);
+                const qtyA = card.quantity_a_per_item ?? 1;
+                const qtyB = card.quantity_b_per_item ?? 1;
+                return (
+                  <tr key={card.id} className="cursor-pointer hover:bg-muted/50" onClick={() => openView(card.id)}>
+                    <td style={{ padding: 8, fontWeight: 600, borderTop: "1px solid #f3f4f6" }}>{cardSkuA} + {cardSkuB}</td>
+                    <td style={{ padding: 8, borderTop: "1px solid #f3f4f6" }}>{card.quantity_total ?? "—"} шт. ({qtyA}/{qtyB} на подвес)</td>
+                    <td style={{ padding: 8, borderTop: "1px solid #f3f4f6" }}>
+                      <button type="button" onClick={(e) => { e.stopPropagation(); confirmDelete({ type: "techcard", id: card.id }); }} className="text-destructive hover:text-destructive/80">
+                        <Trash2 className="h-4 w-4" />
+                      </button>
+                    </td>
+                  </tr>
+                );
+              })}
+              {pairedTechcards.length === 0 && (
+                <tr><td colSpan={3} style={{ padding: 16, textAlign: "center", color: "#9ca3af" }}>Нет парных техкарт</td></tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {/* 1:1 techcards table (hidden by default) */}
+      {showOneToOne && (
+        <div>
+          <h3 className="text-sm font-medium text-muted-foreground mb-2">Стандартные техкарты</h3>
+          <div style={{ border: "1px solid #e5e7eb", borderRadius: 6, overflow: "auto", maxHeight: 400 }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+              <thead>
+                <tr style={{ background: "#f9fafb", position: "sticky", top: 0 }}>
+                  <th style={{ textAlign: "left", padding: 8 }}>Артикул</th>
+                  <th style={{ textAlign: "left", padding: 8 }}>Кол-во</th>
+                  <th style={{ textAlign: "left", padding: 8, width: 80 }}></th>
+                </tr>
+              </thead>
+              <tbody>
+                {oneToOneTechcards.map((card: any) => {
+                  const product = rawItems.find((p) => Number(p.id) === card.product_id);
+                  return (
+                    <tr key={card.id} className="cursor-pointer hover:bg-muted/50" onClick={() => openView(card.id)}>
+                      <td style={{ padding: 8, fontWeight: 600, borderTop: "1px solid #f3f4f6" }}>{product?.sku ?? card.product_id}</td>
+                      <td style={{ padding: 8, borderTop: "1px solid #f3f4f6" }}>{card.quantity_total ?? "—"}</td>
+                      <td style={{ padding: 8, borderTop: "1px solid #f3f4f6" }}>
+                        <button type="button" onClick={(e) => { e.stopPropagation(); confirmDelete({ type: "techcard", id: card.id }); }} className="text-destructive hover:text-destructive/80">
+                          <Trash2 className="h-4 w-4" />
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                })}
+                {oneToOneTechcards.length === 0 && (
+                  <tr><td colSpan={3} style={{ padding: 16, textAlign: "center", color: "#9ca3af" }}>Нет 1:1 техкарт</td></tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {status ? <div className="text-sm text-muted-foreground">{status}</div> : null}
+
+      {/* Bulk creation dialog */}
       <Dialog open={bulkDialogOpen} onOpenChange={setBulkDialogOpen}>
         <DialogContent className="max-w-3xl max-h-[85vh] overflow-y-auto">
           <DialogHeader>
-            <DialogTitle>Массовое назначение техкарт</DialogTitle>
+            <DialogTitle>Массовое создание техкарт</DialogTitle>
           </DialogHeader>
           <div className="space-y-4">
-            <div className="grid grid-cols-2 gap-3">
-              <div className="space-y-1">
-                <label className="text-sm font-medium">Тип обработки</label>
-                <select
-                  value={processingType}
-                  onChange={(e: any) => setProcessingType(e.target.value)}
-                  className="h-10 w-52 rounded-md border border-input bg-background px-3 text-sm"
-                >
-                  <option value="standart_processing">standart_processing</option>
-                  <option value="paired_processing">paired_processing</option>
-                </select>
-              </div>
-              {processingType === "standart_processing" && (
-                <div className="space-y-1">
-                  <label className="text-sm font-medium">Общее кол-во</label>
-                  <Input className="w-52" type="number" placeholder="Общее кол-во" min={1} value={quantityTotalBulk} onChange={(e: any) => setQuantityTotalBulk(Number(e.target.value || 1))} />
-                </div>
-              )}
+            <div className="flex gap-2">
+              <Input className="w-52" value={search} placeholder="Поиск" onChange={(e: any) => setSearch(e.target.value)} />
+              <Button variant="outline" onClick={selectVisible}>Выбрать видимые</Button>
+              <Button variant="outline" onClick={clearSelection}>Сбросить</Button>
             </div>
-
-            <div className="text-sm font-medium">Будет создано/обновлено:</div>
-            <div className="border rounded-md overflow-auto max-h-60">
+            <div className="text-sm">Выбрано: {selectedIds.size}</div>
+            <div className="border rounded-md overflow-auto max-h-80">
               <table className="w-full text-sm">
-                <thead className="bg-muted sticky top-0">
-                  <tr>
-                    <th className="px-3 py-2 text-left">Артикул</th>
-                    <th className="px-3 py-2 text-left">Действие</th>
-                    <th className="px-3 py-2 text-left">Тип</th>
-                    <th className="px-3 py-2 text-left">Кол-во</th>
-                    <th className="px-3 py-2 text-left">Подвесы</th>
-                  </tr>
+                <thead className="bg-muted sticky top-0 z-10">
+                  <tr><th className="px-3 py-2 text-left w-8">✓</th><th className="px-3 py-2 text-left">Артикул</th><th className="px-3 py-2 text-left">Статус</th></tr>
                 </thead>
                 <tbody className="divide-y">
-                  {Array.from(selectedIds).map((productId) => {
-                    const product = rawItems.find((item) => Number(item.id) === productId);
-                    const existing = techcardByProductId.get(productId);
-                    const qtyPerHanger = product?.quantity_per_hanger || 1;
-                    const hangersTotal = processingType === "standart_processing" ? Math.ceil(quantityTotalBulk / qtyPerHanger) : null;
-                    return (
-                      <tr key={productId}>
-                        <td className="px-3 py-2 font-medium">{product?.sku ?? productId}</td>
-                        <td className="px-3 py-2">{existing ? "Обновление" : "Создание"}</td>
-                        <td className="px-3 py-2">{processingType}</td>
-                        <td className="px-3 py-2">{processingType === "standart_processing" ? quantityTotalBulk : "—"}</td>
-                        <td className="px-3 py-2">{hangersTotal ?? "—"}</td>
-                      </tr>
-                    );
-                  })}
+                  {rows
+                    .filter((p) => p.is_paired_profile !== true)
+                    .sort((a, b) => {
+                      const aHas = techcardByProductId.has(Number(a.id)) ? 1 : 0;
+                      const bHas = techcardByProductId.has(Number(b.id)) ? 1 : 0;
+                      return aHas - bHas;
+                    })
+                    .map((product) => {
+                      const productId = Number(product.id);
+                      const selected = selectedIds.has(productId);
+                      const existing = techcardByProductId.get(productId);
+                      return (
+                        <tr key={productId} className={!selected ? "opacity-60" : ""}>
+                          <td className="px-3 py-2">
+                            <input type="checkbox" checked={selected} onChange={() => toggleSelect(productId)} />
+                          </td>
+                          <td className="px-3 py-2 font-medium">{product.sku ?? productId}</td>
+                          <td className="px-3 py-2">{existing ? <span className="text-green-700">Есть техкарта</span> : <span className="text-red-600">Нет техкарты</span>}</td>
+                        </tr>
+                      );
+                    })}
                 </tbody>
               </table>
             </div>
-
-            {processingType === "paired_processing" && selectedIds.size >= 2 && (
-              <div className="text-sm text-muted-foreground">
-                Парный профиль: <span className="font-medium">{Array.from(selectedIds).map((id) => rawItems.find((i) => Number(i.id) === id)?.sku).filter(Boolean).sort().join(" + ")}</span>
-              </div>
-            )}
-
-            <div className="flex justify-end gap-2">
-              <Button type="button" variant="outline" onClick={() => setBulkDialogOpen(false)}>Отмена</Button>
-              {processingType === "paired_processing" ? (
-                <Button type="button" onClick={createPairedProfile} disabled={loading || selectedIds.size < 2}>
-                  Создать парный профиль
-                </Button>
-              ) : (
-                <Button type="button" onClick={applyBulk} disabled={loading || selectedIds.size === 0}>
-                  Применить
-                </Button>
-              )}
-            </div>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setBulkDialogOpen(false)}>Отмена</Button>
+              <Button onClick={applyBulk} disabled={loading || selectedIds.size === 0}>Применить</Button>
+            </DialogFooter>
           </div>
         </DialogContent>
       </Dialog>
 
-      <div>
-        <Button type="button" variant="outline" onClick={() => setPairedDialogOpen(true)}>
-          Создать парную техкарту
-        </Button>
-      </div>
-
+      {/* Paired creation dialog */}
       <Dialog open={pairedDialogOpen} onOpenChange={setPairedDialogOpen}>
         <DialogContent className="max-w-md">
           <DialogHeader>
             <DialogTitle>Создание парной техкарты</DialogTitle>
           </DialogHeader>
           <div className="space-y-3">
-            {/* Row 1: SKU A + qty 1 */}
             <div className="flex items-center gap-3">
               <div className="w-48">
                 {skuA ? (
-                  <div className="flex items-center justify-between px-3 py-2 rounded-md border border-input bg-secondary text-secondary-foreground">
+                  <div className="flex items-center justify-between px-3 py-2 rounded-md border bg-secondary text-secondary-foreground">
                     <span className="text-sm font-medium">{skuA}</span>
-                    <button type="button" onClick={() => setSkuA("")} className="text-xs text-muted-foreground hover:text-foreground cursor-pointer">
-                      Изменить
-                    </button>
+                    <button type="button" onClick={() => setSkuA("")} className="text-xs text-muted-foreground hover:text-foreground cursor-pointer">Изменить</button>
                   </div>
                 ) : (
-                  <ProductSearchMulti
-                    values={[]}
-                    onChange={(v) => { if (v[0]) setSkuA(v[0]); }}
-                    excludeValues={skuB ? [skuB] : []}
-                    pairedOnly
-                    placeholder="Поиск по артикулу"
-                  />
+                  <ProductSearchMulti values={[]} onChange={(v) => { if (v[0]) setSkuA(v[0]); }} excludeValues={skuB ? [skuB] : []} placeholder="Поиск по артикулу" />
                 )}
               </div>
               <div className="w-48">
                 {differentQuantities ? (
-                  <div className="relative">
-                    <Input type="number" className="w-48 pr-6" placeholder="—" min={1} value={quantityAPerItem} onChange={(e: any) => setQuantityAPerItem(e.target.value)} />
-                    {quantityAPerItem && (
-                      <button type="button" onClick={() => setQuantityAPerItem("")} className="absolute right-1 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground cursor-pointer text-xs">
-                        ×
-                      </button>
-                    )}
-                  </div>
+                  <Input type="number" placeholder="—" min={1} value={quantityAPerItem} onChange={(e: any) => setQuantityAPerItem(e.target.value)} />
                 ) : skuA && skuB ? (
-                  <div className="relative">
-                    <Input type="number" className="w-48 pr-6" placeholder="Кол-во каждого" min={1} value={quantityPerItem} onChange={(e: any) => {
-                      setQuantityPerItem(e.target.value);
-                      setQuantityAPerItem(e.target.value);
-                      setQuantityBPerItem(e.target.value);
-                    }} />
-                    {quantityPerItem && (
-                      <button type="button" onClick={() => {
-                        setQuantityPerItem("");
-                        setQuantityAPerItem("");
-                        setQuantityBPerItem("");
-                      }} className="absolute right-1 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground cursor-pointer text-xs">
-                        ×
-                      </button>
-                    )}
-                  </div>
-                ) : (
-                  <div className="w-48 h-10" />
-                )}
+                  <Input type="number" placeholder="Кол-во каждого" min={1} value={quantityPerItem} onChange={(e: any) => { setQuantityPerItem(e.target.value); setQuantityAPerItem(e.target.value); setQuantityBPerItem(e.target.value); }} />
+                ) : <div className="h-10" />}
               </div>
             </div>
-
-            {/* Row 2: SKU B + qty 2 */}
             <div className="flex items-center gap-3">
               <div className="w-48">
                 {skuB ? (
-                  <div className="flex items-center justify-between px-3 py-2 rounded-md border border-input bg-secondary text-secondary-foreground">
+                  <div className="flex items-center justify-between px-3 py-2 rounded-md border bg-secondary text-secondary-foreground">
                     <span className="text-sm font-medium">{skuB}</span>
-                    <button type="button" onClick={() => setSkuB("")} className="text-xs text-muted-foreground hover:text-foreground cursor-pointer">
-                      Изменить
-                    </button>
+                    <button type="button" onClick={() => setSkuB("")} className="text-xs text-muted-foreground hover:text-foreground cursor-pointer">Изменить</button>
                   </div>
                 ) : (
-                  <ProductSearchMulti
-                    values={[]}
-                    onChange={(v) => { if (v[0]) setSkuB(v[0]); }}
-                    excludeValues={skuA ? [skuA] : []}
-                    pairedOnly
-                    placeholder="Поиск по артикулу"
-                  />
+                  <ProductSearchMulti values={[]} onChange={(v) => { if (v[0]) setSkuB(v[0]); }} excludeValues={skuA ? [skuA] : []} placeholder="Поиск по артикулу" />
                 )}
               </div>
               <div className="w-48">
                 {differentQuantities ? (
-                  <div className="relative">
-                    <Input type="number" className="w-48 pr-6" placeholder="—" min={1} value={quantityBPerItem} onChange={(e: any) => setQuantityBPerItem(e.target.value)} />
-                    {quantityBPerItem && (
-                      <button type="button" onClick={() => setQuantityBPerItem("")} className="absolute right-1 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground cursor-pointer text-xs">
-                        ×
-                      </button>
-                    )}
-                  </div>
-                ) : (
-                  <div className="w-48 h-10" />
-                )}
+                  <Input type="number" placeholder="—" min={1} value={quantityBPerItem} onChange={(e: any) => setQuantityBPerItem(e.target.value)} />
+                ) : <div className="h-10" />}
               </div>
             </div>
-
-            {/* Checkbox + total */}
             <div className="flex items-center justify-between">
               <label className="flex items-center gap-2 text-sm cursor-pointer">
                 <input type="checkbox" checked={differentQuantities} onChange={(e) => setDifferentQuantities(e.target.checked)} />
                 Разное кол-во
               </label>
-              {skuA && skuB && quantityAPerItem && quantityBPerItem && (
+              {skuA && skuB && (
                 <div className="text-sm">
-                  {(parseInt(quantityAPerItem) || 1) + (parseInt(quantityBPerItem) || 1)} шт/подв.
+                  Общее: {differentQuantities
+                    ? (parseInt(quantityAPerItem) || 0) + (parseInt(quantityBPerItem) || 0)
+                    : (parseInt(quantityPerItem) || 0) * 2} шт.
                 </div>
               )}
             </div>
-
-            {/* Create button */}
-            <div className="flex justify-end">
-              <Button type="button" onClick={createPairedTechcard} disabled={loading || !skuA.trim() || !skuB.trim()}>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setPairedDialogOpen(false)}>Отмена</Button>
+              <Button onClick={createPairedTechcard} disabled={loading || !skuA.trim() || !skuB.trim()}>
                 {pairProfileSku ? `Создать ${pairProfileSku}` : "Создать парную техкарту"}
               </Button>
-            </div>
+            </DialogFooter>
           </div>
         </DialogContent>
       </Dialog>
 
-      {status ? <div>{status}</div> : null}
-
-      <div style={{ border: "1px solid #e5e7eb", borderRadius: 6, overflow: "auto", maxHeight: 520 }}>
-        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
-          <thead>
-            <tr style={{ background: "#f9fafb", position: "sticky", top: 0 }}>
-              <th style={{ textAlign: "left", padding: 8, width: 40 }}>✓</th>
-              <th style={{ textAlign: "left", padding: 8 }}>Артикул</th>
-              <th style={{ textAlign: "left", padding: 8 }}>Текущая техкарта</th>
-              <th style={{ textAlign: "left", padding: 8 }}>Тип</th>
-              <th style={{ textAlign: "left", padding: 8 }}>Кол-во</th>
-              <th style={{ textAlign: "left", padding: 8 }}>Парный профиль</th>
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map((item) => {
-              const id = Number(item.id);
-              const card = techcardByProductId.get(id);
-              return (
-                <tr key={id}>
-                  <td style={{ padding: 8, borderTop: "1px solid #f3f4f6" }}>
-                    <input type="checkbox" checked={selectedIds.has(id)} onChange={() => toggleSelect(id)} />
-                  </td>
-                  <td style={{ padding: 8, borderTop: "1px solid #f3f4f6", fontWeight: 600 }}>{item.sku}</td>
-                  <td style={{ padding: 8, borderTop: "1px solid #f3f4f6" }}>{card ? `#${card.id} / v${card.version}` : "—"}</td>
-                  <td style={{ padding: 8, borderTop: "1px solid #f3f4f6" }}>{card?.processing_type ?? "—"}</td>
-                  <td style={{ padding: 8, borderTop: "1px solid #f3f4f6" }}>
-                    {card?.quantity_total != null
-                      ? `${card.quantity_total} шт. (${card.hangers_total ?? "?"} подв.)`
-                      : "—"}
-                  </td>
-                  <td style={{ padding: 8, borderTop: "1px solid #f3f4f6" }}>
-                    {card?.processing_type === "paired_processing" ? (
-                      <Button type="button" variant="outline" onClick={() => openPairs(Number(card.id))}>Открыть пары</Button>
-                    ) : "—"}
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-      </div>
-
-      {selectedTechcardId ? (
-        <div style={{ border: "1px solid #e5e7eb", borderRadius: 8, padding: 12, display: "grid", gap: 8 }}>
-          <h3 className="text-base font-semibold">Парный профиль (techcard_pair) для техкарты #{selectedTechcardId}</h3>
-          <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr auto", gap: 8 }}>
-            <Input placeholder="Название пары" value={pairName} onChange={(e: any) => setPairName(e.target.value)} />
-            <Input type="number" value={pairPriority} onChange={(e: any) => setPairPriority(Number(e.target.value || 100))} />
-            <Button type="button" onClick={createPair}>Создать пару</Button>
-          </div>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-            <div>
-              <div className="mb-2 font-medium">Список пар</div>
-              <div style={{ display: "grid", gap: 6 }}>
-                {pairDetails.map((pair) => (
-                  <button
-                    key={pair.id}
-                    type="button"
-                    onClick={() => setSelectedPairId(Number(pair.id))}
-                    style={{ textAlign: "left", padding: 8, border: "1px solid #e5e7eb", borderRadius: 6, background: selectedPairId === pair.id ? "#eef2ff" : "#fff" }}
-                  >
-                    {pair.name} (prio {pair.priority}) - входов: {pair.lines?.length ?? 0}
-                  </button>
-                ))}
-              </div>
-            </div>
-            <div>
-              <div className="mb-2 font-medium">Добавить артикул в пару</div>
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 120px auto", gap: 8 }}>
-                <Input placeholder="Артикул сырья" value={pairLinesSku} onChange={(e: any) => setPairLinesSku(e.target.value)} />
-                <Input type="number" min={1} value={pairLinesQty} onChange={(e: any) => setPairLinesQty(Number(e.target.value || 1))} />
-                <Button type="button" onClick={addPairLine} disabled={!selectedPairId}>Добавить</Button>
-              </div>
-              <div style={{ marginTop: 8 }}>
-                {(pairDetails.find((p) => Number(p.id) === selectedPairId)?.lines ?? []).map((line: any) => {
-                  const product = rawItems.find((item) => Number(item.id) === Number(line.component_product_id));
+      {/* View/Edit dialog */}
+      {viewDetail && (
+        <Dialog open={!!viewTechcardId} onOpenChange={(open) => { if (!open) { setViewTechcardId(null); setViewDetail(null); } }}>
+          <DialogContent className="max-h-[85vh] overflow-y-auto" onOpenAutoFocus={(e) => e.preventDefault()}>
+            <DialogHeader>
+              <DialogTitle>
+                Техкарта #{viewDetail.id}{viewDetail.product_id === null ? " — парная" : ""}
+              </DialogTitle>
+            </DialogHeader>
+            <div className="space-y-4">
+              {viewDetail.product_id === null ? (
+                /* Paired techcard edit */
+                (() => {
+                  const { skuA, skuB } = resolvePairSkus(viewDetail);
                   return (
-                    <div key={line.id} style={{ fontSize: 13 }}>
-                      {product?.sku ?? line.component_product_id}: {line.quantity} {line.unit}
+                    <div className="space-y-3">
+                      <div className="flex flex-wrap gap-3">
+                        <div>
+                          <label className="text-sm font-medium">Артикул {skuA}</label>
+                          <div className="w-48 px-3 py-2 rounded-md border bg-muted text-sm">{skuA}</div>
+                        </div>
+                        <div>
+                          <label className="text-sm font-medium">Артикул {skuB}</label>
+                          <div className="w-48 px-3 py-2 rounded-md border bg-muted text-sm">{skuB}</div>
+                        </div>
+                      </div>
+                      <div className="flex flex-wrap gap-3">
+                        <div>
+                          <label className="text-sm font-medium">Общее кол-во</label>
+                          <Input className="w-48" type="number" min={1} value={editQuantityTotal} onChange={(e: any) => setEditQuantityTotal(Number(e.target.value || 1))} />
+                        </div>
+                        <>
+                          {editDifferentQuantities ? (
+                            <>
+                              <div>
+                                <label className="text-sm font-medium">Кол-во {skuA} на подвес</label>
+                                <Input className="w-48" type="number" min={1} value={editQuantityAPerItem} onChange={(e: any) => setEditQuantityAPerItem(Number(e.target.value || 1))} />
+                              </div>
+                              <div>
+                                <label className="text-sm font-medium">Кол-во {skuB} на подвес</label>
+                                <Input className="w-48" type="number" min={1} value={editQuantityBPerItem} onChange={(e: any) => setEditQuantityBPerItem(Number(e.target.value || 1))} />
+                              </div>
+                            </>
+                          ) : (
+                            <div>
+                              <label className="text-sm font-medium">Кол-во каждого</label>
+                              <Input className="w-48" type="number" min={1} value={editQuantityAPerItem} onChange={(e: any) => {
+                                const v = Number(e.target.value || 1);
+                                setEditQuantityAPerItem(v);
+                                setEditQuantityBPerItem(v);
+                              }} />
+                            </div>
+                          )}
+                          <div className="w-full flex items-center">
+                            <label className="flex items-center gap-2 text-sm cursor-pointer">
+                              <input type="checkbox" checked={editDifferentQuantities} onChange={(e) => setEditDifferentQuantities(e.target.checked)} />
+                              Разное кол-во
+                            </label>
+                          </div>
+                        </>
+                      </div>
                     </div>
                   );
-                })}
-              </div>
+                })()
+              ) : (
+                /* 1:1 techcard edit */
+                <div className="space-y-3">
+                  <div className="flex flex-wrap gap-3">
+                    <div>
+                      <label className="text-sm font-medium">Артикул</label>
+                      <div className="w-48 px-3 py-2 rounded-md border bg-muted text-sm">{rawItems.find((p) => Number(p.id) === viewDetail.product_id)?.sku ?? "—"}</div>
+                    </div>
+                    <div>
+                      <label className="text-sm font-medium">Версия</label>
+                      <div className="w-48 px-3 py-2 rounded-md border bg-muted text-sm">v{viewDetail.version}</div>
+                    </div>
+                  </div>
+                  <div>
+                    <label className="text-sm font-medium">Общее кол-во</label>
+                    <Input className="w-48" type="number" min={1} value={editQuantityTotal} onChange={(e: any) => setEditQuantityTotal(Number(e.target.value || 1))} />
+                  </div>
+                </div>
+              )}
+
+              <DialogFooter className="sm:justify-between">
+                <div className="flex gap-2">
+                  <Button variant="destructive" onClick={() => confirmDelete({ type: "techcard", id: viewDetail.id })}>
+                    <Trash2 className="h-4 w-4 mr-1" />
+                    Удалить
+                  </Button>
+                </div>
+                <div className="flex gap-2">
+                  <Button variant="outline" onClick={() => { setViewTechcardId(null); setViewDetail(null); }}>Отмена</Button>
+                  <Button onClick={saveTechcard}>Сохранить</Button>
+                </div>
+              </DialogFooter>
             </div>
-          </div>
-        </div>
-      ) : null}
+          </DialogContent>
+        </Dialog>
+      )}
+
+      {/* Delete confirmation */}
+      <AlertDialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
+        <AlertDialogContent className="max-w-sm">
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              {`Удалить техкарту #${deleteTarget?.id}?`}
+            </AlertDialogTitle>
+            <AlertDialogDescription>Это действие нельзя отменить.</AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter className="flex-col-reverse sm:flex-row gap-2">
+            <AlertDialogCancel>Отмена</AlertDialogCancel>
+            <AlertDialogAction onClick={handleDelete} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">Удалить</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </section>
   );
 }

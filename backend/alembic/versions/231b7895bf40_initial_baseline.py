@@ -160,26 +160,6 @@ def upgrade() -> None:
     sa.PrimaryKeyConstraint('id'),
     sa.UniqueConstraint('techcard_id', 'component_product_id', name='uq_techcard_lines_component')
     )
-    op.create_table('techcard_pairs',
-    sa.Column('id', sa.BigInteger(), sa.Identity(always=True), nullable=False),
-    sa.Column('techcard_id', sa.BigInteger(), nullable=False),
-    sa.Column('name', sa.String(length=255), nullable=False),
-    sa.Column('priority', sa.BigInteger(), server_default=sa.text('100'), nullable=False),
-    sa.Column('is_active', sa.Boolean(), server_default=sa.text('true'), nullable=False),
-    sa.ForeignKeyConstraint(['techcard_id'], ['techcards.id'], ),
-    sa.PrimaryKeyConstraint('id')
-    )
-    op.create_table('techcard_pair_lines',
-    sa.Column('id', sa.BigInteger(), sa.Identity(always=True), nullable=False),
-    sa.Column('techcard_pair_id', sa.BigInteger(), nullable=False),
-    sa.Column('component_product_id', sa.BigInteger(), nullable=False),
-    sa.Column('quantity', sa.Numeric(precision=14, scale=3), nullable=False),
-    sa.Column('unit', sa.String(length=50), nullable=False),
-    sa.ForeignKeyConstraint(['component_product_id'], ['products.id'], ),
-    sa.ForeignKeyConstraint(['techcard_pair_id'], ['techcard_pairs.id'], ),
-    sa.PrimaryKeyConstraint('id'),
-    sa.UniqueConstraint('techcard_pair_id', 'component_product_id', name='uq_techcard_pair_lines_component')
-    )
     op.create_table('import_templates',
     sa.Column('id', sa.BigInteger(), sa.Identity(always=True), nullable=False),
     sa.Column('name', sa.String(length=255), nullable=False),
@@ -384,8 +364,6 @@ def downgrade() -> None:
     op.drop_table('plan_positions')
     op.drop_table('plan_change_sets')
     op.drop_table('import_templates')
-    op.drop_table('techcard_pair_lines')
-    op.drop_table('techcard_pairs')
     op.drop_table('techcard_lines')
     op.drop_table('users')
     op.drop_table('route_rule_conditions')

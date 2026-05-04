@@ -11,6 +11,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import settings
 from app.core.database import get_db
 from app.models.product import Product, ProductType
+from app.models.techcard import Techcard, TechcardLine
+from app.models.production_plan import PlanPosition
+from app.models.work_task import WorkTask
+from app.models.internal_plan import SectionPlanLine
 
 router = APIRouter(prefix="/products", tags=["products"])
 
@@ -306,6 +310,31 @@ async def delete_product(product_id: int, db: AsyncSession = Depends(get_db)):
     item = await db.get(Product, product_id)
     if item is None:
         raise HTTPException(status_code=404, detail="Product not found")
+
+    relations: list[str] = []
+
+    tc_ref = await db.scalar(select(func.count()).select_from(Techcard).where(Techcard.product_id == product_id))
+    if tc_ref:
+        relations.append("техкарты")
+
+    tc_count = await db.scalar(select(func.count()).select_from(TechcardLine).where(TechcardLine.component_product_id == product_id))
+    if tc_count:
+        relations.append("техкарты (сырьё)")
+
+    pp_count = await db.scalar(select(func.count()).select_from(PlanPosition).where(PlanPosition.product_id == product_id))
+    if pp_count:
+        relations.append("позиции плана")
+
+    wt_count = await db.scalar(select(func.count()).select_from(WorkTask).where(WorkTask.product_id == product_id))
+    if wt_count:
+        relations.append("рабочие задачи")
+
+    spl_count = await db.scalar(select(func.count()).select_from(SectionPlanLine).where(SectionPlanLine.product_id == product_id))
+    if spl_count:
+        relations.append("линии плана участков")
+
+    if relations:
+        raise HTTPException(status_code=409, detail=f"Нельзя удалить: используется в ({', '.join(relations)})")
 
     # Remove this product from other products' aliases
     all_products = (await db.execute(select(Product))).scalars().all()

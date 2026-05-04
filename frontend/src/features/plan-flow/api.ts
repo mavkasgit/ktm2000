@@ -7,6 +7,7 @@ import {
   releaseBatch as releaseReleaseBatch,
   rollbackProductionPlanChangeSet,
 } from "shared/api"
+import { apiClient } from "shared/api/client"
 
 let lastImport: Record<string, any> | null = null
 
@@ -30,6 +31,12 @@ export async function uploadExcel(
     column_mapping: options?.columnMapping,
   })
   lastImport = enrichImport(payload as Record<string, any>)
+  return lastImport
+}
+
+export async function uploadTestExcel() {
+  const { data } = await apiClient.post("/imports/excel/test")
+  lastImport = enrichImport(data as Record<string, any>)
   return lastImport
 }
 

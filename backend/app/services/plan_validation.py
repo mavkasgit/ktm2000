@@ -27,7 +27,7 @@ async def validate_plan_position(db: AsyncSession, position: PlanPosition) -> li
     if techcard is None:
         errors.append("active_techcard_not_found")
     else:
-        line = await db.scalar(select(TechcardLine).where(TechcardLine.techcard_id == techcard.id).limit(1))
+        line = await db.scalar(select(TechcardLine.id).where(TechcardLine.techcard_id == techcard.id).limit(1))
         if line is None:
             errors.append("active_techcard_has_no_lines")
 

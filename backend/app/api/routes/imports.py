@@ -1,6 +1,8 @@
 import json
+from io import BytesIO
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
+from openpyxl import Workbook
 from pydantic import BaseModel
 from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -61,6 +63,82 @@ async def import_excel_plan(
             mode=mode,
             production_plan_id=production_plan_id,
             column_mapping=resolved_mapping,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    return ImportPreviewOut(**result)
+
+
+def _test_workbook() -> bytes:
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "План май 26 05"
+    ws.append(["", "", "Комментарий"])
+    ws.append(["Заявка № 05", "май"])
+    ws.append([])
+    ws.append(["", "", "", "", "", "", "", "", "", "", "", "", "Формирование ящиков"])
+    ws.append(
+        [
+            "Артикул",
+            "пополнение",
+            "Наименование",
+            "остатки сырья на КТМ",
+            "Цвет",
+            "кол-во шт. в 2,7",
+            "Длина, м",
+            "Пробивка/сверловка",
+            "Упаковка",
+            "Примечание ",
+            "Длина после упак, м",
+            "кол-во штук готовой продукции",
+            "Запад",
+            "Восток",
+            "Вид конечного продукта",
+            "Комментарии",
+        ]
+    )
+    ws.append(
+        [
+            "ЮП-2630",
+            "ТЗ",
+            "Стык с дюбелем 40мм 2,7 анод.серебро матовый",
+            3400,
+            "серебро",
+            100,
+            2.7,
+            "",
+            "поф, красная этикетка РП 23*150 на каждый профиль и белая этикетка 58*30 на пачку из 10 шт",
+            "",
+            2.7,
+            100,
+            100,
+            100,
+            "ГП",
+            "",
+        ]
+    )
+    out = BytesIO()
+    wb.save(out)
+    return out.getvalue()
+
+
+@router.post("/excel/test", response_model=ImportPreviewOut, status_code=status.HTTP_201_CREATED)
+async def import_test_excel(
+    db: AsyncSession = Depends(get_db),
+) -> ImportPreviewOut:
+    content = _test_workbook()
+    try:
+        result = await create_excel_import_change_set(
+            db,
+            filename="test-yup2630.xlsx",
+            content=content,
+            content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            sheet_index=0,
+            mode=ImportBatchMode.create_plan,
+            production_plan_id=None,
+            column_mapping=None,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
