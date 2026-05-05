@@ -101,6 +101,7 @@ class PlanPosition(Base):
     customer: Mapped[str | None] = mapped_column(String(255), nullable=True)
     priority: Mapped[int] = mapped_column(BigInteger, nullable=False, server_default=text("100"), default=100)
     source_row_number: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    route_id: Mapped[int | None] = mapped_column(ForeignKey("production_routes.id"), nullable=True)
     status: Mapped[PlanPositionStatus] = mapped_column(Enum(PlanPositionStatus, name="plan_position_status"), nullable=False)
     validation_status: Mapped[PlanPositionValidationStatus] = mapped_column(
         Enum(PlanPositionValidationStatus, name="plan_position_validation_status"),

@@ -66,3 +66,28 @@ export async function listRecentImports(limit: number = 10) {
   });
   return data;
 }
+
+export function getImportFileDownloadUrl(fileId: number) {
+  return `/api/imports/files/${fileId}/download`;
+}
+
+export type ImportPosition = {
+  id: number;
+  source_row_number: number | null;
+  source_sku: string;
+  source_name: string | null;
+  quantity: string;
+  product_id: number | null;
+  product_name: string | null;
+  route_id: number | null;
+  route_name: string | null;
+  status: string;
+  validation_status: string;
+  validation_errors: string[];
+  import_batch_id: number | null;
+};
+
+export async function getImportPositions(batchId: number) {
+  const { data } = await apiClient.get<ImportPosition[]>(`/imports/${batchId}/positions`);
+  return data;
+}

@@ -10,8 +10,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import get_db
 from app.models.import_template import ImportTemplate
 from app.models.imports import ImportBatch, ImportBatchMode, ImportBatchStatus, ImportFile
-from app.models.production_plan import PlanChangeSet, ProductionPlan
+from app.models.production_plan import PlanChangeSet, PlanPosition, ProductionPlan
+from app.models.product import Product
+from app.models.route import ProductionRoute
 from app.services.plan_import_service import create_excel_import_change_set
+from app.services.route_matcher import find_route, resolve_position_route
 
 router = APIRouter(prefix="/imports", tags=["imports"])
 
@@ -126,8 +129,11 @@ def _test_workbook() -> bytes:
 
 @router.post("/excel/test", response_model=ImportPreviewOut, status_code=status.HTTP_201_CREATED)
 async def import_test_excel(
+    production_plan_id: int | None = Query(None),
     db: AsyncSession = Depends(get_db),
 ) -> ImportPreviewOut:
+    import logging
+    logger = logging.getLogger(__name__)
     content = _test_workbook()
     try:
         result = await create_excel_import_change_set(
@@ -136,14 +142,18 @@ async def import_test_excel(
             content=content,
             content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             sheet_index=0,
-            mode=ImportBatchMode.create_plan,
-            production_plan_id=None,
+            mode=ImportBatchMode.append_to_plan if production_plan_id else ImportBatchMode.create_plan,
+            production_plan_id=production_plan_id,
             column_mapping=None,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except RuntimeError as exc:
+        logger.exception("import_test_excel RuntimeError: %s", exc)
         raise HTTPException(status_code=500, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.exception("import_test_excel unexpected error: %s", exc)
+        raise HTTPException(status_code=500, detail=f"{type(exc).__name__}: {exc}") from exc
     return ImportPreviewOut(**result)
 
 
@@ -204,3 +214,101 @@ async def list_recent_imports(
             )
         )
     return items
+
+
+class ImportPositionOut(BaseModel):
+    id: int
+    source_row_number: int | None
+    source_sku: str
+    source_name: str | None
+    quantity: str
+    product_id: int | None
+    product_name: str | None
+    route_id: int | None
+    route_name: str | None
+    status: str
+    validation_status: str
+    validation_errors: list
+    import_batch_id: int | None
+
+
+@router.get("/{batch_id}/positions", response_model=list[ImportPositionOut])
+async def list_import_positions(batch_id: int, db: AsyncSession = Depends(get_db)) -> list[ImportPositionOut]:
+    batch = await db.get(ImportBatch, batch_id)
+    if batch is None:
+        raise HTTPException(status_code=404, detail="Import batch not found")
+
+    positions = (
+        await db.execute(
+            select(PlanPosition)
+            .where(PlanPosition.import_batch_id == batch_id)
+            .order_by(PlanPosition.source_row_number)
+        )
+    ).scalars().all()
+
+    # Preload products for route lookup
+    products_cache: dict[int, Product | None] = {}
+    route_resolve_cache: dict[int, dict] = {}
+
+    result = []
+    for pos in positions:
+        product = None
+        if pos.product_id:
+            if pos.product_id not in products_cache:
+                products_cache[pos.product_id] = await db.get(Product, pos.product_id)
+            product = products_cache[pos.product_id]
+
+        if pos.product_id and pos.product_id in route_resolve_cache:
+            route_info = route_resolve_cache[pos.product_id]
+        else:
+            route_info = await resolve_position_route(db, pos.route_id, product)
+            if pos.product_id:
+                route_resolve_cache[pos.product_id] = route_info
+
+        product_name = product.name if product else None
+
+        result.append(
+            ImportPositionOut(
+                id=pos.id,
+                source_row_number=pos.source_row_number,
+                source_sku=pos.source_sku,
+                source_name=pos.source_name,
+                quantity=str(pos.quantity),
+                product_id=pos.product_id,
+                product_name=product_name,
+                route_id=route_info.route_id,
+                route_name=route_info.route_name,
+                status=pos.status.value,
+                validation_status=pos.validation_status.value,
+                validation_errors=pos.validation_errors or [],
+                import_batch_id=pos.import_batch_id,
+            )
+        )
+
+    return result
+
+
+@router.get("/files/{file_id}/download")
+async def download_import_file(file_id: int, db: AsyncSession = Depends(get_db)):
+    from fastapi.responses import FileResponse
+    from urllib.parse import quote
+
+    file = await db.get(ImportFile, file_id)
+    if file is None:
+        raise HTTPException(status_code=404, detail="File not found")
+    if not file.stored_path:
+        raise HTTPException(status_code=404, detail="File content not available")
+
+    path = Path(file.stored_path)
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="File not found on disk")
+
+    encoded_name = quote(file.original_filename)
+    return FileResponse(
+        path=path,
+        filename=file.original_filename,
+        media_type="application/octet-stream",
+        headers={
+            "Content-Disposition": f"attachment; filename*=UTF-8''{encoded_name}",
+        },
+    )

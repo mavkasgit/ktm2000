@@ -1,10 +1,20 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.product import Product
 from app.models.route import ProductionRoute, RouteMatchingRule, RouteRuleCondition
+
+
+@dataclass
+class ResolvedRouteInfo:
+    route_id: int | None
+    route_name: str | None
+    source: str  # "manual" | "auto" | "missing"
+    error: str | None = None
 
 
 async def find_route(db: AsyncSession, product: Product) -> ProductionRoute | None:
@@ -67,6 +77,36 @@ async def find_route(db: AsyncSession, product: Product) -> ProductionRoute | No
                 break  # this route matched, no need to check lower-priority rules
 
     return best_route
+
+
+async def resolve_position_route(
+    db: AsyncSession,
+    route_id: int | None,
+    product: Product | None,
+) -> ResolvedRouteInfo:
+    """Resolve route for a position: manual override takes priority, fallback to auto-detection.
+
+    Args:
+        route_id: Manual route override from PlanPosition.route_id (None = auto).
+        product: Product for auto-detection fallback.
+
+    Returns:
+        ResolvedRouteInfo with route details, source, and optional error.
+    """
+    if route_id is not None:
+        route = await db.get(ProductionRoute, route_id)
+        if route is None:
+            return ResolvedRouteInfo(route_id=None, route_name=None, source="manual", error="manual route not found")
+        if not route.is_active:
+            return ResolvedRouteInfo(route_id=route.id, route_name=route.name, source="manual", error="manual route inactive")
+        return ResolvedRouteInfo(route_id=route.id, route_name=route.name, source="manual", error=None)
+
+    if product is not None:
+        route = await find_route(db, product)
+        if route is not None:
+            return ResolvedRouteInfo(route_id=route.id, route_name=route.name, source="auto", error=None)
+
+    return ResolvedRouteInfo(route_id=None, route_name=None, source="missing", error=None)
 
 
 def _match_conditions(product: Product, conditions: list[RouteRuleCondition]) -> bool:

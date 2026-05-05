@@ -15,7 +15,7 @@ from app.models.route import ProductionRoute, RouteStep
 from app.models.section import Section
 from app.models.work_task import WorkTask, WorkTaskStatus
 from app.services.route_validation import validate_route_match
-from app.services.route_matcher import find_route
+from app.services.route_matcher import find_route, resolve_position_route
 
 
 async def create_release_batch(
@@ -49,13 +49,21 @@ async def create_release_batch(
 
     for position, release_quantity in selected_positions:
         product = await db.get(Product, position.product_id) if position.product_id else None
-        route = await find_route(db, product) if product else None
-        if route is None:
+        route_info = await resolve_position_route(db, position.route_id, product)
+        if route_info.route_id is None:
             raise ValueError(f"No route found for position {position.id} (product_id={position.product_id})")
+        route = await db.get(ProductionRoute, route_info.route_id)
+        if route is None or not route.is_active:
+            raise ValueError(f"Route for position {position.id} is not active")
+
         await _validate_active_techcard(db, position)
-        route_issues = await validate_route_match(db, position)
-        if route_issues:
-            raise ValueError(f"Route mismatch for position {position.id}: " + "; ".join(route_issues))
+
+        # Only validate route match for auto-detected routes, not manual overrides
+        if route_info.source != "manual":
+            route_issues = await validate_route_match(db, position)
+            if route_issues:
+                raise ValueError(f"Route mismatch for position {position.id}: " + "; ".join(route_issues))
+
         steps = await _get_route_steps_with_sections(db, route)
         remaining = await _remaining_quantity(db, position)
         if release_quantity <= 0:

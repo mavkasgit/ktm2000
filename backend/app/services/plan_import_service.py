@@ -64,6 +64,23 @@ async def create_excel_import_change_set(
         production_plan = await db.get(ProductionPlan, production_plan_id)
         if production_plan is None:
             raise ValueError("Production plan not found")
+    elif mode == ImportBatchMode.append_to_plan:
+        # Find latest non-released/cancelled plan, or create one
+        production_plan = await db.scalar(
+            select(ProductionPlan)
+            .where(ProductionPlan.status.notin_(["released", "cancelled"]))
+            .order_by(ProductionPlan.created_at.desc())
+            .limit(1)
+        )
+        if production_plan is None:
+            production_plan = ProductionPlan(
+                plan_no=_make_plan_no(parsed.sheet_name),
+                name=f"Import {parsed.sheet_name}",
+                period_start=parsed.period_start,
+                period_end=parsed.period_end,
+            )
+            db.add(production_plan)
+            await db.flush()
     else:
         production_plan = ProductionPlan(
             plan_no=_make_plan_no(parsed.sheet_name),
@@ -240,8 +257,19 @@ async def _make_change_items(
         if pos.source_row_hash:
             by_row_hash[pos.source_row_hash] = pos
 
+    # Build set of existing fingerprints for duplicate detection
+    existing_fingerprints: set[str] = set()
+    for pos in existing_positions:
+        if pos.status == PlanPositionStatus.cancelled:
+            continue
+        if pos.source_fingerprint:
+            existing_fingerprints.add(pos.source_fingerprint)
+
     items: list[PlanChangeItem] = []
     matched_fingerprints: set[str] = set()
+
+    # Track fingerprints within this import to detect intra-import duplicates
+    import_fingerprints: dict[str, list[int]] = {}
 
     for row in parsed_rows:
         warnings = list(row.warnings)
@@ -253,6 +281,7 @@ async def _make_change_items(
                 break
 
         if product is None:
+            route = None
             techcard, matched_product = await _find_active_techcard_by_sku(db, row.source_sku)
             if techcard is not None and matched_product is not None:
                 product = matched_product
@@ -307,21 +336,22 @@ async def _make_change_items(
                     else:
                         warnings.append("techcard_pair_not_resolved")
 
-            route = await find_route(db, product) if product else None
-            if route is None:
-                errors.append("active_route_not_found")
+        # Resolve route (after product is determined from either branch)
+        route = await find_route(db, product) if product else None
+        if route is None:
+            errors.append("active_route_not_found")
+        else:
+            steps = (
+                await db.execute(select(RouteStep).where(RouteStep.route_id == route.id).order_by(RouteStep.sequence))
+            ).scalars().all()
+            if not steps:
+                errors.append("active_route_has_no_steps")
             else:
-                steps = (
-                    await db.execute(select(RouteStep).where(RouteStep.route_id == route.id).order_by(RouteStep.sequence))
-                ).scalars().all()
-                if not steps:
-                    errors.append("active_route_has_no_steps")
-                else:
-                    for step in steps:
-                        section = await db.get(Section, step.section_id)
-                        if section is None or not section.is_active:
-                            errors.append("route_contains_inactive_section")
-                            break
+                for step in steps:
+                    section = await db.get(Section, step.section_id)
+                    if section is None or not section.is_active:
+                        errors.append("route_contains_inactive_section")
+                        break
 
         after_data = {
             "product_id": product.id if product else None,
@@ -333,7 +363,21 @@ async def _make_change_items(
             "source_fingerprint": row.source_fingerprint,
             "source_row_hash": row.source_row_hash,
             "source_payload": row.payload,
+            "route_id": route.id if route else None,
+            "route_name": route.name if route else None,
+            "route_source": "auto" if route else "missing",
         }
+
+        # Detect duplicate within this import using fingerprint (full row match)
+        fp = row.source_fingerprint
+        if fp not in import_fingerprints:
+            import_fingerprints[fp] = []
+        import_fingerprints[fp].append(row.source_row_numbers[0])
+
+        # Check against existing positions (only for append/update modes)
+        if mode != ImportBatchMode.create_plan and fp in existing_fingerprints:
+            if "duplicate_sku_due_date" not in errors:
+                errors.append("duplicate_sku_due_date")
 
         change_action = PlanChangeAction.create_position
         before_data = None
@@ -383,6 +427,43 @@ async def _make_change_items(
             )
         )
 
+    # Mark intra-import duplicates: fingerprints that appear more than once
+    duplicate_pairs: dict[str, list[int]] = {}
+    for fp, rows in import_fingerprints.items():
+        if len(rows) > 1:
+            duplicate_pairs[fp] = rows
+
+    if duplicate_pairs:
+        for item in items:
+            if item.after_data:
+                fp = item.after_data.get("source_fingerprint")
+                if fp and fp in duplicate_pairs and "duplicate_sku_due_date" not in item.errors:
+                    item.errors = list(item.errors) + ["duplicate_sku_due_date"]
+                    item.status = PlanChangeItemStatus.invalid
+                    # Store duplicate info for frontend display
+                    item.after_data["duplicate_rows"] = duplicate_pairs[fp]
+                    item.after_data["duplicate_type"] = "within_import"
+
+    # Mark duplicates against existing positions with row info
+    if mode != ImportBatchMode.create_plan:
+        for item in items:
+            if item.after_data and "duplicate_sku_due_date" in item.errors:
+                # Already marked as intra-import duplicate
+                if item.after_data.get("duplicate_type"):
+                    continue
+                # Find existing position with matching fingerprint
+                fp = item.after_data.get("source_fingerprint")
+                if fp and fp in existing_fingerprints:
+                    # Find the existing position with matching fingerprint
+                    for pos in existing_positions:
+                        if pos.status == PlanPositionStatus.cancelled:
+                            continue
+                        if pos.source_fingerprint == fp:
+                            item.after_data["duplicate_existing_id"] = pos.id
+                            item.after_data["duplicate_existing_row"] = pos.source_row_number
+                            item.after_data["duplicate_type"] = "against_existing"
+                            break
+
     if mode == ImportBatchMode.replace_draft_from_same_source:
         for fp, pos in by_fingerprint.items():
             if fp not in matched_fingerprints and pos.status == PlanPositionStatus.draft:
@@ -424,6 +505,7 @@ def _serialize_item(item: PlanChangeItem) -> dict:
         "warnings": item.warnings,
         "errors": item.errors,
         "after_data": item.after_data,
+        "plan_position_id": item.plan_position_id,
     }
 
 
@@ -463,6 +545,6 @@ def _build_available_inputs_by_sku(rows: list[ParsedPlanRow]) -> dict[str, Decim
 
 
 def _make_plan_no(sheet_name: str) -> str:
-    stamp = datetime.now(UTC).strftime("%Y%m%d%H%M%S%f")
-    safe_sheet = "".join(ch for ch in sheet_name if ch.isalnum())[:20] or "excel"
-    return f"IMP-{safe_sheet}-{stamp}"
+    stamp = datetime.now(UTC).strftime("%Y%m%d-%H%M")
+    safe_sheet = "".join(ch for ch in sheet_name if ch.isalnum() or ch in " _-")[:30] or "Excel"
+    return f"План-{safe_sheet}-{stamp}"
