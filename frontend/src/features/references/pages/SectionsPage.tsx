@@ -158,24 +158,31 @@ export function SectionsPage() {
       description: (values.description as string) || null,
     };
 
-    if (dialogMode === "edit" && editingItem?.id) {
-      await apiPatchSection(Number(editingItem.id), payload);
-    } else {
-      await apiCreateSection(payload);
+    try {
+      if (dialogMode === "edit" && editingItem?.id) {
+        await apiPatchSection(Number(editingItem.id), payload);
+        toast({ title: "Сохранено", description: `Участок "${payload.name}" (код: ${payload.code}, ID: ${editingItem.id}) успешно обновлён`, variant: "success" });
+      } else {
+        await apiCreateSection(payload);
+        toast({ title: "Создано", description: `Участок "${payload.name}" (код: ${payload.code}, тип: ${KIND_LABELS[payload.kind] ?? payload.kind}) успешно создан`, variant: "success" });
+      }
+      setDialogOpen(false);
+      await load();
+    } catch (e) {
+      const action = dialogMode === "edit" ? `обновления: ${editingItem?.name} (ID: ${editingItem?.id})` : `создания: ${payload.name}`;
+      toast({ title: `Ошибка ${action}`, description: API.getErrorMessage(e), variant: "destructive" });
     }
-    setDialogOpen(false);
-    await load();
   };
 
   const handleDelete = async () => {
     if (!editingItem?.id) return;
     try {
       await apiDeleteSection(Number(editingItem.id));
-      toast({ title: "Удалено", description: `${editingItem.name} удалён`, variant: "success" });
+      toast({ title: "Удалено", description: `Участок "${editingItem.name}" (код: ${editingItem.code}, ID: ${editingItem.id}, тип: ${KIND_LABELS[editingItem.kind ?? "production"] ?? editingItem.kind}) успешно удалён`, variant: "success" });
       setDialogOpen(false);
       await load();
     } catch (e) {
-      toast({ title: "Ошибка", description: e instanceof Error ? e.message : "Не удалось удалить", variant: "destructive" });
+      toast({ title: `Ошибка удаления: ${editingItem.name} (код: ${editingItem.code}, ID: ${editingItem.id})`, description: API.getErrorMessage(e), variant: "destructive" });
     } finally {
       setDeleteDialogOpen(false);
     }
@@ -186,9 +193,10 @@ export function SectionsPage() {
     try {
       const result = await apiSeedSections();
       setItems(result);
-      toast({ title: "Участки загружены", description: `Создано/обновлено: ${result.length}`, variant: "success" });
+      const kinds = new Set(result.map((r) => r.kind)).size;
+      toast({ title: "Участки загружены", description: `Загружено ${result.length} участков (${kinds} типов): ${result.map((r) => r.name).join(", ")}`, variant: "success" });
     } catch (e) {
-      toast({ title: "Ошибка", description: e instanceof Error ? e.message : "Не удалось загрузить участки", variant: "destructive" });
+      toast({ title: "Ошибка загрузки участков", description: API.getErrorMessage(e), variant: "destructive" });
     } finally {
       setSeeding(false);
       setSeedDialogOpen(false);

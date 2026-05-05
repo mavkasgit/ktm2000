@@ -56,6 +56,20 @@ services:
       - backend
     restart: always
 
+  localtunnel:
+    profiles: ["tunnel"]
+    image: node:20-alpine
+    container_name: ktm-localtunnel-prod
+    network_mode: "service:frontend"
+    depends_on:
+      - frontend
+    command: >
+      sh -c "echo 'Waiting for frontend...' &&
+             until wget -q -O /dev/null http://127.0.0.1:80; do sleep 2; done &&
+             echo 'Starting localtunnel...' &&
+             npx --yes localtunnel --port 80 --subdomain ${LOCALTUNNEL_SUBDOMAIN:-ktm-prod-7q2k9m4x} 2>&1"
+    restart: always
+
 
 
 

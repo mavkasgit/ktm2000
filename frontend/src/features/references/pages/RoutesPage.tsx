@@ -1,6 +1,7 @@
 import { useCallback, useRef, useState } from "react";
 import { Plus, Download } from "lucide-react";
 import * as API from "@/shared/api/routes";
+import { getErrorMessage } from "@/shared/api/client";
 import { Button } from "@/shared/ui/Button";
 import { toast } from "@/shared/ui/use-toast";
 import { AlertDialog, AlertDialogContent, AlertDialogHeader, AlertDialogTitle, AlertDialogDescription, AlertDialogFooter, AlertDialogCancel, AlertDialogAction } from "@/shared/ui/AlertDialog";
@@ -25,7 +26,7 @@ export function RoutesPage() {
       setEditRoute(detail);
       setDialogOpen(true);
     } catch (e) {
-      toast({ variant: "destructive", title: "Ошибка", description: e instanceof Error ? e.message : "Не удалось загрузить маршрут" });
+      toast({ variant: "destructive", title: `Ошибка загрузки маршрута #${route.id}`, description: getErrorMessage(e) });
     }
   };
 
@@ -41,7 +42,7 @@ export function RoutesPage() {
       toast({ title: "Маршрут загружен", description: "Создан маршрут со всеми участками", variant: "success" });
       treeRef.current?.reload();
     } catch (e) {
-      toast({ variant: "destructive", title: "Ошибка", description: e instanceof Error ? e.message : "Не удалось загрузить маршрут" });
+      toast({ variant: "destructive", title: "Ошибка загрузки маршрутов", description: getErrorMessage(e) });
     } finally {
       setSeeding(false);
       setSeedDialogOpen(false);

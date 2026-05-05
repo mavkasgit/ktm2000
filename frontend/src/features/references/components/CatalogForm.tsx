@@ -213,7 +213,7 @@ export const CatalogForm = forwardRef<CatalogFormRef, {
               <>
                 <img
                   key={`full-${photoVersion}`}
-                  src={`${getPhotoUrl(localPhotoFull || product?.photo_full || product?.photo_thumb)!}${photoVersion > 0 ? `?v=${photoVersion}` : ""}`}
+                  src={`${getPhotoUrl(localPhotoFull || product?.photo_full || product?.photo_thumb || "")}${photoVersion > 0 ? `?v=${photoVersion}` : ""}`}
                   alt={product?.name || ""}
                   className="w-full h-full object-contain pointer-events-none"
                 />
@@ -251,7 +251,7 @@ export const CatalogForm = forwardRef<CatalogFormRef, {
                 <>
                   <img
                     key={`thumb-${photoVersion}`}
-                    src={`${getPhotoUrl(localPhotoThumb || product?.photo_thumb || product?.photo_full)!}${photoVersion > 0 ? `?v=${photoVersion}` : ""}`}
+                    src={`${getPhotoUrl(localPhotoThumb || product?.photo_thumb || product?.photo_full || "")}${photoVersion > 0 ? `?v=${photoVersion}` : ""}`}
                     alt="Preview"
                     className="w-full h-full object-contain pointer-events-none"
                   />

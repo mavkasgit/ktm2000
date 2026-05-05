@@ -63,10 +63,10 @@ export function RawMaterialsPage() {
           setDialogOpen(true);
         }, 150);
       } catch {
-        toast({ title: "Ошибка", description: `Не удалось загрузить ${sku}`, variant: "destructive" });
+        toast({ title: `Ошибка загрузки: ${sku}`, description: `Не удалось загрузить сырьё с артикулом ${sku}`, variant: "destructive" });
       }
     } else {
-      toast({ title: "Не найден", description: `Артикул ${sku} не найден в списке`, variant: "destructive" });
+      toast({ title: `Артикул не найден: ${sku}`, description: `Артикул ${sku} отсутствует в списке сырья`, variant: "destructive" });
     }
   };
 
@@ -120,20 +120,24 @@ export function RawMaterialsPage() {
     try {
       if (mode === "create") {
         const result = await API.createProduct(payload as CreateProductInput);
-        toast({ title: "Создано", description: "Сырье успешно создано", variant: "success" });
+        const product = result.data;
+        toast({ title: "Создано", description: `Сырьё "${product.sku}" (ID: ${product.id}${product.name ? `, название: ${product.name}` : ""}) успешно создано`, variant: "success" });
         if (result.activatedAliases?.length) {
           toast({
             title: "Алиасы активированы",
-            description: `Алиас ${result.activatedAliases.join(", ")} активирован в обратном направлении`,
+            description: `${result.activatedAliases.length} алиас(ов): ${result.activatedAliases.join(", ")} активирован(ы) в обратном направлении для "${product.sku}"`,
+            variant: "success",
           });
         }
       } else if (mode === "edit" && selectedProduct) {
         const result = await API.patchProduct(selectedProduct.id, payload as PatchProductInput);
-        toast({ title: "Сохранено", description: "Изменения успешно сохранены", variant: "success" });
+        const product = result.data;
+        toast({ title: "Сохранено", description: `Сырьё "${product.sku}" (ID: ${product.id}) успешно обновлено`, variant: "success" });
         if (result.activatedAliases?.length) {
           toast({
             title: "Алиасы активированы",
-            description: `Алиас ${result.activatedAliases.join(", ")} активирован в обратном направлении`,
+            description: `${result.activatedAliases.length} алиас(ов): ${result.activatedAliases.join(", ")} активирован(ы) в обратном направлении для "${product.sku}"`,
+            variant: "success",
           });
         }
       }
@@ -145,8 +149,9 @@ export function RawMaterialsPage() {
         setPendingAliasSku(null);
       }
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Ошибка сохранения");
-      toast({ title: "Ошибка", description: e instanceof Error ? e.message : "Ошибка сохранения", variant: "destructive" });
+      const action = dialogMode === "create" ? `создания: ${(payload as CreateProductInput).sku}` : `сохранения: ${selectedProduct?.sku} (ID: ${selectedProduct?.id})`;
+      setError(API.getErrorMessage(e));
+      toast({ title: `Ошибка ${action}`, description: API.getErrorMessage(e), variant: "destructive" });
     }
   };
 
@@ -154,12 +159,12 @@ export function RawMaterialsPage() {
     if (!selectedProduct) return;
     try {
       await API.deleteProduct(selectedProduct.id);
-      toast({ title: "Удалено", description: `${selectedProduct.sku} удалён`, variant: "success" });
+      toast({ title: "Удалено", description: `Сырьё "${selectedProduct.sku}" (артикул: ${selectedProduct.sku}, ID: ${selectedProduct.id}, длина: ${selectedProduct.length_mm ?? "—"} мм, кол-во на подвесе: ${selectedProduct.quantity_per_hanger ?? "—"}) успешно удалено`, variant: "success" });
       setDialogOpen(false);
       setFormDirty(false);
       await load();
     } catch (e) {
-      toast({ title: "Ошибка", description: e instanceof Error ? e.message : "Не удалось удалить", variant: "destructive" });
+      toast({ title: `Ошибка удаления: ${selectedProduct.sku} (ID: ${selectedProduct.id})`, description: API.getErrorMessage(e), variant: "destructive" });
     } finally {
       setDeleteDialogOpen(false);
     }
@@ -177,7 +182,7 @@ export function RawMaterialsPage() {
       setPendingZipFile(file);
       setPreviewOpen(true);
     } catch (err) {
-      toast({ variant: "destructive", title: "Ошибка предпросмотра", description: err instanceof Error ? err.message : "Не удалось прочитать ZIP" });
+      toast({ variant: "destructive", title: `Ошибка предпросмотра: ${file.name}`, description: API.getErrorMessage(err) });
     } finally {
       setPreviewLoading(false);
     }
@@ -191,10 +196,10 @@ export function RawMaterialsPage() {
       setPreviewOpen(false);
       setPreviewData(null);
       setPendingZipFile(null);
-      toast({ variant: "success", title: "Импорт завершён", description: `${result.imported} создано, ${result.updated} обновлено, ${result.skipped} без изменений` });
+      toast({ variant: "success", title: "Импорт завершён", description: `Файл: "${pendingZipFile.name}". Создано: ${result.imported}, обновлено: ${result.updated}, пропущено: ${result.skipped}` });
       await load();
     } catch (err) {
-      toast({ variant: "destructive", title: "Ошибка импорта", description: err instanceof Error ? err.message : "Не удалось импортировать" });
+      toast({ variant: "destructive", title: `Ошибка импорта: ${pendingZipFile.name}`, description: API.getErrorMessage(err) });
     } finally {
       setPreviewLoading(false);
     }

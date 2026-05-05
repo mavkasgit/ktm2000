@@ -18,8 +18,50 @@ services:
       timeout: 5s
       retries: 5
 
+  backend:
+    build:
+      context: ../backend
+      dockerfile: Dockerfile
+    container_name: factoryflow-backend-test
+    env_file:
+      - ../.env.test
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-factoryflow_user}:${POSTGRES_PASSWORD:-factoryflow_pass_test}@postgres:5432/${POSTGRES_DB:-factoryflow_test}
+      ENV: test
+      CORS_ORIGINS: "*"
+    ports:
+      - "${TEST_BACKEND_PORT:-5211}:8000"
+    volumes:
+      - storage_test_data:/app/storage
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ../frontend
+      dockerfile: Dockerfile
+    container_name: factoryflow-frontend-test
+    ports:
+      - "${TEST_FRONTEND_PORT:-5210}:80"
+    depends_on:
+      - backend
+
+  localtunnel:
+    profiles: ["tunnel"]
+    image: node:20-alpine
+    container_name: ktm-localtunnel
+    network_mode: "service:frontend"
+    depends_on:
+      - frontend
+    command: >
+      sh -c "echo 'Waiting for frontend...' &&
+             until wget -q -O /dev/null http://127.0.0.1:80; do sleep 2; done &&
+             echo 'Starting localtunnel...' &&
+             npx --yes localtunnel --port 80 --subdomain ${LOCALTUNNEL_SUBDOMAIN:-ktm-test-7q2k9m4x} 2>&1"
+    restart: unless-stopped
+
 volumes:
   postgres_test_data:
-
-
-
+  storage_test_data:

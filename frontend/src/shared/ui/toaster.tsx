@@ -1,6 +1,7 @@
 import * as ToastPrimitives from "@radix-ui/react-toast";
-import { CheckCircle, AlertCircle, X } from "lucide-react";
+import { CheckCircle, AlertCircle, X, Copy, ClipboardCheck } from "lucide-react";
 import { useToast, type ToastData } from "./use-toast";
+import * as React from "react";
 
 function ToastIcon({ variant }: { variant: ToastData["variant"] }) {
   if (variant === "success") return <CheckCircle className="h-5 w-5 text-green-600" />;
@@ -14,6 +15,35 @@ function toastClasses(variant: ToastData["variant"]) {
   if (variant === "success") return `${base} border-green-200 bg-green-50 text-green-900`;
   if (variant === "destructive") return `${base} border-red-200 bg-red-50 text-red-900`;
   return `${base} border bg-background text-foreground`;
+}
+
+function CopyButton({ t }: { t: ToastData }) {
+  const [copied, setCopied] = React.useState(false);
+
+  const handleCopy = React.useCallback(
+    async (e: React.MouseEvent) => {
+      e.stopPropagation();
+      const text = t.title + (t.description ? `: ${t.description}` : "");
+      await navigator.clipboard.writeText(text);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    },
+    [t]
+  );
+
+  return (
+    <button
+      onClick={handleCopy}
+      className="flex-shrink-0 p-1 rounded hover:bg-red-200 transition-colors"
+      title="Копировать ошибку"
+    >
+      {copied ? (
+        <ClipboardCheck className="h-4 w-4 text-green-600" />
+      ) : (
+        <Copy className="h-4 w-4 text-red-400" />
+      )}
+    </button>
+  );
 }
 
 export function Toaster() {
@@ -42,6 +72,7 @@ export function Toaster() {
               </ToastPrimitives.Description>
             )}
           </div>
+          {t.variant === "destructive" && <CopyButton t={t} />}
           <ToastPrimitives.Close className="absolute right-2 top-2 rounded-md p-1 opacity-60 transition-opacity hover:opacity-100 focus:outline-none">
             <X className="h-4 w-4" />
           </ToastPrimitives.Close>

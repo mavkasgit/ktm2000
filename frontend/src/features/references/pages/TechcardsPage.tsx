@@ -6,6 +6,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "
 import { AlertDialog, AlertDialogContent, AlertDialogHeader, AlertDialogTitle, AlertDialogDescription, AlertDialogFooter, AlertDialogCancel, AlertDialogAction } from "@/shared/ui/AlertDialog";
 import { ProductSearchMulti } from "../components/ProductSearchMulti";
 import { toast } from "@/shared/ui/use-toast";
+import { getErrorMessage } from "@/shared/api/client";
 
 type ProcessingType = "standart_processing" | "paired_processing";
 
@@ -109,7 +110,7 @@ export function TechcardsPage() {
       setEditQuantityBPerItem(detail.quantity_b_per_item ?? 1);
       setEditDifferentQuantities((detail.quantity_a_per_item ?? 1) !== (detail.quantity_b_per_item ?? 1));
     } catch (e) {
-      toast({ title: "Ошибка", description: e instanceof Error ? e.message : "Не удалось загрузить техкарту", variant: "destructive" });
+      toast({ title: `Ошибка загрузки техкарты #${techcardId}`, description: getErrorMessage(e), variant: "destructive" });
     }
   };
 
@@ -122,16 +123,19 @@ export function TechcardsPage() {
           quantity_a_per_item: editQuantityAPerItem,
           quantity_b_per_item: editQuantityBPerItem,
         });
+        const { skuA: sA, skuB: sB } = resolvePairSkus(viewDetail);
+        toast({ title: "Сохранено", description: `Парная техкарта #${viewTechcardId} (${sA}+${sB}): общее=${editQuantityTotal}, ${sA}=${editQuantityAPerItem}, ${sB}=${editQuantityBPerItem} на подвес`, variant: "success" });
       } else {
         await api.patchTechcard(viewTechcardId, {
           quantity_total: editQuantityTotal,
         });
+        const sku = rawItems.find((p) => Number(p.id) === viewDetail.product_id)?.sku ?? viewDetail.product_id;
+        toast({ title: "Сохранено", description: `Техкарта #${viewTechcardId} (артикул: ${sku}, ID: ${viewTechcardId}, кол-во: ${editQuantityTotal}) успешно обновлена`, variant: "success" });
       }
-      toast({ title: "Сохранено", description: "Техкарта обновлена", variant: "success" });
       await loadData();
       await openView(viewTechcardId);
     } catch (e) {
-      toast({ title: "Ошибка", description: e instanceof Error ? e.message : "Не удалось сохранить", variant: "destructive" });
+      toast({ title: `Ошибка сохранения: техкарта #${viewTechcardId}`, description: getErrorMessage(e), variant: "destructive" });
     }
   };
 
@@ -143,13 +147,15 @@ export function TechcardsPage() {
   const handleDelete = async () => {
     if (!deleteTarget) return;
     try {
+      const isPaired = viewDetail?.product_id === null;
+      const detail = isPaired ? `парная (${resolvePairSkus(viewDetail).skuA}+${resolvePairSkus(viewDetail).skuB})` : `стандартная (артикул: ${rawItems.find((p) => Number(p.id) === viewDetail?.product_id)?.sku ?? "—"}`;
       await api.deleteTechcard(deleteTarget.id);
-      toast({ title: "Удалено", description: `Техкарта #${deleteTarget.id} удалена`, variant: "success" });
+      toast({ title: "Удалено", description: `Техкарта #${deleteTarget.id} (${detail}, версия: ${viewDetail?.version ?? "—"}) успешно удалена`, variant: "success" });
       setViewTechcardId(null);
       setViewDetail(null);
       await loadData();
     } catch (e) {
-      toast({ title: "Ошибка", description: e instanceof Error ? e.message : "Не удалось удалить", variant: "destructive" });
+      toast({ title: `Ошибка удаления: техкарта #${deleteTarget.id}`, description: getErrorMessage(e), variant: "destructive" });
     } finally {
       setDeleteDialogOpen(false);
       setDeleteTarget(null);
@@ -195,12 +201,12 @@ export function TechcardsPage() {
           updated += 1;
         }
       }
-      toast({ title: "Готово", description: `Создано: ${created}, обновлено: ${updated}`, variant: "success" });
+      toast({ title: "Массовое создание завершено", description: `Выбрано ${selectedIds.size} артикулов: создано ${created} техкарт, обновлено ${updated}`, variant: "success" });
       setBulkDialogOpen(false);
       await loadData();
       clearSelection();
     } catch (e) {
-      toast({ title: "Ошибка", description: e instanceof Error ? e.message : "Ошибка обработки", variant: "destructive" });
+      toast({ title: `Ошибка массового создания: ${selectedIds.size} артикулов`, description: getErrorMessage(e), variant: "destructive" });
     } finally {
       setLoading(false);
     }
@@ -208,28 +214,34 @@ export function TechcardsPage() {
 
   const createPairedTechcard = async () => {
     if (!skuA.trim() || !skuB.trim()) {
-      toast({ title: "Ошибка", description: "Выберите 2 артикула", variant: "destructive" });
+      toast({ title: "Ошибка создания парной техкарты", description: `Выберите 2 артикула (текущий: "${skuA || "—"}" и "${skuB || "—"}")`, variant: "destructive" });
       return;
     }
     const productA = rawItems.find((item) => String(item.sku).toLowerCase() === skuA.trim().toLowerCase());
     const productB = rawItems.find((item) => String(item.sku).toLowerCase() === skuB.trim().toLowerCase());
     if (!productA || !productB) {
-      toast({ title: "Ошибка", description: "Один или оба артикула не найдены", variant: "destructive" });
+      const missing = [];
+      if (!productA) missing.push(skuA);
+      if (!productB) missing.push(skuB);
+      toast({ title: "Артикулы не найдены", description: `Следующие артикулы не найдены в списке: ${missing.join(", ")}`, variant: "destructive" });
       return;
     }
     if (productA.id === productB.id) {
-      toast({ title: "Ошибка", description: "Артикулы должны быть разными", variant: "destructive" });
+      toast({ title: "Ошибка создания парной техкарты", description: `Артикулы должны быть разными (выбран один: ${productA.sku})`, variant: "destructive" });
       return;
     }
     if (!productA.is_paired_profile || !productB.is_paired_profile) {
-      toast({ title: "Ошибка", description: "Оба артикула должны быть парными профилями", variant: "destructive" });
+      const nonPair = [];
+      if (!productA.is_paired_profile) nonPair.push(productA.sku);
+      if (!productB.is_paired_profile) nonPair.push(productB.sku);
+      toast({ title: "Непарные профили", description: `Следующие артикулы не являются парными профилями: ${nonPair.join(", ")}`, variant: "destructive" });
       return;
     }
     const qtyA = parseInt(quantityAPerItem) || 1;
     const qtyB = parseInt(quantityBPerItem) || 1;
     const calcTotal = differentQuantities ? qtyA + qtyB : (parseInt(quantityPerItem) || 1) * 2;
     if (calcTotal < 1) {
-      toast({ title: "Ошибка", description: "Кол-во должно быть > 0", variant: "destructive" });
+      toast({ title: "Ошибка создания парной техкарты", description: `Общее кол-во должно быть > 0 (${calcTotal} при ${qtyA}+${qtyB})`, variant: "destructive" });
       return;
     }
     setLoading(true);
@@ -245,11 +257,11 @@ export function TechcardsPage() {
       });
       await api.createTechcardLine(Number(card.id), { component_product_id: Number(productA.id), quantity: qtyA, unit: "pcs" });
       await api.createTechcardLine(Number(card.id), { component_product_id: Number(productB.id), quantity: qtyB, unit: "pcs" });
-      toast({ title: "Создано", description: `Парная техкарта: ${pairProfileSku} (#${card.id})`, variant: "success" });
+      toast({ title: "Парная техкарта создана", description: `${pairProfileSku} (ID: #${card.id}): общее=${calcTotal}, ${productA.sku}=${qtyA}, ${productB.sku}=${qtyB} на подвес`, variant: "success" });
       setSkuA(""); setSkuB(""); setQuantityPerItem(""); setQuantityAPerItem(""); setQuantityBPerItem(""); setDifferentQuantities(false); setPairedDialogOpen(false);
       await loadData();
     } catch (e) {
-      toast({ title: "Ошибка", description: e instanceof Error ? e.message : "Ошибка создания парной техкарты", variant: "destructive" });
+      toast({ title: `Ошибка создания парной техкарты: ${pairProfileSku}`, description: getErrorMessage(e), variant: "destructive" });
     } finally {
       setLoading(false);
     }

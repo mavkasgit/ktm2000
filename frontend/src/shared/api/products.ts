@@ -1,4 +1,6 @@
-import { apiClient } from "./client";
+import { apiClient, getErrorMessage } from "./client";
+
+export { getErrorMessage };
 
 export type ProductType = "finished_good" | "semi_finished" | "component" | "material";
 

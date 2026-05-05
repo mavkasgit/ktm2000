@@ -39,7 +39,7 @@ import {
   DialogDescription,
 } from "@/shared/ui/Dialog";
 import { toast } from "@/shared/ui/use-toast";
-import { apiClient } from "@/shared/api/client";
+import { apiClient, getErrorMessage } from "@/shared/api/client";
 import { renderIcon } from "@/shared/ui/EntityDialog";
 import { RouteFlowNode, type RouteFlowNodeData } from "./RouteFlowNode";
 
@@ -740,21 +740,21 @@ export function RouteFlowBuilder({ open, onOpenChange, route, onSave }: RouteFlo
     if (!route) return;
     try {
       await API.deleteRoute(route.id);
-      toast({ variant: "success", title: "Удалено", description: `Маршрут "${route.name}" удалён` });
+      toast({ variant: "success", title: "Маршрут удалён", description: `"${route.name}" (ID: ${route.id}, этапов: ${nodes.length}) успешно удалён` });
       onOpenChange(false);
       onSave();
     } catch (e) {
-      toast({ variant: "destructive", title: "Ошибка", description: e instanceof Error ? e.message : "Не удалось удалить маршрут" });
+      toast({ variant: "destructive", title: `Ошибка удаления: ${route.name} (ID: ${route.id})`, description: getErrorMessage(e) });
     }
   };
 
   const handleSave = async () => {
     if (!name.trim()) {
-      toast({ variant: "destructive", title: "Ошибка", description: "Название обязательно" });
+      toast({ variant: "destructive", title: "Ошибка сохранения маршрута", description: "Название маршрута обязательно. Текущее значение пустое." });
       return;
     }
     if (nodes.length === 0) {
-      toast({ variant: "destructive", title: "Ошибка", description: "Добавьте хотя бы один участок" });
+      toast({ variant: "destructive", title: "Ошибка сохранения маршрута", description: `Добавьте хотя бы один участок в маршрут "${name.trim()}"` });
       return;
     }
 
@@ -799,19 +799,21 @@ export function RouteFlowBuilder({ open, onOpenChange, route, onSave }: RouteFlo
         };
       });
 
+      const stepNames = steps.map((s) => s.operation_name).join(" → ");
+
       if (route) {
         await API.updateRoute(route.id, { name: name.trim(), description: description.trim() || null, is_active: isActive });
         await API.replaceSteps(route.id, steps);
-        toast({ variant: "success", title: "Сохранено", description: "Маршрут обновлён" });
+        toast({ variant: "success", title: "Маршрут обновлён", description: `"${name.trim()}" (ID: ${route.id}): ${steps.length} этапов (${stepNames}), активных: ${isActive ? "да" : "нет"}` });
       } else {
         const created = await API.createRoute({ name: name.trim(), description: description.trim() || null, is_active: isActive });
         if (steps.length > 0) await API.replaceSteps(created.id, steps);
-        toast({ variant: "success", title: "Создано", description: "Маршрут создан" });
+        toast({ variant: "success", title: "Маршрут создан", description: `"${name.trim()}" (ID: ${created.id}): ${steps.length} этапов (${stepNames}), активных: ${isActive ? "да" : "нет"}` });
       }
       onOpenChange(false);
       onSave();
     } catch (e) {
-      toast({ variant: "destructive", title: "Ошибка", description: e instanceof Error ? e.message : "Ошибка сохранения" });
+      toast({ variant: "destructive", title: `Ошибка сохранения: "${name.trim()}"`, description: getErrorMessage(e) });
     } finally {
       setSaving(false);
     }

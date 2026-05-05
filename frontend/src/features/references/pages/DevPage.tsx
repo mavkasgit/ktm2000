@@ -74,8 +74,8 @@ function TablerIconsTable() {
             const iconKey = s.icon.replace("tabler:", "").replace("lucide:", "");
             const isLucide = s.icon.startsWith("lucide:");
             const isTabler = s.icon.startsWith("tabler:");
-            const tablerMap = { Spray: IconSpray };
-            const IconComp = isTabler ? tablerMap[iconKey] : null;
+            const tablerMap: Record<string, React.ComponentType<any>> = { Spray: IconSpray };
+            const IconComp = isTabler ? (tablerMap[iconKey] as React.ComponentType<any> | null) : null;
             return (
               <tr
                 key={s.code + s.name + i}

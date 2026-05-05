@@ -1,6 +1,6 @@
 import axios from "axios";
 
-const DEFAULT_API_BASE_URL = "http://localhost:5201/api";
+const DEFAULT_API_BASE_URL = "/api";
 
 const envBaseUrl = import.meta.env.VITE_API_BASE_URL;
 
@@ -17,3 +17,16 @@ export const apiClient = axios.create({
 export type ApiErrorResponse = {
   detail?: string;
 };
+
+/** Extract a human-readable error message from an Axios error */
+export function getErrorMessage(error: unknown): string {
+  if (error && typeof error === "object" && "response" in error) {
+    const axErr = error as { response?: { status?: number; data?: ApiErrorResponse } };
+    const status = axErr.response?.status;
+    const detail = axErr.response?.data?.detail;
+    if (detail) return detail;
+    if (status) return `HTTP ${status}: ${axErr.response?.data ? JSON.stringify(axErr.response.data) : "No response body"}`;
+  }
+  if (error instanceof Error) return error.message;
+  return String(error ?? "Unknown error");
+}

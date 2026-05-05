@@ -18,6 +18,8 @@ export type RouteStep = {
   operation_name: string;
   norm_time_minutes: number | null;
   is_final: boolean;
+  allow_parallel?: boolean;
+  requires_acceptance?: boolean;
 };
 
 export type RuleCondition = {

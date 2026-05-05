@@ -140,7 +140,7 @@ export function BackupsPage() {
     }
     if (activeBackupJob.status === "failed") {
       setHandledBackupJobId(activeBackupJob.job_id)
-      toast({ variant: "destructive", title: "Ошибка", description: "Ошибка создания бэкапа: " + (activeBackupJob.error || "неизвестная ошибка") })
+      toast({ variant: "destructive", title: `Ошибка создания бэкапа: job ${activeBackupJob.job_id}`, description: `Статус: ${activeBackupJob.status}. Причина: ${activeBackupJob.error || "неизвестная ошибка"}` })
       setActiveBackupJobId(null)
     }
   }, [activeBackupJob, handledBackupJobId, refetchBackups])
@@ -151,7 +151,7 @@ export function BackupsPage() {
       setHandledBackupJobId(null)
       setActiveBackupJobId(job.job_id)
     } catch (e: any) {
-      toast({ variant: "destructive", title: "Ошибка создания бэкапа", description: getErrorMessage(e, "Неизвестная ошибка") })
+      toast({ variant: "destructive", title: "Ошибка создания бэкапа", description: getErrorMessage(e) })
     }
   }
 
@@ -223,7 +223,8 @@ export function BackupsPage() {
       setUploadedRestoreFile(null)
       setSuccessOpen(true)
     } catch (e: any) {
-      toast({ variant: "destructive", title: "Ошибка", description: "Ошибка восстановления: " + (e.response?.data?.detail || e.message) })
+      const source = uploadedRestoreFile ? uploadedRestoreFile.name : restoreFilename;
+      toast({ variant: "destructive", title: `Ошибка восстановления: ${source} → ${dbName}`, description: getErrorMessage(e) });
     } finally {
       setRestoreLoading(false)
     }
@@ -257,7 +258,7 @@ export function BackupsPage() {
       setDeleteConfirmOpen(false)
       setDeleteTarget(null)
     } catch (e: any) {
-      toast({ variant: "destructive", title: "Ошибка", description: "Ошибка удаления: " + (e.response?.data?.detail || e.message) })
+      toast({ variant: "destructive", title: `Ошибка удаления: ${deleteTarget}`, description: getErrorMessage(e) })
     }
   }
 
@@ -272,7 +273,7 @@ export function BackupsPage() {
       setBulkDeleteConfirmOpen(false)
       setSelectedFilenames(new Set())
     } catch (e: any) {
-      toast({ variant: "destructive", title: "Ошибка", description: "Ошибка удаления: " + (e.response?.data?.detail || e.message) })
+      toast({ variant: "destructive", title: `Ошибка удаления: ${selectedFilenames.size} файлов`, description: `Файлы: ${Array.from(selectedFilenames).slice(0, 3).join(", ")}${selectedFilenames.size > 3 ? " и ещё " + (selectedFilenames.size - 3) : ""}. ${getErrorMessage(e)}` });
     }
   }
 
@@ -300,7 +301,7 @@ export function BackupsPage() {
       setOlderThanOpen(false)
       setSelectedFilenames(new Set())
     } catch (e: any) {
-      toast({ variant: "destructive", title: "Ошибка", description: "Ошибка удаления: " + (e.response?.data?.detail || e.message) })
+      toast({ variant: "destructive", title: `Ошибка удаления: старше ${days} дней`, description: `Удалено файлов: ${olderThanPreview.length}. ${getErrorMessage(e)}` });
     }
   }
 
@@ -315,7 +316,7 @@ export function BackupsPage() {
       await updateComment.mutateAsync({ filename, comment: commentInput })
       setEditingComment(null)
     } catch (e: any) {
-      toast({ variant: "destructive", title: "Ошибка", description: "Ошибка сохранения комментария: " + (e.response?.data?.detail || e.message) })
+      toast({ variant: "destructive", title: `Ошибка сохранения комментария: ${editingComment ?? filename}`, description: getErrorMessage(e) })
     }
   }
 
