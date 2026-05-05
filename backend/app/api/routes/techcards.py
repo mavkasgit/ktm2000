@@ -46,9 +46,16 @@ class TechcardOut(BaseModel):
     hangers_total: int | None = None
 
 
-class TechcardLineOut(TechcardLineCreate):
+class TechcardLineOut(BaseModel):
     id: int
     techcard_id: int
+    component_product_id: int | None = None
+    quantity: int | None = None
+    unit: str | None = None
+
+
+class TechcardWithLinesOut(TechcardOut):
+    techcard_lines: list[dict] = []
 
 
 class TechcardDetailOut(TechcardOut):
@@ -95,11 +102,35 @@ async def create_techcard(payload: TechcardCreate, db: AsyncSession = Depends(ge
     return TechcardOut.model_validate(item, from_attributes=True)
 
 
-@router.get("", response_model=list[TechcardOut])
-async def list_techcards(db: AsyncSession = Depends(get_db)) -> list[TechcardOut]:
+@router.get("")
+async def list_techcards(db: AsyncSession = Depends(get_db)):
     stmt = select(Techcard).order_by(Techcard.id.desc())
     rows = (await db.execute(stmt)).scalars().all()
-    return [TechcardOut.model_validate(item, from_attributes=True) for item in rows]
+
+    # Load lines for paired techcards
+    paired_ids = [r.id for r in rows if r.processing_type == "paired_processing"]
+    lines_by_tc: dict[int, list[dict]] = {}
+    if paired_ids:
+        lines = (
+            await db.execute(
+                select(TechcardLine).where(TechcardLine.techcard_id.in_(paired_ids)).order_by(TechcardLine.id)
+            )
+        ).scalars().all()
+        for line in lines:
+            lines_by_tc.setdefault(line.techcard_id, []).append({
+                "id": line.id,
+                "component_product_id": line.component_product_id,
+                "quantity": line.quantity,
+                "unit": line.unit,
+            })
+
+    result = []
+    for item in rows:
+        data = TechcardOut.model_validate(item, from_attributes=True).model_dump()
+        if item.processing_type == "paired_processing":
+            data["techcard_lines"] = lines_by_tc.get(item.id, [])
+        result.append(data)
+    return result
 
 
 @router.get("/{techcard_id}", response_model=TechcardDetailOut)

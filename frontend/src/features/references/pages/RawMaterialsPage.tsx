@@ -232,24 +232,54 @@ export function RawMaterialsPage() {
     if (lengthTo) filtered = filtered.filter((p) => (p.length_mm ?? 0) <= parseFloat(lengthTo));
     if (qtyFrom) filtered = filtered.filter((p) => (p.quantity_per_hanger ?? 0) >= parseFloat(qtyFrom));
     if (qtyTo) filtered = filtered.filter((p) => (p.quantity_per_hanger ?? 0) <= parseFloat(qtyTo));
-    if (sortConfigs.length === 0) return filtered;
-    return [...filtered].sort((a, b) => {
-      for (const { field, order } of sortConfigs) {
-        let aVal: string | number | boolean;
-        let bVal: string | number | boolean;
-        if (field === "aliases") {
-          aVal = (a.aliases?.length ?? 0);
-          bVal = (b.aliases?.length ?? 0);
-        } else {
-          aVal = (a[field as keyof Product] ?? (typeof a[field as keyof Product] === "boolean" ? false : "")) as string | number | boolean;
-          bVal = (b[field as keyof Product] ?? (typeof b[field as keyof Product] === "boolean" ? false : "")) as string | number | boolean;
+
+    if (!groupByAliases) {
+      if (sortConfigs.length === 0) return filtered;
+      return [...filtered].sort((a, b) => {
+        for (const { field, order } of sortConfigs) {
+          let aVal: string | number | boolean;
+          let bVal: string | number | boolean;
+          if (field === "aliases") {
+            aVal = (a.aliases?.length ?? 0);
+            bVal = (b.aliases?.length ?? 0);
+          } else {
+            aVal = (a[field as keyof Product] ?? (typeof a[field as keyof Product] === "boolean" ? false : "")) as string | number | boolean;
+            bVal = (b[field as keyof Product] ?? (typeof b[field as keyof Product] === "boolean" ? false : "")) as string | number | boolean;
+          }
+          if (aVal < bVal) return order === "asc" ? -1 : 1;
+          if (aVal > bVal) return order === "asc" ? 1 : -1;
         }
-        if (aVal < bVal) return order === "asc" ? -1 : 1;
-        if (aVal > bVal) return order === "asc" ? 1 : -1;
-      }
-      return 0;
-    });
-  }, [items, sortConfigs, lengthFrom, lengthTo, qtyFrom, qtyTo]);
+        return 0;
+      });
+    }
+
+    // Grouping is enabled: products with aliases first, then without
+    const withAliases = filtered.filter((p) => (p.aliases?.length ?? 0) > 0);
+    const withoutAliases = filtered.filter((p) => (p.aliases?.length ?? 0) === 0);
+
+    // Sort within groups if sortConfigs exist
+    const applySort = (arr: Product[]) => {
+      if (sortConfigs.length === 0) return arr;
+      return [...arr].sort((a, b) => {
+        for (const { field, order } of sortConfigs) {
+          let aVal: string | number | boolean;
+          let bVal: string | number | boolean;
+          if (field === "aliases") {
+            aVal = (a.aliases?.length ?? 0);
+            bVal = (b.aliases?.length ?? 0);
+          } else {
+            aVal = (a[field as keyof Product] ?? (typeof a[field as keyof Product] === "boolean" ? false : "")) as string | number | boolean;
+            bVal = (b[field as keyof Product] ?? (typeof b[field as keyof Product] === "boolean" ? false : "")) as string | number | boolean;
+          }
+          if (aVal < bVal) return order === "asc" ? -1 : 1;
+          if (aVal > bVal) return order === "asc" ? 1 : -1;
+        }
+        return 0;
+      });
+    };
+
+    return [...applySort(withAliases), ...applySort(withoutAliases)];
+  }, [items, sortConfigs, lengthFrom, lengthTo, qtyFrom, qtyTo, groupByAliases]);
 
   const SortHeader = ({ field, children }: { field: SortField; children: React.ReactNode }) => (
     <th
@@ -305,6 +335,9 @@ export function RawMaterialsPage() {
           {activeFiltersCount > 0 && (
             <Badge variant="secondary" className="ml-1 h-5 min-w-[1.25rem] px-1 text-xs">{activeFiltersCount}</Badge>
           )}
+        </Button>
+        <Button variant={groupByAliases ? "default" : "outline"} size="sm" onClick={() => setGroupByAliases(!groupByAliases)}>
+          Сгруппировать одинаковые
         </Button>
       </div>
 

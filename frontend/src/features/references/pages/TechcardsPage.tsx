@@ -268,7 +268,7 @@ export function TechcardsPage() {
   };
 
   const resolvePairSkus = (detail: any): { skuA: string; skuB: string } => {
-    const lines = detail?.lines ?? [];
+    const lines = detail?.techcard_lines ?? detail?.lines ?? [];
     const skus = lines.map((l: any) => {
       const product = rawItems.find((p) => Number(p.id) === Number(l.component_product_id));
       return product?.sku ?? String(l.component_product_id);
@@ -332,7 +332,7 @@ export function TechcardsPage() {
         </div>
       </div>
 
-      {/* 1:1 techcards table (hidden by default) */}
+      {/* Standard techcards table (hidden by default) */}
       {showOneToOne && (
         <div>
           <h3 className="text-sm font-medium text-muted-foreground mb-2">Стандартные техкарты</h3>
@@ -361,7 +361,7 @@ export function TechcardsPage() {
                   );
                 })}
                 {oneToOneTechcards.length === 0 && (
-                  <tr><td colSpan={3} style={{ padding: 16, textAlign: "center", color: "#9ca3af" }}>Нет 1:1 техкарт</td></tr>
+                  <tr><td colSpan={3} style={{ padding: 16, textAlign: "center", color: "#9ca3af" }}>Нет стандартных техкарт</td></tr>
                 )}
               </tbody>
             </table>
@@ -553,7 +553,7 @@ export function TechcardsPage() {
                   );
                 })()
               ) : (
-                /* 1:1 techcard edit */
+                /* Standard techcard edit */
                 <div className="space-y-3">
                   <div className="flex flex-wrap gap-3">
                     <div>
