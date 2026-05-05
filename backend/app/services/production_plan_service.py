@@ -68,11 +68,13 @@ async def apply_change_set(db: AsyncSession, change_set_id: int) -> dict:
                     position.product_id = after.get("product_id")
                     position.source_sku = after["source_sku"]
                     position.source_name = after.get("source_name")
-                    position.quantity = after["quantity"]
+                    qty = after["quantity"]
+                    position.quantity = Decimal(str(qty)) if not isinstance(qty, Decimal) else qty
                     position.source_payload = after.get("source_payload") or {}
                     position.source_ref = after.get("source_ref")
                     position.source_fingerprint = after.get("source_fingerprint")
                     position.source_row_hash = after.get("source_row_hash")
+                    position.import_batch_id = change_set.import_batch_id
                     position.source_row_number = (after.get("source_row_numbers") or [item.source_row_number])[0]
                     position.period_start = _date_from_payload(after, "period_start")
                     position.period_end = _date_from_payload(after, "period_end")
@@ -94,6 +96,9 @@ async def apply_change_set(db: AsyncSession, change_set_id: int) -> dict:
             if not after.get("product_id") and "product_not_found" not in validation_errors:
                 validation_errors.append("product_not_found")
 
+            qty = after["quantity"]
+            qty_decimal = Decimal(str(qty)) if not isinstance(qty, Decimal) else qty
+
             position = PlanPosition(
                 production_plan_id=change_set.production_plan_id,
                 product_id=after.get("product_id"),
@@ -105,7 +110,7 @@ async def apply_change_set(db: AsyncSession, change_set_id: int) -> dict:
                 import_batch_id=change_set.import_batch_id,
                 source_sku=after["source_sku"],
                 source_name=after.get("source_name"),
-                quantity=after["quantity"],
+                quantity=qty_decimal,
                 source_payload=after.get("source_payload") or {},
                 period_start=_date_from_payload(after, "period_start"),
                 period_end=_date_from_payload(after, "period_end"),
@@ -179,17 +184,17 @@ async def rollback_change_set(db: AsyncSession, change_set_id: int) -> dict:
     return await get_plan_preview(db, change_set.production_plan_id)
 
 
-async def approve_plan_position(db: AsyncSession, production_plan_id: int, position_id: int) -> PlanPosition:
+async def approve_plan_position(db: AsyncSession, production_plan_id: int, position_id: int, force: bool = False) -> PlanPosition:
     position = await db.get(PlanPosition, position_id)
     if position is None or position.production_plan_id != production_plan_id:
         raise ValueError("Plan position not found")
-    if position.status == PlanPositionStatus.released:
-        raise ValueError("Released position cannot be approved again")
+    if position.status in {PlanPositionStatus.released, PlanPositionStatus.approved}:
+        raise ValueError(f"Position with status '{position.status.value}' cannot be approved")
 
     errors = await validate_plan_position(db, position)
     position.validation_errors = errors
     position.validation_status = PlanPositionValidationStatus.invalid if errors else PlanPositionValidationStatus.valid
-    if errors:
+    if errors and not force:
         position.status = PlanPositionStatus.invalid
         raise ValueError("; ".join(errors))
 
