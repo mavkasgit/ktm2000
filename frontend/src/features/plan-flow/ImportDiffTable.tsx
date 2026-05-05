@@ -24,7 +24,10 @@ const errorLabels: Record<string, string> = {
   active_route_has_no_steps: "Маршрут без этапов",
   route_sequence_invalid: "Неверная последовательность маршрута",
   route_contains_inactive_section: "Неактивный участок в маршруте",
-  duplicate_sku_due_date: "Дубль артикул + срок",
+  duplicate_sku_due_date: "Дубликат: такой артикул со сроком уже есть",
+  route_primary_operation_mismatch: "Основная операция маршрута не совпадает",
+  route_not_matching_import_signature: "Маршрут не совпадает с ожидаемым",
+  route_missing_required_step: "Отсутствует обязательный этап в маршруте",
   quantity_must_be_positive: "Количество должно быть > 0",
 };
 
@@ -42,14 +45,17 @@ function translateCodes(codes: string[] | unknown, labels: Record<string, string
 }
 
 const headers = [
+  { key: "source_row_number", label: "Строка" },
   { key: "change_action", label: "Действие" },
   { key: "source_sku", label: "Артикул" },
   { key: "source_name", label: "Наименование" },
   { key: "quantity", label: "Кол-во" },
+  { key: "route", label: "Маршрут" },
   { key: "status", label: "Статус" },
   { key: "errors", label: "Ошибки" },
   { key: "warnings", label: "Предупр." },
   { key: "variant", label: "Вариант" },
+  { key: "duplicate_info", label: "Дубликат" },
 ];
 
 function getString(row: UnknownRecord, ...keys: string[]): string {
@@ -103,12 +109,23 @@ export function ImportDiffTable({ rows, sortConfig, onSort }: ImportDiffTablePro
         </thead>
         <tbody>
           {rows.map((row, idx) => {
+            const afterDataRow = row.after_data as Record<string, unknown> | undefined;
+            const rowNum = String(row.source_row_number ?? (afterDataRow?.source_row_numbers as number[] | undefined)?.[0] ?? "—");
+            const planPosId = row.plan_position_id as number | undefined;
             const action = getString(row, "change_action");
             const status = getString(row, "status");
             const sku = String(getAfter(row, "source_sku") ?? getAfter(row, "sku") ?? "");
             const name = String(getAfter(row, "source_name") ?? getAfter(row, "product_name") ?? getAfter(row, "name") ?? "");
             const qtyRaw = getAfter(row, "quantity");
             const quantity = qtyRaw !== undefined && qtyRaw !== null && qtyRaw !== "" ? String(Number(qtyRaw).toFixed(0)) : "";
+            const routeName = String(getAfter(row, "route_name") || "");
+            const routeSource = String(getAfter(row, "route_source") || "");
+            const routeLabel = routeName
+              ? routeName
+              : routeSource === "missing"
+                ? "Маршрут не найден"
+                : "—";
+            const routeColor = routeSource === "missing" ? "#dc2626" : routeName ? "#16a34a" : "#6b7280";
             const errors = translateCodes(row.errors, errorLabels);
             const warnings = translateCodes(row.warnings, warningLabels);
             const variantObj = (getAfter(row, "source_payload") as UnknownRecord | undefined)?.techcard_pair as UnknownRecord | undefined;
@@ -116,20 +133,53 @@ export function ImportDiffTable({ rows, sortConfig, onSort }: ImportDiffTablePro
               ? (variantObj.resolved ? `${variantObj.pair_name ?? "пара"} (#${variantObj.pair_id ?? "?"})` : "не определен")
               : "—";
 
+            // Build duplicate info message
+            let duplicateInfo: string | null = null;
+            const afterData = row.after_data as UnknownRecord | undefined;
+            if (afterData?.duplicate_type === "within_import") {
+              const dupRows = afterData.duplicate_rows as number[] | undefined;
+              if (dupRows && dupRows.length > 1) {
+                duplicateInfo = `Дубликат строк: ${dupRows.join(", ")}`;
+              }
+            } else if (afterData?.duplicate_type === "against_existing") {
+              const existingId = afterData.duplicate_existing_id;
+              const existingRow = afterData.duplicate_existing_row;
+              duplicateInfo = `Дубликат позиции БД #${existingId}`;
+              if (existingRow) duplicateInfo += ` (строка ${existingRow})`;
+            }
+
             return (
-              <tr key={idx}>
+              <tr key={idx} style={{
+                background: row.status === "invalid" ? "#fef2f2" : row.status === "warning" ? "#fffbeb" : undefined,
+              }}>
+                <td style={{ borderBottom: "1px solid #f3f4f6", padding: 8, fontWeight: 600, whiteSpace: "nowrap" }}>
+                  {planPosId ? (
+                    <span title={`Позиция БД: #${planPosId}`}>
+                      #{rowNum}
+                      <span style={{ fontSize: 10, color: "#6b7280", display: "block" }}>БД #{planPosId}</span>
+                    </span>
+                  ) : (
+                    `#${rowNum}`
+                  )}
+                </td>
                 <td style={{ borderBottom: "1px solid #f3f4f6", padding: 8 }}>
                   {actionLabels[action] ?? action}
                 </td>
                 <td style={{ borderBottom: "1px solid #f3f4f6", padding: 8 }}>{sku}</td>
                 <td style={{ borderBottom: "1px solid #f3f4f6", padding: 8 }}>{name}</td>
                 <td style={{ borderBottom: "1px solid #f3f4f6", padding: 8 }}>{quantity}</td>
+                <td style={{ borderBottom: "1px solid #f3f4f6", padding: 8, color: routeColor, fontWeight: routeName ? 500 : 400 }}>
+                  {routeLabel}
+                </td>
                 <td style={{ borderBottom: "1px solid #f3f4f6", padding: 8 }}>
                   {statusLabels[status] ?? status}
                 </td>
                 <td style={{ borderBottom: "1px solid #f3f4f6", padding: 8, color: "#dc2626" }}>{errors}</td>
                 <td style={{ borderBottom: "1px solid #f3f4f6", padding: 8, color: "#d97706" }}>{warnings}</td>
                 <td style={{ borderBottom: "1px solid #f3f4f6", padding: 8 }}>{variantLabel}</td>
+                <td style={{ borderBottom: "1px solid #f3f4f6", padding: 8, fontSize: 11, color: duplicateInfo ? "#dc2626" : undefined }}>
+                  {duplicateInfo || "—"}
+                </td>
               </tr>
             );
           })}

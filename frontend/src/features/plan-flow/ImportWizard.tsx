@@ -1,9 +1,9 @@
 import { useMemo, useRef, useState } from "react"
 import { Check, ExternalLink, Upload } from "lucide-react"
 import { useNavigate } from "react-router-dom"
-import { uploadExcel, uploadTestExcel, applyChangeSet } from "./api"
+import { uploadExcel, uploadTestExcel, applyChangeSet, discardImport } from "./api"
 import { ImportDiffTable } from "./ImportDiffTable"
-import { Button } from "shared/ui"
+import { Button, AlertDialog, AlertDialogContent, AlertDialogHeader, AlertDialogTitle, AlertDialogDescription, AlertDialogFooter, AlertDialogAction, AlertDialogCancel } from "shared/ui"
 import {
   Dialog,
   DialogContent,
@@ -20,6 +20,7 @@ export function ImportWizard(props: {
   onClose: () => void
   onSuccess: (planId: string, changeSetId: string) => void
   mode?: "normal" | "test"
+  productionPlanId?: number
 }) {
   const [step, setStep] = useState<"upload" | "preview" | "result">("upload")
   const [file, setFile] = useState<File | null>(null)
@@ -29,6 +30,9 @@ export function ImportWizard(props: {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [result, setResult] = useState<Record<string, unknown> | null>(null)
+  const [searchQuery, setSearchQuery] = useState("")
+  const [pendingChangeSet, setPendingChangeSet] = useState<{ planId: string; changeSetId: string } | null>(null)
+  const [showCloseConfirm, setShowCloseConfirm] = useState(false)
 
   const fileInputRef = useRef<HTMLInputElement>(null)
   const navigate = useNavigate()
@@ -41,6 +45,17 @@ export function ImportWizard(props: {
     let rows = allRows
     if (filterStatus !== "all") {
       rows = rows.filter((r) => r.status === filterStatus)
+    }
+    if (searchQuery.trim()) {
+      const q = searchQuery.trim().toLowerCase()
+      rows = rows.filter((r) => {
+        const rowNum = String(r.source_row_number ?? (r.after_data as any)?.source_row_numbers?.[0] ?? "")
+        const planPosId = String(r.plan_position_id ?? "")
+        const after = (r.after_data as Record<string, unknown>) || {}
+        const sku = String(after.source_sku ?? r.source_sku ?? "")
+        const name = String(after.source_name ?? r.source_name ?? "")
+        return rowNum.includes(q) || planPosId.includes(q) || sku.toLowerCase().includes(q) || name.toLowerCase().includes(q)
+      })
     }
     if (!sortConfig) return rows
     return [...rows].sort((a, b) => {
@@ -88,8 +103,13 @@ export function ImportWizard(props: {
     setLoading(true)
     setError(null)
     try {
-      const data = await uploadExcel(f)
+      const data = await uploadExcel(f, { productionPlanId: props.productionPlanId })
       setPreviewData(data)
+      const planId = String(data.planId ?? data.production_plan_id ?? "")
+      const changeSetId = String(data.changeSetId ?? data.change_set_id ?? "")
+      if (planId && changeSetId) {
+        setPendingChangeSet({ planId, changeSetId })
+      }
       setStep("preview")
     } catch (e) {
       setError(e instanceof Error ? e.message : "Ошибка загрузки")
@@ -102,8 +122,13 @@ export function ImportWizard(props: {
     setLoading(true)
     setError(null)
     try {
-      const data = await uploadTestExcel()
+      const data = await uploadTestExcel(props.productionPlanId)
       setPreviewData(data)
+      const planId = String(data.planId ?? data.production_plan_id ?? "")
+      const changeSetId = String(data.changeSetId ?? data.change_set_id ?? "")
+      if (planId && changeSetId) {
+        setPendingChangeSet({ planId, changeSetId })
+      }
       setStep("preview")
     } catch (e) {
       setError(e instanceof Error ? e.message : "Ошибка тестового импорта")
@@ -125,6 +150,7 @@ export function ImportWizard(props: {
     try {
       const data = await applyChangeSet(planId, changeSetId)
       setResult(data)
+      setPendingChangeSet(null)
       setStep("result")
       props.onSuccess(planId, changeSetId)
     } catch (e) {
@@ -150,18 +176,34 @@ export function ImportWizard(props: {
     setError(null)
     setSortConfig(null)
     setFilterStatus("all")
+    setSearchQuery("")
+    setPendingChangeSet(null)
     if (fileInputRef.current) {
       fileInputRef.current.value = ""
     }
   }
 
   function handleClose() {
+    if (pendingChangeSet && step !== "result") {
+      setShowCloseConfirm(true)
+      return
+    }
+    reset()
+    props.onClose()
+  }
+
+  function handleForceClose() {
+    setShowCloseConfirm(false)
+    if (pendingChangeSet) {
+      discardImport(pendingChangeSet.planId, pendingChangeSet.changeSetId)
+    }
     reset()
     props.onClose()
   }
 
   return (
-    <Dialog open={props.open} onOpenChange={(open) => { if (!open) handleClose() }}>
+    <>
+      <Dialog open={props.open} onOpenChange={(open) => { if (!open) handleClose() }}>
       <DialogContent className={`w-full max-h-[95vh] overflow-hidden flex flex-col ${step === "preview" ? "max-w-[95vw]" : "max-w-2xl"}`}>
         <DialogHeader>
           <DialogTitle>
@@ -221,6 +263,11 @@ export function ImportWizard(props: {
 
         {step === "preview" && previewData && (
           <div className="flex-1 overflow-hidden flex flex-col space-y-4">
+            {summary.invalid > 0 && (
+              <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-800">
+                <strong>{summary.invalid} строк с ошибками</strong> — будут добавлены в план с пометкой.
+              </div>
+            )}
             <div className="flex items-center justify-between flex-wrap gap-2">
               <div className="flex gap-4 text-sm">
                 <span><strong>Всего:</strong> {summary.total}</span>
@@ -228,20 +275,29 @@ export function ImportWizard(props: {
                 {summary.warning > 0 && <span className="text-amber-600"><strong>Предупр.:</strong> {summary.warning}</span>}
                 {summary.invalid === 0 && summary.warning === 0 && <span className="text-green-600 text-xs">Без ошибок</span>}
               </div>
-              <div className="flex gap-1">
-                {(["all", "invalid", "warning"] as const).map((f) => (
-                  <button
-                    key={f}
-                    onClick={() => setFilterStatus(f)}
-                    className={`px-2.5 py-1 text-xs rounded-md border transition-colors ${
-                      filterStatus === f
-                        ? "bg-primary text-primary-foreground border-primary"
-                        : "bg-background hover:bg-accent border-input"
-                    }`}
-                  >
-                    {f === "all" ? "Все" : f === "invalid" ? "Ошибки" : "Предупр."}
-                  </button>
-                ))}
+              <div className="flex items-center gap-2">
+                <input
+                  type="text"
+                  placeholder="Поиск: строка, ID, артикул..."
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  className="h-7 w-48 px-2 py-1 text-xs border rounded-md bg-background"
+                />
+                <div className="flex gap-1">
+                  {(["all", "invalid", "warning"] as const).map((f) => (
+                    <button
+                      key={f}
+                      onClick={() => setFilterStatus(f)}
+                      className={`px-2.5 py-1 text-xs rounded-md border transition-colors ${
+                        filterStatus === f
+                          ? "bg-primary text-primary-foreground border-primary"
+                          : "bg-background hover:bg-accent border-input"
+                      }`}
+                    >
+                      {f === "all" ? "Все" : f === "invalid" ? "Ошибки" : "Предупр."}
+                    </button>
+                  ))}
+                </div>
               </div>
             </div>
 
@@ -274,14 +330,21 @@ export function ImportWizard(props: {
         )}
 
         {step === "result" && result && (
-          <div className="text-center py-8">
+          <div className="text-center py-6">
             <div className="inline-flex items-center justify-center w-16 h-16 rounded-full bg-green-100 mb-4">
               <Check className="h-8 w-8 text-green-600" />
             </div>
-            <h3 className="text-lg font-medium mb-2">Изменения применены</h3>
-            <p className="text-muted-foreground">
-              Производственный план успешно обновлён.
-            </p>
+            <h3 className="text-lg font-medium mb-4">Изменения применены</h3>
+            <div className="flex justify-center gap-6 text-sm">
+              <div>
+                <div className="font-semibold">{(result as any).created_positions ?? 0}</div>
+                <div className="text-muted-foreground">Создано</div>
+              </div>
+              <div>
+                <div className="font-semibold">{(result as any).updated_positions ?? 0}</div>
+                <div className="text-muted-foreground">Обновлено</div>
+              </div>
+            </div>
           </div>
         )}
 
@@ -302,5 +365,21 @@ export function ImportWizard(props: {
         </DialogFooter>
       </DialogContent>
     </Dialog>
+
+    <AlertDialog open={showCloseConfirm} onOpenChange={setShowCloseConfirm}>
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>Выйти без применения?</AlertDialogTitle>
+          <AlertDialogDescription>
+            Загруженные изменения будут отменены и удалены. Вы уверены?
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel onClick={() => setShowCloseConfirm(false)}>Отмена</AlertDialogCancel>
+          <AlertDialogAction onClick={handleForceClose}>Выйти</AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
+    </>
   )
 }

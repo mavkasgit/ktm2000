@@ -23,19 +23,23 @@ function enrichImport(payload: Record<string, any>) {
 
 export async function uploadExcel(
   file: File,
-  options?: { templateId?: number; columnMapping?: Record<string, string> },
+  options?: { templateId?: number; columnMapping?: Record<string, string>; productionPlanId?: number },
 ) {
   const payload = await importExcel({
     file,
     template_id: options?.templateId,
     column_mapping: options?.columnMapping,
+    mode: "append_to_plan",
+    production_plan_id: options?.productionPlanId ?? undefined,
   })
   lastImport = enrichImport(payload as Record<string, any>)
   return lastImport
 }
 
-export async function uploadTestExcel() {
-  const { data } = await apiClient.post("/imports/excel/test")
+export async function uploadTestExcel(productionPlanId?: number) {
+  const { data } = await apiClient.post("/imports/excel/test", undefined, {
+    params: { production_plan_id: productionPlanId },
+  })
   lastImport = enrichImport(data as Record<string, any>)
   return lastImport
 }
@@ -68,6 +72,14 @@ export async function rollbackChangeSet(planId: string, changeSetId: string) {
   return {
     ...payload,
     planId: String((payload as Record<string, any>).production_plan_id ?? planId),
+  }
+}
+
+export async function discardImport(planId: string, changeSetId: string) {
+  try {
+    await rollbackChangeSet(planId, changeSetId)
+  } catch {
+    // ignore rollback errors on discard
   }
 }
 
