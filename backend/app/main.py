@@ -24,7 +24,7 @@ from app.core.config import settings
 from app.core.database import async_session
 
 app = FastAPI(
-    title="Factoryflow",
+    title="KTM-2000",
     description="Manufacturing planning and execution control system",
     version="0.1.0",
 )

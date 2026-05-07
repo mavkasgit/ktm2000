@@ -16,7 +16,7 @@ export function Layout() {
         <div className="brand">
           <div className="flex items-center gap-2">
             <Factory className="h-5 w-5" />
-            <div className="brand-title">Factoryflow</div>
+            <div className="brand-title">KTM-2000</div>
           </div>
           <div className="brand-caption">Планирование производства</div>
         </div>

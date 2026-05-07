@@ -30,7 +30,7 @@ BACKUPS_DIR.mkdir(parents=True, exist_ok=True)
 BACKUP_DUMP_NAME = "database.dump"
 BACKUP_MANIFEST_NAME = "manifest.json"
 BACKUP_TABLE_EXPORTS_DIR = "exports/tables"
-BACKUP_TABLE_WORKBOOK_NAME = "factoryflow_tables.xlsx"
+BACKUP_TABLE_WORKBOOK_NAME = "ktm2000_tables.xlsx"
 BACKUP_STORAGE_DIRS = {
     "imports": "IMPORT_STORAGE_DIR",
     "products": "PRODUCT_PHOTO_DIR",
@@ -366,7 +366,7 @@ def _write_table_exports_to_zip(
 
     readme = (
         "Этот каталог содержит табличный экспорт для просмотра без восстановления БД.\n"
-        "../factoryflow_tables.xlsx — все таблицы в одном Excel-файле, по листу на таблицу.\n"
+        "../ktm2000_tables.xlsx — все таблицы в одном Excel-файле, по листу на таблицу.\n"
         "tables/*.csv — отдельный CSV-файл на каждую таблицу в UTF-8 with BOM для Excel.\n"
         "Основной источник для восстановления системы: database.dump.\n"
         "Файлы приложения лежат в data/imports, data/products.\n"
@@ -462,7 +462,7 @@ def _replace_storage_dirs(extracted_root: Path) -> None:
 
 
 def _preview_dump_file(dump_path: Path, source_db: str | None = None) -> Dict:
-    preview_db = f"factoryflow_preview_{uuid.uuid4().hex[:8]}"
+    preview_db = f"ktm2000_preview_{uuid.uuid4().hex[:8]}"
     try:
         create_result = _run_postgres_cmd(["psql", "-c", f'CREATE DATABASE "{preview_db}";'], "postgres")
         if create_result.returncode != 0:

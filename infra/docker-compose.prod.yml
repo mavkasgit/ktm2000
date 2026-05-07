@@ -1,17 +1,17 @@
-name: factoryflow-prod
+name: ktm2000-prod
 
 services:
   postgres:
     image: postgres:15-alpine
-    container_name: factoryflow-postgres-prod
+    container_name: ktm2000-postgres-prod
     environment:
-      POSTGRES_USER: ${POSTGRES_USER:-factoryflow_user}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-factoryflow_pass_prod}
-      POSTGRES_DB: ${POSTGRES_DB:-factoryflow_prod}
-    ports:
-      - "${PROD_POSTGRES_BIND:-127.0.0.1}:${PROD_POSTGRES_PORT:-5222}:5432"
+      POSTGRES_USER: ${POSTGRES_USER:-ktm2000_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:-ktm2000_prod}
+    expose:
+      - "5432"
     volumes:
-      - ${PROD_POSTGRES_DATA_PATH:-../data/postgres}:/var/lib/postgresql/data
+      - ${POSTGRES_DATA_PATH:-../data/postgres-prod}:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
       interval: 10s
@@ -23,18 +23,20 @@ services:
     build:
       context: ../backend
       dockerfile: Dockerfile
-    container_name: factoryflow-backend-prod
+    container_name: ktm2000-backend-prod
+    env_file:
+      - ../.env.prod
     environment:
-      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-factoryflow_user}:${POSTGRES_PASSWORD:-factoryflow_pass_prod}@postgres:5432/${POSTGRES_DB:-factoryflow_prod}
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-ktm2000_user}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-ktm2000_prod}
       ENV: prod
       SECRET_KEY: ${SECRET_KEY}
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost}
       PRODUCT_PHOTO_DIR: /app/storage/products
       IMPORT_STORAGE_DIR: /app/storage/imports
-    ports:
-      - "${PROD_BACKEND_BIND:-127.0.0.1}:${PROD_BACKEND_PORT:-5201}:8000"
+    expose:
+      - "8000"
     volumes:
-      - ${PROD_STORAGE_PATH:-../storage}:/app/storage
+      - ${STORAGE_PATH:-../storage}:/app/storage
     depends_on:
       postgres:
         condition: service_healthy
@@ -49,27 +51,21 @@ services:
     build:
       context: ../frontend
       dockerfile: Dockerfile
-    container_name: factoryflow-frontend-prod
-    ports:
-      - "${PROD_FRONTEND_BIND:-127.0.0.1}:${PROD_FRONTEND_PORT:-80}:80"
+    container_name: ktm2000-frontend-prod
+    expose:
+      - "3000"
     depends_on:
       - backend
     restart: always
 
-  localtunnel:
-    profiles: ["tunnel"]
-    image: node:20-alpine
-    container_name: ktm-localtunnel-prod
-    network_mode: "service:frontend"
+  nginx:
+    image: nginx:alpine
+    container_name: ktm2000-nginx-prod
+    ports:
+      - "${EXTERNAL_PORT:-100}:100"
+    volumes:
+      - ../frontend/nginx.conf:/etc/nginx/conf.d/default.conf:ro
     depends_on:
       - frontend
-    command: >
-      sh -c "echo 'Waiting for frontend...' &&
-             until wget -q -O /dev/null http://127.0.0.1:80; do sleep 2; done &&
-             echo 'Starting localtunnel...' &&
-             npx --yes localtunnel --port 80 --subdomain ${LOCALTUNNEL_SUBDOMAIN:-ktm-prod-7q2k9m4x} 2>&1"
+      - backend
     restart: always
-
-
-
-

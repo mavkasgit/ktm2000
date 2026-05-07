@@ -1,4 +1,4 @@
-"""CLI script to import profiles from ekranchik SQLite database into FactoryFlow.
+"""CLI script to import profiles from ekranchik SQLite database into KTM-2000.
 
 Usage:
     cd backend
