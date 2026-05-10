@@ -2,7 +2,6 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
 
 from app.core.database import get_db
 from app.models.product import Product
@@ -11,6 +10,7 @@ from app.models.internal_plan import InternalPlan, SectionPlanLine
 from app.models.work_task import WorkTask, WorkTaskStatus
 from app.models.route import ProductionRoute, RouteStep
 from app.models.section import Section
+from app.services.production_planning_rows import get_production_planning_row_detail, list_production_planning_rows
 from app.services.route_matcher import resolve_position_route
 
 router = APIRouter(prefix="/production-planning", tags=["production-planning"])
@@ -62,6 +62,98 @@ class SectionOut(BaseModel):
 
 class ProductionPlanningOverview(BaseModel):
     sections: list[SectionOut]
+
+
+class PlanningRowOut(BaseModel):
+    plan_position_id: int
+    production_plan_id: int
+    source_row_number: int | None
+    source_sku: str
+    source_name: str | None
+    quantity: float
+    position_status: str
+    validation_status: str
+    route_id: int | None
+    route_name: str | None
+    route_source: str | None
+    route_error: str | None
+    is_released: bool
+    has_tasks: bool
+
+
+class PlanningRouteSnapshotStepOut(BaseModel):
+    route_step_id: int
+    sequence: int
+    section_id: int
+    section_code: str
+    section_name: str
+    section_kind: str | None
+    operation_code: str | None
+    operation_name: str
+
+
+class PlanningRouteSnapshotOut(BaseModel):
+    route_id: int
+    route_name: str | None
+    route_source: str
+    steps: list[PlanningRouteSnapshotStepOut]
+
+
+class PlanningStageOut(BaseModel):
+    route_step_id: int
+    section_id: int
+    section_code: str
+    section_name: str
+    sequence: int
+    operation_code: str | None
+    operation_name: str
+    planned_quantity: float
+    completed_quantity: float
+    transferred_quantity: float
+    rejected_quantity: float
+    execution_percent: float
+    transfer_percent: float
+    reject_percent: float
+    task_status: str
+    not_started: bool
+
+
+class PlanningRowDetailOut(BaseModel):
+    plan_position_id: int
+    production_plan_id: int
+    source_row_number: int | None
+    source_sku: str
+    source_name: str | None
+    quantity: float
+    position_status: str
+    validation_status: str
+    route_id: int | None
+    route_name: str | None
+    route_source: str | None
+    route_error: str | None
+    is_released: bool
+    has_tasks: bool
+    not_started: bool
+    route_snapshot: PlanningRouteSnapshotOut | None
+    stages: list[PlanningStageOut]
+
+
+@router.get("/rows", response_model=list[PlanningRowOut])
+async def list_rows(
+    db: AsyncSession = Depends(get_db),
+):
+    return await list_production_planning_rows(db)
+
+
+@router.get("/rows/{position_id}", response_model=PlanningRowDetailOut)
+async def get_row_detail(
+    position_id: int,
+    db: AsyncSession = Depends(get_db),
+):
+    detail = await get_production_planning_row_detail(db, position_id)
+    if detail is None:
+        raise HTTPException(status_code=404, detail="Position not found")
+    return detail
 
 
 @router.get("/overview", response_model=ProductionPlanningOverview)
@@ -138,16 +230,26 @@ async def get_production_planning_overview(
         await db.execute(
             select(SectionPlanLine)
             .where(SectionPlanLine.plan_position_id.in_(position_ids))
-            .options(selectinload(SectionPlanLine.work_tasks))
             .order_by(SectionPlanLine.sequence)
         )
     ).scalars().all()
+    line_ids = [line.id for line in section_plan_lines]
+    work_tasks = []
+    if line_ids:
+        work_tasks = (
+            await db.execute(
+                select(WorkTask).where(WorkTask.section_plan_line_id.in_(line_ids)).order_by(WorkTask.id)
+            )
+        ).scalars().all()
 
     # Group section plan lines by (position_id, section_id)
     pos_section_lines: dict[tuple[int, int], list[SectionPlanLine]] = {}
     for line in section_plan_lines:
         key = (line.plan_position_id, line.section_id)
         pos_section_lines.setdefault(key, []).append(line)
+    line_work_tasks: dict[int, list[WorkTask]] = {}
+    for wt in work_tasks:
+        line_work_tasks.setdefault(wt.section_plan_line_id, []).append(wt)
 
     # Build result
     result_sections: list[SectionOut] = []
@@ -168,7 +270,7 @@ async def get_production_planning_overview(
             completed_steps = 0
 
             for line in lines:
-                for wt in line.work_tasks:
+                for wt in line_work_tasks.get(line.id, []):
                     total_steps += 1
                     if wt.status == WorkTaskStatus.completed:
                         completed_steps += 1

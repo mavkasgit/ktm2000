@@ -22,6 +22,20 @@ from .release_batch import ReleaseBatch, ReleaseBatchPosition, ReleaseBatchStatu
 from .internal_plan import InternalPlan, InternalPlanStatus, SectionPlanLine
 from .work_task import WorkTask, WorkTaskStatus
 from .import_template import ImportTemplate
+from .movement import Movement, MovementType
+from .transfer import Transfer, TransferStatus, TransferDiscrepancy, TransferDiscrepancyStatus
+from .defect import (
+    Defect,
+    DefectStatus,
+    DefectType,
+    DefectItem,
+    DefectDecision,
+    DefectDecisionType,
+    TransferDiscrepancyDefectItem,
+)
+from .rework_task import ReworkTask, ReworkTaskStatus
+from .entity_comment import EntityComment, EntityType
+from .attachment import Attachment, AttachmentLink
 
 __all__ = [
     "Base",
@@ -59,4 +73,23 @@ __all__ = [
     "WorkTask",
     "WorkTaskStatus",
     "ImportTemplate",
+    "Movement",
+    "MovementType",
+    "Transfer",
+    "TransferStatus",
+    "TransferDiscrepancy",
+    "TransferDiscrepancyStatus",
+    "Defect",
+    "DefectStatus",
+    "DefectType",
+    "DefectItem",
+    "DefectDecision",
+    "DefectDecisionType",
+    "TransferDiscrepancyDefectItem",
+    "ReworkTask",
+    "ReworkTaskStatus",
+    "EntityComment",
+    "EntityType",
+    "Attachment",
+    "AttachmentLink",
 ]

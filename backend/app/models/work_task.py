@@ -12,6 +12,7 @@ class WorkTaskStatus(str, enum.Enum):
     waiting_previous = "waiting_previous"
     ready = "ready"
     in_progress = "in_progress"
+    partially_completed = "partially_completed"
     completed = "completed"
     cancelled = "cancelled"
 

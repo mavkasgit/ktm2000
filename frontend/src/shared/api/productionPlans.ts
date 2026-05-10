@@ -216,6 +216,88 @@ export async function batchAssignRouteGlobal(positionIds: number[], routeId: num
   return data as { updated_count: number; route_id: number | null; route_name: string | null };
 }
 
+export type ProductionPlanningRow = {
+  plan_position_id: number;
+  production_plan_id: number;
+  source_row_number: number | null;
+  source_sku: string;
+  source_name: string | null;
+  quantity: number;
+  position_status: string;
+  validation_status: string;
+  route_id: number | null;
+  route_name: string | null;
+  route_source: string | null;
+  route_error: string | null;
+  is_released: boolean;
+  has_tasks: boolean;
+};
+
+export type ProductionPlanningRouteSnapshotStep = {
+  route_step_id: number;
+  sequence: number;
+  section_id: number;
+  section_code: string;
+  section_name: string;
+  section_kind: string | null;
+  operation_code: string | null;
+  operation_name: string;
+};
+
+export type ProductionPlanningStage = {
+  route_step_id: number;
+  section_id: number;
+  section_code: string;
+  section_name: string;
+  sequence: number;
+  operation_code: string | null;
+  operation_name: string;
+  planned_quantity: number;
+  completed_quantity: number;
+  transferred_quantity: number;
+  rejected_quantity: number;
+  execution_percent: number;
+  transfer_percent: number;
+  reject_percent: number;
+  task_status: string;
+  not_started: boolean;
+};
+
+export type ProductionPlanningRowDetail = {
+  plan_position_id: number;
+  production_plan_id: number;
+  source_row_number: number | null;
+  source_sku: string;
+  source_name: string | null;
+  quantity: number;
+  position_status: string;
+  validation_status: string;
+  route_id: number | null;
+  route_name: string | null;
+  route_source: string | null;
+  route_error: string | null;
+  is_released: boolean;
+  has_tasks: boolean;
+  not_started: boolean;
+  route_snapshot: {
+    route_id: number;
+    route_name: string | null;
+    route_source: string;
+    steps: ProductionPlanningRouteSnapshotStep[];
+  } | null;
+  stages: ProductionPlanningStage[];
+};
+
+export async function listProductionPlanningRows() {
+  const { data } = await apiClient.get<ProductionPlanningRow[]>("/production-planning/rows");
+  return data;
+}
+
+export async function getProductionPlanningRowDetail(positionId: number) {
+  const { data } = await apiClient.get<ProductionPlanningRowDetail>(`/production-planning/rows/${positionId}`);
+  return data;
+}
+
 export type WorkTaskOut = {
   id: number;
   route_step_id: number;
