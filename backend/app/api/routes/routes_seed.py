@@ -34,81 +34,158 @@ class RouteOut(BaseModel):
     steps: list[StepOut] = []
 
 
-# Один маршрут включающий все участки по порядку (по sort_order)
-STEPS = [
-    {"operation_name": "Приёмка сырья", "is_final": False},       # WH
-    {"operation_name": "Сверловка", "is_final": False},           # DRILL
-    {"operation_name": "Прессование", "is_final": False},         # PRESS
-    {"operation_name": "Дробеструйная обработка", "is_final": False},  # SHOT
-    {"operation_name": "Анодирование", "is_final": False},        # ANOD
-    {"operation_name": "Склад полуфабриката", "is_final": False}, # WIP_WH
-    {"operation_name": "Резка на пиле", "is_final": False},       # SAW
-    {"operation_name": "Упаковка", "is_final": False},            # PACK
-    {"operation_name": "Склад готовой продукции", "is_final": True},  # FG_WH
+DEFAULT_ROUTE_TEMPLATES = [
+    {
+        "name": "Типовой: полный (все участки)",
+        "description": "WH → DRILL → PRESS → SHOT → ANOD → WIP_WH → SAW → PACK → FG_WH → SHIPMENT → SENT",
+        "steps": [
+            {"section_code": "WH", "operation_code": "ISSUE_RAW", "operation_name": "Выдача сырья"},
+            {"section_code": "DRILL", "operation_code": "DRILL", "operation_name": "Сверловка"},
+            {"section_code": "PRESS", "operation_code": "PRESS", "operation_name": "Пресс"},
+            {"section_code": "SHOT", "operation_code": "SHOT", "operation_name": "Дробеструй"},
+            {"section_code": "ANOD", "operation_code": "ANOD", "operation_name": "Анодирование"},
+            {"section_code": "WIP_WH", "operation_code": "MOVE_TO_WIP", "operation_name": "Передача на склад полуфабриката"},
+            {"section_code": "SAW", "operation_code": "SAW", "operation_name": "Резка на пиле"},
+            {"section_code": "PACK", "operation_code": "PACK", "operation_name": "Упаковка"},
+            {"section_code": "FG_WH", "operation_code": "FG_WH", "operation_name": "Склад готовой продукции"},
+            {"section_code": "SHIPMENT", "operation_code": "SHIPMENT", "operation_name": "К отгрузке"},
+            {"section_code": "SENT", "operation_code": "SENT", "operation_name": "Отправлено", "is_final": True},
+        ],
+    },
+    {
+        "name": "Типовой: без сверла",
+        "description": "WH → PRESS → SHOT → ANOD → WIP_WH → SAW → PACK → FG_WH",
+        "steps": [
+            {"section_code": "WH", "operation_code": "ISSUE_RAW", "operation_name": "Выдача сырья"},
+            {"section_code": "PRESS", "operation_code": "PRESS", "operation_name": "Пресс"},
+            {"section_code": "SHOT", "operation_code": "SHOT", "operation_name": "Дробеструй"},
+            {"section_code": "ANOD", "operation_code": "ANOD", "operation_name": "Анодирование"},
+            {"section_code": "WIP_WH", "operation_code": "MOVE_TO_WIP", "operation_name": "Передача на склад полуфабриката"},
+            {"section_code": "SAW", "operation_code": "SAW", "operation_name": "Резка на пиле"},
+            {"section_code": "PACK", "operation_code": "PACK", "operation_name": "Упаковка"},
+            {"section_code": "FG_WH", "operation_code": "ACCEPT_FINISHED", "operation_name": "Приемка готовой продукции", "is_final": True},
+        ],
+    },
+    {
+        "name": "Типовой: без пресса и сверла",
+        "description": "WH → SHOT → ANOD → WIP_WH → SAW → PACK → FG_WH",
+        "steps": [
+            {"section_code": "WH", "operation_code": "ISSUE_RAW", "operation_name": "Выдача сырья"},
+            {"section_code": "SHOT", "operation_code": "SHOT", "operation_name": "Дробеструй"},
+            {"section_code": "ANOD", "operation_code": "ANOD", "operation_name": "Анодирование"},
+            {"section_code": "WIP_WH", "operation_code": "MOVE_TO_WIP", "operation_name": "Передача на склад полуфабриката"},
+            {"section_code": "SAW", "operation_code": "SAW", "operation_name": "Резка на пиле"},
+            {"section_code": "PACK", "operation_code": "PACK", "operation_name": "Упаковка"},
+            {"section_code": "FG_WH", "operation_code": "ACCEPT_FINISHED", "operation_name": "Приемка готовой продукции", "is_final": True},
+        ],
+    },
+    {
+        "name": "Типовой: без пресса, сверла и дробеструя",
+        "description": "WH → ANOD → WIP_WH → SAW → PACK → FG_WH",
+        "steps": [
+            {"section_code": "WH", "operation_code": "ISSUE_RAW", "operation_name": "Выдача сырья"},
+            {"section_code": "ANOD", "operation_code": "ANOD", "operation_name": "Анодирование"},
+            {"section_code": "WIP_WH", "operation_code": "MOVE_TO_WIP", "operation_name": "Передача на склад полуфабриката"},
+            {"section_code": "SAW", "operation_code": "SAW", "operation_name": "Резка на пиле"},
+            {"section_code": "PACK", "operation_code": "PACK", "operation_name": "Упаковка"},
+            {"section_code": "FG_WH", "operation_code": "ACCEPT_FINISHED", "operation_name": "Приемка готовой продукции", "is_final": True},
+        ],
+    },
+    {
+        "name": "Типовой: без сверла, пресса и упаковки",
+        "description": "WH → SHOT → ANOD → WIP_WH → SAW → FG_WH",
+        "steps": [
+            {"section_code": "WH", "operation_code": "ISSUE_RAW", "operation_name": "Выдача сырья"},
+            {"section_code": "SHOT", "operation_code": "SHOT", "operation_name": "Дробеструй"},
+            {"section_code": "ANOD", "operation_code": "ANOD", "operation_name": "Анодирование"},
+            {"section_code": "WIP_WH", "operation_code": "MOVE_TO_WIP", "operation_name": "Передача на склад полуфабриката"},
+            {"section_code": "SAW", "operation_code": "SAW", "operation_name": "Резка на пиле"},
+            {"section_code": "FG_WH", "operation_code": "ACCEPT_FINISHED", "operation_name": "Приемка готовой продукции", "is_final": True},
+        ],
+    },
+    {
+        "name": "Типовой: отгрузочный",
+        "description": "FG_WH → SHIPMENT → SENT",
+        "steps": [
+            {"section_code": "FG_WH", "operation_code": "FG_WH", "operation_name": "Склад готовой продукции"},
+            {"section_code": "SHIPMENT", "operation_code": "SHIPMENT", "operation_name": "К отгрузке"},
+            {"section_code": "SENT", "operation_code": "SENT", "operation_name": "Отправлено", "is_final": True},
+        ],
+    },
 ]
 
 
-@router.post("", response_model=RouteOut, status_code=status.HTTP_201_CREATED)
-async def seed_routes(db: AsyncSession = Depends(get_db)) -> RouteOut:
-    """Создать маршрут включающий все участки по порядку."""
-    # Получим все участки отсортированные по sort_order
-    sections_result = await db.execute(select(Section).where(Section.is_active == True).order_by(Section.sort_order))
+@router.post("", response_model=list[RouteOut], status_code=status.HTTP_201_CREATED)
+async def seed_routes(db: AsyncSession = Depends(get_db)) -> list[RouteOut]:
+    """Создать или обновить набор типовых маршрутов."""
+    sections_result = await db.execute(select(Section).where(Section.is_active == True))
     sections = list(sections_result.scalars().all())
+    sections_by_code = {section.code: section for section in sections}
 
-    if not sections:
-        raise HTTPException(status_code=400, detail="Нет загруженных участков. Сначала загрузите участки.")
-
-    if len(sections) != len(STEPS):
-        raise HTTPException(status_code=400, detail=f"Ожидается {len(STEPS)} участков, найдено {len(sections)}")
-
-    # Создаём или находим маршрут
-    ROUTE_NAME = "Полный производственный маршрут"
-    route = await db.scalar(select(ProductionRoute).where(ProductionRoute.name == ROUTE_NAME))
-    if route is None:
-        route = ProductionRoute(name=ROUTE_NAME, description="Все участки по порядку", is_active=True)
-        db.add(route)
-        await db.flush()
-        await db.refresh(route)
-
-    # Удаляем старые шаги
-    existing_steps = (await db.execute(select(RouteStep).where(RouteStep.route_id == route.id))).scalars().all()
-    for step in existing_steps:
-        await db.delete(step)
-    await db.flush()
-
-    # Создаём шаги по порядку
-    result_steps = []
-    for i, (section, step_def) in enumerate(zip(sections, STEPS), start=1):
-        step = RouteStep(
-            route_id=route.id,
-            sequence=i,
-            section_id=section.id,
-            operation_name=step_def["operation_name"],
-            operation_code=section.code,
-            is_final=step_def["is_final"],
-            requires_acceptance=True,
-            allow_parallel=False,
+    required_codes = sorted({step["section_code"] for template in DEFAULT_ROUTE_TEMPLATES for step in template["steps"]})
+    missing_codes = [code for code in required_codes if code not in sections_by_code]
+    if missing_codes:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Не найдены участки для маршрутов: {', '.join(missing_codes)}. Сначала загрузите стандартные участки.",
         )
-        db.add(step)
-        await db.flush()
-        await db.refresh(step)
-        result_steps.append(StepOut(
-            id=step.id,
-            route_id=step.route_id,
-            sequence=step.sequence,
-            section_id=step.section_id,
-            section_code=section.code,
-            section_name=section.name,
-            operation_code=step.operation_code,
-            operation_name=step.operation_name,
-            norm_time_minutes=step.norm_time_minutes,
-            is_final=step.is_final,
-        ))
 
-    return RouteOut(
-        id=route.id,
-        name=route.name,
-        description=route.description,
-        is_active=route.is_active,
-        steps=result_steps,
-    )
+    result: list[RouteOut] = []
+    for template in DEFAULT_ROUTE_TEMPLATES:
+        route = await db.scalar(select(ProductionRoute).where(ProductionRoute.name == template["name"]))
+        if route is None:
+            route = ProductionRoute(name=template["name"], description=template["description"], is_active=True)
+            db.add(route)
+            await db.flush()
+            await db.refresh(route)
+        else:
+            route.description = template["description"]
+            route.is_active = True
+
+        existing_steps = (await db.execute(select(RouteStep).where(RouteStep.route_id == route.id))).scalars().all()
+        for existing in existing_steps:
+            await db.delete(existing)
+        await db.flush()
+
+        steps_out: list[StepOut] = []
+        for idx, step_def in enumerate(template["steps"], start=1):
+            section = sections_by_code[step_def["section_code"]]
+            step = RouteStep(
+                route_id=route.id,
+                sequence=idx,
+                section_id=section.id,
+                operation_code=step_def["operation_code"],
+                operation_name=step_def["operation_name"],
+                is_final=bool(step_def.get("is_final", False)),
+                requires_acceptance=True,
+                allow_parallel=False,
+            )
+            db.add(step)
+            await db.flush()
+            await db.refresh(step)
+            steps_out.append(
+                StepOut(
+                    id=step.id,
+                    route_id=step.route_id,
+                    sequence=step.sequence,
+                    section_id=step.section_id,
+                    section_code=section.code,
+                    section_name=section.name,
+                    operation_code=step.operation_code,
+                    operation_name=step.operation_name,
+                    norm_time_minutes=step.norm_time_minutes,
+                    is_final=step.is_final,
+                )
+            )
+
+        result.append(
+            RouteOut(
+                id=route.id,
+                name=route.name,
+                description=route.description,
+                is_active=route.is_active,
+                steps=steps_out,
+            )
+        )
+
+    return result

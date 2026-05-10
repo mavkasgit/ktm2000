@@ -34,6 +34,26 @@ DEFAULTS = [
     {"code": "SAW", "name": "Пила", "sort_order": 70, "is_active": True, "kind": "production", "icon": "Fan", "icon_color": "#F97316"},
     {"code": "PACK", "name": "Упаковка", "sort_order": 80, "is_active": True, "kind": "production", "icon": "Package", "icon_color": "#10B981"},
     {"code": "FG_WH", "name": "Склад готовой продукции", "sort_order": 90, "is_active": True, "kind": "finished_stock", "icon": "Container", "icon_color": "#065F46"},
+    {
+        "code": "SHIPMENT",
+        "name": "К отгрузке",
+        "description": "ГП и ПФ укладываемая в ящики",
+        "sort_order": 100,
+        "is_active": True,
+        "kind": "finished_stock",
+        "icon": "PackageOpen",
+        "icon_color": "#8B5CF6",
+    },
+    {
+        "code": "SENT",
+        "name": "Отправлено",
+        "description": "ГП и ПФ отправленная",
+        "sort_order": 110,
+        "is_active": True,
+        "kind": "finished_stock",
+        "icon": "PackageCheck",
+        "icon_color": "#EC4899",
+    },
 ]
 
 

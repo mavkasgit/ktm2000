@@ -268,7 +268,7 @@ export function SectionsPage() {
           <AlertDialogHeader>
             <AlertDialogTitle>Загрузить стандартные участки?</AlertDialogTitle>
             <AlertDialogDescription>
-              Будет создано 9 стандартных участков (склады, производство). Существующие участки будут обновлены.
+              Будет создано 11 стандартных участков (включая зоны отгрузки). Существующие участки будут обновлены.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter className="flex-col-reverse sm:flex-row gap-2">

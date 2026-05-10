@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
-from sqlalchemy import func, select
+from sqlalchemy import func, select, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
@@ -8,6 +8,7 @@ from app.models.route import ProductionRoute, RouteMatchingRule, RouteRuleCondit
 from app.models.section import Section
 from app.models.internal_plan import SectionPlanLine
 from app.models.release_batch import ReleaseBatchPosition
+from app.models.production_plan import PlanPosition, PlanChangeItem
 
 router = APIRouter(prefix="/routes", tags=["routes"])
 
@@ -194,32 +195,107 @@ async def update_route(route_id: int, payload: RouteUpdate, db: AsyncSession = D
     return RouteOut.model_validate(route, from_attributes=True)
 
 
-@router.delete("/{route_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_route(route_id: int, db: AsyncSession = Depends(get_db)) -> None:
+@router.get("/{route_id}/delete-check")
+async def check_route_delete(route_id: int, db: AsyncSession = Depends(get_db)):
+    """Check what will be deleted when removing a route"""
     route = await db.get(ProductionRoute, route_id)
     if route is None:
         raise HTTPException(status_code=404, detail="Route not found")
 
-    relations: list[str] = []
-
     steps_count = await db.scalar(select(func.count()).select_from(RouteStep).where(RouteStep.route_id == route_id))
-    if steps_count:
-        relations.append(f"{steps_count} шаг(ов) маршрута")
-
     rules_count = await db.scalar(select(func.count()).select_from(RouteMatchingRule).where(RouteMatchingRule.route_id == route_id))
-    if rules_count:
-        relations.append(f"{rules_count} правило(ок) привязки")
-
     spl_count = await db.scalar(select(func.count()).select_from(SectionPlanLine).where(SectionPlanLine.route_id == route_id))
-    if spl_count:
-        relations.append(f"{spl_count} линия(ий) плана участков")
-
     rbp_count = await db.scalar(select(func.count()).select_from(ReleaseBatchPosition).where(ReleaseBatchPosition.route_id == route_id))
-    if rbp_count:
-        relations.append(f"{rbp_count} позиция(ий) выпуска")
+    plan_positions_count = await db.scalar(select(func.count()).select_from(PlanPosition).where(PlanPosition.route_id == route_id))
 
-    if relations:
-        raise HTTPException(status_code=409, detail=f"Нельзя удалить маршрут: имеются ({', '.join(relations)})")
+    warning_parts = []
+    if steps_count:
+        warning_parts.append(f"{steps_count} шаг(ов) маршрута")
+    if rules_count:
+        warning_parts.append(f"{rules_count} правило(ок) привязки")
+    if spl_count:
+        warning_parts.append(f"{spl_count} линия(ий) плана участков")
+    if rbp_count:
+        warning_parts.append(f"{rbp_count} позиция(ий) выпуска")
+    if plan_positions_count:
+        warning_parts.append(f"{plan_positions_count} позиция(ий) плана")
+
+    return {
+        "has_relations": bool(warning_parts),
+        "warning": f"Будут удалены: {', '.join(warning_parts)}." if warning_parts else None,
+        "steps_count": steps_count or 0,
+        "rules_count": rules_count or 0,
+        "spl_count": spl_count or 0,
+        "rbp_count": rbp_count or 0,
+        "plan_positions_count": plan_positions_count or 0,
+    }
+
+
+class DeleteRouteWarning(BaseModel):
+    warning: str
+    steps_count: int
+    rules_count: int
+    spl_count: int
+    rbp_count: int
+    plan_positions_count: int
+
+
+@router.delete("/{route_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_route(
+    route_id: int,
+    force: str = "false",
+    db: AsyncSession = Depends(get_db)
+) -> None:
+    force_bool = force.lower() in ("true", "1", "yes")
+    
+    route = await db.get(ProductionRoute, route_id)
+    if route is None:
+        raise HTTPException(status_code=404, detail="Route not found")
+
+    # Check for relations
+    steps_count = await db.scalar(select(func.count()).select_from(RouteStep).where(RouteStep.route_id == route_id))
+    rules_count = await db.scalar(select(func.count()).select_from(RouteMatchingRule).where(RouteMatchingRule.route_id == route_id))
+    spl_count = await db.scalar(select(func.count()).select_from(SectionPlanLine).where(SectionPlanLine.route_id == route_id))
+    rbp_count = await db.scalar(select(func.count()).select_from(ReleaseBatchPosition).where(ReleaseBatchPosition.route_id == route_id))
+    plan_positions_count = await db.scalar(select(func.count()).select_from(PlanPosition).where(PlanPosition.route_id == route_id))
+
+    # If not force deletion and there are relations, return warning
+    if not force_bool and (steps_count or rules_count or spl_count or rbp_count or plan_positions_count):
+        warning_parts = []
+        if steps_count:
+            warning_parts.append(f"{steps_count} шаг(ов) маршрута")
+        if rules_count:
+            warning_parts.append(f"{rules_count} правило(ок) привязки")
+        if spl_count:
+            warning_parts.append(f"{spl_count} линия(ий) плана участков")
+        if rbp_count:
+            warning_parts.append(f"{rbp_count} позиция(ий) выпуска")
+        if plan_positions_count:
+            warning_parts.append(f"{plan_positions_count} позиция(ий) плана")
+        
+        warning = f"Будут удалены: {', '.join(warning_parts)}. Продолжить?"
+        raise HTTPException(
+            status_code=409,
+            detail=warning
+        )
+
+    # Delete related records in proper order
+    if steps_count:
+        await db.execute(delete(RouteStep).where(RouteStep.route_id == route_id))
+    if rules_count:
+        await db.execute(delete(RouteMatchingRule).where(RouteMatchingRule.route_id == route_id))
+    if spl_count:
+        await db.execute(delete(SectionPlanLine).where(SectionPlanLine.route_id == route_id))
+    if rbp_count:
+        await db.execute(delete(ReleaseBatchPosition).where(ReleaseBatchPosition.route_id == route_id))
+    
+    # Delete plan_positions and all their related items
+    if plan_positions_count:
+        plan_position_ids = await db.scalars(select(PlanPosition.id).where(PlanPosition.route_id == route_id))
+        plan_position_ids = list(plan_position_ids)
+        if plan_position_ids:
+            await db.execute(delete(PlanChangeItem).where(PlanChangeItem.plan_position_id.in_(plan_position_ids)))
+        await db.execute(delete(PlanPosition).where(PlanPosition.route_id == route_id))
 
     await db.delete(route)
     await db.flush()

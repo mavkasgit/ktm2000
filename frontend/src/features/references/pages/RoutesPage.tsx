@@ -38,8 +38,8 @@ export function RoutesPage() {
   const handleSeed = async () => {
     setSeeding(true);
     try {
-      await API.seedRoutes();
-      toast({ title: "Маршрут загружен", description: "Создан маршрут со всеми участками", variant: "success" });
+      const seeded = await API.seedRoutes();
+      toast({ title: "Маршруты загружены", description: `Создано/обновлено маршрутов: ${seeded.length}`, variant: "success" });
       treeRef.current?.reload();
     } catch (e) {
       toast({ variant: "destructive", title: "Ошибка загрузки маршрутов", description: getErrorMessage(e) });
@@ -77,9 +77,9 @@ export function RoutesPage() {
       <AlertDialog open={seedDialogOpen} onOpenChange={setSeedDialogOpen}>
         <AlertDialogContent className="max-w-sm">
           <AlertDialogHeader>
-            <AlertDialogTitle>Загрузить стандартный маршрут?</AlertDialogTitle>
+            <AlertDialogTitle>Загрузить типовые маршруты?</AlertDialogTitle>
             <AlertDialogDescription>
-              Будет создан маршрут включающий все участки по порядку. Существующие шаги будут заменены.
+              Будут созданы/обновлены 6 типовых маршрутов. Если такие маршруты уже есть, их шаги будут заменены.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter className="flex-col-reverse sm:flex-row gap-2">

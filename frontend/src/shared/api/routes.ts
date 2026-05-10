@@ -88,8 +88,13 @@ export async function updateRoute(id: number, payload: UpdateRouteInput) {
   return data;
 }
 
-export async function deleteRoute(id: number) {
-  await apiClient.delete(`/routes/${id}`);
+export async function deleteRoute(id: number, force: boolean = false) {
+  await apiClient.delete(`/routes/${id}`, { params: { force } });
+}
+
+export async function checkRouteDelete(id: number) {
+  const { data } = await apiClient.get(`/routes/${id}/delete-check`);
+  return data as { has_relations: boolean; warning: string | null; steps_count: number; rules_count: number; spl_count: number; rbp_count: number; plan_positions_count: number };
 }
 
 export async function createStep(routeId: number, payload: StepInput) {
@@ -112,6 +117,6 @@ export async function deleteRule(routeId: number, ruleId: number) {
 }
 
 export async function seedRoutes() {
-  const { data } = await apiClient.post<RouteDetail>("/routes-seed");
+  const { data } = await apiClient.post<RouteDetail[]>("/routes-seed");
   return data;
 }

@@ -51,8 +51,9 @@ type InsertTarget =
   | { kind: "start" }
   | { kind: "end" }
   | null;
-const GRID_SPACING_X = 260;
-const GRID_SPACING_Y = 170;
+const NODE_CARD_WIDTH = 300;
+const GRID_SPACING_X = NODE_CARD_WIDTH + 80;
+const GRID_SPACING_Y = 180;
 
 function getGridColumns(total: number): number {
   return total > 9 ? 4 : 3;
@@ -256,6 +257,9 @@ function FlowCanvas({
       borderRadius: 20,
       offset: 24,
     });
+    const horizontalDistance = Math.abs(targetX - sourceX);
+    const verticalDistance = Math.abs(targetY - sourceY);
+    const labelYOffset = horizontalDistance < 240 && verticalDistance < 56 ? -20 : 0;
 
     return (
       <>
@@ -271,8 +275,9 @@ function FlowCanvas({
             type="button"
             className="absolute h-5 w-5 rounded-full border bg-background text-muted-foreground hover:text-foreground hover:border-primary shadow-sm text-xs leading-none"
             style={{
-              transform: `translate(-50%, -50%) translate(${labelX}px, ${labelY}px)`,
+              transform: `translate(-50%, -50%) translate(${labelX}px, ${labelY + labelYOffset}px)`,
               pointerEvents: "all",
+              zIndex: 30,
             }}
             onClick={(e) => {
               e.stopPropagation();
@@ -380,6 +385,7 @@ export function RouteFlowBuilder({ open, onOpenChange, route, onSave }: RouteFlo
   const [saving, setSaving] = useState(false);
   const [sectionUsage, setSectionUsage] = useState<Record<number, number>>({});
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [deleteWarning, setDeleteWarning] = useState<string | null>(null);
   const [autoConnect, setAutoConnect] = useState(true);
   const [insertTarget, setInsertTarget] = useState<InsertTarget>(null);
   const lastNodeId = useRef<string | null>(null);
@@ -739,11 +745,11 @@ export function RouteFlowBuilder({ open, onOpenChange, route, onSave }: RouteFlo
   const handleDelete = async () => {
     if (!route) return;
     try {
-      await API.deleteRoute(route.id);
-      toast({ variant: "success", title: "Маршрут удалён", description: `"${route.name}" (ID: ${route.id}, этапов: ${nodes.length}) успешно удалён` });
-      onOpenChange(false);
-      onSave();
-    } catch (e) {
+      // First check what will be deleted
+      const check = await API.checkRouteDelete(route.id);
+      // Always show the modal
+      setDeleteWarning(check.warning || "Связанных записей нет. Маршрут будет удалён без дополнительных данных.");
+    } catch (e: any) {
       toast({ variant: "destructive", title: `Ошибка удаления: ${route.name} (ID: ${route.id})`, description: getErrorMessage(e) });
     }
   };
@@ -1028,7 +1034,7 @@ export function RouteFlowBuilder({ open, onOpenChange, route, onSave }: RouteFlo
         <div className="flex items-center justify-between pt-2 border-t">
           <div className="flex gap-2">
             {route && (
-              <Button variant="destructive" onClick={() => setShowDeleteConfirm(true)}>
+              <Button variant="destructive" onClick={() => handleDelete()}>
                 <Trash2 className="h-4 w-4 mr-1" />
                 Удалить маршрут
               </Button>
@@ -1102,21 +1108,38 @@ export function RouteFlowBuilder({ open, onOpenChange, route, onSave }: RouteFlo
         </DialogContent>
       </Dialog>
 
-      {/* Delete Confirmation Dialog */}
-      <Dialog open={showDeleteConfirm} onOpenChange={setShowDeleteConfirm}>
+      {/* Delete Warning Dialog */}
+      <Dialog open={deleteWarning !== null} onOpenChange={(open) => {
+        if (!open) {
+          setDeleteWarning(null);
+        }
+      }}>
         <DialogContent className="max-w-md">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <AlertTriangle className="h-5 w-5 text-destructive" />
               Удалить маршрут?
             </DialogTitle>
-            <DialogDescription>
-              {route && `Маршрут "${route.name}" будет удалён со всеми этапами. Это действие нельзя отменить.`}
+            <DialogDescription className="space-y-2">
+              {deleteWarning && (
+                <>
+                  <span className="block font-medium">{deleteWarning}</span>
+                  <span className="block text-sm text-muted-foreground">
+                    {route && `Маршрут "${route.name}" и все связанные данные будут удалены.`}
+                  </span>
+                </>
+              )}
             </DialogDescription>
           </DialogHeader>
           <div className="flex justify-end gap-2">
-            <Button variant="outline" onClick={() => setShowDeleteConfirm(false)}>Отмена</Button>
-            <Button variant="destructive" onClick={handleDelete}>Удалить</Button>
+            <Button variant="outline" onClick={() => setDeleteWarning(null)}>Отмена</Button>
+            <Button variant="destructive" onClick={async () => {
+              await API.deleteRoute(route!.id, true);
+              toast({ variant: "success", title: "Маршрут удалён", description: `${route!.name} (ID: ${route!.id}, этапов: ${nodes.length}) успешно удалён` });
+              onOpenChange(false);
+              setDeleteWarning(null);
+              onSave();
+            }}>Удалить</Button>
           </div>
         </DialogContent>
       </Dialog>
