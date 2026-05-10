@@ -2,7 +2,7 @@ import enum
 from datetime import datetime
 from decimal import Decimal
 
-from sqlalchemy import BigInteger, DateTime, Enum, ForeignKey, Identity, Numeric, String, Text, func, text
+from sqlalchemy import BigInteger, CheckConstraint, DateTime, Enum, ForeignKey, Identity, Numeric, String, Text, func, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base
@@ -26,6 +26,11 @@ class TransferDiscrepancyStatus(str, enum.Enum):
 
 class Transfer(Base):
     __tablename__ = "transfers"
+    __table_args__ = (
+        CheckConstraint("sent_quantity > 0", name="ck_transfers_sent_quantity_positive"),
+        CheckConstraint("accepted_quantity IS NULL OR accepted_quantity >= 0", name="ck_transfers_accepted_quantity_non_negative"),
+        CheckConstraint("rejected_quantity IS NULL OR rejected_quantity >= 0", name="ck_transfers_rejected_quantity_non_negative"),
+    )
 
     id: Mapped[int] = mapped_column(BigInteger, Identity(always=True), primary_key=True)
     transfer_no: Mapped[str] = mapped_column(String(100), unique=True, nullable=False)
@@ -54,6 +59,11 @@ class Transfer(Base):
 
 class TransferDiscrepancy(Base):
     __tablename__ = "transfer_discrepancies"
+    __table_args__ = (
+        CheckConstraint("discrepancy_quantity > 0", name="ck_transfer_discrepancy_qty_positive"),
+        CheckConstraint("resolved_quantity >= 0", name="ck_transfer_discrepancy_resolved_non_negative"),
+        CheckConstraint("unresolved_quantity >= 0", name="ck_transfer_discrepancy_unresolved_non_negative"),
+    )
 
     id: Mapped[int] = mapped_column(BigInteger, Identity(always=True), primary_key=True)
     transfer_id: Mapped[int] = mapped_column(ForeignKey("transfers.id"), nullable=False)

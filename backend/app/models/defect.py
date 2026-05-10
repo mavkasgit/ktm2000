@@ -2,7 +2,7 @@ import enum
 from datetime import datetime
 from decimal import Decimal
 
-from sqlalchemy import BigInteger, Boolean, DateTime, Enum, ForeignKey, Identity, Numeric, String, Text, func, text
+from sqlalchemy import BigInteger, Boolean, CheckConstraint, DateTime, Enum, ForeignKey, Identity, Numeric, String, Text, func, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base
@@ -65,6 +65,9 @@ class Defect(Base):
 
 class DefectItem(Base):
     __tablename__ = "defect_items"
+    __table_args__ = (
+        CheckConstraint("quantity > 0", name="ck_defect_items_qty_positive"),
+    )
 
     id: Mapped[int] = mapped_column(BigInteger, Identity(always=True), primary_key=True)
     defect_id: Mapped[int] = mapped_column(ForeignKey("defects.id"), nullable=False)
@@ -81,6 +84,9 @@ class DefectItem(Base):
 
 class DefectDecision(Base):
     __tablename__ = "defect_decisions"
+    __table_args__ = (
+        CheckConstraint("quantity > 0", name="ck_defect_decisions_qty_positive"),
+    )
 
     id: Mapped[int] = mapped_column(BigInteger, Identity(always=True), primary_key=True)
     defect_id: Mapped[int] = mapped_column(ForeignKey("defects.id"), nullable=False)
@@ -99,6 +105,9 @@ class DefectDecision(Base):
 
 class TransferDiscrepancyDefectItem(Base):
     __tablename__ = "transfer_discrepancy_defect_items"
+    __table_args__ = (
+        CheckConstraint("quantity > 0", name="ck_discrepancy_defect_item_qty_positive"),
+    )
 
     id: Mapped[int] = mapped_column(BigInteger, Identity(always=True), primary_key=True)
     transfer_discrepancy_id: Mapped[int] = mapped_column(ForeignKey("transfer_discrepancies.id"), nullable=False)

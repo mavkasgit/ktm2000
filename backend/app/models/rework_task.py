@@ -2,7 +2,7 @@ import enum
 from datetime import datetime
 from decimal import Decimal
 
-from sqlalchemy import BigInteger, DateTime, Enum, ForeignKey, Identity, Numeric, String, func, text
+from sqlalchemy import BigInteger, CheckConstraint, DateTime, Enum, ForeignKey, Identity, Numeric, String, func, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base
@@ -17,6 +17,9 @@ class ReworkTaskStatus(str, enum.Enum):
 
 class ReworkTask(Base):
     __tablename__ = "rework_tasks"
+    __table_args__ = (
+        CheckConstraint("quantity > 0", name="ck_rework_tasks_qty_positive"),
+    )
 
     id: Mapped[int] = mapped_column(BigInteger, Identity(always=True), primary_key=True)
     defect_id: Mapped[int] = mapped_column(ForeignKey("defects.id"), nullable=False)

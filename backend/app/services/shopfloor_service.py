@@ -55,6 +55,20 @@ async def _get_defect(db: AsyncSession, defect_id: int) -> Defect:
     return defect
 
 
+async def _check_idempotency(
+    db: AsyncSession,
+    *,
+    idempotency_key: str | None,
+    entity_type: type,
+) -> object | None:
+    """Return existing entity if idempotency_key was already used, else None."""
+    if not idempotency_key:
+        return None
+    return await db.scalar(
+        select(entity_type).where(entity_type.idempotency_key == idempotency_key)
+    )
+
+
 async def _get_route_step(db: AsyncSession, route_step_id: int) -> RouteStep:
     step = await db.get(RouteStep, route_step_id)
     if step is None:
@@ -167,6 +181,12 @@ async def issue_to_work(
 ) -> dict:
     quantity = _to_decimal(quantity)
     _ensure_positive(quantity, "quantity")
+
+    existing = await _check_idempotency(db, idempotency_key=idempotency_key, entity_type=Movement)
+    if existing is not None:
+        task = await _get_task(db, task_id)
+        return {"movement_id": existing.id, "task_id": task.id, "status": task.status.value, "idempotent_replay": True}
+
     task = await _get_task(db, task_id)
     if task.status not in {WorkTaskStatus.ready, WorkTaskStatus.in_progress, WorkTaskStatus.partially_completed}:
         raise ValueError("Task must be ready/in_progress/partially_completed")
@@ -208,6 +228,23 @@ async def complete_task(
     idempotency_key: str | None = None,
 ) -> dict:
     task = await _get_task(db, task_id)
+
+    if idempotency_key:
+        existing = await _check_idempotency(db, idempotency_key=idempotency_key, entity_type=Movement)
+        if existing is not None:
+            # Find associated defect from the same completion operation
+            reject_movement_key = f"{idempotency_key}:reject"
+            defect = await db.scalar(
+                select(Defect).where(Defect.idempotency_key == reject_movement_key)
+            )
+            return {
+                "task_id": task.id,
+                "movement_ids": [existing.id],
+                "defect_id": defect.id if defect else None,
+                "status": task.status.value,
+                "idempotent_replay": True,
+            }
+
     if task.status not in {WorkTaskStatus.in_progress, WorkTaskStatus.partially_completed, WorkTaskStatus.ready}:
         raise ValueError("Task must be in progress")
 
@@ -299,6 +336,11 @@ async def transfer_send(
     comment: str | None = None,
     idempotency_key: str | None = None,
 ) -> dict:
+    if idempotency_key:
+        existing = await _check_idempotency(db, idempotency_key=idempotency_key, entity_type=Transfer)
+        if existing is not None:
+            return {"transfer_id": existing.id, "transfer_no": existing.transfer_no, "status": existing.status.value, "idempotent_replay": True}
+
     from_task = await _get_task(db, from_task_id)
     to_task = await _get_task(db, to_task_id)
     if from_task.product_id != to_task.product_id:
@@ -492,6 +534,11 @@ async def final_release(
     comment: str | None = None,
     idempotency_key: str | None = None,
 ) -> dict:
+    if idempotency_key:
+        existing = await _check_idempotency(db, idempotency_key=idempotency_key, entity_type=Movement)
+        if existing is not None:
+            return {"movement_id": existing.id, "task_id": task_id, "idempotent_replay": True}
+
     task = await _get_task(db, task_id)
     step = await _get_route_step(db, task.route_step_id)
     if not step.is_final:
@@ -536,6 +583,11 @@ async def create_defect(
     comment: str | None = None,
     idempotency_key: str | None = None,
 ) -> dict:
+    if idempotency_key:
+        existing = await _check_idempotency(db, idempotency_key=idempotency_key, entity_type=Defect)
+        if existing is not None:
+            return {"defect_id": existing.id, "item_id": None, "idempotent_replay": True}
+
     task = await _get_task(db, task_id)
     quantity = _to_decimal(quantity)
     _ensure_positive(quantity, "quantity")
@@ -609,6 +661,22 @@ async def defect_decide(
 ) -> dict:
     defect = await _get_defect(db, defect_id)
     task = await _get_task(db, defect.task_id)
+
+    if idempotency_key:
+        existing = await _check_idempotency(db, idempotency_key=idempotency_key, entity_type=DefectDecision)
+        if existing is not None:
+            # Find associated rework task if decision type was rework
+            rework = await db.scalar(
+                select(ReworkTask).where(ReworkTask.defect_id == defect.id).order_by(ReworkTask.id)
+            )
+            return {
+                "defect_id": defect.id,
+                "decision_id": existing.id,
+                "defect_status": defect.status.value,
+                "rework_task_id": rework.id if rework else None,
+                "idempotent_replay": True,
+            }
+
     quantity = _to_decimal(quantity)
     _ensure_positive(quantity, "quantity")
 
@@ -677,6 +745,12 @@ async def rework_create(
 ) -> dict:
     defect = await _get_defect(db, defect_id)
     source_task = await _get_task(db, source_task_id)
+
+    if idempotency_key:
+        existing = await _check_idempotency(db, idempotency_key=idempotency_key, entity_type=ReworkTask)
+        if existing is not None:
+            return {"rework_task_id": existing.id, "idempotent_replay": True}
+
     quantity = _to_decimal(quantity)
     _ensure_positive(quantity, "quantity")
     rework = ReworkTask(
@@ -986,3 +1060,91 @@ async def get_route_stage_aggregates_for_plan_position(db: AsyncSession, plan_po
             for line, step in lines
         ],
     }
+
+
+async def get_rework_details(db: AsyncSession, rework_task_id: int) -> dict:
+    rework = await db.get(ReworkTask, rework_task_id)
+    if rework is None:
+        raise ValueError("Rework task not found")
+
+    decisions = (
+        await db.execute(
+            select(DefectDecision).where(
+                DefectDecision.defect_id == rework.defect_id
+            ).order_by(DefectDecision.id)
+        )
+    ).scalars().all()
+
+    return {
+        "id": rework.id,
+        "defect_id": rework.defect_id,
+        "source_task_id": rework.source_task_id,
+        "section_id": rework.section_id,
+        "product_id": rework.product_id,
+        "quantity": str(rework.quantity),
+        "status": rework.status.value,
+        "created_at": rework.created_at.isoformat(),
+        "closed_at": rework.closed_at.isoformat() if rework.closed_at else None,
+        "defect_decisions": [
+            {
+                "id": d.id,
+                "decision_type": d.decision_type.value,
+                "quantity": str(d.quantity),
+                "decided_at": d.decided_at.isoformat(),
+            }
+            for d in decisions
+        ],
+    }
+
+
+async def list_entity_comments(
+    db: AsyncSession,
+    entity_type: EntityType,
+    entity_id: int,
+) -> list[dict]:
+    comments = (
+        await db.execute(
+            select(EntityComment)
+            .where(EntityComment.entity_type == entity_type, EntityComment.entity_id == entity_id)
+            .order_by(EntityComment.created_at, EntityComment.id)
+        )
+    ).scalars().all()
+    return [
+        {
+            "id": c.id,
+            "comment_type": c.comment_type,
+            "body": c.body,
+            "is_internal": c.is_internal,
+            "author_id": c.author_id,
+            "created_at": c.created_at.isoformat(),
+        }
+        for c in comments
+    ]
+
+
+async def list_entity_attachments(
+    db: AsyncSession,
+    entity_type: EntityType,
+    entity_id: int,
+) -> list[dict]:
+    links = (
+        await db.execute(
+            select(AttachmentLink, Attachment)
+            .join(Attachment, Attachment.id == AttachmentLink.attachment_id)
+            .where(AttachmentLink.entity_type == entity_type, AttachmentLink.entity_id == entity_id)
+            .order_by(AttachmentLink.created_at, AttachmentLink.id)
+        )
+    ).all()
+    return [
+        {
+            "attachment_link_id": link.id,
+            "attachment_id": attachment.id,
+            "original_filename": attachment.original_filename,
+            "stored_path": attachment.stored_path,
+            "content_type": attachment.content_type,
+            "size_bytes": attachment.size_bytes,
+            "caption": link.caption,
+            "created_at": link.created_at.isoformat(),
+        }
+        for link, attachment in links
+    ]

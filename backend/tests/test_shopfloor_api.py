@@ -204,3 +204,133 @@ async def test_shopfloor_over_issue_rejected(client, session) -> None:
     )
     assert res.status_code == 400
     assert "exceeds available" in res.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_shopfloor_idempotent_issue_not_duplicated(client, session) -> None:
+    """Repeated issue with same idempotency_key must not create duplicate movements."""
+    user = await _make_user(session, "shopfloor-idem@test.local")
+    _, plan, pos = await _make_product_route_plan(session, "FG-SF-IDEM")
+    token = create_access_token(subject=user.email)
+    headers = {"Authorization": f"Bearer {token}"}
+
+    await _release_plan_position(client, plan.id, pos.id)
+    task = (
+        await session.execute(
+            select(WorkTask)
+            .join(SectionPlanLine, WorkTask.section_plan_line_id == SectionPlanLine.id)
+            .where(SectionPlanLine.plan_position_id == pos.id)
+            .order_by(SectionPlanLine.sequence)
+        )
+    ).scalars().first()
+    assert task is not None
+
+    first = await client.post(
+        f"/api/shopfloor/tasks/{task.id}/issue",
+        json={"quantity": "50", "idempotency_key": "idem-key-1"},
+        headers=headers,
+    )
+    assert first.status_code == 200
+    first_movement_id = first.json()["movement_id"]
+
+    second = await client.post(
+        f"/api/shopfloor/tasks/{task.id}/issue",
+        json={"quantity": "50", "idempotency_key": "idem-key-1"},
+        headers=headers,
+    )
+    assert second.status_code == 200
+    assert second.json()["idempotent_replay"] is True
+    assert second.json()["movement_id"] == first_movement_id
+
+
+@pytest.mark.asyncio
+async def test_shopfloor_over_transfer_rejected(client, session) -> None:
+    """Transfer quantity must not exceed completed - already_sent."""
+    user = await _make_user(session, "shopfloor-over-xfer@test.local")
+    _, plan, pos = await _make_product_route_plan(session, "FG-SF-XTFR")
+    token = create_access_token(subject=user.email)
+    headers = {"Authorization": f"Bearer {token}"}
+
+    await _release_plan_position(client, plan.id, pos.id)
+    tasks = (
+        await session.execute(
+            select(WorkTask)
+            .join(SectionPlanLine, WorkTask.section_plan_line_id == SectionPlanLine.id)
+            .where(SectionPlanLine.plan_position_id == pos.id)
+            .order_by(SectionPlanLine.sequence)
+        )
+    ).scalars().all()
+    first_task, second_task = tasks[0], tasks[1]
+
+    await client.post(
+        f"/api/shopfloor/tasks/{first_task.id}/issue",
+        json={"quantity": "100"},
+        headers=headers,
+    )
+    await client.post(
+        f"/api/shopfloor/tasks/{first_task.id}/complete",
+        json={"good_quantity": "50", "defect_quantity": "0"},
+        headers=headers,
+    )
+
+    # First transfer of 50 — OK
+    res1 = await client.post(
+        "/api/shopfloor/transfers",
+        json={"from_task_id": first_task.id, "to_task_id": second_task.id, "quantity": "50"},
+        headers=headers,
+    )
+    assert res1.status_code == 200
+
+    # Second transfer — should fail, nothing left to transfer
+    res2 = await client.post(
+        "/api/shopfloor/transfers",
+        json={"from_task_id": first_task.id, "to_task_id": second_task.id, "quantity": "1"},
+        headers=headers,
+    )
+    assert res2.status_code == 400
+    assert "exceeds transferable" in res2.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_shopfloor_over_accept_rejected(client, session) -> None:
+    """accepted + rejected must not exceed sent quantity."""
+    user = await _make_user(session, "shopfloor-over-accept@test.local")
+    _, plan, pos = await _make_product_route_plan(session, "FG-SF-XACC")
+    token = create_access_token(subject=user.email)
+    headers = {"Authorization": f"Bearer {token}"}
+
+    await _release_plan_position(client, plan.id, pos.id)
+    tasks = (
+        await session.execute(
+            select(WorkTask)
+            .join(SectionPlanLine, WorkTask.section_plan_line_id == SectionPlanLine.id)
+            .where(SectionPlanLine.plan_position_id == pos.id)
+            .order_by(SectionPlanLine.sequence)
+        )
+    ).scalars().all()
+    first_task, second_task = tasks[0], tasks[1]
+
+    await client.post(
+        f"/api/shopfloor/tasks/{first_task.id}/issue",
+        json={"quantity": "100"},
+        headers=headers,
+    )
+    await client.post(
+        f"/api/shopfloor/tasks/{first_task.id}/complete",
+        json={"good_quantity": "100", "defect_quantity": "0"},
+        headers=headers,
+    )
+    xfer = await client.post(
+        "/api/shopfloor/transfers",
+        json={"from_task_id": first_task.id, "to_task_id": second_task.id, "quantity": "50"},
+        headers=headers,
+    )
+    transfer_id = xfer.json()["transfer_id"]
+
+    res = await client.post(
+        f"/api/shopfloor/transfers/{transfer_id}/accept",
+        json={"accepted_quantity": "40", "rejected_quantity": "20"},
+        headers=headers,
+    )
+    assert res.status_code == 400
+    assert "exceeds sent" in res.json()["detail"]

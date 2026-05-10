@@ -28,6 +28,11 @@ from app.services.shopfloor_service import (
     transfer_receive,
     transfer_send,
 )
+from app.services.shopfloor_service import (
+    get_rework_details,
+    list_entity_comments,
+    list_entity_attachments,
+)
 
 router = APIRouter(prefix="/shopfloor", tags=["shopfloor"])
 
@@ -436,3 +441,29 @@ async def defect_details(defect_id: int, db: AsyncSession = Depends(get_db)) -> 
 @router.get("/plan-positions/{plan_position_id}/route-stage-aggregates")
 async def route_stage_aggregates(plan_position_id: int, db: AsyncSession = Depends(get_db)) -> dict:
     return await get_route_stage_aggregates_for_plan_position(db, plan_position_id)
+
+
+@router.get("/rework-tasks/{rework_task_id}")
+async def rework_task_details(rework_task_id: int, db: AsyncSession = Depends(get_db)) -> dict:
+    try:
+        return await get_rework_details(db, rework_task_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.get("/entities/{entity_type}/{entity_id}/comments")
+async def entity_comments(
+    entity_type: EntityType,
+    entity_id: int,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    return {"comments": await list_entity_comments(db, entity_type, entity_id)}
+
+
+@router.get("/entities/{entity_type}/{entity_id}/attachments")
+async def entity_attachments(
+    entity_type: EntityType,
+    entity_id: int,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    return {"attachments": await list_entity_attachments(db, entity_type, entity_id)}
