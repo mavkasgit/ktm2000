@@ -1,4 +1,4 @@
-# Factoryflow
+# KTM-2000
 
 Локальная система производственного планирования и контроля.
 
@@ -14,23 +14,33 @@
 
 | Environment | Frontend | Backend | Postgres |
 |---|---:|---:|---:|
-| dev | 5200 | 5201 | 5202 |
+| dev | 3000 (local) | 8000 (local) | 5202 (docker) |
 | test | 5210 | 5211 | 5212 |
 | prod | 5220 | 5221 | 5222 |
 
 Примечания:
 
-- На текущем этапе в compose поднят `postgres`; порты `frontend/backend` зарезервированы и зафиксированы в `.env.*`.
-- Нейминг проекта фиксирован как `factoryflow` (контейнеры, env, package names).
+- Для `dev` через `npm run dev` в Docker поднимается только `postgres`; `backend` и `frontend` запускаются локально.
+- Нейминг проекта фиксирован как `ktm2000` (контейнеры, env, package names).
 
 ## Быстрый запуск
 
 ```bash
 npm install
 npm --prefix frontend install
-npm run db:up
-npm run db:wait
-npm run db:migrate
+npm run dev
 ```
 
+`npm run dev` выполняет:
+- `docker compose ... up -d postgres`
+- ожидание healthcheck БД
+- `alembic upgrade head`
+- локальный запуск backend (`:8000`) и frontend (`:3000`)
 
+## Тесты (отдельная БД)
+
+Тесты запускаются только против отдельной БД `ktm2000_test` на `localhost:5212`, чтобы не обнулять dev-данные.
+
+```bash
+npm run test:pytest
+```

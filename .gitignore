@@ -86,6 +86,9 @@ htmlcov/
 .qwen/
 .qoder/
 
+# Docs (temporary)
+docs/
+
 # Backend data
 backend/data/
 storage/

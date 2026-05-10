@@ -1,4 +1,6 @@
 from collections.abc import AsyncIterator
+import os
+from urllib.parse import urlparse
 
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
@@ -12,14 +14,31 @@ from app.models.base import Base
 
 @pytest_asyncio.fixture(scope="session", loop_scope="session")
 async def test_database_url() -> AsyncIterator[str]:
-    # Tests run against the active dev database.
-    yield settings.DATABASE_URL
+    default_test_url = "postgresql+asyncpg://ktm2000_user:ktm2000_pass_test@localhost:5212/ktm2000_test"
+    url = os.getenv("TEST_DATABASE_URL") or default_test_url
+
+    # Hard safety: never allow tests to run against current app DB URL.
+    if url.strip() == settings.DATABASE_URL.strip():
+        raise RuntimeError(
+            "Unsafe test DB configuration: TEST_DATABASE_URL points to active DATABASE_URL. "
+            "Use a dedicated test database."
+        )
+
+    parsed = urlparse(url.replace("postgresql+asyncpg://", "postgresql://"))
+    db_name = (parsed.path or "").lstrip("/")
+    if "test" not in db_name.lower():
+        raise RuntimeError(
+            f"Unsafe test DB name '{db_name}'. TEST_DATABASE_URL must target a dedicated test database."
+        )
+
+    yield url
 
 
 @pytest_asyncio.fixture(scope="session", loop_scope="session")
 async def engine(test_database_url: str):
     engine = create_async_engine(test_database_url, poolclass=NullPool)
     async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.drop_all)
         await conn.run_sync(Base.metadata.create_all)
     try:
         yield engine

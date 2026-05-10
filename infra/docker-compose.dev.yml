@@ -8,8 +8,8 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-ktm2000_user}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-ktm2000_pass}
       POSTGRES_DB: ${POSTGRES_DB:-ktm2000_dev}
-    expose:
-      - "5432"
+    ports:
+      - "${DEV_POSTGRES_PORT:-5202}:5432"
     volumes:
       - ${POSTGRES_DATA_PATH:-../data/postgres-dev}:/var/lib/postgresql/data
     healthcheck:
@@ -17,51 +17,3 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
-
-  backend:
-    build:
-      context: ../backend
-      dockerfile: Dockerfile
-    container_name: ktm2000-backend
-    env_file:
-      - ../.env.dev
-    environment:
-      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-ktm2000_user}:${POSTGRES_PASSWORD:-ktm2000_pass}@postgres:5432/${POSTGRES_DB:-ktm2000_dev}
-      ENV: dev
-      CORS_ORIGINS: "*"
-    expose:
-      - "8000"
-    volumes:
-      - ../storage:/app/storage
-    depends_on:
-      postgres:
-        condition: service_healthy
-    restart: unless-stopped
-
-  frontend:
-    build:
-      context: ../frontend
-      dockerfile: Dockerfile.dev
-    container_name: ktm2000-frontend
-    environment:
-      - VITE_API_BASE_URL=${BACKEND_INTERNAL_URL:-http://backend:8000}
-    expose:
-      - "3000"
-    volumes:
-      - ../frontend:/app
-      - /app/node_modules
-    depends_on:
-      - backend
-    restart: unless-stopped
-
-  nginx:
-    image: nginx:alpine
-    container_name: ktm2000-nginx
-    ports:
-      - "${EXTERNAL_PORT:-5173}:100"
-    volumes:
-      - ../frontend/nginx.conf:/etc/nginx/conf.d/default.conf:ro
-    depends_on:
-      - frontend
-      - backend
-    restart: unless-stopped

@@ -4,24 +4,36 @@
   "version": "1.0.0",
   "scripts": {
     "setup": "npm install && npm install --prefix frontend && echo 'Не забудьте установить зависимости Python!'",
+
     "predev": "npm run db:up && npm run db:wait && npm run db:migrate",
-    "dev": "concurrently --names \"DB,DEV\" -c \"blue,green\" \"npm run db:logs\" \"npm run frontend:dev\"",
-    "frontend:dev": "cd frontend && npm run dev",
-    "backend": "cd backend && uvicorn app.main:app --host 0.0.0.0 --port 8000",
-    "devkill": "npx kill-port 5200 2>nul & npx kill-port 5201 2>nul & echo Killed all dev servers",
+    "dev": "concurrently --names \"DB,BACKEND,FRONTEND\" -c \"blue,green,yellow\" \"npm run db:logs\" \"npm run backend\" \"npm run frontend\"",
+
+    "frontend": "npm --prefix frontend run dev",
+    "backend": "cd backend && uvicorn app.main:app --host 0.0.0.0 --port 8010",
+
+    "devkill": "npx kill-port 8010 2>nul & npx kill-port 5180 2>nul & echo Killed all dev servers",
     "devrestart": "npm run devkill && npm run dev",
+
     "db:up": "docker compose --env-file .env.dev -f infra/docker-compose.dev.yml up -d",
     "db:down": "docker compose --env-file .env.dev -f infra/docker-compose.dev.yml down",
     "db:logs": "docker compose --env-file .env.dev -f infra/docker-compose.dev.yml logs -f",
     "db:wait": "powershell -ExecutionPolicy Bypass -File scripts/wait-for-container-health.ps1 ktm2000-postgres",
+
     "db:migrate": "cd backend && alembic upgrade head",
     "db:makemigrate": "cd backend && alembic revision --autogenerate -m",
+
     "test:up": "docker compose --env-file .env.test -f infra/docker-compose.test.yml up -d --build",
     "test:down": "docker compose --env-file .env.test -f infra/docker-compose.test.yml down",
     "test:logs": "docker compose --env-file .env.test -f infra/docker-compose.test.yml logs -f",
+    "test:db:up": "docker compose --env-file .env.test -f infra/docker-compose.test.yml up -d postgres",
+    "test:db:wait": "powershell -ExecutionPolicy Bypass -File scripts/wait-for-container-health.ps1 ktm2000-postgres-test",
+    "test:db:down": "docker compose --env-file .env.test -f infra/docker-compose.test.yml stop postgres",
+    "test:pytest": "npm run test:db:up && npm run test:db:wait && cd backend && pytest -q",
+    "test:tunnel:up": "docker compose --env-file .env.test -f infra/docker-compose.test.yml --profile tunnel up -d --build",
     "prod:up": "docker compose --env-file .env.prod -f infra/docker-compose.prod.yml up -d --build",
     "prod:down": "docker compose --env-file .env.prod -f infra/docker-compose.prod.yml down",
-    "prod:logs": "docker compose --env-file .env.prod -f infra/docker-compose.prod.yml logs -f"
+    "prod:logs": "docker compose --env-file .env.prod -f infra/docker-compose.prod.yml logs -f",
+    "prod:tunnel:up": "docker compose --env-file .env.prod -f infra/docker-compose.prod.yml --profile tunnel up -d --build"
   },
   "devDependencies": {
     "@playwright/test": "^1.59.1",

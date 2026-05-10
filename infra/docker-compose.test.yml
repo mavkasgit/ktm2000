@@ -8,8 +8,8 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-ktm2000_user}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-ktm2000_pass_test}
       POSTGRES_DB: ${POSTGRES_DB:-ktm2000_test}
-    expose:
-      - "5432"
+    ports:
+      - "${POSTGRES_PORT:-5212}:5432"
     volumes:
       - postgres_test_data:/var/lib/postgresql/data
     healthcheck:

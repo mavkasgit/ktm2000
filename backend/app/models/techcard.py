@@ -1,4 +1,4 @@
-from sqlalchemy import BigInteger, ForeignKey, Identity, Numeric, String, Boolean, Integer, text, UniqueConstraint
+from sqlalchemy import BigInteger, ForeignKey, Identity, Numeric, String, Boolean, Integer, text, UniqueConstraint, Index
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base
@@ -6,6 +6,14 @@ from app.models.base import Base
 
 class Techcard(Base):
     __tablename__ = "techcards"
+    __table_args__ = (
+        Index(
+            "ix_techcards_active_one_per_product",
+            "product_id",
+            unique=True,
+            postgresql_where=text("is_active = true AND product_id IS NOT NULL"),
+        ),
+    )
 
     id: Mapped[int] = mapped_column(BigInteger, Identity(always=True), primary_key=True)
     product_id: Mapped[int | None] = mapped_column(ForeignKey("products.id"), nullable=True)
