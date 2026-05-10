@@ -75,7 +75,7 @@ function RowRouteCell({ row }: { row: ProductionPlanningRow }) {
   return <span className="text-xs text-red-600">{row.route_error || "Не назначен"}</span>;
 }
 
-export function ProductionPlanningPage() {
+export function ExecutionPage() {
   const [selectedPositionId, setSelectedPositionId] = useState<number | null>(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [skuFilter, setSkuFilter] = useState("");
@@ -235,7 +235,7 @@ export function ProductionPlanningPage() {
     <>
       <header className="page-header">
         <div>
-          <h1 className="page-title">Выполнение</h1>
+          <h1 className="page-title">Контроль выполнения</h1>
           <div className="flex gap-3 text-sm">
             <span className="px-3 py-1 rounded-full bg-muted">Строк всего: {totalRows}</span>
             <span className="px-3 py-1 rounded-full bg-emerald-100 text-emerald-700">Запущено: {releasedRows}</span>

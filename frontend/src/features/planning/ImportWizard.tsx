@@ -1,9 +1,15 @@
-import { useMemo, useRef, useState } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import { Check, ExternalLink, Upload } from "lucide-react"
 import { useNavigate } from "react-router-dom"
-import { uploadExcel, uploadTestExcel, applyChangeSet, discardImport } from "./api"
+import { uploadExcel, uploadTestExcel, applyChangeSet, discardImport, runDemoFullRoute } from "./api"
 import { ImportDiffTable } from "./ImportDiffTable"
 import { Button, Input, AlertDialog, AlertDialogContent, AlertDialogHeader, AlertDialogTitle, AlertDialogDescription, AlertDialogFooter, AlertDialogAction, AlertDialogCancel } from "shared/ui"
+import { useQuery } from "@tanstack/react-query"
+import { listRoutes } from "@/shared/api/routes"
+import { listTechcards, type Techcard } from "@/shared/api/techcards"
+import { listProducts, type Product } from "@/shared/api/products"
+import { getErrorMessage } from "@/shared/api/client"
+import type { ProductionRoute } from "@/shared/api/routes"
 import {
   Dialog,
   DialogContent,
@@ -33,11 +39,47 @@ export function ImportWizard(props: {
   const [searchQuery, setSearchQuery] = useState("")
   const [planMonth, setPlanMonth] = useState("")
   const [planVersion, setPlanVersion] = useState("")
+  const [testRunId, setTestRunId] = useState("")
+  const [testTechcardId, setTestTechcardId] = useState("")
+  const [testRouteId, setTestRouteId] = useState("")
+  const [testQuantity, setTestQuantity] = useState("100")
   const [pendingChangeSet, setPendingChangeSet] = useState<{ planId: string; changeSetId: string } | null>(null)
   const [showCloseConfirm, setShowCloseConfirm] = useState(false)
 
   const fileInputRef = useRef<HTMLInputElement>(null)
   const navigate = useNavigate()
+
+  const { data: techcards } = useQuery<Techcard[]>({
+    queryKey: ["techcards", "test-import-modal"],
+    queryFn: listTechcards,
+    enabled: props.open && props.mode === "test",
+  })
+  const { data: routes } = useQuery<ProductionRoute[]>({
+    queryKey: ["routes", "test-import-modal"],
+    queryFn: () => listRoutes(),
+    enabled: props.open && props.mode === "test",
+  })
+  const { data: products } = useQuery<Product[]>({
+    queryKey: ["products", "test-import-modal"],
+    queryFn: () => listProducts({ limit: 2000 }),
+    enabled: props.open && props.mode === "test",
+  })
+
+  useEffect(() => {
+    if (props.mode !== "test") return
+    if (!testTechcardId && techcards && techcards.length > 0) {
+      const firstWithProduct = techcards.find((t) => t.product_id && t.is_active);
+      if (firstWithProduct) setTestTechcardId(String(firstWithProduct.id));
+    }
+  }, [props.mode, techcards, testTechcardId])
+
+  useEffect(() => {
+    if (props.mode !== "test") return
+    const activeRoutes = (routes || []).filter((r) => r.is_active);
+    if (!testRouteId && activeRoutes.length > 0) {
+      setTestRouteId(String(activeRoutes[0].id));
+    }
+  }, [props.mode, routes, testRouteId])
 
   const allRows = useMemo(() => {
     return (previewData?.items as Record<string, unknown>[]) ?? []
@@ -118,7 +160,7 @@ export function ImportWizard(props: {
       }
       setStep("preview")
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Ошибка загрузки")
+      setError(getErrorMessage(e))
     } finally {
       setLoading(false)
     }
@@ -128,7 +170,15 @@ export function ImportWizard(props: {
     setLoading(true)
     setError(null)
     try {
-      const data = await uploadTestExcel(props.productionPlanId)
+      const parsedQty = Number(testQuantity || "100")
+      const data = await uploadTestExcel({
+        productionPlanId: props.productionPlanId,
+        techcardId: testTechcardId ? Number(testTechcardId) : undefined,
+        runId: testRunId || undefined,
+        planMonth: planMonth || undefined,
+        planVersion: planVersion || undefined,
+        quantity: Number.isFinite(parsedQty) && parsedQty > 0 ? parsedQty : 100,
+      })
       setPreviewData(data)
       const planId = String(data.planId ?? data.production_plan_id ?? "")
       const changeSetId = String(data.changeSetId ?? data.change_set_id ?? "")
@@ -137,7 +187,43 @@ export function ImportWizard(props: {
       }
       setStep("preview")
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Ошибка тестового импорта")
+      setError(getErrorMessage(e))
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  async function handleFullRouteRun() {
+    if (!testTechcardId) {
+      setError("Выберите техкарту")
+      return
+    }
+    if (!testRouteId) {
+      setError("Выберите маршрут")
+      return
+    }
+    setLoading(true)
+    setError(null)
+    try {
+      const parsedQty = Number(testQuantity || "100")
+      const data = await runDemoFullRoute({
+        initial_quantity: Number.isFinite(parsedQty) && parsedQty > 0 ? parsedQty : 100,
+        techcard_id: Number(testTechcardId),
+        route_id: Number(testRouteId),
+        run_id: testRunId || undefined,
+        plan_month: planMonth || undefined,
+        plan_version: planVersion || undefined,
+        production_plan_id: props.productionPlanId,
+      })
+      setResult({
+        ...data,
+        is_demo_run: true,
+      })
+      setPendingChangeSet(null)
+      setStep("result")
+      props.onSuccess(String(data.production_plan_id), "0")
+    } catch (e) {
+      setError(getErrorMessage(e))
     } finally {
       setLoading(false)
     }
@@ -160,7 +246,7 @@ export function ImportWizard(props: {
       setStep("result")
       props.onSuccess(planId, changeSetId)
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Ошибка применения")
+      setError(getErrorMessage(e))
     } finally {
       setLoading(false)
     }
@@ -185,6 +271,8 @@ export function ImportWizard(props: {
     setSearchQuery("")
     setPlanMonth("")
     setPlanVersion("")
+    setTestRunId("")
+    setTestQuantity("100")
     setPendingChangeSet(null)
     if (fileInputRef.current) {
       fileInputRef.current.value = ""
@@ -233,14 +321,77 @@ export function ImportWizard(props: {
         {step === "upload" && (
           <div className="space-y-4">
             {props.mode === "test" ? (
-              <div className="text-center py-6">
-                <p className="text-sm text-muted-foreground mb-4">
-                  Будет загружен тестовый план с одной позицией ЮП-2630
-                </p>
-                <Button onClick={handleTestImport} disabled={loading}>
-                  <Upload className="h-4 w-4 mr-2" />
-                  {loading ? "Загрузка…" : "Загрузить тестовый план"}
-                </Button>
+              <div className="space-y-4 py-1">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  <div>
+                    <label className="text-xs text-muted-foreground">Техкарта</label>
+                    <select
+                      className="h-10 w-full rounded-md border bg-background px-3 text-sm"
+                      value={testTechcardId}
+                      onChange={(e) => setTestTechcardId(e.target.value)}
+                    >
+                      <option value="">Выберите техкарту...</option>
+                      {(techcards || [])
+                        .filter((tc) => tc.product_id && tc.is_active)
+                        .map((tc) => {
+                          const product = (products || []).find((p) => p.id === tc.product_id);
+                          const article = (product?.sku || "—").trim();
+                          const productName = (product?.name || tc.version || "—").trim();
+                          return (
+                            <option key={tc.id} value={String(tc.id)}>
+                              Арт: {article} · {productName} · ТК #{tc.id}
+                            </option>
+                          );
+                        })}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="text-xs text-muted-foreground">Маршрут</label>
+                    <select
+                      className="h-10 w-full rounded-md border bg-background px-3 text-sm"
+                      value={testRouteId}
+                      onChange={(e) => setTestRouteId(e.target.value)}
+                    >
+                      <option value="">Выберите маршрут...</option>
+                      {(routes || [])
+                        .filter((r) => r.is_active)
+                        .map((route) => (
+                          <option key={route.id} value={String(route.id)}>
+                            #{route.id} · {route.name}
+                          </option>
+                        ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="text-xs text-muted-foreground">Количество</label>
+                    <Input value={testQuantity} onChange={(e) => setTestQuantity(e.target.value)} placeholder="100" />
+                  </div>
+                  <div>
+                    <label className="text-xs text-muted-foreground">Run ID (опционально)</label>
+                    <Input value={testRunId} onChange={(e) => setTestRunId(e.target.value)} placeholder="auto" />
+                  </div>
+                  {!props.productionPlanId && (
+                    <>
+                      <div>
+                        <label className="text-xs text-muted-foreground">Месяц плана (например 2026-05)</label>
+                        <Input value={planMonth} onChange={(e) => setPlanMonth(e.target.value)} placeholder="2026-05" />
+                      </div>
+                      <div>
+                        <label className="text-xs text-muted-foreground">Версия плана (например 1)</label>
+                        <Input value={planVersion} onChange={(e) => setPlanVersion(e.target.value)} placeholder="1" />
+                      </div>
+                    </>
+                  )}
+                </div>
+                <div className="flex gap-2 justify-end">
+                  <Button variant="outline" onClick={handleTestImport} disabled={loading}>
+                    <Upload className="h-4 w-4 mr-2" />
+                    {loading ? "Загрузка…" : "Только загрузить тестовую строку"}
+                  </Button>
+                  <Button onClick={handleFullRouteRun} disabled={loading}>
+                    {loading ? "Запуск…" : "Сквозной тестовый прогон"}
+                  </Button>
+                </div>
               </div>
             ) : (
               <>
@@ -361,20 +512,63 @@ export function ImportWizard(props: {
 
         {step === "result" && result && (
           <div className="text-center py-6">
-            <div className="inline-flex items-center justify-center w-16 h-16 rounded-full bg-green-100 mb-4">
-              <Check className="h-8 w-8 text-green-600" />
-            </div>
-            <h3 className="text-lg font-medium mb-4">Изменения применены</h3>
-            <div className="flex justify-center gap-6 text-sm">
-              <div>
-                <div className="font-semibold">{(result as any).created_positions ?? 0}</div>
-                <div className="text-muted-foreground">Создано</div>
+            {(result as any).is_demo_run ? (
+              <div className="space-y-4 text-left">
+                <div className="inline-flex items-center justify-center w-16 h-16 rounded-full bg-green-100 mb-1">
+                  <Check className="h-8 w-8 text-green-600" />
+                </div>
+                <h3 className="text-lg font-medium">Сквозной прогон выполнен</h3>
+                <div className="grid grid-cols-2 gap-3 text-sm">
+                  <div className="rounded border p-2">
+                    <div className="text-muted-foreground">Run ID</div>
+                    <div className="font-medium">{String((result as any).run_id || "—")}</div>
+                  </div>
+                  <div className="rounded border p-2">
+                    <div className="text-muted-foreground">Позиция</div>
+                    <div className="font-medium">#{String((result as any).plan_position_id || "—")}</div>
+                  </div>
+                </div>
+                <div className="max-h-56 overflow-auto rounded border">
+                  <table className="w-full text-xs">
+                    <thead className="bg-muted/50 border-b">
+                      <tr>
+                        <th className="text-left p-2">Участок</th>
+                        <th className="text-left p-2">Вход</th>
+                        <th className="text-left p-2">Брак</th>
+                        <th className="text-left p-2">Годные</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {(((result as any).stage_results as any[]) || []).map((s, idx) => (
+                        <tr key={`${s.section_id}-${idx}`} className="border-b">
+                          <td className="p-2">{s.section_code}</td>
+                          <td className="p-2">{s.input_qty}</td>
+                          <td className="p-2">{s.defect_qty} ({s.defect_percent}%)</td>
+                          <td className="p-2">{s.good_qty}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
               </div>
-              <div>
-                <div className="font-semibold">{(result as any).updated_positions ?? 0}</div>
-                <div className="text-muted-foreground">Обновлено</div>
-              </div>
-            </div>
+            ) : (
+              <>
+                <div className="inline-flex items-center justify-center w-16 h-16 rounded-full bg-green-100 mb-4">
+                  <Check className="h-8 w-8 text-green-600" />
+                </div>
+                <h3 className="text-lg font-medium mb-4">Изменения применены</h3>
+                <div className="flex justify-center gap-6 text-sm">
+                  <div>
+                    <div className="font-semibold">{(result as any).created_positions ?? 0}</div>
+                    <div className="text-muted-foreground">Создано</div>
+                  </div>
+                  <div>
+                    <div className="font-semibold">{(result as any).updated_positions ?? 0}</div>
+                    <div className="text-muted-foreground">Обновлено</div>
+                  </div>
+                </div>
+              </>
+            )}
           </div>
         )}
 

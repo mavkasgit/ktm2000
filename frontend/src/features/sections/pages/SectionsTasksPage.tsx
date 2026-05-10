@@ -1,6 +1,7 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Clock, Send } from "lucide-react";
+import { useNavigate, useParams } from "react-router-dom";
 
 import { apiClient, getErrorMessage } from "@/shared/api/client";
 import { listSections } from "@/shared/api/sections";
@@ -80,9 +81,11 @@ function actionTitle(type: TaskActionDialogType): string {
   return "Внести факт";
 }
 
-export function ShopfloorTasksPage() {
+export function SectionsTasksPage() {
+  const navigate = useNavigate();
+  const params = useParams<{ sectionId?: string }>();
   const queryClient = useQueryClient();
-  const [sectionId, setSectionId] = useState<number | null>(null);
+  const [sectionId, setSectionId] = useState<number | null>(params.sectionId ? Number(params.sectionId) : null);
   const [statusFilter, setStatusFilter] = useState<string>("all");
   const [dateFrom, setDateFrom] = useState(todayISO());
   const [dateTo, setDateTo] = useState(todayISO());
@@ -111,6 +114,20 @@ export function ShopfloorTasksPage() {
     queryFn: listSections,
   });
 
+  useEffect(() => {
+    if (!sections || sections.length === 0) return;
+    const paramId = params.sectionId ? Number(params.sectionId) : null;
+    const validParam = Number.isFinite(paramId) ? sections.find((s) => s.id === paramId) : null;
+    if (validParam) {
+      if (sectionId !== validParam.id) setSectionId(validParam.id);
+      return;
+    }
+    const first = sections[0];
+    if (!first) return;
+    setSectionId(first.id);
+    navigate(`/shopfloor-tasks/${first.id}`, { replace: true });
+  }, [sections, params.sectionId, navigate, sectionId]);
+
   const boardParams = useMemo(
     () => ({
       date_from: dateFrom ? `${dateFrom}T00:00:00` : undefined,
@@ -123,7 +140,8 @@ export function ShopfloorTasksPage() {
   const { data: board, isLoading: boardLoading } = useQuery({
     queryKey: ["shopfloor-board", sectionId, boardParams],
     queryFn: () => getSectionBoard(sectionId as number, boardParams),
-    enabled: sectionId !== null,
+    enabled: sectionId !== null && !!me?.id,
+    retry: false,
   });
 
   const { data: stats } = useQuery({
@@ -133,7 +151,8 @@ export function ShopfloorTasksPage() {
         date_from: `${dateFrom}T00:00:00`,
         date_to: `${dateTo}T23:59:59`,
       }),
-    enabled: sectionId !== null,
+    enabled: sectionId !== null && !!me?.id,
+    retry: false,
   });
 
   const invalidateShopfloor = useCallback(() => {
@@ -305,21 +324,30 @@ export function ShopfloorTasksPage() {
     <>
       <header className="page-header">
         <div>
-          <h1 className="page-title">Цеховые задания</h1>
+          <h1 className="page-title">Участки</h1>
           <p className="page-subtitle">Операционная доска цеха: выдача, факт, передача и статистика.</p>
         </div>
       </header>
 
       <section className="space-y-4">
         <div className="grid grid-cols-1 md:grid-cols-4 gap-2">
-          <Select value={sectionId ? String(sectionId) : ""} onValueChange={(v) => setSectionId(v ? Number(v) : null)}>
+          <Select
+            value={sectionId ? String(sectionId) : ""}
+            onValueChange={(v) => {
+              const nextId = v ? Number(v) : null;
+              setSectionId(nextId);
+              if (nextId) {
+                navigate(`/shopfloor-tasks/${nextId}`);
+              }
+            }}
+          >
             <SelectTrigger>
               <SelectValue placeholder="Выберите цех" />
             </SelectTrigger>
             <SelectContent>
-              {sections?.filter((s) => s.kind === "production").map((s) => (
+              {sections?.map((s) => (
                 <SelectItem key={s.id} value={String(s.id)}>
-                  {s.name}
+                  {s.name} ({s.code})
                 </SelectItem>
               ))}
             </SelectContent>

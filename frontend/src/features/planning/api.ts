@@ -44,12 +44,66 @@ export async function uploadExcel(
   return lastImport
 }
 
-export async function uploadTestExcel(productionPlanId?: number) {
+export async function uploadTestExcel(options?: {
+  productionPlanId?: number;
+  techcardId?: number;
+  runId?: string;
+  planMonth?: string;
+  planVersion?: string;
+  quantity?: number;
+}) {
   const { data } = await apiClient.post("/imports/excel/test", undefined, {
-    params: { production_plan_id: productionPlanId },
+    params: {
+      production_plan_id: options?.productionPlanId,
+      techcard_id: options?.techcardId,
+      run_id: options?.runId?.trim() || undefined,
+      plan_month: options?.planMonth?.trim() || undefined,
+      plan_version: options?.planVersion?.trim() || undefined,
+      quantity: options?.quantity,
+    },
   })
   lastImport = enrichImport(data as Record<string, any>)
   return lastImport
+}
+
+export type DemoStageResult = {
+  section_id: number;
+  section_code: string;
+  task_id: number;
+  input_qty: string;
+  defect_percent: number;
+  defect_qty: string;
+  good_qty: string;
+  performed_at: string;
+  accounted_at: string;
+};
+
+export type DemoFullRouteResponse = {
+  run_id: string;
+  production_plan_id: number;
+  plan_position_id: number;
+  internal_plan_id: number | null;
+  route_id: number;
+  tasks_created: number;
+  stage_results: DemoStageResult[];
+  execution_row_url: string;
+  shopfloor_section_urls: string[];
+  idempotent_replay?: boolean;
+};
+
+export async function runDemoFullRoute(payload: {
+  initial_quantity: number;
+  techcard_id: number;
+  route_id?: number;
+  route_name?: string;
+  run_id?: string;
+  start_performed_at?: string;
+  plan_month?: string;
+  plan_version?: string;
+  production_plan_id?: number;
+}) {
+  const { data } = await apiClient.post<DemoFullRouteResponse>("/demo/test-runs/full-route", payload);
+  return data;
 }
 
 export async function previewDiff() {

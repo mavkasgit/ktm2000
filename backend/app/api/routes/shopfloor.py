@@ -39,7 +39,7 @@ from app.services.shopfloor_service import (
     list_entity_attachments,
 )
 
-router = APIRouter(prefix="/shopfloor", tags=["shopfloor"])
+router = APIRouter(prefix="/shopfloor", tags=["sections-operations"])
 
 
 class IssuePayload(BaseModel):

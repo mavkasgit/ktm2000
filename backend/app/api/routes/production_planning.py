@@ -16,7 +16,7 @@ from app.services.production_planning_rows import get_production_planning_row_de
 from app.services.plan_generation import create_release_batch, release_batch
 from app.services.route_matcher import resolve_position_route
 
-router = APIRouter(prefix="/production-planning", tags=["production-planning"])
+router = APIRouter(prefix="/production-planning", tags=["execution-control"])
 
 
 class TakeToWorkRequest(BaseModel):

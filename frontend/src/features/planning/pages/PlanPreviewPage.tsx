@@ -54,8 +54,8 @@ export function PlanPreviewPage() {
             План #{Number((data as Record<string, unknown> | undefined)?.production_plan_id || 0)} · {String((data as Record<string, unknown> | undefined)?.plan_no || "—")}
           </p>
         </div>
-        <Link to="/production-planning" className="text-sm text-blue-700 hover:underline">
-          Назад к выполнению
+        <Link to="/execution" className="text-sm text-blue-700 hover:underline">
+          Назад к контролю выполнения
         </Link>
       </header>
 

@@ -2,10 +2,10 @@ import { Navigate, createBrowserRouter } from "react-router-dom"
 import { Layout, DashboardPage } from "./Layout"
 import { ReferencesPage, RawMaterialsPage, FinishedGoodsPage, SectionsPage, TechcardsPage, RoutesPage } from "../features/references"
 import { DevPage } from "../features/references/pages/DevPage"
-import { PlanPage } from "../features/plan-flow/pages/PlanPage"
-import { PlanPreviewPage } from "../features/plan-flow/pages/PlanPreviewPage"
-import { ProductionPlanningPage } from "../features/production-planning/pages/ProductionPlanningPage"
-import { ShopfloorTasksPage } from "../features/shopfloor-tasks/pages/ShopfloorTasksPage"
+import { PlanPage } from "../features/planning/pages/PlanPage"
+import { PlanPreviewPage } from "../features/planning/pages/PlanPreviewPage"
+import { ExecutionPage } from "../features/execution/pages/ExecutionPage"
+import { SectionsTasksPage } from "../features/sections/pages/SectionsTasksPage"
 import { SettingsPage } from "../features/settings/SettingsPage"
 import { BackupsPage } from "../features/settings/SettingsBackupsPage"
 
@@ -27,10 +27,11 @@ export const router = createBrowserRouter([
           { path: "routes", element: <RoutesPage /> },
         ],
       },
-      { path: "plan", element: <PlanPage /> },
+      { path: "planning", element: <PlanPage /> },
       { path: "plans/:planId/preview", element: <PlanPreviewPage /> },
-      { path: "production-planning", element: <ProductionPlanningPage /> },
-      { path: "shopfloor-tasks", element: <ShopfloorTasksPage /> },
+      { path: "execution", element: <ExecutionPage /> },
+      { path: "shopfloor-tasks", element: <SectionsTasksPage /> },
+      { path: "shopfloor-tasks/:sectionId", element: <SectionsTasksPage /> },
       {
         path: "settings",
         element: <SettingsPage />,

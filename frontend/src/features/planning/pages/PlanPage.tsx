@@ -404,7 +404,7 @@ export function PlanPage() {
     <>
       <header className="page-header">
         <div>
-          <h1 className="page-title">План и запуск</h1>
+          <h1 className="page-title">План</h1>
           <p className="page-subtitle">Импорт производственного плана из Excel и запуск в производство.</p>
         </div>
         <div className="flex gap-2">
