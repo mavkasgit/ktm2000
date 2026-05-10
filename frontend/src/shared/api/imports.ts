@@ -18,6 +18,8 @@ export type ImportExcelInput = {
   sheet_index?: number;
   mode?: ImportBatchMode;
   production_plan_id?: number;
+  plan_month?: string;
+  plan_version?: string;
   template_id?: number;
   column_mapping?: Record<string, string>;
 };
@@ -49,6 +51,8 @@ export async function importExcel(input: ImportExcelInput) {
         sheet_index: input.sheet_index ?? 0,
         mode: input.mode ?? "create_plan",
         production_plan_id: input.production_plan_id,
+        plan_month: input.plan_month,
+        plan_version: input.plan_version,
         template_id: input.template_id,
         column_mapping: input.column_mapping,
       },

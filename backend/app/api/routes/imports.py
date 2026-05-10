@@ -36,6 +36,8 @@ async def import_excel_plan(
     sheet_index: int = Form(0),
     mode: ImportBatchMode = Form(ImportBatchMode.create_plan),
     production_plan_id: int | None = Form(None),
+    plan_month: str | None = Form(None),
+    plan_version: str | None = Form(None),
     template_id: int | None = Query(None),
     column_mapping: str | None = Query(None),
     db: AsyncSession = Depends(get_db),
@@ -65,6 +67,8 @@ async def import_excel_plan(
             sheet_index=sheet_index,
             mode=mode,
             production_plan_id=production_plan_id,
+            plan_month=plan_month,
+            plan_version=plan_version,
             column_mapping=resolved_mapping,
         )
     except ValueError as exc:

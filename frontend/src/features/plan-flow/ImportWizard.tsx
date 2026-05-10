@@ -3,7 +3,7 @@ import { Check, ExternalLink, Upload } from "lucide-react"
 import { useNavigate } from "react-router-dom"
 import { uploadExcel, uploadTestExcel, applyChangeSet, discardImport } from "./api"
 import { ImportDiffTable } from "./ImportDiffTable"
-import { Button, AlertDialog, AlertDialogContent, AlertDialogHeader, AlertDialogTitle, AlertDialogDescription, AlertDialogFooter, AlertDialogAction, AlertDialogCancel } from "shared/ui"
+import { Button, Input, AlertDialog, AlertDialogContent, AlertDialogHeader, AlertDialogTitle, AlertDialogDescription, AlertDialogFooter, AlertDialogAction, AlertDialogCancel } from "shared/ui"
 import {
   Dialog,
   DialogContent,
@@ -31,6 +31,8 @@ export function ImportWizard(props: {
   const [error, setError] = useState<string | null>(null)
   const [result, setResult] = useState<Record<string, unknown> | null>(null)
   const [searchQuery, setSearchQuery] = useState("")
+  const [planMonth, setPlanMonth] = useState("")
+  const [planVersion, setPlanVersion] = useState("")
   const [pendingChangeSet, setPendingChangeSet] = useState<{ planId: string; changeSetId: string } | null>(null)
   const [showCloseConfirm, setShowCloseConfirm] = useState(false)
 
@@ -103,7 +105,11 @@ export function ImportWizard(props: {
     setLoading(true)
     setError(null)
     try {
-      const data = await uploadExcel(f, { productionPlanId: props.productionPlanId })
+      const data = await uploadExcel(f, {
+        productionPlanId: props.productionPlanId,
+        planMonth: planMonth || undefined,
+        planVersion: planVersion || undefined,
+      })
       setPreviewData(data)
       const planId = String(data.planId ?? data.production_plan_id ?? "")
       const changeSetId = String(data.changeSetId ?? data.change_set_id ?? "")
@@ -177,6 +183,8 @@ export function ImportWizard(props: {
     setSortConfig(null)
     setFilterStatus("all")
     setSearchQuery("")
+    setPlanMonth("")
+    setPlanVersion("")
     setPendingChangeSet(null)
     if (fileInputRef.current) {
       fileInputRef.current.value = ""
@@ -235,6 +243,27 @@ export function ImportWizard(props: {
                 </Button>
               </div>
             ) : (
+              <>
+              {!props.productionPlanId && (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  <div>
+                    <label className="text-xs text-muted-foreground">Месяц плана (например 2026-05)</label>
+                    <Input
+                      value={planMonth}
+                      onChange={(e) => setPlanMonth(e.target.value)}
+                      placeholder="2026-05"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-xs text-muted-foreground">Версия плана (например 1)</label>
+                    <Input
+                      value={planVersion}
+                      onChange={(e) => setPlanVersion(e.target.value)}
+                      placeholder="1"
+                    />
+                  </div>
+                </div>
+              )}
               <div
                 className="border-2 border-dashed rounded-lg p-8 text-center cursor-pointer hover:bg-accent/50 transition-colors"
                 onClick={() => fileInputRef.current?.click()}
@@ -257,6 +286,7 @@ export function ImportWizard(props: {
                   <p className="text-xs text-blue-600 mt-2 font-medium">{file.name}</p>
                 )}
               </div>
+              </>
             )}
           </div>
         )}

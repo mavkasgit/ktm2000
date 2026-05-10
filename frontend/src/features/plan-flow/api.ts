@@ -23,14 +23,22 @@ function enrichImport(payload: Record<string, any>) {
 
 export async function uploadExcel(
   file: File,
-  options?: { templateId?: number; columnMapping?: Record<string, string>; productionPlanId?: number },
+  options?: {
+    templateId?: number;
+    columnMapping?: Record<string, string>;
+    productionPlanId?: number;
+    planMonth?: string;
+    planVersion?: string;
+  },
 ) {
   const payload = await importExcel({
     file,
     template_id: options?.templateId,
     column_mapping: options?.columnMapping,
-    mode: "append_to_plan",
+    mode: options?.productionPlanId ? "append_to_plan" : "create_plan",
     production_plan_id: options?.productionPlanId ?? undefined,
+    plan_month: options?.planMonth?.trim() || undefined,
+    plan_version: options?.planVersion?.trim() || undefined,
   })
   lastImport = enrichImport(payload as Record<string, any>)
   return lastImport
