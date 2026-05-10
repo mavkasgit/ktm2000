@@ -9,19 +9,24 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } f
 import { AlertDialog, AlertDialogContent, AlertDialogHeader, AlertDialogTitle, AlertDialogDescription, AlertDialogFooter, AlertDialogAction, AlertDialogCancel } from "@/shared/ui/AlertDialog";
 import { toast } from "@/shared/ui/use-toast";
 import { ImportPreviewDialog } from "../ImportPreviewDialog";
-import { CatalogForm, type CatalogFormRef } from "../components/CatalogForm";
+import { CatalogForm, type CatalogFormRef, type FieldChange } from "../components/CatalogForm";
 import { CatalogCard } from "../components/CatalogCard";
 import { getPhotoUrl } from "../components/getPhotoUrl";
 import type { Product, CreateProductInput, PatchProductInput, CatalogPreview } from "@/shared/api/products";
 
 type ViewMode = "grid" | "table";
 type DialogMode = "create" | "edit";
-type SortField = "sku" | "name" | "length_mm" | "quantity_per_hanger" | "id" | "is_paired_profile" | "skip_shot_blast" | "aliases";
+type SortField = "sku" | "name" | "length_mm" | "quantity_per_hanger" | "id" | "is_paired_profile" | "skip_shot_blast" | "aliases" | "is_laminated";
 type SortOrder = "asc" | "desc";
 
 interface SortConfig {
   field: SortField;
   order: SortOrder;
+}
+
+function getProductLengths(product: Product): number[] {
+  return [...new Set([...(product.lengths_mm ?? []), product.length_mm ?? undefined].filter((v): v is number => typeof v === "number" && Number.isFinite(v) && v > 0))]
+    .sort((a, b) => a - b);
 }
 
 export function RawMaterialsPage() {
@@ -42,6 +47,7 @@ export function RawMaterialsPage() {
   const [dialogMode, setDialogMode] = useState<DialogMode>("create");
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
   const [formDirty, setFormDirty] = useState(false);
+  const [pendingChanges, setPendingChanges] = useState<FieldChange[]>([]);
   const formRef = useRef<CatalogFormRef>(null);
 
   const [confirmOpen, setConfirmOpen] = useState(false);
@@ -159,7 +165,9 @@ export function RawMaterialsPage() {
     if (!selectedProduct) return;
     try {
       await API.deleteProduct(selectedProduct.id);
-      toast({ title: "Удалено", description: `Сырьё "${selectedProduct.sku}" (артикул: ${selectedProduct.sku}, ID: ${selectedProduct.id}, длина: ${selectedProduct.length_mm ?? "—"} мм, кол-во на подвесе: ${selectedProduct.quantity_per_hanger ?? "—"}) успешно удалено`, variant: "success" });
+      const lengths = getProductLengths(selectedProduct);
+      const lengthsText = lengths.length ? `${lengths.join(", ")} мм` : "—";
+      toast({ title: "Удалено", description: `Сырьё "${selectedProduct.sku}" (артикул: ${selectedProduct.sku}, ID: ${selectedProduct.id}, длины: ${lengthsText}, кол-во на подвесе: ${selectedProduct.quantity_per_hanger ?? "—"}) успешно удалено`, variant: "success" });
       setDialogOpen(false);
       setFormDirty(false);
       await load();
@@ -228,8 +236,19 @@ export function RawMaterialsPage() {
 
   const sortedItems = useMemo(() => {
     let filtered = items;
-    if (lengthFrom) filtered = filtered.filter((p) => (p.length_mm ?? 0) >= parseFloat(lengthFrom));
-    if (lengthTo) filtered = filtered.filter((p) => (p.length_mm ?? 0) <= parseFloat(lengthTo));
+    const lengthFromNum = lengthFrom ? parseFloat(lengthFrom) : null;
+    const lengthToNum = lengthTo ? parseFloat(lengthTo) : null;
+    if (lengthFromNum !== null || lengthToNum !== null) {
+      filtered = filtered.filter((p) => {
+        const lengths = getProductLengths(p);
+        if (lengths.length === 0) return false;
+        return lengths.some((len) => {
+          if (lengthFromNum !== null && len < lengthFromNum) return false;
+          if (lengthToNum !== null && len > lengthToNum) return false;
+          return true;
+        });
+      });
+    }
     if (qtyFrom) filtered = filtered.filter((p) => (p.quantity_per_hanger ?? 0) >= parseFloat(qtyFrom));
     if (qtyTo) filtered = filtered.filter((p) => (p.quantity_per_hanger ?? 0) <= parseFloat(qtyTo));
 
@@ -387,6 +406,7 @@ export function RawMaterialsPage() {
                 <SortHeader field="length_mm">Длина</SortHeader>
                 <SortHeader field="is_paired_profile">Парный</SortHeader>
                 <SortHeader field="skip_shot_blast">Дробеструй</SortHeader>
+                <SortHeader field="is_laminated">Ламинируется</SortHeader>
               </tr>
             </thead>
             <tbody className="divide-y">
@@ -421,7 +441,12 @@ export function RawMaterialsPage() {
                     </div>
                   </td>
                   <td className="px-4 py-2 text-muted-foreground">{product.quantity_per_hanger ?? "—"}</td>
-                  <td className="px-4 py-2 text-muted-foreground">{product.length_mm ? `${product.length_mm} мм` : "—"}</td>
+                  <td className="px-4 py-2 text-muted-foreground">
+                    {(() => {
+                      const lengths = getProductLengths(product);
+                      return lengths.length ? lengths.join(", ") + " мм" : "—";
+                    })()}
+                  </td>
                   <td className="px-4 py-2">
                     {product.is_paired_profile && (
                       <Badge variant="secondary" className="text-xs bg-purple-100">Парный</Badge>
@@ -431,6 +456,11 @@ export function RawMaterialsPage() {
                     {product.skip_shot_blast && (
                       <Badge variant="secondary" className="text-xs bg-amber-100">Пропуск</Badge>
                     )}
+                  </td>
+                  <td className="px-4 py-2">
+                    {product.is_laminated
+                      ? <Badge variant="secondary" className="text-xs bg-green-100">Да</Badge>
+                      : <span className="text-muted-foreground text-xs">—</span>}
                   </td>
                 </tr>
               ))}
@@ -481,22 +511,43 @@ export function RawMaterialsPage() {
               navigateToAlias(sku);
             }}
             onDirtyChange={setFormDirty}
+            onChangesChange={setPendingChanges}
           />
         </DialogContent>
       </Dialog>
 
       <AlertDialog open={confirmOpen} onOpenChange={setConfirmOpen}>
-        <AlertDialogContent className="max-w-sm">
+        <AlertDialogContent className="max-w-md">
           <AlertDialogHeader>
             <AlertDialogTitle>Несохранённые изменения</AlertDialogTitle>
-            <AlertDialogDescription>
-              Вы внесли изменения. Сохранить перед выходом?
+            <AlertDialogDescription asChild>
+              <div>
+                {pendingChanges.length > 0 ? (
+                  <>
+                    <p className="mb-2">Вы изменили {pendingChanges.length} {pendingChanges.length === 1 ? "параметр" : pendingChanges.length < 5 ? "параметра" : "параметров"}:</p>
+                    <ul className="text-sm space-y-1 max-h-48 overflow-auto">
+                      {pendingChanges.map((c) => (
+                        <li key={c.field} className="flex items-start gap-1">
+                          <span className="text-muted-foreground min-w-[100px]">{c.label}:</span>
+                          <span className="line-through text-red-600/80">{String(c.from)}</span>
+                          <span className="text-muted-foreground mx-0.5">→</span>
+                          <span className="text-green-700 font-medium">{String(c.to)}</span>
+                        </li>
+                      ))}
+                    </ul>
+                    <p className="mt-3">Сохранить перед выходом?</p>
+                  </>
+                ) : (
+                  <p>Вы внесли изменения. Сохранить перед выходом?</p>
+                )}
+              </div>
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter className="flex-col-reverse sm:flex-row gap-2">
             <AlertDialogCancel onClick={() => { setConfirmOpen(false); setPendingAliasSku(null); }}>Отмена</AlertDialogCancel>
             <Button variant="destructive" onClick={() => {
               setConfirmOpen(false);
+              setPendingChanges([]);
               confirmAction?.();
             }}>Не сохранять</Button>
             <AlertDialogAction onClick={() => {

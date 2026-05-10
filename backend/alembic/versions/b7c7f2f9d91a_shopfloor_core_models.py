@@ -24,10 +24,19 @@ def upgrade() -> None:
     op.execute("ALTER TYPE work_task_status ADD VALUE IF NOT EXISTS 'partially_completed'")
 
     op.execute(
-        "CREATE TYPE IF NOT EXISTS entity_type AS ENUM ("
-        "'plan_position', 'section_plan_line', 'work_task', "
-        "'transfer', 'transfer_discrepancy', 'defect', "
-        "'defect_item', 'defect_decision', 'rework_task')"
+        """
+        DO $$
+        BEGIN
+            CREATE TYPE entity_type AS ENUM (
+                'plan_position', 'section_plan_line', 'work_task',
+                'transfer', 'transfer_discrepancy', 'defect',
+                'defect_item', 'defect_decision', 'rework_task'
+            );
+        EXCEPTION
+            WHEN duplicate_object THEN NULL;
+        END
+        $$;
+        """
     )
 
     entity_type = postgresql.ENUM(name="entity_type", create_type=False)

@@ -12,6 +12,11 @@ const TYPE_LABELS: Record<ProductType, string> = {
   material: "Материал",
 };
 
+function getProductLengths(product: Product): number[] {
+  return [...new Set([...(product.lengths_mm ?? []), product.length_mm ?? undefined].filter((v): v is number => typeof v === "number" && Number.isFinite(v) && v > 0))]
+    .sort((a, b) => a - b);
+}
+
 export function CatalogCard({
   product,
   onClick,
@@ -40,8 +45,14 @@ export function CatalogCard({
               <Badge variant="outline" className="text-xs">{TYPE_LABELS[product.type]}</Badge>
               {product.profile_type && <Badge variant="secondary" className="text-xs">{product.profile_type}</Badge>}
               {product.color && <Badge variant="secondary" className="text-xs">{product.color}</Badge>}
+              {(() => {
+                const lengths = getProductLengths(product);
+                return lengths.length ? <Badge variant="outline" className="text-xs">{lengths.join(", ")} мм</Badge> : null;
+              })()}
               {product.is_catalog_item && <Badge variant="secondary" className="text-xs bg-blue-100">Сырье (каталог)</Badge>}
               {product.is_paired_profile && <Badge variant="secondary" className="text-xs bg-purple-100">Парный</Badge>}
+              {product.is_laminated && <Badge variant="secondary" className="text-xs bg-green-100">Ламинируется</Badge>}
+              {product.skip_shot_blast && <Badge variant="secondary" className="text-xs bg-amber-100">Без дробеструйки</Badge>}
             </div>
           </div>
         </div>

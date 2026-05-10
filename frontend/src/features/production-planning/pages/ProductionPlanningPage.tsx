@@ -1,13 +1,17 @@
-import { useMemo, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useMemo, useState, useCallback } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   getProductionPlanningRowDetail,
   listPlans,
   listProductionPlanningRows,
+  takeToWork,
   type ProductionPlanningRow,
+  type TakeToWorkResult,
 } from "@/shared/api/productionPlans";
 import { listSections } from "@/shared/api/sections";
-import { Badge, Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, Input, Select, SelectContent, SelectItem, SelectTrigger, SelectValue, renderIcon } from "@/shared/ui";
+import { Badge, Button, Checkbox, Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, Input, Select, SelectContent, SelectItem, SelectTrigger, SelectValue, renderIcon } from "@/shared/ui";
+import { toast } from "@/shared/ui/use-toast";
+import { getErrorMessage } from "@/shared/api/client";
 
 const positionStatusLabels: Record<string, string> = {
   draft: "Черновик",
@@ -109,6 +113,78 @@ export function ProductionPlanningPage() {
     return map;
   }, [sections]);
 
+  const queryClient = useQueryClient();
+  const [selectedRows, setSelectedRows] = useState<Set<number>>(new Set());
+  const [launchDialog, setLaunchDialog] = useState<{ open: boolean; mode: "single" | "bulk"; positionIds: number[] }>({
+    open: false,
+    mode: "single",
+    positionIds: [],
+  });
+  const [launchResults, setLaunchResults] = useState<TakeToWorkResult[]>([]);
+  const [resultsDialogOpen, setResultsDialogOpen] = useState(false);
+
+  const takeToWorkMutation = useMutation({
+    mutationFn: takeToWork,
+    onSuccess: (data) => {
+      setLaunchResults(data.results);
+      setResultsDialogOpen(true);
+      const successCount = data.results.filter((r) => r.status === "success").length;
+      const failCount = data.results.filter((r) => r.status === "failed").length;
+      const alreadyCount = data.results.filter((r) => r.status === "already_started").length;
+      if (failCount > 0) {
+        toast({ title: "Частичный успех", description: `${successCount} успешно, ${failCount} ошибок, ${alreadyCount} уже запущено`, variant: "destructive" });
+      } else {
+        toast({ title: "Запуск завершён", description: `${successCount} запущено, ${alreadyCount} уже было запущено`, variant: "success" });
+      }
+      queryClient.invalidateQueries({ queryKey: ["production-planning-rows"] });
+      setSelectedRows(new Set());
+    },
+    onError: (err) => toast({ title: "Ошибка запуска", description: getErrorMessage(err), variant: "destructive" }),
+  });
+
+  const isRowLaunched = useCallback((row: ProductionPlanningRow) => {
+    return row.has_tasks || row.is_released;
+  }, []);
+
+  const getLaunchBlockReason = useCallback((row: ProductionPlanningRow) => {
+    if (row.has_tasks || row.is_released) return "Уже запущено";
+    if (row.position_status !== "approved") return `Статус "${positionStatusLabels[row.position_status] || row.position_status}"`;
+    if (!row.route_id) return row.route_error || "Нет маршрута";
+    return null;
+  }, []);
+
+  const handleSingleLaunch = useCallback((row: ProductionPlanningRow) => {
+    const reason = getLaunchBlockReason(row);
+    if (reason) {
+      toast({ title: "Невозможно запустить", description: reason, variant: "destructive" });
+      return;
+    }
+    setLaunchDialog({ open: true, mode: "single", positionIds: [row.plan_position_id] });
+  }, [getLaunchBlockReason]);
+
+  const handleBulkLaunch = useCallback(() => {
+    const ids = Array.from(selectedRows);
+    if (ids.length === 0) {
+      toast({ title: "Выберите строки", description: "Отметьте строки для запуска", variant: "destructive" });
+      return;
+    }
+    setLaunchDialog({ open: true, mode: "bulk", positionIds: ids });
+  }, [selectedRows]);
+
+  const toggleRowSelection = useCallback((positionId: number, checked: boolean) => {
+    setSelectedRows((prev) => {
+      const next = new Set(prev);
+      if (checked) next.add(positionId);
+      else next.delete(positionId);
+      return next;
+    });
+  }, []);
+
+  const confirmLaunch = useCallback(() => {
+    takeToWorkMutation.mutate(launchDialog.positionIds);
+    setLaunchDialog({ open: false, mode: "single", positionIds: [] });
+  }, [launchDialog.positionIds, takeToWorkMutation]);
+
   const filteredRows = useMemo(() => {
     const list = rows || [];
     return list.filter((row) => {
@@ -166,6 +242,11 @@ export function ProductionPlanningPage() {
             <span className="px-3 py-1 rounded-full bg-blue-100 text-blue-700">С задачами: {rowsWithTasks}</span>
           </div>
         </div>
+        {selectedRows.size > 0 && (
+          <Button onClick={handleBulkLaunch} variant="default">
+            <span className="ml-1">Взять выбранные в работу ({selectedRows.size})</span>
+          </Button>
+        )}
       </header>
 
       <section className="space-y-3">
@@ -192,6 +273,7 @@ export function ProductionPlanningPage() {
           <table className="w-full text-sm">
             <thead className="border-b bg-muted/50">
               <tr>
+                <th className="text-left p-2 w-8"></th>
                 <th className="text-left p-2">Строка</th>
                 <th className="text-left p-2">План</th>
                 <th className="text-left p-2">SKU</th>
@@ -200,15 +282,27 @@ export function ProductionPlanningPage() {
                 <th className="text-left p-2">Маршрут</th>
                 <th className="text-left p-2">Статус</th>
                 <th className="text-left p-2">Задачи</th>
+                <th className="text-left p-2">Действия</th>
               </tr>
             </thead>
             <tbody>
-              {filteredRows.map((row) => (
+              {filteredRows.map((row) => {
+                const canLaunch = row.position_status === "approved" && !row.has_tasks && !row.is_released && !!row.route_id;
+                const blockReason = getLaunchBlockReason(row);
+                return (
                 <tr
                   key={row.plan_position_id}
                   className="border-b hover:bg-accent/30 cursor-pointer"
                   onClick={() => openDetail(row.plan_position_id)}
                 >
+                  <td className="p-2" onClick={(e) => e.stopPropagation()}>
+                    {canLaunch && (
+                      <Checkbox
+                        checked={selectedRows.has(row.plan_position_id)}
+                        onCheckedChange={(checked) => toggleRowSelection(row.plan_position_id, !!checked)}
+                      />
+                    )}
+                  </td>
                   <td className="p-2">#{row.source_row_number ?? "—"}</td>
                   <td className="p-2">
                     {(() => {
@@ -246,8 +340,27 @@ export function ProductionPlanningPage() {
                   <td className="p-2">
                     <Badge variant={row.has_tasks ? "default" : "secondary"}>{row.has_tasks ? "Есть" : "Нет"}</Badge>
                   </td>
+                  <td className="p-2" onClick={(e) => e.stopPropagation()}>
+                    {canLaunch ? (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => handleSingleLaunch(row)}
+                      >
+                        Взять в работу
+                      </Button>
+                    ) : (
+                      <span
+                        className="text-xs text-muted-foreground"
+                        title={blockReason || ""}
+                      >
+                        {blockReason || "—"}
+                      </span>
+                    )}
+                  </td>
                 </tr>
-              ))}
+                );
+              })}
             </tbody>
           </table>
           {filteredRows.length === 0 && <p className="p-4 text-sm text-muted-foreground text-center">Нет строк по выбранному фильтру</p>}
@@ -390,6 +503,71 @@ export function ProductionPlanningPage() {
                 </div>
               </div>
             )}
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={launchDialog.open}
+        onOpenChange={(open) => {
+          if (!open) setLaunchDialog({ open: false, mode: "single", positionIds: [] });
+        }}
+      >
+        <DialogContent className="sm:max-w-[480px]">
+          <DialogHeader>
+            <DialogTitle>Взять в работу</DialogTitle>
+            <DialogDescription>
+              {launchDialog.mode === "single"
+                ? "Будут созданы задачи по всем этапам маршрута для выбранной строки."
+                : `Будут созданы задачи по всем этапам маршрута для ${launchDialog.positionIds.length} выбранных строк.`}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex justify-end gap-2 pt-2">
+            <Button variant="outline" onClick={() => setLaunchDialog({ open: false, mode: "single", positionIds: [] })}>
+              Отмена
+            </Button>
+            <Button onClick={confirmLaunch} disabled={takeToWorkMutation.isPending}>
+              {takeToWorkMutation.isPending ? "Запуск..." : "Запустить"}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={resultsDialogOpen}
+        onOpenChange={(open) => {
+          if (!open) setResultsDialogOpen(false);
+        }}
+      >
+        <DialogContent className="sm:max-w-[560px]">
+          <DialogHeader>
+            <DialogTitle>Результат запуска</DialogTitle>
+            <DialogDescription>
+              {launchResults.filter((r) => r.status === "success").length} успешно,{" "}
+              {launchResults.filter((r) => r.status === "already_started").length} уже запущено,{" "}
+              {launchResults.filter((r) => r.status === "failed").length} ошибок
+            </DialogDescription>
+          </DialogHeader>
+          <div className="max-h-[320px] overflow-auto space-y-2">
+            {launchResults.map((result) => (
+              <div key={result.position_id} className="rounded border p-2 text-sm">
+                <div className="flex items-center justify-between">
+                  <span className="font-medium">Позиция #{result.position_id}</span>
+                  <Badge
+                    variant={result.status === "success" ? "default" : result.status === "already_started" ? "secondary" : "destructive"}
+                  >
+                    {result.status === "success" ? "Успешно" : result.status === "already_started" ? "Уже запущено" : "Ошибка"}
+                  </Badge>
+                </div>
+                {result.reason && <div className="text-xs text-muted-foreground mt-1">{result.reason}</div>}
+                {result.tasks_created != null && (
+                  <div className="text-xs text-muted-foreground mt-1">Задач создано: {result.tasks_created}</div>
+                )}
+              </div>
+            ))}
+          </div>
+          <div className="flex justify-end pt-2">
+            <Button onClick={() => setResultsDialogOpen(false)}>Закрыть</Button>
           </div>
         </DialogContent>
       </Dialog>

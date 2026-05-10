@@ -350,3 +350,23 @@ export async function getProductionPlanningOverview() {
   const { data } = await apiClient.get<ProductionPlanningOverview>("/production-planning/overview");
   return data;
 }
+
+export type TakeToWorkResult = {
+  position_id: number;
+  status: "success" | "already_started" | "failed";
+  reason: string | null;
+  release_batch_id: number | null;
+  internal_plan_id: number | null;
+  tasks_created: number | null;
+};
+
+export type TakeToWorkResponse = {
+  results: TakeToWorkResult[];
+};
+
+export async function takeToWork(positionIds: number[]) {
+  const { data } = await apiClient.post<TakeToWorkResponse>("/production-planning/rows/take-to-work", {
+    position_ids: positionIds,
+  });
+  return data;
+}

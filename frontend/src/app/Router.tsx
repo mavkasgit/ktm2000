@@ -5,6 +5,7 @@ import { DevPage } from "../features/references/pages/DevPage"
 import { PlanPage } from "../features/plan-flow/pages/PlanPage"
 import { PlanPreviewPage } from "../features/plan-flow/pages/PlanPreviewPage"
 import { ProductionPlanningPage } from "../features/production-planning/pages/ProductionPlanningPage"
+import { ShopfloorTasksPage } from "../features/shopfloor-tasks/pages/ShopfloorTasksPage"
 import { SettingsPage } from "../features/settings/SettingsPage"
 import { BackupsPage } from "../features/settings/SettingsBackupsPage"
 
@@ -29,6 +30,7 @@ export const router = createBrowserRouter([
       { path: "plan", element: <PlanPage /> },
       { path: "plans/:planId/preview", element: <PlanPreviewPage /> },
       { path: "production-planning", element: <ProductionPlanningPage /> },
+      { path: "shopfloor-tasks", element: <ShopfloorTasksPage /> },
       {
         path: "settings",
         element: <SettingsPage />,

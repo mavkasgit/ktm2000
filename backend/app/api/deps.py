@@ -2,12 +2,31 @@ from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from typing import Callable, Sequence
 
 from app.core.database import get_db
 from app.core.security import decode_access_token
-from app.models.user import User
+from app.models.user import User, UserRole
 
 bearer_scheme = HTTPBearer(auto_error=False)
+
+WRITER_ROLES: frozenset[UserRole] = frozenset(
+    {UserRole.admin, UserRole.section_manager, UserRole.operator}
+)
+READER_ROLES: frozenset[UserRole] = frozenset(
+    {UserRole.admin, UserRole.planner, UserRole.section_manager, UserRole.operator, UserRole.viewer}
+)
+
+
+def require_role(allowed_roles: Sequence[UserRole]) -> Callable:
+    """Create a FastAPI dependency that checks the current user has one of the allowed roles."""
+
+    async def _guard(current_user: User = Depends(get_current_user)) -> User:
+        if current_user.role not in allowed_roles:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Insufficient permissions")
+        return current_user
+
+    return _guard
 
 
 async def get_current_user(

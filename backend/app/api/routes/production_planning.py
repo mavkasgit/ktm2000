@@ -1,19 +1,40 @@
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel
-from sqlalchemy import select
+from pydantic import BaseModel, ConfigDict
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.deps import WRITER_ROLES, require_role, get_current_user
 from app.core.database import get_db
+from app.models.internal_plan import SectionPlanLine
 from app.models.product import Product
 from app.models.production_plan import PlanPosition, PlanPositionStatus, ProductionPlan
-from app.models.internal_plan import InternalPlan, SectionPlanLine
 from app.models.work_task import WorkTask, WorkTaskStatus
 from app.models.route import ProductionRoute, RouteStep
 from app.models.section import Section
+from app.models.user import User
 from app.services.production_planning_rows import get_production_planning_row_detail, list_production_planning_rows
+from app.services.plan_generation import create_release_batch, release_batch
 from app.services.route_matcher import resolve_position_route
 
 router = APIRouter(prefix="/production-planning", tags=["production-planning"])
+
+
+class TakeToWorkRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    position_ids: list[int]
+
+
+class TakeToWorkResult(BaseModel):
+    position_id: int
+    status: str  # "success" | "already_started" | "failed"
+    reason: str | None = None
+    release_batch_id: int | None = None
+    internal_plan_id: int | None = None
+    tasks_created: int | None = None
+
+
+class TakeToWorkResponse(BaseModel):
+    results: list[TakeToWorkResult]
 
 
 class WorkTaskOut(BaseModel):
@@ -360,3 +381,114 @@ async def get_production_planning_overview(
         )
 
     return ProductionPlanningOverview(sections=result_sections)
+
+
+@router.post("/rows/take-to-work", response_model=TakeToWorkResponse, dependencies=[Depends(require_role(list(WRITER_ROLES)))])
+async def take_rows_to_work(
+    payload: TakeToWorkRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> TakeToWorkResponse:
+    """Launch plan positions into production: create work tasks for all route stages."""
+    results: list[TakeToWorkResult] = []
+
+    for position_id in payload.position_ids:
+        result = await _process_position_take_to_work(db, position_id)
+        results.append(result)
+
+    return TakeToWorkResponse(results=results)
+
+
+async def _process_position_take_to_work(
+    db: AsyncSession,
+    position_id: int,
+) -> TakeToWorkResult:
+    """Process a single position: validate and release into production."""
+    # Check position exists
+    pos = await db.get(PlanPosition, position_id)
+    if pos is None:
+        return TakeToWorkResult(
+            position_id=position_id,
+            status="failed",
+            reason="Plan position not found",
+        )
+
+    # Check if already has tasks (SectionPlanLines)
+    existing_lines = await db.scalar(
+        select(func.count(SectionPlanLine.id)).where(SectionPlanLine.plan_position_id == position_id)
+    )
+    if existing_lines and existing_lines > 0:
+        return TakeToWorkResult(
+            position_id=position_id,
+            status="already_started",
+            reason="Position already has tasks created",
+        )
+
+    # Check position is approved
+    if pos.status != PlanPositionStatus.approved:
+        return TakeToWorkResult(
+            position_id=position_id,
+            status="failed",
+            reason=f"Position status is '{pos.status.value}', must be 'approved'",
+        )
+
+    # Resolve route
+    product = await db.get(Product, pos.product_id) if pos.product_id else None
+    route_info = await resolve_position_route(db, pos.route_id, product)
+
+    if route_info.route_id is None:
+        return TakeToWorkResult(
+            position_id=position_id,
+            status="failed",
+            reason=route_info.error or "No route found for this position",
+        )
+
+    # Verify route is active
+    route = await db.get(ProductionRoute, route_info.route_id)
+    if route is None or not route.is_active:
+        return TakeToWorkResult(
+            position_id=position_id,
+            status="failed",
+            reason="Route is not active",
+        )
+
+    # Verify route has active sections
+    steps = (
+        await db.execute(
+            select(RouteStep)
+            .where(RouteStep.route_id == route_info.route_id)
+            .join(Section, RouteStep.section_id == Section.id)
+            .where(Section.is_active == True)
+            .order_by(RouteStep.sequence)
+        )
+    ).scalars().all()
+
+    if not steps:
+        return TakeToWorkResult(
+            position_id=position_id,
+            status="failed",
+            reason="Route has no active steps",
+        )
+
+    # Create and release batch
+    try:
+        batch_summary = await create_release_batch(
+            db,
+            production_plan_id=pos.production_plan_id,
+            positions=[{"plan_position_id": position_id, "release_quantity": str(pos.quantity)}],
+        )
+        release_summary = await release_batch(db, batch_summary["id"])
+
+        return TakeToWorkResult(
+            position_id=position_id,
+            status="success",
+            release_batch_id=batch_summary["id"],
+            internal_plan_id=release_summary.get("internal_plan_id"),
+            tasks_created=release_summary.get("tasks_created"),
+        )
+    except ValueError as exc:
+        return TakeToWorkResult(
+            position_id=position_id,
+            status="failed",
+            reason=str(exc),
+        )

@@ -4,19 +4,32 @@ from pathlib import Path
 from typing import List
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status, Response
 from pydantic import BaseModel
-from sqlalchemy import func, or_, select, type_coerce
+from sqlalchemy import func, or_, select, type_coerce, delete
 from sqlalchemy.types import ARRAY, String
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.core.config import settings
 from app.core.database import get_db
-from app.models.product import Product, ProductType
+from app.models.product import Product, ProductType, ProductLength, ProcessingFlag, ProductProcessingFlag
 from app.models.techcard import Techcard, TechcardLine
 from app.models.production_plan import PlanPosition
 from app.models.work_task import WorkTask
 from app.models.internal_plan import SectionPlanLine
 
 router = APIRouter(prefix="/products", tags=["products"])
+
+
+class ProcessingFlagOut(BaseModel):
+    code: str
+    name: str
+    section_scope: str | None
+
+
+class ProcessingFlagInfo(BaseModel):
+    code: str
+    name: str
+    section_scope: str | None
 
 
 class ProductIn(BaseModel):
@@ -41,6 +54,9 @@ class ProductIn(BaseModel):
     is_paired_profile: bool = False
     skip_shot_blast: bool = False
     aliases: List[str] = []
+    lengths_mm: List[float] = []
+    processing_flag_codes: List[str] = []
+    is_laminated: bool = False
 
 
 class ProductPatch(BaseModel):
@@ -64,13 +80,99 @@ class ProductPatch(BaseModel):
     is_paired_profile: bool | None = None
     skip_shot_blast: bool | None = None
     aliases: List[str] | None = None
+    lengths_mm: List[float] | None = None
+    processing_flag_codes: List[str] | None = None
+    is_laminated: bool | None = None
 
 
-class ProductOut(ProductIn):
+class ProductOut(BaseModel):
     id: int
+    sku: str
+    name: str
+    type: ProductType
+    unit: str
+    is_active: bool
+    notes: str | None
+    profile_type: str | None
+    alloy: str | None
+    color: str | None
+    anod_type: str | None
+    length_mm: float | None
+    weight_per_meter: float | None
+    quantity_per_hanger: int | None
+    cross_section: str | None
+    photo_thumb: str | None
+    photo_full: str | None
+    source: str | None
+    is_catalog_item: bool
+    is_paired_profile: bool
+    skip_shot_blast: bool
+    aliases: List[str]
+    lengths_mm: List[float]
+    processing_flags: List[ProcessingFlagInfo]
+    is_laminated: bool
 
 
 VALID_SORT_FIELDS = {"sku", "name", "length_mm", "quantity_per_hanger", "id"}
+
+
+async def _sync_lengths(db: AsyncSession, product_id: int, lengths: list[float]) -> None:
+    """Replace all lengths for a product with the given list."""
+    await db.execute(delete(ProductLength).where(ProductLength.product_id == product_id))
+    for length in lengths:
+        if length <= 0:
+            raise HTTPException(status_code=400, detail=f"length_mm must be > 0, got {length}")
+        db.add(ProductLength(product_id=product_id, length_mm=length))
+
+
+async def _sync_processing_flags(db: AsyncSession, product_id: int, codes: list[str]) -> None:
+    """Replace all processing flags for a product with the given codes."""
+    await db.execute(delete(ProductProcessingFlag).where(ProductProcessingFlag.product_id == product_id))
+    if not codes:
+        return
+    known = await db.scalars(select(ProcessingFlag.code).where(ProcessingFlag.code.in_(codes), ProcessingFlag.is_active == True))
+    known_set = set(known.all())
+    unknown = set(codes) - known_set
+    if unknown:
+        raise HTTPException(status_code=400, detail=f"Unknown processing flag codes: {', '.join(sorted(unknown))}")
+    flag_ids = await db.scalars(select(ProcessingFlag.id).where(ProcessingFlag.code.in_(codes)))
+    for fid in flag_ids.all():
+        db.add(ProductProcessingFlag(product_id=product_id, flag_id=fid))
+
+
+def _to_product_out(product: Product) -> ProductOut:
+    lengths = sorted([l.length_mm for l in product.lengths]) if product.lengths else []
+    flags = [
+        ProcessingFlagInfo(code=f.code, name=f.name, section_scope=f.section_scope)
+        for f in product.processing_flags
+    ]
+    return ProductOut(
+        id=product.id,
+        sku=product.sku,
+        name=product.name,
+        type=product.type,
+        unit=product.unit,
+        is_active=product.is_active,
+        notes=product.notes,
+        profile_type=product.profile_type,
+        alloy=product.alloy,
+        color=product.color,
+        anod_type=product.anod_type,
+        length_mm=product.length_mm,
+        weight_per_meter=product.weight_per_meter,
+        quantity_per_hanger=product.quantity_per_hanger,
+        cross_section=product.cross_section,
+        photo_thumb=product.photo_thumb,
+        photo_full=product.photo_full,
+        source=product.source,
+        is_catalog_item=product.is_catalog_item,
+        is_paired_profile=product.is_paired_profile,
+        skip_shot_blast=product.skip_shot_blast,
+        aliases=product.aliases or [],
+        lengths_mm=lengths,
+        processing_flags=flags,
+        is_laminated=product.is_laminated,
+    )
 
 
 async def _enforce_bidirectional_aliases(
@@ -140,7 +242,10 @@ async def list_products(
     limit: int = Query(500, ge=1, le=2000),
     offset: int = Query(0, ge=0),
 ) -> list[ProductOut]:
-    stmt = select(Product)
+    stmt = select(Product).options(
+        selectinload(Product.lengths),
+        selectinload(Product.processing_flags),
+    )
 
     if q:
         search = f"%{q}%"
@@ -170,8 +275,8 @@ async def list_products(
     for order_clause in _parse_sort(sort):
         stmt = stmt.order_by(order_clause)
     stmt = stmt.limit(limit).offset(offset)
-    items = (await db.execute(stmt)).scalars().all()
-    return [ProductOut.model_validate(i, from_attributes=True) for i in items]
+    items = (await db.execute(stmt)).scalars().unique().all()
+    return [_to_product_out(i) for i in items]
 
 
 @router.get("/search/suggestions", response_model=list[str])
@@ -253,28 +358,45 @@ async def create_product(
     existing = await db.scalar(select(Product).where(Product.sku == payload.sku))
     if existing:
         raise HTTPException(status_code=409, detail="SKU already exists")
-    item = Product(**payload.model_dump())
+
+    product_data = payload.model_dump(exclude={"lengths_mm", "processing_flag_codes"})
+    item = Product(**product_data)
     db.add(item)
     await db.flush()
-    await db.refresh(item)
+
+    if payload.lengths_mm:
+        await _sync_lengths(db, item.id, payload.lengths_mm)
+    if payload.processing_flag_codes:
+        await _sync_processing_flags(db, item.id, payload.processing_flag_codes)
 
     if payload.aliases:
         activated = await _enforce_bidirectional_aliases(db, item.id, payload.aliases, old_aliases=[])
         if activated:
             encoded = base64.b64encode(",".join(activated).encode()).decode()
             response.headers["X-Activated-Aliases"] = encoded
-        await db.flush()
-        await db.refresh(item)
 
-    return ProductOut.model_validate(item, from_attributes=True)
+    await db.flush()
+    await db.refresh(item, attribute_names=["lengths", "processing_flags"])
+    return _to_product_out(item)
+
+
+@router.get("/processing-flags", response_model=list[ProcessingFlagOut])
+async def list_processing_flags(db: AsyncSession = Depends(get_db)) -> list[ProcessingFlagOut]:
+    stmt = select(ProcessingFlag).where(ProcessingFlag.is_active == True).order_by(ProcessingFlag.code)
+    items = (await db.execute(stmt)).scalars().all()
+    return [ProcessingFlagOut(code=f.code, name=f.name, section_scope=f.section_scope) for f in items]
 
 
 @router.get("/{product_id}", response_model=ProductOut)
 async def get_product(product_id: int, db: AsyncSession = Depends(get_db)) -> ProductOut:
-    item = await db.get(Product, product_id)
+    stmt = select(Product).options(
+        selectinload(Product.lengths),
+        selectinload(Product.processing_flags),
+    ).where(Product.id == product_id)
+    item = (await db.execute(stmt)).scalar_one_or_none()
     if item is None:
         raise HTTPException(status_code=404, detail="Product not found")
-    return ProductOut.model_validate(item, from_attributes=True)
+    return _to_product_out(item)
 
 
 @router.patch("/{product_id}", response_model=ProductOut)
@@ -290,8 +412,15 @@ async def patch_product(
 
     old_aliases = item.aliases if payload.aliases is not None else None
 
-    for key, value in payload.model_dump(exclude_unset=True).items():
+    patch_data = payload.model_dump(exclude_unset=True, exclude={"lengths_mm", "processing_flag_codes"})
+    for key, value in patch_data.items():
         setattr(item, key, value)
+
+    if payload.lengths_mm is not None:
+        await _sync_lengths(db, product_id, payload.lengths_mm)
+    if payload.processing_flag_codes is not None:
+        await _sync_processing_flags(db, product_id, payload.processing_flag_codes)
+
     await db.flush()
 
     if payload.aliases is not None and old_aliases is not None:
@@ -301,8 +430,8 @@ async def patch_product(
             response.headers["X-Activated-Aliases"] = encoded
         await db.flush()
 
-    await db.refresh(item)
-    return ProductOut.model_validate(item, from_attributes=True)
+    await db.refresh(item, attribute_names=["lengths", "processing_flags"])
+    return _to_product_out(item)
 
 
 @router.delete("/{product_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -376,5 +505,5 @@ async def upload_product_photo(
         item.photo_thumb = str(thumb_path.relative_to(storage_dir.parent))
 
     await db.flush()
-    await db.refresh(item)
-    return ProductOut.model_validate(item, from_attributes=True)
+    await db.refresh(item, attribute_names=["lengths", "processing_flags"])
+    return _to_product_out(item)

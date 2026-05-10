@@ -105,12 +105,16 @@ async def _release_plan_position(client, plan_id: int, position_id: int) -> None
     assert release_response.status_code == 200
 
 
+def _auth_headers(user: User) -> dict[str, str]:
+    token = create_access_token(subject=user.email)
+    return {"Authorization": f"Bearer {token}"}
+
+
 @pytest.mark.asyncio
 async def test_shopfloor_happy_path_with_discrepancy_link(client, session) -> None:
     user = await _make_user(session, "shopfloor1@test.local")
     _, plan, pos = await _make_product_route_plan(session, "FG-SF-1")
-    token = create_access_token(subject=user.email)
-    headers = {"Authorization": f"Bearer {token}"}
+    headers = _auth_headers(user)
 
     await _release_plan_position(client, plan.id, pos.id)
 
@@ -158,7 +162,7 @@ async def test_shopfloor_happy_path_with_discrepancy_link(client, session) -> No
     discrepancy_id = accept_res.json()["discrepancy_id"]
     assert discrepancy_id is not None
 
-    defect_details = await client.get(f"/api/shopfloor/defects/{defect_id}")
+    defect_details = await client.get(f"/api/shopfloor/defects/{defect_id}", headers=headers)
     assert defect_details.status_code == 200
     defect_item_id = defect_details.json()["items"][0]["id"]
 
@@ -170,11 +174,11 @@ async def test_shopfloor_happy_path_with_discrepancy_link(client, session) -> No
     assert resolve_res.status_code == 200
     assert resolve_res.json()["status"] == "resolved"
 
-    transfer_details = await client.get(f"/api/shopfloor/transfers/{transfer_id}")
+    transfer_details = await client.get(f"/api/shopfloor/transfers/{transfer_id}", headers=headers)
     assert transfer_details.status_code == 200
     assert transfer_details.json()["discrepancies"][0]["status"] == "resolved"
 
-    stage_aggregates = await client.get(f"/api/shopfloor/plan-positions/{pos.id}/route-stage-aggregates")
+    stage_aggregates = await client.get(f"/api/shopfloor/plan-positions/{pos.id}/route-stage-aggregates", headers=headers)
     assert stage_aggregates.status_code == 200
     assert len(stage_aggregates.json()["stages"]) == 2
 
@@ -183,8 +187,7 @@ async def test_shopfloor_happy_path_with_discrepancy_link(client, session) -> No
 async def test_shopfloor_over_issue_rejected(client, session) -> None:
     user = await _make_user(session, "shopfloor2@test.local")
     _, plan, pos = await _make_product_route_plan(session, "FG-SF-2")
-    token = create_access_token(subject=user.email)
-    headers = {"Authorization": f"Bearer {token}"}
+    headers = _auth_headers(user)
 
     await _release_plan_position(client, plan.id, pos.id)
     task = (
@@ -211,8 +214,7 @@ async def test_shopfloor_idempotent_issue_not_duplicated(client, session) -> Non
     """Repeated issue with same idempotency_key must not create duplicate movements."""
     user = await _make_user(session, "shopfloor-idem@test.local")
     _, plan, pos = await _make_product_route_plan(session, "FG-SF-IDEM")
-    token = create_access_token(subject=user.email)
-    headers = {"Authorization": f"Bearer {token}"}
+    headers = _auth_headers(user)
 
     await _release_plan_position(client, plan.id, pos.id)
     task = (
@@ -248,8 +250,7 @@ async def test_shopfloor_over_transfer_rejected(client, session) -> None:
     """Transfer quantity must not exceed completed - already_sent."""
     user = await _make_user(session, "shopfloor-over-xfer@test.local")
     _, plan, pos = await _make_product_route_plan(session, "FG-SF-XTFR")
-    token = create_access_token(subject=user.email)
-    headers = {"Authorization": f"Bearer {token}"}
+    headers = _auth_headers(user)
 
     await _release_plan_position(client, plan.id, pos.id)
     tasks = (
@@ -296,8 +297,7 @@ async def test_shopfloor_over_accept_rejected(client, session) -> None:
     """accepted + rejected must not exceed sent quantity."""
     user = await _make_user(session, "shopfloor-over-accept@test.local")
     _, plan, pos = await _make_product_route_plan(session, "FG-SF-XACC")
-    token = create_access_token(subject=user.email)
-    headers = {"Authorization": f"Bearer {token}"}
+    headers = _auth_headers(user)
 
     await _release_plan_position(client, plan.id, pos.id)
     tasks = (
@@ -334,3 +334,141 @@ async def test_shopfloor_over_accept_rejected(client, session) -> None:
     )
     assert res.status_code == 400
     assert "exceeds sent" in res.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_shopfloor_prepare_task_requires_released_position(client, session) -> None:
+    user = await _make_user(session, "shopfloor-prepare@test.local")
+    _, plan, pos = await _make_product_route_plan(session, "FG-SF-PREP")
+    headers = _auth_headers(user)
+
+    section = await session.scalar(select(Section).where(Section.code == "FG-SF-PREP-A"))
+    assert section is not None
+
+    # Position is approved (not released) at this moment.
+    res = await client.post(
+        "/api/shopfloor/section-tasks/prepare",
+        json={"plan_position_id": pos.id, "section_id": section.id, "quantity": "10"},
+        headers=headers,
+    )
+    assert res.status_code == 400
+    assert "must be released" in res.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_shopfloor_read_endpoints_require_reader_role(client, session) -> None:
+    writer = await _make_user(session, "shopfloor-reader-writer@test.local")
+    viewer = User(
+        email="shopfloor-viewer@test.local",
+        password_hash="x",
+        full_name="Viewer",
+        role=UserRole.viewer,
+        is_active=True,
+    )
+    session.add(viewer)
+    await session.commit()
+
+    _, plan, pos = await _make_product_route_plan(session, "FG-SF-RD")
+    writer_headers = _auth_headers(writer)
+    viewer_headers = _auth_headers(viewer)
+    await _release_plan_position(client, plan.id, pos.id)
+
+    first_line = await session.scalar(
+        select(SectionPlanLine).where(SectionPlanLine.plan_position_id == pos.id).order_by(SectionPlanLine.sequence)
+    )
+    assert first_line is not None
+
+    unauth = await client.get(f"/api/shopfloor/sections/{first_line.section_id}/board")
+    assert unauth.status_code in {401, 403}
+
+    allowed = await client.get(
+        f"/api/shopfloor/sections/{first_line.section_id}/board",
+        headers=viewer_headers,
+    )
+    assert allowed.status_code == 200
+
+    stats = await client.get(
+        f"/api/shopfloor/sections/{first_line.section_id}/daily-stats",
+        params={"date_from": "2026-05-01T00:00:00", "date_to": "2026-05-31T23:59:59"},
+        headers=viewer_headers,
+    )
+    assert stats.status_code == 200
+
+    # writer can still read task detail too
+    task = await session.scalar(
+        select(WorkTask)
+        .join(SectionPlanLine, WorkTask.section_plan_line_id == SectionPlanLine.id)
+        .where(SectionPlanLine.plan_position_id == pos.id)
+        .order_by(SectionPlanLine.sequence)
+    )
+    assert task is not None
+    task_detail = await client.get(f"/api/shopfloor/tasks/{task.id}", headers=writer_headers)
+    assert task_detail.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_shopfloor_issue_complete_transfer_persist_fact_fields(client, session) -> None:
+    user = await _make_user(session, "shopfloor-fact@test.local")
+    _, plan, pos = await _make_product_route_plan(session, "FG-SF-FACT")
+    headers = _auth_headers(user)
+    await _release_plan_position(client, plan.id, pos.id)
+
+    tasks = (
+        await session.execute(
+            select(WorkTask)
+            .join(SectionPlanLine, WorkTask.section_plan_line_id == SectionPlanLine.id)
+            .where(SectionPlanLine.plan_position_id == pos.id)
+            .order_by(SectionPlanLine.sequence)
+        )
+    ).scalars().all()
+    first_task, second_task = tasks[0], tasks[1]
+
+    performed = "2026-05-10T08:00:00+00:00"
+    accounted = "2026-05-10T08:15:00+00:00"
+
+    issue_res = await client.post(
+        f"/api/shopfloor/tasks/{first_task.id}/issue",
+        json={
+            "quantity": "100",
+            "performed_at": performed,
+            "accounted_at": accounted,
+        },
+        headers=headers,
+    )
+    assert issue_res.status_code == 200
+
+    complete_res = await client.post(
+        f"/api/shopfloor/tasks/{first_task.id}/complete",
+        json={
+            "good_quantity": "100",
+            "defect_quantity": "0",
+            "performed_at": performed,
+            "accounted_at": accounted,
+        },
+        headers=headers,
+    )
+    assert complete_res.status_code == 200
+
+    send_res = await client.post(
+        "/api/shopfloor/transfers",
+        json={
+            "from_task_id": first_task.id,
+            "to_task_id": second_task.id,
+            "quantity": "100",
+            "performed_at": performed,
+            "accounted_at": accounted,
+        },
+        headers=headers,
+    )
+    assert send_res.status_code == 200
+
+    detail = await client.get(f"/api/shopfloor/tasks/{first_task.id}", headers=headers)
+    assert detail.status_code == 200
+    movements = detail.json()["movements"]
+    assert len(movements) >= 3
+    # Ensure all persisted with actor as executor and with supplied times
+    for m in movements[:3]:
+        if m["movement_type"] in {"issue_to_work", "complete", "transfer_send"}:
+            assert m["executor_user_id"] == user.id
+            assert m["performed_at"] is not None
+            assert m["accounted_at"] is not None

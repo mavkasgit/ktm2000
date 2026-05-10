@@ -1,11 +1,12 @@
 import { NavLink, Outlet } from "react-router-dom"
-import { Boxes, ClipboardList, Gauge, Factory, Cog } from "lucide-react"
+import { Boxes, ClipboardList, Gauge, Factory, Cog, Wrench } from "lucide-react"
 
 const navItems = [
   { to: "/", label: "Обзор", icon: Gauge },
   { to: "/references", label: "Справочники", icon: Boxes },
   { to: "/plan", label: "План и запуск", icon: ClipboardList },
   { to: "/production-planning", label: "Выполнение", icon: Factory },
+  { to: "/shopfloor-tasks", label: "Цеховые задания", icon: Wrench },
   { to: "/settings", label: "Настройки", icon: Cog },
 ]
 

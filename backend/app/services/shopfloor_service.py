@@ -19,6 +19,7 @@ from app.models.defect import (
 from app.models.entity_comment import EntityComment, EntityType
 from app.models.internal_plan import SectionPlanLine
 from app.models.movement import Movement, MovementType
+from app.models.production_plan import PlanPosition, PlanPositionStatus
 from app.models.rework_task import ReworkTask, ReworkTaskStatus
 from app.models.route import RouteStep
 from app.models.transfer import Transfer, TransferDiscrepancy, TransferDiscrepancyStatus, TransferStatus
@@ -178,6 +179,9 @@ async def issue_to_work(
     comment: str | None = None,
     source_ref: str | None = None,
     idempotency_key: str | None = None,
+    executor_user_id: int | None = None,
+    performed_at: datetime | None = None,
+    accounted_at: datetime | None = None,
 ) -> dict:
     quantity = _to_decimal(quantity)
     _ensure_positive(quantity, "quantity")
@@ -195,6 +199,7 @@ async def issue_to_work(
     if quantity > available:
         raise ValueError("Issue quantity exceeds available quantity")
 
+    now = datetime.now(UTC)
     movement = Movement(
         product_id=task.product_id,
         task_id=task.id,
@@ -207,6 +212,9 @@ async def issue_to_work(
         idempotency_key=idempotency_key,
         comment=comment,
         created_by=actor_id,
+        executor_user_id=executor_user_id or actor_id,
+        performed_at=performed_at or now,
+        accounted_at=accounted_at or now,
     )
     db.add(movement)
     task.status = WorkTaskStatus.in_progress
@@ -226,6 +234,9 @@ async def complete_task(
     defect_reason: str | None = None,
     comment: str | None = None,
     idempotency_key: str | None = None,
+    executor_user_id: int | None = None,
+    performed_at: datetime | None = None,
+    accounted_at: datetime | None = None,
 ) -> dict:
     task = await _get_task(db, task_id)
 
@@ -259,6 +270,11 @@ async def complete_task(
     if total > in_work:
         raise ValueError("Complete quantity exceeds quantity in work")
 
+    now = datetime.now(UTC)
+    eff_performed = performed_at or now
+    eff_accounted = accounted_at or now
+    eff_executor = executor_user_id or actor_id
+
     movement_ids: list[int] = []
     defect_id: int | None = None
     if good_quantity > 0:
@@ -273,6 +289,9 @@ async def complete_task(
             comment=comment,
             created_by=actor_id,
             idempotency_key=idempotency_key,
+            executor_user_id=eff_executor,
+            performed_at=eff_performed,
+            accounted_at=eff_accounted,
         )
         db.add(good_movement)
         await db.flush()
@@ -291,6 +310,9 @@ async def complete_task(
             comment=comment,
             created_by=actor_id,
             idempotency_key=f"{idempotency_key}:reject" if idempotency_key else None,
+            executor_user_id=eff_executor,
+            performed_at=eff_performed,
+            accounted_at=eff_accounted,
         )
         db.add(reject_movement)
         await db.flush()
@@ -335,6 +357,9 @@ async def transfer_send(
     actor_id: int,
     comment: str | None = None,
     idempotency_key: str | None = None,
+    executor_user_id: int | None = None,
+    performed_at: datetime | None = None,
+    accounted_at: datetime | None = None,
 ) -> dict:
     if idempotency_key:
         existing = await _check_idempotency(db, idempotency_key=idempotency_key, entity_type=Transfer)
@@ -391,6 +416,9 @@ async def transfer_send(
         comment=comment,
         created_by=actor_id,
         idempotency_key=f"{idempotency_key}:send" if idempotency_key else None,
+        executor_user_id=executor_user_id or actor_id,
+        performed_at=performed_at or datetime.now(UTC),
+        accounted_at=accounted_at or datetime.now(UTC),
     )
     db.add(movement)
 
@@ -409,6 +437,9 @@ async def transfer_receive(
     reason: str | None = None,
     comment: str | None = None,
     idempotency_key: str | None = None,
+    executor_user_id: int | None = None,
+    performed_at: datetime | None = None,
+    accounted_at: datetime | None = None,
 ) -> dict:
     transfer = await _get_transfer(db, transfer_id)
     if transfer.status not in {TransferStatus.sent, TransferStatus.partially_accepted}:
@@ -450,6 +481,9 @@ async def transfer_receive(
             comment=comment,
             created_by=actor_id,
             idempotency_key=f"{idempotency_key}:receive" if idempotency_key else None,
+            executor_user_id=executor_user_id or actor_id,
+            performed_at=performed_at or datetime.now(UTC),
+            accounted_at=accounted_at or datetime.now(UTC),
         )
         db.add(movement)
 
@@ -533,6 +567,9 @@ async def final_release(
     actor_id: int,
     comment: str | None = None,
     idempotency_key: str | None = None,
+    executor_user_id: int | None = None,
+    performed_at: datetime | None = None,
+    accounted_at: datetime | None = None,
 ) -> dict:
     if idempotency_key:
         existing = await _check_idempotency(db, idempotency_key=idempotency_key, entity_type=Movement)
@@ -566,6 +603,9 @@ async def final_release(
         comment=comment,
         created_by=actor_id,
         idempotency_key=idempotency_key,
+        executor_user_id=executor_user_id or actor_id,
+        performed_at=performed_at or datetime.now(UTC),
+        accounted_at=accounted_at or datetime.now(UTC),
     )
     db.add(movement)
     await _refresh_task_cache(db, task.id)
@@ -889,6 +929,9 @@ async def get_task_details(db: AsyncSession, task_id: int) -> dict:
                 "reason": m.reason,
                 "comment": m.comment,
                 "created_by": m.created_by,
+                "executor_user_id": m.executor_user_id,
+                "performed_at": m.performed_at.isoformat() if m.performed_at else None,
+                "accounted_at": m.accounted_at.isoformat() if m.accounted_at else None,
                 "created_at": m.created_at.isoformat(),
             }
             for m in movements
@@ -1148,3 +1191,234 @@ async def list_entity_attachments(
         }
         for link, attachment in links
     ]
+
+
+async def prepare_section_task(
+    db: AsyncSession,
+    *,
+    plan_position_id: int,
+    section_id: int,
+    quantity: Decimal,
+    actor_id: int,
+    idempotency_key: str | None = None,
+) -> dict:
+    """Create or return an existing WorkTask for a given section from a released plan position."""
+    quantity = _to_decimal(quantity)
+    _ensure_positive(quantity, "quantity")
+
+    # Check plan position exists and is released
+    pos = await db.get(PlanPosition, plan_position_id)
+    if pos is None:
+        raise ValueError("Plan position not found")
+    if pos.status != PlanPositionStatus.released:
+        raise ValueError("Plan position must be released")
+
+    # Find the section plan line for this position + section
+    line = await db.scalar(
+        select(SectionPlanLine).where(
+            SectionPlanLine.plan_position_id == plan_position_id,
+            SectionPlanLine.section_id == section_id,
+        )
+    )
+    if line is None:
+        raise ValueError("No route step found for this section in the plan position")
+
+    # Check for existing open task
+    existing_task = await db.scalar(
+        select(WorkTask).where(
+            WorkTask.section_plan_line_id == line.id,
+            WorkTask.status.notin_([WorkTaskStatus.completed, WorkTaskStatus.cancelled]),
+        )
+    )
+    if existing_task is not None:
+        return {
+            "task_id": existing_task.id,
+            "status": existing_task.status.value,
+            "idempotent_replay": True,
+        }
+
+    # Create new task
+    task = WorkTask(
+        section_plan_line_id=line.id,
+        section_id=section_id,
+        product_id=line.product_id,
+        route_step_id=line.route_step_id,
+        planned_quantity=quantity,
+        status=WorkTaskStatus.ready,
+        due_date=line.due_date,
+    )
+    db.add(task)
+    await db.flush()
+    return {"task_id": task.id, "status": task.status.value}
+
+
+async def get_section_board(
+    db: AsyncSession,
+    *,
+    section_id: int,
+    date_from: datetime | None = None,
+    date_to: datetime | None = None,
+    status: str | None = None,
+) -> dict:
+    """Return the section board: tasks + previous stage progress."""
+    query = select(
+        WorkTask,
+        SectionPlanLine,
+        RouteStep,
+    ).join(
+        SectionPlanLine, WorkTask.section_plan_line_id == SectionPlanLine.id,
+    ).join(
+        RouteStep, WorkTask.route_step_id == RouteStep.id,
+    ).where(
+        WorkTask.section_id == section_id,
+    )
+
+    if status:
+        query = query.where(WorkTask.status == status)
+    if date_from:
+        query = query.where(WorkTask.created_at >= date_from)
+    if date_to:
+        query = query.where(WorkTask.created_at <= date_to)
+
+    query = query.order_by(SectionPlanLine.sequence, WorkTask.id)
+
+    rows = (await db.execute(query)).all()
+
+    tasks_data = []
+    for task, line, step in rows:
+        # Find previous route step
+        prev_step = await db.scalar(
+            select(RouteStep).where(
+                RouteStep.route_id == line.route_id,
+                RouteStep.sequence == step.sequence - 1,
+            )
+        )
+
+        prev_stage_info = None
+        if prev_step:
+            prev_line = await db.scalar(
+                select(SectionPlanLine).where(
+                    SectionPlanLine.plan_position_id == line.plan_position_id,
+                    SectionPlanLine.route_step_id == prev_step.id,
+                )
+            )
+            if prev_line:
+                prev_stage_info = {
+                    "section_plan_line_id": prev_line.id,
+                    "completed_quantity": str(prev_line.cached_completed_quantity),
+                    "transferred_quantity": str(prev_line.cached_transferred_quantity),
+                    "received_quantity": str(prev_line.cached_received_quantity),
+                }
+
+        next_task_id: int | None = None
+        next_task_status: str | None = None
+        next_operation_name: str | None = None
+        next_line = await db.scalar(
+            select(SectionPlanLine).where(
+                SectionPlanLine.plan_position_id == line.plan_position_id,
+                SectionPlanLine.sequence == line.sequence + 1,
+            )
+        )
+        if next_line:
+            next_task = await db.scalar(
+                select(WorkTask)
+                .where(WorkTask.section_plan_line_id == next_line.id)
+                .order_by(WorkTask.id.desc())
+            )
+            if next_task:
+                next_task_id = next_task.id
+                next_task_status = next_task.status.value
+            next_step = await db.get(RouteStep, next_line.route_step_id)
+            if next_step:
+                next_operation_name = next_step.operation_name
+
+        tasks_data.append({
+            "id": task.id,
+            "product_id": task.product_id,
+            "section_plan_line_id": line.id,
+            "plan_position_id": line.plan_position_id,
+            "route_step_id": step.id,
+            "sequence": step.sequence,
+            "operation_code": step.operation_code,
+            "operation_name": step.operation_name,
+            "planned_quantity": str(task.planned_quantity),
+            "status": task.status.value,
+            "cache": {
+                "available_quantity": str(task.cached_available_quantity),
+                "issued_quantity": str(task.cached_issued_quantity),
+                "in_work_quantity": str(task.cached_in_work_quantity),
+                "completed_quantity": str(task.cached_completed_quantity),
+                "transferred_quantity": str(task.cached_transferred_quantity),
+                "received_quantity": str(task.cached_received_quantity),
+                "rejected_quantity": str(task.cached_rejected_quantity),
+                "remaining_quantity": str(task.cached_remaining_quantity),
+            },
+            "previous_stage": prev_stage_info,
+            "next_task_id": next_task_id,
+            "next_task_status": next_task_status,
+            "next_operation_name": next_operation_name,
+        })
+
+    return {"section_id": section_id, "tasks": tasks_data}
+
+
+async def get_section_daily_stats(
+    db: AsyncSession,
+    *,
+    section_id: int,
+    date_from: datetime,
+    date_to: datetime,
+) -> dict:
+    """Return daily statistics for a section, aggregated by performed_at date."""
+    from sqlalchemy import cast, Date as SQLADate
+
+    # Aggregate by date and movement type
+    rows = (
+        await db.execute(
+            select(
+                cast(Movement.performed_at, SQLADate).label("stat_date"),
+                Movement.movement_type,
+                func.count(Movement.id).label("op_count"),
+                func.coalesce(func.sum(Movement.quantity), 0).label("total_qty"),
+                func.avg(
+                    func.extract("epoch", Movement.accounted_at) - func.extract("epoch", Movement.performed_at)
+                ).label("avg_delay_seconds"),
+            )
+            .where(
+                Movement.to_section_id == section_id,
+                Movement.performed_at.isnot(None),
+                Movement.performed_at >= date_from,
+                Movement.performed_at <= date_to,
+            )
+            .group_by(
+                cast(Movement.performed_at, SQLADate),
+                Movement.movement_type,
+            )
+            .order_by(cast(Movement.performed_at, SQLADate))
+        )
+    ).all()
+
+    daily_map: dict[str, dict] = {}
+    for stat_date, mv_type, op_count, total_qty, avg_delay in rows:
+        day_key = str(stat_date)
+        if day_key not in daily_map:
+            daily_map[day_key] = {
+                "date": day_key,
+                "good_quantity": "0",
+                "rejected_quantity": "0",
+                "op_count": 0,
+                "avg_accounting_delay_seconds": "0",
+            }
+
+        type_key = mv_type.value if hasattr(mv_type, "value") else str(mv_type)
+        daily_map[day_key]["op_count"] += op_count
+
+        if type_key == MovementType.complete.value:
+            daily_map[day_key]["good_quantity"] = str(_to_decimal(total_qty))
+        elif type_key in (MovementType.reject.value, MovementType.scrap.value):
+            daily_map[day_key]["rejected_quantity"] = str(_to_decimal(total_qty))
+
+        if avg_delay is not None:
+            daily_map[day_key]["avg_accounting_delay_seconds"] = str(round(float(avg_delay), 1))
+
+    return {"section_id": section_id, "daily_stats": list(daily_map.values())}

@@ -1,7 +1,7 @@
 from .base import Base
 from .section import Section
 from .user import User, UserRole
-from .product import Product, ProductType
+from .product import Product, ProductType, ProductLength, ProcessingFlag, ProductProcessingFlag
 from .techcard import Techcard, TechcardLine
 from .route import ProductionRoute, RouteStep
 from .imports import ImportBatch, ImportBatchMode, ImportBatchStatus, ImportFile
@@ -44,6 +44,9 @@ __all__ = [
     "UserRole",
     "Product",
     "ProductType",
+    "ProductLength",
+    "ProcessingFlag",
+    "ProductProcessingFlag",
     "Techcard",
     "TechcardLine",
     "ProductionRoute",

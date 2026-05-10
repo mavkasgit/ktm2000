@@ -1,5 +1,5 @@
-import React, { useEffect, useImperativeHandle, useState, forwardRef } from "react";
-import { Image, Maximize2, Camera, Trash2 } from "lucide-react";
+import React, { useEffect, useImperativeHandle, useState, forwardRef, useCallback } from "react";
+import { Image, Maximize2, Camera, Trash2, Plus, Minus } from "lucide-react";
 import { Button } from "@/shared/ui/Button";
 import { Input } from "@/shared/ui/Input";
 import { Checkbox } from "@/shared/ui/Checkbox";
@@ -8,58 +8,47 @@ import { ImageUploadModal } from "./ImageUploadModal";
 import { ProductSearchMulti } from "./ProductSearchMulti";
 import { getPhotoUrl } from "./getPhotoUrl";
 import { uploadProductPhoto } from "@/shared/api/products";
-import type { Product, ProductType, CreateProductInput, PatchProductInput } from "@/shared/api/products";
-
-const TYPE_OPTIONS: { value: ProductType; label: string }[] = [
-  { value: "finished_good", label: "Готовая продукция" },
-  { value: "semi_finished", label: "Полуфабрикат" },
-  { value: "component", label: "Сырье" },
-  { value: "material", label: "Материал" },
-];
+import type { Product, CreateProductInput, PatchProductInput } from "@/shared/api/products";
 
 export type DialogMode = "create" | "edit";
 
-function isFormDirty(form: CreateProductInput, product: Product | null, isCreate: boolean): boolean {
-  if (isCreate) {
-    return (
-      form.sku !== "" ||
-      form.name !== "" ||
-      form.type !== "finished_good" ||
-      form.unit !== "шт" ||
-      (form.is_active ?? true) !== true ||
-      form.notes != null ||
-      form.profile_type != null ||
-      form.alloy != null ||
-      form.color != null ||
-      form.anod_type != null ||
-      form.length_mm != null ||
-      form.weight_per_meter != null ||
-      form.quantity_per_hanger != null ||
-      form.cross_section != null ||
-      (form.is_paired_profile ?? false) !== false ||
-      (form.skip_shot_blast ?? false) !== false ||
-      (form.aliases?.length ?? 0) > 0
-    );
-  }
-  if (!product) return false;
-  return (
-    form.name !== product.name ||
-    form.type !== product.type ||
-    form.unit !== product.unit ||
-    form.is_active !== product.is_active ||
-    form.notes !== product.notes ||
-    form.profile_type !== product.profile_type ||
-    form.alloy !== product.alloy ||
-    form.color !== product.color ||
-    form.anod_type !== product.anod_type ||
-    form.length_mm !== product.length_mm ||
-    form.weight_per_meter !== product.weight_per_meter ||
-    form.quantity_per_hanger !== product.quantity_per_hanger ||
-    form.cross_section !== product.cross_section ||
-    form.is_paired_profile !== product.is_paired_profile ||
-    form.skip_shot_blast !== product.skip_shot_blast ||
-    JSON.stringify(form.aliases ?? []) !== JSON.stringify(product.aliases ?? [])
-  );
+export type FieldChange = { field: string; label: string; from: string | number | boolean | null; to: string | number | boolean | null };
+
+function normalizeLengths(lengths: Array<number | null | undefined>): number[] {
+  return [...new Set(lengths.filter((v): v is number => typeof v === "number" && Number.isFinite(v) && v > 0))]
+    .sort((a, b) => a - b);
+}
+
+function getProductLengths(product: Product | null): number[] {
+  if (!product) return [];
+  return normalizeLengths([...(product.lengths_mm ?? []), product.length_mm ?? undefined]);
+}
+
+function getChanges(form: CreateProductInput, product: Product | null, isCreate: boolean): FieldChange[] {
+  if (isCreate || !product) return [];
+  const changes: FieldChange[] = [];
+  const eq = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
+  const formLengths = normalizeLengths(form.lengths_mm ?? []);
+  const productLengths = getProductLengths(product);
+
+  if (!eq(form.name, product.name)) changes.push({ field: "name", label: "Наименование", from: product.name, to: form.name ?? "" });
+  if (!eq(form.type, product.type)) changes.push({ field: "type", label: "Тип", from: product.type, to: form.type ?? "" });
+  if (!eq(form.unit, product.unit)) changes.push({ field: "unit", label: "Ед. изм.", from: product.unit, to: form.unit ?? "" });
+  if (!eq(form.is_active, product.is_active)) changes.push({ field: "is_active", label: "Активен", from: product.is_active ? "Да" : "Нет", to: form.is_active ? "Да" : "Нет" });
+  if (!eq(form.notes, product.notes)) changes.push({ field: "notes", label: "Примечания", from: product.notes ?? "—", to: form.notes ?? "—" });
+  if (!eq(form.profile_type, product.profile_type)) changes.push({ field: "profile_type", label: "Тип профиля", from: product.profile_type ?? "—", to: form.profile_type ?? "—" });
+  if (!eq(form.alloy, product.alloy)) changes.push({ field: "alloy", label: "Сплав", from: product.alloy ?? "—", to: form.alloy ?? "—" });
+  if (!eq(form.color, product.color)) changes.push({ field: "color", label: "Цвет", from: product.color ?? "—", to: form.color ?? "—" });
+  if (!eq(form.anod_type, product.anod_type)) changes.push({ field: "anod_type", label: "Тип анод.", from: product.anod_type ?? "—", to: form.anod_type ?? "—" });
+  if (!eq(form.weight_per_meter, product.weight_per_meter)) changes.push({ field: "weight_per_meter", label: "Вес/м", from: product.weight_per_meter ?? "—", to: form.weight_per_meter ?? "—" });
+  if (!eq(form.quantity_per_hanger, product.quantity_per_hanger)) changes.push({ field: "quantity_per_hanger", label: "Кол-во на подвесе", from: product.quantity_per_hanger ?? "—", to: form.quantity_per_hanger ?? "—" });
+  if (!eq(form.cross_section, product.cross_section)) changes.push({ field: "cross_section", label: "Сечение", from: product.cross_section ?? "—", to: form.cross_section ?? "—" });
+  if (!eq(form.is_paired_profile, product.is_paired_profile)) changes.push({ field: "is_paired_profile", label: "Парный профиль", from: product.is_paired_profile ? "Да" : "Нет", to: form.is_paired_profile ? "Да" : "Нет" });
+  if (!eq(form.skip_shot_blast, product.skip_shot_blast)) changes.push({ field: "skip_shot_blast", label: "Не дробеструится", from: product.skip_shot_blast ? "Да" : "Нет", to: form.skip_shot_blast ? "Да" : "Нет" });
+  if (!eq(form.aliases ?? [], product.aliases ?? [])) changes.push({ field: "aliases", label: "Эквиваленты", from: (product.aliases ?? []).join(", ") || "—", to: (form.aliases ?? []).join(", ") || "—" });
+  if (!eq(formLengths, productLengths)) changes.push({ field: "lengths_mm", label: "Длины", from: productLengths.join(", ") || "—", to: formLengths.join(", ") || "—" });
+  if (!eq(form.is_laminated ?? false, product.is_laminated)) changes.push({ field: "is_laminated", label: "Ламинируется", from: product.is_laminated ? "Да" : "Нет", to: form.is_laminated ? "Да" : "Нет" });
+  return changes;
 }
 
 export interface CatalogFormRef {
@@ -74,6 +63,7 @@ export const CatalogForm = forwardRef<CatalogFormRef, {
   onDelete?: () => void;
   onAliasClick?: (sku: string) => void;
   onDirtyChange?: (dirty: boolean) => void;
+  onChangesChange?: (changes: FieldChange[]) => void;
 }>(function CatalogForm({
   product,
   mode,
@@ -82,8 +72,10 @@ export const CatalogForm = forwardRef<CatalogFormRef, {
   onDelete,
   onAliasClick,
   onDirtyChange,
+  onChangesChange,
 }, ref) {
   const isCreate = mode === "create";
+  const initialLengths = getProductLengths(product);
   const [fullscreenPhoto, setFullscreenPhoto] = useState<string | null>(null);
   const [localPhotoFull, setLocalPhotoFull] = useState<string | null>(null);
   const [localPhotoThumb, setLocalPhotoThumb] = useState<string | null>(null);
@@ -91,6 +83,7 @@ export const CatalogForm = forwardRef<CatalogFormRef, {
   const [uploadThumbModal, setUploadThumbModal] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [photoVersion, setPhotoVersion] = useState(0);
+  const [newLength, setNewLength] = useState("");
   const [form, setForm] = useState<CreateProductInput>({
     sku: product?.sku ?? "",
     name: product?.name ?? "",
@@ -102,30 +95,70 @@ export const CatalogForm = forwardRef<CatalogFormRef, {
     alloy: product?.alloy ?? null,
     color: product?.color ?? null,
     anod_type: product?.anod_type ?? null,
-    length_mm: product?.length_mm ?? null,
+    length_mm: initialLengths[0] ?? product?.length_mm ?? null,
     weight_per_meter: product?.weight_per_meter ?? null,
     quantity_per_hanger: product?.quantity_per_hanger ?? null,
     cross_section: product?.cross_section ?? null,
     is_paired_profile: product?.is_paired_profile ?? false,
     skip_shot_blast: product?.skip_shot_blast ?? false,
     aliases: product?.aliases ?? [],
+    lengths_mm: initialLengths,
+    is_laminated: product?.is_laminated ?? false,
   });
+
+  const setLengths = useCallback((values: number[]) => {
+    const normalized = normalizeLengths(values);
+    setForm((f) => ({
+      ...f,
+      lengths_mm: normalized,
+      // Keep legacy scalar field in sync with the first length.
+      length_mm: normalized[0] ?? null,
+    }));
+  }, []);
+
+  const commitLength = () => {
+    const val = parseFloat(newLength);
+    if (isNaN(val) || val <= 0) return;
+    setLengths([...(form.lengths_mm ?? []), val]);
+    setNewLength("");
+  };
+
+  const buildPatch = useCallback((): PatchProductInput => {
+    if (!product) return {};
+    const patch: PatchProductInput = {};
+    const eq = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
+    const formLengths = normalizeLengths(form.lengths_mm ?? []);
+    const productLengths = getProductLengths(product);
+    const formPrimaryLength = formLengths[0] ?? null;
+    const productPrimaryLength = productLengths[0] ?? (product.length_mm ?? null);
+
+    if (!eq(form.name, product.name)) patch.name = form.name;
+    if (!eq(form.type, product.type)) patch.type = form.type;
+    if (!eq(form.unit, product.unit)) patch.unit = form.unit;
+    if (!eq(form.is_active, product.is_active)) patch.is_active = form.is_active;
+    if (!eq(form.notes, product.notes)) patch.notes = form.notes;
+    if (!eq(form.profile_type, product.profile_type)) patch.profile_type = form.profile_type;
+    if (!eq(form.alloy, product.alloy)) patch.alloy = form.alloy;
+    if (!eq(form.color, product.color)) patch.color = form.color;
+    if (!eq(form.anod_type, product.anod_type)) patch.anod_type = form.anod_type;
+    if (!eq(formPrimaryLength, productPrimaryLength)) patch.length_mm = formPrimaryLength;
+    if (!eq(form.weight_per_meter, product.weight_per_meter)) patch.weight_per_meter = form.weight_per_meter;
+    if (!eq(form.quantity_per_hanger, product.quantity_per_hanger)) patch.quantity_per_hanger = form.quantity_per_hanger;
+    if (!eq(form.cross_section, product.cross_section)) patch.cross_section = form.cross_section;
+    if (!eq(form.is_paired_profile, product.is_paired_profile)) patch.is_paired_profile = form.is_paired_profile;
+    if (!eq(form.skip_shot_blast, product.skip_shot_blast)) patch.skip_shot_blast = form.skip_shot_blast;
+    if (!eq(form.aliases ?? [], product.aliases ?? [])) patch.aliases = form.aliases;
+    if (!eq(formLengths, productLengths)) patch.lengths_mm = formLengths;
+    if (!eq(form.is_laminated ?? false, product.is_laminated)) patch.is_laminated = form.is_laminated;
+    return patch;
+  }, [form, product]);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (isCreate) {
       onSave(form, mode);
     } else if (product) {
-      const patch: PatchProductInput = {};
-      (Object.keys(form) as Array<keyof CreateProductInput>).forEach((key) => {
-        if (key === "sku") return;
-        const val = form[key];
-        const orig = product[key as keyof Product];
-        if (val !== orig) {
-          (patch as any)[key] = val;
-        }
-      });
-      onSave(patch, mode);
+      onSave(buildPatch(), mode);
     }
   };
 
@@ -134,28 +167,21 @@ export const CatalogForm = forwardRef<CatalogFormRef, {
       if (isCreate) {
         onSave(form, mode);
       } else if (product) {
-        const patch: PatchProductInput = {};
-        (Object.keys(form) as Array<keyof CreateProductInput>).forEach((key) => {
-          if (key === "sku") return;
-          const val = form[key];
-          const orig = product[key as keyof Product];
-          if (val !== orig) {
-            (patch as any)[key] = val;
-          }
-        });
-        onSave(patch, mode);
+        onSave(buildPatch(), mode);
       }
     },
-  }));
+  }), [form, product, isCreate, mode, onSave, buildPatch]);
 
   const update = <K extends keyof CreateProductInput>(key: K, value: CreateProductInput[K]) => {
     setForm((f) => ({ ...f, [key]: value }));
   };
 
-  const isDirty = isFormDirty(form, product, isCreate);
+  const changes = getChanges(form, product, isCreate);
+  const isDirty = changes.length > 0;
   useEffect(() => {
     onDirtyChange?.(isDirty);
-  }, [isDirty, onDirtyChange]);
+    onChangesChange?.(changes);
+  }, [isDirty, onDirtyChange, onChangesChange, changes]);
 
   // Cleanup blob URLs on unmount
   useEffect(() => {
@@ -197,6 +223,22 @@ export const CatalogForm = forwardRef<CatalogFormRef, {
           alt={product?.name || ""}
           onClose={() => setFullscreenPhoto(null)}
         />
+      )}
+
+      {isDirty && !isCreate && changes.length > 0 && (
+        <div className="bg-blue-50 border border-blue-200 rounded-lg p-3">
+          <p className="text-sm font-medium text-blue-900 mb-1">Изменения:</p>
+          <ul className="text-xs text-blue-800 space-y-0.5 max-h-24 overflow-auto">
+            {changes.map((c) => (
+              <li key={c.field} className="flex gap-1">
+                <span className="font-medium">{c.label}:</span>
+                <span className="text-red-600 line-through">{String(c.from)}</span>
+                <span>→</span>
+                <span className="text-green-700">{String(c.to)}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
       )}
 
       <div className="grid grid-cols-1 md:grid-cols-[320px_1fr] gap-6">
@@ -295,11 +337,63 @@ export const CatalogForm = forwardRef<CatalogFormRef, {
             </div>
             <div className="space-y-1">
               <label className="text-sm font-medium">Кол-во на подвесе, шт</label>
-              <Input type="number" value={form.quantity_per_hanger ?? ""} onChange={(e) => update("quantity_per_hanger", e.target.value ? parseInt(e.target.value) : null)} />
+              <Input
+                type="number"
+                className="h-10"
+                value={form.quantity_per_hanger ?? ""}
+                onChange={(e) => update("quantity_per_hanger", e.target.value ? parseInt(e.target.value) : null)}
+              />
             </div>
-            <div className="space-y-1">
-              <label className="text-sm font-medium">Длина, мм</label>
-              <Input type="number" step="0.1" value={form.length_mm ?? ""} onChange={(e) => update("length_mm", e.target.value ? parseFloat(e.target.value) : null)} />
+            <div className="space-y-1 sm:col-start-2">
+              <label className="text-sm font-medium">Длины, мм</label>
+              <div className="space-y-1">
+                <div className="flex gap-2 items-stretch">
+                  <Input
+                    type="number"
+                    placeholder="Введите длину"
+                    className="w-32 h-10"
+                    value={newLength}
+                    onChange={(e) => setNewLength(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") {
+                        e.preventDefault();
+                        commitLength();
+                      }
+                    }}
+                  />
+                  <Button
+                    type="button"
+                    className="h-10 bg-green-600 hover:bg-green-700"
+                    onClick={commitLength}
+                  >
+                    <Plus className="h-3 w-3 mr-1" />
+                    Добавить
+                  </Button>
+                </div>
+                {(form.lengths_mm ?? []).length > 0 ? (
+                  <div className="flex flex-wrap gap-2 items-center">
+                    {(form.lengths_mm ?? []).map((len, idx) => {
+                      return (
+                        <div key={`${len}-${idx}`} className="inline-flex items-center gap-1 bg-secondary rounded-md px-2 py-1 text-sm">
+                          <span>{len} мм</span>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const vals = (form.lengths_mm ?? []).filter((_, i) => i !== idx);
+                              setLengths(vals);
+                            }}
+                            className="text-muted-foreground hover:text-destructive"
+                          >
+                            <Minus className="h-3 w-3" />
+                          </button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <p className="text-xs text-muted-foreground">Добавьте хотя бы одну длину.</p>
+                )}
+              </div>
             </div>
           </div>
 
@@ -323,6 +417,16 @@ export const CatalogForm = forwardRef<CatalogFormRef, {
                 />
                 <label htmlFor="skip_shot_blast" className="text-sm font-medium leading-none cursor-pointer">
                   Не дробеструится
+                </label>
+              </div>
+              <div className="flex items-center gap-2">
+                <Checkbox
+                  id="is_laminated"
+                  checked={form.is_laminated ?? false}
+                  onCheckedChange={(checked) => update("is_laminated", checked === true)}
+                />
+                <label htmlFor="is_laminated" className="text-sm font-medium leading-none cursor-pointer">
+                  Ламинируется
                 </label>
               </div>
             </div>

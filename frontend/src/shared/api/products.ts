@@ -4,6 +4,12 @@ export { getErrorMessage };
 
 export type ProductType = "finished_good" | "semi_finished" | "component" | "material";
 
+export type ProcessingFlag = {
+  code: string;
+  name: string;
+  section_scope: string | null;
+};
+
 export type Product = {
   id: number;
   sku: string;
@@ -27,6 +33,9 @@ export type Product = {
   is_paired_profile: boolean;
   skip_shot_blast: boolean;
   aliases: string[];
+  lengths_mm: number[];
+  processing_flags: ProcessingFlag[];
+  is_laminated: boolean;
 };
 
 export type CreateProductInput = {
@@ -49,6 +58,9 @@ export type CreateProductInput = {
   is_paired_profile?: boolean;
   skip_shot_blast?: boolean;
   aliases?: string[];
+  lengths_mm?: number[];
+  processing_flag_codes?: string[];
+  is_laminated?: boolean;
 };
 
 export type PatchProductInput = Partial<Omit<CreateProductInput, "sku">>;
@@ -178,5 +190,10 @@ export async function searchProductSuggestions(
   const { data } = await apiClient.get<string[]>("/products/search/suggestions", {
     params: { q, field, limit },
   });
+  return data;
+}
+
+export async function listProcessingFlags() {
+  const { data } = await apiClient.get<ProcessingFlag[]>("/products/processing-flags");
   return data;
 }
