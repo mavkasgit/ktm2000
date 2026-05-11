@@ -20,6 +20,7 @@ from app.api.routes.routes_seed import router as routes_seed_router
 from app.api.routes.import_templates import router as import_templates_router
 from app.api.routes.catalog_import import router as catalog_import_router
 from app.api.routes.shopfloor import router as shopfloor_router
+from app.api.routes.demo import router as demo_router
 from app.api.backups import router as backups_router
 from app.core.config import settings
 from app.core.database import async_session
@@ -58,6 +59,7 @@ app.include_router(release_batches_router, prefix="/api")
 app.include_router(import_templates_router, prefix="/api")
 app.include_router(catalog_import_router, prefix="/api")
 app.include_router(shopfloor_router, prefix="/api")
+app.include_router(demo_router, prefix="/api")
 app.include_router(backups_router, prefix="/api")
 
 

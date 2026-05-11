@@ -6,7 +6,7 @@ from openpyxl import Workbook
 from app.core.config import settings
 from app.models.imports import ImportBatch, ImportFile
 from app.models.production_plan import PlanChangeItem, PlanChangeSet, ProductionPlan
-from app.services.excel_import import parse_factory_plan_workbook
+from app.services.excel_import import parse_factory_plan_workbook, parse_row_selection
 
 
 def _workbook_bytes() -> bytes:
@@ -109,6 +109,30 @@ def test_factory_plan_parser_groups_paired_profiles_and_continuations() -> None:
     assert continuation.quantity == 900
 
 
+def test_parse_row_selection_csv_and_ranges() -> None:
+    assert parse_row_selection("5") == {5}
+    assert parse_row_selection("5,7,9") == {5, 7, 9}
+    assert parse_row_selection("5-8") == {5, 6, 7, 8}
+    assert parse_row_selection("5,7-9") == {5, 7, 8, 9}
+    assert parse_row_selection("5, 7, 7, 9-10") == {5, 7, 9, 10}
+
+
+@pytest.mark.parametrize("value", ["", "7-", "a", "15-12", "5,,7", "-1", "0"])
+def test_parse_row_selection_invalid(value: str) -> None:
+    with pytest.raises(ValueError):
+        parse_row_selection(value)
+
+
+def test_factory_plan_parser_row_selection_auto_includes_pair() -> None:
+    parsed = parse_factory_plan_workbook(_workbook_bytes(), "plan.xlsx", row_selection="6")
+    assert len(parsed.parsed_rows) == 1
+    row = parsed.parsed_rows[0]
+    assert row.source_row_numbers == [6, 7]
+    assert any(w.startswith("paired_row_auto_included:") for w in row.warnings)
+    assert parsed.selected_row_numbers == [6]
+    assert parsed.auto_included_row_numbers == [7]
+
+
 @pytest.mark.asyncio
 async def test_import_excel_creates_batch_and_change_set(client, session, tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(settings, "IMPORT_STORAGE_DIR", str(tmp_path))
@@ -130,6 +154,9 @@ async def test_import_excel_creates_batch_and_change_set(client, session, tmp_pa
     assert body["summary"]["paired_profile_positions"] == 1
     assert len(body["items"]) == 3
     assert body["items"][0]["after_data"]["source_sku"] == "ЮП-2616+ЮП-2604"
+    assert body["items"][0]["after_data"]["operation_family"] == "NONE"
+    assert body["items"][0]["after_data"]["output_kind"] == "semi_finished_shipment"
+    assert body["items"][0]["after_data"]["has_pack_ops"] is False
     assert body["items"][0]["warnings"] == ["paired_profile_product_unmapped"]
     # ЮП-2083 not seeded in tests, so product_not_found is expected
     assert "product_not_found" in body["items"][1]["errors"] or "active_techcard_has_no_lines" in body["items"][1]["errors"]
@@ -141,6 +168,54 @@ async def test_import_excel_creates_batch_and_change_set(client, session, tmp_pa
 
     change_items = body["items"]
     assert await session.get(PlanChangeItem, change_items[0]["id"]) is not None
+
+
+@pytest.mark.asyncio
+async def test_import_excel_with_row_selection_filters_rows_and_reports_pair_autoinclude(
+    client, session, tmp_path, monkeypatch
+) -> None:
+    monkeypatch.setattr(settings, "IMPORT_STORAGE_DIR", str(tmp_path))
+
+    response = await client.post(
+        "/api/imports/excel",
+        data={"row_selection": "6"},
+        files={
+            "file": (
+                "plan.xlsx",
+                _workbook_bytes(),
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
+        },
+    )
+
+    assert response.status_code == 201
+    body = response.json()
+    assert body["summary"]["total_positions"] == 1
+    assert body["summary"]["row_selection"] == "6"
+    assert body["summary"]["selected_row_numbers"] == [6]
+    assert body["summary"]["auto_included_row_numbers"] == [7]
+    assert body["items"][0]["after_data"]["source_sku"] == "ЮП-2616+ЮП-2604"
+    assert any(w.startswith("paired_row_auto_included:") for w in body["items"][0]["warnings"])
+
+
+@pytest.mark.asyncio
+async def test_import_excel_with_invalid_row_selection_returns_400(client, tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(settings, "IMPORT_STORAGE_DIR", str(tmp_path))
+
+    response = await client.post(
+        "/api/imports/excel",
+        data={"row_selection": "15-12"},
+        files={
+            "file": (
+                "plan.xlsx",
+                _workbook_bytes(),
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
+        },
+    )
+
+    assert response.status_code == 400
+    assert "row range" in response.json()["detail"].lower()
 
 
 def test_factory_plan_parser_with_custom_mapping() -> None:
@@ -205,11 +280,12 @@ def test_factory_plan_parser_maps_additional_pack_operations() -> None:
     )
     ws.append(["SKU-GLUE", "", "Glue Profile", 0, "", 100, 2.7, "клей", "поф", "", 2.7, 100, "", 100, "ГП", ""])
     ws.append(["SKU-DIFF", "", "Diffuser Profile", 0, "", 200, 2.7, "рассеиватель", "поф", "", 2.7, 200, "", 200, "ГП", ""])
+    ws.append(["SKU-NODIFF", "", "No Diffuser Profile", 0, "", 50, 2.7, "Без рассеивателя", "поф", "", 2.7, 50, "", 50, "П/ф", ""])
     out = BytesIO()
     wb.save(out)
 
     parsed = parse_factory_plan_workbook(out.getvalue(), "pack_ops.xlsx")
-    assert len(parsed.parsed_rows) == 2
+    assert len(parsed.parsed_rows) == 3
 
     glue = parsed.parsed_rows[0].payload
     assert glue["operation_code"] == "PACK"
@@ -220,6 +296,11 @@ def test_factory_plan_parser_maps_additional_pack_operations() -> None:
     assert diffuser["operation_code"] == "PACK"
     assert diffuser["operation_name"] == "Упаковка"
     assert diffuser["additional_pack_operations"][0]["operation_code"] == "PACK_DIFFUSER"
+
+    no_diff = parsed.parsed_rows[2].payload
+    assert no_diff["operation_code"] == "PACK"
+    assert no_diff["operation_name"] == "Упаковка"
+    assert no_diff["additional_pack_operations"][0]["operation_code"] == "PACK_CUSTOM"
 
 
 from datetime import date, datetime
@@ -244,7 +325,8 @@ async def test_replace_draft_mode_creates_cancel_for_missing_rows(client, sessio
 
     from app.models.techcard import Techcard, TechcardLine
     from app.models.product import Product, ProductType
-    from app.models.route import ProductionRoute, RouteStep
+    from app.models.route import ProductionRoute, RouteSignatureRule, RouteStep
+    from app.models.routing import RouteOperationFamily, RouteOutputKind
     from app.models.section import Section
 
     product = Product(sku="FG-TEST", name="Test Product", type=ProductType.finished_good, unit="pcs")
@@ -264,6 +346,16 @@ async def test_replace_draft_mode_creates_cancel_for_missing_rows(client, sessio
     route = ProductionRoute(name="Main", is_active=True)
     session.add(route)
     await session.flush()
+    session.add(
+        RouteSignatureRule(
+            route_id=route.id,
+            operation_family=RouteOperationFamily.NONE,
+            output_kind=RouteOutputKind.finished_good,
+            has_pack_ops=False,
+            priority=10,
+            is_active=True,
+        )
+    )
     for index, section in enumerate(sections, start=1):
         session.add(
             RouteStep(

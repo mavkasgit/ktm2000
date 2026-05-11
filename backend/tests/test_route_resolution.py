@@ -44,7 +44,7 @@ from app.services.route_resolution import resolve_route_signature, RouteStepSign
             },
             [
                 "WH/ISSUE_RAW",
-                "PRESS_WINDOW",
+                "PRESS",
                 "SHOT",
                 "ANOD",
                 "WIP_WH/MOVE_TO_WIP",
@@ -63,7 +63,7 @@ from app.services.route_resolution import resolve_route_signature, RouteStepSign
             },
             [
                 "WH/ISSUE_RAW",
-                "PRESS_COMB",
+                "PRESS",
                 "SHOT",
                 "ANOD",
                 "WIP_WH/MOVE_TO_WIP",
@@ -95,7 +95,10 @@ from app.services.route_resolution import resolve_route_signature, RouteStepSign
 def test_resolve_route_signature(payload, expected_steps):
     result = resolve_route_signature(payload)
     assert [step.step_id for step in result.steps] == expected_steps
-    assert result.primary_operation == payload["operation_code"]
+    expected_primary = payload["operation_code"]
+    if expected_primary in {"PRESS_WINDOW", "PRESS_COMB"}:
+        expected_primary = "PRESS"
+    assert result.primary_operation == expected_primary
     assert result.output_kind == payload["output_kind"]
     assert result.additional_pack_operations == [
         op["operation_code"] for op in payload["additional_pack_operations"] if "operation_code" in op

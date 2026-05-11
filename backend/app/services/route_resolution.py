@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
+from app.models.routing import RouteOperationFamily, RouteOutputKind
+
 
 @dataclass
 class RouteStepSignature:
@@ -24,18 +26,29 @@ def resolve_route_signature(source_payload: dict[str, Any]) -> ResolvedRouteSign
     operation_code = source_payload.get("operation_code")
     output_kind = source_payload.get("output_kind")
     additional_pack = source_payload.get("additional_pack_operations") or []
-    additional_codes = [op["operation_code"] for op in additional_pack if "operation_code" in op]
+    additional_codes = []
+    for op in additional_pack:
+        if isinstance(op, dict) and "operation_code" in op:
+            additional_codes.append(op["operation_code"])
+        elif isinstance(op, str):
+            additional_codes.append(op)
+
+    primary_operation = None
+    if operation_code == "DRILL":
+        primary_operation = "DRILL"
+    elif operation_code in ("PRESS_WINDOW", "PRESS_COMB", "PRESS"):
+        primary_operation = "PRESS"
 
     steps: list[RouteStepSignature] = [
         RouteStepSignature(step_id="WH/ISSUE_RAW", operation_code="ISSUE_RAW", section_kind="raw_stock", description="Выдача сырья"),
     ]
 
     # Primary operation
-    if operation_code in ("DRILL", "PRESS_WINDOW", "PRESS_COMB"):
+    if primary_operation in ("DRILL", "PRESS"):
         steps.append(
             RouteStepSignature(
-                step_id=operation_code,
-                operation_code=operation_code,
+                step_id=primary_operation,
+                operation_code=primary_operation,
                 section_kind="production",
                 description="Первичная операция",
             )
@@ -80,7 +93,29 @@ def resolve_route_signature(source_payload: dict[str, Any]) -> ResolvedRouteSign
 
     return ResolvedRouteSignature(
         steps=steps,
-        primary_operation=operation_code,
+        primary_operation=primary_operation,
         output_kind=output_kind,
         additional_pack_operations=additional_codes,
     )
+
+
+def resolve_route_signature_from_canonical(
+    *,
+    operation_family: RouteOperationFamily | None,
+    output_kind: RouteOutputKind | None,
+    has_pack_ops: bool | None,
+) -> ResolvedRouteSignature:
+    operation_code = None
+    if operation_family == RouteOperationFamily.DRILL:
+        operation_code = "DRILL"
+    elif operation_family == RouteOperationFamily.PRESS:
+        operation_code = "PRESS"
+    elif operation_family == RouteOperationFamily.PACK:
+        operation_code = "PACK"
+
+    payload = {
+        "operation_code": operation_code,
+        "output_kind": output_kind.value if output_kind else None,
+        "additional_pack_operations": [{"operation_code": "PACK_CUSTOM"}] if has_pack_ops else [],
+    }
+    return resolve_route_signature(payload)

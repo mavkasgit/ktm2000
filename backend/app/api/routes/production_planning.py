@@ -6,7 +6,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import WRITER_ROLES, require_role, get_current_user
 from app.core.database import get_db
 from app.models.internal_plan import SectionPlanLine
-from app.models.product import Product
 from app.models.production_plan import PlanPosition, PlanPositionStatus, ProductionPlan
 from app.models.work_task import WorkTask, WorkTaskStatus
 from app.models.route import ProductionRoute, RouteStep
@@ -195,20 +194,10 @@ async def get_production_planning_overview(
     if not positions:
         return ProductionPlanningOverview(sections=[])
 
-    # Load products for all positions (needed for auto route resolution)
-    product_ids = {p.product_id for p in positions if p.product_id is not None}
-    products_map: dict[int, Product] = {}
-    if product_ids:
-        products = (
-            await db.execute(select(Product).where(Product.id.in_(product_ids)))
-        ).scalars().all()
-        products_map = {p.id: p for p in products}
-
     # Resolve routes for all positions
     position_route_map: dict[int, tuple[int | None, str | None, str | None]] = {}
     for pos in positions:
-        product = products_map.get(pos.product_id) if pos.product_id else None
-        route_info = await resolve_position_route(db, pos.route_id, product)
+        route_info = await resolve_position_route(db, pos)
         position_route_map[pos.id] = (route_info.route_id, route_info.route_name, route_info.source)
 
     # Collect all section IDs from resolved routes
@@ -433,8 +422,7 @@ async def _process_position_take_to_work(
         )
 
     # Resolve route
-    product = await db.get(Product, pos.product_id) if pos.product_id else None
-    route_info = await resolve_position_route(db, pos.route_id, product)
+    route_info = await resolve_position_route(db, pos)
 
     if route_info.route_id is None:
         return TakeToWorkResult(

@@ -25,13 +25,15 @@ from app.models.production_plan import (
 from app.models.route import ProductionRoute, RouteStep
 from app.models.section import Section
 from app.services.excel_import import (
+    ParsedWorkbook,
     ParsedPlanRow,
     detect_workbook_format,
     parse_factory_plan_workbook,
     sha256_bytes,
     validate_excel_extension,
 )
-from app.services.route_matcher import find_route
+from app.services.route_matcher import RouteSignature, find_route
+from app.services.routing_signature import canonical_signature_from_payload, normalize_pack_op_family
 
 
 async def create_excel_import_change_set(
@@ -46,11 +48,18 @@ async def create_excel_import_change_set(
     plan_month: str | None = None,
     plan_version: str | None = None,
     column_mapping: dict | None = None,
+    row_selection: str | None = None,
 ) -> dict:
     extension = validate_excel_extension(filename)
     file_hash = sha256_bytes(content)
     detected_format = detect_workbook_format(content, filename)
-    parsed = parse_factory_plan_workbook(content, filename, sheet_index=sheet_index, column_mapping=column_mapping)
+    parsed = parse_factory_plan_workbook(
+        content,
+        filename,
+        sheet_index=sheet_index,
+        column_mapping=column_mapping,
+        row_selection=row_selection,
+    )
 
     import_file = await _get_or_create_import_file(
         db,
@@ -105,7 +114,7 @@ async def create_excel_import_change_set(
         db.add(production_plan)
         await db.flush()
 
-    summary = _summary(parsed.parsed_rows, parsed.warnings)
+    summary = _summary(parsed.parsed_rows, parsed.warnings, parsed)
     import_batch = ImportBatch(
         source_file_id=import_file.id,
         production_plan_id=production_plan.id,
@@ -350,10 +359,25 @@ async def _make_change_items(
                     else:
                         warnings.append("techcard_pair_not_resolved")
 
-        # Resolve route (after product is determined from either branch)
-        route = await find_route(db, product) if product else None
+        normalized_pack_op_family = normalize_pack_op_family(row.payload.get("operation"))
+        row.payload["normalized_pack_op_family"] = normalized_pack_op_family
+
+        signature = canonical_signature_from_payload(row.payload)
+        route = None
+        if signature is not None:
+            route, _checked_rules = await find_route(
+                db,
+                RouteSignature(
+                    operation_family=signature.operation_family,
+                    output_kind=signature.output_kind,
+                    has_pack_ops=signature.has_pack_ops,
+                ),
+            )
+        else:
+            errors.append("route_signature_incomplete")
+
         if route is None:
-            errors.append("active_route_not_found")
+            errors.append("route_not_found")
         else:
             steps = (
                 await db.execute(select(RouteStep).where(RouteStep.route_id == route.id).order_by(RouteStep.sequence))
@@ -380,6 +404,9 @@ async def _make_change_items(
             "route_id": route.id if route else None,
             "route_name": route.name if route else None,
             "route_source": "auto" if route else "missing",
+            "operation_family": signature.operation_family.value if signature else None,
+            "output_kind": signature.output_kind.value if signature else None,
+            "has_pack_ops": signature.has_pack_ops if signature else None,
         }
 
         # Detect duplicate within this import using fingerprint (full row match)
@@ -417,6 +444,9 @@ async def _make_change_items(
                             "source_fingerprint": existing_by_fp.source_fingerprint,
                             "source_row_hash": existing_by_fp.source_row_hash,
                             "source_payload": existing_by_fp.source_payload,
+                            "operation_family": existing_by_fp.operation_family.value if existing_by_fp.operation_family else None,
+                            "output_kind": existing_by_fp.output_kind.value if existing_by_fp.output_kind else None,
+                            "has_pack_ops": existing_by_fp.has_pack_ops,
                         }
                 elif existing_by_fp.status == PlanPositionStatus.released:
                     change_action = PlanChangeAction.mark_possible_duplicate
@@ -497,6 +527,9 @@ async def _make_change_items(
                             "source_fingerprint": pos.source_fingerprint,
                             "source_row_hash": pos.source_row_hash,
                             "source_payload": pos.source_payload,
+                            "operation_family": pos.operation_family.value if pos.operation_family else None,
+                            "output_kind": pos.output_kind.value if pos.output_kind else None,
+                            "has_pack_ops": pos.has_pack_ops,
                         },
                         after_data={},
                         status=PlanChangeItemStatus.pending,
@@ -523,10 +556,14 @@ def _serialize_item(item: PlanChangeItem) -> dict:
     }
 
 
-def _summary(rows: list[ParsedPlanRow], workbook_warnings: list[str]) -> dict:
+def _summary(
+    rows: list[ParsedPlanRow],
+    workbook_warnings: list[str],
+    parsed_workbook: ParsedWorkbook | None = None,
+) -> dict:
     warning_counter = Counter(warning for row in rows for warning in row.warnings)
     error_counter = Counter(error for row in rows for error in row.errors)
-    return {
+    summary = {
         "total_positions": len(rows),
         "paired_profile_positions": sum(1 for row in rows if row.payload.get("paired_profile")),
         "warning_count": sum(warning_counter.values()) + len(workbook_warnings),
@@ -536,6 +573,11 @@ def _summary(rows: list[ParsedPlanRow], workbook_warnings: list[str]) -> dict:
         "workbook_warnings": workbook_warnings,
         "quantity_total": str(sum((row.quantity for row in rows), start=rows[0].quantity * 0) if rows else 0),
     }
+    if parsed_workbook is not None:
+        summary["row_selection"] = parsed_workbook.row_selection
+        summary["selected_row_numbers"] = parsed_workbook.selected_row_numbers
+        summary["auto_included_row_numbers"] = parsed_workbook.auto_included_row_numbers
+    return summary
 
 
 def _build_available_inputs_by_sku(rows: list[ParsedPlanRow]) -> dict[str, Decimal]:

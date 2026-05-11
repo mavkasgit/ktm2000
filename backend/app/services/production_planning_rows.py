@@ -6,7 +6,6 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.internal_plan import SectionPlanLine
-from app.models.product import Product
 from app.models.production_plan import PlanPosition, PlanPositionStatus
 from app.models.route import RouteStep
 from app.models.section import Section
@@ -48,7 +47,7 @@ def _resolved_route_error(route_info: ResolvedRouteInfo) -> str | None:
     if route_info.error:
         return route_info.error
     if route_info.route_id is None:
-        return "route not found"
+        return "route_not_found"
     return None
 
 
@@ -71,21 +70,13 @@ async def list_production_planning_rows(db: AsyncSession) -> list[dict]:
     ).all()
     has_tasks_set = {row[0] for row in has_tasks_rows}
 
-    products_cache: dict[int, Product | None] = {}
-    route_cache: dict[tuple[int | None, int | None], ResolvedRouteInfo] = {}
+    route_cache: dict[int, ResolvedRouteInfo] = {}
 
     result: list[dict] = []
     for pos in positions:
-        product = None
-        if pos.product_id is not None:
-            if pos.product_id not in products_cache:
-                products_cache[pos.product_id] = await db.get(Product, pos.product_id)
-            product = products_cache[pos.product_id]
-
-        route_cache_key = (pos.route_id, pos.product_id)
-        if route_cache_key not in route_cache:
-            route_cache[route_cache_key] = await resolve_position_route(db, pos.route_id, product)
-        route_info = route_cache[route_cache_key]
+        if pos.id not in route_cache:
+            route_cache[pos.id] = await resolve_position_route(db, pos)
+        route_info = route_cache[pos.id]
 
         has_tasks = pos.id in has_tasks_set
         result.append(
@@ -117,8 +108,7 @@ async def get_production_planning_row_detail(db: AsyncSession, position_id: int)
     if pos is None:
         return None
 
-    product = await db.get(Product, pos.product_id) if pos.product_id else None
-    route_info = await resolve_position_route(db, pos.route_id, product)
+    route_info = await resolve_position_route(db, pos)
 
     has_tasks = bool(
         await db.scalar(select(func.count(SectionPlanLine.id)).where(SectionPlanLine.plan_position_id == pos.id))

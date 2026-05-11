@@ -8,15 +8,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import func as sa_func
 
 from app.core.database import get_db
-from app.models.product import Product
 from app.models.production_plan import PlanChangeSet, PlanPosition, PlanPositionStatus, ProductionPlan
 from app.models.release_batch import ReleaseBatchType
 from app.models.route import ProductionRoute, RouteStep
 from app.models.section import Section
 from app.services.plan_generation import create_release_batch
 from app.services.production_plan_service import apply_change_set, approve_plan_position, get_plan_preview, rollback_change_set
-from app.services.route_matcher import find_route, resolve_position_route, ResolvedRouteInfo
-from app.services.route_resolution import resolve_route_signature
+from app.services.route_matcher import resolve_position_route, ResolvedRouteInfo
+from app.services.route_resolution import resolve_route_signature_from_canonical
 from app.services.route_validation import validate_route_match
 from app.services.plan_validation import format_validation_error
 
@@ -259,7 +258,11 @@ async def route_check(
     if position.production_plan_id != production_plan_id:
         raise HTTPException(status_code=400, detail="Position does not belong to production plan")
 
-    resolved = resolve_route_signature(position.source_payload or {})
+    resolved = resolve_route_signature_from_canonical(
+        operation_family=position.operation_family,
+        output_kind=position.output_kind,
+        has_pack_ops=position.has_pack_ops,
+    )
     expected_signature = {
         "steps": [
             {
@@ -278,8 +281,9 @@ async def route_check(
     issues = await validate_route_match(db, position)
 
     active_route_snapshot = None
-    product = await db.get(Product, position.product_id) if position.product_id else None
-    route_info = await resolve_position_route(db, position.route_id, product)
+    route_info = await resolve_position_route(db, position)
+    if route_info.route_id is None:
+        issues = [route_info.error or "route_not_found", *issues]
     if route_info.route_id:
         steps_result = await db.execute(
             select(RouteStep, Section)
@@ -302,6 +306,15 @@ async def route_check(
                 }
                 for step, section in steps_result.all()
             ],
+            "diagnostic": {
+                "error": route_info.error,
+                "checked_rules": route_info.checked_rules,
+                "signature": {
+                    "operation_family": route_info.signature.operation_family.value if route_info.signature else None,
+                    "output_kind": route_info.signature.output_kind.value if route_info.signature else None,
+                    "has_pack_ops": route_info.signature.has_pack_ops if route_info.signature else None,
+                },
+            },
         }
 
     return RouteCheckOut(
@@ -330,8 +343,7 @@ async def section_totals(
     for position in positions:
         if position.product_id is None:
             continue
-        product = await db.get(Product, position.product_id)
-        route_info = await resolve_position_route(db, position.route_id, product)
+        route_info = await resolve_position_route(db, position)
         if route_info.route_id is None:
             continue
 
@@ -488,23 +500,15 @@ async def all_plan_positions(db: AsyncSession = Depends(get_db)) -> list[PlanPos
     ).scalars().all()
     warnings_by_position = {ci.plan_position_id: ci.warnings for ci in change_items if ci.plan_position_id}
 
-    products_cache: dict[int, Product | None] = {}
     route_resolve_cache: dict[int, ResolvedRouteInfo] = {}
 
     result = []
     for p in positions:
-        product = None
-        if p.product_id:
-            if p.product_id not in products_cache:
-                products_cache[p.product_id] = await db.get(Product, p.product_id)
-            product = products_cache[p.product_id]
-
-        if p.product_id and p.product_id in route_resolve_cache:
-            route_info = route_resolve_cache[p.product_id]
+        if p.id in route_resolve_cache:
+            route_info = route_resolve_cache[p.id]
         else:
-            route_info = await resolve_position_route(db, p.route_id, product)
-            if p.product_id:
-                route_resolve_cache[p.product_id] = route_info
+            route_info = await resolve_position_route(db, p)
+            route_resolve_cache[p.id] = route_info
 
         result.append(
             PlanPositionOut(
@@ -551,24 +555,16 @@ async def all_positions(production_plan_id: int, db: AsyncSession = Depends(get_
     ).scalars().all()
     warnings_by_position = {ci.plan_position_id: ci.warnings for ci in change_items if ci.plan_position_id}
 
-    # Cache products and routes
-    products_cache: dict[int, Product | None] = {}
+    # Cache resolved routes
     route_resolve_cache: dict[int, ResolvedRouteInfo] = {}
 
     result = []
     for p in positions:
-        product = None
-        if p.product_id:
-            if p.product_id not in products_cache:
-                products_cache[p.product_id] = await db.get(Product, p.product_id)
-            product = products_cache[p.product_id]
-
-        if p.product_id and p.product_id in route_resolve_cache:
-            route_info = route_resolve_cache[p.product_id]
+        if p.id in route_resolve_cache:
+            route_info = route_resolve_cache[p.id]
         else:
-            route_info = await resolve_position_route(db, p.route_id, product)
-            if p.product_id:
-                route_resolve_cache[p.product_id] = route_info
+            route_info = await resolve_position_route(db, p)
+            route_resolve_cache[p.id] = route_info
 
         result.append(
             PlanPositionOut(

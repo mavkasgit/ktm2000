@@ -2,6 +2,7 @@ from sqlalchemy import (
     BigInteger,
     Boolean,
     DateTime,
+    Enum,
     ForeignKey,
     Identity,
     Integer,
@@ -14,6 +15,7 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base
+from app.models.routing import RouteOperationFamily, RouteOutputKind
 
 
 class ProductionRoute(Base):
@@ -26,6 +28,7 @@ class ProductionRoute(Base):
 
     steps: Mapped[list["RouteStep"]] = relationship("RouteStep", back_populates="route", lazy="selectin")
     rules: Mapped[list["RouteMatchingRule"]] = relationship("RouteMatchingRule", back_populates="route", lazy="selectin")
+    signature_rules: Mapped[list["RouteSignatureRule"]] = relationship("RouteSignatureRule", back_populates="route", lazy="selectin")
 
 
 class RouteStep(Base):
@@ -71,3 +74,24 @@ class RouteRuleCondition(Base):
     value: Mapped[str] = mapped_column(Text, nullable=False)
 
     rule: Mapped["RouteMatchingRule"] = relationship("RouteMatchingRule", back_populates="conditions")
+
+
+class RouteSignatureRule(Base):
+    __tablename__ = "route_signature_rules"
+
+    id: Mapped[int] = mapped_column(BigInteger, Identity(always=True), primary_key=True)
+    route_id: Mapped[int] = mapped_column(ForeignKey("production_routes.id"), nullable=False)
+    operation_family: Mapped[RouteOperationFamily] = mapped_column(
+        Enum(RouteOperationFamily, name="route_operation_family"),
+        nullable=False,
+    )
+    output_kind: Mapped[RouteOutputKind] = mapped_column(
+        Enum(RouteOutputKind, name="route_output_kind"),
+        nullable=False,
+    )
+    has_pack_ops: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    priority: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("true"), default=True)
+    created_at: Mapped[None] = mapped_column(DateTime, server_default=func.now())
+
+    route: Mapped["ProductionRoute"] = relationship("ProductionRoute", back_populates="signature_rules")

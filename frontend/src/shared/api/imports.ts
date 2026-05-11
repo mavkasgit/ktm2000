@@ -20,6 +20,7 @@ export type ImportExcelInput = {
   production_plan_id?: number;
   plan_month?: string;
   plan_version?: string;
+  row_selection?: string;
   template_id?: number;
   column_mapping?: Record<string, string>;
 };
@@ -45,17 +46,26 @@ export type RecentImport = {
 export async function importExcel(input: ImportExcelInput) {
   const formData = new FormData();
   formData.append("file", input.file);
+  formData.append("sheet_index", String(input.sheet_index ?? 0));
+  formData.append("mode", input.mode ?? "create_plan");
+  if (input.production_plan_id != null) {
+    formData.append("production_plan_id", String(input.production_plan_id));
+  }
+  if (input.plan_month) {
+    formData.append("plan_month", input.plan_month);
+  }
+  if (input.plan_version) {
+    formData.append("plan_version", input.plan_version);
+  }
+  if (input.row_selection && input.row_selection.trim()) {
+    formData.append("row_selection", input.row_selection.trim());
+  }
 
   const { data } = await apiClient.post<ExcelImportResponse>("/imports/excel", formData, {
-      params: {
-        sheet_index: input.sheet_index ?? 0,
-        mode: input.mode ?? "create_plan",
-        production_plan_id: input.production_plan_id,
-        plan_month: input.plan_month,
-        plan_version: input.plan_version,
-        template_id: input.template_id,
-        column_mapping: input.column_mapping,
-      },
+    params: {
+      template_id: input.template_id,
+      column_mapping: input.column_mapping ? JSON.stringify(input.column_mapping) : undefined,
+    },
     headers: {
       "Content-Type": "multipart/form-data",
     },

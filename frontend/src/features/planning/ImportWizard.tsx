@@ -1,15 +1,14 @@
 import { useEffect, useMemo, useRef, useState } from "react"
 import { Check, ExternalLink, Upload } from "lucide-react"
 import { useNavigate } from "react-router-dom"
-import { uploadExcel, uploadTestExcel, applyChangeSet, discardImport, runDemoFullRoute } from "./api"
+import { uploadExcel, applyChangeSet, discardImport, runDemoFullRoute } from "./api"
 import { ImportDiffTable } from "./ImportDiffTable"
 import { Button, Input, AlertDialog, AlertDialogContent, AlertDialogHeader, AlertDialogTitle, AlertDialogDescription, AlertDialogFooter, AlertDialogAction, AlertDialogCancel } from "shared/ui"
 import { useQuery } from "@tanstack/react-query"
-import { listRoutes } from "@/shared/api/routes"
+import { listRoutes, getRoute, type ProductionRoute, type RouteStep } from "@/shared/api/routes"
 import { listTechcards, type Techcard } from "@/shared/api/techcards"
 import { listProducts, type Product } from "@/shared/api/products"
 import { getErrorMessage } from "@/shared/api/client"
-import type { ProductionRoute } from "@/shared/api/routes"
 import {
   Dialog,
   DialogContent,
@@ -39,10 +38,14 @@ export function ImportWizard(props: {
   const [searchQuery, setSearchQuery] = useState("")
   const [planMonth, setPlanMonth] = useState("")
   const [planVersion, setPlanVersion] = useState("")
+  const [rowSelection, setRowSelection] = useState("")
   const [testRunId, setTestRunId] = useState("")
   const [testTechcardId, setTestTechcardId] = useState("")
   const [testRouteId, setTestRouteId] = useState("")
   const [testQuantity, setTestQuantity] = useState("100")
+  const [scenarioId, setScenarioId] = useState("")
+  const [stagePreset, setStagePreset] = useState<"before_approve" | "after_approve" | "after_release" | "to_step_ready" | "full_route">("before_approve")
+  const [targetRouteStepId, setTargetRouteStepId] = useState("")
   const [pendingChangeSet, setPendingChangeSet] = useState<{ planId: string; changeSetId: string } | null>(null)
   const [showCloseConfirm, setShowCloseConfirm] = useState(false)
 
@@ -63,6 +66,11 @@ export function ImportWizard(props: {
     queryKey: ["products", "test-import-modal"],
     queryFn: () => listProducts({ limit: 2000 }),
     enabled: props.open && props.mode === "test",
+  })
+  const { data: routeDetail } = useQuery({
+    queryKey: ["route", testRouteId],
+    queryFn: () => getRoute(Number(testRouteId)),
+    enabled: props.open && props.mode === "test" && !!testRouteId && stagePreset === "to_step_ready",
   })
 
   useEffect(() => {
@@ -151,33 +159,7 @@ export function ImportWizard(props: {
         productionPlanId: props.productionPlanId,
         planMonth: planMonth || undefined,
         planVersion: planVersion || undefined,
-      })
-      setPreviewData(data)
-      const planId = String(data.planId ?? data.production_plan_id ?? "")
-      const changeSetId = String(data.changeSetId ?? data.change_set_id ?? "")
-      if (planId && changeSetId) {
-        setPendingChangeSet({ planId, changeSetId })
-      }
-      setStep("preview")
-    } catch (e) {
-      setError(getErrorMessage(e))
-    } finally {
-      setLoading(false)
-    }
-  }
-
-  async function handleTestImport() {
-    setLoading(true)
-    setError(null)
-    try {
-      const parsedQty = Number(testQuantity || "100")
-      const data = await uploadTestExcel({
-        productionPlanId: props.productionPlanId,
-        techcardId: testTechcardId ? Number(testTechcardId) : undefined,
-        runId: testRunId || undefined,
-        planMonth: planMonth || undefined,
-        planVersion: planVersion || undefined,
-        quantity: Number.isFinite(parsedQty) && parsedQty > 0 ? parsedQty : 100,
+        rowSelection: rowSelection || undefined,
       })
       setPreviewData(data)
       const planId = String(data.planId ?? data.production_plan_id ?? "")
@@ -202,6 +184,10 @@ export function ImportWizard(props: {
       setError("Выберите маршрут")
       return
     }
+    if (stagePreset === "to_step_ready" && !targetRouteStepId) {
+      setError("Выберите целевой шаг маршрута")
+      return
+    }
     setLoading(true)
     setError(null)
     try {
@@ -211,9 +197,12 @@ export function ImportWizard(props: {
         techcard_id: Number(testTechcardId),
         route_id: Number(testRouteId),
         run_id: testRunId || undefined,
+        scenario_id: scenarioId.trim() || undefined,
         plan_month: planMonth || undefined,
         plan_version: planVersion || undefined,
         production_plan_id: props.productionPlanId,
+        stage_preset: stagePreset,
+        target_route_step_id: stagePreset === "to_step_ready" ? Number(targetRouteStepId) : null,
       })
       setResult({
         ...data,
@@ -271,8 +260,12 @@ export function ImportWizard(props: {
     setSearchQuery("")
     setPlanMonth("")
     setPlanVersion("")
+    setRowSelection("")
     setTestRunId("")
+    setScenarioId("")
     setTestQuantity("100")
+    setStagePreset("before_approve")
+    setTargetRouteStepId("")
     setPendingChangeSet(null)
     if (fileInputRef.current) {
       fileInputRef.current.value = ""
@@ -363,12 +356,47 @@ export function ImportWizard(props: {
                     </select>
                   </div>
                   <div>
+                    <label className="text-xs text-muted-foreground">Стадия остановки</label>
+                    <select
+                      className="h-10 w-full rounded-md border bg-background px-3 text-sm"
+                      value={stagePreset}
+                      onChange={(e) => setStagePreset(e.target.value as any)}
+                    >
+                      <option value="before_approve">До апрува</option>
+                      <option value="after_approve">После апрува</option>
+                      <option value="after_release">После запуска</option>
+                      <option value="to_step_ready">На выбранный шаг ready</option>
+                      <option value="full_route">Полный прогон</option>
+                    </select>
+                  </div>
+                  {stagePreset === "to_step_ready" && (
+                    <div>
+                      <label className="text-xs text-muted-foreground">Целевой шаг маршрута</label>
+                      <select
+                        className="h-10 w-full rounded-md border bg-background px-3 text-sm"
+                        value={targetRouteStepId}
+                        onChange={(e) => setTargetRouteStepId(e.target.value)}
+                      >
+                        <option value="">Выберите шаг...</option>
+                        {(routeDetail?.steps || []).map((step: RouteStep) => (
+                          <option key={step.id} value={String(step.id)}>
+                            #{step.sequence} · {step.section_code} · {step.operation_name}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
+                  <div>
                     <label className="text-xs text-muted-foreground">Количество</label>
                     <Input value={testQuantity} onChange={(e) => setTestQuantity(e.target.value)} placeholder="100" />
                   </div>
                   <div>
                     <label className="text-xs text-muted-foreground">Run ID (опционально)</label>
                     <Input value={testRunId} onChange={(e) => setTestRunId(e.target.value)} placeholder="auto" />
+                  </div>
+                  <div>
+                    <label className="text-xs text-muted-foreground">Scenario ID (опционально)</label>
+                    <Input value={scenarioId} onChange={(e) => setScenarioId(e.target.value)} placeholder="none_fg / drill_fg / ..." />
                   </div>
                   {!props.productionPlanId && (
                     <>
@@ -384,12 +412,8 @@ export function ImportWizard(props: {
                   )}
                 </div>
                 <div className="flex gap-2 justify-end">
-                  <Button variant="outline" onClick={handleTestImport} disabled={loading}>
-                    <Upload className="h-4 w-4 mr-2" />
-                    {loading ? "Загрузка…" : "Только загрузить тестовую строку"}
-                  </Button>
                   <Button onClick={handleFullRouteRun} disabled={loading}>
-                    {loading ? "Запуск…" : "Сквозной тестовый прогон"}
+                    {loading ? "Запуск…" : "Запустить тест"}
                   </Button>
                 </div>
               </div>
@@ -415,6 +439,14 @@ export function ImportWizard(props: {
                   </div>
                 </div>
               )}
+              <div className="mt-3">
+                <label className="text-xs text-muted-foreground">Выбор строк Excel (опционально)</label>
+                <Input
+                  value={rowSelection}
+                  onChange={(e) => setRowSelection(e.target.value)}
+                  placeholder="5,7,12-15"
+                />
+              </div>
               <div
                 className="border-2 border-dashed rounded-lg p-8 text-center cursor-pointer hover:bg-accent/50 transition-colors"
                 onClick={() => fileInputRef.current?.click()}
@@ -449,6 +481,22 @@ export function ImportWizard(props: {
                 <strong>{summary.invalid} строк с ошибками</strong> — будут добавлены в план с пометкой.
               </div>
             )}
+            {(() => {
+              const summaryData = (previewData?.summary as Record<string, unknown>) || {}
+              const selection = String(summaryData.row_selection ?? "")
+              const autoRows = (summaryData.auto_included_row_numbers as unknown[] | undefined) || []
+              if (!selection) return null
+              return (
+                <div className="rounded-lg border border-blue-200 bg-blue-50 p-3 text-sm text-blue-900">
+                  <div><strong>Фильтр строк:</strong> {selection}</div>
+                  {autoRows.length > 0 && (
+                    <div className="mt-1">
+                      <strong>Автодобавлены парные строки:</strong> {autoRows.join(", ")}
+                    </div>
+                  )}
+                </div>
+              )
+            })()}
             <div className="flex items-center justify-between flex-wrap gap-2">
               <div className="flex gap-4 text-sm">
                 <span><strong>Всего:</strong> {summary.total}</span>
@@ -517,7 +565,11 @@ export function ImportWizard(props: {
                 <div className="inline-flex items-center justify-center w-16 h-16 rounded-full bg-green-100 mb-1">
                   <Check className="h-8 w-8 text-green-600" />
                 </div>
-                <h3 className="text-lg font-medium">Сквозной прогон выполнен</h3>
+                <h3 className="text-lg font-medium">
+                  {(result as any).stopped_at_stage === "completed" 
+                    ? "Сквозной прогон выполнен" 
+                    : `Остановлено на стадии: ${(result as any).stopped_at_stage || "—"}`}
+                </h3>
                 <div className="grid grid-cols-2 gap-3 text-sm">
                   <div className="rounded border p-2">
                     <div className="text-muted-foreground">Run ID</div>
@@ -526,6 +578,14 @@ export function ImportWizard(props: {
                   <div className="rounded border p-2">
                     <div className="text-muted-foreground">Позиция</div>
                     <div className="font-medium">#{String((result as any).plan_position_id || "—")}</div>
+                  </div>
+                  <div className="rounded border p-2">
+                    <div className="text-muted-foreground">Стадия</div>
+                    <div className="font-medium">{String((result as any).stage_preset || "—")}</div>
+                  </div>
+                  <div className="rounded border p-2">
+                    <div className="text-muted-foreground">Шагов выполнено</div>
+                    <div className="font-medium">{(result as any).tasks_created || 0}</div>
                   </div>
                 </div>
                 <div className="max-h-56 overflow-auto rounded border">

@@ -2,11 +2,12 @@ import enum
 from datetime import date, datetime
 from decimal import Decimal
 
-from sqlalchemy import BigInteger, Date, DateTime, Enum, ForeignKey, Identity, Index, Numeric, String, Text, func, text
+from sqlalchemy import BigInteger, Boolean, Date, DateTime, Enum, ForeignKey, Identity, Index, Numeric, String, Text, func, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base
+from app.models.routing import RouteOperationFamily, RouteOutputKind
 
 
 class ProductionPlanStatus(str, enum.Enum):
@@ -102,6 +103,15 @@ class PlanPosition(Base):
     priority: Mapped[int] = mapped_column(BigInteger, nullable=False, server_default=text("100"), default=100)
     source_row_number: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     route_id: Mapped[int | None] = mapped_column(ForeignKey("production_routes.id"), nullable=True)
+    operation_family: Mapped[RouteOperationFamily | None] = mapped_column(
+        Enum(RouteOperationFamily, name="route_operation_family"),
+        nullable=True,
+    )
+    output_kind: Mapped[RouteOutputKind | None] = mapped_column(
+        Enum(RouteOutputKind, name="route_output_kind"),
+        nullable=True,
+    )
+    has_pack_ops: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     status: Mapped[PlanPositionStatus] = mapped_column(Enum(PlanPositionStatus, name="plan_position_status"), nullable=False)
     validation_status: Mapped[PlanPositionValidationStatus] = mapped_column(
         Enum(PlanPositionValidationStatus, name="plan_position_validation_status"),

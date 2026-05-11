@@ -12,9 +12,11 @@ from app.models.production_plan import (
     PlanSourceType,
     ProductionPlan,
 )
+from app.models.routing import RouteOperationFamily, RouteOutputKind
 from app.models.route import ProductionRoute, RouteStep
 from app.models.section import Section
 from app.services.route_validation import validate_route_match
+from app.services.routing_signature import canonical_signature_from_payload
 
 
 async def _make_factory_route(
@@ -72,7 +74,7 @@ async def _make_factory_route(
 
 
 async def _make_plan_position(
-    session, product: Product, source_payload: dict
+    session, product: Product, source_payload: dict, route_id: int
 ) -> PlanPosition:
     plan = ProductionPlan(
         plan_no=f"PLAN-{product.sku}",
@@ -82,6 +84,7 @@ async def _make_plan_position(
     )
     session.add(plan)
     await session.flush()
+    signature = canonical_signature_from_payload(source_payload)
     position = PlanPosition(
         production_plan_id=plan.id,
         product_id=product.id,
@@ -93,6 +96,10 @@ async def _make_plan_position(
         status=PlanPositionStatus.draft,
         validation_status=PlanPositionValidationStatus.pending,
         validation_errors=[],
+        route_id=route_id,
+        operation_family=signature.operation_family if signature else RouteOperationFamily.NONE,
+        output_kind=signature.output_kind if signature else RouteOutputKind.finished_good,
+        has_pack_ops=signature.has_pack_ops if signature else False,
     )
     session.add(position)
     await session.flush()
@@ -124,6 +131,7 @@ async def test_validate_route_match_valid(session):
             "additional_pack_operations": [],
             "paired_profile": False,
         },
+        route.id,
     )
 
     issues = await validate_route_match(session, position)
@@ -155,6 +163,7 @@ async def test_validate_route_match_pack_glue_as_attribute(session):
             "additional_pack_operations": [{"operation_code": "PACK_GLUE"}],
             "paired_profile": False,
         },
+        route.id,
     )
 
     issues = await validate_route_match(session, position)
@@ -188,6 +197,7 @@ async def test_validate_route_match_wrong_branch(session):
             "additional_pack_operations": [],
             "paired_profile": False,
         },
+        route.id,
     )
 
     issues = await validate_route_match(session, position)
@@ -218,6 +228,7 @@ async def test_validate_route_match_missing_anod(session):
             "additional_pack_operations": [],
             "paired_profile": False,
         },
+        route.id,
     )
 
     issues = await validate_route_match(session, position)
@@ -250,6 +261,7 @@ async def test_validate_route_match_primary_operation_mismatch(session):
             "additional_pack_operations": [],
             "paired_profile": False,
         },
+        route.id,
     )
 
     issues = await validate_route_match(session, position)

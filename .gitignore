@@ -82,12 +82,20 @@ htmlcov/
 *.bak
 *.tmp
 
+# Excel files
+*.xlsx
+*.xls
+*.xlsm
+*.xlsb
+*.ods
+
 # AI tools
 .qwen/
 .qoder/
 
 # Docs (temporary)
-docs/
+docs/*
+!docs/excel-import-route-passport.md
 
 # Backend data
 backend/data/

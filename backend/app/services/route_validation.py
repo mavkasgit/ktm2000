@@ -4,11 +4,11 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.production_plan import PlanPosition
-from app.models.product import Product
-from app.models.route import ProductionRoute, RouteStep
+from app.models.route import RouteStep
 from app.models.section import Section
-from app.services.route_resolution import resolve_route_signature
-from app.services.route_matcher import find_route
+from app.models.routing import RouteOperationFamily
+from app.services.route_resolution import resolve_route_signature_from_canonical
+from app.services.route_matcher import resolve_position_route
 
 
 ROUTE_ERROR_CODES = {
@@ -23,19 +23,18 @@ async def validate_route_match(db: AsyncSession, position: PlanPosition) -> list
     if position.product_id is None:
         return []
 
-    # Skip validation when there is no import payload with route information
-    if not position.source_payload or position.source_payload.get("output_kind") is None:
+    # Skip validation when canonical signature is unavailable.
+    if position.output_kind is None or position.operation_family is None or position.has_pack_ops is None:
         return []
 
-    product = await db.get(Product, position.product_id) if position.product_id else None
-    route = await find_route(db, product) if product else None
-    if route is None:
+    route_info = await resolve_position_route(db, position)
+    if route_info.route_id is None:
         return []
 
     steps = (
         await db.execute(
             select(RouteStep)
-            .where(RouteStep.route_id == route.id)
+            .where(RouteStep.route_id == route_info.route_id)
             .order_by(RouteStep.sequence)
         )
     ).scalars().all()
@@ -54,7 +53,19 @@ async def validate_route_match(db: AsyncSession, position: PlanPosition) -> list
         for step in steps
     ]
 
-    expected = resolve_route_signature(position.source_payload or {})
+    operation_code = None
+    if position.operation_family == RouteOperationFamily.DRILL:
+        operation_code = "DRILL"
+    elif position.operation_family == RouteOperationFamily.PRESS:
+        operation_code = "PRESS"
+    elif position.operation_family == RouteOperationFamily.PACK:
+        operation_code = "PACK"
+
+    expected = resolve_route_signature_from_canonical(
+        operation_family=position.operation_family,
+        output_kind=position.output_kind,
+        has_pack_ops=position.has_pack_ops,
+    )
     expected_signature = [step.step_id for step in expected.steps]
 
     issues: list[str] = []
@@ -88,21 +99,22 @@ async def validate_route_match(db: AsyncSession, position: PlanPosition) -> list
             issues.append("route_not_matching_import_signature: invalid order of key nodes")
 
     # --- Primary operation check ---
-    primary_codes = {"DRILL", "PRESS_WINDOW", "PRESS_COMB"}
+    primary_codes = {"DRILL", "PRESS"}
     active_primaries = [token for token in active_signature if token in primary_codes]
-    expected_primary = expected.primary_operation
+    expected_primary = operation_code
 
-    if expected_primary in primary_codes:
-        if expected_primary not in active_signature:
+    expected_primary_token = "PRESS" if expected_primary in {"PRESS_WINDOW", "PRESS_COMB"} else expected_primary
+    if expected_primary_token in primary_codes:
+        if expected_primary_token not in active_signature:
             issues.append(
-                f"route_primary_operation_mismatch: expected {expected_primary}"
+                f"route_primary_operation_mismatch: expected {expected_primary_token}"
             )
     elif active_primaries:
         issues.append("route_primary_operation_mismatch: unexpected primary operation in route")
 
     # --- Additional pack operations check ---
     # PACK_* are attributes of PACK step, not independent route steps.
-    if expected.additional_pack_operations:
+    if expected.output_kind != "semi_finished_shipment" and expected.additional_pack_operations:
         if "PACK" not in active_signature:
             issues.append("route_missing_required_step: missing PACK step for additional pack operations")
         unsupported = [op for op in expected.additional_pack_operations if op not in {"PACK_GLUE", "PACK_DIFFUSER", "PACK_CUSTOM"}]
@@ -135,8 +147,10 @@ async def validate_route_match(db: AsyncSession, position: PlanPosition) -> list
 def _route_step_token(step: RouteStep, section_kind: str) -> str:
     op_code = (step.operation_code or "").strip().upper() if step.operation_code else ""
     if op_code:
-        if op_code in {"DRILL", "PRESS_WINDOW", "PRESS_COMB", "SHOT", "ANOD", "SAW", "PACK", "PACK_GLUE", "PACK_DIFFUSER"}:
+        if op_code in {"DRILL", "SHOT", "ANOD", "SAW", "PACK", "PACK_GLUE", "PACK_DIFFUSER"}:
             return op_code
+        if op_code in {"PRESS", "PRESS_WINDOW", "PRESS_COMB"}:
+            return "PRESS"
         if op_code == "ISSUE_RAW":
             return "ISSUE"
         if op_code == "MOVE_TO_WIP":

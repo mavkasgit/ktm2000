@@ -8,7 +8,7 @@ from app.models.product import Product
 from app.models.production_plan import PlanPosition, PlanPositionStatus
 from app.models.route import ProductionRoute, RouteStep
 from app.models.section import Section
-from app.services.route_matcher import find_route, resolve_position_route
+from app.services.route_matcher import resolve_position_route
 
 
 VALIDATION_ERROR_MESSAGES: dict[str, str] = {
@@ -17,7 +17,8 @@ VALIDATION_ERROR_MESSAGES: dict[str, str] = {
     "product_inactive": "Продукт неактивен",
     "active_techcard_not_found": "Не найдена активная техкарта для продукта",
     "active_techcard_has_no_lines": "Техкарта не содержит операций",
-    "active_route_not_found": "Не найден активный маршрут для продукта",
+    "route_not_found": "Не найден маршрут по сигнатуре позиции",
+    "route_signature_incomplete": "Сигнатура маршрута позиции неполная",
     "active_route_has_no_steps": "Маршрут не содержит этапов",
     "route_sequence_invalid": "Неверная последовательность этапов в маршруте",
     "route_contains_inactive_section": "Маршрут содержит неактивный участок",
@@ -63,9 +64,9 @@ async def validate_plan_position(db: AsyncSession, position: PlanPosition) -> li
             errors.append("active_techcard_has_no_lines")
 
     product = await db.get(Product, position.product_id) if position.product_id else None
-    route_info = await resolve_position_route(db, position.route_id, product)
+    route_info = await resolve_position_route(db, position)
     if route_info.route_id is None:
-        errors.append("active_route_not_found")
+        errors.append(route_info.error or "route_not_found")
     else:
         steps = (
             await db.execute(select(RouteStep).where(RouteStep.route_id == route_info.route_id).order_by(RouteStep.sequence))

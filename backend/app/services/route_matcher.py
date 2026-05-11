@@ -1,151 +1,139 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.product import Product
-from app.models.route import ProductionRoute, RouteMatchingRule, RouteRuleCondition
+from app.models.production_plan import PlanPosition
+from app.models.route import ProductionRoute, RouteSignatureRule
+from app.models.routing import RouteOperationFamily, RouteOutputKind
 
 
-@dataclass
+@dataclass(slots=True)
+class RouteSignature:
+    operation_family: RouteOperationFamily
+    output_kind: RouteOutputKind
+    has_pack_ops: bool
+
+
+@dataclass(slots=True)
 class ResolvedRouteInfo:
     route_id: int | None
     route_name: str | None
     source: str  # "manual" | "auto" | "missing"
     error: str | None = None
+    signature: RouteSignature | None = None
+    checked_rules: list[int] = field(default_factory=list)
 
 
-async def find_route(db: AsyncSession, product: Product) -> ProductionRoute | None:
-    """Find the best matching active route for a product using matching rules.
-
-    Priority: higher priority rule wins.
-    Route with NO rules = default fallback (matches everything, lowest priority).
-    """
-    # Load all active routes with their rules
-    routes = (
-        await db.execute(
-            select(ProductionRoute)
-            .where(ProductionRoute.is_active.is_(True))
-            .order_by(ProductionRoute.id)
-        )
-    ).scalars().all()
-
-    if not routes:
+def signature_from_position(position: PlanPosition) -> RouteSignature | None:
+    if position.operation_family is None or position.output_kind is None or position.has_pack_ops is None:
         return None
+    return RouteSignature(
+        operation_family=position.operation_family,
+        output_kind=position.output_kind,
+        has_pack_ops=position.has_pack_ops,
+    )
 
-    best_route: ProductionRoute | None = None
-    best_priority: int = -1  # routes without rules have priority -1 (default)
 
-    for route in routes:
-        # Load rules for this route
-        rules = (
-            await db.execute(
-                select(RouteMatchingRule)
-                .where(RouteMatchingRule.route_id == route.id)
-                .order_by(RouteMatchingRule.priority.desc())
+async def find_route(
+    db: AsyncSession,
+    signature: RouteSignature,
+) -> tuple[ProductionRoute | None, list[int]]:
+    """Resolve active route by canonical signature.
+
+    Precedence:
+    1) exact match by has_pack_ops
+    2) wildcard match with has_pack_ops IS NULL
+    Ties: higher priority first, then smaller rule id.
+    """
+
+    rows = (
+        await db.execute(
+            select(RouteSignatureRule, ProductionRoute)
+            .join(ProductionRoute, ProductionRoute.id == RouteSignatureRule.route_id)
+            .where(
+                ProductionRoute.is_active.is_(True),
+                RouteSignatureRule.is_active.is_(True),
+                RouteSignatureRule.operation_family == signature.operation_family,
+                RouteSignatureRule.output_kind == signature.output_kind,
+                or_(
+                    RouteSignatureRule.has_pack_ops == signature.has_pack_ops,
+                    RouteSignatureRule.has_pack_ops.is_(None),
+                ),
             )
-        ).scalars().all()
+            .order_by(
+                # exact rule has precedence over wildcard
+                RouteSignatureRule.has_pack_ops.is_(None).asc(),
+                RouteSignatureRule.priority.desc(),
+                RouteSignatureRule.id.asc(),
+            )
+        )
+    ).all()
 
-        if not rules:
-            # Default fallback — matches everything, but only if no specific rule matched
-            if best_route is None:
-                best_route = route
-                best_priority = -1
-            continue
-
-        # Check rules in priority order (highest first)
-        for rule in rules:
-            conditions = (
-                await db.execute(
-                    select(RouteRuleCondition).where(RouteRuleCondition.rule_id == rule.id)
-                )
-            ).scalars().all()
-
-            if not conditions:
-                # Rule with no conditions = matches everything
-                if rule.priority > best_priority:
-                    best_route = route
-                    best_priority = rule.priority
-                break
-
-            if _match_conditions(product, conditions):
-                if rule.priority > best_priority:
-                    best_route = route
-                    best_priority = rule.priority
-                break  # this route matched, no need to check lower-priority rules
-
-    return best_route
+    checked_rules = [rule.id for rule, _route in rows]
+    if not rows:
+        return None, checked_rules
+    rule, route = rows[0]
+    return route, checked_rules
 
 
 async def resolve_position_route(
     db: AsyncSession,
-    route_id: int | None,
-    product: Product | None,
+    position: PlanPosition,
 ) -> ResolvedRouteInfo:
-    """Resolve route for a position: manual override takes priority, fallback to auto-detection.
-
-    Args:
-        route_id: Manual route override from PlanPosition.route_id (None = auto).
-        product: Product for auto-detection fallback.
-
-    Returns:
-        ResolvedRouteInfo with route details, source, and optional error.
-    """
-    if route_id is not None:
-        route = await db.get(ProductionRoute, route_id)
+    """Resolve route strictly from manual override + canonical position fields."""
+    manual_route_id = position.route_id
+    if manual_route_id is not None:
+        route = await db.get(ProductionRoute, manual_route_id)
         if route is None:
-            return ResolvedRouteInfo(route_id=None, route_name=None, source="manual", error="manual route not found")
+            return ResolvedRouteInfo(
+                route_id=None,
+                route_name=None,
+                source="manual",
+                error="manual_route_not_found",
+            )
         if not route.is_active:
-            return ResolvedRouteInfo(route_id=route.id, route_name=route.name, source="manual", error="manual route inactive")
-        return ResolvedRouteInfo(route_id=route.id, route_name=route.name, source="manual", error=None)
+            return ResolvedRouteInfo(
+                route_id=route.id,
+                route_name=route.name,
+                source="manual",
+                error="manual_route_inactive",
+            )
+        return ResolvedRouteInfo(
+            route_id=route.id,
+            route_name=route.name,
+            source="manual",
+            signature=signature_from_position(position),
+        )
 
-    if product is not None:
-        route = await find_route(db, product)
-        if route is not None:
-            return ResolvedRouteInfo(route_id=route.id, route_name=route.name, source="auto", error=None)
+    signature = signature_from_position(position)
+    if signature is None:
+        return ResolvedRouteInfo(
+            route_id=None,
+            route_name=None,
+            source="missing",
+            error="route_signature_incomplete",
+            signature=None,
+            checked_rules=[],
+        )
 
-    return ResolvedRouteInfo(route_id=None, route_name=None, source="missing", error=None)
-
-
-def _match_conditions(product: Product, conditions: list[RouteRuleCondition]) -> bool:
-    """Check if a product matches ALL conditions of a rule."""
-    for cond in conditions:
-        product_value = getattr(product, cond.field, None)
-
-        # Normalize types for comparison
-        if cond.field == "length_mm" and product_value is not None:
-            product_value = float(product_value)
-            try:
-                cond_value = float(cond.value)
-            except (ValueError, TypeError):
-                return False
-        elif cond.field == "quantity_per_hanger" and product_value is not None:
-            product_value = int(product_value)
-            try:
-                cond_value = int(cond.value)
-            except (ValueError, TypeError):
-                return False
-        else:
-            cond_value = cond.value
-
-        if cond.operator == "=":
-            if str(product_value or "") != str(cond_value):
-                return False
-        elif cond.operator == "!=":
-            if str(product_value or "") == str(cond_value):
-                return False
-        elif cond.operator == "in":
-            # cond.value is comma-separated list
-            allowed = [v.strip() for v in str(cond_value).split(",")]
-            if str(product_value or "") not in allowed:
-                return False
-        elif cond.operator == "contains":
-            if str(cond_value) not in str(product_value or ""):
-                return False
-        else:
-            # Unknown operator — treat as no match
-            return False
-
-    return True
+    route, checked_rules = await find_route(db, signature)
+    if route is None:
+        return ResolvedRouteInfo(
+            route_id=None,
+            route_name=None,
+            source="missing",
+            error="route_not_found",
+            signature=signature,
+            checked_rules=checked_rules,
+        )
+    return ResolvedRouteInfo(
+        route_id=route.id,
+        route_name=route.name,
+        source="auto",
+        error=None,
+        signature=signature,
+        checked_rules=checked_rules,
+    )

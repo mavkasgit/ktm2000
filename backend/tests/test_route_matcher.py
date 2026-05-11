@@ -1,176 +1,184 @@
 import pytest
 
-from app.models.product import Product, ProductType
-from app.models.route import ProductionRoute, RouteMatchingRule, RouteRuleCondition
-from app.services.route_matcher import find_route, _match_conditions
+from app.models.production_plan import (
+    PlanPosition,
+    PlanPositionStatus,
+    PlanPositionValidationStatus,
+    PlanSourceType,
+)
+from app.models.route import ProductionRoute, RouteSignatureRule
+from app.models.routing import RouteOperationFamily, RouteOutputKind
+from app.services.route_matcher import RouteSignature, find_route, resolve_position_route
 
 
 @pytest.mark.asyncio
-async def test_default_route_matches_when_no_rules(session) -> None:
-    """A route with no rules acts as default fallback and matches any product."""
-    route = ProductionRoute(name="Default", is_active=True)
+async def test_find_route_prefers_exact_over_wildcard(session) -> None:
+    route_exact = ProductionRoute(name="Exact route", is_active=True)
+    route_wildcard = ProductionRoute(name="Wildcard route", is_active=True)
+    session.add_all([route_exact, route_wildcard])
+    await session.flush()
+
+    session.add_all(
+        [
+            RouteSignatureRule(
+                route_id=route_wildcard.id,
+                operation_family=RouteOperationFamily.PRESS,
+                output_kind=RouteOutputKind.finished_good,
+                has_pack_ops=None,
+                priority=100,
+                is_active=True,
+            ),
+            RouteSignatureRule(
+                route_id=route_exact.id,
+                operation_family=RouteOperationFamily.PRESS,
+                output_kind=RouteOutputKind.finished_good,
+                has_pack_ops=True,
+                priority=10,
+                is_active=True,
+            ),
+        ]
+    )
+    await session.flush()
+
+    route, checked = await find_route(
+        session,
+        RouteSignature(
+            operation_family=RouteOperationFamily.PRESS,
+            output_kind=RouteOutputKind.finished_good,
+            has_pack_ops=True,
+        ),
+    )
+    assert route is not None
+    assert route.id == route_exact.id
+    assert len(checked) == 2
+
+
+@pytest.mark.asyncio
+async def test_find_route_uses_priority_then_id(session) -> None:
+    route_low = ProductionRoute(name="Low", is_active=True)
+    route_high = ProductionRoute(name="High", is_active=True)
+    session.add_all([route_low, route_high])
+    await session.flush()
+
+    session.add_all(
+        [
+            RouteSignatureRule(
+                route_id=route_low.id,
+                operation_family=RouteOperationFamily.DRILL,
+                output_kind=RouteOutputKind.finished_good,
+                has_pack_ops=False,
+                priority=1,
+                is_active=True,
+            ),
+            RouteSignatureRule(
+                route_id=route_high.id,
+                operation_family=RouteOperationFamily.DRILL,
+                output_kind=RouteOutputKind.finished_good,
+                has_pack_ops=False,
+                priority=50,
+                is_active=True,
+            ),
+        ]
+    )
+    await session.flush()
+
+    route, _ = await find_route(
+        session,
+        RouteSignature(
+            operation_family=RouteOperationFamily.DRILL,
+            output_kind=RouteOutputKind.finished_good,
+            has_pack_ops=False,
+        ),
+    )
+    assert route is not None
+    assert route.id == route_high.id
+
+
+@pytest.mark.asyncio
+async def test_semi_finished_wildcard_has_pack_ops(session) -> None:
+    route_sf = ProductionRoute(name="Semi-finished", is_active=True)
+    session.add(route_sf)
+    await session.flush()
+
+    session.add(
+        RouteSignatureRule(
+            route_id=route_sf.id,
+            operation_family=RouteOperationFamily.PACK,
+            output_kind=RouteOutputKind.semi_finished_shipment,
+            has_pack_ops=None,
+            priority=20,
+            is_active=True,
+        )
+    )
+    await session.flush()
+
+    route_true, _ = await find_route(
+        session,
+        RouteSignature(
+            operation_family=RouteOperationFamily.PACK,
+            output_kind=RouteOutputKind.semi_finished_shipment,
+            has_pack_ops=True,
+        ),
+    )
+    route_false, _ = await find_route(
+        session,
+        RouteSignature(
+            operation_family=RouteOperationFamily.PACK,
+            output_kind=RouteOutputKind.semi_finished_shipment,
+            has_pack_ops=False,
+        ),
+    )
+    assert route_true is not None
+    assert route_false is not None
+    assert route_true.id == route_sf.id
+    assert route_false.id == route_sf.id
+
+
+@pytest.mark.asyncio
+async def test_resolve_position_route_manual_has_priority(session) -> None:
+    route = ProductionRoute(name="Manual route", is_active=True)
     session.add(route)
     await session.flush()
 
-    product = Product(sku="TEST-1", name="Test", type=ProductType.finished_good, unit="pcs")
-    session.add(product)
-    await session.flush()
-
-    result = await find_route(session, product)
-    assert result is not None
-    assert result.name == "Default"
-
-
-@pytest.mark.asyncio
-async def test_rule_exact_match(session) -> None:
-    """A rule with conditions matches product with matching field."""
-    route = ProductionRoute(name="Box route", is_active=True)
-    session.add(route)
-    await session.flush()
-
-    rule = RouteMatchingRule(route_id=route.id, priority=10)
-    session.add(rule)
-    await session.flush()
-
-    session.add(RouteRuleCondition(rule_id=rule.id, field="profile_type", operator="=", value="универсальный профиль"))
-    await session.flush()
-
-    product = Product(sku="BOX-1", name="Box", type=ProductType.finished_good, unit="pcs", profile_type="универсальный профиль")
-    session.add(product)
-    await session.flush()
-
-    result = await find_route(session, product)
-    assert result is not None
-    assert result.name == "Box route"
-
-
-@pytest.mark.asyncio
-async def test_no_match_returns_default(session) -> None:
-    """When no rule matches, the default route (no rules) is returned."""
-    default_route = ProductionRoute(name="Default", is_active=True)
-    specific_route = ProductionRoute(name="Specific", is_active=True)
-    session.add_all([default_route, specific_route])
-    await session.flush()
-
-    rule = RouteMatchingRule(route_id=specific_route.id, priority=10)
-    session.add(rule)
-    await session.flush()
-    session.add(RouteRuleCondition(rule_id=rule.id, field="alloy", operator="=", value="АД31"))
-    await session.flush()
-
-    # Product with different alloy
-    product = Product(sku="NM-1", name="No Match", type=ProductType.finished_good, unit="pcs", alloy="АД0")
-    session.add(product)
-    await session.flush()
-
-    result = await find_route(session, product)
-    assert result is not None
-    assert result.name == "Default"
-
-
-@pytest.mark.asyncio
-async def test_higher_priority_rule_wins(session) -> None:
-    """When multiple rules match, the one with higher priority wins."""
-    default_route = ProductionRoute(name="Default", is_active=True)
-    general_route = ProductionRoute(name="General aluminum", is_active=True)
-    specific_route = ProductionRoute(name="Specific alloy", is_active=True)
-    session.add_all([default_route, general_route, specific_route])
-    await session.flush()
-
-    # General rule: profile_type = универсальный профиль (priority 5)
-    general_rule = RouteMatchingRule(route_id=general_route.id, priority=5)
-    session.add(general_rule)
-    await session.flush()
-    session.add(RouteRuleCondition(rule_id=general_rule.id, field="profile_type", operator="=", value="универсальный профиль"))
-
-    # Specific rule: alloy = АД31 (priority 20)
-    specific_rule = RouteMatchingRule(route_id=specific_route.id, priority=20)
-    session.add(specific_rule)
-    await session.flush()
-    session.add(RouteRuleCondition(rule_id=specific_rule.id, field="alloy", operator="=", value="АД31"))
-
-    await session.flush()
-
-    product = Product(
-        sku="HP-1", name="High Priority", type=ProductType.finished_good, unit="pcs",
-        profile_type="универсальный профиль", alloy="АД31"
+    pos = PlanPosition(
+        production_plan_id=1,
+        product_id=None,
+        source_type=PlanSourceType.excel_import,
+        source_sku="SKU",
+        quantity=1,
+        source_payload={},
+        status=PlanPositionStatus.draft,
+        validation_status=PlanPositionValidationStatus.pending,
+        validation_errors=[],
+        route_id=route.id,
+        operation_family=RouteOperationFamily.NONE,
+        output_kind=RouteOutputKind.finished_good,
+        has_pack_ops=False,
     )
-    session.add(product)
-    await session.flush()
-
-    result = await find_route(session, product)
-    assert result is not None
-    assert result.name == "Specific alloy"  # higher priority wins
+    result = await resolve_position_route(session, pos)
+    assert result.source == "manual"
+    assert result.route_id == route.id
+    assert result.error is None
 
 
 @pytest.mark.asyncio
-async def test_no_routes_returns_none(session) -> None:
-    product = Product(sku="NONE-1", name="None", type=ProductType.finished_good, unit="pcs")
-    session.add(product)
-    await session.flush()
-
-    result = await find_route(session, product)
-    assert result is None
-
-
-# --- _match_conditions unit tests ---
-
-def _make_product(**kwargs) -> Product:
-    defaults = dict(
-        sku="T-1", name="Test", type=ProductType.finished_good, unit="pcs",
-        profile_type=None, alloy=None, color=None, anod_type=None,
-        length_mm=None, quantity_per_hanger=None,
+async def test_resolve_position_route_no_match_returns_route_not_found(session) -> None:
+    pos = PlanPosition(
+        production_plan_id=1,
+        product_id=None,
+        source_type=PlanSourceType.excel_import,
+        source_sku="SKU",
+        quantity=1,
+        source_payload={},
+        status=PlanPositionStatus.draft,
+        validation_status=PlanPositionValidationStatus.pending,
+        validation_errors=[],
+        route_id=None,
+        operation_family=RouteOperationFamily.DRILL,
+        output_kind=RouteOutputKind.finished_good,
+        has_pack_ops=False,
     )
-    defaults.update(kwargs)
-    return Product(**defaults)
-
-
-def _make_condition(field: str, operator: str, value: str) -> RouteRuleCondition:
-    return RouteRuleCondition(field=field, operator=operator, value=value)
-
-
-def test_match_equals() -> None:
-    product = _make_product(profile_type="универсальный профиль")
-    cond = _make_condition("profile_type", "=", "универсальный профиль")
-    assert _match_conditions(product, [cond]) is True
-    cond2 = _make_condition("profile_type", "=", "другой")
-    assert _match_conditions(product, [cond2]) is False
-
-
-def test_match_not_equals() -> None:
-    product = _make_product(alloy="АД31")
-    cond = _make_condition("alloy", "!=", "АД0")
-    assert _match_conditions(product, [cond]) is True
-    cond2 = _make_condition("alloy", "!=", "АД31")
-    assert _match_conditions(product, [cond2]) is False
-
-
-def test_match_in_list() -> None:
-    product = _make_product(color="черный")
-    cond = _make_condition("color", "in", "черный, серебро, белый")
-    assert _match_conditions(product, [cond]) is True
-    cond2 = _make_condition("color", "in", "серебро, белый")
-    assert _match_conditions(product, [cond2]) is False
-
-
-def test_match_contains() -> None:
-    product = _make_product(profile_type="анодированный трубный")
-    cond = _make_condition("profile_type", "contains", "трубный")
-    assert _match_conditions(product, [cond]) is True
-    cond2 = _make_condition("profile_type", "contains", "короб")
-    assert _match_conditions(product, [cond2]) is False
-
-
-def test_multiple_conditions_all_must_match() -> None:
-    product = _make_product(profile_type="универсальный профиль", alloy="АД31")
-    conds = [
-        _make_condition("profile_type", "=", "универсальный профиль"),
-        _make_condition("alloy", "=", "АД31"),
-    ]
-    assert _match_conditions(product, conds) is True
-
-    conds2 = [
-        _make_condition("profile_type", "=", "универсальный профиль"),
-        _make_condition("alloy", "=", "АД0"),
-    ]
-    assert _match_conditions(product, conds2) is False
+    result = await resolve_position_route(session, pos)
+    assert result.source == "missing"
+    assert result.route_id is None
+    assert result.error == "route_not_found"

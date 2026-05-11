@@ -207,8 +207,8 @@ async def test_validate_position_ignores_cancelled_duplicate(session) -> None:
 
 @pytest.mark.asyncio
 async def test_validate_position_passes_on_valid_position(session) -> None:
-    product, _, _ = await _make_ready_product(session, "FG-OK")
-    plan, position = await _make_plan_position(session, product)
+    product, _, route = await _make_ready_product(session, "FG-OK")
+    plan, position = await _make_plan_position(session, product, route_id=route.id)
     await session.flush()
 
     errors = await validate_plan_position(session, position)
@@ -284,11 +284,19 @@ async def test_validate_position_detects_missing_route(session) -> None:
     session.add(TechcardLine(techcard_id=techcard.id, component_product_id=component.id, quantity=1, unit="pcs"))
     await session.flush()
 
-    plan, position = await _make_plan_position(session, product)
+    from app.models.routing import RouteOperationFamily, RouteOutputKind
+
+    plan, position = await _make_plan_position(
+        session,
+        product,
+        operation_family=RouteOperationFamily.NONE,
+        output_kind=RouteOutputKind.finished_good,
+        has_pack_ops=False,
+    )
     await session.flush()
 
     errors = await validate_plan_position(session, position)
-    assert "active_route_not_found" in errors
+    assert "route_not_found" in errors
 
 
 @pytest.mark.asyncio
@@ -307,7 +315,7 @@ async def test_validate_position_detects_empty_route(session) -> None:
     session.add(route)
     await session.flush()
 
-    plan, position = await _make_plan_position(session, product)
+    plan, position = await _make_plan_position(session, product, route_id=route.id)
     await session.flush()
 
     errors = await validate_plan_position(session, position)
@@ -333,7 +341,7 @@ async def test_validate_position_detects_inactive_section(session) -> None:
     session.add(RouteStep(route_id=route.id, sequence=1, section_id=section.id, operation_name="Cut", is_final=True))
     await session.flush()
 
-    plan, position = await _make_plan_position(session, product)
+    plan, position = await _make_plan_position(session, product, route_id=route.id)
     await session.flush()
 
     errors = await validate_plan_position(session, position)

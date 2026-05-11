@@ -76,6 +76,9 @@ class ParsedWorkbook:
     period_start: date | None
     period_end: date | None
     warnings: list[str]
+    row_selection: str | None = None
+    selected_row_numbers: list[int] | None = None
+    auto_included_row_numbers: list[int] | None = None
 
 
 def sha256_bytes(content: bytes) -> str:
@@ -97,7 +100,13 @@ def detect_workbook_format(content: bytes, filename: str) -> str:
     return Path(filename).suffix.lower().lstrip(".") or "unknown"
 
 
-def parse_factory_plan_workbook(content: bytes, filename: str, sheet_index: int = 0, column_mapping: dict[str, str] | None = None) -> ParsedWorkbook:
+def parse_factory_plan_workbook(
+    content: bytes,
+    filename: str,
+    sheet_index: int = 0,
+    column_mapping: dict[str, str] | None = None,
+    row_selection: str | None = None,
+) -> ParsedWorkbook:
     validate_excel_extension(filename)
 
     try:
@@ -122,10 +131,31 @@ def parse_factory_plan_workbook(content: bytes, filename: str, sheet_index: int 
 
     period_start, period_end = _parse_period(rows[:header_index], sheet.name)
     parsed_rows = _parse_rows(rows, header_index, column_map, period_start, period_end)
+    selected_rows = parse_row_selection(row_selection) if row_selection else None
+    auto_included_rows: set[int] = set()
+    if selected_rows is not None:
+        filtered_rows: list[ParsedPlanRow] = []
+        for parsed_row in parsed_rows:
+            row_numbers = parsed_row.source_row_numbers
+            if any(row_no in selected_rows for row_no in row_numbers):
+                missing = sorted(row_no for row_no in row_numbers if row_no not in selected_rows)
+                if missing:
+                    marker = f"paired_row_auto_included:{','.join(str(row_no) for row_no in missing)}"
+                    if marker not in parsed_row.warnings:
+                        parsed_row.warnings.append(marker)
+                    auto_included_rows.update(missing)
+                filtered_rows.append(parsed_row)
+        parsed_rows = filtered_rows
 
     warnings = []
     if period_start is None:
         warnings.append("period_not_detected")
+    if selected_rows is not None:
+        warnings.append(f"row_selection_applied:{','.join(str(row_no) for row_no in sorted(selected_rows))}")
+        if auto_included_rows:
+            warnings.append(
+                f"row_selection_auto_included:{','.join(str(row_no) for row_no in sorted(auto_included_rows))}"
+            )
 
     return ParsedWorkbook(
         sheet_name=sheet.name,
@@ -135,7 +165,44 @@ def parse_factory_plan_workbook(content: bytes, filename: str, sheet_index: int 
         period_start=period_start,
         period_end=period_end,
         warnings=warnings,
+        row_selection=row_selection.strip() if row_selection else None,
+        selected_row_numbers=sorted(selected_rows) if selected_rows is not None else None,
+        auto_included_row_numbers=sorted(auto_included_rows) if auto_included_rows else None,
     )
+
+
+def parse_row_selection(value: str) -> set[int]:
+    """Parse selection string like `5,7,12-15` into a set of 1-based row numbers."""
+    selected: set[int] = set()
+    normalized = value.strip()
+    if not normalized:
+        raise ValueError("row_selection must not be empty")
+
+    for token in normalized.split(","):
+        part = token.strip()
+        if not part:
+            raise ValueError("row_selection has an empty segment")
+        if "-" in part:
+            bounds = [x.strip() for x in part.split("-", maxsplit=1)]
+            if len(bounds) != 2 or not bounds[0].isdigit() or not bounds[1].isdigit():
+                raise ValueError(f"Invalid row range '{part}'")
+            start = int(bounds[0])
+            end = int(bounds[1])
+            if start <= 0 or end <= 0:
+                raise ValueError(f"Row numbers must be positive in '{part}'")
+            if end < start:
+                raise ValueError(f"Invalid row range '{part}': end is less than start")
+            selected.update(range(start, end + 1))
+            continue
+
+        if not part.isdigit():
+            raise ValueError(f"Invalid row number '{part}'")
+        row_no = int(part)
+        if row_no <= 0:
+            raise ValueError(f"Row number must be positive: '{part}'")
+        selected.add(row_no)
+
+    return selected
 
 
 def _find_header_row(rows: list[list[Any]], mapping: dict[str, str]) -> int:
@@ -449,6 +516,8 @@ def _normalize_operation(value: str | None) -> tuple[str | None, str | None, lis
     if not value:
         return None, None, []
     normalized = value.lower().replace("ё", "е").strip()
+    if "без рассеив" in normalized:
+        return "PACK", "Упаковка", [{"operation_code": "PACK_CUSTOM", "operation_name": f"Доп. упаковочная операция: {value}"}]
     if "окн" in normalized:
         return "PRESS_WINDOW", "Пресс окно", []
     if "греб" in normalized:

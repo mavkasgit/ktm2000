@@ -15,7 +15,7 @@ from app.models.route import ProductionRoute, RouteStep
 from app.models.section import Section
 from app.models.work_task import WorkTask, WorkTaskStatus
 from app.services.route_validation import validate_route_match
-from app.services.route_matcher import find_route, resolve_position_route
+from app.services.route_matcher import resolve_position_route
 
 
 async def create_release_batch(
@@ -48,10 +48,12 @@ async def create_release_batch(
     await db.flush()
 
     for position, release_quantity in selected_positions:
-        product = await db.get(Product, position.product_id) if position.product_id else None
-        route_info = await resolve_position_route(db, position.route_id, product)
+        route_info = await resolve_position_route(db, position)
         if route_info.route_id is None:
-            raise ValueError(f"No route found for position {position.id} (product_id={position.product_id})")
+            raise ValueError(
+                f"route_not_found for position {position.id}: "
+                f"{route_info.error or 'unknown'}; checked_rules={route_info.checked_rules}"
+            )
         route = await db.get(ProductionRoute, route_info.route_id)
         if route is None or not route.is_active:
             raise ValueError(f"Route for position {position.id} is not active")

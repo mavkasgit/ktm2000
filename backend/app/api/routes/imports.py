@@ -1,5 +1,6 @@
 import json
 from io import BytesIO
+from decimal import Decimal
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
 from openpyxl import Workbook
@@ -13,8 +14,9 @@ from app.models.imports import ImportBatch, ImportBatchMode, ImportBatchStatus, 
 from app.models.production_plan import PlanChangeSet, PlanPosition, ProductionPlan
 from app.models.product import Product
 from app.models.route import ProductionRoute
+from app.models.techcard import Techcard
 from app.services.plan_import_service import create_excel_import_change_set
-from app.services.route_matcher import find_route, resolve_position_route
+from app.services.route_matcher import resolve_position_route
 
 router = APIRouter(prefix="/imports", tags=["imports"])
 
@@ -38,6 +40,7 @@ async def import_excel_plan(
     production_plan_id: int | None = Form(None),
     plan_month: str | None = Form(None),
     plan_version: str | None = Form(None),
+    row_selection: str | None = Form(None),
     template_id: int | None = Query(None),
     column_mapping: str | None = Query(None),
     db: AsyncSession = Depends(get_db),
@@ -70,6 +73,7 @@ async def import_excel_plan(
             plan_month=plan_month,
             plan_version=plan_version,
             column_mapping=resolved_mapping,
+            row_selection=row_selection,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -78,7 +82,13 @@ async def import_excel_plan(
     return ImportPreviewOut(**result)
 
 
-def _test_workbook() -> bytes:
+def _test_workbook(
+    *,
+    sku: str = "ЮП-2630",
+    product_name: str = "Стык с дюбелем 40мм 2,7 анод.серебро матовый",
+    quantity: Decimal = Decimal("100"),
+    comments: str | None = None,
+) -> bytes:
     wb = Workbook()
     ws = wb.active
     ws.title = "План май 26 05"
@@ -106,24 +116,25 @@ def _test_workbook() -> bytes:
             "Комментарии",
         ]
     )
+    qty = float(quantity)
     ws.append(
         [
-            "ЮП-2630",
+            sku,
             "ТЗ",
-            "Стык с дюбелем 40мм 2,7 анод.серебро матовый",
+            product_name,
             3400,
             "серебро",
-            100,
+            qty,
             2.7,
             "",
             "поф, красная этикетка РП 23*150 на каждый профиль и белая этикетка 58*30 на пачку из 10 шт",
             "",
             2.7,
-            100,
-            100,
-            100,
+            qty,
+            qty,
+            qty,
             "ГП",
-            "",
+            comments or "",
         ]
     )
     out = BytesIO()
@@ -134,21 +145,51 @@ def _test_workbook() -> bytes:
 @router.post("/excel/test", response_model=ImportPreviewOut, status_code=status.HTTP_201_CREATED)
 async def import_test_excel(
     production_plan_id: int | None = Query(None),
+    techcard_id: int | None = Query(None),
+    run_id: str | None = Query(None),
+    plan_month: str | None = Query(None),
+    plan_version: str | None = Query(None),
+    quantity: Decimal = Query(Decimal("100")),
+    row_selection: str | None = Query(None),
     db: AsyncSession = Depends(get_db),
 ) -> ImportPreviewOut:
     import logging
     logger = logging.getLogger(__name__)
-    content = _test_workbook()
+
+    sku = "ЮП-2630"
+    name = "Стык с дюбелем 40мм 2,7 анод.серебро матовый"
+    if techcard_id is not None:
+        techcard = await db.get(Techcard, techcard_id)
+        if techcard is None:
+            raise HTTPException(status_code=404, detail="Techcard not found")
+        if techcard.product_id is None:
+            raise HTTPException(status_code=400, detail="Techcard has no product_id")
+        product = await db.get(Product, techcard.product_id)
+        if product is None:
+            raise HTTPException(status_code=404, detail="Techcard product not found")
+        sku = product.sku
+        name = product.name
+
+    comments = f"TEST_RUN:{run_id}" if run_id else None
+    content = _test_workbook(
+        sku=sku,
+        product_name=name,
+        quantity=quantity,
+        comments=comments,
+    )
     try:
         result = await create_excel_import_change_set(
             db,
-            filename="test-yup2630.xlsx",
+            filename=f"test-{sku}.xlsx",
             content=content,
             content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             sheet_index=0,
             mode=ImportBatchMode.append_to_plan if production_plan_id else ImportBatchMode.create_plan,
             production_plan_id=production_plan_id,
+            plan_month=plan_month,
+            plan_version=plan_version,
             column_mapping=None,
+            row_selection=row_selection,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -262,12 +303,11 @@ async def list_import_positions(batch_id: int, db: AsyncSession = Depends(get_db
                 products_cache[pos.product_id] = await db.get(Product, pos.product_id)
             product = products_cache[pos.product_id]
 
-        if pos.product_id and pos.product_id in route_resolve_cache:
-            route_info = route_resolve_cache[pos.product_id]
+        if pos.id in route_resolve_cache:
+            route_info = route_resolve_cache[pos.id]
         else:
-            route_info = await resolve_position_route(db, pos.route_id, product)
-            if pos.product_id:
-                route_resolve_cache[pos.product_id] = route_info
+            route_info = await resolve_position_route(db, pos)
+            route_resolve_cache[pos.id] = route_info
 
         product_name = product.name if product else None
 
