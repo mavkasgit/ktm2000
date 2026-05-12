@@ -117,6 +117,8 @@ async def release_batch(db: AsyncSession, release_batch_id: int) -> dict:
             raise ValueError("Plan position not found")
         if position.status not in {PlanPositionStatus.approved, PlanPositionStatus.released}:
             raise ValueError("Only approved positions can be released")
+        if position.route_id is None:
+            raise ValueError(f"Position #{position.id} has no route assigned")
 
         steps = sorted(batch_position.route_snapshot.get("steps", []), key=lambda step: step["sequence"])
         for index, step in enumerate(steps):

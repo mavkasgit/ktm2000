@@ -40,13 +40,16 @@ def signature_from_position(position: PlanPosition) -> RouteSignature | None:
 async def find_route(
     db: AsyncSession,
     signature: RouteSignature,
-) -> tuple[ProductionRoute | None, list[int]]:
+) -> tuple[ProductionRoute | None, list[int], bool]:
     """Resolve active route by canonical signature.
 
     Precedence:
     1) exact match by has_pack_ops
     2) wildcard match with has_pack_ops IS NULL
     Ties: higher priority first, then smaller rule id.
+
+    Returns:
+        (route, checked_rule_ids, is_fallback) — is_fallback=True when no rules matched and first active route used.
     """
 
     rows = (
@@ -74,9 +77,13 @@ async def find_route(
 
     checked_rules = [rule.id for rule, _route in rows]
     if not rows:
-        return None, checked_rules
+        # Fallback: use the first active route — caller should flag this as auto-selected
+        fallback = await db.scalar(
+            select(ProductionRoute).where(ProductionRoute.is_active.is_(True)).order_by(ProductionRoute.id).limit(1)
+        )
+        return fallback, checked_rules, True
     rule, route = rows[0]
-    return route, checked_rules
+    return route, checked_rules, False
 
 
 async def resolve_position_route(
@@ -119,7 +126,7 @@ async def resolve_position_route(
             checked_rules=[],
         )
 
-    route, checked_rules = await find_route(db, signature)
+    route, checked_rules, is_fallback = await find_route(db, signature)
     if route is None:
         return ResolvedRouteInfo(
             route_id=None,
@@ -133,7 +140,7 @@ async def resolve_position_route(
         route_id=route.id,
         route_name=route.name,
         source="auto",
-        error=None,
+        error="auto_fallback" if is_fallback else None,
         signature=signature,
         checked_rules=checked_rules,
     )

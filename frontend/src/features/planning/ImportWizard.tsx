@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react"
-import { Check, ExternalLink, Upload } from "lucide-react"
+import { Check, ExternalLink, Upload, ChevronRight, ChevronDown } from "lucide-react"
 import { useNavigate } from "react-router-dom"
 import { uploadExcel, applyChangeSet, discardImport, runDemoFullRoute } from "./api"
-import { ImportDiffTable } from "./ImportDiffTable"
+import { getExcelSheetNames, previewExcelSheet, type SheetPreviewResponse } from "shared/api/imports"
 import { Button, Input, AlertDialog, AlertDialogContent, AlertDialogHeader, AlertDialogTitle, AlertDialogDescription, AlertDialogFooter, AlertDialogAction, AlertDialogCancel } from "shared/ui"
 import { useQuery } from "@tanstack/react-query"
 import { listRoutes, getRoute, type ProductionRoute, type RouteStep } from "@/shared/api/routes"
@@ -20,6 +20,140 @@ import {
 
 type SortConfig = { key: string; dir: "asc" | "desc" } | null
 
+const rawHeaders = [
+  { key: "source_row_number", label: "Строка" },
+  { key: "source_sku", label: "Артикул" },
+  { key: "source_name", label: "Наименование" },
+  { key: "quantity", label: "Кол-во" },
+  { key: "route_name", label: "Маршрут" },
+  { key: "status", label: "Статус" },
+  { key: "errors", label: "Ошибки" },
+  { key: "warnings", label: "Предупр." },
+];
+
+const statusLabelsRaw: Record<string, string> = {
+  pending: "Ожидает",
+  warning: "Предупреждение",
+  invalid: "Ошибка",
+};
+
+const errorLabelsRaw: Record<string, string> = {
+  product_not_found: "Изделие не найдено",
+  product_inactive: "Изделие неактивно",
+  active_techcard_not_found: "Нет активной техкарты",
+  active_techcard_has_no_lines: "Техкарта пустая",
+  active_route_not_found: "Нет активного маршрута",
+  active_route_has_no_steps: "Маршрут без этапов",
+  route_sequence_invalid: "Неверная последовательность маршрута",
+  route_contains_inactive_section: "Неактивный участок",
+  duplicate_sku_due_date: "Дубликат по артикулу и сроку",
+  route_primary_operation_mismatch: "Основная операция маршрута не совпадает",
+  route_not_matching_import_signature: "Маршрут не совпадает",
+  route_missing_required_step: "Отсутствует обязательный этап",
+  quantity_must_be_positive: "Количество должно быть > 0",
+};
+
+const warningLabelsRaw: Record<string, string> = {
+  paired_profile_product_unmapped: "Парный профиль не сопоставлен",
+  techcard_pair_not_resolved: "Не выбран парный профиль",
+  product_name_missing: "Отсутствует наименование",
+  period_not_detected: "Период не определён",
+  row_selection_applied: "Применён фильтр строк",
+  row_selection_auto_included: "Автодобавлены парные строки",
+  paired_row_auto_included: "Автодобавлена парная строка",
+  route_auto_fallback: "Маршрут выбран автоматически — проверьте корректность",
+};
+
+function translateLabels(codes: string[] | unknown, labels: Record<string, string>): string {
+  if (!Array.isArray(codes)) return String(codes ?? "");
+  if (codes.length === 0) return "—";
+  return codes.map((c) => {
+    // Handle codes with prefix like "paired_row_auto_included:12,13"
+    const [code] = String(c).split(":");
+    return labels[code] ?? String(c);
+  }).join(", ");
+}
+
+type RawPreviewTableProps = {
+  rows: Record<string, unknown>[];
+  sortConfig?: { key: string; dir: "asc" | "desc" } | null;
+  onSort?: (key: string) => void;
+  expanded?: boolean;
+};
+
+function RawPreviewTable({ rows, sortConfig, onSort, expanded }: RawPreviewTableProps) {
+  return (
+    <table className="w-full text-xs">
+      <thead className="border-b bg-muted/50">
+        <tr>
+          <th className="text-left p-2 w-6"></th>
+          {rawHeaders.map((h) => (
+            <th
+              key={h.key}
+              onClick={() => onSort?.(h.key)}
+              className="text-left p-2 cursor-pointer select-none whitespace-nowrap"
+            >
+              {h.label}
+              {sortConfig?.key === h.key ? (sortConfig.dir === "asc" ? " ▲" : " ▼") : ""}
+            </th>
+          ))}
+        </tr>
+      </thead>
+      <tbody>
+        {rows.map((row, idx) => {
+          const status = String(row.status ?? "");
+          const errors = translateLabels(row.errors as string[] | undefined, errorLabelsRaw);
+          const warnings = translateLabels(row.warnings as string[] | undefined, warningLabelsRaw);
+          const rowNum = row.source_row_number ?? (row.payload as any)?.row_numbers?.[0] ?? "—";
+          const rawRow = (row.payload as any)?.raw_excel_row as Record<string, string> | undefined;
+          return (
+            <>
+            <tr
+              key={idx}
+              className="border-b"
+              style={{
+                background: status === "invalid" ? "#fef2f2" : status === "warning" ? "#fffbeb" : undefined,
+              }}
+            >
+              <td className="p-2">
+                {expanded && rawRow ? (
+                  <ChevronDown className="h-3 w-3 text-muted-foreground" />
+                ) : (
+                  <div className="h-3 w-3" />
+                )}
+              </td>
+              <td className="p-2 font-semibold whitespace-nowrap">#{rowNum}</td>
+              <td className="p-2">{String(row.source_sku ?? "")}</td>
+              <td className="p-2">{String(row.source_name ?? "")}</td>
+              <td className="p-2">{String(row.quantity ?? "")}</td>
+              <td className="p-2 text-xs max-w-[150px]">
+                {row.route_name ? (
+                  <span title={String(row.route_source ?? "")}>
+                    {String(row.route_name)}
+                  </span>
+                ) : "—"}
+              </td>
+              <td className="p-2">{statusLabelsRaw[status] ?? status}</td>
+              <td className="p-2 text-red-600">{errors}</td>
+              <td className="p-2 text-amber-600">{warnings}</td>
+            </tr>
+            {expanded && rawRow && (
+              <tr className="border-b bg-muted/30">
+                <td colSpan={9} className="p-2 pl-6 text-[11px] leading-relaxed font-mono">
+                  {Object.values(rawRow).filter(Boolean).join(" | ")}
+                </td>
+              </tr>
+            )}
+            </>
+          );
+        })}
+      </tbody>
+    </table>
+  );
+}
+
+type SheetPreviewCache = Record<number, SheetPreviewResponse>
+
 export function ImportWizard(props: {
   open: boolean
   onClose: () => void
@@ -29,7 +163,10 @@ export function ImportWizard(props: {
 }) {
   const [step, setStep] = useState<"upload" | "preview" | "result">("upload")
   const [file, setFile] = useState<File | null>(null)
-  const [previewData, setPreviewData] = useState<Record<string, unknown> | null>(null)
+  const [sheets, setSheets] = useState<string[]>([])
+  const [selectedSheet, setSelectedSheet] = useState(0)
+  const [sheetPreviews, setSheetPreviews] = useState<SheetPreviewCache>({})
+  const [previewLoading, setPreviewLoading] = useState<Record<number, boolean>>({})
   const [sortConfig, setSortConfig] = useState<SortConfig>(null)
   const [filterStatus, setFilterStatus] = useState<"all" | "invalid" | "warning">("all")
   const [loading, setLoading] = useState(false)
@@ -48,6 +185,7 @@ export function ImportWizard(props: {
   const [targetRouteStepId, setTargetRouteStepId] = useState("")
   const [pendingChangeSet, setPendingChangeSet] = useState<{ planId: string; changeSetId: string } | null>(null)
   const [showCloseConfirm, setShowCloseConfirm] = useState(false)
+  const [showRawRows, setShowRawRows] = useState(false)
 
   const fileInputRef = useRef<HTMLInputElement>(null)
   const navigate = useNavigate()
@@ -89,12 +227,44 @@ export function ImportWizard(props: {
     }
   }, [props.mode, routes, testRouteId])
 
+  // Preview for the currently selected sheet
+  const currentPreview = sheetPreviews[selectedSheet] ?? null
+
   const allRows = useMemo(() => {
-    return (previewData?.items as Record<string, unknown>[]) ?? []
-  }, [previewData])
+    return (currentPreview?.items as Record<string, unknown>[]) ?? []
+  }, [currentPreview])
 
   const filteredRows = useMemo(() => {
     let rows = allRows
+    // Client-side row number filter
+    if (rowSelection.trim() && rows.length > 0) {
+      try {
+        const allowed = new Set<number>()
+        for (const token of rowSelection.split(",")) {
+          const part = token.trim()
+          if (!part) continue
+          if (part.includes("-")) {
+            const bounds = part.split("-").map((s) => s.trim())
+            const s = Number(bounds[0])
+            const e = Number(bounds[1])
+            if (Number.isFinite(s) && Number.isFinite(e) && s > 0 && e > 0) {
+              for (let i = Math.min(s, e); i <= Math.max(s, e); i++) allowed.add(i)
+            }
+          } else if (/^\d+$/.test(part)) {
+            const n = Number(part)
+            if (Number.isFinite(n) && n > 0) allowed.add(n)
+          }
+        }
+        if (allowed.size > 0) {
+          rows = rows.filter((r) => {
+            const rowNum = r.source_row_number ?? (r.after_data as any)?.source_row_numbers?.[0]
+            return rowNum != null && allowed.has(Number(rowNum))
+          })
+        }
+      } catch {
+        // ignore invalid rowSelection
+      }
+    }
     if (filterStatus !== "all") {
       rows = rows.filter((r) => r.status === filterStatus)
     }
@@ -126,7 +296,7 @@ export function ImportWizard(props: {
       if (aVal > bVal) return sortConfig.dir === "asc" ? 1 : -1
       return 0
     })
-  }, [allRows, filterStatus, sortConfig])
+  }, [allRows, filterStatus, sortConfig, rowSelection])
 
   const summary = useMemo(() => {
     const total = allRows.length
@@ -155,19 +325,57 @@ export function ImportWizard(props: {
     setLoading(true)
     setError(null)
     try {
-      const data = await uploadExcel(f, {
+      const sheetNames = await getExcelSheetNames(f)
+      setSheets(sheetNames)
+      setSelectedSheet(0)
+      setSheetPreviews({})
+      setPreviewLoading({})
+      setStep("preview")
+      // Auto-load preview for first sheet
+      loadSheetPreview(f, sheetNames, 0)
+    } catch (e) {
+      setError(getErrorMessage(e))
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  async function loadSheetPreview(f: File, sheetNames: string[], sheetIdx: number) {
+    if (previewLoading[sheetIdx] || sheetPreviews[sheetIdx]) return
+    setPreviewLoading((prev) => ({ ...prev, [sheetIdx]: true }))
+    try {
+      const data = await previewExcelSheet(f, { sheet_index: sheetIdx })
+      setSheetPreviews((prev) => ({ ...prev, [sheetIdx]: data }))
+    } catch {
+      // ignore — user will see empty table
+    } finally {
+      setPreviewLoading((prev) => ({ ...prev, [sheetIdx]: false }))
+    }
+  }
+
+  async function handleApply() {
+    if (!file) return
+    setLoading(true)
+    setError(null)
+    try {
+      const uploaded = await uploadExcel(file, {
         productionPlanId: props.productionPlanId,
         planMonth: planMonth || undefined,
         planVersion: planVersion || undefined,
         rowSelection: rowSelection || undefined,
+        sheetIndex: selectedSheet,
       })
-      setPreviewData(data)
-      const planId = String(data.planId ?? data.production_plan_id ?? "")
-      const changeSetId = String(data.changeSetId ?? data.change_set_id ?? "")
-      if (planId && changeSetId) {
-        setPendingChangeSet({ planId, changeSetId })
+      const planId = String(uploaded.planId ?? uploaded.production_plan_id ?? "")
+      const changeSetId = String(uploaded.changeSetId ?? uploaded.change_set_id ?? "")
+      if (!planId || !changeSetId) {
+        setError("Не найден planId или changeSetId")
+        return
       }
-      setStep("preview")
+      const data = await applyChangeSet(planId, changeSetId)
+      setResult(data)
+      setPendingChangeSet(null)
+      setStep("result")
+      props.onSuccess(planId, changeSetId)
     } catch (e) {
       setError(getErrorMessage(e))
     } finally {
@@ -218,29 +426,6 @@ export function ImportWizard(props: {
     }
   }
 
-  async function handleApply() {
-    if (!previewData) return
-    const planId = String(previewData.planId ?? previewData.production_plan_id ?? "")
-    const changeSetId = String(previewData.changeSetId ?? previewData.change_set_id ?? "")
-    if (!planId || !changeSetId) {
-      setError("Не найден planId или changeSetId")
-      return
-    }
-    setLoading(true)
-    setError(null)
-    try {
-      const data = await applyChangeSet(planId, changeSetId)
-      setResult(data)
-      setPendingChangeSet(null)
-      setStep("result")
-      props.onSuccess(planId, changeSetId)
-    } catch (e) {
-      setError(getErrorMessage(e))
-    } finally {
-      setLoading(false)
-    }
-  }
-
   function toggleSort(key: string) {
     setSortConfig((prev) => {
       if (!prev || prev.key !== key) return { key, dir: "asc" }
@@ -252,7 +437,10 @@ export function ImportWizard(props: {
   function reset() {
     setStep("upload")
     setFile(null)
-    setPreviewData(null)
+    setSheets([])
+    setSelectedSheet(0)
+    setSheetPreviews({})
+    setPreviewLoading({})
     setResult(null)
     setError(null)
     setSortConfig(null)
@@ -267,6 +455,7 @@ export function ImportWizard(props: {
     setStagePreset("before_approve")
     setTargetRouteStepId("")
     setPendingChangeSet(null)
+    setShowRawRows(false)
     if (fileInputRef.current) {
       fileInputRef.current.value = ""
     }
@@ -301,7 +490,7 @@ export function ImportWizard(props: {
           <DialogDescription>
             {props.mode === "test"
               ? "Загрузка тестового плана (ЮП-2630) для проверки"
-              : "Загрузите файл Excel и проверьте изменения перед применением"}
+              : "Загрузите файл Excel, выберите лист и строки, затем примените"}
           </DialogDescription>
         </DialogHeader>
 
@@ -439,14 +628,6 @@ export function ImportWizard(props: {
                   </div>
                 </div>
               )}
-              <div className="mt-3">
-                <label className="text-xs text-muted-foreground">Выбор строк Excel (опционально)</label>
-                <Input
-                  value={rowSelection}
-                  onChange={(e) => setRowSelection(e.target.value)}
-                  placeholder="5,7,12-15"
-                />
-              </div>
               <div
                 className="border-2 border-dashed rounded-lg p-8 text-center cursor-pointer hover:bg-accent/50 transition-colors"
                 onClick={() => fileInputRef.current?.click()}
@@ -474,87 +655,139 @@ export function ImportWizard(props: {
           </div>
         )}
 
-        {step === "preview" && previewData && (
-          <div className="flex-1 overflow-hidden flex flex-col space-y-4">
-            {summary.invalid > 0 && (
-              <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-800">
-                <strong>{summary.invalid} строк с ошибками</strong> — будут добавлены в план с пометкой.
-              </div>
-            )}
-            {(() => {
-              const summaryData = (previewData?.summary as Record<string, unknown>) || {}
-              const selection = String(summaryData.row_selection ?? "")
-              const autoRows = (summaryData.auto_included_row_numbers as unknown[] | undefined) || []
-              if (!selection) return null
-              return (
-                <div className="rounded-lg border border-blue-200 bg-blue-50 p-3 text-sm text-blue-900">
-                  <div><strong>Фильтр строк:</strong> {selection}</div>
-                  {autoRows.length > 0 && (
-                    <div className="mt-1">
-                      <strong>Автодобавлены парные строки:</strong> {autoRows.join(", ")}
-                    </div>
-                  )}
-                </div>
-              )
-            })()}
-            <div className="flex items-center justify-between flex-wrap gap-2">
-              <div className="flex gap-4 text-sm">
-                <span><strong>Всего:</strong> {summary.total}</span>
-                {summary.invalid > 0 && <span className="text-red-600"><strong>Ошибок:</strong> {summary.invalid}</span>}
-                {summary.warning > 0 && <span className="text-amber-600"><strong>Предупр.:</strong> {summary.warning}</span>}
-                {summary.invalid === 0 && summary.warning === 0 && <span className="text-green-600 text-xs">Без ошибок</span>}
-              </div>
-              <div className="flex items-center gap-2">
-                <input
-                  type="text"
-                  placeholder="Поиск: строка, ID, артикул..."
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  className="h-7 w-48 px-2 py-1 text-xs border rounded-md bg-background"
+        {step === "preview" && file && sheets.length > 0 && (
+          <div className="flex-1 overflow-hidden flex flex-col space-y-3">
+            {/* Sheet tabs */}
+            <div className="flex gap-1 flex-wrap shrink-0">
+              {sheets.map((name, idx) => (
+                <button
+                  key={idx}
+                  onClick={() => {
+                    setSelectedSheet(idx)
+                    loadSheetPreview(file, sheets, idx)
+                  }}
+                  className={`px-3 py-1.5 text-xs rounded-md border transition-colors ${
+                    selectedSheet === idx
+                      ? "bg-primary text-primary-foreground border-primary"
+                      : "bg-background hover:bg-accent border-input"
+                  }`}
+                >
+                  {name}
+                </button>
+              ))}
+            </div>
+
+            {/* Row selection filter */}
+            <div className="flex items-center gap-3 shrink-0">
+              <div className="flex-1 max-w-xs">
+                <Input
+                  value={rowSelection}
+                  onChange={(e) => setRowSelection(e.target.value)}
+                  placeholder="Строки: 5,7,12-15"
+                  className="h-7 text-xs"
                 />
-                <div className="flex gap-1">
-                  {(["all", "invalid", "warning"] as const).map((f) => (
+              </div>
+              <span className="text-xs text-muted-foreground">
+                {currentPreview ? `${currentPreview.total_rows} строк на листе` : "Загрузка…"}
+              </span>
+            </div>
+
+            {/* Summary bar */}
+            {currentPreview && (
+              <>
+                {(() => {
+                  const summaryData = (currentPreview.summary as Record<string, unknown>) || {}
+                  const selection = String(summaryData.row_selection ?? "")
+                  const autoRows = (summaryData.auto_included_row_numbers as unknown[] | undefined) || []
+                  if (!selection) return null
+                  return (
+                    <div className="rounded-lg border border-blue-200 bg-blue-50 p-3 text-sm text-blue-900">
+                      <div><strong>Фильтр строк:</strong> {selection}</div>
+                      {autoRows.length > 0 && (
+                        <div className="mt-1">
+                          <strong>Автодобавлены парные строки:</strong> {autoRows.join(", ")}
+                        </div>
+                      )}
+                    </div>
+                  )
+                })()}
+                <div className="flex items-center justify-between flex-wrap gap-2">
+                  <div className="flex gap-4 text-sm">
+                    <span><strong>Всего:</strong> {summary.total}</span>
+                    {summary.invalid > 0 && <span className="text-red-600"><strong>Ошибок:</strong> {summary.invalid}</span>}
+                    {summary.warning > 0 && <span className="text-amber-600"><strong>Предупр.:</strong> {summary.warning}</span>}
+                    {summary.invalid === 0 && summary.warning === 0 && <span className="text-green-600 text-xs">Без ошибок</span>}
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="text"
+                      placeholder="Поиск: строка, ID, артикул..."
+                      value={searchQuery}
+                      onChange={(e) => setSearchQuery(e.target.value)}
+                      className="h-7 w-48 px-2 py-1 text-xs border rounded-md bg-background"
+                    />
+                    <div className="flex gap-1">
+                      {(["all", "invalid", "warning"] as const).map((f) => (
+                        <button
+                          key={f}
+                          onClick={() => setFilterStatus(f)}
+                          className={`px-2.5 py-1 text-xs rounded-md border transition-colors ${
+                            filterStatus === f
+                              ? "bg-primary text-primary-foreground border-primary"
+                              : "bg-background hover:bg-accent border-input"
+                          }`}
+                        >
+                          {f === "all" ? "Все" : f === "invalid" ? "Ошибки" : "Предупр."}
+                        </button>
+                      ))}
+                    </div>
                     <button
-                      key={f}
-                      onClick={() => setFilterStatus(f)}
-                      className={`px-2.5 py-1 text-xs rounded-md border transition-colors ${
-                        filterStatus === f
+                      onClick={() => setShowRawRows(!showRawRows)}
+                      className={`px-2.5 py-1 text-xs rounded-md border transition-colors flex items-center gap-1 ${
+                        showRawRows
                           ? "bg-primary text-primary-foreground border-primary"
                           : "bg-background hover:bg-accent border-input"
                       }`}
                     >
-                      {f === "all" ? "Все" : f === "invalid" ? "Ошибки" : "Предупр."}
+                      {showRawRows ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
+                      Сырые строки
                     </button>
-                  ))}
+                  </div>
                 </div>
-              </div>
-            </div>
 
-            {Object.keys(errorBreakdown).length > 0 && (
-              <div className="flex flex-wrap items-center gap-2 text-xs">
-                <span className="text-muted-foreground">Ошибки по типам:</span>
-                {Object.entries(errorBreakdown).map(([code, count]) => (
-                  <span key={code} className="bg-red-50 text-red-700 px-2 py-0.5 rounded border border-red-100">
-                    {code}: {count}
-                  </span>
-                ))}
-                {errorBreakdown["product_not_found"] > 0 && (
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="ml-auto h-7 text-xs gap-1"
-                    onClick={() => { navigate("/references/raw-materials"); props.onClose() }}
-                  >
-                    <ExternalLink className="h-3 w-3" />
-                    Открыть справочники
-                  </Button>
+                {Object.keys(errorBreakdown).length > 0 && (
+                  <div className="flex flex-wrap items-center gap-2 text-xs">
+                    <span className="text-muted-foreground">Ошибки по типам:</span>
+                    {Object.entries(errorBreakdown).map(([code, count]) => (
+                      <span key={code} className="bg-red-50 text-red-700 px-2 py-0.5 rounded border border-red-100">
+                        {code}: {count}
+                      </span>
+                    ))}
+                    {errorBreakdown["product_not_found"] > 0 && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="ml-auto h-7 text-xs gap-1"
+                        onClick={() => { navigate("/references/raw-materials"); props.onClose() }}
+                      >
+                        <ExternalLink className="h-3 w-3" />
+                        Открыть справочники
+                      </Button>
+                    )}
+                  </div>
                 )}
-              </div>
-            )}
 
-            <div className="flex-1 overflow-auto border rounded-lg">
-              <ImportDiffTable rows={filteredRows} sortConfig={sortConfig} onSort={toggleSort} />
-            </div>
+                <div className="flex-1 overflow-auto border rounded-lg">
+                  {previewLoading[selectedSheet] ? (
+                    <div className="flex items-center justify-center h-32 text-sm text-muted-foreground">Загрузка…</div>
+                  ) : allRows.length === 0 ? (
+                    <div className="flex items-center justify-center h-32 text-sm text-muted-foreground">Нет данных для отображения</div>
+                  ) : (
+                    <RawPreviewTable rows={filteredRows} sortConfig={sortConfig} onSort={toggleSort} expanded={showRawRows} />
+                  )}
+                </div>
+              </>
+            )}
           </div>
         )}
 
@@ -638,7 +871,7 @@ export function ImportWizard(props: {
               <Button variant="outline" onClick={reset} disabled={loading}>
                 Назад
               </Button>
-              <Button onClick={handleApply} disabled={loading}>
+              <Button onClick={handleApply} disabled={loading || !currentPreview}>
                 {loading ? "Применение…" : "Применить изменения"}
               </Button>
             </>

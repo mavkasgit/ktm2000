@@ -337,6 +337,7 @@ def _make_plan_row(
         "period_end": period_end.isoformat() if period_end else None,
         "context_inherited": inherited,
         "paired_profile": False,
+        "raw_excel_row": {k: _cell_text(v) for k, v in raw.items()},
     }
 
     source_sku = component["sku"]

@@ -82,6 +82,52 @@ async def import_excel_plan(
     return ImportPreviewOut(**result)
 
 
+class SheetListOut(BaseModel):
+    sheets: list[str]
+
+
+@router.post("/excel/sheets", response_model=SheetListOut)
+async def list_excel_sheets(file: UploadFile = File(...)) -> SheetListOut:
+    from io import BytesIO
+
+    from app.services.excel_import import validate_excel_extension
+
+    validate_excel_extension(file.filename or "")
+    content = await file.read()
+    from python_calamine import load_workbook
+
+    workbook = load_workbook(BytesIO(content))
+    return SheetListOut(sheets=workbook.sheet_names)
+
+
+class SheetPreviewOut(BaseModel):
+    sheet_name: str
+    header_row_number: int
+    total_rows: int
+    summary: dict
+    items: list[dict]
+
+
+@router.post("/excel/preview", response_model=SheetPreviewOut)
+async def preview_excel_sheet_endpoint(
+    file: UploadFile = File(...),
+    sheet_index: int = Form(0),
+    row_selection: str | None = Form(None),
+    db: AsyncSession = Depends(get_db),
+) -> SheetPreviewOut:
+    from app.services.plan_import_service import preview_excel_sheet
+
+    content = await file.read()
+    result = await preview_excel_sheet(
+        db,
+        filename=file.filename or "workbook.xls",
+        content=content,
+        sheet_index=sheet_index,
+        row_selection=row_selection,
+    )
+    return SheetPreviewOut(**result)
+
+
 def _test_workbook(
     *,
     sku: str = "ЮП-2630",

@@ -52,6 +52,33 @@ def _templates() -> tuple[RouteTemplate, ...]:
             ),
         ),
         RouteTemplate(
+            name="Типовой: ГП с прессом",
+            description="WH → PRESS → SHOT → ANOD → WIP_WH → SAW → PACK → FG_WH",
+            steps=(
+                StepDef("WH", "ISSUE_RAW", "Выдача сырья"),
+                StepDef("PRESS", "PRESS", "Пресс"),
+                StepDef("SHOT", "SHOT", "Дробеструй"),
+                StepDef("ANOD", "ANOD", "Анодирование"),
+                StepDef("WIP_WH", "MOVE_TO_WIP", "Передача на склад полуфабриката"),
+                StepDef("SAW", "SAW", "Резка на пиле"),
+                StepDef("PACK", "PACK", "Упаковка"),
+                StepDef("FG_WH", "ACCEPT_FINISHED", "Приемка готовой продукции", True),
+            ),
+        ),
+        RouteTemplate(
+            name="Типовой: ГП базовый",
+            description="WH → SHOT → ANOD → WIP_WH → SAW → PACK → FG_WH",
+            steps=(
+                StepDef("WH", "ISSUE_RAW", "Выдача сырья"),
+                StepDef("SHOT", "SHOT", "Дробеструй"),
+                StepDef("ANOD", "ANOD", "Анодирование"),
+                StepDef("WIP_WH", "MOVE_TO_WIP", "Передача на склад полуфабриката"),
+                StepDef("SAW", "SAW", "Резка на пиле"),
+                StepDef("PACK", "PACK", "Упаковка"),
+                StepDef("FG_WH", "ACCEPT_FINISHED", "Приемка готовой продукции", True),
+            ),
+        ),
+        RouteTemplate(
             name="Типовой: П/ф со сверлом",
             description="WH → DRILL → SHOT → ANOD → FG_WH → SHIPMENT → SENT",
             steps=(
@@ -78,7 +105,7 @@ def _templates() -> tuple[RouteTemplate, ...]:
             ),
         ),
         RouteTemplate(
-            name="Типовой: П/ф без первичной",
+            name="Типовой: П/ф базовый",
             description="WH → SHOT → ANOD → FG_WH → SHIPMENT → SENT",
             steps=(
                 StepDef("WH", "ISSUE_RAW", "Выдача сырья"),
@@ -96,16 +123,16 @@ def _rules() -> tuple[RuleDef, ...]:
     return (
         RuleDef(RouteOperationFamily.DRILL, RouteOutputKind.finished_good, False, "Типовой: ГП со сверлом", 100),
         RuleDef(RouteOperationFamily.DRILL, RouteOutputKind.finished_good, True, "Типовой: ГП со сверлом", 100),
-        RuleDef(RouteOperationFamily.PRESS, RouteOutputKind.finished_good, False, "Типовой: без сверла", 100),
-        RuleDef(RouteOperationFamily.PRESS, RouteOutputKind.finished_good, True, "Типовой: без сверла", 100),
-        RuleDef(RouteOperationFamily.NONE, RouteOutputKind.finished_good, False, "Типовой: без пресса и сверла", 90),
-        RuleDef(RouteOperationFamily.NONE, RouteOutputKind.finished_good, True, "Типовой: без пресса и сверла", 90),
-        RuleDef(RouteOperationFamily.PACK, RouteOutputKind.finished_good, False, "Типовой: без пресса и сверла", 90),
-        RuleDef(RouteOperationFamily.PACK, RouteOutputKind.finished_good, True, "Типовой: без пресса и сверла", 90),
+        RuleDef(RouteOperationFamily.PRESS, RouteOutputKind.finished_good, False, "Типовой: ГП с прессом", 100),
+        RuleDef(RouteOperationFamily.PRESS, RouteOutputKind.finished_good, True, "Типовой: ГП с прессом", 100),
+        RuleDef(RouteOperationFamily.NONE, RouteOutputKind.finished_good, False, "Типовой: ГП базовый", 90),
+        RuleDef(RouteOperationFamily.NONE, RouteOutputKind.finished_good, True, "Типовой: ГП базовый", 90),
+        RuleDef(RouteOperationFamily.PACK, RouteOutputKind.finished_good, False, "Типовой: ГП базовый", 90),
+        RuleDef(RouteOperationFamily.PACK, RouteOutputKind.finished_good, True, "Типовой: ГП базовый", 90),
         RuleDef(RouteOperationFamily.DRILL, RouteOutputKind.semi_finished_shipment, None, "Типовой: П/ф со сверлом", 100),
         RuleDef(RouteOperationFamily.PRESS, RouteOutputKind.semi_finished_shipment, None, "Типовой: П/ф с прессом", 100),
-        RuleDef(RouteOperationFamily.NONE, RouteOutputKind.semi_finished_shipment, None, "Типовой: П/ф без первичной", 90),
-        RuleDef(RouteOperationFamily.PACK, RouteOutputKind.semi_finished_shipment, None, "Типовой: П/ф без первичной", 90),
+        RuleDef(RouteOperationFamily.NONE, RouteOutputKind.semi_finished_shipment, None, "Типовой: П/ф базовый", 90),
+        RuleDef(RouteOperationFamily.PACK, RouteOutputKind.semi_finished_shipment, None, "Типовой: П/ф базовый", 90),
     )
 
 

@@ -5,6 +5,7 @@ import {
   listPlans,
   listProductionPlanningRows,
   takeToWork,
+  cancelPositionExecution,
   type ProductionPlanningRow,
   type TakeToWorkResult,
 } from "@/shared/api/productionPlans";
@@ -142,6 +143,21 @@ export function ExecutionPage() {
     onError: (err) => toast({ title: "Ошибка запуска", description: getErrorMessage(err), variant: "destructive" }),
   });
 
+  const [cancelDialog, setCancelDialog] = useState<{ open: boolean; positionId: number | null; isReleased: boolean }>({
+    open: false,
+    positionId: null,
+    isReleased: false,
+  });
+
+  const cancelPositionMutation = useMutation({
+    mutationFn: cancelPositionExecution,
+    onSuccess: () => {
+      toast({ title: "Позиция отменена", variant: "success" });
+      queryClient.invalidateQueries({ queryKey: ["production-planning-rows"] });
+    },
+    onError: (err) => toast({ title: "Ошибка отмены", description: getErrorMessage(err), variant: "destructive" }),
+  });
+
   const isRowLaunched = useCallback((row: ProductionPlanningRow) => {
     return row.has_tasks || row.is_released;
   }, []);
@@ -184,6 +200,17 @@ export function ExecutionPage() {
     takeToWorkMutation.mutate(launchDialog.positionIds);
     setLaunchDialog({ open: false, mode: "single", positionIds: [] });
   }, [launchDialog.positionIds, takeToWorkMutation]);
+
+  const handleCancel = useCallback((row: ProductionPlanningRow) => {
+    setCancelDialog({ open: true, positionId: row.plan_position_id, isReleased: row.is_released });
+  }, []);
+
+  const confirmCancel = useCallback(() => {
+    if (cancelDialog.positionId) {
+      cancelPositionMutation.mutate(cancelDialog.positionId);
+    }
+    setCancelDialog({ open: false, positionId: null, isReleased: false });
+  }, [cancelDialog.positionId, cancelPositionMutation]);
 
   const filteredRows = useMemo(() => {
     const list = rows || [];
@@ -260,10 +287,8 @@ export function ExecutionPage() {
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="all">Все статусы</SelectItem>
-              <SelectItem value="draft">Черновик</SelectItem>
               <SelectItem value="approved">Утвержден</SelectItem>
               <SelectItem value="released">Запущен</SelectItem>
-              <SelectItem value="invalid">Ошибка</SelectItem>
               <SelectItem value="cancelled">Отменен</SelectItem>
             </SelectContent>
           </Select>
@@ -341,22 +366,44 @@ export function ExecutionPage() {
                     <Badge variant={row.has_tasks ? "default" : "secondary"}>{row.has_tasks ? "Есть" : "Нет"}</Badge>
                   </td>
                   <td className="p-2" onClick={(e) => e.stopPropagation()}>
-                    {canLaunch ? (
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        onClick={() => handleSingleLaunch(row)}
-                      >
-                        Взять в работу
-                      </Button>
-                    ) : (
-                      <span
-                        className="text-xs text-muted-foreground"
-                        title={blockReason || ""}
-                      >
-                        {blockReason || "—"}
-                      </span>
-                    )}
+                    <div className="flex gap-1">
+                      {canLaunch ? (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => handleSingleLaunch(row)}
+                        >
+                          Взять в работу
+                        </Button>
+                      ) : (
+                        <span
+                          className="text-xs text-muted-foreground"
+                          title={blockReason || ""}
+                        >
+                          {blockReason || "—"}
+                        </span>
+                      )}
+                      {row.position_status === "approved" && (
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          className="text-red-600 hover:text-red-700"
+                          onClick={() => handleCancel(row)}
+                        >
+                          Отменить
+                        </Button>
+                      )}
+                      {row.position_status === "released" && (
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          className="text-red-600 hover:text-red-700"
+                          onClick={() => handleCancel(row)}
+                        >
+                          Остановить
+                        </Button>
+                      )}
+                    </div>
                   </td>
                 </tr>
                 );
@@ -528,6 +575,32 @@ export function ExecutionPage() {
             </Button>
             <Button onClick={confirmLaunch} disabled={takeToWorkMutation.isPending}>
               {takeToWorkMutation.isPending ? "Запуск..." : "Запустить"}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={cancelDialog.open}
+        onOpenChange={(open) => {
+          if (!open) setCancelDialog({ open: false, positionId: null, isReleased: false });
+        }}
+      >
+        <DialogContent className="sm:max-w-[480px]">
+          <DialogHeader>
+            <DialogTitle>{cancelDialog.isReleased ? "Остановить выполнение?" : "Отменить позицию?"}</DialogTitle>
+            <DialogDescription>
+              {cancelDialog.isReleased
+                ? "Позиция уже запущена. Остановка выполнения переведёт её в статус «Отменен». Это действие нельзя отменить."
+                : "Отмена переведёт позицию в статус «Отменен». Это действие нельзя отменить."}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex justify-end gap-2 pt-2">
+            <Button variant="outline" onClick={() => setCancelDialog({ open: false, positionId: null, isReleased: false })}>
+              Отмена
+            </Button>
+            <Button variant="destructive" onClick={confirmCancel} disabled={cancelPositionMutation.isPending}>
+              {cancelPositionMutation.isPending ? "Отмена..." : cancelDialog.isReleased ? "Остановить" : "Отменить"}
             </Button>
           </div>
         </DialogContent>

@@ -2,18 +2,18 @@ from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from sqlalchemy import func as sa_func
 
 from app.core.database import get_db
-from app.models.production_plan import PlanChangeSet, PlanPosition, PlanPositionStatus, ProductionPlan
+from app.models.production_plan import PlanChangeItem, PlanChangeSet, PlanPosition, PlanPositionStatus, ProductionPlan
 from app.models.release_batch import ReleaseBatchType
 from app.models.route import ProductionRoute, RouteStep
 from app.models.section import Section
 from app.services.plan_generation import create_release_batch
-from app.services.production_plan_service import apply_change_set, approve_plan_position, get_plan_preview, rollback_change_set
+from app.services.production_plan_service import apply_change_set, approve_plan_position, cancel_plan_position, get_plan_preview, rollback_change_set
 from app.services.route_matcher import resolve_position_route, ResolvedRouteInfo
 from app.services.route_resolution import resolve_route_signature_from_canonical
 from app.services.route_validation import validate_route_match
@@ -178,11 +178,7 @@ async def delete_import_batch(
         await db.delete(cs)
 
     # Delete all plan positions created by this batch
-    positions = (
-        await db.execute(select(PlanPosition).where(PlanPosition.import_batch_id == batch_id))
-    ).scalars().all()
-    for pos in positions:
-        await db.delete(pos)
+    await db.execute(delete(PlanPosition).where(PlanPosition.import_batch_id == batch_id))
 
     # Delete the batch
     await db.delete(batch)
@@ -211,6 +207,23 @@ async def approve_position(
         "status": position.status.value,
         "validation_status": position.validation_status.value,
         "validation_errors": position.validation_errors,
+    }
+
+
+@router.post("/{production_plan_id}/positions/{position_id}/cancel")
+async def cancel_position(
+    production_plan_id: int,
+    position_id: int,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    try:
+        position = await cancel_plan_position(db, production_plan_id, position_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {
+        "id": position.id,
+        "production_plan_id": position.production_plan_id,
+        "status": position.status.value,
     }
 
 
@@ -481,12 +494,68 @@ async def all_plan_files(db: AsyncSession = Depends(get_db)) -> list[PlanFileInf
 
 @router.get("/all-positions", response_model=list[PlanPositionOut])
 async def all_plan_positions(db: AsyncSession = Depends(get_db)) -> list[PlanPositionOut]:
-    """Return positions from all production plans."""
+    """Return positions from all production plans that are still in planning stage (draft/invalid/valid)."""
     from app.models.production_plan import PlanChangeItem
 
     positions = (
         await db.execute(
             select(PlanPosition)
+            .where(PlanPosition.status.in_([PlanPositionStatus.draft, PlanPositionStatus.invalid, PlanPositionStatus.valid]))
+            .order_by(PlanPosition.source_row_number, PlanPosition.id)
+        )
+    ).scalars().all()
+
+    change_items = (
+        await db.execute(
+            select(PlanChangeItem).where(
+                PlanChangeItem.plan_position_id.in_([p.id for p in positions])
+            )
+        )
+    ).scalars().all()
+    warnings_by_position = {ci.plan_position_id: ci.warnings for ci in change_items if ci.plan_position_id}
+
+    route_resolve_cache: dict[int, ResolvedRouteInfo] = {}
+
+    result = []
+    for p in positions:
+        if p.id in route_resolve_cache:
+            route_info = route_resolve_cache[p.id]
+        else:
+            route_info = await resolve_position_route(db, p)
+            route_resolve_cache[p.id] = route_info
+
+        result.append(
+            PlanPositionOut(
+                id=p.id,
+                production_plan_id=p.production_plan_id,
+                source_sku=p.source_sku,
+                source_name=p.source_name,
+                quantity=str(p.quantity),
+                status=p.status.value,
+                validation_status=p.validation_status.value,
+                errors=[format_validation_error(e) for e in (p.validation_errors or [])],
+                source_row_number=p.source_row_number,
+                warnings=warnings_by_position.get(p.id, []) or [],
+                product_id=p.product_id,
+                route_id=route_info.route_id,
+                route_name=route_info.route_name,
+                route_source=route_info.source,
+                route_error=route_info.error,
+            )
+        )
+
+    return result
+
+
+@router.get("/cancelled-positions", response_model=list[PlanPositionOut])
+async def cancelled_positions(db: AsyncSession = Depends(get_db)) -> list[PlanPositionOut]:
+    """Return cancelled positions (for execution history/audit view)."""
+    from app.models.production_plan import PlanChangeItem
+
+    positions = (
+        await db.execute(
+            select(PlanPosition)
+            .where(PlanPosition.status == PlanPositionStatus.cancelled)
             .order_by(PlanPosition.source_row_number, PlanPosition.id)
         )
     ).scalars().all()
@@ -541,6 +610,7 @@ async def all_positions(production_plan_id: int, db: AsyncSession = Depends(get_
         await db.execute(
             select(PlanPosition)
             .where(PlanPosition.production_plan_id == production_plan_id)
+            .where(PlanPosition.status.in_([PlanPositionStatus.draft, PlanPositionStatus.invalid, PlanPositionStatus.valid]))
             .order_by(PlanPosition.source_row_number, PlanPosition.id)
         )
     ).scalars().all()
@@ -778,3 +848,19 @@ async def batch_preview(production_plan_id: int, batch_id: int, db: AsyncSession
             for item in items
         ],
     }
+
+
+@router.post("/reset-all", status_code=status.HTTP_204_NO_CONTENT)
+async def reset_all_plans(db: AsyncSession = Depends(get_db)):
+    """Удалить все производственные планы и все связанные данные."""
+    await db.execute(text("""
+        TRUNCATE TABLE
+            defects, rework_tasks, transfers, movements,
+            work_tasks, section_plan_lines, internal_plans,
+            release_batch_positions, release_batches,
+            plan_change_items, plan_change_sets,
+            plan_positions, import_batches, import_files,
+            production_plans
+        CASCADE
+    """))
+    await db.commit()

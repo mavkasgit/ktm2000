@@ -54,7 +54,9 @@ def _resolved_route_error(route_info: ResolvedRouteInfo) -> str | None:
 async def list_production_planning_rows(db: AsyncSession) -> list[dict]:
     positions = (
         await db.execute(
-            select(PlanPosition).order_by(PlanPosition.production_plan_id.desc(), PlanPosition.source_row_number, PlanPosition.id)
+            select(PlanPosition)
+            .where(PlanPosition.status.in_([PlanPositionStatus.approved, PlanPositionStatus.released]))
+            .order_by(PlanPosition.production_plan_id.desc(), PlanPosition.source_row_number, PlanPosition.id)
         )
     ).scalars().all()
     if not positions:

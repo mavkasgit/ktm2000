@@ -388,6 +388,30 @@ async def take_rows_to_work(
     return TakeToWorkResponse(results=results)
 
 
+@router.post("/rows/{position_id}/cancel", dependencies=[Depends(require_role(list(WRITER_ROLES)))])
+async def cancel_position(
+    position_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    """Cancel an approved or released position. Moves position to cancelled status."""
+    pos = await db.get(PlanPosition, position_id)
+    if pos is None:
+        raise HTTPException(status_code=404, detail="Position not found")
+
+    if pos.status not in {PlanPositionStatus.approved, PlanPositionStatus.released}:
+        raise HTTPException(status_code=400, detail=f"Нельзя отменить позицию со статусом '{pos.status.value}'")
+
+    pos.status = PlanPositionStatus.cancelled
+    await db.commit()
+
+    return {
+        "id": pos.id,
+        "production_plan_id": pos.production_plan_id,
+        "status": pos.status.value,
+    }
+
+
 async def _process_position_take_to_work(
     db: AsyncSession,
     position_id: int,

@@ -106,6 +106,7 @@ async def apply_change_set(db: AsyncSession, change_set_id: int) -> dict:
             position = PlanPosition(
                 production_plan_id=change_set.production_plan_id,
                 product_id=after.get("product_id"),
+                route_id=after.get("route_id"),
                 source_type=PlanSourceType.excel_import,
                 source_system="excel",
                 source_ref=after.get("source_ref"),
@@ -200,6 +201,10 @@ async def approve_plan_position(db: AsyncSession, production_plan_id: int, posit
         raise ValueError("Plan position not found")
     if position.status in {PlanPositionStatus.released, PlanPositionStatus.approved}:
         raise ValueError(f"Position with status '{position.status.value}' cannot be approved")
+    if position.status == PlanPositionStatus.invalid:
+        raise ValueError("Сначала исправьте ошибки валидации")
+    if position.route_id is None:
+        raise ValueError("Сначала назначьте маршрут")
 
     errors = await validate_plan_position(db, position)
     position.validation_errors = errors
@@ -212,6 +217,19 @@ async def approve_plan_position(db: AsyncSession, production_plan_id: int, posit
     plan = await db.get(ProductionPlan, production_plan_id)
     if plan is not None and plan.status in {ProductionPlanStatus.draft, ProductionPlanStatus.validated}:
         plan.status = ProductionPlanStatus.approved
+    await db.flush()
+    return position
+
+
+async def cancel_plan_position(db: AsyncSession, production_plan_id: int, position_id: int) -> PlanPosition:
+    """Cancel an approved or released position. Only positions with status approved/released can be cancelled."""
+    position = await db.get(PlanPosition, position_id)
+    if position is None or position.production_plan_id != production_plan_id:
+        raise ValueError("Plan position not found")
+    if position.status not in {PlanPositionStatus.approved, PlanPositionStatus.released}:
+        raise ValueError(f"Нельзя отменить позицию со статусом '{position.status.value}'")
+
+    position.status = PlanPositionStatus.cancelled
     await db.flush()
     return position
 

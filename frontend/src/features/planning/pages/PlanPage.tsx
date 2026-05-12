@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react"
 import { Beaker, Download, Eye, FileSpreadsheet, Plus, Upload, Route, Trash2 } from "lucide-react"
 import { ImportWizard } from "../ImportWizard"
 import { Button, Badge, Checkbox, Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, Combobox, Select, SelectContent, SelectItem, SelectTrigger, SelectValue, AlertDialog, AlertDialogContent, AlertDialogHeader, AlertDialogTitle, AlertDialogDescription, AlertDialogFooter, AlertDialogAction, AlertDialogCancel } from "@/shared/ui"
+import { cn } from "@/shared/utils/cn"
 import { toast } from "@/shared/ui"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { planFiles, allPositions, allPlanFiles, allPlanPositions, PlanFileInfo, PlanPositionOut, listPlans, PlanSummary, batchAssignRouteGlobal, deleteImportBatch } from "@/shared/api/productionPlans"
@@ -33,6 +34,54 @@ const statusVariant: Record<string, string> = {
   released: "default",
 }
 
+const routeErrorLabels: Record<string, string> = {
+  route_signature_incomplete: "Сигнатура маршрута неполная",
+  route_not_found: "Маршрут не найден",
+  active_route_not_found: "Активный маршрут не найден",
+  active_route_has_no_steps: "Маршрут без этапов",
+  route_sequence_invalid: "Неверная последовательность маршрута",
+  route_contains_inactive_section: "Маршрут содержит неактивный участок",
+  route_not_matching_import_signature: "Маршрут не совпадает с импортом",
+  route_missing_required_step: "Отсутствует обязательный этап",
+  route_missing_pack_additional_operation: "Отсутствует доп. упаковочная операция",
+  route_primary_operation_mismatch: "Основная операция маршрута не совпадает",
+  manual_route_not_found: "Ручной маршрут не найден",
+  manual_route_inactive: "Ручной маршрут неактивен",
+  auto_fallback: "Маршрут выбран автоматически — проверьте",
+}
+
+const errorLabels: Record<string, string> = {
+  product_not_found: "Изделие не найдено",
+  product_inactive: "Изделие неактивно",
+  active_techcard_not_found: "Нет активной техкарты",
+  active_techcard_has_no_lines: "Техкарта пустая",
+  active_route_not_found: "Нет активного маршрута",
+  active_route_has_no_steps: "Маршрут без этапов",
+  route_sequence_invalid: "Неверная последовательность маршрута",
+  route_contains_inactive_section: "Неактивный участок в маршруте",
+  duplicate_sku_due_date: "Дубликат: такой артикул со сроком уже есть",
+  route_primary_operation_mismatch: "Основная операция маршрута не совпадает",
+  route_not_matching_import_signature: "Маршрут не совпадает с ожидаемым",
+  route_missing_required_step: "Отсутствует обязательный этап в маршруте",
+  route_missing_pack_additional_operation: "Отсутствует доп. упаковочная операция",
+  quantity_must_be_positive: "Количество должно быть > 0",
+  route_signature_incomplete: "Сигнатура маршрута неполная",
+  route_not_found: "Маршрут не найден по сигнатуре",
+}
+
+const warningLabels: Record<string, string> = {
+  paired_profile_product_unmapped: "Парный профиль не сопоставлен",
+  techcard_pair_not_resolved: "Не выбран парный профиль техкарты",
+  product_name_missing: "Отсутствует наименование",
+  period_not_detected: "Период не определён",
+  route_auto_fallback: "Маршрут выбран автоматически — проверьте корректность",
+}
+
+function translateLabel(code: string, labels: Record<string, string>): string {
+  const [base] = String(code).split(":")
+  return labels[base] ?? code
+}
+
 function FileRow({ file, activePlan, onDelete }: { file: PlanFileInfo; activePlan: PlanSummary; onDelete: (batchId: number) => void }) {
   const [previewOpen, setPreviewOpen] = useState(false)
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
@@ -55,6 +104,9 @@ function FileRow({ file, activePlan, onDelete }: { file: PlanFileInfo; activePla
             <FileSpreadsheet className="h-4 w-4 text-muted-foreground" />
             <span className="font-medium text-sm">{file.filename}</span>
           </div>
+        </td>
+        <td className="p-3 text-sm text-muted-foreground">
+          {new Date(file.created_at).toLocaleString("ru-RU", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" })}
         </td>
         <td className="p-3 text-sm text-muted-foreground">{file.sheet_name}</td>
         <td className="p-3 text-sm">{file.total_rows}</td>
@@ -154,14 +206,16 @@ function PositionRow({ pos, onApprove, onDelete, selected, onToggle, routes, onA
   const qty = Number(pos.quantity || 0)
   const qtyStr = Number.isInteger(qty) ? String(qty) : qty.toFixed(3).replace(/\.?0+$/, '')
   const isDraft = pos.status === 'draft'
+  const translatedErrors = hasErrors ? pos.errors.map((e) => translateLabel(e, errorLabels)) : []
+  const translatedWarnings = hasWarnings ? pos.warnings.map((w) => translateLabel(w, warningLabels)) : []
   const reason = pos.validation_status === 'invalid'
-    ? (pos.errors.length > 0 ? pos.errors.join(', ') : 'Ошибка валидации')
+    ? (translatedErrors.length > 0 ? translatedErrors.join(', ') : 'Ошибка валидации')
     : isDraft
       ? 'Ожидает утверждения'
       : ''
   const rowNum = pos.source_row_number ?? "—"
   const routeSourceLabel = pos.route_source === "manual" ? "(вручную)" : pos.route_source === "auto" ? "(авто)" : ""
-  const routeError = pos.route_error
+  const routeError = pos.route_error ? translateLabel(pos.route_error, routeErrorLabels) : null
   const [routeCellOpen, setRouteCellOpen] = useState(false)
 
   return (
@@ -186,18 +240,24 @@ function PositionRow({ pos, onApprove, onDelete, selected, onToggle, routes, onA
             onValueChange={(v) => onAssignRoute(pos.id, v === "__clear__" ? null : Number(v))}
             placeholder={routeError || "Не назначен"}
             emptyText="Маршрут не найден"
+            className={cn(
+              "rounded-md border border-dashed border-input px-2 py-1.5 hover:bg-accent/50 hover:border-primary/50 transition-colors cursor-pointer group",
+              pos.route_id ? "border-solid border-blue-200 bg-blue-50/50" : "bg-muted/20",
+            )}
             triggerContent={
-              pos.route_name ? (
-                <span className="inline-flex items-center gap-1 text-blue-700">
-                  <Route className="h-3 w-3" />
-                  {pos.route_name}
-                  <span className="text-xs text-muted-foreground">{routeSourceLabel}</span>
-                </span>
-              ) : (
-                <span className={routeError ? "text-red-600 text-xs" : "text-muted-foreground text-xs"}>
-                  {routeError || "Не назначен"}
-                </span>
-              )
+              <span className="inline-flex items-center gap-1.5 w-full">
+                <Route className={cn("h-3.5 w-3.5 shrink-0", pos.route_id ? "text-blue-600" : "text-muted-foreground group-hover:text-primary")} />
+                {pos.route_name ? (
+                  <span className="text-blue-700">
+                    {pos.route_name}
+                    <span className="text-xs text-muted-foreground ml-1">{routeSourceLabel}</span>
+                  </span>
+                ) : (
+                  <span className={cn("text-xs", routeError ? "text-red-600" : "text-muted-foreground group-hover:text-foreground")}>
+                    {routeError || "Нажмите для выбора"}
+                  </span>
+                )}
+              </span>
             }
           />
         ) : pos.route_name ? (
@@ -219,29 +279,41 @@ function PositionRow({ pos, onApprove, onDelete, selected, onToggle, routes, onA
       </td>
       <td className="p-2 text-xs text-red-600 max-w-[200px]">
         {hasErrors ? (
-          <span className="truncate block" title={pos.errors.join("\n")}>
-            {pos.errors.join(", ")}
+          <span className="truncate block" title={translatedErrors.join("\n")}>
+            {translatedErrors.join(", ")}
           </span>
         ) : "—"}
       </td>
       <td className="p-2 text-xs text-amber-600 max-w-[150px]">
         {hasWarnings ? (
-          <span className="truncate block" title={pos.warnings.join("\n")}>
-            {pos.warnings.join(", ")}
+          <span className="truncate block" title={translatedWarnings.join("\n")}>
+            {translatedWarnings.join(", ")}
           </span>
         ) : "—"}
       </td>
       <td className="p-2">
-        {isDraft && (
-          <div className="flex gap-1">
-            <Button variant="ghost" size="sm" className="h-6 text-xs text-green-700 hover:text-green-800" onClick={() => onApprove(pos.id, pos.production_plan_id)}>
-              Утвердить
-            </Button>
+        <div className="flex gap-1">
+          {pos.status === 'valid' && (
+            <>
+              <Button variant="ghost" size="sm" className="h-6 text-xs text-green-700 hover:text-green-800" onClick={() => onApprove(pos.id, pos.production_plan_id)}>
+                Утвердить
+              </Button>
+              <Button variant="ghost" size="sm" className="h-6 text-xs text-red-600 hover:text-red-700" onClick={() => onDelete(pos.id, pos.production_plan_id)}>
+                Удалить
+              </Button>
+            </>
+          )}
+          {pos.status === 'draft' && (
             <Button variant="ghost" size="sm" className="h-6 text-xs text-red-600 hover:text-red-700" onClick={() => onDelete(pos.id, pos.production_plan_id)}>
               Удалить
             </Button>
-          </div>
-        )}
+          )}
+          {pos.status === 'invalid' && (
+            <Button variant="ghost" size="sm" className="h-6 text-xs text-red-600 hover:text-red-700" onClick={() => onDelete(pos.id, pos.production_plan_id)}>
+              Удалить
+            </Button>
+          )}
+        </div>
         {pos.validation_status === 'invalid' && (
           <p className="text-xs text-red-600 mt-1 max-w-[250px]" title={reason}>{reason.slice(0, 50)}{reason.length > 50 ? '…' : ''}</p>
         )}
@@ -265,7 +337,7 @@ export function PlanPage() {
   const { data: routes } = useQuery({ queryKey: ["routes"], queryFn: () => listRoutes() })
   const activeRoutes = routes?.filter(r => r.is_active) ?? []
 
-  const [filterStatus, setFilterStatus] = useState<"all" | "draft" | "approved" | "invalid">("all")
+  const [filterStatus, setFilterStatus] = useState<"all" | "draft" | "valid" | "invalid">("all")
 
   const handleSuccess = () => {
     queryClient.invalidateQueries({ queryKey: ["plans"] })
@@ -482,6 +554,7 @@ export function PlanPage() {
                     <thead className="border-b bg-muted/50">
                       <tr>
                         <th className="text-left p-3 text-xs font-medium text-muted-foreground">Файл</th>
+                        <th className="text-left p-3 text-xs font-medium text-muted-foreground">Дата загрузки</th>
                         <th className="text-left p-3 text-xs font-medium text-muted-foreground">Лист</th>
                         <th className="text-left p-3 text-xs font-medium text-muted-foreground">Строк</th>
                         <th className="text-left p-3 text-xs font-medium text-muted-foreground">Размер</th>
@@ -511,7 +584,7 @@ export function PlanPage() {
             <div className="flex items-center justify-between mb-2">
               <h3 className="text-base font-semibold">Сводная таблица позиций</h3>
               <div className="flex gap-1">
-                {(["all", "draft", "approved", "invalid"] as const).map((f) => (
+                {(["all", "draft", "valid", "invalid"] as const).map((f) => (
                   <button
                     key={f}
                     onClick={() => setFilterStatus(f)}
@@ -521,7 +594,7 @@ export function PlanPage() {
                         : "bg-background hover:bg-accent border-input"
                     }`}
                   >
-                    {f === "all" ? "Все" : f === "draft" ? "Черновики" : f === "approved" ? "Утверждённые" : "Ошибки"}
+                    {f === "all" ? "Все" : f === "draft" ? "Черновики" : f === "valid" ? "Валидные" : "Ошибки"}
                   </button>
                 ))}
               </div>

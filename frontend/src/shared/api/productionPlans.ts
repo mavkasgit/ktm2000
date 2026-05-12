@@ -127,6 +127,16 @@ export async function allPlanPositions() {
   return data;
 }
 
+export async function cancelledPositions() {
+  const { data } = await apiClient.get<PlanPositionOut[]>("/production-plans/cancelled-positions");
+  return data;
+}
+
+export async function cancelPosition(planId: number, positionId: number) {
+  const { data } = await apiClient.post(`/production-plans/${planId}/positions/${positionId}/cancel`);
+  return data;
+}
+
 export async function allPositions(planId: number) {
   const { data } = await apiClient.get<PlanPositionOut[]>(`/production-plans/${planId}/all-positions`);
   return data;
@@ -369,4 +379,13 @@ export async function takeToWork(positionIds: number[]) {
     position_ids: positionIds,
   });
   return data;
+}
+
+export async function cancelPositionExecution(positionId: number) {
+  const { data } = await apiClient.post(`/production-planning/rows/${positionId}/cancel`);
+  return data;
+}
+
+export async function resetAllPlans() {
+  await apiClient.post("/production-plans/reset-all");
 }

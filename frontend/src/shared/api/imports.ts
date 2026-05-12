@@ -43,6 +43,39 @@ export type RecentImport = {
   created_at: string;
 };
 
+export async function getExcelSheetNames(file: File): Promise<string[]> {
+  const formData = new FormData();
+  formData.append("file", file);
+  const { data } = await apiClient.post<{ sheets: string[] }>("/imports/excel/sheets", formData, {
+    headers: { "Content-Type": "multipart/form-data" },
+  });
+  return data.sheets;
+}
+
+export type SheetPreviewResponse = {
+  sheet_name: string;
+  header_row_number: number;
+  total_rows: number;
+  summary: Record<string, unknown>;
+  items: Record<string, unknown>[];
+};
+
+export async function previewExcelSheet(
+  file: File,
+  options?: { sheet_index?: number; row_selection?: string },
+): Promise<SheetPreviewResponse> {
+  const formData = new FormData();
+  formData.append("file", file);
+  formData.append("sheet_index", String(options?.sheet_index ?? 0));
+  if (options?.row_selection?.trim()) {
+    formData.append("row_selection", options.row_selection.trim());
+  }
+  const { data } = await apiClient.post<SheetPreviewResponse>("/imports/excel/preview", formData, {
+    headers: { "Content-Type": "multipart/form-data" },
+  });
+  return data;
+}
+
 export async function importExcel(input: ImportExcelInput) {
   const formData = new FormData();
   formData.append("file", input.file);

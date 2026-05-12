@@ -30,10 +30,12 @@ export async function uploadExcel(
     planMonth?: string;
     planVersion?: string;
     rowSelection?: string;
+    sheetIndex?: number;
   },
 ) {
   const payload = await importExcel({
     file,
+    sheet_index: options?.sheetIndex ?? 0,
     template_id: options?.templateId,
     column_mapping: options?.columnMapping,
     mode: options?.productionPlanId ? "append_to_plan" : "create_plan",

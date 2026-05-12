@@ -36,6 +36,76 @@ from app.services.route_matcher import RouteSignature, find_route
 from app.services.routing_signature import canonical_signature_from_payload, normalize_pack_op_family
 
 
+async def preview_excel_sheet(
+    db: AsyncSession,
+    *,
+    filename: str,
+    content: bytes,
+    sheet_index: int = 0,
+    column_mapping: dict | None = None,
+    row_selection: str | None = None,
+) -> dict:
+    """Parse an Excel sheet and return preview data without creating any DB records."""
+    parsed = parse_factory_plan_workbook(
+        content,
+        filename,
+        sheet_index=sheet_index,
+        column_mapping=column_mapping,
+        row_selection=row_selection,
+    )
+    summary = _summary(parsed.parsed_rows, parsed.warnings, parsed)
+    items = []
+    for row in parsed.parsed_rows:
+        warnings = list(row.warnings)
+        errors = list(row.errors)
+
+        signature = canonical_signature_from_payload(row.payload)
+        route = None
+        is_fallback = False
+        if signature is not None:
+            route, _checked_rules, is_fallback = await find_route(
+                db,
+                RouteSignature(
+                    operation_family=signature.operation_family,
+                    output_kind=signature.output_kind,
+                    has_pack_ops=signature.has_pack_ops,
+                ),
+            )
+        else:
+            errors.append("route_signature_incomplete")
+
+        if route is None:
+            errors.append("route_not_found")
+        else:
+            if is_fallback:
+                warnings.append("route_auto_fallback")
+
+        item = {
+            "source_row_number": row.source_row_numbers[0],
+            "source_sku": row.source_sku,
+            "source_name": row.source_name,
+            "quantity": str(row.quantity),
+            "payload": row.payload,
+            "warnings": warnings,
+            "errors": errors,
+            "route_id": route.id if route else None,
+            "route_name": route.name if route else None,
+            "route_source": "auto" if route else "missing",
+            "operation_family": signature.operation_family.value if signature else None,
+            "output_kind": signature.output_kind.value if signature else None,
+            "has_pack_ops": signature.has_pack_ops if signature else None,
+            "status": "invalid" if errors else ("warning" if warnings else "pending"),
+        }
+        items.append(item)
+    return {
+        "sheet_name": parsed.sheet_name,
+        "header_row_number": parsed.header_row_number,
+        "total_rows": parsed.total_rows,
+        "summary": summary,
+        "items": items,
+    }
+
+
 async def create_excel_import_change_set(
     db: AsyncSession,
     *,
@@ -364,8 +434,9 @@ async def _make_change_items(
 
         signature = canonical_signature_from_payload(row.payload)
         route = None
+        is_fallback = False
         if signature is not None:
-            route, _checked_rules = await find_route(
+            route, _checked_rules, is_fallback = await find_route(
                 db,
                 RouteSignature(
                     operation_family=signature.operation_family,
@@ -379,6 +450,8 @@ async def _make_change_items(
         if route is None:
             errors.append("route_not_found")
         else:
+            if is_fallback:
+                warnings.append("route_auto_fallback")
             steps = (
                 await db.execute(select(RouteStep).where(RouteStep.route_id == route.id).order_by(RouteStep.sequence))
             ).scalars().all()
