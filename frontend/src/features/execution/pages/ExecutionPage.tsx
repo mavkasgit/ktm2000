@@ -6,11 +6,15 @@ import {
   listProductionPlanningRows,
   takeToWork,
   cancelPositionExecution,
+  restorePositionExecution,
+  softDeleteCancelledPosition,
+  getPositionHistory,
   type ProductionPlanningRow,
   type TakeToWorkResult,
+  type StatusHistoryEntry,
 } from "@/shared/api/productionPlans";
 import { listSections } from "@/shared/api/sections";
-import { Badge, Button, Checkbox, Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, Input, Select, SelectContent, SelectItem, SelectTrigger, SelectValue, renderIcon } from "@/shared/ui";
+import { Badge, Button, Checkbox, Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, Input, Select, SelectContent, SelectItem, SelectTrigger, SelectValue, AlertDialog, AlertDialogContent, AlertDialogHeader, AlertDialogTitle, AlertDialogDescription, AlertDialogFooter, AlertDialogAction, AlertDialogCancel, renderIcon } from "@/shared/ui";
 import { toast } from "@/shared/ui/use-toast";
 import { getErrorMessage } from "@/shared/api/client";
 
@@ -158,6 +162,55 @@ export function ExecutionPage() {
     onError: (err) => toast({ title: "Ошибка отмены", description: getErrorMessage(err), variant: "destructive" }),
   });
 
+  const [restoreDialog, setRestoreDialog] = useState<{ open: boolean; positionId: number | null; reason: string }>({
+    open: false,
+    positionId: null,
+    reason: "",
+  });
+
+  const restorePositionMutation = useMutation({
+    mutationFn: ({ positionId, reason }: { positionId: number; reason?: string }) => restorePositionExecution(positionId, reason),
+    onSuccess: () => {
+      toast({ title: "Позиция восстановлена", variant: "success" });
+      queryClient.invalidateQueries({ queryKey: ["production-planning-rows"] });
+    },
+    onError: (err) => toast({ title: "Ошибка восстановления", description: getErrorMessage(err), variant: "destructive" }),
+  });
+
+  const [deleteDialog, setDeleteDialog] = useState<{ open: boolean; positionId: number | null; reason: string }>({
+    open: false,
+    positionId: null,
+    reason: "",
+  });
+
+  const softDeleteMutation = useMutation({
+    mutationFn: ({ planId, positionId, reason }: { planId: number; positionId: number; reason?: string }) =>
+      softDeleteCancelledPosition(planId, positionId, reason),
+    onSuccess: () => {
+      toast({ title: "Позиция удалена из списка", variant: "success" });
+      queryClient.invalidateQueries({ queryKey: ["production-planning-rows"] });
+    },
+    onError: (err) => toast({ title: "Ошибка удаления", description: getErrorMessage(err), variant: "destructive" }),
+  });
+
+  const [historyEntries, setHistoryEntries] = useState<StatusHistoryEntry[]>([]);
+  const [historyDialogOpen, setHistoryDialogOpen] = useState(false);
+  const [historyLoading, setHistoryLoading] = useState(false);
+
+  const openHistory = useCallback(async (row: ProductionPlanningRow) => {
+    setHistoryLoading(true);
+    setHistoryEntries([]);
+    setHistoryDialogOpen(true);
+    try {
+      const entries = await getPositionHistory(row.production_plan_id, row.plan_position_id);
+      setHistoryEntries(entries);
+    } catch (e) {
+      toast({ title: "Ошибка загрузки истории", description: getErrorMessage(e), variant: "destructive" });
+    } finally {
+      setHistoryLoading(false);
+    }
+  }, []);
+
   const isRowLaunched = useCallback((row: ProductionPlanningRow) => {
     return row.has_tasks || row.is_released;
   }, []);
@@ -204,6 +257,32 @@ export function ExecutionPage() {
   const handleCancel = useCallback((row: ProductionPlanningRow) => {
     setCancelDialog({ open: true, positionId: row.plan_position_id, isReleased: row.is_released });
   }, []);
+
+  const handleRestore = useCallback((row: ProductionPlanningRow) => {
+    setRestoreDialog({ open: true, positionId: row.plan_position_id, reason: "" });
+  }, []);
+
+  const handleSoftDelete = useCallback((row: ProductionPlanningRow) => {
+    setDeleteDialog({ open: true, positionId: row.plan_position_id, reason: "" });
+  }, []);
+
+  const confirmRestore = useCallback(() => {
+    if (restoreDialog.positionId) {
+      restorePositionMutation.mutate({ positionId: restoreDialog.positionId, reason: restoreDialog.reason || undefined });
+    }
+    setRestoreDialog({ open: false, positionId: null, reason: "" });
+  }, [restoreDialog.positionId, restoreDialog.reason, restorePositionMutation]);
+
+  const confirmSoftDelete = useCallback(() => {
+    if (deleteDialog.positionId) {
+      // We need planId - get it from the row data
+      const row = rows?.find((r) => r.plan_position_id === deleteDialog.positionId);
+      if (row) {
+        softDeleteMutation.mutate({ planId: row.production_plan_id, positionId: deleteDialog.positionId, reason: deleteDialog.reason || undefined });
+      }
+    }
+    setDeleteDialog({ open: false, positionId: null, reason: "" });
+  }, [deleteDialog.positionId, deleteDialog.reason, rows, softDeleteMutation]);
 
   const confirmCancel = useCallback(() => {
     if (cancelDialog.positionId) {
@@ -403,6 +482,34 @@ export function ExecutionPage() {
                           Остановить
                         </Button>
                       )}
+                      {row.position_status === "cancelled" && (
+                        <>
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            className="text-green-600 hover:text-green-700"
+                            onClick={() => handleRestore(row)}
+                          >
+                            Восстановить
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            className="text-red-600 hover:text-red-700"
+                            onClick={() => handleSoftDelete(row)}
+                          >
+                            Удалить из списка
+                          </Button>
+                        </>
+                      )}
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        className="text-gray-500 hover:text-gray-700"
+                        onClick={() => openHistory(row)}
+                      >
+                        История
+                      </Button>
                     </div>
                   </td>
                 </tr>
@@ -580,31 +687,87 @@ export function ExecutionPage() {
         </DialogContent>
       </Dialog>
 
-      <Dialog
+      <AlertDialog
         open={cancelDialog.open}
         onOpenChange={(open) => {
           if (!open) setCancelDialog({ open: false, positionId: null, isReleased: false });
         }}
       >
-        <DialogContent className="sm:max-w-[480px]">
-          <DialogHeader>
-            <DialogTitle>{cancelDialog.isReleased ? "Остановить выполнение?" : "Отменить позицию?"}</DialogTitle>
-            <DialogDescription>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{cancelDialog.isReleased ? "Остановить выполнение?" : "Отменить позицию?"}</AlertDialogTitle>
+            <AlertDialogDescription>
               {cancelDialog.isReleased
                 ? "Позиция уже запущена. Остановка выполнения переведёт её в статус «Отменен». Это действие нельзя отменить."
                 : "Отмена переведёт позицию в статус «Отменен». Это действие нельзя отменить."}
-            </DialogDescription>
-          </DialogHeader>
-          <div className="flex justify-end gap-2 pt-2">
-            <Button variant="outline" onClick={() => setCancelDialog({ open: false, positionId: null, isReleased: false })}>
-              Отмена
-            </Button>
-            <Button variant="destructive" onClick={confirmCancel} disabled={cancelPositionMutation.isPending}>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Отмена</AlertDialogCancel>
+            <AlertDialogAction variant="destructive" onClick={confirmCancel} disabled={cancelPositionMutation.isPending}>
               {cancelPositionMutation.isPending ? "Отмена..." : cancelDialog.isReleased ? "Остановить" : "Отменить"}
-            </Button>
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog
+        open={restoreDialog.open}
+        onOpenChange={(open) => {
+          if (!open) setRestoreDialog({ open: false, positionId: null, reason: "" });
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Восстановить позицию?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Позиция будет восстановлена в предыдущий статус. Это действие нельзя отменить.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <div className="py-2">
+            <Input
+              placeholder="Причина (необязательно)"
+              value={restoreDialog.reason}
+              onChange={(e) => setRestoreDialog((prev) => ({ ...prev, reason: e.target.value }))}
+            />
           </div>
-        </DialogContent>
-      </Dialog>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Отмена</AlertDialogCancel>
+            <AlertDialogAction onClick={confirmRestore} disabled={restorePositionMutation.isPending}>
+              {restorePositionMutation.isPending ? "Восстановление..." : "Восстановить"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog
+        open={deleteDialog.open}
+        onOpenChange={(open) => {
+          if (!open) setDeleteDialog({ open: false, positionId: null, reason: "" });
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Удалить из списка?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Позиция будет скрыта из всех рабочих списков. История изменений сохранится.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <div className="py-2">
+            <Input
+              placeholder="Причина (необязательно)"
+              value={deleteDialog.reason}
+              onChange={(e) => setDeleteDialog((prev) => ({ ...prev, reason: e.target.value }))}
+            />
+          </div>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Отмена</AlertDialogCancel>
+            <AlertDialogAction variant="destructive" onClick={confirmSoftDelete} disabled={softDeleteMutation.isPending}>
+              {softDeleteMutation.isPending ? "Удаление..." : "Удалить из списка"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       <Dialog
         open={resultsDialogOpen}
@@ -642,6 +805,39 @@ export function ExecutionPage() {
           <div className="flex justify-end pt-2">
             <Button onClick={() => setResultsDialogOpen(false)}>Закрыть</Button>
           </div>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={historyDialogOpen}
+        onOpenChange={(open) => {
+          if (!open) setHistoryDialogOpen(false);
+        }}
+      >
+        <DialogContent className="sm:max-w-[560px]">
+          <DialogHeader>
+            <DialogTitle>История статусов</DialogTitle>
+            <DialogDescription>Хронология изменений статуса позиции</DialogDescription>
+          </DialogHeader>
+          {historyLoading ? (
+            <p className="text-sm text-muted-foreground py-4">Загрузка истории...</p>
+          ) : historyEntries.length === 0 ? (
+            <p className="text-sm text-muted-foreground py-4">История изменений отсутствует</p>
+          ) : (
+            <div className="max-h-[400px] overflow-auto space-y-2">
+              {historyEntries.map((entry) => (
+                <div key={entry.id} className="rounded border p-3 text-sm">
+                  <div className="flex items-center justify-between">
+                    <span className="font-medium">
+                      {positionStatusLabels[entry.from_status] || entry.from_status} → {positionStatusLabels[entry.to_status] || entry.to_status}
+                    </span>
+                    <Badge variant="secondary">{new Date(entry.changed_at).toLocaleString("ru-RU", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" })}</Badge>
+                  </div>
+                  {entry.reason && <div className="text-xs text-muted-foreground mt-1">{entry.reason}</div>}
+                </div>
+              ))}
+            </div>
+          )}
         </DialogContent>
       </Dialog>
     </>

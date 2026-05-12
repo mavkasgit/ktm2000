@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.techcard import Techcard, TechcardLine
 from app.models.internal_plan import InternalPlan, SectionPlanLine
-from app.models.production_plan import PlanPosition, PlanPositionStatus, ProductionPlan, ProductionPlanStatus
+from app.models.production_plan import PlanPosition, PlanPositionStatus, PositionStatusHistory, ProductionPlan, ProductionPlanStatus
 from app.models.product import Product
 from app.models.release_batch import ReleaseBatch, ReleaseBatchPosition, ReleaseBatchStatus, ReleaseBatchType
 from app.models.route import ProductionRoute, RouteStep
@@ -149,7 +149,15 @@ async def release_batch(db: AsyncSession, release_batch_id: int) -> dict:
             tasks_created += 1
 
         released_total = await _released_quantity(db, position)
-        position.status = PlanPositionStatus.released if released_total >= position.quantity else PlanPositionStatus.approved
+        new_status = PlanPositionStatus.released if released_total >= position.quantity else PlanPositionStatus.approved
+        if position.status != new_status and new_status == PlanPositionStatus.released:
+            history = PositionStatusHistory(
+                plan_position_id=position.id,
+                from_status=position.status.value,
+                to_status=PlanPositionStatus.released.value,
+            )
+            db.add(history)
+        position.status = new_status
         position.released_at = datetime.now(UTC) if position.status == PlanPositionStatus.released else None
 
     batch.status = ReleaseBatchStatus.released

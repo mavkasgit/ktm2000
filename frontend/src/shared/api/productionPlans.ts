@@ -386,6 +386,37 @@ export async function cancelPositionExecution(positionId: number) {
   return data;
 }
 
+export async function restorePositionExecution(positionId: number, reason?: string) {
+  const { data } = await apiClient.post(`/production-planning/rows/${positionId}/restore`, { reason });
+  return data;
+}
+
+export async function restorePosition(planId: number, positionId: number, reason?: string) {
+  const { data } = await apiClient.post(`/production-plans/${planId}/positions/${positionId}/restore`, { reason });
+  return data;
+}
+
+export async function softDeleteCancelledPosition(planId: number, positionId: number, reason?: string) {
+  const { data } = await apiClient.delete(`/production-plans/${planId}/positions/${positionId}`, {
+    data: { reason },
+  });
+  return data;
+}
+
+export type StatusHistoryEntry = {
+  id: number;
+  from_status: string;
+  to_status: string;
+  changed_by: number | null;
+  changed_at: string;
+  reason: string | null;
+};
+
+export async function getPositionHistory(planId: number, positionId: number) {
+  const { data } = await apiClient.get<StatusHistoryEntry[]>(`/production-plans/${planId}/positions/${positionId}/history`);
+  return data;
+}
+
 export async function resetAllPlans() {
   await apiClient.post("/production-plans/reset-all");
 }

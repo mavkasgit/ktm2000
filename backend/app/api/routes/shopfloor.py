@@ -550,13 +550,18 @@ async def section_board(
 @router.get("/sections/{section_id}/daily-stats", dependencies=[Depends(require_role(list(READER_ROLES)))])
 async def section_daily_stats(
     section_id: int,
-    date_from: datetime = Query(...),
-    date_to: datetime = Query(...),
+    date_from: datetime | None = Query(None),
+    date_to: datetime | None = Query(None),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
+    from datetime import datetime as dt, time
+
+    now = dt.now()
+    d_from = date_from or dt.combine(now.date(), time.min)
+    d_to = date_to or dt.combine(now.date(), time.max)
     return await get_section_daily_stats(
         db,
         section_id=section_id,
-        date_from=date_from,
-        date_to=date_to,
+        date_from=d_from,
+        date_to=d_to,
     )

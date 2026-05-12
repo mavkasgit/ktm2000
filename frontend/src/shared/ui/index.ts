@@ -15,3 +15,5 @@ export { Combobox } from "./Combobox"
 export type { ComboboxOption, ComboboxProps } from "./Combobox"
 export { Toaster } from "./toaster";
 export { toast, type ToastVariant, type ToastData } from "./use-toast";
+export { DatePicker } from "./date-picker";
+export type { DatePickerProps } from "./date-picker";

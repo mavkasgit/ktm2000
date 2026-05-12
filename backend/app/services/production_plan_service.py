@@ -17,11 +17,38 @@ from app.models.production_plan import (
     PlanPositionStatus,
     PlanPositionValidationStatus,
     PlanSourceType,
+    PositionStatusHistory,
     ProductionPlan,
     ProductionPlanStatus,
 )
 from app.models.routing import RouteOperationFamily, RouteOutputKind
 from app.services.plan_validation import validate_plan_position
+
+
+ALLOWED_TRANSITIONS = {
+    (PlanPositionStatus.approved, PlanPositionStatus.cancelled),
+    (PlanPositionStatus.released, PlanPositionStatus.cancelled),
+    (PlanPositionStatus.cancelled, PlanPositionStatus.approved),
+    (PlanPositionStatus.cancelled, PlanPositionStatus.released),
+}
+
+
+def record_status_change(
+    db: AsyncSession,
+    position_id: int,
+    from_status: str,
+    to_status: str,
+    changed_by: int | None = None,
+    reason: str | None = None,
+) -> None:
+    history = PositionStatusHistory(
+        plan_position_id=position_id,
+        from_status=from_status,
+        to_status=to_status,
+        changed_by=changed_by,
+        reason=reason,
+    )
+    db.add(history)
 
 
 async def apply_change_set(db: AsyncSession, change_set_id: int) -> dict:
@@ -195,7 +222,13 @@ async def rollback_change_set(db: AsyncSession, change_set_id: int) -> dict:
     return await get_plan_preview(db, change_set.production_plan_id)
 
 
-async def approve_plan_position(db: AsyncSession, production_plan_id: int, position_id: int, force: bool = False) -> PlanPosition:
+async def approve_plan_position(
+    db: AsyncSession,
+    production_plan_id: int,
+    position_id: int,
+    force: bool = False,
+    changed_by: int | None = None,
+) -> PlanPosition:
     position = await db.get(PlanPosition, position_id)
     if position is None or position.production_plan_id != production_plan_id:
         raise ValueError("Plan position not found")
@@ -214,6 +247,7 @@ async def approve_plan_position(db: AsyncSession, production_plan_id: int, posit
         raise ValueError("; ".join(errors))
 
     position.status = PlanPositionStatus.approved
+    record_status_change(db, position_id, PlanPositionStatus.valid.value, PlanPositionStatus.approved.value, changed_by)
     plan = await db.get(ProductionPlan, production_plan_id)
     if plan is not None and plan.status in {ProductionPlanStatus.draft, ProductionPlanStatus.validated}:
         plan.status = ProductionPlanStatus.approved
@@ -221,7 +255,13 @@ async def approve_plan_position(db: AsyncSession, production_plan_id: int, posit
     return position
 
 
-async def cancel_plan_position(db: AsyncSession, production_plan_id: int, position_id: int) -> PlanPosition:
+async def cancel_plan_position(
+    db: AsyncSession,
+    production_plan_id: int,
+    position_id: int,
+    changed_by: int | None = None,
+    reason: str | None = None,
+) -> PlanPosition:
     """Cancel an approved or released position. Only positions with status approved/released can be cancelled."""
     position = await db.get(PlanPosition, position_id)
     if position is None or position.production_plan_id != production_plan_id:
@@ -229,7 +269,75 @@ async def cancel_plan_position(db: AsyncSession, production_plan_id: int, positi
     if position.status not in {PlanPositionStatus.approved, PlanPositionStatus.released}:
         raise ValueError(f"Нельзя отменить позицию со статусом '{position.status.value}'")
 
+    from_status = position.status.value
     position.status = PlanPositionStatus.cancelled
+    record_status_change(db, position_id, from_status, PlanPositionStatus.cancelled.value, changed_by, reason)
+    await db.flush()
+    return position
+
+
+async def restore_plan_position(
+    db: AsyncSession,
+    production_plan_id: int,
+    position_id: int,
+    changed_by: int | None = None,
+    reason: str | None = None,
+) -> PlanPosition:
+    """Restore a cancelled position to its previous status (approved or released) based on history."""
+    position = await db.get(PlanPosition, position_id)
+    if position is None or position.production_plan_id != production_plan_id:
+        raise ValueError("Plan position not found")
+    if position.status != PlanPositionStatus.cancelled:
+        raise ValueError(f"Нельзя восстановить позицию со статусом '{position.status.value}'")
+
+    # Find the last cancellation record in history
+    last_cancel = (
+        await db.execute(
+            select(PositionStatusHistory)
+            .where(
+                PositionStatusHistory.plan_position_id == position_id,
+                PositionStatusHistory.to_status == PlanPositionStatus.cancelled.value,
+            )
+            .order_by(PositionStatusHistory.changed_at.desc())
+        )
+    ).scalar_one_or_none()
+
+    if last_cancel is None:
+        raise ValueError("Нет истории отмены — восстановление невозможно")
+
+    target_status_value = last_cancel.from_status
+    if target_status_value not in {PlanPositionStatus.approved.value, PlanPositionStatus.released.value}:
+        raise ValueError(f"Недопустимый статус для восстановления: '{target_status_value}'")
+
+    target_status = PlanPositionStatus(target_status_value)
+    position.status = target_status
+    record_status_change(db, position_id, PlanPositionStatus.cancelled.value, target_status_value, changed_by, reason)
+    await db.flush()
+    return position
+
+
+async def soft_delete_cancelled_position(
+    db: AsyncSession,
+    production_plan_id: int,
+    position_id: int,
+    changed_by: int | None = None,
+    reason: str | None = None,
+) -> PlanPosition:
+    """Soft-delete a cancelled position. Hides it from all lists while preserving history."""
+    from datetime import datetime, timezone
+
+    position = await db.get(PlanPosition, position_id)
+    if position is None or position.production_plan_id != production_plan_id:
+        raise ValueError("Plan position not found")
+    if position.status != PlanPositionStatus.cancelled:
+        raise ValueError(f"Можно скрыть только отменённую позицию (текущий статус: '{position.status.value}')")
+
+    record_status_change(
+        db, position_id, PlanPositionStatus.cancelled.value, "deleted", changed_by, reason or "Удалена из списка"
+    )
+    position.deleted_at = datetime.now(timezone.utc)
+    position.deleted_by = changed_by
+    position.delete_reason = reason
     await db.flush()
     return position
 

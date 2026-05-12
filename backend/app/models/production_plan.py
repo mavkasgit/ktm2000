@@ -121,6 +121,9 @@ class PlanPosition(Base):
     approved_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
     approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     released_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    deleted_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    delete_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     __table_args__ = (
         Index("ix_plan_positions_import_row", "import_batch_id", "source_row_number", unique=True),
@@ -161,3 +164,20 @@ class PlanChangeItem(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
     __table_args__ = (Index("ix_plan_change_items_change_set", "change_set_id"),)
+
+
+class PositionStatusHistory(Base):
+    __tablename__ = "position_status_history"
+
+    id: Mapped[int] = mapped_column(BigInteger, Identity(always=True), primary_key=True)
+    plan_position_id: Mapped[int] = mapped_column(ForeignKey("plan_positions.id"), nullable=False)
+    from_status: Mapped[str] = mapped_column(String(20), nullable=False)
+    to_status: Mapped[str] = mapped_column(String(20), nullable=False)
+    changed_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    changed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    __table_args__ = (
+        Index("ix_history_position", "plan_position_id"),
+        Index("ix_history_position_status_time", "plan_position_id", "to_status", "changed_at"),
+    )

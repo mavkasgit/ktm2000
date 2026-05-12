@@ -18,6 +18,7 @@ import {
   Badge,
   Button,
   Checkbox,
+  DatePicker,
   Dialog,
   DialogContent,
   DialogDescription,
@@ -58,10 +59,6 @@ function fmtQty(value: string): string {
   return Number.isInteger(n) ? String(n) : n.toFixed(3).replace(/\.?0+$/, "");
 }
 
-function todayISO(): string {
-  return new Date().toISOString().split("T")[0];
-}
-
 function nowLocalDateTime(): string {
   const d = new Date();
   const p = (v: number) => String(v).padStart(2, "0");
@@ -87,8 +84,8 @@ export function SectionsTasksPage() {
   const queryClient = useQueryClient();
   const [sectionId, setSectionId] = useState<number | null>(params.sectionId ? Number(params.sectionId) : null);
   const [statusFilter, setStatusFilter] = useState<string>("all");
-  const [dateFrom, setDateFrom] = useState(todayISO());
-  const [dateTo, setDateTo] = useState(todayISO());
+  const [dateFrom, setDateFrom] = useState<string>("");
+  const [dateTo, setDateTo] = useState<string>("");
 
   const [actionDialog, setActionDialog] = useState<{ open: boolean; type: TaskActionDialogType; task: SectionBoardTask | null }>({
     open: false,
@@ -352,8 +349,8 @@ export function SectionsTasksPage() {
               ))}
             </SelectContent>
           </Select>
-          <Input type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} />
-          <Input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} />
+          <DatePicker value={dateFrom} onChange={setDateFrom} placeholder="ДД.ММ.ГГГГ" className="w-[130px]" />
+          <DatePicker value={dateTo} onChange={setDateTo} placeholder="ДД.ММ.ГГГГ" className="w-[130px]" />
           <Select value={statusFilter} onValueChange={setStatusFilter}>
             <SelectTrigger>
               <SelectValue placeholder="Статус" />

@@ -56,6 +56,7 @@ async def list_production_planning_rows(db: AsyncSession) -> list[dict]:
         await db.execute(
             select(PlanPosition)
             .where(PlanPosition.status.in_([PlanPositionStatus.approved, PlanPositionStatus.released]))
+            .where(PlanPosition.deleted_at.is_(None))
             .order_by(PlanPosition.production_plan_id.desc(), PlanPosition.source_row_number, PlanPosition.id)
         )
     ).scalars().all()
@@ -107,7 +108,7 @@ async def list_production_planning_rows(db: AsyncSession) -> list[dict]:
 
 async def get_production_planning_row_detail(db: AsyncSession, position_id: int) -> dict | None:
     pos = await db.get(PlanPosition, position_id)
-    if pos is None:
+    if pos is None or pos.deleted_at is not None:
         return None
 
     route_info = await resolve_position_route(db, pos)

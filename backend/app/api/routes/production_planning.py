@@ -3,7 +3,7 @@ from pydantic import BaseModel, ConfigDict
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import WRITER_ROLES, require_role, get_current_user
+from app.api.deps import WRITER_ROLES, get_current_user, require_role
 from app.core.database import get_db
 from app.models.internal_plan import SectionPlanLine
 from app.models.production_plan import PlanPosition, PlanPositionStatus, ProductionPlan
@@ -12,6 +12,7 @@ from app.models.route import ProductionRoute, RouteStep
 from app.models.section import Section
 from app.models.user import User
 from app.services.production_planning_rows import get_production_planning_row_detail, list_production_planning_rows
+from app.services.production_plan_service import record_status_change, restore_plan_position
 from app.services.plan_generation import create_release_batch, release_batch
 from app.services.route_matcher import resolve_position_route
 
@@ -21,6 +22,10 @@ router = APIRouter(prefix="/production-planning", tags=["execution-control"])
 class TakeToWorkRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     position_ids: list[int]
+
+
+class StatusActionIn(BaseModel):
+    reason: str | None = None
 
 
 class TakeToWorkResult(BaseModel):
@@ -182,11 +187,12 @@ async def get_production_planning_overview(
 ):
     """Return all approved plan positions grouped by section with work task progress."""
 
-    # Fetch all approved plan positions
+    # Fetch all approved and released plan positions
     positions = (
         await db.execute(
             select(PlanPosition)
-            .where(PlanPosition.status == PlanPositionStatus.approved)
+            .where(PlanPosition.status.in_([PlanPositionStatus.approved, PlanPositionStatus.released]))
+            .where(PlanPosition.deleted_at.is_(None))
             .order_by(PlanPosition.production_plan_id, PlanPosition.priority, PlanPosition.id)
         )
     ).scalars().all()
@@ -391,6 +397,7 @@ async def take_rows_to_work(
 @router.post("/rows/{position_id}/cancel", dependencies=[Depends(require_role(list(WRITER_ROLES)))])
 async def cancel_position(
     position_id: int,
+    payload: StatusActionIn | None = None,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> dict:
@@ -402,7 +409,56 @@ async def cancel_position(
     if pos.status not in {PlanPositionStatus.approved, PlanPositionStatus.released}:
         raise HTTPException(status_code=400, detail=f"Нельзя отменить позицию со статусом '{pos.status.value}'")
 
+    from_status = pos.status.value
     pos.status = PlanPositionStatus.cancelled
+    record_status_change(db, position_id, from_status, PlanPositionStatus.cancelled.value, current_user.id, payload.reason if payload else None)
+    await db.commit()
+
+    return {
+        "id": pos.id,
+        "production_plan_id": pos.production_plan_id,
+        "status": pos.status.value,
+    }
+
+
+@router.post("/rows/{position_id}/restore", dependencies=[Depends(require_role(list(WRITER_ROLES)))])
+async def restore_position(
+    position_id: int,
+    payload: StatusActionIn | None = None,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    """Restore a cancelled position to its previous status based on history."""
+    pos = await db.get(PlanPosition, position_id)
+    if pos is None:
+        raise HTTPException(status_code=404, detail="Position not found")
+
+    if pos.status != PlanPositionStatus.cancelled:
+        raise HTTPException(status_code=400, detail=f"Нельзя восстановить позицию со статусом '{pos.status.value}'")
+
+    # Find last cancellation history record
+    from app.models.production_plan import PositionStatusHistory
+    from sqlalchemy import select
+    last_cancel = (
+        await db.execute(
+            select(PositionStatusHistory)
+            .where(
+                PositionStatusHistory.plan_position_id == position_id,
+                PositionStatusHistory.to_status == PlanPositionStatus.cancelled.value,
+            )
+            .order_by(PositionStatusHistory.changed_at.desc())
+        )
+    ).scalar_one_or_none()
+
+    if last_cancel is None:
+        raise HTTPException(status_code=400, detail="Нет истории отмены — восстановление невозможно")
+
+    target_status_value = last_cancel.from_status
+    if target_status_value not in {PlanPositionStatus.approved.value, PlanPositionStatus.released.value}:
+        raise HTTPException(status_code=400, detail=f"Недопустимый статус для восстановления: '{target_status_value}'")
+
+    pos.status = PlanPositionStatus(target_status_value)
+    record_status_change(db, position_id, PlanPositionStatus.cancelled.value, target_status_value, current_user.id, payload.reason if payload else None)
     await db.commit()
 
     return {

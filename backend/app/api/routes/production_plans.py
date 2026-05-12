@@ -7,13 +7,23 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from sqlalchemy import func as sa_func
 
+from app.api.deps import WRITER_ROLES, require_role, get_current_user
 from app.core.database import get_db
-from app.models.production_plan import PlanChangeItem, PlanChangeSet, PlanPosition, PlanPositionStatus, ProductionPlan
+from app.models.production_plan import PlanChangeItem, PlanChangeSet, PlanPosition, PlanPositionStatus, PositionStatusHistory, ProductionPlan
 from app.models.release_batch import ReleaseBatchType
 from app.models.route import ProductionRoute, RouteStep
 from app.models.section import Section
+from app.models.user import User
 from app.services.plan_generation import create_release_batch
-from app.services.production_plan_service import apply_change_set, approve_plan_position, cancel_plan_position, get_plan_preview, rollback_change_set
+from app.services.production_plan_service import (
+    apply_change_set,
+    approve_plan_position,
+    cancel_plan_position,
+    get_plan_preview,
+    restore_plan_position,
+    rollback_change_set,
+    soft_delete_cancelled_position,
+)
 from app.services.route_matcher import resolve_position_route, ResolvedRouteInfo
 from app.services.route_resolution import resolve_route_signature_from_canonical
 from app.services.route_validation import validate_route_match
@@ -79,6 +89,19 @@ class ReleaseBatchCreateIn(BaseModel):
     name: str | None = None
     batch_type: ReleaseBatchType = ReleaseBatchType.manual
     positions: list[ReleasePositionIn] | None = None
+
+
+class StatusActionIn(BaseModel):
+    reason: str | None = None
+
+
+class StatusHistoryOut(BaseModel):
+    id: int
+    from_status: str
+    to_status: str
+    changed_by: int | None
+    changed_at: str
+    reason: str | None
 
 
 class RouteCheckOut(BaseModel):
@@ -193,11 +216,12 @@ async def approve_position(
     position_id: int,
     force: bool = False,
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ) -> dict:
     import logging
     logger = logging.getLogger(__name__)
     try:
-        position = await approve_plan_position(db, production_plan_id, position_id, force=force)
+        position = await approve_plan_position(db, production_plan_id, position_id, force=force, changed_by=current_user.id)
     except ValueError as exc:
         logger.error("approve_position failed: %s (plan=%d, pos=%d, force=%s)", exc, production_plan_id, position_id, force)
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -214,10 +238,14 @@ async def approve_position(
 async def cancel_position(
     production_plan_id: int,
     position_id: int,
+    payload: StatusActionIn | None = None,
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ) -> dict:
     try:
-        position = await cancel_plan_position(db, production_plan_id, position_id)
+        position = await cancel_plan_position(
+            db, production_plan_id, position_id, changed_by=current_user.id, reason=payload.reason if payload else None
+        )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {
@@ -227,18 +255,86 @@ async def cancel_position(
     }
 
 
+@router.post("/{production_plan_id}/positions/{position_id}/restore")
+async def restore_position(
+    production_plan_id: int,
+    position_id: int,
+    payload: StatusActionIn | None = None,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    try:
+        position = await restore_plan_position(
+            db, production_plan_id, position_id, changed_by=current_user.id, reason=payload.reason if payload else None
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {
+        "id": position.id,
+        "production_plan_id": position.production_plan_id,
+        "status": position.status.value,
+    }
+
+
+@router.get("/{production_plan_id}/positions/{position_id}/history", response_model=list[StatusHistoryOut])
+async def position_history(
+    production_plan_id: int,
+    position_id: int,
+    db: AsyncSession = Depends(get_db),
+) -> list[StatusHistoryOut]:
+    position = await db.get(PlanPosition, position_id)
+    if position is None or position.production_plan_id != production_plan_id:
+        raise HTTPException(status_code=404, detail="Position not found")
+
+    history = (
+        await db.execute(
+            select(PositionStatusHistory)
+            .where(PositionStatusHistory.plan_position_id == position_id)
+            .order_by(PositionStatusHistory.changed_at.desc())
+        )
+    ).scalars().all()
+
+    return [
+        StatusHistoryOut(
+            id=h.id,
+            from_status=h.from_status,
+            to_status=h.to_status,
+            changed_by=h.changed_by,
+            changed_at=h.changed_at.isoformat(),
+            reason=h.reason,
+        )
+        for h in history
+    ]
+
+
 @router.delete("/{production_plan_id}/positions/{position_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_position(
     production_plan_id: int,
     position_id: int,
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     position = await db.get(PlanPosition, position_id)
     if position is None or position.production_plan_id != production_plan_id:
         raise HTTPException(status_code=404, detail="Position not found")
-    if position.status == "released":
-        raise HTTPException(status_code=400, detail="Нельзя удалить запущенную позицию")
+
+    if position.status == PlanPositionStatus.cancelled:
+        # Soft-delete cancelled positions
+        await soft_delete_cancelled_position(
+            db, production_plan_id, position_id, changed_by=current_user.id, reason="Удалена из списка"
+        )
+        await db.commit()
+        return
+
+    if position.deleted_at is not None:
+        raise HTTPException(status_code=400, detail="Позиция уже удалена")
+
+    if position.status in {PlanPositionStatus.approved, PlanPositionStatus.released}:
+        raise HTTPException(status_code=400, detail="Нельзя удалить утверждённую или запущенную позицию. Используйте отмену.")
+
+    # Hard delete for draft/invalid/valid
     await db.delete(position)
+    await db.commit()
 
 
 @router.post("/{production_plan_id}/release-batches", status_code=status.HTTP_201_CREATED)
@@ -501,6 +597,7 @@ async def all_plan_positions(db: AsyncSession = Depends(get_db)) -> list[PlanPos
         await db.execute(
             select(PlanPosition)
             .where(PlanPosition.status.in_([PlanPositionStatus.draft, PlanPositionStatus.invalid, PlanPositionStatus.valid]))
+            .where(PlanPosition.deleted_at.is_(None))
             .order_by(PlanPosition.source_row_number, PlanPosition.id)
         )
     ).scalars().all()
@@ -556,6 +653,7 @@ async def cancelled_positions(db: AsyncSession = Depends(get_db)) -> list[PlanPo
         await db.execute(
             select(PlanPosition)
             .where(PlanPosition.status == PlanPositionStatus.cancelled)
+            .where(PlanPosition.deleted_at.is_(None))
             .order_by(PlanPosition.source_row_number, PlanPosition.id)
         )
     ).scalars().all()
@@ -611,6 +709,7 @@ async def all_positions(production_plan_id: int, db: AsyncSession = Depends(get_
             select(PlanPosition)
             .where(PlanPosition.production_plan_id == production_plan_id)
             .where(PlanPosition.status.in_([PlanPositionStatus.draft, PlanPositionStatus.invalid, PlanPositionStatus.valid]))
+            .where(PlanPosition.deleted_at.is_(None))
             .order_by(PlanPosition.source_row_number, PlanPosition.id)
         )
     ).scalars().all()
@@ -771,6 +870,7 @@ async def find_plan_duplicates(production_plan_id: int, db: AsyncSession = Depen
             .where(
                 PlanPosition.production_plan_id == production_plan_id,
                 PlanPosition.status != PlanPositionStatus.cancelled,
+                PlanPosition.deleted_at.is_(None),
             )
             .order_by(PlanPosition.source_sku, PlanPosition.source_row_number)
         )
