@@ -3,7 +3,8 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from decimal import Decimal
 
-from sqlalchemy import func, select
+from sqlalchemy import case, func, select
+from sqlalchemy.orm import aliased
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.attachment import Attachment, AttachmentLink
@@ -22,6 +23,7 @@ from app.models.movement import Movement, MovementType
 from app.models.production_plan import PlanPosition, PlanPositionStatus
 from app.models.rework_task import ReworkTask, ReworkTaskStatus
 from app.models.route import RouteStep
+from app.models.section import Section
 from app.models.transfer import Transfer, TransferDiscrepancy, TransferDiscrepancyStatus, TransferStatus
 from app.models.work_task import WorkTask, WorkTaskStatus
 
@@ -1360,6 +1362,170 @@ async def get_section_board(
         })
 
     return {"section_id": section_id, "tasks": tasks_data}
+
+
+async def get_sections_summary(db: AsyncSession) -> dict:
+    """Return section counters for quick top-level switching tiles."""
+    status_counts = (
+        await db.execute(
+            select(
+                WorkTask.section_id.label("section_id"),
+                func.count(WorkTask.id).label("total_tasks"),
+                func.sum(case((WorkTask.status == WorkTaskStatus.ready, 1), else_=0)).label("ready_count"),
+                func.sum(
+                    case(
+                        (
+                            WorkTask.status.in_([WorkTaskStatus.in_progress, WorkTaskStatus.partially_completed]),
+                            1,
+                        ),
+                        else_=0,
+                    )
+                ).label("in_progress_count"),
+                func.sum(case((WorkTask.status == WorkTaskStatus.waiting_previous, 1), else_=0)).label("waiting_count"),
+            )
+            .group_by(WorkTask.section_id)
+        )
+    ).all()
+
+    incoming_counts = (
+        await db.execute(
+            select(
+                Transfer.to_section_id.label("section_id"),
+                func.count(Transfer.id).label("incoming_transfers_count"),
+            )
+            .where(Transfer.status.in_([TransferStatus.sent, TransferStatus.partially_accepted]))
+            .group_by(Transfer.to_section_id)
+        )
+    ).all()
+
+    by_section: dict[int, dict] = {}
+    for row in status_counts:
+        by_section[row.section_id] = {
+            "total_tasks": int(row.total_tasks or 0),
+            "ready_count": int(row.ready_count or 0),
+            "in_progress_count": int(row.in_progress_count or 0),
+            "waiting_count": int(row.waiting_count or 0),
+            "incoming_transfers_count": 0,
+        }
+
+    for row in incoming_counts:
+        entry = by_section.setdefault(
+            row.section_id,
+            {
+                "total_tasks": 0,
+                "ready_count": 0,
+                "in_progress_count": 0,
+                "waiting_count": 0,
+                "incoming_transfers_count": 0,
+            },
+        )
+        entry["incoming_transfers_count"] = int(row.incoming_transfers_count or 0)
+
+    sections = (
+        await db.execute(
+            select(Section).where(Section.is_active == True).order_by(Section.sort_order, Section.id)
+        )
+    ).scalars().all()
+
+    return {
+        "sections": [
+            {
+                "section_id": section.id,
+                "section_code": section.code,
+                "section_name": section.name,
+                "kind": section.kind,
+                "sort_order": section.sort_order,
+                "icon": section.icon,
+                "icon_color": section.icon_color,
+                "total_tasks": by_section.get(section.id, {}).get("total_tasks", 0),
+                "ready_count": by_section.get(section.id, {}).get("ready_count", 0),
+                "in_progress_count": by_section.get(section.id, {}).get("in_progress_count", 0),
+                "waiting_count": by_section.get(section.id, {}).get("waiting_count", 0),
+                "incoming_transfers_count": by_section.get(section.id, {}).get("incoming_transfers_count", 0),
+            }
+            for section in sections
+        ]
+    }
+
+
+async def get_section_incoming_transfers(
+    db: AsyncSession,
+    *,
+    section_id: int,
+) -> dict:
+    """Return incoming open transfers for a section."""
+    from_section = aliased(Section)
+    to_section = aliased(Section)
+    from_task = aliased(WorkTask)
+    to_task = aliased(WorkTask)
+    from_step = aliased(RouteStep)
+    to_step = aliased(RouteStep)
+
+    rows = (
+        await db.execute(
+            select(
+                Transfer,
+                from_section,
+                to_section,
+                from_task,
+                to_task,
+                from_step,
+                to_step,
+            )
+            .join(from_section, from_section.id == Transfer.from_section_id)
+            .join(to_section, to_section.id == Transfer.to_section_id)
+            .join(from_task, from_task.id == Transfer.from_task_id)
+            .join(to_task, to_task.id == Transfer.to_task_id)
+            .join(from_step, from_step.id == from_task.route_step_id)
+            .join(to_step, to_step.id == to_task.route_step_id)
+            .where(
+                Transfer.to_section_id == section_id,
+                Transfer.status.in_([TransferStatus.sent, TransferStatus.partially_accepted]),
+            )
+            .order_by(Transfer.sent_at.desc().nullslast(), Transfer.id.desc())
+        )
+    ).all()
+
+    transfers = []
+    for transfer, from_sec, to_sec, src_task, dst_task, src_step, dst_step in rows:
+        sent = _to_decimal(transfer.sent_quantity or 0)
+        accepted = _to_decimal(transfer.accepted_quantity or 0)
+        rejected = _to_decimal(transfer.rejected_quantity or 0)
+        remaining = sent - accepted - rejected
+        if remaining < 0:
+            remaining = Decimal("0")
+
+        transfers.append(
+            {
+                "transfer_id": transfer.id,
+                "transfer_no": transfer.transfer_no,
+                "status": transfer.status.value,
+                "from_task_id": transfer.from_task_id,
+                "to_task_id": transfer.to_task_id,
+                "from_section_id": transfer.from_section_id,
+                "from_section_code": from_sec.code,
+                "from_section_name": from_sec.name,
+                "to_section_id": transfer.to_section_id,
+                "to_section_code": to_sec.code,
+                "to_section_name": to_sec.name,
+                "from_operation_name": src_step.operation_name,
+                "to_operation_name": dst_step.operation_name,
+                "sent_quantity": str(sent),
+                "accepted_quantity": str(accepted),
+                "rejected_quantity": str(rejected),
+                "remaining_quantity": str(remaining),
+                "comment": transfer.comment,
+                "sent_at": transfer.sent_at.isoformat() if transfer.sent_at else None,
+                "created_at": transfer.created_at.isoformat() if transfer.created_at else None,
+                "from_task_status": src_task.status.value,
+                "to_task_status": dst_task.status.value,
+            }
+        )
+
+    return {
+        "section_id": section_id,
+        "incoming_transfers": transfers,
+    }
 
 
 async def get_section_daily_stats(

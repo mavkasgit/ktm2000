@@ -18,8 +18,8 @@ from app.models.route import ProductionRoute, RouteStep
 from app.models.section import Section
 from app.models.techcard import Techcard, TechcardLine
 from app.models.user import User, UserRole
-from app.models.work_task import WorkTask
-from app.models.internal_plan import SectionPlanLine
+from app.models.work_task import WorkTask, WorkTaskStatus
+from app.models.internal_plan import InternalPlan, SectionPlanLine
 
 
 async def _make_user(session, email: str = "operator@test.local") -> User:
@@ -407,6 +407,113 @@ async def test_shopfloor_read_endpoints_require_reader_role(client, session) -> 
 
 
 @pytest.mark.asyncio
+async def test_shopfloor_sections_summary_and_incoming_transfers(client, session) -> None:
+    user = await _make_user(session, "shopfloor-summary@test.local")
+    product, plan, pos = await _make_product_route_plan(session, "FG-SF-SUM")
+    headers = _auth_headers(user)
+    section_a = await session.scalar(select(Section).where(Section.code == "FG-SF-SUM-A"))
+    section_b = await session.scalar(select(Section).where(Section.code == "FG-SF-SUM-B"))
+    assert section_a is not None and section_b is not None
+    route_steps = (
+        await session.execute(
+            select(RouteStep)
+            .where(RouteStep.operation_code.in_(["FG-SF-SUM-A", "FG-SF-SUM-B"]))
+            .order_by(RouteStep.sequence)
+        )
+    ).scalars().all()
+    assert len(route_steps) == 2
+
+    internal_plan = InternalPlan(production_plan_id=plan.id)
+    session.add(internal_plan)
+    await session.flush()
+
+    line1 = SectionPlanLine(
+        internal_plan_id=internal_plan.id,
+        plan_position_id=pos.id,
+        section_id=section_a.id,
+        product_id=product.id,
+        route_id=route_steps[0].route_id,
+        route_step_id=route_steps[0].id,
+        sequence=1,
+        planned_quantity=Decimal("100"),
+        cached_available_quantity=Decimal("100"),
+        cached_remaining_quantity=Decimal("100"),
+    )
+    line2 = SectionPlanLine(
+        internal_plan_id=internal_plan.id,
+        plan_position_id=pos.id,
+        section_id=section_b.id,
+        product_id=product.id,
+        route_id=route_steps[1].route_id,
+        route_step_id=route_steps[1].id,
+        sequence=2,
+        planned_quantity=Decimal("100"),
+        cached_available_quantity=Decimal("100"),
+        cached_remaining_quantity=Decimal("100"),
+    )
+    session.add_all([line1, line2])
+    await session.flush()
+
+    first_task = WorkTask(
+        section_plan_line_id=line1.id,
+        section_id=section_a.id,
+        product_id=product.id,
+        route_step_id=route_steps[0].id,
+        planned_quantity=Decimal("100"),
+        status=WorkTaskStatus.ready,
+        cached_available_quantity=Decimal("100"),
+        cached_remaining_quantity=Decimal("100"),
+    )
+    second_task = WorkTask(
+        section_plan_line_id=line2.id,
+        section_id=section_b.id,
+        product_id=product.id,
+        route_step_id=route_steps[1].id,
+        planned_quantity=Decimal("100"),
+        status=WorkTaskStatus.waiting_previous,
+        cached_available_quantity=Decimal("100"),
+        cached_remaining_quantity=Decimal("100"),
+    )
+    session.add_all([first_task, second_task])
+    await session.commit()
+
+    await client.post(
+        f"/api/shopfloor/tasks/{first_task.id}/issue",
+        json={"quantity": "60"},
+        headers=headers,
+    )
+    await client.post(
+        f"/api/shopfloor/tasks/{first_task.id}/complete",
+        json={"good_quantity": "40", "defect_quantity": "0"},
+        headers=headers,
+    )
+
+    transfer_res = await client.post(
+        "/api/shopfloor/transfers",
+        json={"from_task_id": first_task.id, "to_task_id": second_task.id, "quantity": "40"},
+        headers=headers,
+    )
+    assert transfer_res.status_code == 200
+    transfer_id = transfer_res.json()["transfer_id"]
+
+    summary_res = await client.get("/api/shopfloor/sections/summary", headers=headers)
+    assert summary_res.status_code == 200
+    sections = summary_res.json()["sections"]
+    second_section = next((item for item in sections if item["section_id"] == second_task.section_id), None)
+    assert second_section is not None
+    assert second_section["incoming_transfers_count"] >= 1
+
+    incoming_res = await client.get(f"/api/shopfloor/sections/{second_task.section_id}/incoming-transfers", headers=headers)
+    assert incoming_res.status_code == 200
+    incoming = incoming_res.json()["incoming_transfers"]
+    assert len(incoming) >= 1
+    row = next((item for item in incoming if item["transfer_id"] == transfer_id), None)
+    assert row is not None
+    assert row["status"] in {"sent", "partially_accepted"}
+    assert Decimal(row["remaining_quantity"]) == Decimal("40")
+
+
+@pytest.mark.asyncio
 async def test_shopfloor_issue_complete_transfer_persist_fact_fields(client, session) -> None:
     user = await _make_user(session, "shopfloor-fact@test.local")
     _, plan, pos = await _make_product_route_plan(session, "FG-SF-FACT")
@@ -472,3 +579,107 @@ async def test_shopfloor_issue_complete_transfer_persist_fact_fields(client, ses
             assert m["executor_user_id"] == user.id
             assert m["performed_at"] is not None
             assert m["accounted_at"] is not None
+
+
+@pytest.mark.asyncio
+async def test_shopfloor_single_window_lock_enforced(client, session) -> None:
+    user = await _make_user(session, "shopfloor-lock@test.local")
+    _, plan, pos = await _make_product_route_plan(session, "FG-SF-LOCK")
+    headers = _auth_headers(user)
+    await _release_plan_position(client, plan.id, pos.id)
+
+    tasks = (
+        await session.execute(
+            select(WorkTask)
+            .join(SectionPlanLine, WorkTask.section_plan_line_id == SectionPlanLine.id)
+            .where(SectionPlanLine.plan_position_id == pos.id)
+            .order_by(SectionPlanLine.sequence)
+        )
+    ).scalars().all()
+    first_task, second_task = tasks[0], tasks[1]
+
+    lock_first = {**headers, "X-Shopfloor-Single-Section-Id": str(first_task.section_id)}
+    lock_second = {**headers, "X-Shopfloor-Single-Section-Id": str(second_task.section_id)}
+
+    board_ok = await client.get(f"/api/shopfloor/sections/{first_task.section_id}/board", headers=lock_first)
+    assert board_ok.status_code == 200
+
+    board_blocked = await client.get(f"/api/shopfloor/sections/{second_task.section_id}/board", headers=lock_first)
+    assert board_blocked.status_code == 403
+    assert board_blocked.json()["detail"] == "Section is locked to single-window context"
+
+    incoming_blocked = await client.get(
+        f"/api/shopfloor/sections/{second_task.section_id}/incoming-transfers",
+        headers=lock_first,
+    )
+    assert incoming_blocked.status_code == 403
+    assert incoming_blocked.json()["detail"] == "Section is locked to single-window context"
+
+    stats_blocked = await client.get(
+        f"/api/shopfloor/sections/{second_task.section_id}/daily-stats",
+        params={"date_from": "2026-05-01T00:00:00", "date_to": "2026-05-31T23:59:59"},
+        headers=lock_first,
+    )
+    assert stats_blocked.status_code == 403
+    assert stats_blocked.json()["detail"] == "Section is locked to single-window context"
+
+    issue_wrong = await client.post(
+        f"/api/shopfloor/tasks/{second_task.id}/issue",
+        json={"quantity": "1"},
+        headers=lock_first,
+    )
+    assert issue_wrong.status_code == 403
+    assert issue_wrong.json()["detail"] == "Section is locked to single-window context"
+
+    complete_wrong = await client.post(
+        f"/api/shopfloor/tasks/{second_task.id}/complete",
+        json={"good_quantity": "1", "defect_quantity": "0"},
+        headers=lock_first,
+    )
+    assert complete_wrong.status_code == 403
+    assert complete_wrong.json()["detail"] == "Section is locked to single-window context"
+
+    issue_ok = await client.post(
+        f"/api/shopfloor/tasks/{first_task.id}/issue",
+        json={"quantity": "100"},
+        headers=lock_first,
+    )
+    assert issue_ok.status_code == 200
+
+    complete_ok = await client.post(
+        f"/api/shopfloor/tasks/{first_task.id}/complete",
+        json={"good_quantity": "100", "defect_quantity": "0"},
+        headers=lock_first,
+    )
+    assert complete_ok.status_code == 200
+
+    send_ok = await client.post(
+        "/api/shopfloor/transfers",
+        json={"from_task_id": first_task.id, "to_task_id": second_task.id, "quantity": "100"},
+        headers=lock_first,
+    )
+    assert send_ok.status_code == 200
+    transfer_id = send_ok.json()["transfer_id"]
+
+    send_wrong = await client.post(
+        "/api/shopfloor/transfers",
+        json={"from_task_id": second_task.id, "to_task_id": first_task.id, "quantity": "1"},
+        headers=lock_first,
+    )
+    assert send_wrong.status_code == 403
+    assert send_wrong.json()["detail"] == "Section is locked to single-window context"
+
+    accept_wrong = await client.post(
+        f"/api/shopfloor/transfers/{transfer_id}/accept",
+        json={"accepted_quantity": "100", "rejected_quantity": "0"},
+        headers=lock_first,
+    )
+    assert accept_wrong.status_code == 403
+    assert accept_wrong.json()["detail"] == "Section is locked to single-window context"
+
+    accept_ok = await client.post(
+        f"/api/shopfloor/transfers/{transfer_id}/accept",
+        json={"accepted_quantity": "100", "rejected_quantity": "0"},
+        headers=lock_second,
+    )
+    assert accept_ok.status_code == 200

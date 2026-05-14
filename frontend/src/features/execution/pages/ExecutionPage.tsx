@@ -704,7 +704,7 @@ export function ExecutionPage() {
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>Отмена</AlertDialogCancel>
-            <AlertDialogAction variant="destructive" onClick={confirmCancel} disabled={cancelPositionMutation.isPending}>
+            <AlertDialogAction className="bg-destructive text-destructive-foreground hover:bg-destructive/90" onClick={confirmCancel} disabled={cancelPositionMutation.isPending}>
               {cancelPositionMutation.isPending ? "Отмена..." : cancelDialog.isReleased ? "Остановить" : "Отменить"}
             </AlertDialogAction>
           </AlertDialogFooter>
@@ -762,7 +762,7 @@ export function ExecutionPage() {
           </div>
           <AlertDialogFooter>
             <AlertDialogCancel>Отмена</AlertDialogCancel>
-            <AlertDialogAction variant="destructive" onClick={confirmSoftDelete} disabled={softDeleteMutation.isPending}>
+            <AlertDialogAction className="bg-destructive text-destructive-foreground hover:bg-destructive/90" onClick={confirmSoftDelete} disabled={softDeleteMutation.isPending}>
               {softDeleteMutation.isPending ? "Удаление..." : "Удалить из списка"}
             </AlertDialogAction>
           </AlertDialogFooter>

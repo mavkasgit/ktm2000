@@ -1,8 +1,9 @@
 from datetime import datetime
 from decimal import Decimal
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Header, Query
 from pydantic import BaseModel
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import READER_ROLES, WRITER_ROLES, require_role
@@ -10,7 +11,9 @@ from app.api.deps import get_current_user
 from app.core.database import get_db
 from app.models.defect import DefectDecisionType
 from app.models.entity_comment import EntityType
+from app.models.transfer import Transfer
 from app.models.user import User
+from app.models.work_task import WorkTask
 from app.services.shopfloor_service import (
     add_defect_item,
     complete_task,
@@ -23,6 +26,8 @@ from app.services.shopfloor_service import (
     get_route_stage_aggregates_for_plan_position,
     get_section_board,
     get_section_daily_stats,
+    get_section_incoming_transfers,
+    get_sections_summary,
     get_task_details,
     get_transfer_details,
     issue_to_work,
@@ -40,6 +45,34 @@ from app.services.shopfloor_service import (
 )
 
 router = APIRouter(prefix="/shopfloor", tags=["sections-operations"])
+LOCKED_SECTION_ERROR = "Section is locked to single-window context"
+
+
+def get_single_window_locked_section_id(
+    x_shopfloor_single_section_id: int | None = Header(default=None, alias="X-Shopfloor-Single-Section-Id"),
+) -> int | None:
+    return x_shopfloor_single_section_id
+
+
+def _ensure_section_lock(section_id: int, locked_section_id: int | None) -> None:
+    if locked_section_id is not None and section_id != locked_section_id:
+        raise HTTPException(status_code=403, detail=LOCKED_SECTION_ERROR)
+
+
+async def _ensure_task_lock(db: AsyncSession, task_id: int, locked_section_id: int | None) -> None:
+    if locked_section_id is None:
+        return
+    task_section_id = await db.scalar(select(WorkTask.section_id).where(WorkTask.id == task_id))
+    if task_section_id is not None and task_section_id != locked_section_id:
+        raise HTTPException(status_code=403, detail=LOCKED_SECTION_ERROR)
+
+
+async def _ensure_transfer_target_lock(db: AsyncSession, transfer_id: int, locked_section_id: int | None) -> None:
+    if locked_section_id is None:
+        return
+    transfer_target_section_id = await db.scalar(select(Transfer.to_section_id).where(Transfer.id == transfer_id))
+    if transfer_target_section_id is not None and transfer_target_section_id != locked_section_id:
+        raise HTTPException(status_code=403, detail=LOCKED_SECTION_ERROR)
 
 
 class IssuePayload(BaseModel):
@@ -172,7 +205,9 @@ async def issue_task(
     payload: IssuePayload,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
+    locked_section_id: int | None = Depends(get_single_window_locked_section_id),
 ) -> dict:
+    await _ensure_task_lock(db, task_id, locked_section_id)
     try:
         return await issue_to_work(
             db,
@@ -196,7 +231,9 @@ async def complete_task_endpoint(
     payload: CompletePayload,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
+    locked_section_id: int | None = Depends(get_single_window_locked_section_id),
 ) -> dict:
+    await _ensure_task_lock(db, task_id, locked_section_id)
     try:
         return await complete_task(
             db,
@@ -220,7 +257,9 @@ async def create_transfer(
     payload: CreateTransferPayload,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
+    locked_section_id: int | None = Depends(get_single_window_locked_section_id),
 ) -> dict:
+    await _ensure_task_lock(db, payload.from_task_id, locked_section_id)
     try:
         return await transfer_send(
             db,
@@ -244,7 +283,9 @@ async def accept_transfer(
     payload: AcceptTransferPayload,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
+    locked_section_id: int | None = Depends(get_single_window_locked_section_id),
 ) -> dict:
+    await _ensure_transfer_target_lock(db, transfer_id, locked_section_id)
     try:
         return await transfer_receive(
             db,
@@ -530,6 +571,23 @@ async def prepare_task(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+@router.get("/sections/summary", dependencies=[Depends(require_role(list(READER_ROLES)))])
+async def sections_summary(
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    return await get_sections_summary(db)
+
+
+@router.get("/sections/{section_id}/incoming-transfers", dependencies=[Depends(require_role(list(READER_ROLES)))])
+async def incoming_transfers(
+    section_id: int,
+    db: AsyncSession = Depends(get_db),
+    locked_section_id: int | None = Depends(get_single_window_locked_section_id),
+) -> dict:
+    _ensure_section_lock(section_id, locked_section_id)
+    return await get_section_incoming_transfers(db, section_id=section_id)
+
+
 @router.get("/sections/{section_id}/board", dependencies=[Depends(require_role(list(READER_ROLES)))])
 async def section_board(
     section_id: int,
@@ -537,7 +595,9 @@ async def section_board(
     date_to: datetime | None = Query(None),
     status: str | None = Query(None),
     db: AsyncSession = Depends(get_db),
+    locked_section_id: int | None = Depends(get_single_window_locked_section_id),
 ) -> dict:
+    _ensure_section_lock(section_id, locked_section_id)
     return await get_section_board(
         db,
         section_id=section_id,
@@ -553,7 +613,9 @@ async def section_daily_stats(
     date_from: datetime | None = Query(None),
     date_to: datetime | None = Query(None),
     db: AsyncSession = Depends(get_db),
+    locked_section_id: int | None = Depends(get_single_window_locked_section_id),
 ) -> dict:
+    _ensure_section_lock(section_id, locked_section_id)
     from datetime import datetime as dt, time
 
     now = dt.now()
