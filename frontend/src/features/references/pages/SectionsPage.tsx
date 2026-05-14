@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useState } from "react";
-import { Plus, Download } from "lucide-react";
+import { Plus, Download, ArrowUp, ArrowDown, GripVertical } from "lucide-react";
 import * as API from "shared/api";
+import * as SectionsAPI from "shared/api/sections";
 import * as UI from "shared/ui";
 import { Button } from "@/shared/ui/Button";
 import { EntityDialog, renderIcon } from "@/shared/ui/EntityDialog";
@@ -16,6 +17,7 @@ type Section = {
   kind?: string;
   icon?: string | null;
   icon_color?: string | null;
+  sort_order?: number;
 };
 
 const KIND_LABELS: Record<string, string> = {
@@ -119,6 +121,17 @@ export function SectionsPage() {
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [seedDialogOpen, setSeedDialogOpen] = useState(false);
   const [seeding, setSeeding] = useState(false);
+  const [draggedIndex, setDraggedIndex] = useState<number | null>(null);
+
+  const moveItem = useCallback((fromIndex: number, toIndex: number) => {
+    setItems((prev) => {
+      if (toIndex < 0 || toIndex >= prev.length) return prev;
+      const next = [...prev];
+      const [moved] = next.splice(fromIndex, 1);
+      next.splice(toIndex, 0, moved);
+      return next;
+    });
+  }, []);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -130,6 +143,49 @@ export function SectionsPage() {
     } finally {
       setLoading(false);
     }
+  }, []);
+
+  const commitReorder = useCallback(async () => {
+    try {
+      const ids = items.map((item) => Number(item.id)).filter(Boolean);
+      if (ids.length > 0) {
+        await SectionsAPI.reorderSections(ids);
+      }
+    } catch (e) {
+      toast({ title: "Ошибка сортировки", description: API.getErrorMessage(e), variant: "destructive" });
+      await load();
+    }
+  }, [items, load]);
+
+  const moveItemUp = useCallback(async (index: number) => {
+    moveItem(index, index - 1);
+    setTimeout(() => commitReorder(), 0);
+  }, [moveItem, commitReorder]);
+
+  const moveItemDown = useCallback(async (index: number) => {
+    moveItem(index, index + 1);
+    setTimeout(() => commitReorder(), 0);
+  }, [moveItem, commitReorder]);
+
+  const handleDragStart = useCallback((index: number) => {
+    setDraggedIndex(index);
+  }, []);
+
+  const handleDragOver = useCallback((e: React.DragEvent, index: number) => {
+    e.preventDefault();
+    if (draggedIndex === null || draggedIndex === index) return;
+    moveItem(draggedIndex, index);
+    setDraggedIndex(index);
+  }, [draggedIndex, moveItem]);
+
+  const handleDrop = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    setDraggedIndex(null);
+    void commitReorder();
+  }, [commitReorder]);
+
+  const handleDragEnd = useCallback(() => {
+    setDraggedIndex(null);
   }, []);
 
   useEffect(() => {
@@ -287,6 +343,7 @@ export function SectionsPage() {
         <Table className="w-auto">
           <thead>
             <tr>
+              <th className="py-3 px-2 text-left text-sm font-medium whitespace-nowrap w-10">⇅</th>
               <th className="py-3 px-4 text-left text-sm font-medium whitespace-nowrap">Иконка</th>
               <th className="py-3 px-4 text-left text-sm font-medium whitespace-nowrap">Название</th>
               <th className="py-3 px-4 text-left text-sm font-medium whitespace-nowrap">Код</th>
@@ -298,8 +355,21 @@ export function SectionsPage() {
             {items.map((item, i) => (
               <tr
                 key={String(item.id ?? `${item.code}-${i}`)}
-                className="cursor-pointer transition-colors"
-                onClick={() => openEdit(item)}
+                className="transition-colors"
+                draggable
+                onDragStart={(e) => {
+                  (e.currentTarget as HTMLTableRowElement).style.opacity = "0.4";
+                  handleDragStart(i);
+                }}
+                onDragOver={(e) => handleDragOver(e, i)}
+                onDrop={(e) => {
+                  (e.currentTarget as HTMLTableRowElement).style.opacity = "1";
+                  handleDrop(e);
+                }}
+                onDragEnd={(e) => {
+                  (e.currentTarget as HTMLTableRowElement).style.opacity = "1";
+                  handleDragEnd();
+                }}
                 style={item.icon_color ? { backgroundColor: item.icon_color + "18" } : undefined}
                 onMouseEnter={(e) => {
                   if (item.icon_color) (e.currentTarget as HTMLTableRowElement).style.backgroundColor = item.icon_color + "40"
@@ -308,7 +378,32 @@ export function SectionsPage() {
                   if (item.icon_color) (e.currentTarget as HTMLTableRowElement).style.backgroundColor = item.icon_color + "18"
                 }}
               >
-                <td className="py-3 px-4 text-sm">
+                <td className="py-3 px-2 text-sm">
+                  <div className="flex items-center gap-0.5">
+                    <span className="cursor-grab active:cursor-grabbing text-muted-foreground hover:text-foreground">
+                      <GripVertical className="h-4 w-4" />
+                    </span>
+                    <button
+                      type="button"
+                      className="p-0.5 rounded hover:bg-accent text-muted-foreground hover:text-foreground disabled:opacity-30 disabled:cursor-default"
+                      disabled={i === 0}
+                      onClick={(e) => { e.stopPropagation(); moveItemUp(i); }}
+                      title="Переместить вверх"
+                    >
+                      <ArrowUp className="h-3.5 w-3.5" />
+                    </button>
+                    <button
+                      type="button"
+                      className="p-0.5 rounded hover:bg-accent text-muted-foreground hover:text-foreground disabled:opacity-30 disabled:cursor-default"
+                      disabled={i === items.length - 1}
+                      onClick={(e) => { e.stopPropagation(); moveItemDown(i); }}
+                      title="Переместить вниз"
+                    >
+                      <ArrowDown className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
+                </td>
+                <td className="py-3 px-4 text-sm cursor-pointer" onClick={() => openEdit(item)}>
                   {item.icon ? (
                     <span style={{ color: item.icon_color || undefined }}>
                       {renderIcon(item.icon, "h-6 w-6")}
@@ -317,10 +412,10 @@ export function SectionsPage() {
                     <span className="text-muted-foreground text-sm">—</span>
                   )}
                 </td>
-                <td className="py-3 px-4 text-sm whitespace-nowrap">{item.name}</td>
-                <td className="py-3 px-4 text-sm whitespace-nowrap">{item.code}</td>
-                <td className="py-3 px-4 text-sm whitespace-nowrap">{KIND_LABELS[item.kind ?? "production"] ?? item.kind ?? "-"}</td>
-                <td className="py-3 px-4 text-sm">{item.description ?? "-"}</td>
+                <td className="py-3 px-4 text-sm whitespace-nowrap cursor-pointer" onClick={() => openEdit(item)}>{item.name}</td>
+                <td className="py-3 px-4 text-sm whitespace-nowrap cursor-pointer" onClick={() => openEdit(item)}>{item.code}</td>
+                <td className="py-3 px-4 text-sm whitespace-nowrap cursor-pointer" onClick={() => openEdit(item)}>{KIND_LABELS[item.kind ?? "production"] ?? item.kind ?? "-"}</td>
+                <td className="py-3 px-4 text-sm cursor-pointer" onClick={() => openEdit(item)}>{item.description ?? "-"}</td>
               </tr>
             ))}
           </tbody>

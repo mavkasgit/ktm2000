@@ -120,3 +120,7 @@ export async function seedRoutes() {
   const { data } = await apiClient.post<RouteDetail[]>("/routes-seed");
   return data;
 }
+
+export async function reorderRoutes(ids: number[]) {
+  await apiClient.post("/routes/reorder", { ids });
+}

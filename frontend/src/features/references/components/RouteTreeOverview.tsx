@@ -5,7 +5,10 @@ import { Badge } from "@/shared/ui/Badge";
 import { Input } from "@/shared/ui/Input";
 import { Card, CardContent } from "@/shared/ui/Card";
 import { apiClient } from "@/shared/api/client";
+import { getErrorMessage } from "@/shared/api/client";
 import { renderIcon } from "@/shared/ui/EntityDialog";
+import { ArrowUp, ArrowDown, GripVertical } from "lucide-react";
+import { toast } from "@/shared/ui/use-toast";
 
 interface RouteTreeOverviewProps {
   onEditRoute: (route: API.RouteDetail) => void;
@@ -20,6 +23,17 @@ export const RouteTreeOverview = forwardRef<RouteTreeOverviewRef, RouteTreeOverv
   const [sections, setSections] = useState<Section[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
+  const [draggedIndex, setDraggedIndex] = useState<number | null>(null);
+
+  const moveRoute = useCallback((fromIndex: number, toIndex: number) => {
+    setRoutes((prev) => {
+      if (toIndex < 0 || toIndex >= prev.length) return prev;
+      const next = [...prev];
+      const [moved] = next.splice(fromIndex, 1);
+      next.splice(toIndex, 0, moved);
+      return next;
+    });
+  }, []);
 
   const loadData = useCallback(async () => {
     setLoading(true);
@@ -44,6 +58,49 @@ export const RouteTreeOverview = forwardRef<RouteTreeOverviewRef, RouteTreeOverv
     } finally {
       setLoading(false);
     }
+  }, []);
+
+  const commitRouteReorder = useCallback(async () => {
+    try {
+      const ids = routes.map((r) => r.id).filter(Boolean);
+      if (ids.length > 0) {
+        await API.reorderRoutes(ids);
+      }
+    } catch (e) {
+      toast({ title: "Ошибка сортировки", description: getErrorMessage(e), variant: "destructive" });
+      await loadData();
+    }
+  }, [routes, loadData]);
+
+  const moveRouteUp = useCallback((index: number) => {
+    moveRoute(index, index - 1);
+    setTimeout(() => commitRouteReorder(), 0);
+  }, [moveRoute, commitRouteReorder]);
+
+  const moveRouteDown = useCallback((index: number) => {
+    moveRoute(index, index + 1);
+    setTimeout(() => commitRouteReorder(), 0);
+  }, [moveRoute, commitRouteReorder]);
+
+  const handleDragStart = useCallback((index: number) => {
+    setDraggedIndex(index);
+  }, []);
+
+  const handleDragOver = useCallback((e: React.DragEvent, index: number) => {
+    e.preventDefault();
+    if (draggedIndex === null || draggedIndex === index) return;
+    moveRoute(draggedIndex, index);
+    setDraggedIndex(index);
+  }, [draggedIndex, moveRoute]);
+
+  const handleDrop = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    setDraggedIndex(null);
+    void commitRouteReorder();
+  }, [commitRouteReorder]);
+
+  const handleDragEnd = useCallback(() => {
+    setDraggedIndex(null);
   }, []);
 
   useImperativeHandle(ref, () => ({ reload: loadData }));
@@ -83,18 +140,59 @@ export const RouteTreeOverview = forwardRef<RouteTreeOverviewRef, RouteTreeOverv
       </div>
 
       <div className="grid gap-3">
-        {filteredRoutes.map((route) => {
+        {filteredRoutes.map((route, routeIndex) => {
           const hasParallelSteps = route.steps.some((s) => s.allow_parallel);
           const hasFinalStep = route.steps.some((s) => s.is_final);
           const isActive = route.is_active;
 
           return (
-            <Card key={route.id} className="overflow-hidden">
+            <Card
+              key={route.id}
+              className="overflow-hidden transition-opacity"
+              draggable
+              onDragStart={(e) => {
+                (e.currentTarget as HTMLDivElement).style.opacity = "0.4";
+                handleDragStart(routeIndex);
+              }}
+              onDragOver={(e) => handleDragOver(e, routeIndex)}
+              onDrop={(e) => {
+                (e.currentTarget as HTMLDivElement).style.opacity = "1";
+                handleDrop(e);
+              }}
+              onDragEnd={(e) => {
+                (e.currentTarget as HTMLDivElement).style.opacity = "1";
+                handleDragEnd();
+              }}
+            >
               {/* Row - click to edit */}
               <div
                 className="w-full flex items-center p-3 gap-3 cursor-pointer hover:bg-muted/50 transition-colors"
                 onClick={() => onEditRoute(route)}
               >
+                {/* Reorder controls */}
+                <div className="flex items-center gap-0.5 shrink-0" onClick={(e) => e.stopPropagation()}>
+                  <span className="cursor-grab active:cursor-grabbing text-muted-foreground hover:text-foreground">
+                    <GripVertical className="h-4 w-4" />
+                  </span>
+                  <button
+                    type="button"
+                    className="p-0.5 rounded hover:bg-accent text-muted-foreground hover:text-foreground disabled:opacity-30 disabled:cursor-default"
+                    disabled={routeIndex === 0}
+                    onClick={() => moveRouteUp(routeIndex)}
+                    title="Переместить вверх"
+                  >
+                    <ArrowUp className="h-3.5 w-3.5" />
+                  </button>
+                  <button
+                    type="button"
+                    className="p-0.5 rounded hover:bg-accent text-muted-foreground hover:text-foreground disabled:opacity-30 disabled:cursor-default"
+                    disabled={routeIndex === filteredRoutes.length - 1}
+                    onClick={() => moveRouteDown(routeIndex)}
+                    title="Переместить вниз"
+                  >
+                    <ArrowDown className="h-3.5 w-3.5" />
+                  </button>
+                </div>
                 <div className="min-w-0 max-w-[360px]">
                   <div className="font-medium">{route.name}</div>
                   {route.description && (

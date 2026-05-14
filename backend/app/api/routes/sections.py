@@ -73,6 +73,21 @@ async def patch_section(section_id: int, payload: SectionPatch, db: AsyncSession
     return SectionOut.model_validate(item, from_attributes=True)
 
 
+class ReorderSectionsIn(BaseModel):
+    ids: list[int]
+
+
+@router.post("/reorder", status_code=status.HTTP_204_NO_CONTENT)
+async def reorder_sections(payload: ReorderSectionsIn, db: AsyncSession = Depends(get_db)):
+    items = (await db.execute(select(Section).where(Section.id.in_(payload.ids)).order_by(Section.id))).scalars().all()
+    by_id = {item.id: item for item in items}
+    for idx, section_id in enumerate(payload.ids):
+        section = by_id.get(section_id)
+        if section:
+            section.sort_order = idx * 10
+    await db.flush()
+
+
 @router.delete("/{section_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_section(section_id: int, db: AsyncSession = Depends(get_db)):
     item = await db.get(Section, section_id)

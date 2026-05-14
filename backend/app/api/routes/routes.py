@@ -117,6 +117,20 @@ class RouteDetailOut(BaseModel):
     rules: list[RuleOut] = []
 
 
+class ReorderRoutesIn(BaseModel):
+    ids: list[int]
+
+
+@router.post("/reorder", status_code=status.HTTP_204_NO_CONTENT)
+async def reorder_routes(payload: ReorderRoutesIn, db: AsyncSession = Depends(get_db)):
+    from sqlalchemy import update
+    for idx, route_id in enumerate(payload.ids):
+        await db.execute(
+            update(ProductionRoute).where(ProductionRoute.id == route_id).values(sort_order=idx * 10)
+        )
+    await db.flush()
+
+
 # --- Endpoints ---
 
 @router.get("", response_model=list[RouteOut])
@@ -124,7 +138,7 @@ async def list_routes(
     q: str | None = None,
     db: AsyncSession = Depends(get_db),
 ) -> list[RouteOut]:
-    stmt = select(ProductionRoute).order_by(ProductionRoute.name)
+    stmt = select(ProductionRoute).order_by(ProductionRoute.sort_order, ProductionRoute.name)
     if q:
         stmt = stmt.where(ProductionRoute.name.ilike(f"%{q}%"))
     rows = (await db.execute(stmt)).scalars().all()
