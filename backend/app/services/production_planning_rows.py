@@ -97,6 +97,13 @@ async def list_production_planning_rows(db: AsyncSession) -> list[dict]:
                 "route_id": route_info.route_id,
                 "route_name": route_info.route_name,
                 "route_source": route_info.source,
+                "route_origin": route_info.route_origin,
+                "route_match_quality": route_info.route_match_quality,
+                "route_match_reason": route_info.route_match_reason,
+                "route_assigned_at": route_info.route_assigned_at.isoformat() if route_info.route_assigned_at else None,
+                "route_manual_confirmed_at": (
+                    route_info.route_manual_confirmed_at.isoformat() if route_info.route_manual_confirmed_at else None
+                ),
                 "route_error": _resolved_route_error(route_info),
                 "is_released": bool(has_tasks or pos.status == PlanPositionStatus.released),
                 "has_tasks": has_tasks,
@@ -178,6 +185,13 @@ async def get_production_planning_row_detail(db: AsyncSession, position_id: int)
             "route_id": route_info.route_id,
             "route_name": route_info.route_name,
             "route_source": route_info.source,
+            "route_origin": route_info.route_origin,
+            "route_match_quality": route_info.route_match_quality,
+            "route_match_reason": route_info.route_match_reason,
+            "route_assigned_at": route_info.route_assigned_at.isoformat() if route_info.route_assigned_at else None,
+            "route_manual_confirmed_at": (
+                route_info.route_manual_confirmed_at.isoformat() if route_info.route_manual_confirmed_at else None
+            ),
             "steps": [
                 {
                     "route_step_id": step.id,
@@ -238,6 +252,13 @@ async def get_production_planning_row_detail(db: AsyncSession, position_id: int)
         "route_id": route_info.route_id,
         "route_name": route_info.route_name,
         "route_source": route_info.source,
+        "route_origin": route_info.route_origin,
+        "route_match_quality": route_info.route_match_quality,
+        "route_match_reason": route_info.route_match_reason,
+        "route_assigned_at": route_info.route_assigned_at.isoformat() if route_info.route_assigned_at else None,
+        "route_manual_confirmed_at": (
+            route_info.route_manual_confirmed_at.isoformat() if route_info.route_manual_confirmed_at else None
+        ),
         "route_error": _resolved_route_error(route_info),
         "is_released": bool(has_tasks or pos.status == PlanPositionStatus.released),
         "has_tasks": has_tasks,

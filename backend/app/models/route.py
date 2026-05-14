@@ -12,6 +12,7 @@ from sqlalchemy import (
     func,
     text,
 )
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base
@@ -96,3 +97,16 @@ class RouteSignatureRule(Base):
     created_at: Mapped[None] = mapped_column(DateTime, server_default=func.now())
 
     route: Mapped["ProductionRoute"] = relationship("ProductionRoute", back_populates="signature_rules")
+
+
+class RouteSelectionRule(Base):
+    __tablename__ = "route_selection_rules"
+
+    id: Mapped[int] = mapped_column(BigInteger, Identity(always=True), primary_key=True)
+    code: Mapped[str | None] = mapped_column(String(100), nullable=True, unique=True)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    priority: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"), default=0)
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("true"), default=True)
+    conditions: Mapped[list] = mapped_column(JSONB, nullable=False, server_default=text("'[]'::jsonb"), default=list)
+    actions: Mapped[list] = mapped_column(JSONB, nullable=False, server_default=text("'[]'::jsonb"), default=list)
+    created_at: Mapped[None] = mapped_column(DateTime, server_default=func.now())

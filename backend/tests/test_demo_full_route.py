@@ -6,6 +6,7 @@ from app.core.security import create_access_token
 from app.models.product import Product, ProductType
 from app.models.production_plan import PlanPosition, ProductionPlan, ProductionPlanStatus
 from app.models.route import ProductionRoute, RouteStep
+from app.models.routing import RouteOperationFamily, RouteOutputKind
 from app.models.section import Section
 from app.models.techcard import Techcard, TechcardLine
 from app.models.user import User, UserRole
@@ -21,6 +22,42 @@ async def _make_user(session, email: str = "demo@test.local") -> User:
 def _auth_headers(user: User) -> dict[str, str]:
     token = create_access_token(subject=user.email)
     return {"Authorization": f"Bearer {token}"}
+
+
+async def _make_demo_route(session, code_prefix: str, step_defs: list[tuple[str, str, str, bool]]) -> ProductionRoute:
+    """Create sections and a route with proper operation codes and section kinds.
+
+    step_defs: list of (section_code_suffix, operation_code, operation_name, is_final)
+    """
+    kind_map = {
+        "ISSUE_RAW": "raw_stock",
+        "MOVE_TO_WIP": "wip_stock",
+        "ACCEPT_FINISHED": "finished_stock",
+    }
+    sections = []
+    for suffix, op_code, op_name, _ in step_defs:
+        kind = kind_map.get(op_code, "production")
+        sections.append(Section(code=f"{code_prefix}-{suffix}", name=op_name, kind=kind, is_active=True))
+    session.add_all(sections)
+    await session.flush()
+
+    route = ProductionRoute(name=f"Demo Route {code_prefix}", description="Demo", is_active=True)
+    session.add(route)
+    await session.flush()
+
+    for idx, (suffix, op_code, op_name, is_final) in enumerate(step_defs, start=1):
+        session.add(
+            RouteStep(
+                route_id=route.id,
+                sequence=idx,
+                section_id=sections[idx - 1].id,
+                operation_code=op_code,
+                operation_name=op_name,
+                is_final=is_final,
+            )
+        )
+    await session.commit()
+    return route
 
 
 @pytest.mark.asyncio
@@ -44,29 +81,16 @@ async def test_demo_full_route_run_and_replay(client, session) -> None:
         )
     )
 
-    sections = [
-        Section(code="DEMO-A", name="Demo A", kind="production", is_active=True),
-        Section(code="DEMO-B", name="Demo B", kind="production", is_active=True),
-        Section(code="DEMO-C", name="Demo C", kind="production", is_active=True),
+    route_steps_def = [
+        ("ISSUE", "ISSUE_RAW", "Выдача сырья", False),
+        ("SHOT", "SHOT", "Дробеструй", False),
+        ("ANOD", "ANOD", "Анодирование", False),
+        ("WIP", "MOVE_TO_WIP", "Перед. на склад п/ф", False),
+        ("SAW", "SAW", "Резка на пиле", False),
+        ("PACK", "PACK", "Упаковка", False),
+        ("FG_WH", "ACCEPT_FINISHED", "Приемка ГП", True),
     ]
-    session.add_all(sections)
-    await session.flush()
-
-    route = ProductionRoute(name="Demo Full Route", description="A->B->C", is_active=True)
-    session.add(route)
-    await session.flush()
-    for idx, section in enumerate(sections, start=1):
-        session.add(
-            RouteStep(
-                route_id=route.id,
-                sequence=idx,
-                section_id=section.id,
-                operation_code=f"OP{idx}",
-                operation_name=f"Operation {idx}",
-                is_final=idx == len(sections),
-            )
-        )
-    await session.commit()
+    route = await _make_demo_route(session, "DEMO-001", route_steps_def)
 
     run_id = "demo-run-001"
     response = await client.post(
@@ -86,10 +110,10 @@ async def test_demo_full_route_run_and_replay(client, session) -> None:
     assert body["plan_position_id"] > 0
     assert body["production_plan_id"] > 0
     assert body["route_id"] == route.id
-    assert body["tasks_created"] == 3
+    assert body["tasks_created"] == 7
     assert body["stage_preset"] == "full_route"
     assert body["stopped_at_stage"] == "completed"
-    assert len(body["stage_results"]) == 3
+    assert len(body["stage_results"]) == 7
     assert all(1 <= int(stage["defect_percent"]) <= 10 for stage in body["stage_results"])
 
     # Test strict uniqueness: duplicate run_id should return 409
@@ -135,28 +159,16 @@ async def test_demo_full_route_forks_when_target_plan_released(client, session) 
         )
     )
 
-    sections = [
-        Section(code="DEMO2-A", name="Demo2 A", kind="production", is_active=True),
-        Section(code="DEMO2-B", name="Demo2 B", kind="production", is_active=True),
+    route_steps_def = [
+        ("ISSUE", "ISSUE_RAW", "Выдача сырья", False),
+        ("SHOT", "SHOT", "Дробеструй", False),
+        ("ANOD", "ANOD", "Анодирование", False),
+        ("WIP", "MOVE_TO_WIP", "Перед. на склад п/ф", False),
+        ("SAW", "SAW", "Резка на пиле", False),
+        ("PACK", "PACK", "Упаковка", False),
+        ("FG_WH", "ACCEPT_FINISHED", "Приемка ГП", True),
     ]
-    session.add_all(sections)
-    await session.flush()
-
-    route = ProductionRoute(name="Demo Route 2", description="A->B", is_active=True)
-    session.add(route)
-    await session.flush()
-    for idx, section in enumerate(sections, start=1):
-        session.add(
-            RouteStep(
-                route_id=route.id,
-                sequence=idx,
-                section_id=section.id,
-                operation_code=f"D2OP{idx}",
-                operation_name=f"Demo2 Operation {idx}",
-                is_final=idx == len(sections),
-            )
-        )
-    await session.commit()
+    route = await _make_demo_route(session, "DEMO-002", route_steps_def)
 
     response = await client.post(
         "/api/demo/test-runs/full-route",
@@ -172,7 +184,7 @@ async def test_demo_full_route_forks_when_target_plan_released(client, session) 
     assert response.status_code == 200, response.text
     body = response.json()
     assert body["production_plan_id"] != released_plan.id
-    assert body["tasks_created"] == 2
+    assert body["tasks_created"] == 7
 
 
 @pytest.mark.asyncio
@@ -318,28 +330,16 @@ async def test_demo_stage_preset_after_release(client, session) -> None:
         )
     )
 
-    sections = [
-        Section(code="DEMO-AR-A", name="Demo AR A", kind="production", is_active=True),
-        Section(code="DEMO-AR-B", name="Demo AR B", kind="production", is_active=True),
+    route_steps_def = [
+        ("ISSUE", "ISSUE_RAW", "Выдача сырья", False),
+        ("SHOT", "SHOT", "Дробеструй", False),
+        ("ANOD", "ANOD", "Анодирование", False),
+        ("WIP", "MOVE_TO_WIP", "Перед. на склад п/ф", False),
+        ("SAW", "SAW", "Резка на пиле", False),
+        ("PACK", "PACK", "Упаковка", False),
+        ("FG_WH", "ACCEPT_FINISHED", "Приемка ГП", True),
     ]
-    session.add_all(sections)
-    await session.flush()
-
-    route = ProductionRoute(name="Demo AR Route", description="A->B", is_active=True)
-    session.add(route)
-    await session.flush()
-    for idx, section in enumerate(sections, start=1):
-        session.add(
-            RouteStep(
-                route_id=route.id,
-                sequence=idx,
-                section_id=section.id,
-                operation_code=f"AR-OP{idx}",
-                operation_name=f"AR Operation {idx}",
-                is_final=idx == len(sections),
-            )
-        )
-    await session.commit()
+    route = await _make_demo_route(session, "DEMO-AR", route_steps_def)
 
     response = await client.post(
         "/api/demo/test-runs/full-route",
@@ -356,7 +356,7 @@ async def test_demo_stage_preset_after_release(client, session) -> None:
     body = response.json()
     assert body["stage_preset"] == "after_release"
     assert body["stopped_at_stage"] == "released"
-    assert body["tasks_created"] == 2
+    assert body["tasks_created"] == 7
     assert len(body["stage_results"]) == 0
 
 
@@ -381,33 +381,24 @@ async def test_demo_stage_preset_to_step_ready_first_step(client, session) -> No
         )
     )
 
-    sections = [
-        Section(code="DEMO-TSR-A", name="Demo TSR A", kind="production", is_active=True),
-        Section(code="DEMO-TSR-B", name="Demo TSR B", kind="production", is_active=True),
-        Section(code="DEMO-TSR-C", name="Demo TSR C", kind="production", is_active=True),
+    route_steps_def = [
+        ("ISSUE", "ISSUE_RAW", "Выдача сырья", False),
+        ("SHOT", "SHOT", "Дробеструй", False),
+        ("ANOD", "ANOD", "Анодирование", False),
+        ("WIP", "MOVE_TO_WIP", "Перед. на склад п/ф", False),
+        ("SAW", "SAW", "Резка на пиле", False),
+        ("PACK", "PACK", "Упаковка", False),
+        ("FG_WH", "ACCEPT_FINISHED", "Приемка ГП", True),
     ]
-    session.add_all(sections)
-    await session.flush()
+    route = await _make_demo_route(session, "DEMO-TSR", route_steps_def)
 
-    route = ProductionRoute(name="Demo TSR Route", description="A->B->C", is_active=True)
-    session.add(route)
-    await session.flush()
-    route_steps = []
-    for idx, section in enumerate(sections, start=1):
-        step = RouteStep(
-            route_id=route.id,
-            sequence=idx,
-            section_id=section.id,
-            operation_code=f"TSR-OP{idx}",
-            operation_name=f"TSR Operation {idx}",
-            is_final=idx == len(sections),
-        )
-        session.add(step)
-        route_steps.append(step)
-    await session.commit()
+    # Get the first route step id
+    from sqlalchemy import select as sa_select
+    first_step = await session.scalar(
+        sa_select(RouteStep).where(RouteStep.route_id == route.id).order_by(RouteStep.sequence).limit(1)
+    )
 
     # Target first step: no steps should be executed
-    first_step_id = route_steps[0].id
     response = await client.post(
         "/api/demo/test-runs/full-route",
         json={
@@ -416,14 +407,14 @@ async def test_demo_stage_preset_to_step_ready_first_step(client, session) -> No
             "route_id": route.id,
             "run_id": "demo-tsr-001",
             "stage_preset": "to_step_ready",
-            "target_route_step_id": first_step_id,
+            "target_route_step_id": first_step.id,
         },
         headers=headers,
     )
     assert response.status_code == 200, response.text
     body = response.json()
     assert body["stage_preset"] == "to_step_ready"
-    assert body["stopped_at_stage"] == f"step_{first_step_id}_ready"
+    assert body["stopped_at_stage"] == f"step_{first_step.id}_ready"
     assert body["tasks_created"] == 0
     assert len(body["stage_results"]) == 0
 
@@ -449,33 +440,27 @@ async def test_demo_stage_preset_to_step_ready_middle_step(client, session) -> N
         )
     )
 
-    sections = [
-        Section(code="DEMO-TSRM-A", name="Demo TSRM A", kind="production", is_active=True),
-        Section(code="DEMO-TSRM-B", name="Demo TSRM B", kind="production", is_active=True),
-        Section(code="DEMO-TSRM-C", name="Demo TSRM C", kind="production", is_active=True),
+    route_steps_def = [
+        ("ISSUE", "ISSUE_RAW", "Выдача сырья", False),
+        ("SHOT", "SHOT", "Дробеструй", False),
+        ("ANOD", "ANOD", "Анодирование", False),
+        ("WIP", "MOVE_TO_WIP", "Перед. на склад п/ф", False),
+        ("SAW", "SAW", "Резка на пиле", False),
+        ("PACK", "PACK", "Упаковка", False),
+        ("FG_WH", "ACCEPT_FINISHED", "Приемка ГП", True),
     ]
-    session.add_all(sections)
-    await session.flush()
+    route = await _make_demo_route(session, "DEMO-TSRM", route_steps_def)
 
-    route = ProductionRoute(name="Demo TSRM Route", description="A->B->C", is_active=True)
-    session.add(route)
-    await session.flush()
-    route_steps = []
-    for idx, section in enumerate(sections, start=1):
-        step = RouteStep(
-            route_id=route.id,
-            sequence=idx,
-            section_id=section.id,
-            operation_code=f"TSRM-OP{idx}",
-            operation_name=f"TSRM Operation {idx}",
-            is_final=idx == len(sections),
+    # Get route steps to target middle step (step 3 = ANOD, 0-indexed = 2)
+    from sqlalchemy import select as sa_select
+    all_steps = (
+        await session.execute(
+            sa_select(RouteStep).where(RouteStep.route_id == route.id).order_by(RouteStep.sequence)
         )
-        session.add(step)
-        route_steps.append(step)
-    await session.commit()
+    ).scalars().all()
+    target_step = all_steps[2]  # ANOD (3rd step)
 
-    # Target middle step (step 2): step 1 should be executed, step 2 stays ready
-    target_step_id = route_steps[1].id
+    # Target middle step (step 3): steps 1-2 should be executed, step 3 stays ready
     response = await client.post(
         "/api/demo/test-runs/full-route",
         json={
@@ -484,17 +469,17 @@ async def test_demo_stage_preset_to_step_ready_middle_step(client, session) -> N
             "route_id": route.id,
             "run_id": "demo-tsrm-001",
             "stage_preset": "to_step_ready",
-            "target_route_step_id": target_step_id,
+            "target_route_step_id": target_step.id,
         },
         headers=headers,
     )
     assert response.status_code == 200, response.text
     body = response.json()
     assert body["stage_preset"] == "to_step_ready"
-    assert body["stopped_at_stage"] == f"step_{target_step_id}_ready"
-    assert body["tasks_created"] == 1  # Only step 1 executed
-    assert len(body["stage_results"]) == 1
-    assert body["stage_results"][0]["section_code"] == "DEMO-TSRM-A"
+    assert body["stopped_at_stage"] == f"step_{target_step.id}_ready"
+    assert body["tasks_created"] == 2  # Steps 1-2 executed
+    assert len(body["stage_results"]) == 2
+    assert body["stage_results"][0]["section_code"].startswith("DEMO-TSRM-ISSUE")
 
 
 @pytest.mark.asyncio

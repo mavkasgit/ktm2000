@@ -3,7 +3,7 @@ from .section import Section
 from .user import User, UserRole
 from .product import Product, ProductType, ProductLength, ProcessingFlag, ProductProcessingFlag
 from .techcard import Techcard, TechcardLine
-from .route import ProductionRoute, RouteStep
+from .route import ProductionRoute, RouteSelectionRule, RouteStep
 from .imports import ImportBatch, ImportBatchMode, ImportBatchStatus, ImportFile
 from .production_plan import (
     PlanChangeAction,
@@ -12,6 +12,9 @@ from .production_plan import (
     PlanChangeSet,
     PlanChangeSetStatus,
     PlanPosition,
+    PlanPositionRouteMatchQuality,
+    PlanPositionRouteMatchReason,
+    PlanPositionRouteOrigin,
     PlanPositionStatus,
     PlanPositionValidationStatus,
     PlanSourceType,
@@ -50,6 +53,7 @@ __all__ = [
     "Techcard",
     "TechcardLine",
     "ProductionRoute",
+    "RouteSelectionRule",
     "RouteStep",
     "ImportFile",
     "ImportBatch",
@@ -59,6 +63,9 @@ __all__ = [
     "ProductionPlanStatus",
     "PlanSourceType",
     "PlanPosition",
+    "PlanPositionRouteOrigin",
+    "PlanPositionRouteMatchQuality",
+    "PlanPositionRouteMatchReason",
     "PlanPositionStatus",
     "PlanPositionValidationStatus",
     "PlanChangeSet",

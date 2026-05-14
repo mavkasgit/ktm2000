@@ -18,6 +18,9 @@ from app.models.production_plan import (
     PlanChangeItem,
     PlanChangeItemStatus,
     PlanChangeSet,
+    PlanPositionRouteMatchQuality,
+    PlanPositionRouteMatchReason,
+    PlanPositionRouteOrigin,
     PlanPosition,
     PlanPositionStatus,
     ProductionPlan,
@@ -32,7 +35,7 @@ from app.services.excel_import import (
     sha256_bytes,
     validate_excel_extension,
 )
-from app.services.route_matcher import RouteSignature, find_route
+from app.services.route_selection import select_route_for_payload
 from app.services.routing_signature import canonical_signature_from_payload, normalize_pack_op_family
 
 
@@ -54,31 +57,29 @@ async def preview_excel_sheet(
         row_selection=row_selection,
     )
     summary = _summary(parsed.parsed_rows, parsed.warnings, parsed)
+    products_by_sku = await _load_products_by_sku(db)
     items = []
     for row in parsed.parsed_rows:
         warnings = list(row.warnings)
         errors = list(row.errors)
+        product = None
+        for key in _sku_lookup_keys(row.source_sku):
+            product = products_by_sku.get(key)
+            if product is not None:
+                break
 
         signature = canonical_signature_from_payload(row.payload)
-        route = None
-        is_fallback = False
-        if signature is not None:
-            route, _checked_rules, is_fallback = await find_route(
-                db,
-                RouteSignature(
-                    operation_family=signature.operation_family,
-                    output_kind=signature.output_kind,
-                    has_pack_ops=signature.has_pack_ops,
-                ),
-            )
-        else:
-            errors.append("route_signature_incomplete")
+        selection = await select_route_for_payload(db, row.payload, product)
+        route = selection.route
 
         if route is None:
-            errors.append("route_not_found")
-        else:
-            if is_fallback:
-                warnings.append("route_auto_fallback")
+            errors.append(selection.error or "no_route_candidate")
+
+        route_match_quality = None
+        route_match_reason = None
+        if route is not None:
+            route_match_quality = selection.route_match_quality or PlanPositionRouteMatchQuality.exact.value
+            route_match_reason = PlanPositionRouteMatchReason.selection_rules.value
 
         item = {
             "source_row_number": row.source_row_numbers[0],
@@ -91,6 +92,11 @@ async def preview_excel_sheet(
             "route_id": route.id if route else None,
             "route_name": route.name if route else None,
             "route_source": "auto" if route else "missing",
+            "route_origin": PlanPositionRouteOrigin.auto.value if route else None,
+            "route_match_quality": route_match_quality,
+            "route_match_reason": route_match_reason,
+            "route_assigned_at": datetime.now(UTC).isoformat() if route else None,
+            "route_manual_confirmed_at": None,
             "operation_family": signature.operation_family.value if signature else None,
             "output_kind": signature.output_kind.value if signature else None,
             "has_pack_ops": signature.has_pack_ops if signature else None,
@@ -433,25 +439,12 @@ async def _make_change_items(
         row.payload["normalized_pack_op_family"] = normalized_pack_op_family
 
         signature = canonical_signature_from_payload(row.payload)
-        route = None
-        is_fallback = False
-        if signature is not None:
-            route, _checked_rules, is_fallback = await find_route(
-                db,
-                RouteSignature(
-                    operation_family=signature.operation_family,
-                    output_kind=signature.output_kind,
-                    has_pack_ops=signature.has_pack_ops,
-                ),
-            )
-        else:
-            errors.append("route_signature_incomplete")
+        selection = await select_route_for_payload(db, row.payload, product)
+        route = selection.route
 
         if route is None:
-            errors.append("route_not_found")
+            errors.append(selection.error or "no_route_candidate")
         else:
-            if is_fallback:
-                warnings.append("route_auto_fallback")
             steps = (
                 await db.execute(select(RouteStep).where(RouteStep.route_id == route.id).order_by(RouteStep.sequence))
             ).scalars().all()
@@ -463,6 +456,14 @@ async def _make_change_items(
                     if section is None or not section.is_active:
                         errors.append("route_contains_inactive_section")
                         break
+
+        route_match_quality = None
+        route_match_reason = None
+        route_assigned_at = None
+        if route is not None:
+            route_assigned_at = datetime.now(UTC).isoformat()
+            route_match_quality = selection.route_match_quality or PlanPositionRouteMatchQuality.exact.value
+            route_match_reason = PlanPositionRouteMatchReason.selection_rules.value
 
         after_data = {
             "product_id": product.id if product else None,
@@ -477,6 +478,11 @@ async def _make_change_items(
             "route_id": route.id if route else None,
             "route_name": route.name if route else None,
             "route_source": "auto" if route else "missing",
+            "route_origin": PlanPositionRouteOrigin.auto.value if route else None,
+            "route_match_quality": route_match_quality,
+            "route_match_reason": route_match_reason,
+            "route_assigned_at": route_assigned_at,
+            "route_manual_confirmed_at": None,
             "operation_family": signature.operation_family.value if signature else None,
             "output_kind": signature.output_kind.value if signature else None,
             "has_pack_ops": signature.has_pack_ops if signature else None,

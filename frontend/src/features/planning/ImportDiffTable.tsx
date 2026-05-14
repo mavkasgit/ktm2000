@@ -28,6 +28,10 @@ const errorLabels: Record<string, string> = {
   route_primary_operation_mismatch: "Основная операция маршрута не совпадает",
   route_not_matching_import_signature: "Маршрут не совпадает с ожидаемым",
   route_missing_required_step: "Отсутствует обязательный этап в маршруте",
+  no_route_candidate: "Нет маршрута под правила выбора",
+  route_rule_conflict: "Конфликт правил выбора маршрута",
+  route_contains_excluded_step: "Маршрут содержит исключённый участок",
+  selection_rules: "Маршрут выбран правилами",
   quantity_must_be_positive: "Количество должно быть > 0",
 };
 
@@ -42,6 +46,36 @@ function translateCodes(codes: string[] | unknown, labels: Record<string, string
   if (!Array.isArray(codes)) return String(codes ?? "");
   if (codes.length === 0) return "—";
   return codes.map((c) => labels[String(c)] ?? String(c)).join(", ");
+}
+
+function formatRouteAssignedAt(value: unknown): string {
+  if (!value || typeof value !== "string") return "дата неизвестна";
+  const dt = new Date(value);
+  if (Number.isNaN(dt.getTime())) return "дата неизвестна";
+  return dt.toLocaleString("ru-RU", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+function buildRouteMetaLabel(row: UnknownRecord): string {
+  const routeSource = String(getAfter(row, "route_source") || "");
+  const routeOrigin = String(getAfter(row, "route_origin") || "");
+  const quality = String(getAfter(row, "route_match_quality") || "");
+  const assignedAt = formatRouteAssignedAt(getAfter(row, "route_assigned_at"));
+  if (routeOrigin === "manual_confirmed" || routeSource === "manual") {
+    return `вручную • ${assignedAt}`;
+  }
+  if (routeOrigin === "auto" || routeSource === "auto") {
+    return `автомаппинг (${quality === "exact" ? "полное" : "скорректирован"}) • ${assignedAt}`;
+  }
+  if (routeOrigin === "legacy" || routeSource === "legacy") {
+    return "legacy • дата неизвестна";
+  }
+  return "";
 }
 
 const headers = [
@@ -120,8 +154,9 @@ export function ImportDiffTable({ rows, sortConfig, onSort }: ImportDiffTablePro
             const quantity = qtyRaw !== undefined && qtyRaw !== null && qtyRaw !== "" ? String(Number(qtyRaw).toFixed(0)) : "";
             const routeName = String(getAfter(row, "route_name") || "");
             const routeSource = String(getAfter(row, "route_source") || "");
+            const routeMeta = buildRouteMetaLabel(row);
             const routeLabel = routeName
-              ? routeName
+              ? `${routeName}${routeMeta ? ` (${routeMeta})` : ""}`
               : routeSource === "missing"
                 ? "Маршрут не найден"
                 : "—";

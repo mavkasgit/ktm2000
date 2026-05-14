@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { Check, ExternalLink, Upload, ChevronRight, ChevronDown } from "lucide-react"
 import { useNavigate } from "react-router-dom"
 import { uploadExcel, applyChangeSet, discardImport, runDemoFullRoute } from "./api"
@@ -50,6 +50,10 @@ const errorLabelsRaw: Record<string, string> = {
   route_primary_operation_mismatch: "Основная операция маршрута не совпадает",
   route_not_matching_import_signature: "Маршрут не совпадает",
   route_missing_required_step: "Отсутствует обязательный этап",
+  no_route_candidate: "Нет маршрута под правила выбора",
+  route_rule_conflict: "Конфликт правил выбора маршрута",
+  route_contains_excluded_step: "Маршрут содержит исключённый участок",
+  selection_rules: "Маршрут выбран правилами",
   quantity_must_be_positive: "Количество должно быть > 0",
 };
 
@@ -61,7 +65,7 @@ const warningLabelsRaw: Record<string, string> = {
   row_selection_applied: "Применён фильтр строк",
   row_selection_auto_included: "Автодобавлены парные строки",
   paired_row_auto_included: "Автодобавлена парная строка",
-  route_auto_fallback: "Маршрут выбран автоматически — проверьте корректность",
+  route_auto_fallback: "Маршрут скорректирован автоматически — проверьте корректность",
 };
 
 function translateLabels(codes: string[] | unknown, labels: Record<string, string>): string {
@@ -74,6 +78,41 @@ function translateLabels(codes: string[] | unknown, labels: Record<string, strin
   }).join(", ");
 }
 
+function formatRouteAssignedAt(value: unknown): string {
+  if (!value || typeof value !== "string") return "дата неизвестна";
+  const dt = new Date(value);
+  if (Number.isNaN(dt.getTime())) return "дата неизвестна";
+  return dt.toLocaleString("ru-RU", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+function buildRouteMetaLabel(row: Record<string, unknown>): string {
+  const routeSource = String(row.route_source ?? "");
+  const routeOrigin = String(row.route_origin ?? "");
+  const matchQuality = String(row.route_match_quality ?? "");
+  const assignedAt = formatRouteAssignedAt(row.route_assigned_at);
+
+  if (routeOrigin === "manual_confirmed" || routeSource === "manual") {
+    return `вручную • ${assignedAt}`;
+  }
+  if (routeOrigin === "auto" || routeSource === "auto") {
+    const quality = matchQuality === "exact" ? "полное" : "скорректирован";
+    return `автомаппинг (${quality}) • ${assignedAt}`;
+  }
+  if (routeOrigin === "legacy" || routeSource === "legacy") {
+    return "legacy • дата неизвестна";
+  }
+  if (routeSource === "missing") {
+    return "не найден";
+  }
+  return "";
+}
+
 type RawPreviewTableProps = {
   rows: Record<string, unknown>[];
   sortConfig?: { key: string; dir: "asc" | "desc" } | null;
@@ -82,21 +121,81 @@ type RawPreviewTableProps = {
 };
 
 function RawPreviewTable({ rows, sortConfig, onSort, expanded }: RawPreviewTableProps) {
+  const [expandedRows, setExpandedRows] = useState<Set<number>>(new Set());
+
+  const toggleRow = useCallback((idx: number) => {
+    setExpandedRows((prev) => {
+      const next = new Set(prev);
+      if (next.has(idx)) {
+        next.delete(idx);
+      } else {
+        next.add(idx);
+      }
+      return next;
+    });
+  }, []);
+
   return (
     <table className="w-full text-xs">
       <thead className="border-b bg-muted/50">
         <tr>
-          <th className="text-left p-2 w-6"></th>
-          {rawHeaders.map((h) => (
-            <th
-              key={h.key}
-              onClick={() => onSort?.(h.key)}
-              className="text-left p-2 cursor-pointer select-none whitespace-nowrap"
-            >
-              {h.label}
-              {sortConfig?.key === h.key ? (sortConfig.dir === "asc" ? " ▲" : " ▼") : ""}
-            </th>
-          ))}
+          <th className="text-left p-2 w-10"></th>
+          <th
+            onClick={() => onSort?.("source_row_number")}
+            className="text-left p-2 w-10 cursor-pointer select-none whitespace-nowrap"
+          >
+            Строка
+            {sortConfig?.key === "source_row_number" ? (sortConfig.dir === "asc" ? " ▲" : " ▼") : ""}
+          </th>
+          <th
+            onClick={() => onSort?.("source_sku")}
+            className="text-left p-2 w-[100px] cursor-pointer select-none whitespace-nowrap"
+          >
+            Артикул
+            {sortConfig?.key === "source_sku" ? (sortConfig.dir === "asc" ? " ▲" : " ▼") : ""}
+          </th>
+          <th
+            onClick={() => onSort?.("quantity")}
+            className="text-left p-2 w-10 cursor-pointer select-none whitespace-nowrap"
+          >
+            Кол-во
+            {sortConfig?.key === "quantity" ? (sortConfig.dir === "asc" ? " ▲" : " ▼") : ""}
+          </th>
+          <th
+            onClick={() => onSort?.("source_name")}
+            className="text-left p-2 w-[250px] cursor-pointer select-none whitespace-nowrap"
+          >
+            Наименование
+            {sortConfig?.key === "source_name" ? (sortConfig.dir === "asc" ? " ▲" : " ▼") : ""}
+          </th>
+          <th
+            onClick={() => onSort?.("route_name")}
+            className="text-left p-2 w-[250px] cursor-pointer select-none whitespace-nowrap"
+          >
+            Маршрут
+            {sortConfig?.key === "route_name" ? (sortConfig.dir === "asc" ? " ▲" : " ▼") : ""}
+          </th>
+          <th
+            onClick={() => onSort?.("status")}
+            className="text-left p-2 w-[150px] cursor-pointer select-none whitespace-nowrap"
+          >
+            Статус
+            {sortConfig?.key === "status" ? (sortConfig.dir === "asc" ? " ▲" : " ▼") : ""}
+          </th>
+          <th
+            onClick={() => onSort?.("errors")}
+            className="text-left p-2 w-[150px] cursor-pointer select-none whitespace-nowrap"
+          >
+            Ошибки
+            {sortConfig?.key === "errors" ? (sortConfig.dir === "asc" ? " ▲" : " ▼") : ""}
+          </th>
+          <th
+            onClick={() => onSort?.("warnings")}
+            className="text-left p-2 w-[250px] cursor-pointer select-none whitespace-nowrap"
+          >
+            Предупр.
+            {sortConfig?.key === "warnings" ? (sortConfig.dir === "asc" ? " ▲" : " ▼") : ""}
+          </th>
         </tr>
       </thead>
       <tbody>
@@ -106,30 +205,38 @@ function RawPreviewTable({ rows, sortConfig, onSort, expanded }: RawPreviewTable
           const warnings = translateLabels(row.warnings as string[] | undefined, warningLabelsRaw);
           const rowNum = row.source_row_number ?? (row.payload as any)?.row_numbers?.[0] ?? "—";
           const rawRow = (row.payload as any)?.raw_excel_row as Record<string, string> | undefined;
+          const routeMeta = buildRouteMetaLabel(row as Record<string, unknown>);
+          const isExpanded = expanded || expandedRows.has(idx);
           return (
             <>
             <tr
               key={idx}
-              className="border-b"
+              className="border-b cursor-pointer"
               style={{
                 background: status === "invalid" ? "#fef2f2" : status === "warning" ? "#fffbeb" : undefined,
               }}
+              onClick={() => rawRow && toggleRow(idx)}
             >
               <td className="p-2">
-                {expanded && rawRow ? (
+                {isExpanded && rawRow ? (
                   <ChevronDown className="h-3 w-3 text-muted-foreground" />
                 ) : (
-                  <div className="h-3 w-3" />
+                  <ChevronRight className="h-3 w-3 text-muted-foreground" />
                 )}
               </td>
               <td className="p-2 font-semibold whitespace-nowrap">#{rowNum}</td>
               <td className="p-2">{String(row.source_sku ?? "")}</td>
-              <td className="p-2">{String(row.source_name ?? "")}</td>
               <td className="p-2">{String(row.quantity ?? "")}</td>
-              <td className="p-2 text-xs max-w-[150px]">
+              <td className="p-2">{String(row.source_name ?? "")}</td>
+              <td className="p-2 text-xs">
                 {row.route_name ? (
-                  <span title={String(row.route_source ?? "")}>
-                    {String(row.route_name)}
+                  <span title={routeMeta}>
+                    {String(row.route_name)}{" "}
+                    {routeMeta && (
+                      <span className="text-muted-foreground">
+                        ({routeMeta})
+                      </span>
+                    )}
                   </span>
                 ) : "—"}
               </td>
@@ -137,7 +244,7 @@ function RawPreviewTable({ rows, sortConfig, onSort, expanded }: RawPreviewTable
               <td className="p-2 text-red-600">{errors}</td>
               <td className="p-2 text-amber-600">{warnings}</td>
             </tr>
-            {expanded && rawRow && (
+            {isExpanded && rawRow && (
               <tr className="border-b bg-muted/30">
                 <td colSpan={9} className="p-2 pl-6 text-[11px] leading-relaxed font-mono">
                   {Object.values(rawRow).filter(Boolean).join(" | ")}
@@ -590,12 +697,12 @@ export function ImportWizard(props: {
                   {!props.productionPlanId && (
                     <>
                       <div>
-                        <label className="text-xs text-muted-foreground">Месяц плана (например 2026-05)</label>
-                        <Input value={planMonth} onChange={(e) => setPlanMonth(e.target.value)} placeholder="2026-05" />
+                        <label className="text-xs text-muted-foreground">Месяц плана</label>
+                        <Input value={planMonth} onChange={(e) => setPlanMonth(e.target.value)} placeholder="Месяц" />
                       </div>
                       <div>
-                        <label className="text-xs text-muted-foreground">Версия плана (например 1)</label>
-                        <Input value={planVersion} onChange={(e) => setPlanVersion(e.target.value)} placeholder="1" />
+                        <label className="text-xs text-muted-foreground">Версия плана</label>
+                        <Input value={planVersion} onChange={(e) => setPlanVersion(e.target.value)} placeholder="Версия" />
                       </div>
                     </>
                   )}
@@ -611,19 +718,19 @@ export function ImportWizard(props: {
               {!props.productionPlanId && (
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                   <div>
-                    <label className="text-xs text-muted-foreground">Месяц плана (например 2026-05)</label>
+                    <label className="text-xs text-muted-foreground">Месяц плана</label>
                     <Input
                       value={planMonth}
                       onChange={(e) => setPlanMonth(e.target.value)}
-                      placeholder="2026-05"
+                      placeholder="Месяц"
                     />
                   </div>
                   <div>
-                    <label className="text-xs text-muted-foreground">Версия плана (например 1)</label>
+                    <label className="text-xs text-muted-foreground">Версия плана</label>
                     <Input
                       value={planVersion}
                       onChange={(e) => setPlanVersion(e.target.value)}
-                      placeholder="1"
+                      placeholder="Версия"
                     />
                   </div>
                 </div>

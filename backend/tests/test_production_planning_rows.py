@@ -14,6 +14,7 @@ from app.models.production_plan import (
     ProductionPlanStatus,
 )
 from app.models.route import ProductionRoute, RouteStep
+from app.models.routing import RouteOperationFamily, RouteOutputKind
 from app.models.section import Section
 from app.models.techcard import Techcard, TechcardLine
 from app.models.work_task import WorkTask
@@ -22,9 +23,12 @@ from app.models.work_task import WorkTask
 async def _make_product_with_route(session, sku: str = "FG-EXEC") -> tuple[Product, ProductionRoute]:
     product = Product(sku=sku, name=f"Finished {sku}", type=ProductType.finished_good, unit="pcs")
     sections = [
-        Section(code=f"{sku}-CUT", name="Cut", kind="production"),
+        Section(code=f"{sku}-ISSUE", name="Issue", kind="raw_stock"),
+        Section(code=f"{sku}-DRILL", name="Drill", kind="production"),
+        Section(code=f"{sku}-SHOT", name="Shot", kind="production"),
         Section(code=f"{sku}-ANOD", name="Anod", kind="production"),
-        Section(code=f"{sku}-PACK", name="Pack", kind="production"),
+        Section(code=f"{sku}-WIP", name="WIP", kind="wip_stock"),
+        Section(code=f"{sku}-FINAL", name="Final", kind="finished_stock"),
     ]
     session.add_all([product, *sections])
     await session.flush()
@@ -45,14 +49,15 @@ async def _make_product_with_route(session, sku: str = "FG-EXEC") -> tuple[Produ
         )
     )
 
-    for idx, section in enumerate(sections, start=1):
+    step_ops = ["ISSUE_RAW", "DRILL", "SHOT", "ANOD", "MOVE_TO_WIP", "ACCEPT_FINISHED"]
+    for idx, (section, op_code) in enumerate(zip(sections, step_ops, strict=True), start=1):
         session.add(
             RouteStep(
                 route_id=route.id,
                 sequence=idx,
                 section_id=section.id,
-                operation_code=section.code,
-                operation_name=section.name,
+                operation_code=op_code,
+                operation_name=op_code,
                 is_final=idx == len(sections),
             )
         )
@@ -83,6 +88,9 @@ async def _make_position(
     product_id: int | None = None,
     status: PlanPositionStatus = PlanPositionStatus.approved,
     row_num: int | None = None,
+    operation_family: RouteOperationFamily | None = RouteOperationFamily.DRILL,
+    output_kind: RouteOutputKind | None = RouteOutputKind.finished_good,
+    has_pack_ops: bool = False,
 ) -> PlanPosition:
     position = PlanPosition(
         production_plan_id=plan_id,
@@ -98,6 +106,9 @@ async def _make_position(
         status=status,
         validation_status=PlanPositionValidationStatus.valid,
         validation_errors=[],
+        operation_family=operation_family,
+        output_kind=output_kind,
+        has_pack_ops=has_pack_ops,
     )
     session.add(position)
     await session.flush()
@@ -116,6 +127,7 @@ async def test_rows_detail_for_released_position_with_tasks(client, session) -> 
         quantity=Decimal("100"),
         product_id=product.id,
     )
+    position.route_id = route.id
     await session.commit()
 
     create_batch_response = await client.post(
@@ -143,7 +155,7 @@ async def test_rows_detail_for_released_position_with_tasks(client, session) -> 
     assert data["route_id"] == route.id
     assert data["has_tasks"] is True
     assert data["not_started"] is False
-    assert len(data["stages"]) == 3
+    assert len(data["stages"]) == 6
 
     first_stage = data["stages"][0]
     assert first_stage["planned_quantity"] == 100.0
@@ -167,6 +179,7 @@ async def test_rows_detail_for_not_started_position(client, session) -> None:
         quantity=Decimal("50"),
         product_id=product.id,
     )
+    position.route_id = route.id
     await session.commit()
 
     response = await client.get(f"/api/production-planning/rows/{position.id}")
@@ -176,7 +189,7 @@ async def test_rows_detail_for_not_started_position(client, session) -> None:
     assert data["route_id"] == route.id
     assert data["has_tasks"] is False
     assert data["not_started"] is True
-    assert len(data["stages"]) == 3
+    assert len(data["stages"]) == 6
     assert all(stage["not_started"] is True for stage in data["stages"])
     assert all(stage["planned_quantity"] == 50.0 for stage in data["stages"])
     assert all(stage["completed_quantity"] == 0.0 for stage in data["stages"])
@@ -194,6 +207,9 @@ async def test_rows_detail_for_position_without_route(client, session) -> None:
         quantity=Decimal("10"),
         product_id=None,
         status=PlanPositionStatus.draft,
+        operation_family=None,
+        output_kind=None,
+        has_pack_ops=None,
     )
     await session.commit()
 
@@ -204,7 +220,7 @@ async def test_rows_detail_for_position_without_route(client, session) -> None:
     assert data["route_id"] is None
     assert data["route_snapshot"] is None
     assert data["stages"] == []
-    assert data["route_error"] == "route not found"
+    assert data["route_error"] == "no_route_candidate"
 
 
 @pytest.mark.asyncio
@@ -249,10 +265,10 @@ async def test_rows_list_includes_mixed_position_statuses(client, session) -> No
     rows = response.json()
     rows_by_id = {row["plan_position_id"]: row for row in rows}
 
-    assert draft.id in rows_by_id
+    # Only approved and released positions are returned by the endpoint
+    assert draft.id not in rows_by_id
     assert approved.id in rows_by_id
     assert released.id in rows_by_id
 
-    assert rows_by_id[draft.id]["position_status"] == "draft"
     assert rows_by_id[approved.id]["position_status"] == "approved"
     assert rows_by_id[released.id]["position_status"] == "released"

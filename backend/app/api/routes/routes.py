@@ -16,17 +16,10 @@ router = APIRouter(prefix="/routes", tags=["routes"])
 
 # --- Pydantic schemas ---
 
-class RouteConditionIn(BaseModel):
-    field: str
-    operator: str
-    value: str
-
-
 class RouteRuleIn(BaseModel):
     priority: int = 0
-    conditions: list[RouteConditionIn] = []
-    operation_family: RouteOperationFamily | None = None
-    output_kind: RouteOutputKind | None = None
+    operation_family: RouteOperationFamily
+    output_kind: RouteOutputKind
     has_pack_ops: bool | None = None
     is_active: bool = True
 
@@ -65,23 +58,14 @@ class StepUpdate(BaseModel):
     is_final: bool = False
 
 
-class ConditionOut(BaseModel):
-    field: str
-    operator: str
-    value: str
-
-    model_config = {"from_attributes": True}
-
-
 class RuleOut(BaseModel):
     id: int
     route_id: int
     priority: int
-    operation_family: RouteOperationFamily | None = None
-    output_kind: RouteOutputKind | None = None
+    operation_family: RouteOperationFamily
+    output_kind: RouteOutputKind
     has_pack_ops: bool | None = None
     is_active: bool = True
-    conditions: list[ConditionOut] = []
 
 
 class StepOut(BaseModel):
@@ -167,8 +151,13 @@ async def get_route(route_id: int, db: AsyncSession = Depends(get_db)) -> RouteD
             is_final=step.is_final,
         ))
 
+    rules_result = await db.execute(
+        select(RouteSignatureRule)
+        .where(RouteSignatureRule.route_id == route.id)
+        .order_by(RouteSignatureRule.priority.desc(), RouteSignatureRule.id.asc())
+    )
     rules = []
-    for rule in route.signature_rules:
+    for rule in rules_result.scalars().all():
         rules.append(RuleOut(
             id=rule.id,
             route_id=rule.route_id,
@@ -177,7 +166,6 @@ async def get_route(route_id: int, db: AsyncSession = Depends(get_db)) -> RouteD
             output_kind=rule.output_kind,
             has_pack_ops=rule.has_pack_ops,
             is_active=rule.is_active,
-            conditions=[],
         ))
 
     return RouteDetailOut(
@@ -429,9 +417,6 @@ async def add_route_rule(route_id: int, payload: RouteRuleIn, db: AsyncSession =
     if route is None:
         raise HTTPException(status_code=404, detail="Route not found")
 
-    if payload.operation_family is None or payload.output_kind is None:
-        raise HTTPException(status_code=400, detail="operation_family and output_kind are required")
-
     rule = RouteSignatureRule(
         route_id=route_id,
         priority=payload.priority,
@@ -452,7 +437,31 @@ async def add_route_rule(route_id: int, payload: RouteRuleIn, db: AsyncSession =
         output_kind=rule.output_kind,
         has_pack_ops=rule.has_pack_ops,
         is_active=rule.is_active,
-        conditions=[],
+    )
+
+
+@router.put("/{route_id}/rules/{rule_id}", response_model=RuleOut)
+async def update_route_rule(route_id: int, rule_id: int, payload: RouteRuleIn, db: AsyncSession = Depends(get_db)) -> RuleOut:
+    rule = await db.get(RouteSignatureRule, rule_id)
+    if rule is None or rule.route_id != route_id:
+        raise HTTPException(status_code=404, detail="Rule not found")
+
+    rule.priority = payload.priority
+    rule.operation_family = payload.operation_family
+    rule.output_kind = payload.output_kind
+    rule.has_pack_ops = payload.has_pack_ops
+    rule.is_active = payload.is_active
+    await db.flush()
+    await db.refresh(rule)
+
+    return RuleOut(
+        id=rule.id,
+        route_id=rule.route_id,
+        priority=rule.priority,
+        operation_family=rule.operation_family,
+        output_kind=rule.output_kind,
+        has_pack_ops=rule.has_pack_ops,
+        is_active=rule.is_active,
     )
 
 

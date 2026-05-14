@@ -109,6 +109,11 @@ export type PlanPositionOut = {
   route_id: number | null;
   route_name: string | null;
   route_source: string | null;
+  route_origin: string | null;
+  route_match_quality: string | null;
+  route_match_reason: string | null;
+  route_assigned_at: string | null;
+  route_manual_confirmed_at: string | null;
   route_error: string | null;
 };
 
@@ -161,20 +166,41 @@ export async function getPlanDuplicates(planId: number) {
   return data;
 }
 
-export type RouteCheckStep = { step_id: string; operation_code: string | null; section_kind: string | null; description: string };
+export type RouteCheckSection = { id: number; code: string | null; name: string | null };
+export type RouteCheckCandidate = {
+  route_id: number;
+  route_name: string;
+  section_ids: number[];
+  section_codes: string[];
+  missing_required_section_ids: number[];
+  excluded_present_section_ids: number[];
+  extra_controlled_sections_count: number;
+  matched: boolean;
+};
 
 export type RouteCheckResponse = {
   expected_signature: {
-    steps: RouteCheckStep[];
-    primary_operation: string | null;
-    output_kind: string | null;
-    additional_pack_operations: string[];
+    matched_rule_ids: number[];
+    required_sections: RouteCheckSection[];
+    excluded_sections: RouteCheckSection[];
+    candidate_routes: RouteCheckCandidate[];
+    selected_route_id: number | null;
+    route_match_reason: string | null;
   };
   active_route_snapshot: {
     route_id: number;
     route_name: string;
-    route_version: string;
+    route_source: string;
     steps: { sequence: number; section_id: number; section_code: string; section_name: string; section_kind: string; operation_name: string }[];
+    diagnostic?: {
+      error: string | null;
+      matched_rule_ids: number[];
+      required_sections: RouteCheckSection[];
+      excluded_sections: RouteCheckSection[];
+      candidate_routes: RouteCheckCandidate[];
+      selected_route_id: number | null;
+      route_match_reason: string | null;
+    };
   } | null;
   match: boolean;
   issues: string[];
@@ -238,6 +264,11 @@ export type ProductionPlanningRow = {
   route_id: number | null;
   route_name: string | null;
   route_source: string | null;
+  route_origin: string | null;
+  route_match_quality: string | null;
+  route_match_reason: string | null;
+  route_assigned_at: string | null;
+  route_manual_confirmed_at: string | null;
   route_error: string | null;
   is_released: boolean;
   has_tasks: boolean;
@@ -285,6 +316,11 @@ export type ProductionPlanningRowDetail = {
   route_id: number | null;
   route_name: string | null;
   route_source: string | null;
+  route_origin: string | null;
+  route_match_quality: string | null;
+  route_match_reason: string | null;
+  route_assigned_at: string | null;
+  route_manual_confirmed_at: string | null;
   route_error: string | null;
   is_released: boolean;
   has_tasks: boolean;
@@ -293,6 +329,11 @@ export type ProductionPlanningRowDetail = {
     route_id: number;
     route_name: string | null;
     route_source: string;
+    route_origin?: string | null;
+    route_match_quality?: string | null;
+    route_match_reason?: string | null;
+    route_assigned_at?: string | null;
+    route_manual_confirmed_at?: string | null;
     steps: ProductionPlanningRouteSnapshotStep[];
   } | null;
   stages: ProductionPlanningStage[];

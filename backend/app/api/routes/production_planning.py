@@ -101,6 +101,11 @@ class PlanningRowOut(BaseModel):
     route_id: int | None
     route_name: str | None
     route_source: str | None
+    route_origin: str | None
+    route_match_quality: str | None
+    route_match_reason: str | None
+    route_assigned_at: str | None
+    route_manual_confirmed_at: str | None
     route_error: str | None
     is_released: bool
     has_tasks: bool
@@ -121,6 +126,11 @@ class PlanningRouteSnapshotOut(BaseModel):
     route_id: int
     route_name: str | None
     route_source: str
+    route_origin: str | None = None
+    route_match_quality: str | None = None
+    route_match_reason: str | None = None
+    route_assigned_at: str | None = None
+    route_manual_confirmed_at: str | None = None
     steps: list[PlanningRouteSnapshotStepOut]
 
 
@@ -155,6 +165,11 @@ class PlanningRowDetailOut(BaseModel):
     route_id: int | None
     route_name: str | None
     route_source: str | None
+    route_origin: str | None
+    route_match_quality: str | None
+    route_match_reason: str | None
+    route_assigned_at: str | None
+    route_manual_confirmed_at: str | None
     route_error: str | None
     is_released: bool
     has_tasks: bool

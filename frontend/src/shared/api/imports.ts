@@ -128,6 +128,12 @@ export type ImportPosition = {
   product_name: string | null;
   route_id: number | null;
   route_name: string | null;
+  route_source: string | null;
+  route_origin: string | null;
+  route_match_quality: string | null;
+  route_match_reason: string | null;
+  route_assigned_at: string | null;
+  route_manual_confirmed_at: string | null;
   status: string;
   validation_status: string;
   validation_errors: string[];

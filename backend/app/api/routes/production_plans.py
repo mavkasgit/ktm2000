@@ -1,3 +1,4 @@
+from datetime import UTC, datetime
 from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -9,7 +10,16 @@ from sqlalchemy import func as sa_func
 
 from app.api.deps import WRITER_ROLES, require_role, get_current_user
 from app.core.database import get_db
-from app.models.production_plan import PlanChangeItem, PlanChangeSet, PlanPosition, PlanPositionStatus, PositionStatusHistory, ProductionPlan
+from app.models.production_plan import (
+    PlanChangeItem,
+    PlanChangeSet,
+    PlanPosition,
+    PlanPositionRouteOrigin,
+    PlanPositionStatus,
+    PositionStatusHistory,
+    ProductionPlan,
+)
+from app.models.product import Product
 from app.models.release_batch import ReleaseBatchType
 from app.models.route import ProductionRoute, RouteStep
 from app.models.section import Section
@@ -25,7 +35,7 @@ from app.services.production_plan_service import (
     soft_delete_cancelled_position,
 )
 from app.services.route_matcher import resolve_position_route, ResolvedRouteInfo
-from app.services.route_resolution import resolve_route_signature_from_canonical
+from app.services.route_selection import select_route_for_payload
 from app.services.route_validation import validate_route_match
 from app.services.plan_validation import format_validation_error
 
@@ -367,24 +377,27 @@ async def route_check(
     if position.production_plan_id != production_plan_id:
         raise HTTPException(status_code=400, detail="Position does not belong to production plan")
 
-    resolved = resolve_route_signature_from_canonical(
-        operation_family=position.operation_family,
-        output_kind=position.output_kind,
-        has_pack_ops=position.has_pack_ops,
-    )
+    product = await db.get(Product, position.product_id) if position.product_id is not None else None
+    selection = await select_route_for_payload(db, position.source_payload, product)
     expected_signature = {
-        "steps": [
+        "matched_rule_ids": selection.matched_rule_ids,
+        "required_sections": selection.required_sections,
+        "excluded_sections": selection.excluded_sections,
+        "candidate_routes": [
             {
-                "step_id": step.step_id,
-                "operation_code": step.operation_code,
-                "section_kind": step.section_kind,
-                "description": step.description,
+                "route_id": candidate.route_id,
+                "route_name": candidate.route_name,
+                "section_ids": candidate.section_ids,
+                "section_codes": candidate.section_codes,
+                "missing_required_section_ids": candidate.missing_required_section_ids,
+                "excluded_present_section_ids": candidate.excluded_present_section_ids,
+                "extra_controlled_sections_count": candidate.extra_controlled_sections_count,
+                "matched": candidate.matched,
             }
-            for step in resolved.steps
+            for candidate in selection.candidate_routes
         ],
-        "primary_operation": resolved.primary_operation,
-        "output_kind": resolved.output_kind,
-        "additional_pack_operations": resolved.additional_pack_operations,
+        "selected_route_id": selection.route.id if selection.route else None,
+        "route_match_reason": selection.route_match_reason,
     }
 
     issues = await validate_route_match(db, position)
@@ -417,12 +430,24 @@ async def route_check(
             ],
             "diagnostic": {
                 "error": route_info.error,
-                "checked_rules": route_info.checked_rules,
-                "signature": {
-                    "operation_family": route_info.signature.operation_family.value if route_info.signature else None,
-                    "output_kind": route_info.signature.output_kind.value if route_info.signature else None,
-                    "has_pack_ops": route_info.signature.has_pack_ops if route_info.signature else None,
-                },
+                "matched_rule_ids": route_info.checked_rules,
+                "required_sections": route_info.required_sections,
+                "excluded_sections": route_info.excluded_sections,
+                "candidate_routes": [
+                    {
+                        "route_id": candidate.route_id,
+                        "route_name": candidate.route_name,
+                        "section_ids": candidate.section_ids,
+                        "section_codes": candidate.section_codes,
+                        "missing_required_section_ids": candidate.missing_required_section_ids,
+                        "excluded_present_section_ids": candidate.excluded_present_section_ids,
+                        "extra_controlled_sections_count": candidate.extra_controlled_sections_count,
+                        "matched": candidate.matched,
+                    }
+                    for candidate in route_info.candidate_routes
+                ],
+                "selected_route_id": route_info.selected_route_id,
+                "route_match_reason": route_info.route_match_reason,
             },
         }
 
@@ -555,7 +580,12 @@ class PlanPositionOut(BaseModel):
     product_id: int | None = None
     route_id: int | None = None
     route_name: str | None = None
-    route_source: str | None = None  # "manual" | "auto" | "missing"
+    route_source: str | None = None  # compatibility: "manual" | "auto" | "legacy" | "missing"
+    route_origin: str | None = None  # "manual_confirmed" | "auto" | "legacy"
+    route_match_quality: str | None = None  # "exact" | "corrected" | "unknown"
+    route_match_reason: str | None = None
+    route_assigned_at: str | None = None
+    route_manual_confirmed_at: str | None = None
     route_error: str | None = None
 
 
@@ -637,6 +667,13 @@ async def all_plan_positions(db: AsyncSession = Depends(get_db)) -> list[PlanPos
                 route_id=route_info.route_id,
                 route_name=route_info.route_name,
                 route_source=route_info.source,
+                route_origin=route_info.route_origin,
+                route_match_quality=route_info.route_match_quality,
+                route_match_reason=route_info.route_match_reason,
+                route_assigned_at=route_info.route_assigned_at.isoformat() if route_info.route_assigned_at else None,
+                route_manual_confirmed_at=(
+                    route_info.route_manual_confirmed_at.isoformat() if route_info.route_manual_confirmed_at else None
+                ),
                 route_error=route_info.error,
             )
         )
@@ -693,6 +730,13 @@ async def cancelled_positions(db: AsyncSession = Depends(get_db)) -> list[PlanPo
                 route_id=route_info.route_id,
                 route_name=route_info.route_name,
                 route_source=route_info.source,
+                route_origin=route_info.route_origin,
+                route_match_quality=route_info.route_match_quality,
+                route_match_reason=route_info.route_match_reason,
+                route_assigned_at=route_info.route_assigned_at.isoformat() if route_info.route_assigned_at else None,
+                route_manual_confirmed_at=(
+                    route_info.route_manual_confirmed_at.isoformat() if route_info.route_manual_confirmed_at else None
+                ),
                 route_error=route_info.error,
             )
         )
@@ -751,6 +795,13 @@ async def all_positions(production_plan_id: int, db: AsyncSession = Depends(get_
                 route_id=route_info.route_id,
                 route_name=route_info.route_name,
                 route_source=route_info.source,
+                route_origin=route_info.route_origin,
+                route_match_quality=route_info.route_match_quality,
+                route_match_reason=route_info.route_match_reason,
+                route_assigned_at=route_info.route_assigned_at.isoformat() if route_info.route_assigned_at else None,
+                route_manual_confirmed_at=(
+                    route_info.route_manual_confirmed_at.isoformat() if route_info.route_manual_confirmed_at else None
+                ),
                 route_error=route_info.error,
             )
         )
@@ -797,6 +848,19 @@ async def batch_assign_route_global(
 
     for pos in positions:
         pos.route_id = payload.route_id
+        if payload.route_id is None:
+            pos.route_origin = None
+            pos.route_match_quality = None
+            pos.route_match_reason = None
+            pos.route_assigned_at = None
+            pos.route_manual_confirmed_at = None
+        else:
+            now = datetime.now(UTC)
+            pos.route_origin = PlanPositionRouteOrigin.manual_confirmed
+            pos.route_match_quality = None
+            pos.route_match_reason = None
+            pos.route_assigned_at = now
+            pos.route_manual_confirmed_at = now
 
     await db.commit()
 
@@ -845,6 +909,19 @@ async def batch_assign_route(
 
     for pos in positions:
         pos.route_id = payload.route_id
+        if payload.route_id is None:
+            pos.route_origin = None
+            pos.route_match_quality = None
+            pos.route_match_reason = None
+            pos.route_assigned_at = None
+            pos.route_manual_confirmed_at = None
+        else:
+            now = datetime.now(UTC)
+            pos.route_origin = PlanPositionRouteOrigin.manual_confirmed
+            pos.route_match_quality = None
+            pos.route_match_reason = None
+            pos.route_assigned_at = now
+            pos.route_manual_confirmed_at = now
 
     await db.commit()
 

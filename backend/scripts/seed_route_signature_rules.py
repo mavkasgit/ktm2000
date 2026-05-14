@@ -130,7 +130,8 @@ def _rules() -> tuple[RuleDef, ...]:
         RuleDef(RouteOperationFamily.PACK, RouteOutputKind.finished_good, False, "Типовой: ГП базовый", 90),
         RuleDef(RouteOperationFamily.PACK, RouteOutputKind.finished_good, True, "Типовой: ГП базовый", 90),
         RuleDef(RouteOperationFamily.DRILL, RouteOutputKind.semi_finished_shipment, None, "Типовой: П/ф со сверлом", 100),
-        RuleDef(RouteOperationFamily.PRESS, RouteOutputKind.semi_finished_shipment, None, "Типовой: П/ф с прессом", 100),
+        RuleDef(RouteOperationFamily.PRESS, RouteOutputKind.semi_finished_shipment, False, "Типовой: П/ф с прессом", 100),
+        RuleDef(RouteOperationFamily.PRESS, RouteOutputKind.semi_finished_shipment, True, "Типовой: П/ф с прессом", 100),
         RuleDef(RouteOperationFamily.NONE, RouteOutputKind.semi_finished_shipment, None, "Типовой: П/ф базовый", 90),
         RuleDef(RouteOperationFamily.PACK, RouteOutputKind.semi_finished_shipment, None, "Типовой: П/ф базовый", 90),
     )

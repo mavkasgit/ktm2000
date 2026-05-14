@@ -36,11 +36,41 @@ const positionStatusColor: Record<string, string> = {
   cancelled: "bg-red-100 text-red-700",
 };
 
-const routeSourceLabels: Record<string, string> = {
-  manual: "ручной",
-  auto: "авто",
-  missing: "не найден",
-};
+function formatRouteAssignedAt(value: string | null | undefined): string {
+  if (!value) return "дата неизвестна";
+  const dt = new Date(value);
+  if (Number.isNaN(dt.getTime())) return "дата неизвестна";
+  return dt.toLocaleString("ru-RU", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+type RouteMetaLike = Pick<
+  ProductionPlanningRow,
+  "route_source" | "route_origin" | "route_match_quality" | "route_assigned_at"
+>;
+
+function routeMetaLabel(route: RouteMetaLike): string {
+  const assignedAt = formatRouteAssignedAt(route.route_assigned_at);
+  if (route.route_origin === "manual_confirmed" || route.route_source === "manual") {
+    return `вручную • ${assignedAt}`;
+  }
+  if (route.route_origin === "auto" || route.route_source === "auto") {
+    const quality = route.route_match_quality === "exact" ? "полное" : "скорректирован";
+    return `автомаппинг (${quality}) • ${assignedAt}`;
+  }
+  if (route.route_origin === "legacy" || route.route_source === "legacy") {
+    return "legacy • дата неизвестна";
+  }
+  if (route.route_source === "missing") {
+    return "не найден";
+  }
+  return "—";
+}
 
 function fmtQty(value: number): string {
   if (Number.isInteger(value)) {
@@ -70,10 +100,11 @@ function StatusBadge({ status }: { status: string }) {
 
 function RowRouteCell({ row }: { row: ProductionPlanningRow }) {
   if (row.route_name) {
+    const meta = routeMetaLabel(row);
     return (
       <span className="text-xs text-blue-700">
         {row.route_name}
-        <span className="text-muted-foreground"> ({routeSourceLabels[row.route_source || ""] || row.route_source || "—"})</span>
+        <span className="text-muted-foreground"> ({meta})</span>
       </span>
     );
   }
@@ -592,8 +623,8 @@ export function ExecutionPage() {
                       <div className="text-muted-foreground">Маршрут</div>
                       <div className="font-medium">
                         {detail.route_name || detail.route_error || "Не назначен"}
-                        {detail.route_source && (
-                          <span className="text-muted-foreground"> ({routeSourceLabels[detail.route_source] || detail.route_source})</span>
+                        {detail.route_name && (
+                          <span className="text-muted-foreground"> ({routeMetaLabel(detail)})</span>
                         )}
                       </div>
                     </div>

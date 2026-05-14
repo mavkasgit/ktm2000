@@ -317,6 +317,12 @@ class ImportPositionOut(BaseModel):
     product_name: str | None
     route_id: int | None
     route_name: str | None
+    route_source: str | None
+    route_origin: str | None
+    route_match_quality: str | None
+    route_match_reason: str | None
+    route_assigned_at: str | None
+    route_manual_confirmed_at: str | None
     status: str
     validation_status: str
     validation_errors: list
@@ -368,6 +374,14 @@ async def list_import_positions(batch_id: int, db: AsyncSession = Depends(get_db
                 product_name=product_name,
                 route_id=route_info.route_id,
                 route_name=route_info.route_name,
+                route_source=route_info.source,
+                route_origin=route_info.route_origin,
+                route_match_quality=route_info.route_match_quality,
+                route_match_reason=route_info.route_match_reason,
+                route_assigned_at=route_info.route_assigned_at.isoformat() if route_info.route_assigned_at else None,
+                route_manual_confirmed_at=(
+                    route_info.route_manual_confirmed_at.isoformat() if route_info.route_manual_confirmed_at else None
+                ),
                 status=pos.status.value,
                 validation_status=pos.validation_status.value,
                 validation_errors=pos.validation_errors or [],

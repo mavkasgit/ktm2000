@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useState } from "react";
 import { Plus, Download, ArrowUp, ArrowDown, GripVertical } from "lucide-react";
+import { useQueryClient } from "@tanstack/react-query";
 import * as API from "shared/api";
 import * as SectionsAPI from "shared/api/sections";
 import * as UI from "shared/ui";
@@ -112,6 +113,7 @@ async function apiSeedSections(): Promise<Section[]> {
 }
 
 export function SectionsPage() {
+  const queryClient = useQueryClient();
   const [items, setItems] = useState<Section[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string>("");
@@ -150,12 +152,14 @@ export function SectionsPage() {
       const ids = items.map((item) => Number(item.id)).filter(Boolean);
       if (ids.length > 0) {
         await SectionsAPI.reorderSections(ids);
+        await queryClient.invalidateQueries({ queryKey: ["sections"] });
+        await queryClient.invalidateQueries({ queryKey: ["shopfloor-sections-summary"] });
       }
     } catch (e) {
       toast({ title: "Ошибка сортировки", description: API.getErrorMessage(e), variant: "destructive" });
       await load();
     }
-  }, [items, load]);
+  }, [items, load, queryClient]);
 
   const moveItemUp = useCallback(async (index: number) => {
     moveItem(index, index - 1);

@@ -1,11 +1,11 @@
 import { useEffect, useMemo, useState } from "react"
-import { Beaker, Download, Eye, FileSpreadsheet, Plus, Upload, Route, Trash2 } from "lucide-react"
+import { Beaker, Download, Eye, FileSpreadsheet, Plus, Upload, Route, Trash2, AlertTriangle } from "lucide-react"
 import { ImportWizard } from "../ImportWizard"
 import { Button, Badge, Checkbox, Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, Combobox, Select, SelectContent, SelectItem, SelectTrigger, SelectValue, AlertDialog, AlertDialogContent, AlertDialogHeader, AlertDialogTitle, AlertDialogDescription, AlertDialogFooter, AlertDialogAction, AlertDialogCancel } from "@/shared/ui"
 import { cn } from "@/shared/utils/cn"
 import { toast } from "@/shared/ui"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
-import { planFiles, allPositions, allPlanFiles, allPlanPositions, PlanFileInfo, PlanPositionOut, listPlans, PlanSummary, batchAssignRouteGlobal, deleteImportBatch } from "@/shared/api/productionPlans"
+import { planFiles, allPositions, allPlanFiles, allPlanPositions, PlanFileInfo, PlanPositionOut, listPlans, PlanSummary, batchAssignRouteGlobal, deleteImportBatch, routeCheck } from "@/shared/api/productionPlans"
 import { listRoutes, ProductionRoute } from "@/shared/api/routes"
 import { getImportFileDownloadUrl } from "@/shared/api/imports"
 import { apiClient } from "@/shared/api/client"
@@ -37,6 +37,10 @@ const statusVariant: Record<string, string> = {
 const routeErrorLabels: Record<string, string> = {
   route_signature_incomplete: "Сигнатура маршрута неполная",
   route_not_found: "Маршрут не найден",
+  no_route_candidate: "Нет маршрута под правила выбора",
+  route_rule_conflict: "Конфликт правил выбора маршрута",
+  route_contains_excluded_step: "Маршрут содержит исключённый участок",
+  selection_rules: "Маршрут выбран правилами",
   active_route_not_found: "Активный маршрут не найден",
   active_route_has_no_steps: "Маршрут без этапов",
   route_sequence_invalid: "Неверная последовательность маршрута",
@@ -47,7 +51,7 @@ const routeErrorLabels: Record<string, string> = {
   route_primary_operation_mismatch: "Основная операция маршрута не совпадает",
   manual_route_not_found: "Ручной маршрут не найден",
   manual_route_inactive: "Ручной маршрут неактивен",
-  auto_fallback: "Маршрут выбран автоматически — проверьте",
+  auto_fallback: "Маршрут скорректирован автоматически — проверьте",
 }
 
 const errorLabels: Record<string, string> = {
@@ -66,7 +70,11 @@ const errorLabels: Record<string, string> = {
   route_missing_pack_additional_operation: "Отсутствует доп. упаковочная операция",
   quantity_must_be_positive: "Количество должно быть > 0",
   route_signature_incomplete: "Сигнатура маршрута неполная",
-  route_not_found: "Маршрут не найден по сигнатуре",
+  route_not_found: "Маршрут не найден",
+  no_route_candidate: "Нет маршрута под правила выбора",
+  route_rule_conflict: "Конфликт правил выбора маршрута",
+  route_contains_excluded_step: "Маршрут содержит исключённый участок",
+  selection_rules: "Маршрут выбран правилами",
 }
 
 const warningLabels: Record<string, string> = {
@@ -74,12 +82,51 @@ const warningLabels: Record<string, string> = {
   techcard_pair_not_resolved: "Не выбран парный профиль техкарты",
   product_name_missing: "Отсутствует наименование",
   period_not_detected: "Период не определён",
-  route_auto_fallback: "Маршрут выбран автоматически — проверьте корректность",
+  route_auto_fallback: "Маршрут скорректирован автоматически — проверьте корректность",
 }
 
 function translateLabel(code: string, labels: Record<string, string>): string {
   const [base] = String(code).split(":")
   return labels[base] ?? code
+}
+
+function formatRouteAssignedAt(value: string | null | undefined): string {
+  if (!value) return "дата неизвестна"
+  const dt = new Date(value)
+  if (Number.isNaN(dt.getTime())) return "дата неизвестна"
+  return dt.toLocaleString("ru-RU", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  })
+}
+
+function routeMetaLabel(pos: PlanPositionOut): string {
+  const assignedAt = formatRouteAssignedAt(pos.route_assigned_at)
+  if (pos.route_origin === "manual_confirmed" || pos.route_source === "manual") {
+    return `вручную • ${assignedAt}`
+  }
+  if (pos.route_origin === "auto" || pos.route_source === "auto") {
+    const quality = pos.route_match_quality === "exact" ? "полное" : "скорректирован"
+    return `автомаппинг (${quality}) • ${assignedAt}`
+  }
+  if (pos.route_origin === "legacy" || pos.route_source === "legacy") {
+    return "legacy • дата неизвестна"
+  }
+  return ""
+}
+
+function isRiskyForApprove(pos: PlanPositionOut): boolean {
+  const hasRouteProblems =
+    pos.route_match_quality === "corrected" ||
+    pos.route_origin === "legacy" ||
+    pos.route_error !== null ||
+    pos.route_match_reason !== null ||
+    (pos.warnings && pos.warnings.length > 0) ||
+    (pos.errors && pos.errors.length > 0)
+  return hasRouteProblems
 }
 
 function FileRow({ file, activePlan, onDelete }: { file: PlanFileInfo; activePlan: PlanSummary; onDelete: (batchId: number) => void }) {
@@ -214,11 +261,110 @@ function PositionRow({ pos, onApprove, onDelete, selected, onToggle, routes, onA
       ? 'Ожидает утверждения'
       : ''
   const rowNum = pos.source_row_number ?? "—"
-  const routeSourceLabel = pos.route_source === "manual" ? "(вручную)" : pos.route_source === "auto" ? "(авто)" : ""
+  const routeSourceLabel = routeMetaLabel(pos)
   const routeError = pos.route_error ? translateLabel(pos.route_error, routeErrorLabels) : null
-  const [routeCellOpen, setRouteCellOpen] = useState(false)
+  const canApprove =
+    (pos.status === 'draft' || pos.status === 'valid') &&
+    pos.validation_status === 'valid' &&
+    pos.route_id !== null
+
+  const [approveDialogOpen, setApproveDialogOpen] = useState(false)
+  const [approving, setApproving] = useState(false)
+
+  // Route-check runs eagerly for all positions with an assigned route
+  const { data: routeCheckData, isLoading: routeCheckLoading, error: routeCheckError } = useQuery({
+    queryKey: ["route-check", pos.production_plan_id, pos.id],
+    queryFn: () => routeCheck(pos.production_plan_id!, pos.id),
+    enabled: pos.route_id !== null && pos.validation_status === "valid",
+    staleTime: 60_000,
+  })
+
+  const routeCheckRisky = routeCheckData !== undefined && (
+    !routeCheckData.match || (routeCheckData.issues && routeCheckData.issues.length > 0)
+  )
+
+  const handleApproveClick = () => {
+    if (isRiskyForApprove(pos) || routeCheckRisky) {
+      setApproveDialogOpen(true)
+    } else {
+      onApprove(pos.id, pos.production_plan_id)
+    }
+  }
+
+  const handleConfirmApprove = async () => {
+    setApproving(true)
+    try {
+      await onApprove(pos.id, pos.production_plan_id)
+    } finally {
+      setApproving(false)
+      setApproveDialogOpen(false)
+    }
+  }
+
+  const detailedReasons = useMemo(() => {
+    const sections: { title: string; items: string[] }[] = []
+
+    // Section 1: Route mismatch issues from route-check
+    const routeIssues = routeCheckData?.issues ?? []
+    if (routeIssues.length > 0) {
+      sections.push({
+        title: "Несовпадения маршрута",
+        items: routeIssues.map((issue) => translateLabel(issue, routeErrorLabels)),
+      })
+    }
+
+    // Section 2: Position warnings and errors
+    const positionMessages: string[] = []
+    if (translatedWarnings.length > 0) positionMessages.push(...translatedWarnings)
+    if (translatedErrors.length > 0) positionMessages.push(...translatedErrors)
+    if (positionMessages.length > 0) {
+      sections.push({
+        title: "Предупреждения позиции",
+        items: positionMessages,
+      })
+    }
+
+    // Section 3: Route-check issues (when route-check found problems not reflected in position errors)
+    if (routeCheckData && !routeCheckData.match && routeIssues.length > 0) {
+      sections.push({
+        title: "Проверка маршрута",
+        items: routeIssues.map((issue) => translateLabel(issue, routeErrorLabels)),
+      })
+    }
+
+    // Section 4: Route risk factors
+    const riskFactors: string[] = []
+    if (pos.route_match_quality === "corrected") {
+      const qualityDetail = pos.route_match_reason ? translateLabel(pos.route_match_reason, routeErrorLabels) : null
+      const parts = ["Маршрут скорректирован"]
+      if (pos.route_name) parts.push(`маршрут: ${pos.route_name}`)
+      if (qualityDetail) parts.push(`причина: ${qualityDetail}`)
+      if (pos.route_origin === "manual_confirmed") parts.push("подтверждён вручную")
+      riskFactors.push(parts.join(" • "))
+    } else if (pos.route_match_reason) {
+      const reasonDetail = translateLabel(pos.route_match_reason, routeErrorLabels)
+      riskFactors.push(`Причина сопоставления: ${reasonDetail}`)
+    }
+    if (pos.route_origin === "legacy") {
+      const parts = ["Использован legacy-маршрут"]
+      if (pos.route_name) parts.push(`маршрут: ${pos.route_name}`)
+      riskFactors.push(parts.join(" • "))
+    }
+    if (pos.route_error) {
+      riskFactors.push(translateLabel(pos.route_error, routeErrorLabels))
+    }
+    if (riskFactors.length > 0) {
+      sections.push({
+        title: "Факторы риска подтверждения",
+        items: riskFactors,
+      })
+    }
+
+    return sections
+  }, [routeCheckData, translatedWarnings, translatedErrors, pos])
 
   return (
+    <>
     <tr className={`border-b ${hasErrors ? "bg-red-50" : hasWarnings ? "bg-amber-50" : ""} ${selected ? "bg-blue-50" : ""}`}>
       <td className="p-2">
         {onToggle && (
@@ -250,7 +396,7 @@ function PositionRow({ pos, onApprove, onDelete, selected, onToggle, routes, onA
                 {pos.route_name ? (
                   <span className="text-blue-700">
                     {pos.route_name}
-                    <span className="text-xs text-muted-foreground ml-1">{routeSourceLabel}</span>
+                    {routeSourceLabel && <span className="text-xs text-muted-foreground ml-1">({routeSourceLabel})</span>}
                   </span>
                 ) : (
                   <span className={cn("text-xs", routeError ? "text-red-600" : "text-muted-foreground group-hover:text-foreground")}>
@@ -264,7 +410,7 @@ function PositionRow({ pos, onApprove, onDelete, selected, onToggle, routes, onA
           <span className="inline-flex items-center gap-1 text-blue-700" title={`Маршрут #${pos.route_id} ${routeSourceLabel}`}>
             <Route className="h-3 w-3" />
             {pos.route_name}
-            <span className="text-xs text-muted-foreground">{routeSourceLabel}</span>
+            {routeSourceLabel && <span className="text-xs text-muted-foreground">({routeSourceLabel})</span>}
           </span>
         ) : (
           <span className={routeError ? "text-red-600 text-xs" : "text-muted-foreground text-xs"} title={routeError || undefined}>
@@ -275,6 +421,11 @@ function PositionRow({ pos, onApprove, onDelete, selected, onToggle, routes, onA
       <td className="p-2">
         <Badge variant={statusVariant[pos.status] as any || "secondary"}>
           {statusLabels[pos.status] || pos.status}
+        </Badge>
+      </td>
+      <td className="p-2">
+        <Badge variant={pos.validation_status === "valid" ? "default" : pos.validation_status === "invalid" ? "destructive" : "secondary"}>
+          {pos.validation_status === "valid" ? "Валидна" : pos.validation_status === "invalid" ? "Ошибка" : "—"}
         </Badge>
       </td>
       <td className="p-2 text-xs text-red-600 max-w-[200px]">
@@ -293,22 +444,17 @@ function PositionRow({ pos, onApprove, onDelete, selected, onToggle, routes, onA
       </td>
       <td className="p-2">
         <div className="flex gap-1">
-          {pos.status === 'valid' && (
+          {canApprove && (
             <>
-              <Button variant="ghost" size="sm" className="h-6 text-xs text-green-700 hover:text-green-800" onClick={() => onApprove(pos.id, pos.production_plan_id)}>
+              <Button variant="ghost" size="sm" className="h-6 text-xs text-green-700 hover:text-green-800" onClick={handleApproveClick} disabled={approving}>
                 Утвердить
               </Button>
-              <Button variant="ghost" size="sm" className="h-6 text-xs text-red-600 hover:text-red-700" onClick={() => onDelete(pos.id, pos.production_plan_id)}>
+              <Button variant="ghost" size="sm" className="h-6 text-xs text-red-600 hover:text-red-700" onClick={() => onDelete(pos.id, pos.production_plan_id)} disabled={approving}>
                 Удалить
               </Button>
             </>
           )}
-          {pos.status === 'draft' && (
-            <Button variant="ghost" size="sm" className="h-6 text-xs text-red-600 hover:text-red-700" onClick={() => onDelete(pos.id, pos.production_plan_id)}>
-              Удалить
-            </Button>
-          )}
-          {pos.status === 'invalid' && (
+          {!canApprove && (
             <Button variant="ghost" size="sm" className="h-6 text-xs text-red-600 hover:text-red-700" onClick={() => onDelete(pos.id, pos.production_plan_id)}>
               Удалить
             </Button>
@@ -319,6 +465,57 @@ function PositionRow({ pos, onApprove, onDelete, selected, onToggle, routes, onA
         )}
       </td>
     </tr>
+
+    <AlertDialog open={approveDialogOpen} onOpenChange={setApproveDialogOpen}>
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle className="flex items-center gap-2">
+            <AlertTriangle className="h-5 w-5 text-amber-500" />
+            Позиция требует внимания
+          </AlertDialogTitle>
+          <AlertDialogDescription className="text-left">
+            Эта позиция может содержать некорректные данные. Утверждение потребует последующей проверки.
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+
+        {routeCheckLoading && (
+          <div className="text-sm text-muted-foreground">Загрузка диагностики...</div>
+        )}
+
+        {routeCheckError && !routeCheckLoading && (
+          <div className="rounded-md border bg-amber-50 p-3 mb-3">
+            <p className="text-sm font-medium mb-1">Диагностика недоступна</p>
+            <p className="text-xs text-muted-foreground">Не удалось получить детали проверки маршрута, но вы можете продолжить утверждение.</p>
+          </div>
+        )}
+
+        {!routeCheckLoading && detailedReasons.length > 0 && (
+          <div className="space-y-3">
+            {detailedReasons.map((section, idx) => (
+              <div key={idx} className="rounded-md border bg-amber-50 p-3">
+                <p className="text-sm font-medium mb-2">{section.title}</p>
+                <ul className="text-sm text-muted-foreground space-y-1">
+                  {section.items.map((item, i) => (
+                    <li key={i} className="flex items-start gap-2">
+                      <span className="mt-1 h-1.5 w-1.5 rounded-full bg-amber-500 shrink-0" />
+                      {item}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ))}
+          </div>
+        )}
+
+        <AlertDialogFooter>
+          <AlertDialogCancel disabled={approving}>Отмена</AlertDialogCancel>
+          <AlertDialogAction onClick={handleConfirmApprove} disabled={approving}>
+            {approving ? "Утверждение..." : "Утвердить всё равно"}
+          </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
+    </>
   )
 }
 
@@ -459,6 +656,7 @@ export function PlanPage() {
     if (!positions) return []
     if (filterStatus === "all") return positions
     if (filterStatus === "invalid") return positions.filter(p => p.validation_status === "invalid")
+    if (filterStatus === "valid") return positions.filter(p => p.validation_status === "valid")
     return positions.filter(p => p.status === filterStatus)
   }, [positions, filterStatus])
 
@@ -642,6 +840,7 @@ export function PlanPage() {
                       <th className="text-left p-2 text-xs font-medium text-muted-foreground">Кол-во</th>
                       <th className="text-left p-2 text-xs font-medium text-muted-foreground">Маршрут</th>
                       <th className="text-left p-2 text-xs font-medium text-muted-foreground">Статус</th>
+                      <th className="text-left p-2 text-xs font-medium text-muted-foreground">Валидация</th>
                       <th className="text-left p-2 text-xs font-medium text-muted-foreground">Ошибки</th>
                       <th className="text-left p-2 text-xs font-medium text-muted-foreground">Предупр.</th>
                       <th className="text-left p-2 text-xs font-medium text-muted-foreground">Действия</th>

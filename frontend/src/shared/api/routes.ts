@@ -22,22 +22,56 @@ export type RouteStep = {
   requires_acceptance?: boolean;
 };
 
-export type RuleCondition = {
-  field: string;
-  operator: "=" | "!=" | "in" | "contains";
-  value: string;
-};
+export type RouteOperationFamily = "NONE" | "DRILL" | "PRESS" | "PACK";
+export type RouteOutputKind = "finished_good" | "semi_finished_shipment";
 
-export type MatchingRule = {
+export type RouteSignatureRule = {
   id: number;
   route_id: number;
   priority: number;
-  conditions: RuleCondition[];
+  operation_family: RouteOperationFamily;
+  output_kind: RouteOutputKind;
+  has_pack_ops: boolean | null;
+  is_active: boolean;
 };
 
 export type RouteDetail = ProductionRoute & {
   steps: RouteStep[];
-  rules: MatchingRule[];
+  rules: RouteSignatureRule[];
+};
+
+export type RouteSelectionCondition = {
+  source: "excel" | "payload" | "product";
+  field_path: string;
+  operator: "equals" | "not_equals" | "contains" | "not_contains" | "in" | "not_in" | "empty" | "not_empty" | "regex";
+  value: unknown;
+  case_sensitive: boolean;
+};
+
+export type RouteSelectionAction = {
+  action: "require_section" | "exclude_section";
+  section_id: number;
+  section_code?: string | null;
+  section_name?: string | null;
+};
+
+export type RouteSelectionRule = {
+  id: number;
+  code: string | null;
+  name: string;
+  priority: number;
+  is_active: boolean;
+  conditions: RouteSelectionCondition[];
+  actions: RouteSelectionAction[];
+};
+
+export type RouteSelectionRuleInput = {
+  code?: string | null;
+  name: string;
+  priority: number;
+  is_active: boolean;
+  conditions: RouteSelectionCondition[];
+  actions: RouteSelectionAction[];
 };
 
 export type CreateRouteInput = {
@@ -65,8 +99,13 @@ export type StepInput = {
 
 export type RuleInput = {
   priority: number;
-  conditions: RuleCondition[];
+  operation_family: RouteOperationFamily;
+  output_kind: RouteOutputKind;
+  has_pack_ops: boolean | null;
+  is_active: boolean;
 };
+
+export type RuleUpdateInput = RuleInput;
 
 export async function listRoutes(q?: string) {
   const { data } = await apiClient.get<ProductionRoute[]>("/routes", { params: q ? { q } : undefined });
@@ -108,12 +147,36 @@ export async function replaceSteps(routeId: number, steps: StepInput[]) {
 }
 
 export async function addRule(routeId: number, payload: RuleInput) {
-  const { data } = await apiClient.post<MatchingRule>(`/routes/${routeId}/rules`, payload);
+  const { data } = await apiClient.post<RouteSignatureRule>(`/routes/${routeId}/rules`, payload);
+  return data;
+}
+
+export async function updateRule(routeId: number, ruleId: number, payload: RuleUpdateInput) {
+  const { data } = await apiClient.put<RouteSignatureRule>(`/routes/${routeId}/rules/${ruleId}`, payload);
   return data;
 }
 
 export async function deleteRule(routeId: number, ruleId: number) {
   await apiClient.delete(`/routes/${routeId}/rules/${ruleId}`);
+}
+
+export async function listRouteSelectionRules() {
+  const { data } = await apiClient.get<RouteSelectionRule[]>("/route-selection-rules");
+  return data;
+}
+
+export async function createRouteSelectionRule(payload: RouteSelectionRuleInput) {
+  const { data } = await apiClient.post<RouteSelectionRule>("/route-selection-rules", payload);
+  return data;
+}
+
+export async function updateRouteSelectionRule(ruleId: number, payload: RouteSelectionRuleInput) {
+  const { data } = await apiClient.put<RouteSelectionRule>(`/route-selection-rules/${ruleId}`, payload);
+  return data;
+}
+
+export async function deleteRouteSelectionRule(ruleId: number) {
+  await apiClient.delete(`/route-selection-rules/${ruleId}`);
 }
 
 export async function seedRoutes() {

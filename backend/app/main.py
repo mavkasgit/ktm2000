@@ -16,6 +16,7 @@ from app.api.routes.production_plans import router as production_plans_router
 from app.api.routes.production_planning import router as production_planning_router
 from app.api.routes.release_batches import router as release_batches_router
 from app.api.routes.routes import router as routes_router
+from app.api.routes.route_selection_rules import router as route_selection_rules_router
 from app.api.routes.routes_seed import router as routes_seed_router
 from app.api.routes.import_templates import router as import_templates_router
 from app.api.routes.catalog_import import router as catalog_import_router
@@ -51,6 +52,7 @@ app.include_router(sections_router, prefix="/api")
 app.include_router(sections_seed_router, prefix="/api")
 app.include_router(techcards_router, prefix="/api")
 app.include_router(routes_router, prefix="/api")
+app.include_router(route_selection_rules_router, prefix="/api")
 app.include_router(routes_seed_router, prefix="/api")
 app.include_router(imports_router, prefix="/api")
 app.include_router(production_plans_router, prefix="/api")

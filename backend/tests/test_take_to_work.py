@@ -16,6 +16,7 @@ from app.models.production_plan import (
     ProductionPlanStatus,
 )
 from app.models.route import ProductionRoute, RouteStep
+from app.models.routing import RouteOperationFamily, RouteOutputKind
 from app.models.section import Section
 from app.models.techcard import Techcard, TechcardLine
 from app.models.user import User, UserRole
@@ -33,9 +34,12 @@ async def _make_user(session, email: str = "operator@test.local") -> User:
 async def _make_product_route_plan(session, sku: str = "FG-TTW") -> tuple[Product, ProductionPlan, PlanPosition]:
     product = Product(sku=sku, name=f"Finished {sku}", type=ProductType.finished_good, unit="pcs")
     sections = [
-        Section(code=f"{sku}-A", name="Step A", kind="production"),
-        Section(code=f"{sku}-B", name="Step B", kind="production"),
-        Section(code=f"{sku}-C", name="Step C", kind="production"),
+        Section(code=f"{sku}-ISSUE", name="Issue", kind="raw_stock"),
+        Section(code=f"{sku}-DRILL", name="Drill", kind="production"),
+        Section(code=f"{sku}-SHOT", name="Shot", kind="production"),
+        Section(code=f"{sku}-ANOD", name="Anod", kind="production"),
+        Section(code=f"{sku}-WIP", name="WIP", kind="wip_stock"),
+        Section(code=f"{sku}-FINAL", name="Final", kind="finished_stock"),
     ]
     session.add_all([product, *sections])
     await session.flush()
@@ -56,14 +60,15 @@ async def _make_product_route_plan(session, sku: str = "FG-TTW") -> tuple[Produc
         )
     )
 
-    for idx, section in enumerate(sections, start=1):
+    step_ops = ["ISSUE_RAW", "DRILL", "SHOT", "ANOD", "MOVE_TO_WIP", "ACCEPT_FINISHED"]
+    for idx, (section, op_code) in enumerate(zip(sections, step_ops, strict=True), start=1):
         session.add(
             RouteStep(
                 route_id=route.id,
                 sequence=idx,
                 section_id=section.id,
-                operation_code=section.code,
-                operation_name=section.name,
+                operation_code=op_code,
+                operation_name=op_code,
                 is_final=idx == len(sections),
             )
         )
@@ -90,8 +95,14 @@ async def _make_product_route_plan(session, sku: str = "FG-TTW") -> tuple[Produc
         validation_errors=[],
         period_start=plan.period_start,
         period_end=plan.period_end,
+        operation_family=RouteOperationFamily.DRILL,
+        output_kind=RouteOutputKind.finished_good,
+        has_pack_ops=False,
     )
     session.add(pos)
+    await session.flush()
+    # Assign route to position so take-to-work resolves it
+    pos.route_id = route.id
     await session.commit()
     return product, plan, pos
 
@@ -121,7 +132,7 @@ async def test_take_to_work_single_success(client, session) -> None:
     assert result["status"] == "success"
     assert result["release_batch_id"] is not None
     assert result["internal_plan_id"] is not None
-    assert result["tasks_created"] == 3  # 3 sections
+    assert result["tasks_created"] == 6  # 6 sections
 
     # Verify tasks were created with correct statuses
     tasks = (
@@ -132,7 +143,7 @@ async def test_take_to_work_single_success(client, session) -> None:
             .order_by(SectionPlanLine.sequence)
         )
     ).scalars().all()
-    assert len(tasks) == 3
+    assert len(tasks) == 6
     assert tasks[0].status == WorkTaskStatus.ready
     assert tasks[1].status == WorkTaskStatus.waiting_previous
     assert tasks[2].status == WorkTaskStatus.waiting_previous
@@ -171,7 +182,7 @@ async def test_take_to_work_already_started(client, session) -> None:
         .join(SectionPlanLine, WorkTask.section_plan_line_id == SectionPlanLine.id)
         .where(SectionPlanLine.plan_position_id == pos.id)
     )
-    assert task_count == 3  # Still only 3, not 6
+    assert task_count == 6  # Still only 6, not 12
 
 
 @pytest.mark.asyncio

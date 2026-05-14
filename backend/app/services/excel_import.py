@@ -130,7 +130,7 @@ def parse_factory_plan_workbook(
     _ensure_required_columns(column_map)
 
     period_start, period_end = _parse_period(rows[:header_index], sheet.name)
-    parsed_rows = _parse_rows(rows, header_index, column_map, period_start, period_end)
+    parsed_rows = _parse_rows(rows, header_index, headers, column_map, period_start, period_end)
     selected_rows = parse_row_selection(row_selection) if row_selection else None
     auto_included_rows: set[int] = set()
     if selected_rows is not None:
@@ -241,6 +241,7 @@ def _ensure_required_columns(column_map: dict[str, int]) -> None:
 def _parse_rows(
     rows: list[list[Any]],
     header_index: int,
+    headers: list[str],
     column_map: dict[str, int],
     period_start: date | None,
     period_end: date | None,
@@ -250,6 +251,7 @@ def _parse_rows(
 
     for row_number, row in enumerate(rows[header_index + 1 :], start=header_index + 2):
         raw = {key: _cell(row, index) for key, index in column_map.items()}
+        raw_columns = _raw_columns(headers, row)
         sku = _cell_text(raw.get("sku"))
         quantity = _decimal_or_none(raw.get("quantity") or raw.get("output_quantity"))
 
@@ -264,7 +266,7 @@ def _parse_rows(
         if _is_full_context(raw):
             last_full_by_sku[sku] = raw
 
-        candidate = _make_plan_row(row_number, enriched, quantity, period_start, period_end, inherited)
+        candidate = _make_plan_row(row_number, enriched, raw_columns, quantity, period_start, period_end, inherited)
 
         if parsed and _can_join_as_paired_profile(parsed[-1], candidate):
             _join_paired_component(parsed[-1], candidate)
@@ -300,6 +302,7 @@ def _is_full_context(raw: dict[str, Any]) -> bool:
 def _make_plan_row(
     row_number: int,
     raw: dict[str, Any],
+    raw_columns: dict[str, str],
     quantity: Decimal,
     period_start: date | None,
     period_end: date | None,
@@ -337,6 +340,7 @@ def _make_plan_row(
         "period_end": period_end.isoformat() if period_end else None,
         "context_inherited": inherited,
         "paired_profile": False,
+        "raw_columns": raw_columns,
         "raw_excel_row": {k: _cell_text(v) for k, v in raw.items()},
     }
 
@@ -377,6 +381,16 @@ def _component_from_raw(row_number: int, raw: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _raw_columns(headers: list[str], row: list[Any]) -> dict[str, str]:
+    result: dict[str, str] = {}
+    for index, header in enumerate(headers):
+        key = _cell_text(header)
+        if not key:
+            key = f"column_{index + 1}"
+        result[key] = _cell_text(_cell(row, index))
+    return result
+
+
 def _can_join_as_paired_profile(previous: ParsedPlanRow, current: ParsedPlanRow) -> bool:
     if previous.payload.get("paired_profile"):
         return False
@@ -396,6 +410,10 @@ def _join_paired_component(previous: ParsedPlanRow, current: ParsedPlanRow) -> N
     previous.payload["row_numbers"] = previous.source_row_numbers
     previous.payload["components"].extend(current.payload["components"])
     previous.payload["paired_profile"] = True
+    raw_columns_by_row = dict(previous.payload.get("raw_columns_by_row") or {})
+    raw_columns_by_row[str(previous.source_row_numbers[0])] = previous.payload.get("raw_columns") or {}
+    raw_columns_by_row[str(current.source_row_numbers[0])] = current.payload.get("raw_columns") or {}
+    previous.payload["raw_columns_by_row"] = raw_columns_by_row
     previous.source_sku = "+".join(component["sku"] for component in previous.payload["components"])
     previous.source_ref = f"rows:{previous.source_row_numbers[0]}-{previous.source_row_numbers[-1]}"
     previous.warnings = [warning for warning in previous.warnings if warning != "product_name_missing"]

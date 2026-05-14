@@ -14,6 +14,9 @@ from app.models.production_plan import (
     PlanChangeSet,
     PlanChangeSetStatus,
     PlanPosition,
+    PlanPositionRouteMatchQuality,
+    PlanPositionRouteMatchReason,
+    PlanPositionRouteOrigin,
     PlanPositionStatus,
     PlanPositionValidationStatus,
     PlanSourceType,
@@ -109,6 +112,12 @@ async def apply_change_set(db: AsyncSession, change_set_id: int) -> dict:
                     position.operation_family = _operation_family_from_after(after)
                     position.output_kind = _output_kind_from_after(after)
                     position.has_pack_ops = _bool_or_none(after.get("has_pack_ops"))
+                    position.route_id = after.get("route_id")
+                    position.route_origin = _route_origin_from_after(after)
+                    position.route_match_quality = _route_match_quality_from_after(after)
+                    position.route_match_reason = _route_match_reason_from_after(after)
+                    position.route_assigned_at = _datetime_from_after(after, "route_assigned_at")
+                    position.route_manual_confirmed_at = _datetime_from_after(after, "route_manual_confirmed_at")
 
                     validation_errors = await validate_plan_position(db, position)
                     position.validation_errors = validation_errors
@@ -150,6 +159,11 @@ async def apply_change_set(db: AsyncSession, change_set_id: int) -> dict:
                 operation_family=_operation_family_from_after(after),
                 output_kind=_output_kind_from_after(after),
                 has_pack_ops=_bool_or_none(after.get("has_pack_ops")),
+                route_origin=_route_origin_from_after(after),
+                route_match_quality=_route_match_quality_from_after(after),
+                route_match_reason=_route_match_reason_from_after(after),
+                route_assigned_at=_datetime_from_after(after, "route_assigned_at"),
+                route_manual_confirmed_at=_datetime_from_after(after, "route_manual_confirmed_at"),
                 status=PlanPositionStatus.invalid if validation_errors else PlanPositionStatus.draft,
                 validation_status=PlanPositionValidationStatus.invalid if validation_errors else PlanPositionValidationStatus.valid,
                 validation_errors=validation_errors,
@@ -246,8 +260,9 @@ async def approve_plan_position(
         position.status = PlanPositionStatus.invalid
         raise ValueError("; ".join(errors))
 
+    from_status = position.status.value
     position.status = PlanPositionStatus.approved
-    record_status_change(db, position_id, PlanPositionStatus.valid.value, PlanPositionStatus.approved.value, changed_by)
+    record_status_change(db, position_id, from_status, PlanPositionStatus.approved.value, changed_by)
     plan = await db.get(ProductionPlan, production_plan_id)
     if plan is not None and plan.status in {ProductionPlanStatus.draft, ProductionPlanStatus.validated}:
         plan.status = ProductionPlanStatus.approved
@@ -412,3 +427,50 @@ def _bool_or_none(value):
     if value is None:
         return None
     return bool(value)
+
+
+def _datetime_from_after(after: dict, key: str):
+    from datetime import datetime
+
+    value = after.get(key)
+    if not value:
+        return None
+    try:
+        if isinstance(value, datetime):
+            return value
+        raw = str(value)
+        if raw.endswith("Z"):
+            raw = raw[:-1] + "+00:00"
+        return datetime.fromisoformat(raw)
+    except ValueError:
+        return None
+
+
+def _route_origin_from_after(after: dict) -> PlanPositionRouteOrigin | None:
+    value = after.get("route_origin")
+    if not value:
+        return None
+    try:
+        return PlanPositionRouteOrigin(str(value))
+    except ValueError:
+        return None
+
+
+def _route_match_quality_from_after(after: dict) -> PlanPositionRouteMatchQuality | None:
+    value = after.get("route_match_quality")
+    if not value:
+        return None
+    try:
+        return PlanPositionRouteMatchQuality(str(value))
+    except ValueError:
+        return None
+
+
+def _route_match_reason_from_after(after: dict) -> PlanPositionRouteMatchReason | None:
+    value = after.get("route_match_reason")
+    if not value:
+        return None
+    try:
+        return PlanPositionRouteMatchReason(str(value))
+    except ValueError:
+        return None

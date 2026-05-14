@@ -2,18 +2,20 @@ from datetime import date
 from decimal import Decimal
 
 import pytest
+from sqlalchemy import select
 
 from app.models.techcard import Techcard, TechcardLine
 from app.models.product import Product, ProductType
 from app.models.production_plan import (
     PlanPosition,
+    PlanPositionRouteOrigin,
     PlanPositionStatus,
     PlanPositionValidationStatus,
     PlanSourceType,
     ProductionPlan,
 )
 from app.models.routing import RouteOperationFamily, RouteOutputKind
-from app.models.route import ProductionRoute, RouteStep
+from app.models.route import ProductionRoute, RouteSelectionRule, RouteStep
 from app.models.section import Section
 from app.services.route_validation import validate_route_match
 from app.services.routing_signature import canonical_signature_from_payload
@@ -104,6 +106,32 @@ async def _make_plan_position(
     session.add(position)
     await session.flush()
     return position
+
+
+async def _section_id(session, sku: str, logical_code: str) -> int:
+    section = await session.scalar(select(Section).where(Section.code == f"{sku}-{logical_code}"))
+    if section is None:
+        section = Section(code=f"{sku}-{logical_code}", name=logical_code, kind="production")
+        session.add(section)
+        await session.flush()
+    return section.id
+
+
+async def _add_selection_rule(session, sku: str, actions: list[tuple[str, str]]) -> None:
+    resolved_actions = []
+    for action, logical_code in actions:
+        resolved_actions.append({"action": action, "section_id": await _section_id(session, sku, logical_code)})
+    session.add(
+        RouteSelectionRule(
+            code=f"rule-{sku}",
+            name=f"Rule {sku}",
+            priority=100,
+            is_active=True,
+            conditions=[],
+            actions=resolved_actions,
+        )
+    )
+    await session.flush()
 
 
 @pytest.mark.asyncio
@@ -200,8 +228,14 @@ async def test_validate_route_match_wrong_branch(session):
         route.id,
     )
 
+    await _add_selection_rule(
+        session,
+        "FG-BRANCH",
+        [("exclude_section", "INTER"), ("exclude_section", "SAW"), ("exclude_section", "PACK")],
+    )
+
     issues = await validate_route_match(session, position)
-    assert any("route_not_matching_import_signature" in i for i in issues)
+    assert any("route_contains_excluded_step" in i for i in issues)
 
 
 @pytest.mark.asyncio
@@ -230,6 +264,8 @@ async def test_validate_route_match_missing_anod(session):
         },
         route.id,
     )
+
+    await _add_selection_rule(session, "FG-NO-ANOD", [("require_section", "ANOD")])
 
     issues = await validate_route_match(session, position)
     assert any("route_missing_required_step" in i for i in issues)
@@ -264,5 +300,42 @@ async def test_validate_route_match_primary_operation_mismatch(session):
         route.id,
     )
 
+    await _add_selection_rule(session, "FG-PRESS", [("require_section", "DRILL"), ("exclude_section", "PRESS")])
+
     issues = await validate_route_match(session, position)
-    assert any("route_primary_operation_mismatch" in i for i in issues)
+    assert any("route_missing_required_step" in i or "route_contains_excluded_step" in i for i in issues)
+
+
+@pytest.mark.asyncio
+async def test_validate_route_match_skips_for_manual_confirmed(session):
+    # Same mismatch scenario as above, but with manual-confirmed route.
+    product, route = await _make_factory_route(
+        session,
+        "FG-MANUAL",
+        [
+            ("ISSUE", "raw_stock", "Выдача"),
+            ("PRESS", "production", "PRESS_WINDOW"),
+            ("SHOT", "production", "Дробеструй"),
+            ("ANOD", "production", "Анод"),
+            ("INTER", "wip_stock", "Пром.склад"),
+            ("SAW", "production", "Пила"),
+            ("PACK", "production", "Упаковка"),
+            ("FINAL", "finished_stock", "Сдача"),
+        ],
+    )
+    position = await _make_plan_position(
+        session,
+        product,
+        {
+            "operation_code": "DRILL",
+            "output_kind": "finished_good",
+            "additional_pack_operations": [],
+            "paired_profile": False,
+        },
+        route.id,
+    )
+    position.route_origin = PlanPositionRouteOrigin.manual_confirmed
+    await session.flush()
+
+    issues = await validate_route_match(session, position)
+    assert issues == []

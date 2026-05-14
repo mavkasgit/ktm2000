@@ -6,6 +6,7 @@ import { Button } from "@/shared/ui/Button";
 import { toast } from "@/shared/ui/use-toast";
 import { AlertDialog, AlertDialogContent, AlertDialogHeader, AlertDialogTitle, AlertDialogDescription, AlertDialogFooter, AlertDialogCancel, AlertDialogAction } from "@/shared/ui/AlertDialog";
 import { RouteFlowBuilder } from "../components/RouteFlowBuilder";
+import { RouteSelectionRulesSection } from "../components/RouteSelectionRulesSection";
 import { RouteTreeOverview, type RouteTreeOverviewRef } from "../components/RouteTreeOverview";
 
 export function RoutesPage() {
@@ -13,6 +14,7 @@ export function RoutesPage() {
   const [editRoute, setEditRoute] = useState<API.RouteDetail | null>(null);
   const [seedDialogOpen, setSeedDialogOpen] = useState(false);
   const [seeding, setSeeding] = useState(false);
+  const [seedRevision, setSeedRevision] = useState(0);
   const treeRef = useRef<RouteTreeOverviewRef>(null);
 
   const handleCreate = useCallback(() => {
@@ -39,8 +41,14 @@ export function RoutesPage() {
     setSeeding(true);
     try {
       const seeded = await API.seedRoutes();
-      toast({ title: "Маршруты загружены", description: `Создано/обновлено маршрутов: ${seeded.length}`, variant: "success" });
+      const rules = await API.listRouteSelectionRules();
+      toast({
+        title: "Маршруты загружены",
+        description: `Создано/обновлено маршрутов: ${seeded.length}; восстановлено правил выбора: ${rules.length}`,
+        variant: "success",
+      });
       treeRef.current?.reload();
+      setSeedRevision((value) => value + 1);
     } catch (e) {
       toast({ variant: "destructive", title: "Ошибка загрузки маршрутов", description: getErrorMessage(e) });
     } finally {
@@ -64,6 +72,8 @@ export function RoutesPage() {
 
       {/* Route Tree Overview */}
       <RouteTreeOverview ref={treeRef} onEditRoute={handleEdit} />
+
+      <RouteSelectionRulesSection refreshKey={seedRevision} />
 
       {/* Flow Builder Dialog */}
       <RouteFlowBuilder

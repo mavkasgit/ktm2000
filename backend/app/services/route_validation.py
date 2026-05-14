@@ -3,12 +3,12 @@ from __future__ import annotations
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.models.product import Product
 from app.models.production_plan import PlanPosition
 from app.models.route import RouteStep
 from app.models.section import Section
-from app.models.routing import RouteOperationFamily
-from app.services.route_resolution import resolve_route_signature_from_canonical
 from app.services.route_matcher import resolve_position_route
+from app.services.route_selection import select_route_for_payload
 
 
 ROUTE_ERROR_CODES = {
@@ -16,6 +16,9 @@ ROUTE_ERROR_CODES = {
     "route_missing_required_step",
     "route_missing_pack_additional_operation",
     "route_primary_operation_mismatch",
+    "route_contains_excluded_step",
+    "route_rule_conflict",
+    "no_route_candidate",
 }
 
 
@@ -23,13 +26,18 @@ async def validate_route_match(db: AsyncSession, position: PlanPosition) -> list
     if position.product_id is None:
         return []
 
-    # Skip validation when canonical signature is unavailable.
-    if position.output_kind is None or position.operation_family is None or position.has_pack_ops is None:
-        return []
-
     route_info = await resolve_position_route(db, position)
     if route_info.route_id is None:
         return []
+    # Manual confirmation is an explicit override by user and should not be
+    # blocked by auto-signature mismatch checks.
+    if route_info.source == "manual" or route_info.route_origin == "manual_confirmed":
+        return []
+
+    product = await db.get(Product, position.product_id)
+    selection = await select_route_for_payload(db, position.source_payload, product)
+    if selection.error == "route_rule_conflict":
+        return ["route_rule_conflict"]
 
     steps = (
         await db.execute(
@@ -41,107 +49,25 @@ async def validate_route_match(db: AsyncSession, position: PlanPosition) -> list
     if not steps:
         return []
 
-    # Load section kinds
-    section_kinds: dict[int, str] = {}
-    for step in steps:
-        section = await db.get(Section, step.section_id)
-        if section:
-            section_kinds[step.section_id] = section.kind
-
-    active_signature = [
-        _route_step_token(step, section_kinds.get(step.section_id, "production"))
-        for step in steps
-    ]
-
-    operation_code = None
-    if position.operation_family == RouteOperationFamily.DRILL:
-        operation_code = "DRILL"
-    elif position.operation_family == RouteOperationFamily.PRESS:
-        operation_code = "PRESS"
-    elif position.operation_family == RouteOperationFamily.PACK:
-        operation_code = "PACK"
-
-    expected = resolve_route_signature_from_canonical(
-        operation_family=position.operation_family,
-        output_kind=position.output_kind,
-        has_pack_ops=position.has_pack_ops,
-    )
-    expected_signature = [step.step_id for step in expected.steps]
-
+    active_section_ids = {step.section_id for step in steps}
+    required_ids = set(selection.required_section_ids)
+    excluded_ids = set(selection.excluded_section_ids)
     issues: list[str] = []
 
-    def _find_index(sig: list[str], *needles: str) -> int | None:
-        for i, token in enumerate(sig):
-            for needle in needles:
-                if needle in token:
-                    return i
-        return None
-
-    # --- Key nodes check ---
-    issue_idx = _find_index(active_signature, "ISSUE", "WH")
-    anod_idx = _find_index(active_signature, "ANOD")
-    final_idx = _find_index(active_signature, "FINAL", "FG_WH")
-
-    expected_issue_idx = _find_index(expected_signature, "ISSUE", "WH")
-    expected_anod_idx = _find_index(expected_signature, "ANOD")
-    expected_final_idx = _find_index(expected_signature, "FINAL", "FG_WH")
-
-    if expected_issue_idx is not None and issue_idx is None:
-        issues.append("route_missing_required_step: missing issue/wh step")
-    if expected_anod_idx is not None and anod_idx is None:
-        issues.append("route_missing_required_step: missing ANOD step")
-    if expected_final_idx is not None and final_idx is None:
-        issues.append("route_missing_required_step: missing final/fg_wh step")
-
-    # Order of key nodes
-    if issue_idx is not None and anod_idx is not None and final_idx is not None:
-        if not (issue_idx < anod_idx < final_idx):
-            issues.append("route_not_matching_import_signature: invalid order of key nodes")
-
-    # --- Primary operation check ---
-    primary_codes = {"DRILL", "PRESS"}
-    active_primaries = [token for token in active_signature if token in primary_codes]
-    expected_primary = operation_code
-
-    expected_primary_token = "PRESS" if expected_primary in {"PRESS_WINDOW", "PRESS_COMB"} else expected_primary
-    if expected_primary_token in primary_codes:
-        if expected_primary_token not in active_signature:
-            issues.append(
-                f"route_primary_operation_mismatch: expected {expected_primary_token}"
-            )
-    elif active_primaries:
-        issues.append("route_primary_operation_mismatch: unexpected primary operation in route")
-
-    # --- Additional pack operations check ---
-    # PACK_* are attributes of PACK step, not independent route steps.
-    if expected.output_kind != "semi_finished_shipment" and expected.additional_pack_operations:
-        if "PACK" not in active_signature:
-            issues.append("route_missing_required_step: missing PACK step for additional pack operations")
-        unsupported = [op for op in expected.additional_pack_operations if op not in {"PACK_GLUE", "PACK_DIFFUSER", "PACK_CUSTOM"}]
-        if unsupported:
-            issues.append("route_missing_pack_additional_operation: unsupported " + ", ".join(sorted(set(unsupported))))
-
-    # --- Branch check ---
-    inter_idx = _find_index(active_signature, "INTER")
-    expected_has_wip = (
-        _find_index(expected_signature, "WIP_WH") is not None
-        or _find_index(expected_signature, "INTER") is not None
-    )
-
-    if expected.output_kind == "semi_finished_shipment":
-        # After ANOD should go directly to FINAL, no INTER/WIP
-        if anod_idx is not None and inter_idx is not None and inter_idx > anod_idx:
-            issues.append(
-                "route_not_matching_import_signature: expected direct final branch (semi-finished)"
-            )
-    elif expected.output_kind == "finished_good":
-        # Must have INTER after ANOD
-        if anod_idx is not None and (inter_idx is None or inter_idx < anod_idx):
-            issues.append(
-                "route_not_matching_import_signature: expected WIP branch (finished good)"
-            )
+    missing_required = sorted(required_ids - active_section_ids)
+    excluded_present = sorted(excluded_ids & active_section_ids)
+    if missing_required:
+        issues.append("route_missing_required_step: " + ", ".join(await _section_codes(db, missing_required)))
+    if excluded_present:
+        issues.append("route_contains_excluded_step: " + ", ".join(await _section_codes(db, excluded_present)))
 
     return issues
+
+
+async def _section_codes(db: AsyncSession, section_ids: list[int]) -> list[str]:
+    sections = (await db.execute(select(Section).where(Section.id.in_(section_ids)))).scalars().all()
+    by_id = {section.id: section.code for section in sections}
+    return [by_id.get(section_id, str(section_id)) for section_id in section_ids]
 
 
 def _route_step_token(step: RouteStep, section_kind: str) -> str:

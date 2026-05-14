@@ -41,6 +41,27 @@ class PlanPositionValidationStatus(str, enum.Enum):
     invalid = "invalid"
 
 
+class PlanPositionRouteOrigin(str, enum.Enum):
+    auto = "auto"
+    manual_confirmed = "manual_confirmed"
+    legacy = "legacy"
+
+
+class PlanPositionRouteMatchQuality(str, enum.Enum):
+    exact = "exact"
+    corrected = "corrected"
+    unknown = "unknown"
+
+
+class PlanPositionRouteMatchReason(str, enum.Enum):
+    wildcard_rule = "wildcard_rule"
+    fallback_first_active = "fallback_first_active"
+    selection_rules = "selection_rules"
+    no_route_candidate = "no_route_candidate"
+    route_rule_conflict = "route_rule_conflict"
+    legacy = "legacy"
+
+
 class PlanChangeSetStatus(str, enum.Enum):
     draft = "draft"
     applied = "applied"
@@ -112,6 +133,20 @@ class PlanPosition(Base):
         nullable=True,
     )
     has_pack_ops: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    route_origin: Mapped[PlanPositionRouteOrigin | None] = mapped_column(
+        Enum(PlanPositionRouteOrigin, name="plan_position_route_origin"),
+        nullable=True,
+    )
+    route_match_quality: Mapped[PlanPositionRouteMatchQuality | None] = mapped_column(
+        Enum(PlanPositionRouteMatchQuality, name="plan_position_route_match_quality"),
+        nullable=True,
+    )
+    route_match_reason: Mapped[PlanPositionRouteMatchReason | None] = mapped_column(
+        Enum(PlanPositionRouteMatchReason, name="plan_position_route_match_reason"),
+        nullable=True,
+    )
+    route_assigned_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    route_manual_confirmed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     status: Mapped[PlanPositionStatus] = mapped_column(Enum(PlanPositionStatus, name="plan_position_status"), nullable=False)
     validation_status: Mapped[PlanPositionValidationStatus] = mapped_column(
         Enum(PlanPositionValidationStatus, name="plan_position_validation_status"),
