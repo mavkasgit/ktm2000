@@ -102,27 +102,11 @@ export function Layout() {
 
 export function DashboardPage() {
   return (
-    <>
-      <header className="page-header">
-        <div>
-          <h1 className="page-title">Производственный контур</h1>
-          <p className="page-subtitle">Импорт плана, утверждение позиций и выпуск партий в производство.</p>
-        </div>
-      </header>
-      <section className="dashboard-grid">
-        <div className="metric-panel">
-          <span>Текущий этап</span>
-          <strong>Этап 1</strong>
-        </div>
-        <div className="metric-panel">
-          <span>Проверки backend</span>
-          <strong>14 тестов</strong>
-        </div>
-        <div className="metric-panel">
-          <span>Порты dev</span>
-          <strong>5200-5202</strong>
-        </div>
-      </section>
-    </>
+    <header className="page-header">
+      <div>
+        <h1 className="page-title">Производственный контур</h1>
+        <p className="page-subtitle">Импорт плана, утверждение позиций и выпуск партий в производство.</p>
+      </div>
+    </header>
   )
 }

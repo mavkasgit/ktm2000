@@ -145,8 +145,42 @@ def _run_postgres_cmd_docker(cmd: List[str], db_name: str | None = None) -> subp
     return result
 
 
+def _running_inside_docker() -> bool:
+    """Проверяет, запущен ли процесс внутри Docker-контейнера."""
+    return Path("/.dockerenv").exists()
+
+
+def _run_postgres_cmd_local(cmd: List[str], db_name: str | None = None) -> subprocess.CompletedProcess:
+    """Выполняет PostgreSQL-команду через локальные CLI-утилиты (psql/pg_dump/pg_restore) с подключением по TCP."""
+    parsed = urlparse(settings.DATABASE_URL.replace("postgresql+asyncpg://", "postgresql://"))
+    user = unquote(parsed.username or "")
+    password = unquote(parsed.password or "")
+    host = parsed.hostname or "localhost"
+    port = str(parsed.port or 5432)
+    database = db_name or parsed.path.lstrip("/")
+
+    env = os.environ.copy()
+    env["PGCLIENTENCODING"] = "UTF8"
+    if password:
+        env["PGPASSWORD"] = password
+
+    full_cmd = cmd + ["-h", host, "-p", port, "-U", user, "-d", database]
+    try:
+        return subprocess.run(full_cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", env=env, check=False, timeout=300)
+    except subprocess.TimeoutExpired:
+        raise HTTPException(
+            status_code=status.HTTP_504_GATEWAY_TIMEOUT,
+            detail=f"Команда {cmd[0]} превысила время ожидания (5 минут).",
+        )
+
+
 def _run_postgres_cmd(cmd: List[str], db_name: str | None = None) -> subprocess.CompletedProcess:
-    """Выполняет pg_dump/pg_restore/psql через Docker exec (бэкенд на Windows без pg tools)."""
+    """Выполняет pg_dump/pg_restore/psql.
+    Внутри Docker-контейнера использует локальные CLI с TCP-подключением.
+    На хост-машине использует docker exec в контейнер БД.
+    """
+    if _running_inside_docker():
+        return _run_postgres_cmd_local(cmd, db_name)
     return _run_postgres_cmd_docker(cmd, db_name)
 
 

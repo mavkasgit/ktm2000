@@ -4,12 +4,7 @@ repomix-output.txt
 *.repomix.*
 
 # Environment files
-.env
-.env.local
-.env.dev
-.env.test
-.env.prod
-*.env
+
 
 # Python
 __pycache__/

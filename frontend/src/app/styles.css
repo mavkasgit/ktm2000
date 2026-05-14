@@ -134,22 +134,6 @@
     @apply mt-1 text-sm text-muted-foreground;
   }
 
-  .dashboard-grid {
-    @apply grid gap-4 md:grid-cols-3;
-  }
-
-  .metric-panel {
-    @apply rounded-lg border bg-card p-5 shadow-sm;
-  }
-
-  .metric-panel span {
-    @apply text-sm text-muted-foreground;
-  }
-
-  .metric-panel strong {
-    @apply mt-2 block text-2xl;
-  }
-
   .tab-row {
     @apply mb-4 flex flex-wrap gap-2;
   }
