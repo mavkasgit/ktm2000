@@ -4,7 +4,7 @@ import { Button } from "./Button"
 import { Popover, PopoverTrigger, PopoverContent } from "./Popover"
 import { cn } from "@/shared/utils/cn"
 
-interface DatePickerProps {
+export interface DatePickerProps {
   value: string
   onChange: (date: string) => void
   label?: string

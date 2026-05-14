@@ -32,16 +32,59 @@
 
   body {
     @apply bg-background text-foreground;
+    overflow-x: hidden;
   }
 }
 
 @layer components {
   .app-shell {
-    @apply flex min-h-screen bg-background;
+    @apply relative flex min-h-screen bg-background;
+  }
+
+  /* Mobile header — visible only on small screens */
+  .mobile-header {
+    @apply fixed left-0 right-0 top-0 z-40 flex items-center gap-3 border-b bg-card px-4 py-3 md:hidden;
+  }
+
+  .mobile-menu-btn {
+    @apply flex h-10 w-10 shrink-0 items-center justify-center rounded-md text-foreground transition-colors hover:bg-accent;
+  }
+
+  .mobile-header-brand {
+    @apply flex items-center gap-2;
+  }
+
+  .mobile-header-title {
+    @apply text-lg font-bold;
+  }
+
+  /* Overlay behind mobile sidebar */
+  .sidebar-overlay {
+    @apply fixed inset-0 z-40 bg-black/50 transition-opacity md:hidden;
   }
 
   .sidebar {
-    @apply sticky top-0 flex h-screen w-64 shrink-0 flex-col border-r bg-card;
+    @apply fixed inset-y-0 left-0 z-50 flex flex-col -translate-x-full border-r bg-card transition-transform duration-300 md:static md:z-auto md:h-screen md:w-64 md:translate-x-0 md:shrink-0;
+  }
+
+  .sidebar--mobile-open {
+    @apply translate-x-0;
+  }
+
+  .sidebar-top-bar {
+    @apply flex items-start justify-between gap-3 px-6 py-5 md:py-6;
+  }
+
+  .sidebar-brand {
+    @apply flex min-w-0 flex-col;
+  }
+
+  .sidebar-brand .brand-title {
+    @apply leading-tight;
+  }
+
+  .sidebar-close-btn {
+    @apply flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground;
   }
 
   .brand {
@@ -69,11 +112,18 @@
   }
 
   .main-area {
-    @apply flex-1 overflow-auto p-6;
+    @apply flex-1 overflow-auto p-6 md:pt-6;
+    padding-top: 4.5rem;
+  }
+
+  @media (min-width: 768px) {
+    .main-area {
+      padding-top: 1.5rem;
+    }
   }
 
   .page-header {
-    @apply mb-5 flex items-end justify-between gap-4;
+    @apply mb-5 flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between;
   }
 
   .page-title {

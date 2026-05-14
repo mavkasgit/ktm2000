@@ -1,56 +1,43 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Clock, Send } from "lucide-react";
-import { useNavigate, useParams } from "react-router-dom";
+import { useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
 
 import { apiClient, getErrorMessage } from "@/shared/api/client";
 import { listSections } from "@/shared/api/sections";
 import {
+  acceptTransfer,
   completeTask,
   createTransfer,
+  getIncomingTransfers,
   getSectionBoard,
   getSectionDailyStats,
+  getSectionsSummary,
   issueTask,
+  type AcceptTransferInput,
   type DailyStatsRow,
   type SectionBoardTask,
 } from "@/shared/api/shopfloor";
-import {
-  Badge,
-  Button,
-  Checkbox,
-  DatePicker,
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-  Input,
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/shared/ui";
-import { toast } from "@/shared/ui/use-toast";
+import { DatePicker, renderIcon, toast } from "@/shared/ui";
+import { IncomingTransfersPanel } from "../components/IncomingTransfersPanel";
+import { SectionSwitcherTiles } from "../components/SectionSwitcherTiles";
+import { SectionTasksBoard, type TaskActionDialogType, type TaskBoardViewMode } from "../components/SectionTasksBoard";
+import { TaskActionDrawer } from "../components/TaskActionDrawer";
 
-type TaskActionDialogType = "issue" | "complete" | "send";
-
-const taskStatusLabels: Record<string, string> = {
-  waiting_previous: "Ожидает",
-  ready: "Готов",
-  in_progress: "В работе",
-  partially_completed: "Частично",
-  completed: "Завершен",
-  cancelled: "Отменен",
+type MeResponse = {
+  id: number;
+  email: string;
+  full_name: string;
+  role: "admin" | "planner" | "section_manager" | "operator" | "viewer";
+  section_id: number | null;
+  is_active: boolean;
 };
 
-const taskStatusColor: Record<string, string> = {
-  waiting_previous: "bg-gray-100 text-gray-600",
-  ready: "bg-blue-100 text-blue-700",
-  in_progress: "bg-amber-100 text-amber-700",
-  partially_completed: "bg-orange-100 text-orange-700",
-  completed: "bg-emerald-100 text-emerald-700",
-  cancelled: "bg-red-100 text-red-600",
+type ActionLogEntry = {
+  id: string;
+  title: string;
+  status: "success" | "error" | "info";
+  message: string;
+  createdAt: string;
 };
 
 function fmtQty(value: string): string {
@@ -72,27 +59,43 @@ function makeIdempotencyKey(prefix: string): string {
   return `${prefix}-${Date.now()}-${Math.floor(Math.random() * 1_000_000)}`;
 }
 
-function actionTitle(type: TaskActionDialogType): string {
-  if (type === "issue") return "Выдать в работу";
-  if (type === "send") return "Передать на следующий этап";
-  return "Внести факт";
+function conflictHintFromError(message: string): string | null {
+  const normalized = message.toLowerCase();
+  if (normalized.includes("exceeds available")) return "Количество больше доступного для выдачи. Проверьте поле 'Доступно'.";
+  if (normalized.includes("exceeds quantity in work")) return "Количество факта больше объема 'В работе'. Сначала уменьшите факт или довыдайте в работу.";
+  if (normalized.includes("exceeds transferable")) return "Количество передачи больше доступного к передаче. Проверьте 'Факт - Передано'.";
+  if (normalized.includes("must be sent")) return "Передача уже обработана. Обновите список входящих передач.";
+  if (normalized.includes("accepted + rejected exceeds sent")) return "Сумма принятого и отклоненного превышает отправленное количество.";
+  if (normalized.includes("next route step")) return "Передавать можно только на следующий этап маршрута.";
+  if (normalized.includes("locked to single-window context")) return "Режим одного окна разрешает работу только с текущим участком.";
+  return null;
 }
 
 export function SectionsTasksPage() {
   const navigate = useNavigate();
+  const location = useLocation();
   const params = useParams<{ sectionId?: string }>();
+  const [searchParams] = useSearchParams();
   const queryClient = useQueryClient();
-  const [sectionId, setSectionId] = useState<number | null>(params.sectionId ? Number(params.sectionId) : null);
-  const [statusFilter, setStatusFilter] = useState<string>("all");
+  const isSingleWindow = searchParams.get("singleWindow") === "1";
+  const requestedSectionId = params.sectionId ? Number(params.sectionId) : null;
+  const isRequestedSectionIdValid = Number.isFinite(requestedSectionId);
+  const lockedSectionId = isSingleWindow && isRequestedSectionIdValid ? (requestedSectionId as number) : null;
+
+  const [sectionId, setSectionId] = useState<number | null>(
+    params.sectionId && Number.isFinite(Number(params.sectionId)) ? Number(params.sectionId) : null
+  );
+  const [viewMode, setViewMode] = useState<TaskBoardViewMode>("active");
   const [dateFrom, setDateFrom] = useState<string>("");
   const [dateTo, setDateTo] = useState<string>("");
+  const [conflictHint, setConflictHint] = useState<string | null>(null);
+  const [actionLog, setActionLog] = useState<ActionLogEntry[]>([]);
 
   const [actionDialog, setActionDialog] = useState<{ open: boolean; type: TaskActionDialogType; task: SectionBoardTask | null }>({
     open: false,
     type: "complete",
     task: null,
   });
-
   const [actionQty, setActionQty] = useState("");
   const [defectQty, setDefectQty] = useState("");
   const [timesMatch, setTimesMatch] = useState(true);
@@ -102,7 +105,7 @@ export function SectionsTasksPage() {
 
   const { data: me } = useQuery({
     queryKey: ["auth-me"],
-    queryFn: async () => (await apiClient.get<{ id: number }>("/auth/me")).data,
+    queryFn: async () => (await apiClient.get<MeResponse>("/auth/me")).data,
     retry: false,
   });
 
@@ -111,86 +114,181 @@ export function SectionsTasksPage() {
     queryFn: listSections,
   });
 
+  const { data: summary } = useQuery({
+    queryKey: ["shopfloor-sections-summary"],
+    queryFn: getSectionsSummary,
+    enabled: !!me?.id && !isSingleWindow,
+    retry: false,
+  });
+
+  const lockedSection = useMemo(() => {
+    if (!isSingleWindow || !sections || lockedSectionId === null) return null;
+    return sections.find((s) => s.id === lockedSectionId && s.is_active) || null;
+  }, [isSingleWindow, sections, lockedSectionId]);
+  const isSingleWindowBlocked = isSingleWindow && !lockedSection;
+
+  const requestOptions = useMemo(
+    () => (isSingleWindow && lockedSectionId !== null ? { singleSectionLockId: lockedSectionId } : undefined),
+    [isSingleWindow, lockedSectionId]
+  );
+
   useEffect(() => {
     if (!sections || sections.length === 0) return;
+    if (isSingleWindow) {
+      if (lockedSectionId === null) {
+        setSectionId(null);
+        return;
+      }
+      const activeLockedSection = sections.find((s) => s.id === lockedSectionId && s.is_active);
+      if (!activeLockedSection) {
+        setSectionId(null);
+        return;
+      }
+      if (sectionId !== activeLockedSection.id) setSectionId(activeLockedSection.id);
+      const expectedPath = `/shopfloor-tasks/${activeLockedSection.id}`;
+      if (location.pathname !== expectedPath || location.search !== "?singleWindow=1") {
+        navigate(`${expectedPath}?singleWindow=1`, { replace: true });
+      }
+      return;
+    }
     const paramId = params.sectionId ? Number(params.sectionId) : null;
     const validParam = Number.isFinite(paramId) ? sections.find((s) => s.id === paramId) : null;
     if (validParam) {
       if (sectionId !== validParam.id) setSectionId(validParam.id);
       return;
     }
-    const first = sections[0];
+    const first = sections.find((s) => s.is_active) || sections[0];
     if (!first) return;
     setSectionId(first.id);
     navigate(`/shopfloor-tasks/${first.id}`, { replace: true });
-  }, [sections, params.sectionId, navigate, sectionId]);
+  }, [sections, params.sectionId, navigate, sectionId, isSingleWindow, lockedSectionId, location.pathname, location.search]);
 
   const boardParams = useMemo(
     () => ({
       date_from: dateFrom ? `${dateFrom}T00:00:00` : undefined,
       date_to: dateTo ? `${dateTo}T23:59:59` : undefined,
-      status: statusFilter !== "all" ? statusFilter : undefined,
     }),
-    [dateFrom, dateTo, statusFilter]
+    [dateFrom, dateTo]
   );
 
   const { data: board, isLoading: boardLoading } = useQuery({
-    queryKey: ["shopfloor-board", sectionId, boardParams],
-    queryFn: () => getSectionBoard(sectionId as number, boardParams),
-    enabled: sectionId !== null && !!me?.id,
+    queryKey: ["shopfloor-board", sectionId, boardParams, requestOptions?.singleSectionLockId ?? null],
+    queryFn: () => getSectionBoard(sectionId as number, boardParams, requestOptions),
+    enabled: sectionId !== null && !!me?.id && !isSingleWindowBlocked,
+    retry: false,
+  });
+
+  const { data: incomingTransfersData, isLoading: incomingLoading } = useQuery({
+    queryKey: ["shopfloor-incoming-transfers", sectionId, requestOptions?.singleSectionLockId ?? null],
+    queryFn: () => getIncomingTransfers(sectionId as number, requestOptions),
+    enabled: sectionId !== null && !!me?.id && !isSingleWindowBlocked,
     retry: false,
   });
 
   const { data: stats } = useQuery({
-    queryKey: ["shopfloor-stats", sectionId, dateFrom, dateTo],
+    queryKey: ["shopfloor-stats", sectionId, dateFrom, dateTo, requestOptions?.singleSectionLockId ?? null],
     queryFn: () =>
       getSectionDailyStats(sectionId as number, {
         date_from: `${dateFrom}T00:00:00`,
         date_to: `${dateTo}T23:59:59`,
-      }),
-    enabled: sectionId !== null && !!me?.id,
+      }, requestOptions),
+    enabled: sectionId !== null && !!me?.id && !!dateFrom && !!dateTo && !isSingleWindow && !isSingleWindowBlocked,
     retry: false,
   });
+
+  const pushActionLog = useCallback((entry: Omit<ActionLogEntry, "id" | "createdAt">) => {
+    setActionLog((prev) => {
+      const next = [
+        {
+          id: `${Date.now()}-${Math.floor(Math.random() * 10000)}`,
+          createdAt: new Date().toISOString(),
+          ...entry,
+        },
+        ...prev,
+      ];
+      return next.slice(0, 10);
+    });
+  }, []);
 
   const invalidateShopfloor = useCallback(() => {
     queryClient.invalidateQueries({ queryKey: ["shopfloor-board"] });
     queryClient.invalidateQueries({ queryKey: ["shopfloor-stats"] });
+    queryClient.invalidateQueries({ queryKey: ["shopfloor-incoming-transfers"] });
+    queryClient.invalidateQueries({ queryKey: ["shopfloor-sections-summary"] });
   }, [queryClient]);
 
+  const closeActionDrawer = useCallback(() => {
+    setActionDialog({ open: false, type: "complete", task: null });
+  }, []);
+
   const issueMutation = useMutation({
-    mutationFn: ({ taskId, payload }: { taskId: number; payload: Parameters<typeof issueTask>[1] }) => issueTask(taskId, payload),
+    mutationFn: ({ taskId, payload }: { taskId: number; payload: Parameters<typeof issueTask>[1] }) =>
+      issueTask(taskId, payload, requestOptions),
     onSuccess: () => {
       toast({ title: "Выдача записана", variant: "success" });
+      pushActionLog({ status: "success", title: "Выдача", message: "Операция успешно записана." });
       invalidateShopfloor();
-      setActionDialog({ open: false, type: "issue", task: null });
+      closeActionDrawer();
+      setConflictHint(null);
     },
-    onError: (err) => toast({ title: "Ошибка", description: getErrorMessage(err), variant: "destructive" }),
+    onError: (err) => {
+      const message = getErrorMessage(err);
+      toast({ title: "Ошибка", description: message, variant: "destructive" });
+      pushActionLog({ status: "error", title: "Выдача", message });
+      setConflictHint(conflictHintFromError(message));
+    },
   });
 
   const completeMutation = useMutation({
-    mutationFn: ({ taskId, payload }: { taskId: number; payload: Parameters<typeof completeTask>[1] }) => completeTask(taskId, payload),
+    mutationFn: ({ taskId, payload }: { taskId: number; payload: Parameters<typeof completeTask>[1] }) =>
+      completeTask(taskId, payload, requestOptions),
     onSuccess: () => {
       toast({ title: "Факт сохранен", variant: "success" });
+      pushActionLog({ status: "success", title: "Факт", message: "Фактическое выполнение сохранено." });
       invalidateShopfloor();
-      setActionDialog({ open: false, type: "complete", task: null });
+      closeActionDrawer();
+      setConflictHint(null);
     },
-    onError: (err) => toast({ title: "Ошибка", description: getErrorMessage(err), variant: "destructive" }),
+    onError: (err) => {
+      const message = getErrorMessage(err);
+      toast({ title: "Ошибка", description: message, variant: "destructive" });
+      pushActionLog({ status: "error", title: "Факт", message });
+      setConflictHint(conflictHintFromError(message));
+    },
   });
 
   const sendMutation = useMutation({
-    mutationFn: createTransfer,
+    mutationFn: (payload: Parameters<typeof createTransfer>[0]) => createTransfer(payload, requestOptions),
     onSuccess: () => {
       toast({ title: "Передача отправлена", variant: "success" });
+      pushActionLog({ status: "success", title: "Передача", message: "Передача на следующий этап отправлена." });
       invalidateShopfloor();
-      setActionDialog({ open: false, type: "send", task: null });
+      closeActionDrawer();
+      setConflictHint(null);
     },
-    onError: (err) => toast({ title: "Ошибка", description: getErrorMessage(err), variant: "destructive" }),
+    onError: (err) => {
+      const message = getErrorMessage(err);
+      toast({ title: "Ошибка", description: message, variant: "destructive" });
+      pushActionLog({ status: "error", title: "Передача", message });
+      setConflictHint(conflictHintFromError(message));
+    },
   });
 
-  const selectedSection = useMemo(
-    () => (sections || []).find((s) => s.id === sectionId),
-    [sections, sectionId]
-  );
+  const acceptTransferMutation = useMutation({
+    mutationFn: ({ transferId, payload }: { transferId: number; payload: AcceptTransferInput }) =>
+      acceptTransfer(transferId, payload, requestOptions),
+    onSuccess: (result) => {
+      const status = result.status === "accepted" ? "Принято полностью" : result.status === "partially_accepted" ? "Принято частично" : "Отклонено";
+      toast({ title: "Входящая передача обновлена", description: status, variant: "success" });
+      pushActionLog({ status: "success", title: "Приемка", message: `Передача #${result.transfer_id}: ${status}.` });
+      invalidateShopfloor();
+    },
+    onError: (err) => {
+      const message = getErrorMessage(err);
+      toast({ title: "Ошибка приемки", description: message, variant: "destructive" });
+      pushActionLog({ status: "error", title: "Приемка", message });
+    },
+  });
 
   const openActionDialog = useCallback((type: TaskActionDialogType, task: SectionBoardTask) => {
     const now = nowLocalDateTime();
@@ -199,6 +297,7 @@ export function SectionsTasksPage() {
     setPerformedAt(now);
     setAccountedAt(now);
     setActionComment("");
+    setConflictHint(null);
     if (type === "complete") {
       setActionQty("");
       setDefectQty("");
@@ -215,9 +314,7 @@ export function SectionsTasksPage() {
   const handleTimesMatchChange = useCallback(
     (checked: boolean) => {
       setTimesMatch(checked);
-      if (checked) {
-        setAccountedAt(performedAt);
-      }
+      if (checked) setAccountedAt(performedAt);
     },
     [performedAt]
   );
@@ -225,9 +322,7 @@ export function SectionsTasksPage() {
   const handlePerformedAtChange = useCallback(
     (value: string) => {
       setPerformedAt(value);
-      if (timesMatch) {
-        setAccountedAt(value);
-      }
+      if (timesMatch) setAccountedAt(value);
     },
     [timesMatch]
   );
@@ -243,10 +338,16 @@ export function SectionsTasksPage() {
 
     if (!(qty > 0)) {
       toast({ title: "Ошибка", description: "Количество должно быть больше 0", variant: "destructive" });
+      setConflictHint("Укажите количество больше нуля.");
       return;
     }
 
     if (actionDialog.type === "issue") {
+      const maxIssue = parseFloat(task.cache.available_quantity);
+      if (Number.isFinite(maxIssue) && qty > maxIssue) {
+        setConflictHint(`Количество больше доступного (${fmtQty(String(maxIssue))}).`);
+        return;
+      }
       issueMutation.mutate({
         taskId: task.id,
         payload: {
@@ -267,6 +368,12 @@ export function SectionsTasksPage() {
       const defect = Number.isFinite(parsedDefect) ? parsedDefect : 0;
       if (good + defect <= 0) {
         toast({ title: "Ошибка", description: "Укажите факт или брак", variant: "destructive" });
+        setConflictHint("Укажите хотя бы одно количество: годные или брак.");
+        return;
+      }
+      const inWork = parseFloat(task.cache.in_work_quantity);
+      if (Number.isFinite(inWork) && good + defect > inWork) {
+        setConflictHint(`Сумма факта и брака больше объема в работе (${fmtQty(String(inWork))}).`);
         return;
       }
       completeMutation.mutate({
@@ -286,6 +393,12 @@ export function SectionsTasksPage() {
 
     if (!task.next_task_id) {
       toast({ title: "Ошибка", description: "Не найдено задание следующего этапа", variant: "destructive" });
+      setConflictHint("Для передачи необходимо создать следующий этап маршрута.");
+      return;
+    }
+    const transferable = Math.max(0, parseFloat(task.cache.completed_quantity) - parseFloat(task.cache.transferred_quantity));
+    if (Number.isFinite(transferable) && qty > transferable) {
+      setConflictHint(`Количество передачи больше доступного (${fmtQty(String(transferable))}).`);
       return;
     }
     sendMutation.mutate({
@@ -311,333 +424,244 @@ export function SectionsTasksPage() {
     defectQty,
   ]);
 
-  const pendingMutation = issueMutation.isPending || completeMutation.isPending || sendMutation.isPending;
+  const handleAcceptTransfer = useCallback(
+    (transferId: number, payload: AcceptTransferInput) => {
+      acceptTransferMutation.mutate({ transferId, payload });
+    },
+    [acceptTransferMutation]
+  );
 
+  const selectedSection = useMemo(
+    () => (sections || []).find((s) => s.id === sectionId) || null,
+    [sections, sectionId]
+  );
+
+  const pendingMutation = issueMutation.isPending || completeMutation.isPending || sendMutation.isPending;
   const tasks = board?.tasks || [];
-  const activeTasks = useMemo(() => tasks.filter((t) => ["ready", "in_progress", "partially_completed"].includes(t.status)), [tasks]);
-  const waitingTasks = useMemo(() => tasks.filter((t) => t.status === "waiting_previous"), [tasks]);
+  const incomingTransfers = incomingTransfersData?.incoming_transfers || [];
+  const canToggleSingleWindow = sectionId !== null && !isSingleWindowBlocked;
+  const selectedSectionColor = selectedSection?.icon_color || "#1D4ED8";
+  const selectedSectionTint = selectedSectionColor.startsWith("#") ? `${selectedSectionColor}1A` : "#DBEAFE";
 
   return (
     <>
-      <header className="page-header">
-        <div>
-          <h1 className="page-title">Участки</h1>
-          <p className="page-subtitle">Операционная доска цеха: выдача, факт, передача и статистика.</p>
-        </div>
-      </header>
+      {!isSingleWindow && (
+        <header className="page-header">
+          <div>
+            <h1 className="page-title">Участки</h1>
+            <p className="page-subtitle">
+              Операционный пульт: быстрый выбор участка, выдача, факт, передача и приемка.
+            </p>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              className="rounded-md border border-slate-700 px-3 py-2 text-xs font-semibold uppercase tracking-wide hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50"
+              disabled={!canToggleSingleWindow}
+              onClick={() => {
+                if (!sectionId) return;
+                navigate(`/shopfloor-tasks/${sectionId}?singleWindow=1`);
+              }}
+            >
+              Включить режим одного окна
+            </button>
+          </div>
+        </header>
+      )}
 
       <section className="space-y-4">
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-2">
-          <Select
-            value={sectionId ? String(sectionId) : ""}
-            onValueChange={(v) => {
-              const nextId = v ? Number(v) : null;
-              setSectionId(nextId);
-              if (nextId) {
-                navigate(`/shopfloor-tasks/${nextId}`);
-              }
-            }}
+        {selectedSection && (
+          <div
+            className="rounded-xl border px-4 py-3"
+            style={{ borderColor: selectedSectionColor, backgroundColor: selectedSectionTint }}
           >
-            <SelectTrigger>
-              <SelectValue placeholder="Выберите цех" />
-            </SelectTrigger>
-            <SelectContent>
-              {sections?.map((s) => (
-                <SelectItem key={s.id} value={String(s.id)}>
-                  {s.name} ({s.code})
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          <DatePicker value={dateFrom} onChange={setDateFrom} placeholder="ДД.ММ.ГГГГ" className="w-[130px]" />
-          <DatePicker value={dateTo} onChange={setDateTo} placeholder="ДД.ММ.ГГГГ" className="w-[130px]" />
-          <Select value={statusFilter} onValueChange={setStatusFilter}>
-            <SelectTrigger>
-              <SelectValue placeholder="Статус" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">Все статусы</SelectItem>
-              <SelectItem value="ready">Готов</SelectItem>
-              <SelectItem value="in_progress">В работе</SelectItem>
-              <SelectItem value="partially_completed">Частично</SelectItem>
-              <SelectItem value="completed">Завершен</SelectItem>
-            </SelectContent>
-          </Select>
-        </div>
-
-        {sectionId && (
-          <>
-            <div>
-              <h2 className="text-lg font-semibold mb-2">Активные задачи</h2>
-              {boardLoading && <p className="text-sm text-muted-foreground p-4">Загрузка...</p>}
-              {!boardLoading && activeTasks.length === 0 && (
-                <div className="rounded-lg border p-4 text-sm text-muted-foreground text-center">Нет активных задач</div>
-              )}
-              {!boardLoading && activeTasks.length > 0 && (
-                <div className="rounded-lg border overflow-auto">
-                  <table className="w-full text-sm">
-                    <thead className="border-b bg-muted/50">
-                      <tr>
-                        <th className="text-left p-2">Этап</th>
-                        <th className="text-left p-2">Операция</th>
-                        <th className="text-left p-2">План</th>
-                        <th className="text-left p-2">В работе</th>
-                        <th className="text-left p-2">Факт</th>
-                        <th className="text-left p-2">Брак</th>
-                        <th className="text-left p-2">Остаток</th>
-                        <th className="text-left p-2">Статус</th>
-                        <th className="text-left p-2">Пред. этап</th>
-                        <th className="text-left p-2">Действия</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {activeTasks.map((task) => (
-                        <tr key={task.id} className="border-b hover:bg-accent/30">
-                          <td className="p-2">#{task.sequence}</td>
-                          <td className="p-2">
-                            <div className="font-medium">{task.operation_name || "—"}</div>
-                            <div className="text-xs text-muted-foreground">{task.operation_code}</div>
-                          </td>
-                          <td className="p-2">{fmtQty(task.planned_quantity)}</td>
-                          <td className="p-2">{fmtQty(task.cache.in_work_quantity)}</td>
-                          <td className="p-2">{fmtQty(task.cache.completed_quantity)}</td>
-                          <td className="p-2">{fmtQty(task.cache.rejected_quantity)}</td>
-                          <td className="p-2">{fmtQty(task.cache.remaining_quantity)}</td>
-                          <td className="p-2">
-                            <Badge variant="secondary" className={taskStatusColor[task.status] || ""}>
-                              {taskStatusLabels[task.status] || task.status}
-                            </Badge>
-                          </td>
-                          <td className="p-2">
-                            {task.previous_stage ? (
-                              <div className="text-xs">
-                                <div>Факт: <span className="font-medium">{fmtQty(task.previous_stage.completed_quantity)}</span></div>
-                                <div>Передано: <span className="font-medium">{fmtQty(task.previous_stage.transferred_quantity)}</span></div>
-                              </div>
-                            ) : (
-                              <span className="text-xs text-muted-foreground">—</span>
-                            )}
-                          </td>
-                          <td className="p-2">
-                            <div className="flex gap-1">
-                              <Button size="sm" variant="outline" onClick={() => openActionDialog("issue", task)}>
-                                Выдать
-                              </Button>
-                              <Button size="sm" variant="outline" onClick={() => openActionDialog("complete", task)}>
-                                <Clock size={14} />
-                                <span className="ml-1">Факт</span>
-                              </Button>
-                              <Button
-                                size="sm"
-                                variant="outline"
-                                onClick={() => openActionDialog("send", task)}
-                                disabled={!task.next_task_id}
-                                title={task.next_task_id ? `Следующий этап: ${task.next_operation_name || "—"}` : "Следующий этап не создан"}
-                              >
-                                <Send size={14} />
-                              </Button>
-                            </div>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-            </div>
-
-            <div>
-              <h2 className="text-lg font-semibold mb-2">Назначенные (ожидают предыдущий этап)</h2>
-              {!boardLoading && waitingTasks.length === 0 && (
-                <div className="rounded-lg border p-4 text-sm text-muted-foreground text-center">Нет ожидающих задач</div>
-              )}
-              {!boardLoading && waitingTasks.length > 0 && (
-                <div className="rounded-lg border overflow-auto">
-                  <table className="w-full text-sm">
-                    <thead className="border-b bg-muted/50">
-                      <tr>
-                        <th className="text-left p-2">Этап</th>
-                        <th className="text-left p-2">Операция</th>
-                        <th className="text-left p-2">План</th>
-                        <th className="text-left p-2">В работе</th>
-                        <th className="text-left p-2">Факт</th>
-                        <th className="text-left p-2">Брак</th>
-                        <th className="text-left p-2">Остаток</th>
-                        <th className="text-left p-2">Статус</th>
-                        <th className="text-left p-2">Пред. этап</th>
-                        <th className="text-left p-2">Действия</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {waitingTasks.map((task) => (
-                        <tr key={task.id} className="border-b hover:bg-accent/30">
-                          <td className="p-2">#{task.sequence}</td>
-                          <td className="p-2">
-                            <div className="font-medium">{task.operation_name || "—"}</div>
-                            <div className="text-xs text-muted-foreground">{task.operation_code}</div>
-                          </td>
-                          <td className="p-2">{fmtQty(task.planned_quantity)}</td>
-                          <td className="p-2">{fmtQty(task.cache.in_work_quantity)}</td>
-                          <td className="p-2">{fmtQty(task.cache.completed_quantity)}</td>
-                          <td className="p-2">{fmtQty(task.cache.rejected_quantity)}</td>
-                          <td className="p-2">{fmtQty(task.cache.remaining_quantity)}</td>
-                          <td className="p-2">
-                            <Badge variant="secondary" className={taskStatusColor[task.status] || ""}>
-                              {taskStatusLabels[task.status] || task.status}
-                            </Badge>
-                          </td>
-                          <td className="p-2">
-                            {task.previous_stage ? (
-                              <div className="text-xs">
-                                <div>Факт: <span className="font-medium">{fmtQty(task.previous_stage.completed_quantity)}</span></div>
-                                <div>Передано: <span className="font-medium">{fmtQty(task.previous_stage.transferred_quantity)}</span></div>
-                              </div>
-                            ) : (
-                              <span className="text-xs text-muted-foreground">—</span>
-                            )}
-                          </td>
-                          <td className="p-2">
-                            <div className="flex gap-1">
-                              <Button size="sm" variant="outline" onClick={() => openActionDialog("issue", task)}>
-                                Выдать
-                              </Button>
-                              <Button size="sm" variant="outline" onClick={() => openActionDialog("complete", task)}>
-                                <Clock size={14} />
-                                <span className="ml-1">Факт</span>
-                              </Button>
-                              <Button
-                                size="sm"
-                                variant="outline"
-                                onClick={() => openActionDialog("send", task)}
-                                disabled={!task.next_task_id}
-                                title={task.next_task_id ? `Следующий этап: ${task.next_operation_name || "—"}` : "Следующий этап не создан"}
-                              >
-                                <Send size={14} />
-                              </Button>
-                            </div>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-            </div>
-
-            {stats && (
-              <div className="rounded-lg border p-4">
-                <h3 className="text-sm font-semibold mb-3">Статистика по дням</h3>
-                <div className="overflow-auto">
-                  <table className="w-full text-sm">
-                    <thead className="border-b bg-muted/50">
-                      <tr>
-                        <th className="text-left p-2">Дата</th>
-                        <th className="text-left p-2">Факт</th>
-                        <th className="text-left p-2">Брак</th>
-                        <th className="text-left p-2">Операций</th>
-                        <th className="text-left p-2">Ср. задержка учета</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {stats.daily_stats.map((row: DailyStatsRow) => (
-                        <tr key={row.date} className="border-b">
-                          <td className="p-2">{row.date}</td>
-                          <td className="p-2">{fmtQty(row.good_quantity)}</td>
-                          <td className="p-2">{parseFloat(row.rejected_quantity) > 0 ? <span className="text-red-600 font-medium">{fmtQty(row.rejected_quantity)}</span> : fmtQty(row.rejected_quantity)}</td>
-                          <td className="p-2">{row.op_count}</td>
-                          <td className="p-2">
-                            {(() => {
-                              const delaySec = parseFloat(row.avg_accounting_delay_seconds);
-                              if (!Number.isFinite(delaySec) || delaySec === 0) return "—";
-                              const min = Math.floor(delaySec / 60);
-                              const sec = Math.round(delaySec % 60);
-                              return `${min}м ${sec}с`;
-                            })()}
-                          </td>
-                        </tr>
-                      ))}
-                      {stats.daily_stats.length === 0 && (
-                        <tr>
-                          <td colSpan={5} className="p-4 text-center text-muted-foreground">Нет данных за период</td>
-                        </tr>
-                      )}
-                    </tbody>
-                  </table>
+            <div className="flex items-start justify-between gap-3">
+              <div className="flex items-center gap-3 min-w-0">
+                <span
+                  className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-lg"
+                  style={{ backgroundColor: "#FFFFFFB3", color: selectedSectionColor }}
+                >
+                  {selectedSection.icon ? renderIcon(selectedSection.icon, "h-5 w-5") : <span className="h-2.5 w-2.5 rounded-full bg-current" />}
+                </span>
+                <div className="min-w-0">
+                  <div className="text-xs font-semibold uppercase tracking-wide" style={{ color: selectedSectionColor }}>
+                    {selectedSection.code}
+                  </div>
+                  <div className="truncate text-xl font-bold leading-tight text-slate-900">
+                    {selectedSection.name}
+                  </div>
                 </div>
               </div>
-            )}
-          </>
+              <div className="shrink-0 flex flex-col items-end gap-2">
+                <div className="rounded-md border border-white/70 bg-white/70 px-2 py-1 text-[11px] font-semibold uppercase tracking-wide text-slate-700">
+                  {isSingleWindow ? "Режим одного окна" : "Рабочий участок"}
+                </div>
+                {isSingleWindow && (
+                  <button
+                    type="button"
+                    className="rounded-md border border-slate-700 bg-white/80 px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wide text-slate-800 hover:bg-white"
+                    onClick={() => navigate(sectionId ? `/shopfloor-tasks/${sectionId}` : "/shopfloor-tasks")}
+                  >
+                    Выйти из режима одного окна
+                  </button>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {isSingleWindowBlocked && (
+          <div className="rounded-lg border border-amber-300 bg-amber-50 p-4 text-sm text-amber-900">
+            <div className="font-semibold">Режим одного окна недоступен</div>
+            <div className="mt-1">
+              {!isRequestedSectionIdValid
+                ? "Не задан корректный участок в URL. Откройте /shopfloor-tasks/<id>?singleWindow=1."
+                : "Участок не найден или недоступен. Доступ к другим участкам в этом режиме заблокирован."}
+            </div>
+            <button
+              type="button"
+              className="mt-3 rounded-md border border-amber-700 px-3 py-1.5 text-xs font-medium hover:bg-amber-100"
+              onClick={() => navigate("/shopfloor-tasks")}
+            >
+              Выйти из режима одного окна
+            </button>
+          </div>
+        )}
+
+        {!isSingleWindow && (
+          <SectionSwitcherTiles
+            sections={(sections || []).filter((section) => section.is_active)}
+            summary={summary?.sections || []}
+            selectedSectionId={sectionId}
+            onSelect={(nextId) => {
+              setSectionId(nextId);
+              navigate(`/shopfloor-tasks/${nextId}`);
+            }}
+          />
+        )}
+
+        {!isSingleWindow && (
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+            <DatePicker value={dateFrom} onChange={setDateFrom} placeholder="Дата от" className="w-full" />
+            <DatePicker value={dateTo} onChange={setDateTo} placeholder="Дата до" className="w-full" />
+          </div>
+        )}
+
+        {!isSingleWindowBlocked && sectionId && (
+          <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
+            <div className="xl:col-span-2 space-y-4">
+              <SectionTasksBoard
+                tasks={tasks}
+                isLoading={boardLoading}
+                mode={viewMode}
+                onModeChange={setViewMode}
+                onAction={openActionDialog}
+              />
+
+              {!isSingleWindow && (
+                <div className="rounded-lg border p-4">
+                  <h3 className="text-sm font-semibold mb-3">Журнал действий (сессия)</h3>
+                  {actionLog.length === 0 && <div className="text-sm text-muted-foreground">Действий пока нет.</div>}
+                  {actionLog.length > 0 && (
+                    <div className="space-y-2">
+                      {actionLog.map((entry) => (
+                        <div key={entry.id} className="rounded-md border px-3 py-2">
+                          <div className="flex items-center justify-between gap-2">
+                            <div className="font-medium text-sm">{entry.title}</div>
+                            <div className="text-xs text-muted-foreground">
+                              {new Date(entry.createdAt).toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}
+                            </div>
+                          </div>
+                          <div className={`text-xs mt-1 ${entry.status === "error" ? "text-red-600" : entry.status === "success" ? "text-emerald-700" : "text-muted-foreground"}`}>
+                            {entry.message}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {!isSingleWindow && stats && (
+                <div className="rounded-lg border p-4">
+                  <h3 className="text-sm font-semibold mb-3">Статистика по дням</h3>
+                  <div className="overflow-auto">
+                    <table className="w-full text-sm">
+                      <thead className="border-b bg-muted/50">
+                        <tr>
+                          <th className="text-left p-2">Дата</th>
+                          <th className="text-left p-2">Факт</th>
+                          <th className="text-left p-2">Брак</th>
+                          <th className="text-left p-2">Операций</th>
+                          <th className="text-left p-2">Ср. задержка учета</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {stats.daily_stats.map((row: DailyStatsRow) => (
+                          <tr key={row.date} className="border-b">
+                            <td className="p-2">{row.date}</td>
+                            <td className="p-2">{fmtQty(row.good_quantity)}</td>
+                            <td className="p-2">{parseFloat(row.rejected_quantity) > 0 ? <span className="text-red-600 font-medium">{fmtQty(row.rejected_quantity)}</span> : fmtQty(row.rejected_quantity)}</td>
+                            <td className="p-2">{row.op_count}</td>
+                            <td className="p-2">
+                              {(() => {
+                                const delaySec = parseFloat(row.avg_accounting_delay_seconds);
+                                if (!Number.isFinite(delaySec) || delaySec === 0) return "—";
+                                const min = Math.floor(delaySec / 60);
+                                const sec = Math.round(delaySec % 60);
+                                return `${min}м ${sec}с`;
+                              })()}
+                            </td>
+                          </tr>
+                        ))}
+                        {stats.daily_stats.length === 0 && (
+                          <tr>
+                            <td colSpan={5} className="p-4 text-center text-muted-foreground">Нет данных за период</td>
+                          </tr>
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <div className="space-y-4">
+              <IncomingTransfersPanel
+                transfers={incomingTransfers}
+                isLoading={incomingLoading}
+                isPending={acceptTransferMutation.isPending}
+                onAccept={handleAcceptTransfer}
+              />
+            </div>
+          </div>
         )}
       </section>
 
-      <Dialog
+      <TaskActionDrawer
         open={actionDialog.open}
         onOpenChange={(open) => {
-          if (!open) {
-            setActionDialog({ open: false, type: "complete", task: null });
-          }
+          if (!open) closeActionDrawer();
+          else setActionDialog((prev) => ({ ...prev, open }));
         }}
-      >
-        <DialogContent className="sm:max-w-[560px]">
-          <DialogHeader>
-            <DialogTitle>{actionTitle(actionDialog.type)}</DialogTitle>
-            <DialogDescription>
-              {actionDialog.task?.operation_name} — Этап #{actionDialog.task?.sequence}
-            </DialogDescription>
-          </DialogHeader>
-
-          <div className="space-y-4">
-            <div>
-              <label className="text-sm font-medium">
-                {actionDialog.type === "complete" ? "Факт (годные)" : "Количество"}
-              </label>
-              <Input type="number" step="0.001" value={actionQty} onChange={(e) => setActionQty(e.target.value)} />
-            </div>
-
-            {actionDialog.type === "complete" && (
-              <div>
-                <label className="text-sm font-medium">Брак</label>
-                <Input type="number" step="0.001" value={defectQty} onChange={(e) => setDefectQty(e.target.value)} />
-              </div>
-            )}
-
-            {actionDialog.type === "send" && (
-              <div className="text-xs text-muted-foreground">
-                Следующий этап: {actionDialog.task?.next_operation_name || "—"}
-              </div>
-            )}
-
-            <div>
-              <label className="text-sm font-medium">Время сдачи</label>
-              <Input type="datetime-local" value={performedAt} onChange={(e) => handlePerformedAtChange(e.target.value)} />
-            </div>
-
-            <div className="flex items-center gap-2">
-              <Checkbox checked={timesMatch} onCheckedChange={(c) => handleTimesMatchChange(!!c)} id="times-match-action" />
-              <label htmlFor="times-match-action" className="text-sm">Время сдачи = Время учета</label>
-            </div>
-
-            <div>
-              <label className="text-sm font-medium">Время учета</label>
-              <Input type="datetime-local" value={accountedAt} onChange={(e) => setAccountedAt(e.target.value)} disabled={timesMatch} />
-            </div>
-
-            <div>
-              <label className="text-sm font-medium">Комментарий</label>
-              <Input value={actionComment} onChange={(e) => setActionComment(e.target.value)} placeholder="Опционально" />
-            </div>
-
-            <div className="flex justify-end gap-2 pt-2">
-              <Button variant="outline" onClick={() => setActionDialog({ open: false, type: "complete", task: null })}>
-                Отмена
-              </Button>
-              <Button onClick={submitAction} disabled={pendingMutation}>
-                {pendingMutation ? "Сохранение..." : "Сохранить"}
-              </Button>
-            </div>
-          </div>
-        </DialogContent>
-      </Dialog>
+        type={actionDialog.type}
+        task={actionDialog.task}
+        actionQty={actionQty}
+        setActionQty={setActionQty}
+        defectQty={defectQty}
+        setDefectQty={setDefectQty}
+        timesMatch={timesMatch}
+        onTimesMatchChange={handleTimesMatchChange}
+        performedAt={performedAt}
+        onPerformedAtChange={handlePerformedAtChange}
+        accountedAt={accountedAt}
+        setAccountedAt={setAccountedAt}
+        actionComment={actionComment}
+        setActionComment={setActionComment}
+        pending={pendingMutation}
+        conflictHint={conflictHint}
+        onSubmit={submitAction}
+      />
     </>
   );
 }
