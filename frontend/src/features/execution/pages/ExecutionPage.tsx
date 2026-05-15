@@ -17,6 +17,7 @@ import { listSections } from "@/shared/api/sections";
 import { Badge, Button, Checkbox, Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, Input, Select, SelectContent, SelectItem, SelectTrigger, SelectValue, AlertDialog, AlertDialogContent, AlertDialogHeader, AlertDialogTitle, AlertDialogDescription, AlertDialogFooter, AlertDialogAction, AlertDialogCancel, renderIcon } from "@/shared/ui";
 import { toast } from "@/shared/ui/use-toast";
 import { getErrorMessage } from "@/shared/api/client";
+import { RowDetailsSidePanel, adaptExecutionDetail } from "@/features/planning/components/row-details";
 
 const positionStatusLabels: Record<string, string> = {
   draft: "Черновик",
@@ -552,7 +553,7 @@ export function ExecutionPage() {
         </div>
       </section>
 
-      <Dialog
+      <RowDetailsSidePanel
         open={drawerOpen}
         onOpenChange={(open) => {
           setDrawerOpen(open);
@@ -560,137 +561,12 @@ export function ExecutionPage() {
             setSelectedPositionId(null);
           }
         }}
-      >
-        <DialogContent className="!left-auto !right-0 !top-0 !translate-x-0 !translate-y-0 h-screen max-h-screen w-[min(100vw,940px)] max-w-none rounded-none border-l p-0 flex flex-col gap-0">
-          <div className="p-6 border-b">
-            <DialogHeader>
-              <DialogTitle>Детализация строки выполнения</DialogTitle>
-              <DialogDescription>
-                Маршрут, этапы и метрики план/факт/брак по выбранной строке импорта.
-              </DialogDescription>
-            </DialogHeader>
-          </div>
-
-          <div className="flex-1 overflow-auto p-6">
-            {detailLoading && <p className="text-sm text-muted-foreground">Загрузка детализации...</p>}
-            {detailError && <p className="text-sm text-red-600">Ошибка: {String(detailError)}</p>}
-            {!detailLoading && !detailError && detail && (
-              <div className="space-y-4">
-                <div className="rounded-lg border p-4">
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-sm">
-                    <div>
-                      <div className="text-muted-foreground">Строка импорта</div>
-                      <div className="font-medium">#{detail.source_row_number ?? "—"}</div>
-                    </div>
-                    <div>
-                      <div className="text-muted-foreground">План</div>
-                      <div className="font-medium">
-                        {detail.production_plan_id} ·{" "}
-                        {(() => {
-                          const planName = planNameById.get(detail.production_plan_id) || "—";
-                          if (planName === "—") {
-                            return "—";
-                          }
-                          return (
-                            <a
-                              href={planPreviewUrl(detail.production_plan_id)}
-                              target="_blank"
-                              rel="noreferrer"
-                              title={planName}
-                              className="text-blue-700 hover:underline inline-block max-w-[320px] truncate align-bottom"
-                            >
-                              План
-                            </a>
-                          );
-                        })()}
-                      </div>
-                    </div>
-                    <div>
-                      <div className="text-muted-foreground">SKU</div>
-                      <div className="font-mono font-medium">{detail.source_sku}</div>
-                    </div>
-                    <div>
-                      <div className="text-muted-foreground">Количество</div>
-                      <div className="font-medium">{fmtQty(detail.quantity)}</div>
-                    </div>
-                    <div>
-                      <div className="text-muted-foreground">Статус позиции</div>
-                      <div className="pt-1">
-                        <StatusBadge status={detail.position_status} />
-                      </div>
-                    </div>
-                    <div>
-                      <div className="text-muted-foreground">Маршрут</div>
-                      <div className="font-medium">
-                        {detail.route_name || detail.route_error || "Не назначен"}
-                        {detail.route_name && (
-                          <span className="text-muted-foreground"> ({routeMetaLabel(detail)})</span>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-                  {detail.not_started && (
-                    <div className="mt-3">
-                      <Badge variant="secondary">Не запущено: задачи по этапам еще не созданы</Badge>
-                    </div>
-                  )}
-                </div>
-
-                <div className="rounded-lg border overflow-auto">
-                  <table className="w-full text-sm">
-                    <thead className="border-b bg-muted/50">
-                      <tr>
-                        <th className="text-left p-2">Этап</th>
-                        <th className="text-left p-2">Участок</th>
-                        <th className="text-left p-2">План</th>
-                        <th className="text-left p-2">Факт</th>
-                        <th className="text-left p-2">Брак</th>
-                        <th className="text-left p-2">% выполнения</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {detail.stages.map((stage) => (
-                        <tr key={stage.route_step_id} className="border-b">
-                          <td className="p-2">#{stage.sequence}</td>
-                          <td className="p-2">
-                            {(() => {
-                              const meta = sectionMetaById.get(stage.section_id);
-                              const color = meta?.icon_color || "#64748B";
-                              return (
-                                <div className="flex items-start gap-2">
-                                  <span
-                                    className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md"
-                                    style={{ backgroundColor: `${color}20`, color }}
-                                  >
-                                    {meta?.icon ? renderIcon(meta.icon, "h-4 w-4") : <span className="h-2 w-2 rounded-full bg-current" />}
-                                  </span>
-                                  <div>
-                                    <div className="font-medium">{stage.section_name}</div>
-                                    <div className="text-xs text-muted-foreground">
-                                      {stage.section_code} · {stage.operation_name}
-                                    </div>
-                                  </div>
-                                </div>
-                              );
-                            })()}
-                          </td>
-                          <td className="p-2">{fmtQty(stage.planned_quantity)}</td>
-                          <td className="p-2">{fmtQty(stage.completed_quantity)}</td>
-                          <td className="p-2">{fmtQty(stage.rejected_quantity)}</td>
-                          <td className="p-2">{calcExecutionPercent(stage.completed_quantity, stage.planned_quantity).toFixed(1)}%</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                  {detail.stages.length === 0 && (
-                    <p className="p-4 text-sm text-muted-foreground text-center">Маршрутные этапы отсутствуют для этой строки</p>
-                  )}
-                </div>
-              </div>
-            )}
-          </div>
-        </DialogContent>
-      </Dialog>
+        data={detail ? adaptExecutionDetail(detail) : null}
+        loading={detailLoading}
+        error={detailError ? String(detailError) : null}
+        title="Детализация строки выполнения"
+        description="Маршрут, этапы и метрики план/факт/брак по выбранной строке импорта."
+      />
 
       <Dialog
         open={launchDialog.open}

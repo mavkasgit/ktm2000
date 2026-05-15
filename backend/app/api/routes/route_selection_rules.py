@@ -2,13 +2,13 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
-from app.models.route import RouteSelectionRule
+from app.models.route import RouteRuleProfile, RouteSelectionRule
 from app.models.section import Section
 
 router = APIRouter(prefix="/route-selection-rules", tags=["route-selection-rules"])
@@ -20,7 +20,10 @@ RuleAction = Literal["require_section", "exclude_section"]
 
 class RouteSelectionConditionIn(BaseModel):
     source: RuleSource
-    field_path: str
+    field_path: str = ""
+    excel_column_index: int | None = None
+    excel_column_letter: str | None = None
+    excel_header: str | None = None
     operator: RuleOperator
     value: Any = None
     case_sensitive: bool = False
@@ -34,6 +37,7 @@ class RouteSelectionActionIn(BaseModel):
 class RouteSelectionRuleIn(BaseModel):
     code: str | None = None
     name: str
+    profile_id: int | None = None
     priority: int = 0
     is_active: bool = True
     conditions: list[RouteSelectionConditionIn] = []
@@ -53,6 +57,9 @@ class RouteSelectionRuleOut(BaseModel):
     id: int
     code: str | None = None
     name: str
+    profile_id: int | None = None
+    profile_code: str | None = None
+    profile_name: str | None = None
     priority: int
     is_active: bool
     conditions: list[RouteSelectionConditionOut]
@@ -60,10 +67,20 @@ class RouteSelectionRuleOut(BaseModel):
 
 
 @router.get("", response_model=list[RouteSelectionRuleOut])
-async def list_route_selection_rules(db: AsyncSession = Depends(get_db)) -> list[RouteSelectionRuleOut]:
-    rules = (
-        await db.execute(select(RouteSelectionRule).order_by(RouteSelectionRule.priority.desc(), RouteSelectionRule.id.asc()))
-    ).scalars().all()
+async def list_route_selection_rules(
+    scope: Literal["global", "profile", "all"] = Query("all"),
+    profile_id: int | None = Query(None),
+    db: AsyncSession = Depends(get_db),
+) -> list[RouteSelectionRuleOut]:
+    stmt = select(RouteSelectionRule)
+    if scope == "global":
+        stmt = stmt.where(RouteSelectionRule.profile_id.is_(None))
+    elif scope == "profile":
+        if profile_id is None:
+            return []
+        stmt = stmt.where(RouteSelectionRule.profile_id == profile_id)
+    stmt = stmt.order_by(RouteSelectionRule.priority.desc(), RouteSelectionRule.id.asc())
+    rules = (await db.execute(stmt)).scalars().all()
     return [await _rule_out(db, rule) for rule in rules]
 
 
@@ -75,9 +92,15 @@ async def create_route_selection_rule(payload: RouteSelectionRuleIn, db: AsyncSe
         if existing is not None:
             raise HTTPException(status_code=409, detail="Rule with this code already exists")
 
+    if payload.profile_id is not None:
+        profile = await db.get(RouteRuleProfile, payload.profile_id)
+        if profile is None:
+            raise HTTPException(status_code=400, detail="Invalid profile_id")
+
     rule = RouteSelectionRule(
         code=_clean_code(payload.code),
         name=payload.name.strip(),
+        profile_id=payload.profile_id,
         priority=payload.priority,
         is_active=payload.is_active,
         conditions=[condition.model_dump() for condition in payload.conditions],
@@ -105,8 +128,14 @@ async def update_route_selection_rule(
         if existing is not None:
             raise HTTPException(status_code=409, detail="Rule with this code already exists")
 
+    if payload.profile_id is not None:
+        profile = await db.get(RouteRuleProfile, payload.profile_id)
+        if profile is None:
+            raise HTTPException(status_code=400, detail="Invalid profile_id")
+
     rule.code = clean_code
     rule.name = payload.name.strip()
+    rule.profile_id = payload.profile_id
     rule.priority = payload.priority
     rule.is_active = payload.is_active
     rule.conditions = [condition.model_dump() for condition in payload.conditions]
@@ -131,7 +160,17 @@ async def _validate_payload(db: AsyncSession, payload: RouteSelectionRuleIn) -> 
     if not payload.actions:
         raise HTTPException(status_code=400, detail="At least one action is required")
     for condition in payload.conditions:
-        if not condition.field_path.strip():
+        has_field = bool(condition.field_path.strip())
+        has_excel_binding = (
+            condition.excel_column_index is not None
+            or bool((condition.excel_header or "").strip())
+        )
+        if condition.source == "excel":
+            if not has_field and not has_excel_binding:
+                raise HTTPException(status_code=400, detail="Excel condition must define field_path or explicit excel column binding")
+            if condition.excel_column_index is not None and condition.excel_column_index <= 0:
+                raise HTTPException(status_code=400, detail="excel_column_index must be positive")
+        elif not has_field:
             raise HTTPException(status_code=400, detail="Condition field_path is required")
         if condition.operator in {"equals", "not_equals", "contains", "not_contains", "in", "not_in", "regex"} and condition.value is None:
             raise HTTPException(status_code=400, detail=f"Condition value is required for {condition.operator}")
@@ -163,10 +202,22 @@ async def _rule_out(db: AsyncSession, rule: RouteSelectionRule) -> RouteSelectio
                 section_name=section.name if section else None,
             )
         )
+
+    profile_code = None
+    profile_name = None
+    if rule.profile_id is not None:
+        profile = await db.get(RouteRuleProfile, rule.profile_id)
+        if profile:
+            profile_code = profile.code
+            profile_name = profile.name
+
     return RouteSelectionRuleOut(
         id=rule.id,
         code=rule.code,
         name=rule.name,
+        profile_id=rule.profile_id,
+        profile_code=profile_code,
+        profile_name=profile_name,
         priority=rule.priority,
         is_active=rule.is_active,
         conditions=[RouteSelectionConditionOut(**condition) for condition in rule.conditions or []],
