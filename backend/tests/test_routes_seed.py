@@ -22,7 +22,7 @@ DEFAULT_SECTIONS = [
 
 
 @pytest.mark.asyncio
-async def test_seed_routes_creates_six_typical_routes(client, session) -> None:
+async def test_seed_routes_creates_characteristic_routes(client, session) -> None:
     for item in DEFAULT_SECTIONS:
         session.add(Section(code=item["code"], name=item["name"], sort_order=item["sort_order"], kind=item["kind"], is_active=True))
     await session.commit()
@@ -30,14 +30,12 @@ async def test_seed_routes_creates_six_typical_routes(client, session) -> None:
     response = await client.post("/api/routes-seed")
     assert response.status_code == 201
     data = response.json()
-    assert len(data) == 11
+    assert len(data) == 12
     names = [route["name"] for route in data]
-    assert "Типовой: полный (все участки)" in names
-    assert "Типовой: без сверла" in names
-    assert "Типовой: без пресса и сверла" in names
-    assert "Типовой: без пресса, сверла и дробеструя" in names
-    assert "Типовой: без сверла, пресса и упаковки" in names
-    assert "Типовой: отгрузочный" in names
+    assert "ГП • Сверло • С дробеструем" in names
+    assert "ГП • Без первичной • Без дробеструя" in names
+    assert "П/ф • Пресс • С дробеструем" in names
+    assert "П/ф • Без первичной • Без дробеструя" in names
     first_rules_count = len((await session.execute(select(RouteSelectionRule))).scalars().all())
     assert first_rules_count == 9
 
@@ -45,7 +43,7 @@ async def test_seed_routes_creates_six_typical_routes(client, session) -> None:
     response2 = await client.post("/api/routes-seed")
     assert response2.status_code == 201
     data2 = response2.json()
-    assert len(data2) == 11
+    assert len(data2) == 12
     second_rules = (await session.execute(select(RouteSelectionRule))).scalars().all()
     assert len(second_rules) == first_rules_count
     unique_keys = {rule.code for rule in second_rules}
@@ -100,7 +98,7 @@ async def test_seeded_rules_select_drill_finished_good_route(client, session) ->
     )
 
     assert result.route is not None
-    assert result.route.name == "Типовой: сверловка"
+    assert result.route.name == "ГП • Сверло • С дробеструем"
     selected = next(candidate for candidate in result.candidate_routes if candidate.route_id == result.route.id)
     assert "DRILL" in selected.section_codes
     assert "WIP_WH" in selected.section_codes

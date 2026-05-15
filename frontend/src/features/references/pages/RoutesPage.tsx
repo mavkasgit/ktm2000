@@ -8,6 +8,9 @@ import { AlertDialog, AlertDialogContent, AlertDialogHeader, AlertDialogTitle, A
 import { RouteFlowBuilder } from "../components/RouteFlowBuilder";
 import { RouteSelectionRulesSection } from "../components/RouteSelectionRulesSection";
 import { RouteTreeOverview, type RouteTreeOverviewRef } from "../components/RouteTreeOverview";
+import { ImportTemplatesPage } from "./ImportTemplatesPage";
+
+type TabKey = "routes" | "templates";
 
 export function RoutesPage() {
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -16,6 +19,19 @@ export function RoutesPage() {
   const [seeding, setSeeding] = useState(false);
   const [seedRevision, setSeedRevision] = useState(0);
   const treeRef = useRef<RouteTreeOverviewRef>(null);
+  const [activeTabs, setActiveTabs] = useState<Set<TabKey>>(new Set(["routes", "templates"]));
+
+  const toggleTab = (tab: TabKey) => {
+    setActiveTabs((prev) => {
+      const next = new Set(prev);
+      if (next.has(tab)) {
+        if (next.size > 1) next.delete(tab);
+      } else {
+        next.add(tab);
+      }
+      return next;
+    });
+  };
 
   const handleCreate = useCallback(() => {
     setEditRoute(null);
@@ -57,23 +73,59 @@ export function RoutesPage() {
     }
   };
 
+  const showRoutes = activeTabs.has("routes");
+  const showTemplates = activeTabs.has("templates");
+
   return (
-    <section className="space-y-6">
-      <div className="flex items-center justify-between">
-        <h2 className="text-xl font-semibold">Маршруты обработки</h2>
-        <div className="flex items-center gap-2">
-          <Button size="sm" variant="outline" onClick={() => setSeedDialogOpen(true)}>
-            <Download className="h-4 w-4 mr-1" />
-            Загрузить маршрут
+    <section className="space-y-4">
+      {/* Tab bar */}
+      <div className="flex gap-4">
+        <div className="flex-1">
+          <Button
+            variant={showRoutes ? "default" : "outline"}
+            className={`w-full ${showRoutes ? "bg-black/10 hover:bg-black/20 text-black text-lg" : ""}`}
+            onClick={() => toggleTab("routes")}
+          >
+            Маршруты обработки
           </Button>
-          <Button size="sm" onClick={handleCreate}><Plus className="h-4 w-4 mr-1" />Создать маршрут</Button>
+        </div>
+        <div className="flex-1">
+          <Button
+            variant={showTemplates ? "default" : "outline"}
+            className={`w-full ${showTemplates ? "bg-black/10 hover:bg-black/20 text-black text-lg" : ""}`}
+            onClick={() => toggleTab("templates")}
+          >
+            Шаблоны и правила
+          </Button>
         </div>
       </div>
 
-      {/* Route Tree Overview */}
-      <RouteTreeOverview ref={treeRef} onEditRoute={handleEdit} />
+      {/* Content */}
+      <div className="flex gap-4 items-start">
+        {showRoutes && (
+          <div className={showTemplates ? "flex-1" : "flex-1"}>
+            <div className="flex items-center justify-between mb-4">
+              <div className="flex items-center gap-2">
+                <Button size="sm" variant="outline" onClick={() => setSeedDialogOpen(true)}>
+                  <Download className="h-4 w-4 mr-1" />
+                  Загрузить маршрут
+                </Button>
+                <Button size="sm" onClick={handleCreate}><Plus className="h-4 w-4 mr-1" />Создать маршрут</Button>
+              </div>
+            </div>
+            <RouteTreeOverview ref={treeRef} onEditRoute={handleEdit} />
+          </div>
+        )}
 
-      <RouteSelectionRulesSection refreshKey={seedRevision} />
+        {showTemplates && (
+          <div className={showRoutes ? "flex-1 space-y-4" : "flex-1 space-y-4"}>
+            <div className="rounded-lg border p-4">
+              <ImportTemplatesPage />
+            </div>
+            <RouteSelectionRulesSection refreshKey={seedRevision} />
+          </div>
+        )}
+      </div>
 
       {/* Flow Builder Dialog */}
       <RouteFlowBuilder
@@ -89,7 +141,7 @@ export function RoutesPage() {
           <AlertDialogHeader>
             <AlertDialogTitle>Загрузить типовые маршруты?</AlertDialogTitle>
             <AlertDialogDescription>
-              Будут созданы/обновлены 6 типовых маршрутов. Если такие маршруты уже есть, их шаги будут заменены.
+              Будут созданы/обновлены 12 характеристических маршрутов и глобальные правила выбора маршрута.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter className="flex-col-reverse sm:flex-row gap-2">

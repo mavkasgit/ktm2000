@@ -2,6 +2,7 @@ import { apiClient } from "./client";
 
 export type ProductionRoute = {
   id: number;
+  code: string | null;
   name: string;
   description: string | null;
   is_active: boolean;
@@ -43,6 +44,9 @@ export type RouteDetail = ProductionRoute & {
 export type RouteSelectionCondition = {
   source: "excel" | "payload" | "product";
   field_path: string;
+  excel_column_index?: number | null;
+  excel_column_letter?: string | null;
+  excel_header?: string | null;
   operator: "equals" | "not_equals" | "contains" | "not_contains" | "in" | "not_in" | "empty" | "not_empty" | "regex";
   value: unknown;
   case_sensitive: boolean;
@@ -59,6 +63,9 @@ export type RouteSelectionRule = {
   id: number;
   code: string | null;
   name: string;
+  profile_id: number | null;
+  profile_code: string | null;
+  profile_name: string | null;
   priority: number;
   is_active: boolean;
   conditions: RouteSelectionCondition[];
@@ -68,6 +75,7 @@ export type RouteSelectionRule = {
 export type RouteSelectionRuleInput = {
   code?: string | null;
   name: string;
+  profile_id?: number | null;
   priority: number;
   is_active: boolean;
   conditions: RouteSelectionCondition[];
@@ -160,8 +168,8 @@ export async function deleteRule(routeId: number, ruleId: number) {
   await apiClient.delete(`/routes/${routeId}/rules/${ruleId}`);
 }
 
-export async function listRouteSelectionRules() {
-  const { data } = await apiClient.get<RouteSelectionRule[]>("/route-selection-rules");
+export async function listRouteSelectionRules(params?: { scope?: "global" | "profile" | "all"; profile_id?: number }) {
+  const { data } = await apiClient.get<RouteSelectionRule[]>("/route-selection-rules", { params });
   return data;
 }
 
@@ -186,4 +194,71 @@ export async function seedRoutes() {
 
 export async function reorderRoutes(ids: number[]) {
   await apiClient.post("/routes/reorder", { ids });
+}
+
+export type RouteRuleProfile = {
+  id: number;
+  code: string;
+  name: string;
+  is_active: boolean;
+  priority: number;
+  import_template_id: number | null;
+  template_code: string | null;
+  template_name: string | null;
+  excel_column_passport: Array<{
+    index: number;
+    letter: string;
+    header: string;
+    field_path: string;
+  }>;
+  excel_passport_meta: {
+    sheet_name?: string;
+    sheet_index?: number;
+    source_row_number?: number;
+    updated_at?: string;
+    import_template_id?: number;
+    [key: string]: unknown;
+  };
+  created_at: string | null;
+};
+
+export type RouteRuleProfileInput = {
+  code: string;
+  name: string;
+  is_active: boolean;
+  priority: number;
+  import_template_id?: number | null;
+  excel_column_passport: Array<{
+    index: number;
+    letter: string;
+    header: string;
+    field_path: string;
+  }>;
+  excel_passport_meta: {
+    sheet_name?: string;
+    sheet_index?: number;
+    source_row_number?: number;
+    updated_at?: string;
+    import_template_id?: number;
+    [key: string]: unknown;
+  };
+};
+
+export async function listRouteRuleProfiles() {
+  const { data } = await apiClient.get<RouteRuleProfile[]>("/route-rule-profiles");
+  return data;
+}
+
+export async function createRouteRuleProfile(payload: RouteRuleProfileInput) {
+  const { data } = await apiClient.post<RouteRuleProfile>("/route-rule-profiles", payload);
+  return data;
+}
+
+export async function updateRouteRuleProfile(profileId: number, payload: RouteRuleProfileInput) {
+  const { data } = await apiClient.put<RouteRuleProfile>(`/route-rule-profiles/${profileId}`, payload);
+  return data;
+}
+
+export async function deleteRouteRuleProfile(profileId: number) {
+  await apiClient.delete(`/route-rule-profiles/${profileId}`);
 }
