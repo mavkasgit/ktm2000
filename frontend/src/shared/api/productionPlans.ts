@@ -115,6 +115,7 @@ export type PlanPositionOut = {
   route_assigned_at: string | null;
   route_manual_confirmed_at: string | null;
   route_error: string | null;
+  raw_excel_row: Record<string, unknown> | null;
 };
 
 export async function planFiles(planId: number) {
@@ -178,14 +179,36 @@ export type RouteCheckCandidate = {
   matched: boolean;
 };
 
+export type RouteCheckConditionDiagnostic = {
+  source: "excel" | "payload" | "product" | string;
+  field_path: string;
+  operator: string;
+  expected: unknown;
+  actual: unknown;
+  matched: boolean;
+  resolved_by?: string | null;
+  excel_column_index?: number | null;
+  excel_column_letter?: string | null;
+  excel_header?: string | null;
+  excel_actual_column_index?: number | null;
+  excel_actual_column_letter?: string | null;
+  excel_actual_header?: string | null;
+  excel_header_match?: boolean | null;
+  issues?: string[];
+};
+
 export type RouteCheckResponse = {
   expected_signature: {
+    template_id: number | null;
+    rule_profile_id: number | null;
     matched_rule_ids: number[];
     required_sections: RouteCheckSection[];
     excluded_sections: RouteCheckSection[];
     candidate_routes: RouteCheckCandidate[];
     selected_route_id: number | null;
     route_match_reason: string | null;
+    condition_diagnostics?: RouteCheckConditionDiagnostic[];
+    excel_column_diagnostics?: RouteCheckConditionDiagnostic[];
   };
   active_route_snapshot: {
     route_id: number;
@@ -194,12 +217,16 @@ export type RouteCheckResponse = {
     steps: { sequence: number; section_id: number; section_code: string; section_name: string; section_kind: string; operation_name: string }[];
     diagnostic?: {
       error: string | null;
+      template_id: number | null;
+      rule_profile_id: number | null;
       matched_rule_ids: number[];
       required_sections: RouteCheckSection[];
       excluded_sections: RouteCheckSection[];
       candidate_routes: RouteCheckCandidate[];
       selected_route_id: number | null;
       route_match_reason: string | null;
+      condition_diagnostics?: RouteCheckConditionDiagnostic[];
+      excel_column_diagnostics?: RouteCheckConditionDiagnostic[];
     };
   } | null;
   match: boolean;
@@ -337,6 +364,7 @@ export type ProductionPlanningRowDetail = {
     steps: ProductionPlanningRouteSnapshotStep[];
   } | null;
   stages: ProductionPlanningStage[];
+  raw_excel_row: Record<string, unknown> | null;
 };
 
 export async function listProductionPlanningRows() {

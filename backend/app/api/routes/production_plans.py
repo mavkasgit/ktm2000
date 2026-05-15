@@ -19,6 +19,7 @@ from app.models.production_plan import (
     PositionStatusHistory,
     ProductionPlan,
 )
+from app.models.imports import ImportBatch
 from app.models.product import Product
 from app.models.release_batch import ReleaseBatchType
 from app.models.route import ProductionRoute, RouteStep
@@ -377,9 +378,15 @@ async def route_check(
     if position.production_plan_id != production_plan_id:
         raise HTTPException(status_code=400, detail="Position does not belong to production plan")
 
+    import_batch = await db.get(ImportBatch, position.import_batch_id) if position.import_batch_id is not None else None
+    rule_profile_id = import_batch.rule_profile_id if import_batch is not None else None
+    template_id = import_batch.template_id if import_batch is not None else None
+
     product = await db.get(Product, position.product_id) if position.product_id is not None else None
-    selection = await select_route_for_payload(db, position.source_payload, product)
+    selection = await select_route_for_payload(db, position.source_payload, product, profile_id=rule_profile_id)
     expected_signature = {
+        "template_id": template_id,
+        "rule_profile_id": rule_profile_id,
         "matched_rule_ids": selection.matched_rule_ids,
         "required_sections": selection.required_sections,
         "excluded_sections": selection.excluded_sections,
@@ -398,6 +405,10 @@ async def route_check(
         ],
         "selected_route_id": selection.route.id if selection.route else None,
         "route_match_reason": selection.route_match_reason,
+        "condition_diagnostics": selection.condition_diagnostics,
+        "excel_column_diagnostics": [
+            diagnostic for diagnostic in selection.condition_diagnostics if diagnostic.get("source") == "excel"
+        ],
     }
 
     issues = await validate_route_match(db, position)
@@ -430,6 +441,8 @@ async def route_check(
             ],
             "diagnostic": {
                 "error": route_info.error,
+                "template_id": template_id,
+                "rule_profile_id": rule_profile_id,
                 "matched_rule_ids": route_info.checked_rules,
                 "required_sections": route_info.required_sections,
                 "excluded_sections": route_info.excluded_sections,
@@ -448,6 +461,10 @@ async def route_check(
                 ],
                 "selected_route_id": route_info.selected_route_id,
                 "route_match_reason": route_info.route_match_reason,
+                "condition_diagnostics": route_info.condition_diagnostics,
+                "excel_column_diagnostics": [
+                    diagnostic for diagnostic in route_info.condition_diagnostics if diagnostic.get("source") == "excel"
+                ],
             },
         }
 
@@ -587,6 +604,7 @@ class PlanPositionOut(BaseModel):
     route_assigned_at: str | None = None
     route_manual_confirmed_at: str | None = None
     route_error: str | None = None
+    raw_excel_row: dict | None = None
 
 
 @router.get("/all-files", response_model=list[PlanFileInfo])
@@ -675,6 +693,7 @@ async def all_plan_positions(db: AsyncSession = Depends(get_db)) -> list[PlanPos
                     route_info.route_manual_confirmed_at.isoformat() if route_info.route_manual_confirmed_at else None
                 ),
                 route_error=route_info.error,
+                raw_excel_row=(p.source_payload or {}).get("raw_excel_row"),
             )
         )
 
@@ -738,6 +757,7 @@ async def cancelled_positions(db: AsyncSession = Depends(get_db)) -> list[PlanPo
                     route_info.route_manual_confirmed_at.isoformat() if route_info.route_manual_confirmed_at else None
                 ),
                 route_error=route_info.error,
+                raw_excel_row=(p.source_payload or {}).get("raw_excel_row"),
             )
         )
 
@@ -803,6 +823,7 @@ async def all_positions(production_plan_id: int, db: AsyncSession = Depends(get_
                     route_info.route_manual_confirmed_at.isoformat() if route_info.route_manual_confirmed_at else None
                 ),
                 route_error=route_info.error,
+                raw_excel_row=(p.source_payload or {}).get("raw_excel_row"),
             )
         )
 

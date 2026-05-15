@@ -7,8 +7,10 @@ import { toast } from "@/shared/ui"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { planFiles, allPositions, allPlanFiles, allPlanPositions, PlanFileInfo, PlanPositionOut, listPlans, PlanSummary, batchAssignRouteGlobal, deleteImportBatch, routeCheck } from "@/shared/api/productionPlans"
 import { listRoutes, ProductionRoute } from "@/shared/api/routes"
+import { listImportTemplates, ImportTemplate } from "@/shared/api/importTemplates"
 import { getImportFileDownloadUrl } from "@/shared/api/imports"
 import { apiClient } from "@/shared/api/client"
+import { RowDetailsSidePanel, adaptPlanPositionOut } from "../components/row-details"
 
 const statusLabels: Record<string, string> = {
   parsed: "Распознан",
@@ -239,7 +241,7 @@ function FileRow({ file, activePlan, onDelete }: { file: PlanFileInfo; activePla
   )
 }
 
-function PositionRow({ pos, onApprove, onDelete, selected, onToggle, routes, onAssignRoute }: {
+function PositionRow({ pos, onApprove, onDelete, selected, onToggle, routes, onAssignRoute, onOpenDetail }: {
   pos: PlanPositionOut;
   onApprove: (id: number, planId?: number) => void;
   onDelete: (id: number, planId?: number) => void;
@@ -247,6 +249,7 @@ function PositionRow({ pos, onApprove, onDelete, selected, onToggle, routes, onA
   onToggle?: (id: number) => void;
   routes?: ProductionRoute[];
   onAssignRoute?: (positionId: number, routeId: number | null) => void;
+  onOpenDetail?: () => void;
 }) {
   const hasErrors = pos.errors && pos.errors.length > 0
   const hasWarnings = pos.warnings && pos.warnings.length > 0
@@ -283,7 +286,8 @@ function PositionRow({ pos, onApprove, onDelete, selected, onToggle, routes, onA
     !routeCheckData.match || (routeCheckData.issues && routeCheckData.issues.length > 0)
   )
 
-  const handleApproveClick = () => {
+  const handleApproveClick = (e: React.MouseEvent) => {
+    e.stopPropagation()
     if (isRiskyForApprove(pos) || routeCheckRisky) {
       setApproveDialogOpen(true)
     } else {
@@ -299,6 +303,11 @@ function PositionRow({ pos, onApprove, onDelete, selected, onToggle, routes, onA
       setApproving(false)
       setApproveDialogOpen(false)
     }
+  }
+
+  const handleDeleteClick = (e: React.MouseEvent) => {
+    e.stopPropagation()
+    onDelete(pos.id, pos.production_plan_id)
   }
 
   const detailedReasons = useMemo(() => {
@@ -365,10 +374,13 @@ function PositionRow({ pos, onApprove, onDelete, selected, onToggle, routes, onA
 
   return (
     <>
-    <tr className={`border-b ${hasErrors ? "bg-red-50" : hasWarnings ? "bg-amber-50" : ""} ${selected ? "bg-blue-50" : ""}`}>
+    <tr
+      className={`border-b ${hasErrors ? "bg-red-50" : hasWarnings ? "bg-amber-50" : ""} ${selected ? "bg-blue-50" : ""} cursor-pointer`}
+      onClick={() => onOpenDetail?.()}
+    >
       <td className="p-2">
         {onToggle && (
-          <Checkbox checked={selected || false} onCheckedChange={() => onToggle(pos.id)} />
+          <Checkbox checked={selected || false} onCheckedChange={() => onToggle(pos.id)} onClick={(e) => e.stopPropagation()} />
         )}
       </td>
       <td className="p-2 text-sm">
@@ -380,6 +392,7 @@ function PositionRow({ pos, onApprove, onDelete, selected, onToggle, routes, onA
       <td className="p-2 text-sm">{qtyStr}</td>
       <td className="p-2 text-sm min-w-[200px]">
         {routes && onAssignRoute ? (
+          <div onClick={(e) => e.stopPropagation()}>
           <Combobox
             options={[{ label: "— Снять маршрут —", value: "__clear__" }, ...routes.map(r => ({ label: r.name, value: String(r.id) }))]}
             value={pos.route_id ? String(pos.route_id) : undefined}
@@ -406,6 +419,7 @@ function PositionRow({ pos, onApprove, onDelete, selected, onToggle, routes, onA
               </span>
             }
           />
+          </div>
         ) : pos.route_name ? (
           <span className="inline-flex items-center gap-1 text-blue-700" title={`Маршрут #${pos.route_id} ${routeSourceLabel}`}>
             <Route className="h-3 w-3" />
@@ -449,13 +463,13 @@ function PositionRow({ pos, onApprove, onDelete, selected, onToggle, routes, onA
               <Button variant="ghost" size="sm" className="h-6 text-xs text-green-700 hover:text-green-800" onClick={handleApproveClick} disabled={approving}>
                 Утвердить
               </Button>
-              <Button variant="ghost" size="sm" className="h-6 text-xs text-red-600 hover:text-red-700" onClick={() => onDelete(pos.id, pos.production_plan_id)} disabled={approving}>
+              <Button variant="ghost" size="sm" className="h-6 text-xs text-red-600 hover:text-red-700" onClick={handleDeleteClick} disabled={approving}>
                 Удалить
               </Button>
             </>
           )}
           {!canApprove && (
-            <Button variant="ghost" size="sm" className="h-6 text-xs text-red-600 hover:text-red-700" onClick={() => onDelete(pos.id, pos.production_plan_id)}>
+            <Button variant="ghost" size="sm" className="h-6 text-xs text-red-600 hover:text-red-700" onClick={handleDeleteClick}>
               Удалить
             </Button>
           )}
@@ -527,6 +541,13 @@ export function PlanPage() {
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set())
   const [selectedRouteId, setSelectedRouteId] = useState<string>("")
   const [assigningRoute, setAssigningRoute] = useState(false)
+  const [detailPosition, setDetailPosition] = useState<PlanPositionOut | null>(null)
+  const [detailOpen, setDetailOpen] = useState(false)
+
+  const openDetail = (pos: PlanPositionOut) => {
+    setDetailPosition(pos)
+    setDetailOpen(true)
+  }
 
   const { data: plans } = useQuery({ queryKey: ["plans"], queryFn: listPlans })
   const activePlan = plans && plans.length > 0 ? plans[0] : null
@@ -534,7 +555,11 @@ export function PlanPage() {
   const { data: routes } = useQuery({ queryKey: ["routes"], queryFn: () => listRoutes() })
   const activeRoutes = routes?.filter(r => r.is_active) ?? []
 
+  const { data: templates } = useQuery({ queryKey: ["import-templates"], queryFn: listImportTemplates })
+  const activeTemplates = (templates ?? []).filter(t => t.is_active).sort((a, b) => a.sort_order - b.sort_order)
+
   const [filterStatus, setFilterStatus] = useState<"all" | "draft" | "valid" | "invalid">("all")
+  const [templateImportOpen, setTemplateImportOpen] = useState<number | null>(null)
 
   const handleSuccess = () => {
     queryClient.invalidateQueries({ queryKey: ["plans"] })
@@ -677,7 +702,13 @@ export function PlanPage() {
           <h1 className="page-title">План</h1>
           <p className="page-subtitle">Импорт производственного плана из Excel и запуск в производство.</p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex gap-2 flex-wrap">
+          {activeTemplates.map(t => (
+            <Button key={t.id} variant="secondary" onClick={() => setTemplateImportOpen(t.id)}>
+              <FileSpreadsheet className="h-4 w-4 mr-2" />
+              {t.button_label || t.name}
+            </Button>
+          ))}
           <Button variant="outline" onClick={() => setTestImportOpen(true)}>
             <Beaker className="h-4 w-4 mr-2" />
             Тестовый импорт
@@ -847,7 +878,7 @@ export function PlanPage() {
                     </tr>
                   </thead>
                   <tbody>
-                    {filteredPositions.map(p => <PositionRow key={p.id} pos={p} onApprove={handleApprove} onDelete={handleDelete} selected={selectedIds.has(p.id)} onToggle={toggleSelect} routes={activeRoutes} onAssignRoute={handleAssignRouteSingle} />)}
+                    {filteredPositions.map(p => <PositionRow key={p.id} pos={p} onApprove={handleApprove} onDelete={handleDelete} selected={selectedIds.has(p.id)} onToggle={toggleSelect} routes={activeRoutes} onAssignRoute={handleAssignRouteSingle} onOpenDetail={() => openDetail(p)} />)}
                   </tbody>
                 </table>
               </div>
@@ -862,6 +893,25 @@ export function PlanPage() {
 
       <ImportWizard open={importOpen} onClose={() => setImportOpen(false)} onSuccess={handleSuccess} productionPlanId={activePlan?.id} />
       <ImportWizard open={testImportOpen} onClose={() => setTestImportOpen(false)} onSuccess={handleSuccess} mode="test" productionPlanId={activePlan?.id} />
+
+      {activeTemplates.map(t => (
+        <ImportWizard
+          key={t.id}
+          open={templateImportOpen === t.id}
+          onClose={() => setTemplateImportOpen(null)}
+          onSuccess={handleSuccess}
+          productionPlanId={activePlan?.id}
+          templateId={t.id}
+        />
+      ))}
+
+      <RowDetailsSidePanel
+        open={detailOpen}
+        onOpenChange={setDetailOpen}
+        data={detailPosition ? adaptPlanPositionOut(detailPosition) : null}
+        title="Детализация позиции плана"
+        description="Маршрут, ошибки и предупреждения по выбранной позиции"
+      />
     </>
   )
 }

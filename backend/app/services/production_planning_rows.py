@@ -265,4 +265,5 @@ async def get_production_planning_row_detail(db: AsyncSession, position_id: int)
         "not_started": not has_tasks,
         "route_snapshot": route_snapshot,
         "stages": steps_data,
+        "raw_excel_row": (pos.source_payload or {}).get("raw_excel_row"),
     }
