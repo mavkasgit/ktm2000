@@ -9,15 +9,13 @@ from pathlib import Path
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException
-from fastapi.security import HTTPAuthorizationCredentials
 from openpyxl import Workbook
 from pydantic import BaseModel
 from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import get_current_user, bearer_scheme
+from app.api.deps import get_current_user
 from app.core.database import get_db
-from app.core.security import get_password_hash
 from app.models.internal_plan import SectionPlanLine
 from app.models.imports import ImportBatchMode
 from app.models.movement import Movement, MovementType
@@ -32,7 +30,7 @@ from app.models.production_plan import (
 from app.models.route import ProductionRoute, RouteStep
 from app.models.section import Section
 from app.models.techcard import Techcard
-from app.models.user import User, UserRole
+from app.models.user import User
 from app.models.work_task import WorkTask
 from app.services.plan_generation import create_release_batch, release_batch
 from app.services.plan_import_service import create_excel_import_change_set
@@ -245,29 +243,8 @@ async def _collect_tasks_for_position(db: AsyncSession, plan_position_id: int) -
 async def run_full_route_test(
     payload: FullRouteRunRequest,
     db: AsyncSession = Depends(get_db),
-    credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
+    current_user: User = Depends(get_current_user),
 ) -> FullRouteRunResponse:
-    current_user: User | None = None
-    if credentials is not None:
-        try:
-            current_user = await get_current_user(credentials, db)
-        except HTTPException:
-            pass  # Allow unauthenticated access in dev mode
-
-    # Fallback to first active user when no auth provided (dev mode)
-    if current_user is None:
-        current_user = await db.scalar(select(User).where(User.is_active).limit(1))
-        if current_user is None:
-            # Dev bootstrap: keep demo orchestration runnable on a clean DB.
-            current_user = User(
-                email="demo-operator@local",
-                password_hash=get_password_hash("demo-operator"),
-                full_name="Demo Operator",
-                role=UserRole.operator,
-                is_active=True,
-            )
-            db.add(current_user)
-            await db.flush()
     if payload.initial_quantity <= 0:
         raise HTTPException(status_code=400, detail="initial_quantity must be > 0")
 
