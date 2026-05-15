@@ -23,6 +23,7 @@ class ProductionRoute(Base):
     __tablename__ = "production_routes"
 
     id: Mapped[int] = mapped_column(BigInteger, Identity(always=True), primary_key=True)
+    code: Mapped[str | None] = mapped_column(String(100), nullable=True, unique=True)
     name: Mapped[str] = mapped_column(String(255), nullable=False, unique=True)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default=text("true"))
@@ -105,8 +106,28 @@ class RouteSelectionRule(Base):
     id: Mapped[int] = mapped_column(BigInteger, Identity(always=True), primary_key=True)
     code: Mapped[str | None] = mapped_column(String(100), nullable=True, unique=True)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
+    profile_id: Mapped[int | None] = mapped_column(ForeignKey("route_rule_profiles.id"), nullable=True)
     priority: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"), default=0)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("true"), default=True)
     conditions: Mapped[list] = mapped_column(JSONB, nullable=False, server_default=text("'[]'::jsonb"), default=list)
     actions: Mapped[list] = mapped_column(JSONB, nullable=False, server_default=text("'[]'::jsonb"), default=list)
     created_at: Mapped[None] = mapped_column(DateTime, server_default=func.now())
+
+    profile: Mapped["RouteRuleProfile | None"] = relationship("RouteRuleProfile", back_populates="rules")
+
+
+class RouteRuleProfile(Base):
+    __tablename__ = "route_rule_profiles"
+
+    id: Mapped[int] = mapped_column(BigInteger, Identity(always=True), primary_key=True)
+    code: Mapped[str] = mapped_column(String(100), nullable=False, unique=True)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("true"), default=True)
+    priority: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"), default=0)
+    import_template_id: Mapped[int | None] = mapped_column(ForeignKey("import_templates.id"), nullable=True)
+    excel_column_passport: Mapped[list] = mapped_column(JSONB, nullable=False, server_default=text("'[]'::jsonb"), default=list)
+    excel_passport_meta: Mapped[dict] = mapped_column(JSONB, nullable=False, server_default=text("'{}'::jsonb"), default=dict)
+    created_at: Mapped[None] = mapped_column(DateTime, server_default=func.now())
+
+    rules: Mapped[list["RouteSelectionRule"]] = relationship("RouteSelectionRule", back_populates="profile", lazy="selectin")
+    import_template: Mapped["ImportTemplate | None"] = relationship("ImportTemplate")
