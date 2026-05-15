@@ -17,3 +17,5 @@ export { Toaster } from "./toaster";
 export { toast, type ToastVariant, type ToastData } from "./use-toast";
 export { DatePicker } from "./date-picker";
 export type { DatePickerProps } from "./date-picker";
+export { DateTimePicker } from "./DateTimePicker";
+export type { DateTimePickerProps } from "./DateTimePicker";

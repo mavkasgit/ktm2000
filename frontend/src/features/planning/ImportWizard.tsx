@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState, Fragment } from "react"
 import { Check, ExternalLink, Upload, ChevronRight, ChevronDown } from "lucide-react"
 import { useNavigate } from "react-router-dom"
 import { uploadExcel, applyChangeSet, discardImport, runDemoFullRoute } from "./api"
@@ -208,9 +208,8 @@ function RawPreviewTable({ rows, sortConfig, onSort, expanded }: RawPreviewTable
           const routeMeta = buildRouteMetaLabel(row as Record<string, unknown>);
           const isExpanded = expanded || expandedRows.has(idx);
           return (
-            <>
+            <Fragment key={idx}>
             <tr
-              key={idx}
               className="border-b cursor-pointer"
               style={{
                 background: status === "invalid" ? "#fef2f2" : status === "warning" ? "#fffbeb" : undefined,
@@ -251,7 +250,7 @@ function RawPreviewTable({ rows, sortConfig, onSort, expanded }: RawPreviewTable
                 </td>
               </tr>
             )}
-            </>
+            </Fragment>
           );
         })}
       </tbody>

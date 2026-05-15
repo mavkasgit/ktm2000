@@ -354,7 +354,7 @@ async def transfer_send(
     db: AsyncSession,
     *,
     from_task_id: int,
-    to_task_id: int,
+    to_task_id: int | None = None,
     quantity: Decimal,
     actor_id: int,
     comment: str | None = None,
@@ -369,13 +369,52 @@ async def transfer_send(
             return {"transfer_id": existing.id, "transfer_no": existing.transfer_no, "status": existing.status.value, "idempotent_replay": True}
 
     from_task = await _get_task(db, from_task_id)
-    to_task = await _get_task(db, to_task_id)
+    from_line = await db.get(SectionPlanLine, from_task.section_plan_line_id)
+    if from_line is None:
+        raise ValueError("Source task plan line not found")
+
+    # Find next section plan line
+    next_line = await db.scalar(
+        select(SectionPlanLine).where(
+            SectionPlanLine.plan_position_id == from_line.plan_position_id,
+            SectionPlanLine.sequence == from_line.sequence + 1,
+        )
+    )
+    if next_line is None:
+        raise ValueError("Next route step not found")
+
+    # Find or create target task
+    if to_task_id is not None:
+        to_task = await _get_task(db, to_task_id)
+    else:
+        # Auto-create target task
+        existing_task = await db.scalar(
+            select(WorkTask).where(
+                WorkTask.section_plan_line_id == next_line.id,
+                WorkTask.status.notin_([WorkTaskStatus.completed, WorkTaskStatus.cancelled]),
+            )
+        )
+        if existing_task:
+            to_task = existing_task
+        else:
+            to_task = WorkTask(
+                section_plan_line_id=next_line.id,
+                section_id=next_line.section_id,
+                product_id=next_line.product_id,
+                route_step_id=next_line.route_step_id,
+                planned_quantity=from_line.planned_quantity,
+                status=WorkTaskStatus.waiting_previous,
+                due_date=next_line.due_date,
+            )
+            db.add(to_task)
+            await db.flush()
+            await _refresh_task_cache(db, to_task.id)
+
     if from_task.product_id != to_task.product_id:
         raise ValueError("Transfer tasks must have same product")
 
-    from_line = await db.get(SectionPlanLine, from_task.section_plan_line_id)
     to_line = await db.get(SectionPlanLine, to_task.section_plan_line_id)
-    if from_line is None or to_line is None or from_line.plan_position_id != to_line.plan_position_id:
+    if to_line is None or from_line.plan_position_id != to_line.plan_position_id:
         raise ValueError("Transfer tasks must belong to same plan position")
 
     from_step = await _get_route_step(db, from_task.route_step_id)
@@ -426,7 +465,12 @@ async def transfer_send(
 
     await _refresh_task_cache(db, from_task.id)
     await _refresh_section_plan_line_cache(db, from_task.section_plan_line_id)
-    return {"transfer_id": transfer.id, "transfer_no": transfer.transfer_no, "status": transfer.status.value}
+    return {
+        "transfer_id": transfer.id,
+        "transfer_no": transfer.transfer_no,
+        "status": transfer.status.value,
+        "to_task_id": to_task.id,
+    }
 
 
 async def transfer_receive(
@@ -1251,6 +1295,8 @@ async def prepare_section_task(
     )
     db.add(task)
     await db.flush()
+    await _refresh_task_cache(db, task.id)
+    await _refresh_section_plan_line_cache(db, task.section_plan_line_id)
     return {"task_id": task.id, "status": task.status.value}
 
 

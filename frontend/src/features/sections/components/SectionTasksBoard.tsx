@@ -135,8 +135,7 @@ export function SectionTasksBoard({
                           variant="outline"
                           className="min-h-[32px]"
                           onClick={() => onAction("send", task)}
-                          disabled={!task.next_task_id}
-                          title={task.next_task_id ? `Следующий этап: ${task.next_operation_name || "—"}` : "Следующий этап не создан"}
+                          title={task.next_task_id ? `Следующий этап: ${task.next_operation_name || "—"}` : "Задача следующего этапа будет создана"}
                         >
                           <Send size={14} />
                         </Button>
@@ -194,7 +193,6 @@ export function SectionTasksBoard({
                     variant="outline"
                     className="min-h-[36px] px-3"
                     onClick={() => onAction("send", task)}
-                    disabled={!task.next_task_id}
                   >
                     <Send size={14} />
                   </Button>

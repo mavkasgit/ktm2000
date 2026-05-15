@@ -147,7 +147,7 @@ export type IssueTaskInput = {
 
 export type TransferSendInput = {
   from_task_id: number;
-  to_task_id: number;
+  to_task_id?: number;
   quantity: number | string;
   comment?: string;
   idempotency_key?: string;

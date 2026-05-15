@@ -99,7 +99,7 @@ class CompletePayload(BaseModel):
 
 class CreateTransferPayload(BaseModel):
     from_task_id: int
-    to_task_id: int
+    to_task_id: int | None = None
     quantity: Decimal
     comment: str | None = None
     idempotency_key: str | None = None

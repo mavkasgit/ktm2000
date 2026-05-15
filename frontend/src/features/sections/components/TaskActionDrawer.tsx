@@ -6,6 +6,7 @@ import {
   Badge,
   Button,
   Checkbox,
+  DateTimePicker,
   Dialog,
   DialogContent,
   DialogDescription,
@@ -51,10 +52,14 @@ type TaskActionDrawerProps = {
   setDefectQty: Dispatch<SetStateAction<string>>;
   timesMatch: boolean;
   onTimesMatchChange: (checked: boolean) => void;
-  performedAt: string;
-  onPerformedAtChange: (value: string) => void;
-  accountedAt: string;
-  setAccountedAt: Dispatch<SetStateAction<string>>;
+  performedDate: string;
+  setPerformedDate: Dispatch<SetStateAction<string>>;
+  performedTime: string;
+  setPerformedTime: Dispatch<SetStateAction<string>>;
+  accountedDate: string;
+  setAccountedDate: Dispatch<SetStateAction<string>>;
+  accountedTime: string;
+  setAccountedTime: Dispatch<SetStateAction<string>>;
   actionComment: string;
   setActionComment: Dispatch<SetStateAction<string>>;
   pending: boolean;
@@ -73,10 +78,14 @@ export function TaskActionDrawer({
   setDefectQty,
   timesMatch,
   onTimesMatchChange,
-  performedAt,
-  onPerformedAtChange,
-  accountedAt,
-  setAccountedAt,
+  performedDate,
+  setPerformedDate,
+  performedTime,
+  setPerformedTime,
+  accountedDate,
+  setAccountedDate,
+  accountedTime,
+  setAccountedTime,
   actionComment,
   setActionComment,
   pending,
@@ -112,7 +121,7 @@ export function TaskActionDrawer({
               </div>
               {type === "send" && !task.next_task_id && (
                 <div className="mt-2">
-                  <Badge variant="destructive">Следующий этап не создан</Badge>
+                  <Badge variant="secondary">Задача следующего этапа будет создана автоматически</Badge>
                 </div>
               )}
             </div>
@@ -176,20 +185,27 @@ export function TaskActionDrawer({
             </div>
           )}
 
-          <div>
-            <label className="text-sm font-medium">Время сдачи</label>
-            <Input type="datetime-local" value={performedAt} onChange={(e) => onPerformedAtChange(e.target.value)} />
-          </div>
+          <DateTimePicker
+            date={performedDate}
+            time={performedTime}
+            onDateChange={setPerformedDate}
+            onTimeChange={setPerformedTime}
+            label="Время сдачи"
+          />
 
           <div className="flex items-center gap-2">
             <Checkbox checked={timesMatch} onCheckedChange={(c) => onTimesMatchChange(!!c)} id="times-match-action" />
             <label htmlFor="times-match-action" className="text-sm">Время сдачи = Время учета</label>
           </div>
 
-          <div>
-            <label className="text-sm font-medium">Время учета</label>
-            <Input type="datetime-local" value={accountedAt} onChange={(e) => setAccountedAt(e.target.value)} disabled={timesMatch} />
-          </div>
+          <DateTimePicker
+            date={accountedDate}
+            time={accountedTime}
+            onDateChange={setAccountedDate}
+            onTimeChange={setAccountedTime}
+            label="Время учета"
+            disabled={timesMatch}
+          />
 
           <div>
             <label className="text-sm font-medium">Комментарий</label>

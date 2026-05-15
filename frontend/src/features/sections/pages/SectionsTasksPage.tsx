@@ -52,6 +52,15 @@ function nowLocalDateTime(): string {
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
 }
 
+function nowLocalDateTimeParts(): { date: string; time: string } {
+  const d = new Date();
+  const p = (v: number) => String(v).padStart(2, "0");
+  return {
+    date: `${p(d.getDate())}.${p(d.getMonth() + 1)}.${d.getFullYear()}`,
+    time: `${p(d.getHours())}:${p(d.getMinutes())}`,
+  };
+}
+
 function makeIdempotencyKey(prefix: string): string {
   if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
     return `${prefix}-${crypto.randomUUID()}`;
@@ -99,8 +108,10 @@ export function SectionsTasksPage() {
   const [actionQty, setActionQty] = useState("");
   const [defectQty, setDefectQty] = useState("");
   const [timesMatch, setTimesMatch] = useState(true);
-  const [performedAt, setPerformedAt] = useState("");
-  const [accountedAt, setAccountedAt] = useState("");
+  const [performedDate, setPerformedDate] = useState("");
+  const [performedTime, setPerformedTime] = useState("");
+  const [accountedDate, setAccountedDate] = useState("");
+  const [accountedTime, setAccountedTime] = useState("");
   const [actionComment, setActionComment] = useState("");
 
   const { data: me } = useQuery({
@@ -291,11 +302,13 @@ export function SectionsTasksPage() {
   });
 
   const openActionDialog = useCallback((type: TaskActionDialogType, task: SectionBoardTask) => {
-    const now = nowLocalDateTime();
+    const now = nowLocalDateTimeParts();
     setActionDialog({ open: true, type, task });
     setTimesMatch(true);
-    setPerformedAt(now);
-    setAccountedAt(now);
+    setPerformedDate(now.date);
+    setPerformedTime(now.time);
+    setAccountedDate(now.date);
+    setAccountedTime(now.time);
     setActionComment("");
     setConflictHint(null);
     if (type === "complete") {
@@ -314,17 +327,12 @@ export function SectionsTasksPage() {
   const handleTimesMatchChange = useCallback(
     (checked: boolean) => {
       setTimesMatch(checked);
-      if (checked) setAccountedAt(performedAt);
+      if (checked) {
+        setAccountedDate(performedDate);
+        setAccountedTime(performedTime);
+      }
     },
-    [performedAt]
-  );
-
-  const handlePerformedAtChange = useCallback(
-    (value: string) => {
-      setPerformedAt(value);
-      if (timesMatch) setAccountedAt(value);
-    },
-    [timesMatch]
+    [performedDate, performedTime]
   );
 
   const submitAction = useCallback(() => {
@@ -332,8 +340,14 @@ export function SectionsTasksPage() {
     if (!task) return;
 
     const qty = parseFloat(actionQty || "0");
-    const effectivePerformedAt = performedAt || nowLocalDateTime();
-    const effectiveAccountedAt = accountedAt || effectivePerformedAt;
+    const toIsoDateTime = (dateStr: string, timeStr: string): string => {
+      if (!dateStr || !timeStr) return nowLocalDateTime();
+      const [dd, mm, yyyy] = dateStr.split(".");
+      const [hh, min] = timeStr.split(":");
+      return `${yyyy}-${mm}-${dd}T${hh}:${min}`;
+    };
+    const effectivePerformedAt = toIsoDateTime(performedDate, performedTime);
+    const effectiveAccountedAt = toIsoDateTime(accountedDate, accountedTime) || effectivePerformedAt;
     const executorUserId = me?.id;
 
     if (!(qty > 0)) {
@@ -391,11 +405,6 @@ export function SectionsTasksPage() {
       return;
     }
 
-    if (!task.next_task_id) {
-      toast({ title: "Ошибка", description: "Не найдено задание следующего этапа", variant: "destructive" });
-      setConflictHint("Для передачи необходимо создать следующий этап маршрута.");
-      return;
-    }
     const transferable = Math.max(0, parseFloat(task.cache.completed_quantity) - parseFloat(task.cache.transferred_quantity));
     if (Number.isFinite(transferable) && qty > transferable) {
       setConflictHint(`Количество передачи больше доступного (${fmtQty(String(transferable))}).`);
@@ -403,7 +412,6 @@ export function SectionsTasksPage() {
     }
     sendMutation.mutate({
       from_task_id: task.id,
-      to_task_id: task.next_task_id,
       quantity: String(qty),
       comment: actionComment || undefined,
       idempotency_key: makeIdempotencyKey("send"),
@@ -414,8 +422,10 @@ export function SectionsTasksPage() {
   }, [
     actionDialog,
     actionQty,
-    performedAt,
-    accountedAt,
+    performedDate,
+    performedTime,
+    accountedDate,
+    accountedTime,
     me?.id,
     issueMutation,
     completeMutation,
@@ -652,10 +662,14 @@ export function SectionsTasksPage() {
         setDefectQty={setDefectQty}
         timesMatch={timesMatch}
         onTimesMatchChange={handleTimesMatchChange}
-        performedAt={performedAt}
-        onPerformedAtChange={handlePerformedAtChange}
-        accountedAt={accountedAt}
-        setAccountedAt={setAccountedAt}
+        performedDate={performedDate}
+        setPerformedDate={setPerformedDate}
+        performedTime={performedTime}
+        setPerformedTime={setPerformedTime}
+        accountedDate={accountedDate}
+        setAccountedDate={setAccountedDate}
+        accountedTime={accountedTime}
+        setAccountedTime={setAccountedTime}
         actionComment={actionComment}
         setActionComment={setActionComment}
         pending={pendingMutation}
