@@ -4,6 +4,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.product import Product
+from app.models.imports import ImportBatch
 from app.models.production_plan import PlanPosition
 from app.models.route import RouteStep
 from app.models.section import Section
@@ -34,8 +35,11 @@ async def validate_route_match(db: AsyncSession, position: PlanPosition) -> list
     if route_info.source == "manual" or route_info.route_origin == "manual_confirmed":
         return []
 
+    import_batch = await db.get(ImportBatch, position.import_batch_id) if position.import_batch_id is not None else None
+    rule_profile_id = import_batch.rule_profile_id if import_batch is not None else None
+
     product = await db.get(Product, position.product_id)
-    selection = await select_route_for_payload(db, position.source_payload, product)
+    selection = await select_route_for_payload(db, position.source_payload, product, profile_id=rule_profile_id)
     if selection.error == "route_rule_conflict":
         return ["route_rule_conflict"]
 

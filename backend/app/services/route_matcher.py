@@ -7,6 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.product import Product
+from app.models.imports import ImportBatch
 from app.models.production_plan import (
     PlanPosition,
     PlanPositionRouteMatchQuality,
@@ -42,6 +43,7 @@ class ResolvedRouteInfo:
     excluded_sections: list[dict] = field(default_factory=list)
     candidate_routes: list[RouteCandidateDiagnostic] = field(default_factory=list)
     selected_route_id: int | None = None
+    condition_diagnostics: list[dict] = field(default_factory=list)
 
 
 def signature_from_position(position: PlanPosition) -> RouteSignature | None:
@@ -167,8 +169,11 @@ async def resolve_position_route(
             signature=signature_from_position(position),
         )
 
+    import_batch = await db.get(ImportBatch, position.import_batch_id) if position.import_batch_id is not None else None
+    rule_profile_id = import_batch.rule_profile_id if import_batch is not None else None
+
     product = await db.get(Product, position.product_id) if position.product_id is not None else None
-    selection = await select_route_for_payload(db, position.source_payload, product)
+    selection = await select_route_for_payload(db, position.source_payload, product, profile_id=rule_profile_id)
     if selection.route is None:
         return ResolvedRouteInfo(
             route_id=None,
@@ -186,6 +191,7 @@ async def resolve_position_route(
             excluded_sections=selection.excluded_sections,
             candidate_routes=selection.candidate_routes,
             selected_route_id=None,
+            condition_diagnostics=selection.condition_diagnostics,
         )
     return ResolvedRouteInfo(
         route_id=selection.route.id,
@@ -203,4 +209,5 @@ async def resolve_position_route(
         excluded_sections=selection.excluded_sections,
         candidate_routes=selection.candidate_routes,
         selected_route_id=selection.route.id,
+        condition_diagnostics=selection.condition_diagnostics,
     )

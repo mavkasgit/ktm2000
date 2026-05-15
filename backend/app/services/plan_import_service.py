@@ -35,7 +35,7 @@ from app.services.excel_import import (
     sha256_bytes,
     validate_excel_extension,
 )
-from app.services.route_selection import select_route_for_payload
+from app.services.route_selection import load_selection_rules_for_profile, select_route_for_payload
 from app.services.routing_signature import canonical_signature_from_payload, normalize_pack_op_family
 
 
@@ -69,7 +69,9 @@ async def preview_excel_sheet(
                 break
 
         signature = canonical_signature_from_payload(row.payload)
-        selection = await select_route_for_payload(db, row.payload, product)
+        selection = await select_route_for_payload(
+            db, row.payload, product, template_column_mapping=column_mapping,
+        )
         route = selection.route
 
         if route is None:
@@ -125,6 +127,8 @@ async def create_excel_import_change_set(
     plan_version: str | None = None,
     column_mapping: dict | None = None,
     row_selection: str | None = None,
+    template_id: int | None = None,
+    rule_profile_id: int | None = None,
 ) -> dict:
     extension = validate_excel_extension(filename)
     file_hash = sha256_bytes(content)
@@ -194,15 +198,34 @@ async def create_excel_import_change_set(
     import_batch = ImportBatch(
         source_file_id=import_file.id,
         production_plan_id=production_plan.id,
+        template_id=template_id,
+        rule_profile_id=rule_profile_id,
         mode=mode,
         sheet_name=parsed.sheet_name,
         header_row_number=parsed.header_row_number,
         total_rows=parsed.total_rows,
         parsed_rows=len(parsed.parsed_rows),
         summary=summary,
+        rules_snapshot=[],
     )
     db.add(import_batch)
     await db.flush()
+
+    # Persist deterministic rule snapshot used for this import run.
+    snapshot_rules = await load_selection_rules_for_profile(db, profile_id=rule_profile_id)
+    import_batch.rules_snapshot = [
+        {
+            "id": rule.id,
+            "code": rule.code,
+            "name": rule.name,
+            "profile_id": rule.profile_id,
+            "priority": rule.priority,
+            "is_active": rule.is_active,
+            "conditions": rule.conditions or [],
+            "actions": rule.actions or [],
+        }
+        for rule in snapshot_rules
+    ]
 
     change_set = PlanChangeSet(
         production_plan_id=production_plan.id,
@@ -224,18 +247,33 @@ async def create_excel_import_change_set(
         ).scalars().all()
 
     products_by_sku = await _load_products_by_sku(db)
-    item_payloads = await _make_change_items(
-        db, change_set.id, parsed.parsed_rows, products_by_sku, mode, existing_positions
+    item_payloads, route_selection_diagnostics = await _make_change_items(
+        db,
+        change_set.id,
+        parsed.parsed_rows,
+        products_by_sku,
+        mode,
+        existing_positions,
+        rule_profile_id,
+        template_id=template_id,
+        template_column_mapping=column_mapping,
     )
     for item in item_payloads:
         db.add(item)
     await db.flush()
+
+    # Update batch with diagnostics
+    import_batch.route_selection_diagnostics = route_selection_diagnostics
 
     return {
         "import_file_id": import_file.id,
         "import_batch_id": import_batch.id,
         "production_plan_id": production_plan.id,
         "change_set_id": change_set.id,
+        "template_id": import_batch.template_id,
+        "rule_profile_id": import_batch.rule_profile_id,
+        "rules_snapshot": import_batch.rules_snapshot,
+        "route_selection_diagnostics": import_batch.route_selection_diagnostics,
         "sheet_name": parsed.sheet_name,
         "header_row_number": parsed.header_row_number,
         "summary": summary,
@@ -346,7 +384,10 @@ async def _make_change_items(
     products_by_sku: dict[str, Product],
     mode: ImportBatchMode,
     existing_positions: list[PlanPosition],
-) -> list[PlanChangeItem]:
+    rule_profile_id: int | None = None,
+    template_id: int | None = None,
+    template_column_mapping: dict | None = None,
+) -> tuple[list[PlanChangeItem], dict]:
     available_by_sku = _build_available_inputs_by_sku(parsed_rows)
     by_fingerprint: dict[str, PlanPosition] = {}
     by_row_hash: dict[str, PlanPosition] = {}
@@ -439,8 +480,16 @@ async def _make_change_items(
         row.payload["normalized_pack_op_family"] = normalized_pack_op_family
 
         signature = canonical_signature_from_payload(row.payload)
-        selection = await select_route_for_payload(db, row.payload, product)
+        selection = await select_route_for_payload(
+            db, row.payload, product, profile_id=rule_profile_id,
+            template_column_mapping=template_column_mapping,
+        )
         route = selection.route
+        excel_condition_diagnostics = [
+            diagnostic
+            for diagnostic in selection.condition_diagnostics
+            if diagnostic.get("source") == "excel"
+        ]
 
         if route is None:
             errors.append(selection.error or "no_route_candidate")
@@ -483,6 +532,14 @@ async def _make_change_items(
             "route_match_reason": route_match_reason,
             "route_assigned_at": route_assigned_at,
             "route_manual_confirmed_at": None,
+            "route_selection": {
+                "matched_rule_ids": selection.matched_rule_ids,
+                "required_sections": selection.required_sections,
+                "excluded_sections": selection.excluded_sections,
+                "selected_route_id": route.id if route else None,
+                "route_match_reason": selection.route_match_reason,
+                "excel_column_diagnostics": excel_condition_diagnostics,
+            },
             "operation_family": signature.operation_family.value if signature else None,
             "output_kind": signature.output_kind.value if signature else None,
             "has_pack_ops": signature.has_pack_ops if signature else None,
@@ -618,7 +675,33 @@ async def _make_change_items(
                     )
                 )
 
-    return items
+    route_selection_diagnostics = {
+        "template_id": template_id,
+        "profile_id": rule_profile_id,
+        "total_rows": len(parsed_rows),
+        "matched_count": sum(1 for item in items if item.after_data and item.after_data.get("route_id")),
+        "unmatched_count": sum(1 for item in items if item.after_data and not item.after_data.get("route_id")),
+        "excel_diagnostics": {
+            "conditions_evaluated": sum(
+                len((item.after_data or {}).get("route_selection", {}).get("excel_column_diagnostics", []))
+                for item in items
+            ),
+            "header_mismatch_count": sum(
+                1
+                for item in items
+                for diagnostic in ((item.after_data or {}).get("route_selection", {}).get("excel_column_diagnostics", []))
+                if "excel_header_mismatch" in (diagnostic.get("issues") or [])
+            ),
+            "fallback_used_count": sum(
+                1
+                for item in items
+                for diagnostic in ((item.after_data or {}).get("route_selection", {}).get("excel_column_diagnostics", []))
+                if diagnostic.get("resolved_by") in {"header_fallback", "explicit_header"}
+            ),
+        },
+    }
+
+    return items, route_selection_diagnostics
 
 
 def _serialize_item(item: PlanChangeItem) -> dict:

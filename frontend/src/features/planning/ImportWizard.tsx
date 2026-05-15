@@ -8,6 +8,7 @@ import { useQuery } from "@tanstack/react-query"
 import { listRoutes, getRoute, type ProductionRoute, type RouteStep } from "@/shared/api/routes"
 import { listTechcards, type Techcard } from "@/shared/api/techcards"
 import { listProducts, type Product } from "@/shared/api/products"
+import { listImportTemplates, type ImportTemplate } from "@/shared/api/importTemplates"
 import { getErrorMessage } from "@/shared/api/client"
 import {
   Dialog,
@@ -266,6 +267,7 @@ export function ImportWizard(props: {
   onSuccess: (planId: string, changeSetId: string) => void
   mode?: "normal" | "test"
   productionPlanId?: number
+  templateId?: number
 }) {
   const [step, setStep] = useState<"upload" | "preview" | "result">("upload")
   const [file, setFile] = useState<File | null>(null)
@@ -292,6 +294,7 @@ export function ImportWizard(props: {
   const [pendingChangeSet, setPendingChangeSet] = useState<{ planId: string; changeSetId: string } | null>(null)
   const [showCloseConfirm, setShowCloseConfirm] = useState(false)
   const [showRawRows, setShowRawRows] = useState(false)
+  const [activeTemplateId, setActiveTemplateId] = useState<number | null>(props.templateId ?? null)
 
   const fileInputRef = useRef<HTMLInputElement>(null)
   const navigate = useNavigate()
@@ -316,6 +319,11 @@ export function ImportWizard(props: {
     queryFn: () => getRoute(Number(testRouteId)),
     enabled: props.open && props.mode === "test" && !!testRouteId && stagePreset === "to_step_ready",
   })
+  const { data: templates } = useQuery<ImportTemplate[]>({
+    queryKey: ["import-templates", "import-modal"],
+    queryFn: listImportTemplates,
+    enabled: props.open && props.mode !== "test",
+  })
 
   useEffect(() => {
     if (props.mode !== "test") return
@@ -332,6 +340,20 @@ export function ImportWizard(props: {
       setTestRouteId(String(activeRoutes[0].id));
     }
   }, [props.mode, routes, testRouteId])
+
+  useEffect(() => {
+    if (!props.open || props.mode === "test") return
+    setActiveTemplateId(props.templateId ?? null)
+  }, [props.open, props.mode, props.templateId])
+
+  const activeTemplates = useMemo(
+    () => (templates ?? []).filter((template) => template.is_active).sort((a, b) => a.sort_order - b.sort_order || a.id - b.id),
+    [templates],
+  )
+  const selectedTemplate = useMemo(
+    () => activeTemplates.find((template) => template.id === activeTemplateId) ?? null,
+    [activeTemplates, activeTemplateId],
+  )
 
   // Preview for the currently selected sheet
   const currentPreview = sheetPreviews[selectedSheet] ?? null
@@ -465,6 +487,7 @@ export function ImportWizard(props: {
     setError(null)
     try {
       const uploaded = await uploadExcel(file, {
+        templateId: activeTemplateId ?? undefined,
         productionPlanId: props.productionPlanId,
         planMonth: planMonth || undefined,
         planVersion: planVersion || undefined,
@@ -714,6 +737,30 @@ export function ImportWizard(props: {
               </div>
             ) : (
               <>
+              {activeTemplates.length > 0 && (
+                <div className="grid grid-cols-1 gap-3">
+                  <div>
+                    <label className="text-xs text-muted-foreground">Шаблон импорта</label>
+                    <select
+                      className="h-10 w-full rounded-md border bg-background px-3 text-sm"
+                      value={activeTemplateId ?? ""}
+                      onChange={(e) => setActiveTemplateId(e.target.value ? Number(e.target.value) : null)}
+                    >
+                      <option value="">Без шаблона (только глобальные правила)</option>
+                      {activeTemplates.map((template) => (
+                        <option key={template.id} value={String(template.id)}>
+                          {template.button_label || template.name}
+                        </option>
+                      ))}
+                    </select>
+                    {selectedTemplate && (
+                      <p className="mt-1 text-xs text-muted-foreground">
+                        Профиль правил: {selectedTemplate.profile_name ?? "Глобальные"}
+                      </p>
+                    )}
+                  </div>
+                </div>
+              )}
               {!props.productionPlanId && (
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                   <div>
@@ -797,6 +844,31 @@ export function ImportWizard(props: {
                 {currentPreview ? `${currentPreview.total_rows} строк на листе` : "Загрузка…"}
               </span>
             </div>
+
+            {props.mode !== "test" && activeTemplates.length > 0 && (
+              <div className="flex items-center gap-3 shrink-0">
+                <div className="w-full max-w-md">
+                  <label className="text-xs text-muted-foreground">Шаблон импорта</label>
+                  <select
+                    className="mt-1 h-9 w-full rounded-md border bg-background px-3 text-sm"
+                    value={activeTemplateId ?? ""}
+                    onChange={(e) => setActiveTemplateId(e.target.value ? Number(e.target.value) : null)}
+                  >
+                    <option value="">Без шаблона (только глобальные правила)</option>
+                    {activeTemplates.map((template) => (
+                      <option key={template.id} value={String(template.id)}>
+                        {template.button_label || template.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                {selectedTemplate && (
+                  <span className="text-xs text-muted-foreground pt-4">
+                    Профиль: {selectedTemplate.profile_name ?? "Глобальные"}
+                  </span>
+                )}
+              </div>
+            )}
 
             {/* Summary bar */}
             {currentPreview && (

@@ -7,6 +7,10 @@ export type ExcelImportResponse = {
   import_batch_id: number;
   production_plan_id: number;
   change_set_id: number;
+  template_id: number | null;
+  rule_profile_id: number | null;
+  rules_snapshot: Record<string, unknown>[];
+  route_selection_diagnostics: Record<string, unknown>;
   sheet_name: string;
   header_row_number: number;
   summary: Record<string, unknown>;
@@ -22,13 +26,15 @@ export type ImportExcelInput = {
   plan_version?: string;
   row_selection?: string;
   template_id?: number;
-  column_mapping?: Record<string, string>;
+  column_mapping?: Record<string, string | { header: string; column: string }>;
 };
 
 export type RecentImport = {
   id: number;
   production_plan_id: number;
   change_set_id: number | null;
+  template_id: number | null;
+  rule_profile_id: number | null;
   plan_name: string;
   plan_no: string;
   original_filename: string;
@@ -40,6 +46,7 @@ export type RecentImport = {
   error_count: number;
   warning_count: number;
   summary: Record<string, unknown>;
+  route_selection_diagnostics: Record<string, unknown>;
   created_at: string;
 };
 

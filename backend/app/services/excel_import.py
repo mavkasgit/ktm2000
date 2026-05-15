@@ -100,6 +100,19 @@ def detect_workbook_format(content: bytes, filename: str) -> str:
     return Path(filename).suffix.lower().lstrip(".") or "unknown"
 
 
+def _normalize_column_mapping(mapping: dict[str, Any] | None) -> dict[str, str]:
+    """Normalize column_mapping to dict[str, str], supporting both old (str) and new (object) formats."""
+    if not mapping:
+        return {}
+    result = {}
+    for key, value in mapping.items():
+        if isinstance(value, dict):
+            result[key] = str(value.get("header", key))
+        else:
+            result[key] = str(value)
+    return result
+
+
 def parse_factory_plan_workbook(
     content: bytes,
     filename: str,
@@ -123,7 +136,7 @@ def parse_factory_plan_workbook(
     if not rows:
         raise ValueError("Workbook sheet is empty")
 
-    effective_mapping = {**HEADER_ALIASES, **(column_mapping or {})}
+    effective_mapping = {**HEADER_ALIASES, **_normalize_column_mapping(column_mapping)}
     header_index = _find_header_row(rows, effective_mapping)
     headers = [_cell_text(cell) for cell in rows[header_index]]
     column_map = _build_column_map(headers, effective_mapping)
@@ -252,6 +265,7 @@ def _parse_rows(
     for row_number, row in enumerate(rows[header_index + 1 :], start=header_index + 2):
         raw = {key: _cell(row, index) for key, index in column_map.items()}
         raw_columns = _raw_columns(headers, row)
+        raw_columns_meta = _raw_columns_meta(headers, row)
         sku = _cell_text(raw.get("sku"))
         quantity = _decimal_or_none(raw.get("quantity") or raw.get("output_quantity"))
 
@@ -266,7 +280,16 @@ def _parse_rows(
         if _is_full_context(raw):
             last_full_by_sku[sku] = raw
 
-        candidate = _make_plan_row(row_number, enriched, raw_columns, quantity, period_start, period_end, inherited)
+        candidate = _make_plan_row(
+            row_number,
+            enriched,
+            raw_columns,
+            raw_columns_meta,
+            quantity,
+            period_start,
+            period_end,
+            inherited,
+        )
 
         if parsed and _can_join_as_paired_profile(parsed[-1], candidate):
             _join_paired_component(parsed[-1], candidate)
@@ -303,6 +326,7 @@ def _make_plan_row(
     row_number: int,
     raw: dict[str, Any],
     raw_columns: dict[str, str],
+    raw_columns_meta: list[dict[str, Any]],
     quantity: Decimal,
     period_start: date | None,
     period_end: date | None,
@@ -341,6 +365,7 @@ def _make_plan_row(
         "context_inherited": inherited,
         "paired_profile": False,
         "raw_columns": raw_columns,
+        "raw_columns_meta": raw_columns_meta,
         "raw_excel_row": {k: _cell_text(v) for k, v in raw.items()},
     }
 
@@ -391,6 +416,34 @@ def _raw_columns(headers: list[str], row: list[Any]) -> dict[str, str]:
     return result
 
 
+def _raw_columns_meta(headers: list[str], row: list[Any]) -> list[dict[str, Any]]:
+    result: list[dict[str, Any]] = []
+    for index, header in enumerate(headers):
+        header_text = _cell_text(header)
+        if not header_text:
+            header_text = f"column_{index + 1}"
+        result.append(
+            {
+                "index": index + 1,
+                "letter": _excel_column_letter(index + 1),
+                "header": header_text,
+                "value": _cell_text(_cell(row, index)),
+            }
+        )
+    return result
+
+
+def _excel_column_letter(index: int) -> str:
+    if index <= 0:
+        return ""
+    letters: list[str] = []
+    value = index
+    while value > 0:
+        value, rem = divmod(value - 1, 26)
+        letters.append(chr(ord("A") + rem))
+    return "".join(reversed(letters))
+
+
 def _can_join_as_paired_profile(previous: ParsedPlanRow, current: ParsedPlanRow) -> bool:
     if previous.payload.get("paired_profile"):
         return False
@@ -414,6 +467,10 @@ def _join_paired_component(previous: ParsedPlanRow, current: ParsedPlanRow) -> N
     raw_columns_by_row[str(previous.source_row_numbers[0])] = previous.payload.get("raw_columns") or {}
     raw_columns_by_row[str(current.source_row_numbers[0])] = current.payload.get("raw_columns") or {}
     previous.payload["raw_columns_by_row"] = raw_columns_by_row
+    raw_columns_meta_by_row = dict(previous.payload.get("raw_columns_meta_by_row") or {})
+    raw_columns_meta_by_row[str(previous.source_row_numbers[0])] = previous.payload.get("raw_columns_meta") or []
+    raw_columns_meta_by_row[str(current.source_row_numbers[0])] = current.payload.get("raw_columns_meta") or []
+    previous.payload["raw_columns_meta_by_row"] = raw_columns_meta_by_row
     previous.source_sku = "+".join(component["sku"] for component in previous.payload["components"])
     previous.source_ref = f"rows:{previous.source_row_numbers[0]}-{previous.source_row_numbers[-1]}"
     previous.warnings = [warning for warning in previous.warnings if warning != "product_name_missing"]

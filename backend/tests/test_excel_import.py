@@ -101,6 +101,12 @@ def test_factory_plan_parser_groups_paired_profiles_and_continuations() -> None:
     assert paired.quantity == 300
     assert paired.payload["paired_profile"] is True
     assert [component["sku"] for component in paired.payload["components"]] == ["ЮП-2616", "ЮП-2604"]
+    assert paired.payload["raw_columns_meta"][0]["index"] == 1
+    assert paired.payload["raw_columns_meta"][0]["letter"] == "A"
+    assert paired.payload["raw_columns_meta"][0]["header"] == "Артикул"
+    assert paired.payload["raw_columns_meta"][7]["index"] == 8
+    assert paired.payload["raw_columns_meta"][7]["letter"] == "H"
+    assert paired.payload["raw_columns_meta"][7]["header"] == "Пробивка/сверловка"
 
     continuation = parsed.parsed_rows[2]
     assert continuation.source_row_numbers == [9]

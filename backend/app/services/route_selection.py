@@ -40,12 +40,14 @@ class RouteSelectionResult:
     route_match_reason: str
     route_match_quality: str | None = None
     error: str | None = None
+    condition_diagnostics: list[dict[str, Any]] = field(default_factory=list)
 
 
 def build_route_rule_context(source_payload: dict[str, Any] | None, product: Product | None = None) -> dict[str, Any]:
     payload = source_payload or {}
     return {
         "excel": payload.get("raw_columns") or payload.get("raw_excel_row") or {},
+        "excel_meta": payload.get("raw_columns_meta") or [],
         "payload": payload,
         "product": _product_context(product),
     }
@@ -55,20 +57,19 @@ async def select_route_for_payload(
     db: AsyncSession,
     source_payload: dict[str, Any] | None,
     product: Product | None = None,
+    profile_id: int | None = None,
+    template_column_mapping: dict[str, str] | None = None,
 ) -> RouteSelectionResult:
     context = build_route_rule_context(source_payload, product)
-    rules = (
-        await db.execute(
-            select(RouteSelectionRule)
-            .where(RouteSelectionRule.is_active.is_(True))
-            .order_by(RouteSelectionRule.priority.desc(), RouteSelectionRule.id.asc())
-        )
-    ).scalars().all()
+    if template_column_mapping:
+        context["template_mapping"] = template_column_mapping
+    rules = await load_selection_rules_for_profile(db, profile_id=profile_id)
 
     matched_rule_ids: list[int] = []
     required: set[int] = set()
     excluded: set[int] = set()
     controlled: set[int] = set()
+    condition_diagnostics: list[dict[str, Any]] = []
 
     for rule in rules:
         actions = list(rule.actions or [])
@@ -78,7 +79,18 @@ async def select_route_for_payload(
                 controlled.add(section_id)
 
         conditions = list(rule.conditions or [])
-        if not _conditions_match(context, conditions):
+        conditions_matched = True
+        for condition_index, condition in enumerate(conditions):
+            matched, diagnostic = _evaluate_condition_with_diagnostic(context, condition)
+            diagnostic["rule_id"] = rule.id
+            diagnostic["rule_code"] = rule.code
+            diagnostic["rule_name"] = rule.name
+            diagnostic["rule_priority"] = rule.priority
+            diagnostic["condition_index"] = condition_index
+            condition_diagnostics.append(diagnostic)
+            if not matched:
+                conditions_matched = False
+        if not conditions_matched:
             continue
 
         matched_rule_ids.append(rule.id)
@@ -105,6 +117,7 @@ async def select_route_for_payload(
             candidate_routes=[],
             route_match_reason="route_rule_conflict",
             error="route_rule_conflict",
+            condition_diagnostics=condition_diagnostics,
         )
 
     routes = (
@@ -146,6 +159,7 @@ async def select_route_for_payload(
             candidate_routes=diagnostics,
             route_match_reason="no_route_candidate",
             error="no_route_candidate",
+            condition_diagnostics=condition_diagnostics,
         )
 
     extra_count, _sort_order, _route_id, selected, _diagnostic = sorted(candidates, key=lambda item: (item[0], item[1], item[2]))[0]
@@ -160,6 +174,34 @@ async def select_route_for_payload(
         route_match_reason="selection_rules",
         route_match_quality="exact" if extra_count == 0 else "corrected",
         error=None,
+        condition_diagnostics=condition_diagnostics,
+    )
+
+
+async def load_selection_rules_for_profile(
+    db: AsyncSession,
+    *,
+    profile_id: int | None,
+) -> list[RouteSelectionRule]:
+    """Load active selection rules with deterministic ordering:
+    global rules first, then profile rules; inside each group priority desc, id asc.
+    """
+    stmt = select(RouteSelectionRule).where(RouteSelectionRule.is_active.is_(True))
+    if profile_id is None:
+        stmt = stmt.where(RouteSelectionRule.profile_id.is_(None))
+    else:
+        stmt = stmt.where(
+            (RouteSelectionRule.profile_id.is_(None)) | (RouteSelectionRule.profile_id == profile_id)
+        )
+
+    rules = (await db.execute(stmt)).scalars().all()
+    return sorted(
+        rules,
+        key=lambda rule: (
+            0 if rule.profile_id is None else 1,
+            -rule.priority,
+            rule.id,
+        ),
     )
 
 
@@ -206,54 +248,95 @@ def _conditions_match(context: dict[str, Any], conditions: list[Condition]) -> b
 
 
 def _condition_match(context: dict[str, Any], condition: Condition) -> bool:
+    matched, _diagnostic = _evaluate_condition_with_diagnostic(context, condition)
+    return matched
+
+
+def _evaluate_condition_with_diagnostic(context: dict[str, Any], condition: Condition) -> tuple[bool, dict[str, Any]]:
     source = str(condition.get("source") or "payload")
     field_path = str(condition.get("field_path") or "")
     operator = str(condition.get("operator") or "equals")
     expected = condition.get("value")
     case_sensitive = bool(condition.get("case_sensitive", False))
-    actual = _lookup_context_value(context, source, field_path)
+    actual, lookup = _lookup_context_value_with_details(context, source, field_path, condition)
+    diagnostic: dict[str, Any] = {
+        "source": source,
+        "field_path": field_path,
+        "operator": operator,
+        "expected": expected,
+        "case_sensitive": case_sensitive,
+        "actual": actual,
+        "resolved_by": lookup.get("resolved_by"),
+        "excel_column_index": lookup.get("excel_column_index"),
+        "excel_column_letter": lookup.get("excel_column_letter"),
+        "excel_header": lookup.get("excel_header"),
+        "excel_actual_column_index": lookup.get("excel_actual_column_index"),
+        "excel_actual_column_letter": lookup.get("excel_actual_column_letter"),
+        "excel_actual_header": lookup.get("excel_actual_header"),
+        "excel_header_match": lookup.get("excel_header_match"),
+        "issues": list(lookup.get("issues") or []),
+    }
 
     if operator == "empty":
-        return _is_empty(actual)
+        matched = _is_empty(actual)
+        diagnostic["matched"] = matched
+        return matched, diagnostic
     if operator == "not_empty":
-        return not _is_empty(actual)
+        matched = not _is_empty(actual)
+        diagnostic["matched"] = matched
+        return matched, diagnostic
 
     actual_values = _list_values(actual)
     if operator in {"in", "not_in"}:
         expected_values = _list_values(expected)
         matched = any(_equals(actual_value, expected_value, case_sensitive=case_sensitive) for actual_value in actual_values for expected_value in expected_values)
-        return matched if operator == "in" else not matched
+        result = matched if operator == "in" else not matched
+        diagnostic["matched"] = result
+        return result, diagnostic
 
     if operator in {"contains", "not_contains"}:
         matched = any(_contains(actual_value, expected, case_sensitive=case_sensitive) for actual_value in actual_values)
-        return matched if operator == "contains" else not matched
+        result = matched if operator == "contains" else not matched
+        diagnostic["matched"] = result
+        return result, diagnostic
 
     if operator in {"equals", "not_equals"}:
         matched = any(_equals(actual_value, expected, case_sensitive=case_sensitive) for actual_value in actual_values)
-        return matched if operator == "equals" else not matched
+        result = matched if operator == "equals" else not matched
+        diagnostic["matched"] = result
+        return result, diagnostic
 
     if operator == "regex":
         flags = 0 if case_sensitive else re.IGNORECASE
         pattern = "" if expected is None else str(expected)
         try:
-            return any(re.search(pattern, "" if value is None else str(value), flags=flags) is not None for value in actual_values)
+            matched = any(re.search(pattern, "" if value is None else str(value), flags=flags) is not None for value in actual_values)
+            diagnostic["matched"] = matched
+            return matched, diagnostic
         except re.error:
-            return False
+            diagnostic["matched"] = False
+            diagnostic["issues"] = [*diagnostic["issues"], "regex_error"]
+            return False, diagnostic
 
-    return False
+    diagnostic["matched"] = False
+    return False, diagnostic
 
 
 def _lookup_context_value(context: dict[str, Any], source: str, field_path: str) -> Any:
-    root = context.get(source) or {}
-    if source == "excel":
-        if isinstance(root, dict) and field_path in root:
-            return root[field_path]
-        normalized = _normalize_key(field_path)
-        for key, value in root.items():
-            if _normalize_key(str(key)) == normalized:
-                return value
-        return None
+    value, _details = _lookup_context_value_with_details(context, source, field_path, {})
+    return value
 
+
+def _lookup_context_value_with_details(
+    context: dict[str, Any],
+    source: str,
+    field_path: str,
+    condition: Condition | None,
+) -> tuple[Any, dict[str, Any]]:
+    if source == "excel":
+        return _lookup_excel_context_value(context, field_path, condition or {})
+
+    root = context.get(source) or {}
     current: Any = root
     for part in field_path.split("."):
         if not part:
@@ -264,8 +347,8 @@ def _lookup_context_value(context: dict[str, Any], source: str, field_path: str)
             index = int(part)
             current = current[index] if 0 <= index < len(current) else None
         else:
-            return None
-    return current
+            return None, {"resolved_by": "path"}
+    return current, {"resolved_by": "path"}
 
 
 def _list_values(value: Any) -> list[Any]:
@@ -299,6 +382,102 @@ def _normalize_text(value: Any, *, case_sensitive: bool) -> str:
 
 def _normalize_key(value: str) -> str:
     return " ".join(value.strip().lower().split())
+
+
+def _lookup_excel_context_value(
+    context: dict[str, Any],
+    field_path: str,
+    condition: Condition,
+) -> tuple[Any, dict[str, Any]]:
+    root = context.get("excel") or {}
+    excel_meta = context.get("excel_meta") or []
+    template_mapping = context.get("template_mapping") or {}
+
+    field_path_normalized = _normalize_key(field_path) if field_path else ""
+    requested_index = _int_or_none(condition.get("excel_column_index"))
+    requested_letter = str(condition.get("excel_column_letter") or "").strip()
+    expected_header = str(condition.get("excel_header") or "").strip()
+    expected_header_normalized = _normalize_key(expected_header) if expected_header else ""
+
+    details: dict[str, Any] = {
+        "resolved_by": "header",
+        "excel_column_index": requested_index,
+        "excel_column_letter": requested_letter or None,
+        "excel_header": expected_header or None,
+        "excel_actual_column_index": None,
+        "excel_actual_column_letter": None,
+        "excel_actual_header": None,
+        "excel_header_match": None,
+        "issues": [],
+    }
+
+    # 0) Resolve field_path through template column mapping (system_key → header_name)
+    if template_mapping and field_path in template_mapping:
+        mapped_header = template_mapping[field_path]
+        if isinstance(root, dict) and mapped_header in root:
+            details["resolved_by"] = "template_mapping"
+            details["excel_actual_header"] = mapped_header
+            return root[mapped_header], details
+        # Try normalized match
+        mapped_normalized = _normalize_key(mapped_header)
+        if isinstance(root, dict):
+            for key, value in root.items():
+                if _normalize_key(str(key)) == mapped_normalized:
+                    details["resolved_by"] = "template_mapping"
+                    details["excel_actual_header"] = str(key)
+                    return value, details
+
+    # 1) Prefer explicit column index binding.
+    if requested_index is not None and isinstance(excel_meta, list):
+        index_match = next(
+            (
+                column
+                for column in excel_meta
+                if _int_or_none(column.get("index")) == requested_index
+            ),
+            None,
+        )
+        if index_match is not None:
+            actual_header = str(index_match.get("header") or "")
+            details["excel_actual_column_index"] = _int_or_none(index_match.get("index"))
+            details["excel_actual_column_letter"] = str(index_match.get("letter") or "") or None
+            details["excel_actual_header"] = actual_header or None
+            header_match = True
+            if expected_header_normalized:
+                header_match = _normalize_key(actual_header) == expected_header_normalized
+            details["excel_header_match"] = header_match
+            if not header_match:
+                details["issues"] = [*details["issues"], "excel_header_mismatch"]
+            if header_match:
+                details["resolved_by"] = "index"
+                return index_match.get("value"), details
+        else:
+            details["issues"] = [*details["issues"], "excel_column_missing"]
+
+    # 2) Backward-compatible fallback by exact/normalized header (field_path).
+    if isinstance(root, dict) and field_path in root:
+        details["resolved_by"] = "header" if requested_index is None else "header_fallback"
+        return root[field_path], details
+
+    if isinstance(root, dict) and field_path_normalized:
+        for key, value in root.items():
+            if _normalize_key(str(key)) == field_path_normalized:
+                details["resolved_by"] = "header" if requested_index is None else "header_fallback"
+                return value, details
+
+    # 3) Fallback by explicit excel_header when provided.
+    if isinstance(root, dict) and expected_header:
+        if expected_header in root:
+            details["resolved_by"] = "explicit_header"
+            return root[expected_header], details
+        for key, value in root.items():
+            if _normalize_key(str(key)) == expected_header_normalized:
+                details["resolved_by"] = "explicit_header"
+                return value, details
+
+    if requested_index is not None:
+        details["issues"] = [*details["issues"], "excel_fallback_not_found"]
+    return None, details
 
 
 def _bool_or_raw(value: Any) -> Any:

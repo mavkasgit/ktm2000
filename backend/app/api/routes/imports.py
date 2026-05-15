@@ -1,10 +1,11 @@
 import json
 from io import BytesIO
 from decimal import Decimal
+from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
 from openpyxl import Workbook
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -26,6 +27,10 @@ class ImportPreviewOut(BaseModel):
     import_batch_id: int
     production_plan_id: int
     change_set_id: int
+    template_id: int | None = None
+    rule_profile_id: int | None = None
+    rules_snapshot: list[dict] = Field(default_factory=list)
+    route_selection_diagnostics: dict = Field(default_factory=dict)
     sheet_name: str
     header_row_number: int
     summary: dict
@@ -46,11 +51,15 @@ async def import_excel_plan(
     db: AsyncSession = Depends(get_db),
 ) -> ImportPreviewOut:
     resolved_mapping = None
+    rule_profile_id = None
     if template_id is not None:
         template = await db.get(ImportTemplate, template_id)
         if template is None:
             raise HTTPException(status_code=404, detail="Template not found")
+        if not template.is_active:
+            raise HTTPException(status_code=400, detail="Template is inactive")
         resolved_mapping = dict(template.column_mapping)
+        rule_profile_id = template.route_rule_profile_id
     if column_mapping is not None:
         try:
             parsed_mapping = json.loads(column_mapping)
@@ -74,6 +83,8 @@ async def import_excel_plan(
             plan_version=plan_version,
             column_mapping=resolved_mapping,
             row_selection=row_selection,
+            template_id=template_id,
+            rule_profile_id=rule_profile_id,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -252,6 +263,8 @@ class ImportRecentOut(BaseModel):
     id: int
     production_plan_id: int
     change_set_id: int | None
+    template_id: int | None = None
+    rule_profile_id: int | None = None
     plan_name: str
     plan_no: str
     original_filename: str
@@ -263,6 +276,7 @@ class ImportRecentOut(BaseModel):
     error_count: int
     warning_count: int
     summary: dict
+    route_selection_diagnostics: dict
     created_at: str
 
     class Config:
@@ -290,6 +304,8 @@ async def list_recent_imports(
                 id=batch.id,
                 production_plan_id=batch.production_plan_id,
                 change_set_id=change_set.id if change_set else None,
+                template_id=batch.template_id,
+                rule_profile_id=batch.rule_profile_id,
                 plan_name=plan.name,
                 plan_no=plan.plan_no,
                 original_filename=file.original_filename,
@@ -301,6 +317,7 @@ async def list_recent_imports(
                 error_count=summary.get("error_count", 0),
                 warning_count=summary.get("warning_count", 0),
                 summary=summary,
+                route_selection_diagnostics=batch.route_selection_diagnostics or {},
                 created_at=batch.created_at.isoformat() if batch.created_at else "",
             )
         )

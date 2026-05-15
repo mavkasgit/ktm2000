@@ -41,6 +41,8 @@ class ImportBatch(Base):
     id: Mapped[int] = mapped_column(BigInteger, Identity(always=True), primary_key=True)
     source_file_id: Mapped[int] = mapped_column(ForeignKey("import_files.id"), nullable=False)
     production_plan_id: Mapped[int] = mapped_column(ForeignKey("production_plans.id"), nullable=False)
+    template_id: Mapped[int | None] = mapped_column(ForeignKey("import_templates.id"), nullable=True)
+    rule_profile_id: Mapped[int | None] = mapped_column(ForeignKey("route_rule_profiles.id"), nullable=True)
     mode: Mapped[ImportBatchMode] = mapped_column(Enum(ImportBatchMode, name="import_batch_mode"), nullable=False)
     status: Mapped[ImportBatchStatus] = mapped_column(
         Enum(ImportBatchStatus, name="import_batch_status"),
@@ -54,4 +56,6 @@ class ImportBatch(Base):
     total_rows: Mapped[int] = mapped_column(BigInteger, nullable=False)
     parsed_rows: Mapped[int] = mapped_column(BigInteger, nullable=False)
     summary: Mapped[dict] = mapped_column(JSONB, nullable=False, server_default=text("'{}'::jsonb"), default=dict)
+    rules_snapshot: Mapped[list] = mapped_column(JSONB, nullable=False, server_default=text("'[]'::jsonb"), default=list)
+    route_selection_diagnostics: Mapped[dict] = mapped_column(JSONB, nullable=False, server_default=text("'{}'::jsonb"), default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
