@@ -593,6 +593,8 @@ class PlanPositionOut(BaseModel):
     errors: list
     warnings: list
     source_row_number: int | None
+    source_row_numbers: list[int] | None = None
+    source_ref: str | None = None
     change_action: str | None = None
     product_id: int | None = None
     route_id: int | None = None
@@ -605,6 +607,24 @@ class PlanPositionOut(BaseModel):
     route_manual_confirmed_at: str | None = None
     route_error: str | None = None
     raw_excel_row: dict | None = None
+    payload: dict | None = None
+
+
+def _source_row_numbers_from_position(position: PlanPosition) -> list[int] | None:
+    payload = position.source_payload or {}
+    raw_row_numbers = payload.get("row_numbers")
+    if isinstance(raw_row_numbers, list):
+        result: list[int] = []
+        for value in raw_row_numbers:
+            try:
+                result.append(int(value))
+            except (TypeError, ValueError):
+                continue
+        if result:
+            return result
+    if position.source_row_number is not None:
+        return [position.source_row_number]
+    return None
 
 
 @router.get("/all-files", response_model=list[PlanFileInfo])
@@ -680,6 +700,8 @@ async def all_plan_positions(db: AsyncSession = Depends(get_db)) -> list[PlanPos
                 validation_status=p.validation_status.value,
                 errors=[format_validation_error(e) for e in (p.validation_errors or [])],
                 source_row_number=p.source_row_number,
+                source_row_numbers=_source_row_numbers_from_position(p),
+                source_ref=p.source_ref,
                 warnings=warnings_by_position.get(p.id, []) or [],
                 product_id=p.product_id,
                 route_id=route_info.route_id,
@@ -694,6 +716,7 @@ async def all_plan_positions(db: AsyncSession = Depends(get_db)) -> list[PlanPos
                 ),
                 route_error=route_info.error,
                 raw_excel_row=(p.source_payload or {}).get("raw_excel_row"),
+                payload=p.source_payload,
             )
         )
 
@@ -744,6 +767,8 @@ async def cancelled_positions(db: AsyncSession = Depends(get_db)) -> list[PlanPo
                 validation_status=p.validation_status.value,
                 errors=[format_validation_error(e) for e in (p.validation_errors or [])],
                 source_row_number=p.source_row_number,
+                source_row_numbers=_source_row_numbers_from_position(p),
+                source_ref=p.source_ref,
                 warnings=warnings_by_position.get(p.id, []) or [],
                 product_id=p.product_id,
                 route_id=route_info.route_id,
@@ -758,6 +783,7 @@ async def cancelled_positions(db: AsyncSession = Depends(get_db)) -> list[PlanPo
                 ),
                 route_error=route_info.error,
                 raw_excel_row=(p.source_payload or {}).get("raw_excel_row"),
+                payload=p.source_payload,
             )
         )
 
@@ -810,6 +836,8 @@ async def all_positions(production_plan_id: int, db: AsyncSession = Depends(get_
                 validation_status=p.validation_status.value,
                 errors=[format_validation_error(e) for e in (p.validation_errors or [])],
                 source_row_number=p.source_row_number,
+                source_row_numbers=_source_row_numbers_from_position(p),
+                source_ref=p.source_ref,
                 warnings=warnings_by_position.get(p.id, []) or [],
                 product_id=p.product_id,
                 route_id=route_info.route_id,
@@ -824,6 +852,7 @@ async def all_positions(production_plan_id: int, db: AsyncSession = Depends(get_
                 ),
                 route_error=route_info.error,
                 raw_excel_row=(p.source_payload or {}).get("raw_excel_row"),
+                payload=p.source_payload,
             )
         )
 

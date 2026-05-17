@@ -177,6 +177,7 @@ class PlanningRowDetailOut(BaseModel):
     route_snapshot: PlanningRouteSnapshotOut | None
     stages: list[PlanningStageOut]
     raw_excel_row: dict | None = None
+    payload: dict | None = None
 
 
 @router.get("/rows", response_model=list[PlanningRowOut])

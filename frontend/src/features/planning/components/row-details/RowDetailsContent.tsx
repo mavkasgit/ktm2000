@@ -51,16 +51,23 @@ export function RowDetailsContent({ data, showPlanLink = true }: RowDetailsConte
   const hasWarnings = data.warnings.length > 0
   const hasRouteCheckIssues = (data.routeCheckIssues?.length ?? 0) > 0
   const hasStages = (data.stages?.length ?? 0) > 0
-  const hasRawData = !!data.rawExcelRow
+  const hasRawData = (data.rawExcelRows?.length ?? 0) > 0
 
   return (
     <div className="space-y-4">
       {/* Raw Excel data */}
       {hasRawData && (
         <div className="rounded-lg border p-4">
-          <pre className="text-xs bg-muted/50 rounded-md p-3 overflow-auto whitespace-pre-wrap break-words font-mono">
-            {data.rawExcelRow}
-          </pre>
+          <div className="space-y-2">
+            {data.rawExcelRows!.map((r, i) => (
+              <div key={i}>
+                <div className="text-xs font-medium text-muted-foreground mb-1">Строка #{r.rowNumber}</div>
+                <pre className="text-xs bg-muted/50 rounded-md p-3 overflow-auto whitespace-pre-wrap break-words font-mono">
+                  {r.text}
+                </pre>
+              </div>
+            ))}
+          </div>
         </div>
       )}
 

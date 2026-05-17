@@ -15,5 +15,5 @@ export type RowDetailsData = {
   productionPlanId: number
   stages?: ProductionPlanningStage[]
   routeCheckIssues?: string[]
-  rawExcelRow?: string
+  rawExcelRows?: { rowNumber: string; text: string }[]
 }

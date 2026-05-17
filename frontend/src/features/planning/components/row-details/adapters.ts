@@ -50,7 +50,7 @@ const warningLabelsRaw: Record<string, string> = {
   paired_profile_product_unmapped: "Парный профиль не сопоставлен",
   techcard_pair_not_resolved: "Не выбран парный профиль техкарты",
   product_name_missing: "Отсутствует наименование",
-  period_not_detected: "Период не определён",
+  period_not_detected: "не определен",
   route_auto_fallback: "Маршрут скорректирован автоматически — проверьте корректность",
   row_selection_applied: "Применён фильтр строк",
   row_selection_auto_included: "Автодобавлены парные строки",
@@ -104,6 +104,29 @@ function translateLabels(codes: string[], labels: Record<string, string>): strin
   return codes.map((c) => translateLabel(c, labels))
 }
 
+function buildRawExcelRows(
+  rawExcelRow: Record<string, unknown> | null | undefined,
+  payload: Record<string, unknown> | null | undefined,
+): { rowNumber: string; text: string }[] | undefined {
+  const rawColumnsByRow = payload?.raw_columns_by_row as Record<string, Record<string, unknown>> | undefined
+  if (rawColumnsByRow && Object.keys(rawColumnsByRow).length > 0) {
+    return Object.entries(rawColumnsByRow)
+      .sort(([a], [b]) => Number(a) - Number(b))
+      .map(([num, data]) => ({
+        rowNumber: num,
+        text: Object.values(data).filter(Boolean).map(String).join(" | "),
+      }))
+  }
+  if (rawExcelRow && Object.keys(rawExcelRow).length > 0) {
+    const rowNum = String((payload?.row_numbers as number[] | undefined)?.[0] ?? "")
+    return [{
+      rowNumber: rowNum,
+      text: Object.values(rawExcelRow).filter(Boolean).map(String).join(" | "),
+    }]
+  }
+  return undefined
+}
+
 // ─── Adapters ────────────────────────────────────────────────────────────────
 
 export function adaptPlanPositionOut(pos: PlanPositionOut): RowDetailsData {
@@ -126,9 +149,7 @@ export function adaptPlanPositionOut(pos: PlanPositionOut): RowDetailsData {
     warnings: translateLabels(pos.warnings, warningLabelsRaw),
     productionPlanId: pos.production_plan_id,
     routeCheckIssues: [],
-    rawExcelRow: pos.raw_excel_row
-      ? Object.entries(pos.raw_excel_row).filter(([, v]) => v).map(([, v]) => String(v)).join(" | ")
-      : undefined,
+    rawExcelRows: buildRawExcelRows(pos.raw_excel_row, pos.payload),
   }
 }
 
@@ -152,9 +173,7 @@ export function adaptExecutionDetail(detail: ProductionPlanningRowDetail): RowDe
     warnings: [],
     productionPlanId: detail.production_plan_id,
     stages: detail.stages,
-    rawExcelRow: detail.raw_excel_row
-      ? Object.entries(detail.raw_excel_row).filter(([, v]) => v).map(([, v]) => String(v)).join(" | ")
-      : undefined,
+    rawExcelRows: buildRawExcelRows(detail.raw_excel_row, detail.payload),
   }
 }
 
@@ -171,10 +190,10 @@ export function adaptRawImportRow(row: Record<string, unknown>): RowDetailsData 
   const rawWarnings = (row.warnings as string[] | undefined) ?? []
 
   const payload = (row.payload as Record<string, unknown> | undefined) ?? {}
-  const rawExcelObj = (payload.raw_excel_row as Record<string, unknown> | undefined)
-  const rawExcelRow = rawExcelObj
-    ? Object.entries(rawExcelObj).filter(([, v]) => v).map(([, v]) => String(v)).join(" | ")
-    : undefined
+  const rawExcelRows = buildRawExcelRows(
+    payload.raw_excel_row as Record<string, unknown> | undefined,
+    payload,
+  )
 
   return {
     id: sourceRowNumber ?? (payload.row_numbers as number[] | undefined)?.[0] ?? 0,
@@ -194,6 +213,6 @@ export function adaptRawImportRow(row: Record<string, unknown>): RowDetailsData 
     errors: translateLabels(rawErrors, errorLabelsRaw),
     warnings: translateLabels(rawWarnings, warningLabelsRaw),
     productionPlanId: 0,
-    rawExcelRow,
+    rawExcelRows,
   }
 }

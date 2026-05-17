@@ -105,6 +105,8 @@ export type PlanPositionOut = {
   errors: string[];
   warnings: string[];
   source_row_number: number | null;
+  source_row_numbers?: number[] | null;
+  source_ref?: string | null;
   product_id: number | null;
   route_id: number | null;
   route_name: string | null;
@@ -116,6 +118,7 @@ export type PlanPositionOut = {
   route_manual_confirmed_at: string | null;
   route_error: string | null;
   raw_excel_row: Record<string, unknown> | null;
+  payload?: Record<string, unknown> | null;
 };
 
 export async function planFiles(planId: number) {
@@ -365,6 +368,7 @@ export type ProductionPlanningRowDetail = {
   } | null;
   stages: ProductionPlanningStage[];
   raw_excel_row: Record<string, unknown> | null;
+  payload?: Record<string, unknown> | null;
 };
 
 export async function listProductionPlanningRows() {

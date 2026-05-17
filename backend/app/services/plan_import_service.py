@@ -36,7 +36,7 @@ from app.services.excel_import import (
     validate_excel_extension,
 )
 from app.services.route_selection import load_selection_rules_for_profile, select_route_for_payload
-from app.services.routing_signature import canonical_signature_from_payload, normalize_pack_op_family
+from app.services.routing_signature import canonical_signature_from_payload
 
 
 async def preview_excel_sheet(
@@ -46,7 +46,9 @@ async def preview_excel_sheet(
     content: bytes,
     sheet_index: int = 0,
     column_mapping: dict | None = None,
+    normalization_rules: dict | None = None,
     row_selection: str | None = None,
+    rule_profile_id: int | None = None,
 ) -> dict:
     """Parse an Excel sheet and return preview data without creating any DB records."""
     parsed = parse_factory_plan_workbook(
@@ -54,6 +56,7 @@ async def preview_excel_sheet(
         filename,
         sheet_index=sheet_index,
         column_mapping=column_mapping,
+        normalization_rules=normalization_rules,
         row_selection=row_selection,
     )
     summary = _summary(parsed.parsed_rows, parsed.warnings, parsed)
@@ -68,9 +71,20 @@ async def preview_excel_sheet(
             if product is not None:
                 break
 
+        # Mirror paired-profile resolution from import flow to avoid stale parser warning
+        # when the paired techcard can actually be resolved.
+        if row.payload.get("paired_profile"):
+            components = row.payload.get("components") or []
+            component_skus = [c.get("sku", "") for c in components if c.get("sku")]
+            techcard = await _find_paired_techcard(db, component_skus) if component_skus else None
+            if techcard is not None:
+                warnings = [w for w in warnings if w != "paired_profile_product_unmapped"]
+            elif "paired_profile_product_unmapped" not in warnings:
+                warnings.append("paired_profile_product_unmapped")
+
         signature = canonical_signature_from_payload(row.payload)
         selection = await select_route_for_payload(
-            db, row.payload, product, template_column_mapping=column_mapping,
+            db, row.payload, product, profile_id=rule_profile_id, template_column_mapping=column_mapping,
         )
         route = selection.route
 
@@ -126,6 +140,7 @@ async def create_excel_import_change_set(
     plan_month: str | None = None,
     plan_version: str | None = None,
     column_mapping: dict | None = None,
+    normalization_rules: dict | None = None,
     row_selection: str | None = None,
     template_id: int | None = None,
     rule_profile_id: int | None = None,
@@ -138,6 +153,7 @@ async def create_excel_import_change_set(
         filename,
         sheet_index=sheet_index,
         column_mapping=column_mapping,
+        normalization_rules=normalization_rules,
         row_selection=row_selection,
     )
 
@@ -377,6 +393,48 @@ async def _find_active_techcard_by_sku(db: AsyncSession, sku: str) -> tuple[Tech
     return None, None
 
 
+async def _find_paired_techcard(
+    db: AsyncSession, component_skus: list[str]
+) -> Techcard | None:
+    """Find an active paired_processing techcard that contains all given component SKUs."""
+    if not component_skus:
+        return None
+
+    normalized_keys = [
+        key.lower().replace(" ", "").replace("\u00A0", "").replace("\u2014", "-")
+        for key in component_skus
+    ]
+
+    stmt = (
+        select(Techcard)
+        .where(
+            Techcard.is_active.is_(True),
+            Techcard.processing_type == "paired_processing",
+        )
+    )
+    techcards = await db.execute(stmt)
+
+    seen: set[int] = set()
+    for tc in techcards.scalars().all():
+        if tc.id in seen:
+            continue
+        seen.add(tc.id)
+
+        lines = await db.execute(
+            select(TechcardLine, Product)
+            .join(Product, Product.id == TechcardLine.component_product_id)
+            .where(TechcardLine.techcard_id == tc.id)
+        )
+        line_skus = {
+            lp[1].sku.lower().replace(" ", "").replace("\u00A0", "").replace("\u2014", "-")
+            for lp in lines.all()
+        }
+        if all(sku in line_skus for sku in normalized_keys):
+            return tc
+
+    return None
+
+
 async def _make_change_items(
     db: AsyncSession,
     change_set_id: int,
@@ -422,19 +480,71 @@ async def _make_change_items(
 
         if product is None:
             route = None
-            techcard, matched_product = await _find_active_techcard_by_sku(db, row.source_sku)
-            if techcard is not None and matched_product is not None:
-                product = matched_product
-            elif row.payload.get("paired_profile"):
-                if "paired_profile_product_unmapped" not in warnings:
-                    warnings.append("paired_profile_product_unmapped")
+            if row.payload.get("paired_profile"):
+                components = row.payload.get("components") or []
+                component_skus = [c.get("sku", "") for c in components if c.get("sku")]
+                if component_skus:
+                    techcard = await _find_paired_techcard(db, component_skus)
+                else:
+                    techcard, matched_product = await _find_active_techcard_by_sku(db, row.source_sku)
+                    if techcard is not None and matched_product is not None:
+                        product = matched_product
+                if techcard is not None:
+                    line = await db.scalar(select(TechcardLine.id).where(TechcardLine.techcard_id == techcard.id).limit(1))
+                    if line is None:
+                        errors.append("active_techcard_has_no_lines")
+                    else:
+                        lines = (
+                            await db.execute(
+                                select(TechcardLine, Product)
+                                .join(Product, Product.id == TechcardLine.component_product_id)
+                                .where(TechcardLine.techcard_id == techcard.id)
+                                .order_by(TechcardLine.id)
+                            )
+                        ).all()
+                        resolved_inputs = []
+                        for tc_line, comp_product in lines:
+                            sku_key = comp_product.sku.lower()
+                            available = available_by_sku.get(sku_key, Decimal("0"))
+                            resolved_inputs.append({
+                                "product_id": comp_product.id,
+                                "sku": comp_product.sku,
+                                "techcard_quantity": str(tc_line.quantity),
+                                "available_quantity": str(available),
+                                "unit": tc_line.unit,
+                            })
+                        row.payload["techcard_pair"] = {
+                            "resolved": len(resolved_inputs) > 0,
+                            "reason": None,
+                            "inputs": resolved_inputs,
+                        }
+                        warnings = [w for w in warnings if w != "paired_profile_product_unmapped"]
+                else:
+                    if "paired_profile_product_unmapped" not in warnings:
+                        warnings.append("paired_profile_product_unmapped")
             else:
-                errors.append("product_not_found")
+                techcard, matched_product = await _find_active_techcard_by_sku(db, row.source_sku)
+                if techcard is not None and matched_product is not None:
+                    product = matched_product
+                else:
+                    errors.append("product_not_found")
         else:
             if not product.is_active:
                 errors.append("product_inactive")
 
-            techcard = await db.scalar(select(Techcard).where(Techcard.product_id == product.id, Techcard.is_active.is_(True)))
+            if row.payload.get("paired_profile"):
+                components = row.payload.get("components") or []
+                component_skus = [c.get("sku", "") for c in components if c.get("sku")]
+                techcard = await _find_paired_techcard(db, component_skus) if component_skus else None
+                if techcard is None:
+                    techcard = await db.scalar(
+                        select(Techcard).where(Techcard.product_id == product.id, Techcard.is_active.is_(True))
+                    )
+            else:
+                techcard = await db.scalar(
+                    select(Techcard).where(Techcard.product_id == product.id, Techcard.is_active.is_(True))
+                )
+
             if techcard is None:
                 errors.append("active_techcard_not_found")
             else:
@@ -442,7 +552,7 @@ async def _make_change_items(
                 if line is None:
                     errors.append("active_techcard_has_no_lines")
 
-                if row.payload.get("paired_profile") and techcard.processing_type == "paired_processing":
+                if techcard.processing_type == "paired_processing":
                     lines = (
                         await db.execute(
                             select(TechcardLine, Product)
@@ -452,32 +562,22 @@ async def _make_change_items(
                         )
                     ).all()
                     resolved_inputs = []
-                    all_fit = True
                     for tc_line, comp_product in lines:
                         sku_key = comp_product.sku.lower()
-                        required = row.quantity * Decimal(str(tc_line.quantity))
                         available = available_by_sku.get(sku_key, Decimal("0"))
                         resolved_inputs.append({
                             "product_id": comp_product.id,
                             "sku": comp_product.sku,
-                            "required_quantity": str(required),
+                            "techcard_quantity": str(tc_line.quantity),
                             "available_quantity": str(available),
                             "unit": tc_line.unit,
                         })
-                        if available < required:
-                            all_fit = False
                     row.payload["techcard_pair"] = {
-                        "resolved": all_fit and len(resolved_inputs) > 0,
-                        "reason": None if all_fit else "insufficient_components",
+                        "resolved": len(resolved_inputs) > 0,
+                        "reason": None,
                         "inputs": resolved_inputs,
                     }
-                    if all_fit:
-                        warnings = [w for w in warnings if w != "paired_profile_product_unmapped"]
-                    else:
-                        warnings.append("techcard_pair_not_resolved")
-
-        normalized_pack_op_family = normalize_pack_op_family(row.payload.get("operation"))
-        row.payload["normalized_pack_op_family"] = normalized_pack_op_family
+                    warnings = [w for w in warnings if w != "paired_profile_product_unmapped"]
 
         signature = canonical_signature_from_payload(row.payload)
         selection = await select_route_for_payload(
@@ -539,6 +639,9 @@ async def _make_change_items(
                 "selected_route_id": route.id if route else None,
                 "route_match_reason": selection.route_match_reason,
                 "excel_column_diagnostics": excel_condition_diagnostics,
+                "normalize_applied_actions": selection.normalize_applied_actions,
+                "ctx_snapshot": selection.ctx_snapshot,
+                "route_select_matched_rule_ids": selection.route_select_matched_rule_ids,
             },
             "operation_family": signature.operation_family.value if signature else None,
             "output_kind": signature.output_kind.value if signature else None,
@@ -681,6 +784,15 @@ async def _make_change_items(
         "total_rows": len(parsed_rows),
         "matched_count": sum(1 for item in items if item.after_data and item.after_data.get("route_id")),
         "unmatched_count": sum(1 for item in items if item.after_data and not item.after_data.get("route_id")),
+        "normalize_actions_count": sum(
+            len((item.after_data or {}).get("route_selection", {}).get("normalize_applied_actions", []))
+            for item in items
+        ),
+        "ctx_samples": [
+            (item.after_data or {}).get("route_selection", {}).get("ctx_snapshot")
+            for item in items
+            if (item.after_data or {}).get("route_selection", {}).get("ctx_snapshot")
+        ][:5],
         "excel_diagnostics": {
             "conditions_evaluated": sum(
                 len((item.after_data or {}).get("route_selection", {}).get("excel_column_diagnostics", []))
@@ -739,6 +851,13 @@ def _summary(
         summary["row_selection"] = parsed_workbook.row_selection
         summary["selected_row_numbers"] = parsed_workbook.selected_row_numbers
         summary["auto_included_row_numbers"] = parsed_workbook.auto_included_row_numbers
+        summary["period_start"] = parsed_workbook.period_start.isoformat() if parsed_workbook.period_start else None
+        summary["period_end"] = parsed_workbook.period_end.isoformat() if parsed_workbook.period_end else None
+        summary["period_label"] = (
+            f"{summary['period_start']} - {summary['period_end']}"
+            if summary["period_start"] and summary["period_end"]
+            else "не определен"
+        )
     return summary
 
 

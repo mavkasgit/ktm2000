@@ -62,7 +62,7 @@ const warningLabelsRaw: Record<string, string> = {
   paired_profile_product_unmapped: "Парный профиль не сопоставлен",
   techcard_pair_not_resolved: "Не выбран парный профиль",
   product_name_missing: "Отсутствует наименование",
-  period_not_detected: "Период не определён",
+  period_not_detected: "не определен",
   row_selection_applied: "Применён фильтр строк",
   row_selection_auto_included: "Автодобавлены парные строки",
   paired_row_auto_included: "Автодобавлена парная строка",
@@ -177,13 +177,6 @@ function RawPreviewTable({ rows, sortConfig, onSort, expanded }: RawPreviewTable
             {sortConfig?.key === "route_name" ? (sortConfig.dir === "asc" ? " ▲" : " ▼") : ""}
           </th>
           <th
-            onClick={() => onSort?.("status")}
-            className="text-left p-2 w-[150px] cursor-pointer select-none whitespace-nowrap"
-          >
-            Статус
-            {sortConfig?.key === "status" ? (sortConfig.dir === "asc" ? " ▲" : " ▼") : ""}
-          </th>
-          <th
             onClick={() => onSort?.("errors")}
             className="text-left p-2 w-[150px] cursor-pointer select-none whitespace-nowrap"
           >
@@ -204,8 +197,17 @@ function RawPreviewTable({ rows, sortConfig, onSort, expanded }: RawPreviewTable
           const status = String(row.status ?? "");
           const errors = translateLabels(row.errors as string[] | undefined, errorLabelsRaw);
           const warnings = translateLabels(row.warnings as string[] | undefined, warningLabelsRaw);
-          const rowNum = row.source_row_number ?? (row.payload as any)?.row_numbers?.[0] ?? "—";
+          const rowNumbers = (row.payload as any)?.row_numbers as number[] | undefined;
+          const rowNumDisplay = Array.isArray(rowNumbers) && rowNumbers.length > 1
+            ? rowNumbers.map((n: number) => `#${n}`).join(", ")
+            : `#${row.source_row_number ?? rowNumbers?.[0] ?? "—"}`;
           const rawRow = (row.payload as any)?.raw_excel_row as Record<string, string> | undefined;
+          const rawColumnsByRow = (row.payload as any)?.raw_columns_by_row as Record<string, Record<string, string>> | undefined;
+          const allRawRows = rawColumnsByRow
+            ? Object.entries(rawColumnsByRow).sort(([a], [b]) => Number(a) - Number(b)).map(([num, data]) => ({ rowNumber: num, data }))
+            : rawRow
+              ? [{ rowNumber: String(row.source_row_number ?? ""), data: rawRow }]
+              : [];
           const routeMeta = buildRouteMetaLabel(row as Record<string, unknown>);
           const isExpanded = expanded || expandedRows.has(idx);
           return (
@@ -224,7 +226,7 @@ function RawPreviewTable({ rows, sortConfig, onSort, expanded }: RawPreviewTable
                   <ChevronRight className="h-3 w-3 text-muted-foreground" />
                 )}
               </td>
-              <td className="p-2 font-semibold whitespace-nowrap">#{rowNum}</td>
+              <td className="p-2 font-semibold whitespace-nowrap">{rowNumDisplay}</td>
               <td className="p-2">{String(row.source_sku ?? "")}</td>
               <td className="p-2">{String(row.quantity ?? "")}</td>
               <td className="p-2">{String(row.source_name ?? "")}</td>
@@ -240,16 +242,22 @@ function RawPreviewTable({ rows, sortConfig, onSort, expanded }: RawPreviewTable
                   </span>
                 ) : "—"}
               </td>
-              <td className="p-2">{statusLabelsRaw[status] ?? status}</td>
               <td className="p-2 text-red-600">{errors}</td>
               <td className="p-2 text-amber-600">{warnings}</td>
             </tr>
-            {isExpanded && rawRow && (
-              <tr className="border-b bg-muted/30">
-                <td colSpan={9} className="p-2 pl-6 text-[11px] leading-relaxed font-mono">
-                  {Object.values(rawRow).filter(Boolean).join(" | ")}
-                </td>
-              </tr>
+            {isExpanded && allRawRows.length > 0 && (
+              <>
+                {allRawRows.map((r, rowIdx) => (
+                  <tr key={rowIdx} className="border-b bg-muted/30">
+                    <td colSpan={9} className="p-2 pl-6 text-[11px] leading-relaxed font-mono">
+                      <div className="flex items-start gap-2">
+                        <span className="font-bold text-muted-foreground shrink-0">#{r.rowNumber}:</span>
+                        <span>{Object.values(r.data).filter(Boolean).join(" | ")}</span>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </>
             )}
             </Fragment>
           );
@@ -259,7 +267,13 @@ function RawPreviewTable({ rows, sortConfig, onSort, expanded }: RawPreviewTable
   );
 }
 
-type SheetPreviewCache = Record<number, SheetPreviewResponse>
+type SheetPreviewCache = Record<string, SheetPreviewResponse>
+
+function buildPreviewCacheKey(sheetIdx: number, templateId: number | null, rowSelection: string): string {
+  const selection = rowSelection.trim();
+  const templatePart = templateId == null ? "none" : String(templateId);
+  return `${sheetIdx}:${templatePart}:${selection}`;
+}
 
 export function ImportWizard(props: {
   open: boolean
@@ -274,7 +288,7 @@ export function ImportWizard(props: {
   const [sheets, setSheets] = useState<string[]>([])
   const [selectedSheet, setSelectedSheet] = useState(0)
   const [sheetPreviews, setSheetPreviews] = useState<SheetPreviewCache>({})
-  const [previewLoading, setPreviewLoading] = useState<Record<number, boolean>>({})
+  const [previewLoading, setPreviewLoading] = useState<Record<string, boolean>>({})
   const [sortConfig, setSortConfig] = useState<SortConfig>(null)
   const [filterStatus, setFilterStatus] = useState<"all" | "invalid" | "warning">("all")
   const [loading, setLoading] = useState(false)
@@ -355,8 +369,20 @@ export function ImportWizard(props: {
     [activeTemplates, activeTemplateId],
   )
 
+  useEffect(() => {
+    if (step !== "preview" || !file) return
+    setSheetPreviews({})
+    setPreviewLoading({})
+    loadSheetPreview(file, selectedSheet, rowSelection)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTemplateId, rowSelection])
+
   // Preview for the currently selected sheet
-  const currentPreview = sheetPreviews[selectedSheet] ?? null
+  const currentPreviewKey = useMemo(
+    () => buildPreviewCacheKey(selectedSheet, activeTemplateId, rowSelection),
+    [selectedSheet, activeTemplateId, rowSelection],
+  )
+  const currentPreview = sheetPreviews[currentPreviewKey] ?? null
 
   const allRows = useMemo(() => {
     return (currentPreview?.items as Record<string, unknown>[]) ?? []
@@ -460,7 +486,7 @@ export function ImportWizard(props: {
       setPreviewLoading({})
       setStep("preview")
       // Auto-load preview for first sheet
-      loadSheetPreview(f, sheetNames, 0)
+      loadSheetPreview(f, 0, rowSelection)
     } catch (e) {
       setError(getErrorMessage(e))
     } finally {
@@ -468,21 +494,30 @@ export function ImportWizard(props: {
     }
   }
 
-  async function loadSheetPreview(f: File, sheetNames: string[], sheetIdx: number) {
-    if (previewLoading[sheetIdx] || sheetPreviews[sheetIdx]) return
-    setPreviewLoading((prev) => ({ ...prev, [sheetIdx]: true }))
+  async function loadSheetPreview(f: File, sheetIdx: number, selection: string = rowSelection) {
+    const cacheKey = buildPreviewCacheKey(sheetIdx, activeTemplateId, selection)
+    if (previewLoading[cacheKey] || sheetPreviews[cacheKey]) return
+    setPreviewLoading((prev) => ({ ...prev, [cacheKey]: true }))
     try {
-      const data = await previewExcelSheet(f, { sheet_index: sheetIdx })
-      setSheetPreviews((prev) => ({ ...prev, [sheetIdx]: data }))
+      const data = await previewExcelSheet(f, {
+        sheet_index: sheetIdx,
+        row_selection: selection.trim() || undefined,
+        template_id: activeTemplateId ?? undefined,
+      })
+      setSheetPreviews((prev) => ({ ...prev, [cacheKey]: data }))
     } catch {
       // ignore — user will see empty table
     } finally {
-      setPreviewLoading((prev) => ({ ...prev, [sheetIdx]: false }))
+      setPreviewLoading((prev) => ({ ...prev, [cacheKey]: false }))
     }
   }
 
   async function handleApply() {
     if (!file) return
+    if (!activeTemplateId) {
+      setError("Выберите шаблон импорта перед применением")
+      return
+    }
     setLoading(true)
     setError(null)
     try {
@@ -753,11 +788,6 @@ export function ImportWizard(props: {
                         </option>
                       ))}
                     </select>
-                    {selectedTemplate && (
-                      <p className="mt-1 text-xs text-muted-foreground">
-                        Профиль правил: {selectedTemplate.profile_name ?? "Глобальные"}
-                      </p>
-                    )}
                   </div>
                 </div>
               )}
@@ -817,7 +847,7 @@ export function ImportWizard(props: {
                   key={idx}
                   onClick={() => {
                     setSelectedSheet(idx)
-                    loadSheetPreview(file, sheets, idx)
+                    loadSheetPreview(file, idx, rowSelection)
                   }}
                   className={`px-3 py-1.5 text-xs rounded-md border transition-colors ${
                     selectedSheet === idx
@@ -862,11 +892,6 @@ export function ImportWizard(props: {
                     ))}
                   </select>
                 </div>
-                {selectedTemplate && (
-                  <span className="text-xs text-muted-foreground pt-4">
-                    Профиль: {selectedTemplate.profile_name ?? "Глобальные"}
-                  </span>
-                )}
               </div>
             )}
 
@@ -892,6 +917,10 @@ export function ImportWizard(props: {
                 <div className="flex items-center justify-between flex-wrap gap-2">
                   <div className="flex gap-4 text-sm">
                     <span><strong>Всего:</strong> {summary.total}</span>
+                    <span>
+                      <strong>Период:</strong>{" "}
+                      {String(((currentPreview.summary as Record<string, unknown>)?.period_label ?? "не определен"))}
+                    </span>
                     {summary.invalid > 0 && <span className="text-red-600"><strong>Ошибок:</strong> {summary.invalid}</span>}
                     {summary.warning > 0 && <span className="text-amber-600"><strong>Предупр.:</strong> {summary.warning}</span>}
                     {summary.invalid === 0 && summary.warning === 0 && <span className="text-green-600 text-xs">Без ошибок</span>}
@@ -956,7 +985,7 @@ export function ImportWizard(props: {
                 )}
 
                 <div className="flex-1 overflow-auto border rounded-lg">
-                  {previewLoading[selectedSheet] ? (
+                  {previewLoading[currentPreviewKey] ? (
                     <div className="flex items-center justify-center h-32 text-sm text-muted-foreground">Загрузка…</div>
                   ) : allRows.length === 0 ? (
                     <div className="flex items-center justify-center h-32 text-sm text-muted-foreground">Нет данных для отображения</div>
