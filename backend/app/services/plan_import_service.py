@@ -45,12 +45,14 @@ async def preview_excel_sheet(
     filename: str,
     content: bytes,
     sheet_index: int = 0,
+    mode: ImportBatchMode = ImportBatchMode.create_plan,
+    production_plan_id: int | None = None,
     column_mapping: dict | None = None,
     normalization_rules: dict | None = None,
     row_selection: str | None = None,
     rule_profile_id: int | None = None,
 ) -> dict:
-    """Parse an Excel sheet and return preview data without creating any DB records."""
+    """Parse an Excel sheet and return full preview checks without creating DB records."""
     parsed = parse_factory_plan_workbook(
         content,
         filename,
@@ -60,71 +62,47 @@ async def preview_excel_sheet(
         row_selection=row_selection,
     )
     summary = _summary(parsed.parsed_rows, parsed.warnings, parsed)
-    products_by_sku = await _load_products_by_sku(db)
-    items = []
-    for row in parsed.parsed_rows:
-        warnings = list(row.warnings)
-        errors = list(row.errors)
-        product = None
-        for key in _sku_lookup_keys(row.source_sku):
-            product = products_by_sku.get(key)
-            if product is not None:
-                break
 
-        # Mirror paired-profile resolution from import flow to avoid stale parser warning
-        # when the paired techcard can actually be resolved.
-        if row.payload.get("paired_profile"):
-            components = row.payload.get("components") or []
-            component_skus = [c.get("sku", "") for c in components if c.get("sku")]
-            techcard = await _find_paired_techcard(db, component_skus) if component_skus else None
-            if techcard is not None:
-                warnings = [w for w in warnings if w != "paired_profile_product_unmapped"]
-            elif "paired_profile_product_unmapped" not in warnings:
-                warnings.append("paired_profile_product_unmapped")
-
-        signature = canonical_signature_from_payload(row.payload)
-        selection = await select_route_for_payload(
-            db, row.payload, product, profile_id=rule_profile_id, template_column_mapping=column_mapping,
+    existing_positions: list[PlanPosition] = []
+    effective_plan_id = production_plan_id
+    if effective_plan_id is None and mode == ImportBatchMode.append_to_plan:
+        latest_plan = await db.scalar(
+            select(ProductionPlan)
+            .where(ProductionPlan.status.notin_(["released", "cancelled"]))
+            .order_by(ProductionPlan.created_at.desc())
+            .limit(1)
         )
-        route = selection.route
+        if latest_plan is not None:
+            effective_plan_id = latest_plan.id
 
-        if route is None:
-            errors.append(selection.error or "no_route_candidate")
+    if effective_plan_id is not None and mode != ImportBatchMode.create_plan:
+        existing_positions = (
+            await db.execute(
+                select(PlanPosition).where(
+                    PlanPosition.production_plan_id == effective_plan_id,
+                    PlanPosition.status != PlanPositionStatus.cancelled,
+                )
+            )
+        ).scalars().all()
 
-        route_match_quality = None
-        route_match_reason = None
-        if route is not None:
-            route_match_quality = selection.route_match_quality or PlanPositionRouteMatchQuality.exact.value
-            route_match_reason = PlanPositionRouteMatchReason.selection_rules.value
+    products_by_sku = await _load_products_by_sku(db)
+    item_payloads, _route_selection_diagnostics = await _make_change_items(
+        db,
+        0,  # dry-run preview, no persisted change set
+        parsed.parsed_rows,
+        products_by_sku,
+        mode,
+        existing_positions,
+        rule_profile_id,
+        template_column_mapping=column_mapping,
+    )
 
-        item = {
-            "source_row_number": row.source_row_numbers[0],
-            "source_sku": row.source_sku,
-            "source_name": row.source_name,
-            "quantity": str(row.quantity),
-            "payload": row.payload,
-            "warnings": warnings,
-            "errors": errors,
-            "route_id": route.id if route else None,
-            "route_name": route.name if route else None,
-            "route_source": "auto" if route else "missing",
-            "route_origin": PlanPositionRouteOrigin.auto.value if route else None,
-            "route_match_quality": route_match_quality,
-            "route_match_reason": route_match_reason,
-            "route_assigned_at": datetime.now(UTC).isoformat() if route else None,
-            "route_manual_confirmed_at": None,
-            "operation_family": signature.operation_family.value if signature else None,
-            "output_kind": signature.output_kind.value if signature else None,
-            "has_pack_ops": signature.has_pack_ops if signature else None,
-            "status": "invalid" if errors else ("warning" if warnings else "pending"),
-        }
-        items.append(item)
     return {
         "sheet_name": parsed.sheet_name,
         "header_row_number": parsed.header_row_number,
         "total_rows": parsed.total_rows,
         "summary": summary,
-        "items": items,
+        "items": [_serialize_item(item) for item in item_payloads],
     }
 
 
@@ -466,8 +444,10 @@ async def _make_change_items(
     items: list[PlanChangeItem] = []
     matched_fingerprints: set[str] = set()
 
-    # Track fingerprints within this import to detect intra-import duplicates
-    import_fingerprints: dict[str, list[int]] = {}
+    # Track fingerprints within this import to detect intra-import duplicates.
+    # Use row hashes (not just first row number) so real duplicates are detected
+    # and repeated references to the same source row are ignored.
+    import_fingerprints: dict[str, dict[str, set[str] | set[int]]] = {}
 
     for row in parsed_rows:
         warnings = list(row.warnings)
@@ -651,18 +631,23 @@ async def _make_change_items(
         # Detect duplicate within this import using fingerprint (full row match)
         fp = row.source_fingerprint
         if fp not in import_fingerprints:
-            import_fingerprints[fp] = []
-        import_fingerprints[fp].append(row.source_row_numbers[0])
-
-        # Check against existing positions (only for append/update modes)
-        if mode != ImportBatchMode.create_plan and fp in existing_fingerprints:
-            if "duplicate_sku_due_date" not in errors:
-                errors.append("duplicate_sku_due_date")
+            import_fingerprints[fp] = {"row_hashes": set(), "row_numbers": set()}
+        fp_entry = import_fingerprints[fp]
+        row_hashes = fp_entry["row_hashes"]
+        row_numbers = fp_entry["row_numbers"]
+        if isinstance(row_hashes, set):
+            row_hashes.add(row.source_row_hash)
+        if isinstance(row_numbers, set):
+            # Use only the canonical (first) row number to avoid false positives
+            # from paired profile rows which have multiple source_row_numbers.
+            canonical_row = row.source_row_numbers[0] if row.source_row_numbers else row.source_row_number
+            row_numbers.add(canonical_row)
 
         change_action = PlanChangeAction.create_position
         before_data = None
         plan_position_id = None
 
+        existing_by_fp = None
         if mode != ImportBatchMode.create_plan:
             existing_by_fp = by_fingerprint.get(row.source_fingerprint)
             if existing_by_fp is not None:
@@ -691,6 +676,11 @@ async def _make_change_items(
                     change_action = PlanChangeAction.mark_possible_duplicate
                     plan_position_id = existing_by_fp.id
 
+        # Duplicate against existing data
+        if mode != ImportBatchMode.create_plan and fp in existing_fingerprints:
+            if "duplicate_sku_due_date" not in errors:
+                errors.append("duplicate_sku_due_date")
+
         status = PlanChangeItemStatus.invalid if errors else PlanChangeItemStatus.warning if warnings else PlanChangeItemStatus.pending
         if change_action == PlanChangeAction.mark_possible_duplicate and status == PlanChangeItemStatus.pending:
             status = PlanChangeItemStatus.warning
@@ -712,9 +702,11 @@ async def _make_change_items(
 
     # Mark intra-import duplicates: fingerprints that appear more than once
     duplicate_pairs: dict[str, list[int]] = {}
-    for fp, rows in import_fingerprints.items():
-        if len(rows) > 1:
-            duplicate_pairs[fp] = rows
+    for fp, fp_entry in import_fingerprints.items():
+        row_hashes = fp_entry["row_hashes"]
+        row_numbers = fp_entry["row_numbers"]
+        if isinstance(row_numbers, set) and len(row_numbers) > 1:
+            duplicate_pairs[fp] = sorted(row_numbers)
 
     if duplicate_pairs:
         for item in items:
@@ -744,6 +736,7 @@ async def _make_change_items(
                         if pos.source_fingerprint == fp:
                             item.after_data["duplicate_existing_id"] = pos.id
                             item.after_data["duplicate_existing_row"] = pos.source_row_number
+                            item.after_data["duplicate_existing_payload"] = pos.source_payload
                             item.after_data["duplicate_type"] = "against_existing"
                             break
 

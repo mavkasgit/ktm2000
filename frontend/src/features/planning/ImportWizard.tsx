@@ -1,13 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState, Fragment } from "react"
 import { Check, ExternalLink, Upload, ChevronRight, ChevronDown } from "lucide-react"
 import { useNavigate } from "react-router-dom"
-import { uploadExcel, applyChangeSet, discardImport, runDemoFullRoute } from "./api"
+import { uploadExcel, applyChangeSet, discardImport } from "./api"
 import { getExcelSheetNames, previewExcelSheet, type SheetPreviewResponse } from "shared/api/imports"
 import { Button, Input, AlertDialog, AlertDialogContent, AlertDialogHeader, AlertDialogTitle, AlertDialogDescription, AlertDialogFooter, AlertDialogAction, AlertDialogCancel } from "shared/ui"
 import { useQuery } from "@tanstack/react-query"
-import { listRoutes, getRoute, type ProductionRoute, type RouteStep } from "@/shared/api/routes"
-import { listTechcards, type Techcard } from "@/shared/api/techcards"
-import { listProducts, type Product } from "@/shared/api/products"
 import { listImportTemplates, type ImportTemplate } from "@/shared/api/importTemplates"
 import { getErrorMessage } from "@/shared/api/client"
 import {
@@ -47,7 +44,7 @@ const errorLabelsRaw: Record<string, string> = {
   active_route_has_no_steps: "Маршрут без этапов",
   route_sequence_invalid: "Неверная последовательность маршрута",
   route_contains_inactive_section: "Неактивный участок",
-  duplicate_sku_due_date: "Дубликат по артикулу и сроку",
+  duplicate_sku_due_date: "Дубликат строки Excel",
   route_primary_operation_mismatch: "Основная операция маршрута не совпадает",
   route_not_matching_import_signature: "Маршрут не совпадает",
   route_missing_required_step: "Отсутствует обязательный этап",
@@ -69,12 +66,27 @@ const warningLabelsRaw: Record<string, string> = {
   route_auto_fallback: "Маршрут скорректирован автоматически — проверьте корректность",
 };
 
-function translateLabels(codes: string[] | unknown, labels: Record<string, string>): string {
+function translateLabels(codes: string[] | unknown, labels: Record<string, string>, afterData?: Record<string, unknown>): string {
   if (!Array.isArray(codes)) return String(codes ?? "");
   if (codes.length === 0) return "—";
   return codes.map((c) => {
     // Handle codes with prefix like "paired_row_auto_included:12,13"
     const [code] = String(c).split(":");
+    // Special handling for duplicate error - show specific row numbers
+    if (code === "duplicate_sku_due_date" && afterData) {
+      const duplicateRows = afterData.duplicate_rows as number[] | undefined;
+      const duplicateType = String(afterData.duplicate_type ?? "");
+      if (duplicateType === "within_import" && Array.isArray(duplicateRows) && duplicateRows.length > 0) {
+        const rowsList = duplicateRows.map((n) => `#${n}`).join(", ");
+        return `Дубликат строк ${rowsList}`;
+      }
+      if (duplicateType === "against_existing") {
+        const existingRow = afterData.duplicate_existing_row as number | undefined;
+        if (existingRow != null) {
+          return `Дубликат строки #${existingRow} из плана`;
+        }
+      }
+    }
     return labels[code] ?? String(c);
   }).join(", ");
 }
@@ -141,6 +153,7 @@ function RawPreviewTable({ rows, sortConfig, onSort, expanded }: RawPreviewTable
       <thead className="border-b bg-muted/50">
         <tr>
           <th className="text-left p-2 w-10"></th>
+          <th className="text-left p-2 w-20 whitespace-nowrap">Id</th>
           <th
             onClick={() => onSort?.("source_row_number")}
             className="text-left p-2 w-10 cursor-pointer select-none whitespace-nowrap"
@@ -194,21 +207,106 @@ function RawPreviewTable({ rows, sortConfig, onSort, expanded }: RawPreviewTable
       </thead>
       <tbody>
         {rows.map((row, idx) => {
+          const afterData = (row.after_data as Record<string, unknown> | undefined) ?? {};
           const status = String(row.status ?? "");
-          const errors = translateLabels(row.errors as string[] | undefined, errorLabelsRaw);
+          const errors = translateLabels(row.errors as string[] | undefined, errorLabelsRaw, afterData);
           const warnings = translateLabels(row.warnings as string[] | undefined, warningLabelsRaw);
-          const rowNumbers = (row.payload as any)?.row_numbers as number[] | undefined;
-          const rowNumDisplay = Array.isArray(rowNumbers) && rowNumbers.length > 1
-            ? rowNumbers.map((n: number) => `#${n}`).join(", ")
-            : `#${row.source_row_number ?? rowNumbers?.[0] ?? "—"}`;
+          const rowNumbers = ((row.payload as any)?.row_numbers as number[] | undefined) ?? (afterData.source_row_numbers as number[] | undefined);
+          const uniqueRowNumbers = Array.isArray(rowNumbers)
+            ? Array.from(new Set(rowNumbers.filter((n): n is number => Number.isFinite(n))))
+            : [];
+          const rowNumDisplay = uniqueRowNumbers.length > 1
+            ? uniqueRowNumbers.map((n) => `#${n}`).join(", ")
+            : `#${row.source_row_number ?? uniqueRowNumbers[0] ?? "—"}`;
           const rawRow = (row.payload as any)?.raw_excel_row as Record<string, string> | undefined;
+          const rawColumns = (row.payload as any)?.raw_columns as Record<string, string> | undefined;
           const rawColumnsByRow = (row.payload as any)?.raw_columns_by_row as Record<string, Record<string, string>> | undefined;
-          const allRawRows = rawColumnsByRow
-            ? Object.entries(rawColumnsByRow).sort(([a], [b]) => Number(a) - Number(b)).map(([num, data]) => ({ rowNumber: num, data }))
-            : rawRow
-              ? [{ rowNumber: String(row.source_row_number ?? ""), data: rawRow }]
-              : [];
-          const routeMeta = buildRouteMetaLabel(row as Record<string, unknown>);
+
+          // Build raw rows preferring raw_columns (header order) over raw_excel_row (column_map order)
+          const buildRawRowsFromColumns = (
+            columnsByRow: Record<string, Record<string, string>> | undefined,
+            singleColumns: Record<string, string> | undefined,
+            singleRawRow: Record<string, string> | undefined,
+            fallbackRowNum: string,
+          ): { rowNumber: string; data: Record<string, string> }[] => {
+            if (columnsByRow && Object.keys(columnsByRow).length > 0) {
+              return Object.entries(columnsByRow)
+                .sort(([a], [b]) => Number(a) - Number(b))
+                .map(([num, data]) => ({ rowNumber: num, data }));
+            }
+            if (singleColumns && Object.keys(singleColumns).length > 0) {
+              return [{ rowNumber: fallbackRowNum, data: singleColumns }];
+            }
+            if (singleRawRow) {
+              return [{ rowNumber: fallbackRowNum, data: singleRawRow }];
+            }
+            return [];
+          };
+
+          const allRawRows = buildRawRowsFromColumns(
+            rawColumnsByRow, rawColumns, rawRow, String(row.source_row_number ?? ""),
+          );
+
+          // Also check after_data.source_payload for server-side items
+          const sourcePayload = (afterData.source_payload as Record<string, unknown> | undefined) ?? {};
+          const serverRawColumns = sourcePayload.raw_columns as Record<string, string> | undefined;
+          const serverRawColumnsByRow = sourcePayload.raw_columns_by_row as Record<string, Record<string, string>> | undefined;
+          const serverRawRow = sourcePayload.raw_excel_row as Record<string, string> | undefined;
+          const serverRawRows = buildRawRowsFromColumns(
+            serverRawColumnsByRow as any, serverRawColumns, serverRawRow as any,
+            String((sourcePayload.row_numbers as number[] | undefined)?.[0] ?? row.source_row_number ?? ""),
+          );
+
+          // For against_existing duplicates, get the existing DB row raw data
+          // Reorder duplicate columns to match the Excel row column order for easy comparison
+          const duplicateType = String(afterData.duplicate_type ?? "");
+          const dupExistingPayload = (afterData.duplicate_existing_payload as Record<string, unknown> | undefined) ?? {};
+          const dupExistingRawColumns = dupExistingPayload.raw_columns as Record<string, string> | undefined;
+          const dupExistingRawColumnsByRow = dupExistingPayload.raw_columns_by_row as Record<string, Record<string, string>> | undefined;
+          const dupExistingRawRow = dupExistingPayload.raw_excel_row as Record<string, string> | undefined;
+          const dupExistingRawRowsUnordered = buildRawRowsFromColumns(
+            dupExistingRawColumnsByRow as any, dupExistingRawColumns, dupExistingRawRow as any,
+            String((dupExistingPayload.row_numbers as number[] | undefined)?.[0] ?? afterData.duplicate_existing_row ?? ""),
+          );
+
+          const effectiveRawRows = allRawRows.length > 0 ? allRawRows : serverRawRows;
+          const hasRawData = effectiveRawRows.length > 0 || dupExistingRawRowsUnordered.length > 0;
+
+          // Reorder duplicate columns to match first available Excel row column order
+          const refColumnOrder = effectiveRawRows.length > 0
+            ? Object.keys(effectiveRawRows[0].data)
+            : (serverRawRows.length > 0 ? Object.keys(serverRawRows[0].data) : []);
+          const reorderColumns = (data: Record<string, string>, order: string[]): Record<string, string> => {
+            if (order.length === 0) return data;
+            const result: Record<string, string> = {};
+            for (const key of order) {
+              if (key in data) result[key] = data[key];
+            }
+            for (const key of Object.keys(data)) {
+              if (!(key in result)) result[key] = data[key];
+            }
+            return result;
+          };
+          const dupExistingRawRows = dupExistingRawRowsUnordered.map(r => ({
+            ...r,
+            data: reorderColumns(r.data, refColumnOrder),
+            isDuplicate: true,
+          }));
+          const routeMeta = buildRouteMetaLabel({ ...(row as Record<string, unknown>), ...afterData });
+          const displaySku = String(afterData.source_sku ?? row.source_sku ?? "");
+          const rawQty = afterData.quantity ?? row.quantity ?? "";
+          const numQty = Number(rawQty);
+          const displayQty = Number.isFinite(numQty) ? (Number.isInteger(numQty) ? String(numQty) : String(numQty)) : String(rawQty);
+          const displayName = String(afterData.source_name ?? row.source_name ?? "");
+          const displayRouteName = String(afterData.route_name ?? row.route_name ?? "");
+          const predictedId = (row as any)._predicted_id as number | undefined;
+          const planPosId = row.plan_position_id as number | undefined;
+          const dbId = planPosId ?? predictedId;
+          const duplicateExistingId = afterData.duplicate_existing_id as number | undefined;
+          const idDisplay = dbId != null ? `#${dbId}` : "—";
+          const idDisplayWithDuplicate = duplicateExistingId != null
+            ? `${idDisplay} / #${duplicateExistingId}`
+            : idDisplay;
           const isExpanded = expanded || expandedRows.has(idx);
           return (
             <Fragment key={idx}>
@@ -217,23 +315,24 @@ function RawPreviewTable({ rows, sortConfig, onSort, expanded }: RawPreviewTable
               style={{
                 background: status === "invalid" ? "#fef2f2" : status === "warning" ? "#fffbeb" : undefined,
               }}
-              onClick={() => rawRow && toggleRow(idx)}
+              onClick={() => hasRawData && toggleRow(idx)}
             >
               <td className="p-2">
-                {isExpanded && rawRow ? (
+                {isExpanded && hasRawData ? (
                   <ChevronDown className="h-3 w-3 text-muted-foreground" />
                 ) : (
                   <ChevronRight className="h-3 w-3 text-muted-foreground" />
                 )}
               </td>
+              <td className="p-2 font-semibold whitespace-nowrap">{idDisplayWithDuplicate}</td>
               <td className="p-2 font-semibold whitespace-nowrap">{rowNumDisplay}</td>
-              <td className="p-2">{String(row.source_sku ?? "")}</td>
-              <td className="p-2">{String(row.quantity ?? "")}</td>
-              <td className="p-2">{String(row.source_name ?? "")}</td>
+              <td className="p-2">{displaySku}</td>
+              <td className="p-2">{displayQty}</td>
+              <td className="p-2">{displayName}</td>
               <td className="p-2 text-xs">
-                {row.route_name ? (
+                {displayRouteName ? (
                   <span title={routeMeta}>
-                    {String(row.route_name)}{" "}
+                    {displayRouteName}{" "}
                     {routeMeta && (
                       <span className="text-muted-foreground">
                         ({routeMeta})
@@ -245,18 +344,47 @@ function RawPreviewTable({ rows, sortConfig, onSort, expanded }: RawPreviewTable
               <td className="p-2 text-red-600">{errors}</td>
               <td className="p-2 text-amber-600">{warnings}</td>
             </tr>
-            {isExpanded && allRawRows.length > 0 && (
+            {isExpanded && (effectiveRawRows.length > 0 || dupExistingRawRows.length > 0) && (
               <>
-                {allRawRows.map((r, rowIdx) => (
-                  <tr key={rowIdx} className="border-b bg-muted/30">
-                    <td colSpan={9} className="p-2 pl-6 text-[11px] leading-relaxed font-mono">
-                      <div className="flex items-start gap-2">
-                        <span className="font-bold text-muted-foreground shrink-0">#{r.rowNumber}:</span>
-                        <span>{Object.values(r.data).filter(Boolean).join(" | ")}</span>
-                      </div>
-                    </td>
-                  </tr>
-                ))}
+                {effectiveRawRows.length > 0 && (
+                  <>
+                    {effectiveRawRows.map((r, rowIdx) => {
+                      return (
+                      <tr key={`raw-${rowIdx}`} className="border-b bg-muted/30">
+                        <td colSpan={9} className="p-2 pl-6 text-[11px] leading-relaxed font-mono">
+                          <div className="flex items-start gap-2">
+                            <span className="font-bold text-muted-foreground shrink-0">
+                              {dbId != null ? `(#${dbId}) ` : ""}
+                              {duplicateExistingId != null ? `(#${duplicateExistingId}) ` : ""}
+                              #{r.rowNumber}:
+                            </span>
+                            <span>{Object.values(r.data).filter(Boolean).join(" | ")}</span>
+                          </div>
+                        </td>
+                      </tr>
+                      );
+                    })}
+                  </>
+                )}
+                {dupExistingRawRows.length > 0 && (
+                  <>
+                    {dupExistingRawRows.map((r, rowIdx) => {
+                      const dupId = afterData.duplicate_existing_id as number | undefined;
+                      return (
+                      <tr key={`dup-${rowIdx}`} className="border-b bg-red-50/50">
+                        <td colSpan={9} className="p-2 pl-6 text-[11px] leading-relaxed font-mono">
+                          <div className="flex items-start gap-2">
+                            <span className="font-bold text-red-600 shrink-0">
+                              {dupId ? `(#${dupId}) ` : ""}#{r.rowNumber} (дубликат):
+                            </span>
+                            <span>{Object.values(r.data).filter(Boolean).join(" | ")}</span>
+                          </div>
+                        </td>
+                      </tr>
+                      );
+                    })}
+                  </>
+                )}
               </>
             )}
             </Fragment>
@@ -279,7 +407,6 @@ export function ImportWizard(props: {
   open: boolean
   onClose: () => void
   onSuccess: (planId: string, changeSetId: string) => void
-  mode?: "normal" | "test"
   productionPlanId?: number
   templateId?: number
 }) {
@@ -298,67 +425,24 @@ export function ImportWizard(props: {
   const [planMonth, setPlanMonth] = useState("")
   const [planVersion, setPlanVersion] = useState("")
   const [rowSelection, setRowSelection] = useState("")
-  const [testRunId, setTestRunId] = useState("")
-  const [testTechcardId, setTestTechcardId] = useState("")
-  const [testRouteId, setTestRouteId] = useState("")
-  const [testQuantity, setTestQuantity] = useState("100")
-  const [scenarioId, setScenarioId] = useState("")
-  const [stagePreset, setStagePreset] = useState<"before_approve" | "after_approve" | "after_release" | "to_step_ready" | "full_route">("before_approve")
-  const [targetRouteStepId, setTargetRouteStepId] = useState("")
   const [pendingChangeSet, setPendingChangeSet] = useState<{ planId: string; changeSetId: string } | null>(null)
+  const [showApplyConfirm, setShowApplyConfirm] = useState(false)
   const [showCloseConfirm, setShowCloseConfirm] = useState(false)
   const [showRawRows, setShowRawRows] = useState(false)
   const [activeTemplateId, setActiveTemplateId] = useState<number | null>(props.templateId ?? null)
 
   const fileInputRef = useRef<HTMLInputElement>(null)
   const navigate = useNavigate()
-
-  const { data: techcards } = useQuery<Techcard[]>({
-    queryKey: ["techcards", "test-import-modal"],
-    queryFn: listTechcards,
-    enabled: props.open && props.mode === "test",
-  })
-  const { data: routes } = useQuery<ProductionRoute[]>({
-    queryKey: ["routes", "test-import-modal"],
-    queryFn: () => listRoutes(),
-    enabled: props.open && props.mode === "test",
-  })
-  const { data: products } = useQuery<Product[]>({
-    queryKey: ["products", "test-import-modal"],
-    queryFn: () => listProducts({ limit: 2000 }),
-    enabled: props.open && props.mode === "test",
-  })
-  const { data: routeDetail } = useQuery({
-    queryKey: ["route", testRouteId],
-    queryFn: () => getRoute(Number(testRouteId)),
-    enabled: props.open && props.mode === "test" && !!testRouteId && stagePreset === "to_step_ready",
-  })
   const { data: templates } = useQuery<ImportTemplate[]>({
     queryKey: ["import-templates", "import-modal"],
     queryFn: listImportTemplates,
-    enabled: props.open && props.mode !== "test",
+    enabled: props.open,
   })
 
   useEffect(() => {
-    if (props.mode !== "test") return
-    if (!testTechcardId && techcards && techcards.length > 0) {
-      const firstWithProduct = techcards.find((t) => t.product_id && t.is_active);
-      if (firstWithProduct) setTestTechcardId(String(firstWithProduct.id));
-    }
-  }, [props.mode, techcards, testTechcardId])
-
-  useEffect(() => {
-    if (props.mode !== "test") return
-    const activeRoutes = (routes || []).filter((r) => r.is_active);
-    if (!testRouteId && activeRoutes.length > 0) {
-      setTestRouteId(String(activeRoutes[0].id));
-    }
-  }, [props.mode, routes, testRouteId])
-
-  useEffect(() => {
-    if (!props.open || props.mode === "test") return
+    if (!props.open) return
     setActiveTemplateId(props.templateId ?? null)
-  }, [props.open, props.mode, props.templateId])
+  }, [props.open, props.templateId])
 
   const activeTemplates = useMemo(
     () => (templates ?? []).filter((template) => template.is_active).sort((a, b) => a.sort_order - b.sort_order || a.id - b.id),
@@ -373,6 +457,7 @@ export function ImportWizard(props: {
     if (step !== "preview" || !file) return
     setSheetPreviews({})
     setPreviewLoading({})
+    setPendingChangeSet(null)
     loadSheetPreview(file, selectedSheet, rowSelection)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeTemplateId, rowSelection])
@@ -385,7 +470,24 @@ export function ImportWizard(props: {
   const currentPreview = sheetPreviews[currentPreviewKey] ?? null
 
   const allRows = useMemo(() => {
-    return (currentPreview?.items as Record<string, unknown>[]) ?? []
+    const base = (currentPreview?.items as Record<string, unknown>[]) ?? []
+    // Compute predicted DB IDs: for rows without persisted plan_position_id,
+    // assign sequential IDs starting from max visible DB id.
+    let maxId = 0
+    for (const r of base) {
+      const pid = r.plan_position_id as number | undefined
+      if (pid != null && pid > maxId) maxId = pid
+      const dupId = (r.after_data as Record<string, unknown> | undefined)?.duplicate_existing_id
+      if (typeof dupId === "number" && dupId > maxId) maxId = dupId
+    }
+    let nextId = maxId + 1
+    return base.map((r) => {
+      const pid = r.plan_position_id as number | undefined
+      if (pid == null) {
+        return { ...r, _predicted_id: nextId++ }
+      }
+      return r
+    })
   }, [currentPreview])
 
   const filteredRows = useMemo(() => {
@@ -459,6 +561,20 @@ export function ImportWizard(props: {
     return { total, invalid, warning }
   }, [allRows])
 
+  const applyStats = useMemo(() => {
+    const total = summary.total
+    const invalid = summary.invalid
+    const warning = summary.warning
+    return {
+      total,
+      invalid,
+      warning,
+      normal: Math.max(total - invalid - warning, 0),
+      uploadAll: total,
+      uploadSkipInvalid: Math.max(total - invalid, 0),
+    }
+  }, [summary])
+
   const errorBreakdown = useMemo(() => {
     const counts: Record<string, number> = {}
     for (const row of allRows) {
@@ -484,6 +600,7 @@ export function ImportWizard(props: {
       setSelectedSheet(0)
       setSheetPreviews({})
       setPreviewLoading({})
+      setPendingChangeSet(null)
       setStep("preview")
       // Auto-load preview for first sheet
       loadSheetPreview(f, 0, rowSelection)
@@ -503,6 +620,8 @@ export function ImportWizard(props: {
         sheet_index: sheetIdx,
         row_selection: selection.trim() || undefined,
         template_id: activeTemplateId ?? undefined,
+        mode: props.productionPlanId ? "append_to_plan" : "create_plan",
+        production_plan_id: props.productionPlanId,
       })
       setSheetPreviews((prev) => ({ ...prev, [cacheKey]: data }))
     } catch {
@@ -512,82 +631,62 @@ export function ImportWizard(props: {
     }
   }
 
-  async function handleApply() {
+  async function handleApplyConfirmed(skipInvalid: boolean) {
     if (!file) return
     if (!activeTemplateId) {
       setError("Выберите шаблон импорта перед применением")
       return
     }
+
+    setShowApplyConfirm(false)
     setLoading(true)
     setError(null)
+    let changeSet = pendingChangeSet
+    let createdNow = false
     try {
-      const uploaded = await uploadExcel(file, {
-        templateId: activeTemplateId ?? undefined,
-        productionPlanId: props.productionPlanId,
-        planMonth: planMonth || undefined,
-        planVersion: planVersion || undefined,
-        rowSelection: rowSelection || undefined,
-        sheetIndex: selectedSheet,
-      })
-      const planId = String(uploaded.planId ?? uploaded.production_plan_id ?? "")
-      const changeSetId = String(uploaded.changeSetId ?? uploaded.change_set_id ?? "")
-      if (!planId || !changeSetId) {
-        setError("Не найден planId или changeSetId")
-        return
+      if (!changeSet) {
+        const uploaded = await uploadExcel(file, {
+          templateId: activeTemplateId,
+          productionPlanId: props.productionPlanId,
+          planMonth: planMonth || undefined,
+          planVersion: planVersion || undefined,
+          rowSelection: rowSelection || undefined,
+          sheetIndex: selectedSheet,
+        })
+        const planId = String(uploaded.planId ?? uploaded.production_plan_id ?? "")
+        const changeSetId = String(uploaded.changeSetId ?? uploaded.change_set_id ?? "")
+        if (!planId || !changeSetId) {
+          throw new Error("Не найден planId или changeSetId")
+        }
+        changeSet = { planId, changeSetId }
+        createdNow = true
+        setPendingChangeSet(changeSet)
       }
-      const data = await applyChangeSet(planId, changeSetId)
+
+      const data = await applyChangeSet(changeSet.planId, changeSet.changeSetId, { skipInvalid })
       setResult(data)
       setPendingChangeSet(null)
       setStep("result")
-      props.onSuccess(planId, changeSetId)
+      props.onSuccess(changeSet.planId, changeSet.changeSetId)
     } catch (e) {
+      // If apply failed right after creating a change set, cleanup immediately.
+      if (createdNow && changeSet) {
+        discardImport(changeSet.planId, changeSet.changeSetId).catch(() => {})
+        setPendingChangeSet(null)
+      }
       setError(getErrorMessage(e))
     } finally {
       setLoading(false)
     }
   }
 
-  async function handleFullRouteRun() {
-    if (!testTechcardId) {
-      setError("Выберите техкарту")
+  function handleApply() {
+    if (!file) return
+    if (!activeTemplateId) {
+      setError("Выберите шаблон импорта перед применением")
       return
     }
-    if (!testRouteId) {
-      setError("Выберите маршрут")
-      return
-    }
-    if (stagePreset === "to_step_ready" && !targetRouteStepId) {
-      setError("Выберите целевой шаг маршрута")
-      return
-    }
-    setLoading(true)
-    setError(null)
-    try {
-      const parsedQty = Number(testQuantity || "100")
-      const data = await runDemoFullRoute({
-        initial_quantity: Number.isFinite(parsedQty) && parsedQty > 0 ? parsedQty : 100,
-        techcard_id: Number(testTechcardId),
-        route_id: Number(testRouteId),
-        run_id: testRunId || undefined,
-        scenario_id: scenarioId.trim() || undefined,
-        plan_month: planMonth || undefined,
-        plan_version: planVersion || undefined,
-        production_plan_id: props.productionPlanId,
-        stage_preset: stagePreset,
-        target_route_step_id: stagePreset === "to_step_ready" ? Number(targetRouteStepId) : null,
-      })
-      setResult({
-        ...data,
-        is_demo_run: true,
-      })
-      setPendingChangeSet(null)
-      setStep("result")
-      props.onSuccess(String(data.production_plan_id), "0")
-    } catch (e) {
-      setError(getErrorMessage(e))
-    } finally {
-      setLoading(false)
-    }
+    setShowApplyConfirm(true)
   }
 
   function toggleSort(key: string) {
@@ -599,6 +698,10 @@ export function ImportWizard(props: {
   }
 
   function reset() {
+    // Discard any pending change set on reset
+    if (pendingChangeSet) {
+      discardImport(pendingChangeSet.planId, pendingChangeSet.changeSetId).catch(() => {})
+    }
     setStep("upload")
     setFile(null)
     setSheets([])
@@ -613,11 +716,6 @@ export function ImportWizard(props: {
     setPlanMonth("")
     setPlanVersion("")
     setRowSelection("")
-    setTestRunId("")
-    setScenarioId("")
-    setTestQuantity("100")
-    setStagePreset("before_approve")
-    setTargetRouteStepId("")
     setPendingChangeSet(null)
     setShowRawRows(false)
     if (fileInputRef.current) {
@@ -636,9 +734,6 @@ export function ImportWizard(props: {
 
   function handleForceClose() {
     setShowCloseConfirm(false)
-    if (pendingChangeSet) {
-      discardImport(pendingChangeSet.planId, pendingChangeSet.changeSetId)
-    }
     reset()
     props.onClose()
   }
@@ -648,13 +743,9 @@ export function ImportWizard(props: {
       <Dialog open={props.open} onOpenChange={(open) => { if (!open) handleClose() }}>
       <DialogContent className={`w-full max-h-[95vh] overflow-hidden flex flex-col ${step === "preview" ? "max-w-[95vw]" : "max-w-2xl"}`}>
         <DialogHeader>
-          <DialogTitle>
-            {props.mode === "test" ? "Тестовый импорт плана" : "Импорт производственного плана"}
-          </DialogTitle>
+          <DialogTitle>Импорт производственного плана</DialogTitle>
           <DialogDescription>
-            {props.mode === "test"
-              ? "Загрузка тестового плана (ЮП-2630) для проверки"
-              : "Загрузите файл Excel, выберите лист и строки, затем примените"}
+            Загрузите файл Excel, выберите лист и строки, затем примените
           </DialogDescription>
         </DialogHeader>
 
@@ -666,112 +757,6 @@ export function ImportWizard(props: {
 
         {step === "upload" && (
           <div className="space-y-4">
-            {props.mode === "test" ? (
-              <div className="space-y-4 py-1">
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                  <div>
-                    <label className="text-xs text-muted-foreground">Техкарта</label>
-                    <select
-                      className="h-10 w-full rounded-md border bg-background px-3 text-sm"
-                      value={testTechcardId}
-                      onChange={(e) => setTestTechcardId(e.target.value)}
-                    >
-                      <option value="">Выберите техкарту...</option>
-                      {(techcards || [])
-                        .filter((tc) => tc.product_id && tc.is_active)
-                        .map((tc) => {
-                          const product = (products || []).find((p) => p.id === tc.product_id);
-                          const article = (product?.sku || "—").trim();
-                          const productName = (product?.name || tc.version || "—").trim();
-                          return (
-                            <option key={tc.id} value={String(tc.id)}>
-                              Арт: {article} · {productName} · ТК #{tc.id}
-                            </option>
-                          );
-                        })}
-                    </select>
-                  </div>
-                  <div>
-                    <label className="text-xs text-muted-foreground">Маршрут</label>
-                    <select
-                      className="h-10 w-full rounded-md border bg-background px-3 text-sm"
-                      value={testRouteId}
-                      onChange={(e) => setTestRouteId(e.target.value)}
-                    >
-                      <option value="">Выберите маршрут...</option>
-                      {(routes || [])
-                        .filter((r) => r.is_active)
-                        .map((route) => (
-                          <option key={route.id} value={String(route.id)}>
-                            #{route.id} · {route.name}
-                          </option>
-                        ))}
-                    </select>
-                  </div>
-                  <div>
-                    <label className="text-xs text-muted-foreground">Стадия остановки</label>
-                    <select
-                      className="h-10 w-full rounded-md border bg-background px-3 text-sm"
-                      value={stagePreset}
-                      onChange={(e) => setStagePreset(e.target.value as any)}
-                    >
-                      <option value="before_approve">До апрува</option>
-                      <option value="after_approve">После апрува</option>
-                      <option value="after_release">После запуска</option>
-                      <option value="to_step_ready">На выбранный шаг ready</option>
-                      <option value="full_route">Полный прогон</option>
-                    </select>
-                  </div>
-                  {stagePreset === "to_step_ready" && (
-                    <div>
-                      <label className="text-xs text-muted-foreground">Целевой шаг маршрута</label>
-                      <select
-                        className="h-10 w-full rounded-md border bg-background px-3 text-sm"
-                        value={targetRouteStepId}
-                        onChange={(e) => setTargetRouteStepId(e.target.value)}
-                      >
-                        <option value="">Выберите шаг...</option>
-                        {(routeDetail?.steps || []).map((step: RouteStep) => (
-                          <option key={step.id} value={String(step.id)}>
-                            #{step.sequence} · {step.section_code} · {step.operation_name}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-                  )}
-                  <div>
-                    <label className="text-xs text-muted-foreground">Количество</label>
-                    <Input value={testQuantity} onChange={(e) => setTestQuantity(e.target.value)} placeholder="100" />
-                  </div>
-                  <div>
-                    <label className="text-xs text-muted-foreground">Run ID (опционально)</label>
-                    <Input value={testRunId} onChange={(e) => setTestRunId(e.target.value)} placeholder="auto" />
-                  </div>
-                  <div>
-                    <label className="text-xs text-muted-foreground">Scenario ID (опционально)</label>
-                    <Input value={scenarioId} onChange={(e) => setScenarioId(e.target.value)} placeholder="none_fg / drill_fg / ..." />
-                  </div>
-                  {!props.productionPlanId && (
-                    <>
-                      <div>
-                        <label className="text-xs text-muted-foreground">Месяц плана</label>
-                        <Input value={planMonth} onChange={(e) => setPlanMonth(e.target.value)} placeholder="Месяц" />
-                      </div>
-                      <div>
-                        <label className="text-xs text-muted-foreground">Версия плана</label>
-                        <Input value={planVersion} onChange={(e) => setPlanVersion(e.target.value)} placeholder="Версия" />
-                      </div>
-                    </>
-                  )}
-                </div>
-                <div className="flex gap-2 justify-end">
-                  <Button onClick={handleFullRouteRun} disabled={loading}>
-                    {loading ? "Запуск…" : "Запустить тест"}
-                  </Button>
-                </div>
-              </div>
-            ) : (
-              <>
               {activeTemplates.length > 0 && (
                 <div className="grid grid-cols-1 gap-3">
                   <div>
@@ -833,8 +818,6 @@ export function ImportWizard(props: {
                   <p className="text-xs text-blue-600 mt-2 font-medium">{file.name}</p>
                 )}
               </div>
-              </>
-            )}
           </div>
         )}
 
@@ -875,7 +858,7 @@ export function ImportWizard(props: {
               </span>
             </div>
 
-            {props.mode !== "test" && activeTemplates.length > 0 && (
+            {activeTemplates.length > 0 && (
               <div className="flex items-center gap-3 shrink-0">
                 <div className="w-full max-w-md">
                   <label className="text-xs text-muted-foreground">Шаблон импорта</label>
@@ -1000,59 +983,6 @@ export function ImportWizard(props: {
 
         {step === "result" && result && (
           <div className="text-center py-6">
-            {(result as any).is_demo_run ? (
-              <div className="space-y-4 text-left">
-                <div className="inline-flex items-center justify-center w-16 h-16 rounded-full bg-green-100 mb-1">
-                  <Check className="h-8 w-8 text-green-600" />
-                </div>
-                <h3 className="text-lg font-medium">
-                  {(result as any).stopped_at_stage === "completed" 
-                    ? "Сквозной прогон выполнен" 
-                    : `Остановлено на стадии: ${(result as any).stopped_at_stage || "—"}`}
-                </h3>
-                <div className="grid grid-cols-2 gap-3 text-sm">
-                  <div className="rounded border p-2">
-                    <div className="text-muted-foreground">Run ID</div>
-                    <div className="font-medium">{String((result as any).run_id || "—")}</div>
-                  </div>
-                  <div className="rounded border p-2">
-                    <div className="text-muted-foreground">Позиция</div>
-                    <div className="font-medium">#{String((result as any).plan_position_id || "—")}</div>
-                  </div>
-                  <div className="rounded border p-2">
-                    <div className="text-muted-foreground">Стадия</div>
-                    <div className="font-medium">{String((result as any).stage_preset || "—")}</div>
-                  </div>
-                  <div className="rounded border p-2">
-                    <div className="text-muted-foreground">Шагов выполнено</div>
-                    <div className="font-medium">{(result as any).tasks_created || 0}</div>
-                  </div>
-                </div>
-                <div className="max-h-56 overflow-auto rounded border">
-                  <table className="w-full text-xs">
-                    <thead className="bg-muted/50 border-b">
-                      <tr>
-                        <th className="text-left p-2">Участок</th>
-                        <th className="text-left p-2">Вход</th>
-                        <th className="text-left p-2">Брак</th>
-                        <th className="text-left p-2">Годные</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {(((result as any).stage_results as any[]) || []).map((s, idx) => (
-                        <tr key={`${s.section_id}-${idx}`} className="border-b">
-                          <td className="p-2">{s.section_code}</td>
-                          <td className="p-2">{s.input_qty}</td>
-                          <td className="p-2">{s.defect_qty} ({s.defect_percent}%)</td>
-                          <td className="p-2">{s.good_qty}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-            ) : (
-              <>
                 <div className="inline-flex items-center justify-center w-16 h-16 rounded-full bg-green-100 mb-4">
                   <Check className="h-8 w-8 text-green-600" />
                 </div>
@@ -1067,8 +997,6 @@ export function ImportWizard(props: {
                     <div className="text-muted-foreground">Обновлено</div>
                   </div>
                 </div>
-              </>
-            )}
           </div>
         )}
 
@@ -1079,7 +1007,7 @@ export function ImportWizard(props: {
                 Назад
               </Button>
               <Button onClick={handleApply} disabled={loading || !currentPreview}>
-                {loading ? "Применение…" : "Применить изменения"}
+                {loading ? "Проверка…" : "Применить изменения"}
               </Button>
             </>
           )}
@@ -1101,6 +1029,57 @@ export function ImportWizard(props: {
         <AlertDialogFooter>
           <AlertDialogCancel onClick={() => setShowCloseConfirm(false)}>Отмена</AlertDialogCancel>
           <AlertDialogAction onClick={handleForceClose}>Выйти</AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
+
+    <AlertDialog open={showApplyConfirm} onOpenChange={setShowApplyConfirm}>
+      <AlertDialogContent className="max-w-2xl">
+        <AlertDialogHeader>
+          <AlertDialogTitle>Подтвердите применение</AlertDialogTitle>
+          <div className="mt-2 space-y-3 text-sm">
+            <div className="grid grid-cols-2 gap-2">
+              <div className="rounded border p-2">
+                <div className="text-muted-foreground">Всего строк</div>
+                <div className="font-semibold">{applyStats.total}</div>
+              </div>
+              <div className="rounded border p-2">
+                <div className="text-muted-foreground">Новые</div>
+                <div className="font-semibold text-green-700">{applyStats.normal}</div>
+              </div>
+              <div className="rounded border p-2">
+                <div className="text-muted-foreground">С предупреждениями</div>
+                <div className="font-semibold text-amber-700">{applyStats.warning}</div>
+              </div>
+              <div className="rounded border p-2">
+                <div className="text-muted-foreground">С ошибками</div>
+                <div className="font-semibold text-red-700">{applyStats.invalid}</div>
+              </div>
+            </div>
+            <div className="rounded border p-2">
+              <div className="text-muted-foreground">Файл</div>
+              <div className="font-medium break-all">{file?.name || "—"}</div>
+              <div className="mt-1 text-xs text-muted-foreground">
+                Лист: {sheets[selectedSheet] ?? currentPreview?.sheet_name ?? "—"}; Строки: {rowSelection.trim() || "все"}
+              </div>
+            </div>
+            {applyStats.invalid > 0 && (
+              <AlertDialogDescription>
+                Режим "Пропустить ошибки" загрузит только строки без ошибок.
+              </AlertDialogDescription>
+            )}
+          </div>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel onClick={() => setShowApplyConfirm(false)}>Отмена</AlertDialogCancel>
+          <AlertDialogAction onClick={() => void handleApplyConfirmed(false)} disabled={loading}>
+            Загрузить с ошибками ({applyStats.uploadAll} строк)
+          </AlertDialogAction>
+          {applyStats.invalid > 0 && (
+            <Button onClick={() => void handleApplyConfirmed(true)} disabled={loading}>
+              Загрузить ({applyStats.uploadSkipInvalid} строк)
+            </Button>
+          )}
         </AlertDialogFooter>
       </AlertDialogContent>
     </AlertDialog>

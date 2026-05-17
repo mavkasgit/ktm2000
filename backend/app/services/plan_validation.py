@@ -26,7 +26,7 @@ VALIDATION_ERROR_MESSAGES: dict[str, str] = {
     "active_route_has_no_steps": "Маршрут не содержит этапов",
     "route_sequence_invalid": "Неверная последовательность этапов в маршруте",
     "route_contains_inactive_section": "Маршрут содержит неактивный участок",
-    "duplicate_sku_due_date": "Дубликат: позиция с таким артикулом и сроком уже есть в плане. Объедините количество или измените срок.",
+    "duplicate_sku_due_date": "Дубликат строки Excel: такая же строка уже есть в плане.",
     "route_not_matching_import_signature": "Маршрут не совпадает с ожидаемым",
     "route_missing_required_step": "В маршруте отсутствует обязательный этап",
     "route_missing_pack_additional_operation": "В маршруте нет дополнительной операции упаковки",
@@ -146,20 +146,32 @@ async def validate_plan_position(db: AsyncSession, position: PlanPosition) -> li
                 errors.append("route_contains_inactive_section")
                 break
 
-    duplicate_stmt = (
-        select(PlanPosition)
-        .where(
-            PlanPosition.production_plan_id == position.production_plan_id,
-            PlanPosition.source_sku == position.source_sku,
-            PlanPosition.due_date == position.due_date,
-            PlanPosition.status != PlanPositionStatus.cancelled,
+    duplicate_stmt = None
+    if position.source_fingerprint:
+        duplicate_stmt = (
+            select(PlanPosition)
+            .where(
+                PlanPosition.production_plan_id == position.production_plan_id,
+                PlanPosition.source_fingerprint == position.source_fingerprint,
+                PlanPosition.status != PlanPositionStatus.cancelled,
+            )
         )
-    )
-    if position.id is not None:
-        duplicate_stmt = duplicate_stmt.where(PlanPosition.id != position.id)
-    duplicate = await db.scalar(duplicate_stmt)
-    if duplicate is not None:
-        errors.append("duplicate_sku_due_date")
+    elif position.source_row_hash:
+        duplicate_stmt = (
+            select(PlanPosition)
+            .where(
+                PlanPosition.production_plan_id == position.production_plan_id,
+                PlanPosition.source_row_hash == position.source_row_hash,
+                PlanPosition.status != PlanPositionStatus.cancelled,
+            )
+        )
+
+    if duplicate_stmt is not None:
+        if position.id is not None:
+            duplicate_stmt = duplicate_stmt.where(PlanPosition.id != position.id)
+        duplicate = await db.scalar(duplicate_stmt)
+        if duplicate is not None:
+            errors.append("duplicate_sku_due_date")
 
     from app.services.route_validation import validate_route_match
 

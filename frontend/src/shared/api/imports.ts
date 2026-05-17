@@ -69,11 +69,21 @@ export type SheetPreviewResponse = {
 
 export async function previewExcelSheet(
   file: File,
-  options?: { sheet_index?: number; row_selection?: string; template_id?: number },
+  options?: {
+    sheet_index?: number;
+    row_selection?: string;
+    template_id?: number;
+    mode?: ImportBatchMode;
+    production_plan_id?: number;
+  },
 ): Promise<SheetPreviewResponse> {
   const formData = new FormData();
   formData.append("file", file);
   formData.append("sheet_index", String(options?.sheet_index ?? 0));
+  formData.append("mode", options?.mode ?? "create_plan");
+  if (options?.production_plan_id != null) {
+    formData.append("production_plan_id", String(options.production_plan_id));
+  }
   if (options?.row_selection?.trim()) {
     formData.append("row_selection", options.row_selection.trim());
   }

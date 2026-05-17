@@ -139,6 +139,8 @@ class SheetPreviewOut(BaseModel):
 async def preview_excel_sheet_endpoint(
     file: UploadFile = File(...),
     sheet_index: int = Form(0),
+    mode: ImportBatchMode = Form(ImportBatchMode.create_plan),
+    production_plan_id: int | None = Form(None),
     row_selection: str | None = Form(None),
     template_id: int | None = Query(None),
     db: AsyncSession = Depends(get_db),
@@ -173,6 +175,8 @@ async def preview_excel_sheet_endpoint(
         filename=file.filename or "workbook.xls",
         content=content,
         sheet_index=sheet_index,
+        mode=mode,
+        production_plan_id=production_plan_id,
         column_mapping=resolved_mapping,
         normalization_rules=resolved_normalization_rules,
         row_selection=row_selection,
