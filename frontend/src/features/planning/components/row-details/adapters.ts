@@ -32,7 +32,7 @@ const errorLabelsRaw: Record<string, string> = {
   active_route_has_no_steps: "Маршрут без этапов",
   route_sequence_invalid: "Неверная последовательность маршрута",
   route_contains_inactive_section: "Неактивный участок в маршруте",
-  duplicate_sku_due_date: "Дубликат: такой артикул со сроком уже есть",
+  duplicate_sku_due_date: "Дубликат строки Excel: такая же строка уже есть",
   route_primary_operation_mismatch: "Основная операция маршрута не совпадает",
   route_not_matching_import_signature: "Маршрут не совпадает с ожидаемым",
   route_missing_required_step: "Отсутствует обязательный этап в маршруте",
@@ -174,6 +174,12 @@ export function adaptExecutionDetail(detail: ProductionPlanningRowDetail): RowDe
     productionPlanId: detail.production_plan_id,
     stages: detail.stages,
     rawExcelRows: buildRawExcelRows(detail.raw_excel_row, detail.payload),
+    currentStageSectionId: (detail as any).current_stage_section_id,
+    currentStageSectionName: (detail as any).current_stage_section_name,
+    currentStageSectionCode: (detail as any).current_stage_section_code,
+    currentStageSequence: (detail as any).current_stage_sequence,
+    currentStageOperation: (detail as any).current_stage_operation,
+    currentStageTaskStatus: (detail as any).current_stage_task_status,
   }
 }
 

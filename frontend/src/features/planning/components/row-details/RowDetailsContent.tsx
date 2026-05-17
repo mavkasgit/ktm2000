@@ -1,6 +1,9 @@
 import { Badge } from "@/shared/ui"
-import { cn } from "@/shared/utils/cn"
+import { renderIcon } from "@/shared/ui/EntityDialog"
 import { type RowDetailsData } from "./types"
+import { useMemo } from "react"
+import { useQuery } from "@tanstack/react-query"
+import { listSections } from "@/shared/api/sections"
 
 const statusLabels: Record<string, string> = {
   draft: "Черновик",
@@ -41,6 +44,14 @@ function planPreviewUrl(planId: number): string {
   return `/plans/${planId}/preview`
 }
 
+function jumpToPlanPosition(positionId: number): void {
+  const row = document.getElementById(`plan-position-${positionId}`)
+  if (!row) return
+  row.scrollIntoView({ behavior: "smooth", block: "center" })
+  row.classList.add("ring-2", "ring-red-300")
+  setTimeout(() => row.classList.remove("ring-2", "ring-red-300"), 1800)
+}
+
 interface RowDetailsContentProps {
   data: RowDetailsData
   showPlanLink?: boolean
@@ -52,6 +63,23 @@ export function RowDetailsContent({ data, showPlanLink = true }: RowDetailsConte
   const hasRouteCheckIssues = (data.routeCheckIssues?.length ?? 0) > 0
   const hasStages = (data.stages?.length ?? 0) > 0
   const hasRawData = (data.rawExcelRows?.length ?? 0) > 0
+  const hasCurrentStage = data.currentStageSectionName && data.currentStageSequence
+
+  const { data: sectionsData } = useQuery({
+    queryKey: ["sections"],
+    queryFn: listSections,
+    enabled: hasCurrentStage,
+  })
+
+  const sectionMetaById = useMemo(() => {
+    const map = new Map<number, { icon: string | null; icon_color: string | null }>()
+    ;(sectionsData || []).forEach((s) => map.set(s.id, { icon: s.icon, icon_color: s.icon_color }))
+    return map
+  }, [sectionsData])
+
+  const currentSectionId = data.currentStageSectionId
+  const currentSectionMeta = currentSectionId ? sectionMetaById.get(currentSectionId) : null
+  const currentIconColor = currentSectionMeta?.icon_color || "#2563EB"
 
   return (
     <div className="space-y-4">
@@ -67,6 +95,37 @@ export function RowDetailsContent({ data, showPlanLink = true }: RowDetailsConte
                 </pre>
               </div>
             ))}
+          </div>
+        </div>
+      )}
+
+      {/* Current stage */}
+      {hasCurrentStage && (
+        <div className="rounded-lg border border-blue-200 bg-blue-50 p-4">
+          <div className="text-xs font-medium text-blue-800 mb-3">Текущий этап выполнения</div>
+          <div className="flex items-center gap-3">
+            {currentSectionMeta?.icon && (
+              <span
+                className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded"
+                style={{ backgroundColor: `${currentIconColor}20`, color: currentIconColor }}
+              >
+                {renderIcon(currentSectionMeta.icon, "h-5 w-5")}
+              </span>
+            )}
+            <div className="flex-1">
+              <div className="font-semibold text-base text-blue-900">{data.currentStageSectionName}</div>
+              <div className="text-sm text-blue-700">
+                Этап #{data.currentStageSequence} · {data.currentStageOperation}
+              </div>
+            </div>
+            {data.currentStageTaskStatus && (
+              <Badge
+                variant={data.currentStageTaskStatus === "in_progress" ? "default" : "secondary"}
+                className="text-sm px-3 py-1"
+              >
+                {data.currentStageTaskStatus === "in_progress" ? "В работе" : data.currentStageTaskStatus === "ready" ? "Готов" : data.currentStageTaskStatus}
+              </Badge>
+            )}
           </div>
         </div>
       )}
@@ -116,7 +175,7 @@ export function RowDetailsContent({ data, showPlanLink = true }: RowDetailsConte
               </div>
             </div>
           )}
-          <div className={cn("md:col-span-2", !hasStages && "md:col-span-2")}>
+          <div className={`md:col-span-2${!hasStages ? " md:col-span-2" : ""}`}>
             <div className="text-muted-foreground">Маршрут</div>
             <div className="font-medium">
               {data.routeName || data.routeError || "Не назначен"}
@@ -135,6 +194,23 @@ export function RowDetailsContent({ data, showPlanLink = true }: RowDetailsConte
       {hasErrors && (
         <div className="rounded-lg border border-red-200 bg-red-50 p-4">
           <p className="text-sm font-medium text-red-800 mb-2">Ошибки</p>
+          {(data.duplicateConflictIds?.length ?? 0) > 0 && (
+            <div className="mb-3 border-b border-red-200 pb-3">
+              <p className="text-xs text-red-800 mb-2">Конфликтующие позиции:</p>
+              <div className="flex flex-wrap gap-2">
+                {data.duplicateConflictIds!.map((id) => (
+                  <button
+                    key={id}
+                    type="button"
+                    className="text-sm underline text-red-700 hover:no-underline"
+                    onClick={() => jumpToPlanPosition(id)}
+                  >
+                    #{id}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
           <ul className="text-sm text-red-700 space-y-1">
             {data.errors.map((err, i) => (
               <li key={i} className="flex items-start gap-2">
@@ -195,14 +271,40 @@ export function RowDetailsContent({ data, showPlanLink = true }: RowDetailsConte
                 const pct = stage.planned_quantity > 0
                   ? ((stage.completed_quantity / stage.planned_quantity) * 100).toFixed(1)
                   : "0.0"
+                const iconColor = stage.section_icon_color || "#2563EB"
+                const isCurrentStage = Boolean(data.currentStageSectionId && stage.section_id === data.currentStageSectionId)
                 return (
-                  <tr key={stage.route_step_id} className="border-b">
-                    <td className="p-2">#{stage.sequence}</td>
+                  <tr
+                    key={stage.route_step_id}
+                    className={`border-b${isCurrentStage ? " bg-blue-50 border-l-4 border-l-blue-500" : ""}`}
+                  >
                     <td className="p-2">
-                      <div>
-                        <div className="font-medium">{stage.section_name}</div>
-                        <div className="text-xs text-muted-foreground">
-                          {stage.section_code} · {stage.operation_name}
+                      <div className="flex items-center gap-2">
+                        #{stage.sequence}
+                        {isCurrentStage && (
+                          <Badge variant="default" className="text-[10px] px-1.5 py-0">
+                            Текущий
+                          </Badge>
+                        )}
+                      </div>
+                    </td>
+                    <td className="p-2">
+                      <div className="flex items-center gap-2">
+                        {stage.section_icon && (
+                          <span
+                            className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded"
+                            style={{ backgroundColor: `${iconColor}20`, color: iconColor }}
+                          >
+                            {renderIcon(stage.section_icon, "h-4 w-4")}
+                          </span>
+                        )}
+                        <div>
+                          <div className={`font-medium${isCurrentStage ? " text-blue-900" : ""}`}>
+                            {stage.section_name}
+                          </div>
+                          <div className="text-xs text-muted-foreground">
+                            {stage.section_code} · {stage.operation_name}
+                          </div>
                         </div>
                       </div>
                     </td>

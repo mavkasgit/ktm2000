@@ -1,15 +1,15 @@
 import { useEffect, useMemo, useState } from "react"
-import { Beaker, Download, Eye, FileSpreadsheet, Plus, Upload, Route, Trash2, AlertTriangle } from "lucide-react"
+import { Download, Eye, FileSpreadsheet, Plus, Upload, Route, Trash2, AlertTriangle } from "lucide-react"
 import { ImportWizard } from "../ImportWizard"
 import { Button, Badge, Checkbox, Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, Combobox, Select, SelectContent, SelectItem, SelectTrigger, SelectValue, AlertDialog, AlertDialogContent, AlertDialogHeader, AlertDialogTitle, AlertDialogDescription, AlertDialogFooter, AlertDialogAction, AlertDialogCancel } from "@/shared/ui"
 import { cn } from "@/shared/utils/cn"
 import { toast } from "@/shared/ui"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
-import { planFiles, allPositions, allPlanFiles, allPlanPositions, PlanFileInfo, PlanPositionOut, listPlans, PlanSummary, batchAssignRouteGlobal, deleteImportBatch, routeCheck } from "@/shared/api/productionPlans"
+import { planFiles, allPositions, allPlanFiles, allPlanPositions, PlanFileInfo, PlanPositionOut, listPlans, PlanSummary, batchAssignRouteGlobal, deleteImportBatch, routeCheck, approveProductionPlanPosition, getPlanDuplicates } from "@/shared/api/productionPlans"
 import { listRoutes, ProductionRoute } from "@/shared/api/routes"
 import { listImportTemplates, ImportTemplate } from "@/shared/api/importTemplates"
 import { getImportFileDownloadUrl } from "@/shared/api/imports"
-import { apiClient } from "@/shared/api/client"
+import { apiClient, getErrorMessage } from "@/shared/api/client"
 import { RowDetailsSidePanel, adaptPlanPositionOut } from "../components/row-details"
 
 const statusLabels: Record<string, string> = {
@@ -65,7 +65,7 @@ const errorLabels: Record<string, string> = {
   active_route_has_no_steps: "Маршрут без этапов",
   route_sequence_invalid: "Неверная последовательность маршрута",
   route_contains_inactive_section: "Неактивный участок в маршруте",
-  duplicate_sku_due_date: "Дубликат: такой артикул со сроком уже есть",
+  duplicate_sku_due_date: "Дубликат строки Excel: такая же строка уже есть",
   route_primary_operation_mismatch: "Основная операция маршрута не совпадает",
   route_not_matching_import_signature: "Маршрут не совпадает с ожидаемым",
   route_missing_required_step: "Отсутствует обязательный этап в маршруте",
@@ -120,7 +120,12 @@ function routeMetaLabel(pos: PlanPositionOut): string {
   return ""
 }
 
-function isRiskyForApprove(pos: PlanPositionOut): boolean {
+type DuplicateConflict = {
+  fingerprint: string
+  conflictIds: number[]
+}
+
+function isRiskyForApprove(pos: PlanPositionOut, duplicateConflict?: DuplicateConflict): boolean {
   const hasRouteProblems =
     pos.route_match_quality === "corrected" ||
     pos.route_origin === "legacy" ||
@@ -128,7 +133,7 @@ function isRiskyForApprove(pos: PlanPositionOut): boolean {
     pos.route_match_reason !== null ||
     (pos.warnings && pos.warnings.length > 0) ||
     (pos.errors && pos.errors.length > 0)
-  return hasRouteProblems
+  return hasRouteProblems || Boolean(duplicateConflict && duplicateConflict.conflictIds.length > 0)
 }
 
 function FileRow({ file, activePlan, onDelete }: { file: PlanFileInfo; activePlan: PlanSummary; onDelete: (batchId: number) => void }) {
@@ -241,28 +246,24 @@ function FileRow({ file, activePlan, onDelete }: { file: PlanFileInfo; activePla
   )
 }
 
-function PositionRow({ pos, onApprove, onDelete, selected, onToggle, routes, onAssignRoute, onOpenDetail }: {
+function PositionRow({ pos, onApprove, onDelete, selected, onToggle, routes, onAssignRoute, onOpenDetail, duplicateConflict, onJumpToPosition }: {
   pos: PlanPositionOut;
-  onApprove: (id: number, planId?: number) => void;
+  onApprove: (id: number, planId?: number, force?: boolean) => Promise<void>;
   onDelete: (id: number, planId?: number) => void;
   selected?: boolean;
   onToggle?: (id: number) => void;
   routes?: ProductionRoute[];
   onAssignRoute?: (positionId: number, routeId: number | null) => void;
   onOpenDetail?: () => void;
+  duplicateConflict?: DuplicateConflict;
+  onJumpToPosition?: (id: number) => void;
 }) {
   const hasErrors = pos.errors && pos.errors.length > 0
   const hasWarnings = pos.warnings && pos.warnings.length > 0
   const qty = Number(pos.quantity || 0)
   const qtyStr = Number.isInteger(qty) ? String(qty) : qty.toFixed(3).replace(/\.?0+$/, '')
-  const isDraft = pos.status === 'draft'
   const translatedErrors = hasErrors ? pos.errors.map((e) => translateLabel(e, errorLabels)) : []
   const translatedWarnings = hasWarnings ? pos.warnings.map((w) => translateLabel(w, warningLabels)) : []
-  const reason = pos.validation_status === 'invalid'
-    ? (translatedErrors.length > 0 ? translatedErrors.join(', ') : 'Ошибка валидации')
-    : isDraft
-      ? 'Ожидает утверждения'
-      : ''
   const rowNum = (() => {
     const numbers = Array.isArray(pos.source_row_numbers)
       ? pos.source_row_numbers.filter((v): v is number => typeof v === "number")
@@ -272,6 +273,7 @@ function PositionRow({ pos, onApprove, onDelete, selected, onToggle, routes, onA
   })()
   const routeSourceLabel = routeMetaLabel(pos)
   const routeError = pos.route_error ? translateLabel(pos.route_error, routeErrorLabels) : null
+  const hasDuplicateConflict = Boolean(duplicateConflict && duplicateConflict.conflictIds.length > 0)
   const canApprove =
     (pos.status === 'draft' || pos.status === 'valid') &&
     pos.validation_status === 'valid' &&
@@ -294,7 +296,7 @@ function PositionRow({ pos, onApprove, onDelete, selected, onToggle, routes, onA
 
   const handleApproveClick = (e: React.MouseEvent) => {
     e.stopPropagation()
-    if (isRiskyForApprove(pos) || routeCheckRisky) {
+    if (isRiskyForApprove(pos, duplicateConflict) || routeCheckRisky) {
       setApproveDialogOpen(true)
     } else {
       onApprove(pos.id, pos.production_plan_id)
@@ -304,7 +306,7 @@ function PositionRow({ pos, onApprove, onDelete, selected, onToggle, routes, onA
   const handleConfirmApprove = async () => {
     setApproving(true)
     try {
-      await onApprove(pos.id, pos.production_plan_id)
+      await onApprove(pos.id, pos.production_plan_id, true)
     } finally {
       setApproving(false)
       setApproveDialogOpen(false)
@@ -381,7 +383,8 @@ function PositionRow({ pos, onApprove, onDelete, selected, onToggle, routes, onA
   return (
     <>
     <tr
-      className={`border-b ${hasErrors ? "bg-red-50" : hasWarnings ? "bg-amber-50" : ""} ${selected ? "bg-blue-50" : ""} cursor-pointer`}
+      id={`plan-position-${pos.id}`}
+      className={`border-b ${hasErrors || hasDuplicateConflict ? "bg-red-50" : hasWarnings ? "bg-amber-50" : ""} ${selected ? "bg-blue-50" : ""} cursor-pointer`}
       onClick={() => onOpenDetail?.()}
     >
       <td className="p-2">
@@ -449,10 +452,34 @@ function PositionRow({ pos, onApprove, onDelete, selected, onToggle, routes, onA
         </Badge>
       </td>
       <td className="p-2 text-xs text-red-600 max-w-[200px]">
-        {hasErrors ? (
-          <span className="truncate block" title={translatedErrors.join("\n")}>
-            {translatedErrors.join(", ")}
-          </span>
+        {hasErrors || hasDuplicateConflict ? (
+          <div className="space-y-1">
+            {hasDuplicateConflict && (
+              <div className="text-red-700">
+                <span className="block">Дубликат Excel-строки</span>
+                <div className="flex flex-wrap gap-1 mt-1">
+                  {duplicateConflict?.conflictIds.map((id) => (
+                    <button
+                      key={id}
+                      type="button"
+                      className="underline hover:no-underline"
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        onJumpToPosition?.(id)
+                      }}
+                    >
+                      #{id}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+            {hasErrors && (
+              <span className="truncate block" title={translatedErrors.join("\n")}>
+                {translatedErrors.join(", ")}
+              </span>
+            )}
+          </div>
         ) : "—"}
       </td>
       <td className="p-2 text-xs text-amber-600 max-w-[150px]">
@@ -480,9 +507,6 @@ function PositionRow({ pos, onApprove, onDelete, selected, onToggle, routes, onA
             </Button>
           )}
         </div>
-        {pos.validation_status === 'invalid' && (
-          <p className="text-xs text-red-600 mt-1 max-w-[250px]" title={reason}>{reason.slice(0, 50)}{reason.length > 50 ? '…' : ''}</p>
-        )}
       </td>
     </tr>
 
@@ -527,6 +551,26 @@ function PositionRow({ pos, onApprove, onDelete, selected, onToggle, routes, onA
           </div>
         )}
 
+        {hasDuplicateConflict && (
+          <div className="rounded-md border bg-red-50 p-3">
+            <p className="text-sm font-medium mb-2">
+              Дубликат Excel-строки
+            </p>
+            <div className="flex flex-wrap gap-2">
+              {duplicateConflict?.conflictIds.map((id) => (
+                <button
+                  key={id}
+                  type="button"
+                  className="text-sm underline text-red-700 hover:no-underline"
+                  onClick={() => onJumpToPosition?.(id)}
+                >
+                  Перейти к позиции #{id}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
         <AlertDialogFooter>
           <AlertDialogCancel disabled={approving}>Отмена</AlertDialogCancel>
           <AlertDialogAction onClick={handleConfirmApprove} disabled={approving}>
@@ -541,7 +585,6 @@ function PositionRow({ pos, onApprove, onDelete, selected, onToggle, routes, onA
 
 export function PlanPage() {
   const [importOpen, setImportOpen] = useState(false)
-  const [testImportOpen, setTestImportOpen] = useState(false)
   const queryClient = useQueryClient()
   const [showAllFiles, setShowAllFiles] = useState(false)
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set())
@@ -567,24 +610,44 @@ export function PlanPage() {
   const [filterStatus, setFilterStatus] = useState<"all" | "draft" | "valid" | "invalid">("all")
   const [templateImportOpen, setTemplateImportOpen] = useState<number | null>(null)
 
+  const { data: duplicateGroupsByPlan } = useQuery({
+    queryKey: ["plan-duplicates-all", plans?.map((p) => p.id).join(",")],
+    queryFn: async () => {
+      const planIds = (plans ?? []).map((p) => p.id)
+      const entries = await Promise.all(
+        planIds.map(async (planId) => [planId, await getPlanDuplicates(planId)] as const),
+      )
+      return Object.fromEntries(entries) as Record<number, Awaited<ReturnType<typeof getPlanDuplicates>>>
+    },
+    enabled: (plans?.length ?? 0) > 0,
+    staleTime: 30_000,
+  })
+
   const handleSuccess = () => {
     queryClient.invalidateQueries({ queryKey: ["plans"] })
     queryClient.invalidateQueries({ queryKey: ["all-plan-files"] })
     queryClient.invalidateQueries({ queryKey: ["all-plan-positions"] })
+    queryClient.invalidateQueries({ queryKey: ["plan-duplicates-all"] })
   }
 
-  const handleApprove = async (positionId: number, planId?: number) => {
+  const handleApprove = async (positionId: number, planId?: number, force = false) => {
     const targetPlanId = planId || activePlan?.id
     if (!targetPlanId) return
     try {
-      await apiClient.post(`/production-plans/${targetPlanId}/positions/${positionId}/approve`)
+      await approveProductionPlanPosition(targetPlanId, positionId, { force })
       queryClient.invalidateQueries({ queryKey: ["all-plan-positions"] })
+      queryClient.invalidateQueries({ queryKey: ["plan-duplicates-all"] })
       toast({ title: "Позиция утверждена", variant: "success" })
     } catch (e) {
-      const msg = e instanceof Error ? e.message : "Не удалось утвердить"
+      const msg = getErrorMessage(e)
+      const duplicateConflict = duplicateConflictsByPosition.get(positionId)
+      const duplicateLinksPrefix =
+        duplicateConflict && duplicateConflict.conflictIds.length > 0
+          ? `Конфликтующие позиции: ${duplicateConflict.conflictIds.map((id) => `#${id}`).join(", ")}. `
+          : ""
       toast({
         title: "Ошибка валидации",
-        description: msg,
+        description: `${duplicateLinksPrefix}${msg}`,
         variant: "destructive",
       })
     }
@@ -596,6 +659,7 @@ export function PlanPage() {
     try {
       await apiClient.delete(`/production-plans/${targetPlanId}/positions/${positionId}`)
       queryClient.invalidateQueries({ queryKey: ["all-plan-positions"] })
+      queryClient.invalidateQueries({ queryKey: ["plan-duplicates-all"] })
       toast({ title: "Позиция удалена", variant: "success" })
     } catch (e) {
       toast({ title: "Ошибка", description: e instanceof Error ? e.message : "Не удалось удалить", variant: "destructive" })
@@ -691,6 +755,49 @@ export function PlanPage() {
     return positions.filter(p => p.status === filterStatus)
   }, [positions, filterStatus])
 
+  const duplicateConflictsByPosition = useMemo(() => {
+    const map = new Map<number, DuplicateConflict>()
+    if (!duplicateGroupsByPlan) return map
+    for (const groups of Object.values(duplicateGroupsByPlan)) {
+      for (const group of groups) {
+        const ids = group.positions.map((position) => position.id)
+        for (const id of ids) {
+          map.set(id, {
+            fingerprint: group.source_fingerprint,
+            conflictIds: ids.filter((otherId) => otherId !== id),
+          })
+        }
+      }
+    }
+    return map
+  }, [duplicateGroupsByPlan])
+
+  const jumpToPosition = (positionId: number) => {
+    setFilterStatus("all")
+    const targetPosition = positions?.find((p) => p.id === positionId)
+    if (targetPosition) {
+      setDetailPosition(targetPosition)
+      setDetailOpen(true)
+    }
+    setTimeout(() => {
+      const row = document.getElementById(`plan-position-${positionId}`)
+      if (!row) return
+      row.scrollIntoView({ behavior: "smooth", block: "center" })
+      row.classList.add("ring-2", "ring-red-300")
+      setTimeout(() => row.classList.remove("ring-2", "ring-red-300"), 1800)
+    }, 0)
+  }
+
+  const detailData = useMemo(() => {
+    if (!detailPosition) return null
+    const data = adaptPlanPositionOut(detailPosition)
+    const duplicateConflict = duplicateConflictsByPosition.get(detailPosition.id)
+    if (duplicateConflict && duplicateConflict.conflictIds.length > 0) {
+      data.duplicateConflictIds = duplicateConflict.conflictIds
+    }
+    return data
+  }, [detailPosition, duplicateConflictsByPosition])
+
   const totalQty = positions?.reduce((sum, p) => sum + Number(p.quantity || 0), 0) ?? 0
   const totalQtyStr = Number.isInteger(totalQty) ? String(totalQty) : totalQty.toFixed(3).replace(/\.?0+$/, '')
   const errorCount = positions?.filter(p => p.errors?.length > 0).length ?? 0
@@ -715,10 +822,6 @@ export function PlanPage() {
               {t.button_label || t.name}
             </Button>
           ))}
-          <Button variant="outline" onClick={() => setTestImportOpen(true)}>
-            <Beaker className="h-4 w-4 mr-2" />
-            Тестовый импорт
-          </Button>
           <Button onClick={() => setImportOpen(true)}>
             <Plus className="h-4 w-4 mr-2" />
             Добавить файл
@@ -884,7 +987,7 @@ export function PlanPage() {
                     </tr>
                   </thead>
                   <tbody>
-                    {filteredPositions.map(p => <PositionRow key={p.id} pos={p} onApprove={handleApprove} onDelete={handleDelete} selected={selectedIds.has(p.id)} onToggle={toggleSelect} routes={activeRoutes} onAssignRoute={handleAssignRouteSingle} onOpenDetail={() => openDetail(p)} />)}
+                    {filteredPositions.map(p => <PositionRow key={p.id} pos={p} onApprove={handleApprove} onDelete={handleDelete} selected={selectedIds.has(p.id)} onToggle={toggleSelect} routes={activeRoutes} onAssignRoute={handleAssignRouteSingle} onOpenDetail={() => openDetail(p)} duplicateConflict={duplicateConflictsByPosition.get(p.id)} onJumpToPosition={jumpToPosition} />)}
                   </tbody>
                 </table>
               </div>
@@ -898,7 +1001,6 @@ export function PlanPage() {
       )}
 
       <ImportWizard open={importOpen} onClose={() => setImportOpen(false)} onSuccess={handleSuccess} productionPlanId={activePlan?.id} />
-      <ImportWizard open={testImportOpen} onClose={() => setTestImportOpen(false)} onSuccess={handleSuccess} mode="test" productionPlanId={activePlan?.id} />
 
       {activeTemplates.map(t => (
         <ImportWizard
@@ -914,7 +1016,7 @@ export function PlanPage() {
       <RowDetailsSidePanel
         open={detailOpen}
         onOpenChange={setDetailOpen}
-        data={detailPosition ? adaptPlanPositionOut(detailPosition) : null}
+        data={detailData}
         title="Детализация позиции плана"
         description="Маршрут, ошибки и предупреждения по выбранной позиции"
       />

@@ -21,6 +21,12 @@ const statusLabels: Record<string, string> = {
   cancelled: "Отменен",
 };
 
+function formatQuantity(value: string): string {
+  const num = Number(value);
+  if (!Number.isFinite(num)) return value;
+  return Number.isInteger(num) ? num.toString() : String(num);
+}
+
 export function PlanPreviewPage() {
   const { planId } = useParams<{ planId: string }>();
   const numericPlanId = Number(planId);
@@ -83,7 +89,7 @@ export function PlanPreviewPage() {
                 <td className="p-2">#{row.id}</td>
                 <td className="p-2 font-mono">{row.source_sku}</td>
                 <td className="p-2">{row.source_name || "—"}</td>
-                <td className="p-2">{row.quantity}</td>
+                <td className="p-2">{formatQuantity(row.quantity)}</td>
                 <td className="p-2">{statusLabels[row.status] || row.status}</td>
                 <td className="p-2">{row.validation_status}</td>
                 <td className="p-2 text-xs text-red-600">{(row.validation_errors || []).join(", ") || "—"}</td>

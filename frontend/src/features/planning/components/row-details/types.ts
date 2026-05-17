@@ -16,4 +16,11 @@ export type RowDetailsData = {
   stages?: ProductionPlanningStage[]
   routeCheckIssues?: string[]
   rawExcelRows?: { rowNumber: string; text: string }[]
+  duplicateConflictIds?: number[]
+  currentStageSectionId?: number | null
+  currentStageSectionName?: string | null
+  currentStageSectionCode?: string | null
+  currentStageSequence?: number | null
+  currentStageOperation?: string | null
+  currentStageTaskStatus?: string | null
 }
