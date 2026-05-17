@@ -43,6 +43,32 @@ from app.services.plan_validation import format_validation_error
 router = APIRouter(prefix="/production-plans", tags=["production-plans"])
 
 
+async def _delete_batch_and_orphan_file(db: AsyncSession, batch_id: int) -> bool:
+    """Delete import batch and remove source file only when no other batch references it."""
+    from app.models.imports import ImportBatch, ImportFile
+
+    batch = await db.get(ImportBatch, batch_id)
+    if batch is None:
+        return False
+
+    source_file_id = batch.source_file_id
+    await db.delete(batch)
+    await db.flush()
+
+    if source_file_id:
+        refs_count = (
+            await db.execute(
+                select(sa_func.count(ImportBatch.id)).where(ImportBatch.source_file_id == source_file_id)
+            )
+        ).scalar() or 0
+        if refs_count == 0:
+            import_file = await db.get(ImportFile, source_file_id)
+            if import_file is not None:
+                await db.delete(import_file)
+                await db.flush()
+    return True
+
+
 class PlanSummaryOut(BaseModel):
     id: int
     plan_no: str
@@ -149,6 +175,7 @@ async def preview_production_plan(production_plan_id: int, db: AsyncSession = De
 async def apply_plan_change_set(
     production_plan_id: int,
     change_set_id: int,
+    skip_invalid: bool = False,
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     change_set = await db.get(PlanChangeSet, change_set_id)
@@ -157,7 +184,7 @@ async def apply_plan_change_set(
     if change_set.production_plan_id != production_plan_id:
         raise HTTPException(status_code=400, detail="Change set does not belong to production plan")
     try:
-        preview = await apply_change_set(db, change_set_id)
+        preview = await apply_change_set(db, change_set_id, skip_invalid=skip_invalid)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return preview
@@ -178,6 +205,45 @@ async def rollback_plan_change_set(
         return await rollback_change_set(db, change_set_id)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.delete("/{production_plan_id}/change-sets/{change_set_id}")
+async def discard_plan_change_set(
+    production_plan_id: int,
+    change_set_id: int,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Discard a change set: delete pending ones directly, rollback applied ones."""
+    from sqlalchemy import delete
+
+    change_set = await db.get(PlanChangeSet, change_set_id)
+    if change_set is None:
+        raise HTTPException(status_code=404, detail="Change set not found")
+    if change_set.production_plan_id != production_plan_id:
+        raise HTTPException(status_code=400, detail="Change set does not belong to production plan")
+
+    batch_id = change_set.import_batch_id
+
+    if change_set.status.value == "applied":
+        await rollback_change_set(db, change_set_id)
+
+    # Delete all change items
+    await db.execute(delete(PlanChangeItem).where(PlanChangeItem.change_set_id == change_set_id))
+    # Delete the change set and flush so follow-up queries see the real DB state.
+    await db.delete(change_set)
+    await db.flush()
+
+    # If the batch has no other change sets, delete the batch and maybe file too.
+    if batch_id:
+        remaining_sets_count = (
+            await db.execute(select(sa_func.count(PlanChangeSet.id)).where(PlanChangeSet.import_batch_id == batch_id))
+        ).scalar() or 0
+        if remaining_sets_count == 0:
+            await _delete_batch_and_orphan_file(db, batch_id)
+
+    await db.commit()
+
+    return {"deleted": True, "change_set_id": change_set_id}
 
 
 @router.delete("/{production_plan_id}/batches/{batch_id}")
@@ -214,8 +280,8 @@ async def delete_import_batch(
     # Delete all plan positions created by this batch
     await db.execute(delete(PlanPosition).where(PlanPosition.import_batch_id == batch_id))
 
-    # Delete the batch
-    await db.delete(batch)
+    # Delete the batch and source file only when it is no longer referenced.
+    await _delete_batch_and_orphan_file(db, batch_id)
     await db.commit()
 
     return {"deleted": True, "batch_id": batch_id}
@@ -983,14 +1049,13 @@ async def batch_assign_route(
 
 
 class DuplicateGroup(BaseModel):
-    source_sku: str
-    due_date: str | None
+    source_fingerprint: str
     positions: list[dict]
 
 
 @router.get("/{production_plan_id}/duplicates", response_model=list[DuplicateGroup])
 async def find_plan_duplicates(production_plan_id: int, db: AsyncSession = Depends(get_db)) -> list[DuplicateGroup]:
-    """Find positions with duplicate source_sku + due_date within a production plan."""
+    """Find duplicate positions by unique Excel row fingerprint within a production plan."""
     positions = (
         await db.execute(
             select(PlanPosition)
@@ -1005,13 +1070,10 @@ async def find_plan_duplicates(production_plan_id: int, db: AsyncSession = Depen
 
     from collections import defaultdict
 
-    groups: dict[tuple[str, str | None], list[dict]] = defaultdict(list)
+    groups: dict[str, list[dict]] = defaultdict(list)
 
     for p in positions:
-        due_date = None
-        if p.source_payload:
-            due_date = p.source_payload.get("due_date")
-        key = (p.source_sku.lower().strip(), due_date)
+        key = p.source_fingerprint or p.source_row_hash or f"id:{p.id}"
         groups[key].append({
             "id": p.id,
             "source_sku": p.source_sku,
@@ -1020,15 +1082,16 @@ async def find_plan_duplicates(production_plan_id: int, db: AsyncSession = Depen
             "source_row_number": p.source_row_number,
             "status": p.status.value,
             "validation_errors": p.validation_errors or [],
+            "source_fingerprint": p.source_fingerprint,
+            "source_row_hash": p.source_row_hash,
         })
 
     result = []
-    for (sku, due_date), positions_list in groups.items():
+    for fp, positions_list in groups.items():
         if len(positions_list) > 1:
             result.append(
                 DuplicateGroup(
-                    source_sku=sku,
-                    due_date=due_date,
+                    source_fingerprint=fp,
                     positions=positions_list,
                 )
             )

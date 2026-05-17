@@ -2,6 +2,7 @@ import {
   applyProductionPlanChangeSet,
   approveProductionPlanPosition,
   createPlanReleaseBatch,
+  discardProductionPlanChangeSet,
   importExcel,
   previewProductionPlan as loadProductionPlanPreview,
   releaseBatch as releaseReleaseBatch,
@@ -48,72 +49,6 @@ export async function uploadExcel(
   return lastImport
 }
 
-export async function uploadTestExcel(options?: {
-  productionPlanId?: number;
-  techcardId?: number;
-  runId?: string;
-  planMonth?: string;
-  planVersion?: string;
-  quantity?: number;
-}) {
-  const { data } = await apiClient.post("/imports/excel/test", undefined, {
-    params: {
-      production_plan_id: options?.productionPlanId,
-      techcard_id: options?.techcardId,
-      run_id: options?.runId?.trim() || undefined,
-      plan_month: options?.planMonth?.trim() || undefined,
-      plan_version: options?.planVersion?.trim() || undefined,
-      quantity: options?.quantity,
-    },
-  })
-  lastImport = enrichImport(data as Record<string, any>)
-  return lastImport
-}
-
-export type DemoStageResult = {
-  section_id: number;
-  section_code: string;
-  task_id: number;
-  input_qty: string;
-  defect_percent: number;
-  defect_qty: string;
-  good_qty: string;
-  performed_at: string;
-  accounted_at: string;
-};
-
-export type DemoFullRouteResponse = {
-  run_id: string;
-  production_plan_id: number;
-  plan_position_id: number;
-  internal_plan_id: number | null;
-  route_id: number;
-  tasks_created: number;
-  stage_preset: string;
-  stopped_at_stage: string;
-  stage_results: DemoStageResult[];
-  execution_row_url: string;
-  shopfloor_section_urls: string[];
-};
-
-export async function runDemoFullRoute(payload: {
-  initial_quantity: number;
-  techcard_id: number;
-  route_id?: number;
-  route_name?: string;
-  scenario_id?: string;
-  run_id?: string;
-  start_performed_at?: string;
-  plan_month?: string;
-  plan_version?: string;
-  production_plan_id?: number;
-  stage_preset?: string;
-  target_route_step_id?: number | null;
-}) {
-  const { data } = await apiClient.post<DemoFullRouteResponse>("/demo/test-runs/full-route", payload);
-  return data;
-}
-
 export async function previewDiff() {
   if (!lastImport) {
     throw new Error("Сначала загрузите Excel")
@@ -124,13 +59,21 @@ export async function previewDiff() {
   }
 }
 
-export async function applyChangeSet(planId?: string, changeSetId?: string) {
+export async function applyChangeSet(
+  planId?: string,
+  changeSetId?: string,
+  options?: { skipInvalid?: boolean },
+) {
   const resolvedPlanId = planId || lastImport?.production_plan_id
   const resolvedChangeSetId = changeSetId || lastImport?.change_set_id
   if (!resolvedPlanId || !resolvedChangeSetId) {
     throw new Error("Нет production_plan_id или change_set_id")
   }
-  const payload = await applyProductionPlanChangeSet(Number(resolvedPlanId), Number(resolvedChangeSetId))
+  const payload = await applyProductionPlanChangeSet(
+    Number(resolvedPlanId),
+    Number(resolvedChangeSetId),
+    { skipInvalid: options?.skipInvalid },
+  )
   return {
     ...payload,
     planId: String((payload as Record<string, any>).production_plan_id ?? resolvedPlanId),
@@ -146,11 +89,7 @@ export async function rollbackChangeSet(planId: string, changeSetId: string) {
 }
 
 export async function discardImport(planId: string, changeSetId: string) {
-  try {
-    await rollbackChangeSet(planId, changeSetId)
-  } catch {
-    // ignore rollback errors on discard
-  }
+  await discardProductionPlanChangeSet(Number(planId), Number(changeSetId))
 }
 
 export async function previewProductionPlan(planId?: string) {

@@ -55,9 +55,19 @@ export async function previewProductionPlan(productionPlanId: number) {
   return data;
 }
 
-export async function applyProductionPlanChangeSet(productionPlanId: number, changeSetId: number) {
+export async function applyProductionPlanChangeSet(
+  productionPlanId: number,
+  changeSetId: number,
+  options?: { skipInvalid?: boolean },
+) {
   const { data } = await apiClient.post<ProductionPlanPreview>(
     `/production-plans/${productionPlanId}/change-sets/${changeSetId}/apply`,
+    undefined,
+    {
+      params: {
+        skip_invalid: options?.skipInvalid || undefined,
+      },
+    },
   );
   return data;
 }
@@ -69,9 +79,24 @@ export async function rollbackProductionPlanChangeSet(productionPlanId: number, 
   return data;
 }
 
-export async function approveProductionPlanPosition(productionPlanId: number, positionId: number) {
+export async function discardProductionPlanChangeSet(productionPlanId: number, changeSetId: number) {
+  const { data } = await apiClient.delete<{ deleted: boolean; change_set_id: number }>(
+    `/production-plans/${productionPlanId}/change-sets/${changeSetId}`,
+  );
+  return data;
+}
+
+export async function approveProductionPlanPosition(
+  productionPlanId: number,
+  positionId: number,
+  options?: { force?: boolean },
+) {
   const { data } = await apiClient.post<ApprovePositionResponse>(
     `/production-plans/${productionPlanId}/positions/${positionId}/approve`,
+    undefined,
+    {
+      params: options?.force ? { force: true } : undefined,
+    },
   );
   return data;
 }
@@ -152,8 +177,7 @@ export async function allPositions(planId: number) {
 }
 
 export type PlanDuplicateGroup = {
-  source_sku: string;
-  due_date: string | null;
+  source_fingerprint: string;
   positions: {
     id: number;
     source_sku: string;
@@ -162,6 +186,8 @@ export type PlanDuplicateGroup = {
     source_row_number: number | null;
     status: string;
     validation_errors: string[];
+    source_fingerprint?: string | null;
+    source_row_hash?: string | null;
   }[];
 };
 
@@ -302,6 +328,12 @@ export type ProductionPlanningRow = {
   route_error: string | null;
   is_released: boolean;
   has_tasks: boolean;
+  current_stage_section_id: number | null;
+  current_stage_sequence: number | null;
+  current_stage_operation: string | null;
+  current_stage_section_code: string | null;
+  current_stage_section_name: string | null;
+  current_stage_task_status: string | null;
 };
 
 export type ProductionPlanningRouteSnapshotStep = {
@@ -311,6 +343,8 @@ export type ProductionPlanningRouteSnapshotStep = {
   section_code: string;
   section_name: string;
   section_kind: string | null;
+  section_icon: string | null;
+  section_icon_color: string | null;
   operation_code: string | null;
   operation_name: string;
 };
@@ -320,6 +354,8 @@ export type ProductionPlanningStage = {
   section_id: number;
   section_code: string;
   section_name: string;
+  section_icon: string | null;
+  section_icon_color: string | null;
   sequence: number;
   operation_code: string | null;
   operation_name: string;
@@ -355,6 +391,12 @@ export type ProductionPlanningRowDetail = {
   is_released: boolean;
   has_tasks: boolean;
   not_started: boolean;
+  current_stage_section_id: number | null;
+  current_stage_sequence: number | null;
+  current_stage_operation: string | null;
+  current_stage_section_code: string | null;
+  current_stage_section_name: string | null;
+  current_stage_task_status: string | null;
   route_snapshot: {
     route_id: number;
     route_name: string | null;

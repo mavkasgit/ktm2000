@@ -54,7 +54,7 @@ def record_status_change(
     db.add(history)
 
 
-async def apply_change_set(db: AsyncSession, change_set_id: int) -> dict:
+async def apply_change_set(db: AsyncSession, change_set_id: int, *, skip_invalid: bool = False) -> dict:
     change_set = await db.get(PlanChangeSet, change_set_id)
     if change_set is None:
         raise ValueError("Change set not found")
@@ -69,8 +69,15 @@ async def apply_change_set(db: AsyncSession, change_set_id: int) -> dict:
     updated = 0
     ignored = 0
     cancelled = 0
+    skipped_invalid = 0
     for item in items:
         if item.status == PlanChangeItemStatus.applied:
+            continue
+
+        # Optional mode: apply only rows without errors.
+        if skip_invalid and item.errors:
+            item.status = PlanChangeItemStatus.applied
+            skipped_invalid += 1
             continue
 
         if item.change_action == PlanChangeAction.ignore_unchanged:
@@ -189,6 +196,7 @@ async def apply_change_set(db: AsyncSession, change_set_id: int) -> dict:
         "updated_positions": updated,
         "ignored_positions": ignored,
         "cancelled_positions": cancelled,
+        "skipped_invalid_positions": skipped_invalid,
     }
     return await get_plan_preview(db, change_set.production_plan_id, extra=extra)
 
