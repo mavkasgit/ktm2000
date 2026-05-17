@@ -14,8 +14,9 @@ from app.models.import_template import ImportTemplate
 from app.models.imports import ImportBatch, ImportBatchMode, ImportBatchStatus, ImportFile
 from app.models.production_plan import PlanChangeSet, PlanPosition, ProductionPlan
 from app.models.product import Product
-from app.models.route import ProductionRoute
+from app.models.route import ProductionRoute, RouteRuleProfile
 from app.models.techcard import Techcard
+from app.services.import_normalization import default_import_normalization_rules, has_valid_normalization_rules
 from app.services.plan_import_service import create_excel_import_change_set
 from app.services.route_matcher import resolve_position_route
 
@@ -50,16 +51,30 @@ async def import_excel_plan(
     column_mapping: str | None = Query(None),
     db: AsyncSession = Depends(get_db),
 ) -> ImportPreviewOut:
+    if template_id is None:
+        raise HTTPException(status_code=400, detail="template_id is required")
+
     resolved_mapping = None
+    resolved_normalization_rules = None
     rule_profile_id = None
-    if template_id is not None:
-        template = await db.get(ImportTemplate, template_id)
-        if template is None:
-            raise HTTPException(status_code=404, detail="Template not found")
-        if not template.is_active:
-            raise HTTPException(status_code=400, detail="Template is inactive")
-        resolved_mapping = dict(template.column_mapping)
-        rule_profile_id = template.route_rule_profile_id
+    template = await db.get(ImportTemplate, template_id)
+    if template is None:
+        raise HTTPException(status_code=404, detail="Template not found")
+    if not template.is_active:
+        raise HTTPException(status_code=400, detail="Template is inactive")
+    if not has_valid_normalization_rules(template.normalization_rules):
+        raise HTTPException(status_code=400, detail="Template normalization rules are invalid")
+
+    resolved_mapping = dict(template.column_mapping)
+    resolved_normalization_rules = dict(template.normalization_rules)
+    rule_profile_id = (
+        await db.execute(
+            select(RouteRuleProfile.id)
+            .where(RouteRuleProfile.import_template_id == template_id)
+            .order_by(desc(RouteRuleProfile.is_active), desc(RouteRuleProfile.priority), RouteRuleProfile.id.asc())
+            .limit(1)
+        )
+    ).scalars().first()
     if column_mapping is not None:
         try:
             parsed_mapping = json.loads(column_mapping)
@@ -82,6 +97,7 @@ async def import_excel_plan(
             plan_month=plan_month,
             plan_version=plan_version,
             column_mapping=resolved_mapping,
+            normalization_rules=resolved_normalization_rules,
             row_selection=row_selection,
             template_id=template_id,
             rule_profile_id=rule_profile_id,
@@ -124,9 +140,32 @@ async def preview_excel_sheet_endpoint(
     file: UploadFile = File(...),
     sheet_index: int = Form(0),
     row_selection: str | None = Form(None),
+    template_id: int | None = Query(None),
     db: AsyncSession = Depends(get_db),
 ) -> SheetPreviewOut:
     from app.services.plan_import_service import preview_excel_sheet
+
+    resolved_mapping = None
+    resolved_normalization_rules = None
+    rule_profile_id = None
+    if template_id is not None:
+        template = await db.get(ImportTemplate, template_id)
+        if template is None:
+            raise HTTPException(status_code=404, detail="Template not found")
+        if not template.is_active:
+            raise HTTPException(status_code=400, detail="Template is inactive")
+        if not has_valid_normalization_rules(template.normalization_rules):
+            raise HTTPException(status_code=400, detail="Template normalization rules are invalid")
+        resolved_mapping = dict(template.column_mapping)
+        resolved_normalization_rules = dict(template.normalization_rules)
+        rule_profile_id = (
+            await db.execute(
+                select(RouteRuleProfile.id)
+                .where(RouteRuleProfile.import_template_id == template_id)
+                .order_by(desc(RouteRuleProfile.is_active), desc(RouteRuleProfile.priority), RouteRuleProfile.id.asc())
+                .limit(1)
+            )
+        ).scalars().first()
 
     content = await file.read()
     result = await preview_excel_sheet(
@@ -134,7 +173,10 @@ async def preview_excel_sheet_endpoint(
         filename=file.filename or "workbook.xls",
         content=content,
         sheet_index=sheet_index,
+        column_mapping=resolved_mapping,
+        normalization_rules=resolved_normalization_rules,
         row_selection=row_selection,
+        rule_profile_id=rule_profile_id,
     )
     return SheetPreviewOut(**result)
 
@@ -246,6 +288,7 @@ async def import_test_excel(
             plan_month=plan_month,
             plan_version=plan_version,
             column_mapping=None,
+            normalization_rules=default_import_normalization_rules(),
             row_selection=row_selection,
         )
     except ValueError as exc:

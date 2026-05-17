@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
 from app.models.import_template import ImportTemplate
-from app.models.route import RouteRuleProfile
+from app.models.route import RouteRuleProfile, RouteSelectionRule
 
 router = APIRouter(prefix="/route-rule-profiles", tags=["route-rule-profiles"])
 
@@ -140,14 +140,13 @@ async def delete_route_rule_profile(profile_id: int, db: AsyncSession = Depends(
     if profile is None:
         raise HTTPException(status_code=404, detail="Profile not found")
 
-    # Check if any templates reference this profile
-    template_count = (
+    rule_ref = (
         await db.execute(
-            select(ImportTemplate.id).where(ImportTemplate.route_rule_profile_id == profile_id)
+            select(RouteSelectionRule.id).where(RouteSelectionRule.profile_id == profile_id).limit(1)
         )
     ).scalars().first()
-    if template_count is not None:
-        raise HTTPException(status_code=409, detail="Cannot delete profile: referenced by import templates")
+    if rule_ref is not None:
+        raise HTTPException(status_code=409, detail="Cannot delete profile: it is used by route selection rules")
 
     await db.delete(profile)
     await db.flush()

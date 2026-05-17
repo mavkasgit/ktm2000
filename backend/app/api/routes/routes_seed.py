@@ -39,7 +39,7 @@ class RouteOut(BaseModel):
 DEFAULT_ROUTE_TEMPLATES = [
     {
         "code": "fg_drill_shot",
-        "name": "ГП • Сверло • С дробеструем",
+        "name": "ГП • Сверло",
         "description": "WH → DRILL → SHOT → ANOD → WIP_WH → SAW → PACK → FG_WH → SHIPMENT → SENT",
         "sort_order": 10,
         "steps": [
@@ -57,7 +57,7 @@ DEFAULT_ROUTE_TEMPLATES = [
     },
     {
         "code": "fg_press_shot",
-        "name": "ГП • Пресс • С дробеструем",
+        "name": "ГП • Пресс",
         "description": "WH → PRESS → SHOT → ANOD → WIP_WH → SAW → PACK → FG_WH → SHIPMENT → SENT",
         "sort_order": 20,
         "steps": [
@@ -75,7 +75,7 @@ DEFAULT_ROUTE_TEMPLATES = [
     },
     {
         "code": "fg_primary_none_shot",
-        "name": "ГП • Без первичной • С дробеструем",
+        "name": "ГП",
         "description": "WH → SHOT → ANOD → WIP_WH → SAW → PACK → FG_WH → SHIPMENT → SENT",
         "sort_order": 30,
         "steps": [
@@ -142,7 +142,7 @@ DEFAULT_ROUTE_TEMPLATES = [
     },
     {
         "code": "sf_drill_shot",
-        "name": "П/ф • Сверло • С дробеструем",
+        "name": "П/ф • Сверло",
         "description": "WH → DRILL → SHOT → ANOD → FG_WH → SHIPMENT → SENT",
         "sort_order": 70,
         "steps": [
@@ -157,7 +157,7 @@ DEFAULT_ROUTE_TEMPLATES = [
     },
     {
         "code": "sf_press_shot",
-        "name": "П/ф • Пресс • С дробеструем",
+        "name": "П/ф • Пресс",
         "description": "WH → PRESS → SHOT → ANOD → FG_WH → SHIPMENT → SENT",
         "sort_order": 80,
         "steps": [
@@ -172,7 +172,7 @@ DEFAULT_ROUTE_TEMPLATES = [
     },
     {
         "code": "sf_primary_none_shot",
-        "name": "П/ф • Без первичной • С дробеструем",
+        "name": "П/ф",
         "description": "WH → SHOT → ANOD → FG_WH → SHIPMENT → SENT",
         "sort_order": 90,
         "steps": [

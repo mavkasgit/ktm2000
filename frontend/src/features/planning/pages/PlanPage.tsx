@@ -83,7 +83,7 @@ const warningLabels: Record<string, string> = {
   paired_profile_product_unmapped: "Парный профиль не сопоставлен",
   techcard_pair_not_resolved: "Не выбран парный профиль техкарты",
   product_name_missing: "Отсутствует наименование",
-  period_not_detected: "Период не определён",
+  period_not_detected: "не определен",
   route_auto_fallback: "Маршрут скорректирован автоматически — проверьте корректность",
 }
 
@@ -263,7 +263,13 @@ function PositionRow({ pos, onApprove, onDelete, selected, onToggle, routes, onA
     : isDraft
       ? 'Ожидает утверждения'
       : ''
-  const rowNum = pos.source_row_number ?? "—"
+  const rowNum = (() => {
+    const numbers = Array.isArray(pos.source_row_numbers)
+      ? pos.source_row_numbers.filter((v): v is number => typeof v === "number")
+      : []
+    if (numbers.length > 0) return numbers.join(",")
+    return pos.source_row_number ?? "—"
+  })()
   const routeSourceLabel = routeMetaLabel(pos)
   const routeError = pos.route_error ? translateLabel(pos.route_error, routeErrorLabels) : null
   const canApprove =

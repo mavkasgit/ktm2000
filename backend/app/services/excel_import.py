@@ -9,6 +9,8 @@ from io import BytesIO
 from pathlib import Path
 from typing import Any
 
+from app.services.import_normalization import apply_import_normalization
+
 
 SUPPORTED_EXCEL_EXTENSIONS = {".xls", ".xlsx", ".xlsm", ".xlsb", ".ods"}
 
@@ -118,6 +120,7 @@ def parse_factory_plan_workbook(
     filename: str,
     sheet_index: int = 0,
     column_mapping: dict[str, str] | None = None,
+    normalization_rules: dict[str, Any] | None = None,
     row_selection: str | None = None,
 ) -> ParsedWorkbook:
     validate_excel_extension(filename)
@@ -143,7 +146,15 @@ def parse_factory_plan_workbook(
     _ensure_required_columns(column_map)
 
     period_start, period_end = _parse_period(rows[:header_index], sheet.name)
-    parsed_rows = _parse_rows(rows, header_index, headers, column_map, period_start, period_end)
+    parsed_rows = _parse_rows(
+        rows,
+        header_index,
+        headers,
+        column_map,
+        period_start,
+        period_end,
+        normalization_rules,
+    )
     selected_rows = parse_row_selection(row_selection) if row_selection else None
     auto_included_rows: set[int] = set()
     if selected_rows is not None:
@@ -161,8 +172,6 @@ def parse_factory_plan_workbook(
         parsed_rows = filtered_rows
 
     warnings = []
-    if period_start is None:
-        warnings.append("period_not_detected")
     if selected_rows is not None:
         warnings.append(f"row_selection_applied:{','.join(str(row_no) for row_no in sorted(selected_rows))}")
         if auto_included_rows:
@@ -258,6 +267,7 @@ def _parse_rows(
     column_map: dict[str, int],
     period_start: date | None,
     period_end: date | None,
+    normalization_rules: dict[str, Any] | None,
 ) -> list[ParsedPlanRow]:
     parsed: list[ParsedPlanRow] = []
     last_full_by_sku: dict[str, dict[str, Any]] = {}
@@ -289,6 +299,7 @@ def _parse_rows(
             period_start,
             period_end,
             inherited,
+            normalization_rules,
         )
 
         if parsed and _can_join_as_paired_profile(parsed[-1], candidate):
@@ -331,24 +342,31 @@ def _make_plan_row(
     period_start: date | None,
     period_end: date | None,
     inherited: bool,
+    normalization_rules: dict[str, Any] | None,
 ) -> ParsedPlanRow:
     component = _component_from_raw(row_number, raw)
     raw_operation = _cell_text(raw.get("operation")) or None
-    operation_code, operation_name, additional_pack_operations = _normalize_operation(raw_operation)
+    raw_output_kind = _cell_text(raw.get("output_kind")) or None
+    normalized = apply_import_normalization(
+        raw_operation=raw_operation,
+        raw_output_kind=raw_output_kind,
+        normalization_rules=normalization_rules,
+    )
     payload = {
         "row_numbers": [row_number],
         "components": [component],
         "color": _cell_text(raw.get("color")) or None,
         "input_length": _decimal_to_str(_decimal_or_none(raw.get("input_length"))),
         "operation": raw_operation,
-        "operation_code": operation_code,
-        "operation_name": operation_name,
-        "additional_pack_operations": additional_pack_operations,
+        "operation_code": normalized.get("operation_code"),
+        "operation_name": normalized.get("operation_name"),
+        "additional_pack_operations": normalized.get("additional_pack_operations", []),
+        "normalized_pack_op_family": normalized.get("normalized_pack_op_family", "NONE"),
         "packaging": _cell_text(raw.get("packaging")) or None,
         "note": _cell_text(raw.get("note")) or None,
         "output_length": _decimal_to_str(_decimal_or_none(raw.get("output_length"))),
-        "output_kind": _normalize_output_kind(_cell_text(raw.get("output_kind"))),
-        "output_kind_raw": _cell_text(raw.get("output_kind")) or None,
+        "output_kind": normalized.get("output_kind"),
+        "output_kind_raw": raw_output_kind,
         "shipping": {
             "west_quantity": _decimal_to_str(_decimal_or_none(raw.get("west_quantity"))),
             "east_quantity": _decimal_to_str(_decimal_or_none(raw.get("east_quantity"))),
@@ -375,9 +393,6 @@ def _make_plan_row(
     errors = []
     if not _cell_text(raw.get("product_name")):
         warnings.append("product_name_missing")
-    if period_start is None:
-        warnings.append("period_not_detected")
-
     fingerprint_payload = _fingerprint_payload(source_sku, quantity, payload)
     row_hash = _hash_json({"row_number": row_number, "raw": _jsonable(raw)})
     return ParsedPlanRow(
@@ -575,36 +590,6 @@ def _int_or_none(value: Any) -> int | None:
         return int(str(value).strip())
     except (ValueError, TypeError):
         return None
-
-
-def _normalize_output_kind(value: str) -> str | None:
-    if not value:
-        return None
-    normalized = value.lower().replace("/", "").replace(" ", "")
-    if normalized in {"гп", "гп."}:
-        return "finished_good"
-    if normalized in {"пф", "пф."}:
-        return "semi_finished_shipment"
-    return value
-
-
-def _normalize_operation(value: str | None) -> tuple[str | None, str | None, list[dict[str, str]]]:
-    if not value:
-        return None, None, []
-    normalized = value.lower().replace("ё", "е").strip()
-    if "без рассеив" in normalized:
-        return "PACK", "Упаковка", [{"operation_code": "PACK_CUSTOM", "operation_name": f"Доп. упаковочная операция: {value}"}]
-    if "окн" in normalized:
-        return "PRESS_WINDOW", "Пресс окно", []
-    if "греб" in normalized:
-        return "PRESS_COMB", "Пресс гребенка", []
-    if "сверл" in normalized or "сверло" in normalized:
-        return "DRILL", "Сверловка", []
-    if "клей" in normalized:
-        return "PACK", "Упаковка", [{"operation_code": "PACK_GLUE", "operation_name": "Упаковка с клеевой операцией"}]
-    if "рассеив" in normalized:
-        return "PACK", "Упаковка", [{"operation_code": "PACK_DIFFUSER", "operation_name": "Упаковка с рассеивателем"}]
-    return "PACK", "Упаковка", [{"operation_code": "PACK_CUSTOM", "operation_name": f"Доп. упаковочная операция: {value}"}]
 
 
 def _fingerprint_payload(source_sku: str, quantity: Decimal, payload: dict[str, Any]) -> dict[str, Any]:

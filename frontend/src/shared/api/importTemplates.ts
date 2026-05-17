@@ -7,8 +7,10 @@ export type ImportTemplate = {
   button_label: string | null;
   is_active: boolean;
   sort_order: number;
-  column_mapping: Record<string, string>;
+  column_mapping: Record<string, string | { header?: string; column?: string }>;
+  normalization_rules: Record<string, unknown>;
   description: string | null;
+  profile_name?: string | null;
   created_at: string;
 };
 
@@ -18,7 +20,8 @@ export type CreateImportTemplateInput = {
   button_label?: string | null;
   is_active?: boolean;
   sort_order?: number;
-  column_mapping?: Record<string, string>;
+  column_mapping?: Record<string, string | { header?: string; column?: string }>;
+  normalization_rules?: Record<string, unknown>;
   description?: string | null;
 };
 

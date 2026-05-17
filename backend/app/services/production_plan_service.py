@@ -133,7 +133,8 @@ async def apply_change_set(db: AsyncSession, change_set_id: int) -> dict:
         if item.change_action == PlanChangeAction.create_position:
             after = item.after_data
             validation_errors = list(item.errors or [])
-            if not after.get("product_id") and "product_not_found" not in validation_errors:
+            is_paired_profile = bool((after.get("source_payload") or {}).get("paired_profile"))
+            if not is_paired_profile and not after.get("product_id") and "product_not_found" not in validation_errors:
                 validation_errors.append("product_not_found")
 
             qty = after["quantity"]

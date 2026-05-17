@@ -4,9 +4,12 @@ import pytest
 from openpyxl import Workbook
 
 from app.core.config import settings
+from app.models.import_template import ImportTemplate
 from app.models.imports import ImportBatch, ImportFile
 from app.models.production_plan import PlanChangeItem, PlanChangeSet, ProductionPlan
+from app.models.route import RouteRuleProfile
 from app.services.excel_import import parse_factory_plan_workbook, parse_row_selection
+from app.services.import_normalization import default_import_normalization_rules
 
 
 def _workbook_bytes() -> bytes:
@@ -86,6 +89,19 @@ def _workbook_bytes() -> bytes:
     return out.getvalue()
 
 
+async def _create_template(session, *, name: str, code: str) -> ImportTemplate:
+    template = ImportTemplate(
+        name=name,
+        code=code,
+        is_active=True,
+        column_mapping={"sku": {"header": "Артикул", "column": "A"}},
+        normalization_rules=default_import_normalization_rules(),
+    )
+    session.add(template)
+    await session.flush()
+    return template
+
+
 def test_factory_plan_parser_groups_paired_profiles_and_continuations() -> None:
     parsed = parse_factory_plan_workbook(_workbook_bytes(), "plan.xlsx")
 
@@ -142,9 +158,11 @@ def test_factory_plan_parser_row_selection_auto_includes_pair() -> None:
 @pytest.mark.asyncio
 async def test_import_excel_creates_batch_and_change_set(client, session, tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(settings, "IMPORT_STORAGE_DIR", str(tmp_path))
+    template = await _create_template(session, name="Base Template", code="base-template")
+    await session.commit()
 
     response = await client.post(
-        "/api/imports/excel",
+        f"/api/imports/excel?template_id={template.id}",
         files={
             "file": (
                 "plan.xlsx",
@@ -177,13 +195,60 @@ async def test_import_excel_creates_batch_and_change_set(client, session, tmp_pa
 
 
 @pytest.mark.asyncio
-async def test_import_excel_with_row_selection_filters_rows_and_reports_pair_autoinclude(
+async def test_preview_excel_resolves_paired_profile_warning_when_pair_techcard_exists(
     client, session, tmp_path, monkeypatch
 ) -> None:
     monkeypatch.setattr(settings, "IMPORT_STORAGE_DIR", str(tmp_path))
 
+    from app.models.product import Product, ProductType
+    from app.models.techcard import Techcard, TechcardLine
+
+    template = await _create_template(session, name="Preview Pair Template", code="preview-pair-template")
+
+    comp_a = Product(sku="ЮП-2616", name="Comp A", type=ProductType.component, unit="pcs", is_active=True)
+    comp_b = Product(sku="ЮП-2604", name="Comp B", type=ProductType.component, unit="pcs", is_active=True)
+    session.add_all([comp_a, comp_b])
+    await session.flush()
+
+    paired = Techcard(product_id=None, version="v1", is_active=True, processing_type="paired_processing")
+    session.add(paired)
+    await session.flush()
+    session.add_all(
+        [
+            TechcardLine(techcard_id=paired.id, component_product_id=comp_a.id, quantity=1, unit="pcs"),
+            TechcardLine(techcard_id=paired.id, component_product_id=comp_b.id, quantity=1, unit="pcs"),
+        ]
+    )
+    await session.commit()
+
     response = await client.post(
-        "/api/imports/excel",
+        f"/api/imports/excel/preview?template_id={template.id}",
+        files={
+            "file": (
+                "plan.xlsx",
+                _workbook_bytes(),
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    paired_item = body["items"][0]
+    assert paired_item["source_sku"] == "ЮП-2616+ЮП-2604"
+    assert "paired_profile_product_unmapped" not in paired_item["warnings"]
+
+
+@pytest.mark.asyncio
+async def test_import_excel_with_row_selection_filters_rows_and_reports_pair_autoinclude(
+    client, session, tmp_path, monkeypatch
+) -> None:
+    monkeypatch.setattr(settings, "IMPORT_STORAGE_DIR", str(tmp_path))
+    template = await _create_template(session, name="Rows Template", code="rows-template")
+    await session.commit()
+
+    response = await client.post(
+        f"/api/imports/excel?template_id={template.id}",
         data={"row_selection": "6"},
         files={
             "file": (
@@ -205,11 +270,13 @@ async def test_import_excel_with_row_selection_filters_rows_and_reports_pair_aut
 
 
 @pytest.mark.asyncio
-async def test_import_excel_with_invalid_row_selection_returns_400(client, tmp_path, monkeypatch) -> None:
+async def test_import_excel_with_invalid_row_selection_returns_400(client, session, tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(settings, "IMPORT_STORAGE_DIR", str(tmp_path))
+    template = await _create_template(session, name="Invalid Rows Template", code="invalid-rows-template")
+    await session.commit()
 
     response = await client.post(
-        "/api/imports/excel",
+        f"/api/imports/excel?template_id={template.id}",
         data={"row_selection": "15-12"},
         files={
             "file": (
@@ -222,6 +289,25 @@ async def test_import_excel_with_invalid_row_selection_returns_400(client, tmp_p
 
     assert response.status_code == 400
     assert "row range" in response.json()["detail"].lower()
+
+
+@pytest.mark.asyncio
+async def test_import_excel_requires_template_id(client, tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(settings, "IMPORT_STORAGE_DIR", str(tmp_path))
+
+    response = await client.post(
+        "/api/imports/excel",
+        files={
+            "file": (
+                "plan.xlsx",
+                _workbook_bytes(),
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
+        },
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "template_id is required"
 
 
 def test_factory_plan_parser_with_custom_mapping() -> None:
@@ -290,7 +376,11 @@ def test_factory_plan_parser_maps_additional_pack_operations() -> None:
     out = BytesIO()
     wb.save(out)
 
-    parsed = parse_factory_plan_workbook(out.getvalue(), "pack_ops.xlsx")
+    parsed = parse_factory_plan_workbook(
+        out.getvalue(),
+        "pack_ops.xlsx",
+        normalization_rules=default_import_normalization_rules(),
+    )
     assert len(parsed.parsed_rows) == 3
 
     glue = parsed.parsed_rows[0].payload
@@ -413,9 +503,11 @@ async def test_replace_draft_mode_creates_cancel_for_missing_rows(client, sessio
         return out.getvalue()
 
     # First import with 2 rows
+    template = await _create_template(session, name="Replace Template", code="replace-template")
+    await session.commit()
     wb1 = _make_workbook([("FG-TEST", "Test Product", 100), ("FG-TEST", "Test Product", 200)])
     response1 = await client.post(
-        "/api/imports/excel",
+        f"/api/imports/excel?template_id={template.id}",
         files={"file": ("plan1.xlsx", wb1, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
     )
     assert response1.status_code == 201
@@ -430,7 +522,7 @@ async def test_replace_draft_mode_creates_cancel_for_missing_rows(client, sessio
     # Second import with 1 row (replace mode)
     wb2 = _make_workbook([("FG-TEST", "Test Product", 100)])
     response2 = await client.post(
-        "/api/imports/excel",
+        f"/api/imports/excel?template_id={template.id}",
         data={"mode": "replace_draft_from_same_source", "production_plan_id": str(plan_id)},
         files={"file": ("plan2.xlsx", wb2, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
     )
@@ -438,3 +530,154 @@ async def test_replace_draft_mode_creates_cancel_for_missing_rows(client, sessio
     body2 = response2.json()
     actions = [item["change_action"] for item in body2["items"]]
     assert "cancel_draft_position" in actions
+
+
+@pytest.mark.asyncio
+async def test_import_excel_resolves_profile_by_template_priority(client, session, tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(settings, "IMPORT_STORAGE_DIR", str(tmp_path))
+
+    template = ImportTemplate(
+        name="Template with Profiles",
+        code="template-profiles",
+        is_active=True,
+        column_mapping={"sku": {"header": "Артикул", "column": "A"}},
+        normalization_rules=default_import_normalization_rules(),
+    )
+    session.add(template)
+    await session.flush()
+
+    low_active = RouteRuleProfile(
+        code="profile-low-active",
+        name="Profile low active",
+        is_active=True,
+        priority=10,
+        import_template_id=template.id,
+    )
+    high_inactive = RouteRuleProfile(
+        code="profile-high-inactive",
+        name="Profile high inactive",
+        is_active=False,
+        priority=999,
+        import_template_id=template.id,
+    )
+    high_active = RouteRuleProfile(
+        code="profile-high-active",
+        name="Profile high active",
+        is_active=True,
+        priority=20,
+        import_template_id=template.id,
+    )
+    session.add_all([low_active, high_inactive, high_active])
+    await session.commit()
+
+    response = await client.post(
+        f"/api/imports/excel?template_id={template.id}",
+        files={
+            "file": (
+                "plan.xlsx",
+                _workbook_bytes(),
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
+        },
+    )
+
+    assert response.status_code == 201
+    body = response.json()
+    assert body["template_id"] == template.id
+    assert body["rule_profile_id"] == high_active.id
+
+
+@pytest.mark.asyncio
+async def test_import_excel_template_without_profile_uses_fallback(client, session, tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(settings, "IMPORT_STORAGE_DIR", str(tmp_path))
+
+    template = ImportTemplate(
+        name="Template without profile",
+        code="template-no-profile",
+        is_active=True,
+        column_mapping={"sku": {"header": "Артикул", "column": "A"}},
+        normalization_rules=default_import_normalization_rules(),
+    )
+    session.add(template)
+    await session.commit()
+
+    response = await client.post(
+        f"/api/imports/excel?template_id={template.id}",
+        files={
+            "file": (
+                "plan.xlsx",
+                _workbook_bytes(),
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
+        },
+    )
+
+    assert response.status_code == 201
+    body = response.json()
+    assert body["template_id"] == template.id
+    assert body["rule_profile_id"] is None
+
+
+@pytest.mark.asyncio
+async def test_preview_excel_uses_template_profile_for_rule_selection(client, session, monkeypatch) -> None:
+    template = ImportTemplate(
+        name="Template preview profile",
+        code="template-preview-profile",
+        is_active=True,
+        column_mapping={"sku": {"header": "Артикул", "column": "A"}},
+        normalization_rules=default_import_normalization_rules(),
+    )
+    session.add(template)
+    await session.flush()
+
+    low_active = RouteRuleProfile(
+        code="preview-profile-low",
+        name="Preview profile low",
+        is_active=True,
+        priority=10,
+        import_template_id=template.id,
+    )
+    high_inactive = RouteRuleProfile(
+        code="preview-profile-high-inactive",
+        name="Preview profile high inactive",
+        is_active=False,
+        priority=999,
+        import_template_id=template.id,
+    )
+    high_active = RouteRuleProfile(
+        code="preview-profile-high-active",
+        name="Preview profile high active",
+        is_active=True,
+        priority=20,
+        import_template_id=template.id,
+    )
+    session.add_all([low_active, high_inactive, high_active])
+    await session.commit()
+
+    captured: dict[str, int | None] = {"rule_profile_id": None}
+
+    async def _fake_preview_excel_sheet(_db, **kwargs):
+        captured["rule_profile_id"] = kwargs.get("rule_profile_id")
+        return {
+            "sheet_name": "test",
+            "header_row_number": 1,
+            "total_rows": 0,
+            "summary": {},
+            "items": [],
+        }
+
+    monkeypatch.setattr("app.services.plan_import_service.preview_excel_sheet", _fake_preview_excel_sheet)
+
+    response = await client.post(
+        f"/api/imports/excel/preview?template_id={template.id}",
+        files={
+            "file": (
+                "plan.xlsx",
+                _workbook_bytes(),
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
+        },
+    )
+
+    assert response.status_code == 200
+    assert captured["rule_profile_id"] == high_active.id

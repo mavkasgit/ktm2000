@@ -23,7 +23,8 @@ async def test_create_and_list_import_templates(client) -> None:
     assert created["is_active"] is True
     assert created["sort_order"] == 10
     assert created["column_mapping"] == {"A": "sku", "B": "quantity"}
-    assert created["route_rule_profile_id"] is None
+    assert "normalization_rules" in created
+    assert isinstance(created["normalization_rules"], dict)
     assert "id" in created
 
     list_response = await client.get("/api/import-templates")

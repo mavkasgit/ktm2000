@@ -111,6 +111,7 @@ class RouteSelectionRule(Base):
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("true"), default=True)
     conditions: Mapped[list] = mapped_column(JSONB, nullable=False, server_default=text("'[]'::jsonb"), default=list)
     actions: Mapped[list] = mapped_column(JSONB, nullable=False, server_default=text("'[]'::jsonb"), default=list)
+    phase: Mapped[str] = mapped_column(String(20), nullable=False, server_default=text("'route_select'"), default="route_select")
     created_at: Mapped[None] = mapped_column(DateTime, server_default=func.now())
 
     profile: Mapped["RouteRuleProfile | None"] = relationship("RouteRuleProfile", back_populates="rules")

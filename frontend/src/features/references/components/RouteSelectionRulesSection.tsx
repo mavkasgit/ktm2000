@@ -21,6 +21,12 @@ type Props = {
 
 type RuleScope = "global" | "profile";
 type RuleSource = RoutesAPI.RouteSelectionCondition["source"];
+type RulePhase = "normalize" | "route_select";
+
+const phaseLabels: Record<RulePhase, string> = {
+  normalize: "Нормализация",
+  route_select: "Выбор маршрута",
+};
 
 type FieldOption = {
   field_path: string;
@@ -66,7 +72,12 @@ const operatorLabels: Record<RoutesAPI.RouteSelectionCondition["operator"], stri
 const actionLabels: Record<RoutesAPI.RouteSelectionAction["action"], string> = {
   require_section: "Добавить",
   exclude_section: "Исключить",
+  set: "Установить (set)",
+  add: "Добавить в список (add)",
+  remove: "Удалить из списка (remove)",
 };
+
+const isDslAction = (action: string): boolean => action === "set" || action === "add" || action === "remove";
 
 const HEADER_KEY_BY_NAME: Record<string, string> = {
   "артикул": "sku",
@@ -147,12 +158,19 @@ const emptyAction: RoutesAPI.RouteSelectionAction = {
   section_id: 0,
 };
 
+const emptyDslAction: RoutesAPI.RouteSelectionAction = {
+  action: "set",
+  path: "ctx.",
+  value: null,
+};
+
 const emptyForm: RoutesAPI.RouteSelectionRuleInput = {
   code: null,
   name: "",
   profile_id: null,
   priority: 0,
   is_active: true,
+  phase: "route_select",
   conditions: [],
   actions: [{ ...emptyAction }],
 };
@@ -185,6 +203,314 @@ function toColumnLetter(index: number): string {
 function toFieldPath(header: string, index: number): string {
   const normalized = normalizeHeader(header);
   return HEADER_KEY_BY_NAME[normalized] ?? `column_${index}`;
+}
+
+type PassportBindingStatus = {
+  level: "ok" | "warning" | "info";
+  title: string;
+  description: string;
+};
+
+function parseColumnTokenToIndex(token: string): number | null {
+  const clean = token.trim();
+  if (!clean) return null;
+  if (/^\d+$/.test(clean)) {
+    const parsed = Number(clean);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+  }
+  if (!/^[A-Za-z]+$/.test(clean)) return null;
+  let out = 0;
+  for (const ch of clean.toUpperCase()) {
+    out = out * 26 + (ch.charCodeAt(0) - 64);
+  }
+  return out > 0 ? out : null;
+}
+
+function looksLikeColumnKey(value: string): boolean {
+  const clean = value.trim();
+  return /^[A-Za-z]+$/.test(clean) || /^\d+$/.test(clean);
+}
+
+function buildPassportFromTemplateMapping(mapping: ImportTemplatesAPI.ImportTemplate["column_mapping"]): ExcelColumnSpec[] {
+  const usedIndexes = new Set<number>();
+  const prepared = Object.entries(mapping ?? {}).map(([rawKey, rawValue]) => {
+    const key = rawKey.trim();
+    if (!key) return null;
+
+    let fieldPath = key;
+    let header = key;
+    let columnToken = "";
+    if (typeof rawValue === "string") {
+      const value = rawValue.trim();
+      if (looksLikeColumnKey(key) && value) {
+        fieldPath = value;
+        header = value;
+        columnToken = key;
+      } else {
+        header = value || key;
+      }
+    } else if (rawValue && typeof rawValue === "object") {
+      const row = rawValue as { header?: string; column?: string };
+      header = String(row.header ?? key).trim() || key;
+      columnToken = String(row.column ?? "").trim();
+    }
+
+    const parsedIndex = parseColumnTokenToIndex(columnToken);
+    if (parsedIndex) usedIndexes.add(parsedIndex);
+    return {
+      field_path: fieldPath,
+      header,
+      parsedIndex,
+    };
+  }).filter((item): item is { field_path: string; header: string; parsedIndex: number | null } => item !== null);
+
+  let nextIndex = 1;
+  return prepared.map((item) => {
+    let index = item.parsedIndex;
+    if (!index) {
+      while (usedIndexes.has(nextIndex)) nextIndex += 1;
+      index = nextIndex;
+      usedIndexes.add(index);
+      nextIndex += 1;
+    }
+    return {
+      index,
+      letter: toColumnLetter(index),
+      header: item.header,
+      field_path: item.field_path,
+    };
+  }).sort((a, b) => a.index - b.index);
+}
+
+function getPassportBindingStatus(
+  importTemplateId: number | null,
+  passport: ExcelColumnSpec[],
+  meta: Record<string, unknown>,
+  templateName: string | null,
+): PassportBindingStatus {
+  if (!importTemplateId) {
+    return {
+      level: "info",
+      title: "Шаблон импорта не выбран",
+      description: "Можно работать с полями payload/product. Для стабильных Excel-условий рекомендуется выбрать шаблон и синхронизировать паспорт.",
+    };
+  }
+  if (!passport.length) {
+    return {
+      level: "warning",
+      title: "Паспорт колонок не задан",
+      description: templateName
+        ? `Выбран шаблон «${templateName}», но паспорт пуст. Excel-условия будут ограничены до заполнения паспорта.`
+        : "Шаблон выбран, но паспорт пуст. Excel-условия будут ограничены до заполнения паспорта.",
+    };
+  }
+  const metaTemplateId = Number(meta.import_template_id ?? NaN);
+  if (Number.isFinite(metaTemplateId) && metaTemplateId === importTemplateId) {
+    return {
+      level: "ok",
+      title: "Паспорт синхронизирован с шаблоном",
+      description: templateName
+        ? `Паспорт привязан к шаблону «${templateName}». Колонок: ${passport.length}.`
+        : `Паспорт привязан к текущему шаблону. Колонок: ${passport.length}.`,
+    };
+  }
+  return {
+    level: "warning",
+    title: "Паспорт может быть устаревшим",
+    description: templateName
+      ? `Выбран шаблон «${templateName}», но метаданные паспорта не совпадают. Нажмите «Применить».`
+      : "Метаданные паспорта не совпадают с выбранным шаблоном. Рекомендуется обновить паспорт вручную.",
+  };
+}
+
+function passportStatusClassName(level: PassportBindingStatus["level"]): string {
+  if (level === "ok") return "border-emerald-300 bg-emerald-50 text-emerald-800";
+  if (level === "warning") return "border-amber-300 bg-amber-50 text-amber-800";
+  return "border-slate-300 bg-slate-50 text-slate-700";
+}
+
+type ConditionRowProps = {
+  index: number;
+  condition: RoutesAPI.RouteSelectionCondition;
+  scope: RuleScope;
+  ruleExcelColumns: ExcelColumnSpec[];
+  fieldOptionsBySource: Record<RuleSource, FieldOption[]>;
+  valuePresets: Record<string, Array<{ label: string; value: unknown }>>;
+  sourceOptionsForCondition: (condition: RoutesAPI.RouteSelectionCondition) => RuleSource[];
+  onUpdateCondition: (index: number, patch: Partial<RoutesAPI.RouteSelectionCondition>) => void;
+  onApplyExcelColumn: (index: number, columnIndex: number) => void;
+  onApplyValuePreset: (index: number, value: unknown) => void;
+  onRemoveCondition: (index: number) => void;
+};
+
+function ConditionRow({
+  index,
+  condition,
+  scope,
+  ruleExcelColumns,
+  fieldOptionsBySource,
+  valuePresets: conditionValuePresets,
+  sourceOptionsForCondition,
+  onUpdateCondition,
+  onApplyExcelColumn,
+  onApplyValuePreset,
+  onRemoveCondition,
+}: ConditionRowProps) {
+  const selectedFieldHint = fieldOptionsBySource[condition.source].find((option) => option.field_path === condition.field_path)?.hint;
+  const presetKey = `${condition.source}:${condition.field_path}`;
+
+  return (
+    <tr className="border-b last:border-b-0 align-top">
+      <td className="p-1 min-w-[170px]">
+        <Select
+          value={condition.source}
+          onValueChange={(value) => {
+            const nextSource = value as RuleSource;
+            if (nextSource === "excel") {
+              const preferred = ruleExcelColumns.find((column) => column.field_path === condition.field_path) ?? ruleExcelColumns[0];
+              onUpdateCondition(index, {
+                source: nextSource,
+                field_path: preferred?.field_path ?? condition.field_path ?? "",
+                excel_column_index: preferred?.index ?? null,
+                excel_column_letter: preferred?.letter ?? null,
+                excel_header: preferred?.header ?? null,
+              });
+              return;
+            }
+            onUpdateCondition(index, {
+              source: nextSource,
+              excel_column_index: null,
+              excel_column_letter: null,
+              excel_header: null,
+            });
+          }}
+        >
+          <SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger>
+          <SelectContent>
+            {sourceOptionsForCondition(condition).map((value) => (
+              <SelectItem key={value} value={value}>{sourceLabels[value]}</SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </td>
+      <td className="p-1 min-w-[280px]">
+        <div className="grid gap-1">
+          {condition.source === "excel" ? (
+            <>
+              <Select
+                value={condition.excel_column_index ? String(condition.excel_column_index) : "__custom__"}
+                onValueChange={(value) => {
+                  if (value === "__custom__") {
+                    onUpdateCondition(index, {
+                      excel_column_index: null,
+                      excel_column_letter: null,
+                      excel_header: null,
+                    });
+                    return;
+                  }
+                  onApplyExcelColumn(index, Number(value));
+                }}
+                disabled={scope !== "profile" || ruleExcelColumns.length === 0}
+              >
+                <SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  {condition.excel_column_index && !ruleExcelColumns.some((column) => column.index === condition.excel_column_index) && (
+                    <SelectItem value={String(condition.excel_column_index)}>
+                      {condition.excel_column_index} / {condition.excel_column_letter ?? "?"} / {condition.excel_header ?? "—"}
+                    </SelectItem>
+                  )}
+                  {ruleExcelColumns.map((column) => (
+                    <SelectItem key={column.index} value={String(column.index)}>
+                      {column.index} / {column.letter} / {column.header}
+                    </SelectItem>
+                  ))}
+                  {ruleExcelColumns.length === 0 && (
+                    <SelectItem value="__empty__" disabled>
+                      Паспорт колонок не задан
+                    </SelectItem>
+                  )}
+                  <SelectItem value="__custom__">Кастомная колонка</SelectItem>
+                </SelectContent>
+              </Select>
+              {condition.excel_column_index ? (
+                <Input value={condition.field_path} readOnly className="h-7 text-xs bg-muted/40" />
+              ) : (
+                <Input
+                  value={condition.field_path}
+                  onChange={(event) => onUpdateCondition(index, { field_path: event.target.value })}
+                  placeholder="Ключ колонки"
+                  className="h-7 text-xs"
+                />
+              )}
+            </>
+          ) : (
+            <>
+              <Input
+                list={`field-path-options-${index}`}
+                value={condition.field_path}
+                onChange={(event) => onUpdateCondition(index, { field_path: event.target.value })}
+                placeholder="Например: output_kind"
+                className="h-8 text-xs"
+              />
+              <datalist id={`field-path-options-${index}`}>
+                {fieldOptionsBySource[condition.source].map((option) => (
+                  <option key={`${condition.source}-${option.field_path}`} value={option.field_path}>
+                    {option.label}
+                  </option>
+                ))}
+              </datalist>
+            </>
+          )}
+          {selectedFieldHint ? <span className="text-[11px] text-muted-foreground">{selectedFieldHint}</span> : null}
+        </div>
+      </td>
+      <td className="p-1 min-w-[150px]">
+        <Select value={condition.operator} onValueChange={(value) => onUpdateCondition(index, { operator: value as RoutesAPI.RouteSelectionCondition["operator"] })}>
+          <SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger>
+          <SelectContent>
+            {(Object.keys(operatorLabels) as RoutesAPI.RouteSelectionCondition["operator"][]).map((value) => (
+              <SelectItem key={value} value={value}>{operatorLabels[value]}</SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </td>
+      <td className="p-1 min-w-[220px]">
+        <div className="grid gap-1">
+          <Input
+            disabled={condition.operator === "empty" || condition.operator === "not_empty"}
+            value={String(condition.value ?? "")}
+            onChange={(event) => onUpdateCondition(index, { value: event.target.value })}
+            className="h-8 text-xs"
+          />
+          {condition.operator !== "empty" && condition.operator !== "not_empty" && conditionValuePresets[presetKey]?.length ? (
+            <div className="flex flex-wrap gap-1">
+              {conditionValuePresets[presetKey].map((preset, presetIndex) => (
+                <button
+                  key={`${presetKey}:${presetIndex}`}
+                  type="button"
+                  onClick={() => onApplyValuePreset(index, preset.value)}
+                  className="rounded border px-1.5 py-0.5 text-[10px] hover:bg-accent"
+                >
+                  {preset.label}
+                </button>
+              ))}
+            </div>
+          ) : null}
+        </div>
+      </td>
+      <td className="p-1 w-[64px]">
+        <div className="flex items-center justify-center gap-1 pt-2">
+          <Checkbox checked={condition.case_sensitive} onCheckedChange={(checked) => onUpdateCondition(index, { case_sensitive: checked === true })} />
+          <span className="text-[10px] text-muted-foreground">Aa</span>
+        </div>
+      </td>
+      <td className="p-1 w-[52px]">
+        <Button size="sm" variant="ghost" className="h-8 w-8 p-0 text-red-600" onClick={() => onRemoveCondition(index)}>
+          <Trash2 className="h-4 w-4" />
+        </Button>
+      </td>
+    </tr>
+  );
 }
 
 export function RouteSelectionRulesSection({ refreshKey }: Props) {
@@ -232,6 +558,32 @@ export function RouteSelectionRulesSection({ refreshKey }: Props) {
       product: productFieldOptions,
     };
   }, [ruleExcelColumns]);
+  const selectedProfileTemplate = useMemo(
+    () => importTemplates.find((item) => item.id === selectedProfile?.import_template_id) ?? null,
+    [importTemplates, selectedProfile?.import_template_id],
+  );
+  const selectedProfilePassportStatus = useMemo(
+    () => getPassportBindingStatus(
+      selectedProfile?.import_template_id ?? null,
+      selectedProfile?.excel_column_passport ?? [],
+      (selectedProfile?.excel_passport_meta ?? {}) as Record<string, unknown>,
+      selectedProfileTemplate?.name ?? null,
+    ),
+    [selectedProfile, selectedProfileTemplate?.name],
+  );
+  const profileFormTemplate = useMemo(
+    () => importTemplates.find((item) => item.id === profileForm.import_template_id) ?? null,
+    [importTemplates, profileForm.import_template_id],
+  );
+  const profileFormPassportStatus = useMemo(
+    () => getPassportBindingStatus(
+      profileForm.import_template_id,
+      profileForm.excel_column_passport,
+      profileForm.excel_passport_meta,
+      profileFormTemplate?.name ?? null,
+    ),
+    [profileForm.excel_column_passport, profileForm.excel_passport_meta, profileForm.import_template_id, profileFormTemplate?.name],
+  );
 
   const loadData = useCallback(async () => {
     setLoading(true);
@@ -291,11 +643,24 @@ export function RouteSelectionRulesSection({ refreshKey }: Props) {
     ...rule,
     code: rule.code?.trim() || null,
     name: rule.name.trim(),
+    phase: rule.phase ?? "route_select",
     profile_id: scope === "profile" && selectedProfileId ? selectedProfileId : null,
-    actions: rule.actions.map((action) => ({
-      action: action.action,
-      section_id: Number(action.section_id),
-    })),
+    actions: rule.actions.map((action) => {
+      if (isDslAction(action.action)) {
+        return {
+          action: action.action,
+          section_id: null,
+          path: action.path?.trim() || null,
+          value: action.value,
+        };
+      }
+      return {
+        action: action.action,
+        section_id: Number(action.section_id),
+        path: null,
+        value: null,
+      };
+    }),
     conditions: rule.conditions.map((condition) => ({
       ...condition,
       field_path: condition.field_path.trim(),
@@ -324,8 +689,14 @@ export function RouteSelectionRulesSection({ refreshKey }: Props) {
       profile_id: rule.profile_id,
       priority: rule.priority,
       is_active: rule.is_active,
+      phase: rule.phase,
       conditions: rule.conditions.map((condition) => ({ ...condition })),
-      actions: rule.actions.map((action) => ({ action: action.action, section_id: action.section_id })),
+      actions: rule.actions.map((action) => ({
+        action: action.action,
+        section_id: action.section_id,
+        path: action.path,
+        value: action.value,
+      })),
     });
     setDialogOpen(true);
   };
@@ -335,7 +706,14 @@ export function RouteSelectionRulesSection({ refreshKey }: Props) {
     if (!normalized.name) return "Название обязательно";
     if (!Number.isFinite(normalized.priority)) return "Приоритет обязателен";
     if (!normalized.actions.length) return "Добавьте хотя бы одно действие";
-    if (normalized.actions.some((action) => !action.section_id)) return "В каждом действии должен быть выбран участок";
+
+    for (const action of normalized.actions) {
+      if (isDslAction(action.action)) {
+        if (!action.path?.startsWith("ctx.")) return "DSL действие: путь должен начинаться с 'ctx.'";
+      } else {
+        if (!action.section_id) return "В каждом действии по участкам должен быть выбран участок";
+      }
+    }
 
     for (const condition of normalized.conditions) {
       if (condition.source === "excel") {
@@ -343,6 +721,8 @@ export function RouteSelectionRulesSection({ refreshKey }: Props) {
         if (!selectedProfile) return "Для Excel-условий выберите группу";
         if (!(selectedProfile.excel_column_passport?.length ?? 0)) return "Сначала задайте паспорт колонок в группе правил";
         if (!condition.field_path && !condition.excel_column_index && !condition.excel_header) return "В каждом excel-условии нужно указать колонку";
+      } else if (condition.source === "ctx") {
+        if (!condition.field_path) return "В каждом ctx-условии должно быть поле";
       } else if (!condition.field_path) {
         return "В каждом условии должно быть поле";
       }
@@ -443,6 +823,34 @@ export function RouteSelectionRulesSection({ refreshKey }: Props) {
       excel_passport_meta: { ...(profile.excel_passport_meta ?? {}) },
     });
     setProfileDialogOpen(true);
+  };
+
+  const handleSyncPassportFromTemplate = () => {
+    if (!profileForm.import_template_id) {
+      toast({ variant: "destructive", title: "Сначала выберите шаблон импорта" });
+      return;
+    }
+    const template = importTemplates.find((item) => item.id === profileForm.import_template_id);
+    if (!template) {
+      toast({ variant: "destructive", title: "Шаблон импорта не найден" });
+      return;
+    }
+    const syncedPassport = buildPassportFromTemplateMapping(template.column_mapping);
+    if (!syncedPassport.length) {
+      toast({ variant: "destructive", title: "В шаблоне нет данных для синхронизации паспорта" });
+      return;
+    }
+    setProfileForm((current) => ({
+      ...current,
+      excel_column_passport: syncedPassport,
+      excel_passport_meta: {
+        ...(current.excel_passport_meta ?? {}),
+        import_template_id: current.import_template_id,
+        synced_at: new Date().toISOString(),
+        source: "import_template",
+      },
+    }));
+    toast({ title: "Паспорт синхронизирован", description: `Колонок: ${syncedPassport.length}`, variant: "success" });
   };
 
   const handleProfileSave = async () => {
@@ -593,16 +1001,24 @@ export function RouteSelectionRulesSection({ refreshKey }: Props) {
                 >
                   <TableCell>
                     <div className="font-medium">{rule.name}</div>
-                    {rule.code && <div className="text-xs text-muted-foreground">{rule.code}</div>}
+                    <div className="flex items-center gap-1 mt-1">
+                      <Badge variant={rule.phase === "normalize" ? "secondary" : "default"} className="text-[10px] px-1 py-0">
+                        {phaseLabels[rule.phase]}
+                      </Badge>
+                      {rule.code && <span className="text-xs text-muted-foreground">{rule.code}</span>}
+                    </div>
                     {rule.profile_name && <div className="text-xs text-muted-foreground">Группа: {rule.profile_name}</div>}
                   </TableCell>
                   <TableCell>
                     <div className="flex flex-wrap gap-1">
-                      {rule.actions.map((action, index) => (
-                        <Badge key={`${rule.id}-${index}`} variant={action.action === "require_section" ? "default" : "secondary"}>
-                          {actionLabels[action.action]} {action.section_code ?? action.section_id}
-                        </Badge>
-                      ))}
+                      {rule.actions.map((action, index) => {
+                        const isDsl = isDslAction(action.action);
+                        return (
+                          <Badge key={`${rule.id}-${index}`} variant={isDsl ? "outline" : (action.action === "require_section" ? "default" : "secondary")}>
+                            {actionLabels[action.action]} {isDsl ? (action.path ?? "") : (action.section_code ?? action.section_id)}
+                          </Badge>
+                        );
+                      })}
                     </div>
                   </TableCell>
                   <TableCell className="font-medium">{rule.priority}</TableCell>
@@ -631,7 +1047,7 @@ export function RouteSelectionRulesSection({ refreshKey }: Props) {
           </DialogHeader>
 
           <div className="grid gap-4 overflow-y-auto">
-            <div className="grid gap-3 md:grid-cols-[1fr_1fr_140px]">
+            <div className="grid gap-3 md:grid-cols-[1fr_1fr_120px_160px]">
               <label className="grid gap-1.5 text-sm font-medium">
                 Название правила
                 <Input value={form.name} onChange={(event) => setForm((current) => ({ ...current, name: event.target.value }))} />
@@ -644,19 +1060,23 @@ export function RouteSelectionRulesSection({ refreshKey }: Props) {
                 Приоритет
                 <Input type="number" value={form.priority} onChange={(event) => setForm((current) => ({ ...current, priority: Number(event.target.value) }))} />
               </label>
+              <label className="grid gap-1.5 text-sm font-medium">
+                Фаза
+                <Select value={form.phase ?? "route_select"} onValueChange={(value) => setForm((current) => ({ ...current, phase: value as RulePhase }))}>
+                  <SelectTrigger className="h-9"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    {(Object.keys(phaseLabels) as RulePhase[]).map((phase) => (
+                      <SelectItem key={phase} value={phase}>{phaseLabels[phase]}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </label>
             </div>
 
             {scope === "profile" && (
-              <div className="rounded-md border bg-muted/20 p-3 text-xs">
-                {ruleExcelColumns.length > 0 ? (
-                  <div className="text-muted-foreground">
-                    Паспорт колонок группы загружен: {ruleExcelColumns.length} колонок.
-                  </div>
-                ) : (
-                  <div className="text-amber-700">
-                    Паспорт колонок в группе не задан. Excel-условия недоступны, пока не заполните паспорт в редакторе группы.
-                  </div>
-                )}
+              <div className={`rounded-md border p-3 text-xs ${passportStatusClassName(selectedProfilePassportStatus.level)}`}>
+                <div className="font-medium">{selectedProfilePassportStatus.title}</div>
+                <div className="mt-1">{selectedProfilePassportStatus.description}</div>
               </div>
             )}
 
@@ -671,161 +1091,43 @@ export function RouteSelectionRulesSection({ refreshKey }: Props) {
                   </Button>
                 </div>
 
-                {form.conditions.map((condition, index) => (
-                <div key={index} className="grid gap-2 rounded-md border p-3 md:grid-cols-[120px_1fr_160px_1fr_110px_auto] md:items-end">
-                  <label className="grid gap-1.5 text-xs font-medium">
-                    Источник
-                    <Select
-                      value={condition.source}
-                      onValueChange={(value) => {
-                        const nextSource = value as RuleSource;
-                        if (nextSource === "excel") {
-                          const preferred = ruleExcelColumns.find((column) => column.field_path === condition.field_path) ?? ruleExcelColumns[0];
-                          updateCondition(index, {
-                            source: nextSource,
-                            field_path: preferred?.field_path ?? condition.field_path ?? "",
-                            excel_column_index: preferred?.index ?? null,
-                            excel_column_letter: preferred?.letter ?? null,
-                            excel_header: preferred?.header ?? null,
-                          });
-                          return;
-                        }
-                        updateCondition(index, {
-                          source: nextSource,
-                          excel_column_index: null,
-                          excel_column_letter: null,
-                          excel_header: null,
-                        });
-                      }}
-                    >
-                      <SelectTrigger><SelectValue /></SelectTrigger>
-                      <SelectContent>
-                        {sourceOptionsForCondition(condition).map((value) => (
-                          <SelectItem key={value} value={value}>{sourceLabels[value]}</SelectItem>
+                {form.conditions.length > 0 ? (
+                  <div className="rounded-md border overflow-x-auto">
+                    <table className="w-full text-xs">
+                      <thead className="border-b bg-muted/50">
+                        <tr>
+                          <th className="text-left py-1 px-2 font-medium">Источник</th>
+                          <th className="text-left py-1 px-2 font-medium">Поле / колонка</th>
+                          <th className="text-left py-1 px-2 font-medium">Оператор</th>
+                          <th className="text-left py-1 px-2 font-medium">Значение</th>
+                          <th className="text-center py-1 px-2 font-medium">Aa</th>
+                          <th className="py-1 px-2 w-12" />
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {form.conditions.map((condition, index) => (
+                          <ConditionRow
+                            key={`${condition.source}-${index}`}
+                            index={index}
+                            condition={condition}
+                            scope={scope}
+                            ruleExcelColumns={ruleExcelColumns}
+                            fieldOptionsBySource={fieldOptionsBySource}
+                            valuePresets={valuePresets}
+                            sourceOptionsForCondition={sourceOptionsForCondition}
+                            onUpdateCondition={updateCondition}
+                            onApplyExcelColumn={applyExcelColumn}
+                            onApplyValuePreset={applyValuePreset}
+                            onRemoveCondition={(conditionIndex) => setForm((current) => ({
+                              ...current,
+                              conditions: current.conditions.filter((_, idx) => idx !== conditionIndex),
+                            }))}
+                          />
                         ))}
-                      </SelectContent>
-                    </Select>
-                  </label>
-
-                  <label className="grid gap-1.5 text-xs font-medium">
-                    {condition.source === "excel" ? "Колонка Excel" : "Поле / колонка"}
-                    {condition.source === "excel" ? (
-                      <>
-                        <Select
-                          value={condition.excel_column_index ? String(condition.excel_column_index) : "__custom__"}
-                          onValueChange={(value) => {
-                            if (value === "__custom__") {
-                              updateCondition(index, {
-                                excel_column_index: null,
-                                excel_column_letter: null,
-                                excel_header: null,
-                              });
-                              return;
-                            }
-                            applyExcelColumn(index, Number(value));
-                          }}
-                          disabled={scope !== "profile" || ruleExcelColumns.length === 0}
-                        >
-                          <SelectTrigger><SelectValue /></SelectTrigger>
-                          <SelectContent>
-                            {condition.excel_column_index && !ruleExcelColumns.some((column) => column.index === condition.excel_column_index) && (
-                              <SelectItem value={String(condition.excel_column_index)}>
-                                {condition.excel_column_index} / {condition.excel_column_letter ?? "?"} / {condition.excel_header ?? "—"}
-                              </SelectItem>
-                            )}
-                            {ruleExcelColumns.map((column) => (
-                              <SelectItem key={column.index} value={String(column.index)}>
-                                {column.index} / {column.letter} / {column.header}
-                              </SelectItem>
-                            ))}
-                            {ruleExcelColumns.length === 0 && (
-                              <SelectItem value="__empty__" disabled>
-                                Паспорт колонок не задан
-                              </SelectItem>
-                            )}
-                            <SelectItem value="__custom__">Кастомная колонка</SelectItem>
-                          </SelectContent>
-                        </Select>
-                        {condition.excel_column_index ? (
-                          <div className="text-[11px] text-muted-foreground">
-                            {condition.excel_column_index} / {condition.excel_column_letter ?? "?"} / {condition.excel_header ?? "—"} · ключ: <span className="font-mono">{condition.field_path}</span>
-                          </div>
-                        ) : null}
-                      </>
-                    ) : (
-                      <>
-                        <Input
-                          list={`field-path-options-${index}`}
-                          value={condition.field_path}
-                          onChange={(event) => updateCondition(index, { field_path: event.target.value })}
-                          placeholder="Например: output_kind"
-                        />
-                        <datalist id={`field-path-options-${index}`}>
-                          {fieldOptionsBySource[condition.source].map((option) => (
-                            <option key={`${condition.source}-${option.field_path}`} value={option.field_path}>
-                              {option.label}
-                            </option>
-                          ))}
-                        </datalist>
-                      </>
-                    )}
-                    {condition.source === "excel" && !condition.excel_column_index && (
-                      <Input
-                        value={condition.field_path}
-                        onChange={(event) => updateCondition(index, { field_path: event.target.value })}
-                        placeholder="Кастомное имя заголовка"
-                      />
-                    )}
-                    {fieldOptionsBySource[condition.source].find((option) => option.field_path === condition.field_path)?.hint ? (
-                      <span className="text-[11px] text-muted-foreground">
-                        {fieldOptionsBySource[condition.source].find((option) => option.field_path === condition.field_path)?.hint}
-                      </span>
-                    ) : null}
-                  </label>
-
-                  <label className="grid gap-1.5 text-xs font-medium">
-                    Оператор
-                    <Select value={condition.operator} onValueChange={(value) => updateCondition(index, { operator: value as RoutesAPI.RouteSelectionCondition["operator"] })}>
-                      <SelectTrigger><SelectValue /></SelectTrigger>
-                      <SelectContent>
-                        {(Object.keys(operatorLabels) as RoutesAPI.RouteSelectionCondition["operator"][]).map((value) => <SelectItem key={value} value={value}>{operatorLabels[value]}</SelectItem>)}
-                      </SelectContent>
-                    </Select>
-                  </label>
-
-                  <label className="grid gap-1.5 text-xs font-medium">
-                    Значение
-                    <Input
-                      disabled={condition.operator === "empty" || condition.operator === "not_empty"}
-                      value={String(condition.value ?? "")}
-                      onChange={(event) => updateCondition(index, { value: event.target.value })}
-                    />
-                    {condition.operator !== "empty" && condition.operator !== "not_empty" && valuePresets[`${condition.source}:${condition.field_path}`]?.length ? (
-                      <div className="flex flex-wrap gap-1">
-                        {valuePresets[`${condition.source}:${condition.field_path}`].map((preset, presetIndex) => (
-                          <button
-                            key={`${condition.source}:${condition.field_path}:${presetIndex}`}
-                            type="button"
-                            onClick={() => applyValuePreset(index, preset.value)}
-                            className="rounded border px-1.5 py-0.5 text-[10px] hover:bg-accent"
-                          >
-                            {preset.label}
-                          </button>
-                        ))}
-                      </div>
-                    ) : null}
-                  </label>
-
-                  <label className="flex items-center gap-2 pb-2 text-xs font-medium">
-                    <Checkbox checked={condition.case_sensitive} onCheckedChange={(checked) => updateCondition(index, { case_sensitive: checked === true })} />
-                    Учитывать регистр
-                  </label>
-
-                  <Button size="sm" variant="outline" onClick={() => setForm((current) => ({ ...current, conditions: current.conditions.filter((_, idx) => idx !== index) }))}>
-                    <Trash2 className="h-4 w-4" />
-                  </Button>
-                </div>
-              ))}
+                      </tbody>
+                    </table>
+                  </div>
+                ) : null}
 
               {form.conditions.length === 0 && <div className="rounded-md border p-3 text-sm text-muted-foreground">Правило будет применяться всегда.</div>}
               </div>
@@ -833,8 +1135,16 @@ export function RouteSelectionRulesSection({ refreshKey }: Props) {
               {/* Actions */}
               <div>
                 <div className="flex items-center justify-between mb-2">
-                  <h3 className="text-sm font-semibold">Действия по участкам</h3>
-                  <Button size="sm" variant="outline" onClick={() => setForm((current) => ({ ...current, actions: [...current.actions, { ...emptyAction, section_id: activeSections[0]?.id ?? 0 }] }))}>
+                  <h3 className="text-sm font-semibold">
+                    {form.phase === "normalize" ? "DSL-действия" : "Действия по участкам"}
+                  </h3>
+                  <Button size="sm" variant="outline" onClick={() => {
+                    if (form.phase === "normalize") {
+                      setForm((current) => ({ ...current, actions: [...current.actions, { ...emptyDslAction }] }));
+                    } else {
+                      setForm((current) => ({ ...current, actions: [...current.actions, { ...emptyAction, section_id: activeSections[0]?.id ?? 0 }] }));
+                    }
+                  }}>
                     <Plus className="mr-1 h-4 w-4" />
                     Добавить действие
                   </Button>
@@ -845,22 +1155,38 @@ export function RouteSelectionRulesSection({ refreshKey }: Props) {
                     <thead className="border-b bg-muted/50">
                       <tr>
                         <th className="text-left py-1 px-2 text-xs font-medium">Действие</th>
-                        <th className="text-left py-1 px-2 text-xs font-medium">Участок</th>
+                        {form.phase === "normalize" ? (
+                          <>
+                            <th className="text-left py-1 px-2 text-xs font-medium">Путь (ctx.*)</th>
+                            <th className="text-left py-1 px-2 text-xs font-medium">Значение (JSON)</th>
+                          </>
+                        ) : (
+                          <th className="text-left py-1 px-2 text-xs font-medium">Участок</th>
+                        )}
                         <th className="py-1 px-1 w-8"></th>
                       </tr>
                     </thead>
                     <tbody>
                       {form.actions.length === 0 ? (
                         <tr>
-                          <td colSpan={3} className="py-3 text-center text-muted-foreground text-xs">
+                          <td colSpan={form.phase === "normalize" ? 4 : 3} className="py-3 text-center text-muted-foreground text-xs">
                             Нет действий. Добавьте хотя бы одно.
                           </td>
                         </tr>
                       ) : (
-                        form.actions.map((action, index) => (
+                        form.actions.map((action, index) => {
+                          const dsl = isDslAction(action.action);
+                          return (
                           <tr key={index} className="border-b last:border-b-0">
                             <td className="py-0.5 px-2">
-                              <Select value={action.action} onValueChange={(value) => updateAction(index, { action: value as RoutesAPI.RouteSelectionAction["action"] })}>
+                              <Select value={action.action} onValueChange={(value) => {
+                                const newAction = value as RoutesAPI.RouteSelectionAction["action"];
+                                if (isDslAction(newAction)) {
+                                  updateAction(index, { action: newAction, section_id: null, path: action.path ?? "ctx.", value: action.value ?? null });
+                                } else {
+                                  updateAction(index, { action: newAction, path: null, value: null, section_id: action.section_id ?? 0 });
+                                }
+                              }}>
                                 <SelectTrigger className="h-6 text-xs">
                                   <SelectValue />
                                 </SelectTrigger>
@@ -871,14 +1197,42 @@ export function RouteSelectionRulesSection({ refreshKey }: Props) {
                                 </SelectContent>
                               </Select>
                             </td>
-                            <td className="py-0.5 px-2">
-                              <SectionSelect
-                                sections={sections}
-                                value={action.section_id}
-                                onValueChange={(value) => updateAction(index, { section_id: value })}
-                                className="h-6 text-xs"
-                              />
-                            </td>
+                            {dsl ? (
+                              <>
+                                <td className="py-0.5 px-2">
+                                  <Input
+                                    value={action.path ?? "ctx."}
+                                    onChange={(e) => updateAction(index, { path: e.target.value })}
+                                    placeholder="ctx.field"
+                                    className="h-6 text-xs"
+                                  />
+                                </td>
+                                <td className="py-0.5 px-2">
+                                  <Input
+                                    value={JSON.stringify(action.value ?? "")}
+                                    onChange={(e) => {
+                                      try {
+                                        const parsed = e.target.value === "" ? null : JSON.parse(e.target.value);
+                                        updateAction(index, { value: parsed });
+                                      } catch {
+                                        // Invalid JSON, ignore
+                                      }
+                                    }}
+                                    placeholder='null, "text", 42, [1,2]'
+                                    className="h-6 text-xs"
+                                  />
+                                </td>
+                              </>
+                            ) : (
+                              <td className="py-0.5 px-2">
+                                <SectionSelect
+                                  sections={sections}
+                                  value={action.section_id ?? 0}
+                                  onValueChange={(value) => updateAction(index, { section_id: value })}
+                                  className="h-6 text-xs"
+                                />
+                              </td>
+                            )}
                             <td className="py-0.5 px-1 w-8">
                               <Button
                                 variant="ghost"
@@ -890,7 +1244,8 @@ export function RouteSelectionRulesSection({ refreshKey }: Props) {
                               </Button>
                             </td>
                           </tr>
-                        ))
+                          );
+                        })
                       )}
                     </tbody>
                   </table>
@@ -945,25 +1300,37 @@ export function RouteSelectionRulesSection({ refreshKey }: Props) {
             </div>
           </div>
 
-          <div className="w-[250px]">
-            <label className="text-sm font-medium">Шаблон импорта</label>
-            <Select
-              value={profileForm.import_template_id ? String(profileForm.import_template_id) : "__none__"}
-              onValueChange={(value) => setProfileForm((current) => ({
-                ...current,
-                import_template_id: value === "__none__" ? null : Number(value),
-              }))}
-            >
-              <SelectTrigger>
-                <SelectValue placeholder="Выберите шаблон импорта" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="__none__">Не выбран</SelectItem>
-                {importTemplates.map((t) => (
-                  <SelectItem key={t.id} value={String(t.id)}>{t.name}{t.code ? ` (${t.code})` : ""}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+          <div className="grid gap-2">
+            <div className="flex items-end gap-2">
+              <div className="w-[320px]">
+                <label className="text-sm font-medium">Шаблон импорта</label>
+                <Select
+                  value={profileForm.import_template_id ? String(profileForm.import_template_id) : "__none__"}
+                  onValueChange={(value) => setProfileForm((current) => ({
+                    ...current,
+                    import_template_id: value === "__none__" ? null : Number(value),
+                  }))}
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder="Выберите шаблон импорта" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="__none__">Не выбран</SelectItem>
+                    {importTemplates.map((t) => (
+                      <SelectItem key={t.id} value={String(t.id)}>{t.name}{t.code ? ` (${t.code})` : ""}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <Button type="button" variant="outline" size="sm" onClick={handleSyncPassportFromTemplate}>
+                Применить
+              </Button>
+            </div>
+            <span className="text-xs text-muted-foreground">Ручная синхронизация без автозамены при смене шаблона</span>
+            <div className={`rounded-md border p-3 text-xs ${passportStatusClassName(profileFormPassportStatus.level)}`}>
+              <div className="font-medium">{profileFormPassportStatus.title}</div>
+              <div className="mt-1">{profileFormPassportStatus.description}</div>
+            </div>
           </div>
 
           <DialogFooter className="flex items-center justify-between w-full sm:justify-between">
@@ -991,4 +1358,3 @@ export function RouteSelectionRulesSection({ refreshKey }: Props) {
     </Card>
   );
 }
-

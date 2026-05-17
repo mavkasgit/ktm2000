@@ -1,7 +1,7 @@
 """add_import_template_id_to_route_rule_profiles
 
 Revision ID: 015_profile_import_template
-Revises: 014_route_rule_profile_excel_passport
+Revises: 014_excel_passport
 Create Date: 2026-05-15 01:00:00.000000
 """
 
@@ -13,7 +13,7 @@ import sqlalchemy as sa
 
 # revision identifiers, used by Alembic.
 revision: str = "015_profile_import_template"
-down_revision: Union[str, None] = "014_route_rule_profile_excel_passport"
+down_revision: Union[str, None] = "014_excel_passport"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

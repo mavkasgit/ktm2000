@@ -13,9 +13,10 @@ from app.models.section import Section
 
 router = APIRouter(prefix="/route-selection-rules", tags=["route-selection-rules"])
 
-RuleSource = Literal["excel", "payload", "product"]
+RulePhase = Literal["normalize", "route_select"]
+RuleSource = Literal["excel", "payload", "product", "ctx"]
 RuleOperator = Literal["equals", "not_equals", "contains", "not_contains", "in", "not_in", "empty", "not_empty", "regex"]
-RuleAction = Literal["require_section", "exclude_section"]
+RuleAction = Literal["require_section", "exclude_section", "set", "add", "remove"]
 
 
 class RouteSelectionConditionIn(BaseModel):
@@ -31,7 +32,9 @@ class RouteSelectionConditionIn(BaseModel):
 
 class RouteSelectionActionIn(BaseModel):
     action: RuleAction
-    section_id: int
+    section_id: int | None = None
+    path: str | None = None
+    value: Any = None
 
 
 class RouteSelectionRuleIn(BaseModel):
@@ -40,6 +43,7 @@ class RouteSelectionRuleIn(BaseModel):
     profile_id: int | None = None
     priority: int = 0
     is_active: bool = True
+    phase: RulePhase = "route_select"
     conditions: list[RouteSelectionConditionIn] = []
     actions: list[RouteSelectionActionIn]
 
@@ -48,9 +52,13 @@ class RouteSelectionConditionOut(RouteSelectionConditionIn):
     pass
 
 
-class RouteSelectionActionOut(RouteSelectionActionIn):
+class RouteSelectionActionOut(BaseModel):
+    action: RuleAction
+    section_id: int | None = None
     section_code: str | None = None
     section_name: str | None = None
+    path: str | None = None
+    value: Any = None
 
 
 class RouteSelectionRuleOut(BaseModel):
@@ -62,6 +70,7 @@ class RouteSelectionRuleOut(BaseModel):
     profile_name: str | None = None
     priority: int
     is_active: bool
+    phase: RulePhase
     conditions: list[RouteSelectionConditionOut]
     actions: list[RouteSelectionActionOut]
 
@@ -103,6 +112,7 @@ async def create_route_selection_rule(payload: RouteSelectionRuleIn, db: AsyncSe
         profile_id=payload.profile_id,
         priority=payload.priority,
         is_active=payload.is_active,
+        phase=payload.phase,
         conditions=[condition.model_dump() for condition in payload.conditions],
         actions=[action.model_dump() for action in payload.actions],
     )
@@ -138,6 +148,7 @@ async def update_route_selection_rule(
     rule.profile_id = payload.profile_id
     rule.priority = payload.priority
     rule.is_active = payload.is_active
+    rule.phase = payload.phase
     rule.conditions = [condition.model_dump() for condition in payload.conditions]
     rule.actions = [action.model_dump() for action in payload.actions]
     await db.flush()
@@ -170,14 +181,30 @@ async def _validate_payload(db: AsyncSession, payload: RouteSelectionRuleIn) -> 
                 raise HTTPException(status_code=400, detail="Excel condition must define field_path or explicit excel column binding")
             if condition.excel_column_index is not None and condition.excel_column_index <= 0:
                 raise HTTPException(status_code=400, detail="excel_column_index must be positive")
+        elif condition.source == "ctx":
+            if not has_field:
+                raise HTTPException(status_code=400, detail="Context condition field_path is required")
         elif not has_field:
             raise HTTPException(status_code=400, detail="Condition field_path is required")
         if condition.operator in {"equals", "not_equals", "contains", "not_contains", "in", "not_in", "regex"} and condition.value is None:
             raise HTTPException(status_code=400, detail=f"Condition value is required for {condition.operator}")
-    section_ids = {action.section_id for action in payload.actions}
-    count = len((await db.execute(select(Section.id).where(Section.id.in_(section_ids)))).scalars().all())
-    if count != len(section_ids):
-        raise HTTPException(status_code=400, detail="Action references unknown section")
+
+    section_ids: set[int] = set()
+    for action in payload.actions:
+        if action.action in {"set", "add", "remove"}:
+            if not action.path or not action.path.startswith("ctx."):
+                raise HTTPException(status_code=400, detail="DSL action path must start with 'ctx.'")
+        elif action.action in {"require_section", "exclude_section"}:
+            if action.section_id is None:
+                raise HTTPException(status_code=400, detail=f"{action.action} requires section_id")
+            section_ids.add(action.section_id)
+        else:
+            raise HTTPException(status_code=400, detail=f"Unknown action type: {action.action}")
+
+    if section_ids:
+        count = len((await db.execute(select(Section.id).where(Section.id.in_(section_ids)))).scalars().all())
+        if count != len(section_ids):
+            raise HTTPException(status_code=400, detail="Action references unknown section")
 
 
 async def _rule_out(db: AsyncSession, rule: RouteSelectionRule) -> RouteSelectionRuleOut:
@@ -192,16 +219,18 @@ async def _rule_out(db: AsyncSession, rule: RouteSelectionRule) -> RouteSelectio
         sections = {section.id: section for section in rows}
     actions = []
     for action in rule.actions or []:
-        section_id = int(action.get("section_id"))
-        section = sections.get(section_id)
-        actions.append(
-            RouteSelectionActionOut(
-                action=action.get("action"),
-                section_id=section_id,
-                section_code=section.code if section else None,
-                section_name=section.name if section else None,
-            )
-        )
+        action_out = {
+            "action": action.get("action"),
+            "section_id": action.get("section_id"),
+            "path": action.get("path"),
+            "value": action.get("value"),
+        }
+        section_id = action.get("section_id")
+        if section_id is not None:
+            section = sections.get(section_id)
+            action_out["section_code"] = section.code if section else None
+            action_out["section_name"] = section.name if section else None
+        actions.append(RouteSelectionActionOut(**action_out))
 
     profile_code = None
     profile_name = None
@@ -220,6 +249,7 @@ async def _rule_out(db: AsyncSession, rule: RouteSelectionRule) -> RouteSelectio
         profile_name=profile_name,
         priority=rule.priority,
         is_active=rule.is_active,
+        phase=rule.phase,
         conditions=[RouteSelectionConditionOut(**condition) for condition in rule.conditions or []],
         actions=actions,
     )

@@ -69,7 +69,7 @@ export type SheetPreviewResponse = {
 
 export async function previewExcelSheet(
   file: File,
-  options?: { sheet_index?: number; row_selection?: string },
+  options?: { sheet_index?: number; row_selection?: string; template_id?: number },
 ): Promise<SheetPreviewResponse> {
   const formData = new FormData();
   formData.append("file", file);
@@ -78,6 +78,9 @@ export async function previewExcelSheet(
     formData.append("row_selection", options.row_selection.trim());
   }
   const { data } = await apiClient.post<SheetPreviewResponse>("/imports/excel/preview", formData, {
+    params: {
+      template_id: options?.template_id,
+    },
     headers: { "Content-Type": "multipart/form-data" },
   });
   return data;

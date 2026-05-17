@@ -41,6 +41,9 @@ class RouteSelectionResult:
     route_match_quality: str | None = None
     error: str | None = None
     condition_diagnostics: list[dict[str, Any]] = field(default_factory=list)
+    normalize_applied_actions: list[dict[str, Any]] = field(default_factory=list)
+    ctx_snapshot: dict[str, Any] = field(default_factory=dict)
+    route_select_matched_rule_ids: list[int] = field(default_factory=list)
 
 
 def build_route_rule_context(source_payload: dict[str, Any] | None, product: Product | None = None) -> dict[str, Any]:
@@ -50,7 +53,99 @@ def build_route_rule_context(source_payload: dict[str, Any] | None, product: Pro
         "excel_meta": payload.get("raw_columns_meta") or [],
         "payload": payload,
         "product": _product_context(product),
+        "ctx": {},  # mutable context for normalize phase
     }
+
+
+def _normalize_template_mapping(mapping: dict[str, Any] | None) -> dict[str, str]:
+    if not isinstance(mapping, dict):
+        return {}
+    normalized: dict[str, str] = {}
+    for key, value in mapping.items():
+        key_text = str(key).strip()
+        if not key_text:
+            continue
+        header: str | None = None
+        if isinstance(value, dict):
+            raw_header = value.get("header")
+            if raw_header is not None:
+                header = str(raw_header).strip()
+        elif value is not None:
+            header = str(value).strip()
+        if header:
+            normalized[key_text] = header
+    return normalized
+
+
+def _set_nested(ctx: dict[str, Any], parts: list[str], value: Any) -> None:
+    """Set a value in ctx at the given dotted path."""
+    current = ctx
+    for part in parts[:-1]:
+        if part not in current or not isinstance(current[part], dict):
+            current[part] = {}
+        current = current[part]
+    current[parts[-1]] = value
+
+
+def _add_to_nested(ctx: dict[str, Any], parts: list[str], value: Any) -> None:
+    """Add a value to a list in ctx at the given dotted path, creating the list if needed."""
+    current = ctx
+    for part in parts[:-1]:
+        if part not in current or not isinstance(current[part], dict):
+            current[part] = {}
+        current = current[part]
+    target = current.get(parts[-1])
+    if target is None:
+        current[parts[-1]] = []
+    elif not isinstance(target, list):
+        current[parts[-1]] = [target]
+    current[parts[-1]].append(value)
+
+
+def _remove_from_nested(ctx: dict[str, Any], parts: list[str], value: Any) -> None:
+    """Remove a value from a list in ctx, or delete the key entirely."""
+    current = ctx
+    for part in parts[:-1]:
+        if not isinstance(current, dict) or part not in current:
+            return
+        current = current[part]
+    if not isinstance(current, dict):
+        return
+    target = current.get(parts[-1])
+    if isinstance(target, list) and value in target:
+        target.remove(value)
+        if not target:
+            del current[parts[-1]]
+    elif target == value:
+        del current[parts[-1]]
+
+
+def _apply_dsl_action(ctx: dict[str, Any], action: Action) -> dict[str, Any] | None:
+    """Apply a DSL action (set/add/remove) to ctx. Returns diagnostic record or None."""
+    path = action.get("path", "")
+    if not path.startswith("ctx."):
+        return None
+    parts = path.split(".")[1:]  # strip "ctx"
+    value = action.get("value")
+    action_kind = action.get("action", "")
+    if action_kind == "set":
+        _set_nested(ctx, parts, value)
+        return {"action": "set", "path": path, "value": value}
+    elif action_kind == "add":
+        _add_to_nested(ctx, parts, value)
+        return {"action": "add", "path": path, "value": value}
+    elif action_kind == "remove":
+        _remove_from_nested(ctx, parts, value)
+        return {"action": "remove", "path": path, "value": value}
+    return None
+
+
+def _load_rules_by_phase(
+    rules: list[RouteSelectionRule],
+    phase: str,
+) -> list[RouteSelectionRule]:
+    """Filter rules by phase. Rules without phase field default to 'route_select'."""
+    return [r for r in rules if (r.phase if hasattr(r, "phase") else "route_select") == phase]
 
 
 async def select_route_for_payload(
@@ -58,20 +153,51 @@ async def select_route_for_payload(
     source_payload: dict[str, Any] | None,
     product: Product | None = None,
     profile_id: int | None = None,
-    template_column_mapping: dict[str, str] | None = None,
+    template_column_mapping: dict[str, Any] | None = None,
 ) -> RouteSelectionResult:
     context = build_route_rule_context(source_payload, product)
-    if template_column_mapping:
-        context["template_mapping"] = template_column_mapping
-    rules = await load_selection_rules_for_profile(db, profile_id=profile_id)
+    normalized_mapping = _normalize_template_mapping(template_column_mapping)
+    if normalized_mapping:
+        context["template_mapping"] = normalized_mapping
+    all_rules = await load_selection_rules_for_profile(db, profile_id=profile_id)
 
+    # Phase 1: normalize — apply set/add/remove actions to ctx
+    normalize_rules = _load_rules_by_phase(all_rules, "normalize")
+    normalize_applied_actions: list[dict[str, Any]] = []
+    for rule in normalize_rules:
+        conditions = list(rule.conditions or [])
+        conditions_matched = True
+        for condition_index, condition in enumerate(conditions):
+            matched, _diagnostic = _evaluate_condition_with_diagnostic(context, condition)
+            if not matched:
+                conditions_matched = False
+                break
+        if not conditions_matched:
+            continue
+        for action in rule.actions or []:
+            result = _apply_dsl_action(context["ctx"], action)
+            if result is not None:
+                normalize_applied_actions.append({**result, "rule_id": rule.id, "rule_code": rule.code})
+
+    ctx = context["ctx"]
+
+    # Phase 2: route_select — evaluate rules and collect section constraints
+    select_rules = _load_rules_by_phase(all_rules, "route_select")
     matched_rule_ids: list[int] = []
+    route_select_matched_rule_ids: list[int] = []
     required: set[int] = set()
     excluded: set[int] = set()
     controlled: set[int] = set()
     condition_diagnostics: list[dict[str, Any]] = []
 
-    for rule in rules:
+    # Collect controlled sections from all rules (for scoring)
+    for rule in all_rules:
+        for action in rule.actions or []:
+            section_id = _int_or_none(action.get("section_id"))
+            if section_id is not None:
+                controlled.add(section_id)
+
+    for rule in select_rules:
         actions = list(rule.actions or [])
         for action in actions:
             section_id = _int_or_none(action.get("section_id"))
@@ -94,15 +220,22 @@ async def select_route_for_payload(
             continue
 
         matched_rule_ids.append(rule.id)
+        route_select_matched_rule_ids.append(rule.id)
         for action in actions:
-            section_id = _int_or_none(action.get("section_id"))
-            if section_id is None:
-                continue
             action_kind = str(action.get("action") or "")
-            if action_kind == "require_section":
+            section_id = _int_or_none(action.get("section_id"))
+            if action_kind == "require_section" and section_id is not None:
                 required.add(section_id)
-            elif action_kind == "exclude_section":
+            elif action_kind == "exclude_section" and section_id is not None:
                 excluded.add(section_id)
+
+    # Merge section constraints from ctx (set by normalize phase)
+    ctx_required = ctx.get("required_sections")
+    ctx_excluded = ctx.get("excluded_sections")
+    if isinstance(ctx_required, list):
+        required.update(ctx_required)
+    if isinstance(ctx_excluded, list):
+        excluded.update(ctx_excluded)
 
     conflict = required & excluded
     sections_by_id = await _sections_by_id(db, required | excluded)
@@ -118,6 +251,9 @@ async def select_route_for_payload(
             route_match_reason="route_rule_conflict",
             error="route_rule_conflict",
             condition_diagnostics=condition_diagnostics,
+            normalize_applied_actions=normalize_applied_actions,
+            ctx_snapshot=dict(ctx),
+            route_select_matched_rule_ids=route_select_matched_rule_ids,
         )
 
     routes = (
@@ -160,6 +296,9 @@ async def select_route_for_payload(
             route_match_reason="no_route_candidate",
             error="no_route_candidate",
             condition_diagnostics=condition_diagnostics,
+            normalize_applied_actions=normalize_applied_actions,
+            ctx_snapshot=dict(ctx),
+            route_select_matched_rule_ids=route_select_matched_rule_ids,
         )
 
     extra_count, _sort_order, _route_id, selected, _diagnostic = sorted(candidates, key=lambda item: (item[0], item[1], item[2]))[0]
@@ -175,6 +314,9 @@ async def select_route_for_payload(
         route_match_quality="exact" if extra_count == 0 else "corrected",
         error=None,
         condition_diagnostics=condition_diagnostics,
+        normalize_applied_actions=normalize_applied_actions,
+        ctx_snapshot=dict(ctx),
+        route_select_matched_rule_ids=route_select_matched_rule_ids,
     )
 
 
@@ -333,6 +475,21 @@ def _lookup_context_value_with_details(
     field_path: str,
     condition: Condition | None,
 ) -> tuple[Any, dict[str, Any]]:
+    if source == "ctx":
+        root = context.get("ctx") or {}
+        current: Any = root
+        for part in field_path.split("."):
+            if not part:
+                continue
+            if isinstance(current, dict):
+                current = current.get(part)
+            elif isinstance(current, list) and part.isdigit():
+                index = int(part)
+                current = current[index] if 0 <= index < len(current) else None
+            else:
+                return None, {"resolved_by": "path"}
+        return current, {"resolved_by": "path"}
+
     if source == "excel":
         return _lookup_excel_context_value(context, field_path, condition or {})
 

@@ -42,7 +42,7 @@ export type RouteDetail = ProductionRoute & {
 };
 
 export type RouteSelectionCondition = {
-  source: "excel" | "payload" | "product";
+  source: "excel" | "payload" | "product" | "ctx";
   field_path: string;
   excel_column_index?: number | null;
   excel_column_letter?: string | null;
@@ -53,10 +53,12 @@ export type RouteSelectionCondition = {
 };
 
 export type RouteSelectionAction = {
-  action: "require_section" | "exclude_section";
-  section_id: number;
+  action: "require_section" | "exclude_section" | "set" | "add" | "remove";
+  section_id?: number | null;
   section_code?: string | null;
   section_name?: string | null;
+  path?: string | null;
+  value?: unknown;
 };
 
 export type RouteSelectionRule = {
@@ -68,6 +70,7 @@ export type RouteSelectionRule = {
   profile_name: string | null;
   priority: number;
   is_active: boolean;
+  phase: "normalize" | "route_select";
   conditions: RouteSelectionCondition[];
   actions: RouteSelectionAction[];
 };
@@ -78,6 +81,7 @@ export type RouteSelectionRuleInput = {
   profile_id?: number | null;
   priority: number;
   is_active: boolean;
+  phase?: "normalize" | "route_select";
   conditions: RouteSelectionCondition[];
   actions: RouteSelectionAction[];
 };

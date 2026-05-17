@@ -5,7 +5,6 @@ from app.services.routing_signature import (
     canonical_signature_from_payload,
     normalize_operation_family,
     normalize_output_kind,
-    normalize_pack_op_family,
 )
 
 
@@ -13,12 +12,12 @@ from app.services.routing_signature import (
     "raw_op,op_code,expected_family",
     [
         ("", None, RouteOperationFamily.NONE),
-        ("сверло", None, RouteOperationFamily.DRILL),
-        ("окно", None, RouteOperationFamily.PRESS),
-        ("гребенка", None, RouteOperationFamily.PRESS),
-        ("клей", None, RouteOperationFamily.PACK),
-        ("рассеиватель", None, RouteOperationFamily.PACK),
-        ("Без рассеивателя", None, RouteOperationFamily.PACK),
+        ("сверло", None, RouteOperationFamily.NONE),
+        ("окно", None, RouteOperationFamily.NONE),
+        ("гребенка", None, RouteOperationFamily.NONE),
+        ("клей", None, RouteOperationFamily.NONE),
+        ("рассеиватель", None, RouteOperationFamily.NONE),
+        ("Без рассеивателя", None, RouteOperationFamily.NONE),
         ("", "PRESS_WINDOW", RouteOperationFamily.PRESS),
         ("", "PRESS_COMB", RouteOperationFamily.PRESS),
         ("", "DRILL", RouteOperationFamily.DRILL),
@@ -31,18 +30,12 @@ def test_normalize_operation_family(raw_op, op_code, expected_family):
 @pytest.mark.parametrize(
     "raw,expected",
     [
-        ("ГП", RouteOutputKind.finished_good),
-        ("П/ф", RouteOutputKind.semi_finished_shipment),
         ("finished_good", RouteOutputKind.finished_good),
         ("semi_finished_shipment", RouteOutputKind.semi_finished_shipment),
     ],
 )
 def test_normalize_output_kind(raw, expected):
     assert normalize_output_kind(raw) == expected
-
-
-def test_normalize_pack_op_family_no_diffuser_is_custom():
-    assert normalize_pack_op_family("Без рассеивателя") == "CUSTOM"
 
 
 def test_canonical_signature_from_payload():

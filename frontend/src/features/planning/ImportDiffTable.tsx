@@ -39,7 +39,7 @@ const warningLabels: Record<string, string> = {
   paired_profile_product_unmapped: "Парный профиль не сопоставлен",
   techcard_pair_not_resolved: "Не выбран парный профиль техкарты",
   product_name_missing: "Отсутствует наименование",
-  period_not_detected: "Период не определён",
+  period_not_detected: "не определен",
 };
 
 function translateCodes(codes: string[] | unknown, labels: Record<string, string>): string {
