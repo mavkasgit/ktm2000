@@ -1017,8 +1017,6 @@ export function PlanPage() {
         open={detailOpen}
         onOpenChange={setDetailOpen}
         data={detailData}
-        title="Детализация позиции плана"
-        description="Маршрут, ошибки и предупреждения по выбранной позиции"
       />
     </>
   )

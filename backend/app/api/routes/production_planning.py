@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -109,6 +109,12 @@ class PlanningRowOut(BaseModel):
     route_error: str | None
     is_released: bool
     has_tasks: bool
+    current_stage_section_id: int | None = None
+    current_stage_sequence: int | None = None
+    current_stage_operation: str | None = None
+    current_stage_section_code: str | None = None
+    current_stage_section_name: str | None = None
+    current_stage_task_status: str | None = None
 
 
 class PlanningRouteSnapshotStepOut(BaseModel):
@@ -118,6 +124,8 @@ class PlanningRouteSnapshotStepOut(BaseModel):
     section_code: str
     section_name: str
     section_kind: str | None
+    section_icon: str | None = None
+    section_icon_color: str | None = None
     operation_code: str | None
     operation_name: str
 
@@ -135,10 +143,20 @@ class PlanningRouteSnapshotOut(BaseModel):
 
 
 class PlanningStageOut(BaseModel):
+    class FlowEventOut(BaseModel):
+        step: str
+        label: str
+        quantity: float
+        event_at: str | None = None
+        task_id: int | None = None
+        transfer_id: int | None = None
+
     route_step_id: int
     section_id: int
     section_code: str
     section_name: str
+    section_icon: str | None = None
+    section_icon_color: str | None = None
     sequence: int
     operation_code: str | None
     operation_name: str
@@ -151,6 +169,17 @@ class PlanningStageOut(BaseModel):
     reject_percent: float
     task_status: str
     not_started: bool
+    issued_qty: float
+    issued_last_at: str | None = None
+    accounted_good_qty: float
+    accounted_reject_qty: float
+    accounted_total_qty: float
+    accounted_last_at: str | None = None
+    sent_qty: float
+    sent_last_at: str | None = None
+    accepted_by_next_qty: float
+    accepted_by_next_last_at: str | None = None
+    flow_events: list[FlowEventOut] = Field(default_factory=list)
 
 
 class PlanningRowDetailOut(BaseModel):
@@ -174,6 +203,12 @@ class PlanningRowDetailOut(BaseModel):
     is_released: bool
     has_tasks: bool
     not_started: bool
+    current_stage_section_id: int | None = None
+    current_stage_sequence: int | None = None
+    current_stage_operation: str | None = None
+    current_stage_section_code: str | None = None
+    current_stage_section_name: str | None = None
+    current_stage_task_status: str | None = None
     route_snapshot: PlanningRouteSnapshotOut | None
     stages: list[PlanningStageOut]
     raw_excel_row: dict | None = None

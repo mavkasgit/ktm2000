@@ -409,6 +409,7 @@ export function ExecutionPage() {
           <table className="w-full text-sm">
             <thead className="border-b bg-muted/50">
               <tr>
+                <th className="text-left p-2 w-20">ID</th>
                 <th className="text-left p-2 w-8"></th>
                 <th className="text-left p-2">Строка</th>
                 <th className="text-left p-2">План</th>
@@ -431,6 +432,7 @@ export function ExecutionPage() {
                   className="border-b hover:bg-accent/30 cursor-pointer"
                   onClick={() => openDetail(row.plan_position_id)}
                 >
+                  <td className="p-2 font-mono text-xs text-muted-foreground">#{row.plan_position_id}</td>
                   <td className="p-2" onClick={(e) => e.stopPropagation()}>
                     {canLaunch && (
                       <Checkbox
@@ -474,7 +476,44 @@ export function ExecutionPage() {
                     <StatusBadge status={row.position_status} />
                   </td>
                   <td className="p-2">
-                    <Badge variant={row.has_tasks ? "default" : "secondary"}>{row.has_tasks ? "Есть" : "Нет"}</Badge>
+                    {row.has_tasks ? (
+                      row.current_stage_section_name ? (
+                        <div className="space-y-0.5">
+                          <div className="flex items-center gap-1.5 text-xs font-medium">
+                            {sectionMetaById.get(row.current_stage_section_id as number)?.icon && (
+                              <span
+                                className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded"
+                                style={{
+                                  backgroundColor: `${sectionMetaById.get(row.current_stage_section_id as number)?.icon_color || "#2563EB"}20`,
+                                  color: sectionMetaById.get(row.current_stage_section_id as number)?.icon_color || "#2563EB",
+                                }}
+                              >
+                                {renderIcon(
+                                  sectionMetaById.get(row.current_stage_section_id as number)!.icon!,
+                                  "h-3 w-3",
+                                )}
+                              </span>
+                            )}
+                            <span>{row.current_stage_section_name}</span>
+                          </div>
+                          <div className="text-xs text-muted-foreground">
+                            Этап #{row.current_stage_sequence} · {row.current_stage_operation}
+                          </div>
+                          {row.current_stage_task_status && (
+                            <Badge
+                              variant={row.current_stage_task_status === "in_progress" ? "default" : "secondary"}
+                              className="text-[10px] px-1.5 py-0"
+                            >
+                              {row.current_stage_task_status === "in_progress" ? "В работе" : "Готов"}
+                            </Badge>
+                          )}
+                        </div>
+                      ) : (
+                        <Badge variant="secondary">Задачи созданы</Badge>
+                      )
+                    ) : (
+                      <Badge variant="secondary">Нет</Badge>
+                    )}
                   </td>
                   <td className="p-2" onClick={(e) => e.stopPropagation()}>
                     <div className="flex gap-1">
@@ -564,8 +603,6 @@ export function ExecutionPage() {
         data={detail ? adaptExecutionDetail(detail) : null}
         loading={detailLoading}
         error={detailError ? String(detailError) : null}
-        title="Детализация строки выполнения"
-        description="Маршрут, этапы и метрики план/факт/брак по выбранной строке импорта."
       />
 
       <Dialog

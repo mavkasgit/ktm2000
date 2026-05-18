@@ -1118,8 +1118,9 @@ async def get_defect_details(db: AsyncSession, defect_id: int) -> dict:
 async def get_route_stage_aggregates_for_plan_position(db: AsyncSession, plan_position_id: int) -> dict:
     lines = (
         await db.execute(
-            select(SectionPlanLine, RouteStep)
+            select(SectionPlanLine, RouteStep, Section)
             .join(RouteStep, RouteStep.id == SectionPlanLine.route_step_id)
+            .join(Section, Section.id == RouteStep.section_id)
             .where(SectionPlanLine.plan_position_id == plan_position_id)
             .order_by(SectionPlanLine.sequence)
         )
@@ -1133,6 +1134,11 @@ async def get_route_stage_aggregates_for_plan_position(db: AsyncSession, plan_po
             {
                 "section_plan_line_id": line.id,
                 "route_step_id": line.route_step_id,
+                "section_id": step.section_id,
+                "section_code": section.code,
+                "section_name": section.name,
+                "section_icon": section.icon,
+                "section_icon_color": section.icon_color,
                 "sequence": line.sequence,
                 "operation_code": step.operation_code,
                 "operation_name": step.operation_name,
@@ -1146,7 +1152,7 @@ async def get_route_stage_aggregates_for_plan_position(db: AsyncSession, plan_po
                 "rejected_quantity": str(line.cached_rejected_quantity),
                 "remaining_quantity": str(line.cached_remaining_quantity),
             }
-            for line, step in lines
+            for line, step, section in lines
         ],
     }
 

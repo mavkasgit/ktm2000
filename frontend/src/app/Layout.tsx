@@ -85,7 +85,7 @@ export function Layout() {
               const Icon = item.icon
               return (
                 <NavLink key={item.to} to={item.to} end={item.to === "/"} className="nav-link">
-                  <Icon size={18} />
+                  <Icon className="nav-link-icon" aria-hidden="true" />
                   <span>{item.label}</span>
                 </NavLink>
               )

@@ -2,7 +2,7 @@ import { useMemo } from "react";
 import type { Section } from "@/shared/api/sections";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue, renderIcon } from "@/shared/ui";
 
-type SectionSelectProps = {
+export type SectionSelectProps = {
   sections: Section[];
   value: number | undefined;
   onValueChange: (value: number) => void;

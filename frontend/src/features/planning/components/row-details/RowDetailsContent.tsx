@@ -1,7 +1,7 @@
 import { Badge } from "@/shared/ui"
 import { renderIcon } from "@/shared/ui/EntityDialog"
 import { type RowDetailsData } from "./types"
-import { useMemo } from "react"
+import { useMemo, useState } from "react"
 import { useQuery } from "@tanstack/react-query"
 import { listSections } from "@/shared/api/sections"
 
@@ -33,11 +33,34 @@ const statusVariant: Record<string, string> = {
   pending: "secondary",
 }
 
+const taskStatusLabels: Record<string, string> = {
+  waiting_previous: "Ожидает предыдущий этап",
+  ready: "Готов",
+  in_progress: "В работе",
+  partially_completed: "Частично выполнен",
+  completed: "Выполнен",
+  cancelled: "Отменён",
+  not_started: "Не начат",
+}
+
 function fmtQty(value: number | string): string {
   const num = typeof value === "string" ? Number(value) : value
   if (!Number.isFinite(num)) return String(value)
   if (Number.isInteger(num)) return String(num)
   return num.toFixed(3).replace(/\.?0+$/, "")
+}
+
+function fmtEventAt(value: string | null | undefined): string {
+  if (!value) return "—"
+  const dt = new Date(value)
+  if (Number.isNaN(dt.getTime())) return "—"
+  return dt.toLocaleString("ru-RU", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  })
 }
 
 function planPreviewUrl(planId: number): string {
@@ -57,18 +80,23 @@ interface RowDetailsContentProps {
   showPlanLink?: boolean
 }
 
-export function RowDetailsContent({ data, showPlanLink = true }: RowDetailsContentProps) {
+export function RowDetailsContent({
+  data,
+  showPlanLink = true,
+}: RowDetailsContentProps) {
+  const [expandedStages, setExpandedStages] = useState<Record<number, boolean>>({})
   const hasErrors = data.errors.length > 0
   const hasWarnings = data.warnings.length > 0
   const hasRouteCheckIssues = (data.routeCheckIssues?.length ?? 0) > 0
   const hasStages = (data.stages?.length ?? 0) > 0
   const hasRawData = (data.rawExcelRows?.length ?? 0) > 0
-  const hasCurrentStage = data.currentStageSectionName && data.currentStageSequence
+  const hasIssues = hasErrors || hasWarnings || hasRouteCheckIssues
+  const hasCurrentStage = Boolean(data.currentStageSectionName && data.currentStageSequence)
 
   const { data: sectionsData } = useQuery({
     queryKey: ["sections"],
     queryFn: listSections,
-    enabled: hasCurrentStage,
+    enabled: hasCurrentStage || hasStages,
   })
 
   const sectionMetaById = useMemo(() => {
@@ -80,179 +108,162 @@ export function RowDetailsContent({ data, showPlanLink = true }: RowDetailsConte
   const currentSectionId = data.currentStageSectionId
   const currentSectionMeta = currentSectionId ? sectionMetaById.get(currentSectionId) : null
   const currentIconColor = currentSectionMeta?.icon_color || "#2563EB"
+  const routeText = data.routeName || data.routeError || "Не назначен"
+  const currentStageLabel = hasCurrentStage
+    ? `#${data.currentStageSequence} ${data.currentStageSectionName}`
+    : "Не начат"
+  const positionIdText = typeof data.id === "number" || typeof data.id === "string" ? String(data.id) : "—"
 
   return (
     <div className="space-y-4">
-      {/* Raw Excel data */}
-      {hasRawData && (
-        <div className="rounded-lg border p-4">
-          <div className="space-y-2">
-            {data.rawExcelRows!.map((r, i) => (
-              <div key={i}>
-                <div className="text-xs font-medium text-muted-foreground mb-1">Строка #{r.rowNumber}</div>
-                <pre className="text-xs bg-muted/50 rounded-md p-3 overflow-auto whitespace-pre-wrap break-words font-mono">
-                  {r.text}
-                </pre>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {/* Current stage */}
-      {hasCurrentStage && (
-        <div className="rounded-lg border border-blue-200 bg-blue-50 p-4">
-          <div className="text-xs font-medium text-blue-800 mb-3">Текущий этап выполнения</div>
-          <div className="flex items-center gap-3">
-            {currentSectionMeta?.icon && (
+      <div className="rounded-lg border p-3">
+        <div className="text-sm font-medium mb-2">Исходная строка импорта</div>
+        <div className="grid grid-cols-1 gap-2 text-sm">
+          <div className="flex items-center gap-2 min-w-0 flex-nowrap overflow-hidden">
+            {hasCurrentStage && currentSectionMeta?.icon && (
               <span
-                className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded"
+                className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded"
                 style={{ backgroundColor: `${currentIconColor}20`, color: currentIconColor }}
               >
-                {renderIcon(currentSectionMeta.icon, "h-5 w-5")}
+                {renderIcon(currentSectionMeta.icon, "h-3 w-3")}
               </span>
             )}
-            <div className="flex-1">
-              <div className="font-semibold text-base text-blue-900">{data.currentStageSectionName}</div>
-              <div className="text-sm text-blue-700">
-                Этап #{data.currentStageSequence} · {data.currentStageOperation}
-              </div>
-            </div>
+            <span className="text-muted-foreground">Текущий этап:</span>
+            <span className="font-medium truncate">{currentStageLabel}</span>
             {data.currentStageTaskStatus && (
-              <Badge
-                variant={data.currentStageTaskStatus === "in_progress" ? "default" : "secondary"}
-                className="text-sm px-3 py-1"
-              >
-                {data.currentStageTaskStatus === "in_progress" ? "В работе" : data.currentStageTaskStatus === "ready" ? "Готов" : data.currentStageTaskStatus}
-              </Badge>
+              <>
+                <span className="text-muted-foreground">·</span>
+                <span className="font-medium shrink-0">
+                  {data.currentStageTaskStatus === "in_progress"
+                    ? "В работе"
+                    : data.currentStageTaskStatus === "ready"
+                      ? "Готов"
+                      : data.currentStageTaskStatus}
+                </span>
+              </>
             )}
+            <span className="text-muted-foreground shrink-0">·</span>
+            <span className="text-muted-foreground shrink-0">Статус:</span>
+            <span className="font-medium shrink-0">{statusLabels[data.status] || data.status}</span>
+            <span className="text-muted-foreground shrink-0">·</span>
+            <span className="text-muted-foreground shrink-0">Маршрут:</span>
+            <span className={`min-w-0 truncate ${data.routeError ? "font-medium text-red-700" : "font-medium"}`}>
+              {routeText}
+              {data.routeName && data.routeMeta ? ` (${data.routeMeta})` : ""}
+            </span>
           </div>
-        </div>
-      )}
 
-      {/* Basic info */}
-      <div className="rounded-lg border p-4">
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-sm">
-          <div>
-            <div className="text-muted-foreground">Строка импорта</div>
-            <div className="font-medium">#{data.sourceRowNumber ?? "—"}</div>
-          </div>
-          <div>
-            <div className="text-muted-foreground">SKU</div>
-            <div className="font-mono font-medium">{data.sku}</div>
-          </div>
-          {data.name && (
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
             <div className="md:col-span-2">
-              <div className="text-muted-foreground">Наименование</div>
-              <div className="font-medium">{data.name}</div>
-            </div>
-          )}
-          <div>
-            <div className="text-muted-foreground">Количество</div>
-            <div className="font-medium">{fmtQty(data.quantity)}</div>
-          </div>
-          <div>
-            <div className="text-muted-foreground">Статус</div>
-            <div className="pt-1">
-              <Badge variant={(statusVariant[data.status] as any) || "secondary"}>
-                {statusLabels[data.status] || data.status}
-              </Badge>
-            </div>
-          </div>
-          {data.productionPlanId > 0 && showPlanLink && (
-            <div>
-              <div className="text-muted-foreground">План</div>
-              <div className="font-medium">
-                {data.productionPlanId}{" "}
-                <a
-                  href={planPreviewUrl(data.productionPlanId)}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="text-blue-700 hover:underline inline-block max-w-[240px] truncate align-bottom"
-                >
-                  План
-                </a>
-              </div>
-            </div>
-          )}
-          <div className={`md:col-span-2${!hasStages ? " md:col-span-2" : ""}`}>
-            <div className="text-muted-foreground">Маршрут</div>
-            <div className="font-medium">
-              {data.routeName || data.routeError || "Не назначен"}
-              {data.routeName && data.routeMeta && (
-                <span className="text-muted-foreground"> ({data.routeMeta})</span>
+              <span className="text-muted-foreground">ID {positionIdText}</span>
+              <span className="text-muted-foreground"> · </span>
+              <span className="text-muted-foreground">Строка #{data.sourceRowNumber ?? "—"}</span>
+              {data.productionPlanId > 0 && (
+                <>
+                  <span className="text-muted-foreground"> · </span>
+                  <span className="text-muted-foreground">План {data.productionPlanId}</span>
+                  {showPlanLink && (
+                    <>
+                      {" "}
+                      <a
+                        href={planPreviewUrl(data.productionPlanId)}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="text-blue-700 hover:underline"
+                      >
+                        План
+                      </a>
+                    </>
+                  )}
+                </>
               )}
             </div>
-            {data.routeError && (
-              <div className="text-xs text-red-600 mt-1">{data.routeError}</div>
-            )}
+            <div className="md:col-span-2 min-w-0">
+              <span className="text-muted-foreground">SKU </span>
+              <span className="font-mono font-medium">{data.sku}</span>
+              <span className="text-muted-foreground"> · Кол-во </span>
+              <span className="font-medium">{fmtQty(data.quantity)} шт.</span>
+              <span className="text-muted-foreground"> · Наименование </span>
+              <span className="font-medium">{data.name || "—"}</span>
+            </div>
           </div>
+
+          {hasRawData && (
+            <div className="space-y-2">
+              {data.rawExcelRows!.map((r, i) => (
+                <div key={i} className="text-xs">
+                  <div className="rounded-md bg-muted/50 px-3 py-2 font-mono whitespace-pre-wrap break-words">
+                    {r.text}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
         </div>
       </div>
 
-      {/* Errors */}
-      {hasErrors && (
-        <div className="rounded-lg border border-red-200 bg-red-50 p-4">
-          <p className="text-sm font-medium text-red-800 mb-2">Ошибки</p>
-          {(data.duplicateConflictIds?.length ?? 0) > 0 && (
-            <div className="mb-3 border-b border-red-200 pb-3">
-              <p className="text-xs text-red-800 mb-2">Конфликтующие позиции:</p>
-              <div className="flex flex-wrap gap-2">
-                {data.duplicateConflictIds!.map((id) => (
-                  <button
-                    key={id}
-                    type="button"
-                    className="text-sm underline text-red-700 hover:no-underline"
-                    onClick={() => jumpToPlanPosition(id)}
-                  >
-                    #{id}
-                  </button>
-                ))}
+      {hasIssues && (
+        <div className="rounded-lg border border-amber-200 bg-amber-50 p-3">
+          <div className="text-sm font-medium text-amber-900 mb-2">Проблемы и предупреждения</div>
+          <div className="space-y-3 text-sm">
+            {hasErrors && (
+              <div>
+                <div className="text-xs font-semibold uppercase tracking-wide text-red-800 mb-1">Ошибки</div>
+                {(data.duplicateConflictIds?.length ?? 0) > 0 && (
+                  <div className="mb-2 flex flex-wrap gap-2">
+                    {data.duplicateConflictIds!.map((id) => (
+                      <button
+                        key={id}
+                        type="button"
+                        className="text-xs underline text-red-700 hover:no-underline"
+                        onClick={() => jumpToPlanPosition(id)}
+                      >
+                        Конфликт #{id}
+                      </button>
+                    ))}
+                  </div>
+                )}
+                <ul className="space-y-1 text-red-700">
+                  {data.errors.map((err, i) => (
+                    <li key={i} className="flex items-start gap-2">
+                      <span className="mt-1.5 h-1.5 w-1.5 rounded-full bg-red-500 shrink-0" />
+                      {err}
+                    </li>
+                  ))}
+                </ul>
               </div>
-            </div>
-          )}
-          <ul className="text-sm text-red-700 space-y-1">
-            {data.errors.map((err, i) => (
-              <li key={i} className="flex items-start gap-2">
-                <span className="mt-1.5 h-1.5 w-1.5 rounded-full bg-red-500 shrink-0" />
-                {err}
-              </li>
-            ))}
-          </ul>
+            )}
+            {hasWarnings && (
+              <div>
+                <div className="text-xs font-semibold uppercase tracking-wide text-amber-800 mb-1">Предупреждения</div>
+                <ul className="space-y-1 text-amber-700">
+                  {data.warnings.map((w, i) => (
+                    <li key={i} className="flex items-start gap-2">
+                      <span className="mt-1.5 h-1.5 w-1.5 rounded-full bg-amber-500 shrink-0" />
+                      {w}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+            {hasRouteCheckIssues && (
+              <div>
+                <div className="text-xs font-semibold uppercase tracking-wide text-amber-800 mb-1">Несовпадения маршрута</div>
+                <ul className="space-y-1 text-amber-700">
+                  {data.routeCheckIssues!.map((issue, i) => (
+                    <li key={i} className="flex items-start gap-2">
+                      <span className="mt-1.5 h-1.5 w-1.5 rounded-full bg-amber-500 shrink-0" />
+                      {issue}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+          </div>
         </div>
       )}
 
-      {/* Warnings */}
-      {hasWarnings && (
-        <div className="rounded-lg border border-amber-200 bg-amber-50 p-4">
-          <p className="text-sm font-medium text-amber-800 mb-2">Предупреждения</p>
-          <ul className="text-sm text-amber-700 space-y-1">
-            {data.warnings.map((w, i) => (
-              <li key={i} className="flex items-start gap-2">
-                <span className="mt-1.5 h-1.5 w-1.5 rounded-full bg-amber-500 shrink-0" />
-                {w}
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
-
-      {/* Route check issues */}
-      {hasRouteCheckIssues && (
-        <div className="rounded-lg border border-amber-200 bg-amber-50 p-4">
-          <p className="text-sm font-medium text-amber-800 mb-2">Несовпадения маршрута</p>
-          <ul className="text-sm text-amber-700 space-y-1">
-            {data.routeCheckIssues!.map((issue, i) => (
-              <li key={i} className="flex items-start gap-2">
-                <span className="mt-1.5 h-1.5 w-1.5 rounded-full bg-amber-500 shrink-0" />
-                {issue}
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
-
-      {/* Stages table */}
       {hasStages && (
         <div className="rounded-lg border overflow-auto">
           <table className="w-full text-sm">
@@ -271,48 +282,99 @@ export function RowDetailsContent({ data, showPlanLink = true }: RowDetailsConte
                 const pct = stage.planned_quantity > 0
                   ? ((stage.completed_quantity / stage.planned_quantity) * 100).toFixed(1)
                   : "0.0"
-                const iconColor = stage.section_icon_color || "#2563EB"
+                const sectionMeta = sectionMetaById.get(stage.section_id)
+                const stageIcon = stage.section_icon || sectionMeta?.icon || null
+                const iconColor = stage.section_icon_color || sectionMeta?.icon_color || "#2563EB"
                 const isCurrentStage = Boolean(data.currentStageSectionId && stage.section_id === data.currentStageSectionId)
+                const isExpanded = Boolean(expandedStages[stage.route_step_id])
+                const stageStatusText = taskStatusLabels[stage.task_status] || stage.task_status
+                const compactFlowText = [
+                  `Выдано ${fmtQty(stage.issued_qty)} (${fmtEventAt(stage.issued_last_at)})`,
+                  `Учтено ${fmtQty(stage.accounted_good_qty)}/${fmtQty(stage.accounted_reject_qty)} (${fmtEventAt(stage.accounted_last_at)})`,
+                  `Передано ${fmtQty(stage.sent_qty)} (${fmtEventAt(stage.sent_last_at)})`,
+                  `Принято след. этапом ${fmtQty(stage.accepted_by_next_qty)} (${fmtEventAt(stage.accepted_by_next_last_at)})`,
+                ].join(" · ")
                 return (
-                  <tr
-                    key={stage.route_step_id}
-                    className={`border-b${isCurrentStage ? " bg-blue-50 border-l-4 border-l-blue-500" : ""}`}
-                  >
-                    <td className="p-2">
-                      <div className="flex items-center gap-2">
-                        #{stage.sequence}
-                        {isCurrentStage && (
-                          <Badge variant="default" className="text-[10px] px-1.5 py-0">
-                            Текущий
-                          </Badge>
-                        )}
-                      </div>
-                    </td>
-                    <td className="p-2">
-                      <div className="flex items-center gap-2">
-                        {stage.section_icon && (
-                          <span
-                            className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded"
-                            style={{ backgroundColor: `${iconColor}20`, color: iconColor }}
-                          >
-                            {renderIcon(stage.section_icon, "h-4 w-4")}
-                          </span>
-                        )}
-                        <div>
-                          <div className={`font-medium${isCurrentStage ? " text-blue-900" : ""}`}>
-                            {stage.section_name}
-                          </div>
-                          <div className="text-xs text-muted-foreground">
-                            {stage.section_code} · {stage.operation_name}
+                  [
+                    <tr
+                      key={`stage-row-${stage.route_step_id}`}
+                      className={`border-b${isCurrentStage ? " bg-blue-50 border-l-4 border-l-blue-500" : ""}`}
+                    >
+                      <td className="p-2 align-top">
+                        <div className="flex items-center gap-2">
+                          #{stage.sequence}
+                          {isCurrentStage && (
+                            <Badge variant="default" className="text-[10px] px-1.5 py-0">
+                              Текущий
+                            </Badge>
+                          )}
+                        </div>
+                      </td>
+                      <td className="p-2">
+                        <div className="flex items-start gap-2">
+                          {stageIcon && (
+                            <span
+                              className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded mt-0.5"
+                              style={{ backgroundColor: `${iconColor}20`, color: iconColor }}
+                            >
+                              {renderIcon(stageIcon, "h-4 w-4")}
+                            </span>
+                          )}
+                          <div className="min-w-0">
+                            <div className={`font-medium${isCurrentStage ? " text-blue-900" : ""}`}>
+                              {stage.section_name}
+                            </div>
+                            <div className="text-xs text-muted-foreground">
+                              {stage.section_code} · {stage.operation_name}
+                            </div>
+                            <div className="text-xs text-muted-foreground mt-1">
+                              Статус этапа: <span className="font-medium text-foreground">{stageStatusText}</span>
+                            </div>
+                            <div className="text-xs text-muted-foreground mt-1 break-words">
+                              {compactFlowText}
+                            </div>
+                            <button
+                              type="button"
+                              className="mt-1 text-xs text-blue-700 hover:underline"
+                              onClick={() =>
+                                setExpandedStages((prev) => ({
+                                  ...prev,
+                                  [stage.route_step_id]: !prev[stage.route_step_id],
+                                }))
+                              }
+                            >
+                              {isExpanded ? "Скрыть операции" : "Показать операции"}
+                            </button>
                           </div>
                         </div>
-                      </div>
-                    </td>
-                    <td className="p-2">{fmtQty(stage.planned_quantity)}</td>
-                    <td className="p-2">{fmtQty(stage.completed_quantity)}</td>
-                    <td className="p-2">{fmtQty(stage.rejected_quantity)}</td>
-                    <td className="p-2">{pct}%</td>
-                  </tr>
+                      </td>
+                      <td className="p-2 align-top">{fmtQty(stage.planned_quantity)}</td>
+                      <td className="p-2 align-top">{fmtQty(stage.completed_quantity)}</td>
+                      <td className="p-2 align-top">{fmtQty(stage.rejected_quantity)}</td>
+                      <td className="p-2 align-top">{pct}%</td>
+                    </tr>,
+                    isExpanded ? (
+                      <tr key={`stage-events-${stage.route_step_id}`} className="border-b bg-muted/20">
+                        <td colSpan={6} className="p-2">
+                          <div className="space-y-1 text-xs">
+                            {stage.flow_events.length === 0 ? (
+                              <div className="text-muted-foreground">Операции по этапу отсутствуют</div>
+                            ) : (
+                              stage.flow_events.map((event, idx) => (
+                                <div key={`${stage.route_step_id}-${idx}`} className="flex flex-wrap items-center gap-2">
+                                  <span className="font-medium">{event.label}</span>
+                                  <span>{fmtQty(event.quantity)} шт.</span>
+                                  <span className="text-muted-foreground">{fmtEventAt(event.event_at)}</span>
+                                  {event.task_id && <span className="text-muted-foreground">task #{event.task_id}</span>}
+                                  {event.transfer_id && <span className="text-muted-foreground">transfer #{event.transfer_id}</span>}
+                                </div>
+                              ))
+                            )}
+                          </div>
+                        </td>
+                      </tr>
+                    ) : null,
+                  ]
                 )
               })}
             </tbody>
@@ -322,6 +384,7 @@ export function RowDetailsContent({ data, showPlanLink = true }: RowDetailsConte
           )}
         </div>
       )}
+
     </div>
   )
 }

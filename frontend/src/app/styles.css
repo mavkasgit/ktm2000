@@ -107,7 +107,16 @@
     @apply flex items-center gap-3 rounded-md px-3 py-2 text-sm text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground;
   }
 
-  .nav-link.active {
+  .nav-link .nav-link-icon {
+    @apply h-[18px] w-[18px] shrink-0;
+  }
+
+  .nav-link span {
+    @apply min-w-0 truncate;
+  }
+
+  .nav-link.active,
+  .nav-link[aria-current="page"] {
     @apply bg-primary text-primary-foreground;
   }
 

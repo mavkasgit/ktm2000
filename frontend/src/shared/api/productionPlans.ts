@@ -350,6 +350,14 @@ export type ProductionPlanningRouteSnapshotStep = {
 };
 
 export type ProductionPlanningStage = {
+  flow_events: {
+    step: string;
+    label: string;
+    quantity: number;
+    event_at: string | null;
+    task_id: number | null;
+    transfer_id: number | null;
+  }[];
   route_step_id: number;
   section_id: number;
   section_code: string;
@@ -368,6 +376,16 @@ export type ProductionPlanningStage = {
   reject_percent: number;
   task_status: string;
   not_started: boolean;
+  issued_qty: number;
+  issued_last_at: string | null;
+  accounted_good_qty: number;
+  accounted_reject_qty: number;
+  accounted_total_qty: number;
+  accounted_last_at: string | null;
+  sent_qty: number;
+  sent_last_at: string | null;
+  accepted_by_next_qty: number;
+  accepted_by_next_last_at: string | null;
 };
 
 export type ProductionPlanningRowDetail = {

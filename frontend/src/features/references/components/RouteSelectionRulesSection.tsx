@@ -55,6 +55,7 @@ const sourceLabels: Record<RuleSource, string> = {
   excel: "Колонки Excel",
   payload: "Нормализованные поля",
   product: "Поля продукта",
+  ctx: "Контекст",
 };
 
 const operatorLabels: Record<RoutesAPI.RouteSelectionCondition["operator"], string> = {
@@ -556,6 +557,7 @@ export function RouteSelectionRulesSection({ refreshKey }: Props) {
       excel,
       payload: payloadFieldOptions,
       product: productFieldOptions,
+      ctx: [],
     };
   }, [ruleExcelColumns]);
   const selectedProfileTemplate = useMemo(
