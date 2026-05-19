@@ -34,7 +34,7 @@ const statusVariant: Record<string, string> = {
 }
 
 const taskStatusLabels: Record<string, string> = {
-  waiting_previous: "Ожидает предыдущий этап",
+  waiting_previous: "Ожидает этап",
   ready: "Готов",
   in_progress: "В работе",
   partially_completed: "Частично выполнен",
@@ -117,7 +117,6 @@ export function RowDetailsContent({
   return (
     <div className="space-y-4">
       <div className="rounded-lg border p-3">
-        <div className="text-sm font-medium mb-2">Исходная строка импорта</div>
         <div className="grid grid-cols-1 gap-2 text-sm">
           <div className="flex items-center gap-2 min-w-0 flex-nowrap overflow-hidden">
             {hasCurrentStage && currentSectionMeta?.icon && (
@@ -190,6 +189,7 @@ export function RowDetailsContent({
 
           {hasRawData && (
             <div className="space-y-2">
+              <div className="text-sm font-medium">Исходная строка импорта</div>
               {data.rawExcelRows!.map((r, i) => (
                 <div key={i} className="text-xs">
                   <div className="rounded-md bg-muted/50 px-3 py-2 font-mono whitespace-pre-wrap break-words">
@@ -271,9 +271,15 @@ export function RowDetailsContent({
               <tr>
                 <th className="text-left p-2">Этап</th>
                 <th className="text-left p-2">Участок</th>
+                <th className="text-left p-2">Статус этапа</th>
                 <th className="text-left p-2">План</th>
-                <th className="text-left p-2">Факт</th>
-                <th className="text-left p-2">Брак</th>
+                <th className="text-left p-2">Выдано</th>
+                <th className="text-left p-2" title="Годные">Годные</th>
+                <th className="text-left p-2" title="Брак">Брак</th>
+                <th className="text-left p-2" title="Итог = Годные + Брак">Итог</th>
+                <th className="text-left p-2">Передано</th>
+                <th className="text-left p-2">Принято след. этапом</th>
+                <th className="text-left p-2">Остаток</th>
                 <th className="text-left p-2">% выполнения</th>
               </tr>
             </thead>
@@ -288,26 +294,42 @@ export function RowDetailsContent({
                 const isCurrentStage = Boolean(data.currentStageSectionId && stage.section_id === data.currentStageSectionId)
                 const isExpanded = Boolean(expandedStages[stage.route_step_id])
                 const stageStatusText = taskStatusLabels[stage.task_status] || stage.task_status
-                const compactFlowText = [
-                  `Выдано ${fmtQty(stage.issued_qty)} (${fmtEventAt(stage.issued_last_at)})`,
-                  `Учтено ${fmtQty(stage.accounted_good_qty)}/${fmtQty(stage.accounted_reject_qty)} (${fmtEventAt(stage.accounted_last_at)})`,
-                  `Передано ${fmtQty(stage.sent_qty)} (${fmtEventAt(stage.sent_last_at)})`,
-                  `Принято след. этапом ${fmtQty(stage.accepted_by_next_qty)} (${fmtEventAt(stage.accepted_by_next_last_at)})`,
-                ].join(" · ")
+                const remainingQty = Math.max(stage.planned_quantity - stage.accounted_total_qty, 0)
                 return (
                   [
                     <tr
                       key={`stage-row-${stage.route_step_id}`}
-                      className={`border-b${isCurrentStage ? " bg-blue-50 border-l-4 border-l-blue-500" : ""}`}
+                      className={`border-b cursor-pointer hover:bg-muted/30${isCurrentStage ? " bg-blue-50 border-l-4 border-l-blue-500" : ""}`}
+                      role="button"
+                      tabIndex={0}
+                      aria-expanded={isExpanded}
+                      onClick={() =>
+                        setExpandedStages((prev) => ({
+                          ...prev,
+                          [stage.route_step_id]: !prev[stage.route_step_id],
+                        }))
+                      }
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter" || event.key === " ") {
+                          event.preventDefault()
+                          setExpandedStages((prev) => ({
+                            ...prev,
+                            [stage.route_step_id]: !prev[stage.route_step_id],
+                          }))
+                        }
+                      }}
                     >
                       <td className="p-2 align-top">
-                        <div className="flex items-center gap-2">
-                          #{stage.sequence}
-                          {isCurrentStage && (
-                            <Badge variant="default" className="text-[10px] px-1.5 py-0">
-                              Текущий
-                            </Badge>
-                          )}
+                        <div className="flex flex-col items-start gap-1">
+                          <div className="flex items-center gap-2">
+                            <span>#{stage.sequence}</span>
+                            {isCurrentStage && (
+                              <Badge variant="default" className="text-[10px] px-1.5 py-0">
+                                Текущий
+                              </Badge>
+                            )}
+                          </div>
+                          <span className="text-lg leading-none text-muted-foreground">{isExpanded ? "▾" : "▸"}</span>
                         </div>
                       </td>
                       <td className="p-2">
@@ -324,38 +346,25 @@ export function RowDetailsContent({
                             <div className={`font-medium${isCurrentStage ? " text-blue-900" : ""}`}>
                               {stage.section_name}
                             </div>
-                            <div className="text-xs text-muted-foreground">
-                              {stage.section_code} · {stage.operation_name}
-                            </div>
-                            <div className="text-xs text-muted-foreground mt-1">
-                              Статус этапа: <span className="font-medium text-foreground">{stageStatusText}</span>
-                            </div>
-                            <div className="text-xs text-muted-foreground mt-1 break-words">
-                              {compactFlowText}
-                            </div>
-                            <button
-                              type="button"
-                              className="mt-1 text-xs text-blue-700 hover:underline"
-                              onClick={() =>
-                                setExpandedStages((prev) => ({
-                                  ...prev,
-                                  [stage.route_step_id]: !prev[stage.route_step_id],
-                                }))
-                              }
-                            >
-                              {isExpanded ? "Скрыть операции" : "Показать операции"}
-                            </button>
                           </div>
                         </div>
                       </td>
+                      <td className="p-2 align-top">
+                        <span className="text-xs">{stageStatusText}</span>
+                      </td>
                       <td className="p-2 align-top">{fmtQty(stage.planned_quantity)}</td>
-                      <td className="p-2 align-top">{fmtQty(stage.completed_quantity)}</td>
-                      <td className="p-2 align-top">{fmtQty(stage.rejected_quantity)}</td>
+                      <td className="p-2 align-top">{fmtQty(stage.issued_qty)}</td>
+                      <td className="p-2 align-top">{fmtQty(stage.accounted_good_qty)}</td>
+                      <td className="p-2 align-top">{fmtQty(stage.accounted_reject_qty)}</td>
+                      <td className="p-2 align-top">{fmtQty(stage.accounted_total_qty)}</td>
+                      <td className="p-2 align-top">{fmtQty(stage.sent_qty)}</td>
+                      <td className="p-2 align-top">{fmtQty(stage.accepted_by_next_qty)}</td>
+                      <td className="p-2 align-top">{fmtQty(remainingQty)}</td>
                       <td className="p-2 align-top">{pct}%</td>
                     </tr>,
                     isExpanded ? (
                       <tr key={`stage-events-${stage.route_step_id}`} className="border-b bg-muted/20">
-                        <td colSpan={6} className="p-2">
+                        <td colSpan={12} className="p-2">
                           <div className="space-y-1 text-xs">
                             {stage.flow_events.length === 0 ? (
                               <div className="text-muted-foreground">Операции по этапу отсутствуют</div>
