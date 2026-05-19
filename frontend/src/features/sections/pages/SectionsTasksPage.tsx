@@ -43,7 +43,12 @@ type ActionLogEntry = {
 function fmtQty(value: string): string {
   const n = parseFloat(value);
   if (!Number.isFinite(n)) return "0";
-  return Number.isInteger(n) ? String(n) : n.toFixed(3).replace(/\.?0+$/, "");
+  return String(Math.round(n));
+}
+
+function toInteger(value: string | number): number {
+  const n = typeof value === "number" ? value : parseFloat(value);
+  return Number.isFinite(n) ? Math.round(n) : 0;
 }
 
 function nowLocalDateTime(): string {
@@ -56,7 +61,7 @@ function nowLocalDateTimeParts(): { date: string; time: string } {
   const d = new Date();
   const p = (v: number) => String(v).padStart(2, "0");
   return {
-    date: `${p(d.getDate())}.${p(d.getMonth() + 1)}.${d.getFullYear()}`,
+    date: `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`,
     time: `${p(d.getHours())}:${p(d.getMinutes())}`,
   };
 }
@@ -112,6 +117,7 @@ export function SectionsTasksPage() {
   const [performedTime, setPerformedTime] = useState("");
   const [accountedDate, setAccountedDate] = useState("");
   const [accountedTime, setAccountedTime] = useState("");
+  const [dateToday, setDateToday] = useState(true);
   const [actionComment, setActionComment] = useState("");
 
   const { data: me } = useQuery({
@@ -305,6 +311,7 @@ export function SectionsTasksPage() {
     const now = nowLocalDateTimeParts();
     setActionDialog({ open: true, type, task });
     setTimesMatch(true);
+    setDateToday(true);
     setPerformedDate(now.date);
     setPerformedTime(now.time);
     setAccountedDate(now.date);
@@ -318,7 +325,7 @@ export function SectionsTasksPage() {
       setActionQty(fmtQty(task.cache.remaining_quantity));
       setDefectQty("");
     } else {
-      const transferable = Math.max(0, parseFloat(task.cache.completed_quantity) - parseFloat(task.cache.transferred_quantity));
+      const transferable = Math.max(0, toInteger(task.cache.completed_quantity) - toInteger(task.cache.transferred_quantity));
       setActionQty(Number.isFinite(transferable) ? String(transferable) : "");
       setDefectQty("");
     }
@@ -335,15 +342,42 @@ export function SectionsTasksPage() {
     [performedDate, performedTime]
   );
 
+  useEffect(() => {
+    if (!timesMatch) return;
+    setAccountedDate(performedDate);
+    setAccountedTime(performedTime);
+  }, [timesMatch, performedDate, performedTime]);
+
+  useEffect(() => {
+    if (!dateToday) return;
+    const today = nowLocalDateTimeParts().date;
+    if (performedDate !== today) {
+      setPerformedDate(today);
+    }
+    if (accountedDate !== today) {
+      setAccountedDate(today);
+    }
+  }, [dateToday, performedDate, accountedDate]);
+
   const submitAction = useCallback(() => {
     const task = actionDialog.task;
     if (!task) return;
 
-    const qty = parseFloat(actionQty || "0");
+    const qty = toInteger(actionQty || "0");
     const toIsoDateTime = (dateStr: string, timeStr: string): string => {
-      if (!dateStr || !timeStr) return nowLocalDateTime();
+      if (!timeStr) return nowLocalDateTime();
+      if (!dateStr) {
+        const d = new Date();
+        const p = (v: number) => String(v).padStart(2, "0");
+        const today = `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+        return `${today}T${timeStr}`;
+      }
+      if (/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) {
+        return `${dateStr}T${timeStr}`;
+      }
       const [dd, mm, yyyy] = dateStr.split(".");
       const [hh, min] = timeStr.split(":");
+      if (!dd || !mm || !yyyy || !hh || !min) return nowLocalDateTime();
       return `${yyyy}-${mm}-${dd}T${hh}:${min}`;
     };
     const effectivePerformedAt = toIsoDateTime(performedDate, performedTime);
@@ -357,7 +391,7 @@ export function SectionsTasksPage() {
     }
 
     if (actionDialog.type === "issue") {
-      const maxIssue = parseFloat(task.cache.available_quantity);
+      const maxIssue = toInteger(task.cache.available_quantity);
       if (Number.isFinite(maxIssue) && qty > maxIssue) {
         setConflictHint(`Количество больше доступного (${fmtQty(String(maxIssue))}).`);
         return;
@@ -377,7 +411,7 @@ export function SectionsTasksPage() {
     }
 
     if (actionDialog.type === "complete") {
-      const parsedDefect = parseFloat(defectQty || "0");
+      const parsedDefect = toInteger(defectQty || "0");
       const good = qty;
       const defect = Number.isFinite(parsedDefect) ? parsedDefect : 0;
       if (good + defect <= 0) {
@@ -385,7 +419,7 @@ export function SectionsTasksPage() {
         setConflictHint("Укажите хотя бы одно количество: годные или брак.");
         return;
       }
-      const inWork = parseFloat(task.cache.in_work_quantity);
+      const inWork = toInteger(task.cache.in_work_quantity);
       if (Number.isFinite(inWork) && good + defect > inWork) {
         setConflictHint(`Сумма факта и брака больше объема в работе (${fmtQty(String(inWork))}).`);
         return;
@@ -405,7 +439,7 @@ export function SectionsTasksPage() {
       return;
     }
 
-    const transferable = Math.max(0, parseFloat(task.cache.completed_quantity) - parseFloat(task.cache.transferred_quantity));
+    const transferable = Math.max(0, toInteger(task.cache.completed_quantity) - toInteger(task.cache.transferred_quantity));
     if (Number.isFinite(transferable) && qty > transferable) {
       setConflictHint(`Количество передачи больше доступного (${fmtQty(String(transferable))}).`);
       return;
@@ -666,6 +700,8 @@ export function SectionsTasksPage() {
         setPerformedDate={setPerformedDate}
         performedTime={performedTime}
         setPerformedTime={setPerformedTime}
+        dateToday={dateToday}
+        onDateTodayChange={setDateToday}
         accountedDate={accountedDate}
         setAccountedDate={setAccountedDate}
         accountedTime={accountedTime}

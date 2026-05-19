@@ -20,12 +20,18 @@ import type { TaskActionDialogType } from "./SectionTasksBoard";
 function fmtQty(value: string): string {
   const n = parseFloat(value);
   if (!Number.isFinite(n)) return "0";
-  return Number.isInteger(n) ? String(n) : n.toFixed(3).replace(/\.?0+$/, "");
+  return String(Math.round(n));
 }
 
 function toNumber(value: string): number {
   const n = parseFloat(value);
-  return Number.isFinite(n) ? n : 0;
+  return Number.isFinite(n) ? Math.round(n) : 0;
+}
+
+function normalizeIntegerInput(value: string): string {
+  const digits = value.replace(/[^\d]/g, "");
+  if (!digits) return "";
+  return String(parseInt(digits, 10));
 }
 
 function actionTitle(type: TaskActionDialogType): string {
@@ -56,6 +62,8 @@ type TaskActionDrawerProps = {
   setPerformedDate: Dispatch<SetStateAction<string>>;
   performedTime: string;
   setPerformedTime: Dispatch<SetStateAction<string>>;
+  dateToday: boolean;
+  onDateTodayChange: (checked: boolean) => void;
   accountedDate: string;
   setAccountedDate: Dispatch<SetStateAction<string>>;
   accountedTime: string;
@@ -82,6 +90,8 @@ export function TaskActionDrawer({
   setPerformedDate,
   performedTime,
   setPerformedTime,
+  dateToday,
+  onDateTodayChange,
   accountedDate,
   setAccountedDate,
   accountedTime,
@@ -140,7 +150,7 @@ export function TaskActionDrawer({
             <label className="text-sm font-medium">
               {type === "complete" ? "Факт (годные)" : "Количество"}
             </label>
-            <Input type="number" step="0.001" value={actionQty} onChange={(e) => setActionQty(e.target.value)} />
+            <Input type="number" step="1" min="0" value={actionQty} onChange={(e) => setActionQty(normalizeIntegerInput(e.target.value))} />
             <div className="mt-2 flex flex-wrap gap-1">
               {presets.map((p) => (
                 <Button
@@ -149,7 +159,7 @@ export function TaskActionDrawer({
                   size="sm"
                   variant="outline"
                   onClick={() => {
-                    const val = maxQty > 0 ? ((maxQty * p) / 100).toFixed(3).replace(/\.?0+$/, "") : "0";
+                    const val = maxQty > 0 ? String(Math.round((maxQty * p) / 100)) : "0";
                     setActionQty(val);
                   }}
                 >
@@ -160,7 +170,7 @@ export function TaskActionDrawer({
                 type="button"
                 size="sm"
                 variant="outline"
-                onClick={() => setActionQty(maxQty > 0 ? String(maxQty) : "0")}
+                onClick={() => setActionQty(maxQty > 0 ? String(Math.round(maxQty)) : "0")}
               >
                 Макс
               </Button>
@@ -175,7 +185,7 @@ export function TaskActionDrawer({
           {type === "complete" && (
             <div>
               <label className="text-sm font-medium">Брак</label>
-              <Input type="number" step="0.001" value={defectQty} onChange={(e) => setDefectQty(e.target.value)} />
+              <Input type="number" step="1" min="0" value={defectQty} onChange={(e) => setDefectQty(normalizeIntegerInput(e.target.value))} />
             </div>
           )}
 
@@ -185,27 +195,41 @@ export function TaskActionDrawer({
             </div>
           )}
 
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+            <div className="flex items-center gap-2">
+              <Checkbox
+                checked={dateToday}
+                onCheckedChange={(c) => onDateTodayChange(!!c)}
+                id="date-today"
+              />
+              <label htmlFor="date-today" className="text-sm">Дата = сегодня</label>
+            </div>
+            <div className="flex items-center gap-2">
+              <Checkbox checked={timesMatch} onCheckedChange={(c) => onTimesMatchChange(!!c)} id="times-match-action" />
+              <label htmlFor="times-match-action" className="text-sm">Время сдачи = Время учета</label>
+            </div>
+          </div>
+
           <DateTimePicker
             date={performedDate}
             time={performedTime}
             onDateChange={setPerformedDate}
             onTimeChange={setPerformedTime}
-            label="Время сдачи"
+            label="Время сдачи (фактическое выполнение)"
+            dateDisabled={dateToday}
           />
-
-          <div className="flex items-center gap-2">
-            <Checkbox checked={timesMatch} onCheckedChange={(c) => onTimesMatchChange(!!c)} id="times-match-action" />
-            <label htmlFor="times-match-action" className="text-sm">Время сдачи = Время учета</label>
-          </div>
-
-          <DateTimePicker
-            date={accountedDate}
-            time={accountedTime}
-            onDateChange={setAccountedDate}
-            onTimeChange={setAccountedTime}
-            label="Время учета"
-            disabled={timesMatch}
-          />
+          {!timesMatch && (
+            <>
+              <DateTimePicker
+                date={accountedDate}
+                time={accountedTime}
+                onDateChange={setAccountedDate}
+                onTimeChange={setAccountedTime}
+                label="Время учета (отражение в системе)"
+                dateDisabled={dateToday}
+              />
+            </>
+          )}
 
           <div>
             <label className="text-sm font-medium">Комментарий</label>
@@ -225,4 +249,3 @@ export function TaskActionDrawer({
     </Dialog>
   );
 }
-
