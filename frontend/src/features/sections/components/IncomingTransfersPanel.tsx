@@ -15,12 +15,18 @@ import {
 function fmtQty(value: string): string {
   const n = parseFloat(value);
   if (!Number.isFinite(n)) return "0";
-  return Number.isInteger(n) ? String(n) : n.toFixed(3).replace(/\.?0+$/, "");
+  return String(Math.round(n));
 }
 
 function toNumber(value: string | number): number {
   const n = typeof value === "number" ? value : parseFloat(value);
-  return Number.isFinite(n) ? n : 0;
+  return Number.isFinite(n) ? Math.round(n) : 0;
+}
+
+function normalizeIntegerInput(value: string): string {
+  const digits = value.replace(/[^\d]/g, "");
+  if (!digits) return "";
+  return String(parseInt(digits, 10));
 }
 
 type AcceptDialogState = {
@@ -165,7 +171,10 @@ export function IncomingTransfersPanel({
               <div key={transfer.transfer_id} className="rounded-lg border p-3">
                 <div className="flex flex-wrap items-start justify-between gap-2">
                   <div>
-                    <div className="font-medium">{transfer.transfer_no}</div>
+                    <div className="text-xs">
+                      <span className="font-medium">#{transfer.plan_position_id}</span>
+                      <span className="text-muted-foreground"> · {transfer.product_sku} · Строка #{transfer.from_line_sequence} · Задача #{transfer.from_line_id}</span>
+                    </div>
                     <div className="text-xs text-muted-foreground">
                       {transfer.from_section_code} · {transfer.from_section_name}
                       {" -> "}
@@ -185,7 +194,12 @@ export function IncomingTransfersPanel({
                 <div className="mt-3 flex flex-wrap gap-1">
                   <Button
                     size="sm"
-                    onClick={() => onAccept(transfer.transfer_id, { accepted_quantity: transfer.sent_quantity, rejected_quantity: "0" })}
+                    onClick={() =>
+                      onAccept(transfer.transfer_id, {
+                        accepted_quantity: String(Math.round(parseFloat(transfer.sent_quantity) || 0)),
+                        rejected_quantity: "0",
+                      })
+                    }
                     disabled={isPending || left <= 0}
                   >
                     Принять полностью
@@ -216,11 +230,11 @@ export function IncomingTransfersPanel({
               <>
                 <div>
                   <label className="text-sm font-medium">Принять сейчас</label>
-                  <Input type="number" step="0.001" value={dialog.acceptNow} onChange={(e) => setDialog((prev) => ({ ...prev, acceptNow: e.target.value }))} />
+                  <Input type="number" step="1" min="0" value={dialog.acceptNow} onChange={(e) => setDialog((prev) => ({ ...prev, acceptNow: normalizeIntegerInput(e.target.value) }))} />
                 </div>
                 <div>
                   <label className="text-sm font-medium">Отклонить сейчас</label>
-                  <Input type="number" step="0.001" value={dialog.rejectNow} onChange={(e) => setDialog((prev) => ({ ...prev, rejectNow: e.target.value }))} />
+                  <Input type="number" step="1" min="0" value={dialog.rejectNow} onChange={(e) => setDialog((prev) => ({ ...prev, rejectNow: normalizeIntegerInput(e.target.value) }))} />
                 </div>
               </>
             )}
@@ -243,4 +257,3 @@ export function IncomingTransfersPanel({
     </div>
   );
 }
-

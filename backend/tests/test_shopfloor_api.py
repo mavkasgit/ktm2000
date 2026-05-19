@@ -222,6 +222,65 @@ async def test_shopfloor_over_issue_rejected(client, session) -> None:
 
 
 @pytest.mark.asyncio
+async def test_shopfloor_second_stage_available_not_inflated_by_plan(client, session) -> None:
+    user = await _make_user(session, "shopfloor-second-available@test.local")
+    _, plan, pos = await _make_product_route_plan(session, "FG-SF-AV2")
+    headers = _auth_headers(user)
+
+    await _release_plan_position(client, plan.id, pos.id)
+    tasks = (
+        await session.execute(
+            select(WorkTask)
+            .join(SectionPlanLine, WorkTask.section_plan_line_id == SectionPlanLine.id)
+            .where(SectionPlanLine.plan_position_id == pos.id)
+            .order_by(SectionPlanLine.sequence)
+        )
+    ).scalars().all()
+    first_task, second_task = tasks[0], tasks[1]
+
+    await client.post(
+        f"/api/shopfloor/tasks/{first_task.id}/issue",
+        json={"quantity": "100"},
+        headers=headers,
+    )
+    await client.post(
+        f"/api/shopfloor/tasks/{first_task.id}/complete",
+        json={"good_quantity": "100", "defect_quantity": "0"},
+        headers=headers,
+    )
+    send_res = await client.post(
+        "/api/shopfloor/transfers",
+        json={"from_task_id": first_task.id, "to_task_id": second_task.id, "quantity": "25"},
+        headers=headers,
+    )
+    assert send_res.status_code == 200
+    transfer_id = send_res.json()["transfer_id"]
+
+    accept_res = await client.post(
+        f"/api/shopfloor/transfers/{transfer_id}/accept",
+        json={"accepted_quantity": "25", "rejected_quantity": "0"},
+        headers=headers,
+    )
+    assert accept_res.status_code == 200
+
+    board_res = await client.get(
+        f"/api/shopfloor/sections/{second_task.section_id}/board",
+        headers=headers,
+    )
+    assert board_res.status_code == 200
+    row = next(item for item in board_res.json()["tasks"] if item["id"] == second_task.id)
+    assert Decimal(row["cache"]["available_quantity"]) == Decimal("25")
+
+    over_issue = await client.post(
+        f"/api/shopfloor/tasks/{second_task.id}/issue",
+        json={"quantity": "26"},
+        headers=headers,
+    )
+    assert over_issue.status_code == 400
+    assert "exceeds available" in over_issue.json()["detail"]
+
+
+@pytest.mark.asyncio
 async def test_shopfloor_idempotent_issue_not_duplicated(client, session) -> None:
     """Repeated issue with same idempotency_key must not create duplicate movements."""
     user = await _make_user(session, "shopfloor-idem@test.local")

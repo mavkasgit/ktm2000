@@ -1,5 +1,3 @@
-import { Clock, Send } from "lucide-react";
-
 import type { SectionBoardTask } from "@/shared/api/shopfloor";
 import { Badge, Button } from "@/shared/ui";
 
@@ -27,7 +25,7 @@ const taskStatusColor: Record<string, string> = {
 function fmtQty(value: string): string {
   const n = parseFloat(value);
   if (!Number.isFinite(n)) return "0";
-  return Number.isInteger(n) ? String(n) : n.toFixed(3).replace(/\.?0+$/, "");
+  return String(Math.round(n));
 }
 
 function isTaskVisible(task: SectionBoardTask, mode: TaskBoardViewMode): boolean {
@@ -80,10 +78,10 @@ export function SectionTasksBoard({
               <thead className="border-b bg-muted/50">
                 <tr>
                   <th className="text-left p-2">Этап</th>
-                  <th className="text-left p-2">Операция</th>
+                  <th className="text-left p-2">Артикул</th>
                   <th className="text-left p-2">План</th>
                   <th className="text-left p-2">В работе</th>
-                  <th className="text-left p-2">Факт</th>
+                  <th className="text-left p-2">Годные</th>
                   <th className="text-left p-2">Передано</th>
                   <th className="text-left p-2">Брак</th>
                   <th className="text-left p-2">Остаток</th>
@@ -96,10 +94,7 @@ export function SectionTasksBoard({
                 {filteredTasks.map((task) => (
                   <tr key={task.id} className="border-b hover:bg-accent/30">
                     <td className="p-2">#{task.sequence}</td>
-                    <td className="p-2">
-                      <div className="font-medium">{task.operation_name || "—"}</div>
-                      <div className="text-xs text-muted-foreground">{task.operation_code || "—"}</div>
-                    </td>
+                    <td className="p-2 font-medium">{task.product_sku}</td>
                     <td className="p-2">{fmtQty(task.planned_quantity)}</td>
                     <td className="p-2">{fmtQty(task.cache.in_work_quantity)}</td>
                     <td className="p-2">{fmtQty(task.cache.completed_quantity)}</td>
@@ -114,7 +109,7 @@ export function SectionTasksBoard({
                     <td className="p-2">
                       {task.previous_stage ? (
                         <div className="text-xs">
-                          <div>Факт: <span className="font-medium">{fmtQty(task.previous_stage.completed_quantity)}</span></div>
+                          <div>Годные: <span className="font-medium">{fmtQty(task.previous_stage.completed_quantity)}</span></div>
                           <div>Передано: <span className="font-medium">{fmtQty(task.previous_stage.transferred_quantity)}</span></div>
                         </div>
                       ) : (
@@ -127,8 +122,7 @@ export function SectionTasksBoard({
                           Выдать
                         </Button>
                         <Button size="sm" variant="outline" className="min-h-[32px]" onClick={() => onAction("complete", task)}>
-                          <Clock size={14} />
-                          <span className="ml-1">Факт</span>
+                          <span>Завершить</span>
                         </Button>
                         <Button
                           size="sm"
@@ -137,7 +131,7 @@ export function SectionTasksBoard({
                           onClick={() => onAction("send", task)}
                           title={task.next_task_id ? `Следующий этап: ${task.next_operation_name || "—"}` : "Задача следующего этапа будет создана"}
                         >
-                          <Send size={14} />
+                          <span>Передать</span>
                         </Button>
                       </div>
                     </td>
@@ -153,22 +147,18 @@ export function SectionTasksBoard({
               <div key={task.id} className="rounded-lg border bg-card p-4 shadow-sm space-y-3">
                 <div className="flex items-center justify-between gap-2">
                   <div className="font-semibold">
-                    <span className="text-muted-foreground">#{task.sequence}</span>{" "}
-                    {task.operation_name || "—"}
+                    <span className="text-muted-foreground">#{task.sequence}</span>
+                    <span className="ml-2 text-sm font-medium">{task.product_sku}</span>
                   </div>
                   <Badge variant="secondary" className={taskStatusColor[task.status] || ""}>
                     {taskStatusLabels[task.status] || task.status}
                   </Badge>
                 </div>
 
-                {task.operation_code && (
-                  <div className="text-xs text-muted-foreground">{task.operation_code}</div>
-                )}
-
                 <div className="grid grid-cols-2 gap-2 text-sm">
                   <div><span className="text-muted-foreground">План:</span> {fmtQty(task.planned_quantity)}</div>
                   <div><span className="text-muted-foreground">В работе:</span> {fmtQty(task.cache.in_work_quantity)}</div>
-                  <div><span className="text-muted-foreground">Факт:</span> {fmtQty(task.cache.completed_quantity)}</div>
+                  <div><span className="text-muted-foreground">Годные:</span> {fmtQty(task.cache.completed_quantity)}</div>
                   <div><span className="text-muted-foreground">Передано:</span> {fmtQty(task.cache.transferred_quantity)}</div>
                   <div><span className="text-muted-foreground">Брак:</span> {fmtQty(task.cache.rejected_quantity)}</div>
                   <div><span className="text-muted-foreground">Остаток:</span> {fmtQty(task.cache.remaining_quantity)}</div>
@@ -176,7 +166,7 @@ export function SectionTasksBoard({
 
                 {task.previous_stage && (
                   <div className="text-xs text-muted-foreground border-t pt-2">
-                    Пред. этап: факт {fmtQty(task.previous_stage.completed_quantity)}, передано {fmtQty(task.previous_stage.transferred_quantity)}
+                    Пред. этап: годные {fmtQty(task.previous_stage.completed_quantity)}, передано {fmtQty(task.previous_stage.transferred_quantity)}
                   </div>
                 )}
 
@@ -185,16 +175,15 @@ export function SectionTasksBoard({
                     Выдать
                   </Button>
                   <Button size="sm" variant="outline" className="flex-1 min-h-[36px]" onClick={() => onAction("complete", task)}>
-                    <Clock size={14} />
-                    <span className="ml-1">Факт</span>
+                    <span>Завершить</span>
                   </Button>
                   <Button
                     size="sm"
                     variant="outline"
-                    className="min-h-[36px] px-3"
+                    className="flex-1 min-h-[36px]"
                     onClick={() => onAction("send", task)}
                   >
-                    <Send size={14} />
+                    <span>Передать</span>
                   </Button>
                 </div>
               </div>
@@ -205,4 +194,3 @@ export function SectionTasksBoard({
     </div>
   );
 }
-

@@ -16,6 +16,7 @@ function makeRequestConfig(options?: ShopfloorRequestOptions) {
 export type SectionBoardTask = {
   id: number;
   product_id: number;
+  product_sku: string;
   section_plan_line_id: number;
   plan_position_id: number;
   route_step_id: number;
@@ -105,6 +106,10 @@ export type IncomingTransfer = {
   created_at: string | null;
   from_task_status: string;
   to_task_status: string;
+  product_sku: string;
+  from_line_id: number;
+  from_line_sequence: number;
+  plan_position_id: number;
 };
 
 export type IncomingTransfersResponse = {

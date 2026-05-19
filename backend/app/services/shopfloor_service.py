@@ -21,6 +21,7 @@ from app.models.entity_comment import EntityComment, EntityType
 from app.models.internal_plan import SectionPlanLine
 from app.models.movement import Movement, MovementType
 from app.models.production_plan import PlanPosition, PlanPositionStatus
+from app.models.product import Product
 from app.models.rework_task import ReworkTask, ReworkTaskStatus
 from app.models.route import RouteStep
 from app.models.section import Section
@@ -97,6 +98,30 @@ async def _task_movement_sums(db: AsyncSession, task_id: int) -> dict[str, Decim
     return sums
 
 
+async def _initial_available_quantity(db: AsyncSession, task: WorkTask) -> Decimal:
+    """Base availability before incoming transfers.
+
+    For the first route stage, task can start from planned quantity.
+    For subsequent stages, availability comes only from received transfers.
+    """
+    line = await db.get(SectionPlanLine, task.section_plan_line_id)
+    if line is not None and line.sequence == 1:
+        return task.planned_quantity
+    return Decimal("0")
+
+
+def _compute_available_from_balances(
+    *,
+    planned_quantity: Decimal,
+    received_quantity: Decimal,
+    issued_quantity: Decimal,
+    is_first_stage: bool,
+) -> Decimal:
+    base_available = planned_quantity if is_first_stage else Decimal("0")
+    available = base_available + received_quantity - issued_quantity
+    return available if available > 0 else Decimal("0")
+
+
 async def _refresh_task_cache(db: AsyncSession, task_id: int) -> WorkTask:
     task = await _get_task(db, task_id)
     sums = await _task_movement_sums(db, task_id)
@@ -111,7 +136,8 @@ async def _refresh_task_cache(db: AsyncSession, task_id: int) -> WorkTask:
     if in_work < 0:
         in_work = Decimal("0")
 
-    available = task.planned_quantity + received - issued
+    base_available = await _initial_available_quantity(db, task)
+    available = base_available + received - issued
     if available < 0:
         available = Decimal("0")
 
@@ -197,7 +223,8 @@ async def issue_to_work(
     if task.status not in {WorkTaskStatus.ready, WorkTaskStatus.in_progress, WorkTaskStatus.partially_completed}:
         raise ValueError("Task must be ready/in_progress/partially_completed")
 
-    available = task.planned_quantity + task.cached_received_quantity - task.cached_issued_quantity
+    task = await _refresh_task_cache(db, task.id)
+    available = task.cached_available_quantity
     if quantity > available:
         raise ValueError("Issue quantity exceeds available quantity")
 
@@ -943,12 +970,19 @@ async def get_task_details(db: AsyncSession, task_id: int) -> dict:
     movements = (
         await db.execute(select(Movement).where(Movement.task_id == task.id).order_by(Movement.created_at, Movement.id))
     ).scalars().all()
+    is_first_stage = bool(step and step.sequence == 1)
+    available = _compute_available_from_balances(
+        planned_quantity=_to_decimal(task.planned_quantity),
+        received_quantity=_to_decimal(task.cached_received_quantity),
+        issued_quantity=_to_decimal(task.cached_issued_quantity),
+        is_first_stage=is_first_stage,
+    )
     return {
         "id": task.id,
         "status": task.status.value,
         "planned_quantity": str(task.planned_quantity),
         "cache": {
-            "available_quantity": str(task.cached_available_quantity),
+            "available_quantity": str(available),
             "issued_quantity": str(task.cached_issued_quantity),
             "in_work_quantity": str(task.cached_in_work_quantity),
             "completed_quantity": str(task.cached_completed_quantity),
@@ -1319,10 +1353,13 @@ async def get_section_board(
         WorkTask,
         SectionPlanLine,
         RouteStep,
+        Product.sku,
     ).join(
         SectionPlanLine, WorkTask.section_plan_line_id == SectionPlanLine.id,
     ).join(
         RouteStep, WorkTask.route_step_id == RouteStep.id,
+    ).join(
+        Product, WorkTask.product_id == Product.id,
     ).where(
         WorkTask.section_id == section_id,
     )
@@ -1339,7 +1376,7 @@ async def get_section_board(
     rows = (await db.execute(query)).all()
 
     tasks_data = []
-    for task, line, step in rows:
+    for task, line, step, product_sku in rows:
         # Find previous route step
         prev_step = await db.scalar(
             select(RouteStep).where(
@@ -1386,9 +1423,17 @@ async def get_section_board(
             if next_step:
                 next_operation_name = next_step.operation_name
 
+        available = _compute_available_from_balances(
+            planned_quantity=_to_decimal(task.planned_quantity),
+            received_quantity=_to_decimal(task.cached_received_quantity),
+            issued_quantity=_to_decimal(task.cached_issued_quantity),
+            is_first_stage=bool(line.sequence == 1),
+        )
+
         tasks_data.append({
             "id": task.id,
             "product_id": task.product_id,
+            "product_sku": product_sku,
             "section_plan_line_id": line.id,
             "plan_position_id": line.plan_position_id,
             "route_step_id": step.id,
@@ -1398,7 +1443,7 @@ async def get_section_board(
             "planned_quantity": str(task.planned_quantity),
             "status": task.status.value,
             "cache": {
-                "available_quantity": str(task.cached_available_quantity),
+                "available_quantity": str(available),
                 "issued_quantity": str(task.cached_issued_quantity),
                 "in_work_quantity": str(task.cached_in_work_quantity),
                 "completed_quantity": str(task.cached_completed_quantity),
@@ -1512,6 +1557,7 @@ async def get_section_incoming_transfers(
     to_task = aliased(WorkTask)
     from_step = aliased(RouteStep)
     to_step = aliased(RouteStep)
+    from_line = aliased(SectionPlanLine)
 
     rows = (
         await db.execute(
@@ -1523,6 +1569,8 @@ async def get_section_incoming_transfers(
                 to_task,
                 from_step,
                 to_step,
+                from_line,
+                Product.sku,
             )
             .join(from_section, from_section.id == Transfer.from_section_id)
             .join(to_section, to_section.id == Transfer.to_section_id)
@@ -1530,6 +1578,8 @@ async def get_section_incoming_transfers(
             .join(to_task, to_task.id == Transfer.to_task_id)
             .join(from_step, from_step.id == from_task.route_step_id)
             .join(to_step, to_step.id == to_task.route_step_id)
+            .join(from_line, from_line.id == from_task.section_plan_line_id)
+            .join(Product, Product.id == from_task.product_id)
             .where(
                 Transfer.to_section_id == section_id,
                 Transfer.status.in_([TransferStatus.sent, TransferStatus.partially_accepted]),
@@ -1539,7 +1589,7 @@ async def get_section_incoming_transfers(
     ).all()
 
     transfers = []
-    for transfer, from_sec, to_sec, src_task, dst_task, src_step, dst_step in rows:
+    for transfer, from_sec, to_sec, src_task, dst_task, src_step, dst_step, src_line, product_sku in rows:
         sent = _to_decimal(transfer.sent_quantity or 0)
         accepted = _to_decimal(transfer.accepted_quantity or 0)
         rejected = _to_decimal(transfer.rejected_quantity or 0)
@@ -1571,6 +1621,10 @@ async def get_section_incoming_transfers(
                 "created_at": transfer.created_at.isoformat() if transfer.created_at else None,
                 "from_task_status": src_task.status.value,
                 "to_task_status": dst_task.status.value,
+                "product_sku": product_sku,
+                "from_line_id": src_line.id,
+                "from_line_sequence": src_line.sequence,
+                "plan_position_id": src_line.plan_position_id,
             }
         )
 
