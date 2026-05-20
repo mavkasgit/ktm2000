@@ -34,6 +34,10 @@ function isTaskVisible(task: SectionBoardTask, mode: TaskBoardViewMode): boolean
   return ["completed", "cancelled"].includes(task.status);
 }
 
+function isFinalStageTask(task: SectionBoardTask): boolean {
+  return !task.next_operation_name;
+}
+
 type SectionTasksBoardProps = {
   tasks: SectionBoardTask[];
   isLoading: boolean;
@@ -91,7 +95,9 @@ export function SectionTasksBoard({
                 </tr>
               </thead>
               <tbody>
-                {filteredTasks.map((task) => (
+                {filteredTasks.map((task) => {
+                  const isFinalStage = isFinalStageTask(task);
+                  return (
                   <tr key={task.id} className="border-b hover:bg-accent/30">
                     <td className="p-2">#{task.sequence}</td>
                     <td className="p-2 font-medium">{task.product_sku}</td>
@@ -124,26 +130,38 @@ export function SectionTasksBoard({
                         <Button size="sm" variant="outline" className="min-h-[32px]" onClick={() => onAction("complete", task)}>
                           <span>Завершить</span>
                         </Button>
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          className="min-h-[32px]"
-                          onClick={() => onAction("send", task)}
-                          title={task.next_task_id ? `Следующий этап: ${task.next_operation_name || "—"}` : "Задача следующего этапа будет создана"}
-                        >
-                          <span>Передать</span>
-                        </Button>
+                        {isFinalStage ? (
+                          <span className="min-h-[32px] inline-flex items-center px-3 text-xs text-muted-foreground border rounded-md">
+                            Финальный этап
+                          </span>
+                        ) : (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="min-h-[32px]"
+                            onClick={() => onAction("send", task)}
+                            title={
+                              task.next_task_id
+                                ? `Следующий этап: ${task.next_operation_name || "—"}`
+                                : "Задача следующего этапа будет создана"
+                            }
+                          >
+                            <span>Передать</span>
+                          </Button>
+                        )}
                       </div>
                     </td>
                   </tr>
-                ))}
+                )})}
               </tbody>
             </table>
           </div>
 
           {/* Mobile cards */}
           <div className="md:hidden space-y-3">
-            {filteredTasks.map((task) => (
+            {filteredTasks.map((task) => {
+              const isFinalStage = isFinalStageTask(task);
+              return (
               <div key={task.id} className="rounded-lg border bg-card p-4 shadow-sm space-y-3">
                 <div className="flex items-center justify-between gap-2">
                   <div className="font-semibold">
@@ -164,11 +182,11 @@ export function SectionTasksBoard({
                   <div><span className="text-muted-foreground">Остаток:</span> {fmtQty(task.cache.remaining_quantity)}</div>
                 </div>
 
-                {task.previous_stage && (
+                {task.previous_stage ? (
                   <div className="text-xs text-muted-foreground border-t pt-2">
                     Пред. этап: годные {fmtQty(task.previous_stage.completed_quantity)}, передано {fmtQty(task.previous_stage.transferred_quantity)}
                   </div>
-                )}
+                ) : null}
 
                 <div className="flex gap-2 pt-1">
                   <Button size="sm" variant="outline" className="flex-1 min-h-[36px]" onClick={() => onAction("issue", task)}>
@@ -177,17 +195,23 @@ export function SectionTasksBoard({
                   <Button size="sm" variant="outline" className="flex-1 min-h-[36px]" onClick={() => onAction("complete", task)}>
                     <span>Завершить</span>
                   </Button>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    className="flex-1 min-h-[36px]"
-                    onClick={() => onAction("send", task)}
-                  >
-                    <span>Передать</span>
-                  </Button>
+                  {isFinalStage ? (
+                    <span className="flex-1 min-h-[36px] inline-flex items-center justify-center text-xs text-muted-foreground border rounded-md px-2">
+                      Финальный этап
+                    </span>
+                  ) : (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="flex-1 min-h-[36px]"
+                      onClick={() => onAction("send", task)}
+                    >
+                      <span>Передать</span>
+                    </Button>
+                  )}
                 </div>
               </div>
-            ))}
+            )})}
           </div>
         </>
       )}

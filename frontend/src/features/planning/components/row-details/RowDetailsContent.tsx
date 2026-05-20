@@ -284,16 +284,18 @@ export function RowDetailsContent({
               </tr>
             </thead>
             <tbody>
-              {data.stages!.map((stage) => {
+              {data.stages!.map((stage, idx) => {
                 const pct = stage.planned_quantity > 0
                   ? ((stage.completed_quantity / stage.planned_quantity) * 100).toFixed(1)
                   : "0.0"
                 const sectionMeta = sectionMetaById.get(stage.section_id)
                 const stageIcon = stage.section_icon || sectionMeta?.icon || null
                 const iconColor = stage.section_icon_color || sectionMeta?.icon_color || "#2563EB"
+                const isFinalStage = idx === data.stages!.length - 1
                 const isCurrentStage = Boolean(data.currentStageSectionId && stage.section_id === data.currentStageSectionId)
                 const isExpanded = Boolean(expandedStages[stage.route_step_id])
-                const stageStatusText = taskStatusLabels[stage.task_status] || stage.task_status
+                const stageStatusBaseText = taskStatusLabels[stage.task_status] || stage.task_status
+                const stageStatusText = isFinalStage ? `${stageStatusBaseText} (финальный этап)` : stageStatusBaseText
                 const remainingQty = Math.max(stage.planned_quantity - stage.accounted_total_qty, 0)
                 return (
                   [
@@ -358,7 +360,13 @@ export function RowDetailsContent({
                       <td className="p-2 align-top">{fmtQty(stage.accounted_reject_qty)}</td>
                       <td className="p-2 align-top">{fmtQty(stage.accounted_total_qty)}</td>
                       <td className="p-2 align-top">{fmtQty(stage.sent_qty)}</td>
-                      <td className="p-2 align-top">{fmtQty(stage.accepted_by_next_qty)}</td>
+                      <td className="p-2 align-top">
+                        {isFinalStage ? (
+                          <span className="text-muted-foreground">Не требуется</span>
+                        ) : (
+                          fmtQty(stage.accepted_by_next_qty)
+                        )}
+                      </td>
                       <td className="p-2 align-top">{fmtQty(remainingQty)}</td>
                       <td className="p-2 align-top">{pct}%</td>
                     </tr>,
@@ -372,6 +380,11 @@ export function RowDetailsContent({
                               stage.flow_events.map((event, idx) => (
                                 <div key={`${stage.route_step_id}-${idx}`} className="flex flex-wrap items-center gap-2">
                                   <span className="font-medium">{event.label}</span>
+                                  {event.manual_route_pass && (
+                                    <Badge variant="secondary" className="text-[10px] px-1.5 py-0">
+                                      ручной пропуск
+                                    </Badge>
+                                  )}
                                   <span>{fmtQty(event.quantity)} шт.</span>
                                   <span className="text-muted-foreground">{fmtEventAt(event.event_at)}</span>
                                   {event.task_id && <span className="text-muted-foreground">task #{event.task_id}</span>}

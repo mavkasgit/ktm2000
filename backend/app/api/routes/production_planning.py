@@ -1,3 +1,7 @@
+from datetime import UTC, datetime
+from decimal import Decimal
+from uuid import uuid4
+
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import func, select
@@ -6,7 +10,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import WRITER_ROLES, get_current_user, require_role
 from app.core.database import get_db
 from app.models.internal_plan import SectionPlanLine
+from app.models.movement import Movement
 from app.models.production_plan import PlanPosition, PlanPositionStatus, ProductionPlan
+from app.models.transfer import Transfer
 from app.models.work_task import WorkTask, WorkTaskStatus
 from app.models.route import ProductionRoute, RouteStep
 from app.models.section import Section
@@ -15,8 +21,10 @@ from app.services.production_planning_rows import get_production_planning_row_de
 from app.services.production_plan_service import record_status_change, restore_plan_position
 from app.services.plan_generation import create_release_batch, release_batch
 from app.services.route_matcher import resolve_position_route
+from app.services.shopfloor_service import complete_task, issue_to_work, transfer_receive, transfer_send
 
 router = APIRouter(prefix="/production-planning", tags=["execution-control"])
+MANUAL_ROUTE_PASS_PREFIX = "manual_route_pass:"
 
 
 class TakeToWorkRequest(BaseModel):
@@ -26,6 +34,27 @@ class TakeToWorkRequest(BaseModel):
 
 class StatusActionIn(BaseModel):
     reason: str | None = None
+
+
+class ManualPassRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    target_route_step_id: int | None = None
+    complete_route: bool = False
+    comment: str | None = None
+    idempotency_key: str | None = None
+
+
+class ManualPassResponse(BaseModel):
+    position_id: int
+    target_route_step_id: int
+    target_task_id: int
+    complete_route: bool = False
+    position_completed: bool = False
+    tasks_created: int
+    movements_created: int
+    transfers_created: int
+    skipped_stages: int
 
 
 class TakeToWorkResult(BaseModel):
@@ -109,12 +138,14 @@ class PlanningRowOut(BaseModel):
     route_error: str | None
     is_released: bool
     has_tasks: bool
+    is_completed: bool
     current_stage_section_id: int | None = None
     current_stage_sequence: int | None = None
     current_stage_operation: str | None = None
     current_stage_section_code: str | None = None
     current_stage_section_name: str | None = None
     current_stage_task_status: str | None = None
+    route_steps: list[dict] | None = None
 
 
 class PlanningRouteSnapshotStepOut(BaseModel):
@@ -150,6 +181,7 @@ class PlanningStageOut(BaseModel):
         event_at: str | None = None
         task_id: int | None = None
         transfer_id: int | None = None
+        manual_route_pass: bool = False
 
     route_step_id: int
     section_id: int
@@ -430,6 +462,248 @@ async def get_production_planning_overview(
     return ProductionPlanningOverview(sections=result_sections)
 
 
+async def _collect_task_rows_for_position(
+    db: AsyncSession,
+    position_id: int,
+) -> list[tuple[WorkTask, SectionPlanLine, RouteStep]]:
+    return (
+        await db.execute(
+            select(WorkTask, SectionPlanLine, RouteStep)
+            .join(SectionPlanLine, WorkTask.section_plan_line_id == SectionPlanLine.id)
+            .join(RouteStep, WorkTask.route_step_id == RouteStep.id)
+            .where(SectionPlanLine.plan_position_id == position_id)
+            .order_by(SectionPlanLine.sequence, WorkTask.id)
+        )
+    ).all()
+
+
+async def _position_movement_source_refs(db: AsyncSession, position_id: int) -> list[str | None]:
+    return [
+        row[0]
+        for row in (
+            await db.execute(
+                select(Movement.source_ref)
+                .join(SectionPlanLine, SectionPlanLine.id == Movement.section_plan_line_id)
+                .where(SectionPlanLine.plan_position_id == position_id)
+            )
+        ).all()
+    ]
+
+
+async def _position_transfer_idempotency_keys(db: AsyncSession, position_id: int) -> list[str | None]:
+    return [
+        row[0]
+        for row in (
+            await db.execute(
+                select(Transfer.idempotency_key)
+                .join(WorkTask, WorkTask.id == Transfer.from_task_id)
+                .join(SectionPlanLine, SectionPlanLine.id == WorkTask.section_plan_line_id)
+                .where(SectionPlanLine.plan_position_id == position_id)
+            )
+        ).all()
+    ]
+
+
+async def _ensure_manual_pass_can_start_or_replay(
+    db: AsyncSession,
+    *,
+    position_id: int,
+    source_ref: str,
+) -> bool:
+    movement_refs = await _position_movement_source_refs(db, position_id)
+    transfer_keys = await _position_transfer_idempotency_keys(db, position_id)
+    if not movement_refs and not transfer_keys:
+        return False
+
+    same_manual_movements = all(ref == source_ref for ref in movement_refs)
+    same_manual_transfers = all(key is not None and key.startswith(f"{source_ref}:") for key in transfer_keys)
+    if same_manual_movements and same_manual_transfers:
+        return True
+
+    raise ValueError("Position already has execution facts; manual route pass is allowed only before execution starts")
+
+
+async def _manual_pass_counts(
+    db: AsyncSession,
+    *,
+    position_id: int,
+    source_ref: str,
+) -> tuple[int, int]:
+    movements_count = await db.scalar(
+        select(func.count(Movement.id))
+        .join(SectionPlanLine, SectionPlanLine.id == Movement.section_plan_line_id)
+        .where(
+            SectionPlanLine.plan_position_id == position_id,
+            Movement.source_ref == source_ref,
+        )
+    )
+    transfer_keys = await _position_transfer_idempotency_keys(db, position_id)
+    transfers_count = sum(1 for key in transfer_keys if key is not None and key.startswith(f"{source_ref}:"))
+    return int(movements_count or 0), transfers_count
+
+
+@router.post(
+    "/rows/{position_id}/manual-pass",
+    response_model=ManualPassResponse,
+    dependencies=[Depends(require_role(list(WRITER_ROLES)))],
+)
+async def manual_pass_to_stage(
+    position_id: int,
+    payload: ManualPassRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> ManualPassResponse:
+    pos = await db.get(PlanPosition, position_id)
+    if pos is None or pos.deleted_at is not None:
+        raise HTTPException(status_code=404, detail="Position not found")
+    if pos.status not in {PlanPositionStatus.approved, PlanPositionStatus.released}:
+        raise HTTPException(status_code=400, detail=f"Position status must be approved or released, got '{pos.status.value}'")
+
+    base_key = (payload.idempotency_key or uuid4().hex).strip()
+    if not base_key:
+        base_key = uuid4().hex
+    source_ref = f"{MANUAL_ROUTE_PASS_PREFIX}{base_key}"
+    is_replay = False
+    try:
+        is_replay = await _ensure_manual_pass_can_start_or_replay(db, position_id=position_id, source_ref=source_ref)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    existing_lines = await db.scalar(
+        select(func.count(SectionPlanLine.id)).where(SectionPlanLine.plan_position_id == position_id)
+    )
+    tasks_created = 0
+    if not existing_lines:
+        if pos.status not in {PlanPositionStatus.approved, PlanPositionStatus.released}:
+            raise HTTPException(status_code=400, detail="Position has no tasks and cannot be released from current status")
+        result = await _process_position_take_to_work(db, position_id)
+        if result.status != "success":
+            raise HTTPException(status_code=400, detail=result.reason or "Unable to create route tasks")
+        tasks_created = int(result.tasks_created or 0)
+
+    task_rows = await _collect_task_rows_for_position(db, position_id)
+    if not task_rows:
+        raise HTTPException(status_code=400, detail="Position has no route tasks")
+
+    complete_route = bool(payload.complete_route)
+    if complete_route:
+        target_index = len(task_rows) - 1
+        target_route_step_id = task_rows[target_index][2].id
+        stages_to_execute = len(task_rows)
+    else:
+        if payload.target_route_step_id is None:
+            raise HTTPException(status_code=400, detail="target_route_step_id is required unless complete_route is true")
+        target_index: int | None = None
+        for idx, (_task, _line, step) in enumerate(task_rows):
+            if step.id == payload.target_route_step_id:
+                target_index = idx
+                break
+        if target_index is None:
+            raise HTTPException(status_code=400, detail="target_route_step_id not found in this position route")
+        target_route_step_id = payload.target_route_step_id
+        stages_to_execute = target_index
+
+    target_task = task_rows[target_index][0]
+    if not is_replay:
+        now = datetime.now(UTC)
+        target_step = task_rows[target_index][2]
+        manual_comment = payload.comment or (
+            "Ручной сквозной проход: полное завершение"
+            if complete_route
+            else f"Ручной сквозной проход до этапа #{target_step.sequence}"
+        )
+
+        for idx in range(stages_to_execute):
+            task, _line, step = task_rows[idx]
+            next_task = task_rows[idx + 1][0] if idx < len(task_rows) - 1 else None
+            quantity = Decimal(str(task.planned_quantity))
+            operation_key = f"{source_ref}:step:{step.sequence}"
+
+            try:
+                await issue_to_work(
+                    db,
+                    task_id=task.id,
+                    quantity=quantity,
+                    actor_id=current_user.id,
+                    comment=manual_comment,
+                    source_ref=source_ref,
+                    idempotency_key=f"{operation_key}:issue",
+                    executor_user_id=current_user.id,
+                    performed_at=now,
+                    accounted_at=now,
+                )
+                await complete_task(
+                    db,
+                    task_id=task.id,
+                    good_quantity=quantity,
+                    defect_quantity=Decimal("0"),
+                    actor_id=current_user.id,
+                    comment=manual_comment,
+                    source_ref=source_ref,
+                    idempotency_key=f"{operation_key}:complete",
+                    executor_user_id=current_user.id,
+                    performed_at=now,
+                    accounted_at=now,
+                )
+                if next_task is not None:
+                    transfer_result = await transfer_send(
+                        db,
+                        from_task_id=task.id,
+                        to_task_id=next_task.id,
+                        quantity=quantity,
+                        actor_id=current_user.id,
+                        comment=manual_comment,
+                        source_ref=source_ref,
+                        idempotency_key=f"{operation_key}:transfer",
+                        executor_user_id=current_user.id,
+                        performed_at=now,
+                        accounted_at=now,
+                    )
+                    await transfer_receive(
+                        db,
+                        transfer_id=int(transfer_result["transfer_id"]),
+                        accepted_quantity=quantity,
+                        rejected_quantity=Decimal("0"),
+                        actor_id=current_user.id,
+                        reason="manual_route_pass",
+                        comment=manual_comment,
+                        source_ref=source_ref,
+                        idempotency_key=f"{operation_key}:receive",
+                        executor_user_id=current_user.id,
+                        performed_at=now,
+                        accounted_at=now,
+                    )
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=f"Manual pass failed at step {step.sequence}: {exc}") from exc
+
+    movements_created, transfers_created = await _manual_pass_counts(db, position_id=position_id, source_ref=source_ref)
+    total_tasks = await db.scalar(
+        select(func.count(WorkTask.id))
+        .join(SectionPlanLine, WorkTask.section_plan_line_id == SectionPlanLine.id)
+        .where(SectionPlanLine.plan_position_id == position_id)
+    )
+    completed_tasks = await db.scalar(
+        select(func.count(WorkTask.id))
+        .join(SectionPlanLine, WorkTask.section_plan_line_id == SectionPlanLine.id)
+        .where(
+            SectionPlanLine.plan_position_id == position_id,
+            WorkTask.status == WorkTaskStatus.completed,
+        )
+    )
+    position_completed = bool(total_tasks and completed_tasks == total_tasks)
+    return ManualPassResponse(
+        position_id=position_id,
+        target_route_step_id=target_route_step_id,
+        target_task_id=target_task.id,
+        complete_route=complete_route,
+        position_completed=position_completed,
+        tasks_created=tasks_created,
+        movements_created=movements_created,
+        transfers_created=transfers_created,
+        skipped_stages=stages_to_execute,
+    )
+
+
 @router.post("/rows/take-to-work", response_model=TakeToWorkResponse, dependencies=[Depends(require_role(list(WRITER_ROLES)))])
 async def take_rows_to_work(
     payload: TakeToWorkRequest,
@@ -545,12 +819,12 @@ async def _process_position_take_to_work(
             reason="Position already has tasks created",
         )
 
-    # Check position is approved
-    if pos.status != PlanPositionStatus.approved:
+    # Check position is approved or released
+    if pos.status not in {PlanPositionStatus.approved, PlanPositionStatus.released}:
         return TakeToWorkResult(
             position_id=position_id,
             status="failed",
-            reason=f"Position status is '{pos.status.value}', must be 'approved'",
+            reason=f"Position status is '{pos.status.value}', must be 'approved' or 'released'",
         )
 
     # Resolve route

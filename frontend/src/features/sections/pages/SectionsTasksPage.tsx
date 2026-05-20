@@ -439,6 +439,13 @@ export function SectionsTasksPage() {
       return;
     }
 
+    if (!task.next_operation_name) {
+      const message = "Финальный этап маршрута: передача на следующий этап не требуется.";
+      toast({ title: "Передача недоступна", description: message, variant: "destructive" });
+      setConflictHint(message);
+      return;
+    }
+
     const transferable = Math.max(0, toInteger(task.cache.completed_quantity) - toInteger(task.cache.transferred_quantity));
     if (Number.isFinite(transferable) && qty > transferable) {
       setConflictHint(`Количество передачи больше доступного (${fmtQty(String(transferable))}).`);

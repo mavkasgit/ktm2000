@@ -328,12 +328,19 @@ export type ProductionPlanningRow = {
   route_error: string | null;
   is_released: boolean;
   has_tasks: boolean;
+  is_completed: boolean;
   current_stage_section_id: number | null;
   current_stage_sequence: number | null;
   current_stage_operation: string | null;
   current_stage_section_code: string | null;
   current_stage_section_name: string | null;
   current_stage_task_status: string | null;
+  route_steps?: {
+    section_id: number;
+    section_icon: string | null;
+    section_icon_color: string | null;
+    sequence: number;
+  }[];
 };
 
 export type ProductionPlanningRouteSnapshotStep = {
@@ -357,6 +364,7 @@ export type ProductionPlanningStage = {
     event_at: string | null;
     task_id: number | null;
     transfer_id: number | null;
+    manual_route_pass?: boolean;
   }[];
   route_step_id: number;
   section_id: number;
@@ -507,10 +515,34 @@ export type TakeToWorkResponse = {
   results: TakeToWorkResult[];
 };
 
+export type ManualPassInput = {
+  target_route_step_id?: number;
+  complete_route?: boolean;
+  comment?: string;
+  idempotency_key?: string;
+};
+
+export type ManualPassResponse = {
+  position_id: number;
+  target_route_step_id: number;
+  target_task_id: number;
+  complete_route: boolean;
+  position_completed: boolean;
+  tasks_created: number;
+  movements_created: number;
+  transfers_created: number;
+  skipped_stages: number;
+};
+
 export async function takeToWork(positionIds: number[]) {
   const { data } = await apiClient.post<TakeToWorkResponse>("/production-planning/rows/take-to-work", {
     position_ids: positionIds,
   });
+  return data;
+}
+
+export async function manualPassToStage(positionId: number, payload: ManualPassInput) {
+  const { data } = await apiClient.post<ManualPassResponse>(`/production-planning/rows/${positionId}/manual-pass`, payload);
   return data;
 }
 

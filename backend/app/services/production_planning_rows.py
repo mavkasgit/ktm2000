@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from decimal import Decimal
 
-from sqlalchemy import func, select
+from sqlalchemy import case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.internal_plan import SectionPlanLine
@@ -13,6 +13,8 @@ from app.models.section import Section
 from app.models.transfer import Transfer
 from app.models.work_task import WorkTask, WorkTaskStatus
 from app.services.route_matcher import ResolvedRouteInfo, resolve_position_route
+
+MANUAL_ROUTE_PASS_PREFIX = "manual_route_pass:"
 
 
 def _to_float(value: Decimal | int | float | None) -> float:
@@ -58,11 +60,15 @@ def _event_at_iso(*, performed_at, accounted_at, created_at) -> str | None:
     return event_at.isoformat() if event_at else None
 
 
+def _is_manual_route_pass(value: str | None) -> bool:
+    return bool(value and value.startswith(MANUAL_ROUTE_PASS_PREFIX))
+
+
 async def list_production_planning_rows(db: AsyncSession) -> list[dict]:
     positions = (
         await db.execute(
             select(PlanPosition)
-            .where(PlanPosition.status.in_([PlanPositionStatus.approved, PlanPositionStatus.released]))
+            .where(PlanPosition.status.in_([PlanPositionStatus.approved, PlanPositionStatus.released, PlanPositionStatus.cancelled]))
             .where(PlanPosition.deleted_at.is_(None))
             .order_by(PlanPosition.production_plan_id.desc(), PlanPosition.source_row_number, PlanPosition.id)
         )
@@ -79,6 +85,62 @@ async def list_production_planning_rows(db: AsyncSession) -> list[dict]:
         )
     ).all()
     has_tasks_set = {row[0] for row in has_tasks_rows}
+
+    # Count total and completed tasks per position to detect fully completed positions
+    task_counts = (
+        await db.execute(
+            select(
+                SectionPlanLine.plan_position_id,
+                func.count(WorkTask.id).label("total_tasks"),
+                func.sum(
+                    case((WorkTask.status == WorkTaskStatus.completed, 1), else_=0)
+                ).label("completed_tasks"),
+            )
+            .join(WorkTask, WorkTask.section_plan_line_id == SectionPlanLine.id)
+            .where(SectionPlanLine.plan_position_id.in_(position_ids))
+            .group_by(SectionPlanLine.plan_position_id)
+        )
+    ).all()
+    completed_set = {
+        row.plan_position_id
+        for row in task_counts
+        if row.total_tasks > 0 and row.completed_tasks == row.total_tasks
+    }
+
+    shipment_completed_rows = (
+        await db.execute(
+            select(SectionPlanLine.plan_position_id)
+            .join(WorkTask, WorkTask.section_plan_line_id == SectionPlanLine.id)
+            .join(Section, Section.id == SectionPlanLine.section_id)
+            .where(
+                SectionPlanLine.plan_position_id.in_(position_ids),
+                WorkTask.status == WorkTaskStatus.completed,
+                Section.code == "SHIPMENT",
+            )
+            .group_by(SectionPlanLine.plan_position_id)
+        )
+    ).all()
+    shipment_completed_set = {row[0] for row in shipment_completed_rows}
+    completed_set |= shipment_completed_set
+
+    # Also treat position as completed when the final route step task is completed.
+    # This covers routes where terminal section is SENT (or any custom final section),
+    # while previous stages may keep non-terminal statuses.
+    final_step_completed_rows = (
+        await db.execute(
+            select(SectionPlanLine.plan_position_id)
+            .join(WorkTask, WorkTask.section_plan_line_id == SectionPlanLine.id)
+            .join(RouteStep, RouteStep.id == SectionPlanLine.route_step_id)
+            .where(
+                SectionPlanLine.plan_position_id.in_(position_ids),
+                WorkTask.status == WorkTaskStatus.completed,
+                RouteStep.is_final.is_(True),
+            )
+            .group_by(SectionPlanLine.plan_position_id)
+        )
+    ).all()
+    final_step_completed_set = {row[0] for row in final_step_completed_rows}
+    completed_set |= final_step_completed_set
 
     # Fetch current stage info: first in_progress or ready task per position
     current_stage_rows = (
@@ -142,27 +204,72 @@ async def list_production_planning_rows(db: AsyncSession) -> list[dict]:
                 "current_stage_section_name": row.section_name,
                 "current_stage_task_status": row.task_status.value if hasattr(row.task_status, "value") else str(row.task_status),
             }
+    fallback_rows_by_position: dict[int, list] = {}
     for row in fallback_rows:
-        if row.plan_position_id not in current_stage_by_position:
-            current_stage_by_position[row.plan_position_id] = {
-                "current_stage_section_id": row.section_id,
-                "current_stage_sequence": row.sequence,
-                "current_stage_operation": row.operation_name,
-                "current_stage_section_code": row.section_code,
-                "current_stage_section_name": row.section_name,
-                "current_stage_task_status": row.task_status.value if hasattr(row.task_status, "value") else str(row.task_status),
+        fallback_rows_by_position.setdefault(row.plan_position_id, []).append(row)
+
+    for position_id, rows in fallback_rows_by_position.items():
+        if position_id in current_stage_by_position:
+            continue
+        chosen_row = None
+        for row in rows:
+            status_value = row.task_status.value if hasattr(row.task_status, "value") else str(row.task_status)
+            if status_value not in {"completed", "cancelled"}:
+                chosen_row = row
+                break
+        if chosen_row is None and rows:
+            # All tasks are terminal for this position; point to the last route step.
+            chosen_row = rows[-1]
+        if chosen_row is not None:
+            current_stage_by_position[position_id] = {
+                "current_stage_section_id": chosen_row.section_id,
+                "current_stage_sequence": chosen_row.sequence,
+                "current_stage_operation": chosen_row.operation_name,
+                "current_stage_section_code": chosen_row.section_code,
+                "current_stage_section_name": chosen_row.section_name,
+                "current_stage_task_status": (
+                    chosen_row.task_status.value
+                    if hasattr(chosen_row.task_status, "value")
+                    else str(chosen_row.task_status)
+                ),
             }
 
     route_cache: dict[int, ResolvedRouteInfo] = {}
+    route_steps_cache: dict[int, list[dict]] = {}
 
     result: list[dict] = []
     for pos in positions:
         if pos.id not in route_cache:
-            route_cache[pos.id] = await resolve_position_route(db, pos)
+            route_info = await resolve_position_route(db, pos)
+            route_cache[pos.id] = route_info
+
+            # Cache route steps for this route
+            if route_info.route_id is not None and route_info.route_id not in route_steps_cache:
+                steps = (
+                    await db.execute(
+                        select(RouteStep, Section)
+                        .join(Section, RouteStep.section_id == Section.id)
+                        .where(RouteStep.route_id == route_info.route_id)
+                        .where(Section.is_active == True)
+                        .order_by(RouteStep.sequence)
+                    )
+                ).all()
+                route_steps_cache[route_info.route_id] = [
+                    {
+                        "section_id": section.id,
+                        "section_icon": section.icon,
+                        "section_icon_color": section.icon_color,
+                        "sequence": step.sequence,
+                    }
+                    for step, section in steps
+                ]
+
         route_info = route_cache[pos.id]
 
         has_tasks = pos.id in has_tasks_set
+        is_completed = pos.id in completed_set
         stage_info = current_stage_by_position.get(pos.id, {})
+        route_steps = route_steps_cache.get(route_info.route_id) if route_info.route_id is not None else None
         result.append(
             {
                 "plan_position_id": pos.id,
@@ -188,12 +295,14 @@ async def list_production_planning_rows(db: AsyncSession) -> list[dict]:
                 "route_error": _resolved_route_error(route_info),
                 "is_released": bool(has_tasks or pos.status == PlanPositionStatus.released),
                 "has_tasks": has_tasks,
+                "is_completed": is_completed,
                 "current_stage_section_id": stage_info.get("current_stage_section_id"),
                 "current_stage_sequence": stage_info.get("current_stage_sequence"),
                 "current_stage_operation": stage_info.get("current_stage_operation"),
                 "current_stage_section_code": stage_info.get("current_stage_section_code"),
                 "current_stage_section_name": stage_info.get("current_stage_section_name"),
                 "current_stage_task_status": stage_info.get("current_stage_task_status"),
+                "route_steps": route_steps,
             }
         )
 
@@ -278,6 +387,7 @@ async def get_production_planning_row_detail(db: AsyncSession, position_id: int)
                     Movement.transfer_id.label("transfer_id"),
                     Movement.movement_type.label("movement_type"),
                     Movement.quantity.label("quantity"),
+                    Movement.source_ref.label("source_ref"),
                     Movement.performed_at.label("performed_at"),
                     Movement.accounted_at.label("accounted_at"),
                     Movement.created_at.label("created_at"),
@@ -293,6 +403,7 @@ async def get_production_planning_row_detail(db: AsyncSession, position_id: int)
             movement_type = row.movement_type
             movement_type_value = movement_type.value if hasattr(movement_type, "value") else str(movement_type)
             quantity = _to_float(row.quantity)
+            is_manual_route_pass = _is_manual_route_pass(row.source_ref)
             event_sort_dt = row.performed_at or row.accounted_at or row.created_at
             event_at_iso = _event_at_iso(
                 performed_at=row.performed_at,
@@ -328,11 +439,12 @@ async def get_production_planning_row_detail(db: AsyncSession, position_id: int)
                 entry["flow_events"].append(
                     {
                         "step": "issue",
-                        "label": "Выдано в работу",
+                        "label": "Ручной пропуск: выдано" if is_manual_route_pass else "Выдано в работу",
                         "quantity": round(quantity, 3),
                         "event_at": event_at_iso,
                         "task_id": row.task_id,
                         "transfer_id": row.transfer_id,
+                        "manual_route_pass": is_manual_route_pass,
                         "_sort_dt": event_sort_dt,
                         "_sort_id": row.movement_id,
                     }
@@ -346,11 +458,12 @@ async def get_production_planning_row_detail(db: AsyncSession, position_id: int)
                 entry["flow_events"].append(
                     {
                         "step": "account",
-                        "label": "Учтено (годное)",
+                        "label": "Ручной пропуск: выполнено" if is_manual_route_pass else "Учтено (годное)",
                         "quantity": round(quantity, 3),
                         "event_at": event_at_iso,
                         "task_id": row.task_id,
                         "transfer_id": row.transfer_id,
+                        "manual_route_pass": is_manual_route_pass,
                         "_sort_dt": event_sort_dt,
                         "_sort_id": row.movement_id,
                     }
@@ -364,11 +477,12 @@ async def get_production_planning_row_detail(db: AsyncSession, position_id: int)
                 entry["flow_events"].append(
                     {
                         "step": "account",
-                        "label": "Учтено (брак)",
+                        "label": "Ручной пропуск: брак" if is_manual_route_pass else "Учтено (брак)",
                         "quantity": round(quantity, 3),
                         "event_at": event_at_iso,
                         "task_id": row.task_id,
                         "transfer_id": row.transfer_id,
+                        "manual_route_pass": is_manual_route_pass,
                         "_sort_dt": event_sort_dt,
                         "_sort_id": row.movement_id,
                     }
@@ -381,11 +495,12 @@ async def get_production_planning_row_detail(db: AsyncSession, position_id: int)
                 entry["flow_events"].append(
                     {
                         "step": "send",
-                        "label": "Передано",
+                        "label": "Ручной пропуск: передано" if is_manual_route_pass else "Передано",
                         "quantity": round(quantity, 3),
                         "event_at": event_at_iso,
                         "task_id": row.task_id,
                         "transfer_id": row.transfer_id,
+                        "manual_route_pass": is_manual_route_pass,
                         "_sort_dt": event_sort_dt,
                         "_sort_id": row.movement_id,
                     }
@@ -398,6 +513,7 @@ async def get_production_planning_row_detail(db: AsyncSession, position_id: int)
                     Transfer.id.label("transfer_id"),
                     Transfer.from_task_id.label("from_task_id"),
                     Transfer.accepted_quantity.label("accepted_quantity"),
+                    Transfer.idempotency_key.label("idempotency_key"),
                     Transfer.accepted_at.label("accepted_at"),
                     Transfer.created_at.label("created_at"),
                 )
@@ -413,6 +529,7 @@ async def get_production_planning_row_detail(db: AsyncSession, position_id: int)
             accepted_qty = _to_float(row.accepted_quantity)
             if accepted_qty <= 0:
                 continue
+            is_manual_route_pass = _is_manual_route_pass(row.idempotency_key)
             event_at = row.accepted_at or row.created_at
             event_at_iso = event_at.isoformat() if event_at else None
             entry = flow_by_step.setdefault(
@@ -442,11 +559,12 @@ async def get_production_planning_row_detail(db: AsyncSession, position_id: int)
             entry["flow_events"].append(
                 {
                     "step": "accept",
-                    "label": "Принято след. этапом",
+                    "label": "Ручной пропуск: принято след. этапом" if is_manual_route_pass else "Принято след. этапом",
                     "quantity": round(accepted_qty, 3),
                     "event_at": event_at_iso,
                     "task_id": row.from_task_id,
                     "transfer_id": row.transfer_id,
+                    "manual_route_pass": is_manual_route_pass,
                     "_sort_dt": event_at or row.created_at,
                     "_sort_id": row.transfer_id,
                 }
@@ -539,6 +657,7 @@ async def get_production_planning_row_detail(db: AsyncSession, position_id: int)
                             "event_at": event["event_at"],
                             "task_id": event["task_id"],
                             "transfer_id": event["transfer_id"],
+                            "manual_route_pass": bool(event.get("manual_route_pass")),
                         }
                         for event in flow_events
                     ],
@@ -572,9 +691,9 @@ async def get_production_planning_row_detail(db: AsyncSession, position_id: int)
             )
         ).first()
         
-        # Fallback: if no in_progress/ready, get the first stage with any task
+        # Fallback: if no in_progress/ready, pick first non-terminal stage; else last stage.
         if not current_stage_row:
-            current_stage_row = (
+            fallback_stage_rows = (
                 await db.execute(
                     select(
                         RouteStep.section_id,
@@ -589,9 +708,15 @@ async def get_production_planning_row_detail(db: AsyncSession, position_id: int)
                     .join(WorkTask, WorkTask.section_plan_line_id == SectionPlanLine.id)
                     .where(SectionPlanLine.plan_position_id == pos.id)
                     .order_by(RouteStep.sequence)
-                    .limit(1)
                 )
-            ).first()
+            ).all()
+            for row in fallback_stage_rows:
+                status_value = row.task_status.value if hasattr(row.task_status, "value") else str(row.task_status)
+                if status_value not in {"completed", "cancelled"}:
+                    current_stage_row = row
+                    break
+            if not current_stage_row and fallback_stage_rows:
+                current_stage_row = fallback_stage_rows[-1]
         
         if current_stage_row:
             current_stage_info = {

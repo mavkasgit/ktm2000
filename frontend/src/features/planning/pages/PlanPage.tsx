@@ -637,6 +637,7 @@ export function PlanPage() {
       await approveProductionPlanPosition(targetPlanId, positionId, { force })
       queryClient.invalidateQueries({ queryKey: ["all-plan-positions"] })
       queryClient.invalidateQueries({ queryKey: ["plan-duplicates-all"] })
+      queryClient.invalidateQueries({ queryKey: ["production-planning-rows"] })
       toast({ title: "Позиция утверждена", variant: "success" })
     } catch (e) {
       const msg = getErrorMessage(e)

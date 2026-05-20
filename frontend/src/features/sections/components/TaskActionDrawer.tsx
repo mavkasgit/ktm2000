@@ -47,6 +47,10 @@ function maxQuantity(type: TaskActionDialogType, task: SectionBoardTask | null):
   return Math.max(0, toNumber(task.cache.completed_quantity) - toNumber(task.cache.transferred_quantity));
 }
 
+function isFinalStageTask(task: SectionBoardTask | null): boolean {
+  return !!task && !task.next_operation_name;
+}
+
 type TaskActionDrawerProps = {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -103,6 +107,7 @@ export function TaskActionDrawer({
   onSubmit,
 }: TaskActionDrawerProps) {
   const maxQty = maxQuantity(type, task);
+  const isFinalSend = type === "send" && isFinalStageTask(task);
   const qtyNum = toNumber(actionQty);
   const outOfRange = qtyNum > 0 && maxQty > 0 && qtyNum > maxQty;
 
@@ -129,7 +134,12 @@ export function TaskActionDrawer({
                 <div>Факт: <span className="font-medium">{fmtQty(task.cache.completed_quantity)}</span></div>
                 <div>К передаче: <span className="font-medium">{fmtQty(String(maxQuantity("send", task)))}</span></div>
               </div>
-              {type === "send" && !task.next_task_id && (
+              {type === "send" && isFinalSend && (
+                <div className="mt-2">
+                  <Badge variant="secondary">Финальный этап: передача на следующий этап не требуется</Badge>
+                </div>
+              )}
+              {type === "send" && !isFinalSend && !task.next_task_id && (
                 <div className="mt-2">
                   <Badge variant="secondary">Задача следующего этапа будет создана автоматически</Badge>
                 </div>
@@ -189,7 +199,7 @@ export function TaskActionDrawer({
             </div>
           )}
 
-          {type === "send" && (
+          {type === "send" && !isFinalSend && (
             <div className="text-xs text-muted-foreground">
               Следующий этап: {task?.next_operation_name || "—"}
             </div>
@@ -241,7 +251,7 @@ export function TaskActionDrawer({
           <Button variant="outline" onClick={() => onOpenChange(false)}>
             Отмена
           </Button>
-          <Button onClick={onSubmit} disabled={pending}>
+          <Button onClick={onSubmit} disabled={pending || isFinalSend}>
             {pending ? "Сохранение..." : "Сохранить"}
           </Button>
         </div>

@@ -4,6 +4,7 @@ import {
   getProductionPlanningRowDetail,
   listPlans,
   listProductionPlanningRows,
+  manualPassToStage,
   takeToWork,
   cancelPositionExecution,
   restorePositionExecution,
@@ -12,12 +13,14 @@ import {
   type ProductionPlanningRow,
   type TakeToWorkResult,
   type StatusHistoryEntry,
+  type ProductionPlanningRowDetail,
 } from "@/shared/api/productionPlans";
 import { listSections } from "@/shared/api/sections";
 import { Badge, Button, Checkbox, Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, Input, Select, SelectContent, SelectItem, SelectTrigger, SelectValue, AlertDialog, AlertDialogContent, AlertDialogHeader, AlertDialogTitle, AlertDialogDescription, AlertDialogFooter, AlertDialogAction, AlertDialogCancel, renderIcon } from "@/shared/ui";
 import { toast } from "@/shared/ui/use-toast";
 import { getErrorMessage } from "@/shared/api/client";
 import { RowDetailsSidePanel, adaptExecutionDetail } from "@/features/planning/components/row-details";
+import { StepIndicator } from "../components/StepIndicator";
 
 const positionStatusLabels: Record<string, string> = {
   draft: "Черновик",
@@ -26,6 +29,7 @@ const positionStatusLabels: Record<string, string> = {
   approved: "Утвержден",
   released: "Запущен",
   cancelled: "Отменен",
+  completed: "Завершён",
 };
 
 const positionStatusColor: Record<string, string> = {
@@ -35,6 +39,7 @@ const positionStatusColor: Record<string, string> = {
   approved: "bg-blue-100 text-blue-700",
   released: "bg-emerald-100 text-emerald-700",
   cancelled: "bg-red-100 text-red-700",
+  completed: "bg-violet-100 text-violet-700",
 };
 
 function formatRouteAssignedAt(value: string | null | undefined): string {
@@ -91,10 +96,11 @@ function calcExecutionPercent(fact: number, plan: number): number {
   return (fact / plan) * 100;
 }
 
-function StatusBadge({ status }: { status: string }) {
+function StatusBadge({ status, isCompleted }: { status: string; isCompleted?: boolean }) {
+  const displayStatus = isCompleted ? "completed" : status;
   return (
-    <span className={`text-xs px-2 py-0.5 rounded-full ${positionStatusColor[status] || "bg-gray-100 text-gray-700"}`}>
-      {positionStatusLabels[status] || status}
+    <span className={`text-xs px-2 py-0.5 rounded-full ${positionStatusColor[displayStatus] || "bg-gray-100 text-gray-700"}`}>
+      {positionStatusLabels[displayStatus] || displayStatus}
     </span>
   );
 }
@@ -159,6 +165,23 @@ export function ExecutionPage() {
   });
   const [launchResults, setLaunchResults] = useState<TakeToWorkResult[]>([]);
   const [resultsDialogOpen, setResultsDialogOpen] = useState(false);
+  const [manualPassDialog, setManualPassDialog] = useState<{
+    open: boolean;
+    positionId: number | null;
+    targetRouteStepId: string;
+    comment: string;
+  }>({
+    open: false,
+    positionId: null,
+    targetRouteStepId: "",
+    comment: "",
+  });
+
+  const { data: manualPassDetail, isLoading: manualPassDetailLoading } = useQuery<ProductionPlanningRowDetail>({
+    queryKey: ["production-planning-row-detail", manualPassDialog.positionId],
+    queryFn: () => getProductionPlanningRowDetail(manualPassDialog.positionId as number),
+    enabled: manualPassDialog.open && manualPassDialog.positionId !== null,
+  });
 
   const takeToWorkMutation = useMutation({
     mutationFn: takeToWork,
@@ -177,6 +200,39 @@ export function ExecutionPage() {
       setSelectedRows(new Set());
     },
     onError: (err) => toast({ title: "Ошибка запуска", description: getErrorMessage(err), variant: "destructive" }),
+  });
+
+  const manualPassMutation = useMutation({
+    mutationFn: ({
+      positionId,
+      targetRouteStepId,
+      comment,
+    }: {
+      positionId: number;
+      targetRouteStepId: string;
+      comment?: string;
+    }) => {
+      const completeRoute = targetRouteStepId === "complete";
+      return manualPassToStage(positionId, {
+        target_route_step_id: completeRoute ? undefined : Number(targetRouteStepId),
+        complete_route: completeRoute,
+        comment,
+        idempotency_key: `manual-pass-${positionId}-${targetRouteStepId}-${Date.now()}`,
+      });
+    },
+    onSuccess: (data) => {
+      toast({
+        title: data.complete_route
+          ? (data.position_completed ? "Задача полностью завершена" : "Сквозной проход выполнен (частично)")
+          : "Сквозной проход выполнен",
+        description: `Пропущено этапов: ${data.skipped_stages}. Создано фактов: ${data.movements_created}.`,
+        variant: data.complete_route && !data.position_completed ? "destructive" : "success",
+      });
+      queryClient.invalidateQueries({ queryKey: ["production-planning-rows"] });
+      queryClient.invalidateQueries({ queryKey: ["production-planning-row-detail", data.position_id] });
+      setManualPassDialog({ open: false, positionId: null, targetRouteStepId: "", comment: "" });
+    },
+    onError: (err) => toast({ title: "Ошибка сквозного прохода", description: getErrorMessage(err), variant: "destructive" }),
   });
 
   const [cancelDialog, setCancelDialog] = useState<{ open: boolean; positionId: number | null; isReleased: boolean }>({
@@ -248,6 +304,7 @@ export function ExecutionPage() {
   }, []);
 
   const getLaunchBlockReason = useCallback((row: ProductionPlanningRow) => {
+    if (row.is_completed) return "Уже завершено";
     if (row.has_tasks || row.is_released) return "Уже запущено";
     if (row.position_status !== "approved") return `Статус "${positionStatusLabels[row.position_status] || row.position_status}"`;
     if (!row.route_id) return row.route_error || "Нет маршрута";
@@ -262,6 +319,19 @@ export function ExecutionPage() {
     }
     setLaunchDialog({ open: true, mode: "single", positionIds: [row.plan_position_id] });
   }, [getLaunchBlockReason]);
+
+  const handleManualPass = useCallback((row: ProductionPlanningRow) => {
+    if (!row.route_id || !["approved", "released"].includes(row.position_status)) {
+      toast({ title: "Невозможно выполнить сквозной проход", description: "Нужна утвержденная или запущенная строка с маршрутом", variant: "destructive" });
+      return;
+    }
+    setManualPassDialog({
+      open: true,
+      positionId: row.plan_position_id,
+      targetRouteStepId: "",
+      comment: "",
+    });
+  }, []);
 
   const handleBulkLaunch = useCallback(() => {
     const ids = Array.from(selectedRows);
@@ -285,6 +355,15 @@ export function ExecutionPage() {
     takeToWorkMutation.mutate(launchDialog.positionIds);
     setLaunchDialog({ open: false, mode: "single", positionIds: [] });
   }, [launchDialog.positionIds, takeToWorkMutation]);
+
+  const confirmManualPass = useCallback(() => {
+    if (!manualPassDialog.positionId || !manualPassDialog.targetRouteStepId) return;
+    manualPassMutation.mutate({
+      positionId: manualPassDialog.positionId,
+      targetRouteStepId: manualPassDialog.targetRouteStepId,
+      comment: manualPassDialog.comment.trim() || undefined,
+    });
+  }, [manualPassDialog.comment, manualPassDialog.positionId, manualPassDialog.targetRouteStepId, manualPassMutation]);
 
   const handleCancel = useCallback((row: ProductionPlanningRow) => {
     setCancelDialog({ open: true, positionId: row.plan_position_id, isReleased: row.is_released });
@@ -326,7 +405,10 @@ export function ExecutionPage() {
   const filteredRows = useMemo(() => {
     const list = rows || [];
     return list.filter((row) => {
-      if (statusFilter !== "all" && row.position_status !== statusFilter) {
+      if (statusFilter === "completed" && !row.is_completed) {
+        return false;
+      }
+      if (statusFilter !== "all" && statusFilter !== "completed" && row.position_status !== statusFilter) {
         return false;
       }
       if (skuFilter.trim()) {
@@ -353,8 +435,9 @@ export function ExecutionPage() {
   }, [rows, statusFilter, skuFilter, rowFilter, planFilter, planNameById]);
 
   const totalRows = rows?.length || 0;
-  const releasedRows = rows?.filter((r) => r.is_released).length || 0;
+  const releasedRows = rows?.filter((r) => r.is_released && !r.is_completed).length || 0;
   const rowsWithTasks = rows?.filter((r) => r.has_tasks).length || 0;
+  const completedRows = rows?.filter((r) => r.is_completed).length || 0;
 
   const openDetail = (positionId: number) => {
     setSelectedPositionId(positionId);
@@ -376,8 +459,8 @@ export function ExecutionPage() {
           <h1 className="page-title">Контроль выполнения</h1>
           <div className="flex gap-3 text-sm">
             <span className="px-3 py-1 rounded-full bg-muted">Строк всего: {totalRows}</span>
-            <span className="px-3 py-1 rounded-full bg-emerald-100 text-emerald-700">Запущено: {releasedRows}</span>
-            <span className="px-3 py-1 rounded-full bg-blue-100 text-blue-700">С задачами: {rowsWithTasks}</span>
+            <span className="px-3 py-1 rounded-full bg-emerald-100 text-emerald-700">В работе: {releasedRows}</span>
+            <span className="px-3 py-1 rounded-full bg-violet-100 text-violet-700">Завершено: {completedRows}</span>
           </div>
         </div>
         {selectedRows.size > 0 && (
@@ -399,7 +482,8 @@ export function ExecutionPage() {
             <SelectContent>
               <SelectItem value="all">Все статусы</SelectItem>
               <SelectItem value="approved">Утвержден</SelectItem>
-              <SelectItem value="released">Запущен</SelectItem>
+              <SelectItem value="released">В работе</SelectItem>
+              <SelectItem value="completed">Завершён</SelectItem>
               <SelectItem value="cancelled">Отменен</SelectItem>
             </SelectContent>
           </Select>
@@ -425,6 +509,7 @@ export function ExecutionPage() {
             <tbody>
               {filteredRows.map((row) => {
                 const canLaunch = row.position_status === "approved" && !row.has_tasks && !row.is_released && !!row.route_id;
+                const canManualPass = !!row.route_id && ["approved", "released"].includes(row.position_status) && !row.is_completed;
                 const blockReason = getLaunchBlockReason(row);
                 return (
                 <tr
@@ -473,44 +558,18 @@ export function ExecutionPage() {
                     <RowRouteCell row={row} />
                   </td>
                   <td className="p-2">
-                    <StatusBadge status={row.position_status} />
+                    <StatusBadge status={row.position_status} isCompleted={row.is_completed} />
                   </td>
                   <td className="p-2">
-                    {row.has_tasks ? (
-                      row.current_stage_section_name ? (
-                        <div className="space-y-0.5">
-                          <div className="flex items-center gap-1.5 text-xs font-medium">
-                            {sectionMetaById.get(row.current_stage_section_id as number)?.icon && (
-                              <span
-                                className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded"
-                                style={{
-                                  backgroundColor: `${sectionMetaById.get(row.current_stage_section_id as number)?.icon_color || "#2563EB"}20`,
-                                  color: sectionMetaById.get(row.current_stage_section_id as number)?.icon_color || "#2563EB",
-                                }}
-                              >
-                                {renderIcon(
-                                  sectionMetaById.get(row.current_stage_section_id as number)!.icon!,
-                                  "h-3 w-3",
-                                )}
-                              </span>
-                            )}
-                            <span>{row.current_stage_section_name}</span>
-                          </div>
-                          <div className="text-xs text-muted-foreground">
-                            Этап #{row.current_stage_sequence} · {row.current_stage_operation}
-                          </div>
-                          {row.current_stage_task_status && (
-                            <Badge
-                              variant={row.current_stage_task_status === "in_progress" ? "default" : "secondary"}
-                              className="text-[10px] px-1.5 py-0"
-                            >
-                              {row.current_stage_task_status === "in_progress" ? "В работе" : "Готов"}
-                            </Badge>
-                          )}
-                        </div>
-                      ) : (
-                        <Badge variant="secondary">Задачи созданы</Badge>
-                      )
+                    {row.route_steps && row.route_steps.length > 0 ? (
+                      <StepIndicator
+                        steps={row.route_steps}
+                        currentStageSequence={row.current_stage_sequence}
+                        currentStageTaskStatus={row.current_stage_task_status}
+                        sectionMetaById={sectionMetaById}
+                      />
+                    ) : row.has_tasks ? (
+                      <Badge variant="secondary">Задачи созданы</Badge>
                     ) : (
                       <Badge variant="secondary">Нет</Badge>
                     )}
@@ -532,6 +591,15 @@ export function ExecutionPage() {
                         >
                           {blockReason || "—"}
                         </span>
+                      )}
+                      {canManualPass && (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => handleManualPass(row)}
+                        >
+                          Сквозной проход
+                        </Button>
                       )}
                       {row.position_status === "approved" && (
                         <Button
@@ -631,6 +699,79 @@ export function ExecutionPage() {
         </DialogContent>
       </Dialog>
 
+      <Dialog
+        open={manualPassDialog.open}
+        onOpenChange={(open) => {
+          if (!open) setManualPassDialog({ open: false, positionId: null, targetRouteStepId: "", comment: "" });
+        }}
+      >
+        <DialogContent className="sm:max-w-[560px]">
+          <DialogHeader>
+            <DialogTitle>Сквозной проход</DialogTitle>
+            <DialogDescription>
+              Система создаст задачи маршрута при необходимости и оформит предыдущие этапы как ручной пропуск. Выбранный этап останется готовым к работе.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            {manualPassDetailLoading ? (
+              <p className="text-sm text-muted-foreground">Загрузка маршрута...</p>
+            ) : (
+              <>
+                <div className="space-y-1.5">
+                  <div className="text-sm font-medium">Остановиться на этапе</div>
+                  <Select
+                    value={manualPassDialog.targetRouteStepId}
+                    onValueChange={(value) => setManualPassDialog((prev) => ({ ...prev, targetRouteStepId: value }))}
+                  >
+                    <SelectTrigger>
+                      <SelectValue placeholder="Выберите этап маршрута" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {(manualPassDetail?.stages || []).map((stage) => (
+                        <SelectItem key={stage.route_step_id} value={String(stage.route_step_id)}>
+                          #{stage.sequence} · {stage.section_name} · {stage.operation_name || "Операция"}
+                        </SelectItem>
+                      ))}
+                      {(manualPassDetail?.stages?.length || 0) > 0 && (
+                        <SelectItem value="complete">
+                          Полное завершение задачи
+                        </SelectItem>
+                      )}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-1.5">
+                  <div className="text-sm font-medium">Комментарий</div>
+                  <Input
+                    placeholder="Необязательно"
+                    value={manualPassDialog.comment}
+                    onChange={(e) => setManualPassDialog((prev) => ({ ...prev, comment: e.target.value }))}
+                  />
+                </div>
+                {manualPassDialog.targetRouteStepId && manualPassDetail && (
+                  <div className="rounded border bg-muted/40 p-3 text-sm text-muted-foreground">
+                    {manualPassDialog.targetRouteStepId === "complete"
+                      ? "Будут вручную закрыты все этапы маршрута. Все созданные факты получат текущее время выполнения и учёта."
+                      : "Будут вручную закрыты этапы до выбранного. Все созданные факты получат текущее время выполнения и учёта."}
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+          <div className="flex justify-end gap-2 pt-2">
+            <Button variant="outline" onClick={() => setManualPassDialog({ open: false, positionId: null, targetRouteStepId: "", comment: "" })}>
+              Отмена
+            </Button>
+            <Button
+              onClick={confirmManualPass}
+              disabled={manualPassMutation.isPending || manualPassDetailLoading || !manualPassDialog.targetRouteStepId}
+            >
+              {manualPassMutation.isPending ? "Выполнение..." : "Выполнить"}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
       <AlertDialog
         open={cancelDialog.open}
         onOpenChange={(open) => {
@@ -642,8 +783,8 @@ export function ExecutionPage() {
             <AlertDialogTitle>{cancelDialog.isReleased ? "Остановить выполнение?" : "Отменить позицию?"}</AlertDialogTitle>
             <AlertDialogDescription>
               {cancelDialog.isReleased
-                ? "Позиция уже запущена. Остановка выполнения переведёт её в статус «Отменен». Это действие нельзя отменить."
-                : "Отмена переведёт позицию в статус «Отменен». Это действие нельзя отменить."}
+                ? "Позиция уже запущена. Остановка выполнения переведёт её в статус «Отменен»."
+                : "Отмена переведёт позицию в статус «Отменен»."}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
