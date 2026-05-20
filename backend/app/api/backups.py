@@ -177,11 +177,31 @@ def _run_postgres_cmd_local(cmd: List[str], db_name: str | None = None) -> subpr
 def _run_postgres_cmd(cmd: List[str], db_name: str | None = None) -> subprocess.CompletedProcess:
     """Выполняет pg_dump/pg_restore/psql.
     Внутри Docker-контейнера использует локальные CLI с TCP-подключением.
-    На хост-машине использует docker exec в контейнер БД.
+    На хост-машине сначала пробует локальные CLI, если недоступны — fallback через Docker exec.
     """
     if _running_inside_docker():
         return _run_postgres_cmd_local(cmd, db_name)
-    return _run_postgres_cmd_docker(cmd, db_name)
+
+    connection_args, env = _get_db_connection(db_name)
+    full_cmd = [cmd[0], *connection_args, *cmd[1:]]
+    try:
+        return subprocess.run(
+            full_cmd,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            check=False,
+            timeout=300,
+            env=env,
+        )
+    except FileNotFoundError:
+        return _run_postgres_cmd_docker(cmd, db_name)
+    except subprocess.TimeoutExpired:
+        raise HTTPException(
+            status_code=status.HTTP_504_GATEWAY_TIMEOUT,
+            detail=f"Команда {cmd[0]} превысила время ожидания (5 минут).",
+        )
 
 
 def _get_all_tables(db_name: str | None = None) -> List[str]:
