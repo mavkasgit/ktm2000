@@ -1,0 +1,60 @@
+from __future__ import annotations
+
+from datetime import UTC, datetime
+from decimal import Decimal
+
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.models.defect import Defect
+from app.models.route import RouteStep
+from app.models.transfer import Transfer
+from app.models.work_task import WorkTask
+
+def _to_decimal(value: Decimal | int | float | str) -> Decimal:
+    return Decimal(str(value))
+
+def _ensure_positive(value: Decimal, field_name: str) -> None:
+    if value <= 0:
+        raise ValueError(f"{field_name} must be > 0")
+
+async def _get_task(db: AsyncSession, task_id: int) -> WorkTask:
+    task = await db.get(WorkTask, task_id)
+    if task is None:
+        raise ValueError("Task not found")
+    return task
+
+async def _get_transfer(db: AsyncSession, transfer_id: int) -> Transfer:
+    transfer = await db.get(Transfer, transfer_id)
+    if transfer is None:
+        raise ValueError("Transfer not found")
+    return transfer
+
+async def _get_defect(db: AsyncSession, defect_id: int) -> Defect:
+    defect = await db.get(Defect, defect_id)
+    if defect is None:
+        raise ValueError("Defect not found")
+    return defect
+
+async def _check_idempotency(
+    db: AsyncSession,
+    *,
+    idempotency_key: str | None,
+    entity_type: type,
+) -> object | None:
+    """Return existing entity if idempotency_key was already used, else None."""
+    if not idempotency_key:
+        return None
+    return await db.scalar(
+        select(entity_type).where(entity_type.idempotency_key == idempotency_key)
+    )
+
+async def _get_route_step(db: AsyncSession, route_step_id: int) -> RouteStep:
+    step = await db.get(RouteStep, route_step_id)
+    if step is None:
+        raise ValueError("Route step not found")
+    return step
+
+def _transfer_no() -> str:
+    return f"TR-{datetime.now(UTC).strftime('%Y%m%d%H%M%S%f')}"
+
