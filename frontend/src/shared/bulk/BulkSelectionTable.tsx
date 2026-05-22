@@ -104,8 +104,11 @@ export function BulkSelectionTable({
                   {onRemoveRow && (
                     <button
                       type="button"
-                      className="text-muted-foreground hover:text-destructive"
-                      onClick={() => onRemoveRow(row.id)}
+                      className="text-muted-foreground hover:text-destructive transition-colors"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onRemoveRow(row.id);
+                      }}
                     >
                       <X className="h-3.5 w-3.5" />
                     </button>

@@ -1,17 +1,15 @@
 import { useEffect, useMemo, useRef, useState } from "react"
-import { Download, Eye, FileSpreadsheet, Plus, Upload, Route, Trash2, AlertTriangle, ListChecks } from "lucide-react"
+import { FileSpreadsheet, Plus, Upload, ListChecks } from "lucide-react"
 import { ImportWizard } from "../ImportWizard"
-import { Button, Badge, Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, Combobox, Select, SelectContent, SelectItem, SelectTrigger, SelectValue, AlertDialog, AlertDialogContent, AlertDialogHeader, AlertDialogTitle, AlertDialogDescription, AlertDialogFooter, AlertDialogAction, AlertDialogCancel, SortableHeader, VirtualizedTableBody, FiltersPanel, type FiltersPanelField } from "@/shared/ui"
+import { Button, Select, SelectContent, SelectItem, SelectTrigger, SelectValue, AlertDialog, AlertDialogContent, AlertDialogHeader, AlertDialogTitle, AlertDialogDescription, AlertDialogFooter, AlertDialogAction, AlertDialogCancel, SortableFilterHeader, VirtualizedTableBody, FiltersPanel, type FiltersPanelField } from "@/shared/ui"
 import { buildActiveFilterSummary } from "@/shared/ui/buildActiveFilterSummary"
 import { useTableQueryEngine, SortConfig, ColumnSortDef } from "@/shared/hooks/useTableQueryEngine"
 import { nextMultiSortConfigs } from "@/shared/lib/multiSort"
-import { cn } from "@/shared/utils/cn"
 import { toast } from "@/shared/ui"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
-import { planFiles, allPositions, allPlanFiles, allPlanPositions, PlanFileInfo, PlanPositionOut, listPlans, PlanSummary, batchAssignRouteGlobal, deleteImportBatch, routeCheck, approveProductionPlanPosition, getPlanDuplicates } from "@/shared/api/productionPlans"
-import { listRoutes, ProductionRoute } from "@/shared/api/routes"
-import { listImportTemplates, ImportTemplate } from "@/shared/api/importTemplates"
-import { getImportFileDownloadUrl } from "@/shared/api/imports"
+import { allPlanFiles, allPlanPositions, PlanPositionOut, listPlans, batchAssignRouteGlobal, deleteImportBatch, approveProductionPlanPosition, getPlanDuplicates } from "@/shared/api/productionPlans"
+import { listRoutes } from "@/shared/api/routes"
+import { listImportTemplates } from "@/shared/api/importTemplates"
 import { apiClient, getErrorMessage } from "@/shared/api/client"
 import { RowDetailsSidePanel, adaptPlanPositionOut } from "../components/row-details"
 import {
@@ -25,580 +23,13 @@ import {
   type BulkSelectionRow,
   type BulkSelectionAction,
 } from "@/shared/bulk"
-
-const statusLabels: Record<string, string> = {
-  parsed: "Распознан",
-  failed: "Ошибка",
-  applied: "Применён",
-  cancelled: "Отменён",
-  draft: "Черновик",
-  valid: "Валиден",
-  invalid: "Ошибка",
-  approved: "Утверждён",
-  released: "Запущен",
-}
-
-const statusVariant: Record<string, string> = {
-  parsed: "secondary",
-  failed: "destructive",
-  applied: "default",
-  cancelled: "destructive",
-  draft: "secondary",
-  valid: "default",
-  invalid: "destructive",
-  approved: "default",
-  released: "default",
-}
-
-const routeErrorLabels: Record<string, string> = {
-  route_signature_incomplete: "Сигнатура маршрута неполная",
-  route_not_found: "Маршрут не найден",
-  no_route_candidate: "Нет маршрута под правила выбора",
-  route_rule_conflict: "Конфликт правил выбора маршрута",
-  route_contains_excluded_step: "Маршрут содержит исключённый участок",
-  selection_rules: "Маршрут выбран правилами",
-  active_route_not_found: "Активный маршрут не найден",
-  active_route_has_no_steps: "Маршрут без этапов",
-  route_sequence_invalid: "Неверная последовательность маршрута",
-  route_contains_inactive_section: "Маршрут содержит неактивный участок",
-  route_not_matching_import_signature: "Маршрут не совпадает с импортом",
-  route_missing_required_step: "Отсутствует обязательный этап",
-  route_missing_pack_additional_operation: "Отсутствует доп. упаковочная операция",
-  route_primary_operation_mismatch: "Основная операция маршрута не совпадает",
-  manual_route_not_found: "Ручной маршрут не найден",
-  manual_route_inactive: "Ручной маршрут неактивен",
-  auto_fallback: "Маршрут скорректирован автоматически — проверьте",
-}
-
-const errorLabels: Record<string, string> = {
-  product_not_found: "Изделие не найдено",
-  product_inactive: "Изделие неактивно",
-  active_techcard_not_found: "Нет активной техкарты",
-  active_techcard_has_no_lines: "Техкарта пустая",
-  active_route_not_found: "Нет активного маршрута",
-  active_route_has_no_steps: "Маршрут без этапов",
-  route_sequence_invalid: "Неверная последовательность маршрута",
-  route_contains_inactive_section: "Неактивный участок в маршруте",
-  duplicate_sku_due_date: "Дубликат строки Excel: такая же строка уже есть",
-  route_primary_operation_mismatch: "Основная операция маршрута не совпадает",
-  route_not_matching_import_signature: "Маршрут не совпадает с ожидаемым",
-  route_missing_required_step: "Отсутствует обязательный этап в маршруте",
-  route_missing_pack_additional_operation: "Отсутствует доп. упаковочная операция",
-  quantity_must_be_positive: "Количество должно быть > 0",
-  route_signature_incomplete: "Сигнатура маршрута неполная",
-  route_not_found: "Маршрут не найден",
-  no_route_candidate: "Нет маршрута под правила выбора",
-  route_rule_conflict: "Конфликт правил выбора маршрута",
-  route_contains_excluded_step: "Маршрут содержит исключённый участок",
-  selection_rules: "Маршрут выбран правилами",
-}
-
-const warningLabels: Record<string, string> = {
-  paired_profile_product_unmapped: "Парный профиль не сопоставлен",
-  techcard_pair_not_resolved: "Не выбран парный профиль техкарты",
-  product_name_missing: "Отсутствует наименование",
-  period_not_detected: "не определен",
-  route_auto_fallback: "Маршрут скорректирован автоматически — проверьте корректность",
-}
-
-type PlanSortField = "id" | "rowNum" | "sku" | "name" | "qty" | "route" | "status" | "validation" | "errors" | "warnings"
-
-interface PlanFiltersState {
-  status: "all" | "draft" | "valid" | "invalid"
-  validation_status: "all" | "valid" | "invalid"
-  has_route: "all" | "yes" | "no"
-  has_errors: "all" | "yes" | "no"
-  has_warnings: "all" | "yes" | "no"
-  has_duplicates: "all" | "yes" | "no"
-}
-
-function translateLabel(code: string, labels: Record<string, string>): string {
-  const [base] = String(code).split(":")
-  return labels[base] ?? code
-}
-
-function formatRouteAssignedAt(value: string | null | undefined): string {
-  if (!value) return "дата неизвестна"
-  const dt = new Date(value)
-  if (Number.isNaN(dt.getTime())) return "дата неизвестна"
-  return dt.toLocaleString("ru-RU", {
-    day: "2-digit",
-    month: "2-digit",
-    year: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-  })
-}
-
-function routeMetaLabel(pos: PlanPositionOut): string {
-  const assignedAt = formatRouteAssignedAt(pos.route_assigned_at)
-  if (pos.route_origin === "manual_confirmed" || pos.route_source === "manual") {
-    return `вручную • ${assignedAt}`
-  }
-  if (pos.route_origin === "auto" || pos.route_source === "auto") {
-    const quality = pos.route_match_quality === "exact" ? "полное" : "скорректирован"
-    return `автомаппинг (${quality}) • ${assignedAt}`
-  }
-  if (pos.route_origin === "legacy" || pos.route_source === "legacy") {
-    return "legacy • дата неизвестна"
-  }
-  return ""
-}
-
-type DuplicateConflict = {
-  fingerprint: string
-  conflictIds: number[]
-}
-
-function isRiskyForApprove(pos: PlanPositionOut, duplicateConflict?: DuplicateConflict): boolean {
-  const hasRouteProblems =
-    pos.route_match_quality === "corrected" ||
-    pos.route_origin === "legacy" ||
-    pos.route_error !== null ||
-    pos.route_match_reason !== null ||
-    (pos.warnings && pos.warnings.length > 0) ||
-    (pos.errors && pos.errors.length > 0)
-  return hasRouteProblems || Boolean(duplicateConflict && duplicateConflict.conflictIds.length > 0)
-}
-
-function FileRow({ file, activePlan, onDelete }: { file: PlanFileInfo; activePlan: PlanSummary; onDelete: (batchId: number) => void }) {
-  const [previewOpen, setPreviewOpen] = useState(false)
-  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
-  const downloadUrl = getImportFileDownloadUrl(file.file_id)
-
-  const { data: previewData } = useQuery({
-    queryKey: ["batch-preview", file.batch_id],
-    queryFn: () =>
-      apiClient.get(`/production-plans/${activePlan!.id}/batches/${file.batch_id}/preview`).then(r => r.data),
-    enabled: previewOpen && !!activePlan,
-  })
-
-  const previewItems = ((previewData as any)?.items as Record<string, any>[] | undefined) ?? []
-
-  return (
-    <>
-      <tr className="border-b">
-        <td className="p-3">
-          <div className="flex items-center gap-2">
-            <FileSpreadsheet className="h-4 w-4 text-muted-foreground" />
-            <span className="font-medium text-sm">{file.filename}</span>
-          </div>
-        </td>
-        <td className="p-3 text-sm text-muted-foreground">
-          {new Date(file.created_at).toLocaleString("ru-RU", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" })}
-        </td>
-        <td className="p-3 text-sm text-muted-foreground">{file.sheet_name}</td>
-        <td className="p-3 text-sm">{file.total_rows}</td>
-        <td className="p-3 text-sm">
-          {(file.size_bytes / 1024).toFixed(1)} KB
-        </td>
-        <td className="p-3">
-          <Badge variant={statusVariant[file.status] as any || "secondary"}>
-            {statusLabels[file.status] || file.status}
-          </Badge>
-        </td>
-        <td className="p-3">
-          <div className="flex gap-1">
-            <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={() => setPreviewOpen(true)}>
-              <Eye className="h-3 w-3 mr-1" /> Просмотр
-            </Button>
-            <Button variant="ghost" size="sm" className="h-7 text-xs" asChild>
-              <a href={downloadUrl} download={file.filename}>
-                <Download className="h-3 w-3 mr-1" /> Скачать
-              </a>
-            </Button>
-            <Button variant="ghost" size="sm" className="h-7 text-xs text-red-600 hover:text-red-700" onClick={() => setDeleteDialogOpen(true)}>
-              <Trash2 className="h-3 w-3 mr-1" /> Удалить
-            </Button>
-          </div>
-        </td>
-      </tr>
-
-      <Dialog open={previewOpen} onOpenChange={setPreviewOpen}>
-        <DialogContent className="max-w-[90vw] max-h-[80vh] overflow-hidden flex flex-col">
-          <DialogHeader>
-            <DialogTitle>Файл: {file.filename}</DialogTitle>
-            <DialogDescription>Предпросмотр содержимого загруженного файла</DialogDescription>
-          </DialogHeader>
-          {previewItems.length === 0 && (
-            <p className="text-sm text-muted-foreground">Предпросмотр недоступен</p>
-          )}
-          {previewItems.length > 0 && (
-            <div className="flex-1 overflow-auto border rounded-lg">
-              <table className="w-full text-sm">
-                <thead className="border-b bg-muted/50">
-                  <tr>
-                    <th className="text-left p-2">Артикул</th>
-                    <th className="text-left p-2">Наименование</th>
-                    <th className="text-left p-2">Кол-во</th>
-                    <th className="text-left p-2">Статус</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {previewItems.slice(0, 100).map((row, i) => (
-                    <tr key={i} className="border-b">
-                      <td className="p-2">{row.source_sku ?? row.sku ?? "—"}</td>
-                      <td className="p-2">{row.source_name ?? row.product_name ?? "—"}</td>
-                      <td className="p-2">{row.quantity ?? "—"}</td>
-                      <td className="p-2">{row.status ?? "—"}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-              {previewItems.length > 100 && (
-                <p className="text-xs text-muted-foreground p-2">Показано 100 из {previewItems.length} строк</p>
-              )}
-            </div>
-          )}
-        </DialogContent>
-      </Dialog>
-
-      <AlertDialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Удалить импорт?</AlertDialogTitle>
-            <AlertDialogDescription>
-              Файл «{file.filename}» и все связанные позиции будут удалены. Это действие нельзя отменить.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Отмена</AlertDialogCancel>
-            <AlertDialogAction onClick={() => onDelete(file.batch_id)}>Удалить</AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
-    </>
-  )
-}
-
-function PositionRow({ pos, onApprove, onDelete, selected, routes, onAssignRoute, onOpenDetail, duplicateConflict, onJumpToPosition, onSelect }: {
-  pos: PlanPositionOut;
-  onApprove: (id: number, planId?: number, force?: boolean) => Promise<void>;
-  onDelete: (id: number, planId?: number) => void;
-  selected?: boolean;
-  routes?: ProductionRoute[];
-  onAssignRoute?: (positionId: number, routeId: number | null) => void;
-  onOpenDetail?: () => void;
-  duplicateConflict?: DuplicateConflict;
-  onJumpToPosition?: (id: number) => void;
-  onSelect?: (id: number) => void;
-}) {
-  const hasErrors = pos.errors && pos.errors.length > 0
-  const hasWarnings = pos.warnings && pos.warnings.length > 0
-  const qty = Number(pos.quantity || 0)
-  const qtyStr = Number.isInteger(qty) ? String(qty) : qty.toFixed(3).replace(/\.?0+$/, '')
-  const translatedErrors = hasErrors ? pos.errors.map((e) => translateLabel(e, errorLabels)) : []
-  const translatedWarnings = hasWarnings ? pos.warnings.map((w) => translateLabel(w, warningLabels)) : []
-  const rowNum = (() => {
-    const numbers = Array.isArray(pos.source_row_numbers)
-      ? pos.source_row_numbers.filter((v): v is number => typeof v === "number")
-      : []
-    if (numbers.length > 0) return numbers.join(",")
-    return pos.source_row_number ?? "—"
-  })()
-  const routeSourceLabel = routeMetaLabel(pos)
-  const routeError = pos.route_error ? translateLabel(pos.route_error, routeErrorLabels) : null
-  const hasDuplicateConflict = Boolean(duplicateConflict && duplicateConflict.conflictIds.length > 0)
-  const canApprove =
-    (pos.status === 'draft' || pos.status === 'valid') &&
-    pos.validation_status === 'valid' &&
-    pos.route_id !== null
-
-  const [approveDialogOpen, setApproveDialogOpen] = useState(false)
-  const [approving, setApproving] = useState(false)
-
-  // Route-check runs eagerly for all positions with an assigned route
-  const { data: routeCheckData, isLoading: routeCheckLoading, error: routeCheckError } = useQuery({
-    queryKey: ["route-check", pos.production_plan_id, pos.id],
-    queryFn: () => routeCheck(pos.production_plan_id!, pos.id),
-    enabled: pos.route_id !== null && pos.validation_status === "valid",
-    staleTime: 60_000,
-  })
-
-  const routeCheckRisky = routeCheckData !== undefined && (
-    !routeCheckData.match || (routeCheckData.issues && routeCheckData.issues.length > 0)
-  )
-
-  const handleApproveClick = (e: React.MouseEvent) => {
-    e.stopPropagation()
-    if (isRiskyForApprove(pos, duplicateConflict) || routeCheckRisky) {
-      setApproveDialogOpen(true)
-    } else {
-      onApprove(pos.id, pos.production_plan_id)
-    }
-  }
-
-  const handleConfirmApprove = async () => {
-    setApproving(true)
-    try {
-      await onApprove(pos.id, pos.production_plan_id, true)
-    } finally {
-      setApproving(false)
-      setApproveDialogOpen(false)
-    }
-  }
-
-  const handleDeleteClick = (e: React.MouseEvent) => {
-    e.stopPropagation()
-    onDelete(pos.id, pos.production_plan_id)
-  }
-
-  const detailedReasons = useMemo(() => {
-    const sections: { title: string; items: string[] }[] = []
-
-    // Section 1: Route mismatch issues from route-check
-    const routeIssues = routeCheckData?.issues ?? []
-    if (routeIssues.length > 0) {
-      sections.push({
-        title: "Несовпадения маршрута",
-        items: routeIssues.map((issue) => translateLabel(issue, routeErrorLabels)),
-      })
-    }
-
-    // Section 2: Position warnings and errors
-    const positionMessages: string[] = []
-    if (translatedWarnings.length > 0) positionMessages.push(...translatedWarnings)
-    if (translatedErrors.length > 0) positionMessages.push(...translatedErrors)
-    if (positionMessages.length > 0) {
-      sections.push({
-        title: "Предупреждения позиции",
-        items: positionMessages,
-      })
-    }
-
-    // Section 3: Route-check issues (when route-check found problems not reflected in position errors)
-    if (routeCheckData && !routeCheckData.match && routeIssues.length > 0) {
-      sections.push({
-        title: "Проверка маршрута",
-        items: routeIssues.map((issue) => translateLabel(issue, routeErrorLabels)),
-      })
-    }
-
-    // Section 4: Route risk factors
-    const riskFactors: string[] = []
-    if (pos.route_match_quality === "corrected") {
-      const qualityDetail = pos.route_match_reason ? translateLabel(pos.route_match_reason, routeErrorLabels) : null
-      const parts = ["Маршрут скорректирован"]
-      if (pos.route_name) parts.push(`маршрут: ${pos.route_name}`)
-      if (qualityDetail) parts.push(`причина: ${qualityDetail}`)
-      if (pos.route_origin === "manual_confirmed") parts.push("подтверждён вручную")
-      riskFactors.push(parts.join(" • "))
-    } else if (pos.route_match_reason) {
-      const reasonDetail = translateLabel(pos.route_match_reason, routeErrorLabels)
-      riskFactors.push(`Причина сопоставления: ${reasonDetail}`)
-    }
-    if (pos.route_origin === "legacy") {
-      const parts = ["Использован legacy-маршрут"]
-      if (pos.route_name) parts.push(`маршрут: ${pos.route_name}`)
-      riskFactors.push(parts.join(" • "))
-    }
-    if (pos.route_error) {
-      riskFactors.push(translateLabel(pos.route_error, routeErrorLabels))
-    }
-    if (riskFactors.length > 0) {
-      sections.push({
-        title: "Факторы риска подтверждения",
-        items: riskFactors,
-      })
-    }
-
-    return sections
-  }, [routeCheckData, translatedWarnings, translatedErrors, pos])
-
-  return (
-    <>
-    <tr
-      id={`plan-position-${pos.id}`}
-      className={`border-b ${hasErrors || hasDuplicateConflict ? "bg-red-50" : hasWarnings ? "bg-amber-50" : ""} ${selected ? "bg-blue-100 ring-1 ring-blue-300" : ""} cursor-pointer hover:bg-accent hover:ring-1 hover:ring-ring/20 transition-colors`}
-      onClick={(e) => {
-        if (onSelect) {
-          e.stopPropagation()
-          onSelect(pos.id)
-        } else {
-          onOpenDetail?.()
-        }
-      }}
-    >
-      <td className="p-2 text-sm">
-        <span className="text-muted-foreground">#{pos.id}</span>
-      </td>
-      <td className="p-2 text-sm font-medium">{rowNum}</td>
-      <td className="p-2 text-sm">{pos.source_sku}</td>
-      <td className="p-2 text-sm">{pos.source_name ?? "—"}</td>
-      <td className="p-2 text-sm">{qtyStr}</td>
-      <td className="p-2 text-sm min-w-[200px]">
-        {routes && onAssignRoute ? (
-          <div onClick={(e) => e.stopPropagation()}>
-          <Combobox
-            options={[{ label: "— Снять маршрут —", value: "__clear__" }, ...routes.map(r => ({ label: r.name, value: String(r.id) }))]}
-            value={pos.route_id ? String(pos.route_id) : undefined}
-            onValueChange={(v) => onAssignRoute(pos.id, v === "__clear__" ? null : Number(v))}
-            placeholder={routeError || "Не назначен"}
-            emptyText="Маршрут не найден"
-            className={cn(
-              "rounded-md border border-dashed border-input px-2 py-1.5 hover:bg-accent/50 hover:border-primary/50 transition-colors cursor-pointer group",
-              pos.route_id ? "border-solid border-blue-200 bg-blue-50/50" : "bg-muted/20",
-            )}
-            triggerContent={
-              <span className="inline-flex items-center gap-1.5 w-full">
-                <Route className={cn("h-3.5 w-3.5 shrink-0", pos.route_id ? "text-blue-600" : "text-muted-foreground group-hover:text-primary")} />
-                {pos.route_name ? (
-                  <span className="text-blue-700">
-                    {pos.route_name}
-                    {routeSourceLabel && <span className="text-xs text-muted-foreground ml-1">({routeSourceLabel})</span>}
-                  </span>
-                ) : (
-                  <span className={cn("text-xs", routeError ? "text-red-600" : "text-muted-foreground group-hover:text-foreground")}>
-                    {routeError || "Нажмите для выбора"}
-                  </span>
-                )}
-              </span>
-            }
-          />
-          </div>
-        ) : pos.route_name ? (
-          <span className="inline-flex items-center gap-1 text-blue-700" title={`Маршрут #${pos.route_id} ${routeSourceLabel}`}>
-            <Route className="h-3 w-3" />
-            {pos.route_name}
-            {routeSourceLabel && <span className="text-xs text-muted-foreground">({routeSourceLabel})</span>}
-          </span>
-        ) : (
-          <span className={routeError ? "text-red-600 text-xs" : "text-muted-foreground text-xs"} title={routeError || undefined}>
-            {routeError || "Не назначен"}
-          </span>
-        )}
-      </td>
-      <td className="p-2 text-xs text-red-600 max-w-[200px]">
-        {hasErrors || hasDuplicateConflict ? (
-          <div className="space-y-1">
-            {hasDuplicateConflict && (
-              <div className="text-red-700">
-                <span className="block">Дубликат Excel-строки</span>
-                <div className="flex flex-wrap gap-1 mt-1">
-                  {duplicateConflict?.conflictIds.map((id) => (
-                    <button
-                      key={id}
-                      type="button"
-                      className="underline hover:no-underline"
-                      onClick={(e) => {
-                        e.stopPropagation()
-                        onJumpToPosition?.(id)
-                      }}
-                    >
-                      #{id}
-                    </button>
-                  ))}
-                </div>
-              </div>
-            )}
-            {hasErrors && (
-              <span className="truncate block" title={translatedErrors.join("\n")}>
-                {translatedErrors.join(", ")}
-              </span>
-            )}
-          </div>
-        ) : "—"}
-      </td>
-      <td className="p-2 text-xs text-amber-600 max-w-[150px]">
-        {hasWarnings ? (
-          <span className="truncate block" title={translatedWarnings.join("\n")}>
-            {translatedWarnings.join(", ")}
-          </span>
-        ) : "—"}
-      </td>
-      <td className="p-2">
-        <div className="flex gap-1">
-          {canApprove && (
-            <>
-              <Button variant="ghost" size="sm" className="h-6 text-xs text-green-700 hover:text-green-800" onClick={handleApproveClick} disabled={approving}>
-                Утвердить
-              </Button>
-              <Button variant="ghost" size="sm" className="h-6 text-xs text-red-600 hover:text-red-700" onClick={handleDeleteClick} disabled={approving}>
-                Удалить
-              </Button>
-            </>
-          )}
-          {!canApprove && (
-            <Button variant="ghost" size="sm" className="h-6 text-xs text-red-600 hover:text-red-700" onClick={handleDeleteClick}>
-              Удалить
-            </Button>
-          )}
-        </div>
-      </td>
-    </tr>
-
-    <AlertDialog open={approveDialogOpen} onOpenChange={setApproveDialogOpen}>
-      <AlertDialogContent>
-        <AlertDialogHeader>
-          <AlertDialogTitle className="flex items-center gap-2">
-            <AlertTriangle className="h-5 w-5 text-amber-500" />
-            Позиция требует внимания
-          </AlertDialogTitle>
-          <AlertDialogDescription className="text-left">
-            Эта позиция может содержать некорректные данные. Утверждение потребует последующей проверки.
-          </AlertDialogDescription>
-        </AlertDialogHeader>
-
-        {routeCheckLoading && (
-          <div className="text-sm text-muted-foreground">Загрузка диагностики...</div>
-        )}
-
-        {routeCheckError && !routeCheckLoading && (
-          <div className="rounded-md border bg-amber-50 p-3 mb-3">
-            <p className="text-sm font-medium mb-1">Диагностика недоступна</p>
-            <p className="text-xs text-muted-foreground">Не удалось получить детали проверки маршрута, но вы можете продолжить утверждение.</p>
-          </div>
-        )}
-
-        {!routeCheckLoading && detailedReasons.length > 0 && (
-          <div className="space-y-3">
-            {detailedReasons.map((section, idx) => (
-              <div key={idx} className="rounded-md border bg-amber-50 p-3">
-                <p className="text-sm font-medium mb-2">{section.title}</p>
-                <ul className="text-sm text-muted-foreground space-y-1">
-                  {section.items.map((item, i) => (
-                    <li key={i} className="flex items-start gap-2">
-                      <span className="mt-1 h-1.5 w-1.5 rounded-full bg-amber-500 shrink-0" />
-                      {item}
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            ))}
-          </div>
-        )}
-
-        {hasDuplicateConflict && (
-          <div className="rounded-md border bg-red-50 p-3">
-            <p className="text-sm font-medium mb-2">
-              Дубликат Excel-строки
-            </p>
-            <div className="flex flex-wrap gap-2">
-              {duplicateConflict?.conflictIds.map((id) => (
-                <button
-                  key={id}
-                  type="button"
-                  className="text-sm underline text-red-700 hover:no-underline"
-                  onClick={() => onJumpToPosition?.(id)}
-                >
-                  Перейти к позиции #{id}
-                </button>
-              ))}
-            </div>
-          </div>
-        )}
-
-        <AlertDialogFooter>
-          <AlertDialogCancel disabled={approving}>Отмена</AlertDialogCancel>
-          <AlertDialogAction onClick={handleConfirmApprove} disabled={approving}>
-            {approving ? "Утверждение..." : "Утвердить всё равно"}
-          </AlertDialogAction>
-        </AlertDialogFooter>
-      </AlertDialogContent>
-    </AlertDialog>
-    </>
-  )
-}
+import { FileRow } from "../components/PlanFileRow"
+import { PositionRow } from "../components/PlanPositionRow"
+import {
+  DuplicateConflict,
+  PlanSortField,
+  PlanFiltersState,
+} from "../lib/plan-labels"
 
 export function PlanPage() {
   const [importOpen, setImportOpen] = useState(false)
@@ -642,6 +73,9 @@ export function PlanPage() {
   })
   const [searchQuery, setSearchQuery] = useState("")
   const [sortConfigs, setSortConfigs] = useState<SortConfig<PlanSortField>[]>([])
+  const [columnFilters, setColumnFilters] = useState<
+    Partial<Record<PlanSortField, Set<string>>>
+  >({})
   const [templateImportOpen, setTemplateImportOpen] = useState<number | null>(null)
 
   const { data: duplicateGroupsByPlan } = useQuery({
@@ -714,13 +148,14 @@ export function PlanPage() {
   }
 
   const toggleSelect = (id: number) => {
-    const wasSelected = bulkSelection.isSelected(id)
+    setSelectionOrder(prev => {
+      const idx = prev.indexOf(id)
+      if (idx === -1) {
+        return [id, ...prev]
+      }
+      return prev.filter(x => x !== id)
+    })
     bulkSelection.selectOne(id)
-    if (!wasSelected) {
-      setSelectionOrder(prev => [id, ...prev])
-    } else {
-      setSelectionOrder(prev => prev.filter(x => x !== id))
-    }
   }
 
   const selectAll = () => {
@@ -736,6 +171,7 @@ export function PlanPage() {
   const resetAllFilters = () => {
     setSearchQuery("")
     setSortConfigs([])
+    setColumnFilters({})
     setFilters({
       status: "all",
       validation_status: "all",
@@ -833,6 +269,7 @@ export function PlanPage() {
     })
     bulkSelection.clear()
     setSelectionOrder([])
+    setBulkMode(false)
   }
 
   const requestBulkDelete = () => {
@@ -884,6 +321,7 @@ export function PlanPage() {
     })
     bulkSelection.clear()
     setSelectionOrder([])
+    setBulkMode(false)
   }
 
   const { data: files, isLoading: filesLoading } = useQuery({
@@ -914,15 +352,37 @@ export function PlanPage() {
   }, [duplicateGroupsByPlan])
 
   // Build filter predicate from PlanFiltersState
+  const getPlanCellValue = (row: PlanPositionOut, field: PlanSortField): string => {
+    switch (field) {
+      case "id": return String(row.id)
+      case "rowNum": {
+        const numbers = Array.isArray(row.source_row_numbers)
+          ? row.source_row_numbers.filter((v): v is number => typeof v === "number")
+          : []
+        return String(numbers.length > 0 ? Math.min(...numbers) : (row.source_row_number ?? 0))
+      }
+      case "sku": return row.source_sku
+      case "name": return row.source_name ?? ""
+      case "qty": return String(Number(row.quantity || 0))
+      case "route": return row.route_name ?? "Не назначен"
+      case "errors": return String(row.errors?.length ?? 0)
+      case "warnings": return String(row.warnings?.length ?? 0)
+      default: return ""
+    }
+  }
+
   const filterPredicate = useMemo(() => {
-    if (
-      filters.status === "all" &&
-      filters.validation_status === "all" &&
-      filters.has_route === "all" &&
-      filters.has_errors === "all" &&
-      filters.has_warnings === "all" &&
-      filters.has_duplicates === "all"
-    ) return null
+    const hasColumnFilters = Object.values(columnFilters).some(s => s && s.size > 0)
+    const hasTopFilters =
+      filters.status !== "all" ||
+      filters.validation_status !== "all" ||
+      filters.has_route !== "all" ||
+      filters.has_errors !== "all" ||
+      filters.has_warnings !== "all" ||
+      filters.has_duplicates !== "all" ||
+      searchQuery.trim() !== ""
+
+    if (!hasColumnFilters && !hasTopFilters) return null
 
     return (row: PlanPositionOut) => {
       if (filters.status !== "all" && row.status !== filters.status) return false
@@ -935,9 +395,16 @@ export function PlanPage() {
       if (filters.has_warnings === "no" && row.warnings && row.warnings.length > 0) return false
       if (filters.has_duplicates === "yes" && !duplicateConflictsByPosition.has(row.id)) return false
       if (filters.has_duplicates === "no" && duplicateConflictsByPosition.has(row.id)) return false
+      // Column filters (AND across columns, OR within column)
+      for (const [field, selected] of Object.entries(columnFilters)) {
+        if (selected && selected.size > 0) {
+          const cellValue = getPlanCellValue(row, field as PlanSortField)
+          if (!selected.has(cellValue)) return false
+        }
+      }
       return true
     }
-  }, [filters, duplicateConflictsByPosition])
+  }, [filters, duplicateConflictsByPosition, columnFilters, searchQuery])
 
   // Sort definitions for PlanPage columns
   const sortDefs: ColumnSortDef<PlanPositionOut, PlanSortField>[] = useMemo(() => [
@@ -975,6 +442,29 @@ export function PlanPage() {
     () => buildActiveFilterSummary(filters, searchQuery, sortConfigs.length),
     [filters, searchQuery, sortConfigs.length],
   )
+
+  const handleColumnFilterChange = (field: PlanSortField, selected: Set<string>) => {
+    setColumnFilters((prev) => ({ ...prev, [field]: selected }))
+  }
+
+  const uniqueValuesByField = useMemo(() => {
+    const allRows = positions ?? []
+    return {
+      id: [...new Set(allRows.map((p) => String(p.id)))],
+      rowNum: [...new Set(allRows.map((p) => {
+        const numbers = Array.isArray(p.source_row_numbers)
+          ? p.source_row_numbers.filter((v): v is number => typeof v === "number")
+          : []
+        return String(numbers.length > 0 ? Math.min(...numbers) : (p.source_row_number ?? 0))
+      }))],
+      sku: [...new Set(allRows.map((p) => p.source_sku))],
+      name: [...new Set(allRows.map((p) => p.source_name ?? "").filter(Boolean))],
+      qty: [...new Set(allRows.map((p) => String(Number(p.quantity || 0))))],
+      route: [...new Set(allRows.map((p) => p.route_name ?? "Не назначен"))],
+      errors: [...new Set(allRows.map((p) => String(p.errors?.length ?? 0)))],
+      warnings: [...new Set(allRows.map((p) => String(p.warnings?.length ?? 0)))],
+    }
+  }, [positions])
   const filterFields = useMemo<FiltersPanelField[]>(
     () => [
       {
@@ -982,84 +472,11 @@ export function PlanPage() {
         key: "search",
         value: searchQuery,
         onChange: setSearchQuery,
-        placeholder: "Поиск: ID, строка, артикул, наименование...",
-        layoutSpan: "md:col-span-2 xl:col-span-2",
-      },
-      {
-        kind: "select",
-        key: "status",
-        value: filters.status,
-        onChange: (value) => setFilters((prev) => ({ ...prev, status: value as PlanFiltersState["status"] })),
-        placeholder: "Статус позиции",
-        options: [
-          { value: "all", label: "Статус: все" },
-          { value: "draft", label: "Статус: черновик" },
-          { value: "valid", label: "Статус: валиден" },
-          { value: "invalid", label: "Статус: ошибка" },
-        ],
-      },
-      {
-        kind: "select",
-        key: "validation_status",
-        value: filters.validation_status,
-        onChange: (value) => setFilters((prev) => ({ ...prev, validation_status: value as PlanFiltersState["validation_status"] })),
-        placeholder: "Валидация",
-        options: [
-          { value: "all", label: "Валидация: все" },
-          { value: "valid", label: "Валидация: пройдена" },
-          { value: "invalid", label: "Валидация: ошибка" },
-        ],
-      },
-      {
-        kind: "select",
-        key: "has_route",
-        value: filters.has_route,
-        onChange: (value) => setFilters((prev) => ({ ...prev, has_route: value as PlanFiltersState["has_route"] })),
-        placeholder: "Маршрут",
-        options: [
-          { value: "all", label: "Маршрут: все" },
-          { value: "yes", label: "Маршрут: назначен" },
-          { value: "no", label: "Маршрут: не назначен" },
-        ],
-      },
-      {
-        kind: "select",
-        key: "has_errors",
-        value: filters.has_errors,
-        onChange: (value) => setFilters((prev) => ({ ...prev, has_errors: value as PlanFiltersState["has_errors"] })),
-        placeholder: "Ошибки",
-        options: [
-          { value: "all", label: "Ошибки: все" },
-          { value: "yes", label: "Ошибки: есть" },
-          { value: "no", label: "Ошибки: нет" },
-        ],
-      },
-      {
-        kind: "select",
-        key: "has_warnings",
-        value: filters.has_warnings,
-        onChange: (value) => setFilters((prev) => ({ ...prev, has_warnings: value as PlanFiltersState["has_warnings"] })),
-        placeholder: "Предупреждения",
-        options: [
-          { value: "all", label: "Предупр.: все" },
-          { value: "yes", label: "Предупр.: есть" },
-          { value: "no", label: "Предупр.: нет" },
-        ],
-      },
-      {
-        kind: "select",
-        key: "has_duplicates",
-        value: filters.has_duplicates,
-        onChange: (value) => setFilters((prev) => ({ ...prev, has_duplicates: value as PlanFiltersState["has_duplicates"] })),
-        placeholder: "Дубликаты",
-        options: [
-          { value: "all", label: "Дубликаты: все" },
-          { value: "yes", label: "Дубликаты: есть" },
-          { value: "no", label: "Дубликаты: нет" },
-        ],
+        placeholder: "Поиск",
+        layoutSpan: "min-w-[250px]",
       },
     ],
-    [filters, searchQuery],
+    [searchQuery],
   )
 
   // Sort toggle handler: click cycles none -> asc -> desc -> removed
@@ -1291,6 +708,7 @@ export function PlanPage() {
 
             <FiltersPanel
               className="mb-3"
+              compact
               fields={filterFields}
               onReset={resetAllFilters}
               hasActiveFilters={activeFilterSummary.count > 0}
@@ -1335,7 +753,10 @@ export function PlanPage() {
               ]}
               actions={bulkActions}
               onClose={exitBulkMode}
-              onRemoveRow={(id) => bulkSelection.selectOne(Number(id), false)}
+              onRemoveRow={(id) => {
+                bulkSelection.selectOne(Number(id), false);
+                setSelectionOrder((prev) => prev.filter((x) => x !== Number(id)));
+              }}
               progress={bulkProgress}
               lastSummary={bulkSummary}
               className="shrink-0"
@@ -1348,35 +769,100 @@ export function PlanPage() {
               <>
               <div
                 ref={tableScrollRef}
-                tabIndex={-1}
-                onMouseDown={() => tableScrollRef.current?.focus()}
-                className="rounded-lg border overflow-auto focus:outline-none"
+                className="rounded-lg border overflow-auto"
                 style={{ maxHeight: bulkMode ? undefined : '70vh' }}
               >
                 <table className="w-full border-separate border-spacing-0">
                   <thead className="[&_th]:sticky [&_th]:top-0 [&_th]:z-20 [&_th]:bg-background [&_th]:border-b">
                     <tr>
-                      <th className="text-left p-2" aria-sort={getAriaSort("id")}>
-                        <SortableHeader field="id" currentSorts={sortConfigs} onSortChange={handleSortChange}>Id</SortableHeader>
+                      <th className="text-left p-2">
+                        <SortableFilterHeader
+                          field="id"
+                          label="Id"
+                          currentSorts={sortConfigs}
+                          onSortChange={handleSortChange}
+                          values={uniqueValuesByField.id}
+                          selectedValues={columnFilters.id ?? new Set()}
+                          onFilterChange={handleColumnFilterChange}
+                        />
                       </th>
-                      <th className="text-left p-2" aria-sort={getAriaSort("rowNum")}>
-                        <SortableHeader field="rowNum" currentSorts={sortConfigs} onSortChange={handleSortChange}>Строка</SortableHeader>
+                      <th className="text-left p-2">
+                        <SortableFilterHeader
+                          field="rowNum"
+                          label="Строка"
+                          currentSorts={sortConfigs}
+                          onSortChange={handleSortChange}
+                          values={uniqueValuesByField.rowNum}
+                          selectedValues={columnFilters.rowNum ?? new Set()}
+                          onFilterChange={handleColumnFilterChange}
+                        />
                       </th>
-                      <th className="text-left p-2" aria-sort={getAriaSort("sku")}>
-                        <SortableHeader field="sku" currentSorts={sortConfigs} onSortChange={handleSortChange}>Артикул</SortableHeader>
+                      <th className="text-left p-2">
+                        <SortableFilterHeader
+                          field="sku"
+                          label="Артикул"
+                          currentSorts={sortConfigs}
+                          onSortChange={handleSortChange}
+                          values={uniqueValuesByField.sku}
+                          selectedValues={columnFilters.sku ?? new Set()}
+                          onFilterChange={handleColumnFilterChange}
+                        />
                       </th>
-                      <th className="text-left p-2" aria-sort={getAriaSort("name")}>
-                        <SortableHeader field="name" currentSorts={sortConfigs} onSortChange={handleSortChange}>Наименование</SortableHeader>
+                      <th className="text-left p-2">
+                        <SortableFilterHeader
+                          field="qty"
+                          label="Кол-во"
+                          currentSorts={sortConfigs}
+                          onSortChange={handleSortChange}
+                          values={uniqueValuesByField.qty}
+                          selectedValues={columnFilters.qty ?? new Set()}
+                          onFilterChange={handleColumnFilterChange}
+                          valueLabel={(v) => v}
+                        />
                       </th>
-                      <th className="text-left p-2" aria-sort={getAriaSort("qty")}>
-                        <SortableHeader field="qty" currentSorts={sortConfigs} onSortChange={handleSortChange}>Кол-во</SortableHeader>
+                      <th className="text-left p-2">
+                        <SortableFilterHeader
+                          field="name"
+                          label="Наименование"
+                          currentSorts={sortConfigs}
+                          onSortChange={handleSortChange}
+                          values={uniqueValuesByField.name}
+                          selectedValues={columnFilters.name ?? new Set()}
+                          onFilterChange={handleColumnFilterChange}
+                        />
                       </th>
-                      <th className="text-left p-2 min-w-[200px]">Маршрут</th>
-                      <th className="text-left p-2" aria-sort={getAriaSort("errors")}>
-                        <SortableHeader field="errors" currentSorts={sortConfigs} onSortChange={handleSortChange}>Ошибки</SortableHeader>
+                      <th className="text-left p-2 min-w-[200px]">
+                        <SortableFilterHeader
+                          field="route"
+                          label="Маршрут"
+                          currentSorts={sortConfigs}
+                          onSortChange={handleSortChange}
+                          values={uniqueValuesByField.route}
+                          selectedValues={columnFilters.route ?? new Set()}
+                          onFilterChange={handleColumnFilterChange}
+                        />
                       </th>
-                      <th className="text-left p-2" aria-sort={getAriaSort("warnings")}>
-                        <SortableHeader field="warnings" currentSorts={sortConfigs} onSortChange={handleSortChange}>Предупр.</SortableHeader>
+                      <th className="text-left p-2">
+                        <SortableFilterHeader
+                          field="errors"
+                          label="Ошибки"
+                          currentSorts={sortConfigs}
+                          onSortChange={handleSortChange}
+                          values={uniqueValuesByField.errors}
+                          selectedValues={columnFilters.errors ?? new Set()}
+                          onFilterChange={handleColumnFilterChange}
+                        />
+                      </th>
+                      <th className="text-left p-2">
+                        <SortableFilterHeader
+                          field="warnings"
+                          label="Предупр."
+                          currentSorts={sortConfigs}
+                          onSortChange={handleSortChange}
+                          values={uniqueValuesByField.warnings}
+                          selectedValues={columnFilters.warnings ?? new Set()}
+                          onFilterChange={handleColumnFilterChange}
+                        />
                       </th>
                       <th className="text-left p-2 text-xs font-medium text-muted-foreground">Действия</th>
                     </tr>

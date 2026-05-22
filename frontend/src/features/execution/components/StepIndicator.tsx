@@ -53,18 +53,23 @@ export function StepIndicator({
     );
   }
 
-  // Show 5 steps: 2 before, current, 2 after
-  const currentIndex = currentStageSequence ? currentStageSequence - 1 : 0;
-  const startIndex = Math.max(0, currentIndex - 2);
-  const endIndex = Math.min(steps.length, currentIndex + 3);
-  
+  // Show up to 5 real steps around the current stage. Ellipses are intentionally
+  // omitted because they consume the same space as useful step dots.
+  const currentIndex = Math.max(
+    0,
+    steps.findIndex((step) => step.sequence === currentStageSequence),
+  );
+  const windowSize = 5;
+  const startIndex = Math.min(
+    Math.max(0, currentIndex - 2),
+    Math.max(0, steps.length - windowSize),
+  );
+  const endIndex = Math.min(steps.length, startIndex + windowSize);
+
   const visibleSteps = steps.slice(startIndex, endIndex);
-  const showStartEllipsis = startIndex > 0;
-  const showEndEllipsis = endIndex < steps.length;
 
   return (
     <div className="flex items-center gap-1.5">
-      {showStartEllipsis && <EllipsisDots />}
       {visibleSteps.map((step) => {
         const { isCompleted, isCurrent, isInProgress, isReady } = getStepStatus(
           step.sequence,
@@ -88,7 +93,6 @@ export function StepIndicator({
           />
         );
       })}
-      {showEndEllipsis && <EllipsisDots />}
     </div>
   );
 }
@@ -177,14 +181,6 @@ function StepDot({
         </div>
         <div className="w-2 h-2 bg-gray-900 transform rotate-45 -translate-y-1 mx-auto"></div>
       </div>
-    </div>
-  );
-}
-
-function EllipsisDots() {
-  return (
-    <div className="flex items-center justify-center w-7 h-7">
-      <span className="text-xs text-muted-foreground font-medium">···</span>
     </div>
   );
 }

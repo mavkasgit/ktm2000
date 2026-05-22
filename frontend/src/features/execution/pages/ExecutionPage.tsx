@@ -17,15 +17,11 @@ import {
   type ProductionPlanningRowDetail,
 } from "@/shared/api/productionPlans";
 import { listSections } from "@/shared/api/sections";
-import { Badge, Button, Checkbox, Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, Input, Select, SelectContent, SelectItem, SelectTrigger, SelectValue, AlertDialog, AlertDialogContent, AlertDialogHeader, AlertDialogTitle, AlertDialogDescription, AlertDialogFooter, AlertDialogAction, AlertDialogCancel, renderIcon, FiltersPanel, VirtualizedTableBody, SortableHeader, type FiltersPanelField } from "@/shared/ui";
 import { useTableQueryEngine, SortConfig, ColumnSortDef } from "@/shared/hooks/useTableQueryEngine";
 import { nextMultiSortConfigs } from "@/shared/lib/multiSort";
 import { toast } from "@/shared/ui/use-toast";
 import { getErrorMessage } from "@/shared/api/client";
-import { RowDetailsSidePanel, adaptExecutionDetail } from "@/features/planning/components/row-details";
-import { StepIndicator } from "../components/StepIndicator";
 import {
-  BulkPowerBar,
   BulkResultsDialog,
   runBulkAction,
   summarizeBulkResults,
@@ -35,114 +31,39 @@ import {
   type BulkActionResultItem,
   type BulkActionSummary,
   type BulkRunnerProgress,
+  type BulkSelectionRow,
+  type BulkSelectionAction,
 } from "@/shared/bulk";
-
-const positionStatusLabels: Record<string, string> = {
-  draft: "Черновик",
-  invalid: "Ошибка",
-  valid: "Валиден",
-  approved: "Утвержден",
-  released: "Запущен",
-  cancelled: "Отменен",
-  completed: "Завершён",
-};
-
-const positionStatusColor: Record<string, string> = {
-  draft: "bg-gray-100 text-gray-700",
-  invalid: "bg-red-100 text-red-700",
-  valid: "bg-green-100 text-green-700",
-  approved: "bg-blue-100 text-blue-700",
-  released: "bg-emerald-100 text-emerald-700",
-  cancelled: "bg-red-100 text-red-700",
-  completed: "bg-violet-100 text-violet-700",
-};
-
-function formatRouteAssignedAt(value: string | null | undefined): string {
-  if (!value) return "дата неизвестна";
-  const dt = new Date(value);
-  if (Number.isNaN(dt.getTime())) return "дата неизвестна";
-  return dt.toLocaleString("ru-RU", {
-    day: "2-digit",
-    month: "2-digit",
-    year: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
-}
-
-type RouteMetaLike = Pick<
-  ProductionPlanningRow,
-  "route_source" | "route_origin" | "route_match_quality" | "route_assigned_at"
->;
-
-function routeMetaLabel(route: RouteMetaLike): string {
-  const assignedAt = formatRouteAssignedAt(route.route_assigned_at);
-  if (route.route_origin === "manual_confirmed" || route.route_source === "manual") {
-    return `вручную • ${assignedAt}`;
-  }
-  if (route.route_origin === "auto" || route.route_source === "auto") {
-    const quality = route.route_match_quality === "exact" ? "полное" : "скорректирован";
-    return `автомаппинг (${quality}) • ${assignedAt}`;
-  }
-  if (route.route_origin === "legacy" || route.route_source === "legacy") {
-    return "legacy • дата неизвестна";
-  }
-  if (route.route_source === "missing") {
-    return "не найден";
-  }
-  return "—";
-}
-
-function fmtQty(value: number): string {
-  if (Number.isInteger(value)) {
-    return String(value);
-  }
-  return value.toFixed(3).replace(/\.?0+$/, "");
-}
-
-function planPreviewUrl(planId: number): string {
-  return `/plans/${planId}/preview`;
-}
-
-function calcExecutionPercent(fact: number, plan: number): number {
-  if (!Number.isFinite(plan) || plan <= 0) {
-    return 0;
-  }
-  return (fact / plan) * 100;
-}
-
-function StatusBadge({ status, isCompleted }: { status: string; isCompleted?: boolean }) {
-  const displayStatus = isCompleted ? "completed" : status;
-  return (
-    <span className={`text-xs px-2 py-0.5 rounded-full ${positionStatusColor[displayStatus] || "bg-gray-100 text-gray-700"}`}>
-      {positionStatusLabels[displayStatus] || displayStatus}
-    </span>
-  );
-}
-
-function RowRouteCell({ row }: { row: ProductionPlanningRow }) {
-  if (row.route_name) {
-    const meta = routeMetaLabel(row);
-    return (
-      <span className="text-xs text-blue-700">
-        {row.route_name}
-        <span className="text-muted-foreground"> ({meta})</span>
-      </span>
-    );
-  }
-  return <span className="text-xs text-red-600">{row.route_error || "Не назначен"}</span>;
-}
-
-type ExecutionSortField = "id" | "row" | "plan" | "sku" | "name" | "qty" | "route" | "status"
+import { ExecutionTable } from "../components/ExecutionTable";
+import { ExecutionDialogs } from "../components/ExecutionDialogs";
+import {
+  ExecutionSortField,
+  positionStatusLabels,
+  fmtQty,
+  getLaunchBlockReason,
+  getCancelBlockReason,
+  getRestoreBlockReason,
+  getSoftDeleteBlockReason,
+  getManualPassBlockReason,
+  getCellValue,
+} from "../components/execution-utils";
 
 export function ExecutionPage() {
   const [selectedPositionId, setSelectedPositionId] = useState<number | null>(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
-  const [skuFilter, setSkuFilter] = useState("");
-  const [rowFilter, setRowFilter] = useState("");
-  const [planFilter, setPlanFilter] = useState("");
-  const [statusFilter, setStatusFilter] = useState<string>("all");
+  const [searchQuery, setSearchQuery] = useState("");
+  const [hideColumnIds, setHideColumnIds] = useState(false);
   const [sortConfigs, setSortConfigs] = useState<SortConfig<ExecutionSortField>[]>([]);
+  const [columnFilters, setColumnFilters] = useState<
+    Partial<Record<ExecutionSortField, Set<string>>>
+  >({});
+
+  const handleColumnFilterChange = useCallback(
+    (field: ExecutionSortField, selected: Set<string>) => {
+      setColumnFilters((prev) => ({ ...prev, [field]: selected }));
+    },
+    [],
+  );
 
   const { data: rows, isLoading, error } = useQuery({
     queryKey: ["production-planning-rows"],
@@ -181,6 +102,10 @@ export function ExecutionPage() {
   const [bulkResults, setBulkResults] = useState<BulkActionResultItem<number>[]>([]);
   const [bulkSummary, setBulkSummary] = useState<BulkActionSummary | null>(null);
   const [bulkResultsOpen, setBulkResultsOpen] = useState(false);
+  const [bulkMode, setBulkMode] = useState(false);
+  const [selectionOrder, setSelectionOrder] = useState<number[]>([]);
+  const [bulkSoftDeleting, setBulkSoftDeleting] = useState(false);
+  const [bulkDeleteConfirmOpen, setBulkDeleteConfirmOpen] = useState(false);
   const [launchDialog, setLaunchDialog] = useState<{ open: boolean; mode: "single" | "bulk"; positionIds: number[] }>({
     open: false,
     mode: "single",
@@ -196,6 +121,17 @@ export function ExecutionPage() {
     positionId: null,
     targetRouteStepId: "",
     comment: "",
+  });
+  const [manualPassBulkDialog, setManualPassBulkDialog] = useState<{
+    open: boolean;
+    targetRouteStepId: string;
+    comment: string;
+    positionIds: number[];
+  }>({
+    open: false,
+    targetRouteStepId: "",
+    comment: "",
+    positionIds: [],
   });
 
   const { data: manualPassDetail, isLoading: manualPassDetailLoading } = useQuery<ProductionPlanningRowDetail>({
@@ -227,6 +163,7 @@ export function ExecutionPage() {
       }
       queryClient.invalidateQueries({ queryKey: ["production-planning-rows"] });
       bulkSelection.clear();
+      setSelectionOrder([]);
     },
     onError: (err) => toast({ title: "Ошибка запуска", description: getErrorMessage(err), variant: "destructive" }),
   });
@@ -328,32 +265,6 @@ export function ExecutionPage() {
     }
   }, []);
 
-  const isRowLaunched = useCallback((row: ProductionPlanningRow) => {
-    return row.has_tasks || row.is_released;
-  }, []);
-
-  const getLaunchBlockReason = useCallback((row: ProductionPlanningRow) => {
-    if (row.is_completed) return "Уже завершено";
-    if (row.has_tasks || row.is_released) return "Уже запущено";
-    if (row.position_status !== "approved") return `Статус "${positionStatusLabels[row.position_status] || row.position_status}"`;
-    if (!row.route_id) return row.route_error || "Нет маршрута";
-    return null;
-  }, []);
-
-  const getCancelBlockReason = useCallback((row: ProductionPlanningRow) => {
-    if (!["approved", "released"].includes(row.position_status)) {
-      return `Статус "${positionStatusLabels[row.position_status] || row.position_status}"`;
-    }
-    return null;
-  }, []);
-
-  const getRestoreBlockReason = useCallback((row: ProductionPlanningRow) => {
-    if (row.position_status !== "cancelled") {
-      return `Статус "${positionStatusLabels[row.position_status] || row.position_status}"`;
-    }
-    return null;
-  }, []);
-
   const handleSingleLaunch = useCallback((row: ProductionPlanningRow) => {
     const reason = getLaunchBlockReason(row);
     if (reason) {
@@ -361,7 +272,7 @@ export function ExecutionPage() {
       return;
     }
     setLaunchDialog({ open: true, mode: "single", positionIds: [row.plan_position_id] });
-  }, [getLaunchBlockReason]);
+  }, []);
 
   const handleManualPass = useCallback((row: ProductionPlanningRow) => {
     if (!row.route_id || !["approved", "released"].includes(row.position_status)) {
@@ -390,6 +301,64 @@ export function ExecutionPage() {
     });
   }, [manualPassDialog.comment, manualPassDialog.positionId, manualPassDialog.targetRouteStepId, manualPassMutation]);
 
+  const requestBulkManualPass = useCallback(() => {
+    if (bulkSelection.selectedCount === 0) return;
+    setManualPassBulkDialog({
+      open: true,
+      targetRouteStepId: "",
+      comment: "",
+      positionIds: Array.from(bulkSelection.selectedIds),
+    });
+  }, [bulkSelection.selectedCount, bulkSelection.selectedIds]);
+
+  const confirmBulkManualPass = useCallback(async () => {
+    if (!manualPassBulkDialog.targetRouteStepId || manualPassBulkDialog.positionIds.length === 0) return;
+    setManualPassBulkDialog((prev) => ({ ...prev, open: false }));
+    const selectedPositionsMap = new Map(rows?.map((r) => [r.plan_position_id, r]) ?? []);
+    const results: BulkActionResultItem<number>[] = [];
+    setBulkProgress({ total: manualPassBulkDialog.positionIds.length, completed: 0, running: true });
+
+    for (let i = 0; i < manualPassBulkDialog.positionIds.length; i++) {
+      const id = manualPassBulkDialog.positionIds[i];
+      const row = selectedPositionsMap.get(id);
+      if (!row) {
+        results.push({ id, status: "failed", reason: "Позиция не найдена" });
+      } else if (!row.route_id || !["approved", "released"].includes(row.position_status)) {
+        results.push({ id, status: "skipped", reason: "Нужна утвержденная или запущенная строка с маршрутом" });
+      } else {
+        try {
+          const completeRoute = manualPassBulkDialog.targetRouteStepId === "complete";
+          await manualPassToStage(id, {
+            target_route_step_id: completeRoute ? undefined : Number(manualPassBulkDialog.targetRouteStepId),
+            complete_route: completeRoute,
+            comment: manualPassBulkDialog.comment.trim() || undefined,
+            idempotency_key: `manual-pass-bulk-${id}-${manualPassBulkDialog.targetRouteStepId}-${Date.now()}`,
+          });
+          results.push({ id, status: "success" });
+        } catch (e) {
+          results.push({ id, status: "failed", reason: getErrorMessage(e) });
+        }
+      }
+      setBulkProgress({ total: manualPassBulkDialog.positionIds.length, completed: i + 1, running: i + 1 < manualPassBulkDialog.positionIds.length });
+    }
+
+    const summary = summarizeBulkResults(results);
+    setBulkResults(results);
+    setBulkSummary(summary);
+    if (summary.failed > 0) setBulkResultsOpen(true);
+    setBulkProgress(null);
+    queryClient.invalidateQueries({ queryKey: ["production-planning-rows"] });
+    toast({
+      title: summary.failed > 0 ? "Частичный успех" : "Массовый сквозной проход",
+      description: summary.failed > 0
+        ? `${summary.success} успешно, ${summary.failed} ошибок`
+        : `${summary.success} успешно, ${summary.skipped} пропущено`,
+      variant: summary.failed > 0 ? "destructive" : "success",
+    });
+    bulkSelection.clear();
+    setSelectionOrder([]);
+  }, [manualPassBulkDialog.comment, manualPassBulkDialog.positionIds, manualPassBulkDialog.targetRouteStepId, rows, queryClient, bulkSelection]);
+
   const handleCancel = useCallback((row: ProductionPlanningRow) => {
     setCancelDialog({ open: true, positionId: row.plan_position_id, isReleased: row.is_released });
   }, []);
@@ -411,7 +380,6 @@ export function ExecutionPage() {
 
   const confirmSoftDelete = useCallback(() => {
     if (deleteDialog.positionId) {
-      // We need planId - get it from the row data
       const row = rows?.find((r) => r.plan_position_id === deleteDialog.positionId);
       if (row) {
         softDeleteMutation.mutate({ planId: row.production_plan_id, positionId: deleteDialog.positionId, reason: deleteDialog.reason || undefined });
@@ -420,6 +388,83 @@ export function ExecutionPage() {
     setDeleteDialog({ open: false, positionId: null, reason: "" });
   }, [deleteDialog.positionId, deleteDialog.reason, rows, softDeleteMutation]);
 
+  const toggleSelect = useCallback((id: number) => {
+    setSelectionOrder((prev) => {
+      const idx = prev.indexOf(id);
+      if (idx === -1) {
+        return [id, ...prev];
+      }
+      return prev.filter((x) => x !== id);
+    });
+    bulkSelection.selectOne(id);
+  }, [bulkSelection]);
+
+  const exitBulkMode = useCallback(() => {
+    bulkSelection.clear();
+    setSelectionOrder([]);
+    setBulkMode(false);
+  }, [bulkSelection]);
+
+  useEffect(() => {
+    if (!bulkMode) return;
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === "Escape") exitBulkMode();
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [bulkMode, exitBulkMode]);
+
+  const requestBulkSoftDelete = useCallback(() => {
+    if (bulkSelection.selectedCount === 0) return;
+    setBulkDeleteConfirmOpen(true);
+  }, [bulkSelection.selectedCount]);
+
+  const handleBulkSoftDelete = useCallback(async () => {
+    setBulkDeleteConfirmOpen(false);
+    if (bulkSelection.selectedCount === 0) return;
+    const selectedIds = Array.from(bulkSelection.selectedIds);
+    const selectedPositionsMap = new Map(rows?.map((r) => [r.plan_position_id, r]) ?? []);
+
+    const results: BulkActionResultItem<number>[] = [];
+    setBulkProgress({ total: selectedIds.length, completed: 0, running: true });
+    setBulkSoftDeleting(true);
+
+    for (let i = 0; i < selectedIds.length; i++) {
+      const id = selectedIds[i];
+      const row = selectedPositionsMap.get(id);
+      if (!row) {
+        results.push({ id, status: "failed", reason: "Позиция не найдена" });
+      } else if (row.position_status !== "cancelled") {
+        results.push({ id, status: "skipped", reason: `Статус "${positionStatusLabels[row.position_status] || row.position_status}"` });
+      } else {
+        try {
+          await softDeleteCancelledPosition(row.production_plan_id, id);
+          results.push({ id, status: "success" });
+        } catch (e) {
+          results.push({ id, status: "failed", reason: getErrorMessage(e) });
+        }
+      }
+      setBulkProgress({ total: selectedIds.length, completed: i + 1, running: i + 1 < selectedIds.length });
+    }
+
+    const summary = summarizeBulkResults(results);
+    setBulkResults(results);
+    setBulkSummary(summary);
+    if (summary.failed > 0) setBulkResultsOpen(true);
+    setBulkSoftDeleting(false);
+    setBulkProgress(null);
+    queryClient.invalidateQueries({ queryKey: ["production-planning-rows"] });
+    toast({
+      title: summary.failed > 0 ? "Частичный успех" : "Массовое удаление",
+      description: summary.failed > 0
+        ? `${summary.success} успешно, ${summary.failed} ошибок`
+        : `${summary.success} успешно, ${summary.skipped} пропущено`,
+      variant: summary.failed > 0 ? "destructive" : "success",
+    });
+    bulkSelection.clear();
+    setSelectionOrder([]);
+  }, [bulkSelection, rows]);
+
   const confirmCancel = useCallback(() => {
     if (cancelDialog.positionId) {
       cancelPositionMutation.mutate(cancelDialog.positionId);
@@ -427,95 +472,75 @@ export function ExecutionPage() {
     setCancelDialog({ open: false, positionId: null, isReleased: false });
   }, [cancelDialog.positionId, cancelPositionMutation]);
 
+  // Filter states
   const executionActiveFilterSummary = useMemo(() => {
     const labels: string[] = [];
-    if (skuFilter.trim()) labels.push("SKU/наименование");
-    if (rowFilter.trim()) labels.push("Номер строки");
-    if (planFilter.trim()) labels.push("План");
-    if (statusFilter !== "all") labels.push("Статус");
-    return { count: labels.length, labels };
-  }, [planFilter, rowFilter, skuFilter, statusFilter]);
-  const resetExecutionFilters = useCallback(() => {
-    setSkuFilter("");
-    setRowFilter("");
-    setPlanFilter("");
-    setStatusFilter("all");
-  }, []);
-  const executionFilterFields = useMemo<FiltersPanelField[]>(
-    () => [
-      {
-        kind: "search",
-        key: "sku",
-        value: skuFilter,
-        onChange: setSkuFilter,
-        placeholder: "Поиск по SKU / наименованию",
-      },
-      {
-        kind: "search",
-        key: "row",
-        value: rowFilter,
-        onChange: setRowFilter,
-        placeholder: "Фильтр по номеру строки",
-      },
-      {
-        kind: "search",
-        key: "plan",
-        value: planFilter,
-        onChange: setPlanFilter,
-        placeholder: "Фильтр по плану (ID или PLAN-...)",
-      },
-      {
-        kind: "select",
-        key: "status",
-        value: statusFilter,
-        onChange: setStatusFilter,
-        placeholder: "Статус",
-        options: [
-          { value: "all", label: "Все статусы" },
-          { value: "approved", label: "Утвержден" },
-          { value: "released", label: "В работе" },
-          { value: "completed", label: "Завершён" },
-          { value: "cancelled", label: "Отменен" },
-        ],
-      },
-    ],
-    [planFilter, rowFilter, skuFilter, statusFilter],
-  );
-
-  // Build filter predicate from execution filters
-  const executionFilterPredicate = useMemo(() => {
-    if (
-      statusFilter === "all" &&
-      !skuFilter.trim() &&
-      !rowFilter.trim() &&
-      !planFilter.trim()
-    ) {
-      return null;
+    if (searchQuery.trim()) labels.push("Поиск");
+    const columnFilterFields: Partial<Record<ExecutionSortField, string>> = {
+      id: "ID", row: "Строка", plan: "План", sku: "SKU", name: "Наименование",
+      qty: "Кол-во", route: "Маршрут", status: "Статус", stage: "Этап",
+    };
+    for (const [field, selected] of Object.entries(columnFilters)) {
+      if (selected && selected.size > 0) {
+        labels.push(`Колонка: ${columnFilterFields[field as ExecutionSortField] || field}`);
+      }
     }
+    return { count: labels.length, labels };
+  }, [columnFilters, searchQuery]);
+
+  const resetExecutionFilters = useCallback(() => {
+    setSearchQuery("");
+    setColumnFilters({});
+  }, []);
+
+  const executionFilterFields = useMemo(() => [
+    {
+      kind: "search" as const,
+      key: "search",
+      value: searchQuery,
+      onChange: setSearchQuery,
+      placeholder: "Поиск",
+      layoutSpan: "min-w-[250px]",
+    },
+    {
+      kind: "toggle" as const,
+      key: "hide-ids",
+      label: "Скрыть ID/Строка/План",
+      checked: hideColumnIds,
+      onChange: setHideColumnIds,
+    },
+  ], [hideColumnIds, searchQuery]);
+
+  const uniqueValuesByField = useMemo(() => {
+    const allRows = rows || [];
+    return {
+      id: [...new Set(allRows.map((r) => String(r.plan_position_id)))],
+      row: [...new Set(allRows.map((r) => String(r.source_row_number ?? "")))],
+      plan: [...new Set(allRows.map((r) => `${r.production_plan_id} ${planNameById.get(r.production_plan_id) || ""}`))],
+      sku: [...new Set(allRows.map((r) => r.source_sku))],
+      name: [...new Set(allRows.map((r) => r.source_name || "").filter(Boolean))],
+      qty: [...new Set(allRows.map((r) => fmtQty(r.quantity)))],
+      route: [...new Set(allRows.map((r) => r.route_name || "Не назначен"))],
+      status: [...new Set(allRows.map((r) => r.is_completed ? "completed" : r.position_status))],
+      stage: [...new Set(allRows.map((r) => r.current_stage_section_name || "—"))],
+    };
+  }, [rows, planNameById]);
+
+  const combinedPredicate = useMemo(() => {
+    const activeColumnFilters = Object.entries(columnFilters).filter(
+      ([, selected]) => selected && selected.size > 0,
+    );
+    if (activeColumnFilters.length === 0) return null;
 
     return (row: ProductionPlanningRow) => {
-      if (statusFilter === "completed" && !row.is_completed) return false;
-      if (statusFilter !== "all" && statusFilter !== "completed" && row.position_status !== statusFilter) return false;
-      if (skuFilter.trim()) {
-        const skuTerm = skuFilter.trim().toLowerCase();
-        if (!row.source_sku.toLowerCase().includes(skuTerm) && !(row.source_name || "").toLowerCase().includes(skuTerm)) {
-          return false;
-        }
-      }
-      if (rowFilter.trim()) {
-        const rowTerm = rowFilter.trim();
-        if (!String(row.source_row_number ?? "").includes(rowTerm)) return false;
-      }
-      if (planFilter.trim()) {
-        const planTerm = planFilter.trim().toLowerCase();
-        const planText = `${row.production_plan_id} ${planNameById.get(row.production_plan_id) || ""}`.toLowerCase();
-        if (!planText.includes(planTerm)) return false;
+      for (const [field, selected] of activeColumnFilters) {
+        const cellValue = getCellValue(row, field as ExecutionSortField);
+        if (!selected.has(cellValue)) return false;
       }
       return true;
     };
-  }, [statusFilter, skuFilter, rowFilter, planFilter, planNameById]);
+  }, [columnFilters]);
 
-  // Sort definitions for ExecutionPage columns
   const executionSortDefs: ColumnSortDef<ProductionPlanningRow, ExecutionSortField>[] = useMemo(() => [
     { field: "id", getSortValue: (r) => r.plan_position_id },
     { field: "row", getSortValue: (r) => r.source_row_number ?? 0 },
@@ -525,17 +550,19 @@ export function ExecutionPage() {
     { field: "qty", getSortValue: (r) => r.quantity },
     { field: "route", getSortValue: (r) => r.route_name || "" },
     { field: "status", getSortValue: (r) => r.position_status },
+    { field: "stage", getSortValue: (r) => r.current_stage_sequence ?? 0 },
   ], []);
 
   const executionQueryResult = useTableQueryEngine<ProductionPlanningRow, ExecutionSortField>({
     rows: rows || [],
     getId: (r) => r.plan_position_id,
-    searchQuery: "",
-    filterPredicate: executionFilterPredicate,
+    searchQuery,
+    filterPredicate: combinedPredicate,
     sortConfigs,
     sortDefs: executionSortDefs,
   });
   const filteredRows = executionQueryResult.rows;
+
   const rowById = useMemo(() => {
     const map = new Map<number, ProductionPlanningRow>();
     (rows || []).forEach((row) => map.set(row.plan_position_id, row));
@@ -610,7 +637,80 @@ export function ExecutionPage() {
         }));
       },
     },
-  ], [getCancelBlockReason, getLaunchBlockReason, getRestoreBlockReason]);
+    {
+      id: "soft-delete",
+      label: "Удалить из списка",
+      primaryLabel: "Удалить",
+      pendingLabel: "Удаление...",
+      isEligible: (id, context) => {
+        const row = context.get(id);
+        return Boolean(row && !getSoftDeleteBlockReason(row));
+      },
+      getIneligibleReason: (id, context) => {
+        const row = context.get(id);
+        return row ? getSoftDeleteBlockReason(row) : "Строка не найдена";
+      },
+      run: async (ids, context) => {
+        const results: BulkActionResultItem<number>[] = [];
+        for (const id of ids) {
+          const row = context.get(id);
+          if (!row) {
+            results.push({ id, status: "failed", reason: "Позиция не найдена" });
+            continue;
+          }
+          try {
+            await softDeleteCancelledPosition(row.production_plan_id, id);
+            results.push({ id, status: "success" });
+          } catch (e) {
+            results.push({ id, status: "failed", reason: getErrorMessage(e) });
+          }
+        }
+        return results;
+      },
+    },
+    {
+      id: "manual-pass",
+      label: "Сквозной проход",
+      primaryLabel: "Сквозной проход",
+      pendingLabel: "Сквозной проход...",
+      isEligible: (id, context) => {
+        const row = context.get(id);
+        return Boolean(row && !getManualPassBlockReason(row));
+      },
+      getIneligibleReason: (id, context) => {
+        const row = context.get(id);
+        return row ? getManualPassBlockReason(row) : "Строка не найдена";
+      },
+      run: async () => {
+        // This is handled via dialog — runSelectedBulkAction intercepts it
+        return [];
+      },
+    },
+  ], []);
+
+  const runBulkActionById = useCallback(async (actionId: string) => {
+    const action = executionBulkActions.find((a) => a.id === actionId);
+    if (!action) return;
+    if (bulkSelection.selectedCount === 0) {
+      toast({ title: "Выберите строки", description: "Отметьте строки для массового действия", variant: "destructive" });
+      return;
+    }
+    setBulkProgress({ total: bulkSelection.selectedCount, completed: 0, running: true });
+    const results = await runBulkAction(action, bulkSelection.selectedIds, rowById, setBulkProgress);
+    const summary = summarizeBulkResults(results);
+    setBulkResults(results);
+    setBulkSummary(summary);
+    setBulkResultsOpen(true);
+    queryClient.invalidateQueries({ queryKey: ["production-planning-rows"] });
+    toast({
+      title: summary.failed > 0 ? "Частичный успех" : "Массовое действие выполнено",
+      description: `${summary.success} успешно, ${summary.skipped} пропущено, ${summary.failed} ошибок`,
+      variant: summary.failed > 0 ? "destructive" : "success",
+    });
+    bulkSelection.clear();
+    setSelectionOrder([]);
+    setBulkProgress(null);
+  }, [bulkSelection, executionBulkActions, queryClient, rowById]);
 
   const selectedBulkAction = executionBulkActions.find((action) => action.id === selectedBulkActionId) ?? executionBulkActions[0]!;
   const eligibleFilteredIds = useMemo(
@@ -630,6 +730,16 @@ export function ExecutionPage() {
       toast({ title: "Выберите строки", description: "Отметьте строки для массового действия", variant: "destructive" });
       return;
     }
+    // manual-pass requires a dialog first
+    if (selectedBulkActionId === "manual-pass") {
+      setManualPassBulkDialog({
+        open: true,
+        targetRouteStepId: "",
+        comment: "",
+        positionIds: Array.from(bulkSelection.selectedIds),
+      });
+      return;
+    }
     setBulkProgress({ total: bulkSelection.selectedCount, completed: 0, running: true });
     const results = await runBulkAction(selectedBulkAction, bulkSelection.selectedIds, rowById, setBulkProgress);
     const summary = summarizeBulkResults(results);
@@ -643,8 +753,57 @@ export function ExecutionPage() {
       variant: summary.failed > 0 ? "destructive" : "success",
     });
     bulkSelection.clear();
+    setSelectionOrder([]);
     setBulkProgress(null);
-  }, [bulkSelection, queryClient, rowById, selectedBulkAction]);
+  }, [bulkSelection, queryClient, rowById, selectedBulkAction, selectedBulkActionId]);
+
+  const bulkSelectionRows = useMemo<BulkSelectionRow[]>(() => {
+    const rowMap = new Map(rows?.map((r) => [r.plan_position_id, r]) ?? []);
+    return selectionOrder.map((id) => {
+      const row = rowMap.get(id);
+      return {
+        id,
+        cells: {
+          id: `#${id}`,
+          sku: row?.source_sku ?? "—",
+          name: row?.source_name ?? "—",
+          qty: row ? fmtQty(row.quantity) : "0",
+          status: positionStatusLabels[row?.position_status ?? ""] ?? "—",
+        },
+      };
+    });
+  }, [selectionOrder, rows]);
+
+  const bulkSelectionActions = useMemo<BulkSelectionAction[]>(() => [
+    {
+      id: "take-to-work",
+      label: "Взять в работу",
+      variant: "default",
+      onClick: () => runBulkActionById("take-to-work"),
+      disabled: bulkSelection.selectedCount === 0 || Boolean(bulkProgress?.running),
+    },
+    {
+      id: "cancel",
+      label: "Отменить",
+      variant: "destructive",
+      onClick: () => runBulkActionById("cancel"),
+      disabled: bulkSelection.selectedCount === 0 || Boolean(bulkProgress?.running),
+    },
+    {
+      id: "restore",
+      label: "Восстановить",
+      variant: "outline",
+      onClick: () => runBulkActionById("restore"),
+      disabled: bulkSelection.selectedCount === 0 || Boolean(bulkProgress?.running),
+    },
+    {
+      id: "soft-delete",
+      label: "Удалить из списка",
+      variant: "destructive",
+      onClick: requestBulkSoftDelete,
+      disabled: bulkSelection.selectedCount === 0 || Boolean(bulkProgress?.running),
+    },
+  ], [bulkSelection.selectedCount, bulkProgress?.running, requestBulkSoftDelete, runBulkActionById]);
 
   const tableScrollRef = useRef<HTMLDivElement>(null);
 
@@ -661,10 +820,8 @@ export function ExecutionPage() {
 
   const totalRows = rows?.length || 0;
   const releasedRows = rows?.filter((r) => r.is_released && !r.is_completed).length || 0;
-  const rowsWithTasks = rows?.filter((r) => r.has_tasks).length || 0;
   const completedRows = rows?.filter((r) => r.is_completed).length || 0;
 
-  // Sort toggle handler: click cycles none -> asc -> desc -> removed
   const handleSortChange = (field: ExecutionSortField) => {
     setSortConfigs((prev) => nextMultiSortConfigs(prev, field));
   };
@@ -690,483 +847,100 @@ export function ExecutionPage() {
 
   return (
     <>
-      <header className="page-header">
-        <div>
-          <h1 className="page-title">Контроль выполнения</h1>
-          <div className="flex gap-3 text-sm">
-            <span className="px-3 py-1 rounded-full bg-muted">Строк всего: {totalRows}</span>
-            <span className="px-3 py-1 rounded-full bg-emerald-100 text-emerald-700">В работе: {releasedRows}</span>
-            <span className="px-3 py-1 rounded-full bg-violet-100 text-violet-700">Завершено: {completedRows}</span>
-          </div>
-        </div>
-      </header>
+      <ExecutionTable
+        rows={rows || []}
+        filteredRows={filteredRows}
+        isLoading={isLoading}
+        bulkMode={bulkMode}
+        totalRows={totalRows}
+        releasedRows={releasedRows}
+        completedRows={completedRows}
+        filterFields={executionFilterFields}
+        resetFilters={resetExecutionFilters}
+        activeFilterSummary={executionActiveFilterSummary}
+        sortConfigs={sortConfigs}
+        handleSortChange={handleSortChange}
+        getAriaSort={getAriaSort}
+        columnFilters={columnFilters}
+        onColumnFilterChange={handleColumnFilterChange}
+        uniqueValuesByField={uniqueValuesByField}
+        hideColumnIds={hideColumnIds}
+        bulkSelection={bulkSelection}
+        bulkSelectionRows={bulkSelectionRows}
+        bulkSelectionActions={bulkSelectionActions}
+        bulkProgress={bulkProgress}
+        bulkSummary={bulkSummary}
+        selectedBulkActionId={selectedBulkActionId}
+        onActionChange={setSelectedBulkActionId}
+        executionBulkActions={executionBulkActions}
+        onRunSelectedBulkAction={runSelectedBulkAction}
+        onEnterBulkMode={() => setBulkMode(true)}
+        onExitBulkMode={exitBulkMode}
+        sectionMetaById={sectionMetaById}
+        rowById={rowById}
+        onOpenDetail={openDetail}
+        onSingleLaunch={handleSingleLaunch}
+        onManualPass={handleManualPass}
+        onCancel={handleCancel}
+        onRestore={handleRestore}
+        onSoftDelete={handleSoftDelete}
+        onOpenHistory={openHistory}
+        onToggleSelect={toggleSelect}
+        onRequestBulkSoftDelete={requestBulkSoftDelete}
+        onRemoveSelection={(id) => setSelectionOrder((prev) => prev.filter((x) => x !== id))}
+        tableScrollRef={tableScrollRef}
+      />
 
-      <section className="space-y-3">
-        <FiltersPanel
-          fields={executionFilterFields}
-          onReset={resetExecutionFilters}
-          hasActiveFilters={executionActiveFilterSummary.count > 0}
-          activeSummary={executionActiveFilterSummary}
-        />
-
-        <BulkPowerBar
-          selectedCount={bulkSelection.selectedCount}
-          actions={executionBulkActions}
-          selectedActionId={selectedBulkActionId}
-          onActionChange={setSelectedBulkActionId}
-          onRun={runSelectedBulkAction}
-          onClear={bulkSelection.clear}
-          progress={bulkProgress}
-          lastSummary={bulkSummary}
-        />
-
-        <div
-          ref={tableScrollRef}
-          tabIndex={-1}
-          onMouseDown={() => tableScrollRef.current?.focus()}
-          className="rounded-lg border overflow-auto max-h-[70vh] focus:outline-none"
-        >
-          <table className="w-full border-separate border-spacing-0">
-            <thead className="[&_th]:sticky [&_th]:top-0 [&_th]:z-20 [&_th]:bg-background [&_th]:border-b">
-              <tr>
-                <th className="text-left p-2 w-20" aria-sort={getAriaSort("id")}>
-                  <SortableHeader field="id" currentSorts={sortConfigs} onSortChange={handleSortChange}>ID</SortableHeader>
-                </th>
-                <th className="text-left p-2 w-8">
-                  <Checkbox
-                    checked={
-                      bulkSelection.isAllSelected(eligibleFilteredIds)
-                        ? true
-                        : bulkSelection.isIndeterminate(eligibleFilteredIds)
-                          ? "indeterminate"
-                          : false
-                    }
-                    onCheckedChange={() => {
-                      if (bulkSelection.isAllSelected(eligibleFilteredIds)) {
-                        bulkSelection.clear();
-                      } else {
-                        bulkSelection.selectAllFiltered(eligibleFilteredIds);
-                      }
-                    }}
-                    disabled={eligibleFilteredIds.length === 0}
-                  />
-                </th>
-                <th className="text-left p-2" aria-sort={getAriaSort("row")}>
-                  <SortableHeader field="row" currentSorts={sortConfigs} onSortChange={handleSortChange}>Строка</SortableHeader>
-                </th>
-                <th className="text-left p-2" aria-sort={getAriaSort("plan")}>
-                  <SortableHeader field="plan" currentSorts={sortConfigs} onSortChange={handleSortChange}>План</SortableHeader>
-                </th>
-                <th className="text-left p-2" aria-sort={getAriaSort("sku")}>
-                  <SortableHeader field="sku" currentSorts={sortConfigs} onSortChange={handleSortChange}>SKU</SortableHeader>
-                </th>
-                <th className="text-left p-2" aria-sort={getAriaSort("name")}>
-                  <SortableHeader field="name" currentSorts={sortConfigs} onSortChange={handleSortChange}>Наименование</SortableHeader>
-                </th>
-                <th className="text-left p-2" aria-sort={getAriaSort("qty")}>
-                  <SortableHeader field="qty" currentSorts={sortConfigs} onSortChange={handleSortChange}>Кол-во</SortableHeader>
-                </th>
-                <th className="text-left p-2">Маршрут</th>
-                <th className="text-left p-2" aria-sort={getAriaSort("status")}>
-                  <SortableHeader field="status" currentSorts={sortConfigs} onSortChange={handleSortChange}>Статус</SortableHeader>
-                </th>
-                <th className="text-left p-2">Задачи</th>
-                <th className="text-left p-2">Действия</th>
-              </tr>
-            </thead>
-            <VirtualizedTableBody
-              rows={filteredRows}
-              rowHeight={48}
-              colSpan={11}
-              scrollContainerRef={tableScrollRef}
-              renderRow={(row) => {
-                const canLaunch = row.position_status === "approved" && !row.has_tasks && !row.is_released && !!row.route_id;
-                const canSelect = selectedBulkAction.isEligible?.(row.plan_position_id, rowById) ?? true;
-                const canManualPass = !!row.route_id && ["approved", "released"].includes(row.position_status) && !row.is_completed;
-                const blockReason = getLaunchBlockReason(row);
-                return (
-                <tr
-                  key={row.plan_position_id}
-                  className="border-b hover:bg-accent hover:ring-1 hover:ring-ring/20 cursor-pointer transition-colors"
-                  onClick={() => openDetail(row.plan_position_id)}
-                >
-                  <td className="p-2 font-mono text-xs text-muted-foreground">#{row.plan_position_id}</td>
-                  <td className="p-2" onClick={(e) => e.stopPropagation()}>
-                    {canSelect && (
-                      <Checkbox
-                        checked={bulkSelection.isSelected(row.plan_position_id)}
-                        onCheckedChange={(checked) => bulkSelection.selectOne(row.plan_position_id, !!checked)}
-                      />
-                    )}
-                  </td>
-                  <td className="p-2">#{row.source_row_number ?? "—"}</td>
-                  <td className="p-2">
-                    {(() => {
-                      const planName = planNameById.get(row.production_plan_id) || "—";
-                      return (
-                        <>
-                          <div className="text-xs text-muted-foreground">{row.production_plan_id}</div>
-                          {planName !== "—" ? (
-                            <a
-                              href={planPreviewUrl(row.production_plan_id)}
-                              target="_blank"
-                              rel="noreferrer"
-                              title={planName}
-                              className="text-blue-700 hover:underline inline-block max-w-[240px] truncate align-bottom"
-                              onClick={(e) => e.stopPropagation()}
-                            >
-                              План
-                            </a>
-                          ) : (
-                            <div>—</div>
-                          )}
-                        </>
-                      );
-                    })()}
-                  </td>
-                  <td className="p-2 font-mono">{row.source_sku}</td>
-                  <td className="p-2">{row.source_name || "—"}</td>
-                  <td className="p-2">{fmtQty(row.quantity)}</td>
-                  <td className="p-2">
-                    <RowRouteCell row={row} />
-                  </td>
-                  <td className="p-2">
-                    <StatusBadge status={row.position_status} isCompleted={row.is_completed} />
-                  </td>
-                  <td className="p-2">
-                    {row.route_steps && row.route_steps.length > 0 ? (
-                      <StepIndicator
-                        steps={row.route_steps}
-                        currentStageSequence={row.current_stage_sequence}
-                        currentStageTaskStatus={row.current_stage_task_status}
-                        sectionMetaById={sectionMetaById}
-                      />
-                    ) : row.has_tasks ? (
-                      <Badge variant="secondary">Задачи созданы</Badge>
-                    ) : (
-                      <Badge variant="secondary">Нет</Badge>
-                    )}
-                  </td>
-                  <td className="p-2" onClick={(e) => e.stopPropagation()}>
-                    <div className="flex gap-1">
-                      {canLaunch ? (
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          onClick={() => handleSingleLaunch(row)}
-                        >
-                          Взять в работу
-                        </Button>
-                      ) : (
-                        <span
-                          className="text-xs text-muted-foreground"
-                          title={blockReason || ""}
-                        >
-                          {blockReason || "—"}
-                        </span>
-                      )}
-                      {canManualPass && (
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          onClick={() => handleManualPass(row)}
-                        >
-                          Сквозной проход
-                        </Button>
-                      )}
-                      {row.position_status === "approved" && (
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          className="text-red-600 hover:text-red-700"
-                          onClick={() => handleCancel(row)}
-                        >
-                          Отменить
-                        </Button>
-                      )}
-                      {row.position_status === "released" && (
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          className="text-red-600 hover:text-red-700"
-                          onClick={() => handleCancel(row)}
-                        >
-                          Остановить
-                        </Button>
-                      )}
-                      {row.position_status === "cancelled" && (
-                        <>
-                          <Button
-                            size="sm"
-                            variant="ghost"
-                            className="text-green-600 hover:text-green-700"
-                            onClick={() => handleRestore(row)}
-                          >
-                            Восстановить
-                          </Button>
-                          <Button
-                            size="sm"
-                            variant="ghost"
-                            className="text-red-600 hover:text-red-700"
-                            onClick={() => handleSoftDelete(row)}
-                          >
-                            Удалить из списка
-                          </Button>
-                        </>
-                      )}
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        className="text-gray-500 hover:text-gray-700"
-                        onClick={() => openHistory(row)}
-                      >
-                        История
-                      </Button>
-                    </div>
-                  </td>
-                </tr>
-                );
-              }}
-            />
-          </table>
-          {filteredRows.length === 0 && <p className="p-4 text-sm text-muted-foreground text-center">Нет строк по выбранному фильтру</p>}
-        </div>
-      </section>
-
-      <RowDetailsSidePanel
-        open={drawerOpen}
-        onOpenChange={(open) => {
+      <ExecutionDialogs
+        drawerOpen={drawerOpen}
+        onDrawerOpenChange={(open) => {
           setDrawerOpen(open);
-          if (!open) {
-            setSelectedPositionId(null);
-          }
+          if (!open) setSelectedPositionId(null);
         }}
-        data={detail ? adaptExecutionDetail(detail) : null}
-        loading={detailLoading}
-        error={detailError ? String(detailError) : null}
+        detail={detail ?? null}
+        detailLoading={detailLoading}
+        detailError={detailError}
+        selectedPositionId={selectedPositionId}
+        launchDialog={launchDialog}
+        onLaunchDialogChange={setLaunchDialog}
+        takeToWorkPending={takeToWorkMutation.isPending}
+        onConfirmLaunch={confirmLaunch}
+        manualPassDialog={manualPassDialog}
+        onManualPassDialogChange={setManualPassDialog}
+        manualPassDetail={manualPassDetail}
+        manualPassDetailLoading={manualPassDetailLoading}
+        manualPassPending={manualPassMutation.isPending}
+        onConfirmManualPass={confirmManualPass}
+        manualPassBulkDialog={manualPassBulkDialog}
+        onManualPassBulkDialogChange={setManualPassBulkDialog}
+        bulkManualPassPending={bulkSoftDeleting || Boolean(bulkProgress?.running)}
+        onConfirmBulkManualPass={confirmBulkManualPass}
+        cancelDialog={cancelDialog}
+        onCancelDialogChange={setCancelDialog}
+        cancelPending={cancelPositionMutation.isPending}
+        onConfirmCancel={confirmCancel}
+        restoreDialog={restoreDialog}
+        onRestoreDialogChange={setRestoreDialog}
+        restorePending={restorePositionMutation.isPending}
+        onConfirmRestore={confirmRestore}
+        deleteDialog={deleteDialog}
+        onDeleteDialogChange={setDeleteDialog}
+        softDeletePending={softDeleteMutation.isPending}
+        onConfirmSoftDelete={confirmSoftDelete}
+        bulkResultsOpen={bulkResultsOpen}
+        onBulkResultsChange={setBulkResultsOpen}
+        bulkSummary={bulkSummary}
+        bulkResults={bulkResults}
+        bulkDeleteConfirmOpen={bulkDeleteConfirmOpen}
+        onBulkDeleteConfirmChange={setBulkDeleteConfirmOpen}
+        bulkSoftDeleting={bulkSoftDeleting}
+        bulkSelectedCount={bulkSelection.selectedCount}
+        onConfirmBulkSoftDelete={handleBulkSoftDelete}
+        historyDialogOpen={historyDialogOpen}
+        onHistoryDialogChange={setHistoryDialogOpen}
+        historyLoading={historyLoading}
+        historyEntries={historyEntries}
       />
-
-      <Dialog
-        open={launchDialog.open}
-        onOpenChange={(open) => {
-          if (!open) setLaunchDialog({ open: false, mode: "single", positionIds: [] });
-        }}
-      >
-        <DialogContent className="sm:max-w-[480px]">
-          <DialogHeader>
-            <DialogTitle>Взять в работу</DialogTitle>
-            <DialogDescription>
-              {launchDialog.mode === "single"
-                ? "Будут созданы задачи по всем этапам маршрута для выбранной строки."
-                : `Будут созданы задачи по всем этапам маршрута для ${launchDialog.positionIds.length} выбранных строк.`}
-            </DialogDescription>
-          </DialogHeader>
-          <div className="flex justify-end gap-2 pt-2">
-            <Button variant="outline" onClick={() => setLaunchDialog({ open: false, mode: "single", positionIds: [] })}>
-              Отмена
-            </Button>
-            <Button onClick={confirmLaunch} disabled={takeToWorkMutation.isPending}>
-              {takeToWorkMutation.isPending ? "Запуск..." : "Запустить"}
-            </Button>
-          </div>
-        </DialogContent>
-      </Dialog>
-
-      <Dialog
-        open={manualPassDialog.open}
-        onOpenChange={(open) => {
-          if (!open) setManualPassDialog({ open: false, positionId: null, targetRouteStepId: "", comment: "" });
-        }}
-      >
-        <DialogContent className="sm:max-w-[560px]">
-          <DialogHeader>
-            <DialogTitle>Сквозной проход</DialogTitle>
-            <DialogDescription>
-              Система создаст задачи маршрута при необходимости и оформит предыдущие этапы как ручной пропуск. Выбранный этап останется готовым к работе.
-            </DialogDescription>
-          </DialogHeader>
-          <div className="space-y-3">
-            {manualPassDetailLoading ? (
-              <p className="text-sm text-muted-foreground">Загрузка маршрута...</p>
-            ) : (
-              <>
-                <div className="space-y-1.5">
-                  <div className="text-sm font-medium">Остановиться на этапе</div>
-                  <Select
-                    value={manualPassDialog.targetRouteStepId}
-                    onValueChange={(value) => setManualPassDialog((prev) => ({ ...prev, targetRouteStepId: value }))}
-                  >
-                    <SelectTrigger>
-                      <SelectValue placeholder="Выберите этап маршрута" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {(manualPassDetail?.stages || []).map((stage) => (
-                        <SelectItem key={stage.route_step_id} value={String(stage.route_step_id)}>
-                          #{stage.sequence} · {stage.section_name} · {stage.operation_name || "Операция"}
-                        </SelectItem>
-                      ))}
-                      {(manualPassDetail?.stages?.length || 0) > 0 && (
-                        <SelectItem value="complete">
-                          Полное завершение задачи
-                        </SelectItem>
-                      )}
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div className="space-y-1.5">
-                  <div className="text-sm font-medium">Комментарий</div>
-                  <Input
-                    placeholder="Необязательно"
-                    value={manualPassDialog.comment}
-                    onChange={(e) => setManualPassDialog((prev) => ({ ...prev, comment: e.target.value }))}
-                  />
-                </div>
-                {manualPassDialog.targetRouteStepId && manualPassDetail && (
-                  <div className="rounded border bg-muted/40 p-3 text-sm text-muted-foreground">
-                    {manualPassDialog.targetRouteStepId === "complete"
-                      ? "Будут вручную закрыты все этапы маршрута. Все созданные факты получат текущее время выполнения и учёта."
-                      : "Будут вручную закрыты этапы до выбранного. Все созданные факты получат текущее время выполнения и учёта."}
-                  </div>
-                )}
-              </>
-            )}
-          </div>
-          <div className="flex justify-end gap-2 pt-2">
-            <Button variant="outline" onClick={() => setManualPassDialog({ open: false, positionId: null, targetRouteStepId: "", comment: "" })}>
-              Отмена
-            </Button>
-            <Button
-              onClick={confirmManualPass}
-              disabled={manualPassMutation.isPending || manualPassDetailLoading || !manualPassDialog.targetRouteStepId}
-            >
-              {manualPassMutation.isPending ? "Выполнение..." : "Выполнить"}
-            </Button>
-          </div>
-        </DialogContent>
-      </Dialog>
-
-      <AlertDialog
-        open={cancelDialog.open}
-        onOpenChange={(open) => {
-          if (!open) setCancelDialog({ open: false, positionId: null, isReleased: false });
-        }}
-      >
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>{cancelDialog.isReleased ? "Остановить выполнение?" : "Отменить позицию?"}</AlertDialogTitle>
-            <AlertDialogDescription>
-              {cancelDialog.isReleased
-                ? "Позиция уже запущена. Остановка выполнения переведёт её в статус «Отменен»."
-                : "Отмена переведёт позицию в статус «Отменен»."}
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Отмена</AlertDialogCancel>
-            <AlertDialogAction className="bg-destructive text-destructive-foreground hover:bg-destructive/90" onClick={confirmCancel} disabled={cancelPositionMutation.isPending}>
-              {cancelPositionMutation.isPending ? "Отмена..." : cancelDialog.isReleased ? "Остановить" : "Отменить"}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
-
-      <AlertDialog
-        open={restoreDialog.open}
-        onOpenChange={(open) => {
-          if (!open) setRestoreDialog({ open: false, positionId: null, reason: "" });
-        }}
-      >
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Восстановить позицию?</AlertDialogTitle>
-            <AlertDialogDescription>
-              Позиция будет восстановлена в предыдущий статус. Это действие нельзя отменить.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <div className="py-2">
-            <Input
-              placeholder="Причина (необязательно)"
-              value={restoreDialog.reason}
-              onChange={(e) => setRestoreDialog((prev) => ({ ...prev, reason: e.target.value }))}
-            />
-          </div>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Отмена</AlertDialogCancel>
-            <AlertDialogAction onClick={confirmRestore} disabled={restorePositionMutation.isPending}>
-              {restorePositionMutation.isPending ? "Восстановление..." : "Восстановить"}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
-
-      <AlertDialog
-        open={deleteDialog.open}
-        onOpenChange={(open) => {
-          if (!open) setDeleteDialog({ open: false, positionId: null, reason: "" });
-        }}
-      >
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Удалить из списка?</AlertDialogTitle>
-            <AlertDialogDescription>
-              Позиция будет скрыта из всех рабочих списков. История изменений сохранится.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <div className="py-2">
-            <Input
-              placeholder="Причина (необязательно)"
-              value={deleteDialog.reason}
-              onChange={(e) => setDeleteDialog((prev) => ({ ...prev, reason: e.target.value }))}
-            />
-          </div>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Отмена</AlertDialogCancel>
-            <AlertDialogAction className="bg-destructive text-destructive-foreground hover:bg-destructive/90" onClick={confirmSoftDelete} disabled={softDeleteMutation.isPending}>
-              {softDeleteMutation.isPending ? "Удаление..." : "Удалить из списка"}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
-
-      <BulkResultsDialog
-        open={bulkResultsOpen}
-        onOpenChange={setBulkResultsOpen}
-        title="Результат массового действия"
-        summary={bulkSummary}
-        results={bulkResults}
-      />
-
-      <Dialog
-        open={historyDialogOpen}
-        onOpenChange={(open) => {
-          if (!open) setHistoryDialogOpen(false);
-        }}
-      >
-        <DialogContent className="sm:max-w-[560px]">
-          <DialogHeader>
-            <DialogTitle>История статусов</DialogTitle>
-            <DialogDescription>Хронология изменений статуса позиции</DialogDescription>
-          </DialogHeader>
-          {historyLoading ? (
-            <p className="text-sm text-muted-foreground py-4">Загрузка истории...</p>
-          ) : historyEntries.length === 0 ? (
-            <p className="text-sm text-muted-foreground py-4">История изменений отсутствует</p>
-          ) : (
-            <div className="max-h-[400px] overflow-auto space-y-2">
-              {historyEntries.map((entry) => (
-                <div key={entry.id} className="rounded border p-3 text-sm">
-                  <div className="flex items-center justify-between">
-                    <span className="font-medium">
-                      {positionStatusLabels[entry.from_status] || entry.from_status} → {positionStatusLabels[entry.to_status] || entry.to_status}
-                    </span>
-                    <Badge variant="secondary">{new Date(entry.changed_at).toLocaleString("ru-RU", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" })}</Badge>
-                  </div>
-                  {entry.reason && <div className="text-xs text-muted-foreground mt-1">{entry.reason}</div>}
-                </div>
-              ))}
-            </div>
-          )}
-        </DialogContent>
-      </Dialog>
     </>
   );
 }

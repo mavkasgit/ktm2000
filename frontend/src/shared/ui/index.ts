@@ -23,6 +23,8 @@ export { SectionSelect } from "./SectionSelect";
 export type { SectionSelectProps } from "./SectionSelect";
 export { SortableHeader } from "./SortableHeader";
 export type { SortableHeaderProps } from "./SortableHeader";
+export { SortableFilterHeader } from "./SortableFilterHeader";
+export type { SortableFilterHeaderProps } from "./SortableFilterHeader";
 export { TableToolbar } from "./TableToolbar";
 export type { TableToolbarProps } from "./TableToolbar";
 export { FiltersPanel, type FiltersPanelProps, type FiltersPanelField, type FiltersPanelOption } from "./FiltersPanel";

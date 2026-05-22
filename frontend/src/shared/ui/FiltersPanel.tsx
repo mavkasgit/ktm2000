@@ -1,9 +1,27 @@
-import { Search, X } from "lucide-react";
+import { Search, X, Eye, EyeOff } from "lucide-react";
 import type { ReactNode } from "react";
 import { Button } from "./Button";
 import { Input } from "./Input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./Select";
 import { cn } from "@/shared/utils/cn";
+
+function renderToggleField(field: Extract<FiltersPanelField, { kind: "toggle" }>) {
+  return (
+    <Button
+      variant={field.checked ? "default" : "outline"}
+      size="sm"
+      className="h-9 text-xs whitespace-nowrap"
+      onClick={() => field.onChange(!field.checked)}
+    >
+      {field.checked ? (
+        <Eye className="h-3.5 w-3.5 mr-1" />
+      ) : (
+        <EyeOff className="h-3.5 w-3.5 mr-1" />
+      )}
+      {field.label}
+    </Button>
+  );
+}
 
 export interface FiltersPanelOption {
   value: string;
@@ -26,6 +44,14 @@ export type FiltersPanelField =
       value: string;
       options: FiltersPanelOption[];
       onChange: (value: string) => void;
+      layoutSpan?: string;
+    }
+  | {
+      kind: "toggle";
+      key: string;
+      label: string;
+      checked: boolean;
+      onChange: (checked: boolean) => void;
       layoutSpan?: string;
     };
 
@@ -61,7 +87,9 @@ export function FiltersPanel({
         <div className="flex items-center gap-2 flex-wrap">
           {fields.map((field) => (
             <div key={field.key} className={field.layoutSpan ?? "min-w-[160px] flex-shrink-0"}>
-              {field.kind === "search" ? (
+              {field.kind === "toggle" ? (
+                renderToggleField(field)
+              ) : field.kind === "search" ? (
                 <div className="relative">
                   <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
                   <Input
@@ -117,7 +145,9 @@ export function FiltersPanel({
           <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-4 2xl:grid-cols-7">
             {fields.map((field) => (
               <div key={field.key} className={field.layoutSpan}>
-                {field.kind === "search" ? (
+                {field.kind === "toggle" ? (
+                  renderToggleField(field)
+                ) : field.kind === "search" ? (
                   <div className="relative">
                     <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
                     <Input

@@ -121,7 +121,7 @@
   }
 
   .main-area {
-    @apply flex-1 overflow-auto p-6 md:pt-6;
+    @apply min-w-0 flex-1 overflow-auto overflow-x-hidden p-6 md:pt-6;
     padding-top: 4.5rem;
   }
 
@@ -157,5 +157,42 @@
 
   .work-panel {
     @apply rounded-lg border bg-card p-4 shadow-sm;
+  }
+
+  .execution-table {
+    --execution-col-sku: 120px;
+    --execution-col-qty: 72px;
+    --execution-col-status: 112px;
+    --execution-col-stage: 200px;
+    --execution-col-actions: 370px;
+  }
+
+  @media (max-width: 1099px) {
+    .execution-table {
+      --execution-col-sku: 88px;
+      --execution-col-qty: 56px;
+      --execution-col-status: 92px;
+      --execution-col-stage: 108px;
+      --execution-col-actions: 112px;
+    }
+  }
+
+  @media (max-width: 899px) {
+    .execution-table {
+      --execution-col-sku: 72px;
+      --execution-col-qty: 48px;
+      --execution-col-status: 80px;
+      --execution-col-stage: 96px;
+      --execution-col-actions: 96px;
+    }
+  }
+
+  @media (max-width: 699px) {
+    .execution-table {
+      --execution-col-sku: 72px;
+      --execution-col-qty: 48px;
+      --execution-col-status: 80px;
+      --execution-col-actions: 96px;
+    }
   }
 }
