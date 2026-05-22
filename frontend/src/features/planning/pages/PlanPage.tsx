@@ -1,7 +1,7 @@
-import { useMemo, useRef, useState } from "react"
-import { Download, Eye, FileSpreadsheet, Plus, Upload, Route, Trash2, AlertTriangle } from "lucide-react"
+import { useEffect, useMemo, useRef, useState } from "react"
+import { Download, Eye, FileSpreadsheet, Plus, Upload, Route, Trash2, AlertTriangle, ListChecks } from "lucide-react"
 import { ImportWizard } from "../ImportWizard"
-import { Button, Badge, Checkbox, Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, Combobox, Select, SelectContent, SelectItem, SelectTrigger, SelectValue, AlertDialog, AlertDialogContent, AlertDialogHeader, AlertDialogTitle, AlertDialogDescription, AlertDialogFooter, AlertDialogAction, AlertDialogCancel, SortableHeader, VirtualizedTableBody, FiltersPanel, type FiltersPanelField } from "@/shared/ui"
+import { Button, Badge, Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, Combobox, Select, SelectContent, SelectItem, SelectTrigger, SelectValue, AlertDialog, AlertDialogContent, AlertDialogHeader, AlertDialogTitle, AlertDialogDescription, AlertDialogFooter, AlertDialogAction, AlertDialogCancel, SortableHeader, VirtualizedTableBody, FiltersPanel, type FiltersPanelField } from "@/shared/ui"
 import { buildActiveFilterSummary } from "@/shared/ui/buildActiveFilterSummary"
 import { useTableQueryEngine, SortConfig, ColumnSortDef } from "@/shared/hooks/useTableQueryEngine"
 import { nextMultiSortConfigs } from "@/shared/lib/multiSort"
@@ -14,6 +14,17 @@ import { listImportTemplates, ImportTemplate } from "@/shared/api/importTemplate
 import { getImportFileDownloadUrl } from "@/shared/api/imports"
 import { apiClient, getErrorMessage } from "@/shared/api/client"
 import { RowDetailsSidePanel, adaptPlanPositionOut } from "../components/row-details"
+import {
+  BulkResultsDialog,
+  summarizeBulkResults,
+  useBulkSelection,
+  type BulkActionResultItem,
+  type BulkActionSummary,
+  type BulkRunnerProgress,
+  BulkSelectionTable,
+  type BulkSelectionRow,
+  type BulkSelectionAction,
+} from "@/shared/bulk"
 
 const statusLabels: Record<string, string> = {
   parsed: "Распознан",
@@ -260,17 +271,17 @@ function FileRow({ file, activePlan, onDelete }: { file: PlanFileInfo; activePla
   )
 }
 
-function PositionRow({ pos, onApprove, onDelete, selected, onToggle, routes, onAssignRoute, onOpenDetail, duplicateConflict, onJumpToPosition }: {
+function PositionRow({ pos, onApprove, onDelete, selected, routes, onAssignRoute, onOpenDetail, duplicateConflict, onJumpToPosition, onSelect }: {
   pos: PlanPositionOut;
   onApprove: (id: number, planId?: number, force?: boolean) => Promise<void>;
   onDelete: (id: number, planId?: number) => void;
   selected?: boolean;
-  onToggle?: (id: number) => void;
   routes?: ProductionRoute[];
   onAssignRoute?: (positionId: number, routeId: number | null) => void;
   onOpenDetail?: () => void;
   duplicateConflict?: DuplicateConflict;
   onJumpToPosition?: (id: number) => void;
+  onSelect?: (id: number) => void;
 }) {
   const hasErrors = pos.errors && pos.errors.length > 0
   const hasWarnings = pos.warnings && pos.warnings.length > 0
@@ -398,14 +409,16 @@ function PositionRow({ pos, onApprove, onDelete, selected, onToggle, routes, onA
     <>
     <tr
       id={`plan-position-${pos.id}`}
-      className={`border-b ${hasErrors || hasDuplicateConflict ? "bg-red-50" : hasWarnings ? "bg-amber-50" : ""} ${selected ? "bg-blue-50" : ""} cursor-pointer hover:bg-accent hover:ring-1 hover:ring-ring/20 transition-colors`}
-      onClick={() => onOpenDetail?.()}
+      className={`border-b ${hasErrors || hasDuplicateConflict ? "bg-red-50" : hasWarnings ? "bg-amber-50" : ""} ${selected ? "bg-blue-100 ring-1 ring-blue-300" : ""} cursor-pointer hover:bg-accent hover:ring-1 hover:ring-ring/20 transition-colors`}
+      onClick={(e) => {
+        if (onSelect) {
+          e.stopPropagation()
+          onSelect(pos.id)
+        } else {
+          onOpenDetail?.()
+        }
+      }}
     >
-      <td className="p-2">
-        {onToggle && (
-          <Checkbox checked={selected || false} onCheckedChange={() => onToggle(pos.id)} onClick={(e) => e.stopPropagation()} />
-        )}
-      </td>
       <td className="p-2 text-sm">
         <span className="text-muted-foreground">#{pos.id}</span>
       </td>
@@ -591,9 +604,16 @@ export function PlanPage() {
   const [importOpen, setImportOpen] = useState(false)
   const queryClient = useQueryClient()
   const [showAllFiles, setShowAllFiles] = useState(false)
-  const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set())
-  const [selectedRouteId, setSelectedRouteId] = useState<string>("")
-  const [assigningRoute, setAssigningRoute] = useState(false)
+  const bulkSelection = useBulkSelection<number>()
+  const [bulkMode, setBulkMode] = useState(false)
+  const [selectionOrder, setSelectionOrder] = useState<number[]>([])
+  const [bulkApproving, setBulkApproving] = useState(false)
+  const [bulkDeleting, setBulkDeleting] = useState(false)
+  const [bulkDeleteConfirmOpen, setBulkDeleteConfirmOpen] = useState(false)
+  const [bulkProgress, setBulkProgress] = useState<BulkRunnerProgress | null>(null)
+  const [bulkResults, setBulkResults] = useState<BulkActionResultItem<number>[]>([])
+  const [bulkSummary, setBulkSummary] = useState<BulkActionSummary | null>(null)
+  const [bulkResultsOpen, setBulkResultsOpen] = useState(false)
   const [detailPosition, setDetailPosition] = useState<PlanPositionOut | null>(null)
   const [detailOpen, setDetailOpen] = useState(false)
   const tableScrollRef = useRef<HTMLDivElement>(null)
@@ -694,23 +714,24 @@ export function PlanPage() {
   }
 
   const toggleSelect = (id: number) => {
-    setSelectedIds(prev => {
-      const next = new Set(prev)
-      if (next.has(id)) next.delete(id)
-      else next.add(id)
-      return next
-    })
-  }
-
-  const selectAll = () => {
-    if (selectedIds.size === processedRows.length) {
-      setSelectedIds(new Set())
+    const wasSelected = bulkSelection.isSelected(id)
+    bulkSelection.selectOne(id)
+    if (!wasSelected) {
+      setSelectionOrder(prev => [id, ...prev])
     } else {
-      setSelectedIds(new Set(processedRows.map(p => p.id)))
+      setSelectionOrder(prev => prev.filter(x => x !== id))
     }
   }
 
-  const clearSelection = () => setSelectedIds(new Set())
+  const selectAll = () => {
+    if (bulkSelection.isAllSelected(filteredPositionIds)) {
+      bulkSelection.clear()
+      setSelectionOrder([])
+    } else {
+      bulkSelection.selectAllFiltered(filteredPositionIds)
+      setSelectionOrder([...filteredPositionIds])
+    }
+  }
 
   const resetAllFilters = () => {
     setSearchQuery("")
@@ -739,29 +760,130 @@ export function PlanPage() {
     }
   }
 
-  const handleAssignRoute = async () => {
-    if (selectedIds.size === 0) return
-    const routeId = selectedRouteId ? Number(selectedRouteId) : null
-    setAssigningRoute(true)
-    try {
-      const result = await batchAssignRouteGlobal(Array.from(selectedIds), routeId)
-      queryClient.invalidateQueries({ queryKey: ["all-plan-positions"] })
-      toast({
-        title: routeId ? "Маршрут назначен" : "Маршрут снят",
-        description: `Обновлено позиций: ${result.updated_count}`,
-        variant: "success",
-      })
-      setSelectedIds(new Set())
-      setSelectedRouteId("")
-    } catch (e) {
-      toast({
-        title: "Ошибка",
-        description: e instanceof Error ? e.message : "Не удалось назначить маршрут",
-        variant: "destructive",
-      })
-    } finally {
-      setAssigningRoute(false)
+  const exitBulkMode = () => {
+    bulkSelection.clear()
+    setSelectionOrder([])
+    setBulkMode(false)
+  }
+
+  useEffect(() => {
+    if (!bulkMode) return
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === "Escape") exitBulkMode()
     }
+    window.addEventListener("keydown", handler)
+    return () => window.removeEventListener("keydown", handler)
+  }, [bulkMode])
+
+  const canApprovePosition = (pos: PlanPositionOut) =>
+    (pos.status === 'draft' || pos.status === 'valid') &&
+    pos.validation_status === 'valid' &&
+    pos.route_id !== null
+
+  const getApproveIneligibleReason = (pos: PlanPositionOut): string | null => {
+    if (pos.status === 'approved' || pos.status === 'released') return "Уже утверждена"
+    if (pos.validation_status !== 'valid') return "Валидация не пройдена"
+    if (!pos.route_id) return "Нет маршрута"
+    return null
+  }
+
+  const handleBulkApprove = async () => {
+    if (bulkSelection.selectedCount === 0) return
+    const selectedIds = Array.from(bulkSelection.selectedIds)
+    const selectedPositionsMap = new Map(positions?.map(p => [p.id, p]) ?? [])
+
+    const results: BulkActionResultItem<number>[] = []
+    setBulkProgress({ total: selectedIds.length, completed: 0, running: true })
+    setBulkApproving(true)
+
+    for (let i = 0; i < selectedIds.length; i++) {
+      const id = selectedIds[i]
+      const pos = selectedPositionsMap.get(id)
+      if (!pos) {
+        results.push({ id, status: "failed", reason: "Позиция не найдена" })
+      } else if (!canApprovePosition(pos)) {
+        results.push({ id, status: "skipped", reason: getApproveIneligibleReason(pos) ?? "Не может быть утверждена" })
+      } else {
+        try {
+          await approveProductionPlanPosition(pos.production_plan_id, id, { force: false })
+          results.push({ id, status: "success" })
+        } catch (e) {
+          results.push({ id, status: "failed", reason: getErrorMessage(e) })
+        }
+      }
+      setBulkProgress({ total: selectedIds.length, completed: i + 1, running: i + 1 < selectedIds.length })
+    }
+
+    const summary = summarizeBulkResults(results)
+    setBulkResults(results)
+    setBulkSummary(summary)
+    if (summary.failed > 0) setBulkResultsOpen(true)
+    setBulkApproving(false)
+    setBulkProgress(null)
+    queryClient.invalidateQueries({ queryKey: ["all-plan-positions"] })
+    queryClient.invalidateQueries({ queryKey: ["plan-duplicates-all"] })
+    queryClient.invalidateQueries({ queryKey: ["production-planning-rows"] })
+    const failedEntries = results.filter(r => r.status === "failed")
+    toast({
+      title: summary.failed > 0 ? "Частичный успех" : "Массовое утверждение",
+      description: summary.failed > 0
+        ? `${summary.success} успешно, ${summary.failed} ошибок. ${failedEntries.slice(0, 3).map(r => `#${r.id}: ${r.reason}`).join("; ")}`
+        : `${summary.success} успешно, ${summary.skipped} пропущено`,
+      variant: summary.failed > 0 ? "destructive" : "success",
+    })
+    bulkSelection.clear()
+    setSelectionOrder([])
+  }
+
+  const requestBulkDelete = () => {
+    if (bulkSelection.selectedCount === 0) return
+    setBulkDeleteConfirmOpen(true)
+  }
+
+  const confirmBulkDelete = async () => {
+    setBulkDeleteConfirmOpen(false)
+    if (bulkSelection.selectedCount === 0) return
+    const selectedIds = Array.from(bulkSelection.selectedIds)
+    const selectedPositionsMap = new Map(positions?.map(p => [p.id, p]) ?? [])
+
+    const results: BulkActionResultItem<number>[] = []
+    setBulkProgress({ total: selectedIds.length, completed: 0, running: true })
+    setBulkDeleting(true)
+
+    for (let i = 0; i < selectedIds.length; i++) {
+      const id = selectedIds[i]
+      const pos = selectedPositionsMap.get(id)
+      if (!pos) {
+        results.push({ id, status: "failed", reason: "Позиция не найдена" })
+      } else {
+        try {
+          await apiClient.delete(`/production-plans/${pos.production_plan_id}/positions/${id}`)
+          results.push({ id, status: "success" })
+        } catch (e) {
+          results.push({ id, status: "failed", reason: e instanceof Error ? e.message : "Не удалось удалить" })
+        }
+      }
+      setBulkProgress({ total: selectedIds.length, completed: i + 1, running: i + 1 < selectedIds.length })
+    }
+
+    const summary = summarizeBulkResults(results)
+    setBulkResults(results)
+    setBulkSummary(summary)
+    if (summary.failed > 0) setBulkResultsOpen(true)
+    setBulkDeleting(false)
+    setBulkProgress(null)
+    queryClient.invalidateQueries({ queryKey: ["all-plan-positions"] })
+    queryClient.invalidateQueries({ queryKey: ["plan-duplicates-all"] })
+    const failedEntries = results.filter(r => r.status === "failed")
+    toast({
+      title: summary.failed > 0 ? "Частичный успех" : "Массовое удаление",
+      description: summary.failed > 0
+        ? `${summary.success} успешно, ${summary.failed} ошибок. ${failedEntries.slice(0, 3).map(r => `#${r.id}: ${r.reason}`).join("; ")}`
+        : `${summary.success} успешно`,
+      variant: summary.failed > 0 ? "destructive" : "success",
+    })
+    bulkSelection.clear()
+    setSelectionOrder([])
   }
 
   const { data: files, isLoading: filesLoading } = useQuery({
@@ -848,6 +970,7 @@ export function PlanPage() {
     sortDefs,
   })
   const processedRows = result.rows
+  const filteredPositionIds = useMemo(() => processedRows.map((p) => p.id), [processedRows])
   const activeFilterSummary = useMemo(
     () => buildActiveFilterSummary(filters, searchQuery, sortConfigs.length),
     [filters, searchQuery, sortConfigs.length],
@@ -976,6 +1099,42 @@ export function PlanPage() {
     return data
   }, [detailPosition, duplicateConflictsByPosition])
 
+  const bulkSelectionRows = useMemo<BulkSelectionRow[]>(() => {
+    const posMap = new Map(positions?.map(p => [p.id, p]) ?? [])
+    return selectionOrder.map(id => {
+      const pos = posMap.get(id)
+      return {
+        id,
+        cells: {
+          id: `#${id}`,
+          sku: pos?.source_sku ?? "—",
+          name: pos?.source_name ?? "—",
+          qty: pos ? Number(pos.quantity || 0).toString() : "0",
+          route: pos?.route_name ?? "—",
+        },
+      }
+    })
+  }, [selectionOrder, positions])
+
+  const bulkActions = useMemo<BulkSelectionAction[]>(() => [
+    {
+      id: "approve",
+      label: "Утвердить",
+      variant: "success" as const,
+      onClick: handleBulkApprove,
+      disabled: bulkSelection.selectedCount === 0 || bulkApproving || bulkDeleting,
+      pending: bulkApproving,
+    },
+    {
+      id: "delete",
+      label: "Удалить",
+      variant: "destructive" as const,
+      onClick: requestBulkDelete,
+      disabled: bulkSelection.selectedCount === 0 || bulkApproving || bulkDeleting,
+      pending: bulkDeleting,
+    },
+  ], [bulkSelection.selectedCount, bulkApproving, bulkDeleting, handleBulkApprove, requestBulkDelete])
+
   const totalQty = positions?.reduce((sum, p) => sum + Number(p.quantity || 0), 0) ?? 0
   const totalQtyStr = Number.isInteger(totalQty) ? String(totalQty) : totalQty.toFixed(3).replace(/\.?0+$/, '')
   const errorCount = positions?.filter(p => p.errors?.length > 0).length ?? 0
@@ -988,6 +1147,7 @@ export function PlanPage() {
 
   return (
     <>
+      {!bulkMode && (
       <header className="page-header">
         <div>
           <h1 className="page-title">План</h1>
@@ -1006,8 +1166,9 @@ export function PlanPage() {
           </Button>
         </div>
       </header>
+      )}
 
-      {!activePlan && (
+      {!bulkMode && !activePlan && (
         <div className="rounded-lg border border-dashed p-12 text-center">
           <Upload className="h-12 w-12 mx-auto text-muted-foreground mb-3" />
           <h3 className="text-lg font-medium mb-1">Нет активного плана</h3>
@@ -1021,7 +1182,7 @@ export function PlanPage() {
         </div>
       )}
 
-      {activePlan && (
+      {!bulkMode && activePlan && (
         <div className="space-y-6">
           {/* Unified plan card: two columns */}
           <div className="rounded-lg border bg-card flex flex-col md:flex-row">
@@ -1094,15 +1255,39 @@ export function PlanPage() {
               )}
             </div>
           </div>
+        </div>
+      )}
+
+      {activePlan && (
+        <div className={bulkMode ? "fixed inset-0 z-50 bg-background flex flex-col p-4 overflow-auto" : undefined}>
+          {bulkMode && (
+            <div className="mb-3">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <ListChecks className="h-5 w-5 text-primary" />
+                  <span className="text-lg font-semibold">Групповые операции</span>
+                  <span className="text-sm text-muted-foreground">Выбрано: {bulkSelection.selectedCount}</span>
+                </div>
+                <Button variant="outline" size="sm" onClick={exitBulkMode}>
+                  Выйти
+                </Button>
+              </div>
+              <p className="text-sm text-muted-foreground mt-1">
+                Выбирайте позиции кликом по строке, используйте фильтры для отбора. Примените действие — «Утвердить» или «Удалить». <kbd className="px-1 py-0.5 text-xs rounded bg-muted font-mono">Esc</kbd> — выход.
+              </p>
+            </div>
+          )}
 
           {/* Aggregated positions */}
-          <section>
+          <section className="flex-1 flex flex-col">
+            {!bulkMode && (
             <div className="flex items-center gap-2 mb-2">
               <h3 className="text-base font-semibold">Сводная таблица позиций</h3>
               <span className="inline-flex items-center justify-center h-5 min-w-[20px] px-1.5 rounded-full bg-muted text-[11px] font-medium text-muted-foreground">
                 {processedRows.length} строк
               </span>
             </div>
+            )}
 
             <FiltersPanel
               className="mb-3"
@@ -1112,41 +1297,65 @@ export function PlanPage() {
               activeSummary={activeFilterSummary}
             />
 
-            {/* Route assignment toolbar */}
-            {selectedIds.size > 0 && (
-              <div className="flex items-center gap-3 mb-3 p-3 bg-blue-50 border border-blue-200 rounded-lg">
-                <span className="text-sm font-medium text-blue-800">Выбрано: {selectedIds.size}</span>
-                <Select value={selectedRouteId} onValueChange={setSelectedRouteId}>
-                  <SelectTrigger className="w-56 h-8 text-sm">
-                    <SelectValue placeholder="Выберите маршрут..." />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="__clear__">— Снять маршрут —</SelectItem>
-                    {activeRoutes.map(r => (
-                      <SelectItem key={r.id} value={String(r.id)}>{r.name}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-                <Button size="sm" className="h-8 text-sm" onClick={handleAssignRoute} disabled={assigningRoute || !selectedRouteId}>
-                  {assigningRoute ? "Применение..." : "Применить маршрут"}
+            {!bulkMode && (
+            <div className="flex items-center gap-2 mb-3">
+              <Button
+                variant={bulkMode ? "default" : "outline"}
+                size="sm"
+                onClick={() => {
+                  if (bulkMode) exitBulkMode()
+                  else setBulkMode(true)
+                }}
+              >
+                <ListChecks className="h-4 w-4 mr-1.5" />
+                {bulkMode ? "Групповые операции: вкл" : "Групповые операции"}
+              </Button>
+              {bulkMode && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={selectAll}
+                >
+                  Выбрать все
                 </Button>
-                <Button variant="ghost" size="sm" className="h-8 text-sm" onClick={clearSelection}>Сбросить</Button>
-              </div>
+              )}
+            </div>
             )}
 
+            {bulkMode && (
+            <BulkSelectionTable
+              selectedCount={bulkSelection.selectedCount}
+              rows={bulkSelectionRows}
+              columns={[
+                { key: "id", label: "ID" },
+                { key: "sku", label: "Артикул" },
+                { key: "name", label: "Наименование" },
+                { key: "qty", label: "Кол-во" },
+                { key: "route", label: "Маршрут" },
+              ]}
+              actions={bulkActions}
+              onClose={exitBulkMode}
+              onRemoveRow={(id) => bulkSelection.selectOne(Number(id), false)}
+              progress={bulkProgress}
+              lastSummary={bulkSummary}
+              className="shrink-0"
+            />
+            )}
+
+            <div className="flex-1 min-h-0">
             {posLoading && <p className="text-sm text-muted-foreground">Загрузка...</p>}
             {positions && positions.length > 0 && (
               <>
-              <div ref={tableScrollRef} className="rounded-lg border overflow-auto max-h-[70vh]">
+              <div
+                ref={tableScrollRef}
+                tabIndex={-1}
+                onMouseDown={() => tableScrollRef.current?.focus()}
+                className="rounded-lg border overflow-auto focus:outline-none"
+                style={{ maxHeight: bulkMode ? undefined : '70vh' }}
+              >
                 <table className="w-full border-separate border-spacing-0">
                   <thead className="[&_th]:sticky [&_th]:top-0 [&_th]:z-20 [&_th]:bg-background [&_th]:border-b">
                     <tr>
-                      <th className="text-left p-2 w-10">
-                        <Checkbox
-                          checked={processedRows.length > 0 && selectedIds.size === processedRows.length}
-                          onCheckedChange={selectAll}
-                        />
-                      </th>
                       <th className="text-left p-2" aria-sort={getAriaSort("id")}>
                         <SortableHeader field="id" currentSorts={sortConfigs} onSortChange={handleSortChange}>Id</SortableHeader>
                       </th>
@@ -1175,7 +1384,7 @@ export function PlanPage() {
                   <VirtualizedTableBody
                     rows={processedRows}
                     rowHeight={48}
-                    colSpan={10}
+                    colSpan={9}
                     scrollContainerRef={tableScrollRef}
                     renderRow={(p) => (
                       <PositionRow
@@ -1183,13 +1392,13 @@ export function PlanPage() {
                         pos={p}
                         onApprove={handleApprove}
                         onDelete={handleDelete}
-                        selected={selectedIds.has(p.id)}
-                        onToggle={toggleSelect}
+                        selected={bulkSelection.isSelected(p.id)}
                         routes={activeRoutes}
                         onAssignRoute={handleAssignRouteSingle}
                         onOpenDetail={() => openDetail(p)}
                         duplicateConflict={duplicateConflictsByPosition.get(p.id)}
                         onJumpToPosition={jumpToPosition}
+                        onSelect={bulkMode ? toggleSelect : undefined}
                       />
                     )}
                   />
@@ -1200,6 +1409,7 @@ export function PlanPage() {
               )}
               </>
             )}
+            </div>
           </section>
         </div>
       )}
@@ -1222,6 +1432,40 @@ export function PlanPage() {
         onOpenChange={setDetailOpen}
         data={detailData}
       />
+
+      {bulkSummary && bulkSummary.failed > 0 && (
+      <BulkResultsDialog
+        open={bulkResultsOpen}
+        onOpenChange={setBulkResultsOpen}
+        title="Результат массового действия"
+        summary={bulkSummary}
+        results={bulkResults}
+      />
+      )}
+
+      <AlertDialog open={bulkDeleteConfirmOpen} onOpenChange={setBulkDeleteConfirmOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle className="text-destructive">Подтвердить удаление</AlertDialogTitle>
+            <AlertDialogDescription>
+              Будет удалено <strong>{bulkSelection.selectedCount}</strong> позиций. Это действие нельзя отменить.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Отмена</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={(e) => {
+                e.preventDefault()
+                confirmBulkDelete()
+              }}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              disabled={bulkDeleting}
+            >
+              {bulkDeleting ? "Удаление..." : "Удалить"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </>
   )
 }

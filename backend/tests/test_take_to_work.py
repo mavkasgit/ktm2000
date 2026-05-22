@@ -331,3 +331,151 @@ async def test_take_to_work_rejects_extra_fields(client, session) -> None:
         headers=headers,
     )
     assert res.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_cancel_batch_success_and_repeat_skips(client, session) -> None:
+    user = await _make_user(session, "cancel-batch@test.local")
+    _, _, pos = await _make_product_route_plan(session, "FG-CANCEL-BATCH")
+    headers = _auth_headers(user)
+
+    res = await client.post(
+        "/api/production-planning/rows/cancel-batch",
+        json={"position_ids": [pos.id], "reason": "batch stop"},
+        headers=headers,
+    )
+    assert res.status_code == 200
+    assert res.json()["results"] == [{"position_id": pos.id, "status": "success", "reason": None}]
+    await session.refresh(pos)
+    assert pos.status == PlanPositionStatus.cancelled
+
+    repeat = await client.post(
+        "/api/production-planning/rows/cancel-batch",
+        json={"position_ids": [pos.id]},
+        headers=headers,
+    )
+    assert repeat.status_code == 200
+    assert repeat.json()["results"][0]["status"] == "skipped"
+    assert "already cancelled" in repeat.json()["results"][0]["reason"]
+
+
+@pytest.mark.asyncio
+async def test_cancel_batch_mixed_invalid_and_not_found(client, session) -> None:
+    user = await _make_user(session, "cancel-batch-mixed@test.local")
+    _, _, approved_pos = await _make_product_route_plan(session, "FG-CANCEL-MIXED")
+
+    product = Product(sku="FG-CANCEL-DRAFT", name="Draft Product", type=ProductType.finished_good, unit="pcs")
+    plan = ProductionPlan(
+        plan_no="PLAN-CANCEL-DRAFT",
+        name="Draft Plan",
+        status=ProductionPlanStatus.approved,
+        period_start=date(2026, 5, 1),
+        period_end=date(2026, 5, 31),
+    )
+    session.add_all([product, plan])
+    await session.flush()
+    draft_pos = PlanPosition(
+        production_plan_id=plan.id,
+        product_id=product.id,
+        source_type=PlanSourceType.manual,
+        source_sku=product.sku,
+        source_name=product.name,
+        quantity=Decimal("5"),
+        source_payload={},
+        status=PlanPositionStatus.draft,
+        validation_status=PlanPositionValidationStatus.valid,
+        validation_errors=[],
+        period_start=plan.period_start,
+        period_end=plan.period_end,
+    )
+    session.add(draft_pos)
+    await session.commit()
+
+    res = await client.post(
+        "/api/production-planning/rows/cancel-batch",
+        json={"position_ids": [approved_pos.id, draft_pos.id, 999999]},
+        headers=_auth_headers(user),
+    )
+    assert res.status_code == 200
+    results = res.json()["results"]
+    assert [item["status"] for item in results] == ["success", "failed", "failed"]
+    assert "draft" in results[1]["reason"]
+    assert "not found" in results[2]["reason"].lower()
+
+
+@pytest.mark.asyncio
+async def test_restore_batch_success_and_repeat_skips(client, session) -> None:
+    user = await _make_user(session, "restore-batch@test.local")
+    _, _, pos = await _make_product_route_plan(session, "FG-RESTORE-BATCH")
+    headers = _auth_headers(user)
+
+    cancel = await client.post(
+        "/api/production-planning/rows/cancel-batch",
+        json={"position_ids": [pos.id], "reason": "pause"},
+        headers=headers,
+    )
+    assert cancel.status_code == 200
+    assert cancel.json()["results"][0]["status"] == "success"
+
+    restore = await client.post(
+        "/api/production-planning/rows/restore-batch",
+        json={"position_ids": [pos.id], "reason": "resume"},
+        headers=headers,
+    )
+    assert restore.status_code == 200
+    assert restore.json()["results"] == [{"position_id": pos.id, "status": "success", "reason": None}]
+    await session.refresh(pos)
+    assert pos.status == PlanPositionStatus.approved
+
+    repeat = await client.post(
+        "/api/production-planning/rows/restore-batch",
+        json={"position_ids": [pos.id]},
+        headers=headers,
+    )
+    assert repeat.status_code == 200
+    assert repeat.json()["results"][0]["status"] == "skipped"
+    assert "already active" in repeat.json()["results"][0]["reason"]
+
+
+@pytest.mark.asyncio
+async def test_restore_batch_invalid_status_and_not_found(client, session) -> None:
+    user = await _make_user(session, "restore-batch-invalid@test.local")
+    _, _, approved_pos = await _make_product_route_plan(session, "FG-RESTORE-INVALID")
+    product = Product(sku="FG-RESTORE-DRAFT", name="Draft Product", type=ProductType.finished_good, unit="pcs")
+    plan = ProductionPlan(
+        plan_no="PLAN-RESTORE-DRAFT",
+        name="Draft Plan",
+        status=ProductionPlanStatus.approved,
+        period_start=date(2026, 5, 1),
+        period_end=date(2026, 5, 31),
+    )
+    session.add_all([product, plan])
+    await session.flush()
+    draft_pos = PlanPosition(
+        production_plan_id=plan.id,
+        product_id=product.id,
+        source_type=PlanSourceType.manual,
+        source_sku=product.sku,
+        source_name=product.name,
+        quantity=Decimal("5"),
+        source_payload={},
+        status=PlanPositionStatus.draft,
+        validation_status=PlanPositionValidationStatus.valid,
+        validation_errors=[],
+        period_start=plan.period_start,
+        period_end=plan.period_end,
+    )
+    session.add(draft_pos)
+    await session.commit()
+
+    res = await client.post(
+        "/api/production-planning/rows/restore-batch",
+        json={"position_ids": [approved_pos.id, draft_pos.id, 999999]},
+        headers=_auth_headers(user),
+    )
+    assert res.status_code == 200
+    results = res.json()["results"]
+    assert [item["status"] for item in results] == ["skipped", "failed", "failed"]
+    assert "already active" in results[0]["reason"]
+    assert "draft" in results[1]["reason"]
+    assert "not found" in results[2]["reason"].lower()

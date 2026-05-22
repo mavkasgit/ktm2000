@@ -409,6 +409,13 @@ async def delete_position(
     if position.status in {PlanPositionStatus.approved, PlanPositionStatus.released}:
         raise HTTPException(status_code=400, detail="Нельзя удалить утверждённую или запущенную позицию. Используйте отмену.")
 
+    # Delete related change items to avoid FK violation
+    await db.execute(
+        PlanChangeItem.__table__.delete().where(
+            PlanChangeItem.plan_position_id == position_id
+        )
+    )
+
     # Hard delete for draft/invalid/valid
     await db.delete(position)
     await db.commit()

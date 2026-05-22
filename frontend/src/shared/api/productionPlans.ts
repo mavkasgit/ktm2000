@@ -515,6 +515,28 @@ export type TakeToWorkResponse = {
   results: TakeToWorkResult[];
 };
 
+export type BatchActionStatus = "success" | "failed" | "skipped";
+
+export type BatchActionResult = {
+  position_id: number;
+  status: BatchActionStatus;
+  reason: string | null;
+};
+
+export type BatchActionResponse = {
+  results: BatchActionResult[];
+};
+
+export type CancelBatchRequest = {
+  position_ids: number[];
+  reason?: string;
+};
+
+export type RestoreBatchRequest = {
+  position_ids: number[];
+  reason?: string;
+};
+
 export type ManualPassInput = {
   target_route_step_id?: number;
   complete_route?: boolean;
@@ -551,8 +573,18 @@ export async function cancelPositionExecution(positionId: number) {
   return data;
 }
 
+export async function cancelPositionsExecutionBatch(payload: CancelBatchRequest) {
+  const { data } = await apiClient.post<BatchActionResponse>("/production-planning/rows/cancel-batch", payload);
+  return data;
+}
+
 export async function restorePositionExecution(positionId: number, reason?: string) {
   const { data } = await apiClient.post(`/production-planning/rows/${positionId}/restore`, { reason });
+  return data;
+}
+
+export async function restorePositionsExecutionBatch(payload: RestoreBatchRequest) {
+  const { data } = await apiClient.post<BatchActionResponse>("/production-planning/rows/restore-batch", payload);
   return data;
 }
 

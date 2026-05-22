@@ -1,4 +1,4 @@
-import { useMemo, useState, useCallback, useRef } from "react";
+import { useMemo, useState, useCallback, useRef, useEffect } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   getProductionPlanningRowDetail,
@@ -7,11 +7,12 @@ import {
   manualPassToStage,
   takeToWork,
   cancelPositionExecution,
+  cancelPositionsExecutionBatch,
   restorePositionExecution,
+  restorePositionsExecutionBatch,
   softDeleteCancelledPosition,
   getPositionHistory,
   type ProductionPlanningRow,
-  type TakeToWorkResult,
   type StatusHistoryEntry,
   type ProductionPlanningRowDetail,
 } from "@/shared/api/productionPlans";
@@ -23,6 +24,18 @@ import { toast } from "@/shared/ui/use-toast";
 import { getErrorMessage } from "@/shared/api/client";
 import { RowDetailsSidePanel, adaptExecutionDetail } from "@/features/planning/components/row-details";
 import { StepIndicator } from "../components/StepIndicator";
+import {
+  BulkPowerBar,
+  BulkResultsDialog,
+  runBulkAction,
+  summarizeBulkResults,
+  useBulkHotkeys,
+  useBulkSelection,
+  type BulkActionDefinition,
+  type BulkActionResultItem,
+  type BulkActionSummary,
+  type BulkRunnerProgress,
+} from "@/shared/bulk";
 
 const positionStatusLabels: Record<string, string> = {
   draft: "Черновик",
@@ -129,7 +142,7 @@ export function ExecutionPage() {
   const [rowFilter, setRowFilter] = useState("");
   const [planFilter, setPlanFilter] = useState("");
   const [statusFilter, setStatusFilter] = useState<string>("all");
-  const [sortConfigs, setSortConfigs] = useState<SortConfig<ExecutionSortField>>([]);
+  const [sortConfigs, setSortConfigs] = useState<SortConfig<ExecutionSortField>[]>([]);
 
   const { data: rows, isLoading, error } = useQuery({
     queryKey: ["production-planning-rows"],
@@ -162,14 +175,17 @@ export function ExecutionPage() {
   }, [sections]);
 
   const queryClient = useQueryClient();
-  const [selectedRows, setSelectedRows] = useState<Set<number>>(new Set());
+  const bulkSelection = useBulkSelection<number>();
+  const [selectedBulkActionId, setSelectedBulkActionId] = useState("take-to-work");
+  const [bulkProgress, setBulkProgress] = useState<BulkRunnerProgress | null>(null);
+  const [bulkResults, setBulkResults] = useState<BulkActionResultItem<number>[]>([]);
+  const [bulkSummary, setBulkSummary] = useState<BulkActionSummary | null>(null);
+  const [bulkResultsOpen, setBulkResultsOpen] = useState(false);
   const [launchDialog, setLaunchDialog] = useState<{ open: boolean; mode: "single" | "bulk"; positionIds: number[] }>({
     open: false,
     mode: "single",
     positionIds: [],
   });
-  const [launchResults, setLaunchResults] = useState<TakeToWorkResult[]>([]);
-  const [resultsDialogOpen, setResultsDialogOpen] = useState(false);
   const [manualPassDialog, setManualPassDialog] = useState<{
     open: boolean;
     positionId: number | null;
@@ -191,18 +207,26 @@ export function ExecutionPage() {
   const takeToWorkMutation = useMutation({
     mutationFn: takeToWork,
     onSuccess: (data) => {
-      setLaunchResults(data.results);
-      setResultsDialogOpen(true);
-      const successCount = data.results.filter((r) => r.status === "success").length;
-      const failCount = data.results.filter((r) => r.status === "failed").length;
-      const alreadyCount = data.results.filter((r) => r.status === "already_started").length;
+      const results = data.results.map<BulkActionResultItem<number>>((result) => ({
+        id: result.position_id,
+        status: result.status === "already_started" ? "skipped" : result.status,
+        reason: result.reason,
+        meta: { tasks_created: result.tasks_created },
+      }));
+      const summary = summarizeBulkResults(results);
+      setBulkResults(results);
+      setBulkSummary(summary);
+      setBulkResultsOpen(true);
+      const successCount = summary.success;
+      const failCount = summary.failed;
+      const alreadyCount = summary.skipped;
       if (failCount > 0) {
         toast({ title: "Частичный успех", description: `${successCount} успешно, ${failCount} ошибок, ${alreadyCount} уже запущено`, variant: "destructive" });
       } else {
         toast({ title: "Запуск завершён", description: `${successCount} запущено, ${alreadyCount} уже было запущено`, variant: "success" });
       }
       queryClient.invalidateQueries({ queryKey: ["production-planning-rows"] });
-      setSelectedRows(new Set());
+      bulkSelection.clear();
     },
     onError: (err) => toast({ title: "Ошибка запуска", description: getErrorMessage(err), variant: "destructive" }),
   });
@@ -316,6 +340,20 @@ export function ExecutionPage() {
     return null;
   }, []);
 
+  const getCancelBlockReason = useCallback((row: ProductionPlanningRow) => {
+    if (!["approved", "released"].includes(row.position_status)) {
+      return `Статус "${positionStatusLabels[row.position_status] || row.position_status}"`;
+    }
+    return null;
+  }, []);
+
+  const getRestoreBlockReason = useCallback((row: ProductionPlanningRow) => {
+    if (row.position_status !== "cancelled") {
+      return `Статус "${positionStatusLabels[row.position_status] || row.position_status}"`;
+    }
+    return null;
+  }, []);
+
   const handleSingleLaunch = useCallback((row: ProductionPlanningRow) => {
     const reason = getLaunchBlockReason(row);
     if (reason) {
@@ -335,24 +373,6 @@ export function ExecutionPage() {
       positionId: row.plan_position_id,
       targetRouteStepId: "",
       comment: "",
-    });
-  }, []);
-
-  const handleBulkLaunch = useCallback(() => {
-    const ids = Array.from(selectedRows);
-    if (ids.length === 0) {
-      toast({ title: "Выберите строки", description: "Отметьте строки для запуска", variant: "destructive" });
-      return;
-    }
-    setLaunchDialog({ open: true, mode: "bulk", positionIds: ids });
-  }, [selectedRows]);
-
-  const toggleRowSelection = useCallback((positionId: number, checked: boolean) => {
-    setSelectedRows((prev) => {
-      const next = new Set(prev);
-      if (checked) next.add(positionId);
-      else next.delete(positionId);
-      return next;
     });
   }, []);
 
@@ -516,8 +536,128 @@ export function ExecutionPage() {
     sortDefs: executionSortDefs,
   });
   const filteredRows = executionQueryResult.rows;
+  const rowById = useMemo(() => {
+    const map = new Map<number, ProductionPlanningRow>();
+    (rows || []).forEach((row) => map.set(row.plan_position_id, row));
+    return map;
+  }, [rows]);
+
+  const executionBulkActions = useMemo<BulkActionDefinition<number, Map<number, ProductionPlanningRow>>[]>(() => [
+    {
+      id: "take-to-work",
+      label: "Взять в работу",
+      primaryLabel: "Взять в работу",
+      pendingLabel: "Запуск...",
+      isEligible: (id, context) => {
+        const row = context.get(id);
+        return Boolean(row && !getLaunchBlockReason(row));
+      },
+      getIneligibleReason: (id, context) => {
+        const row = context.get(id);
+        return row ? getLaunchBlockReason(row) : "Строка не найдена";
+      },
+      run: async (ids) => {
+        const data = await takeToWork(ids);
+        return data.results.map((result) => ({
+          id: result.position_id,
+          status: result.status === "already_started" ? "skipped" : result.status,
+          reason: result.reason,
+          meta: { tasks_created: result.tasks_created },
+        }));
+      },
+    },
+    {
+      id: "cancel",
+      label: "Отменить / остановить",
+      primaryLabel: "Отменить",
+      pendingLabel: "Отмена...",
+      isEligible: (id, context) => {
+        const row = context.get(id);
+        return Boolean(row && !getCancelBlockReason(row));
+      },
+      getIneligibleReason: (id, context) => {
+        const row = context.get(id);
+        return row ? getCancelBlockReason(row) : "Строка не найдена";
+      },
+      run: async (ids) => {
+        const data = await cancelPositionsExecutionBatch({ position_ids: ids });
+        return data.results.map((result) => ({
+          id: result.position_id,
+          status: result.status,
+          reason: result.reason,
+        }));
+      },
+    },
+    {
+      id: "restore",
+      label: "Восстановить",
+      primaryLabel: "Восстановить",
+      pendingLabel: "Восстановление...",
+      isEligible: (id, context) => {
+        const row = context.get(id);
+        return Boolean(row && !getRestoreBlockReason(row));
+      },
+      getIneligibleReason: (id, context) => {
+        const row = context.get(id);
+        return row ? getRestoreBlockReason(row) : "Строка не найдена";
+      },
+      run: async (ids) => {
+        const data = await restorePositionsExecutionBatch({ position_ids: ids });
+        return data.results.map((result) => ({
+          id: result.position_id,
+          status: result.status,
+          reason: result.reason,
+        }));
+      },
+    },
+  ], [getCancelBlockReason, getLaunchBlockReason, getRestoreBlockReason]);
+
+  const selectedBulkAction = executionBulkActions.find((action) => action.id === selectedBulkActionId) ?? executionBulkActions[0]!;
+  const eligibleFilteredIds = useMemo(
+    () =>
+      filteredRows
+        .filter((row) => selectedBulkAction.isEligible?.(row.plan_position_id, rowById) ?? true)
+        .map((row) => row.plan_position_id),
+    [filteredRows, rowById, selectedBulkAction],
+  );
+
+  useEffect(() => {
+    bulkSelection.pruneTo(eligibleFilteredIds);
+  }, [bulkSelection.pruneTo, eligibleFilteredIds]);
+
+  const runSelectedBulkAction = useCallback(async () => {
+    if (bulkSelection.selectedCount === 0) {
+      toast({ title: "Выберите строки", description: "Отметьте строки для массового действия", variant: "destructive" });
+      return;
+    }
+    setBulkProgress({ total: bulkSelection.selectedCount, completed: 0, running: true });
+    const results = await runBulkAction(selectedBulkAction, bulkSelection.selectedIds, rowById, setBulkProgress);
+    const summary = summarizeBulkResults(results);
+    setBulkResults(results);
+    setBulkSummary(summary);
+    setBulkResultsOpen(true);
+    queryClient.invalidateQueries({ queryKey: ["production-planning-rows"] });
+    toast({
+      title: summary.failed > 0 ? "Частичный успех" : "Массовое действие выполнено",
+      description: `${summary.success} успешно, ${summary.skipped} пропущено, ${summary.failed} ошибок`,
+      variant: summary.failed > 0 ? "destructive" : "success",
+    });
+    bulkSelection.clear();
+    setBulkProgress(null);
+  }, [bulkSelection, queryClient, rowById, selectedBulkAction]);
 
   const tableScrollRef = useRef<HTMLDivElement>(null);
+
+  useBulkHotkeys({
+    scopeRef: tableScrollRef,
+    filteredIds: eligibleFilteredIds,
+    hasSelection: bulkSelection.selectedCount > 0,
+    disabled: isLoading,
+    isRunning: Boolean(bulkProgress?.running),
+    selectAllFiltered: bulkSelection.selectAllFiltered,
+    clear: bulkSelection.clear,
+    runPrimary: runSelectedBulkAction,
+  });
 
   const totalRows = rows?.length || 0;
   const releasedRows = rows?.filter((r) => r.is_released && !r.is_completed).length || 0;
@@ -559,11 +699,6 @@ export function ExecutionPage() {
             <span className="px-3 py-1 rounded-full bg-violet-100 text-violet-700">Завершено: {completedRows}</span>
           </div>
         </div>
-        {selectedRows.size > 0 && (
-          <Button onClick={handleBulkLaunch} variant="default">
-            <span className="ml-1">Взять выбранные в работу ({selectedRows.size})</span>
-          </Button>
-        )}
       </header>
 
       <section className="space-y-3">
@@ -574,14 +709,48 @@ export function ExecutionPage() {
           activeSummary={executionActiveFilterSummary}
         />
 
-        <div ref={tableScrollRef} className="rounded-lg border overflow-auto max-h-[70vh]">
+        <BulkPowerBar
+          selectedCount={bulkSelection.selectedCount}
+          actions={executionBulkActions}
+          selectedActionId={selectedBulkActionId}
+          onActionChange={setSelectedBulkActionId}
+          onRun={runSelectedBulkAction}
+          onClear={bulkSelection.clear}
+          progress={bulkProgress}
+          lastSummary={bulkSummary}
+        />
+
+        <div
+          ref={tableScrollRef}
+          tabIndex={-1}
+          onMouseDown={() => tableScrollRef.current?.focus()}
+          className="rounded-lg border overflow-auto max-h-[70vh] focus:outline-none"
+        >
           <table className="w-full border-separate border-spacing-0">
             <thead className="[&_th]:sticky [&_th]:top-0 [&_th]:z-20 [&_th]:bg-background [&_th]:border-b">
               <tr>
                 <th className="text-left p-2 w-20" aria-sort={getAriaSort("id")}>
                   <SortableHeader field="id" currentSorts={sortConfigs} onSortChange={handleSortChange}>ID</SortableHeader>
                 </th>
-                <th className="text-left p-2 w-8"></th>
+                <th className="text-left p-2 w-8">
+                  <Checkbox
+                    checked={
+                      bulkSelection.isAllSelected(eligibleFilteredIds)
+                        ? true
+                        : bulkSelection.isIndeterminate(eligibleFilteredIds)
+                          ? "indeterminate"
+                          : false
+                    }
+                    onCheckedChange={() => {
+                      if (bulkSelection.isAllSelected(eligibleFilteredIds)) {
+                        bulkSelection.clear();
+                      } else {
+                        bulkSelection.selectAllFiltered(eligibleFilteredIds);
+                      }
+                    }}
+                    disabled={eligibleFilteredIds.length === 0}
+                  />
+                </th>
                 <th className="text-left p-2" aria-sort={getAriaSort("row")}>
                   <SortableHeader field="row" currentSorts={sortConfigs} onSortChange={handleSortChange}>Строка</SortableHeader>
                 </th>
@@ -612,6 +781,7 @@ export function ExecutionPage() {
               scrollContainerRef={tableScrollRef}
               renderRow={(row) => {
                 const canLaunch = row.position_status === "approved" && !row.has_tasks && !row.is_released && !!row.route_id;
+                const canSelect = selectedBulkAction.isEligible?.(row.plan_position_id, rowById) ?? true;
                 const canManualPass = !!row.route_id && ["approved", "released"].includes(row.position_status) && !row.is_completed;
                 const blockReason = getLaunchBlockReason(row);
                 return (
@@ -622,10 +792,10 @@ export function ExecutionPage() {
                 >
                   <td className="p-2 font-mono text-xs text-muted-foreground">#{row.plan_position_id}</td>
                   <td className="p-2" onClick={(e) => e.stopPropagation()}>
-                    {canLaunch && (
+                    {canSelect && (
                       <Checkbox
-                        checked={selectedRows.has(row.plan_position_id)}
-                        onCheckedChange={(checked) => toggleRowSelection(row.plan_position_id, !!checked)}
+                        checked={bulkSelection.isSelected(row.plan_position_id)}
+                        onCheckedChange={(checked) => bulkSelection.selectOne(row.plan_position_id, !!checked)}
                       />
                     )}
                   </td>
@@ -957,44 +1127,13 @@ export function ExecutionPage() {
         </AlertDialogContent>
       </AlertDialog>
 
-      <Dialog
-        open={resultsDialogOpen}
-        onOpenChange={(open) => {
-          if (!open) setResultsDialogOpen(false);
-        }}
-      >
-        <DialogContent className="sm:max-w-[560px]">
-          <DialogHeader>
-            <DialogTitle>Результат запуска</DialogTitle>
-            <DialogDescription>
-              {launchResults.filter((r) => r.status === "success").length} успешно,{" "}
-              {launchResults.filter((r) => r.status === "already_started").length} уже запущено,{" "}
-              {launchResults.filter((r) => r.status === "failed").length} ошибок
-            </DialogDescription>
-          </DialogHeader>
-          <div className="max-h-[320px] overflow-auto space-y-2">
-            {launchResults.map((result) => (
-              <div key={result.position_id} className="rounded border p-2 text-sm">
-                <div className="flex items-center justify-between">
-                  <span className="font-medium">Позиция #{result.position_id}</span>
-                  <Badge
-                    variant={result.status === "success" ? "default" : result.status === "already_started" ? "secondary" : "destructive"}
-                  >
-                    {result.status === "success" ? "Успешно" : result.status === "already_started" ? "Уже запущено" : "Ошибка"}
-                  </Badge>
-                </div>
-                {result.reason && <div className="text-xs text-muted-foreground mt-1">{result.reason}</div>}
-                {result.tasks_created != null && (
-                  <div className="text-xs text-muted-foreground mt-1">Задач создано: {result.tasks_created}</div>
-                )}
-              </div>
-            ))}
-          </div>
-          <div className="flex justify-end pt-2">
-            <Button onClick={() => setResultsDialogOpen(false)}>Закрыть</Button>
-          </div>
-        </DialogContent>
-      </Dialog>
+      <BulkResultsDialog
+        open={bulkResultsOpen}
+        onOpenChange={setBulkResultsOpen}
+        title="Результат массового действия"
+        summary={bulkSummary}
+        results={bulkResults}
+      />
 
       <Dialog
         open={historyDialogOpen}

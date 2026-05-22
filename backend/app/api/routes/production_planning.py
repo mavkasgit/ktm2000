@@ -1,5 +1,6 @@
 from datetime import UTC, datetime
 from decimal import Decimal
+from typing import Literal
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -34,6 +35,30 @@ class TakeToWorkRequest(BaseModel):
 
 class StatusActionIn(BaseModel):
     reason: str | None = None
+
+
+class CancelBatchRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    position_ids: list[int]
+    reason: str | None = None
+
+
+class RestoreBatchRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    position_ids: list[int]
+    reason: str | None = None
+
+
+class BatchActionResult(BaseModel):
+    position_id: int
+    status: Literal["success", "failed", "skipped"]
+    reason: str | None = None
+
+
+class BatchActionResponse(BaseModel):
+    results: list[BatchActionResult]
 
 
 class ManualPassRequest(BaseModel):
@@ -747,6 +772,24 @@ async def cancel_position(
     }
 
 
+@router.post(
+    "/rows/cancel-batch",
+    response_model=BatchActionResponse,
+    dependencies=[Depends(require_role(list(WRITER_ROLES)))],
+)
+async def cancel_positions_batch(
+    payload: CancelBatchRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> BatchActionResponse:
+    results = [
+        await _process_position_cancel(db, position_id, current_user.id, payload.reason)
+        for position_id in payload.position_ids
+    ]
+    await db.commit()
+    return BatchActionResponse(results=results)
+
+
 @router.post("/rows/{position_id}/restore", dependencies=[Depends(require_role(list(WRITER_ROLES)))])
 async def restore_position(
     position_id: int,
@@ -792,6 +835,95 @@ async def restore_position(
         "production_plan_id": pos.production_plan_id,
         "status": pos.status.value,
     }
+
+
+@router.post(
+    "/rows/restore-batch",
+    response_model=BatchActionResponse,
+    dependencies=[Depends(require_role(list(WRITER_ROLES)))],
+)
+async def restore_positions_batch(
+    payload: RestoreBatchRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> BatchActionResponse:
+    results = [
+        await _process_position_restore(db, position_id, current_user.id, payload.reason)
+        for position_id in payload.position_ids
+    ]
+    await db.commit()
+    return BatchActionResponse(results=results)
+
+
+async def _process_position_cancel(
+    db: AsyncSession,
+    position_id: int,
+    current_user_id: int | None,
+    reason: str | None,
+) -> BatchActionResult:
+    pos = await db.get(PlanPosition, position_id)
+    if pos is None or pos.deleted_at is not None:
+        return BatchActionResult(position_id=position_id, status="failed", reason="Position not found")
+    if pos.status == PlanPositionStatus.cancelled:
+        return BatchActionResult(position_id=position_id, status="skipped", reason="Position is already cancelled")
+    if pos.status not in {PlanPositionStatus.approved, PlanPositionStatus.released}:
+        return BatchActionResult(
+            position_id=position_id,
+            status="failed",
+            reason=f"Нельзя отменить позицию со статусом '{pos.status.value}'",
+        )
+
+    from_status = pos.status.value
+    pos.status = PlanPositionStatus.cancelled
+    record_status_change(db, position_id, from_status, PlanPositionStatus.cancelled.value, current_user_id, reason)
+    return BatchActionResult(position_id=position_id, status="success")
+
+
+async def _process_position_restore(
+    db: AsyncSession,
+    position_id: int,
+    current_user_id: int | None,
+    reason: str | None,
+) -> BatchActionResult:
+    pos = await db.get(PlanPosition, position_id)
+    if pos is None or pos.deleted_at is not None:
+        return BatchActionResult(position_id=position_id, status="failed", reason="Position not found")
+    if pos.status in {PlanPositionStatus.approved, PlanPositionStatus.released}:
+        return BatchActionResult(position_id=position_id, status="skipped", reason="Position is already active")
+    if pos.status != PlanPositionStatus.cancelled:
+        return BatchActionResult(
+            position_id=position_id,
+            status="failed",
+            reason=f"Нельзя восстановить позицию со статусом '{pos.status.value}'",
+        )
+
+    from app.models.production_plan import PositionStatusHistory
+
+    last_cancel = (
+        await db.execute(
+            select(PositionStatusHistory)
+            .where(
+                PositionStatusHistory.plan_position_id == position_id,
+                PositionStatusHistory.to_status == PlanPositionStatus.cancelled.value,
+            )
+            .order_by(PositionStatusHistory.changed_at.desc())
+        )
+    ).scalar_one_or_none()
+
+    if last_cancel is None:
+        return BatchActionResult(position_id=position_id, status="failed", reason="Нет истории отмены — восстановление невозможно")
+
+    target_status_value = last_cancel.from_status
+    if target_status_value not in {PlanPositionStatus.approved.value, PlanPositionStatus.released.value}:
+        return BatchActionResult(
+            position_id=position_id,
+            status="failed",
+            reason=f"Недопустимый статус для восстановления: '{target_status_value}'",
+        )
+
+    pos.status = PlanPositionStatus(target_status_value)
+    record_status_change(db, position_id, PlanPositionStatus.cancelled.value, target_status_value, current_user_id, reason)
+    return BatchActionResult(position_id=position_id, status="success")
 
 
 async def _process_position_take_to_work(
