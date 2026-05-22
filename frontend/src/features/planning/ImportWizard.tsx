@@ -3,7 +3,8 @@ import { Check, ExternalLink, Upload, ChevronRight, ChevronDown } from "lucide-r
 import { useNavigate } from "react-router-dom"
 import { uploadExcel, applyChangeSet, discardImport } from "./api"
 import { getExcelSheetNames, previewExcelSheet, type SheetPreviewResponse } from "shared/api/imports"
-import { Button, Input, AlertDialog, AlertDialogContent, AlertDialogHeader, AlertDialogTitle, AlertDialogDescription, AlertDialogFooter, AlertDialogAction, AlertDialogCancel } from "shared/ui"
+import { Button, Input, AlertDialog, AlertDialogContent, AlertDialogHeader, AlertDialogTitle, AlertDialogDescription, AlertDialogFooter, AlertDialogAction, AlertDialogCancel, FiltersPanel, Select, SelectContent, SelectItem, SelectTrigger, SelectValue, type FiltersPanelField } from "shared/ui"
+import { buildActiveFilterSummary } from "shared/ui/buildActiveFilterSummary"
 import { useQuery } from "@tanstack/react-query"
 import { listImportTemplates, type ImportTemplate } from "@/shared/api/importTemplates"
 import { getErrorMessage } from "@/shared/api/client"
@@ -552,7 +553,7 @@ export function ImportWizard(props: {
       if (aVal > bVal) return sortConfig.dir === "asc" ? 1 : -1
       return 0
     })
-  }, [allRows, filterStatus, sortConfig, rowSelection])
+  }, [allRows, filterStatus, sortConfig, rowSelection, searchQuery])
 
   const summary = useMemo(() => {
     const total = allRows.length
@@ -560,6 +561,44 @@ export function ImportWizard(props: {
     const warning = allRows.filter((r) => r.status === "warning").length
     return { total, invalid, warning }
   }, [allRows])
+  const previewActiveFilterSummary = useMemo(
+    () =>
+      buildActiveFilterSummary(
+        { status: filterStatus },
+        searchQuery,
+        sortConfig ? 1 : 0,
+      ),
+    [filterStatus, searchQuery, sortConfig],
+  )
+  const resetPreviewFilters = useCallback(() => {
+    setSearchQuery("")
+    setFilterStatus("all")
+    setSortConfig(null)
+  }, [])
+  const previewFilterFields = useMemo<FiltersPanelField[]>(
+    () => [
+      {
+        kind: "search" as const,
+        key: "search",
+        value: searchQuery,
+        onChange: setSearchQuery,
+        placeholder: "Поиск: строка, ID, артикул...",
+      },
+      {
+        kind: "select" as const,
+        key: "status",
+        value: filterStatus,
+        onChange: (value: string) => setFilterStatus(value as "all" | "invalid" | "warning"),
+        placeholder: "Статус строк",
+        options: [
+          { value: "all", label: "Все" },
+          { value: "invalid", label: "Ошибки" },
+          { value: "warning", label: "Предупр." },
+        ],
+      },
+    ],
+    [filterStatus, searchQuery],
+  )
 
   const applyStats = useMemo(() => {
     const total = summary.total
@@ -761,18 +800,21 @@ export function ImportWizard(props: {
                 <div className="grid grid-cols-1 gap-3">
                   <div>
                     <label className="text-xs text-muted-foreground">Шаблон импорта</label>
-                    <select
-                      className="h-10 w-full rounded-md border bg-background px-3 text-sm"
-                      value={activeTemplateId ?? ""}
-                      onChange={(e) => setActiveTemplateId(e.target.value ? Number(e.target.value) : null)}
-                    >
-                      <option value="">Без шаблона (только глобальные правила)</option>
-                      {activeTemplates.map((template) => (
-                        <option key={template.id} value={String(template.id)}>
-                          {template.button_label || template.name}
-                        </option>
-                      ))}
-                    </select>
+                    <div className="w-[300px]">
+                      <Select value={activeTemplateId != null ? String(activeTemplateId) : "none"} onValueChange={(v) => setActiveTemplateId(v === "none" ? null : Number(v))}>
+                        <SelectTrigger className="h-10">
+                          <SelectValue placeholder="Без шаблона (только глобальные правила)" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="none">Без шаблона (только глобальные правила)</SelectItem>
+                          {activeTemplates.map((template) => (
+                            <SelectItem key={template.id} value={String(template.id)}>
+                              {template.button_label || template.name}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
                   </div>
                 </div>
               )}
@@ -823,149 +865,130 @@ export function ImportWizard(props: {
 
         {step === "preview" && file && sheets.length > 0 && (
           <div className="flex-1 overflow-hidden flex flex-col space-y-3">
-            {/* Sheet tabs */}
-            <div className="flex gap-1 flex-wrap shrink-0">
-              {sheets.map((name, idx) => (
-                <button
-                  key={idx}
-                  onClick={() => {
-                    setSelectedSheet(idx)
-                    loadSheetPreview(file, idx, rowSelection)
-                  }}
-                  className={`px-3 py-1.5 text-xs rounded-md border transition-colors ${
-                    selectedSheet === idx
-                      ? "bg-primary text-primary-foreground border-primary"
-                      : "bg-background hover:bg-accent border-input"
-                  }`}
-                >
-                  {name}
-                </button>
-              ))}
-            </div>
-
-            {/* Row selection filter */}
-            <div className="flex items-center gap-3 shrink-0">
-              <div className="flex-1 max-w-xs">
-                <Input
-                  value={rowSelection}
-                  onChange={(e) => setRowSelection(e.target.value)}
-                  placeholder="Строки: 5,7,12-15"
-                  className="h-7 text-xs"
-                />
-              </div>
-              <span className="text-xs text-muted-foreground">
-                {currentPreview ? `${currentPreview.total_rows} строк на листе` : "Загрузка…"}
-              </span>
-            </div>
-
-            {activeTemplates.length > 0 && (
-              <div className="flex items-center gap-3 shrink-0">
-                <div className="w-full max-w-md">
-                  <label className="text-xs text-muted-foreground">Шаблон импорта</label>
-                  <select
-                    className="mt-1 h-9 w-full rounded-md border bg-background px-3 text-sm"
-                    value={activeTemplateId ?? ""}
-                    onChange={(e) => setActiveTemplateId(e.target.value ? Number(e.target.value) : null)}
-                  >
-                    <option value="">Без шаблона (только глобальные правила)</option>
-                    {activeTemplates.map((template) => (
-                      <option key={template.id} value={String(template.id)}>
-                        {template.button_label || template.name}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-              </div>
-            )}
-
-            {/* Summary bar */}
+            {/* Compact horizontal controls */}
             {currentPreview && (
               <>
-                {(() => {
-                  const summaryData = (currentPreview.summary as Record<string, unknown>) || {}
-                  const selection = String(summaryData.row_selection ?? "")
-                  const autoRows = (summaryData.auto_included_row_numbers as unknown[] | undefined) || []
-                  if (!selection) return null
-                  return (
-                    <div className="rounded-lg border border-blue-200 bg-blue-50 p-3 text-sm text-blue-900">
-                      <div><strong>Фильтр строк:</strong> {selection}</div>
-                      {autoRows.length > 0 && (
-                        <div className="mt-1">
-                          <strong>Автодобавлены парные строки:</strong> {autoRows.join(", ")}
-                        </div>
-                      )}
-                    </div>
-                  )
-                })()}
-                <div className="flex items-center justify-between flex-wrap gap-2">
-                  <div className="flex gap-4 text-sm">
-                    <span><strong>Всего:</strong> {summary.total}</span>
-                    <span>
-                      <strong>Период:</strong>{" "}
-                      {String(((currentPreview.summary as Record<string, unknown>)?.period_label ?? "не определен"))}
-                    </span>
-                    {summary.invalid > 0 && <span className="text-red-600"><strong>Ошибок:</strong> {summary.invalid}</span>}
-                    {summary.warning > 0 && <span className="text-amber-600"><strong>Предупр.:</strong> {summary.warning}</span>}
-                    {summary.invalid === 0 && summary.warning === 0 && <span className="text-green-600 text-xs">Без ошибок</span>}
+                {/* Row 1: Sheet tabs / File / Rows / Template / References */}
+                <div className="flex flex-wrap items-center gap-3 shrink-0">
+                  {/* Sheet tabs as buttons */}
+                  <div className="flex gap-1 flex-wrap shrink-0">
+                    {sheets.map((name, idx) => (
+                      <button
+                        key={idx}
+                        onClick={() => {
+                          setSelectedSheet(idx)
+                          loadSheetPreview(file, idx, rowSelection)
+                        }}
+                        className={`px-3 py-1.5 text-xs rounded-md border transition-colors ${
+                          selectedSheet === idx
+                            ? "bg-primary text-primary-foreground border-primary"
+                            : "bg-background hover:bg-accent border-input"
+                        }`}
+                      >
+                        {name}
+                      </button>
+                    ))}
                   </div>
-                  <div className="flex items-center gap-2">
-                    <input
-                      type="text"
-                      placeholder="Поиск: строка, ID, артикул..."
-                      value={searchQuery}
-                      onChange={(e) => setSearchQuery(e.target.value)}
-                      className="h-7 w-48 px-2 py-1 text-xs border rounded-md bg-background"
-                    />
-                    <div className="flex gap-1">
-                      {(["all", "invalid", "warning"] as const).map((f) => (
-                        <button
-                          key={f}
-                          onClick={() => setFilterStatus(f)}
-                          className={`px-2.5 py-1 text-xs rounded-md border transition-colors ${
-                            filterStatus === f
-                              ? "bg-primary text-primary-foreground border-primary"
-                              : "bg-background hover:bg-accent border-input"
-                          }`}
-                        >
-                          {f === "all" ? "Все" : f === "invalid" ? "Ошибки" : "Предупр."}
-                        </button>
-                      ))}
-                    </div>
-                    <button
-                      onClick={() => setShowRawRows(!showRawRows)}
-                      className={`px-2.5 py-1 text-xs rounded-md border transition-colors flex items-center gap-1 ${
-                        showRawRows
-                          ? "bg-primary text-primary-foreground border-primary"
-                          : "bg-background hover:bg-accent border-input"
-                      }`}
+
+                  <span className="text-xs text-muted-foreground">
+                    {currentPreview.total_rows} строк
+                  </span>
+
+                  <span className="text-xs text-muted-foreground font-medium">Строки:</span>
+                  <Input
+                    value={rowSelection}
+                    onChange={(e) => setRowSelection(e.target.value)}
+                    placeholder="5,7,12-15"
+                    className="h-7 w-32 text-xs"
+                  />
+
+                  {activeTemplates.length > 0 && (
+                    <>
+                      <span className="text-xs text-muted-foreground font-medium">Шаблон:</span>
+                      <div className="w-[300px] flex-shrink-0">
+                        <Select value={activeTemplateId != null ? String(activeTemplateId) : "none"} onValueChange={(v) => setActiveTemplateId(v === "none" ? null : Number(v))}>
+                          <SelectTrigger className="h-7 text-xs">
+                            <SelectValue placeholder="Без шаблона" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="none">Без шаблона</SelectItem>
+                            {activeTemplates.map((template) => (
+                              <SelectItem key={template.id} value={String(template.id)}>
+                                {template.button_label || template.name}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                    </>
+                  )}
+                </div>
+
+                {/* Row 2: Summary + Error chips */}
+                <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-sm shrink-0">
+                  <span><strong>Всего:</strong> {summary.total}</span>
+                  <span>
+                    <strong>Период:</strong>{" "}
+                    {String(((currentPreview.summary as Record<string, unknown>)?.period_label ?? "не определен"))}
+                  </span>
+                  {summary.invalid > 0 && <span className="text-red-600"><strong>Ошибок:</strong> {summary.invalid}</span>}
+                  {summary.warning > 0 && <span className="text-amber-600"><strong>Предупр.:</strong> {summary.warning}</span>}
+                  {summary.invalid === 0 && summary.warning === 0 && <span className="text-green-600 text-xs">Без ошибок</span>}
+                  {errorBreakdown["product_not_found"] > 0 && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="h-7 text-xs gap-1 shrink-0"
+                      onClick={() => window.open("/references/raw-materials", "_blank")}
                     >
-                      {showRawRows ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
-                      Сырые строки
-                    </button>
-                  </div>
+                      <ExternalLink className="h-3 w-3" />
+                      Открыть справочники
+                    </Button>
+                  )}
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-7 text-xs gap-1 shrink-0"
+                    onClick={() => window.open("/planning", "_blank")}
+                  >
+                    <ExternalLink className="h-3 w-3" />
+                    Открыть план
+                  </Button>
                 </div>
 
                 {Object.keys(errorBreakdown).length > 0 && (
-                  <div className="flex flex-wrap items-center gap-2 text-xs">
-                    <span className="text-muted-foreground">Ошибки по типам:</span>
+                  <div className="flex flex-wrap items-center gap-2 text-xs shrink-0">
                     {Object.entries(errorBreakdown).map(([code, count]) => (
                       <span key={code} className="bg-red-50 text-red-700 px-2 py-0.5 rounded border border-red-100">
-                        {code}: {count}
+                        {errorLabelsRaw[code] ?? code}: {count}
                       </span>
                     ))}
-                    {errorBreakdown["product_not_found"] > 0 && (
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        className="ml-auto h-7 text-xs gap-1"
-                        onClick={() => { navigate("/references/raw-materials"); props.onClose() }}
-                      >
-                        <ExternalLink className="h-3 w-3" />
-                        Открыть справочники
-                      </Button>
-                    )}
                   </div>
                 )}
+
+                {/* Row 3: Filters */}
+                <FiltersPanel
+                  compact
+                  fields={previewFilterFields}
+                  onReset={resetPreviewFilters}
+                  hasActiveFilters={previewActiveFilterSummary.count > 0}
+                  activeSummary={previewActiveFilterSummary}
+                  className="p-3"
+                  actions={(
+                    <div className="flex items-center gap-2">
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant={showRawRows ? "default" : "outline"}
+                        className="h-8 text-sm"
+                        onClick={() => setShowRawRows(!showRawRows)}
+                      >
+                        {showRawRows ? <ChevronDown className="h-3.5 w-3.5 mr-1" /> : <ChevronRight className="h-3.5 w-3.5 mr-1" />}
+                        Сырые строки
+                      </Button>
+                    </div>
+                  )}
+                />
 
                 <div className="flex-1 overflow-auto border rounded-lg">
                   {previewLoading[currentPreviewKey] ? (

@@ -1,4 +1,4 @@
-import { useMemo, useState, useCallback } from "react";
+import { useMemo, useState, useCallback, useRef } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   getProductionPlanningRowDetail,
@@ -16,7 +16,9 @@ import {
   type ProductionPlanningRowDetail,
 } from "@/shared/api/productionPlans";
 import { listSections } from "@/shared/api/sections";
-import { Badge, Button, Checkbox, Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, Input, Select, SelectContent, SelectItem, SelectTrigger, SelectValue, AlertDialog, AlertDialogContent, AlertDialogHeader, AlertDialogTitle, AlertDialogDescription, AlertDialogFooter, AlertDialogAction, AlertDialogCancel, renderIcon } from "@/shared/ui";
+import { Badge, Button, Checkbox, Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, Input, Select, SelectContent, SelectItem, SelectTrigger, SelectValue, AlertDialog, AlertDialogContent, AlertDialogHeader, AlertDialogTitle, AlertDialogDescription, AlertDialogFooter, AlertDialogAction, AlertDialogCancel, renderIcon, FiltersPanel, VirtualizedTableBody, SortableHeader, type FiltersPanelField } from "@/shared/ui";
+import { useTableQueryEngine, SortConfig, ColumnSortDef } from "@/shared/hooks/useTableQueryEngine";
+import { nextMultiSortConfigs } from "@/shared/lib/multiSort";
 import { toast } from "@/shared/ui/use-toast";
 import { getErrorMessage } from "@/shared/api/client";
 import { RowDetailsSidePanel, adaptExecutionDetail } from "@/features/planning/components/row-details";
@@ -118,6 +120,8 @@ function RowRouteCell({ row }: { row: ProductionPlanningRow }) {
   return <span className="text-xs text-red-600">{row.route_error || "Не назначен"}</span>;
 }
 
+type ExecutionSortField = "id" | "row" | "plan" | "sku" | "name" | "qty" | "route" | "status"
+
 export function ExecutionPage() {
   const [selectedPositionId, setSelectedPositionId] = useState<number | null>(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
@@ -125,6 +129,7 @@ export function ExecutionPage() {
   const [rowFilter, setRowFilter] = useState("");
   const [planFilter, setPlanFilter] = useState("");
   const [statusFilter, setStatusFilter] = useState<string>("all");
+  const [sortConfigs, setSortConfigs] = useState<SortConfig<ExecutionSortField>>([]);
 
   const { data: rows, isLoading, error } = useQuery({
     queryKey: ["production-planning-rows"],
@@ -402,15 +407,75 @@ export function ExecutionPage() {
     setCancelDialog({ open: false, positionId: null, isReleased: false });
   }, [cancelDialog.positionId, cancelPositionMutation]);
 
-  const filteredRows = useMemo(() => {
-    const list = rows || [];
-    return list.filter((row) => {
-      if (statusFilter === "completed" && !row.is_completed) {
-        return false;
-      }
-      if (statusFilter !== "all" && statusFilter !== "completed" && row.position_status !== statusFilter) {
-        return false;
-      }
+  const executionActiveFilterSummary = useMemo(() => {
+    const labels: string[] = [];
+    if (skuFilter.trim()) labels.push("SKU/наименование");
+    if (rowFilter.trim()) labels.push("Номер строки");
+    if (planFilter.trim()) labels.push("План");
+    if (statusFilter !== "all") labels.push("Статус");
+    return { count: labels.length, labels };
+  }, [planFilter, rowFilter, skuFilter, statusFilter]);
+  const resetExecutionFilters = useCallback(() => {
+    setSkuFilter("");
+    setRowFilter("");
+    setPlanFilter("");
+    setStatusFilter("all");
+  }, []);
+  const executionFilterFields = useMemo<FiltersPanelField[]>(
+    () => [
+      {
+        kind: "search",
+        key: "sku",
+        value: skuFilter,
+        onChange: setSkuFilter,
+        placeholder: "Поиск по SKU / наименованию",
+      },
+      {
+        kind: "search",
+        key: "row",
+        value: rowFilter,
+        onChange: setRowFilter,
+        placeholder: "Фильтр по номеру строки",
+      },
+      {
+        kind: "search",
+        key: "plan",
+        value: planFilter,
+        onChange: setPlanFilter,
+        placeholder: "Фильтр по плану (ID или PLAN-...)",
+      },
+      {
+        kind: "select",
+        key: "status",
+        value: statusFilter,
+        onChange: setStatusFilter,
+        placeholder: "Статус",
+        options: [
+          { value: "all", label: "Все статусы" },
+          { value: "approved", label: "Утвержден" },
+          { value: "released", label: "В работе" },
+          { value: "completed", label: "Завершён" },
+          { value: "cancelled", label: "Отменен" },
+        ],
+      },
+    ],
+    [planFilter, rowFilter, skuFilter, statusFilter],
+  );
+
+  // Build filter predicate from execution filters
+  const executionFilterPredicate = useMemo(() => {
+    if (
+      statusFilter === "all" &&
+      !skuFilter.trim() &&
+      !rowFilter.trim() &&
+      !planFilter.trim()
+    ) {
+      return null;
+    }
+
+    return (row: ProductionPlanningRow) => {
+      if (statusFilter === "completed" && !row.is_completed) return false;
+      if (statusFilter !== "all" && statusFilter !== "completed" && row.position_status !== statusFilter) return false;
       if (skuFilter.trim()) {
         const skuTerm = skuFilter.trim().toLowerCase();
         if (!row.source_sku.toLowerCase().includes(skuTerm) && !(row.source_name || "").toLowerCase().includes(skuTerm)) {
@@ -419,25 +484,56 @@ export function ExecutionPage() {
       }
       if (rowFilter.trim()) {
         const rowTerm = rowFilter.trim();
-        if (!String(row.source_row_number ?? "").includes(rowTerm)) {
-          return false;
-        }
+        if (!String(row.source_row_number ?? "").includes(rowTerm)) return false;
       }
       if (planFilter.trim()) {
         const planTerm = planFilter.trim().toLowerCase();
         const planText = `${row.production_plan_id} ${planNameById.get(row.production_plan_id) || ""}`.toLowerCase();
-        if (!planText.includes(planTerm)) {
-          return false;
-        }
+        if (!planText.includes(planTerm)) return false;
       }
       return true;
-    });
-  }, [rows, statusFilter, skuFilter, rowFilter, planFilter, planNameById]);
+    };
+  }, [statusFilter, skuFilter, rowFilter, planFilter, planNameById]);
+
+  // Sort definitions for ExecutionPage columns
+  const executionSortDefs: ColumnSortDef<ProductionPlanningRow, ExecutionSortField>[] = useMemo(() => [
+    { field: "id", getSortValue: (r) => r.plan_position_id },
+    { field: "row", getSortValue: (r) => r.source_row_number ?? 0 },
+    { field: "plan", getSortValue: (r) => r.production_plan_id },
+    { field: "sku", getSortValue: (r) => r.source_sku },
+    { field: "name", getSortValue: (r) => r.source_name || "" },
+    { field: "qty", getSortValue: (r) => r.quantity },
+    { field: "route", getSortValue: (r) => r.route_name || "" },
+    { field: "status", getSortValue: (r) => r.position_status },
+  ], []);
+
+  const executionQueryResult = useTableQueryEngine<ProductionPlanningRow, ExecutionSortField>({
+    rows: rows || [],
+    getId: (r) => r.plan_position_id,
+    searchQuery: "",
+    filterPredicate: executionFilterPredicate,
+    sortConfigs,
+    sortDefs: executionSortDefs,
+  });
+  const filteredRows = executionQueryResult.rows;
+
+  const tableScrollRef = useRef<HTMLDivElement>(null);
 
   const totalRows = rows?.length || 0;
   const releasedRows = rows?.filter((r) => r.is_released && !r.is_completed).length || 0;
   const rowsWithTasks = rows?.filter((r) => r.has_tasks).length || 0;
   const completedRows = rows?.filter((r) => r.is_completed).length || 0;
+
+  // Sort toggle handler: click cycles none -> asc -> desc -> removed
+  const handleSortChange = (field: ExecutionSortField) => {
+    setSortConfigs((prev) => nextMultiSortConfigs(prev, field));
+  };
+
+  const getAriaSort = (field: ExecutionSortField): "none" | "ascending" | "descending" => {
+    const active = sortConfigs.find((s) => s.field === field);
+    if (!active) return "none";
+    return active.order === "asc" ? "ascending" : "descending";
+  };
 
   const openDetail = (positionId: number) => {
     setSelectedPositionId(positionId);
@@ -471,50 +567,57 @@ export function ExecutionPage() {
       </header>
 
       <section className="space-y-3">
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-2">
-          <Input placeholder="Поиск по SKU / наименованию" value={skuFilter} onChange={(e) => setSkuFilter(e.target.value)} />
-          <Input placeholder="Фильтр по номеру строки" value={rowFilter} onChange={(e) => setRowFilter(e.target.value)} />
-          <Input placeholder="Фильтр по плану (ID или PLAN-...)" value={planFilter} onChange={(e) => setPlanFilter(e.target.value)} />
-          <Select value={statusFilter} onValueChange={setStatusFilter}>
-            <SelectTrigger>
-              <SelectValue placeholder="Статус" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">Все статусы</SelectItem>
-              <SelectItem value="approved">Утвержден</SelectItem>
-              <SelectItem value="released">В работе</SelectItem>
-              <SelectItem value="completed">Завершён</SelectItem>
-              <SelectItem value="cancelled">Отменен</SelectItem>
-            </SelectContent>
-          </Select>
-        </div>
+        <FiltersPanel
+          fields={executionFilterFields}
+          onReset={resetExecutionFilters}
+          hasActiveFilters={executionActiveFilterSummary.count > 0}
+          activeSummary={executionActiveFilterSummary}
+        />
 
-        <div className="rounded-lg border overflow-auto">
-          <table className="w-full text-sm">
-            <thead className="border-b bg-muted/50">
+        <div ref={tableScrollRef} className="rounded-lg border overflow-auto max-h-[70vh]">
+          <table className="w-full border-separate border-spacing-0">
+            <thead className="[&_th]:sticky [&_th]:top-0 [&_th]:z-20 [&_th]:bg-background [&_th]:border-b">
               <tr>
-                <th className="text-left p-2 w-20">ID</th>
+                <th className="text-left p-2 w-20" aria-sort={getAriaSort("id")}>
+                  <SortableHeader field="id" currentSorts={sortConfigs} onSortChange={handleSortChange}>ID</SortableHeader>
+                </th>
                 <th className="text-left p-2 w-8"></th>
-                <th className="text-left p-2">Строка</th>
-                <th className="text-left p-2">План</th>
-                <th className="text-left p-2">SKU</th>
-                <th className="text-left p-2">Наименование</th>
-                <th className="text-left p-2">Кол-во</th>
+                <th className="text-left p-2" aria-sort={getAriaSort("row")}>
+                  <SortableHeader field="row" currentSorts={sortConfigs} onSortChange={handleSortChange}>Строка</SortableHeader>
+                </th>
+                <th className="text-left p-2" aria-sort={getAriaSort("plan")}>
+                  <SortableHeader field="plan" currentSorts={sortConfigs} onSortChange={handleSortChange}>План</SortableHeader>
+                </th>
+                <th className="text-left p-2" aria-sort={getAriaSort("sku")}>
+                  <SortableHeader field="sku" currentSorts={sortConfigs} onSortChange={handleSortChange}>SKU</SortableHeader>
+                </th>
+                <th className="text-left p-2" aria-sort={getAriaSort("name")}>
+                  <SortableHeader field="name" currentSorts={sortConfigs} onSortChange={handleSortChange}>Наименование</SortableHeader>
+                </th>
+                <th className="text-left p-2" aria-sort={getAriaSort("qty")}>
+                  <SortableHeader field="qty" currentSorts={sortConfigs} onSortChange={handleSortChange}>Кол-во</SortableHeader>
+                </th>
                 <th className="text-left p-2">Маршрут</th>
-                <th className="text-left p-2">Статус</th>
+                <th className="text-left p-2" aria-sort={getAriaSort("status")}>
+                  <SortableHeader field="status" currentSorts={sortConfigs} onSortChange={handleSortChange}>Статус</SortableHeader>
+                </th>
                 <th className="text-left p-2">Задачи</th>
                 <th className="text-left p-2">Действия</th>
               </tr>
             </thead>
-            <tbody>
-              {filteredRows.map((row) => {
+            <VirtualizedTableBody
+              rows={filteredRows}
+              rowHeight={48}
+              colSpan={11}
+              scrollContainerRef={tableScrollRef}
+              renderRow={(row) => {
                 const canLaunch = row.position_status === "approved" && !row.has_tasks && !row.is_released && !!row.route_id;
                 const canManualPass = !!row.route_id && ["approved", "released"].includes(row.position_status) && !row.is_completed;
                 const blockReason = getLaunchBlockReason(row);
                 return (
                 <tr
                   key={row.plan_position_id}
-                  className="border-b hover:bg-accent/30 cursor-pointer"
+                  className="border-b hover:bg-accent hover:ring-1 hover:ring-ring/20 cursor-pointer transition-colors"
                   onClick={() => openDetail(row.plan_position_id)}
                 >
                   <td className="p-2 font-mono text-xs text-muted-foreground">#{row.plan_position_id}</td>
@@ -653,8 +756,8 @@ export function ExecutionPage() {
                   </td>
                 </tr>
                 );
-              })}
-            </tbody>
+              }}
+            />
           </table>
           {filteredRows.length === 0 && <p className="p-4 text-sm text-muted-foreground text-center">Нет строк по выбранному фильтру</p>}
         </div>

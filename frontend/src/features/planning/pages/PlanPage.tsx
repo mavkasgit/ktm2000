@@ -1,7 +1,10 @@
-import { useEffect, useMemo, useState } from "react"
+import { useMemo, useRef, useState } from "react"
 import { Download, Eye, FileSpreadsheet, Plus, Upload, Route, Trash2, AlertTriangle } from "lucide-react"
 import { ImportWizard } from "../ImportWizard"
-import { Button, Badge, Checkbox, Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, Combobox, Select, SelectContent, SelectItem, SelectTrigger, SelectValue, AlertDialog, AlertDialogContent, AlertDialogHeader, AlertDialogTitle, AlertDialogDescription, AlertDialogFooter, AlertDialogAction, AlertDialogCancel } from "@/shared/ui"
+import { Button, Badge, Checkbox, Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, Combobox, Select, SelectContent, SelectItem, SelectTrigger, SelectValue, AlertDialog, AlertDialogContent, AlertDialogHeader, AlertDialogTitle, AlertDialogDescription, AlertDialogFooter, AlertDialogAction, AlertDialogCancel, SortableHeader, VirtualizedTableBody, FiltersPanel, type FiltersPanelField } from "@/shared/ui"
+import { buildActiveFilterSummary } from "@/shared/ui/buildActiveFilterSummary"
+import { useTableQueryEngine, SortConfig, ColumnSortDef } from "@/shared/hooks/useTableQueryEngine"
+import { nextMultiSortConfigs } from "@/shared/lib/multiSort"
 import { cn } from "@/shared/utils/cn"
 import { toast } from "@/shared/ui"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
@@ -85,6 +88,17 @@ const warningLabels: Record<string, string> = {
   product_name_missing: "Отсутствует наименование",
   period_not_detected: "не определен",
   route_auto_fallback: "Маршрут скорректирован автоматически — проверьте корректность",
+}
+
+type PlanSortField = "id" | "rowNum" | "sku" | "name" | "qty" | "route" | "status" | "validation" | "errors" | "warnings"
+
+interface PlanFiltersState {
+  status: "all" | "draft" | "valid" | "invalid"
+  validation_status: "all" | "valid" | "invalid"
+  has_route: "all" | "yes" | "no"
+  has_errors: "all" | "yes" | "no"
+  has_warnings: "all" | "yes" | "no"
+  has_duplicates: "all" | "yes" | "no"
 }
 
 function translateLabel(code: string, labels: Record<string, string>): string {
@@ -384,7 +398,7 @@ function PositionRow({ pos, onApprove, onDelete, selected, onToggle, routes, onA
     <>
     <tr
       id={`plan-position-${pos.id}`}
-      className={`border-b ${hasErrors || hasDuplicateConflict ? "bg-red-50" : hasWarnings ? "bg-amber-50" : ""} ${selected ? "bg-blue-50" : ""} cursor-pointer`}
+      className={`border-b ${hasErrors || hasDuplicateConflict ? "bg-red-50" : hasWarnings ? "bg-amber-50" : ""} ${selected ? "bg-blue-50" : ""} cursor-pointer hover:bg-accent hover:ring-1 hover:ring-ring/20 transition-colors`}
       onClick={() => onOpenDetail?.()}
     >
       <td className="p-2">
@@ -440,16 +454,6 @@ function PositionRow({ pos, onApprove, onDelete, selected, onToggle, routes, onA
             {routeError || "Не назначен"}
           </span>
         )}
-      </td>
-      <td className="p-2">
-        <Badge variant={statusVariant[pos.status] as any || "secondary"}>
-          {statusLabels[pos.status] || pos.status}
-        </Badge>
-      </td>
-      <td className="p-2">
-        <Badge variant={pos.validation_status === "valid" ? "default" : pos.validation_status === "invalid" ? "destructive" : "secondary"}>
-          {pos.validation_status === "valid" ? "Валидна" : pos.validation_status === "invalid" ? "Ошибка" : "—"}
-        </Badge>
       </td>
       <td className="p-2 text-xs text-red-600 max-w-[200px]">
         {hasErrors || hasDuplicateConflict ? (
@@ -592,6 +596,7 @@ export function PlanPage() {
   const [assigningRoute, setAssigningRoute] = useState(false)
   const [detailPosition, setDetailPosition] = useState<PlanPositionOut | null>(null)
   const [detailOpen, setDetailOpen] = useState(false)
+  const tableScrollRef = useRef<HTMLDivElement>(null)
 
   const openDetail = (pos: PlanPositionOut) => {
     setDetailPosition(pos)
@@ -607,7 +612,16 @@ export function PlanPage() {
   const { data: templates } = useQuery({ queryKey: ["import-templates"], queryFn: listImportTemplates })
   const activeTemplates = (templates ?? []).filter(t => t.is_active).sort((a, b) => a.sort_order - b.sort_order)
 
-  const [filterStatus, setFilterStatus] = useState<"all" | "draft" | "valid" | "invalid">("all")
+  const [filters, setFilters] = useState<PlanFiltersState>({
+    status: "all",
+    validation_status: "all",
+    has_route: "all",
+    has_errors: "all",
+    has_warnings: "all",
+    has_duplicates: "all",
+  })
+  const [searchQuery, setSearchQuery] = useState("")
+  const [sortConfigs, setSortConfigs] = useState<SortConfig<PlanSortField>[]>([])
   const [templateImportOpen, setTemplateImportOpen] = useState<number | null>(null)
 
   const { data: duplicateGroupsByPlan } = useQuery({
@@ -689,15 +703,27 @@ export function PlanPage() {
   }
 
   const selectAll = () => {
-    if (!filteredPositions) return
-    if (selectedIds.size === filteredPositions.length) {
+    if (selectedIds.size === processedRows.length) {
       setSelectedIds(new Set())
     } else {
-      setSelectedIds(new Set(filteredPositions.map(p => p.id)))
+      setSelectedIds(new Set(processedRows.map(p => p.id)))
     }
   }
 
   const clearSelection = () => setSelectedIds(new Set())
+
+  const resetAllFilters = () => {
+    setSearchQuery("")
+    setSortConfigs([])
+    setFilters({
+      status: "all",
+      validation_status: "all",
+      has_route: "all",
+      has_errors: "all",
+      has_warnings: "all",
+      has_duplicates: "all",
+    })
+  }
 
   const handleAssignRouteSingle = async (positionId: number, routeId: number | null) => {
     try {
@@ -748,14 +774,6 @@ export function PlanPage() {
     queryFn: () => allPlanPositions(),
   })
 
-  const filteredPositions = useMemo(() => {
-    if (!positions) return []
-    if (filterStatus === "all") return positions
-    if (filterStatus === "invalid") return positions.filter(p => p.validation_status === "invalid")
-    if (filterStatus === "valid") return positions.filter(p => p.validation_status === "valid")
-    return positions.filter(p => p.status === filterStatus)
-  }, [positions, filterStatus])
-
   const duplicateConflictsByPosition = useMemo(() => {
     const map = new Map<number, DuplicateConflict>()
     if (!duplicateGroupsByPlan) return map
@@ -773,8 +791,167 @@ export function PlanPage() {
     return map
   }, [duplicateGroupsByPlan])
 
+  // Build filter predicate from PlanFiltersState
+  const filterPredicate = useMemo(() => {
+    if (
+      filters.status === "all" &&
+      filters.validation_status === "all" &&
+      filters.has_route === "all" &&
+      filters.has_errors === "all" &&
+      filters.has_warnings === "all" &&
+      filters.has_duplicates === "all"
+    ) return null
+
+    return (row: PlanPositionOut) => {
+      if (filters.status !== "all" && row.status !== filters.status) return false
+      if (filters.validation_status !== "all" && row.validation_status !== filters.validation_status) return false
+      if (filters.has_route === "yes" && !row.route_id) return false
+      if (filters.has_route === "no" && row.route_id) return false
+      if (filters.has_errors === "yes" && (!row.errors || row.errors.length === 0)) return false
+      if (filters.has_errors === "no" && row.errors && row.errors.length > 0) return false
+      if (filters.has_warnings === "yes" && (!row.warnings || row.warnings.length === 0)) return false
+      if (filters.has_warnings === "no" && row.warnings && row.warnings.length > 0) return false
+      if (filters.has_duplicates === "yes" && !duplicateConflictsByPosition.has(row.id)) return false
+      if (filters.has_duplicates === "no" && duplicateConflictsByPosition.has(row.id)) return false
+      return true
+    }
+  }, [filters, duplicateConflictsByPosition])
+
+  // Sort definitions for PlanPage columns
+  const sortDefs: ColumnSortDef<PlanPositionOut, PlanSortField>[] = useMemo(() => [
+    { field: "id", getSortValue: (p) => p.id },
+    {
+      field: "rowNum",
+      getSortValue: (p) => {
+        const numbers = Array.isArray(p.source_row_numbers)
+          ? p.source_row_numbers.filter((v): v is number => typeof v === "number")
+          : []
+        return numbers.length > 0 ? Math.min(...numbers) : (p.source_row_number ?? 0)
+      },
+    },
+    { field: "sku", getSortValue: (p) => p.source_sku },
+    { field: "name", getSortValue: (p) => p.source_name ?? "" },
+    { field: "qty", getSortValue: (p) => Number(p.quantity || 0) },
+    { field: "route", getSortValue: (p) => p.route_name ?? "" },
+    { field: "status", getSortValue: (p) => p.status },
+    { field: "validation", getSortValue: (p) => p.validation_status },
+    { field: "errors", getSortValue: (p) => p.errors?.length ?? 0 },
+    { field: "warnings", getSortValue: (p) => p.warnings?.length ?? 0 },
+  ], [])
+
+  const result = useTableQueryEngine<PlanPositionOut, PlanSortField>({
+    rows: positions ?? [],
+    getId: (p) => p.id,
+    searchQuery,
+    filterPredicate,
+    sortConfigs,
+    sortDefs,
+  })
+  const processedRows = result.rows
+  const activeFilterSummary = useMemo(
+    () => buildActiveFilterSummary(filters, searchQuery, sortConfigs.length),
+    [filters, searchQuery, sortConfigs.length],
+  )
+  const filterFields = useMemo<FiltersPanelField[]>(
+    () => [
+      {
+        kind: "search",
+        key: "search",
+        value: searchQuery,
+        onChange: setSearchQuery,
+        placeholder: "Поиск: ID, строка, артикул, наименование...",
+        layoutSpan: "md:col-span-2 xl:col-span-2",
+      },
+      {
+        kind: "select",
+        key: "status",
+        value: filters.status,
+        onChange: (value) => setFilters((prev) => ({ ...prev, status: value as PlanFiltersState["status"] })),
+        placeholder: "Статус позиции",
+        options: [
+          { value: "all", label: "Статус: все" },
+          { value: "draft", label: "Статус: черновик" },
+          { value: "valid", label: "Статус: валиден" },
+          { value: "invalid", label: "Статус: ошибка" },
+        ],
+      },
+      {
+        kind: "select",
+        key: "validation_status",
+        value: filters.validation_status,
+        onChange: (value) => setFilters((prev) => ({ ...prev, validation_status: value as PlanFiltersState["validation_status"] })),
+        placeholder: "Валидация",
+        options: [
+          { value: "all", label: "Валидация: все" },
+          { value: "valid", label: "Валидация: пройдена" },
+          { value: "invalid", label: "Валидация: ошибка" },
+        ],
+      },
+      {
+        kind: "select",
+        key: "has_route",
+        value: filters.has_route,
+        onChange: (value) => setFilters((prev) => ({ ...prev, has_route: value as PlanFiltersState["has_route"] })),
+        placeholder: "Маршрут",
+        options: [
+          { value: "all", label: "Маршрут: все" },
+          { value: "yes", label: "Маршрут: назначен" },
+          { value: "no", label: "Маршрут: не назначен" },
+        ],
+      },
+      {
+        kind: "select",
+        key: "has_errors",
+        value: filters.has_errors,
+        onChange: (value) => setFilters((prev) => ({ ...prev, has_errors: value as PlanFiltersState["has_errors"] })),
+        placeholder: "Ошибки",
+        options: [
+          { value: "all", label: "Ошибки: все" },
+          { value: "yes", label: "Ошибки: есть" },
+          { value: "no", label: "Ошибки: нет" },
+        ],
+      },
+      {
+        kind: "select",
+        key: "has_warnings",
+        value: filters.has_warnings,
+        onChange: (value) => setFilters((prev) => ({ ...prev, has_warnings: value as PlanFiltersState["has_warnings"] })),
+        placeholder: "Предупреждения",
+        options: [
+          { value: "all", label: "Предупр.: все" },
+          { value: "yes", label: "Предупр.: есть" },
+          { value: "no", label: "Предупр.: нет" },
+        ],
+      },
+      {
+        kind: "select",
+        key: "has_duplicates",
+        value: filters.has_duplicates,
+        onChange: (value) => setFilters((prev) => ({ ...prev, has_duplicates: value as PlanFiltersState["has_duplicates"] })),
+        placeholder: "Дубликаты",
+        options: [
+          { value: "all", label: "Дубликаты: все" },
+          { value: "yes", label: "Дубликаты: есть" },
+          { value: "no", label: "Дубликаты: нет" },
+        ],
+      },
+    ],
+    [filters, searchQuery],
+  )
+
+  // Sort toggle handler: click cycles none -> asc -> desc -> removed
+  const handleSortChange = (field: PlanSortField) => {
+    setSortConfigs((prev) => nextMultiSortConfigs(prev, field))
+  }
+
+  const getAriaSort = (field: PlanSortField): "none" | "ascending" | "descending" => {
+    const active = sortConfigs.find((s) => s.field === field)
+    if (!active) return "none"
+    return active.order === "asc" ? "ascending" : "descending"
+  }
+
   const jumpToPosition = (positionId: number) => {
-    setFilterStatus("all")
+    setFilters(prev => ({ ...prev, status: "all" }))
     const targetPosition = positions?.find((p) => p.id === positionId)
     if (targetPosition) {
       setDetailPosition(targetPosition)
@@ -920,24 +1097,20 @@ export function PlanPage() {
 
           {/* Aggregated positions */}
           <section>
-            <div className="flex items-center justify-between mb-2">
+            <div className="flex items-center gap-2 mb-2">
               <h3 className="text-base font-semibold">Сводная таблица позиций</h3>
-              <div className="flex gap-1">
-                {(["all", "draft", "valid", "invalid"] as const).map((f) => (
-                  <button
-                    key={f}
-                    onClick={() => setFilterStatus(f)}
-                    className={`px-2.5 py-1 text-xs rounded-md border transition-colors ${
-                      filterStatus === f
-                        ? "bg-primary text-primary-foreground border-primary"
-                        : "bg-background hover:bg-accent border-input"
-                    }`}
-                  >
-                    {f === "all" ? "Все" : f === "draft" ? "Черновики" : f === "valid" ? "Валидные" : "Ошибки"}
-                  </button>
-                ))}
-              </div>
+              <span className="inline-flex items-center justify-center h-5 min-w-[20px] px-1.5 rounded-full bg-muted text-[11px] font-medium text-muted-foreground">
+                {processedRows.length} строк
+              </span>
             </div>
+
+            <FiltersPanel
+              className="mb-3"
+              fields={filterFields}
+              onReset={resetAllFilters}
+              hasActiveFilters={activeFilterSummary.count > 0}
+              activeSummary={activeFilterSummary}
+            />
 
             {/* Route assignment toolbar */}
             {selectedIds.size > 0 && (
@@ -964,36 +1137,66 @@ export function PlanPage() {
             {posLoading && <p className="text-sm text-muted-foreground">Загрузка...</p>}
             {positions && positions.length > 0 && (
               <>
-              <div className="rounded-lg border overflow-auto">
-                <table className="w-full">
-                  <thead className="border-b bg-muted/50">
+              <div ref={tableScrollRef} className="rounded-lg border overflow-auto max-h-[70vh]">
+                <table className="w-full border-separate border-spacing-0">
+                  <thead className="[&_th]:sticky [&_th]:top-0 [&_th]:z-20 [&_th]:bg-background [&_th]:border-b">
                     <tr>
-                      <th className="text-left p-2 text-xs font-medium text-muted-foreground w-10">
+                      <th className="text-left p-2 w-10">
                         <Checkbox
-                          checked={filteredPositions.length > 0 && selectedIds.size === filteredPositions.length}
+                          checked={processedRows.length > 0 && selectedIds.size === processedRows.length}
                           onCheckedChange={selectAll}
                         />
                       </th>
-                      <th className="text-left p-2 text-xs font-medium text-muted-foreground">Id</th>
-                      <th className="text-left p-2 text-xs font-medium text-muted-foreground">Строка</th>
-                      <th className="text-left p-2 text-xs font-medium text-muted-foreground">Артикул</th>
-                      <th className="text-left p-2 text-xs font-medium text-muted-foreground">Наименование</th>
-                      <th className="text-left p-2 text-xs font-medium text-muted-foreground">Кол-во</th>
-                      <th className="text-left p-2 text-xs font-medium text-muted-foreground">Маршрут</th>
-                      <th className="text-left p-2 text-xs font-medium text-muted-foreground">Статус</th>
-                      <th className="text-left p-2 text-xs font-medium text-muted-foreground">Валидация</th>
-                      <th className="text-left p-2 text-xs font-medium text-muted-foreground">Ошибки</th>
-                      <th className="text-left p-2 text-xs font-medium text-muted-foreground">Предупр.</th>
+                      <th className="text-left p-2" aria-sort={getAriaSort("id")}>
+                        <SortableHeader field="id" currentSorts={sortConfigs} onSortChange={handleSortChange}>Id</SortableHeader>
+                      </th>
+                      <th className="text-left p-2" aria-sort={getAriaSort("rowNum")}>
+                        <SortableHeader field="rowNum" currentSorts={sortConfigs} onSortChange={handleSortChange}>Строка</SortableHeader>
+                      </th>
+                      <th className="text-left p-2" aria-sort={getAriaSort("sku")}>
+                        <SortableHeader field="sku" currentSorts={sortConfigs} onSortChange={handleSortChange}>Артикул</SortableHeader>
+                      </th>
+                      <th className="text-left p-2" aria-sort={getAriaSort("name")}>
+                        <SortableHeader field="name" currentSorts={sortConfigs} onSortChange={handleSortChange}>Наименование</SortableHeader>
+                      </th>
+                      <th className="text-left p-2" aria-sort={getAriaSort("qty")}>
+                        <SortableHeader field="qty" currentSorts={sortConfigs} onSortChange={handleSortChange}>Кол-во</SortableHeader>
+                      </th>
+                      <th className="text-left p-2 min-w-[200px]">Маршрут</th>
+                      <th className="text-left p-2" aria-sort={getAriaSort("errors")}>
+                        <SortableHeader field="errors" currentSorts={sortConfigs} onSortChange={handleSortChange}>Ошибки</SortableHeader>
+                      </th>
+                      <th className="text-left p-2" aria-sort={getAriaSort("warnings")}>
+                        <SortableHeader field="warnings" currentSorts={sortConfigs} onSortChange={handleSortChange}>Предупр.</SortableHeader>
+                      </th>
                       <th className="text-left p-2 text-xs font-medium text-muted-foreground">Действия</th>
                     </tr>
                   </thead>
-                  <tbody>
-                    {filteredPositions.map(p => <PositionRow key={p.id} pos={p} onApprove={handleApprove} onDelete={handleDelete} selected={selectedIds.has(p.id)} onToggle={toggleSelect} routes={activeRoutes} onAssignRoute={handleAssignRouteSingle} onOpenDetail={() => openDetail(p)} duplicateConflict={duplicateConflictsByPosition.get(p.id)} onJumpToPosition={jumpToPosition} />)}
-                  </tbody>
+                  <VirtualizedTableBody
+                    rows={processedRows}
+                    rowHeight={48}
+                    colSpan={10}
+                    scrollContainerRef={tableScrollRef}
+                    renderRow={(p) => (
+                      <PositionRow
+                        key={p.id}
+                        pos={p}
+                        onApprove={handleApprove}
+                        onDelete={handleDelete}
+                        selected={selectedIds.has(p.id)}
+                        onToggle={toggleSelect}
+                        routes={activeRoutes}
+                        onAssignRoute={handleAssignRouteSingle}
+                        onOpenDetail={() => openDetail(p)}
+                        duplicateConflict={duplicateConflictsByPosition.get(p.id)}
+                        onJumpToPosition={jumpToPosition}
+                      />
+                    )}
+                  />
                 </table>
               </div>
-              {filteredPositions.length === 0 && (
-                <p className="text-sm text-muted-foreground p-4 text-center">Нет позиций с таким фильтром</p>
+              {processedRows.length === 0 && (
+                <p className="text-sm text-muted-foreground p-4 text-center">Нет позиций, соответствующих фильтру</p>
               )}
               </>
             )}
