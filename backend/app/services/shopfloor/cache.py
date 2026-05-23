@@ -69,7 +69,7 @@ async def _refresh_task_cache(db: AsyncSession, task_id: int) -> WorkTask:
     if available < 0:
         available = Decimal("0")
 
-    remaining = task.planned_quantity - completed - rejected
+    remaining = task.planned_quantity - transferred
     if remaining < 0:
         remaining = Decimal("0")
 
@@ -82,7 +82,8 @@ async def _refresh_task_cache(db: AsyncSession, task_id: int) -> WorkTask:
     task.cached_available_quantity = available
     task.cached_remaining_quantity = remaining
 
-    if completed + rejected >= task.planned_quantity:
+    # Task is completed only when all planned is completed AND all completed is transferred
+    if completed >= task.planned_quantity and transferred >= completed:
         task.status = WorkTaskStatus.completed
     elif completed + rejected > 0:
         task.status = WorkTaskStatus.partially_completed

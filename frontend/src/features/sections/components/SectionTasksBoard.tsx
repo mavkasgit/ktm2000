@@ -1,12 +1,38 @@
+import { useMemo, useState, useCallback } from "react";
 import type { SectionBoardTask } from "@/shared/api/shopfloor";
-import { Badge, Button } from "@/shared/ui";
+import { Badge, Button, SortableFilterHeader, Checkbox } from "@/shared/ui";
+import { useTableQueryEngine, SortConfig, ColumnSortDef } from "@/shared/hooks/useTableQueryEngine";
+import { nextMultiSortConfigs } from "@/shared/lib/multiSort";
+
+export type BulkSelectionController = {
+  selectedIds: Set<number>;
+  isSelected: (id: number) => boolean;
+  selectOne: (id: number, checked?: boolean) => void;
+  selectedCount: number;
+  isAllSelected: (ids: Iterable<number>) => boolean;
+  isIndeterminate: (ids: Iterable<number>) => boolean;
+  selectAllFiltered: (ids: Iterable<number>) => void;
+  clear: () => void;
+};
 
 export type TaskBoardViewMode = "active" | "waiting" | "completed";
 export type TaskActionDialogType = "issue" | "complete" | "send";
 
+type TaskSortField =
+  | "sequence"
+  | "productSku"
+  | "plannedQty"
+  | "issuedQty"
+  | "inWorkQty"
+  | "completedQty"
+  | "transferredQty"
+  | "rejectedQty"
+  | "remainingQty"
+  | "status";
+
 const taskStatusLabels: Record<string, string> = {
   waiting_previous: "Ожидает",
-  ready: "Готов",
+  ready: "К выдаче",
   in_progress: "В работе",
   partially_completed: "Частично",
   completed: "Завершен",
@@ -38,12 +64,29 @@ function isFinalStageTask(task: SectionBoardTask): boolean {
   return !task.next_operation_name;
 }
 
+function getTaskCellValue(task: SectionBoardTask, field: TaskSortField): string {
+  switch (field) {
+    case "sequence": return String(task.sequence);
+    case "productSku": return task.product_sku;
+    case "status": return task.status;
+    case "plannedQty": return String(parseFloat(task.planned_quantity) || 0);
+    case "issuedQty": return String(parseFloat(task.cache.issued_quantity) || 0);
+    case "inWorkQty": return String(parseFloat(task.cache.in_work_quantity) || 0);
+    case "completedQty": return String(parseFloat(task.cache.completed_quantity) || 0);
+    case "transferredQty": return String(parseFloat(task.cache.transferred_quantity) || 0);
+    case "rejectedQty": return String(parseFloat(task.cache.rejected_quantity) || 0);
+    case "remainingQty": return String(parseFloat(task.cache.remaining_quantity) || 0);
+  }
+}
+
 type SectionTasksBoardProps = {
   tasks: SectionBoardTask[];
   isLoading: boolean;
   mode: TaskBoardViewMode;
   onModeChange: (next: TaskBoardViewMode) => void;
   onAction: (type: TaskActionDialogType, task: SectionBoardTask) => void;
+  bulkMode?: boolean;
+  bulkSelection?: BulkSelectionController;
 };
 
 export function SectionTasksBoard({
@@ -52,8 +95,79 @@ export function SectionTasksBoard({
   mode,
   onModeChange,
   onAction,
+  bulkMode,
+  bulkSelection,
 }: SectionTasksBoardProps) {
-  const filteredTasks = tasks.filter((task) => isTaskVisible(task, mode));
+  const [sortConfigs, setSortConfigs] = useState<SortConfig<TaskSortField>[]>([]);
+  const [columnFilters, setColumnFilters] = useState<Partial<Record<TaskSortField, Set<string>>>>({});
+
+  const handleSortChange = useCallback((field: TaskSortField) => {
+    setSortConfigs((prev) => nextMultiSortConfigs(prev, field));
+  }, []);
+
+  const handleColumnFilterChange = useCallback((field: TaskSortField, selected: Set<string>) => {
+    setColumnFilters((prev) => ({ ...prev, [field]: selected }));
+  }, []);
+
+  const visibleTasks = useMemo(
+    () => tasks.filter((task) => isTaskVisible(task, mode)),
+    [tasks, mode],
+  );
+
+  const sortDefs: ColumnSortDef<SectionBoardTask, TaskSortField>[] = useMemo(() => [
+    { field: "sequence", getSortValue: (t) => t.sequence },
+    { field: "productSku", getSortValue: (t) => t.product_sku },
+    { field: "status", getSortValue: (t) => t.status },
+    { field: "plannedQty", getSortValue: (t) => parseFloat(t.planned_quantity) || 0 },
+    { field: "issuedQty", getSortValue: (t) => parseFloat(t.cache.issued_quantity) || 0 },
+    { field: "inWorkQty", getSortValue: (t) => parseFloat(t.cache.in_work_quantity) || 0 },
+    { field: "completedQty", getSortValue: (t) => parseFloat(t.cache.completed_quantity) || 0 },
+    { field: "transferredQty", getSortValue: (t) => parseFloat(t.cache.transferred_quantity) || 0 },
+    { field: "rejectedQty", getSortValue: (t) => parseFloat(t.cache.rejected_quantity) || 0 },
+    { field: "remainingQty", getSortValue: (t) => parseFloat(t.cache.remaining_quantity) || 0 },
+  ], []);
+
+  const filterPredicate = useMemo(() => {
+    const hasFilters = Object.values(columnFilters).some((s) => s && s.size > 0);
+    if (!hasFilters) return null;
+    return (task: SectionBoardTask) => {
+      for (const [field, selected] of Object.entries(columnFilters)) {
+        if (selected && selected.size > 0) {
+          const cellValue = getTaskCellValue(task, field as TaskSortField);
+          if (!selected.has(cellValue)) return false;
+        }
+      }
+      return true;
+    };
+  }, [columnFilters]);
+
+  const uniqueValues = useMemo(() => ({
+    sequence: [...new Set(visibleTasks.map((t) => String(t.sequence)))],
+    productSku: [...new Set(visibleTasks.map((t) => t.product_sku))],
+    status: [...new Set(visibleTasks.map((t) => t.status))],
+    plannedQty: [...new Set(visibleTasks.map((t) => String(parseFloat(t.planned_quantity) || 0)))],
+    issuedQty: [...new Set(visibleTasks.map((t) => String(parseFloat(t.cache.issued_quantity) || 0)))],
+    inWorkQty: [...new Set(visibleTasks.map((t) => String(parseFloat(t.cache.in_work_quantity) || 0)))],
+    completedQty: [...new Set(visibleTasks.map((t) => String(parseFloat(t.cache.completed_quantity) || 0)))],
+    transferredQty: [...new Set(visibleTasks.map((t) => String(parseFloat(t.cache.transferred_quantity) || 0)))],
+    rejectedQty: [...new Set(visibleTasks.map((t) => String(parseFloat(t.cache.rejected_quantity) || 0)))],
+    remainingQty: [...new Set(visibleTasks.map((t) => String(parseFloat(t.cache.remaining_quantity) || 0)))],
+  }), [visibleTasks]);
+
+  const result = useTableQueryEngine<SectionBoardTask, TaskSortField>({
+    rows: visibleTasks,
+    getId: (t) => t.id,
+    searchQuery: "",
+    filterPredicate,
+    sortConfigs,
+    sortDefs,
+  });
+
+  const sortedTasks = result.rows;
+
+  const sortedTaskIds = useMemo(() => sortedTasks.map((t) => t.id), [sortedTasks]);
+
+  const statusLabel = (status: string) => taskStatusLabels[status] || status;
 
   return (
     <div className="space-y-3">
@@ -70,46 +184,160 @@ export function SectionTasksBoard({
       </div>
 
       {isLoading && <div className="rounded-lg border p-4 text-sm text-muted-foreground">Загрузка задач...</div>}
-      {!isLoading && filteredTasks.length === 0 && (
-        <div className="rounded-lg border p-4 text-sm text-muted-foreground text-center">Нет задач в выбранном режиме</div>
+      {!isLoading && sortedTasks.length === 0 && (
+        <div className="rounded-lg border p-4 text-sm text-muted-foreground text-center">
+          {visibleTasks.length === 0 ? "Нет задач в выбранном режиме" : "Нет задач, соответствующих фильтру"}
+        </div>
       )}
 
-      {!isLoading && filteredTasks.length > 0 && (
+      {!isLoading && sortedTasks.length > 0 && (
         <>
           {/* Desktop table */}
           <div className="hidden md:block rounded-lg border overflow-auto">
-            <table className="w-full text-sm">
-              <thead className="border-b bg-muted/50">
+            <table className="w-full border-separate border-spacing-0 text-sm">
+              <thead className="[&_th]:sticky [&_th]:top-0 [&_th]:z-20 [&_th]:bg-background [&_th]:border-b">
                 <tr>
-                  <th className="text-left p-2">Этап</th>
-                  <th className="text-left p-2">Артикул</th>
-                  <th className="text-left p-2">План</th>
-                  <th className="text-left p-2">В работе</th>
-                  <th className="text-left p-2">Годные</th>
-                  <th className="text-left p-2">Передано</th>
-                  <th className="text-left p-2">Брак</th>
-                  <th className="text-left p-2">Остаток</th>
-                  <th className="text-left p-2">Статус</th>
-                  <th className="text-left p-2">Пред. этап</th>
-                  <th className="text-left p-2">Действия</th>
+                  <th className="text-left p-2">
+                    <SortableFilterHeader
+                      field="sequence"
+                      label="Этап"
+                      currentSorts={sortConfigs}
+                      onSortChange={handleSortChange}
+                      values={uniqueValues.sequence}
+                      selectedValues={columnFilters.sequence ?? new Set()}
+                      onFilterChange={handleColumnFilterChange}
+                    />
+                  </th>
+                  <th className="text-left p-2">
+                    <SortableFilterHeader
+                      field="productSku"
+                      label="Артикул"
+                      currentSorts={sortConfigs}
+                      onSortChange={handleSortChange}
+                      values={uniqueValues.productSku}
+                      selectedValues={columnFilters.productSku ?? new Set()}
+                      onFilterChange={handleColumnFilterChange}
+                    />
+                  </th>
+                  <th className="text-left p-2">
+                    <SortableFilterHeader
+                      field="plannedQty"
+                      label="План"
+                      currentSorts={sortConfigs}
+                      onSortChange={handleSortChange}
+                      values={uniqueValues.plannedQty}
+                      selectedValues={columnFilters.plannedQty ?? new Set()}
+                      onFilterChange={handleColumnFilterChange}
+                    />
+                  </th>
+                  <th className="text-left p-2">
+                    <SortableFilterHeader
+                      field="issuedQty"
+                      label="Выдано"
+                      currentSorts={sortConfigs}
+                      onSortChange={handleSortChange}
+                      values={uniqueValues.issuedQty}
+                      selectedValues={columnFilters.issuedQty ?? new Set()}
+                      onFilterChange={handleColumnFilterChange}
+                    />
+                  </th>
+                  <th className="text-left p-2">
+                    <SortableFilterHeader
+                      field="inWorkQty"
+                      label="В работе"
+                      currentSorts={sortConfigs}
+                      onSortChange={handleSortChange}
+                      values={uniqueValues.inWorkQty}
+                      selectedValues={columnFilters.inWorkQty ?? new Set()}
+                      onFilterChange={handleColumnFilterChange}
+                    />
+                  </th>
+                  <th className="text-left p-2">
+                    <SortableFilterHeader
+                      field="completedQty"
+                      label="Годные"
+                      currentSorts={sortConfigs}
+                      onSortChange={handleSortChange}
+                      values={uniqueValues.completedQty}
+                      selectedValues={columnFilters.completedQty ?? new Set()}
+                      onFilterChange={handleColumnFilterChange}
+                    />
+                  </th>
+                  <th className="text-left p-2">
+                    <SortableFilterHeader
+                      field="rejectedQty"
+                      label="Брак"
+                      currentSorts={sortConfigs}
+                      onSortChange={handleSortChange}
+                      values={uniqueValues.rejectedQty}
+                      selectedValues={columnFilters.rejectedQty ?? new Set()}
+                      onFilterChange={handleColumnFilterChange}
+                    />
+                  </th>
+                  <th className="text-left p-2">
+                    <SortableFilterHeader
+                      field="transferredQty"
+                      label="Передано"
+                      currentSorts={sortConfigs}
+                      onSortChange={handleSortChange}
+                      values={uniqueValues.transferredQty}
+                      selectedValues={columnFilters.transferredQty ?? new Set()}
+                      onFilterChange={handleColumnFilterChange}
+                    />
+                  </th>
+                  <th className="text-left p-2">
+                    <SortableFilterHeader
+                      field="remainingQty"
+                      label="Остаток"
+                      currentSorts={sortConfigs}
+                      onSortChange={handleSortChange}
+                      values={uniqueValues.remainingQty}
+                      selectedValues={columnFilters.remainingQty ?? new Set()}
+                      onFilterChange={handleColumnFilterChange}
+                    />
+                  </th>
+                  <th className="text-left p-2">
+                    <SortableFilterHeader
+                      field="status"
+                      label="Статус"
+                      currentSorts={sortConfigs}
+                      onSortChange={handleSortChange}
+                      values={uniqueValues.status}
+                      selectedValues={columnFilters.status ?? new Set()}
+                      onFilterChange={handleColumnFilterChange}
+                      valueLabel={statusLabel}
+                    />
+                  </th>
+                  <th className="text-left p-2 text-xs font-medium">Пред. этап</th>
+                  <th className="text-left p-2 text-xs font-medium">Действия</th>
                 </tr>
               </thead>
               <tbody>
-                {filteredTasks.map((task) => {
+                {sortedTasks.map((task) => {
                   const isFinalStage = isFinalStageTask(task);
+                  const isSelected = bulkMode && bulkSelection?.isSelected(task.id);
                   return (
-                  <tr key={task.id} className="border-b hover:bg-accent/30">
+                  <tr
+                    key={task.id}
+                    className={`border-b hover:bg-accent/30 cursor-pointer transition-colors ${isSelected ? "bg-blue-100 ring-1 ring-blue-300" : ""}`}
+                    onClick={() => {
+                      if (bulkMode && bulkSelection) {
+                        bulkSelection.selectOne(task.id);
+                      }
+                    }}
+                  >
                     <td className="p-2">#{task.sequence}</td>
                     <td className="p-2 font-medium">{task.product_sku}</td>
                     <td className="p-2">{fmtQty(task.planned_quantity)}</td>
+                    <td className="p-2">{fmtQty(task.cache.issued_quantity)}</td>
                     <td className="p-2">{fmtQty(task.cache.in_work_quantity)}</td>
                     <td className="p-2">{fmtQty(task.cache.completed_quantity)}</td>
-                    <td className="p-2">{fmtQty(task.cache.transferred_quantity)}</td>
                     <td className="p-2">{fmtQty(task.cache.rejected_quantity)}</td>
+                    <td className="p-2">{fmtQty(task.cache.transferred_quantity)}</td>
                     <td className="p-2">{fmtQty(task.cache.remaining_quantity)}</td>
                     <td className="p-2">
                       <Badge variant="secondary" className={taskStatusColor[task.status] || ""}>
-                        {taskStatusLabels[task.status] || task.status}
+                        {statusLabel(task.status)}
                       </Badge>
                     </td>
                     <td className="p-2">
@@ -159,26 +387,36 @@ export function SectionTasksBoard({
 
           {/* Mobile cards */}
           <div className="md:hidden space-y-3">
-            {filteredTasks.map((task) => {
+            {sortedTasks.map((task) => {
               const isFinalStage = isFinalStageTask(task);
+              const isSelected = bulkMode && bulkSelection?.isSelected(task.id);
               return (
-              <div key={task.id} className="rounded-lg border bg-card p-4 shadow-sm space-y-3">
+              <div
+                key={task.id}
+                className={`rounded-lg border bg-card p-4 shadow-sm space-y-3 cursor-pointer transition-colors ${isSelected ? "bg-blue-100 ring-1 ring-blue-300" : ""}`}
+                onClick={() => {
+                  if (bulkMode && bulkSelection) {
+                    bulkSelection.selectOne(task.id);
+                  }
+                }}
+              >
                 <div className="flex items-center justify-between gap-2">
                   <div className="font-semibold">
                     <span className="text-muted-foreground">#{task.sequence}</span>
                     <span className="ml-2 text-sm font-medium">{task.product_sku}</span>
                   </div>
                   <Badge variant="secondary" className={taskStatusColor[task.status] || ""}>
-                    {taskStatusLabels[task.status] || task.status}
+                    {statusLabel(task.status)}
                   </Badge>
                 </div>
 
                 <div className="grid grid-cols-2 gap-2 text-sm">
                   <div><span className="text-muted-foreground">План:</span> {fmtQty(task.planned_quantity)}</div>
+                  <div><span className="text-muted-foreground">Выдано:</span> {fmtQty(task.cache.issued_quantity)}</div>
                   <div><span className="text-muted-foreground">В работе:</span> {fmtQty(task.cache.in_work_quantity)}</div>
                   <div><span className="text-muted-foreground">Годные:</span> {fmtQty(task.cache.completed_quantity)}</div>
-                  <div><span className="text-muted-foreground">Передано:</span> {fmtQty(task.cache.transferred_quantity)}</div>
                   <div><span className="text-muted-foreground">Брак:</span> {fmtQty(task.cache.rejected_quantity)}</div>
+                  <div><span className="text-muted-foreground">Передано:</span> {fmtQty(task.cache.transferred_quantity)}</div>
                   <div><span className="text-muted-foreground">Остаток:</span> {fmtQty(task.cache.remaining_quantity)}</div>
                 </div>
 

@@ -18,6 +18,10 @@ export function Layout() {
   const isSingleWindowShopfloor =
     location.pathname.startsWith("/shopfloor-tasks") &&
     new URLSearchParams(location.search).get("singleWindow") === "1"
+  const isBulkMode =
+    location.pathname.startsWith("/shopfloor-tasks") &&
+    new URLSearchParams(location.search).get("bulk") === "1"
+  const hideSidebar = isSingleWindowShopfloor || isBulkMode
 
   // Close mobile menu when route changes
   useEffect(() => {
@@ -41,7 +45,7 @@ export function Layout() {
   return (
     <div className="app-shell">
       {/* Mobile header with hamburger */}
-      {!isSingleWindowShopfloor && (
+      {!hideSidebar && (
         <div className="mobile-header">
           <button
             type="button"
@@ -59,9 +63,9 @@ export function Layout() {
       )}
 
       {/* Overlay */}
-      {!isSingleWindowShopfloor && mobileMenuOpen && <div className="sidebar-overlay" aria-hidden="true" />}
+      {!hideSidebar && mobileMenuOpen && <div className="sidebar-overlay" aria-hidden="true" />}
 
-      {!isSingleWindowShopfloor && (
+      {!hideSidebar && (
         <aside ref={sidebarRef} className={`sidebar ${mobileMenuOpen ? "sidebar--mobile-open" : ""}`}>
           <div className="sidebar-top-bar">
             <div className="sidebar-brand">
@@ -93,7 +97,7 @@ export function Layout() {
           </nav>
         </aside>
       )}
-      <main className={isSingleWindowShopfloor ? "main-area !pt-6 md:!pt-6" : "main-area"}>
+      <main className={hideSidebar ? "main-area !pt-6 md:!pt-6" : "main-area"}>
         <Outlet />
       </main>
     </div>

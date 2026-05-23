@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState, useRef } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
+import { ListChecks } from "lucide-react";
 
 import { apiClient, getErrorMessage } from "@/shared/api/client";
 import { listSections } from "@/shared/api/sections";
@@ -17,11 +18,14 @@ import {
   type DailyStatsRow,
   type SectionBoardTask,
 } from "@/shared/api/shopfloor";
-import { DatePicker, renderIcon, toast } from "@/shared/ui";
+import { DatePicker, renderIcon, toast, Button } from "@/shared/ui";
+import { useBulkSelection } from "@/shared/bulk";
+import { BulkResultsDialog, summarizeBulkResults, type BulkActionResultItem, type BulkActionSummary, type BulkRunnerProgress } from "@/shared/bulk";
 import { IncomingTransfersPanel } from "../components/IncomingTransfersPanel";
 import { SectionSwitcherTiles } from "../components/SectionSwitcherTiles";
 import { SectionTasksBoard, type TaskActionDialogType, type TaskBoardViewMode } from "../components/SectionTasksBoard";
 import { TaskActionDrawer } from "../components/TaskActionDrawer";
+import { BulkOperationsPanel } from "../components/BulkOperationsPanel";
 
 type MeResponse = {
   id: number;
@@ -120,6 +124,47 @@ export function SectionsTasksPage() {
   const [dateToday, setDateToday] = useState(true);
   const [actionComment, setActionComment] = useState("");
 
+  // Bulk mode state
+  const [bulkMode, setBulkMode] = useState(searchParams.get("bulk") === "1" || searchParams.get("singleWindow") === "1");
+  const bulkSelection = useBulkSelection<number>();
+  const activatedSingleWindowRef = useRef(false);
+  const locationRef = useRef(location);
+  locationRef.current = location;
+
+  const toggleBulkMode = useCallback(() => {
+    setBulkMode((prev) => {
+      const nextBulk = !prev;
+      if (!nextBulk) bulkSelection.clear();
+
+      const sp = new URLSearchParams(locationRef.current.search);
+      if (nextBulk) {
+        sp.set("bulk", "1");
+        const swAlready = sp.get("singleWindow") === "1";
+        if (!swAlready && sectionId) {
+          sp.set("singleWindow", "1");
+          activatedSingleWindowRef.current = true;
+        }
+      } else {
+        sp.delete("bulk");
+        if (activatedSingleWindowRef.current) {
+          sp.delete("singleWindow");
+          activatedSingleWindowRef.current = false;
+        }
+      }
+      const qs = sp.toString();
+      const expected = qs ? `?${qs}` : "";
+      if (locationRef.current.search !== expected) {
+        navigate(`${locationRef.current.pathname}${expected || ""}`, { replace: true });
+      }
+      return nextBulk;
+    });
+  }, [bulkSelection, sectionId, navigate]);
+  const [bulkProgress, setBulkProgress] = useState<BulkRunnerProgress | null>(null);
+  const [bulkResults, setBulkResults] = useState<BulkActionResultItem<number>[]>([]);
+  const [bulkResultsOpen, setBulkResultsOpen] = useState(false);
+  const [bulkSummary, setBulkSummary] = useState<BulkActionSummary | null>(null);
+  const bulkExecuting = bulkProgress?.running ?? false;
+
   const { data: me } = useQuery({
     queryKey: ["auth-me"],
     queryFn: async () => (await apiClient.get<MeResponse>("/auth/me")).data,
@@ -163,8 +208,16 @@ export function SectionsTasksPage() {
       }
       if (sectionId !== activeLockedSection.id) setSectionId(activeLockedSection.id);
       const expectedPath = `/shopfloor-tasks/${activeLockedSection.id}`;
-      if (location.pathname !== expectedPath || location.search !== "?singleWindow=1") {
-        navigate(`${expectedPath}?singleWindow=1`, { replace: true });
+      // Accept URLs with singleWindow=1 and optionally bulk=1
+      const sp = new URLSearchParams(location.search);
+      const hasSingleWindow = sp.get("singleWindow") === "1";
+      const hasBulk = sp.get("bulk") === "1";
+      const urlOk = location.pathname === expectedPath && hasSingleWindow && (hasBulk ? sp.toString() === "bulk=1&singleWindow=1" || sp.toString() === "singleWindow=1&bulk=1" : sp.toString() === "singleWindow=1");
+      if (!urlOk) {
+        const nextSp = new URLSearchParams();
+        nextSp.set("singleWindow", "1");
+        if (hasBulk) nextSp.set("bulk", "1");
+        navigate(`${expectedPath}?${nextSp.toString()}`, { replace: true });
       }
       return;
     }
@@ -359,6 +412,18 @@ export function SectionsTasksPage() {
     }
   }, [dateToday, performedDate, accountedDate]);
 
+  // Escape key to exit bulk mode
+  useEffect(() => {
+    if (!bulkMode) return;
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        toggleBulkMode();
+      }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [bulkMode, toggleBulkMode]);
+
   const submitAction = useCallback(() => {
     const task = actionDialog.task;
     if (!task) return;
@@ -475,6 +540,184 @@ export function SectionsTasksPage() {
     defectQty,
   ]);
 
+  // Bulk operations via panel
+  const handleBulkIssue = useCallback(async (entries: { taskId: number; quantity: string }[]) => {
+    setBulkProgress({ total: entries.length, completed: 0, running: true });
+    const results: BulkActionResultItem<number>[] = [];
+    for (let i = 0; i < entries.length; i++) {
+      const entry = entries[i];
+      try {
+        await issueMutation.mutateAsync({
+          taskId: entry.taskId,
+          payload: {
+            quantity: entry.quantity,
+            idempotency_key: makeIdempotencyKey("bulk-issue"),
+            executor_user_id: me?.id,
+            performed_at: nowLocalDateTime(),
+            accounted_at: nowLocalDateTime(),
+          },
+        });
+        results.push({ id: entry.taskId, status: "success" });
+      } catch (e) {
+        results.push({ id: entry.taskId, status: "failed", reason: getErrorMessage(e) });
+      }
+      setBulkProgress({ total: entries.length, completed: i + 1, running: i + 1 < entries.length });
+    }
+    finishBulk(results);
+  }, [issueMutation, me?.id, invalidateShopfloor]);
+
+  const handleBulkComplete = useCallback(async (entries: { taskId: number; goodQty: string; defectQty: string }[]) => {
+    setBulkProgress({ total: entries.length, completed: 0, running: true });
+    const results: BulkActionResultItem<number>[] = [];
+    for (let i = 0; i < entries.length; i++) {
+      const entry = entries[i];
+      try {
+        await completeMutation.mutateAsync({
+          taskId: entry.taskId,
+          payload: {
+            good_quantity: entry.goodQty,
+            defect_quantity: entry.defectQty || "0",
+            idempotency_key: makeIdempotencyKey("bulk-complete"),
+            executor_user_id: me?.id,
+            performed_at: nowLocalDateTime(),
+            accounted_at: nowLocalDateTime(),
+          },
+        });
+        results.push({ id: entry.taskId, status: "success" });
+      } catch (e) {
+        results.push({ id: entry.taskId, status: "failed", reason: getErrorMessage(e) });
+      }
+      setBulkProgress({ total: entries.length, completed: i + 1, running: i + 1 < entries.length });
+    }
+    finishBulk(results);
+  }, [completeMutation, me?.id, invalidateShopfloor]);
+
+  const handleBulkSend = useCallback(async (entries: { taskId: number; quantity: string }[]) => {
+    setBulkProgress({ total: entries.length, completed: 0, running: true });
+    const results: BulkActionResultItem<number>[] = [];
+    for (let i = 0; i < entries.length; i++) {
+      const entry = entries[i];
+      try {
+        await sendMutation.mutateAsync({
+          from_task_id: entry.taskId,
+          quantity: entry.quantity,
+          idempotency_key: makeIdempotencyKey("bulk-send"),
+          executor_user_id: me?.id,
+          performed_at: nowLocalDateTime(),
+          accounted_at: nowLocalDateTime(),
+        });
+        results.push({ id: entry.taskId, status: "success" });
+      } catch (e) {
+        results.push({ id: entry.taskId, status: "failed", reason: getErrorMessage(e) });
+      }
+      setBulkProgress({ total: entries.length, completed: i + 1, running: i + 1 < entries.length });
+    }
+    finishBulk(results);
+  }, [sendMutation, me?.id, invalidateShopfloor]);
+
+  const finishBulk = useCallback((results: BulkActionResultItem<number>[]) => {
+    const summary = summarizeBulkResults(results);
+    setBulkResults(results);
+    setBulkSummary(summary);
+    if (summary.failed > 0) setBulkResultsOpen(true);
+    setBulkProgress(null);
+    bulkSelection.clear();
+    invalidateShopfloor();
+    toast({
+      title: summary.failed > 0 ? "Частичный успех" : "Массовая операция",
+      description: `${summary.success} успешно, ${summary.failed} ошибок${summary.skipped > 0 ? `, ${summary.skipped} пропущено` : ""}`,
+      variant: summary.failed > 0 ? "destructive" : "success",
+    });
+  }, [bulkSelection, invalidateShopfloor]);
+
+  const handleBulkExecuteAll = useCallback(async (data: {
+    issueEntries: { taskId: number; quantity: string }[];
+    completeEntries: { taskId: number; goodQty: string; defectQty: string }[];
+    sendEntries: { taskId: number; quantity: string }[];
+  }) => {
+    const allResults: BulkActionResultItem<number>[] = [];
+    let total = data.issueEntries.length + data.completeEntries.length + data.sendEntries.length;
+
+    // Step 1: Issue
+    if (data.issueEntries.length > 0) {
+      setBulkProgress({ total, completed: 0, running: true });
+      for (let i = 0; i < data.issueEntries.length; i++) {
+        const entry = data.issueEntries[i];
+        try {
+          await issueMutation.mutateAsync({
+            taskId: entry.taskId,
+            payload: {
+              quantity: entry.quantity,
+              idempotency_key: makeIdempotencyKey("bulk-issue"),
+              executor_user_id: me?.id,
+              performed_at: nowLocalDateTime(),
+              accounted_at: nowLocalDateTime(),
+            },
+          });
+          allResults.push({ id: entry.taskId, status: "success" });
+        } catch (e) {
+          allResults.push({ id: entry.taskId, status: "failed", reason: getErrorMessage(e) });
+        }
+        setBulkProgress({ total, completed: i + 1, running: true });
+      }
+      invalidateShopfloor();
+      // Wait for DB to update
+      await new Promise(r => setTimeout(r, 500));
+    }
+
+    // Step 2: Complete
+    if (data.completeEntries.length > 0) {
+      setBulkProgress({ total, completed: data.issueEntries.length, running: true });
+      for (let i = 0; i < data.completeEntries.length; i++) {
+        const entry = data.completeEntries[i];
+        try {
+          await completeMutation.mutateAsync({
+            taskId: entry.taskId,
+            payload: {
+              good_quantity: entry.goodQty,
+              defect_quantity: entry.defectQty,
+              idempotency_key: makeIdempotencyKey("bulk-complete"),
+              executor_user_id: me?.id,
+              performed_at: nowLocalDateTime(),
+              accounted_at: nowLocalDateTime(),
+            },
+          });
+          allResults.push({ id: entry.taskId, status: "success" });
+        } catch (e) {
+          allResults.push({ id: entry.taskId, status: "failed", reason: getErrorMessage(e) });
+        }
+        setBulkProgress({ total, completed: data.issueEntries.length + i + 1, running: true });
+      }
+      invalidateShopfloor();
+      // Wait for DB to update
+      await new Promise(r => setTimeout(r, 500));
+    }
+
+    // Step 3: Send (now completed is in DB)
+    if (data.sendEntries.length > 0) {
+      setBulkProgress({ total, completed: data.issueEntries.length + data.completeEntries.length, running: true });
+      for (let i = 0; i < data.sendEntries.length; i++) {
+        const entry = data.sendEntries[i];
+        try {
+          await sendMutation.mutateAsync({
+            from_task_id: entry.taskId,
+            quantity: entry.quantity,
+            idempotency_key: makeIdempotencyKey("bulk-send"),
+            executor_user_id: me?.id,
+            performed_at: nowLocalDateTime(),
+            accounted_at: nowLocalDateTime(),
+          });
+          allResults.push({ id: entry.taskId, status: "success" });
+        } catch (e) {
+          allResults.push({ id: entry.taskId, status: "failed", reason: getErrorMessage(e) });
+        }
+        setBulkProgress({ total, completed: data.issueEntries.length + data.completeEntries.length + i + 1, running: i + 1 < data.sendEntries.length });
+      }
+    }
+
+    finishBulk(allResults);
+  }, [issueMutation, completeMutation, sendMutation, me?.id, invalidateShopfloor, finishBulk]);
+
   const handleAcceptTransfer = useCallback(
     (transferId: number, payload: AcceptTransferInput) => {
       acceptTransferMutation.mutate({ transferId, payload });
@@ -489,6 +732,10 @@ export function SectionsTasksPage() {
 
   const pendingMutation = issueMutation.isPending || completeMutation.isPending || sendMutation.isPending;
   const tasks = board?.tasks || [];
+  const selectedTasks = useMemo(
+    () => tasks.filter((t) => bulkSelection.selectedIds.has(t.id)),
+    [tasks, bulkSelection.selectedIds],
+  );
   const incomingTransfers = incomingTransfersData?.incoming_transfers || [];
   const canToggleSingleWindow = sectionId !== null && !isSingleWindowBlocked;
   const selectedSectionColor = selectedSection?.icon_color || "#1D4ED8";
@@ -528,20 +775,53 @@ export function SectionsTasksPage() {
           >
             <div className="flex items-start justify-between gap-3">
               <div className="flex items-center gap-3 min-w-0">
-                <span
-                  className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-lg"
-                  style={{ backgroundColor: "#FFFFFFB3", color: selectedSectionColor }}
-                >
-                  {selectedSection.icon ? renderIcon(selectedSection.icon, "h-5 w-5") : <span className="h-2.5 w-2.5 rounded-full bg-current" />}
-                </span>
-                <div className="min-w-0">
-                  <div className="text-xs font-semibold uppercase tracking-wide" style={{ color: selectedSectionColor }}>
-                    {selectedSection.code}
-                  </div>
-                  <div className="truncate text-xl font-bold leading-tight text-slate-900">
-                    {selectedSection.name}
-                  </div>
-                </div>
+                {isSingleWindow ? (
+                  <SectionSwitcherTiles
+                    sections={(sections || []).filter((s) => s.is_active)}
+                    summary={summary?.sections || []}
+                    selectedSectionId={sectionId}
+                    onSelect={(nextId) => {
+                      setSectionId(nextId);
+                      navigate(`/shopfloor-tasks/${nextId}?singleWindow=1`);
+                    }}
+                    variant="popover"
+                    headerContent={
+                      <>
+                        <span
+                          className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-lg"
+                          style={{ backgroundColor: "#FFFFFFB3", color: selectedSectionColor }}
+                        >
+                          {selectedSection.icon ? renderIcon(selectedSection.icon, "h-5 w-5") : <span className="h-2.5 w-2.5 rounded-full bg-current" />}
+                        </span>
+                        <div className="min-w-0">
+                          <div className="text-xs font-semibold uppercase tracking-wide" style={{ color: selectedSectionColor }}>
+                            {selectedSection.code}
+                          </div>
+                          <div className="truncate text-xl font-bold leading-tight text-slate-900">
+                            {selectedSection.name}
+                          </div>
+                        </div>
+                      </>
+                    }
+                  />
+                ) : (
+                  <>
+                    <span
+                      className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-lg"
+                      style={{ backgroundColor: "#FFFFFFB3", color: selectedSectionColor }}
+                    >
+                      {selectedSection.icon ? renderIcon(selectedSection.icon, "h-5 w-5") : <span className="h-2.5 w-2.5 rounded-full bg-current" />}
+                    </span>
+                    <div className="min-w-0">
+                      <div className="text-xs font-semibold uppercase tracking-wide" style={{ color: selectedSectionColor }}>
+                        {selectedSection.code}
+                      </div>
+                      <div className="truncate text-xl font-bold leading-tight text-slate-900">
+                        {selectedSection.name}
+                      </div>
+                    </div>
+                  </>
+                )}
               </div>
               <div className="shrink-0 flex flex-col items-end gap-2">
                 <div className="rounded-md border border-white/70 bg-white/70 px-2 py-1 text-[11px] font-semibold uppercase tracking-wide text-slate-700">
@@ -601,12 +881,36 @@ export function SectionsTasksPage() {
         {!isSingleWindowBlocked && sectionId && (
           <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
             <div className="xl:col-span-2 space-y-4">
+              {/* Bulk mode toggle */}
+              <div className="flex items-center gap-2">
+                <Button variant="outline" size="sm" onClick={toggleBulkMode}>
+                  <ListChecks className="h-4 w-4 mr-1" />
+                  {bulkMode ? "Закрыть" : "Групповые операции"}
+                </Button>
+                {bulkMode && (
+                  <span className="text-sm text-muted-foreground">
+                    Клик по строке для выбора · Выбрано: {bulkSelection.selectedCount}
+                  </span>
+                )}
+              </div>
+
+              {/* Bulk operations panel */}
+              {bulkMode && bulkSelection.selectedCount > 0 && (
+                <BulkOperationsPanel
+                  tasks={selectedTasks}
+                  onExecuteAll={handleBulkExecuteAll}
+                  pending={bulkExecuting}
+                />
+              )}
+
               <SectionTasksBoard
                 tasks={tasks}
                 isLoading={boardLoading}
                 mode={viewMode}
                 onModeChange={setViewMode}
                 onAction={openActionDialog}
+                bulkMode={bulkMode}
+                bulkSelection={bulkMode ? bulkSelection : undefined}
               />
 
               {!isSingleWindow && (
@@ -718,6 +1022,15 @@ export function SectionsTasksPage() {
         pending={pendingMutation}
         conflictHint={conflictHint}
         onSubmit={submitAction}
+      />
+
+      {/* Bulk results dialog */}
+      <BulkResultsDialog
+        open={bulkResultsOpen}
+        onOpenChange={setBulkResultsOpen}
+        title="Результат массовой операции"
+        summary={bulkSummary}
+        results={bulkResults}
       />
     </>
   );
