@@ -231,7 +231,7 @@ export function ExecutionRow({
   return (
     <tr
       className={`border-b hover:bg-accent hover:ring-1 hover:ring-ring/20 cursor-pointer transition-colors overflow-hidden ${isSelected ? BULK_STYLES.selectedRow : ""}`}
-      onClick={() => {
+      onClick={(e) => {
         if (bulkMode) {
           onToggleSelect(row.plan_position_id);
         } else {

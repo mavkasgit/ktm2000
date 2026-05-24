@@ -31,8 +31,6 @@ import {
   type BulkActionResultItem,
   type BulkActionSummary,
   type BulkRunnerProgress,
-  type BulkSelectionRow,
-  type BulkSelectionAction,
 } from "@/shared/bulk";
 import { ExecutionTable } from "../components/ExecutionTable";
 import { ExecutionDialogs } from "../components/ExecutionDialogs";
@@ -563,6 +561,18 @@ export function ExecutionPage() {
   });
   const filteredRows = executionQueryResult.rows;
 
+  const handleSelectAll = useCallback(() => {
+    const filteredIds = filteredRows.map((r) => r.plan_position_id);
+    bulkSelection.selectAll(filteredIds);
+    setSelectionOrder(filteredIds);
+  }, [bulkSelection, filteredRows]);
+
+  const handleResetAll = useCallback(() => {
+    bulkSelection.clear();
+    resetExecutionFilters();
+    setSelectionOrder([]);
+  }, [bulkSelection, resetExecutionFilters]);
+
   const rowById = useMemo(() => {
     const map = new Map<number, ProductionPlanningRow>();
     (rows || []).forEach((row) => map.set(row.plan_position_id, row));
@@ -712,26 +722,15 @@ export function ExecutionPage() {
     setBulkProgress(null);
   }, [bulkSelection, executionBulkActions, queryClient, rowById]);
 
-  const selectedBulkAction = executionBulkActions.find((action) => action.id === selectedBulkActionId) ?? executionBulkActions[0]!;
-  const eligibleFilteredIds = useMemo(
-    () =>
-      filteredRows
-        .filter((row) => selectedBulkAction.isEligible?.(row.plan_position_id, rowById) ?? true)
-        .map((row) => row.plan_position_id),
-    [filteredRows, rowById, selectedBulkAction],
-  );
-
-  useEffect(() => {
-    bulkSelection.pruneTo(eligibleFilteredIds);
-  }, [bulkSelection.pruneTo, eligibleFilteredIds]);
-
-  const runSelectedBulkAction = useCallback(async () => {
+  const runSelectedBulkAction = useCallback(async (actionId?: string) => {
     if (bulkSelection.selectedCount === 0) {
       toast({ title: "Выберите строки", description: "Отметьте строки для массового действия", variant: "destructive" });
       return;
     }
+    const resolvedActionId = actionId ?? selectedBulkActionId;
+    const action = executionBulkActions.find((a) => a.id === resolvedActionId) ?? executionBulkActions[0]!;
     // manual-pass requires a dialog first
-    if (selectedBulkActionId === "manual-pass") {
+    if (resolvedActionId === "manual-pass") {
       setManualPassBulkDialog({
         open: true,
         targetRouteStepId: "",
@@ -741,7 +740,7 @@ export function ExecutionPage() {
       return;
     }
     setBulkProgress({ total: bulkSelection.selectedCount, completed: 0, running: true });
-    const results = await runBulkAction(selectedBulkAction, bulkSelection.selectedIds, rowById, setBulkProgress);
+    const results = await runBulkAction(action, bulkSelection.selectedIds, rowById, setBulkProgress);
     const summary = summarizeBulkResults(results);
     setBulkResults(results);
     setBulkSummary(summary);
@@ -755,61 +754,15 @@ export function ExecutionPage() {
     bulkSelection.clear();
     setSelectionOrder([]);
     setBulkProgress(null);
-  }, [bulkSelection, queryClient, rowById, selectedBulkAction, selectedBulkActionId]);
-
-  const bulkSelectionRows = useMemo<BulkSelectionRow[]>(() => {
-    const rowMap = new Map(rows?.map((r) => [r.plan_position_id, r]) ?? []);
-    return selectionOrder.map((id) => {
-      const row = rowMap.get(id);
-      return {
-        id,
-        cells: {
-          id: `#${id}`,
-          sku: row?.source_sku ?? "—",
-          name: row?.source_name ?? "—",
-          qty: row ? fmtQty(row.quantity) : "0",
-          status: positionStatusLabels[row?.position_status ?? ""] ?? "—",
-        },
-      };
-    });
-  }, [selectionOrder, rows]);
-
-  const bulkSelectionActions = useMemo<BulkSelectionAction[]>(() => [
-    {
-      id: "take-to-work",
-      label: "Взять в работу",
-      variant: "default",
-      onClick: () => runBulkActionById("take-to-work"),
-      disabled: bulkSelection.selectedCount === 0 || Boolean(bulkProgress?.running),
-    },
-    {
-      id: "cancel",
-      label: "Отменить",
-      variant: "destructive",
-      onClick: () => runBulkActionById("cancel"),
-      disabled: bulkSelection.selectedCount === 0 || Boolean(bulkProgress?.running),
-    },
-    {
-      id: "restore",
-      label: "Восстановить",
-      variant: "outline",
-      onClick: () => runBulkActionById("restore"),
-      disabled: bulkSelection.selectedCount === 0 || Boolean(bulkProgress?.running),
-    },
-    {
-      id: "soft-delete",
-      label: "Удалить из списка",
-      variant: "destructive",
-      onClick: requestBulkSoftDelete,
-      disabled: bulkSelection.selectedCount === 0 || Boolean(bulkProgress?.running),
-    },
-  ], [bulkSelection.selectedCount, bulkProgress?.running, requestBulkSoftDelete, runBulkActionById]);
+  }, [bulkSelection, executionBulkActions, queryClient, rowById, selectedBulkActionId]);
 
   const tableScrollRef = useRef<HTMLDivElement>(null);
 
+  const filteredIds = useMemo(() => filteredRows.map((r) => r.plan_position_id), [filteredRows]);
+
   useBulkHotkeys({
     scopeRef: tableScrollRef,
-    filteredIds: eligibleFilteredIds,
+    filteredIds,
     hasSelection: bulkSelection.selectedCount > 0,
     disabled: isLoading,
     isRunning: Boolean(bulkProgress?.running),
@@ -866,8 +819,6 @@ export function ExecutionPage() {
         uniqueValuesByField={uniqueValuesByField}
         hideColumnIds={hideColumnIds}
         bulkSelection={bulkSelection}
-        bulkSelectionRows={bulkSelectionRows}
-        bulkSelectionActions={bulkSelectionActions}
         bulkProgress={bulkProgress}
         bulkSummary={bulkSummary}
         selectedBulkActionId={selectedBulkActionId}
@@ -886,6 +837,8 @@ export function ExecutionPage() {
         onSoftDelete={handleSoftDelete}
         onOpenHistory={openHistory}
         onToggleSelect={toggleSelect}
+        onSelectAll={handleSelectAll}
+        onResetAll={handleResetAll}
         onRequestBulkSoftDelete={requestBulkSoftDelete}
         onRemoveSelection={(id) => setSelectionOrder((prev) => prev.filter((x) => x !== id))}
         tableScrollRef={tableScrollRef}

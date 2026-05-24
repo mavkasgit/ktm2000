@@ -1,3 +1,4 @@
+import { useMemo, useRef } from "react";
 import { ListChecks } from "lucide-react";
 import { ProductionPlanningRow } from "@/shared/api/productionPlans";
 import { Button, FiltersPanel, VirtualizedTableBody, SortableFilterHeader, type FiltersPanelField } from "@/shared/ui";
@@ -6,14 +7,10 @@ import { ExecutionSortField, positionStatusLabels, fmtQty } from "./execution-ut
 import { ExecutionRow } from "./ExecutionRow";
 import { getExecutionTableColumns } from "./execution-table-columns";
 import {
-  BulkPowerBar,
-  BulkSelectionTable,
   type BulkActionDefinition,
   type BulkActionResultItem,
   type BulkActionSummary,
   type BulkRunnerProgress,
-  type BulkSelectionRow,
-  type BulkSelectionAction,
 } from "@/shared/bulk";
 
 interface ExecutionTableProps {
@@ -59,14 +56,12 @@ interface ExecutionTableProps {
     isAllSelected: (ids: Iterable<number>) => boolean;
     isIndeterminate: (ids: Iterable<number>) => boolean;
   };
-  bulkSelectionRows: BulkSelectionRow[];
-  bulkSelectionActions: BulkSelectionAction[];
   bulkProgress: BulkRunnerProgress | null;
   bulkSummary: BulkActionSummary | null;
   selectedBulkActionId: string;
   onActionChange: (id: string) => void;
   executionBulkActions: BulkActionDefinition<number, Map<number, ProductionPlanningRow>>[];
-  onRunSelectedBulkAction: () => void;
+  onRunSelectedBulkAction: (actionId?: string) => void;
   onEnterBulkMode: () => void;
   onExitBulkMode: () => void;
   // lookups
@@ -81,7 +76,9 @@ interface ExecutionTableProps {
   onSoftDelete: (row: ProductionPlanningRow) => void;
   onOpenHistory: (row: ProductionPlanningRow) => void;
   onToggleSelect: (id: number) => void;
+  onSelectAll: () => void;
   onRequestBulkSoftDelete: () => void;
+  onResetAll: () => void;
   onRemoveSelection?: (id: number) => void;
   tableScrollRef: React.MutableRefObject<HTMLDivElement | null>;
 }
@@ -105,8 +102,6 @@ export function ExecutionTable({
   uniqueValuesByField,
   hideColumnIds,
   bulkSelection,
-  bulkSelectionRows,
-  bulkSelectionActions,
   bulkProgress,
   bulkSummary,
   selectedBulkActionId,
@@ -125,6 +120,8 @@ export function ExecutionTable({
   onSoftDelete,
   onOpenHistory,
   onToggleSelect,
+  onSelectAll,
+  onResetAll,
   onRequestBulkSoftDelete,
   onRemoveSelection,
   tableScrollRef,
@@ -132,6 +129,93 @@ export function ExecutionTable({
   const visibleColumns = getExecutionTableColumns(hideColumnIds);
   const headerCellClass =
     "sticky top-0 z-20 border-b bg-background p-2 text-left align-middle text-xs font-medium text-muted-foreground overflow-hidden";
+
+  const actionVariant = (actionId: string): "default" | "destructive" | "outline" | "success" => {
+    switch (actionId) {
+      case "take-to-work": return "outline";
+      case "restore": return "success";
+      case "cancel": case "soft-delete": return "destructive";
+      default: return "default";
+    }
+  };
+
+  const eligibleBulkActions = useMemo(
+    () =>
+      executionBulkActions
+        .map((action) => {
+          let count = 0;
+          for (const id of bulkSelection.selectedIds) {
+            if (action.isEligible?.(id, rowById)) count++;
+          }
+          return { action, eligibleCount: count };
+        })
+        .filter(({ eligibleCount }) => eligibleCount > 0),
+    [executionBulkActions, bulkSelection.selectedIds, rowById],
+  );
+
+  const cancelActionLabel = useMemo(() => {
+    let hasApproved = false;
+    let hasReleased = false;
+    for (const id of bulkSelection.selectedIds) {
+      const row = rowById.get(id);
+      if (row) {
+        if (row.position_status === "approved") hasApproved = true;
+        if (row.position_status === "released") hasReleased = true;
+      }
+    }
+    if (hasApproved && hasReleased) return "Отменить / Остановить";
+    if (hasReleased) return "Остановить";
+    return "Отменить";
+  }, [bulkSelection.selectedIds, rowById]);
+
+  const bulkActions = useMemo(() => {
+    const running = Boolean(bulkProgress?.running);
+
+    if (bulkSelection.selectedCount === 0) {
+      return (
+        <div className="flex items-center gap-2 ml-auto">
+          <span className="text-sm text-muted-foreground">Нет выбранных строк</span>
+          <Button variant="outline" size="sm" onClick={onSelectAll}>
+            Выделить все ({filteredRows.length})
+          </Button>
+        </div>
+      );
+    }
+
+    return (
+      <div className="flex items-center gap-2 ml-auto flex-wrap">
+        <span className="text-sm font-medium whitespace-nowrap">Выбрано: {bulkSelection.selectedCount}</span>
+        {eligibleBulkActions.map(({ action, eligibleCount }) => {
+          const variant = actionVariant(action.id);
+          const label = action.id === "cancel" ? cancelActionLabel : action.label;
+          return (
+            <Button
+              key={action.id}
+              size="sm"
+              variant={variant}
+              className="h-8 text-xs"
+              onClick={() => {
+                onRunSelectedBulkAction(action.id);
+              }}
+              disabled={running}
+            >
+              {running && bulkProgress
+                ? `${label} (${bulkProgress.completed}/${bulkProgress.total})`
+                : label}
+              {!running && eligibleCount < bulkSelection.selectedCount && (
+                <span className="ml-1 opacity-60">({eligibleCount})</span>
+              )}
+            </Button>
+          );
+        })}
+        {bulkSelection.selectedCount < filteredRows.length && (
+          <Button variant="outline" size="sm" onClick={onSelectAll}>
+            Выделить все
+          </Button>
+        )}
+      </div>
+    );
+  }, [bulkSelection.selectedCount, bulkSelection.selectedIds, bulkProgress, eligibleBulkActions, filteredRows.length, onSelectAll, onRunSelectedBulkAction, cancelActionLabel]);
 
   return (
     <>
@@ -162,7 +246,7 @@ export function ExecutionTable({
               </Button>
             </div>
             <p className="text-sm text-muted-foreground mt-1">
-              Выбирайте позиции кликом по строке, используйте фильтры для отбора. Примените действие через кнопки выше. <kbd className="px-1 py-0.5 text-xs rounded bg-muted font-mono">Esc</kbd> — выход.
+              Выбирайте позиции кликом по строке, <kbd className="px-1 py-0.5 text-xs rounded bg-muted font-mono">Shift+Click</kbd> — диапазон. Примените действие через кнопки выше. <kbd className="px-1 py-0.5 text-xs rounded bg-muted font-mono">Esc</kbd> — выход.
             </p>
           </div>
         )}
@@ -171,9 +255,10 @@ export function ExecutionTable({
           <FiltersPanel
             compact
             fields={filterFields}
-            onReset={resetFilters}
+            onReset={onResetAll}
             hasActiveFilters={activeFilterSummary.count > 0}
             activeSummary={activeFilterSummary}
+            actions={bulkActions}
           />
 
           {!bulkMode && (
@@ -183,44 +268,6 @@ export function ExecutionTable({
                 Групповые операции
               </Button>
             </div>
-          )}
-
-          {bulkMode && (
-            <BulkSelectionTable
-              selectedCount={bulkSelection.selectedCount}
-              rows={bulkSelectionRows}
-              columns={[
-                { key: "id", label: "ID" },
-                { key: "sku", label: "SKU" },
-                { key: "name", label: "Наименование" },
-                { key: "qty", label: "Кол-во" },
-                { key: "status", label: "Статус" },
-              ]}
-              actions={bulkSelectionActions}
-              onClose={onExitBulkMode}
-              onRemoveRow={(id) => {
-                bulkSelection.selectOne(Number(id), false);
-                onRemoveSelection?.(Number(id));
-              }}
-              progress={bulkProgress}
-              lastSummary={bulkSummary}
-              className="shrink-0"
-            />
-          )}
-
-          {!bulkMode && (
-            <BulkPowerBar
-              selectedCount={bulkSelection.selectedCount}
-              actions={executionBulkActions}
-              selectedActionId={selectedBulkActionId}
-              onActionChange={onActionChange}
-              onRun={onRunSelectedBulkAction}
-              onClear={bulkSelection.clear}
-              progress={bulkProgress}
-              lastSummary={bulkSummary}
-              selectedIds={bulkSelection.selectedIds}
-              context={rowById}
-            />
           )}
 
           <div
@@ -273,7 +320,7 @@ export function ExecutionTable({
                 rowHeight={48}
                 colSpan={visibleColumns.length}
                 scrollContainerRef={tableScrollRef as React.RefObject<HTMLElement | null>}
-                renderRow={(row) => (
+                renderRow={(row, rowIdx) => (
                   <ExecutionRow
                     key={row.plan_position_id}
                     row={row}
