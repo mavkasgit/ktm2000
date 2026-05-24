@@ -81,6 +81,7 @@ class ParsedWorkbook:
     row_selection: str | None = None
     selected_row_numbers: list[int] | None = None
     auto_included_row_numbers: list[int] | None = None
+    normalize_hanger_quantity: bool = True
 
 
 def sha256_bytes(content: bytes) -> str:
@@ -122,6 +123,7 @@ def parse_factory_plan_workbook(
     column_mapping: dict[str, str] | None = None,
     normalization_rules: dict[str, Any] | None = None,
     row_selection: str | None = None,
+    normalize_hanger_quantity: bool = True,
 ) -> ParsedWorkbook:
     validate_excel_extension(filename)
 
@@ -190,6 +192,7 @@ def parse_factory_plan_workbook(
         row_selection=row_selection.strip() if row_selection else None,
         selected_row_numbers=sorted(selected_rows) if selected_rows is not None else None,
         auto_included_row_numbers=sorted(auto_included_rows) if auto_included_rows else None,
+        normalize_hanger_quantity=normalize_hanger_quantity,
     )
 
 

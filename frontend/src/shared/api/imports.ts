@@ -27,6 +27,7 @@ export type ImportExcelInput = {
   row_selection?: string;
   template_id?: number;
   column_mapping?: Record<string, string | { header: string; column: string }>;
+  normalize_hanger_quantity?: boolean;
 };
 
 export type RecentImport = {
@@ -75,6 +76,7 @@ export async function previewExcelSheet(
     template_id?: number;
     mode?: ImportBatchMode;
     production_plan_id?: number;
+    normalize_hanger_quantity?: boolean;
   },
 ): Promise<SheetPreviewResponse> {
   const formData = new FormData();
@@ -87,6 +89,7 @@ export async function previewExcelSheet(
   if (options?.row_selection?.trim()) {
     formData.append("row_selection", options.row_selection.trim());
   }
+  formData.append("normalize_hanger_quantity", String(options?.normalize_hanger_quantity ?? true));
   const { data } = await apiClient.post<SheetPreviewResponse>("/imports/excel/preview", formData, {
     params: {
       template_id: options?.template_id,
@@ -113,6 +116,7 @@ export async function importExcel(input: ImportExcelInput) {
   if (input.row_selection && input.row_selection.trim()) {
     formData.append("row_selection", input.row_selection.trim());
   }
+  formData.append("normalize_hanger_quantity", String(input.normalize_hanger_quantity ?? true));
 
   const { data } = await apiClient.post<ExcelImportResponse>("/imports/excel", formData, {
     params: {

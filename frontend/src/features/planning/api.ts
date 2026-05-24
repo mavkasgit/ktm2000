@@ -32,6 +32,7 @@ export async function uploadExcel(
     planVersion?: string;
     rowSelection?: string;
     sheetIndex?: number;
+    normalizeHangerQuantity?: boolean;
   },
 ) {
   const payload = await importExcel({
@@ -44,6 +45,7 @@ export async function uploadExcel(
     plan_month: options?.planMonth?.trim() || undefined,
     plan_version: options?.planVersion?.trim() || undefined,
     row_selection: options?.rowSelection?.trim() || undefined,
+    normalize_hanger_quantity: options?.normalizeHangerQuantity ?? true,
   })
   lastImport = enrichImport(payload as Record<string, any>)
   return lastImport

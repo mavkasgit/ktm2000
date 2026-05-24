@@ -681,3 +681,496 @@ async def test_preview_excel_uses_template_profile_for_rule_selection(client, se
 
     assert response.status_code == 200
     assert captured["rule_profile_id"] == high_active.id
+
+
+# ─────────────────────────────────────────────────────────────
+# Tests for hanger quantity rounding (normalize_hanger_quantity)
+# ─────────────────────────────────────────────────────────────
+
+def _workbook_with_quantity(sku: str, name: str, quantity: int) -> bytes:
+    """Создаёт минимальный Excel с одной строкой плана."""
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "План май 26 05"
+    ws.append(["", "", "Комментарий"])
+    ws.append(["Заявка № 05", "май"])
+    ws.append([])
+    ws.append(["", "", "", "", "", "", "", "", "", "", "", "", "Формирование ящиков"])
+    ws.append(
+        [
+            "Артикул",
+            "пополнение",
+            "Наименование",
+            "остатки сырья на КТМ",
+            "Цвет",
+            "кол-во шт. в 2,7",
+            "Длина, м",
+            "Пробивка/сверловка",
+            "Упаковка",
+            "Примечание ",
+            "Длина после упак, м",
+            "кол-во штук готовой продукции",
+            "Запад",
+            "Восток",
+            "Вид конечного продукта",
+            "Комментарии",
+        ]
+    )
+    ws.append([sku, "ТЗ", name, 0, "", quantity, 2.7, "", "", "", 2.7, quantity, "", quantity, "ГП"])
+    out = BytesIO()
+    wb.save(out)
+    return out.getvalue()
+
+
+@pytest.mark.asyncio
+async def test_import_with_normalize_hanger_quantity_rounds_up(
+    client, session, tmp_path, monkeypatch
+) -> None:
+    """Импорт с normalize_hanger_quantity=True округляет количество вверх."""
+    monkeypatch.setattr(settings, "IMPORT_STORAGE_DIR", str(tmp_path))
+
+    from app.models.product import Product, ProductType
+    from app.models.techcard import Techcard, TechcardLine
+    from app.models.route import ProductionRoute, RouteSignatureRule, RouteStep
+    from app.models.routing import RouteOperationFamily, RouteOutputKind
+    from app.models.section import Section
+
+    product = Product(sku="FG-TEST", name="Test Product", type=ProductType.finished_good, unit="pcs", quantity_per_hanger=5)
+    component = Product(sku="FG-TEST-RAW", name="Test Raw", type=ProductType.component, unit="pcs")
+    sections = [Section(code="CUT", name="Cut"), Section(code="PACK", name="Pack")]
+    session.add_all([product, component, *sections])
+    await session.flush()
+
+    techcard = Techcard(product_id=product.id, version="v1", is_active=True)
+    session.add(techcard)
+    await session.flush()
+    session.add(TechcardLine(techcard_id=techcard.id, component_product_id=component.id, quantity=1, unit="pcs"))
+
+    route = ProductionRoute(name="Main", is_active=True)
+    session.add(route)
+    await session.flush()
+    session.add(
+        RouteSignatureRule(
+            route_id=route.id,
+            operation_family=RouteOperationFamily.NONE,
+            output_kind=RouteOutputKind.finished_good,
+            has_pack_ops=False,
+            priority=10,
+            is_active=True,
+        )
+    )
+    for index, section in enumerate(sections, start=1):
+        session.add(
+            RouteStep(
+                route_id=route.id,
+                sequence=index,
+                section_id=section.id,
+                operation_name=f"Step {index}",
+                is_final=index == len(sections),
+            )
+        )
+    await session.commit()
+
+    template = await _create_template(session, name="Hanger Template", code="hanger-template")
+    await session.commit()
+
+    # Количество 12, на подвес 5 → должно округлиться до 15
+    wb = _workbook_with_quantity("FG-TEST", "Test Product", 12)
+    response = await client.post(
+        f"/api/imports/excel?template_id={template.id}",
+        data={"normalize_hanger_quantity": "true"},
+        files={"file": ("plan.xlsx", wb, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+    )
+
+    assert response.status_code == 201
+    body = response.json()
+    item = body["items"][0]
+
+    # Проверяем что количество округлено (Decimal строки)
+    assert item["after_data"]["quantity"] == "15"
+    assert item["after_data"]["original_quantity"] in ("12", "12.0")
+
+    # Проверяем что есть hanger_count и quantity_per_hanger
+    assert item["after_data"]["quantity_per_hanger"] == 5
+    assert item["after_data"]["hanger_count"] == 3
+
+    # Нет warning о округлении (это нормальное поведение, не warning)
+    assert not any("hanger_quantity_adjusted" in w for w in item["warnings"])
+
+    # Проверяем summary (Decimal строки)
+    assert body["summary"]["quantity_total"] in ("12", "12.0")
+    # quantity_adjusted_total добавляется на верхний уровень ответа
+    assert body["quantity_adjusted_total"] == "15"
+
+
+@pytest.mark.asyncio
+async def test_import_without_normalize_hanger_quantity_keeps_original(
+    client, session, tmp_path, monkeypatch
+) -> None:
+    """Импорт с normalize_hanger_quantity=False сохраняет оригинальное количество."""
+    monkeypatch.setattr(settings, "IMPORT_STORAGE_DIR", str(tmp_path))
+
+    from app.models.product import Product, ProductType
+    from app.models.techcard import Techcard, TechcardLine
+    from app.models.route import ProductionRoute, RouteSignatureRule, RouteStep
+    from app.models.routing import RouteOperationFamily, RouteOutputKind
+    from app.models.section import Section
+
+    product = Product(sku="FG-TEST", name="Test Product", type=ProductType.finished_good, unit="pcs", quantity_per_hanger=5)
+    component = Product(sku="FG-TEST-RAW", name="Test Raw", type=ProductType.component, unit="pcs")
+    sections = [Section(code="CUT", name="Cut"), Section(code="PACK", name="Pack")]
+    session.add_all([product, component, *sections])
+    await session.flush()
+
+    techcard = Techcard(product_id=product.id, version="v1", is_active=True)
+    session.add(techcard)
+    await session.flush()
+    session.add(TechcardLine(techcard_id=techcard.id, component_product_id=component.id, quantity=1, unit="pcs"))
+
+    route = ProductionRoute(name="Main", is_active=True)
+    session.add(route)
+    await session.flush()
+    session.add(
+        RouteSignatureRule(
+            route_id=route.id,
+            operation_family=RouteOperationFamily.NONE,
+            output_kind=RouteOutputKind.finished_good,
+            has_pack_ops=False,
+            priority=10,
+            is_active=True,
+        )
+    )
+    for index, section in enumerate(sections, start=1):
+        session.add(
+            RouteStep(
+                route_id=route.id,
+                sequence=index,
+                section_id=section.id,
+                operation_name=f"Step {index}",
+                is_final=index == len(sections),
+            )
+        )
+    await session.commit()
+
+    template = await _create_template(session, name="No Hanger Template", code="no-hanger-template")
+    await session.commit()
+
+    wb = _workbook_with_quantity("FG-TEST", "Test Product", 12)
+    response = await client.post(
+        f"/api/imports/excel?template_id={template.id}",
+        data={"normalize_hanger_quantity": "false"},
+        files={"file": ("plan.xlsx", wb, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+    )
+
+    assert response.status_code == 201
+    body = response.json()
+    item = body["items"][0]
+
+    # Количество не округлено (Decimal строки)
+    assert item["after_data"]["quantity"] in ("12", "12.0")
+    assert item["after_data"]["original_quantity"] in ("12", "12.0")
+
+    # Нет warning о округлении
+    assert not any("hanger_quantity_adjusted" in w for w in item["warnings"])
+
+
+@pytest.mark.asyncio
+async def test_import_product_without_quantity_per_hanger_shows_warning(
+    client, session, tmp_path, monkeypatch
+) -> None:
+    """Продукт без quantity_per_hanger получает warning но количество не меняется."""
+    monkeypatch.setattr(settings, "IMPORT_STORAGE_DIR", str(tmp_path))
+
+    from app.models.product import Product, ProductType
+    from app.models.techcard import Techcard, TechcardLine
+    from app.models.route import ProductionRoute, RouteSignatureRule, RouteStep
+    from app.models.routing import RouteOperationFamily, RouteOutputKind
+    from app.models.section import Section
+
+    # Продукт БЕЗ quantity_per_hanger
+    product = Product(sku="FG-TEST", name="Test Product", type=ProductType.finished_good, unit="pcs")
+    component = Product(sku="FG-TEST-RAW", name="Test Raw", type=ProductType.component, unit="pcs")
+    sections = [Section(code="CUT", name="Cut"), Section(code="PACK", name="Pack")]
+    session.add_all([product, component, *sections])
+    await session.flush()
+
+    techcard = Techcard(product_id=product.id, version="v1", is_active=True)
+    session.add(techcard)
+    await session.flush()
+    session.add(TechcardLine(techcard_id=techcard.id, component_product_id=component.id, quantity=1, unit="pcs"))
+
+    route = ProductionRoute(name="Main", is_active=True)
+    session.add(route)
+    await session.flush()
+    session.add(
+        RouteSignatureRule(
+            route_id=route.id,
+            operation_family=RouteOperationFamily.NONE,
+            output_kind=RouteOutputKind.finished_good,
+            has_pack_ops=False,
+            priority=10,
+            is_active=True,
+        )
+    )
+    for index, section in enumerate(sections, start=1):
+        session.add(
+            RouteStep(
+                route_id=route.id,
+                sequence=index,
+                section_id=section.id,
+                operation_name=f"Step {index}",
+                is_final=index == len(sections),
+            )
+        )
+    await session.commit()
+
+    template = await _create_template(session, name="No Hanger Value Template", code="no-hanger-value-template")
+    await session.commit()
+
+    wb = _workbook_with_quantity("FG-TEST", "Test Product", 12)
+    response = await client.post(
+        f"/api/imports/excel?template_id={template.id}",
+        data={"normalize_hanger_quantity": "true"},
+        files={"file": ("plan.xlsx", wb, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+    )
+
+    assert response.status_code == 201
+    body = response.json()
+    item = body["items"][0]
+
+    # Количество не изменилось (Decimal строки)
+    assert item["after_data"]["quantity"] in ("12", "12.0")
+    assert item["after_data"]["original_quantity"] in ("12", "12.0")
+
+    # Есть warning что quantity_per_hanger не задан
+    assert any("hanger_quantity_not_set" in w for w in item["warnings"])
+
+
+@pytest.mark.asyncio
+async def test_import_already_multiple_no_warning(
+    client, session, tmp_path, monkeypatch
+) -> None:
+    """Количество уже кратно подвесу — нет warning."""
+    monkeypatch.setattr(settings, "IMPORT_STORAGE_DIR", str(tmp_path))
+
+    from app.models.product import Product, ProductType
+    from app.models.techcard import Techcard, TechcardLine
+    from app.models.route import ProductionRoute, RouteSignatureRule, RouteStep
+    from app.models.routing import RouteOperationFamily, RouteOutputKind
+    from app.models.section import Section
+
+    product = Product(sku="FG-TEST", name="Test Product", type=ProductType.finished_good, unit="pcs", quantity_per_hanger=5)
+    component = Product(sku="FG-TEST-RAW", name="Test Raw", type=ProductType.component, unit="pcs")
+    sections = [Section(code="CUT", name="Cut"), Section(code="PACK", name="Pack")]
+    session.add_all([product, component, *sections])
+    await session.flush()
+
+    techcard = Techcard(product_id=product.id, version="v1", is_active=True)
+    session.add(techcard)
+    await session.flush()
+    session.add(TechcardLine(techcard_id=techcard.id, component_product_id=component.id, quantity=1, unit="pcs"))
+
+    route = ProductionRoute(name="Main", is_active=True)
+    session.add(route)
+    await session.flush()
+    session.add(
+        RouteSignatureRule(
+            route_id=route.id,
+            operation_family=RouteOperationFamily.NONE,
+            output_kind=RouteOutputKind.finished_good,
+            has_pack_ops=False,
+            priority=10,
+            is_active=True,
+        )
+    )
+    for index, section in enumerate(sections, start=1):
+        session.add(
+            RouteStep(
+                route_id=route.id,
+                sequence=index,
+                section_id=section.id,
+                operation_name=f"Step {index}",
+                is_final=index == len(sections),
+            )
+        )
+    await session.commit()
+
+    template = await _create_template(session, name="Multiple Template", code="multiple-template")
+    await session.commit()
+
+    # 15 кратно 5
+    wb = _workbook_with_quantity("FG-TEST", "Test Product", 15)
+    response = await client.post(
+        f"/api/imports/excel?template_id={template.id}",
+        data={"normalize_hanger_quantity": "true"},
+        files={"file": ("plan.xlsx", wb, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+    )
+
+    assert response.status_code == 201
+    body = response.json()
+    item = body["items"][0]
+
+    assert item["after_data"]["quantity"] in ("15", "15.0")
+    # Нет warning о округлении так как уже кратно
+    assert not any("hanger_quantity_adjusted" in w for w in item["warnings"])
+    assert not any("hanger_quantity_not_set" in w for w in item["warnings"])
+
+
+def _workbook_paired() -> bytes:
+    """Создаёт Excel с парой профилей."""
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "План май 26 05"
+    ws.append(["", "", "Комментарий"])
+    ws.append(["Заявка № 05", "май"])
+    ws.append([])
+    ws.append(["", "", "", "", "", "", "", "", "", "", "", "", "Формирование ящиков"])
+    ws.append(
+        [
+            "Артикул",
+            "пополнение",
+            "Наименование",
+            "остатки сырья на КТМ",
+            "Цвет",
+            "кол-во шт. в 2,7",
+            "Длина, м",
+            "Пробивка/сверловка",
+            "Упаковка",
+            "Примечание ",
+            "Длина после упак, м",
+            "кол-во штук готовой продукции",
+            "Запад",
+            "Восток",
+            "Вид конечного продукта",
+            "Комментарии",
+            "",
+            "",
+            "Упаковка в 1,8",
+            "добавить",
+        ]
+    )
+    # Парная строка 1 и 2 — вторая с пустым name как в оригинале
+    ws.append(["ЮП-PAIR-A", "ТЗ", "Paired Profile", 100, "black", 10, 2.7, "", "", "", 2.7, 10, "", 10, "П/ф"])
+    ws.append(["ЮП-PAIR-B", "ТЗ", "", 100, "black", 10, 2.7, "", "", "", 2.7, 10, "", 10, "П/ф"])
+    out = BytesIO()
+    wb.save(out)
+    return out.getvalue()
+
+
+@pytest.mark.asyncio
+async def test_import_paired_techcard_rounds_by_quantity_a_b_per_item(
+    client, session, tmp_path, monkeypatch
+) -> None:
+    """Парная техкарта округляет каждый компонент по своему quantity_a/b_per_item."""
+    monkeypatch.setattr(settings, "IMPORT_STORAGE_DIR", str(tmp_path))
+
+    from app.models.product import Product, ProductType
+    from app.models.techcard import Techcard, TechcardLine
+
+    comp_a = Product(sku="ЮП-PAIR-A", name="Pair A", type=ProductType.component, unit="pcs")
+    comp_b = Product(sku="ЮП-PAIR-B", name="Pair B", type=ProductType.component, unit="pcs")
+    session.add_all([comp_a, comp_b])
+    await session.flush()
+
+    # Парная техкарта с quantity_a_per_item=8, quantity_b_per_item=12
+    paired = Techcard(
+        product_id=None,
+        version="v1",
+        is_active=True,
+        processing_type="paired_processing",
+        quantity_a_per_item=8,
+        quantity_b_per_item=12,
+    )
+    session.add(paired)
+    await session.flush()
+    session.add_all(
+        [
+            TechcardLine(techcard_id=paired.id, component_product_id=comp_a.id, quantity=1, unit="pcs"),
+            TechcardLine(techcard_id=paired.id, component_product_id=comp_b.id, quantity=1, unit="pcs"),
+        ]
+    )
+    await session.commit()
+
+    template = await _create_template(session, name="Paired Hanger Template", code="paired-hanger-template")
+    await session.commit()
+
+    wb = _workbook_paired()
+    response = await client.post(
+        f"/api/imports/excel/preview?template_id={template.id}",
+        data={"normalize_hanger_quantity": "true"},
+        files={"file": ("paired.xlsx", wb, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    paired_item = body["items"][0]
+
+    # Основной quantity остался 10 (Decimal строка)
+    assert paired_item["after_data"]["quantity"] in ("10", "10.0")
+
+    # Проверяем warnings чтобы понять что произошло
+    warnings = paired_item.get("warnings", [])
+
+    # Проверяем adjusted_quantities_by_component
+    adjusted = paired_item["after_data"].get("adjusted_quantities_by_component", {})
+    # 10 → округляем по 8 = 16 для A
+    assert "ЮП-PAIR-A" in adjusted
+    # 10 → округляем по 12 = 12 для B
+    assert "ЮП-PAIR-B" in adjusted
+
+    # Проверяем warnings
+    assert any("paired_hanger_adjusted" in w for w in paired_item["warnings"])
+
+
+@pytest.mark.asyncio
+async def test_import_paired_techcard_without_quantity_a_b_per_item_shows_warning(
+    client, session, tmp_path, monkeypatch
+) -> None:
+    """Парная техкарта без quantity_a/b_per_item показывает warning."""
+    monkeypatch.setattr(settings, "IMPORT_STORAGE_DIR", str(tmp_path))
+
+    from app.models.product import Product, ProductType
+    from app.models.techcard import Techcard, TechcardLine
+
+    comp_a = Product(sku="ЮП-PAIR-A", name="Pair A", type=ProductType.component, unit="pcs")
+    comp_b = Product(sku="ЮП-PAIR-B", name="Pair B", type=ProductType.component, unit="pcs")
+    session.add_all([comp_a, comp_b])
+    await session.flush()
+
+    # Парная техкарта БЕЗ quantity_a/b_per_item
+    paired = Techcard(
+        product_id=None,
+        version="v1",
+        is_active=True,
+        processing_type="paired_processing",
+    )
+    session.add(paired)
+    await session.flush()
+    session.add_all(
+        [
+            TechcardLine(techcard_id=paired.id, component_product_id=comp_a.id, quantity=1, unit="pcs"),
+            TechcardLine(techcard_id=paired.id, component_product_id=comp_b.id, quantity=1, unit="pcs"),
+        ]
+    )
+    await session.commit()
+
+    template = await _create_template(session, name="Paired No Hanger Template", code="paired-no-hanger-template")
+    await session.commit()
+
+    wb = _workbook_paired()
+    response = await client.post(
+        f"/api/imports/excel/preview?template_id={template.id}",
+        data={"normalize_hanger_quantity": "true"},
+        files={"file": ("paired.xlsx", wb, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    paired_item = body["items"][0]
+
+    # Quantity не изменился (Decimal строка)
+    assert paired_item["after_data"]["quantity"] in ("10", "10.0")
+    assert paired_item["after_data"]["original_quantity"] in ("10", "10.0")
+
+    # Нет adjusted_quantities_by_component
+    assert "adjusted_quantities_by_component" not in paired_item["after_data"]

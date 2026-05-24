@@ -36,6 +36,7 @@ class ImportPreviewOut(BaseModel):
     header_row_number: int
     summary: dict
     items: list[dict]
+    quantity_adjusted_total: str | None = None
 
 
 @router.post("/excel", response_model=ImportPreviewOut, status_code=status.HTTP_201_CREATED)
@@ -49,6 +50,7 @@ async def import_excel_plan(
     row_selection: str | None = Form(None),
     template_id: int | None = Query(None),
     column_mapping: str | None = Query(None),
+    normalize_hanger_quantity: bool = Form(True),
     db: AsyncSession = Depends(get_db),
 ) -> ImportPreviewOut:
     if template_id is None:
@@ -101,6 +103,7 @@ async def import_excel_plan(
             row_selection=row_selection,
             template_id=template_id,
             rule_profile_id=rule_profile_id,
+            normalize_hanger_quantity=normalize_hanger_quantity,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -143,6 +146,7 @@ async def preview_excel_sheet_endpoint(
     production_plan_id: int | None = Form(None),
     row_selection: str | None = Form(None),
     template_id: int | None = Query(None),
+    normalize_hanger_quantity: bool = Form(True),
     db: AsyncSession = Depends(get_db),
 ) -> SheetPreviewOut:
     from app.services.plan_import_service import preview_excel_sheet
@@ -181,6 +185,7 @@ async def preview_excel_sheet_endpoint(
         normalization_rules=resolved_normalization_rules,
         row_selection=row_selection,
         rule_profile_id=rule_profile_id,
+        normalize_hanger_quantity=normalize_hanger_quantity,
     )
     return SheetPreviewOut(**result)
 

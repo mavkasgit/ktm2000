@@ -40,6 +40,9 @@ const warningLabels: Record<string, string> = {
   techcard_pair_not_resolved: "Не выбран парный профиль техкарты",
   product_name_missing: "Отсутствует наименование",
   period_not_detected: "не определен",
+  paired_hanger_adjusted: "Округлено для компонента парной техкарты",
+  paired_hanger_mismatch: "Разное кол-во на подвес у компонентов парной техкарты",
+  hanger_quantity_not_set: "quantity_per_hanger не задан — количество не округлено",
 };
 
 function translateCodes(codes: string[] | unknown, labels: Record<string, string>): string {
@@ -151,7 +154,22 @@ export function ImportDiffTable({ rows, sortConfig, onSort }: ImportDiffTablePro
             const sku = String(getAfter(row, "source_sku") ?? getAfter(row, "sku") ?? "");
             const name = String(getAfter(row, "source_name") ?? getAfter(row, "product_name") ?? getAfter(row, "name") ?? "");
             const qtyRaw = getAfter(row, "quantity");
-            const quantity = qtyRaw !== undefined && qtyRaw !== null && qtyRaw !== "" ? String(Number(qtyRaw).toFixed(0)) : "";
+            const originalQty = getAfter(row, "original_quantity");
+            const numQty = qtyRaw != null && qtyRaw !== "" ? Number(qtyRaw) : NaN;
+            // Normalize: remove .0 for whole numbers
+            const quantity = Number.isFinite(numQty) ? (numQty % 1 === 0 ? String(Math.trunc(numQty)) : String(numQty)) : "";
+            const normalizedOriginal = originalQty != null && originalQty !== "" ? (() => {
+              const n = Number(originalQty);
+              return Number.isFinite(n) ? (n % 1 === 0 ? String(Math.trunc(n)) : String(n)) : String(originalQty);
+            })() : null;
+            const qtyAdjusted = normalizedOriginal && normalizedOriginal !== quantity;
+
+            // Get hanger count from after_data (backend calculates it)
+            const afterDataForHanger = row.after_data as UnknownRecord | undefined;
+            const hangerCountRaw = (afterDataForHanger?.hanger_count as number | null | undefined) ?? null;
+            const hangerCountDisplay = hangerCountRaw != null
+              ? (Number.isInteger(hangerCountRaw) ? String(hangerCountRaw) : Number(hangerCountRaw).toFixed(1))
+              : null;
             const routeName = String(getAfter(row, "route_name") || "");
             const routeSource = String(getAfter(row, "route_source") || "");
             const routeMeta = buildRouteMetaLabel(row);
@@ -202,7 +220,21 @@ export function ImportDiffTable({ rows, sortConfig, onSort }: ImportDiffTablePro
                 </td>
                 <td style={{ borderBottom: "1px solid #f3f4f6", padding: 8 }}>{sku}</td>
                 <td style={{ borderBottom: "1px solid #f3f4f6", padding: 8 }}>{name}</td>
-                <td style={{ borderBottom: "1px solid #f3f4f6", padding: 8 }}>{quantity}</td>
+                <td style={{ borderBottom: "1px solid #f3f4f6", padding: 8 }}>
+                  {qtyAdjusted ? (
+                    <span>
+                      <span style={{ color: "#9CA3AF" }}>{normalizedOriginal}</span>
+                      <span style={{ color: "#9CA3AF", margin: "0 4px" }}>→</span>
+                      <span style={{ fontWeight: 500, color: "#D97706" }}>
+                        {quantity}{hangerCountDisplay != null ? ` (${hangerCountDisplay}П)` : ''}
+                      </span>
+                    </span>
+                  ) : (
+                    <span>
+                      {quantity}{hangerCountDisplay != null ? ` (${hangerCountDisplay}П)` : ''}
+                    </span>
+                  )}
+                </td>
                 <td style={{ borderBottom: "1px solid #f3f4f6", padding: 8, color: routeColor, fontWeight: routeName ? 500 : 400 }}>
                   {routeLabel}
                 </td>

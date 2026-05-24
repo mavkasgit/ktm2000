@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from collections import Counter
 from datetime import UTC, date, datetime
 from decimal import Decimal
@@ -37,6 +38,7 @@ from app.services.excel_import import (
 )
 from app.services.route_selection import load_selection_rules_for_profile, select_route_for_payload
 from app.services.routing_signature import canonical_signature_from_payload
+from app.services.hanger_quantity import adjust_quantity_to_hanger
 
 
 async def preview_excel_sheet(
@@ -51,6 +53,7 @@ async def preview_excel_sheet(
     normalization_rules: dict | None = None,
     row_selection: str | None = None,
     rule_profile_id: int | None = None,
+    normalize_hanger_quantity: bool = True,
 ) -> dict:
     """Parse an Excel sheet and return full preview checks without creating DB records."""
     parsed = parse_factory_plan_workbook(
@@ -60,6 +63,7 @@ async def preview_excel_sheet(
         column_mapping=column_mapping,
         normalization_rules=normalization_rules,
         row_selection=row_selection,
+        normalize_hanger_quantity=normalize_hanger_quantity,
     )
     summary = _summary(parsed.parsed_rows, parsed.warnings, parsed)
 
@@ -95,7 +99,15 @@ async def preview_excel_sheet(
         existing_positions,
         rule_profile_id,
         template_column_mapping=column_mapping,
+        normalize_hanger_quantity=parsed.normalize_hanger_quantity,
     )
+
+    # Добавляем quantity_adjusted_total в summary
+    quantity_adjusted_total = sum(
+        (Decimal(item.after_data.get("quantity", "0")) for item in item_payloads),
+        start=Decimal("0"),
+    )
+    summary["quantity_adjusted_total"] = str(quantity_adjusted_total)
 
     return {
         "sheet_name": parsed.sheet_name,
@@ -122,6 +134,7 @@ async def create_excel_import_change_set(
     row_selection: str | None = None,
     template_id: int | None = None,
     rule_profile_id: int | None = None,
+    normalize_hanger_quantity: bool = True,
 ) -> dict:
     extension = validate_excel_extension(filename)
     file_hash = sha256_bytes(content)
@@ -133,6 +146,7 @@ async def create_excel_import_change_set(
         column_mapping=column_mapping,
         normalization_rules=normalization_rules,
         row_selection=row_selection,
+        normalize_hanger_quantity=normalize_hanger_quantity,
     )
 
     import_file = await _get_or_create_import_file(
@@ -251,6 +265,7 @@ async def create_excel_import_change_set(
         rule_profile_id,
         template_id=template_id,
         template_column_mapping=column_mapping,
+        normalize_hanger_quantity=parsed.normalize_hanger_quantity,
     )
     for item in item_payloads:
         db.add(item)
@@ -272,6 +287,10 @@ async def create_excel_import_change_set(
         "header_row_number": parsed.header_row_number,
         "summary": summary,
         "items": [_serialize_item(item) for item in item_payloads],
+        "quantity_adjusted_total": str(sum(
+            (Decimal(item.after_data.get("quantity", "0")) for item in item_payloads),
+            start=Decimal("0"),
+        )),
     }
 
 
@@ -423,6 +442,7 @@ async def _make_change_items(
     rule_profile_id: int | None = None,
     template_id: int | None = None,
     template_column_mapping: dict | None = None,
+    normalize_hanger_quantity: bool = True,
 ) -> tuple[list[PlanChangeItem], dict]:
     available_by_sku = _build_available_inputs_by_sku(parsed_rows)
     by_fingerprint: dict[str, PlanPosition] = {}
@@ -594,11 +614,97 @@ async def _make_change_items(
             route_match_quality = selection.route_match_quality or PlanPositionRouteMatchQuality.exact.value
             route_match_reason = PlanPositionRouteMatchReason.selection_rules.value
 
+        # Округление количества до кратности подвесам
+        effective_quantity = row.quantity
+        original_quantity = row.quantity
+        adjusted_quantities_by_component: dict[str, str] | None = None
+        quantity_per_hanger: int | None = None
+        hanger_count: int | None = None
+
+        if row.payload.get("paired_profile"):
+            # Парная техкарта — берём подвесы из техкарты
+            components = row.payload.get("components") or []
+            component_skus = [c.get("sku", "") for c in components if c.get("sku")]
+            techcard = await _find_paired_techcard(db, component_skus) if component_skus else None
+
+            if techcard:
+                per_a = techcard.quantity_a_per_item
+                per_b = techcard.quantity_b_per_item
+
+                if per_a and per_b and per_a > 0 and per_b > 0:
+                    if per_a == per_b:
+                        # Одинаковое кол-во на подвес — считаем просто
+                        hanger_count = math.ceil(row.quantity / per_a) if normalize_hanger_quantity else float(row.quantity / per_a)
+                    else:
+                        # Разное кол-во на подвес — warning
+                        warnings.append(
+                            f"paired_hanger_mismatch:quantity_a_per_item={per_a},quantity_b_per_item={per_b}"
+                        )
+
+                if normalize_hanger_quantity:
+                    lines = (
+                        await db.execute(
+                            select(TechcardLine, Product)
+                            .join(Product, Product.id == TechcardLine.component_product_id)
+                            .where(TechcardLine.techcard_id == techcard.id)
+                            .order_by(TechcardLine.id)
+                        )
+                    ).all()
+
+                    adjusted_quantities = {}
+                    for idx, (tc_line, comp_product) in enumerate(lines):
+                        sku = comp_product.sku
+                        per_hanger = techcard.quantity_a_per_item if idx == 0 else techcard.quantity_b_per_item
+
+                        if per_hanger and per_hanger > 0:
+                            adjusted = adjust_quantity_to_hanger(row.quantity, per_hanger)
+                            if adjusted is not None:
+                                adjusted_quantities[sku] = adjusted
+                                warnings.append(
+                                    f"paired_hanger_adjusted:{sku} "
+                                    f"{row.quantity}->{adjusted} "
+                                    f"(per_hanger={per_hanger})"
+                                )
+
+                    if adjusted_quantities:
+                        row.payload["adjusted_quantities_by_component"] = adjusted_quantities
+                        adjusted_quantities_by_component = {
+                            sku: str(qty) for sku, qty in adjusted_quantities.items()
+                        }
+        else:
+            # Стандартная техкарта — берём quantity_per_hanger из каталога продукта
+            if product and product.quantity_per_hanger and product.quantity_per_hanger > 0:
+                quantity_per_hanger = product.quantity_per_hanger
+
+                if normalize_hanger_quantity:
+                    adjusted = adjust_quantity_to_hanger(row.quantity, product.quantity_per_hanger)
+                    if adjusted is not None:
+                        effective_quantity = adjusted
+                        hanger_count = math.ceil(effective_quantity / product.quantity_per_hanger)
+                    else:
+                        hanger_count = math.ceil(effective_quantity / product.quantity_per_hanger)
+                else:
+                    # Округление отключено — считаем подвесы как дробное число
+                    hanger_count = float(effective_quantity / product.quantity_per_hanger)
+            elif normalize_hanger_quantity:
+                # Warning если quantity_per_hanger не задан
+                if product:
+                    warnings.append(
+                        f"hanger_quantity_not_set:quantity_per_hanger не задан для {product.sku}"
+                    )
+                else:
+                    warnings.append(
+                        "hanger_quantity_not_set:продукт не найден"
+                    )
+
         after_data = {
             "product_id": product.id if product else None,
             "source_sku": row.source_sku,
             "source_name": row.source_name,
-            "quantity": str(row.quantity),
+            "quantity": str(effective_quantity),
+            "original_quantity": str(original_quantity),
+            "quantity_per_hanger": quantity_per_hanger,
+            "hanger_count": hanger_count,
             "source_ref": row.source_ref,
             "source_row_numbers": row.source_row_numbers,
             "source_fingerprint": row.source_fingerprint,
@@ -627,6 +733,8 @@ async def _make_change_items(
             "output_kind": signature.output_kind.value if signature else None,
             "has_pack_ops": signature.has_pack_ops if signature else None,
         }
+        if adjusted_quantities_by_component:
+            after_data["adjusted_quantities_by_component"] = adjusted_quantities_by_component
 
         # Detect duplicate within this import using fingerprint (full row match)
         fp = row.source_fingerprint
@@ -653,7 +761,9 @@ async def _make_change_items(
             if existing_by_fp is not None:
                 matched_fingerprints.add(row.source_fingerprint)
                 if existing_by_fp.status == PlanPositionStatus.draft:
-                    if existing_by_fp.source_row_hash == row.source_row_hash:
+                    # Сравниваем по original_quantity если есть, иначе по hash
+                    existing_original = existing_by_fp.source_payload.get("original_quantity", str(existing_by_fp.quantity))
+                    if existing_original == str(row.quantity) and existing_by_fp.source_row_hash == row.source_row_hash:
                         change_action = PlanChangeAction.ignore_unchanged
                     else:
                         change_action = PlanChangeAction.update_draft_position
@@ -663,6 +773,7 @@ async def _make_change_items(
                             "source_sku": existing_by_fp.source_sku,
                             "source_name": existing_by_fp.source_name,
                             "quantity": str(existing_by_fp.quantity),
+                            "original_quantity": existing_by_fp.source_payload.get("original_quantity", str(existing_by_fp.quantity)),
                             "source_ref": existing_by_fp.source_ref,
                             "source_row_numbers": [existing_by_fp.source_row_number],
                             "source_fingerprint": existing_by_fp.source_fingerprint,
@@ -814,6 +925,7 @@ def _serialize_item(item: PlanChangeItem) -> dict:
         "id": item.id,
         "source_row_number": item.source_row_number,
         "source_ref": item.source_ref,
+        "source_sku": item.after_data.get("source_sku") if item.after_data else None,
         "change_action": item.change_action.value,
         "status": item.status.value,
         "warnings": item.warnings,

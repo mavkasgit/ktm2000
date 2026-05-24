@@ -65,6 +65,9 @@ const warningLabelsRaw: Record<string, string> = {
   row_selection_auto_included: "Автодобавлены парные строки",
   paired_row_auto_included: "Автодобавлена парная строка",
   route_auto_fallback: "Маршрут скорректирован автоматически — проверьте корректность",
+  paired_hanger_adjusted: "Округлено для компонента парной техкарты",
+  paired_hanger_mismatch: "Разное кол-во на подвес у компонентов парной техкарты",
+  hanger_quantity_not_set: "quantity_per_hanger не задан — количество не округлено",
 };
 
 function translateLabels(codes: string[] | unknown, labels: Record<string, string>, afterData?: Record<string, unknown>): string {
@@ -296,8 +299,21 @@ function RawPreviewTable({ rows, sortConfig, onSort, expanded }: RawPreviewTable
           const routeMeta = buildRouteMetaLabel({ ...(row as Record<string, unknown>), ...afterData });
           const displaySku = String(afterData.source_sku ?? row.source_sku ?? "");
           const rawQty = afterData.quantity ?? row.quantity ?? "";
+          const originalQty = afterData.original_quantity;
           const numQty = Number(rawQty);
-          const displayQty = Number.isFinite(numQty) ? (Number.isInteger(numQty) ? String(numQty) : String(numQty)) : String(rawQty);
+          // Normalize: remove .0 for whole numbers
+          const displayQty = Number.isFinite(numQty) ? (numQty % 1 === 0 ? String(Math.trunc(numQty)) : String(numQty)) : String(rawQty);
+          const normalizedOriginal = originalQty ? (() => {
+            const n = Number(originalQty);
+            return Number.isFinite(n) ? (n % 1 === 0 ? String(Math.trunc(n)) : String(n)) : String(originalQty);
+          })() : null;
+          const qtyAdjusted = normalizedOriginal && normalizedOriginal !== displayQty;
+
+          // Get hanger count from after_data (backend calculates it)
+          const hangerCountRaw = afterData.hanger_count as number | null | undefined;
+          const hangerCountDisplay = hangerCountRaw != null
+            ? (Number.isInteger(hangerCountRaw) ? String(hangerCountRaw) : hangerCountRaw.toFixed(1))
+            : null;
           const displayName = String(afterData.source_name ?? row.source_name ?? "");
           const displayRouteName = String(afterData.route_name ?? row.route_name ?? "");
           const predictedId = (row as any)._predicted_id as number | undefined;
@@ -328,7 +344,21 @@ function RawPreviewTable({ rows, sortConfig, onSort, expanded }: RawPreviewTable
               <td className="p-2 font-semibold whitespace-nowrap">{idDisplayWithDuplicate}</td>
               <td className="p-2 font-semibold whitespace-nowrap">{rowNumDisplay}</td>
               <td className="p-2">{displaySku}</td>
-              <td className="p-2">{displayQty}</td>
+              <td className="p-2 whitespace-nowrap">
+                {qtyAdjusted ? (
+                  <span>
+                    <span className="text-muted-foreground">{normalizedOriginal}</span>
+                    <span className="mx-1 text-muted-foreground">→</span>
+                    <span className="font-medium text-amber-600">
+                      {displayQty}{hangerCountDisplay != null ? ` (${hangerCountDisplay}П)` : ''}
+                    </span>
+                  </span>
+                ) : (
+                  <span>
+                    {displayQty}{hangerCountDisplay != null ? ` (${hangerCountDisplay}П)` : ''}
+                  </span>
+                )}
+              </td>
               <td className="p-2">{displayName}</td>
               <td className="p-2 text-xs">
                 {displayRouteName ? (
@@ -398,10 +428,10 @@ function RawPreviewTable({ rows, sortConfig, onSort, expanded }: RawPreviewTable
 
 type SheetPreviewCache = Record<string, SheetPreviewResponse>
 
-function buildPreviewCacheKey(sheetIdx: number, templateId: number | null, rowSelection: string): string {
+function buildPreviewCacheKey(sheetIdx: number, templateId: number | null, rowSelection: string, normalizeHanger: boolean): string {
   const selection = rowSelection.trim();
   const templatePart = templateId == null ? "none" : String(templateId);
-  return `${sheetIdx}:${templatePart}:${selection}`;
+  return `${sheetIdx}:${templatePart}:${selection}:${normalizeHanger ? "h" : "n"}`;
 }
 
 export function ImportWizard(props: {
@@ -431,6 +461,7 @@ export function ImportWizard(props: {
   const [showCloseConfirm, setShowCloseConfirm] = useState(false)
   const [showRawRows, setShowRawRows] = useState(false)
   const [activeTemplateId, setActiveTemplateId] = useState<number | null>(props.templateId ?? null)
+  const [normalizeHangerQuantity, setNormalizeHangerQuantity] = useState(true)
 
   const fileInputRef = useRef<HTMLInputElement>(null)
   const navigate = useNavigate()
@@ -465,8 +496,8 @@ export function ImportWizard(props: {
 
   // Preview for the currently selected sheet
   const currentPreviewKey = useMemo(
-    () => buildPreviewCacheKey(selectedSheet, activeTemplateId, rowSelection),
-    [selectedSheet, activeTemplateId, rowSelection],
+    () => buildPreviewCacheKey(selectedSheet, activeTemplateId, rowSelection, normalizeHangerQuantity),
+    [selectedSheet, activeTemplateId, rowSelection, normalizeHangerQuantity],
   )
   const currentPreview = sheetPreviews[currentPreviewKey] ?? null
 
@@ -650,8 +681,26 @@ export function ImportWizard(props: {
     }
   }
 
+  // Refetch preview when hanger quantity toggle changes
+  useEffect(() => {
+    if (!file) return
+    // Invalidate old cache entries that had different normalizeHangerQuantity value
+    setSheetPreviews((prev) => {
+      const next: Record<string, SheetPreviewResponse> = {}
+      for (const [key, value] of Object.entries(prev)) {
+        // Keep entries that match current normalizeHangerQuantity
+        if (key.endsWith(normalizeHangerQuantity ? ":h" : ":n")) {
+          next[key] = value
+        }
+      }
+      return next
+    })
+    loadSheetPreview(file, selectedSheet)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [normalizeHangerQuantity])
+
   async function loadSheetPreview(f: File, sheetIdx: number, selection: string = rowSelection) {
-    const cacheKey = buildPreviewCacheKey(sheetIdx, activeTemplateId, selection)
+    const cacheKey = buildPreviewCacheKey(sheetIdx, activeTemplateId, selection, normalizeHangerQuantity)
     if (previewLoading[cacheKey] || sheetPreviews[cacheKey]) return
     setPreviewLoading((prev) => ({ ...prev, [cacheKey]: true }))
     try {
@@ -661,6 +710,7 @@ export function ImportWizard(props: {
         template_id: activeTemplateId ?? undefined,
         mode: props.productionPlanId ? "append_to_plan" : "create_plan",
         production_plan_id: props.productionPlanId,
+        normalize_hanger_quantity: normalizeHangerQuantity,
       })
       setSheetPreviews((prev) => ({ ...prev, [cacheKey]: data }))
     } catch {
@@ -691,6 +741,7 @@ export function ImportWizard(props: {
           planVersion: planVersion || undefined,
           rowSelection: rowSelection || undefined,
           sheetIndex: selectedSheet,
+          normalizeHangerQuantity: normalizeHangerQuantity,
         })
         const planId = String(uploaded.planId ?? uploaded.production_plan_id ?? "")
         const changeSetId = String(uploaded.changeSetId ?? uploaded.change_set_id ?? "")
@@ -902,6 +953,16 @@ export function ImportWizard(props: {
                     className="h-7 w-32 text-xs"
                   />
 
+                  <label className="flex items-center gap-1.5 text-xs cursor-pointer shrink-0">
+                    <input
+                      type="checkbox"
+                      checked={normalizeHangerQuantity}
+                      onChange={(e) => setNormalizeHangerQuantity(e.target.checked)}
+                      className="h-3.5 w-3.5 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                    />
+                    <span className="text-muted-foreground font-medium">Округлять до кратности подвеса</span>
+                  </label>
+
                   {activeTemplates.length > 0 && (
                     <>
                       <span className="text-xs text-muted-foreground font-medium">Шаблон:</span>
@@ -927,6 +988,30 @@ export function ImportWizard(props: {
                 {/* Row 2: Summary + Error chips */}
                 <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-sm shrink-0">
                   <span><strong>Всего:</strong> {summary.total}</span>
+                  {(() => {
+                    const qtyTotalRaw = (currentPreview.summary as Record<string, unknown>)?.quantity_total as string | undefined;
+                    const qtyAdjustedTotalRaw = (currentPreview.summary as Record<string, unknown>)?.quantity_adjusted_total as string | undefined;
+                    const normalizeQty = (qty: string) => {
+                      const n = Number(qty);
+                      return Number.isFinite(n) ? (n % 1 === 0 ? String(Math.trunc(n)) : String(n)) : qty;
+                    };
+                    const qtyTotal = qtyTotalRaw ? normalizeQty(qtyTotalRaw) : undefined;
+                    const qtyAdjustedTotal = qtyAdjustedTotalRaw ? normalizeQty(qtyAdjustedTotalRaw) : undefined;
+                    if (qtyTotal && qtyAdjustedTotal && qtyTotal !== qtyAdjustedTotal) {
+                      return (
+                        <span>
+                          <strong>Кол-во:</strong>{" "}
+                          <span className="text-muted-foreground">{qtyTotal}</span>
+                          <span className="mx-1 text-muted-foreground">→</span>
+                          <span className="font-medium text-amber-600">{qtyAdjustedTotal}</span>
+                        </span>
+                      );
+                    }
+                    if (qtyTotal) {
+                      return <span><strong>Кол-во:</strong> {qtyTotal}</span>;
+                    }
+                    return null;
+                  })()}
                   <span>
                     <strong>Период:</strong>{" "}
                     {String(((currentPreview.summary as Record<string, unknown>)?.period_label ?? "не определен"))}
