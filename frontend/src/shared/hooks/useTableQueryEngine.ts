@@ -66,8 +66,9 @@ export function useTableQueryEngine<T, Field extends string>(
         filterPredicate,
         sortConfigs,
         sortDefs: sortDefsMap,
+        getId,
       }),
-    [rows, searchQuery, searchIndex, filterPredicate, sortConfigs, sortDefsMap],
+    [rows, searchQuery, searchIndex, filterPredicate, sortConfigs, sortDefsMap, getId],
   );
 }
 

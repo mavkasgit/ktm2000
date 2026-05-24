@@ -102,8 +102,9 @@ export function processTableRows<T, Field extends string>(opts: {
   filterPredicate: ((row: T) => boolean) | null;
   sortConfigs: SortConfig<Field>[];
   sortDefs: Map<string, ColumnSortDef<T, Field>>;
+  getId?: (row: T) => string | number;
 }): TableQueryEngineResult<T> {
-  const { rows, searchQuery, searchIndex, filterPredicate, sortConfigs, sortDefs } = opts;
+  const { rows, searchQuery, searchIndex, filterPredicate, sortConfigs, sortDefs, getId } = opts;
   const totalCount = rows.length;
 
   // Step 1: Search
@@ -111,7 +112,7 @@ export function processTableRows<T, Field extends string>(opts: {
   if (searchQuery.trim()) {
     const query = normalizeText(searchQuery.trim());
     result = rows.filter((row) => {
-      const id = String((row as Record<string, unknown>).id ?? (row as Record<string, unknown>).rowId);
+      const id = getId ? String(getId(row)) : (String((row as Record<string, unknown>).id ?? (row as Record<string, unknown>).rowId));
       const index = searchIndex.get(id);
       return index ? index.includes(query) : false;
     });
