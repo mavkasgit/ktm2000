@@ -10,12 +10,14 @@
 import { useMemo, useState, useCallback } from "react";
 import { ChevronDown, ChevronRight } from "lucide-react";
 import type { SectionBoardTask } from "@/shared/api/shopfloor";
-import { Badge, Button, SortableFilterHeader } from "@/shared/ui";
+import { Badge, Button, SortableFilterHeader, FiltersPanel, type FiltersPanelField } from "@/shared/ui";
 import { useTableQueryEngine, SortConfig, ColumnSortDef } from "@/shared/hooks/useTableQueryEngine";
 import { nextMultiSortConfigs } from "@/shared/lib/multiSort";
 import { groupTasksByProfile, groupStatus, sortGroupsByPriority } from "../lib/groupTasksByProfile";
 import type { GroupingProfile } from "../lib/groupingProfiles";
-import { BULK_STYLES } from "@/shared/bulk/styles";
+import { TABLE_ROW_STYLES } from "@/shared/lib/tableRowStyles";
+
+type TaskActionType = "issue" | "complete" | "send";
 
 // ---------------------------------------------------------------------------
 // Экспорты для обратной совместимости
@@ -120,11 +122,22 @@ function renderTaskRow(
   onAction: (type: TaskActionDialogType, task: SectionBoardTask) => void,
   isLastInGroup = false,
   isInGroup = false,
+  clickedActions?: Record<number, Set<TaskActionType>>,
+  toggleActionClick?: (taskId: number, action: TaskActionType) => void,
 ) {
+  const actions = clickedActions?.[task.id] || new Set<TaskActionType>();
+  const buttonBase = "min-h-[32px] transition-all";
+  const buttonActive = "bg-emerald-100 border-emerald-400 text-emerald-800 ring-1 ring-emerald-400 hover:bg-red-100 hover:border-red-400 hover:text-red-700 hover:line-through";
+  const buttonDefault = "hover:bg-accent/50";
+
+  const handleAction = (type: TaskActionDialogType) => {
+    toggleActionClick?.(task.id, type as TaskActionType);
+    onAction(type, task);
+  };
   return (
     <tr
       key={task.id}
-      className={`cursor-pointer transition-colors ${isSelected ? BULK_STYLES.selectedRow : ""} ${isInGroup ? "bg-blue-50/80 hover:bg-blue-100/80" : "hover:bg-accent/30"} ${isLastInGroup ? "border-b-2 border-blue-300" : "border-b"}`}
+      className={`cursor-pointer transition-colors ${isSelected ? `${TABLE_ROW_STYLES.selectedRow}` : ""} ${isInGroup ? TABLE_ROW_STYLES.defaultGroupRow : TABLE_ROW_STYLES.defaultRow} ${isLastInGroup ? "border-b-2 border-blue-300" : "border-b"}`}
       onClick={() => {
         if (bulkMode && bulkSelection) {
           bulkSelection.selectOne(task.id);
@@ -160,10 +173,10 @@ function renderTaskRow(
       </td>
       <td className="p-2">
         <div className="flex gap-1">
-          <Button size="sm" variant="outline" className="min-h-[32px]" onClick={() => onAction("issue", task)}>
+          <Button size="sm" variant="outline" className={`${buttonBase} ${actions.has("issue") ? buttonActive : buttonDefault}`} onClick={() => handleAction("issue")} title={actions.has("issue") ? "Отменить выдачу" : "Выдать задачу"}>
             Выдать
           </Button>
-          <Button size="sm" variant="outline" className="min-h-[32px]" onClick={() => onAction("complete", task)}>
+          <Button size="sm" variant="outline" className={`${buttonBase} ${actions.has("complete") ? buttonActive : buttonDefault}`} onClick={() => handleAction("complete")} title={actions.has("complete") ? "Отменить завершение" : "Завершить задачу"}>
             <span>Завершить</span>
           </Button>
           {isFinalStage ? (
@@ -174,13 +187,9 @@ function renderTaskRow(
             <Button
               size="sm"
               variant="outline"
-              className="min-h-[32px]"
-              onClick={() => onAction("send", task)}
-              title={
-                task.next_task_id
-                  ? `Следующий этап: ${task.next_operation_name || "—"}`
-                  : "Задача следующего этапа будет создана"
-              }
+              className={`${buttonBase} ${actions.has("send") ? buttonActive : buttonDefault}`}
+              onClick={() => handleAction("send")}
+              title={actions.has("send") ? "Отменить передачу" : (task.next_task_id ? `Следующий этап: ${task.next_operation_name || "—"}` : "Задача следующего этапа будет создана")}
             >
               <span>Передать</span>
             </Button>
@@ -199,11 +208,22 @@ function renderMobileCard(
   bulkSelection: BulkSelectionController | undefined,
   onAction: (type: TaskActionDialogType, task: SectionBoardTask) => void,
   isLastInGroup = false,
+  clickedActions?: Record<number, Set<TaskActionType>>,
+  toggleActionClick?: (taskId: number, action: TaskActionType) => void,
 ) {
+  const actions = clickedActions?.[task.id] || new Set<TaskActionType>();
+  const buttonBase = "flex-1 min-h-[36px] transition-all";
+  const buttonActive = "bg-emerald-100 border-emerald-400 text-emerald-800 ring-1 ring-emerald-400 hover:bg-red-100 hover:border-red-400 hover:text-red-700 hover:line-through";
+  const buttonDefault = "hover:bg-accent/50";
+
+  const handleAction = (type: TaskActionDialogType) => {
+    toggleActionClick?.(task.id, type as TaskActionType);
+    onAction(type, task);
+  };
   return (
     <div
       key={task.id}
-      className={`p-4 space-y-3 cursor-pointer transition-colors ${isSelected ? BULK_STYLES.selectedMobileCard : ""} ${isLastInGroup ? "border-b-2 border-blue-300 mb-3" : "mb-0"}`}
+      className={`p-4 space-y-3 cursor-pointer transition-colors ${isSelected ? TABLE_ROW_STYLES.selectedMobileCard : ""} ${isLastInGroup ? "border-b-2 border-blue-300 mb-3" : "mb-0"}`}
       onClick={() => {
         if (bulkMode && bulkSelection) {
           bulkSelection.selectOne(task.id);
@@ -238,10 +258,10 @@ function renderMobileCard(
       ) : null}
 
       <div className="flex gap-2 pt-1">
-        <Button size="sm" variant="outline" className="flex-1 min-h-[36px]" onClick={() => onAction("issue", task)}>
+        <Button size="sm" variant="outline" className={`${buttonBase} ${actions.has("issue") ? buttonActive : buttonDefault}`} onClick={() => handleAction("issue")} title={actions.has("issue") ? "Отменить выдачу" : "Выдать задачу"}>
           Выдать
         </Button>
-        <Button size="sm" variant="outline" className="flex-1 min-h-[36px]" onClick={() => onAction("complete", task)}>
+        <Button size="sm" variant="outline" className={`${buttonBase} ${actions.has("complete") ? buttonActive : buttonDefault}`} onClick={() => handleAction("complete")} title={actions.has("complete") ? "Отменить завершение" : "Завершить задачу"}>
           <span>Завершить</span>
         </Button>
         {isFinalStage ? (
@@ -252,8 +272,9 @@ function renderMobileCard(
           <Button
             size="sm"
             variant="outline"
-            className="flex-1 min-h-[36px]"
-            onClick={() => onAction("send", task)}
+            className={`${buttonBase} ${actions.has("send") ? buttonActive : buttonDefault}`}
+            onClick={() => handleAction("send")}
+            title={actions.has("send") ? "Отменить передачу" : "Передать на следующий этап"}
           >
             <span>Передать</span>
           </Button>
@@ -290,7 +311,7 @@ function TableTaskGroupRow({
 
   return (
     <tr
-      className={`border-y-2 border-blue-200 cursor-pointer transition-colors font-semibold ${isBulkMode && allSelected ? BULK_STYLES.selectedGroupHeader : "bg-blue-50/80 hover:bg-blue-100/80"}`}
+      className={`border-y-2 border-blue-200 cursor-pointer transition-colors font-semibold ${isBulkMode && allSelected ? TABLE_ROW_STYLES.selectedGroupHeader : TABLE_ROW_STYLES.defaultGroupHeader}`}
       onClick={isBulkMode ? onSelectGroup : undefined}
     >
       <td className="p-2">
@@ -330,12 +351,12 @@ function TableTaskGroupRow({
             &times;{group.tasks.length}
           </Badge>
           {isBulkMode && allSelected && (
-            <span className={`text-xs ${BULK_STYLES.selectedLabel}`}>выбрано</span>
+            <span className={`text-xs ${TABLE_ROW_STYLES.selectedLabel}`}>выбрано</span>
           )}
         </div>
       </td>
-      <td className={`p-2 text-xs text-muted-foreground ${isBulkMode && allSelected ? BULK_STYLES.selectedGroupHeader : "bg-blue-50/80"}`}>—</td>
-      <td className={`p-2 ${isBulkMode && allSelected ? BULK_STYLES.selectedGroupHeader : "bg-blue-50/80"}`}></td>
+      <td className={`p-2 text-xs text-muted-foreground ${isBulkMode && allSelected ? TABLE_ROW_STYLES.selectedGroupHeader : TABLE_ROW_STYLES.defaultGroupRow}`}>—</td>
+      <td className={`p-2 ${isBulkMode && allSelected ? TABLE_ROW_STYLES.selectedGroupHeader : TABLE_ROW_STYLES.defaultGroupRow}`}></td>
     </tr>
   );
 }
@@ -351,8 +372,10 @@ type SectionTasksBoardProps = {
   onModeChange: (next: TaskBoardViewMode) => void;
   onAction: (type: TaskActionDialogType, task: SectionBoardTask) => void;
   bulkMode?: boolean;
+  onBulkModeChange?: (enabled: boolean) => void;
   bulkSelection?: BulkSelectionController;
   profile: GroupingProfile;
+  onSelectAllVisible?: (ids: number[]) => void;
 };
 
 // ---------------------------------------------------------------------------
@@ -366,11 +389,28 @@ export function SectionTasksBoard({
   onModeChange,
   onAction,
   bulkMode,
+  onBulkModeChange,
   bulkSelection,
   profile,
+  onSelectAllVisible,
 }: SectionTasksBoardProps) {
   const [sortConfigs, setSortConfigs] = useState<SortConfig<TaskSortField>[]>([]);
   const [columnFilters, setColumnFilters] = useState<Partial<Record<TaskSortField, Set<string>>>>({});
+  const [searchQuery, setSearchQuery] = useState("");
+  const [clickedActions, setClickedActions] = useState<Record<number, Set<TaskActionType>>>({});
+
+  const toggleActionClick = useCallback((taskId: number, action: TaskActionType) => {
+    setClickedActions((prev) => {
+      const taskActions = prev[taskId] || new Set<TaskActionType>();
+      const next = new Set(taskActions);
+      if (next.has(action)) {
+        next.delete(action);
+      } else {
+        next.add(action);
+      }
+      return { ...prev, [taskId]: next };
+    });
+  }, []);
 
   const handleSortChange = useCallback((field: TaskSortField) => {
     setSortConfigs((prev) => nextMultiSortConfigs(prev, field));
@@ -380,9 +420,31 @@ export function SectionTasksBoard({
     setColumnFilters((prev) => ({ ...prev, [field]: selected }));
   }, []);
 
+  const searchIndex = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const task of tasks) {
+      const terms = [
+        String(task.sequence),
+        task.product_sku,
+        task.operation_name || "",
+        task.status,
+      ].filter(Boolean).map((s) => s.toLowerCase());
+      map.set(String(task.id), terms.join(" "));
+    }
+    return map;
+  }, [tasks]);
+
   const visibleTasks = useMemo(
-    () => tasks.filter((task) => isTaskVisible(task, mode)),
-    [tasks, mode],
+    () => {
+      const modeFiltered = tasks.filter((task) => isTaskVisible(task, mode));
+      if (!searchQuery.trim()) return modeFiltered;
+      const q = searchQuery.trim().toLowerCase();
+      return modeFiltered.filter((task) => {
+        const index = searchIndex.get(String(task.id));
+        return index ? index.includes(q) : false;
+      });
+    },
+    [tasks, mode, searchQuery, searchIndex],
   );
 
   const sortDefs: ColumnSortDef<SectionBoardTask, TaskSortField>[] = useMemo(() => [
@@ -453,19 +515,80 @@ export function SectionTasksBoard({
 
   const statusLabel = (status: string) => taskStatusLabels[status] || status;
 
+  const modeCounts = useMemo(() => ({
+    active: tasks.filter((t) => ["ready", "in_progress", "partially_completed", "in_work", "partially"].includes(t.status)).length,
+    waiting: tasks.filter((t) => t.status === "waiting_previous" || t.status === "pending" || t.status === "blocked").length,
+    completed: tasks.filter((t) => ["completed", "cancelled", "done"].includes(t.status)).length,
+  }), [tasks]);
+
+  const modeFields = useMemo((): FiltersPanelField[] => [
+    {
+      kind: "search",
+      key: "search",
+      value: searchQuery,
+      onChange: setSearchQuery,
+      placeholder: "Поиск",
+      layoutSpan: "min-w-[250px]",
+    },
+    {
+      kind: "bulk",
+      key: "bulk-mode",
+      enabled: bulkMode ?? false,
+      onChange: (enabled: boolean) => onBulkModeChange?.(enabled),
+    },
+    {
+      kind: "toggle",
+      key: "mode-active",
+      label: "Активные",
+      badgeCount: modeCounts.active,
+      checked: mode === "active",
+      onChange: () => onModeChange("active"),
+      layoutSpan: "min-w-[0px]",
+    },
+    {
+      kind: "toggle",
+      key: "mode-waiting",
+      label: "Ожидают",
+      badgeCount: modeCounts.waiting,
+      checked: mode === "waiting",
+      onChange: () => onModeChange("waiting"),
+      layoutSpan: "min-w-[0px]",
+    },
+    {
+      kind: "toggle",
+      key: "mode-completed",
+      label: "Завершенные",
+      badgeCount: modeCounts.completed,
+      checked: mode === "completed",
+      onChange: () => onModeChange("completed"),
+      layoutSpan: "min-w-[0px]",
+    },
+  ], [mode, onModeChange, searchQuery, bulkMode, onBulkModeChange, modeCounts]);
+
+  const activeFilterSummary = useMemo(() => {
+    const labels: string[] = [];
+    if (searchQuery.trim()) labels.push("Поиск");
+    return { count: labels.length, labels };
+  }, [searchQuery]);
+
   return (
     <div className="space-y-3">
-      <div className="flex flex-wrap gap-2">
-        <Button variant={mode === "active" ? "default" : "outline"} onClick={() => onModeChange("active")} className="min-h-[40px]">
-          Активные
-        </Button>
-        <Button variant={mode === "waiting" ? "default" : "outline"} onClick={() => onModeChange("waiting")} className="min-h-[40px]">
-          Ожидают предыдущий
-        </Button>
-        <Button variant={mode === "completed" ? "default" : "outline"} onClick={() => onModeChange("completed")} className="min-h-[40px]">
-          Завершенные
-        </Button>
-      </div>
+      <FiltersPanel
+        compact
+        fields={modeFields}
+        onReset={() => {
+          setSearchQuery("");
+          bulkSelection?.clear();
+          onBulkModeChange?.(false);
+        }}
+        hasActiveFilters={activeFilterSummary.count > 0}
+        activeSummary={activeFilterSummary}
+        onSelectAll={() => {
+          onBulkModeChange?.(true);
+          onSelectAllVisible?.(visibleTasks.map((t) => t.id));
+        }}
+        totalRowCount={visibleTasks.length}
+      />
 
       {isLoading && <div className="rounded-lg border p-4 text-sm text-muted-foreground">Загрузка задач...</div>}
       {!isLoading && sortedTasks.length === 0 && (
@@ -607,7 +730,7 @@ export function SectionTasksBoard({
                     const task = group.tasks[0];
                     const isFinalStage = isFinalStageTask(task);
                     const isSelected = bulkMode && bulkSelection?.isSelected(task.id);
-                    return renderTaskRow(task, isFinalStage, isSelected, bulkMode, bulkSelection, onAction, true, false);
+                    return renderTaskRow(task, isFinalStage, isSelected, bulkMode, bulkSelection, onAction, true, false, clickedActions, toggleActionClick);
                   }
 
                   return (
@@ -622,12 +745,16 @@ export function SectionTasksBoard({
                         onSelectGroup={() => {
                           if (!bulkMode || !bulkSelection) return;
                           const taskIds = group.tasks.map((t) => t.id);
-                          if (bulkSelection.isAllSelected(taskIds)) {
+                          const allSelected = bulkSelection.isAllSelected(taskIds);
+                          const someSelected = bulkSelection.isIndeterminate(taskIds);
+                          if (allSelected || someSelected) {
                             for (const id of taskIds) {
                               bulkSelection.selectOne(id, false);
                             }
                           } else {
-                            bulkSelection.selectAllFiltered(taskIds);
+                            for (const id of taskIds) {
+                              bulkSelection.selectOne(id, true);
+                            }
                           }
                         }}
                       />
@@ -635,7 +762,7 @@ export function SectionTasksBoard({
                         const isFinalStage = isFinalStageTask(task);
                         const isSelected = bulkMode && bulkSelection?.isSelected(task.id);
                         const isLast = idx === group.tasks.length - 1;
-                        return renderTaskRow(task, isFinalStage, isSelected, bulkMode, bulkSelection, onAction, isLast, true);
+                        return renderTaskRow(task, isFinalStage, isSelected, bulkMode, bulkSelection, onAction, isLast, true, clickedActions, toggleActionClick);
                       })}
                     </>
                   );
@@ -655,22 +782,26 @@ export function SectionTasksBoard({
                 const task = group.tasks[0];
                 const isFinalStage = isFinalStageTask(task);
                 const isSelected = bulkMode && bulkSelection?.isSelected(task.id);
-                return renderMobileCard(task, isFinalStage, isSelected, bulkMode, bulkSelection, onAction, true);
+                return renderMobileCard(task, isFinalStage, isSelected, bulkMode, bulkSelection, onAction, true, clickedActions, toggleActionClick);
               }
 
               return (
-                <div key={group.key} className={`rounded-lg overflow-hidden transition-colors ${bulkMode && bulkSelection?.isAllSelected(group.tasks.map(t => t.id)) ? BULK_STYLES.selectedGroupContainer : "bg-muted/20"}`}>
+                <div key={group.key} className={`rounded-lg overflow-hidden transition-colors ${bulkMode && bulkSelection?.isAllSelected(group.tasks.map(t => t.id)) ? TABLE_ROW_STYLES.selectedGroupContainer : TABLE_ROW_STYLES.defaultGroupContainer}`}>
                   <div
                     className="p-3 flex items-center justify-between gap-2 border-b border-muted"
                     onClick={() => {
                       if (bulkMode && bulkSelection) {
                         const taskIds = group.tasks.map((t) => t.id);
-                        if (bulkSelection.isAllSelected(taskIds)) {
+                        const allSelected = bulkSelection.isAllSelected(taskIds);
+                        const someSelected = bulkSelection.isIndeterminate(taskIds);
+                        if (allSelected || someSelected) {
                           for (const id of taskIds) {
                             bulkSelection.selectOne(id, false);
                           }
                         } else {
-                          bulkSelection.selectAllFiltered(taskIds);
+                          for (const id of taskIds) {
+                            bulkSelection.selectOne(id, true);
+                          }
                         }
                       }
                     }}
@@ -693,7 +824,7 @@ export function SectionTasksBoard({
                         {group.label}
                       </span>
                       {bulkMode && bulkSelection?.isAllSelected(group.tasks.map(t => t.id)) && (
-                        <span className={`text-xs ${BULK_STYLES.selectedLabel} ml-1`}>выбрано</span>
+                        <span className={`text-xs ${TABLE_ROW_STYLES.selectedLabel} ml-1`}>выбрано</span>
                       )}
                     </div>
                     <div className="flex items-center gap-2">
@@ -706,7 +837,7 @@ export function SectionTasksBoard({
                     const isLast = idx === group.tasks.length - 1;
                     const isFinalStage = isFinalStageTask(task);
                     const isSelected = bulkMode && bulkSelection?.isSelected(task.id);
-                    return renderMobileCard(task, isFinalStage, isSelected, bulkMode, bulkSelection, onAction, isLast);
+                    return renderMobileCard(task, isFinalStage, isSelected, bulkMode, bulkSelection, onAction, isLast, clickedActions, toggleActionClick);
                   })}</div>}
                 </div>
               );

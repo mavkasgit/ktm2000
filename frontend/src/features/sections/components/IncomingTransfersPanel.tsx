@@ -44,6 +44,7 @@ type IncomingTransfersPanelProps = {
   isLoading: boolean;
   isPending: boolean;
   onAccept: (transferId: number, payload: AcceptTransferInput) => void;
+  onAcceptAll?: () => void;
 };
 
 export function IncomingTransfersPanel({
@@ -51,6 +52,7 @@ export function IncomingTransfersPanel({
   isLoading,
   isPending,
   onAccept,
+  onAcceptAll,
 }: IncomingTransfersPanelProps) {
   const [dialog, setDialog] = useState<AcceptDialogState>({
     open: false,
@@ -152,7 +154,19 @@ export function IncomingTransfersPanel({
     <div className="rounded-lg border p-4 space-y-3">
       <div className="flex items-center justify-between gap-3">
         <h3 className="text-sm font-semibold">Входящие передачи</h3>
-        <Badge variant="secondary">{transfers.length}</Badge>
+        <div className="flex items-center gap-2">
+          {onAcceptAll && transfers.some((t) => {
+            const sent = toNumber(t.sent_quantity);
+            const accepted = toNumber(t.accepted_quantity);
+            const rejected = toNumber(t.rejected_quantity);
+            return sent - accepted - rejected > 0;
+          }) && (
+            <Button size="sm" onClick={onAcceptAll} disabled={isPending}>
+              Принять все
+            </Button>
+          )}
+          <Badge variant="secondary">{transfers.length}</Badge>
+        </div>
       </div>
 
       {isLoading && <div className="text-sm text-muted-foreground">Загрузка входящих передач...</div>}

@@ -1,4 +1,4 @@
-import { Search, X, Eye, EyeOff } from "lucide-react";
+import { Search, X, Eye, EyeOff, ListChecks } from "lucide-react";
 import type { ReactNode } from "react";
 import { Button } from "./Button";
 import { Input } from "./Input";
@@ -19,7 +19,60 @@ function renderToggleField(field: Extract<FiltersPanelField, { kind: "toggle" }>
         <EyeOff className="h-3.5 w-3.5 mr-1" />
       )}
       {field.label}
+      {field.badgeCount != null && field.badgeCount > 0 && (
+        <span className={`ml-1.5 inline-flex items-center justify-center min-w-[18px] h-[18px] rounded-full text-[10px] font-semibold px-1 ${
+          field.checked
+            ? "bg-white/25 text-white"
+            : "bg-primary/20 text-primary"
+        }`}>
+          {field.badgeCount}
+        </span>
+      )}
     </Button>
+  );
+}
+
+function renderBulkField(field: Extract<FiltersPanelField, { kind: "bulk" }>) {
+  return (
+    <Button
+      variant={field.enabled ? "default" : "outline"}
+      size="sm"
+      className="h-9 text-xs whitespace-nowrap"
+      onClick={() => field.onChange(!field.enabled)}
+    >
+      <ListChecks className="h-3.5 w-3.5 mr-1" />
+      {field.label ?? "Групповые операции"}
+    </Button>
+  );
+}
+
+function renderBulkWithSelectAll(
+  field: Extract<FiltersPanelField, { kind: "bulk" }>,
+  onSelectAll?: (activateBulk: boolean) => void,
+  totalRowCount?: number,
+) {
+  return (
+    <div className="flex items-center gap-1.5">
+      <Button
+        variant={field.enabled ? "default" : "outline"}
+        size="sm"
+        className="h-9 text-xs whitespace-nowrap"
+        onClick={() => field.onChange(!field.enabled)}
+      >
+        <ListChecks className="h-3.5 w-3.5 mr-1" />
+        {field.label ?? "Групповые операции"}
+      </Button>
+      {onSelectAll && (
+        <Button
+          variant="outline"
+          size="sm"
+          className="h-9 text-xs whitespace-nowrap"
+          onClick={() => onSelectAll(true)}
+        >
+          Выделить все{totalRowCount != null && totalRowCount > 0 ? ` (${totalRowCount})` : ""}
+        </Button>
+      )}
+    </div>
   );
 }
 
@@ -52,6 +105,15 @@ export type FiltersPanelField =
       label: string;
       checked: boolean;
       onChange: (checked: boolean) => void;
+      badgeCount?: number;
+      layoutSpan?: string;
+    }
+  | {
+      kind: "bulk";
+      key: string;
+      enabled: boolean;
+      onChange: (enabled: boolean) => void;
+      label?: string;
       layoutSpan?: string;
     };
 
@@ -67,6 +129,10 @@ export interface FiltersPanelProps {
   className?: string;
   /** When true, renders all fields, actions, and summary in a single flex row instead of a grid. */
   compact?: boolean;
+  /** When provided, renders a "Выделить все" button next to bulk toggle. Callback receives true to activate bulk mode. */
+  onSelectAll?: (activateBulk: boolean) => void;
+  /** Total number of rows available for selection — shown in "Выделить все ({count})" button. */
+  totalRowCount?: number;
 }
 
 export function FiltersPanel({
@@ -77,6 +143,8 @@ export function FiltersPanel({
   actions,
   className,
   compact,
+  onSelectAll,
+  totalRowCount,
 }: FiltersPanelProps) {
   const summaryCount = activeSummary?.count ?? 0;
   const summaryLabels = activeSummary?.labels ?? [];
@@ -89,6 +157,8 @@ export function FiltersPanel({
             <div key={field.key} className={field.layoutSpan ?? "min-w-[160px] flex-shrink-0"}>
               {field.kind === "toggle" ? (
                 renderToggleField(field)
+              ) : field.kind === "bulk" ? (
+                onSelectAll ? renderBulkWithSelectAll(field, onSelectAll, totalRowCount) : renderBulkField(field)
               ) : field.kind === "search" ? (
                 <div className="relative">
                   <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
@@ -116,7 +186,9 @@ export function FiltersPanel({
             </div>
           ))}
 
-          {actions}
+          <div className="ml-auto flex items-center gap-2 flex-wrap">
+            {actions}
+          </div>
 
           {summaryCount > 0 && (
             <div className="flex items-center gap-1.5 flex-nowrap flex-shrink-0">
@@ -147,6 +219,8 @@ export function FiltersPanel({
               <div key={field.key} className={field.layoutSpan}>
                 {field.kind === "toggle" ? (
                   renderToggleField(field)
+                ) : field.kind === "bulk" ? (
+                  onSelectAll ? renderBulkWithSelectAll(field, onSelectAll, totalRowCount) : renderBulkField(field)
                 ) : field.kind === "search" ? (
                   <div className="relative">
                     <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />

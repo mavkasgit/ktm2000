@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useMemo, useState, useRef } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
-import { ListChecks } from "lucide-react";
 
 import { apiClient, getErrorMessage } from "@/shared/api/client";
 import { listSections } from "@/shared/api/sections";
@@ -18,7 +17,8 @@ import {
   type DailyStatsRow,
   type SectionBoardTask,
 } from "@/shared/api/shopfloor";
-import { DatePicker, renderIcon, toast, Button } from "@/shared/ui";
+import { DatePicker, renderIcon, toast, Button, Popover, PopoverTrigger, PopoverContent } from "@/shared/ui";
+import { Inbox } from "lucide-react";
 import { useBulkSelection } from "@/shared/bulk";
 import { BulkResultsDialog, summarizeBulkResults, type BulkActionResultItem, type BulkActionSummary, type BulkRunnerProgress } from "@/shared/bulk";
 import { IncomingTransfersPanel } from "../components/IncomingTransfersPanel";
@@ -219,7 +219,7 @@ export function SectionsTasksPage() {
   const { data: summary } = useQuery({
     queryKey: ["shopfloor-sections-summary"],
     queryFn: getSectionsSummary,
-    enabled: !!me?.id && !isSingleWindow,
+    enabled: !!me?.id,
     retry: false,
   });
 
@@ -758,6 +758,26 @@ export function SectionsTasksPage() {
     finishBulk(allResults);
   }, [issueMutation, completeMutation, sendMutation, me?.id, invalidateShopfloor, finishBulk]);
 
+  const pendingMutation = issueMutation.isPending || completeMutation.isPending || sendMutation.isPending;
+  const tasks = board?.tasks || [];
+  const selectedTasks = useMemo(
+    () => tasks.filter((t) => bulkSelection.selectedIds.has(t.id)),
+    [tasks, bulkSelection.selectedIds],
+  );
+
+  const handleSelectAll = useCallback((ids: number[]) => {
+    bulkSelection.selectAll(ids);
+  }, [bulkSelection]);
+
+  const incomingTransfers = incomingTransfersData?.incoming_transfers || [];
+  const [incomingPopoverOpen, setIncomingPopoverOpen] = useState(false);
+
+  useEffect(() => {
+    if (incomingTransfers.length > 0 && !incomingLoading) {
+      setIncomingPopoverOpen(true);
+    }
+  }, [incomingTransfers.length, incomingLoading]);
+
   const handleAcceptTransfer = useCallback(
     (transferId: number, payload: AcceptTransferInput) => {
       acceptTransferMutation.mutate({ transferId, payload });
@@ -765,18 +785,30 @@ export function SectionsTasksPage() {
     [acceptTransferMutation]
   );
 
+  const handleAcceptAll = useCallback(() => {
+    const transfersWithRemaining = incomingTransfers.filter((t) => {
+      const sent = toInteger(t.sent_quantity);
+      const accepted = toInteger(t.accepted_quantity);
+      const rejected = toInteger(t.rejected_quantity);
+      return sent - accepted - rejected > 0;
+    });
+
+    for (const transfer of transfersWithRemaining) {
+      acceptTransferMutation.mutate({
+        transferId: transfer.transfer_id,
+        payload: {
+          accepted_quantity: String(Math.round(parseFloat(transfer.sent_quantity) || 0)),
+          rejected_quantity: "0",
+        },
+      });
+    }
+  }, [incomingTransfers, acceptTransferMutation]);
+
   const selectedSection = useMemo(
     () => (sections || []).find((s) => s.id === sectionId) || null,
     [sections, sectionId]
   );
 
-  const pendingMutation = issueMutation.isPending || completeMutation.isPending || sendMutation.isPending;
-  const tasks = board?.tasks || [];
-  const selectedTasks = useMemo(
-    () => tasks.filter((t) => bulkSelection.selectedIds.has(t.id)),
-    [tasks, bulkSelection.selectedIds],
-  );
-  const incomingTransfers = incomingTransfersData?.incoming_transfers || [];
   const canToggleSingleWindow = sectionId !== null && !isSingleWindowBlocked;
   const selectedSectionColor = selectedSection?.icon_color || "#1D4ED8";
   const selectedSectionTint = selectedSectionColor.startsWith("#") ? `${selectedSectionColor}1A` : "#DBEAFE";
@@ -919,46 +951,59 @@ export function SectionsTasksPage() {
         )}
 
         {!isSingleWindowBlocked && sectionId && (
-          <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
-            <div className="xl:col-span-2 space-y-4">
-              {/* Bulk mode toggle */}
-              <div className="flex items-center gap-2">
-                <Button variant="outline" size="sm" onClick={toggleBulkMode}>
-                  <ListChecks className="h-4 w-4 mr-1" />
-                  {bulkMode ? "Закрыть" : "Групповые операции"}
-                </Button>
-                <Button variant="outline" size="sm" onClick={() => setPlanModalOpen(true)}>
-                  План
-                </Button>
-                <Button variant="outline" size="sm" onClick={() => setGroupingModalOpen(true)} title="Настройки группировки">
-                  {profile.name}
-                </Button>
-                {bulkMode && (
-                  <span className="text-sm text-muted-foreground">
-                    Клик по строке для выбора · Выбрано: {bulkSelection.selectedCount}
-                  </span>
-                )}
-              </div>
-
-              {/* Bulk operations panel */}
-              {bulkMode && bulkSelection.selectedCount > 0 && (
-                <BulkOperationsPanel
-                  tasks={selectedTasks}
-                  onExecuteAll={handleBulkExecuteAll}
-                  pending={bulkExecuting}
-                />
-              )}
-
-              <SectionTasksBoard
-                tasks={tasks}
-                isLoading={boardLoading}
-                mode={viewMode}
-                onModeChange={setViewMode}
-                onAction={openActionDialog}
-                bulkMode={bulkMode}
-                bulkSelection={bulkMode ? bulkSelection : undefined}
-                profile={profile}
+          <div className="space-y-4">
+            {/* Bulk operations panel */}
+            {bulkMode && bulkSelection.selectedCount > 0 && (
+              <BulkOperationsPanel
+                tasks={selectedTasks}
+                onExecuteAll={handleBulkExecuteAll}
+                pending={bulkExecuting}
               />
+            )}
+
+            <div className="flex items-center gap-2">
+              <Button variant="outline" size="sm" onClick={() => setPlanModalOpen(true)}>
+                План
+              </Button>
+              <Button variant="outline" size="sm" onClick={() => setGroupingModalOpen(true)} title="Настройки группировки">
+                {profile.name}
+              </Button>
+              <Popover open={incomingPopoverOpen} onOpenChange={setIncomingPopoverOpen}>
+                <PopoverTrigger asChild>
+                  <Button variant="outline" size="sm">
+                    <Inbox className="h-4 w-4 mr-1" />
+                    Входящие передачи
+                    {incomingTransfers.length > 0 && (
+                      <span className="ml-1 px-1.5 py-0.5 text-[10px] font-semibold rounded-full bg-red-600 text-white">
+                        {incomingTransfers.length}
+                      </span>
+                    )}
+                  </Button>
+                </PopoverTrigger>
+                <PopoverContent align="end" className="w-[600px] max-h-[80vh] overflow-auto p-0">
+                  <IncomingTransfersPanel
+                    transfers={incomingTransfers}
+                    isLoading={incomingLoading}
+                    isPending={acceptTransferMutation.isPending}
+                    onAccept={handleAcceptTransfer}
+                    onAcceptAll={handleAcceptAll}
+                  />
+                </PopoverContent>
+              </Popover>
+            </div>
+
+            <SectionTasksBoard
+              tasks={tasks}
+              isLoading={boardLoading}
+              mode={viewMode}
+              onModeChange={setViewMode}
+              onAction={openActionDialog}
+              bulkMode={bulkMode}
+              onBulkModeChange={toggleBulkMode}
+              bulkSelection={bulkMode ? bulkSelection : undefined}
+              profile={profile}
+              onSelectAllVisible={handleSelectAll}
+            />
 
               {!isSingleWindow && (
                 <div className="rounded-lg border p-4">
@@ -1027,16 +1072,6 @@ export function SectionsTasksPage() {
                 </div>
               )}
             </div>
-
-            <div className="space-y-4">
-              <IncomingTransfersPanel
-                transfers={incomingTransfers}
-                isLoading={incomingLoading}
-                isPending={acceptTransferMutation.isPending}
-                onAccept={handleAcceptTransfer}
-              />
-            </div>
-          </div>
         )}
       </section>
 
