@@ -4,7 +4,7 @@ import { ArrowRight, History, RotateCcw, Trash2, XCircle } from "lucide-react";
 import { positionStatusLabels, positionStatusColor, routeMetaLabel, fmtQty, planPreviewUrl, getLaunchBlockReason } from "./execution-utils";
 import { StepIndicator } from "../components/StepIndicator";
 import type { ExecutionColumnId, ExecutionTableColumn } from "./execution-table-columns";
-import { BULK_STYLES } from "@/shared/bulk/styles";
+import { TABLE_ROW_STYLES } from "@/shared/lib/tableRowStyles";
 
 function StatusBadge({ status, isCompleted }: { status: string; isCompleted?: boolean }) {
   const displayStatus = isCompleted ? "completed" : status;
@@ -230,7 +230,7 @@ export function ExecutionRow({
 
   return (
     <tr
-      className={`border-b hover:bg-accent hover:ring-1 hover:ring-ring/20 cursor-pointer transition-colors overflow-hidden ${isSelected ? BULK_STYLES.selectedRow : ""}`}
+      className={`border-b hover:bg-accent hover:ring-1 hover:ring-ring/20 cursor-pointer transition-colors overflow-hidden ${isSelected ? TABLE_ROW_STYLES.selectedRow : ""}`}
       onClick={(e) => {
         if (bulkMode) {
           onToggleSelect(row.plan_position_id);

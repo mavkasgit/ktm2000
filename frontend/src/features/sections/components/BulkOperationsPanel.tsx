@@ -45,6 +45,14 @@ export function BulkOperationsPanel({
     return map;
   });
 
+  const [activatedArrows, setActivatedArrows] = useState<Record<number, Set<"issue" | "complete">>>(() => {
+    const map: Record<number, Set<"issue" | "complete">> = {};
+    return map;
+  });
+
+  const [bulkArrows, setBulkArrows] = useState<Set<"issue" | "complete">>(new Set());
+  const [bulkConfirmActive, setBulkConfirmActive] = useState(false);
+
   const initEntry = (task: SectionBoardTask): BulkOpEntry => {
     const issueMax = toInteger(task.cache.available_quantity);
     const inWork = toInteger(task.cache.in_work_quantity);
@@ -90,9 +98,73 @@ export function BulkOperationsPanel({
     });
   };
 
-  const transferQty = (taskId: number, field: keyof BulkOpEntry, maxVal: number) => {
+  const transferQty = (taskId: number, field: keyof BulkOpEntry, maxVal: number, arrowType: "issue" | "complete") => {
     if (maxVal > 0) {
       updateQty(taskId, field, String(maxVal));
+      setActivatedArrows((prev) => {
+        const taskArrows = prev[taskId] || new Set<"issue" | "complete">();
+        const next = new Set(taskArrows);
+        next.add(arrowType);
+        return { ...prev, [taskId]: next };
+      });
+    }
+  };
+
+  const undoCascade = (taskId: number, arrowType: "issue" | "complete") => {
+    const e = entries[taskId];
+    if (!e) return;
+
+    if (arrowType === "issue") {
+      // Отменяем передачу issue→complete и всё что за ней (complete→send)
+      const issueMax = toInteger(e.task.cache.available_quantity);
+      const inWork = toInteger(e.task.cache.in_work_quantity);
+      setEntries((prev) => ({
+        ...prev,
+        [taskId]: {
+          ...prev[taskId],
+          issueQty: issueMax > 0 ? String(issueMax) : "",
+          completeQty: inWork > 0 ? String(inWork) : "",
+          sendQty: "0",
+        },
+      }));
+      setActivatedArrows((prev) => {
+        const taskArrows = prev[taskId] || new Set<"issue" | "complete">();
+        const next = new Set(taskArrows);
+        next.delete("issue");
+        next.delete("complete");
+        return { ...prev, [taskId]: next };
+      });
+    } else if (arrowType === "complete") {
+      // Отменяем только передачу complete→send
+      setEntries((prev) => ({
+        ...prev,
+        [taskId]: {
+          ...prev[taskId],
+          sendQty: "0",
+        },
+      }));
+      setActivatedArrows((prev) => {
+        const taskArrows = prev[taskId] || new Set<"issue" | "complete">();
+        const next = new Set(taskArrows);
+        next.delete("complete");
+        return { ...prev, [taskId]: next };
+      });
+    }
+  };
+
+  const toggleArrow = (taskId: number, arrowType: "issue" | "complete") => {
+    const taskArrows = activatedArrows[taskId] || new Set<"issue" | "complete">();
+    
+    if (taskArrows.has(arrowType)) {
+      // Если уже активирована - отменяем каскад
+      undoCascade(taskId, arrowType);
+    } else {
+      // Иначе активируем
+      setActivatedArrows((prev) => {
+        const next = new Set(prev[taskId] || new Set<"issue" | "complete">());
+        next.add(arrowType);
+        return { ...prev, [taskId]: next };
+      });
     }
   };
 
@@ -140,14 +212,169 @@ export function BulkOperationsPanel({
     }
   };
 
-  return (
-    <div className="rounded-lg border bg-card">
-      <div className="p-3 border-b">
-        <h3 className="text-sm font-semibold">Групповые операции — {tasks.length} задач</h3>
-      </div>
+  // Bulk actions — apply to all rows
+  const transferAllIssueToComplete = () => {
+    for (const task of tasks) {
+      const e = entries[task.id];
+      if (!e) continue;
+      const issueMax = toInteger(task.cache.available_quantity);
+      const issueVal = toInteger(e.issueQty);
+      if (issueVal > 0) {
+        updateQty(task.id, "completeQty", String(issueVal));
+        // Activate individual arrow for this task
+        setActivatedArrows((prev) => {
+          const taskArrows = prev[task.id] || new Set<"issue" | "complete">();
+          const next = new Set(taskArrows);
+          next.add("issue");
+          return { ...prev, [task.id]: next };
+        });
+      }
+    }
+    setBulkArrows((prev) => {
+      const next = new Set(prev);
+      next.add("issue");
+      return next;
+    });
+  };
 
+  const undoBulkIssueCascade = () => {
+    for (const task of tasks) {
+      const e = entries[task.id];
+      if (!e) continue;
+      const issueMax = toInteger(task.cache.available_quantity);
+      const inWork = toInteger(task.cache.in_work_quantity);
+      setEntries((prev) => ({
+        ...prev,
+        [task.id]: {
+          ...prev[task.id],
+          issueQty: issueMax > 0 ? String(issueMax) : "",
+          completeQty: inWork > 0 ? String(inWork) : "",
+          sendQty: "0",
+        },
+      }));
+    }
+    // Clear all individual arrow activations for all tasks
+    setActivatedArrows({});
+    setBulkArrows((prev) => {
+      const next = new Set(prev);
+      next.delete("issue");
+      next.delete("complete");
+      return next;
+    });
+  };
+
+  const transferAllCompleteToSend = () => {
+    for (const task of tasks) {
+      const e = entries[task.id];
+      if (!e) continue;
+      const completeVal = toInteger(e.completeQty);
+      const defectVal = toInteger(e.defectQty || "0");
+      const sendVal = Math.max(0, completeVal - defectVal);
+      if (sendVal > 0) {
+        updateQty(task.id, "sendQty", String(sendVal));
+        // Activate individual arrow for this task
+        setActivatedArrows((prev) => {
+          const taskArrows = prev[task.id] || new Set<"issue" | "complete">();
+          const next = new Set(taskArrows);
+          next.add("complete");
+          return { ...prev, [task.id]: next };
+        });
+      }
+    }
+    setBulkArrows((prev) => {
+      const next = new Set(prev);
+      next.add("complete");
+      return next;
+    });
+  };
+
+  const undoBulkCompleteCascade = () => {
+    for (const task of tasks) {
+      setEntries((prev) => ({
+        ...prev,
+        [task.id]: {
+          ...prev[task.id],
+          sendQty: "0",
+        },
+      }));
+    }
+    // Clear only complete arrows for all tasks, keep issue arrows
+    setActivatedArrows((prev) => {
+      const next: Record<number, Set<"issue" | "complete">> = {};
+      for (const [taskId, arrows] of Object.entries(prev)) {
+        const filtered = new Set(arrows);
+        filtered.delete("complete");
+        if (filtered.size > 0) {
+          next[Number(taskId)] = filtered;
+        }
+      }
+      return next;
+    });
+    setBulkArrows((prev) => {
+      const next = new Set(prev);
+      next.delete("complete");
+      return next;
+    });
+  };
+
+  const toggleBulkArrow = (arrowType: "issue" | "complete") => {
+    if (bulkArrows.has(arrowType)) {
+      // Отменяем каскад
+      if (arrowType === "issue") {
+        undoBulkIssueCascade();
+      } else {
+        undoBulkCompleteCascade();
+      }
+    } else {
+      // Активируем
+      if (arrowType === "issue") {
+        transferAllIssueToComplete();
+      } else {
+        transferAllCompleteToSend();
+      }
+    }
+  };
+
+  const confirmAllTasks = () => {
+    for (const task of tasks) {
+      const e = entries[task.id];
+      if (!e) continue;
+      const allSteps: RowStep[] = [];
+      if (toInteger(e.issueQty) > 0) allSteps.push("issue");
+      if (toInteger(e.completeQty) > 0) allSteps.push("complete");
+      if (toInteger(e.sendQty) > 0) allSteps.push("send");
+      if (allSteps.length > 0) {
+        setEntries((prev) => ({
+          ...prev,
+          [task.id]: { ...prev[task.id], confirmedSteps: new Set(allSteps) },
+        }));
+      }
+    }
+    setBulkConfirmActive(true);
+  };
+
+  const undoBulkConfirm = () => {
+    for (const task of tasks) {
+      setEntries((prev) => ({
+        ...prev,
+        [task.id]: { ...prev[task.id], confirmedSteps: new Set<RowStep>() },
+      }));
+    }
+    setBulkConfirmActive(false);
+  };
+
+  const toggleBulkConfirm = () => {
+    if (bulkConfirmActive) {
+      undoBulkConfirm();
+    } else {
+      confirmAllTasks();
+    }
+  };
+
+  return (
+    <div className="rounded-lg border bg-card inline-block">
       <div className="overflow-auto">
-        <table className="w-full text-sm">
+        <table className="text-sm">
           <thead className="sticky top-0 bg-background border-b">
             <tr>
               <th className="text-left p-2 text-xs font-medium text-muted-foreground whitespace-nowrap">Этап</th>
@@ -187,10 +414,20 @@ export function BulkOperationsPanel({
                   <td className="p-1 text-center">
                     <button
                       type="button"
-                      className="inline-flex items-center justify-center h-6 w-6 rounded hover:bg-accent text-muted-foreground hover:text-foreground transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+                      className={`inline-flex items-center justify-center h-6 w-6 rounded transition-colors disabled:opacity-30 disabled:cursor-not-allowed ${
+                        activatedArrows[task.id]?.has("issue")
+                          ? "bg-blue-100 text-blue-700 hover:bg-red-100 hover:text-red-700 hover:line-through"
+                          : "hover:bg-accent text-muted-foreground hover:text-foreground"
+                      }`}
                       disabled={pending || toInteger(e.issueQty) <= 0}
-                      onClick={() => transferQty(task.id, "completeQty", toInteger(e.issueQty))}
-                      title="Выдача → Завершение"
+                      onClick={() => {
+                        if (activatedArrows[task.id]?.has("issue")) {
+                          toggleArrow(task.id, "issue");
+                        } else {
+                          transferQty(task.id, "completeQty", toInteger(e.issueQty), "issue");
+                        }
+                      }}
+                      title={activatedArrows[task.id]?.has("issue") ? "Отменить передачу" : "Выдача → Завершение"}
                     >
                       <ArrowRight size={14} />
                     </button>
@@ -219,10 +456,20 @@ export function BulkOperationsPanel({
                   <td className="p-1 text-center">
                     <button
                       type="button"
-                      className="inline-flex items-center justify-center h-6 w-6 rounded hover:bg-accent text-muted-foreground hover:text-foreground transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+                      className={`inline-flex items-center justify-center h-6 w-6 rounded transition-colors disabled:opacity-30 disabled:cursor-not-allowed ${
+                        activatedArrows[task.id]?.has("complete")
+                          ? "bg-blue-100 text-blue-700 hover:bg-red-100 hover:text-red-700 hover:line-through"
+                          : "hover:bg-accent text-muted-foreground hover:text-foreground"
+                      }`}
                       disabled={pending || toInteger(e.completeQty) - toInteger(e.defectQty || "0") <= 0}
-                      onClick={() => transferQty(task.id, "sendQty", Math.max(0, toInteger(e.completeQty) - toInteger(e.defectQty || "0")))}
-                      title="Завершение - Брак → Передача"
+                      onClick={() => {
+                        if (activatedArrows[task.id]?.has("complete")) {
+                          toggleArrow(task.id, "complete");
+                        } else {
+                          transferQty(task.id, "sendQty", Math.max(0, toInteger(e.completeQty) - toInteger(e.defectQty || "0")), "complete");
+                        }
+                      }}
+                      title={activatedArrows[task.id]?.has("complete") ? "Отменить передачу" : "Завершение - Брак → Передача"}
                     >
                       <ArrowRight size={14} />
                     </button>
@@ -242,11 +489,13 @@ export function BulkOperationsPanel({
                     <button
                       type="button"
                       className={`inline-flex items-center justify-center h-6 w-6 rounded transition-colors disabled:opacity-30 disabled:cursor-not-allowed ${
-                        e.confirmedSteps.size > 0 ? "bg-emerald-100 text-emerald-700" : "hover:bg-emerald-100 text-muted-foreground hover:text-emerald-700"
+                        e.confirmedSteps.size > 0
+                          ? "bg-emerald-100 text-emerald-700 hover:bg-red-100 hover:text-red-700 hover:line-through"
+                          : "hover:bg-emerald-100 text-muted-foreground hover:text-emerald-700"
                       }`}
                       disabled={pending}
                       onClick={() => confirmAll(task)}
-                      title="Отметить все шаги для выполнения"
+                      title={e.confirmedSteps.size > 0 ? "Отменить подтверждение" : "Отметить все шаги для выполнения"}
                     >
                       <Check size={14} />
                     </button>
@@ -259,12 +508,54 @@ export function BulkOperationsPanel({
       </div>
 
       <div className="flex items-center justify-between p-3 border-t">
-        <div className="text-sm text-muted-foreground">
-          {(() => {
-            let count = 0;
-            for (const e of Object.values(entries)) count += e.confirmedSteps.size;
-            return count > 0 ? `Отмечено: ${count}` : "Нажмите ✓ для отметки";
-          })()}
+        <div className="flex items-center gap-2">
+          <span className="text-xs font-medium text-muted-foreground whitespace-nowrap">Применить ко всем:</span>
+          <button
+            type="button"
+            className={`inline-flex items-center justify-center h-7 w-7 rounded border transition-colors disabled:opacity-30 disabled:cursor-not-allowed ${
+              bulkArrows.has("issue")
+                ? "bg-blue-100 border-blue-400 hover:bg-red-100 hover:border-red-400 hover:text-red-700 hover:line-through"
+                : "bg-background hover:bg-accent text-muted-foreground hover:text-foreground"
+            }`}
+            disabled={pending}
+            onClick={() => toggleBulkArrow("issue")}
+            title={bulkArrows.has("issue") ? "Отменить передачу для всех" : "Выдача → Завершение для всех"}
+          >
+            <ArrowRight size={14} />
+          </button>
+          <button
+            type="button"
+            className={`inline-flex items-center justify-center h-7 w-7 rounded border transition-colors disabled:opacity-30 disabled:cursor-not-allowed ${
+              bulkArrows.has("complete")
+                ? "bg-blue-100 border-blue-400 hover:bg-red-100 hover:border-red-400 hover:text-red-700 hover:line-through"
+                : "bg-background hover:bg-accent text-muted-foreground hover:text-foreground"
+            }`}
+            disabled={pending}
+            onClick={() => toggleBulkArrow("complete")}
+            title={bulkArrows.has("complete") ? "Отменить передачу для всех" : "Завершение - Брак → Передача для всех"}
+          >
+            <ArrowRight size={14} />
+          </button>
+          <button
+            type="button"
+            className={`inline-flex items-center justify-center h-7 w-7 rounded border transition-colors disabled:opacity-30 disabled:cursor-not-allowed ${
+              bulkConfirmActive
+                ? "bg-emerald-100 border-emerald-400 hover:bg-red-100 hover:border-red-400 hover:text-red-700 hover:line-through"
+                : "bg-background hover:bg-emerald-100 text-muted-foreground hover:text-emerald-700"
+            }`}
+            disabled={pending}
+            onClick={toggleBulkConfirm}
+            title={bulkConfirmActive ? "Отменить подтверждение для всех" : "Отметить все шаги для всех задач"}
+          >
+            <Check size={14} />
+          </button>
+          <span className="text-sm text-muted-foreground ml-4">
+            {(() => {
+              let count = 0;
+              for (const e of Object.values(entries)) count += e.confirmedSteps.size;
+              return count > 0 ? `Отмечено: ${count}` : "Нажмите ✓ для отметки";
+            })()}
+          </span>
         </div>
         <Button
           size="sm"

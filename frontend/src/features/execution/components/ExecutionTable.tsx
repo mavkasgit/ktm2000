@@ -173,17 +173,14 @@ export function ExecutionTable({
 
     if (bulkSelection.selectedCount === 0) {
       return (
-        <div className="flex items-center gap-2 ml-auto">
+        <div className="flex items-center gap-2">
           <span className="text-sm text-muted-foreground">Нет выбранных строк</span>
-          <Button variant="outline" size="sm" onClick={onSelectAll}>
-            Выделить все ({filteredRows.length})
-          </Button>
         </div>
       );
     }
 
     return (
-      <div className="flex items-center gap-2 ml-auto flex-wrap">
+      <div className="flex items-center gap-2 flex-wrap">
         <span className="text-sm font-medium whitespace-nowrap">Выбрано: {bulkSelection.selectedCount}</span>
         {eligibleBulkActions.map(({ action, eligibleCount }) => {
           const variant = actionVariant(action.id);
@@ -208,14 +205,9 @@ export function ExecutionTable({
             </Button>
           );
         })}
-        {bulkSelection.selectedCount < filteredRows.length && (
-          <Button variant="outline" size="sm" onClick={onSelectAll}>
-            Выделить все
-          </Button>
-        )}
       </div>
     );
-  }, [bulkSelection.selectedCount, bulkSelection.selectedIds, bulkProgress, eligibleBulkActions, filteredRows.length, onSelectAll, onRunSelectedBulkAction, cancelActionLabel]);
+  }, [bulkSelection.selectedCount, bulkSelection.selectedIds, bulkProgress, eligibleBulkActions, onRunSelectedBulkAction, cancelActionLabel]);
 
   return (
     <>
@@ -259,16 +251,12 @@ export function ExecutionTable({
             hasActiveFilters={activeFilterSummary.count > 0}
             activeSummary={activeFilterSummary}
             actions={bulkActions}
+            onSelectAll={() => {
+              onEnterBulkMode();
+              onSelectAll();
+            }}
+            totalRowCount={filteredRows.length}
           />
-
-          {!bulkMode && (
-            <div className="flex items-center gap-2 mb-2">
-              <Button variant="outline" size="sm" onClick={onEnterBulkMode}>
-                <ListChecks className="h-4 w-4 mr-1.5" />
-                Групповые операции
-              </Button>
-            </div>
-          )}
 
           <div
             ref={tableScrollRef}

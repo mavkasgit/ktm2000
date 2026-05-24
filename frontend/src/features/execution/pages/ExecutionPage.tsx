@@ -501,13 +501,25 @@ export function ExecutionPage() {
       layoutSpan: "min-w-[250px]",
     },
     {
+      kind: "bulk" as const,
+      key: "bulk-mode",
+      enabled: bulkMode,
+      onChange: (enabled: boolean) => {
+        if (enabled) {
+          setBulkMode(true);
+        } else {
+          exitBulkMode();
+        }
+      },
+    },
+    {
       kind: "toggle" as const,
       key: "hide-ids",
       label: "Скрыть ID/Строка/План",
       checked: hideColumnIds,
       onChange: setHideColumnIds,
     },
-  ], [hideColumnIds, searchQuery]);
+  ], [hideColumnIds, searchQuery, bulkMode, exitBulkMode]);
 
   const uniqueValuesByField = useMemo(() => {
     const allRows = rows || [];

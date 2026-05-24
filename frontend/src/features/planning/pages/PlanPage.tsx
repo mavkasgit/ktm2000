@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react"
 import { FileSpreadsheet, Plus, Upload, ListChecks } from "lucide-react"
 import { ImportWizard } from "../ImportWizard"
-import { Button, Select, SelectContent, SelectItem, SelectTrigger, SelectValue, AlertDialog, AlertDialogContent, AlertDialogHeader, AlertDialogTitle, AlertDialogDescription, AlertDialogFooter, AlertDialogAction, AlertDialogCancel, SortableFilterHeader, VirtualizedTableBody, FiltersPanel, type FiltersPanelField } from "@/shared/ui"
+import { Button, Select, SelectContent, SelectItem, SelectTrigger, SelectValue, AlertDialog, AlertDialogContent, AlertDialogHeader, AlertDialogTitle, AlertDialogDescription, AlertDialogFooter, AlertDialogAction, AlertDialogCancel, SortableFilterHeader, VirtualizedTableBody, FiltersPanel, type FiltersPanelField, Badge } from "@/shared/ui"
 import { buildActiveFilterSummary } from "@/shared/ui/buildActiveFilterSummary"
 import { useTableQueryEngine, SortConfig, ColumnSortDef } from "@/shared/hooks/useTableQueryEngine"
 import { nextMultiSortConfigs } from "@/shared/lib/multiSort"
@@ -19,9 +19,6 @@ import {
   type BulkActionResultItem,
   type BulkActionSummary,
   type BulkRunnerProgress,
-  BulkSelectionTable,
-  type BulkSelectionRow,
-  type BulkSelectionAction,
 } from "@/shared/bulk"
 import { FileRow } from "../components/PlanFileRow"
 import { PositionRow } from "../components/PlanPositionRow"
@@ -37,7 +34,6 @@ export function PlanPage() {
   const [showAllFiles, setShowAllFiles] = useState(false)
   const bulkSelection = useBulkSelection<number>()
   const [bulkMode, setBulkMode] = useState(false)
-  const [selectionOrder, setSelectionOrder] = useState<number[]>([])
   const [bulkApproving, setBulkApproving] = useState(false)
   const [bulkDeleting, setBulkDeleting] = useState(false)
   const [bulkDeleteConfirmOpen, setBulkDeleteConfirmOpen] = useState(false)
@@ -148,23 +144,14 @@ export function PlanPage() {
   }
 
   const toggleSelect = (id: number) => {
-    setSelectionOrder(prev => {
-      const idx = prev.indexOf(id)
-      if (idx === -1) {
-        return [id, ...prev]
-      }
-      return prev.filter(x => x !== id)
-    })
     bulkSelection.selectOne(id)
   }
 
   const selectAll = () => {
     if (bulkSelection.isAllSelected(filteredPositionIds)) {
       bulkSelection.clear()
-      setSelectionOrder([])
     } else {
       bulkSelection.selectAllFiltered(filteredPositionIds)
-      setSelectionOrder([...filteredPositionIds])
     }
   }
 
@@ -180,6 +167,8 @@ export function PlanPage() {
       has_warnings: "all",
       has_duplicates: "all",
     })
+    bulkSelection.clear()
+    setBulkMode(false)
   }
 
   const handleAssignRouteSingle = async (positionId: number, routeId: number | null) => {
@@ -198,7 +187,6 @@ export function PlanPage() {
 
   const exitBulkMode = () => {
     bulkSelection.clear()
-    setSelectionOrder([])
     setBulkMode(false)
   }
 
@@ -268,7 +256,6 @@ export function PlanPage() {
       variant: summary.failed > 0 ? "destructive" : "success",
     })
     bulkSelection.clear()
-    setSelectionOrder([])
     setBulkMode(false)
   }
 
@@ -320,7 +307,6 @@ export function PlanPage() {
       variant: summary.failed > 0 ? "destructive" : "success",
     })
     bulkSelection.clear()
-    setSelectionOrder([])
     setBulkMode(false)
   }
 
@@ -475,8 +461,20 @@ export function PlanPage() {
         placeholder: "Поиск",
         layoutSpan: "min-w-[250px]",
       },
+      {
+        kind: "bulk",
+        key: "bulk-mode",
+        enabled: bulkMode,
+        onChange: (enabled: boolean) => {
+          if (enabled) {
+            setBulkMode(true);
+          } else {
+            exitBulkMode();
+          }
+        },
+      },
     ],
-    [searchQuery],
+    [searchQuery, bulkMode, exitBulkMode],
   )
 
   // Sort toggle handler: click cycles none -> asc -> desc -> removed
@@ -515,42 +513,6 @@ export function PlanPage() {
     }
     return data
   }, [detailPosition, duplicateConflictsByPosition])
-
-  const bulkSelectionRows = useMemo<BulkSelectionRow[]>(() => {
-    const posMap = new Map(positions?.map(p => [p.id, p]) ?? [])
-    return selectionOrder.map(id => {
-      const pos = posMap.get(id)
-      return {
-        id,
-        cells: {
-          id: `#${id}`,
-          sku: pos?.source_sku ?? "—",
-          name: pos?.source_name ?? "—",
-          qty: pos ? Number(pos.quantity || 0).toString() : "0",
-          route: pos?.route_name ?? "—",
-        },
-      }
-    })
-  }, [selectionOrder, positions])
-
-  const bulkActions = useMemo<BulkSelectionAction[]>(() => [
-    {
-      id: "approve",
-      label: "Утвердить",
-      variant: "success" as const,
-      onClick: handleBulkApprove,
-      disabled: bulkSelection.selectedCount === 0 || bulkApproving || bulkDeleting,
-      pending: bulkApproving,
-    },
-    {
-      id: "delete",
-      label: "Удалить",
-      variant: "destructive" as const,
-      onClick: requestBulkDelete,
-      disabled: bulkSelection.selectedCount === 0 || bulkApproving || bulkDeleting,
-      pending: bulkDeleting,
-    },
-  ], [bulkSelection.selectedCount, bulkApproving, bulkDeleting, handleBulkApprove, requestBulkDelete])
 
   const totalQty = positions?.reduce((sum, p) => sum + Number(p.quantity || 0), 0) ?? 0
   const totalQtyStr = Number.isInteger(totalQty) ? String(totalQty) : totalQty.toFixed(3).replace(/\.?0+$/, '')
@@ -713,55 +675,48 @@ export function PlanPage() {
               onReset={resetAllFilters}
               hasActiveFilters={activeFilterSummary.count > 0}
               activeSummary={activeFilterSummary}
-            />
-
-            {!bulkMode && (
-            <div className="flex items-center gap-2 mb-3">
-              <Button
-                variant={bulkMode ? "default" : "outline"}
-                size="sm"
-                onClick={() => {
-                  if (bulkMode) exitBulkMode()
-                  else setBulkMode(true)
-                }}
-              >
-                <ListChecks className="h-4 w-4 mr-1.5" />
-                {bulkMode ? "Групповые операции: вкл" : "Групповые операции"}
-              </Button>
-              {bulkMode && (
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={selectAll}
-                >
-                  Выбрать все
-                </Button>
-              )}
-            </div>
-            )}
-
-            {bulkMode && (
-            <BulkSelectionTable
-              selectedCount={bulkSelection.selectedCount}
-              rows={bulkSelectionRows}
-              columns={[
-                { key: "id", label: "ID" },
-                { key: "sku", label: "Артикул" },
-                { key: "name", label: "Наименование" },
-                { key: "qty", label: "Кол-во" },
-                { key: "route", label: "Маршрут" },
-              ]}
-              actions={bulkActions}
-              onClose={exitBulkMode}
-              onRemoveRow={(id) => {
-                bulkSelection.selectOne(Number(id), false);
-                setSelectionOrder((prev) => prev.filter((x) => x !== Number(id)));
+              actions={
+                <>
+                  {bulkMode && bulkSelection.selectedCount > 0 && (
+                    <>
+                      <span className="text-sm font-medium whitespace-nowrap">Выбрано: {bulkSelection.selectedCount}</span>
+                      <Button
+                        size="sm"
+                        variant="success"
+                        onClick={handleBulkApprove}
+                        disabled={bulkApproving || bulkDeleting}
+                      >
+                        {bulkApproving ? "Выполнение..." : "Утвердить"}
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="destructive"
+                        onClick={requestBulkDelete}
+                        disabled={bulkApproving || bulkDeleting}
+                      >
+                        {bulkDeleting ? "Удаление..." : "Удалить"}
+                      </Button>
+                      {bulkProgress?.running && (
+                        <span className="text-xs text-muted-foreground">
+                          {bulkProgress.completed}/{bulkProgress.total}
+                        </span>
+                      )}
+                      {bulkSummary && bulkSummary.total > 0 && !bulkProgress?.running && (
+                        <Badge variant={bulkSummary.failed > 0 ? "destructive" : "secondary"}>
+                          {bulkSummary.success} ok / {bulkSummary.skipped} пропущено / {bulkSummary.failed} ошибок
+                        </Badge>
+                      )}
+                    </>
+                  )}
+                </>
+              }
+              onSelectAll={() => {
+                setBulkMode(true);
+                selectAll();
               }}
-              progress={bulkProgress}
-              lastSummary={bulkSummary}
-              className="shrink-0"
+              totalRowCount={processedRows.length}
             />
-            )}
+
 
             <div className="flex-1 min-h-0">
             {posLoading && <p className="text-sm text-muted-foreground">Загрузка...</p>}
