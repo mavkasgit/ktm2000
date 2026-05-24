@@ -43,6 +43,7 @@ class RouteStep(Base):
     section_id: Mapped[int] = mapped_column(ForeignKey("sections.id"), nullable=False)
     operation_code: Mapped[str | None] = mapped_column(String(100), nullable=True)
     operation_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    is_significant: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default=text("false"))
     norm_time_minutes: Mapped[int | None] = mapped_column(Integer, nullable=True)
     requires_acceptance: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default=text("true"))
     allow_parallel: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default=text("false"))
@@ -52,6 +53,22 @@ class RouteStep(Base):
 
     __table_args__ = (
         UniqueConstraint("route_id", "sequence", name="uq_route_steps_sequence"),
+    )
+
+
+class SectionOperation(Base):
+    __tablename__ = "section_operations"
+
+    id: Mapped[int] = mapped_column(BigInteger, Identity(always=True), primary_key=True)
+    section_id: Mapped[int] = mapped_column(ForeignKey("sections.id"), nullable=False)
+    operation_code: Mapped[str] = mapped_column(String(100), nullable=False)
+    operation_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    is_significant: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default=text("false"))
+
+    section: Mapped["Section"] = relationship("Section")
+
+    __table_args__ = (
+        UniqueConstraint("section_id", "operation_code", name="uq_section_operations"),
     )
 
 

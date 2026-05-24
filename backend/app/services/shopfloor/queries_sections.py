@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 from datetime import datetime
 from decimal import Decimal
 
@@ -8,15 +10,39 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
 from app.models.internal_plan import SectionPlanLine
+from app.models.production_plan import PlanPosition
 from app.models.movement import Movement, MovementType
 from app.models.product import Product
-from app.models.route import RouteStep
+from app.models.route import RouteStep, SectionOperation
 from app.models.section import Section
 from app.models.transfer import Transfer, TransferStatus
 from app.models.work_task import WorkTask, WorkTaskStatus
 
 from .cache import _compute_available_from_balances
 from .common import _to_decimal
+
+
+def _compute_display_sku(source_sku: str, output_sku: str) -> str:
+    return f"{source_sku} \u2192 {output_sku}" if source_sku != output_sku else output_sku
+
+
+def _compute_fingerprint(
+    source_sku: str | None,
+    output_sku: str | None,
+    operation_code: str | None,
+    output_kind: str | None,
+    source_payload: dict | None,
+) -> str:
+    payload = {
+        "input_sku": source_sku or "",
+        "output_sku": output_sku or "",
+        "operation_code": operation_code or "",
+        "output_kind": output_kind or "",
+        **(source_payload or {}),
+    }
+    canonical = json.dumps(payload, sort_keys=True, ensure_ascii=True)
+    return hashlib.sha256(canonical.encode()).hexdigest()[:16]
+
 
 async def get_section_board(
     db: AsyncSession,
@@ -32,12 +58,25 @@ async def get_section_board(
         SectionPlanLine,
         RouteStep,
         Product.sku,
+        PlanPosition.source_ref,
+        PlanPosition.source_payload,
+        PlanPosition.source_fingerprint,
+        PlanPosition.source_sku,
+        PlanPosition.output_sku,
+        PlanPosition.output_kind,
+        SectionOperation.is_significant.label("op_is_significant"),
+        SectionOperation.operation_name.label("op_operation_name"),
     ).join(
         SectionPlanLine, WorkTask.section_plan_line_id == SectionPlanLine.id,
     ).join(
         RouteStep, WorkTask.route_step_id == RouteStep.id,
     ).join(
         Product, WorkTask.product_id == Product.id,
+    ).join(
+        PlanPosition, SectionPlanLine.plan_position_id == PlanPosition.id,
+    ).outerjoin(
+        SectionOperation,
+        SectionOperation.section_id == WorkTask.section_id,
     ).where(
         WorkTask.section_id == section_id,
     )
@@ -53,24 +92,57 @@ async def get_section_board(
 
     rows = (await db.execute(query)).all()
 
-    tasks_data = []
-    for task, line, step, product_sku in rows:
-        # Find previous route step
-        prev_step = await db.scalar(
-            select(RouteStep).where(
-                RouteStep.route_id == line.route_id,
-                RouteStep.sequence == step.sequence - 1,
-            )
+    if not rows:
+        return {"section_id": section_id, "tasks": []}
+
+    # --- Batched loading to fix N+1 ---
+    route_ids: set[int] = set()
+    plan_position_ids: set[int] = set()
+    for row in rows:
+        line = row[1]  # SectionPlanLine
+        step = row[2]  # RouteStep
+        route_ids.add(step.route_id)
+        plan_position_ids.add(line.plan_position_id)
+
+    # Load all route steps for involved routes
+    all_steps = (await db.execute(
+        select(RouteStep).where(RouteStep.route_id.in_(route_ids))
+    )).scalars().all()
+    steps_by_route: dict[int, list[RouteStep]] = {}
+    for s in all_steps:
+        steps_by_route.setdefault(s.route_id, []).append(s)
+
+    # Load all SectionPlanLine for prev/next lookup
+    all_lines = (await db.execute(
+        select(SectionPlanLine).where(
+            SectionPlanLine.plan_position_id.in_(plan_position_ids)
         )
+    )).scalars().all()
+    lines_by_pos_seq: dict[tuple[int, int], SectionPlanLine] = {}
+    for line in all_lines:
+        lines_by_pos_seq[(line.plan_position_id, line.sequence)] = line
+
+    # Load all WorkTask for next task lookup
+    next_line_ids = [line.id for line in all_lines]
+    all_tasks = (await db.execute(
+        select(WorkTask).where(WorkTask.section_plan_line_id.in_(next_line_ids))
+    )).scalars().all()
+    # For each line, keep the latest task (highest id)
+    tasks_by_line: dict[int, WorkTask] = {}
+    for t in all_tasks:
+        existing = tasks_by_line.get(t.section_plan_line_id)
+        if existing is None or t.id > existing.id:
+            tasks_by_line[t.section_plan_line_id] = t
+
+    tasks_data = []
+    for task, line, step, product_sku, source_ref, source_payload, source_fingerprint, source_sku, output_sku, output_kind in rows:
+        # Prev step — dict lookup
+        route_steps = steps_by_route.get(line.route_id, [])
+        prev_step = next((s for s in route_steps if s.sequence == step.sequence - 1), None)
 
         prev_stage_info = None
         if prev_step:
-            prev_line = await db.scalar(
-                select(SectionPlanLine).where(
-                    SectionPlanLine.plan_position_id == line.plan_position_id,
-                    SectionPlanLine.route_step_id == prev_step.id,
-                )
-            )
+            prev_line = lines_by_pos_seq.get((line.plan_position_id, prev_step.sequence))
             if prev_line:
                 prev_stage_info = {
                     "section_plan_line_id": prev_line.id,
@@ -79,25 +151,19 @@ async def get_section_board(
                     "received_quantity": str(prev_line.cached_received_quantity),
                 }
 
+        # Next line — dict lookup
+        next_line = lines_by_pos_seq.get((line.plan_position_id, step.sequence + 1))
         next_task_id: int | None = None
         next_task_status: str | None = None
         next_operation_name: str | None = None
-        next_line = await db.scalar(
-            select(SectionPlanLine).where(
-                SectionPlanLine.plan_position_id == line.plan_position_id,
-                SectionPlanLine.sequence == line.sequence + 1,
-            )
-        )
         if next_line:
-            next_task = await db.scalar(
-                select(WorkTask)
-                .where(WorkTask.section_plan_line_id == next_line.id)
-                .order_by(WorkTask.id.desc())
-            )
+            next_task = tasks_by_line.get(next_line.id)
             if next_task:
                 next_task_id = next_task.id
                 next_task_status = next_task.status.value
-            next_step = await db.get(RouteStep, next_line.route_step_id)
+            # Next step from already-loaded steps
+            next_route_steps = steps_by_route.get(next_line.route_id, [])
+            next_step = next((s for s in next_route_steps if s.id == next_line.route_step_id), None)
             if next_step:
                 next_operation_name = next_step.operation_name
 
@@ -107,6 +173,12 @@ async def get_section_board(
             issued_quantity=_to_decimal(task.cached_issued_quantity),
             is_first_stage=bool(line.sequence == 1),
         )
+
+        display_sku = _compute_display_sku(source_sku or "", output_sku or "")
+        fingerprint = _compute_fingerprint(
+            source_sku, output_sku, step.operation_code, output_kind, source_payload
+        )
+        sig_output_kind_value = output_kind.value if hasattr(output_kind, "value") else output_kind
 
         tasks_data.append({
             "id": task.id,
@@ -134,9 +206,29 @@ async def get_section_board(
             "next_task_id": next_task_id,
             "next_task_status": next_task_status,
             "next_operation_name": next_operation_name,
+            "source_ref": source_ref,
+            "source_payload": source_payload or {},
+            "source_fingerprint": fingerprint,
+            # --- новые поля ---
+            "input_sku": source_sku or "",
+            "output_sku": output_sku or "",
+            "display_sku": display_sku,
+            "signature": {
+                "input_sku": source_sku or "",
+                "output_sku": output_sku or "",
+                "display_sku": display_sku,
+                "operation_code": step.operation_code,
+                "operation_name": row.op_operation_name or step.operation_name,
+                "is_significant": row.op_is_significant if row.op_is_significant is not None else step.is_significant,
+                "output_kind": sig_output_kind_value,
+                "source_ref": source_ref,
+                "source_payload": source_payload or {},
+                "source_fingerprint": fingerprint,
+            },
         })
 
     return {"section_id": section_id, "tasks": tasks_data}
+
 
 async def get_sections_summary(db: AsyncSession) -> dict:
     """Return section counters for quick top-level switching tiles."""
@@ -220,6 +312,7 @@ async def get_sections_summary(db: AsyncSession) -> dict:
             for section in sections
         ]
     }
+
 
 async def get_section_incoming_transfers(
     db: AsyncSession,
@@ -309,6 +402,7 @@ async def get_section_incoming_transfers(
         "incoming_transfers": transfers,
     }
 
+
 async def get_section_daily_stats(
     db: AsyncSession,
     *,
@@ -370,3 +464,32 @@ async def get_section_daily_stats(
 
     return {"section_id": section_id, "daily_stats": list(daily_map.values())}
 
+
+async def get_section_payload_keys(
+    db: AsyncSession,
+    *,
+    section_id: int,
+) -> dict:
+    """
+    Возвращает список уникальных ключей из source_payload для всех задач участка.
+
+    Используется в GroupingSettingsModal для показа чекбоксов кастомных полей.
+
+    ПОЧЕМУ ОТДЕЛЬНЫЙ ЗАПРОС, А НЕ ЧАСТЬ get_section_board:
+      Этот запрос нужен только при открытии модалки настроек (~1 раз в сессию),
+      а не при каждой загрузке доски. Разделение снижает объём данных в основном запросе.
+
+    PostgreSQL jsonb_object_keys() — встроенная функция для извлечения ключей JSONB.
+    """
+    stmt = (
+        select(
+            func.jsonb_object_keys(PlanPosition.source_payload).label("key")
+        )
+        .join(SectionPlanLine, SectionPlanLine.plan_position_id == PlanPosition.id)
+        .where(SectionPlanLine.section_id == section_id)
+        .distinct()
+        .order_by(func.jsonb_object_keys(PlanPosition.source_payload))
+    )
+
+    rows = (await db.execute(stmt)).scalars().all()
+    return {"keys": list(rows)}

@@ -11,6 +11,7 @@ from .queries_sections import (
     get_section_board,
     get_section_daily_stats,
     get_section_incoming_transfers,
+    get_section_payload_keys,
     get_sections_summary,
 )
 
@@ -21,6 +22,7 @@ __all__ = [
     "get_section_board",
     "get_section_daily_stats",
     "get_section_incoming_transfers",
+    "get_section_payload_keys",
     "get_sections_summary",
     "get_task_details",
     "get_transfer_details",

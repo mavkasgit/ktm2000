@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
 from app.models.section import Section
+from app.models.route import SectionOperation
 
 router = APIRouter(prefix="/sections-seed", tags=["sections-seed"])
 
@@ -56,10 +57,48 @@ DEFAULTS = [
     },
 ]
 
+# Операции по умолчанию для каждого участка
+SECTION_OPS = {
+    "WH": [
+        ("ISSUE_RAW", "Выдача сырья", False),
+    ],
+    "DRILL": [
+        ("DRILL", "Сверловка", True),
+    ],
+    "PRESS": [
+        ("PRESS_WINDOW", "Пресс (окно)", True),
+        ("PRESS_COMB", "Пресс (гребенка)", True),
+    ],
+    "SHOT": [
+        ("SHOT", "Дробеструй", True),
+    ],
+    "ANOD": [
+        ("ANOD", "Анодирование", True),
+    ],
+    "WIP_WH": [
+        ("MOVE_TO_WIP", "Передача на склад полуфабриката", False),
+    ],
+    "SAW": [
+        ("SAW", "Резка на пиле", True),
+    ],
+    "PACK": [
+        ("PACK", "Упаковка", True),
+    ],
+    "FG_WH": [
+        ("FG_WH", "Склад готовой продукции", False),
+    ],
+    "SHIPMENT": [
+        ("SHIPMENT", "К отгрузке", False),
+    ],
+    "SENT": [
+        ("SENT", "Отправлено", False),
+    ],
+}
+
 
 @router.post("", response_model=list[SectionOut], status_code=status.HTTP_201_CREATED)
 async def seed_sections(db: AsyncSession = Depends(get_db)) -> list[SectionOut]:
-    """Создать или обновить стандартные участки."""
+    """Создать или обновить стандартные участки и операции."""
     created = 0
     for d in DEFAULTS:
         existing = await db.scalar(select(Section).where(Section.code == d["code"]))
@@ -69,6 +108,34 @@ async def seed_sections(db: AsyncSession = Depends(get_db)) -> list[SectionOut]:
         else:
             db.add(Section(**d))
             created += 1
+    await db.flush()
+
+    # Сидим операции
+    sections_result = await db.execute(select(Section))
+    sections = {s.code: s for s in sections_result.scalars().all()}
+
+    for section_code, ops in SECTION_OPS.items():
+        section = sections.get(section_code)
+        if not section:
+            continue
+        for op_code, op_name, is_sig in ops:
+            existing = await db.scalar(
+                select(SectionOperation).where(
+                    SectionOperation.section_id == section.id,
+                    SectionOperation.operation_code == op_code,
+                )
+            )
+            if existing:
+                existing.operation_name = op_name
+                existing.is_significant = is_sig
+            else:
+                db.add(SectionOperation(
+                    section_id=section.id,
+                    operation_code=op_code,
+                    operation_name=op_name,
+                    is_significant=is_sig,
+                ))
+
     await db.flush()
     result = await db.execute(select(Section).order_by(Section.sort_order, Section.id))
     return [SectionOut.model_validate(i, from_attributes=True) for i in result.scalars().all()]

@@ -13,6 +13,29 @@ function makeRequestConfig(options?: ShopfloorRequestOptions) {
   };
 }
 
+export interface SourceSignature {
+  input_sku: string;
+  output_sku: string;
+  display_sku: string;
+  operation_code: string | null;
+  operation_name: string | null;
+  is_significant: boolean;
+  output_kind: string | null;
+  source_ref: string | null;
+  source_payload: Record<string, unknown>;
+  source_fingerprint: string;
+}
+
+export type TaskStatus = "pending" | "in_work" | "done" | "partially" | "blocked";
+
+export type TaskGroup = {
+  key: string;
+  label: string;
+  tasks: SectionBoardTask[];
+  totalQtyPlan: number;
+  totalQtyDone: number;
+};
+
 export type SectionBoardTask = {
   id: number;
   product_id: number;
@@ -44,6 +67,14 @@ export type SectionBoardTask = {
   next_task_id: number | null;
   next_task_status: string | null;
   next_operation_name: string | null;
+  source_ref: string | null;
+  source_payload: Record<string, unknown>;
+  source_fingerprint: string | null;
+  // --- новые поля: трансформация артикула ---
+  input_sku: string;
+  output_sku: string;
+  display_sku: string;
+  signature: SourceSignature;
 };
 
 export type SectionBoardResponse = {
@@ -278,6 +309,105 @@ export async function acceptTransfer(
     `/shopfloor/transfers/${transferId}/accept`,
     payload,
     makeRequestConfig(options)
+  );
+  return data;
+}
+
+// ---------------------------------------------------------------------------
+// Утилиты для работы с задачами
+// ---------------------------------------------------------------------------
+
+/**
+ * Проверяет, является ли операция трансформирующей (меняет артикул).
+ */
+export function isTransformingTask(task: SectionBoardTask): boolean {
+  return task.signature.input_sku !== task.signature.output_sku;
+}
+
+/**
+ * Процент выполнения задачи (0–100).
+ */
+export function taskProgress(task: SectionBoardTask): number {
+  const plan = parseFloat(task.planned_quantity);
+  if (plan === 0) return 0;
+  return Math.min(100, Math.round((parseFloat(task.cache.completed_quantity) / plan) * 100));
+}
+
+/**
+ * Процент выполнения группы.
+ */
+export function groupProgress(group: TaskGroup): number {
+  if (group.totalQtyPlan === 0) return 0;
+  return Math.min(
+    100,
+    Math.round((group.totalQtyDone / group.totalQtyPlan) * 100),
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Payload-keys API — для кастомных полей группировки
+// ---------------------------------------------------------------------------
+
+/**
+ * Загружает уникальные ключи source_payload для участка.
+ * Используется в GroupingSettingsModal для чекбоксов кастомных полей.
+ */
+export async function getSectionPayloadKeys(
+  sectionId: number,
+  options?: ShopfloorRequestOptions,
+): Promise<string[]> {
+  const { data } = await apiClient.get<{ keys: string[] }>(
+    `/shopfloor/sections/${sectionId}/payload-keys`,
+    makeRequestConfig(options),
+  );
+  return data.keys;
+}
+
+export interface SectionOperation {
+  id: number;
+  operation_code: string;
+  operation_name: string;
+  is_significant: boolean;
+}
+
+export async function getSectionOperations(
+  sectionId: number,
+): Promise<SectionOperation[]> {
+  const { data } = await apiClient.get<SectionOperation[]>(
+    `/shopfloor/sections/${sectionId}/operations`,
+  );
+  return data;
+}
+
+export async function updateSectionOperation(
+  sectionId: number,
+  opId: number,
+  payload: { is_significant: boolean },
+): Promise<SectionOperation> {
+  const { data } = await apiClient.patch<SectionOperation>(
+    `/shopfloor/sections/${sectionId}/operations/${opId}`,
+    payload,
+  );
+  return data;
+}
+
+export async function createSectionOperation(
+  sectionId: number,
+  payload: { operation_code: string; operation_name: string; is_significant?: boolean },
+): Promise<SectionOperation> {
+  const { data } = await apiClient.post<SectionOperation>(
+    `/shopfloor/sections/${sectionId}/operations`,
+    payload,
+  );
+  return data;
+}
+
+export async function deleteSectionOperation(
+  sectionId: number,
+  opId: number,
+): Promise<{ status: string }> {
+  const { data } = await apiClient.delete<{ status: string }>(
+    `/shopfloor/sections/${sectionId}/operations/${opId}`,
   );
   return data;
 }

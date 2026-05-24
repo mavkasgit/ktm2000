@@ -114,6 +114,7 @@ class PlanPosition(Base):
     source_row_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
     import_batch_id: Mapped[int | None] = mapped_column(ForeignKey("import_batches.id"), nullable=True)
     source_sku: Mapped[str] = mapped_column(String(255), nullable=False)
+    output_sku: Mapped[str] = mapped_column(String(255), nullable=False, server_default=text("''"))
     source_name: Mapped[str | None] = mapped_column(String(1000), nullable=True)
     quantity: Mapped[Decimal] = mapped_column(Numeric(14, 3), nullable=False)
     source_payload: Mapped[dict] = mapped_column(JSONB, nullable=False, server_default=text("'{}'::jsonb"), default=dict)

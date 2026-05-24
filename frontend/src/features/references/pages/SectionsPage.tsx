@@ -1,10 +1,12 @@
 import React, { useCallback, useEffect, useState } from "react";
-import { Plus, Download, ArrowUp, ArrowDown, GripVertical } from "lucide-react";
+import { Plus, Download, ArrowUp, ArrowDown, GripVertical, Settings, X } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 import * as API from "shared/api";
 import * as SectionsAPI from "shared/api/sections";
+import * as ShopfloorAPI from "shared/api/shopfloor";
 import * as UI from "shared/ui";
 import { Button } from "@/shared/ui/Button";
+import { Badge } from "@/shared/ui/Badge";
 import { EntityDialog, renderIcon } from "@/shared/ui/EntityDialog";
 import { AlertDialog, AlertDialogContent, AlertDialogHeader, AlertDialogTitle, AlertDialogDescription, AlertDialogFooter, AlertDialogCancel, AlertDialogAction } from "@/shared/ui/AlertDialog";
 import { toast } from "@/shared/ui/use-toast";
@@ -124,6 +126,76 @@ export function SectionsPage() {
   const [seedDialogOpen, setSeedDialogOpen] = useState(false);
   const [seeding, setSeeding] = useState(false);
   const [draggedIndex, setDraggedIndex] = useState<number | null>(null);
+
+  // Operations panel
+  const [expandedSectionId, setExpandedSectionId] = useState<number | null>(null);
+  const [sectionOps, setSectionOps] = useState<ShopfloorAPI.SectionOperation[]>([]);
+  const [opsLoading, setOpsLoading] = useState(false);
+  const [newOpCode, setNewOpCode] = useState("");
+  const [newOpName, setNewOpName] = useState("");
+  const [deleteOpDialog, setDeleteOpDialog] = useState<{ sectionId: number; opId: number; opName: string } | null>(null);
+
+  const toggleSectionOps = useCallback(async (sectionId: number) => {
+    if (expandedSectionId === sectionId) {
+      setExpandedSectionId(null);
+      return;
+    }
+    setExpandedSectionId(sectionId);
+    setOpsLoading(true);
+    try {
+      const ops = await ShopfloorAPI.getSectionOperations(sectionId);
+      setSectionOps(ops);
+    } catch (e) {
+      toast({ title: "Ошибка загрузки операций", description: API.getErrorMessage(e), variant: "destructive" });
+    } finally {
+      setOpsLoading(false);
+    }
+  }, [expandedSectionId]);
+
+  const toggleOpSignificant = useCallback(async (sectionId: number, opId: number, current: boolean) => {
+    try {
+      const updated = await ShopfloorAPI.updateSectionOperation(sectionId, opId, { is_significant: !current });
+      setSectionOps((prev) => prev.map((o) => o.id === opId ? updated : o));
+      // Invalidate shopfloor cache so board picks up the change
+      await queryClient.invalidateQueries({ queryKey: ["shopfloor"] });
+    } catch (e) {
+      toast({ title: "Ошибка обновления", description: API.getErrorMessage(e), variant: "destructive" });
+    }
+  }, [queryClient]);
+
+  const createOp = useCallback(async (sectionId: number) => {
+    if (!newOpCode.trim() || !newOpName.trim()) return;
+    try {
+      const created = await ShopfloorAPI.createSectionOperation(sectionId, {
+        operation_code: newOpCode.trim(),
+        operation_name: newOpName.trim(),
+      });
+      setSectionOps((prev) => [...prev, created]);
+      setNewOpCode("");
+      setNewOpName("");
+      await queryClient.invalidateQueries({ queryKey: ["shopfloor"] });
+    } catch (e) {
+      toast({ title: "Ошибка создания", description: API.getErrorMessage(e), variant: "destructive" });
+    }
+  }, [newOpCode, newOpName, queryClient]);
+
+  const deleteOp = useCallback(async (sectionId: number, opId: number, opName: string) => {
+    setDeleteOpDialog({ sectionId, opId, opName });
+  }, []);
+
+  const confirmedDeleteOp = useCallback(async () => {
+    if (!deleteOpDialog) return;
+    const { sectionId, opId } = deleteOpDialog;
+    try {
+      await ShopfloorAPI.deleteSectionOperation(sectionId, opId);
+      setSectionOps((prev) => prev.filter((o) => o.id !== opId));
+      await queryClient.invalidateQueries({ queryKey: ["shopfloor"] });
+    } catch (e) {
+      toast({ title: "Ошибка удаления", description: API.getErrorMessage(e), variant: "destructive" });
+    } finally {
+      setDeleteOpDialog(null);
+    }
+  }, [deleteOpDialog, queryClient]);
 
   const moveItem = useCallback((fromIndex: number, toIndex: number) => {
     setItems((prev) => {
@@ -340,6 +412,23 @@ export function SectionsPage() {
         </AlertDialogContent>
       </AlertDialog>
 
+      <AlertDialog open={!!deleteOpDialog} onOpenChange={(open) => !open && setDeleteOpDialog(null)}>
+        <AlertDialogContent className="max-w-sm">
+          <AlertDialogHeader>
+            <AlertDialogTitle>Удалить операцию &laquo;{deleteOpDialog?.opName}&raquo;?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Это действие нельзя отменить. Операция будет удалена навсегда.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter className="flex-col-reverse sm:flex-row gap-2">
+            <AlertDialogCancel>Отмена</AlertDialogCancel>
+            <AlertDialogAction onClick={confirmedDeleteOp} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">
+              Удалить
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
       {error ? <div role="alert">{error}</div> : null}
       {loading ? <div>Загрузка...</div> : null}
 
@@ -352,13 +441,14 @@ export function SectionsPage() {
               <th className="py-3 px-4 text-left text-sm font-medium whitespace-nowrap">Название</th>
               <th className="py-3 px-4 text-left text-sm font-medium whitespace-nowrap">Код</th>
               <th className="py-3 px-4 text-left text-sm font-medium whitespace-nowrap">Тип</th>
-              <th className="py-3 px-4 text-left text-sm font-medium">Описание</th>
+              <th className="py-3 px-4 text-left text-sm font-medium whitespace-nowrap">Описание</th>
+              <th className="py-3 px-4 text-left text-sm font-medium whitespace-nowrap">Операции</th>
             </tr>
           </thead>
           <tbody>
             {items.map((item, i) => (
+              <React.Fragment key={String(item.id ?? `${item.code}-${i}`)}>
               <tr
-                key={String(item.id ?? `${item.code}-${i}`)}
                 className="transition-colors"
                 draggable
                 onDragStart={(e) => {
@@ -420,7 +510,81 @@ export function SectionsPage() {
                 <td className="py-3 px-4 text-sm whitespace-nowrap cursor-pointer" onClick={() => openEdit(item)}>{item.code}</td>
                 <td className="py-3 px-4 text-sm whitespace-nowrap cursor-pointer" onClick={() => openEdit(item)}>{KIND_LABELS[item.kind ?? "production"] ?? item.kind ?? "-"}</td>
                 <td className="py-3 px-4 text-sm cursor-pointer" onClick={() => openEdit(item)}>{item.description ?? "-"}</td>
+                <td className="py-3 px-4 text-sm">
+                  <Button size="sm" variant="ghost" onClick={() => toggleSectionOps(Number(item.id))}>
+                    <Settings className="h-4 w-4 mr-1" />
+                    {expandedSectionId === item.id ? "Скрыть" : "Настроить"}
+                  </Button>
+                </td>
               </tr>
+              {expandedSectionId === Number(item.id) && (
+                <tr key={`ops-${item.id}`}>
+                  <td colSpan={7} className="p-0">
+                    <div className="bg-muted/30 border-l-4 border-blue-400 p-4 m-2 rounded">
+                      <div className="flex items-center gap-2 mb-2">
+                        <Settings className="h-4 w-4 text-blue-600" />
+                        <span className="font-semibold text-sm">Операции участка &laquo;{item.name}&raquo;</span>
+                        <span className="text-xs text-muted-foreground">Отмеченные операции показываются в плане</span>
+                      </div>
+
+                      <div className="flex items-center gap-2 flex-wrap">
+                        {/* Create form inline */}
+                        <div className="flex items-center gap-1">
+                          <input
+                            type="text"
+                            placeholder="Код"
+                            value={newOpCode}
+                            onChange={(e) => setNewOpCode(e.target.value)}
+                            className="w-24 h-8 px-2 text-xs border rounded bg-background font-mono"
+                          />
+                          <input
+                            type="text"
+                            placeholder="Название"
+                            value={newOpName}
+                            onChange={(e) => setNewOpName(e.target.value)}
+                            className="w-36 h-8 px-2 text-xs border rounded bg-background"
+                          />
+                          <Button size="sm" className="h-8" onClick={() => createOp(Number(item.id))}>
+                            <Plus className="h-3 w-3" />
+                          </Button>
+                        </div>
+
+                        {opsLoading ? (
+                          <span className="text-xs text-muted-foreground">Загрузка...</span>
+                        ) : sectionOps.length === 0 ? (
+                          <span className="text-xs text-muted-foreground">Нет операций</span>
+                        ) : (
+                          sectionOps.map((op) => (
+                            <div
+                              key={op.id}
+                              className="flex items-center gap-1 px-2 h-8 rounded border bg-card hover:bg-accent/50 transition-colors text-sm group"
+                            >
+                              <input
+                                type="checkbox"
+                                checked={op.is_significant}
+                                onChange={() => toggleOpSignificant(Number(item.id), op.id, op.is_significant)}
+                                className="rounded border-gray-300 cursor-pointer h-3.5 w-3.5"
+                              />
+                              <span className="font-mono text-xs text-muted-foreground">{op.operation_code}</span>
+                              <span className="text-xs">{op.operation_name}</span>
+                              {op.is_significant && <Badge variant="secondary" className="text-xs bg-green-100 text-green-700 shrink-0">★</Badge>}
+                              <button
+                                type="button"
+                                onClick={() => deleteOp(Number(item.id), op.id, op.operation_name)}
+                                className="p-0.5 rounded hover:bg-destructive/20 text-muted-foreground hover:text-destructive opacity-0 group-hover:opacity-100 transition-opacity"
+                                title="Удалить"
+                              >
+                                <X className="h-3 w-3" />
+                              </button>
+                            </div>
+                          ))
+                        )}
+                      </div>
+                    </div>
+                  </td>
+                </tr>
+              )}
+              </React.Fragment>
             ))}
           </tbody>
         </Table>
