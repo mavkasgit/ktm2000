@@ -26,6 +26,9 @@ import { SectionSwitcherTiles } from "../components/SectionSwitcherTiles";
 import { SectionTasksBoard, type TaskActionDialogType, type TaskBoardViewMode } from "../components/SectionTasksBoard";
 import { TaskActionDrawer } from "../components/TaskActionDrawer";
 import { BulkOperationsPanel } from "../components/BulkOperationsPanel";
+import { PlanModal } from "../components/PlanModal";
+import { GroupingSettingsModal } from "../components/GroupingSettingsModal";
+import { loadProfileForSection, PRESET_PROFILES, type GroupingProfile, saveProfileForSection } from "../lib/groupingProfiles";
 
 type MeResponse = {
   id: number;
@@ -103,6 +106,28 @@ export function SectionsTasksPage() {
   const [sectionId, setSectionId] = useState<number | null>(
     params.sectionId && Number.isFinite(Number(params.sectionId)) ? Number(params.sectionId) : null
   );
+  const [profile, setProfile] = useState<GroupingProfile>(() =>
+    sectionId ? loadProfileForSection(sectionId) : PRESET_PROFILES[1]
+  );
+
+  // При смене участка — загрузить его профиль группировки
+  useEffect(() => {
+    if (sectionId) setProfile(loadProfileForSection(sectionId));
+  }, [sectionId]);
+
+  function handleProfileApply(newProfile: GroupingProfile) {
+    setProfile(newProfile);
+  }
+
+  const planProfileKey = sectionId ? `plan-group-profile-${sectionId}` : null;
+
+  const handlePlanProfileApply = useCallback((newProfile: GroupingProfile) => {
+    setPlanProfile(newProfile);
+    if (planProfileKey) {
+      localStorage.setItem(planProfileKey, JSON.stringify(newProfile));
+    }
+  }, [planProfileKey]);
+
   const [viewMode, setViewMode] = useState<TaskBoardViewMode>("active");
   const [dateFrom, setDateFrom] = useState<string>("");
   const [dateTo, setDateTo] = useState<string>("");
@@ -123,11 +148,26 @@ export function SectionsTasksPage() {
   const [accountedTime, setAccountedTime] = useState("");
   const [dateToday, setDateToday] = useState(true);
   const [actionComment, setActionComment] = useState("");
+  const [planModalOpen, setPlanModalOpen] = useState(false);
+  const [groupingModalOpen, setGroupingModalOpen] = useState(false);
+  const [planProfile, setPlanProfile] = useState<GroupingProfile>(() => {
+    try {
+      const saved = planProfileKey ? localStorage.getItem(planProfileKey) : null;
+      if (saved) return JSON.parse(saved);
+    } catch {}
+    return PRESET_PROFILES.find(p => p.id === "sku+stage")!;
+  });
 
   // Bulk mode state
   const [bulkMode, setBulkMode] = useState(searchParams.get("bulk") === "1" || searchParams.get("singleWindow") === "1");
   const bulkSelection = useBulkSelection<number>();
   const activatedSingleWindowRef = useRef(false);
+
+  // Sync bulkMode with URL search params
+  useEffect(() => {
+    const fromUrl = searchParams.get("bulk") === "1" || searchParams.get("singleWindow") === "1";
+    setBulkMode(fromUrl);
+  }, [searchParams]);
   const locationRef = useRef(location);
   locationRef.current = location;
 
@@ -887,6 +927,12 @@ export function SectionsTasksPage() {
                   <ListChecks className="h-4 w-4 mr-1" />
                   {bulkMode ? "Закрыть" : "Групповые операции"}
                 </Button>
+                <Button variant="outline" size="sm" onClick={() => setPlanModalOpen(true)}>
+                  План
+                </Button>
+                <Button variant="outline" size="sm" onClick={() => setGroupingModalOpen(true)} title="Настройки группировки">
+                  {profile.name}
+                </Button>
                 {bulkMode && (
                   <span className="text-sm text-muted-foreground">
                     Клик по строке для выбора · Выбрано: {bulkSelection.selectedCount}
@@ -911,6 +957,7 @@ export function SectionsTasksPage() {
                 onAction={openActionDialog}
                 bulkMode={bulkMode}
                 bulkSelection={bulkMode ? bulkSelection : undefined}
+                profile={profile}
               />
 
               {!isSingleWindow && (
@@ -1032,6 +1079,27 @@ export function SectionsTasksPage() {
         summary={bulkSummary}
         results={bulkResults}
       />
+
+      {/* Plan modal */}
+      <PlanModal
+        open={planModalOpen}
+        onOpenChange={setPlanModalOpen}
+        sectionName={selectedSection?.name || "—"}
+        tasks={tasks}
+        profile={planProfile}
+        onProfileChange={handlePlanProfileApply}
+      />
+
+      {/* Grouping settings modal */}
+      {groupingModalOpen && sectionId && selectedSection && (
+        <GroupingSettingsModal
+          sectionId={sectionId}
+          sectionName={selectedSection.name}
+          currentProfile={profile}
+          onClose={() => setGroupingModalOpen(false)}
+          onApply={handleProfileApply}
+        />
+      )}
     </>
   );
 }
