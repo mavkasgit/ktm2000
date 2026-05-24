@@ -64,8 +64,6 @@ async def get_section_board(
         PlanPosition.source_sku,
         PlanPosition.output_sku,
         PlanPosition.output_kind,
-        SectionOperation.is_significant.label("op_is_significant"),
-        SectionOperation.operation_name.label("op_operation_name"),
     ).join(
         SectionPlanLine, WorkTask.section_plan_line_id == SectionPlanLine.id,
     ).join(
@@ -74,9 +72,6 @@ async def get_section_board(
         Product, WorkTask.product_id == Product.id,
     ).outerjoin(
         PlanPosition, SectionPlanLine.plan_position_id == PlanPosition.id,
-    ).outerjoin(
-        SectionOperation,
-        SectionOperation.section_id == WorkTask.section_id,
     ).where(
         WorkTask.section_id == section_id,
         (PlanPosition.deleted_at.is_(None)) | (PlanPosition.id.is_(None)),
@@ -157,9 +152,16 @@ async def get_section_board(
         op_name_by_section.setdefault(op.section_id, {})[op.operation_code] = op.operation_name
 
     tasks_data = []
-    for task, line, step, product_sku, source_ref, source_payload, source_fingerprint, source_sku, output_sku, output_kind, op_is_significant, op_operation_name in rows:
-        # Determine effective operation_code (override from task or default from route step)
-        effective_op_code = task.selected_operation_code or step.operation_code
+    for task, line, step, product_sku, source_ref, source_payload, source_fingerprint, source_sku, output_sku, output_kind in rows:
+        # Determine effective operation_code.
+        # Priority: task override > source_payload (100% confirmed) > route_step
+        effective_op_code = task.selected_operation_code
+        if not effective_op_code:
+            src_op = (source_payload or {}).get("operation_code")
+            if src_op:
+                effective_op_code = src_op
+            else:
+                effective_op_code = step.operation_code
         # Look up operation_name from section operations if available
         effective_op_name = op_name_by_section.get(task.section_id, {}).get(effective_op_code) or step.operation_name
         # Determine is_significant from section operations

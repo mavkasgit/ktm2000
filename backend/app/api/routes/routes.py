@@ -4,7 +4,7 @@ from sqlalchemy import func, select, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
-from app.models.route import ProductionRoute, RouteMatchingRule, RouteSignatureRule, RouteStep
+from app.models.route import ProductionRoute, RouteMatchingRule, RouteSignatureRule, RouteStep, SectionOperation
 from app.models.routing import RouteOperationFamily, RouteOutputKind
 from app.models.section import Section
 from app.models.internal_plan import SectionPlanLine
@@ -333,6 +333,21 @@ async def create_route_step(route_id: int, payload: StepCreate, db: AsyncSession
     if payload.sequence <= 0:
         raise HTTPException(status_code=400, detail="Sequence must be > 0")
 
+    # Validate operation_code: NULL allowed (operation from source_payload),
+    # or must exist in section_operations
+    if payload.operation_code:
+        op_exists = await db.scalar(
+            select(SectionOperation.id).where(
+                SectionOperation.section_id == payload.section_id,
+                SectionOperation.operation_code == payload.operation_code,
+            )
+        )
+        if not op_exists:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Operation '{payload.operation_code}' is not registered for section {payload.section_id}",
+            )
+
     if payload.is_final:
         final_exists = await db.scalar(
             select(RouteStep).where(RouteStep.route_id == route_id, RouteStep.is_final.is_(True))
@@ -381,6 +396,21 @@ async def replace_route_steps(route_id: int, payload: list[StepUpdate], db: Asyn
             raise HTTPException(status_code=404, detail=f"Section {item.section_id} not found")
         if not section.is_active:
             raise HTTPException(status_code=400, detail=f"Inactive section {item.section_id}")
+
+        # Validate operation_code: NULL allowed (operation from source_payload),
+        # or must exist in section_operations
+        if item.operation_code:
+            op_exists = await db.scalar(
+                select(SectionOperation.id).where(
+                    SectionOperation.section_id == item.section_id,
+                    SectionOperation.operation_code == item.operation_code,
+                )
+            )
+            if not op_exists:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Operation '{item.operation_code}' is not registered for section {item.section_id}",
+                )
 
         step = RouteStep(
             route_id=route_id,
