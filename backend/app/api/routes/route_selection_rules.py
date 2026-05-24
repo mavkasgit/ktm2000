@@ -33,6 +33,7 @@ class RouteSelectionConditionIn(BaseModel):
 class RouteSelectionActionIn(BaseModel):
     action: RuleAction
     section_id: int | None = None
+    operation_code: str | None = None
     path: str | None = None
     value: Any = None
 
@@ -57,6 +58,8 @@ class RouteSelectionActionOut(BaseModel):
     section_id: int | None = None
     section_code: str | None = None
     section_name: str | None = None
+    operation_code: str | None = None
+    operation_name: str | None = None
     path: str | None = None
     value: Any = None
 
@@ -217,11 +220,25 @@ async def _rule_out(db: AsyncSession, rule: RouteSelectionRule) -> RouteSelectio
     if section_ids:
         rows = (await db.execute(select(Section).where(Section.id.in_(section_ids)))).scalars().all()
         sections = {section.id: section for section in rows}
+
+    # Load section operations for set_operation actions
+    from app.models.route import SectionOperation
+    section_ops: dict[int, dict[str, str]] = {}  # section_id -> {op_code -> op_name}
+    for action in (rule.actions or []):
+        sid = action.get("section_id")
+        op_code = action.get("operation_code")
+        if sid and op_code and sid not in section_ops:
+            ops = (await db.execute(
+                select(SectionOperation).where(SectionOperation.section_id == sid)
+            )).scalars().all()
+            section_ops[sid] = {o.operation_code: o.operation_name for o in ops}
+
     actions = []
     for action in rule.actions or []:
         action_out = {
             "action": action.get("action"),
             "section_id": action.get("section_id"),
+            "operation_code": action.get("operation_code"),
             "path": action.get("path"),
             "value": action.get("value"),
         }
@@ -230,6 +247,10 @@ async def _rule_out(db: AsyncSession, rule: RouteSelectionRule) -> RouteSelectio
             section = sections.get(section_id)
             action_out["section_code"] = section.code if section else None
             action_out["section_name"] = section.name if section else None
+            # Resolve operation_name
+            op_code = action.get("operation_code")
+            if op_code and section_id in section_ops:
+                action_out["operation_name"] = section_ops[section_id].get(op_code)
         actions.append(RouteSelectionActionOut(**action_out))
 
     profile_code = None

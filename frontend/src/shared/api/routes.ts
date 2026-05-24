@@ -57,6 +57,8 @@ export type RouteSelectionAction = {
   section_id?: number | null;
   section_code?: string | null;
   section_name?: string | null;
+  operation_code?: string | null;
+  operation_name?: string | null;
   path?: string | null;
   value?: unknown;
 };

@@ -4,6 +4,7 @@ import * as RoutesAPI from "@/shared/api/routes";
 import * as SectionsAPI from "@/shared/api/sections";
 import * as ImportTemplatesAPI from "@/shared/api/importTemplates";
 import { getErrorMessage } from "@/shared/api/client";
+import { getSectionOperations, type SectionOperation } from "@/shared/api/shopfloor";
 import { Badge } from "@/shared/ui/Badge";
 import { Button } from "@/shared/ui/Button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/shared/ui/Card";
@@ -79,6 +80,7 @@ const actionLabels: Record<RoutesAPI.RouteSelectionAction["action"], string> = {
 };
 
 const isDslAction = (action: string): boolean => action === "set" || action === "add" || action === "remove";
+const isSectionAction = (action: string): boolean => action === "require_section" || action === "exclude_section";
 
 const HEADER_KEY_BY_NAME: Record<string, string> = {
   "артикул": "sku",
@@ -534,6 +536,10 @@ export function RouteSelectionRulesSection({ refreshKey }: Props) {
   const [savingProfile, setSavingProfile] = useState(false);
   const [deletingProfileId, setDeletingProfileId] = useState<number | null>(null);
 
+  // Cache: sectionId -> operations list
+  const [sectionOps, setSectionOps] = useState<Record<number, SectionOperation[]>>({});
+  const fetchedSectionsRef = useRef<Set<number>>(new Set());
+
   const activeSections = useMemo(() => sections.filter((section) => section.is_active), [sections]);
   const selectedProfile = useMemo(
     () => profiles.find((profile) => profile.id === selectedProfileId) ?? null,
@@ -620,6 +626,39 @@ export function RouteSelectionRulesSection({ refreshKey }: Props) {
     }
   }, [scope, selectedProfileId]);
 
+  const fetchSectionOperations = useCallback(async (sectionId: number) => {
+    if (fetchedSectionsRef.current.has(sectionId)) return;
+    fetchedSectionsRef.current.add(sectionId);
+    try {
+      const ops = await getSectionOperations(sectionId);
+      setSectionOps((prev) => ({ ...prev, [sectionId]: ops }));
+    } catch (e) {
+      setSectionOps((prev) => ({ ...prev, [sectionId]: [] }));
+    }
+  }, []);
+
+  // Auto-fetch operations for section_ids that are already in form actions
+  useEffect(() => {
+    const sectionIds = new Set<number>();
+    for (const action of form.actions) {
+      if (isSectionAction(action.action) && action.section_id) {
+        sectionIds.add(action.section_id);
+      }
+    }
+    for (const sectionId of sectionIds) {
+      if (!fetchedSectionsRef.current.has(sectionId)) {
+        fetchedSectionsRef.current.add(sectionId);
+        getSectionOperations(sectionId)
+          .then((ops) => {
+            setSectionOps((prev) => ({ ...prev, [sectionId]: ops }));
+          })
+          .catch(() => {
+            setSectionOps((prev) => ({ ...prev, [sectionId]: [] }));
+          });
+      }
+    }
+  }, [form.actions]);
+
   useEffect(() => {
     void loadData();
   }, [loadData]);
@@ -652,13 +691,24 @@ export function RouteSelectionRulesSection({ refreshKey }: Props) {
         return {
           action: action.action,
           section_id: null,
+          operation_code: null,
           path: action.path?.trim() || null,
           value: action.value,
+        };
+      }
+      if (isSectionAction(action.action)) {
+        return {
+          action: action.action,
+          section_id: Number(action.section_id),
+          operation_code: action.operation_code?.trim() || null,
+          path: null,
+          value: null,
         };
       }
       return {
         action: action.action,
         section_id: Number(action.section_id),
+        operation_code: null,
         path: null,
         value: null,
       };
@@ -675,6 +725,7 @@ export function RouteSelectionRulesSection({ refreshKey }: Props) {
 
   const openCreateDialog = () => {
     setEditingRule(null);
+    fetchedSectionsRef.current.clear();
     setForm({
       ...emptyForm,
       profile_id: scope === "profile" && selectedProfileId ? selectedProfileId : null,
@@ -685,6 +736,7 @@ export function RouteSelectionRulesSection({ refreshKey }: Props) {
 
   const openEditDialog = (rule: RoutesAPI.RouteSelectionRule) => {
     setEditingRule(rule);
+    fetchedSectionsRef.current.clear();
     setForm({
       code: rule.code,
       name: rule.name,
@@ -696,6 +748,7 @@ export function RouteSelectionRulesSection({ refreshKey }: Props) {
       actions: rule.actions.map((action) => ({
         action: action.action,
         section_id: action.section_id,
+        operation_code: action.operation_code,
         path: action.path,
         value: action.value,
       })),
@@ -712,7 +765,7 @@ export function RouteSelectionRulesSection({ refreshKey }: Props) {
     for (const action of normalized.actions) {
       if (isDslAction(action.action)) {
         if (!action.path?.startsWith("ctx.")) return "DSL действие: путь должен начинаться с 'ctx.'";
-      } else {
+      } else if (isSectionAction(action.action)) {
         if (!action.section_id) return "В каждом действии по участкам должен быть выбран участок";
       }
     }
@@ -1015,9 +1068,10 @@ export function RouteSelectionRulesSection({ refreshKey }: Props) {
                     <div className="flex flex-wrap gap-1">
                       {rule.actions.map((action, index) => {
                         const isDsl = isDslAction(action.action);
+                        const isSection = isSectionAction(action.action);
                         return (
                           <Badge key={`${rule.id}-${index}`} variant={isDsl ? "outline" : (action.action === "require_section" ? "default" : "secondary")}>
-                            {actionLabels[action.action]} {isDsl ? (action.path ?? "") : (action.section_code ?? action.section_id)}
+                            {actionLabels[action.action]} {isDsl ? (action.path ?? "") : isSection && action.operation_code ? `${action.section_code ?? action.section_id} → ${action.operation_code}` : (action.section_code ?? action.section_id)}
                           </Badge>
                         );
                       })}
@@ -1163,7 +1217,10 @@ export function RouteSelectionRulesSection({ refreshKey }: Props) {
                             <th className="text-left py-1 px-2 text-xs font-medium">Значение (JSON)</th>
                           </>
                         ) : (
-                          <th className="text-left py-1 px-2 text-xs font-medium">Участок</th>
+                          <>
+                            <th className="text-left py-1 px-2 text-xs font-medium">Участок</th>
+                            <th className="text-left py-1 px-2 text-xs font-medium">Операция</th>
+                          </>
                         )}
                         <th className="py-1 px-1 w-8"></th>
                       </tr>
@@ -1171,7 +1228,7 @@ export function RouteSelectionRulesSection({ refreshKey }: Props) {
                     <tbody>
                       {form.actions.length === 0 ? (
                         <tr>
-                          <td colSpan={form.phase === "normalize" ? 4 : 3} className="py-3 text-center text-muted-foreground text-xs">
+                          <td colSpan={4} className="py-3 text-center text-muted-foreground text-xs">
                             Нет действий. Добавьте хотя бы одно.
                           </td>
                         </tr>
@@ -1223,6 +1280,44 @@ export function RouteSelectionRulesSection({ refreshKey }: Props) {
                                     placeholder='null, "text", 42, [1,2]'
                                     className="h-6 text-xs"
                                   />
+                                </td>
+                              </>
+                            ) : isSectionAction(action.action) ? (
+                              <>
+                                <td className="py-0.5 px-2">
+                                  <SectionSelect
+                                    sections={sections}
+                                    value={action.section_id ?? 0}
+                                    onValueChange={(value) => {
+                                      updateAction(index, { section_id: value });
+                                      fetchSectionOperations(value);
+                                    }}
+                                    className="h-6 text-xs"
+                                  />
+                                </td>
+                                <td className="py-0.5 px-2">
+                                  <Select
+                                    value={action.operation_code ?? "__none__"}
+                                    onValueChange={(value) => updateAction(index, { operation_code: value === "__none__" ? null : value })}
+                                    disabled={!action.section_id}
+                                  >
+                                    <SelectTrigger className="h-6 text-xs">
+                                      <SelectValue placeholder="Выберите операцию" />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                      <SelectItem value="__none__">—</SelectItem>
+                                      {(sectionOps[action.section_id ?? 0] ?? []).map((op) => (
+                                        <SelectItem key={op.operation_code} value={op.operation_code}>
+                                          {op.operation_name} ({op.operation_code})
+                                        </SelectItem>
+                                      ))}
+                                      {(!action.section_id || !(sectionOps[action.section_id ?? 0]?.length)) && (
+                                        <SelectItem value="__empty__" disabled>
+                                          {!action.section_id ? "Сначала выберите участок" : "Нет операций"}
+                                        </SelectItem>
+                                      )}
+                                    </SelectContent>
+                                  </Select>
                                 </td>
                               </>
                             ) : (
