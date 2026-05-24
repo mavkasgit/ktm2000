@@ -96,24 +96,24 @@ export function SectionSwitcherTiles({
         </div>
         {variant === "popover" ? (
           <div className="mt-2 grid grid-cols-2 gap-1">
-            <Badge variant="secondary" className="text-[11px] justify-center">Г: {stats.ready}</Badge>
-            <Badge variant="secondary" className="text-[11px] justify-center">ВР: {stats.inProgress}</Badge>
-            <Badge variant="secondary" className="text-[11px] justify-center">ОЖ: {stats.waiting}</Badge>
             <Badge variant={stats.incoming > 0 ? "destructive" : "secondary"} className="text-[11px] justify-center">
               {stats.incoming > 0 ? <>Вх: {stats.incoming}</> : <>Вх: 0</>}
             </Badge>
+            <Badge variant="secondary" className="text-[11px] justify-center">ОЖ: {stats.waiting}</Badge>
+            <Badge variant="secondary" className="text-[11px] justify-center">ВР: {stats.inProgress}</Badge>
+            <Badge variant="secondary" className="text-[11px] justify-center">Г: {stats.ready}</Badge>
           </div>
         ) : (
           <div className="mt-2 flex flex-wrap gap-1">
-            <Badge variant="secondary" className="text-[11px]">Г: {stats.ready}</Badge>
-            <Badge variant="secondary" className="text-[11px]">ВР: {stats.inProgress}</Badge>
-            <Badge variant="secondary" className="text-[11px]">ОЖ: {stats.waiting}</Badge>
             {stats.incoming > 0 && (
               <Badge variant="destructive" className="text-[11px]">
                 <AlertCircle className="mr-1 h-3 w-3" />
                 Вх: {stats.incoming}
               </Badge>
             )}
+            <Badge variant="secondary" className="text-[11px]">ОЖ: {stats.waiting}</Badge>
+            <Badge variant="secondary" className="text-[11px]">ВР: {stats.inProgress}</Badge>
+            <Badge variant="secondary" className="text-[11px]">Г: {stats.ready}</Badge>
           </div>
         )}
       </button>
@@ -121,7 +121,7 @@ export function SectionSwitcherTiles({
   };
 
   const sectionGrid = (
-    <div className={`gap-2 ${variant === "popover" ? "grid grid-cols-3" : "grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-8"}`}>
+    <div className={`gap-2 ${variant === "popover" ? "grid grid-cols-3" : "grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-6"}`}>
       {gridSections.map((section) => sectionCard(section))}
       {gridSections.length === 0 && (
         <div className={`rounded-lg border p-3 text-center text-sm text-muted-foreground ${variant === "popover" ? "col-span-3" : "col-span-full"}`}>

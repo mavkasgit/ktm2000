@@ -80,6 +80,7 @@ export type SectionBoardTask = {
 export type SectionBoardResponse = {
   section_id: number;
   tasks: SectionBoardTask[];
+  available_operations: SectionOperation[];
 };
 
 export type DailyStatsRow = {
@@ -408,6 +409,17 @@ export async function deleteSectionOperation(
 ): Promise<{ status: string }> {
   const { data } = await apiClient.delete<{ status: string }>(
     `/shopfloor/sections/${sectionId}/operations/${opId}`,
+  );
+  return data;
+}
+
+export async function setTaskOperation(
+  taskId: number,
+  operationCode: string,
+): Promise<{ task_id: number; operation_code: string; operation_name: string }> {
+  const { data } = await apiClient.patch<{ task_id: number; operation_code: string; operation_name: string }>(
+    `/shopfloor/tasks/${taskId}/operation`,
+    { operation_code: operationCode },
   );
   return data;
 }

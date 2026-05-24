@@ -11,6 +11,7 @@ from app.api.deps import get_current_user
 from app.core.database import get_db
 from app.models.defect import DefectDecisionType
 from app.models.entity_comment import EntityType
+from app.models.route import SectionOperation
 from app.models.transfer import Transfer
 from app.models.user import User
 from app.models.work_task import WorkTask
@@ -74,6 +75,10 @@ async def _ensure_transfer_target_lock(db: AsyncSession, transfer_id: int, locke
     transfer_target_section_id = await db.scalar(select(Transfer.to_section_id).where(Transfer.id == transfer_id))
     if transfer_target_section_id is not None and transfer_target_section_id != locked_section_id:
         raise HTTPException(status_code=403, detail=LOCKED_SECTION_ERROR)
+
+
+class PatchOperationPayload(BaseModel):
+    operation_code: str
 
 
 class IssuePayload(BaseModel):
@@ -251,6 +256,43 @@ async def complete_task_endpoint(
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.patch("/tasks/{task_id}/operation", dependencies=[Depends(require_role(list(WRITER_ROLES)))])
+async def patch_task_operation(
+    task_id: int,
+    payload: PatchOperationPayload,
+    db: AsyncSession = Depends(get_db),
+    locked_section_id: int | None = Depends(get_single_window_locked_section_id),
+) -> dict:
+    await _ensure_task_lock(db, task_id, locked_section_id)
+
+    task = await db.get(WorkTask, task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+
+    # Validate that the operation exists for this task's section
+    op = await db.scalar(
+        select(SectionOperation).where(
+            SectionOperation.section_id == task.section_id,
+            SectionOperation.operation_code == payload.operation_code,
+        )
+    )
+    if not op:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Operation '{payload.operation_code}' not found for section {task.section_id}",
+        )
+
+    task.selected_operation_code = payload.operation_code
+    await db.commit()
+    await db.refresh(task)
+
+    return {
+        "task_id": task.id,
+        "operation_code": task.selected_operation_code,
+        "operation_name": op.operation_name,
+    }
 
 
 @router.post("/transfers", dependencies=[Depends(require_role(list(WRITER_ROLES)))])

@@ -350,6 +350,11 @@ async def soft_delete_cancelled_position(
     """Soft-delete a cancelled position. Hides it from all lists while preserving history."""
     from datetime import datetime, timezone
 
+    from sqlalchemy import select
+
+    from app.models.internal_plan import SectionPlanLine
+    from app.models.work_task import WorkTask, WorkTaskStatus
+
     position = await db.get(PlanPosition, position_id)
     if position is None or position.production_plan_id != production_plan_id:
         raise ValueError("Plan position not found")
@@ -362,6 +367,25 @@ async def soft_delete_cancelled_position(
     position.deleted_at = datetime.now(timezone.utc)
     position.deleted_by = changed_by
     position.delete_reason = reason
+    await db.flush()
+
+    # Cancel all active related WorkTasks so they disappear from shopfloor board
+    line_ids_result = (
+        await db.execute(
+            select(SectionPlanLine.id).where(
+                SectionPlanLine.plan_position_id == position_id
+            )
+        )
+    ).scalars().all()
+
+    if line_ids_result:
+        await db.execute(
+            WorkTask.__table__.update()
+            .where(WorkTask.section_plan_line_id.in_(line_ids_result))
+            .where(WorkTask.status.notin_([WorkTaskStatus.completed, WorkTaskStatus.cancelled]))
+            .values(status=WorkTaskStatus.cancelled)
+        )
+
     await db.flush()
     return position
 

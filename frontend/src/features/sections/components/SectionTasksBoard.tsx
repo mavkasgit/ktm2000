@@ -133,6 +133,9 @@ function renderTaskRow(
     >
       <td className="p-2">#{task.sequence}</td>
       <td className="p-2 font-medium">{task.product_sku}</td>
+      <td className="p-2">
+        <span className="text-xs">{task.operation_name || "—"}</span>
+      </td>
       <td className="p-2">{fmtQty(task.planned_quantity)}</td>
       <td className="p-2">{fmtQty(task.cache.issued_quantity)}</td>
       <td className="p-2">{fmtQty(task.cache.in_work_quantity)}</td>
@@ -219,6 +222,7 @@ function renderMobileCard(
 
       <div className="grid grid-cols-2 gap-2 text-sm">
         <div><span className="text-muted-foreground">План:</span> {fmtQty(task.planned_quantity)}</div>
+        <div><span className="text-muted-foreground">Операция:</span> {task.operation_name || "—"}</div>
         <div><span className="text-muted-foreground">Выдано:</span> {fmtQty(task.cache.issued_quantity)}</div>
         <div><span className="text-muted-foreground">В работе:</span> {fmtQty(task.cache.in_work_quantity)}</div>
         <div><span className="text-muted-foreground">Годные:</span> {fmtQty(task.cache.completed_quantity)}</div>
@@ -308,15 +312,10 @@ function TableTaskGroupRow({
         </div>
       </td>
       <td className="p-2 text-blue-700">
-        {skuChanged ? (
-          <span className="flex items-center gap-1 text-xs">
-            <span className="text-muted-foreground line-through">{sig.input_sku}</span>
-            <span className="text-blue-400">→</span>
-            <span className="font-semibold">{sig.output_sku}</span>
-          </span>
-        ) : (
-          firstTask.product_sku
-        )}
+        {firstTask.product_sku}
+      </td>
+      <td className="p-2 text-xs text-blue-600 font-medium">
+        {firstTask.operation_name || "—"}
       </td>
       <td className="p-2 text-blue-800">{fmtQty(String(group.totalQtyPlan))}</td>
       <td className="p-2 text-blue-800">{fmtQty(String(group.tasks.reduce((s, t) => s + parseFloat(t.cache.issued_quantity), 0)))}</td>
@@ -335,10 +334,8 @@ function TableTaskGroupRow({
           )}
         </div>
       </td>
-      <td className="p-2 text-xs text-blue-600 font-medium">
-        {firstTask.operation_name || "—"}
-      </td>
-      <td className="p-2"></td>
+      <td className={`p-2 text-xs text-muted-foreground ${isBulkMode && allSelected ? BULK_STYLES.selectedGroupHeader : "bg-blue-50/80"}`}>—</td>
+      <td className={`p-2 ${isBulkMode && allSelected ? BULK_STYLES.selectedGroupHeader : "bg-blue-50/80"}`}></td>
     </tr>
   );
 }
@@ -506,6 +503,7 @@ export function SectionTasksBoard({
                       onFilterChange={handleColumnFilterChange}
                     />
                   </th>
+                  <th className="text-left p-2 text-xs font-medium">Операция</th>
                   <th className="text-left p-2">
                     <SortableFilterHeader
                       field="plannedQty"
@@ -609,7 +607,7 @@ export function SectionTasksBoard({
                     const task = group.tasks[0];
                     const isFinalStage = isFinalStageTask(task);
                     const isSelected = bulkMode && bulkSelection?.isSelected(task.id);
-                    return renderTaskRow(task, isFinalStage, isSelected, bulkMode, bulkSelection, onAction, true);
+                    return renderTaskRow(task, isFinalStage, isSelected, bulkMode, bulkSelection, onAction, true, false);
                   }
 
                   return (

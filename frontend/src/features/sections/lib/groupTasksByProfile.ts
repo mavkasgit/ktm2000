@@ -25,7 +25,7 @@ function buildGroupKey(
   const parts = profile.criteria.map((criterion: GroupingCriterion) => {
     switch (criterion) {
       case "productSku":
-        return s.output_sku;
+        return task.product_sku;
 
       case "routeStepId":
         return String(task.route_step_id);
@@ -69,7 +69,7 @@ function buildGroupLabel(
   const s = task.signature;
   const parts: string[] = [];
 
-  parts.push(s.display_sku);
+  parts.push(task.product_sku);
 
   for (const criterion of profile.criteria) {
     switch (criterion) {

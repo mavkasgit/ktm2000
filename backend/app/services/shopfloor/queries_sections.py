@@ -72,13 +72,14 @@ async def get_section_board(
         RouteStep, WorkTask.route_step_id == RouteStep.id,
     ).join(
         Product, WorkTask.product_id == Product.id,
-    ).join(
+    ).outerjoin(
         PlanPosition, SectionPlanLine.plan_position_id == PlanPosition.id,
     ).outerjoin(
         SectionOperation,
         SectionOperation.section_id == WorkTask.section_id,
     ).where(
         WorkTask.section_id == section_id,
+        (PlanPosition.deleted_at.is_(None)) | (PlanPosition.id.is_(None)),
     )
 
     if status:
@@ -134,8 +135,41 @@ async def get_section_board(
         if existing is None or t.id > existing.id:
             tasks_by_line[t.section_plan_line_id] = t
 
+    # Load section operations for the dropdown
+    section_ops = (await db.execute(
+        select(SectionOperation)
+        .where(SectionOperation.section_id == section_id)
+        .order_by(SectionOperation.operation_code)
+    )).scalars().all()
+    available_operations = [
+        {
+            "id": op.id,
+            "operation_code": op.operation_code,
+            "operation_name": op.operation_name,
+            "is_significant": op.is_significant,
+        }
+        for op in section_ops
+    ]
+
+    # Build lookup: section_id -> {operation_code -> operation_name}
+    op_name_by_section: dict[int, dict[str, str]] = {}
+    for op in section_ops:
+        op_name_by_section.setdefault(op.section_id, {})[op.operation_code] = op.operation_name
+
     tasks_data = []
-    for task, line, step, product_sku, source_ref, source_payload, source_fingerprint, source_sku, output_sku, output_kind in rows:
+    for task, line, step, product_sku, source_ref, source_payload, source_fingerprint, source_sku, output_sku, output_kind, op_is_significant, op_operation_name in rows:
+        # Determine effective operation_code (override from task or default from route step)
+        effective_op_code = task.selected_operation_code or step.operation_code
+        # Look up operation_name from section operations if available
+        effective_op_name = op_name_by_section.get(task.section_id, {}).get(effective_op_code) or step.operation_name
+        # Determine is_significant from section operations
+        effective_is_significant = False
+        for op in section_ops:
+            if op.section_id == task.section_id and op.operation_code == effective_op_code:
+                effective_is_significant = op.is_significant
+                break
+        else:
+            effective_is_significant = step.is_significant
         # Prev step — dict lookup
         route_steps = steps_by_route.get(line.route_id, [])
         prev_step = next((s for s in route_steps if s.sequence == step.sequence - 1), None)
@@ -176,7 +210,7 @@ async def get_section_board(
 
         display_sku = _compute_display_sku(source_sku or "", output_sku or "")
         fingerprint = _compute_fingerprint(
-            source_sku, output_sku, step.operation_code, output_kind, source_payload
+            source_sku, output_sku, effective_op_code, output_kind, source_payload
         )
         sig_output_kind_value = output_kind.value if hasattr(output_kind, "value") else output_kind
 
@@ -188,8 +222,8 @@ async def get_section_board(
             "plan_position_id": line.plan_position_id,
             "route_step_id": step.id,
             "sequence": step.sequence,
-            "operation_code": step.operation_code,
-            "operation_name": step.operation_name,
+            "operation_code": effective_op_code,
+            "operation_name": effective_op_name,
             "planned_quantity": str(task.planned_quantity),
             "status": task.status.value,
             "cache": {
@@ -217,9 +251,9 @@ async def get_section_board(
                 "input_sku": source_sku or "",
                 "output_sku": output_sku or "",
                 "display_sku": display_sku,
-                "operation_code": step.operation_code,
-                "operation_name": row.op_operation_name or step.operation_name,
-                "is_significant": row.op_is_significant if row.op_is_significant is not None else step.is_significant,
+                "operation_code": effective_op_code,
+                "operation_name": effective_op_name,
+                "is_significant": effective_is_significant,
                 "output_kind": sig_output_kind_value,
                 "source_ref": source_ref,
                 "source_payload": source_payload or {},
@@ -227,7 +261,7 @@ async def get_section_board(
             },
         })
 
-    return {"section_id": section_id, "tasks": tasks_data}
+    return {"section_id": section_id, "tasks": tasks_data, "available_operations": available_operations}
 
 
 async def get_sections_summary(db: AsyncSession) -> dict:
@@ -248,6 +282,12 @@ async def get_sections_summary(db: AsyncSession) -> dict:
                     )
                 ).label("in_progress_count"),
                 func.sum(case((WorkTask.status == WorkTaskStatus.waiting_previous, 1), else_=0)).label("waiting_count"),
+            )
+            .outerjoin(SectionPlanLine, WorkTask.section_plan_line_id == SectionPlanLine.id)
+            .outerjoin(PlanPosition, SectionPlanLine.plan_position_id == PlanPosition.id)
+            .where(
+                WorkTask.status.notin_([WorkTaskStatus.cancelled, WorkTaskStatus.completed]),
+                (PlanPosition.deleted_at.is_(None)) | (PlanPosition.id.is_(None)),
             )
             .group_by(WorkTask.section_id)
         )
