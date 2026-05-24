@@ -22,8 +22,17 @@ class StepOut(BaseModel):
     section_name: str | None = None
     operation_code: str | None = None
     operation_name: str
+    is_significant: bool = False
     norm_time_minutes: int | None = None
     is_final: bool
+
+
+# Операции которые влияют на группировку в плане (технологические)
+SIGNIFICANT_OPS = {"DRILL", "SHOT", "ANOD", "PRESS_WINDOW", "PRESS_COMB", "SAW", "PACK", "COAT", "WELD", "BEND", "CUT", "POLISH"}
+
+
+def _is_significant(operation_code: str | None) -> bool:
+    return operation_code in SIGNIFICANT_OPS if operation_code else False
 
 
 class RouteOut(BaseModel):
@@ -254,14 +263,14 @@ DEFAULT_ROUTE_SELECTION_RULES = [
         "name": "Операция пресса: окно",
         "priority": 890,
         "conditions": [("payload", "operation", "contains", "окн")],
-        "actions": [("require_section", "PRESS"), ("exclude_section", "DRILL")],
+        "actions": [("require_section", "PRESS"), ("exclude_section", "DRILL"), ("set_operation", "PRESS", "PRESS_WINDOW")],
     },
     {
         "code": "global_press_comb",
         "name": "Операция пресса: гребенка",
         "priority": 880,
         "conditions": [("payload", "operation", "contains", "греб")],
-        "actions": [("require_section", "PRESS"), ("exclude_section", "DRILL")],
+        "actions": [("require_section", "PRESS"), ("exclude_section", "DRILL"), ("set_operation", "PRESS", "PRESS_COMB")],
     },
     {
         "code": "global_empty_primary",
@@ -362,6 +371,7 @@ async def seed_routes(db: AsyncSession = Depends(get_db)) -> list[RouteOut]:
                 section_id=section.id,
                 operation_code=step_def["operation_code"],
                 operation_name=step_def["operation_name"],
+                is_significant=_is_significant(step_def["operation_code"]),
                 is_final=bool(step_def.get("is_final", False)),
                 requires_acceptance=True,
                 allow_parallel=False,
@@ -379,6 +389,7 @@ async def seed_routes(db: AsyncSession = Depends(get_db)) -> list[RouteOut]:
                     section_name=section.name,
                     operation_code=step.operation_code,
                     operation_name=step.operation_name,
+                    is_significant=step.is_significant,
                     norm_time_minutes=step.norm_time_minutes,
                     is_final=step.is_final,
                 )
@@ -435,13 +446,17 @@ async def _seed_route_selection_rules(db: AsyncSession, sections_by_code: dict[s
             }
             for source, field_path, operator, value in rule_def["conditions"]
         ]
-        actions = [
-            {
-                "action": action,
+        actions = []
+        for action_tuple in rule_def["actions"]:
+            action_type = action_tuple[0]
+            section_code = action_tuple[1]
+            action_dict = {
+                "action": action_type,
                 "section_id": sections_by_code[section_code].id,
             }
-            for action, section_code in rule_def["actions"]
-        ]
+            if action_type == "set_operation" and len(action_tuple) > 2:
+                action_dict["operation_code"] = action_tuple[2]
+            actions.append(action_dict)
         rule = await db.scalar(
             select(RouteSelectionRule).where(RouteSelectionRule.code == rule_def["code"])
         )

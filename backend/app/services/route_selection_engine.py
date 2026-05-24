@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.route import RouteSelectionRule
 from app.models.section import Section
-from app.models.route import ProductionRoute, RouteStep
+from app.models.route import ProductionRoute, RouteStep, SectionOperation
 
 
 @dataclass
@@ -22,6 +22,7 @@ class RouteSelectionResult:
     matched_rule_ids: list[int] = field(default_factory=list)
     required_sections: set[int] = field(default_factory=set)
     excluded_sections: set[int] = field(default_factory=set)
+    selected_operations: dict[int, str] = field(default_factory=dict)  # section_id -> operation_code
     candidate_routes: list[int] = field(default_factory=list)
     diagnostics: dict[str, Any] = field(default_factory=dict)
 
@@ -144,6 +145,7 @@ async def select_route(
     # Step 2-4: Evaluate rules and collect actions
     required_sections: set[int] = set()
     excluded_sections: set[int] = set()
+    selected_operations: dict[int, str] = {}  # section_id -> operation_code
     matched_rule_ids: list[int] = []
 
     for rule in rules:
@@ -154,18 +156,22 @@ async def select_route(
             for action in (rule.actions or []):
                 section_id = action.get("section_id")
                 action_type = action.get("action")
-                if section_id is None:
-                    continue
-                if action_type == "require_section":
+                if action_type == "require_section" and section_id is not None:
                     required_sections.add(section_id)
-                elif action_type == "exclude_section":
+                elif action_type == "exclude_section" and section_id is not None:
                     excluded_sections.add(section_id)
+                elif action_type == "set_operation" and section_id is not None:
+                    op_code = action.get("operation_code")
+                    if op_code:
+                        selected_operations[section_id] = op_code
 
     result.matched_rule_ids = matched_rule_ids
     result.required_sections = required_sections
     result.excluded_sections = excluded_sections
+    result.selected_operations = selected_operations
     result.diagnostics["required_section_ids"] = list(required_sections)
     result.diagnostics["excluded_section_ids"] = list(excluded_sections)
+    result.diagnostics["selected_operations"] = selected_operations
 
     # Step 5: Check for conflicts
     conflict = required_sections & excluded_sections
