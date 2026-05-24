@@ -600,6 +600,23 @@ export async function softDeleteCancelledPosition(planId: number, positionId: nu
   return data;
 }
 
+export type UpdatePositionQuantityInput = {
+  quantity: number | string;
+  quantity_per_hanger?: number | null;
+};
+
+export async function updatePositionQuantity(
+  planId: number,
+  positionId: number,
+  payload: UpdatePositionQuantityInput,
+) {
+  const { data } = await apiClient.patch<PlanPositionOut>(
+    `/production-plans/${planId}/positions/${positionId}/quantity`,
+    payload,
+  );
+  return data;
+}
+
 export type StatusHistoryEntry = {
   id: number;
   from_status: string;

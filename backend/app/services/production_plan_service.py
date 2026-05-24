@@ -28,6 +28,19 @@ from app.models.routing import RouteOperationFamily, RouteOutputKind
 from app.services.plan_validation import validate_plan_position
 
 
+def _enrich_source_payload(
+    source_payload: dict | None,
+    after_data: dict,
+) -> dict:
+    """Copy original_quantity and quantity_per_hanger from after_data into source_payload."""
+    payload = dict(source_payload) if source_payload else {}
+    if "original_quantity" in after_data:
+        payload["original_quantity"] = after_data["original_quantity"]
+    if "quantity_per_hanger" in after_data:
+        payload["quantity_per_hanger"] = after_data["quantity_per_hanger"]
+    return payload
+
+
 ALLOWED_TRANSITIONS = {
     (PlanPositionStatus.approved, PlanPositionStatus.cancelled),
     (PlanPositionStatus.released, PlanPositionStatus.cancelled),
@@ -160,7 +173,7 @@ async def apply_change_set(db: AsyncSession, change_set_id: int, *, skip_invalid
                 source_sku=after["source_sku"],
                 source_name=after.get("source_name"),
                 quantity=qty_decimal,
-                source_payload=after.get("source_payload") or {},
+                source_payload=_enrich_source_payload(after.get("source_payload"), after),
                 period_start=_date_from_payload(after, "period_start"),
                 period_end=_date_from_payload(after, "period_end"),
                 source_row_number=(after.get("source_row_numbers") or [item.source_row_number])[0],

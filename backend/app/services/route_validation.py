@@ -74,34 +74,3 @@ async def _section_codes(db: AsyncSession, section_ids: list[int]) -> list[str]:
     return [by_id.get(section_id, str(section_id)) for section_id in section_ids]
 
 
-def _route_step_token(step: RouteStep, section_kind: str) -> str:
-    op_code = (step.operation_code or "").strip().upper() if step.operation_code else ""
-    if op_code:
-        if op_code in {"DRILL", "SHOT", "ANOD", "SAW", "PACK", "PACK_GLUE", "PACK_DIFFUSER"}:
-            return op_code
-        if op_code in {"PRESS", "PRESS_WINDOW", "PRESS_COMB"}:
-            return "PRESS"
-        if op_code == "ISSUE_RAW":
-            return "ISSUE"
-        if op_code == "MOVE_TO_WIP":
-            return "INTER"
-        if op_code == "ACCEPT_FINISHED":
-            return "FINAL"
-
-    if section_kind == "raw_stock":
-        return "ISSUE"
-    if section_kind == "wip_stock":
-        return "INTER"
-    if section_kind == "finished_stock":
-        return "FINAL"
-    if step.operation_name in ("Дробеструй", "SHOT"):
-        return "SHOT"
-    if step.operation_name in ("Анодирование", "Анод", "ANOD"):
-        return "ANOD"
-    if step.operation_name in ("Пила", "SAW"):
-        return "SAW"
-    if step.operation_name in ("Упаковка", "PACK"):
-        return "PACK"
-    if step.operation_name in ("Сверло", "DRILL"):
-        return "DRILL"
-    return step.operation_name.upper()

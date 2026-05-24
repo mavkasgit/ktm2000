@@ -9,6 +9,7 @@ interface RowDetailsSidePanelProps {
   loading?: boolean
   error?: string | null
   showPlanLink?: boolean
+  onSaved?: () => void
 }
 
 export function RowDetailsSidePanel({
@@ -18,6 +19,7 @@ export function RowDetailsSidePanel({
   loading = false,
   error = null,
   showPlanLink,
+  onSaved,
 }: RowDetailsSidePanelProps) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -30,7 +32,7 @@ export function RowDetailsSidePanel({
             <p className="text-sm text-red-600">Ошибка: {error}</p>
           )}
           {!loading && !error && data && (
-            <RowDetailsContent data={data} showPlanLink={showPlanLink} />
+            <RowDetailsContent data={data} showPlanLink={showPlanLink} onSaved={onSaved} />
           )}
         </div>
       </DialogContent>

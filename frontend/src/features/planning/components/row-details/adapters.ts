@@ -130,6 +130,7 @@ function buildRawExcelRows(
 // ─── Adapters ────────────────────────────────────────────────────────────────
 
 export function adaptPlanPositionOut(pos: PlanPositionOut): RowDetailsData {
+  const payload = pos.payload || {}
   return {
     id: pos.id,
     sourceRowNumber: pos.source_row_number,
@@ -150,6 +151,9 @@ export function adaptPlanPositionOut(pos: PlanPositionOut): RowDetailsData {
     productionPlanId: pos.production_plan_id,
     routeCheckIssues: [],
     rawExcelRows: buildRawExcelRows(pos.raw_excel_row, pos.payload),
+    quantityPerHanger: (payload.quantity_per_hanger as number | undefined) ?? null,
+    productId: pos.product_id,
+    originalQuantity: (payload.original_quantity as string | undefined) ?? null,
   }
 }
 

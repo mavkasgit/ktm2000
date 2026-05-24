@@ -32,6 +32,19 @@ export function PositionRow({ pos, onApprove, onDelete, selected, routes, onAssi
   const hasWarnings = pos.warnings && pos.warnings.length > 0
   const qty = Number(pos.quantity || 0)
   const qtyStr = Number.isInteger(qty) ? String(qty) : qty.toFixed(3).replace(/\.?0+$/, '')
+  const originalQtyRaw = (pos.payload?.original_quantity as string | number | null | undefined) ?? null
+  const originalQtyNum = originalQtyRaw != null ? Number(originalQtyRaw) : null
+  const originalQtyDisplay = originalQtyNum != null && Number.isFinite(originalQtyNum)
+    ? (Number.isInteger(originalQtyNum) ? String(originalQtyNum) : String(originalQtyNum))
+    : null
+  const qtyAdjusted = originalQtyDisplay != null && originalQtyDisplay !== qtyStr
+  const quantityPerHanger = (pos.payload?.quantity_per_hanger as number | null | undefined) ?? null
+  const hangerCount = quantityPerHanger && quantityPerHanger > 0
+    ? qty / quantityPerHanger
+    : null
+  const hangerDisplay = hangerCount != null
+    ? (Number.isInteger(hangerCount) ? String(hangerCount) : hangerCount.toFixed(1))
+    : null
   const translatedErrors = hasErrors ? pos.errors.map((e) => translateLabel(e, errorLabels)) : []
   const translatedWarnings = hasWarnings ? pos.warnings.map((w) => translateLabel(w, warningLabels)) : []
   const rowNum = (() => {
@@ -169,7 +182,21 @@ export function PositionRow({ pos, onApprove, onDelete, selected, routes, onAssi
       </td>
       <td className="p-2 text-sm font-medium">{rowNum}</td>
       <td className="p-2 text-sm">{pos.source_sku}</td>
-      <td className="p-2 text-sm">{qtyStr}</td>
+      <td className="p-2 text-sm whitespace-nowrap">
+        {qtyAdjusted ? (
+          <span>
+            <span className="text-muted-foreground">{originalQtyDisplay}</span>
+            <span className="mx-1 text-muted-foreground">→</span>
+            <span className="font-medium text-amber-600">
+              {qtyStr}{hangerDisplay ? ` (${hangerDisplay}П)` : ''}
+            </span>
+          </span>
+        ) : (
+          <span>
+            {qtyStr}{hangerDisplay ? ` (${hangerDisplay}П)` : ''}
+          </span>
+        )}
+      </td>
       <td className="p-2 text-sm">{pos.source_name ?? "—"}</td>
       <td className="p-2 text-sm min-w-[200px]">
         {routes && onAssignRoute ? (

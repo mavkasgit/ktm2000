@@ -1,9 +1,12 @@
-import { Badge } from "@/shared/ui"
+import { Badge, Input, Button } from "@/shared/ui"
 import { renderIcon } from "@/shared/ui/EntityDialog"
 import { type RowDetailsData } from "./types"
 import { useMemo, useState } from "react"
-import { useQuery } from "@tanstack/react-query"
+import { useQuery, useQueryClient, useMutation } from "@tanstack/react-query"
 import { listSections } from "@/shared/api/sections"
+import { updatePositionQuantity } from "@/shared/api/productionPlans"
+import { toast } from "@/shared/ui"
+import { getErrorMessage } from "@/shared/api/client"
 
 const statusLabels: Record<string, string> = {
   draft: "Черновик",
@@ -78,13 +81,68 @@ function jumpToPlanPosition(positionId: number): void {
 interface RowDetailsContentProps {
   data: RowDetailsData
   showPlanLink?: boolean
+  onSaved?: () => void
 }
 
 export function RowDetailsContent({
   data,
   showPlanLink = true,
+  onSaved,
 }: RowDetailsContentProps) {
   const [expandedStages, setExpandedStages] = useState<Record<number, boolean>>({})
+  const queryClient = useQueryClient()
+
+  // Editing state
+  const [editQuantity, setEditQuantity] = useState(fmtQty(data.quantity))
+  const [editQuantityPerHanger, setEditQuantityPerHanger] = useState(
+    data.quantityPerHanger ? String(data.quantityPerHanger) : ""
+  )
+
+  const updateMutation = useMutation({
+    mutationFn: (payload: { quantity: number | string; quantity_per_hanger: number | null }) => {
+      if (!data.productionPlanId || typeof data.id !== "number") {
+        throw new Error("Нет данных для сохранения")
+      }
+      return updatePositionQuantity(data.productionPlanId, data.id, {
+        quantity: payload.quantity,
+        quantity_per_hanger: payload.quantity_per_hanger,
+      })
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["all-plan-positions"] })
+      toast({ title: "Количество обновлено", variant: "success" })
+      onSaved?.()
+    },
+    onError: (e) => {
+      toast({ title: "Ошибка", description: getErrorMessage(e), variant: "destructive" })
+    },
+  })
+
+  // Вычисляемое кол-во подвесов
+  const hangerCount = useMemo(() => {
+    const qty = Number(editQuantity) || 0
+    const perHanger = Number(editQuantityPerHanger) || 0
+    if (perHanger > 0) {
+      const val = qty / perHanger
+      return Number.isInteger(val) ? String(val) : val.toFixed(1)
+    }
+    return null
+  }, [editQuantity, editQuantityPerHanger])
+
+  const handleSave = () => {
+    const qty = Number(editQuantity)
+    if (!qty || qty <= 0) {
+      toast({ title: "Ошибка", description: "Количество должно быть > 0", variant: "destructive" })
+      return
+    }
+    updateMutation.mutate({
+      quantity: qty,
+      quantity_per_hanger: editQuantityPerHanger ? Number(editQuantityPerHanger) : null,
+    })
+  }
+
+  const canEdit = typeof data.id === "number" && data.productionPlanId > 0 &&
+    (data.status === "draft" || data.status === "invalid" || data.status === "valid")
   const hasErrors = data.errors.length > 0
   const hasWarnings = data.warnings.length > 0
   const hasRouteCheckIssues = (data.routeCheckIssues?.length ?? 0) > 0
@@ -178,10 +236,18 @@ export function RowDetailsContent({
               )}
             </div>
             <div className="md:col-span-2 min-w-0">
-              <span className="text-muted-foreground">SKU </span>
+              <span className="text-muted-foreground">Артикул </span>
               <span className="font-mono font-medium">{data.sku}</span>
               <span className="text-muted-foreground"> · Кол-во </span>
-              <span className="font-medium">{fmtQty(data.quantity)} шт.</span>
+              {data.originalQuantity && fmtQty(data.originalQuantity) !== fmtQty(data.quantity) ? (
+                <span>
+                  <span className="text-muted-foreground">{fmtQty(data.originalQuantity)}</span>
+                  <span className="mx-1 text-muted-foreground">→</span>
+                  <span className="font-medium text-amber-600">{fmtQty(data.quantity)} шт.</span>
+                </span>
+              ) : (
+                <span className="font-medium">{fmtQty(data.quantity)} шт.</span>
+              )}
               <span className="text-muted-foreground"> · Наименование </span>
               <span className="font-medium">{data.name || "—"}</span>
             </div>
@@ -202,6 +268,49 @@ export function RowDetailsContent({
 
         </div>
       </div>
+
+      {canEdit && (
+        <div className="rounded-lg border p-3">
+          <div className="text-sm font-medium">Редактирование количества <span className="text-sm font-medium">{data.sku}</span></div>
+          <div className="space-y-3">
+            <div className="flex items-end gap-3 flex-wrap">
+              <div>
+                <label className="text-xs text-muted-foreground">Количество</label>
+                <Input
+                  type="number"
+                  value={editQuantity}
+                  onChange={(e) => setEditQuantity(e.target.value)}
+                  min="1"
+                  step="1"
+                  className="mt-1 w-[200px]"
+                />
+              </div>
+              <div>
+                <label className="text-xs text-muted-foreground">
+                  Кол-во на подвес{data.quantityPerHanger ? ` (из справочника: ${data.quantityPerHanger})` : ""}
+                </label>
+                <Input
+                  type="number"
+                  value={editQuantityPerHanger}
+                  onChange={(e) => setEditQuantityPerHanger(e.target.value)}
+                  min="1"
+                  step="1"
+                  placeholder={data.quantityPerHanger ? String(data.quantityPerHanger) : "—"}
+                  className="mt-1 w-[200px]"
+                />
+              </div>
+              {hangerCount !== null && (
+                <div className="text-sm text-muted-foreground whitespace-nowrap pb-2">
+                  = <strong>{hangerCount}П</strong>
+                </div>
+              )}
+            </div>
+            <Button onClick={handleSave} disabled={updateMutation.isPending} size="sm">
+              {updateMutation.isPending ? "Сохранение..." : "Сохранить"}
+            </Button>
+          </div>
+        </div>
+      )}
 
       {hasIssues && (
         <div className="rounded-lg border border-amber-200 bg-amber-50 p-3">

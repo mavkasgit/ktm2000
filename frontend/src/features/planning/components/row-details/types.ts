@@ -23,4 +23,7 @@ export type RowDetailsData = {
   currentStageSequence?: number | null
   currentStageOperation?: string | null
   currentStageTaskStatus?: string | null
+  quantityPerHanger?: number | null
+  productId?: number | null
+  originalQuantity?: string | number | null
 }

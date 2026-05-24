@@ -132,6 +132,11 @@ class StatusActionIn(BaseModel):
     reason: str | None = None
 
 
+class UpdatePositionQuantityIn(BaseModel):
+    quantity: Decimal
+    quantity_per_hanger: int | None = None
+
+
 class StatusHistoryOut(BaseModel):
     id: int
     from_status: str
@@ -1161,3 +1166,79 @@ async def reset_all_plans(db: AsyncSession = Depends(get_db)):
         CASCADE
     """))
     await db.commit()
+
+
+@router.patch("/{production_plan_id}/positions/{position_id}/quantity")
+async def update_position_quantity(
+    production_plan_id: int,
+    position_id: int,
+    payload: UpdatePositionQuantityIn,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> PlanPositionOut:
+    """Update position quantity and optionally quantity_per_hanger in source_payload."""
+    from app.services.plan_validation import validate_plan_position
+    from app.models.production_plan import PlanPositionValidationStatus
+
+    position = await db.get(PlanPosition, position_id)
+    if position is None or position.production_plan_id != production_plan_id:
+        raise HTTPException(status_code=404, detail="Position not found")
+
+    if position.status not in (PlanPositionStatus.draft, PlanPositionStatus.invalid, PlanPositionStatus.valid):
+        raise HTTPException(status_code=400, detail="Можно менять только черновики")
+
+    if position.deleted_at is not None:
+        raise HTTPException(status_code=400, detail="Позиция удалена")
+
+    position.quantity = payload.quantity
+
+    source_payload = position.source_payload or {}
+
+    # Store original_quantity on first edit
+    if "original_quantity" not in source_payload:
+        source_payload["original_quantity"] = str(position.quantity)
+
+    if payload.quantity_per_hanger is not None:
+        source_payload["quantity_per_hanger"] = payload.quantity_per_hanger
+    position.source_payload = source_payload
+
+    position.validation_errors = await validate_plan_position(db, position)
+    position.validation_status = (
+        PlanPositionValidationStatus.valid
+        if not position.validation_errors
+        else PlanPositionValidationStatus.invalid
+    )
+
+    await db.commit()
+    await db.refresh(position)
+
+    route_info = await resolve_position_route(db, position)
+
+    return PlanPositionOut(
+        id=position.id,
+        production_plan_id=position.production_plan_id,
+        source_sku=position.source_sku,
+        source_name=position.source_name,
+        quantity=str(position.quantity),
+        status=position.status.value,
+        validation_status=position.validation_status.value,
+        errors=[format_validation_error(e) for e in (position.validation_errors or [])],
+        warnings=[],
+        source_row_number=position.source_row_number,
+        source_row_numbers=_source_row_numbers_from_position(position),
+        source_ref=position.source_ref,
+        product_id=position.product_id,
+        route_id=route_info.route_id,
+        route_name=route_info.route_name,
+        route_source=route_info.source,
+        route_origin=route_info.route_origin,
+        route_match_quality=route_info.route_match_quality,
+        route_match_reason=route_info.route_match_reason,
+        route_assigned_at=route_info.route_assigned_at.isoformat() if route_info.route_assigned_at else None,
+        route_manual_confirmed_at=(
+            route_info.route_manual_confirmed_at.isoformat() if route_info.route_manual_confirmed_at else None
+        ),
+        route_error=route_info.error,
+        raw_excel_row=(position.source_payload or {}).get("raw_excel_row"),
+        payload=position.source_payload,
+    )

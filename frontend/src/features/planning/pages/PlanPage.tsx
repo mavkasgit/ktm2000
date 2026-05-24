@@ -872,6 +872,9 @@ export function PlanPage() {
         open={detailOpen}
         onOpenChange={setDetailOpen}
         data={detailData}
+        onSaved={() => {
+          queryClient.invalidateQueries({ queryKey: ["all-plan-positions"] })
+        }}
       />
 
       {bulkSummary && bulkSummary.failed > 0 && (
