@@ -1,6 +1,7 @@
 import { HardDrive, Database, Trash2 } from "lucide-react"
 import { useNavigate } from "react-router-dom"
 import { useState } from "react"
+import { useQueryClient } from "@tanstack/react-query"
 import { Button } from "@/shared/ui/Button"
 import { AlertDialog, AlertDialogContent, AlertDialogHeader, AlertDialogTitle, AlertDialogDescription, AlertDialogFooter, AlertDialogAction, AlertDialogCancel } from "@/shared/ui"
 import { toast } from "@/shared/ui"
@@ -8,6 +9,7 @@ import { resetAllPlans } from "@/shared/api/productionPlans"
 
 export function SettingsPage() {
   const navigate = useNavigate()
+  const queryClient = useQueryClient()
   const [confirmOpen, setConfirmOpen] = useState(false)
   const [resetting, setResetting] = useState(false)
 
@@ -16,6 +18,7 @@ export function SettingsPage() {
     setResetting(true)
     try {
       await resetAllPlans()
+      queryClient.invalidateQueries()
       toast({ title: "Планы очищены", variant: "success" })
       navigate("/planning")
     } catch (e) {

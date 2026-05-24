@@ -150,7 +150,7 @@ export function SectionSwitcherTiles({
             </svg>
           </div>
         </PopoverTrigger>
-        <PopoverContent className="w-[min(50vw,700px)]" align="start">
+        <PopoverContent side="bottom" avoidCollisions={false} sideOffset={8} className="w-[min(50vw,700px)]" align="start">
           <div className="space-y-3">
             <div className="relative">
               <Search className="pointer-events-none absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />

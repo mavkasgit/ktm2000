@@ -160,6 +160,8 @@ export function ExecutionPage() {
         toast({ title: "Запуск завершён", description: `${successCount} запущено, ${alreadyCount} уже было запущено`, variant: "success" });
       }
       queryClient.invalidateQueries({ queryKey: ["production-planning-rows"] });
+      queryClient.invalidateQueries({ queryKey: ["production-planning-row-detail"] });
+      queryClient.invalidateQueries({ queryKey: ["plans"] });
       bulkSelection.clear();
       setSelectionOrder([]);
     },
@@ -210,6 +212,8 @@ export function ExecutionPage() {
     onSuccess: () => {
       toast({ title: "Позиция отменена", variant: "success" });
       queryClient.invalidateQueries({ queryKey: ["production-planning-rows"] });
+      queryClient.invalidateQueries({ queryKey: ["production-planning-row-detail"] });
+      queryClient.invalidateQueries({ queryKey: ["plans"] });
     },
     onError: (err) => toast({ title: "Ошибка отмены", description: getErrorMessage(err), variant: "destructive" }),
   });
@@ -225,6 +229,8 @@ export function ExecutionPage() {
     onSuccess: () => {
       toast({ title: "Позиция восстановлена", variant: "success" });
       queryClient.invalidateQueries({ queryKey: ["production-planning-rows"] });
+      queryClient.invalidateQueries({ queryKey: ["production-planning-row-detail"] });
+      queryClient.invalidateQueries({ queryKey: ["plans"] });
     },
     onError: (err) => toast({ title: "Ошибка восстановления", description: getErrorMessage(err), variant: "destructive" }),
   });
@@ -241,6 +247,8 @@ export function ExecutionPage() {
     onSuccess: () => {
       toast({ title: "Позиция удалена из списка", variant: "success" });
       queryClient.invalidateQueries({ queryKey: ["production-planning-rows"] });
+      queryClient.invalidateQueries({ queryKey: ["production-planning-row-detail"] });
+      queryClient.invalidateQueries({ queryKey: ["plans"] });
     },
     onError: (err) => toast({ title: "Ошибка удаления", description: getErrorMessage(err), variant: "destructive" }),
   });
@@ -346,6 +354,8 @@ export function ExecutionPage() {
     if (summary.failed > 0) setBulkResultsOpen(true);
     setBulkProgress(null);
     queryClient.invalidateQueries({ queryKey: ["production-planning-rows"] });
+    queryClient.invalidateQueries({ queryKey: ["production-planning-row-detail"] });
+    queryClient.invalidateQueries({ queryKey: ["plans"] });
     toast({
       title: summary.failed > 0 ? "Частичный успех" : "Массовый сквозной проход",
       description: summary.failed > 0
@@ -452,6 +462,8 @@ export function ExecutionPage() {
     setBulkSoftDeleting(false);
     setBulkProgress(null);
     queryClient.invalidateQueries({ queryKey: ["production-planning-rows"] });
+    queryClient.invalidateQueries({ queryKey: ["production-planning-row-detail"] });
+    queryClient.invalidateQueries({ queryKey: ["plans"] });
     toast({
       title: summary.failed > 0 ? "Частичный успех" : "Массовое удаление",
       description: summary.failed > 0
@@ -724,6 +736,8 @@ export function ExecutionPage() {
     setBulkSummary(summary);
     setBulkResultsOpen(true);
     queryClient.invalidateQueries({ queryKey: ["production-planning-rows"] });
+    queryClient.invalidateQueries({ queryKey: ["production-planning-row-detail"] });
+    queryClient.invalidateQueries({ queryKey: ["plans"] });
     toast({
       title: summary.failed > 0 ? "Частичный успех" : "Массовое действие выполнено",
       description: `${summary.success} успешно, ${summary.skipped} пропущено, ${summary.failed} ошибок`,
@@ -758,6 +772,8 @@ export function ExecutionPage() {
     setBulkSummary(summary);
     setBulkResultsOpen(true);
     queryClient.invalidateQueries({ queryKey: ["production-planning-rows"] });
+    queryClient.invalidateQueries({ queryKey: ["production-planning-row-detail"] });
+    queryClient.invalidateQueries({ queryKey: ["plans"] });
     toast({
       title: summary.failed > 0 ? "Частичный успех" : "Массовое действие выполнено",
       description: `${summary.success} успешно, ${summary.skipped} пропущено, ${summary.failed} ошибок`,

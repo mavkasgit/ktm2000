@@ -980,7 +980,7 @@ export function SectionsTasksPage() {
                     )}
                   </Button>
                 </PopoverTrigger>
-                <PopoverContent align="end" className="w-[600px] max-h-[80vh] overflow-auto p-0">
+                <PopoverContent side="right" avoidCollisions={false} align="start" className="w-[600px] max-h-[80vh] overflow-auto p-0">
                   <IncomingTransfersPanel
                     transfers={incomingTransfers}
                     isLoading={incomingLoading}
