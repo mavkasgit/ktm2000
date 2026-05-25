@@ -89,6 +89,7 @@ async def resolve_position_route(
     assigned_at = position.route_assigned_at
     manual_confirmed_at = position.route_manual_confirmed_at
 
+    # If position has a stored route_id, use it directly without recalculation
     if route_id is not None:
         route = await db.get(ProductionRoute, route_id)
         source = _compat_source_from_origin(origin, route_id)
@@ -104,7 +105,21 @@ async def resolve_position_route(
                 route_manual_confirmed_at=manual_confirmed_at,
                 error="manual_route_not_found" if source == "manual" else "route_not_found",
             )
+        
+        # Return stored route with its metadata
+        return ResolvedRouteInfo(
+            route_id=route.id,
+            route_name=route.name,
+            source=source,
+            route_origin=origin,
+            route_match_quality=quality,
+            route_match_reason=reason,
+            route_assigned_at=assigned_at,
+            route_manual_confirmed_at=manual_confirmed_at,
+            error=None,
+        )
 
+    # No stored route_id - try to resolve from source_payload
     import_batch = await db.get(ImportBatch, position.import_batch_id) if position.import_batch_id is not None else None
     rule_profile_id = import_batch.rule_profile_id if import_batch is not None else None
 

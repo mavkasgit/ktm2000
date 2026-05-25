@@ -234,14 +234,27 @@ def _find_header_row(rows: list[list[Any]], mapping: dict[str, str]) -> int:
     required_keys = ["sku", "product_name"]
     quantity_key = "quantity" if "quantity" in mapping else "output_quantity"
     required_keys.append(quantity_key)
-    required_headers = {mapping[key] for key in required_keys if key in mapping}
+    required_headers = {_normalize_header(mapping[key]) for key in required_keys if key in mapping}
     if len(required_headers) < len(required_keys):
         raise ValueError("Could not determine required headers from mapping")
     for idx, row in enumerate(rows[:30]):
-        values = {_cell_text(cell) for cell in row}
+        values = {_normalize_header(_cell_text(cell)) for cell in row}
         if required_headers.issubset(values):
             return idx
-    raise ValueError("Required header row not found")
+
+    # Build diagnostic info for better error message
+    found_headers: set[str] = set()
+    for idx, row in enumerate(rows[:30]):
+        values = {_normalize_header(_cell_text(cell)) for cell in row}
+        if values & required_headers:  # If any required headers found
+            found_headers.update(values & required_headers)
+
+    missing = required_headers - found_headers
+    raise ValueError(
+        f"Required header row not found. "
+        f"Missing headers: {', '.join(sorted(missing))}. "
+        f"Searched first {min(30, len(rows))} rows."
+    )
 
 
 def _build_column_map(headers: list[str], mapping: dict[str, str]) -> dict[str, int]:

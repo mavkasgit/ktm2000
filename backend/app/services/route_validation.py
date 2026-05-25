@@ -37,9 +37,21 @@ async def validate_route_match(db: AsyncSession, position: PlanPosition) -> list
 
     import_batch = await db.get(ImportBatch, position.import_batch_id) if position.import_batch_id is not None else None
     rule_profile_id = import_batch.rule_profile_id if import_batch is not None else None
+    
+    # Get template column mapping from import batch for proper Excel column resolution
+    template_column_mapping = None
+    if import_batch and import_batch.template_id:
+        from app.models.import_template import ImportTemplate
+        template = await db.get(ImportTemplate, import_batch.template_id)
+        if template:
+            template_column_mapping = template.column_mapping
 
     product = await db.get(Product, position.product_id)
-    selection = await select_route_for_payload(db, position.source_payload, product, profile_id=rule_profile_id)
+    selection = await select_route_for_payload(
+        db, position.source_payload, product, 
+        profile_id=rule_profile_id,
+        template_column_mapping=template_column_mapping
+    )
     if selection.error == "route_rule_conflict":
         return ["route_rule_conflict"]
 

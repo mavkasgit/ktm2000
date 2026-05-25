@@ -1,7 +1,7 @@
 import { Badge, Input, Button } from "@/shared/ui"
 import { renderIcon } from "@/shared/ui/EntityDialog"
 import { type RowDetailsData } from "./types"
-import { useMemo, useState } from "react"
+import { useEffect, useMemo, useState } from "react"
 import { useQuery, useQueryClient, useMutation } from "@tanstack/react-query"
 import { listSections } from "@/shared/api/sections"
 import { updatePositionQuantity } from "@/shared/api/productionPlans"
@@ -92,11 +92,19 @@ export function RowDetailsContent({
   const [expandedStages, setExpandedStages] = useState<Record<number, boolean>>({})
   const queryClient = useQueryClient()
 
-  // Editing state
+  // Local state for quantity to show updated value immediately
+  const [currentQuantity, setCurrentQuantity] = useState(data.quantity)
   const [editQuantity, setEditQuantity] = useState(fmtQty(data.quantity))
   const [editQuantityPerHanger, setEditQuantityPerHanger] = useState(
     data.quantityPerHanger ? String(data.quantityPerHanger) : ""
   )
+
+  // Sync local state when data changes (e.g., opening different position)
+  useEffect(() => {
+    setCurrentQuantity(data.quantity)
+    setEditQuantity(fmtQty(data.quantity))
+    setEditQuantityPerHanger(data.quantityPerHanger ? String(data.quantityPerHanger) : "")
+  }, [data.id, data.quantity, data.quantityPerHanger])
 
   const updateMutation = useMutation({
     mutationFn: (payload: { quantity: number | string; quantity_per_hanger: number | null }) => {
@@ -108,8 +116,15 @@ export function RowDetailsContent({
         quantity_per_hanger: payload.quantity_per_hanger,
       })
     },
-    onSuccess: () => {
+    onSuccess: (updatedPosition) => {
+      // Update local state immediately
+      const newQty = Number(updatedPosition.quantity)
+      if (!Number.isNaN(newQty)) {
+        setCurrentQuantity(newQty)
+      }
+      // Refetch position details to update the sidebar
       queryClient.invalidateQueries({ queryKey: ["all-plan-positions"] })
+      queryClient.invalidateQueries({ queryKey: ["plan-position-detail", data.id] })
       toast({ title: "Количество обновлено", variant: "success" })
       onSaved?.()
     },
@@ -139,6 +154,13 @@ export function RowDetailsContent({
       quantity: qty,
       quantity_per_hanger: editQuantityPerHanger ? Number(editQuantityPerHanger) : null,
     })
+  }
+
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === "Enter") {
+      e.preventDefault()
+      handleSave()
+    }
   }
 
   const canEdit = typeof data.id === "number" && data.productionPlanId > 0 &&
@@ -239,14 +261,14 @@ export function RowDetailsContent({
               <span className="text-muted-foreground">Артикул </span>
               <span className="font-mono font-medium">{data.sku}</span>
               <span className="text-muted-foreground"> · Кол-во </span>
-              {data.originalQuantity && fmtQty(data.originalQuantity) !== fmtQty(data.quantity) ? (
+              {data.originalQuantity && fmtQty(data.originalQuantity) !== fmtQty(currentQuantity) ? (
                 <span>
                   <span className="text-muted-foreground">{fmtQty(data.originalQuantity)}</span>
                   <span className="mx-1 text-muted-foreground">→</span>
-                  <span className="font-medium text-amber-600">{fmtQty(data.quantity)} шт.</span>
+                  <span className="font-medium text-amber-600">{fmtQty(currentQuantity)} шт.</span>
                 </span>
               ) : (
-                <span className="font-medium">{fmtQty(data.quantity)} шт.</span>
+                <span className="font-medium">{fmtQty(currentQuantity)} шт.</span>
               )}
               <span className="text-muted-foreground"> · Наименование </span>
               <span className="font-medium">{data.name || "—"}</span>
@@ -280,6 +302,7 @@ export function RowDetailsContent({
                   type="number"
                   value={editQuantity}
                   onChange={(e) => setEditQuantity(e.target.value)}
+                  onKeyDown={handleKeyDown}
                   min="1"
                   step="1"
                   className="mt-1 w-[200px]"
@@ -293,6 +316,7 @@ export function RowDetailsContent({
                   type="number"
                   value={editQuantityPerHanger}
                   onChange={(e) => setEditQuantityPerHanger(e.target.value)}
+                  onKeyDown={handleKeyDown}
                   min="1"
                   step="1"
                   placeholder={data.quantityPerHanger ? String(data.quantityPerHanger) : "—"}
