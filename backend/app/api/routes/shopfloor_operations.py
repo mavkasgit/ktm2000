@@ -20,6 +20,8 @@ class CreateOperationSchema(BaseModel):
     operation_code: str
     operation_name: str
     is_significant: bool = False
+    icon: str | None = None
+    icon_color: str | None = None
 
 
 @router.get("/{section_id}/operations")
@@ -47,6 +49,8 @@ async def get_section_operations(
             "operation_code": r.operation_code,
             "operation_name": r.operation_name,
             "is_significant": r.is_significant,
+            "icon": r.icon,
+            "icon_color": r.icon_color,
         }
         for r in rows
     ]
@@ -81,6 +85,8 @@ async def create_section_operation(
         operation_code=payload.operation_code,
         operation_name=payload.operation_name,
         is_significant=payload.is_significant,
+        icon=payload.icon,
+        icon_color=payload.icon_color,
     )
     db.add(op)
     await db.commit()
@@ -91,6 +97,8 @@ async def create_section_operation(
         "operation_code": op.operation_code,
         "operation_name": op.operation_name,
         "is_significant": op.is_significant,
+        "icon": op.icon,
+        "icon_color": op.icon_color,
     }
 
 
@@ -126,6 +134,10 @@ async def update_section_operation(
 
     if "is_significant" in payload:
         op.is_significant = bool(payload["is_significant"])
+    if "icon" in payload:
+        op.icon = payload["icon"]
+    if "icon_color" in payload:
+        op.icon_color = payload["icon_color"]
 
     await db.commit()
     await db.refresh(op)
@@ -135,4 +147,6 @@ async def update_section_operation(
         "operation_code": op.operation_code,
         "operation_name": op.operation_name,
         "is_significant": op.is_significant,
+        "icon": op.icon,
+        "icon_color": op.icon_color,
     }

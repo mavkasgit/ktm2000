@@ -142,6 +142,8 @@ async def get_section_board(
             "operation_code": op.operation_code,
             "operation_name": op.operation_name,
             "is_significant": op.is_significant,
+            "icon": op.icon,
+            "icon_color": op.icon_color,
         }
         for op in section_ops
     ]
@@ -150,6 +152,15 @@ async def get_section_board(
     op_name_by_section: dict[int, dict[str, str]] = {}
     for op in section_ops:
         op_name_by_section.setdefault(op.section_id, {})[op.operation_code] = op.operation_name
+
+    # Build lookup: (section_id, operation_code) -> {icon, icon_color}
+    icon_by_section_op: dict[tuple[int, str], dict] = {}
+    for op in section_ops:
+        if op.icon or op.icon_color:
+            icon_by_section_op[(op.section_id, op.operation_code)] = {
+                "icon": op.icon,
+                "icon_color": op.icon_color,
+            }
 
     tasks_data = []
     for task, line, step, product_sku, source_ref, source_payload, source_fingerprint, source_sku, output_sku, output_kind in rows:
@@ -174,6 +185,29 @@ async def get_section_board(
             effective_is_significant = step.is_significant
         # Prev step — dict lookup
         route_steps = steps_by_route.get(line.route_id, [])
+        # Build route history: only significant operations up to (but NOT including) current step
+        route_history = []
+        for s in route_steps:
+            if s.sequence < step.sequence and s.is_significant:
+                op_icon = icon_by_section_op.get((s.section_id, s.operation_code))
+                route_history.append({
+                    "operation_code": s.operation_code or "",
+                    "operation_name": s.operation_name,
+                    "is_significant": s.is_significant,
+                    "icon": op_icon["icon"] if op_icon else None,
+                    "icon_color": op_icon["icon_color"] if op_icon else None,
+                })
+        # route_history_after = route_history + current step operation (what it will look like after completion)
+        current_op_key = (task.section_id, effective_op_code)
+        current_op_icon = icon_by_section_op.get(current_op_key)
+        current_op_obj = {
+            "operation_code": effective_op_code or "",
+            "operation_name": effective_op_name,
+            "is_significant": effective_is_significant,
+            "icon": current_op_icon["icon"] if current_op_icon else None,
+            "icon_color": current_op_icon["icon_color"] if current_op_icon else None,
+        }
+        route_history_after = route_history + [current_op_obj] if current_op_obj["operation_code"] else route_history
         prev_step = next((s for s in route_steps if s.sequence == step.sequence - 1), None)
 
         prev_stage_info = None
@@ -249,6 +283,8 @@ async def get_section_board(
             "input_sku": source_sku or "",
             "output_sku": output_sku or "",
             "display_sku": display_sku,
+            "route_history": route_history,
+            "route_history_after": route_history_after,
             "signature": {
                 "input_sku": source_sku or "",
                 "output_sku": output_sku or "",
@@ -260,6 +296,8 @@ async def get_section_board(
                 "source_ref": source_ref,
                 "source_payload": source_payload or {},
                 "source_fingerprint": fingerprint,
+                "route_history": route_history,
+                "route_history_after": route_history_after,
             },
         })
 
