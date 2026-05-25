@@ -1,8 +1,8 @@
-"""seed_system_user
+"""seed data: system user, normalization rules defaults
 
-Revision ID: 012_seed_system_user
-Revises: 011_route_selection_rules
-Create Date: 2026-05-15 02:46:00.000000
+Revision ID: 009_seed_data
+Revises: 008_final_polish
+Create Date: 2026-05-25 12:07:00.000000
 """
 
 from typing import Sequence, Union
@@ -10,16 +10,14 @@ from typing import Sequence, Union
 from alembic import op
 
 
-# revision identifiers, used by Alembic.
-revision: str = '012_seed_system_user'
-down_revision: Union[str, None] = '011_route_selection_rules'
+revision: str = '009_seed_data'
+down_revision: Union[str, None] = '008_final_polish'
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
     # System user for dev-mode operations and background tasks.
-    # This user is referenced by position_status_history.changed_by and other audit fields.
     # OVERRIDING SYSTEM VALUE is needed because users.id is GENERATED ALWAYS.
     op.execute(
         """
