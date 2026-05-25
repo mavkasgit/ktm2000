@@ -1,7 +1,7 @@
 """add_products_aliases_and_skip_shot_blast
 
 Revision ID: 001_products_aliases
-Revises: 89fd6a7d5f21
+Revises: 231b7895bf40
 Create Date: 2026-05-04 00:00:00.000000
 """
 
@@ -13,7 +13,7 @@ import sqlalchemy as sa
 
 # revision identifiers, used by Alembic.
 revision: str = '001_products_aliases'
-down_revision: Union[str, None] = '89fd6a7d5f21'
+down_revision: Union[str, None] = '231b7895bf40'
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

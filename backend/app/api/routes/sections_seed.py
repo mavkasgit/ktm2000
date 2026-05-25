@@ -58,40 +58,64 @@ DEFAULTS = [
 ]
 
 # Операции по умолчанию для каждого участка
+# Формат: (code, name, is_significant, icon, icon_color)
+# Когда операция одна — повторяем иконку/цвет участка.
+# Когда несколько — подбираем осмысленные иконки + цвета из палитры участка.
 SECTION_OPS = {
     "WH": [
-        ("ISSUE_RAW", "Выдача сырья", False),
+        # Участок: Warehouse, #F59E0B
+        ("ISSUE_RAW", "Выдача сырья", False, "Package", "#F59E0B"),
     ],
     "DRILL": [
-        ("DRILL", "Сверловка", True),
+        # Участок: Drill, #3B82F6
+        ("DRILL", "Сверловка", True, "Drill", "#3B82F6"),
     ],
     "PRESS": [
-        ("PRESS_WINDOW", "Пресс (окно)", True),
-        ("PRESS_COMB", "Пресс (гребенка)", True),
+        # Участок: Anvil, #EF4444
+        ("PRESS_WINDOW", "Пресс (окно)", True, "LetterO", "#EF4444"),
+        ("PRESS_COMB", "Пресс (гребенка)", True, "LetterSh", "#F97316"),
     ],
     "SHOT": [
-        ("SHOT", "Дробеструй", True),
+        # Участок: SprayCan, #6B7280
+        ("SHOT", "Дробеструй", True, "SprayCan", "#6B7280"),
     ],
     "ANOD": [
-        ("ANOD", "Анодирование", True),
+        # Участок: FlaskConical, #06B6D4 — без иконок, только цветной кружок
+        # Реальные цвета анодирования из ekranchik
+        ("ANOD_01", "Серебро", True, None, "#C0C0C0"),
+        ("ANOD_02", "Золото", True, None, "#FFD700"),
+        ("ANOD_03", "Бронза", True, None, "#8B5A2B"),
+        ("ANOD_05", "Чёрный", True, None, "#1C1C1C"),
+        ("ANOD_06", "Шампань", True, None, "#F7E7CE"),
+        ("ANOD_07", "Медь", True, None, "#CD5C5C"),
+        ("ANOD_08", "Титан", True, None, "#878681"),
+        # Упаковка на анодировании
+        ("PACK_SPUNBOND", "Спанбонд", True, None, "#06B6D4"),
+        ("PACK_STRETCH", "Стрейч", True, None, "#0891B2"),
     ],
     "WIP_WH": [
-        ("MOVE_TO_WIP", "Передача на склад полуфабриката", False),
+        # Участок: Boxes, #84CC16
+        ("MOVE_TO_WIP", "Передача на склад полуфабриката", False, "Truck", "#84CC16"),
     ],
     "SAW": [
-        ("SAW", "Резка на пиле", True),
+        # Участок: Fan, #F97316
+        ("SAW", "Резка на пиле", True, "Fan", "#F97316"),
     ],
     "PACK": [
-        ("PACK", "Упаковка", True),
+        # Участок: Package, #10B981
+        ("PACK", "Упаковка", True, "Package", "#10B981"),
     ],
     "FG_WH": [
-        ("FG_WH", "Склад готовой продукции", False),
+        # Участок: Container, #065F46
+        ("FG_WH", "Склад готовой продукции", False, "Container", "#065F46"),
     ],
     "SHIPMENT": [
-        ("SHIPMENT", "К отгрузке", False),
+        # Участок: PackageOpen, #8B5CF6
+        ("SHIPMENT", "К отгрузке", False, "PackageOpen", "#8B5CF6"),
     ],
     "SENT": [
-        ("SENT", "Отправлено", False),
+        # Участок: PackageCheck, #EC4899
+        ("SENT", "Отправлено", False, "PackageCheck", "#EC4899"),
     ],
 }
 
@@ -118,7 +142,7 @@ async def seed_sections(db: AsyncSession = Depends(get_db)) -> list[SectionOut]:
         section = sections.get(section_code)
         if not section:
             continue
-        for op_code, op_name, is_sig in ops:
+        for op_code, op_name, is_sig, icon, icon_color in ops:
             existing = await db.scalar(
                 select(SectionOperation).where(
                     SectionOperation.section_id == section.id,
@@ -128,12 +152,16 @@ async def seed_sections(db: AsyncSession = Depends(get_db)) -> list[SectionOut]:
             if existing:
                 existing.operation_name = op_name
                 existing.is_significant = is_sig
+                existing.icon = icon
+                existing.icon_color = icon_color
             else:
                 db.add(SectionOperation(
                     section_id=section.id,
                     operation_code=op_code,
                     operation_name=op_name,
                     is_significant=is_sig,
+                    icon=icon,
+                    icon_color=icon_color,
                 ))
 
     await db.flush()
