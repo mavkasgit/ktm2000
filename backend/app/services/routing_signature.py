@@ -30,6 +30,10 @@ def normalize_operation_family(*, operation_code: str | None, raw_operation: str
         return RouteOperationFamily.DRILL
     if code == "PACK":
         return RouteOperationFamily.PACK
+    if code == "PACK_SPUNBOND":
+        return RouteOperationFamily.SPUNBOND
+    if code == "PACK_STRETCH":
+        return RouteOperationFamily.STRETCH
     return RouteOperationFamily.NONE
 
 

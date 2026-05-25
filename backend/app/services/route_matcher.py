@@ -15,15 +15,7 @@ from app.models.production_plan import (
     PlanPositionRouteOrigin,
 )
 from app.models.route import ProductionRoute
-from app.models.routing import RouteOperationFamily, RouteOutputKind
 from app.services.route_selection import RouteCandidateDiagnostic, select_route_for_payload
-
-
-@dataclass(slots=True)
-class RouteSignature:
-    operation_family: RouteOperationFamily
-    output_kind: RouteOutputKind
-    has_pack_ops: bool
 
 
 @dataclass(slots=True)
@@ -37,45 +29,12 @@ class ResolvedRouteInfo:
     route_assigned_at: datetime | None = None
     route_manual_confirmed_at: datetime | None = None
     error: str | None = None
-    signature: RouteSignature | None = None
     checked_rules: list[int] = field(default_factory=list)
     required_sections: list[dict] = field(default_factory=list)
     excluded_sections: list[dict] = field(default_factory=list)
     candidate_routes: list[RouteCandidateDiagnostic] = field(default_factory=list)
     selected_route_id: int | None = None
     condition_diagnostics: list[dict] = field(default_factory=list)
-
-
-def signature_from_position(position: PlanPosition) -> RouteSignature | None:
-    if position.operation_family is None or position.output_kind is None or position.has_pack_ops is None:
-        return None
-    return RouteSignature(
-        operation_family=position.operation_family,
-        output_kind=position.output_kind,
-        has_pack_ops=position.has_pack_ops,
-    )
-
-
-async def find_route(
-    db: AsyncSession,
-    signature: RouteSignature,
-) -> tuple[ProductionRoute | None, list[int], str]:
-    """Compatibility adapter for old callers.
-
-    New auto-routing is based on source_payload rules. This helper builds a
-    minimal payload from the canonical fields and deliberately does not fallback
-    to the first active route when no global rule candidate exists.
-    """
-    result = await select_route_for_payload(
-        db,
-        {
-            "operation_family": signature.operation_family.value,
-            "output_kind": signature.output_kind.value,
-            "has_pack_ops": signature.has_pack_ops,
-        },
-    )
-    match_kind = "exact" if result.route is not None and result.route_match_quality == "exact" else result.route_match_reason
-    return result.route, result.matched_rule_ids, match_kind
 
 
 def _normalize_origin(value: object) -> str | None:
@@ -145,29 +104,6 @@ async def resolve_position_route(
                 route_manual_confirmed_at=manual_confirmed_at,
                 error="manual_route_not_found" if source == "manual" else "route_not_found",
             )
-        if not route.is_active:
-            return ResolvedRouteInfo(
-                route_id=route.id,
-                route_name=route.name,
-                source=source,
-                route_origin=origin,
-                route_match_quality=quality,
-                route_match_reason=reason,
-                route_assigned_at=assigned_at,
-                route_manual_confirmed_at=manual_confirmed_at,
-                error="manual_route_inactive" if source == "manual" else "active_route_not_found",
-            )
-        return ResolvedRouteInfo(
-            route_id=route.id,
-            route_name=route.name,
-            source=source,
-            route_origin=origin,
-            route_match_quality=quality,
-            route_match_reason=reason,
-            route_assigned_at=assigned_at,
-            route_manual_confirmed_at=manual_confirmed_at,
-            signature=signature_from_position(position),
-        )
 
     import_batch = await db.get(ImportBatch, position.import_batch_id) if position.import_batch_id is not None else None
     rule_profile_id = import_batch.rule_profile_id if import_batch is not None else None
@@ -185,7 +121,6 @@ async def resolve_position_route(
             route_assigned_at=None,
             route_manual_confirmed_at=None,
             error=selection.error or "route_not_found",
-            signature=signature_from_position(position),
             checked_rules=selection.matched_rule_ids,
             required_sections=selection.required_sections,
             excluded_sections=selection.excluded_sections,
@@ -203,7 +138,6 @@ async def resolve_position_route(
         route_assigned_at=None,
         route_manual_confirmed_at=None,
         error=None,
-        signature=signature_from_position(position),
         checked_rules=selection.matched_rule_ids,
         required_sections=selection.required_sections,
         excluded_sections=selection.excluded_sections,

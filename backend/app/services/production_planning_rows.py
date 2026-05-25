@@ -13,8 +13,25 @@ from app.models.section import Section
 from app.models.transfer import Transfer
 from app.models.work_task import WorkTask, WorkTaskStatus
 from app.services.route_matcher import ResolvedRouteInfo, resolve_position_route
+from app.services.route_resolution import resolve_anod_operation
 
 MANUAL_ROUTE_PASS_PREFIX = "manual_route_pass:"
+
+
+def _resolve_step_operation_code(step_operation_code: str | None, section_code: str, position: PlanPosition) -> str | None:
+    """Resolve operation_code for a route step.
+
+    For ANOD steps with operation_code=None, resolve from position source_payload.
+    For all other steps, return the operation_code as-is.
+    """
+    if step_operation_code is not None:
+        return step_operation_code
+
+    # ANOD placeholder: resolve from payload
+    if section_code == "ANOD":
+        return resolve_anod_operation(position.source_payload)
+
+    return None
 
 
 def _to_float(value: Decimal | int | float | None) -> float:
@@ -591,7 +608,7 @@ async def get_production_planning_row_detail(db: AsyncSession, position_id: int)
                     "section_kind": section.kind,
                     "section_icon": section.icon,
                     "section_icon_color": section.icon_color,
-                    "operation_code": step.operation_code,
+                    "operation_code": _resolve_step_operation_code(step.operation_code, section.code, pos),
                     "operation_name": step.operation_name,
                 }
                 for step, section in steps
@@ -628,7 +645,7 @@ async def get_production_planning_row_detail(db: AsyncSession, position_id: int)
                     "section_icon": section.icon,
                     "section_icon_color": section.icon_color,
                     "sequence": step.sequence,
-                    "operation_code": step.operation_code,
+                    "operation_code": _resolve_step_operation_code(step.operation_code, section.code, pos),
                     "operation_name": step.operation_name,
                     "planned_quantity": round(planned_quantity, 3),
                     "completed_quantity": round(completed_quantity, 3),

@@ -64,6 +64,8 @@ class SectionOperation(Base):
     operation_code: Mapped[str] = mapped_column(String(100), nullable=False)
     operation_name: Mapped[str] = mapped_column(String(255), nullable=False)
     is_significant: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default=text("false"))
+    icon: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    icon_color: Mapped[str | None] = mapped_column(String(7), nullable=True)
 
     section: Mapped["Section"] = relationship("Section")
 

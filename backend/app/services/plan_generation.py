@@ -16,6 +16,7 @@ from app.models.section import Section
 from app.models.work_task import WorkTask, WorkTaskStatus
 from app.services.route_validation import validate_route_match
 from app.services.route_matcher import resolve_position_route
+from app.services.route_resolution import resolve_anod_operation
 
 
 async def create_release_batch(
@@ -79,7 +80,7 @@ async def create_release_batch(
                 plan_position_id=position.id,
                 release_quantity=release_quantity,
                 route_id=route.id,
-                route_snapshot=_route_snapshot(route, steps),
+                route_snapshot=_route_snapshot(route, steps, position),
             )
         )
 
@@ -260,7 +261,7 @@ async def _get_route_steps_with_sections(db: AsyncSession, route: ProductionRout
     return result
 
 
-def _route_snapshot(route: ProductionRoute, steps: list[tuple[RouteStep, Section]]) -> dict:
+def _route_snapshot(route: ProductionRoute, steps: list[tuple[RouteStep, Section]], position: PlanPosition | None = None) -> dict:
     return {
         "route_id": route.id,
         "route_name": route.name,
@@ -272,7 +273,11 @@ def _route_snapshot(route: ProductionRoute, steps: list[tuple[RouteStep, Section
                 "section_code": section.code,
                 "section_name": section.name,
                 "section_kind": section.kind,
-                "operation_code": step.operation_code,
+                "operation_code": (
+                    resolve_anod_operation(position.source_payload)
+                    if step.operation_code is None and section.code == "ANOD" and position
+                    else step.operation_code
+                ),
                 "operation_name": step.operation_name,
                 "requires_acceptance": step.requires_acceptance,
                 "allow_parallel": step.allow_parallel,

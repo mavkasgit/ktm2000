@@ -6,6 +6,8 @@ class RouteOperationFamily(str, enum.Enum):
     DRILL = "DRILL"
     PRESS = "PRESS"
     PACK = "PACK"
+    SPUNBOND = "SPUNBOND"
+    STRETCH = "STRETCH"
 
 
 class RouteOutputKind(str, enum.Enum):
