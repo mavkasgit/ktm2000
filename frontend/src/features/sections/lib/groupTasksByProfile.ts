@@ -42,6 +42,16 @@ function buildGroupKey(
       case "fingerprint":
         return s.source_fingerprint;
 
+      case "routeHistory":
+        return (s.route_history ?? [])
+          .map((op: any) => typeof op === "string" ? op : (op.operation_code || op.operation_name || ""))
+          .join("→");
+
+      case "routeHistoryAfter":
+        return (s.route_history_after ?? [])
+          .map((op: any) => typeof op === "string" ? op : (op.operation_code || op.operation_name || ""))
+          .join("→");
+
       case "customField": {
         const fields = profile.customFields ?? [];
         if (fields.length === 0) {
@@ -114,6 +124,22 @@ function buildGroupLabel(
       case "fingerprint":
         if (s.operation_code) parts.push(s.operation_code);
         if (s.output_kind) parts.push(s.output_kind);
+        break;
+
+      case "routeHistory":
+        if (s.route_history && s.route_history.length > 0) {
+          parts.push(s.route_history
+            .map((op: any) => typeof op === "string" ? op : op.operation_name)
+            .join(" → "));
+        }
+        break;
+
+      case "routeHistoryAfter":
+        if (s.route_history_after && s.route_history_after.length > 0) {
+          parts.push(s.route_history_after
+            .map((op: any) => typeof op === "string" ? op : op.operation_name)
+            .join(" → "));
+        }
         break;
 
       case "customField":

@@ -8,6 +8,7 @@ import * as UI from "shared/ui";
 import { Button } from "@/shared/ui/Button";
 import { Badge } from "@/shared/ui/Badge";
 import { EntityDialog, renderIcon } from "@/shared/ui/EntityDialog";
+import { Popover, PopoverTrigger, PopoverContent } from "@/shared/ui/Popover";
 import { AlertDialog, AlertDialogContent, AlertDialogHeader, AlertDialogTitle, AlertDialogDescription, AlertDialogFooter, AlertDialogCancel, AlertDialogAction } from "@/shared/ui/AlertDialog";
 import { toast } from "@/shared/ui/use-toast";
 import type { EntityDialogField } from "@/shared/ui/EntityDialog";
@@ -39,6 +40,14 @@ const KIND_OPTIONS = [
 
 const ui = UI as Record<string, React.ComponentType<any>>;
 const Table = ui.Table ?? "table";
+
+const OP_FIELDS: Record<string, EntityDialogField> = {
+  operation_code: { type: "text", label: "Код операции", placeholder: "Введите код", required: true, rowGroup: "row1" },
+  operation_name: { type: "text", label: "Название операции", placeholder: "Введите название", required: true, rowGroup: "row1" },
+  is_significant: { type: "checkbox", label: "★ Значимая", rowGroup: "row1" },
+  icon: { type: "icon", label: "Иконка" },
+  icon_color: { type: "color", label: "Цвет" },
+};
 
 const SECTION_FIELDS: Record<string, EntityDialogField> = {
   code: { type: "text", label: "Код", placeholder: "DRILL", required: true, rowGroup: "row1" },
@@ -131,9 +140,12 @@ export function SectionsPage() {
   const [expandedSectionId, setExpandedSectionId] = useState<number | null>(null);
   const [sectionOps, setSectionOps] = useState<ShopfloorAPI.SectionOperation[]>([]);
   const [opsLoading, setOpsLoading] = useState(false);
-  const [newOpCode, setNewOpCode] = useState("");
-  const [newOpName, setNewOpName] = useState("");
   const [deleteOpDialog, setDeleteOpDialog] = useState<{ sectionId: number; opId: number; opName: string } | null>(null);
+  const [opDialogOpen, setOpDialogOpen] = useState(false);
+  const [opDialogMode, setOpDialogMode] = useState<"add" | "edit">("add");
+  const [opDialogSectionId, setOpDialogSectionId] = useState<number>(0);
+  const [opDialogOpId, setOpDialogOpId] = useState<number>(0);
+  const [opDialogInitial, setOpDialogInitial] = useState<Record<string, unknown>>({});
 
   const toggleSectionOps = useCallback(async (sectionId: number) => {
     if (expandedSectionId === sectionId) {
@@ -163,21 +175,71 @@ export function SectionsPage() {
     }
   }, [queryClient]);
 
-  const createOp = useCallback(async (sectionId: number) => {
-    if (!newOpCode.trim() || !newOpName.trim()) return;
-    try {
-      const created = await ShopfloorAPI.createSectionOperation(sectionId, {
-        operation_code: newOpCode.trim(),
-        operation_name: newOpName.trim(),
-      });
-      setSectionOps((prev) => [...prev, created]);
-      setNewOpCode("");
-      setNewOpName("");
-      await queryClient.invalidateQueries({ queryKey: ["shopfloor"] });
-    } catch (e) {
-      toast({ title: "Ошибка создания", description: API.getErrorMessage(e), variant: "destructive" });
+  const openAddOp = useCallback((sectionId: number) => {
+    setOpDialogSectionId(sectionId);
+    setOpDialogMode("add");
+    setOpDialogInitial({ operation_code: "", operation_name: "", is_significant: false, icon: "", icon_color: "" });
+    setOpDialogOpen(true);
+  }, []);
+
+  const openEditOp = useCallback((sectionId: number, op: ShopfloorAPI.SectionOperation) => {
+    setOpDialogSectionId(sectionId);
+    setOpDialogMode("edit");
+    setOpDialogOpId(op.id);
+    setOpDialogInitial({
+      operation_code: op.operation_code,
+      operation_name: op.operation_name,
+      is_significant: op.is_significant,
+      icon: op.icon || "",
+      icon_color: op.icon_color || "",
+    });
+    setOpDialogOpen(true);
+  }, []);
+
+  const handleSaveOp = useCallback(async (values: Record<string, unknown>) => {
+    console.log("[handleSaveOp] mode:", opDialogMode, "values:", values);
+    if (opDialogMode === "add") {
+      try {
+        const payload = {
+          operation_code: String(values.operation_code || ""),
+          operation_name: String(values.operation_name || ""),
+          is_significant: !!values.is_significant,
+          icon: String(values.icon || "") || null,
+          icon_color: String(values.icon_color || "") || null,
+        };
+        console.log("[handleSaveOp] create payload:", payload);
+        const created = await ShopfloorAPI.createSectionOperation(opDialogSectionId, payload);
+        console.log("[handleSaveOp] created:", created);
+        setSectionOps((prev) => [...prev, created]);
+        await queryClient.invalidateQueries({ queryKey: ["shopfloor"] });
+        setOpDialogOpen(false);
+      } catch (e) {
+        console.error("[handleSaveOp] create error:", e);
+        toast({ title: "Ошибка создания", description: API.getErrorMessage(e), variant: "destructive" });
+        return false;
+      }
+    } else {
+      try {
+        const payload = {
+          is_significant: !!values.is_significant,
+          icon: String(values.icon || "") || null,
+          icon_color: String(values.icon_color || "") || null,
+        };
+        console.log("[handleSaveOp] update payload:", payload);
+        const updated = await ShopfloorAPI.updateSectionOperation(opDialogSectionId, opDialogOpId, payload);
+        console.log("[handleSaveOp] updated:", updated);
+        setSectionOps((prev) => prev.map((o) => o.id === opDialogOpId ? updated : o));
+        await queryClient.invalidateQueries({ queryKey: ["shopfloor"] });
+        setOpDialogOpen(false);
+      } catch (e) {
+        console.error("[handleSaveOp] update error:", e);
+        toast({ title: "Ошибка обновления", description: API.getErrorMessage(e), variant: "destructive" });
+        return false;
+      }
     }
-  }, [newOpCode, newOpName, queryClient]);
+    console.log("[handleSaveOp] returning true");
+    return true;
+  }, [opDialogMode, opDialogSectionId, opDialogOpId, queryClient]);
 
   const deleteOp = useCallback(async (sectionId: number, opId: number, opName: string) => {
     setDeleteOpDialog({ sectionId, opId, opName });
@@ -528,26 +590,10 @@ export function SectionsPage() {
                       </div>
 
                       <div className="flex items-center gap-2 flex-wrap">
-                        {/* Create form inline */}
-                        <div className="flex items-center gap-1">
-                          <input
-                            type="text"
-                            placeholder="Код"
-                            value={newOpCode}
-                            onChange={(e) => setNewOpCode(e.target.value)}
-                            className="w-24 h-8 px-2 text-xs border rounded bg-background font-mono"
-                          />
-                          <input
-                            type="text"
-                            placeholder="Название"
-                            value={newOpName}
-                            onChange={(e) => setNewOpName(e.target.value)}
-                            className="w-36 h-8 px-2 text-xs border rounded bg-background"
-                          />
-                          <Button size="sm" className="h-8" onClick={() => createOp(Number(item.id))}>
-                            <Plus className="h-3 w-3" />
-                          </Button>
-                        </div>
+                        <Button size="sm" variant="outline" className="h-8" onClick={() => openAddOp(Number(item.id))}>
+                          <Plus className="h-3 w-3 mr-1" />
+                          Добавить операцию
+                        </Button>
 
                         {opsLoading ? (
                           <span className="text-xs text-muted-foreground">Загрузка...</span>
@@ -557,7 +603,7 @@ export function SectionsPage() {
                           sectionOps.map((op) => (
                             <div
                               key={op.id}
-                              className="flex items-center gap-1 px-2 h-8 rounded border bg-card hover:bg-accent/50 transition-colors text-sm group"
+                              className="flex items-center gap-1 px-2 h-8 rounded border bg-card hover:bg-accent/50 transition-colors text-sm group cursor-pointer" onClick={() => openEditOp(Number(item.id), op)}
                             >
                               <input
                                 type="checkbox"
@@ -565,12 +611,22 @@ export function SectionsPage() {
                                 onChange={() => toggleOpSignificant(Number(item.id), op.id, op.is_significant)}
                                 className="rounded border-gray-300 cursor-pointer h-3.5 w-3.5"
                               />
+                              {op.icon ? (
+                                <span style={{ color: op.icon_color || undefined }} className="shrink-0">
+                                  {renderIcon(op.icon, "h-3.5 w-3.5")}
+                                </span>
+                              ) : op.icon_color ? (
+                                <span
+                                  className="inline-block size-3.5 shrink-0 rounded-full bg-current"
+                                  style={{ color: op.icon_color }}
+                                />
+                              ) : null}
                               <span className="font-mono text-xs text-muted-foreground">{op.operation_code}</span>
                               <span className="text-xs">{op.operation_name}</span>
                               {op.is_significant && <Badge variant="secondary" className="text-xs bg-green-100 text-green-700 shrink-0">★</Badge>}
                               <button
                                 type="button"
-                                onClick={() => deleteOp(Number(item.id), op.id, op.operation_name)}
+                                onClick={(e) => { e.stopPropagation(); deleteOp(Number(item.id), op.id, op.operation_name); }}
                                 className="p-0.5 rounded hover:bg-destructive/20 text-muted-foreground hover:text-destructive opacity-0 group-hover:opacity-100 transition-opacity"
                                 title="Удалить"
                               >
@@ -589,6 +645,21 @@ export function SectionsPage() {
           </tbody>
         </Table>
       </div>
+    <EntityDialog
+        fields={OP_FIELDS}
+        open={opDialogOpen}
+        onOpenChange={setOpDialogOpen}
+        mode={opDialogMode}
+        initialValues={opDialogInitial}
+        onSave={handleSaveOp}
+        onDelete={opDialogMode === "edit" ? () => { deleteOp(opDialogSectionId, opDialogOpId, String(opDialogInitial.operation_name || "")); } : undefined}
+        addTitle="Новая операция"
+        editTitle="Редактировать операцию"
+        addDescription="Заполните информацию об операции"
+        editDescription="Измените параметры операции"
+        addLabel="Создать"
+        saveLabel="Сохранить"
+      />
     </section>
   );
 }

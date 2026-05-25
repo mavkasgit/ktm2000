@@ -13,6 +13,14 @@ function makeRequestConfig(options?: ShopfloorRequestOptions) {
   };
 }
 
+export interface RouteHistoryOp {
+  operation_code: string;
+  operation_name: string;
+  is_significant: boolean;
+  icon?: string | null;
+  icon_color?: string | null;
+}
+
 export interface SourceSignature {
   input_sku: string;
   output_sku: string;
@@ -20,10 +28,14 @@ export interface SourceSignature {
   operation_code: string | null;
   operation_name: string | null;
   is_significant: boolean;
+  icon?: string | null;
+  icon_color?: string | null;
   output_kind: string | null;
   source_ref: string | null;
   source_payload: Record<string, unknown>;
   source_fingerprint: string;
+  route_history: RouteHistoryOp[];
+  route_history_after: RouteHistoryOp[];
 }
 
 export type TaskStatus = "pending" | "in_work" | "done" | "partially" | "blocked";
@@ -74,6 +86,8 @@ export type SectionBoardTask = {
   input_sku: string;
   output_sku: string;
   display_sku: string;
+  route_history: RouteHistoryOp[];
+  route_history_after: RouteHistoryOp[];
   signature: SourceSignature;
 };
 
@@ -369,6 +383,8 @@ export interface SectionOperation {
   operation_code: string;
   operation_name: string;
   is_significant: boolean;
+  icon?: string | null;
+  icon_color?: string | null;
 }
 
 export async function getSectionOperations(
@@ -383,7 +399,7 @@ export async function getSectionOperations(
 export async function updateSectionOperation(
   sectionId: number,
   opId: number,
-  payload: { is_significant: boolean },
+  payload: { is_significant?: boolean; icon?: string | null; icon_color?: string | null },
 ): Promise<SectionOperation> {
   const { data } = await apiClient.patch<SectionOperation>(
     `/shopfloor/sections/${sectionId}/operations/${opId}`,
@@ -394,7 +410,7 @@ export async function updateSectionOperation(
 
 export async function createSectionOperation(
   sectionId: number,
-  payload: { operation_code: string; operation_name: string; is_significant?: boolean },
+  payload: { operation_code: string; operation_name: string; is_significant?: boolean; icon?: string | null; icon_color?: string | null },
 ): Promise<SectionOperation> {
   const { data } = await apiClient.post<SectionOperation>(
     `/shopfloor/sections/${sectionId}/operations`,

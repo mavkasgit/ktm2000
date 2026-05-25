@@ -40,7 +40,9 @@ export type GroupingCriterion =
   | "outputKind"     // Цвет/тип выхода (silver, black...)
   | "sourceRef"      // Ссылка на заказ (ЗКЗ-2024-1241/5)
   | "fingerprint"    // Полная сигнатура (SHA1-хеш)
-  | "customField";   // Произвольное поле из source_payload
+  | "customField"    // Произвольное поле из source_payload
+  | "routeHistory"   // Цепочка операций от начала маршрута (до текущего)
+  | "routeHistoryAfter"; // Цепочка операций после текущего этапа
 
 
 export interface GroupingProfile {
@@ -79,29 +81,14 @@ export const PRESET_PROFILES: GroupingProfile[] = [
     criteria: ["productSku"],
   },
   {
-    id: "sku+stage",
-    name: "Артикул + этап",
-    criteria: ["productSku", "routeStepId"],
+    id: "sku+routeHistory",
+    name: "Артикул + история до",
+    criteria: ["productSku", "routeHistory", "operationCode"],
   },
   {
-    id: "sku+operation",
-    name: "Артикул + операция",
-    criteria: ["productSku", "operationCode"],
-  },
-  {
-    id: "sku+output",
-    name: "Артикул + цвет",
-    criteria: ["productSku", "outputKind"],
-  },
-  {
-    id: "sku+ref",
-    name: "Артикул + заказ",
-    criteria: ["productSku", "sourceRef"],
-  },
-  {
-    id: "fingerprint",
-    name: "Полная сигнатура",
-    criteria: ["fingerprint"],
+    id: "sku+routeHistoryAfter",
+    name: "Артикул + история после",
+    criteria: ["productSku", "routeHistoryAfter", "operationCode"],
   },
   {
     id: "custom",
@@ -152,7 +139,7 @@ export function loadProfileForSection(sectionId: number): GroupingProfile {
   } catch { /* ignore */ }
 
   // 3. Встроенный дефолт — "Артикул + этап"
-  return PRESET_PROFILES[1];
+  return PRESET_PROFILES[0];
 }
 
 
@@ -200,17 +187,16 @@ export const CRITERION_LABELS: Record<GroupingCriterion, string> = {
   sourceRef:     "Ссылка на заказ",
   fingerprint:   "Полная сигнатура",
   customField:   "Поля из source_payload",
+  routeHistory:  "История до",
+  routeHistoryAfter: "История после",
 };
 
 
 export function getProfilePreview(profile: GroupingProfile): string {
   const examples: Record<string, string> = {
     "sku":           "ЮП-460",
-    "sku+stage":     "ЮП-460 · Этап 2",
-    "sku+operation": "ЮП-460 · press_window",
-    "sku+output":    "ЮП-460 · silver",
-    "sku+ref":       "ЮП-460 · ЗКЗ-2024-1241",
-    "fingerprint":   "a3f9c2d41b88",
+    "sku+routeHistory": "ЮП-460 · ISSUE_RAW",
+    "sku+routeHistoryAfter": "ЮП-460 · ISSUE_RAW→PRESS_WINDOW",
     "custom":        `ЮП-460 · ${(profile.customFields ?? []).join(" · ") || "..."}`,
   };
   return examples[profile.id] ?? "—";

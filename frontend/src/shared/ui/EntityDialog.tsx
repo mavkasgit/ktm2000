@@ -40,13 +40,34 @@ const ICON_LIST = [
   "Flame","Sparkle","Hammer","Droplet","BoxSelect","PackageOpen",
   "PackageCheck","PackagePlus","PackageMinus","PackageSearch","PackageX",
   "Fan","FlaskConical","Beaker","TestTube","Construction","PenTool","Pickaxe",
-  "SprayCan",
+  "SprayCan","LetterO","LetterSh",
 ]
 
+// Custom letter icon components
+function LetterO({ className, style }: { className?: string; style?: React.CSSProperties }) {
+  return (
+    <svg className={className} style={style} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+      <ellipse cx="12" cy="12" rx="10" ry="7" />
+    </svg>
+  )
+}
+
+function LetterSh({ className, style }: { className?: string; style?: React.CSSProperties }) {
+  return (
+    <svg className={className} style={style} viewBox="0 0 24 24" fill="currentColor">
+      <text x="12" y="19" textAnchor="middle" fontSize="22" fontFamily="sans-serif" fontWeight="bold">Ш</text>
+    </svg>
+  )
+}
+
 const LUCIDE = L as unknown as Record<string, React.ComponentType<{ className?: string; style?: React.CSSProperties }>>
+const CUSTOM_ICONS: Record<string, React.ComponentType<{ className?: string; style?: React.CSSProperties }>> = {
+  LetterO,
+  LetterSh,
+}
 
 export function renderIcon(name: string, className = "h-4 w-4", style?: React.CSSProperties): ReactNode | null {
-  const Icon = LUCIDE[name]
+  const Icon = CUSTOM_ICONS[name] || LUCIDE[name]
   return Icon ? <Icon className={className} style={style} /> : null
 }
 
@@ -219,12 +240,33 @@ function IconColorPicker({
     <div className="flex gap-4">
       <div className="space-y-2">
         <div className="text-xs text-muted-foreground h-4">Иконка</div>
-        {iconValue && (
-          <div className="flex items-center gap-2 text-sm">
-            <span style={{ color: colorValue }}>{renderIcon(iconValue)}</span>
-            <span className="text-muted-foreground">{iconValue}</span>
-          </div>
-        )}
+        <div className="flex items-center gap-2 text-sm">
+          {iconValue ? (
+            <>
+              <span style={{ color: colorValue }}>{renderIcon(iconValue)}</span>
+              <span className="text-muted-foreground">{iconValue}</span>
+              <button
+                type="button"
+                className="p-0.5 rounded hover:bg-destructive/20 text-muted-foreground hover:text-destructive transition-colors"
+                onClick={() => onIconChange("")}
+                title="Убрать иконку"
+              >
+                <svg className="size-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <line x1="18" y1="6" x2="6" y2="18" />
+                  <line x1="6" y1="6" x2="18" y2="18" />
+                </svg>
+              </button>
+            </>
+          ) : (
+            <>
+              <span
+                className="inline-block size-5 rounded-full bg-current"
+                style={{ color: colorValue }}
+              />
+              <span className="text-muted-foreground text-xs">Без иконки</span>
+            </>
+          )}
+        </div>
         <div className="grid grid-cols-4 gap-1.5">
           {preview.map((name) => (
             <button
@@ -284,7 +326,7 @@ function IconColorPicker({
 /* ───────── EntityDialog ───────── */
 
 export interface EntityDialogField {
-  type: "text" | "number" | "color" | "icon" | "select"
+  type: "text" | "number" | "color" | "icon" | "select" | "checkbox"
   label: string
   placeholder?: string
   required?: boolean
@@ -344,6 +386,7 @@ export function EntityDialog({
         if (f.type === "number") defaults[key] = f.min ?? 1
         else if (f.type === "select") defaults[key] = f.options?.[0]?.value ?? ""
         else if (f.type === "color") defaults[key] = COLOR_PRESETS[Math.floor(Math.random() * COLOR_PRESETS.length)]
+        else if (f.type === "checkbox") defaults[key] = initialValues[key] ?? false
         else defaults[key] = initialValues[key] ?? ""
       }
       setValues(defaults)
@@ -402,7 +445,7 @@ export function EntityDialog({
           id={inputId}
           value={val as string}
           placeholder={field.placeholder ?? ""}
-          className={inputClasses}
+          className={cn("h-10", inputClasses)}
           onChange={(e) => setValue(key, e.target.value)}
           data-testid={field.testId}
         />
@@ -439,6 +482,25 @@ export function EntityDialog({
           }}
           min={min}
         />
+      )
+    }
+
+    if (field.type === "checkbox") {
+      const checked = Boolean(val)
+      return (
+        <button
+          type="button"
+          id={inputId}
+          onClick={() => setValue(key, !checked)}
+          className={cn(
+            "inline-flex items-center justify-center h-10 w-10 rounded-md border cursor-pointer transition-all",
+            checked
+              ? "bg-yellow-100 border-yellow-300 text-yellow-700 hover:bg-yellow-200"
+              : "bg-background border-input text-muted-foreground/40 hover:bg-accent"
+          )}
+        >
+          <span className="text-base leading-none">★</span>
+        </button>
       )
     }
 
@@ -504,14 +566,16 @@ export function EntityDialog({
         groupFields.forEach(([k]) => rendered.add(k))
 
         result.push(
-          <div key={key} className="flex gap-3">
+          <div key={key} className="flex gap-3 items-end">
             {groupFields.map(([gk, gf]) => {
               const gv = values[gk] ?? ""
               const hasError = !!errors[gk]
               return (
-                <div key={gk} className="flex-1">
-                  <label htmlFor={getFieldId(gk)} className="text-sm font-medium">{gf.label}</label>
-                  <div className="mt-1">
+                <div key={gk} className={gf.type === "checkbox" ? "ml-auto flex items-end" : "flex-1"}>
+                  {gf.type !== "checkbox" && (
+                    <label htmlFor={getFieldId(gk)} className="text-sm font-medium">{gf.label}</label>
+                  )}
+                  <div className={gf.type === "checkbox" ? "" : "mt-1"}>
                     {renderField(gk, gf, gv, true)}
                   </div>
                   {hasError && (
@@ -526,7 +590,7 @@ export function EntityDialog({
         rendered.add(key)
         result.push(
           <div key={key}>
-            {!(field.type === "icon" && hasIconColorPair) && (
+            {!(field.type === "icon" && hasIconColorPair) && !(field.type === "checkbox") && (
               <label htmlFor={getFieldId(key)} className="text-sm font-medium">{field.label}</label>
             )}
             <div className="mt-1">

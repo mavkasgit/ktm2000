@@ -1,10 +1,9 @@
 import { useCallback, useRef, useState } from "react";
-import { Plus, Download } from "lucide-react";
+import { Plus } from "lucide-react";
 import * as API from "@/shared/api/routes";
 import { getErrorMessage } from "@/shared/api/client";
 import { Button } from "@/shared/ui/Button";
 import { toast } from "@/shared/ui/use-toast";
-import { AlertDialog, AlertDialogContent, AlertDialogHeader, AlertDialogTitle, AlertDialogDescription, AlertDialogFooter, AlertDialogCancel, AlertDialogAction } from "@/shared/ui/AlertDialog";
 import { RouteFlowBuilder } from "../components/RouteFlowBuilder";
 import { RouteSelectionRulesSection } from "../components/RouteSelectionRulesSection";
 import { RouteTreeOverview, type RouteTreeOverviewRef } from "../components/RouteTreeOverview";
@@ -15,8 +14,6 @@ type TabKey = "routes" | "templates";
 export function RoutesPage() {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editRoute, setEditRoute] = useState<API.RouteDetail | null>(null);
-  const [seedDialogOpen, setSeedDialogOpen] = useState(false);
-  const [seeding, setSeeding] = useState(false);
   const [seedRevision, setSeedRevision] = useState(0);
   const treeRef = useRef<RouteTreeOverviewRef>(null);
   const [activeTabs, setActiveTabs] = useState<Set<TabKey>>(new Set(["routes", "templates"]));
@@ -53,26 +50,6 @@ export function RoutesPage() {
     treeRef.current?.reload();
   };
 
-  const handleSeed = async () => {
-    setSeeding(true);
-    try {
-      const seeded = await API.seedRoutes();
-      const rules = await API.listRouteSelectionRules();
-      toast({
-        title: "Маршруты загружены",
-        description: `Создано/обновлено маршрутов: ${seeded.length}; восстановлено правил выбора: ${rules.length}`,
-        variant: "success",
-      });
-      treeRef.current?.reload();
-      setSeedRevision((value) => value + 1);
-    } catch (e) {
-      toast({ variant: "destructive", title: "Ошибка загрузки маршрутов", description: getErrorMessage(e) });
-    } finally {
-      setSeeding(false);
-      setSeedDialogOpen(false);
-    }
-  };
-
   const showRoutes = activeTabs.has("routes");
   const showTemplates = activeTabs.has("templates");
 
@@ -105,13 +82,7 @@ export function RoutesPage() {
         {showRoutes && (
           <div className={showTemplates ? "flex-1" : "flex-1"}>
             <div className="flex items-center justify-between mb-4">
-              <div className="flex items-center gap-2">
-                <Button size="sm" variant="outline" onClick={() => setSeedDialogOpen(true)}>
-                  <Download className="h-4 w-4 mr-1" />
-                  Загрузить маршрут
-                </Button>
-                <Button size="sm" onClick={handleCreate}><Plus className="h-4 w-4 mr-1" />Создать маршрут</Button>
-              </div>
+              <Button size="sm" onClick={handleCreate}><Plus className="h-4 w-4 mr-1" />Создать маршрут</Button>
             </div>
             <RouteTreeOverview ref={treeRef} onEditRoute={handleEdit} />
           </div>
@@ -134,24 +105,6 @@ export function RoutesPage() {
         route={editRoute}
         onSave={handleSaved}
       />
-
-      {/* Seed Confirmation */}
-      <AlertDialog open={seedDialogOpen} onOpenChange={setSeedDialogOpen}>
-        <AlertDialogContent className="max-w-sm">
-          <AlertDialogHeader>
-            <AlertDialogTitle>Загрузить типовые маршруты?</AlertDialogTitle>
-            <AlertDialogDescription>
-              Будут созданы/обновлены 12 характеристических маршрутов и глобальные правила выбора маршрута.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter className="flex-col-reverse sm:flex-row gap-2">
-            <AlertDialogCancel>Отмена</AlertDialogCancel>
-            <AlertDialogAction onClick={handleSeed} disabled={seeding}>
-              {seeding ? "Загрузка..." : "Загрузить"}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
     </section>
   );
 }

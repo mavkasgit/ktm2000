@@ -379,6 +379,7 @@ export function BulkOperationsPanel({
             <tr>
               <th className="text-left p-2 text-xs font-medium text-muted-foreground whitespace-nowrap">Этап</th>
               <th className="text-left p-2 text-xs font-medium text-muted-foreground whitespace-nowrap">Артикул</th>
+              <th className="text-left p-2 text-xs font-medium text-muted-foreground whitespace-nowrap">Операция</th>
               <th className="text-left p-2 text-xs font-medium text-muted-foreground whitespace-nowrap">Доступно</th>
               <th className="text-left p-2 text-xs font-medium text-muted-foreground whitespace-nowrap">Выдача</th>
               <th className="w-8"></th>
@@ -399,6 +400,7 @@ export function BulkOperationsPanel({
                 <tr key={task.id} className="border-b">
                   <td className="p-2 whitespace-nowrap">#{task.sequence}</td>
                   <td className="p-2 font-medium whitespace-nowrap">{task.product_sku}</td>
+                  <td className="p-2 text-xs whitespace-nowrap">{task.operation_name || "—"}</td>
                   <td className="p-2 whitespace-nowrap">{fmtQty(String(issueMax))}</td>
                   <td className="p-2">
                     <Input

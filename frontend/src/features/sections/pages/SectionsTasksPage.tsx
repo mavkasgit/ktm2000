@@ -119,15 +119,6 @@ export function SectionsTasksPage() {
     setProfile(newProfile);
   }
 
-  const planProfileKey = sectionId ? `plan-group-profile-${sectionId}` : null;
-
-  const handlePlanProfileApply = useCallback((newProfile: GroupingProfile) => {
-    setPlanProfile(newProfile);
-    if (planProfileKey) {
-      localStorage.setItem(planProfileKey, JSON.stringify(newProfile));
-    }
-  }, [planProfileKey]);
-
   const [viewMode, setViewMode] = useState<TaskBoardViewMode>("active");
   const [dateFrom, setDateFrom] = useState<string>("");
   const [dateTo, setDateTo] = useState<string>("");
@@ -150,13 +141,6 @@ export function SectionsTasksPage() {
   const [actionComment, setActionComment] = useState("");
   const [planModalOpen, setPlanModalOpen] = useState(false);
   const [groupingModalOpen, setGroupingModalOpen] = useState(false);
-  const [planProfile, setPlanProfile] = useState<GroupingProfile>(() => {
-    try {
-      const saved = planProfileKey ? localStorage.getItem(planProfileKey) : null;
-      if (saved) return JSON.parse(saved);
-    } catch {}
-    return PRESET_PROFILES.find(p => p.id === "sku+stage")!;
-  });
 
   // Bulk mode state
   const [bulkMode, setBulkMode] = useState(searchParams.get("bulk") === "1" || searchParams.get("singleWindow") === "1");
@@ -1119,10 +1103,9 @@ export function SectionsTasksPage() {
       <PlanModal
         open={planModalOpen}
         onOpenChange={setPlanModalOpen}
+        sectionId={sectionId ?? 0}
         sectionName={selectedSection?.name || "—"}
         tasks={tasks}
-        profile={planProfile}
-        onProfileChange={handlePlanProfileApply}
       />
 
       {/* Grouping settings modal */}

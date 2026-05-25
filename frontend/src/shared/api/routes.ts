@@ -193,8 +193,15 @@ export async function deleteRouteSelectionRule(ruleId: number) {
   await apiClient.delete(`/route-selection-rules/${ruleId}`);
 }
 
+export type SeedSummary = {
+  import_templates: number;
+  route_rule_profiles: number;
+  routes: number;
+  selection_rules: number;
+};
+
 export async function seedRoutes() {
-  const { data } = await apiClient.post<RouteDetail[]>("/routes-seed");
+  const { data } = await apiClient.post<SeedSummary>("/routes-seed");
   return data;
 }
 
