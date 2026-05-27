@@ -200,14 +200,28 @@ async def get_section_board(
                     "icon_color": op_icon["icon_color"] if op_icon else None,
                 })
         # route_history_after = route_history + current step operation (what it will look like after completion)
-        current_op_key = (task.section_id, effective_op_code)
-        current_op_icon = icon_by_section_op.get(current_op_key)
+        # IMPORTANT: prefer route_step's operation_code (the operation of THIS stage).
+        # If route_step.operation_code is NULL (e.g. press section), fall back to effective_op_code
+        # which comes from source_payload. This ensures:
+        #   - Raw warehouse: always shows ISSUE_RAW (from route_step), never PRESS_WINDOW from payload
+        #   - Press: shows PRESS_WINDOW/PRESS_COMB (from source_payload, since route_step has NULL)
+        if step.operation_code:
+            after_op_code = step.operation_code
+            after_op_name = step.operation_name
+            after_is_significant = step.is_significant
+            after_icon = icon_by_section_op.get((task.section_id, step.operation_code))
+        else:
+            after_op_code = effective_op_code or ""
+            after_op_name = effective_op_name
+            after_is_significant = effective_is_significant
+            after_icon = icon_by_section_op.get((task.section_id, effective_op_code))
+
         current_op_obj = {
-            "operation_code": effective_op_code or "",
-            "operation_name": effective_op_name,
-            "is_significant": effective_is_significant,
-            "icon": current_op_icon["icon"] if current_op_icon else None,
-            "icon_color": current_op_icon["icon_color"] if current_op_icon else None,
+            "operation_code": after_op_code,
+            "operation_name": after_op_name,
+            "is_significant": after_is_significant,
+            "icon": after_icon["icon"] if after_icon else None,
+            "icon_color": after_icon["icon_color"] if after_icon else None,
         }
         route_history_after = route_history + [current_op_obj] if current_op_obj["operation_code"] else route_history
         prev_step = next((s for s in route_steps if s.sequence == step.sequence - 1), None)
@@ -252,10 +266,18 @@ async def get_section_board(
         )
         sig_output_kind_value = output_kind.value if hasattr(output_kind, "value") else output_kind
 
+        # For paired profiles, source_sku contains both articles (e.g., "ЮП-2616+ЮП-2604")
+        # Use source_sku directly for paired profiles, otherwise use display_sku or product_sku
+        is_paired = source_sku and "+" in source_sku
+        if is_paired:
+            effective_display_sku = source_sku
+        else:
+            effective_display_sku = display_sku if (source_sku and source_sku != (output_sku or "")) else (product_sku or "")
+
         tasks_data.append({
             "id": task.id,
             "product_id": task.product_id,
-            "product_sku": product_sku,
+            "product_sku": effective_display_sku,
             "section_plan_line_id": line.id,
             "plan_position_id": line.plan_position_id,
             "route_step_id": step.id,
@@ -284,13 +306,13 @@ async def get_section_board(
             # --- новые поля ---
             "input_sku": source_sku or "",
             "output_sku": output_sku or "",
-            "display_sku": display_sku,
+            "display_sku": effective_display_sku,
             "route_history": route_history,
             "route_history_after": route_history_after,
             "signature": {
                 "input_sku": source_sku or "",
                 "output_sku": output_sku or "",
-                "display_sku": display_sku,
+                "display_sku": effective_display_sku,
                 "operation_code": effective_op_code,
                 "operation_name": effective_op_name,
                 "is_significant": effective_is_significant,

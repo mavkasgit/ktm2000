@@ -22,6 +22,13 @@ function buildGroupKey(
 ): string {
   const s = task.signature;
 
+  // Check if there are actual operations BEFORE the current stage.
+  // This matters for both routeHistory and routeHistoryAfter profiles:
+  // - routeHistory is empty on first stage → don't split by operationCode
+  // - routeHistoryAfter always has current op, but we still need to check
+  //   if there were operations BEFORE it to justify splitting
+  const hasHistoryBefore = (s.route_history ?? []).length > 0;
+
   const parts = profile.criteria.map((criterion: GroupingCriterion) => {
     switch (criterion) {
       case "productSku":
@@ -31,6 +38,12 @@ function buildGroupKey(
         return String(task.route_step_id);
 
       case "operationCode":
+        // Skip operationCode in key if there's no history before current stage.
+        // On the first stage, all tasks should group by productSku only,
+        // regardless of their operation_code.
+        if ((profile.criteria.includes("routeHistory") || profile.criteria.includes("routeHistoryAfter")) && !hasHistoryBefore) {
+          return "__no_history__";
+        }
         return s.operation_code ?? "—";
 
       case "outputKind":
