@@ -16,10 +16,12 @@ from app.models.product import Product
 from app.models.route import RouteStep, SectionOperation
 from app.models.section import Section
 from app.models.transfer import Transfer, TransferStatus
+from app.models.warehouse_remainder import WarehouseRemainder
 from app.models.work_task import WorkTask, WorkTaskStatus
 
 from .cache import _compute_available_from_balances
 from .common import _to_decimal
+from .operations_combined import get_combined_info_for_board
 
 
 def _compute_display_sku(source_sku: str, output_sku: str) -> str:
@@ -301,7 +303,70 @@ async def get_section_board(
             },
         })
 
-    return {"section_id": section_id, "tasks": tasks_data, "available_operations": available_operations}
+    # --- Combined operations processing ---
+    # Collect unique plan_position_ids
+    plan_position_ids = {row[1].plan_position_id for row in rows}  # row[1] = SectionPlanLine
+
+    # Get combined group info for all plan positions
+    combined_by_pos: dict[int, dict] = {}
+    for pos_id in plan_position_ids:
+        info = await get_combined_info_for_board(db, pos_id)
+        if info:
+            combined_by_pos[pos_id] = info
+
+    # Build lookup: line_id -> combined_op_group
+    line_to_cog: dict[int, str] = {}
+    for task, line, step, *_ in rows:
+        if step.combined_op_group:
+            line_to_cog[line.id] = step.combined_op_group
+
+    # Identify secondary line IDs per plan_position
+    secondary_line_ids: set[int] = set()
+    for pos_id, groups in combined_by_pos.items():
+        for cog, group_info in groups.items():
+            for sec_line_id in group_info.get("secondary_line_ids", []):
+                secondary_line_ids.add(sec_line_id)
+
+    # Build lookup: plan_position_id + cog -> operation_names
+    cog_op_names: dict[tuple[int, str], list[str]] = {}
+    for pos_id, groups in combined_by_pos.items():
+        for cog, group_info in groups.items():
+            cog_op_names[(pos_id, cog)] = group_info.get("operation_names", [])
+
+    # Filter out secondary tasks and add combined fields to primary tasks
+    td_all_by_line_id = tasks_data  # Reference for secondary task lookup
+
+    filtered_tasks_data = []
+    for td in tasks_data:
+        line_id = td["section_plan_line_id"]
+        if line_id in secondary_line_ids:
+            # Skip secondary tasks — they are executed together with primary
+            continue
+
+        # Check if this is a primary task in a combined group
+        pos_id = td["plan_position_id"]
+        cog = line_to_cog.get(line_id)
+        if cog and pos_id in combined_by_pos and cog in combined_by_pos[pos_id]:
+            # This is a primary task
+            group_info = combined_by_pos[pos_id][cog]
+            # Find secondary task IDs
+            sec_task_ids = []
+            for sec_line_id in group_info.get("secondary_line_ids", []):
+                sec_task = next((t for t in td_all_by_line_id if t["section_plan_line_id"] == sec_line_id), None)
+                if sec_task:
+                    sec_task_ids.append(sec_task["id"])
+
+            td["is_combined_primary"] = True
+            td["combined_task_ids"] = sec_task_ids
+            td["combined_operation_names"] = group_info.get("operation_names", [])
+        else:
+            td["is_combined_primary"] = False
+            td["combined_task_ids"] = []
+            td["combined_operation_names"] = []
+
+        filtered_tasks_data.append(td)
+
+    return {"section_id": section_id, "tasks": filtered_tasks_data, "available_operations": available_operations}
 
 
 async def get_sections_summary(db: AsyncSession) -> dict:
@@ -573,3 +638,65 @@ async def get_section_payload_keys(
 
     rows = (await db.execute(stmt)).scalars().all()
     return {"keys": list(rows)}
+
+
+async def get_warehouse_remainders(
+    db: AsyncSession,
+    *,
+    section_id: int | None = None,
+) -> dict:
+    """Return active warehouse remainders (not fully consumed).
+
+    These are surplus quantities returned to stock after task completion
+    where issued > completed. Includes completed stages info for display.
+    """
+    query = select(
+        WarehouseRemainder,
+        Product.sku,
+        Product.name,
+        Section.code.label("section_code"),
+        Section.name.label("section_name"),
+        RouteStep.sequence.label("route_step_sequence"),
+        RouteStep.operation_code,
+        RouteStep.operation_name,
+    ).join(
+        Product, WarehouseRemainder.product_id == Product.id,
+    ).join(
+        Section, WarehouseRemainder.section_id == Section.id,
+    ).join(
+        RouteStep, WarehouseRemainder.route_step_id == RouteStep.id,
+    ).where(
+        WarehouseRemainder.consumed_at.is_(None),
+        WarehouseRemainder.remainder_quantity > 0,
+    )
+
+    if section_id is not None:
+        query = query.where(WarehouseRemainder.section_id == section_id)
+
+    query = query.order_by(WarehouseRemainder.created_at.desc())
+
+    rows = (await db.execute(query)).all()
+
+    remainders = []
+    for remainder, product_sku, product_name, section_code, section_name, step_sequence, op_code, op_name in rows:
+        remainders.append({
+            "id": remainder.id,
+            "product_id": remainder.product_id,
+            "product_sku": product_sku,
+            "product_name": product_name,
+            "section_id": remainder.section_id,
+            "section_code": section_code,
+            "section_name": section_name,
+            "route_step_id": remainder.route_step_id,
+            "route_step_sequence": step_sequence,
+            "operation_code": op_code,
+            "operation_name": op_name,
+            "section_plan_line_id": remainder.section_plan_line_id,
+            "origin_task_id": remainder.origin_task_id,
+            "remainder_quantity": str(remainder.remainder_quantity),
+            "original_issued": str(remainder.original_issued),
+            "completed_stages": remainder.completed_stages_json,
+            "created_at": remainder.created_at.isoformat() if remainder.created_at else None,
+        })
+
+    return {"remainders": remainders}

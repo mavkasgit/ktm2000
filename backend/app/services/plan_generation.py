@@ -11,12 +11,12 @@ from app.models.internal_plan import InternalPlan, SectionPlanLine
 from app.models.production_plan import PlanPosition, PlanPositionStatus, PositionStatusHistory, ProductionPlan, ProductionPlanStatus
 from app.models.product import Product
 from app.models.release_batch import ReleaseBatch, ReleaseBatchPosition, ReleaseBatchStatus, ReleaseBatchType
-from app.models.route import ProductionRoute, RouteStep
+from app.models.route import ProductionRoute, RouteStep, SectionOperation
 from app.models.section import Section
 from app.models.work_task import WorkTask, WorkTaskStatus
 from app.services.route_validation import validate_route_match
 from app.services.route_matcher import resolve_position_route
-from app.services.route_resolution import resolve_anod_operation
+from app.services.production_planning_rows import _resolve_step_operation_code
 
 
 async def create_release_batch(
@@ -74,13 +74,22 @@ async def create_release_batch(
         if release_quantity > remaining:
             raise ValueError("Release quantity exceeds approved remaining quantity")
 
+        # Load operation names for generic resolution (any section with operation_code=None)
+        section_ids = {section.id for _step, section in steps}
+        operation_names_by_key = {
+            (op.section_id, op.operation_code): op.operation_name
+            for op in (
+                await db.execute(select(SectionOperation).where(SectionOperation.section_id.in_(section_ids)))
+            ).scalars().all()
+        }
+
         db.add(
             ReleaseBatchPosition(
                 release_batch_id=batch.id,
                 plan_position_id=position.id,
                 release_quantity=release_quantity,
                 route_id=route.id,
-                route_snapshot=_route_snapshot(route, steps, position),
+                route_snapshot=_route_snapshot(route, steps, position, operation_names_by_key),
             )
         )
 
@@ -122,15 +131,43 @@ async def release_batch(db: AsyncSession, release_batch_id: int) -> dict:
             raise ValueError(f"Position #{position.id} has no route assigned")
 
         steps = sorted(batch_position.route_snapshot.get("steps", []), key=lambda step: step["sequence"])
-        for index, step in enumerate(steps):
+
+        # Group steps by combined_op_group to avoid duplicate SectionPlanLines
+        # Steps with same combined_op_group and section_id should be merged into one line
+        grouped_steps: list[list[dict]] = []
+        current_group: list[dict] = []
+        current_cog: str | None = None
+        current_section_id: int | None = None
+
+        for step in steps:
+            step_cog = step.get("combined_op_group")
+            step_section = step["section_id"]
+
+            if step_cog is not None and step_cog == current_cog and step_section == current_section_id:
+                # Continue current combined group
+                current_group.append(step)
+            else:
+                # Start new group
+                if current_group:
+                    grouped_steps.append(current_group)
+                current_group = [step]
+                current_cog = step_cog
+                current_section_id = step_section
+
+        if current_group:
+            grouped_steps.append(current_group)
+
+        line_index = 0
+        for group in grouped_steps:
+            primary_step = group[0]
             line = SectionPlanLine(
                 internal_plan_id=internal_plan.id,
                 plan_position_id=position.id,
-                section_id=step["section_id"],
+                section_id=primary_step["section_id"],
                 product_id=position.product_id,
                 route_id=batch_position.route_id,
-                route_step_id=step["route_step_id"],
-                sequence=step["sequence"],
+                route_step_id=primary_step["route_step_id"],
+                sequence=primary_step["sequence"],
                 planned_quantity=batch_position.release_quantity,
                 due_date=position.due_date,
             )
@@ -143,11 +180,12 @@ async def release_batch(db: AsyncSession, release_batch_id: int) -> dict:
                     product_id=line.product_id,
                     route_step_id=line.route_step_id,
                     planned_quantity=line.planned_quantity,
-                    status=WorkTaskStatus.ready if index == 0 else WorkTaskStatus.waiting_previous,
+                    status=WorkTaskStatus.ready if line_index == 0 else WorkTaskStatus.waiting_previous,
                     due_date=line.due_date,
                 )
             )
             tasks_created += 1
+            line_index += 1
 
         released_total = await _released_quantity(db, position)
         new_status = PlanPositionStatus.released if released_total >= position.quantity else PlanPositionStatus.approved
@@ -261,7 +299,13 @@ async def _get_route_steps_with_sections(db: AsyncSession, route: ProductionRout
     return result
 
 
-def _route_snapshot(route: ProductionRoute, steps: list[tuple[RouteStep, Section]], position: PlanPosition | None = None) -> dict:
+def _route_snapshot(
+    route: ProductionRoute,
+    steps: list[tuple[RouteStep, Section]],
+    position: PlanPosition | None = None,
+    operation_names_by_key: dict[tuple[int, str], str] | None = None,
+) -> dict:
+    op_names = operation_names_by_key or {}
     return {
         "route_id": route.id,
         "route_name": route.name,
@@ -273,19 +317,34 @@ def _route_snapshot(route: ProductionRoute, steps: list[tuple[RouteStep, Section
                 "section_code": section.code,
                 "section_name": section.name,
                 "section_kind": section.kind,
-                "operation_code": (
-                    resolve_anod_operation(position.source_payload)
-                    if step.operation_code is None and section.code == "ANOD" and position
-                    else step.operation_code
-                ),
-                "operation_name": step.operation_name,
+                "operation_code": _resolve_step_operation_code(step.operation_code, section.code, position),
+                "operation_name": _resolve_route_step_operation_name(step, section, position, op_names),
                 "requires_acceptance": step.requires_acceptance,
                 "allow_parallel": step.allow_parallel,
                 "is_final": step.is_final,
+                "combined_op_group": step.combined_op_group,
             }
             for step, section in steps
         ],
     }
+
+
+def _resolve_route_step_operation_name(
+    step: RouteStep,
+    section: Section,
+    position: PlanPosition | None,
+    operation_names_by_key: dict[tuple[int, str], str],
+) -> str:
+    """Resolve display operation name for a route step.
+
+    For steps with operation_code=None (placeholders), resolve the specific
+    operation name from SectionOperation using the resolved operation_code.
+    Works for ANY section, not just ANOD.
+    """
+    resolved_code = _resolve_step_operation_code(step.operation_code, section.code, position)
+    if resolved_code is not None:
+        return operation_names_by_key.get((section.id, resolved_code), step.operation_name)
+    return step.operation_name
 
 
 async def _remaining_quantity(db: AsyncSession, position: PlanPosition) -> Decimal:

@@ -37,6 +37,7 @@ function normalizeIntegerInput(value: string): string {
 function actionTitle(type: TaskActionDialogType): string {
   if (type === "issue") return "Выдать в работу";
   if (type === "send") return "Передать на следующий этап";
+  if (type === "return") return "Вернуть остаток на склад";
   return "Внести факт";
 }
 
@@ -44,6 +45,7 @@ function maxQuantity(type: TaskActionDialogType, task: SectionBoardTask | null):
   if (!task) return 0;
   if (type === "issue") return toNumber(task.cache.available_quantity);
   if (type === "complete") return toNumber(task.cache.in_work_quantity);
+  if (type === "return") return Math.max(0, toNumber(task.cache.issued_quantity) - toNumber(task.cache.completed_quantity) - toNumber(task.cache.transferred_quantity));
   return Math.max(0, toNumber(task.cache.completed_quantity) - toNumber(task.cache.transferred_quantity));
 }
 
@@ -109,9 +111,7 @@ export function TaskActionDrawer({
   const maxQty = maxQuantity(type, task);
   const isFinalSend = type === "send" && isFinalStageTask(task);
   const qtyNum = toNumber(actionQty);
-  const outOfRange = qtyNum > 0 && maxQty > 0 && qtyNum > maxQty;
-
-  const presets = [25, 50, 100];
+  const outOfRange = type !== "issue" && qtyNum > 0 && maxQty > 0 && qtyNum > maxQty;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -144,6 +144,11 @@ export function TaskActionDrawer({
                   <Badge variant="secondary">Задача следующего этапа будет создана автоматически</Badge>
                 </div>
               )}
+              {task.is_combined_primary && task.combined_operation_names.length > 1 && (
+                <div className="mt-2">
+                  <Badge variant="secondary">Будет выполнено: {task.combined_operation_names.join(" + ")}</Badge>
+                </div>
+              )}
             </div>
           )}
 
@@ -162,27 +167,23 @@ export function TaskActionDrawer({
             </label>
             <Input type="number" step="1" min="0" value={actionQty} onChange={(e) => setActionQty(normalizeIntegerInput(e.target.value))} />
             <div className="mt-2 flex flex-wrap gap-1">
-              {presets.map((p) => (
+              {task && (
                 <Button
-                  key={p}
                   type="button"
                   size="sm"
                   variant="outline"
-                  onClick={() => {
-                    const val = maxQty > 0 ? String(Math.round((maxQty * p) / 100)) : "0";
-                    setActionQty(val);
-                  }}
+                  onClick={() => setActionQty(fmtQty(task.planned_quantity))}
                 >
-                  {p}%
+                  Плановое
                 </Button>
-              ))}
+              )}
               <Button
                 type="button"
                 size="sm"
                 variant="outline"
                 onClick={() => setActionQty(maxQty > 0 ? String(Math.round(maxQty)) : "0")}
               >
-                Макс
+                Максимальное
               </Button>
             </div>
             {outOfRange && (

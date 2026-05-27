@@ -216,7 +216,7 @@ export function SectionsPage() {
       } catch (e) {
         console.error("[handleSaveOp] create error:", e);
         toast({ title: "Ошибка создания", description: API.getErrorMessage(e), variant: "destructive" });
-        return false;
+        return;
       }
     } else {
       try {
@@ -234,11 +234,10 @@ export function SectionsPage() {
       } catch (e) {
         console.error("[handleSaveOp] update error:", e);
         toast({ title: "Ошибка обновления", description: API.getErrorMessage(e), variant: "destructive" });
-        return false;
+        return;
       }
     }
-    console.log("[handleSaveOp] returning true");
-    return true;
+    console.log("[handleSaveOp] done");
   }, [opDialogMode, opDialogSectionId, opDialogOpId, queryClient]);
 
   const deleteOp = useCallback(async (sectionId: number, opId: number, opName: string) => {

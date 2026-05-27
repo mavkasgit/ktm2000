@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 from sqlalchemy import func, select, delete
+from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
@@ -45,6 +46,7 @@ class StepCreate(BaseModel):
     requires_acceptance: bool = True
     allow_parallel: bool = False
     is_final: bool = False
+    combined_op_group: str | None = None
 
 
 class StepUpdate(BaseModel):
@@ -56,6 +58,7 @@ class StepUpdate(BaseModel):
     requires_acceptance: bool = True
     allow_parallel: bool = False
     is_final: bool = False
+    combined_op_group: str | None = None
 
 
 class RuleOut(BaseModel):
@@ -79,6 +82,7 @@ class StepOut(BaseModel):
     operation_name: str
     norm_time_minutes: int | None = None
     is_final: bool
+    combined_op_group: str | None = None
 
     model_config = {"from_attributes": True}
 
@@ -135,6 +139,18 @@ async def get_route(route_id: int, db: AsyncSession = Depends(get_db)) -> RouteD
     if route is None:
         raise HTTPException(status_code=404, detail="Route not found")
 
+    # Use raw SQL to bypass ORM caching
+    from sqlalchemy import text
+    steps_result = await db.execute(text("""
+        SELECT rs.id, rs.route_id, rs.sequence, rs.section_id, rs.operation_code,
+               rs.operation_name, rs.norm_time_minutes, rs.is_final, rs.combined_op_group,
+               s.code as section_code, s.name as section_name
+        FROM route_steps rs
+        LEFT JOIN sections s ON rs.section_id = s.id
+        WHERE rs.route_id = :route_id
+        ORDER BY rs.sequence
+    """), {"route_id": route_id})
+
     steps = []
     for step in route.steps:
         section = await db.get(Section, step.section_id)
@@ -149,6 +165,7 @@ async def get_route(route_id: int, db: AsyncSession = Depends(get_db)) -> RouteD
             operation_name=step.operation_name,
             norm_time_minutes=step.norm_time_minutes,
             is_final=step.is_final,
+            combined_op_group=step.combined_op_group,
         ))
 
     rules_result = await db.execute(
@@ -371,6 +388,7 @@ async def create_route_step(route_id: int, payload: StepCreate, db: AsyncSession
         operation_name=step.operation_name,
         norm_time_minutes=step.norm_time_minutes,
         is_final=step.is_final,
+        combined_op_group=step.combined_op_group,
     )
 
 
@@ -422,6 +440,7 @@ async def replace_route_steps(route_id: int, payload: list[StepUpdate], db: Asyn
             requires_acceptance=item.requires_acceptance,
             allow_parallel=item.allow_parallel,
             is_final=item.is_final,
+            combined_op_group=item.combined_op_group,
         )
         db.add(step)
         await db.flush()
@@ -437,6 +456,7 @@ async def replace_route_steps(route_id: int, payload: list[StepUpdate], db: Asyn
             operation_name=step.operation_name,
             norm_time_minutes=step.norm_time_minutes,
             is_final=step.is_final,
+            combined_op_group=step.combined_op_group,
         ))
     return result
 

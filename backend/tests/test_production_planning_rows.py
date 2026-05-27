@@ -15,7 +15,7 @@ from app.models.production_plan import (
     ProductionPlan,
     ProductionPlanStatus,
 )
-from app.models.route import ProductionRoute, RouteStep
+from app.models.route import ProductionRoute, RouteStep, SectionOperation
 from app.models.routing import RouteOperationFamily, RouteOutputKind
 from app.models.section import Section
 from app.models.techcard import Techcard, TechcardLine
@@ -63,6 +63,120 @@ async def _make_product_with_route(session, sku: str = "FG-EXEC") -> tuple[Produ
                 operation_code=op_code,
                 operation_name=op_code,
                 is_final=idx == len(sections),
+            )
+        )
+    await session.flush()
+    return product, route
+
+
+async def _make_product_with_combined_anod_route(session, sku: str = "FG-COMBO-STAGE") -> tuple[Product, ProductionRoute]:
+    product = Product(sku=sku, name=f"Finished {sku}", type=ProductType.finished_good, unit="pcs")
+    sections = [
+        Section(code=f"{sku}-ISSUE", name="Issue", kind="raw_stock"),
+        Section(code=f"{sku}-SHOT", name="Shot", kind="production"),
+        Section(code=f"{sku}-ANOD", name="Анодирование", kind="production"),
+        Section(code=f"{sku}-WIP", name="WIP", kind="wip_stock"),
+        Section(code=f"{sku}-FINAL", name="Final", kind="finished_stock"),
+    ]
+    session.add_all([product, *sections])
+    await session.flush()
+    session.add_all([
+        SectionOperation(section_id=sections[2].id, operation_code="ANOD_05", operation_name="Чёрный"),
+        SectionOperation(section_id=sections[2].id, operation_code="PACK_STRETCH", operation_name="Стрейч"),
+    ])
+
+    route = ProductionRoute(name=f"Combined Route-{sku}", is_active=True)
+    session.add(route)
+    await session.flush()
+
+    techcard = Techcard(product_id=product.id, version="v1", is_active=True)
+    session.add(techcard)
+    await session.flush()
+    session.add(TechcardLine(techcard_id=techcard.id, component_product_id=product.id, quantity=Decimal("1"), unit="pcs"))
+
+    steps_config = [
+        (sections[0], "ISSUE_RAW", "Issue", None, False),
+        (sections[1], "SHOT", "Shot", None, False),
+        (sections[2], None, "Анодирование", "anod_pack", False),
+        (sections[2], "PACK_STRETCH", "Стрейч", "anod_pack", False),
+        (sections[3], "MOVE_TO_WIP", "WIP", None, False),
+        (sections[4], "ACCEPT_FINISHED", "Final", None, True),
+    ]
+    for idx, (section, operation_code, operation_name, combined_op_group, is_final) in enumerate(steps_config, start=1):
+        session.add(
+            RouteStep(
+                route_id=route.id,
+                sequence=idx,
+                section_id=section.id,
+                operation_code=operation_code,
+                operation_name=operation_name,
+                combined_op_group=combined_op_group,
+                is_final=is_final,
+            )
+        )
+    await session.flush()
+    return product, route
+
+
+async def _make_product_with_multi_combined_route(session, sku: str = "FG-MULTI-COMBO") -> tuple[Product, ProductionRoute]:
+    """Create a route with TWO separate combined_op_group values on different sections."""
+    product = Product(sku=sku, name=f"Finished {sku}", type=ProductType.finished_good, unit="pcs")
+    sections = [
+        Section(code=f"{sku}-ISSUE", name="Склад сырья", kind="raw_stock"),
+        Section(code=f"{sku}-DRILL", name="Дробеструй", kind="production"),
+        Section(code=f"{sku}-ANOD", name="Анодирование", kind="production"),
+        Section(code=f"{sku}-PACK", name="Упаковка", kind="production"),
+        Section(code=f"{sku}-WIP", name="Склад п/ф", kind="wip_stock"),
+        Section(code=f"{sku}-FINAL", name="Склад ГП", kind="finished_stock"),
+    ]
+    session.add_all([product, *sections])
+    await session.flush()
+
+    # Operations for ANOD section (combined group "anod_color")
+    session.add_all([
+        SectionOperation(section_id=sections[2].id, operation_code="ANOD_BLACK", operation_name="Чёрный"),
+        SectionOperation(section_id=sections[2].id, operation_code="ANOD_MATTE", operation_name="Матовый"),
+    ])
+    # Operations for PACK section (combined group "pack_ops")
+    session.add_all([
+        SectionOperation(section_id=sections[3].id, operation_code="PACK_LABEL", operation_name="Этикетка"),
+        SectionOperation(section_id=sections[3].id, operation_code="PACK_BOX", operation_name="Коробка"),
+    ])
+
+    route = ProductionRoute(name=f"Multi-Combined Route-{sku}", is_active=True)
+    session.add(route)
+    await session.flush()
+
+    techcard = Techcard(product_id=product.id, version="v1", is_active=True)
+    session.add(techcard)
+    await session.flush()
+    session.add(TechcardLine(techcard_id=techcard.id, component_product_id=product.id, quantity=Decimal("1"), unit="pcs"))
+
+    # Route steps with TWO separate combined groups:
+    # 1. ANOD: two steps with combined_op_group="anod_color"
+    # 2. PACK: two steps with combined_op_group="pack_ops"
+    steps_config = [
+        (sections[0], "ISSUE_RAW", "Выдача", None, False),
+        (sections[1], "DRILL", "Дробеструй", None, False),
+        # ANOD combined group
+        (sections[2], None, "Анодирование", "anod_color", False),
+        (sections[2], "ANOD_MATTE", "Матовый", "anod_color", False),
+        # PACK combined group
+        (sections[3], None, "Упаковка", "pack_ops", False),
+        (sections[3], "PACK_BOX", "Коробка", "pack_ops", False),
+        (sections[4], "MOVE_TO_WIP", "Склад п/ф", None, False),
+        (sections[5], "ACCEPT_FINISHED", "Склад ГП", None, True),
+    ]
+    for idx, (section, operation_code, operation_name, combined_op_group, is_final) in enumerate(steps_config, start=1):
+        session.add(
+            RouteStep(
+                route_id=route.id,
+                sequence=idx,
+                section_id=section.id,
+                operation_code=operation_code,
+                operation_name=operation_name,
+                combined_op_group=combined_op_group,
+                is_final=is_final,
             )
         )
     await session.flush()
@@ -130,6 +244,187 @@ async def _make_position(
     session.add(position)
     await session.flush()
     return position
+
+
+@pytest.mark.asyncio
+async def test_rows_detail_merges_combined_anod_stages_before_release(client, session) -> None:
+    product, route = await _make_product_with_combined_anod_route(session)
+    plan = await _make_plan(session, "COMBO-STAGE")
+    position = await _make_position(
+        session,
+        plan_id=plan.id,
+        sku=product.sku,
+        name=product.name,
+        quantity=Decimal("1020"),
+        product_id=product.id,
+    )
+    position.route_id = route.id
+    position.source_payload = {"color": "черный"}
+    await session.commit()
+
+    response = await client.get(f"/api/production-planning/rows/{position.id}")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["not_started"] is True
+    assert len(data["route_snapshot"]["steps"]) == 5
+    assert len(data["stages"]) == 5
+    assert [stage["section_name"] for stage in data["stages"]].count("Анодирование") == 1
+    anod_stage = next(stage for stage in data["stages"] if stage["section_name"] == "Анодирование")
+    assert anod_stage["sequence"] == 3
+    assert anod_stage["planned_quantity"] == 1020.0
+    assert anod_stage["operation_code"] == "ANOD_05"
+    assert anod_stage["operation_name"] == "Чёрный / Стрейч"
+
+
+@pytest.mark.asyncio
+async def test_rows_list_merges_combined_anod_route_steps(client, session) -> None:
+    product, route = await _make_product_with_combined_anod_route(session, "FG-COMBO-LIST")
+    plan = await _make_plan(session, "COMBO-LIST")
+    position = await _make_position(
+        session,
+        plan_id=plan.id,
+        sku=product.sku,
+        name=product.name,
+        quantity=Decimal("1020"),
+        product_id=product.id,
+        row_num=6,
+    )
+    position.route_id = route.id
+    await session.commit()
+
+    response = await client.get("/api/production-planning/rows")
+
+    assert response.status_code == 200
+    row = next(item for item in response.json() if item["plan_position_id"] == position.id)
+    route_steps = row["route_steps"]
+    assert len(route_steps) == 5
+    anod_section_id = next(step.section_id for step in await _route_steps(session, route.id) if step.combined_op_group == "anod_pack")
+    assert [step["section_id"] for step in route_steps].count(anod_section_id) == 1
+    assert [step["sequence"] for step in route_steps] == [1, 2, 3, 5, 6]
+
+
+@pytest.mark.asyncio
+async def test_rows_list_and_detail_merge_multiple_combined_groups(client, session) -> None:
+    """Route has TWO separate combined_op_group values — both must be merged independently."""
+    product, route = await _make_product_with_multi_combined_route(session, "FG-MULTI-COMBO")
+    plan = await _make_plan(session, "MULTI-COMBO")
+    position = await _make_position(
+        session,
+        plan_id=plan.id,
+        sku=product.sku,
+        name=product.name,
+        quantity=Decimal("500"),
+        product_id=product.id,
+        row_num=10,
+    )
+    position.route_id = route.id
+    position.source_payload = {"color": "черный матовый"}
+    await session.commit()
+
+    # Check list endpoint
+    response = await client.get("/api/production-planning/rows")
+    assert response.status_code == 200
+    row = next(item for item in response.json() if item["plan_position_id"] == position.id)
+    route_steps = row["route_steps"]
+
+    # Route has 8 raw steps, but after grouping should be 6:
+    # 1. Выдача, 2. Дробеструй, 3. Анодирование(merged 2), 4. Упаковка(merged 2), 5. Склад п/ф, 6. Склад ГП
+    assert len(route_steps) == 6, f"Expected 6 grouped route_steps, got {len(route_steps)}: {[s['sequence'] for s in route_steps]}"
+
+    # Check sequences are preserved (merged steps keep first sequence of group)
+    assert [step["sequence"] for step in route_steps] == [1, 2, 3, 5, 7, 8]
+
+    # Check detail endpoint
+    response = await client.get(f"/api/production-planning/rows/{position.id}")
+    assert response.status_code == 200
+    data = response.json()
+
+    assert len(data["stages"]) == 6, f"Expected 6 stages, got {len(data['stages'])}"
+    assert len(data["route_snapshot"]["steps"]) == 6
+
+    # Each combined section appears exactly once
+    stage_names = [stage["section_name"] for stage in data["stages"]]
+    assert stage_names.count("Анодирование") == 1, f"Анодирование appears {stage_names.count('Анодирование')} times"
+    assert stage_names.count("Упаковка") == 1, f"Упаковка appears {stage_names.count('Упаковка')} times"
+
+    # Check merged operation names
+    # First step in combined group has operation_code=None, so keeps route_step.operation_name "Анодирование"
+    # Second step resolves to "Матовый" from SectionOperation
+    anod_stage = next(s for s in data["stages"] if s["section_name"] == "Анодирование")
+    assert anod_stage["sequence"] == 3
+    assert anod_stage["operation_name"] == "Анодирование / Матовый"
+    assert anod_stage["planned_quantity"] == 500.0
+
+    pack_stage = next(s for s in data["stages"] if s["section_name"] == "Упаковка")
+    assert pack_stage["sequence"] == 5
+    # First step has operation_code=None, keeps route_step.operation_name "Упаковка"
+    # Second step has operation_code="PACK_BOX", resolves to "Коробка"
+    assert pack_stage["operation_name"] == "Упаковка / Коробка"
+    assert pack_stage["planned_quantity"] == 500.0
+
+
+@pytest.mark.asyncio
+async def test_rows_detail_resolves_press_operation_from_payload(client, session) -> None:
+    """PRESS route step has operation_code=None; operation code and name must resolve from source_payload."""
+    product = Product(sku="FG-PRESS-TEST", name="Press Test", type=ProductType.finished_good, unit="pcs")
+    sections = [
+        Section(code="PRESS-RAW", name="Склад сырья", kind="raw_stock"),
+        Section(code="PRESS", name="Пресс", kind="production"),
+        Section(code="PRESS-FG", name="Склад ГП", kind="finished_stock"),
+    ]
+    session.add_all([product, *sections])
+    await session.flush()
+
+    route = ProductionRoute(name="Press Route", is_active=True)
+    session.add(route)
+    await session.flush()
+
+    # PRESS step with operation_code=None — placeholder, resolves from payload
+    steps_config = [
+        (sections[0], "ISSUE_RAW", "Выдача сырья", None, False),
+        (sections[1], None, "Пресс", None, False),  # placeholder
+        (sections[2], "ACCEPT_FINISHED", "Склад ГП", None, True),
+    ]
+    for idx, (section, operation_code, operation_name, combined_op_group, is_final) in enumerate(steps_config, start=1):
+        session.add(
+            RouteStep(
+                route_id=route.id,
+                sequence=idx,
+                section_id=section.id,
+                operation_code=operation_code,
+                operation_name=operation_name,
+                combined_op_group=combined_op_group,
+                is_final=is_final,
+            )
+        )
+    await session.flush()
+
+    plan = await _make_plan(session, "PRESS-TEST")
+    position = await _make_position(
+        session,
+        plan_id=plan.id,
+        sku=product.sku,
+        name=product.name,
+        quantity=Decimal("200"),
+        product_id=product.id,
+    )
+    position.route_id = route.id
+
+    # source_payload contains PRESS_WINDOW from Excel normalization
+    position.source_payload = {"operation_code": "PRESS_WINDOW", "operation_name": "Пресс окно"}
+    await session.commit()
+
+    response = await client.get(f"/api/production-planning/rows/{position.id}")
+    assert response.status_code == 200
+    data = response.json()
+
+    # Check that PRESS operation_code resolved to PRESS_WINDOW
+    press_stage = next(s for s in data["stages"] if s["section_name"] == "Пресс")
+    assert press_stage["operation_code"] == "PRESS_WINDOW"
+    # operation_name comes from route_step.operation_name since no SectionOperation registered
+    # but operation_code is correctly resolved from payload
+    assert press_stage["planned_quantity"] == 200.0
 
 
 @pytest.mark.asyncio

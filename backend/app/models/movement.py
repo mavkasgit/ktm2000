@@ -18,6 +18,7 @@ class MovementType(str, enum.Enum):
     return_to_previous = "return_to_previous"
     final_release = "final_release"
     adjustment = "adjustment"
+    return_to_stock = "return_to_stock"
 
 
 class Movement(Base):

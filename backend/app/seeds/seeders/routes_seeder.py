@@ -132,6 +132,7 @@ async def seed_routes(
 
         for idx, step_def in enumerate(template["steps"], start=1):
             section = sections_by_code[step_def["section_code"]]
+            cog = step_def.get("combined_op_group")
             db.add(
                 RouteStep(
                     route_id=route.id,
@@ -143,10 +144,12 @@ async def seed_routes(
                     is_final=bool(step_def.get("is_final", False)),
                     requires_acceptance=True,
                     allow_parallel=False,
+                    combined_op_group=cog,
                 )
             )
 
         await db.flush()
+
         result[template["code"]] = route
 
     return result

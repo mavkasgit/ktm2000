@@ -8,12 +8,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.internal_plan import SectionPlanLine
 from app.models.movement import Movement, MovementType
 from app.models.production_plan import PlanPosition, PlanPositionStatus
-from app.models.route import RouteStep
+from app.models.route import RouteStep, SectionOperation
 from app.models.section import Section
 from app.models.transfer import Transfer
 from app.models.work_task import WorkTask, WorkTaskStatus
 from app.services.route_matcher import ResolvedRouteInfo, resolve_position_route
-from app.services.route_resolution import resolve_anod_operation
+from app.services.route_resolution import resolve_operation
 
 MANUAL_ROUTE_PASS_PREFIX = "manual_route_pass:"
 
@@ -21,17 +21,46 @@ MANUAL_ROUTE_PASS_PREFIX = "manual_route_pass:"
 def _resolve_step_operation_code(step_operation_code: str | None, section_code: str, position: PlanPosition) -> str | None:
     """Resolve operation_code for a route step.
 
-    For ANOD steps with operation_code=None, resolve from position source_payload.
-    For all other steps, return the operation_code as-is.
+    For steps with operation_code=None, resolve from position source_payload
+    using the unified resolve_operation helper (covers PRESS, ANOD placeholders).
+    For steps with explicit operation_code, return as-is.
     """
     if step_operation_code is not None:
         return step_operation_code
 
-    # ANOD placeholder: resolve from payload
-    if section_code == "ANOD":
-        return resolve_anod_operation(position.source_payload)
+    return resolve_operation(section_code, position.source_payload)
 
-    return None
+
+def _resolve_current_stage_operation(
+    operation_name: str,
+    operation_code: str | None,
+    section_code: str,
+    section_id: int,
+    position: PlanPosition,
+    operation_names_by_key: dict[tuple[int, str], str],
+) -> str:
+    """Resolve the display operation name for current-stage info.
+
+    Mirrors _resolve_step_operation_name logic so that placeholders
+    (operation_code=None) are resolved from position source_payload
+    for ANY section, not only ANOD.
+    """
+    resolved_code = _resolve_step_operation_code(operation_code, section_code, position)
+    if resolved_code is not None:
+        return operation_names_by_key.get((section_id, resolved_code), operation_name)
+    return operation_name
+
+
+def _resolve_step_operation_name(
+    step: RouteStep,
+    section: Section,
+    position: PlanPosition,
+    operation_names_by_key: dict[tuple[int, str], str],
+) -> str:
+    operation_code = _resolve_step_operation_code(step.operation_code, section.code, position)
+    if operation_code is not None:
+        return operation_names_by_key.get((section.id, operation_code), step.operation_name)
+    return step.operation_name
 
 
 def _to_float(value: Decimal | int | float | None) -> float:
@@ -62,6 +91,30 @@ def _summarize_task_status(statuses: list[str]) -> str:
     if status_set == {"cancelled"}:
         return "cancelled"
     return statuses[0]
+
+
+def _group_combined_route_steps(steps: list[tuple[RouteStep, Section]]) -> list[list[tuple[RouteStep, Section]]]:
+    grouped_steps: list[list[tuple[RouteStep, Section]]] = []
+    current_group: list[tuple[RouteStep, Section]] = []
+    current_cog: str | None = None
+    current_section_id: int | None = None
+
+    for step, section in steps:
+        step_cog = step.combined_op_group
+        if step_cog is not None and step_cog == current_cog and step.section_id == current_section_id:
+            current_group.append((step, section))
+            continue
+
+        if current_group:
+            grouped_steps.append(current_group)
+        current_group = [(step, section)]
+        current_cog = step_cog
+        current_section_id = step.section_id
+
+    if current_group:
+        grouped_steps.append(current_group)
+
+    return grouped_steps
 
 
 def _resolved_route_error(route_info: ResolvedRouteInfo) -> str | None:
@@ -167,6 +220,7 @@ async def list_production_planning_rows(db: AsyncSession) -> list[dict]:
                 RouteStep.section_id,
                 RouteStep.sequence,
                 RouteStep.operation_name,
+                RouteStep.operation_code,
                 Section.code.label("section_code"),
                 Section.name.label("section_name"),
                 WorkTask.status.label("task_status"),
@@ -195,6 +249,7 @@ async def list_production_planning_rows(db: AsyncSession) -> list[dict]:
                     RouteStep.section_id,
                     RouteStep.sequence,
                     RouteStep.operation_name,
+                    RouteStep.operation_code,
                     Section.code.label("section_code"),
                     Section.name.label("section_name"),
                     WorkTask.status.label("task_status"),
@@ -216,7 +271,8 @@ async def list_production_planning_rows(db: AsyncSession) -> list[dict]:
             current_stage_by_position[row.plan_position_id] = {
                 "current_stage_section_id": row.section_id,
                 "current_stage_sequence": row.sequence,
-                "current_stage_operation": row.operation_name,
+                "current_stage_operation_name": row.operation_name,
+                "current_stage_operation_code": row.operation_code,
                 "current_stage_section_code": row.section_code,
                 "current_stage_section_name": row.section_name,
                 "current_stage_task_status": row.task_status.value if hasattr(row.task_status, "value") else str(row.task_status),
@@ -241,7 +297,8 @@ async def list_production_planning_rows(db: AsyncSession) -> list[dict]:
             current_stage_by_position[position_id] = {
                 "current_stage_section_id": chosen_row.section_id,
                 "current_stage_sequence": chosen_row.sequence,
-                "current_stage_operation": chosen_row.operation_name,
+                "current_stage_operation_name": chosen_row.operation_name,
+                "current_stage_operation_code": chosen_row.operation_code,
                 "current_stage_section_code": chosen_row.section_code,
                 "current_stage_section_name": chosen_row.section_name,
                 "current_stage_task_status": (
@@ -276,16 +333,30 @@ async def list_production_planning_rows(db: AsyncSession) -> list[dict]:
                         "section_id": section.id,
                         "section_icon": section.icon,
                         "section_icon_color": section.icon_color,
-                        "sequence": step.sequence,
+                        "sequence": group[0][0].sequence,
                     }
-                    for step, section in steps
+                    for group in _group_combined_route_steps(steps)
+                    for _step, section in [group[0]]
                 ]
 
         route_info = route_cache[pos.id]
 
         has_tasks = pos.id in has_tasks_set
         is_completed = pos.id in completed_set
-        stage_info = current_stage_by_position.get(pos.id, {})
+        raw_stage_info = current_stage_by_position.get(pos.id, {})
+
+        # Resolve operation name for current stage using position-specific payload
+        current_stage_operation = None
+        if raw_stage_info:
+            current_stage_operation = _resolve_current_stage_operation(
+                operation_name=raw_stage_info.get("current_stage_operation_name", ""),
+                operation_code=raw_stage_info.get("current_stage_operation_code"),
+                section_code=raw_stage_info.get("current_stage_section_code", ""),
+                section_id=raw_stage_info.get("current_stage_section_id", 0),
+                position=pos,
+                operation_names_by_key={},
+            )
+
         route_steps = route_steps_cache.get(route_info.route_id) if route_info.route_id is not None else None
         result.append(
             {
@@ -313,12 +384,12 @@ async def list_production_planning_rows(db: AsyncSession) -> list[dict]:
                 "is_released": bool(has_tasks or pos.status == PlanPositionStatus.released),
                 "has_tasks": has_tasks,
                 "is_completed": is_completed,
-                "current_stage_section_id": stage_info.get("current_stage_section_id"),
-                "current_stage_sequence": stage_info.get("current_stage_sequence"),
-                "current_stage_operation": stage_info.get("current_stage_operation"),
-                "current_stage_section_code": stage_info.get("current_stage_section_code"),
-                "current_stage_section_name": stage_info.get("current_stage_section_name"),
-                "current_stage_task_status": stage_info.get("current_stage_task_status"),
+                "current_stage_section_id": raw_stage_info.get("current_stage_section_id"),
+                "current_stage_sequence": raw_stage_info.get("current_stage_sequence"),
+                "current_stage_operation": current_stage_operation or None,
+                "current_stage_section_code": raw_stage_info.get("current_stage_section_code"),
+                "current_stage_section_name": raw_stage_info.get("current_stage_section_name"),
+                "current_stage_task_status": raw_stage_info.get("current_stage_task_status"),
                 "route_steps": route_steps,
             }
         )
@@ -349,6 +420,15 @@ async def get_production_planning_row_detail(db: AsyncSession, position_id: int)
                 .order_by(RouteStep.sequence)
             )
         ).all()
+        section_ids = {section.id for _step, section in steps}
+        operation_names_by_key = {
+            (operation.section_id, operation.operation_code): operation.operation_name
+            for operation in (
+                await db.execute(
+                    select(SectionOperation).where(SectionOperation.section_id.in_(section_ids))
+                )
+            ).scalars().all()
+        }
 
         planned_by_step = {
             row.route_step_id: _to_float(row.planned_quantity)
@@ -587,6 +667,8 @@ async def get_production_planning_row_detail(db: AsyncSession, position_id: int)
                 }
             )
 
+        grouped_steps = _group_combined_route_steps(steps)
+
         route_snapshot = {
             "route_id": route_info.route_id,
             "route_name": route_info.route_name,
@@ -600,34 +682,45 @@ async def get_production_planning_row_detail(db: AsyncSession, position_id: int)
             ),
             "steps": [
                 {
-                    "route_step_id": step.id,
-                    "sequence": step.sequence,
+                    "route_step_id": group[0][0].id,
+                    "sequence": group[0][0].sequence,
                     "section_id": section.id,
                     "section_code": section.code,
                     "section_name": section.name,
                     "section_kind": section.kind,
                     "section_icon": section.icon,
                     "section_icon_color": section.icon_color,
-                    "operation_code": _resolve_step_operation_code(step.operation_code, section.code, pos),
-                    "operation_name": step.operation_name,
+                    "operation_code": _resolve_step_operation_code(group[0][0].operation_code, section.code, pos),
+                    "operation_name": " / ".join(
+                        _resolve_step_operation_name(step, group_section, pos, operation_names_by_key)
+                        for step, group_section in group
+                    ),
                 }
-                for step, section in steps
+                for group in grouped_steps
+                for _step, section in [group[0]]
             ],
         }
 
-        for step, section in steps:
+        for group in grouped_steps:
+            step, section = group[0]
+            step_ids = [group_step.id for group_step, _section in group]
             fallback_planned = _to_float(pos.quantity) if not has_tasks else 0.0
-            planned_quantity = planned_by_step.get(step.id, fallback_planned)
-            totals = task_aggregates_by_step.get(
-                step.id,
-                {"completed_quantity": 0.0, "transferred_quantity": 0.0, "rejected_quantity": 0.0},
-            )
-            flow = flow_by_step.get(step.id, {})
-            completed_quantity = totals["completed_quantity"]
-            transferred_quantity = totals["transferred_quantity"]
-            rejected_quantity = totals["rejected_quantity"]
-            task_status = _summarize_task_status(task_statuses_by_step.get(step.id, []))
-            flow_events = flow.get("flow_events", [])
+            planned_values = [planned_by_step[step_id] for step_id in step_ids if step_id in planned_by_step]
+            planned_quantity = max(planned_values) if planned_values else fallback_planned
+            completed_quantity = sum(task_aggregates_by_step.get(step_id, {}).get("completed_quantity", 0.0) for step_id in step_ids)
+            transferred_quantity = sum(task_aggregates_by_step.get(step_id, {}).get("transferred_quantity", 0.0) for step_id in step_ids)
+            rejected_quantity = sum(task_aggregates_by_step.get(step_id, {}).get("rejected_quantity", 0.0) for step_id in step_ids)
+            task_status = _summarize_task_status([
+                status
+                for step_id in step_ids
+                for status in task_statuses_by_step.get(step_id, [])
+            ])
+            flows = [flow_by_step.get(step_id, {}) for step_id in step_ids]
+            flow_events = [
+                event
+                for flow in flows
+                for event in flow.get("flow_events", [])
+            ]
             flow_events.sort(
                 key=lambda item: (
                     item.get("_sort_dt") is None,
@@ -646,7 +739,10 @@ async def get_production_planning_row_detail(db: AsyncSession, position_id: int)
                     "section_icon_color": section.icon_color,
                     "sequence": step.sequence,
                     "operation_code": _resolve_step_operation_code(step.operation_code, section.code, pos),
-                    "operation_name": step.operation_name,
+                    "operation_name": " / ".join(
+                        _resolve_step_operation_name(group_step, group_section, pos, operation_names_by_key)
+                        for group_step, group_section in group
+                    ),
                     "planned_quantity": round(planned_quantity, 3),
                     "completed_quantity": round(completed_quantity, 3),
                     "transferred_quantity": round(transferred_quantity, 3),
@@ -656,16 +752,19 @@ async def get_production_planning_row_detail(db: AsyncSession, position_id: int)
                     "reject_percent": _clamp_percent(rejected_quantity, planned_quantity),
                     "task_status": task_status,
                     "not_started": not has_tasks,
-                    "issued_qty": round(_to_float(flow.get("issued_qty")), 3),
-                    "issued_last_at": flow.get("issued_last_at"),
-                    "accounted_good_qty": round(_to_float(flow.get("accounted_good_qty")), 3),
-                    "accounted_reject_qty": round(_to_float(flow.get("accounted_reject_qty")), 3),
-                    "accounted_total_qty": round(_to_float(flow.get("accounted_total_qty")), 3),
-                    "accounted_last_at": flow.get("accounted_last_at"),
-                    "sent_qty": round(_to_float(flow.get("sent_qty")), 3),
-                    "sent_last_at": flow.get("sent_last_at"),
-                    "accepted_by_next_qty": round(_to_float(flow.get("accepted_by_next_qty")), 3),
-                    "accepted_by_next_last_at": flow.get("accepted_by_next_last_at"),
+                    "issued_qty": round(sum(_to_float(flow.get("issued_qty")) for flow in flows), 3),
+                    "issued_last_at": max((flow.get("issued_last_at") for flow in flows if flow.get("issued_last_at")), default=None),
+                    "accounted_good_qty": round(sum(_to_float(flow.get("accounted_good_qty")) for flow in flows), 3),
+                    "accounted_reject_qty": round(sum(_to_float(flow.get("accounted_reject_qty")) for flow in flows), 3),
+                    "accounted_total_qty": round(sum(_to_float(flow.get("accounted_total_qty")) for flow in flows), 3),
+                    "accounted_last_at": max((flow.get("accounted_last_at") for flow in flows if flow.get("accounted_last_at")), default=None),
+                    "sent_qty": round(sum(_to_float(flow.get("sent_qty")) for flow in flows), 3),
+                    "sent_last_at": max((flow.get("sent_last_at") for flow in flows if flow.get("sent_last_at")), default=None),
+                    "accepted_by_next_qty": round(sum(_to_float(flow.get("accepted_by_next_qty")) for flow in flows), 3),
+                    "accepted_by_next_last_at": max(
+                        (flow.get("accepted_by_next_last_at") for flow in flows if flow.get("accepted_by_next_last_at")),
+                        default=None,
+                    ),
                     "flow_events": [
                         {
                             "step": event["step"],
@@ -684,6 +783,26 @@ async def get_production_planning_row_detail(db: AsyncSession, position_id: int)
     # Determine current active stage
     current_stage_info: dict | None = None
     if has_tasks:
+        # Load operation_names_by_key if not already loaded (for current_stage resolution)
+        if route_info.route_id is not None and "operation_names_by_key" not in locals():
+            _steps_for_ops = (
+                await db.execute(
+                    select(RouteStep, Section)
+                    .join(Section, RouteStep.section_id == Section.id)
+                    .where(RouteStep.route_id == route_info.route_id)
+                    .order_by(RouteStep.sequence)
+                )
+            ).all()
+            _section_ids_for_ops = {s.id for _s, s in _steps_for_ops}
+            operation_names_by_key = {
+                (op.section_id, op.operation_code): op.operation_name
+                for op in (
+                    await db.execute(
+                        select(SectionOperation).where(SectionOperation.section_id.in_(_section_ids_for_ops))
+                    )
+                ).scalars().all()
+            }
+
         # First try to find in_progress or ready tasks
         current_stage_row = (
             await db.execute(
@@ -691,6 +810,7 @@ async def get_production_planning_row_detail(db: AsyncSession, position_id: int)
                     RouteStep.section_id,
                     RouteStep.sequence,
                     RouteStep.operation_name,
+                    RouteStep.operation_code,
                     Section.code.label("section_code"),
                     Section.name.label("section_name"),
                     WorkTask.status.label("task_status"),
@@ -707,7 +827,7 @@ async def get_production_planning_row_detail(db: AsyncSession, position_id: int)
                 .limit(1)
             )
         ).first()
-        
+
         # Fallback: if no in_progress/ready, pick first non-terminal stage; else last stage.
         if not current_stage_row:
             fallback_stage_rows = (
@@ -716,6 +836,7 @@ async def get_production_planning_row_detail(db: AsyncSession, position_id: int)
                         RouteStep.section_id,
                         RouteStep.sequence,
                         RouteStep.operation_name,
+                        RouteStep.operation_code,
                         Section.code.label("section_code"),
                         Section.name.label("section_name"),
                         WorkTask.status.label("task_status"),
@@ -734,17 +855,25 @@ async def get_production_planning_row_detail(db: AsyncSession, position_id: int)
                     break
             if not current_stage_row and fallback_stage_rows:
                 current_stage_row = fallback_stage_rows[-1]
-        
+
         if current_stage_row:
+            resolved_op_name = _resolve_current_stage_operation(
+                operation_name=current_stage_row.operation_name,
+                operation_code=current_stage_row.operation_code,
+                section_code=current_stage_row.section_code,
+                section_id=current_stage_row.section_id,
+                position=pos,
+                operation_names_by_key=locals().get("operation_names_by_key", {}),
+            )
             current_stage_info = {
                 "current_stage_section_id": current_stage_row.section_id,
                 "current_stage_sequence": current_stage_row.sequence,
-                "current_stage_operation": current_stage_row.operation_name,
+                "current_stage_operation": resolved_op_name,
                 "current_stage_section_code": current_stage_row.section_code,
                 "current_stage_section_name": current_stage_row.section_name,
                 "current_stage_task_status": (
-                    current_stage_row.task_status.value 
-                    if hasattr(current_stage_row.task_status, "value") 
+                    current_stage_row.task_status.value
+                    if hasattr(current_stage_row.task_status, "value")
                     else str(current_stage_row.task_status)
                 ),
             }

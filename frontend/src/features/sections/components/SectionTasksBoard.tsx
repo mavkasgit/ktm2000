@@ -17,14 +17,14 @@ import { groupTasksByProfile, groupStatus, sortGroupsByPriority } from "../lib/g
 import type { GroupingProfile } from "../lib/groupingProfiles";
 import { TABLE_ROW_STYLES } from "@/shared/lib/tableRowStyles";
 
-type TaskActionType = "issue" | "complete" | "send";
+type TaskActionType = "issue" | "complete" | "send" | "return";
 
 // ---------------------------------------------------------------------------
 // Экспорты для обратной совместимости
 // ---------------------------------------------------------------------------
 
 export type TaskBoardViewMode = "active" | "waiting" | "completed";
-export type TaskActionDialogType = "issue" | "complete" | "send";
+export type TaskActionDialogType = "issue" | "complete" | "send" | "return";
 
 export type BulkSelectionController = {
   selectedIds: Set<number>;
@@ -147,7 +147,11 @@ function renderTaskRow(
       <td className="p-2">#{task.sequence}</td>
       <td className="p-2 font-medium">{task.product_sku}</td>
       <td className="p-2">
-        <span className="text-xs">{task.operation_name || "—"}</span>
+        {task.is_combined_primary && task.combined_operation_names.length > 1 ? (
+          <span className="text-xs font-medium">{task.combined_operation_names.join(" + ")}</span>
+        ) : (
+          <span className="text-xs">{task.operation_name || "—"}</span>
+        )}
       </td>
       <td className="p-2">{fmtQty(task.planned_quantity)}</td>
       <td className="p-2">{fmtQty(task.cache.issued_quantity)}</td>
@@ -178,6 +182,9 @@ function renderTaskRow(
           </Button>
           <Button size="sm" variant="outline" className={`${buttonBase} ${actions.has("complete") ? buttonActive : buttonDefault}`} onClick={() => handleAction("complete")} title={actions.has("complete") ? "Отменить завершение" : "Завершить задачу"}>
             <span>Завершить</span>
+          </Button>
+          <Button size="sm" variant="outline" className={`${buttonBase} ${actions.has("return") ? buttonActive : buttonDefault}`} onClick={() => handleAction("return")} title={actions.has("return") ? "Отменить возврат" : "Вернуть остаток на склад"}>
+            Возврат
           </Button>
           {isFinalStage ? (
             <span className="min-h-[32px] inline-flex items-center px-3 text-xs text-muted-foreground border rounded-md">
@@ -242,7 +249,7 @@ function renderMobileCard(
 
       <div className="grid grid-cols-2 gap-2 text-sm">
         <div><span className="text-muted-foreground">План:</span> {fmtQty(task.planned_quantity)}</div>
-        <div><span className="text-muted-foreground">Операция:</span> {task.operation_name || "—"}</div>
+        <div><span className="text-muted-foreground">Операция:</span> {task.is_combined_primary && task.combined_operation_names.length > 1 ? task.combined_operation_names.join(" + ") : (task.operation_name || "—")}</div>
         <div><span className="text-muted-foreground">Выдано:</span> {fmtQty(task.cache.issued_quantity)}</div>
         <div><span className="text-muted-foreground">В работе:</span> {fmtQty(task.cache.in_work_quantity)}</div>
         <div><span className="text-muted-foreground">Годные:</span> {fmtQty(task.cache.completed_quantity)}</div>
@@ -263,6 +270,9 @@ function renderMobileCard(
         </Button>
         <Button size="sm" variant="outline" className={`${buttonBase} ${actions.has("complete") ? buttonActive : buttonDefault}`} onClick={() => handleAction("complete")} title={actions.has("complete") ? "Отменить завершение" : "Завершить задачу"}>
           <span>Завершить</span>
+        </Button>
+        <Button size="sm" variant="outline" className={`${buttonBase} ${actions.has("return") ? buttonActive : buttonDefault}`} onClick={() => handleAction("return")} title={actions.has("return") ? "Отменить возврат" : "Вернуть остаток на склад"}>
+          Возврат
         </Button>
         {isFinalStage ? (
           <span className="flex-1 min-h-[36px] inline-flex items-center justify-center text-xs text-muted-foreground border rounded-md px-2">

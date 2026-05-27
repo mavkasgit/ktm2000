@@ -10,6 +10,7 @@ from app.models.defect import Defect, DefectItem, DefectStatus
 from app.models.internal_plan import SectionPlanLine
 from app.models.movement import Movement, MovementType
 from app.models.production_plan import PlanPosition, PlanPositionStatus
+from app.models.warehouse_remainder import WarehouseRemainder
 from app.models.work_task import WorkTask, WorkTaskStatus
 
 from .cache import _refresh_section_plan_line_cache, _refresh_task_cache
@@ -41,9 +42,7 @@ async def issue_to_work(
         raise ValueError("Task must be ready/in_progress/partially_completed")
 
     task = await _refresh_task_cache(db, task.id)
-    available = task.cached_available_quantity
-    if quantity > available:
-        raise ValueError("Issue quantity exceeds available quantity")
+    # Allow over-plan issuing: no longer restrict by cached_available_quantity
 
     now = datetime.now(UTC)
     movement = Movement(
@@ -307,4 +306,166 @@ async def prepare_section_task(
     await _refresh_task_cache(db, task.id)
     await _refresh_section_plan_line_cache(db, task.section_plan_line_id)
     return {"task_id": task.id, "status": task.status.value}
+
+
+async def return_remainder_to_stock(
+    db: AsyncSession,
+    *,
+    task_id: int,
+    quantity: Decimal,
+    actor_id: int,
+    comment: str | None = None,
+    idempotency_key: str | None = None,
+    executor_user_id: int | None = None,
+    performed_at: datetime | None = None,
+    accounted_at: datetime | None = None,
+) -> dict:
+    """Manually return excess quantity from a task to warehouse stock."""
+    quantity = _to_decimal(quantity)
+    _ensure_positive(quantity, "quantity")
+
+    existing = await _check_idempotency(db, idempotency_key=idempotency_key, entity_type=Movement)
+    if existing is not None:
+        task = await _get_task(db, task_id)
+        return {"movement_id": existing.id, "task_id": task.id, "idempotent_replay": True}
+
+    task = await _get_task(db, task_id)
+    task = await _refresh_task_cache(db, task.id)
+
+    # Calculate available for return: issued - completed - transferred
+    available_for_return = task.cached_issued_quantity - task.cached_completed_quantity - task.cached_transferred_quantity
+    if available_for_return <= 0:
+        raise ValueError("No excess quantity available for return")
+    if quantity > available_for_return:
+        raise ValueError(f"Return quantity ({quantity}) exceeds available for return ({available_for_return})")
+
+    now = datetime.now(UTC)
+    eff_performed = performed_at or now
+    eff_accounted = accounted_at or now
+    eff_executor = executor_user_id or actor_id
+
+    # Build completed stages info
+    line = await db.get(SectionPlanLine, task.section_plan_line_id)
+    completed_stages = []
+    if line is not None:
+        from app.models.route import RouteStep
+        steps = await db.execute(
+            select(RouteStep)
+            .where(RouteStep.route_id == line.route_id)
+            .where(RouteStep.sequence <= line.sequence)
+            .order_by(RouteStep.sequence)
+        )
+        for step in steps.scalars().all():
+            completed_stages.append({
+                "section_id": step.section_id,
+                "operation_code": step.operation_code,
+                "operation_name": step.operation_name,
+                "sequence": step.sequence,
+            })
+
+    # Create remainder record
+    remainder = WarehouseRemainder(
+        product_id=task.product_id,
+        section_id=task.section_id,
+        route_step_id=task.route_step_id,
+        section_plan_line_id=task.section_plan_line_id,
+        origin_task_id=task.id,
+        remainder_quantity=quantity,
+        original_issued=quantity,
+        completed_stages_json=completed_stages,
+    )
+    db.add(remainder)
+
+    # Create return movement
+    movement = Movement(
+        product_id=task.product_id,
+        task_id=task.id,
+        section_plan_line_id=task.section_plan_line_id,
+        from_section_id=task.section_id,
+        to_section_id=task.section_id,
+        movement_type=MovementType.return_to_stock,
+        quantity=quantity,
+        comment=comment,
+        created_by=actor_id,
+        idempotency_key=idempotency_key,
+        executor_user_id=eff_executor,
+        performed_at=eff_performed,
+        accounted_at=eff_accounted,
+    )
+    db.add(movement)
+    await db.flush()
+    await _refresh_task_cache(db, task.id)
+    await _refresh_section_plan_line_cache(db, task.section_plan_line_id)
+    return {"movement_id": movement.id, "remainder_id": remainder.id, "task_id": task.id}
+
+
+async def consume_remainder(
+    db: AsyncSession,
+    *,
+    remainder_id: int,
+    task_id: int,
+    quantity: Decimal,
+    actor_id: int,
+    comment: str | None = None,
+    idempotency_key: str | None = None,
+    executor_user_id: int | None = None,
+    performed_at: datetime | None = None,
+    accounted_at: datetime | None = None,
+) -> dict:
+    """Use a warehouse remainder for issuing to work on a task."""
+    quantity = _to_decimal(quantity)
+    _ensure_positive(quantity, "quantity")
+
+    existing = await _check_idempotency(db, idempotency_key=idempotency_key, entity_type=Movement)
+    if existing is not None:
+        task = await _get_task(db, task_id)
+        return {"movement_id": existing.id, "task_id": task.id, "idempotent_replay": True}
+
+    remainder = await db.get(WarehouseRemainder, remainder_id)
+    if remainder is None:
+        raise ValueError("Remainder not found")
+    if remainder.consumed_at is not None:
+        raise ValueError("Remainder already consumed")
+    if quantity > remainder.remainder_quantity:
+        raise ValueError("Consume quantity exceeds remainder quantity")
+
+    task = await _get_task(db, task_id)
+    if task.status not in {WorkTaskStatus.ready, WorkTaskStatus.in_progress, WorkTaskStatus.partially_completed}:
+        raise ValueError("Task must be ready/in_progress/partially_completed")
+
+    now = datetime.now(UTC)
+    eff_performed = performed_at or now
+    eff_accounted = accounted_at or now
+    eff_executor = executor_user_id or actor_id
+
+    # Create issue movement
+    movement = Movement(
+        product_id=task.product_id,
+        task_id=task.id,
+        section_plan_line_id=task.section_plan_line_id,
+        from_section_id=task.section_id,
+        to_section_id=task.section_id,
+        movement_type=MovementType.issue_to_work,
+        quantity=quantity,
+        source_ref=f"remainder:{remainder_id}",
+        comment=comment,
+        created_by=actor_id,
+        idempotency_key=idempotency_key,
+        executor_user_id=eff_executor,
+        performed_at=eff_performed,
+        accounted_at=eff_accounted,
+    )
+    db.add(movement)
+
+    # Update remainder
+    remainder.remainder_quantity -= quantity
+    if remainder.remainder_quantity <= 0:
+        remainder.consumed_at = now
+        remainder.consumed_by_task_id = task.id
+
+    task.status = WorkTaskStatus.in_progress
+    await db.flush()
+    await _refresh_task_cache(db, task.id)
+    await _refresh_section_plan_line_cache(db, task.section_plan_line_id)
+    return {"movement_id": movement.id, "remainder_id": remainder.id, "task_id": task.id}
 

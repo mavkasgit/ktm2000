@@ -18,6 +18,7 @@ from app.models.work_task import WorkTask
 from app.services.shopfloor_service import (
     add_defect_item,
     complete_task,
+    consume_remainder,
     create_attachment,
     create_comment,
     create_defect,
@@ -32,10 +33,13 @@ from app.services.shopfloor_service import (
     get_sections_summary,
     get_task_details,
     get_transfer_details,
+    get_warehouse_remainders,
     issue_to_work,
     link_attachment,
     prepare_section_task,
+    resolve_combined_group,
     resolve_transfer_discrepancy_link,
+    return_remainder_to_stock,
     rework_create,
     transfer_receive,
     transfer_send,
@@ -147,6 +151,27 @@ class PrepareTaskPayload(BaseModel):
     idempotency_key: str | None = None
 
 
+class ReturnRemainderPayload(BaseModel):
+    task_id: int
+    quantity: Decimal
+    comment: str | None = None
+    idempotency_key: str | None = None
+    executor_user_id: int | None = None
+    performed_at: datetime | None = None
+    accounted_at: datetime | None = None
+
+
+class ConsumeRemainderPayload(BaseModel):
+    remainder_id: int
+    task_id: int
+    quantity: Decimal
+    comment: str | None = None
+    idempotency_key: str | None = None
+    executor_user_id: int | None = None
+    performed_at: datetime | None = None
+    accounted_at: datetime | None = None
+
+
 class CreateDefectPayload(BaseModel):
     task_id: int
     quantity: Decimal
@@ -215,6 +240,34 @@ async def issue_task(
 ) -> dict:
     await _ensure_task_lock(db, task_id, locked_section_id)
     try:
+        combined = await resolve_combined_group(db, task_id)
+        if combined:
+            # Issue all tasks in the combined group
+            movement_ids = []
+            task_ids = []
+            status = None
+            for t in combined.all_tasks:
+                result = await issue_to_work(
+                    db,
+                    task_id=t.id,
+                    quantity=payload.quantity,
+                    actor_id=current_user.id,
+                    comment=payload.comment,
+                    source_ref=payload.source_ref,
+                    idempotency_key=payload.idempotency_key,
+                    executor_user_id=payload.executor_user_id,
+                    performed_at=payload.performed_at,
+                    accounted_at=payload.accounted_at,
+                )
+                movement_ids.append(result["movement_id"])
+                task_ids.append(result["task_id"])
+                status = result["status"]
+            return {
+                "movement_ids": movement_ids,
+                "task_ids": task_ids,
+                "status": status,
+                "combined_group": True,
+            }
         return await issue_to_work(
             db,
             task_id=task_id,
@@ -241,6 +294,38 @@ async def complete_task_endpoint(
 ) -> dict:
     await _ensure_task_lock(db, task_id, locked_section_id)
     try:
+        combined = await resolve_combined_group(db, task_id)
+        if combined:
+            movement_ids = []
+            task_ids = []
+            defect_ids = []
+            status = None
+            for t in combined.all_tasks:
+                result = await complete_task(
+                    db,
+                    task_id=t.id,
+                    good_quantity=payload.good_quantity,
+                    defect_quantity=payload.defect_quantity,
+                    actor_id=current_user.id,
+                    defect_reason=payload.defect_reason,
+                    comment=payload.comment,
+                    idempotency_key=payload.idempotency_key,
+                    executor_user_id=payload.executor_user_id,
+                    performed_at=payload.performed_at,
+                    accounted_at=payload.accounted_at,
+                )
+                movement_ids.extend(result["movement_ids"])
+                task_ids.append(result["task_id"])
+                if result.get("defect_id"):
+                    defect_ids.append(result["defect_id"])
+                status = result["status"]
+            return {
+                "movement_ids": movement_ids,
+                "task_ids": task_ids,
+                "defect_ids": defect_ids,
+                "status": status,
+                "combined_group": True,
+            }
         return await complete_task(
             db,
             task_id=task_id,
@@ -304,6 +389,33 @@ async def create_transfer(
 ) -> dict:
     await _ensure_task_lock(db, payload.from_task_id, locked_section_id)
     try:
+        combined = await resolve_combined_group(db, payload.from_task_id)
+        if combined:
+            transfer_ids = []
+            to_task_ids = []
+            status = None
+            for t in combined.all_tasks:
+                result = await transfer_send(
+                    db,
+                    from_task_id=t.id,
+                    to_task_id=None,  # Auto-create target task
+                    quantity=payload.quantity,
+                    actor_id=current_user.id,
+                    comment=payload.comment,
+                    idempotency_key=payload.idempotency_key,
+                    executor_user_id=payload.executor_user_id,
+                    performed_at=payload.performed_at,
+                    accounted_at=payload.accounted_at,
+                )
+                transfer_ids.append(result["transfer_id"])
+                to_task_ids.append(result["to_task_id"])
+                status = result["status"]
+            return {
+                "transfer_ids": transfer_ids,
+                "to_task_ids": to_task_ids,
+                "status": status,
+                "combined_group": True,
+            }
         return await transfer_send(
             db,
             from_task_id=payload.from_task_id,
@@ -680,3 +792,63 @@ async def section_daily_stats(
         date_from=d_from,
         date_to=d_to,
     )
+
+
+@router.get("/remainders", dependencies=[Depends(require_role(list(READER_ROLES)))])
+async def list_warehouse_remainders(
+    section_id: int | None = Query(None),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """List active warehouse remainders (surplus returned to stock)."""
+    return await get_warehouse_remainders(db, section_id=section_id)
+
+
+@router.post("/remainders/return", dependencies=[Depends(require_role(list(WRITER_ROLES)))])
+async def return_remainder(
+    payload: ReturnRemainderPayload,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+    locked_section_id: int | None = Depends(get_single_window_locked_section_id),
+) -> dict:
+    """Manually return excess quantity from a task to warehouse stock."""
+    await _ensure_task_lock(db, payload.task_id, locked_section_id)
+    try:
+        return await return_remainder_to_stock(
+            db,
+            task_id=payload.task_id,
+            quantity=payload.quantity,
+            actor_id=current_user.id,
+            comment=payload.comment,
+            idempotency_key=payload.idempotency_key,
+            executor_user_id=payload.executor_user_id,
+            performed_at=payload.performed_at,
+            accounted_at=payload.accounted_at,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/remainders/consume", dependencies=[Depends(require_role(list(WRITER_ROLES)))])
+async def consume_remainder(
+    payload: ConsumeRemainderPayload,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+    locked_section_id: int | None = Depends(get_single_window_locked_section_id),
+) -> dict:
+    """Use a warehouse remainder for issuing to work on a task."""
+    await _ensure_task_lock(db, payload.task_id, locked_section_id)
+    try:
+        return await consume_remainder(
+            db,
+            remainder_id=payload.remainder_id,
+            task_id=payload.task_id,
+            quantity=payload.quantity,
+            actor_id=current_user.id,
+            comment=payload.comment,
+            idempotency_key=payload.idempotency_key,
+            executor_user_id=payload.executor_user_id,
+            performed_at=payload.performed_at,
+            accounted_at=payload.accounted_at,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc

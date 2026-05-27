@@ -7,15 +7,19 @@ import { listSections } from "@/shared/api/sections";
 import {
   acceptTransfer,
   completeTask,
+  consumeRemainder,
   createTransfer,
   getIncomingTransfers,
   getSectionBoard,
   getSectionDailyStats,
   getSectionsSummary,
+  getWarehouseRemainders,
   issueTask,
+  returnRemainder,
   type AcceptTransferInput,
   type DailyStatsRow,
   type SectionBoardTask,
+  type WarehouseRemainder,
 } from "@/shared/api/shopfloor";
 import { DatePicker, renderIcon, toast, Button, Popover, PopoverTrigger, PopoverContent } from "@/shared/ui";
 import { Inbox } from "lucide-react";
@@ -28,6 +32,7 @@ import { TaskActionDrawer } from "../components/TaskActionDrawer";
 import { BulkOperationsPanel } from "../components/BulkOperationsPanel";
 import { PlanModal } from "../components/PlanModal";
 import { GroupingSettingsModal } from "../components/GroupingSettingsModal";
+import { WarehouseRemaindersDialog } from "../components/WarehouseRemaindersDialog";
 import { loadProfileForSection, PRESET_PROFILES, type GroupingProfile, saveProfileForSection } from "../lib/groupingProfiles";
 
 type MeResponse = {
@@ -141,6 +146,8 @@ export function SectionsTasksPage() {
   const [actionComment, setActionComment] = useState("");
   const [planModalOpen, setPlanModalOpen] = useState(false);
   const [groupingModalOpen, setGroupingModalOpen] = useState(false);
+  const [remaindersDialogOpen, setRemaindersDialogOpen] = useState(false);
+  const [selectedRemainder, setSelectedRemainder] = useState<WarehouseRemainder | null>(null);
 
   // Bulk mode state
   const [bulkMode, setBulkMode] = useState(searchParams.get("bulk") === "1" || searchParams.get("singleWindow") === "1");
@@ -155,9 +162,9 @@ export function SectionsTasksPage() {
   const locationRef = useRef(location);
   locationRef.current = location;
 
-  const toggleBulkMode = useCallback(() => {
+  const toggleBulkMode = useCallback((force?: boolean) => {
     setBulkMode((prev) => {
-      const nextBulk = !prev;
+      const nextBulk = force !== undefined ? force : !prev;
       if (!nextBulk) bulkSelection.clear();
 
       const sp = new URLSearchParams(locationRef.current.search);
@@ -290,6 +297,13 @@ export function SectionsTasksPage() {
     retry: false,
   });
 
+  const { data: remaindersData, isLoading: remaindersLoading } = useQuery({
+    queryKey: ["shopfloor-remainders", sectionId],
+    queryFn: () => getWarehouseRemainders(sectionId ?? undefined),
+    enabled: remaindersDialogOpen && sectionId !== null,
+    retry: false,
+  });
+
   const pushActionLog = useCallback((entry: Omit<ActionLogEntry, "id" | "createdAt">) => {
     setActionLog((prev) => {
       const next = [
@@ -384,6 +398,41 @@ export function SectionsTasksPage() {
     },
   });
 
+  const returnRemainderMutation = useMutation({
+    mutationFn: (payload: Parameters<typeof returnRemainder>[0]) =>
+      returnRemainder(payload, requestOptions),
+    onSuccess: () => {
+      toast({ title: "Возврат на склад записан", variant: "success" });
+      pushActionLog({ status: "success", title: "Возврат", message: "Остаток возвращен на склад." });
+      invalidateShopfloor();
+      closeActionDrawer();
+      setConflictHint(null);
+    },
+    onError: (err) => {
+      const message = getErrorMessage(err);
+      toast({ title: "Ошибка", description: message, variant: "destructive" });
+      pushActionLog({ status: "error", title: "Возврат", message });
+      setConflictHint(conflictHintFromError(message));
+    },
+  });
+
+  const consumeRemainderMutation = useMutation({
+    mutationFn: (payload: Parameters<typeof consumeRemainder>[0]) =>
+      consumeRemainder(payload, requestOptions),
+    onSuccess: () => {
+      toast({ title: "Остаток использован", variant: "success" });
+      pushActionLog({ status: "success", title: "Использование остатка", message: "Остаток применен к задаче." });
+      invalidateShopfloor();
+      setRemaindersDialogOpen(false);
+      setSelectedRemainder(null);
+    },
+    onError: (err) => {
+      const message = getErrorMessage(err);
+      toast({ title: "Ошибка", description: message, variant: "destructive" });
+      pushActionLog({ status: "error", title: "Использование остатка", message });
+    },
+  });
+
   const openActionDialog = useCallback((type: TaskActionDialogType, task: SectionBoardTask) => {
     const now = nowLocalDateTimeParts();
     setActionDialog({ open: true, type, task });
@@ -400,6 +449,10 @@ export function SectionsTasksPage() {
       setDefectQty("");
     } else if (type === "issue") {
       setActionQty(fmtQty(task.cache.remaining_quantity));
+      setDefectQty("");
+    } else if (type === "return") {
+      const returnable = Math.max(0, toInteger(task.cache.issued_quantity) - toInteger(task.cache.completed_quantity) - toInteger(task.cache.transferred_quantity));
+      setActionQty(Number.isFinite(returnable) ? String(returnable) : "");
       setDefectQty("");
     } else {
       const transferable = Math.max(0, toInteger(task.cache.completed_quantity) - toInteger(task.cache.transferred_quantity));
@@ -480,11 +533,6 @@ export function SectionsTasksPage() {
     }
 
     if (actionDialog.type === "issue") {
-      const maxIssue = toInteger(task.cache.available_quantity);
-      if (Number.isFinite(maxIssue) && qty > maxIssue) {
-        setConflictHint(`Количество больше доступного (${fmtQty(String(maxIssue))}).`);
-        return;
-      }
       issueMutation.mutate({
         taskId: task.id,
         payload: {
@@ -528,6 +576,24 @@ export function SectionsTasksPage() {
       return;
     }
 
+    if (actionDialog.type === "return") {
+      const returnable = Math.max(0, toInteger(task.cache.issued_quantity) - toInteger(task.cache.completed_quantity) - toInteger(task.cache.transferred_quantity));
+      if (Number.isFinite(returnable) && qty > returnable) {
+        setConflictHint(`Количество возврата больше доступного (${fmtQty(String(returnable))}).`);
+        return;
+      }
+      returnRemainderMutation.mutate({
+        task_id: task.id,
+        quantity: qty,
+        comment: actionComment || undefined,
+        idempotency_key: makeIdempotencyKey("return"),
+        executor_user_id: executorUserId,
+        performed_at: effectivePerformedAt,
+        accounted_at: effectiveAccountedAt,
+      });
+      return;
+    }
+
     if (!task.next_operation_name) {
       const message = "Финальный этап маршрута: передача на следующий этап не требуется.";
       toast({ title: "Передача недоступна", description: message, variant: "destructive" });
@@ -560,6 +626,7 @@ export function SectionsTasksPage() {
     issueMutation,
     completeMutation,
     sendMutation,
+    returnRemainderMutation,
     actionComment,
     defectQty,
   ]);
@@ -742,7 +809,7 @@ export function SectionsTasksPage() {
     finishBulk(allResults);
   }, [issueMutation, completeMutation, sendMutation, me?.id, invalidateShopfloor, finishBulk]);
 
-  const pendingMutation = issueMutation.isPending || completeMutation.isPending || sendMutation.isPending;
+  const pendingMutation = issueMutation.isPending || completeMutation.isPending || sendMutation.isPending || returnRemainderMutation.isPending;
   const tasks = board?.tasks || [];
   const selectedTasks = useMemo(
     () => tasks.filter((t) => bulkSelection.selectedIds.has(t.id)),
@@ -787,6 +854,31 @@ export function SectionsTasksPage() {
       });
     }
   }, [incomingTransfers, acceptTransferMutation]);
+
+  const handleUseRemainder = useCallback((remainder: WarehouseRemainder) => {
+    // Find a task in the current section that matches the product
+    const matchingTask = tasks.find(
+      (t) => t.product_sku === remainder.product_sku &&
+        (t.status === "ready" || t.status === "in_work")
+    );
+    if (!matchingTask) {
+      toast({
+        title: "Нет подходящей задачи",
+        description: `Не найдена задача для ${remainder.product_sku} в статусе готовности или работы.`,
+        variant: "destructive",
+      });
+      return;
+    }
+    consumeRemainderMutation.mutate({
+      remainder_id: remainder.id,
+      task_id: matchingTask.id,
+      quantity: remainder.remainder_quantity,
+      idempotency_key: makeIdempotencyKey("consume-remainder"),
+      executor_user_id: me?.id,
+      performed_at: nowLocalDateTime(),
+      accounted_at: nowLocalDateTime(),
+    });
+  }, [tasks, consumeRemainderMutation, me?.id]);
 
   const selectedSection = useMemo(
     () => (sections || []).find((s) => s.id === sectionId) || null,
@@ -948,6 +1040,9 @@ export function SectionsTasksPage() {
             <div className="flex items-center gap-2">
               <Button variant="outline" size="sm" onClick={() => setPlanModalOpen(true)}>
                 План
+              </Button>
+              <Button variant="outline" size="sm" onClick={() => setRemaindersDialogOpen(true)} title="Складские остатки">
+                Остатки
               </Button>
               <Button variant="outline" size="sm" onClick={() => setGroupingModalOpen(true)} title="Настройки группировки">
                 {profile.name}
@@ -1118,6 +1213,15 @@ export function SectionsTasksPage() {
           onApply={handleProfileApply}
         />
       )}
+
+      {/* Warehouse remainders dialog */}
+      <WarehouseRemaindersDialog
+        open={remaindersDialogOpen}
+        onOpenChange={setRemaindersDialogOpen}
+        remainders={remaindersData?.remainders || []}
+        isLoading={remaindersLoading}
+        onUseRemainder={handleUseRemainder}
+      />
     </>
   );
 }

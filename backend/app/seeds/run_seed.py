@@ -6,6 +6,7 @@ from app.seeds.import_templates import IMPORT_TEMPLATES
 from app.seeds.route_rule_profiles import ROUTE_RULE_PROFILES
 from app.seeds.routes import ROUTES
 from app.seeds.selection_rules import SELECTION_RULES
+from app.seeds.seeders.cleanup_seeder import clear_generated_production_data
 from app.seeds.seeders.import_template_seeder import seed_import_template
 from app.seeds.seeders.route_rule_profile_seeder import seed_route_rule_profile
 from app.seeds.seeders.routes_seeder import seed_routes
@@ -19,6 +20,9 @@ async def run_full_seed(db: AsyncSession, force: bool = False) -> dict:
     Returns counters for each entity type.
     """
     result: dict = {}
+
+    if force:
+        result["cleanup"] = await clear_generated_production_data(db)
 
     # 1. Sections (required by routes)
     sections_map = await seed_sections(db)

@@ -48,6 +48,7 @@ class RouteStep(Base):
     requires_acceptance: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default=text("true"))
     allow_parallel: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default=text("false"))
     is_final: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default=text("false"))
+    combined_op_group: Mapped[str | None] = mapped_column(String(100), nullable=True)
 
     route: Mapped["ProductionRoute"] = relationship("ProductionRoute", back_populates="steps")
 

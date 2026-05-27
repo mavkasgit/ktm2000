@@ -384,6 +384,7 @@ function TemplateDialog(props: {
       }
       return { key, header: typeof value === "string" ? value : key, column: "" }
     })
+    cols.sort((a, b) => a.column.localeCompare(b.column, undefined, { numeric: true }))
     setPassportColumns(cols)
     const normalization = props.template?.normalization_rules ?? DEFAULT_NORMALIZATION_RULES
     setOperationRules(parseOperationRules(normalization))
@@ -461,7 +462,7 @@ function TemplateDialog(props: {
         key: autoKey,
       })
     }
-    cols.sort((a, b) => a.column.localeCompare(b.column))
+    cols.sort((a, b) => a.column.localeCompare(b.column, undefined, { numeric: true }))
     setPassportColumns(cols)
 
     // Auto-set name from filename if empty (create mode)

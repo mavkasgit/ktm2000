@@ -89,6 +89,10 @@ export type SectionBoardTask = {
   route_history: RouteHistoryOp[];
   route_history_after: RouteHistoryOp[];
   signature: SourceSignature;
+  // --- combined operations ---
+  is_combined_primary: boolean;
+  combined_task_ids: number[];
+  combined_operation_names: string[];
 };
 
 export type SectionBoardResponse = {
@@ -436,6 +440,98 @@ export async function setTaskOperation(
   const { data } = await apiClient.patch<{ task_id: number; operation_code: string; operation_name: string }>(
     `/shopfloor/tasks/${taskId}/operation`,
     { operation_code: operationCode },
+  );
+  return data;
+}
+
+// ---------------------------------------------------------------------------
+// Warehouse Remainders API
+// ---------------------------------------------------------------------------
+
+export type CompletedStage = {
+  section_id: number;
+  operation_code: string;
+  operation_name: string;
+  sequence: number;
+};
+
+export type WarehouseRemainder = {
+  id: number;
+  product_id: number;
+  product_sku: string;
+  product_name: string;
+  section_id: number;
+  section_code: string;
+  section_name: string;
+  route_step_id: number;
+  route_step_sequence: number;
+  operation_code: string | null;
+  operation_name: string | null;
+  section_plan_line_id: number;
+  origin_task_id: number;
+  remainder_quantity: string;
+  original_issued: string;
+  completed_stages: CompletedStage[];
+  created_at: string | null;
+};
+
+export type WarehouseRemaindersResponse = {
+  remainders: WarehouseRemainder[];
+};
+
+export async function getWarehouseRemainders(
+  sectionId?: number,
+): Promise<WarehouseRemaindersResponse> {
+  const params = new URLSearchParams();
+  if (sectionId) params.set("section_id", String(sectionId));
+  const qs = params.toString();
+  const { data } = await apiClient.get<WarehouseRemaindersResponse>(
+    `/shopfloor/remainders${qs ? `?${qs}` : ""}`,
+  );
+  return data;
+}
+
+export type ReturnRemainderInput = {
+  task_id: number;
+  quantity: number | string;
+  comment?: string;
+  idempotency_key?: string;
+  executor_user_id?: number;
+  performed_at?: string;
+  accounted_at?: string;
+};
+
+export type ConsumeRemainderInput = {
+  remainder_id: number;
+  task_id: number;
+  quantity: number | string;
+  comment?: string;
+  idempotency_key?: string;
+  executor_user_id?: number;
+  performed_at?: string;
+  accounted_at?: string;
+};
+
+export async function returnRemainder(
+  payload: ReturnRemainderInput,
+  options?: ShopfloorRequestOptions,
+): Promise<{ movement_id: number; remainder_id: number; task_id: number; idempotent_replay?: boolean }> {
+  const { data } = await apiClient.post(
+    "/shopfloor/remainders/return",
+    payload,
+    makeRequestConfig(options),
+  );
+  return data;
+}
+
+export async function consumeRemainder(
+  payload: ConsumeRemainderInput,
+  options?: ShopfloorRequestOptions,
+): Promise<{ movement_id: number; remainder_id: number; task_id: number; idempotent_replay?: boolean }> {
+  const { data } = await apiClient.post(
+    "/shopfloor/remainders/consume",
+    payload,
+    makeRequestConfig(options),
   );
   return data;
 }
