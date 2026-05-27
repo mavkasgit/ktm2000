@@ -1154,7 +1154,7 @@ async def batch_preview(production_plan_id: int, batch_id: int, db: AsyncSession
 
 @router.post("/reset-all", status_code=status.HTTP_204_NO_CONTENT)
 async def reset_all_plans(db: AsyncSession = Depends(get_db)):
-    """Удалить все производственные планы и все связанные данные."""
+    """Удалить все производственные планы, связанные данные и справочники (маршруты, правила, импорты)."""
     await db.execute(text("""
         TRUNCATE TABLE
             defects, rework_tasks, transfers, movements,
@@ -1162,7 +1162,11 @@ async def reset_all_plans(db: AsyncSession = Depends(get_db)):
             release_batch_positions, release_batches,
             plan_change_items, plan_change_sets,
             plan_positions, import_batches, import_files,
-            production_plans
+            production_plans,
+            route_selection_rules, route_rule_profiles, production_routes,
+            route_steps, section_operations, route_matching_rules, route_rule_conditions, route_signature_rules,
+            import_templates,
+            sections
         CASCADE
     """))
     await db.commit()

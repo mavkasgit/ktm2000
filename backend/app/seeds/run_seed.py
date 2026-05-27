@@ -12,6 +12,7 @@ from app.seeds.seeders.route_rule_profile_seeder import seed_route_rule_profile
 from app.seeds.seeders.routes_seeder import seed_routes
 from app.seeds.seeders.sections_seeder import seed_sections
 from app.seeds.seeders.selection_rules_seeder import seed_selection_rules
+from app.seeds.seeders.users_seeder import seed_users
 
 
 async def run_full_seed(db: AsyncSession, force: bool = False) -> dict:
@@ -23,6 +24,10 @@ async def run_full_seed(db: AsyncSession, force: bool = False) -> dict:
 
     if force:
         result["cleanup"] = await clear_generated_production_data(db)
+
+    # 0. System user (required by dev-mode _fake_user)
+    users_map = await seed_users(db)
+    result["users"] = len(users_map)
 
     # 1. Sections (required by routes)
     sections_map = await seed_sections(db)

@@ -140,8 +140,7 @@ export function SettingsPage() {
     try {
       await resetAllPlans()
       queryClient.invalidateQueries()
-      toast({ title: "Планы очищены", variant: "success" })
-      navigate("/planning")
+      toast({ title: "Планы и справочники очищены", variant: "success" })
     } catch (e) {
       toast({ title: "Ошибка", description: e instanceof Error ? e.message : "Не удалось очистить планы", variant: "destructive" })
     } finally {
@@ -199,12 +198,12 @@ export function SettingsPage() {
               <Trash2 className="h-5 w-5 text-red-500" />
             </div>
             <div>
-              <h3 className="font-medium">Планы</h3>
-              <p className="text-sm text-muted-foreground">Очистка всех производственных планов</p>
+              <h3 className="font-medium">Очистка данных</h3>
+              <p className="text-sm text-muted-foreground">Удаление планов и справочников</p>
             </div>
           </div>
           <Button variant="destructive" onClick={() => setConfirmOpen(true)} disabled={resetting} className="w-full">
-            {resetting ? "Очистка..." : "Очистить все планы"}
+            {resetting ? "Очистка..." : "Очистить"}
           </Button>
         </div>
       </div>
@@ -214,16 +213,19 @@ export function SettingsPage() {
       <AlertDialog open={confirmOpen} onOpenChange={setConfirmOpen}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Очистить все планы?</AlertDialogTitle>
+            <AlertDialogTitle>Вы уверены?</AlertDialogTitle>
             <AlertDialogDescription>
               Все производственные планы, импорты, позиции, задачи и связанные данные будут удалены.
-              Справочники (продукты, маршруты, участки) останутся без изменений.
+              Также будут очищены справочники: участки, маршруты, правила маршрутизации и шаблоны импорта.
+              Таблицы rawmaterials и techcards останутся без изменений.
               Это действие нельзя отменить.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>Отмена</AlertDialogCancel>
-            <AlertDialogAction onClick={handleReset}>Очистить</AlertDialogAction>
+            <AlertDialogAction onClick={handleReset} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">
+              Удалить
+            </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>

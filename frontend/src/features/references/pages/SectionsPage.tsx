@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useState } from "react";
-import { Plus, Download, ArrowUp, ArrowDown, GripVertical, Settings, X } from "lucide-react";
+import { Plus, ArrowUp, ArrowDown, GripVertical, Settings, X } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 import * as API from "shared/api";
 import * as SectionsAPI from "shared/api/sections";
@@ -113,16 +113,6 @@ async function apiDeleteSection(id: number): Promise<void> {
   }
 }
 
-async function apiSeedSections(): Promise<Section[]> {
-  const api = API as Record<string, any>;
-  if (typeof api.seedSections === "function") {
-    return api.seedSections();
-  }
-  const response = await fetch("/api/sections-seed", { method: "POST" });
-  if (!response.ok) throw new Error(`Failed to seed sections: ${response.status}`);
-  return response.json();
-}
-
 export function SectionsPage() {
   const queryClient = useQueryClient();
   const [items, setItems] = useState<Section[]>([]);
@@ -132,8 +122,6 @@ export function SectionsPage() {
   const [dialogMode, setDialogMode] = useState<"add" | "edit">("add");
   const [editingItem, setEditingItem] = useState<Section | null>(null);
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
-  const [seedDialogOpen, setSeedDialogOpen] = useState(false);
-  const [seeding, setSeeding] = useState(false);
   const [draggedIndex, setDraggedIndex] = useState<number | null>(null);
 
   // Operations panel
@@ -381,21 +369,6 @@ export function SectionsPage() {
     }
   };
 
-  const handleSeed = async () => {
-    setSeeding(true);
-    try {
-      const result = await apiSeedSections();
-      setItems(result);
-      const kinds = new Set(result.map((r) => r.kind)).size;
-      toast({ title: "Участки загружены", description: `Загружено ${result.length} участков (${kinds} типов): ${result.map((r) => r.name).join(", ")}`, variant: "success" });
-    } catch (e) {
-      toast({ title: "Ошибка загрузки участков", description: API.getErrorMessage(e), variant: "destructive" });
-    } finally {
-      setSeeding(false);
-      setSeedDialogOpen(false);
-    }
-  };
-
   const initialValues = dialogMode === "edit"
     ? {
         code: editingItem?.code ?? "",
@@ -411,16 +384,10 @@ export function SectionsPage() {
     <section style={{ display: "grid", gap: 12 }}>
       <div className="flex items-center justify-between">
         <h2 className="text-lg font-semibold">Участки</h2>
-        <div className="flex items-center gap-2">
-          <Button size="sm" variant="outline" onClick={() => setSeedDialogOpen(true)}>
-            <Download className="h-4 w-4 mr-1" />
-            Загрузить участки
-          </Button>
-          <Button size="sm" onClick={openAdd}>
-            <Plus className="h-4 w-4 mr-1" />
-            Добавить участок
-          </Button>
-        </div>
+        <Button size="sm" onClick={openAdd}>
+          <Plus className="h-4 w-4 mr-1" />
+          Добавить участок
+        </Button>
       </div>
 
       <EntityDialog
@@ -451,23 +418,6 @@ export function SectionsPage() {
             <AlertDialogCancel>Отмена</AlertDialogCancel>
             <AlertDialogAction onClick={handleDelete} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">
               Удалить
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
-
-      <AlertDialog open={seedDialogOpen} onOpenChange={setSeedDialogOpen}>
-        <AlertDialogContent className="max-w-sm">
-          <AlertDialogHeader>
-            <AlertDialogTitle>Загрузить стандартные участки?</AlertDialogTitle>
-            <AlertDialogDescription>
-              Будет создано 11 стандартных участков (включая зоны отгрузки). Существующие участки будут обновлены.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter className="flex-col-reverse sm:flex-row gap-2">
-            <AlertDialogCancel>Отмена</AlertDialogCancel>
-            <AlertDialogAction onClick={handleSeed} disabled={seeding}>
-              {seeding ? "Загрузка..." : "Загрузить"}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
