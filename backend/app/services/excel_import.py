@@ -250,10 +250,18 @@ def _find_header_row(rows: list[list[Any]], mapping: dict[str, str]) -> int:
             found_headers.update(values & required_headers)
 
     missing = required_headers - found_headers
+
+    # Collect all unique headers found for debugging
+    all_found_headers: set[str] = set()
+    for idx, row in enumerate(rows[:30]):
+        values = {_normalize_header(_cell_text(cell)) for cell in row if _normalize_header(_cell_text(cell))}
+        all_found_headers.update(values)
+
     raise ValueError(
         f"Required header row not found. "
         f"Missing headers: {', '.join(sorted(missing))}. "
-        f"Searched first {min(30, len(rows))} rows."
+        f"Searched first {min(30, len(rows))} rows. "
+        f"Found headers: {', '.join(sorted(all_found_headers))}"
     )
 
 

@@ -14,6 +14,7 @@ from app.models.release_batch import ReleaseBatch, ReleaseBatchPosition, Release
 from app.models.route import ProductionRoute, RouteStep, SectionOperation
 from app.models.section import Section
 from app.models.work_task import WorkTask, WorkTaskStatus
+from app.services.plan_validation import _find_paired_techcard, _paired_component_skus
 from app.services.route_validation import validate_route_match
 from app.services.route_matcher import resolve_position_route
 from app.services.production_planning_rows import _resolve_step_operation_code
@@ -130,6 +131,22 @@ async def release_batch(db: AsyncSession, release_batch_id: int) -> dict:
         if position.route_id is None:
             raise ValueError(f"Position #{position.id} has no route assigned")
 
+        # Resolve product_id for paired profile positions
+        effective_product_id = position.product_id
+        if effective_product_id is None:
+            paired_techcard = await _find_paired_techcard(db, _paired_component_skus(position))
+            if paired_techcard is None:
+                raise ValueError(f"Position #{position.id}: no paired techcard found for product resolution")
+            # Get the first component product from the paired techcard
+            first_component = await db.scalar(
+                select(TechcardLine.component_product_id)
+                .where(TechcardLine.techcard_id == paired_techcard.id)
+                .limit(1)
+            )
+            if first_component is None:
+                raise ValueError(f"Position #{position.id}: paired techcard has no component products")
+            effective_product_id = first_component
+
         steps = sorted(batch_position.route_snapshot.get("steps", []), key=lambda step: step["sequence"])
 
         # Group steps by combined_op_group to avoid duplicate SectionPlanLines
@@ -164,7 +181,7 @@ async def release_batch(db: AsyncSession, release_batch_id: int) -> dict:
                 internal_plan_id=internal_plan.id,
                 plan_position_id=position.id,
                 section_id=primary_step["section_id"],
-                product_id=position.product_id,
+                product_id=effective_product_id,
                 route_id=batch_position.route_id,
                 route_step_id=primary_step["route_step_id"],
                 sequence=primary_step["sequence"],

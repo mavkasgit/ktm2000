@@ -15,8 +15,8 @@ SECTIONS_DATA = [
     {"code": "SAW", "name": "Пила", "sort_order": 70, "kind": "production", "icon": "Fan", "icon_color": "#F97316"},
     {"code": "PACK", "name": "Упаковка", "sort_order": 80, "kind": "production", "icon": "Package", "icon_color": "#10B981"},
     {"code": "FG_WH", "name": "Склад готовой продукции", "sort_order": 90, "kind": "finished_stock", "icon": "Container", "icon_color": "#065F46"},
-    {"code": "SHIPMENT", "name": "К отгрузке", "sort_order": 100, "kind": "shipment", "icon": "Truck", "icon_color": "#7C3AED"},
-    {"code": "SENT", "name": "Отправлено", "sort_order": 110, "kind": "sent", "icon": "CheckCircle", "icon_color": "#059669"},
+    {"code": "SHIPMENT", "name": "К отгрузке", "sort_order": 100, "kind": "finished_stock", "icon": "Truck", "icon_color": "#7C3AED"},
+    {"code": "SENT", "name": "Отправлено", "sort_order": 110, "kind": "finished_stock", "icon": "CheckCircle", "icon_color": "#059669"},
 ]
 
 
