@@ -20,29 +20,29 @@ branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
 
+def _create_enum_if_not_exists(name: str, values: list[str]) -> None:
+    """Create a PostgreSQL enum only if it doesn't already exist."""
+    conn = op.get_bind()
+    exists = conn.execute(
+        sa.text("SELECT EXISTS (SELECT 1 FROM pg_type WHERE typname = :name)").bindparams(name=name)
+    ).scalar()
+    if not exists:
+        postgresql.ENUM(*values, name=name).create(conn)
+
+
 def upgrade() -> None:
-    # ENUMs
-    postgresql.ENUM("plan_position", "section_plan_line", "work_task", "transfer",
-                     "transfer_discrepancy", "defect", "defect_item", "defect_decision",
-                     "rework_task", name="entity_type").create(op.get_bind())
-    postgresql.ENUM("draft", "sent", "accepted", "partially_accepted", "rejected", "cancelled",
-                     name="transfer_status").create(op.get_bind())
-    postgresql.ENUM("open", "partially_resolved", "resolved", "cancelled",
-                     name="transfer_discrepancy_status").create(op.get_bind())
-    postgresql.ENUM("issue_to_work", "complete", "transfer_send", "transfer_receive",
-                     "reject", "scrap", "return_to_previous", "final_release", "adjustment",
-                     name="movement_type").create(op.get_bind())
-    postgresql.ENUM("open", "decision_required", "rework_task_created", "scrapped",
-                     "returned", "accepted_with_deviation", "closed",
-                     name="defect_status").create(op.get_bind())
-    postgresql.ENUM("scrap", "rework_current", "return_previous", "quality_hold",
-                     "accept_with_deviation", name="defect_decision_type").create(op.get_bind())
-    postgresql.ENUM("open", "in_progress", "completed", "cancelled",
-                     name="rework_task_status").create(op.get_bind())
-
-    entity_type = postgresql.ENUM(name="entity_type", create_type=False)
-
-    # defect_types
+    _create_enum_if_not_exists("entity_type", ["plan_position", "section_plan_line", "work_task", "transfer", "transfer_discrepancy", "defect", "defect_item", "defect_decision", "rework_task"])
+    _create_enum_if_not_exists("transfer_status", ["draft", "sent", "accepted", "partially_accepted", "rejected", "cancelled"])
+    _create_enum_if_not_exists("transfer_discrepancy_status", ["open", "partially_resolved", "resolved", "cancelled"])
+    _create_enum_if_not_exists("movement_type", ["issue_to_work", "complete", "transfer_send", "transfer_receive", "reject", "scrap", "return_to_previous", "final_release", "adjustment"])
+    _create_enum_if_not_exists("defect_status", ["open", "decision_required", "rework_task_created", "scrapped", "returned", "accepted_with_deviation", "closed"])
+    _create_enum_if_not_exists("defect_decision_type", ["scrap", "rework_current", "return_previous", "quality_hold", "accept_with_deviation"])
+    _create_enum_if_not_exists("rework_task_status", ["open", "in_progress", "completed", "cancelled"])
+    entity_type = postgresql.ENUM(
+        "plan_position", "section_plan_line", "work_task", "transfer",
+        "transfer_discrepancy", "defect", "defect_item", "defect_decision",
+        "rework_task", name="entity_type", create_type=False
+    )
     op.create_table('defect_types',
         sa.Column('id', sa.BigInteger(), sa.Identity(always=True), primary_key=True),
         sa.Column('code', sa.String(100), nullable=False, unique=True),
@@ -67,7 +67,7 @@ def upgrade() -> None:
         sa.Column('sent_quantity', sa.Numeric(14, 3), nullable=False),
         sa.Column('accepted_quantity', sa.Numeric(14, 3), nullable=True),
         sa.Column('rejected_quantity', sa.Numeric(14, 3), nullable=True),
-        sa.Column('status', sa.Enum("draft", "sent", "accepted", "partially_accepted", "rejected", "cancelled", name="transfer_status"), nullable=False, server_default=sa.text("'draft'")),
+        sa.Column('status', postgresql.ENUM("draft", "sent", "accepted", "partially_accepted", "rejected", "cancelled", name="transfer_status", create_type=False), nullable=False, server_default=sa.text("'draft'")),
         sa.Column('idempotency_key', sa.String(128), nullable=True),
         sa.Column('sent_by', sa.BigInteger(), sa.ForeignKey('users.id'), nullable=True),
         sa.Column('sent_at', sa.DateTime(timezone=True), nullable=True),
@@ -87,7 +87,7 @@ def upgrade() -> None:
         sa.Column('discrepancy_quantity', sa.Numeric(14, 3), nullable=False),
         sa.Column('resolved_quantity', sa.Numeric(14, 3), nullable=False, server_default=sa.text("0")),
         sa.Column('unresolved_quantity', sa.Numeric(14, 3), nullable=False),
-        sa.Column('status', sa.Enum("open", "partially_resolved", "resolved", "cancelled", name="transfer_discrepancy_status"), nullable=False, server_default=sa.text("'open'")),
+        sa.Column('status', postgresql.ENUM("open", "partially_resolved", "resolved", "cancelled", name="transfer_discrepancy_status", create_type=False), nullable=False, server_default=sa.text("'open'")),
         sa.Column('reason', sa.String(255), nullable=True),
         sa.Column('comment', sa.Text(), nullable=True),
         sa.Column('created_by', sa.BigInteger(), sa.ForeignKey('users.id'), nullable=False),
@@ -107,7 +107,7 @@ def upgrade() -> None:
         sa.Column('transfer_id', sa.BigInteger(), sa.ForeignKey('transfers.id'), nullable=True),
         sa.Column('from_section_id', sa.BigInteger(), sa.ForeignKey('sections.id'), nullable=True),
         sa.Column('to_section_id', sa.BigInteger(), sa.ForeignKey('sections.id'), nullable=True),
-        sa.Column('movement_type', sa.Enum("issue_to_work", "complete", "transfer_send", "transfer_receive", "reject", "scrap", "return_to_previous", "final_release", "adjustment", name="movement_type"), nullable=False),
+        sa.Column('movement_type', postgresql.ENUM("issue_to_work", "complete", "transfer_send", "transfer_receive", "reject", "scrap", "return_to_previous", "final_release", "adjustment", name="movement_type", create_type=False), nullable=False),
         sa.Column('quantity', sa.Numeric(14, 3), nullable=False),
         sa.Column('source_ref', sa.String(255), nullable=True),
         sa.Column('idempotency_key', sa.String(128), nullable=True),
@@ -130,7 +130,7 @@ def upgrade() -> None:
         sa.Column('section_id', sa.BigInteger(), sa.ForeignKey('sections.id'), nullable=False),
         sa.Column('task_id', sa.BigInteger(), sa.ForeignKey('work_tasks.id'), nullable=False),
         sa.Column('movement_id', sa.BigInteger(), sa.ForeignKey('movements.id'), nullable=True),
-        sa.Column('status', sa.Enum("open", "decision_required", "rework_task_created", "scrapped", "returned", "accepted_with_deviation", "closed", name="defect_status"), nullable=False, server_default=sa.text("'open'")),
+        sa.Column('status', postgresql.ENUM("open", "decision_required", "rework_task_created", "scrapped", "returned", "accepted_with_deviation", "closed", name="defect_status", create_type=False), nullable=False, server_default=sa.text("'open'")),
         sa.Column('responsible_section_id', sa.BigInteger(), sa.ForeignKey('sections.id'), nullable=True),
         sa.Column('idempotency_key', sa.String(128), nullable=True),
         sa.Column('comment', sa.Text(), nullable=True),
@@ -158,7 +158,7 @@ def upgrade() -> None:
     op.create_table('defect_decisions',
         sa.Column('id', sa.BigInteger(), sa.Identity(always=True), primary_key=True),
         sa.Column('defect_id', sa.BigInteger(), sa.ForeignKey('defects.id'), nullable=False),
-        sa.Column('decision_type', sa.Enum("scrap", "rework_current", "return_previous", "quality_hold", "accept_with_deviation", name="defect_decision_type"), nullable=False),
+        sa.Column('decision_type', postgresql.ENUM("scrap", "rework_current", "return_previous", "quality_hold", "accept_with_deviation", name="defect_decision_type", create_type=False), nullable=False),
         sa.Column('quantity', sa.Numeric(14, 3), nullable=False),
         sa.Column('target_section_id', sa.BigInteger(), sa.ForeignKey('sections.id'), nullable=True),
         sa.Column('reason', sa.String(255), nullable=True),
@@ -177,7 +177,7 @@ def upgrade() -> None:
         sa.Column('section_id', sa.BigInteger(), sa.ForeignKey('sections.id'), nullable=False),
         sa.Column('product_id', sa.BigInteger(), sa.ForeignKey('products.id'), nullable=False),
         sa.Column('quantity', sa.Numeric(14, 3), nullable=False),
-        sa.Column('status', sa.Enum("open", "in_progress", "completed", "cancelled", name="rework_task_status"), nullable=False, server_default=sa.text("'open'")),
+        sa.Column('status', postgresql.ENUM("open", "in_progress", "completed", "cancelled", name="rework_task_status", create_type=False), nullable=False, server_default=sa.text("'open'")),
         sa.Column('idempotency_key', sa.String(128), nullable=True),
         sa.Column('created_by', sa.BigInteger(), sa.ForeignKey('users.id'), nullable=False),
         sa.Column('created_at', sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),

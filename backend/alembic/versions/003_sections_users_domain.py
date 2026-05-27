@@ -18,12 +18,21 @@ branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
 
+def _create_enum_if_not_exists(name: str, values: list[str]) -> None:
+    """Create a PostgreSQL enum only if it doesn't exist, using a PL/pgSQL block."""
+    values_sql = ", ".join(f"'{v}'" for v in values)
+    op.execute(sa.text(f"""
+        DO $$
+        BEGIN
+            IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = '{name}') THEN
+                CREATE TYPE {name} AS ENUM ({values_sql});
+            END IF;
+        END$$;
+    """))
+
+
 def upgrade() -> None:
-    user_role_enum = postgresql.ENUM(
-        "admin", "planner", "section_manager", "operator", "viewer",
-        name="user_role",
-    )
-    user_role_enum.create(op.get_bind())
+    _create_enum_if_not_exists("user_role", ["admin", "planner", "section_manager", "operator", "viewer"])
 
     op.create_table(
         'sections',
@@ -45,7 +54,7 @@ def upgrade() -> None:
         sa.Column('email', sa.String(255), nullable=False, unique=True),
         sa.Column('password_hash', sa.String(255), nullable=False),
         sa.Column('full_name', sa.String(255), nullable=False),
-        sa.Column('role', sa.Enum("admin", "planner", "section_manager", "operator", "viewer", name="user_role"), nullable=False),
+        sa.Column('role', postgresql.ENUM("admin", "planner", "section_manager", "operator", "viewer", name="user_role", create_type=False), nullable=False),
         sa.Column('section_id', sa.BigInteger(), sa.ForeignKey('sections.id'), nullable=True),
         sa.Column('is_active', sa.Boolean(), nullable=False, server_default=sa.text("true")),
         sa.Column('created_at', sa.DateTime(timezone=True), nullable=False, server_default=sa.text("now()")),

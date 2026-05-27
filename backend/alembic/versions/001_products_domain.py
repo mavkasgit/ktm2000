@@ -29,13 +29,21 @@ PROCESSING_FLAGS = [
 ]
 
 
+def _create_enum_if_not_exists(name: str, values: list[str]) -> None:
+    """Create a PostgreSQL enum only if it doesn't exist, using a PL/pgSQL block."""
+    values_sql = ", ".join(f"'{v}'" for v in values)
+    op.execute(sa.text(f"""
+        DO $$
+        BEGIN
+            IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = '{name}') THEN
+                CREATE TYPE {name} AS ENUM ({values_sql});
+            END IF;
+        END$$;
+    """))
+
+
 def upgrade() -> None:
-    # ENUMs
-    product_type_enum = postgresql.ENUM(
-        "finished_good", "semi_finished", "component", "material",
-        name="product_type",
-    )
-    product_type_enum.create(op.get_bind())
+    _create_enum_if_not_exists("product_type", ["finished_good", "semi_finished", "component", "material"])
 
     # Tables
     op.create_table(
@@ -43,7 +51,7 @@ def upgrade() -> None:
         sa.Column('id', sa.BigInteger(), sa.Identity(always=True), primary_key=True),
         sa.Column('sku', sa.String(100), nullable=False),
         sa.Column('name', sa.String(255), nullable=False),
-        sa.Column('type', sa.Enum("finished_good", "semi_finished", "component", "material", name="product_type"), nullable=False),
+        sa.Column('type', postgresql.ENUM("finished_good", "semi_finished", "component", "material", name="product_type", create_type=False), nullable=False),
         sa.Column('unit', sa.String(50), nullable=False, server_default=sa.text("'pcs'")),
         sa.Column('is_active', sa.Boolean(), nullable=False, server_default=sa.text("true")),
         sa.Column('notes', sa.String(2000), nullable=True),

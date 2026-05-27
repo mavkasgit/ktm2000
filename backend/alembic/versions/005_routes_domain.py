@@ -19,12 +19,19 @@ branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
 
-def upgrade() -> None:
-    # ENUMs
-    postgresql.ENUM("NONE", "DRILL", "PRESS", "PACK", "SPUNBOND", "STRETCH", name="route_operation_family").create(op.get_bind())
-    postgresql.ENUM("finished_good", "semi_finished_shipment", name="route_output_kind").create(op.get_bind())
+def _create_enum_if_not_exists(name: str, values: list[str]) -> None:
+    """Create a PostgreSQL enum only if it doesn't already exist."""
+    conn = op.get_bind()
+    exists = conn.execute(
+        sa.text("SELECT EXISTS (SELECT 1 FROM pg_type WHERE typname = :name)").bindparams(name=name)
+    ).scalar()
+    if not exists:
+        postgresql.ENUM(*values, name=name).create(conn)
 
-    # production_routes
+
+def upgrade() -> None:
+    _create_enum_if_not_exists("route_operation_family", ["NONE", "DRILL", "PRESS", "PACK", "SPUNBOND", "STRETCH"])
+    _create_enum_if_not_exists("route_output_kind", ["finished_good", "semi_finished_shipment"])
     op.create_table('production_routes',
         sa.Column('id', sa.BigInteger(), sa.Identity(always=True), primary_key=True),
         sa.Column('code', sa.String(100), nullable=True, unique=True),
@@ -71,8 +78,8 @@ def upgrade() -> None:
     op.create_table('route_signature_rules',
         sa.Column('id', sa.BigInteger(), sa.Identity(always=True), primary_key=True),
         sa.Column('route_id', sa.BigInteger(), sa.ForeignKey('production_routes.id'), nullable=False),
-        sa.Column('operation_family', sa.Enum("NONE", "DRILL", "PRESS", "PACK", "SPUNBOND", "STRETCH", name="route_operation_family"), nullable=False),
-        sa.Column('output_kind', sa.Enum("finished_good", "semi_finished_shipment", name="route_output_kind"), nullable=False),
+        sa.Column('operation_family', postgresql.ENUM("NONE", "DRILL", "PRESS", "PACK", "SPUNBOND", "STRETCH", name="route_operation_family", create_type=False), nullable=False),
+        sa.Column('output_kind', postgresql.ENUM("finished_good", "semi_finished_shipment", name="route_output_kind", create_type=False), nullable=False),
         sa.Column('has_pack_ops', sa.Boolean(), nullable=True),
         sa.Column('priority', sa.Integer(), nullable=False, server_default=sa.text("0")),
         sa.Column('is_active', sa.Boolean(), nullable=False, server_default=sa.text("true")),
@@ -86,7 +93,7 @@ def upgrade() -> None:
         sa.Column('id', sa.BigInteger(), sa.Identity(always=True), primary_key=True),
         sa.Column('code', sa.String(100), nullable=True, unique=True),
         sa.Column('name', sa.String(255), nullable=False),
-        sa.Column('profile_id', sa.BigInteger(), sa.ForeignKey('route_rule_profiles.id'), nullable=True),
+        sa.Column('profile_id', sa.BigInteger(), nullable=True),
         sa.Column('priority', sa.Integer(), nullable=False, server_default=sa.text("0")),
         sa.Column('is_active', sa.Boolean(), nullable=False, server_default=sa.text("true")),
         sa.Column('conditions', postgresql.JSONB(astext_type=sa.Text()), nullable=False, server_default=sa.text("'[]'::jsonb")),
@@ -105,7 +112,7 @@ def upgrade() -> None:
         sa.Column('name', sa.String(255), nullable=False),
         sa.Column('is_active', sa.Boolean(), nullable=False, server_default=sa.text("true")),
         sa.Column('priority', sa.Integer(), nullable=False, server_default=sa.text("0")),
-        sa.Column('import_template_id', sa.BigInteger(), sa.ForeignKey('import_templates.id'), nullable=True),
+        sa.Column('import_template_id', sa.BigInteger(), nullable=True),
         sa.Column('excel_column_passport', postgresql.JSONB(astext_type=sa.Text()), nullable=False, server_default=sa.text("'[]'::jsonb")),
         sa.Column('excel_passport_meta', postgresql.JSONB(astext_type=sa.Text()), nullable=False, server_default=sa.text("'{}'::jsonb")),
         sa.Column('created_at', sa.DateTime(), server_default=sa.func.now()),

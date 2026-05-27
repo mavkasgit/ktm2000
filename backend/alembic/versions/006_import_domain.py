@@ -18,12 +18,19 @@ branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
 
-def upgrade() -> None:
-    # ENUMs
-    postgresql.ENUM("create_plan", "append_to_plan", "replace_draft_from_same_source", name="import_batch_mode").create(op.get_bind())
-    postgresql.ENUM("parsed", "failed", "applied", "cancelled", name="import_batch_status").create(op.get_bind())
+def _create_enum_if_not_exists(name: str, values: list[str]) -> None:
+    """Create a PostgreSQL enum only if it doesn't already exist."""
+    conn = op.get_bind()
+    exists = conn.execute(
+        sa.text("SELECT EXISTS (SELECT 1 FROM pg_type WHERE typname = :name)").bindparams(name=name)
+    ).scalar()
+    if not exists:
+        postgresql.ENUM(*values, name=name).create(conn)
 
-    # import_files
+
+def upgrade() -> None:
+    _create_enum_if_not_exists("import_batch_mode", ["create_plan", "append_to_plan", "replace_draft_from_same_source"])
+    _create_enum_if_not_exists("import_batch_status", ["parsed", "failed", "applied", "cancelled"])
     op.create_table('import_files',
         sa.Column('id', sa.BigInteger(), sa.Identity(always=True), primary_key=True),
         sa.Column('original_filename', sa.String(500), nullable=False),
@@ -58,8 +65,8 @@ def upgrade() -> None:
         sa.Column('production_plan_id', sa.BigInteger(), sa.ForeignKey('production_plans.id'), nullable=False),
         sa.Column('template_id', sa.BigInteger(), sa.ForeignKey('import_templates.id'), nullable=True),
         sa.Column('rule_profile_id', sa.BigInteger(), sa.ForeignKey('route_rule_profiles.id'), nullable=True),
-        sa.Column('mode', sa.Enum("create_plan", "append_to_plan", "replace_draft_from_same_source", name="import_batch_mode"), nullable=False),
-        sa.Column('status', sa.Enum("parsed", "failed", "applied", "cancelled", name="import_batch_status"), nullable=False, server_default=sa.text("'parsed'")),
+        sa.Column('mode', postgresql.ENUM("create_plan", "append_to_plan", "replace_draft_from_same_source", name="import_batch_mode", create_type=False), nullable=False),
+        sa.Column('status', postgresql.ENUM("parsed", "failed", "applied", "cancelled", name="import_batch_status", create_type=False), nullable=False, server_default=sa.text("'parsed'")),
         sa.Column('source_system', sa.String(100), nullable=False, server_default=sa.text("'excel'")),
         sa.Column('sheet_name', sa.String(255), nullable=False),
         sa.Column('header_row_number', sa.BigInteger(), nullable=False),
