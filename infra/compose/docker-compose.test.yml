@@ -20,11 +20,11 @@ services:
 
   backend:
     build:
-      context: ../backend
+      context: ../../backend
       dockerfile: Dockerfile
     container_name: ktm2000-backend-test
     env_file:
-      - ../.env.test
+      - ../../.env.test
     environment:
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-ktm2000_user}:${POSTGRES_PASSWORD:-ktm2000_pass_test}@postgres:5432/${POSTGRES_DB:-ktm2000_test}
       ENV: test
@@ -40,7 +40,7 @@ services:
 
   frontend:
     build:
-      context: ../frontend
+      context: ../../frontend
       dockerfile: Dockerfile
     container_name: ktm2000-frontend-test
     expose:

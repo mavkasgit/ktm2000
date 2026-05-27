@@ -10,6 +10,7 @@ venv
 *.md
 tests/
 scripts/
+alembic/versions/__pycache__/
 alembic/versions/*.pyc
 storage/
 data/

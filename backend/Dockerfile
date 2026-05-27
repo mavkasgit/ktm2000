@@ -13,9 +13,12 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
+# Clean stale Python cache (old migration .pyc files)
+RUN find . -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
+
 # Create storage directories
 RUN mkdir -p /app/storage/products /app/storage/imports && chmod -R 755 /app/storage
 
 EXPOSE 8000
 
-CMD ["sh", "-c", "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000"]
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
