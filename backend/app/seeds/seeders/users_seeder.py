@@ -7,13 +7,12 @@ from app.models.user import User, UserRole
 
 
 async def seed_users(db: AsyncSession, force: bool = False) -> dict[int, User]:
-    """Ensure system user (id=1) exists for dev-mode _fake_user(). Returns {id: user} map."""
+    """Ensure system user exists for dev-mode _fake_user(). Returns {id: user} map."""
     result: dict[int, User] = {}
 
-    system_user = await db.scalar(select(User).where(User.id == 1))
+    system_user = await db.scalar(select(User).where(User.email == "system@local"))
     if system_user is None:
         system_user = User(
-            id=1,
             email="system@local",
             password_hash="",
             role=UserRole.admin,

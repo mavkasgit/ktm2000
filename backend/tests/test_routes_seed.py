@@ -280,9 +280,10 @@ async def test_new_release_after_force_seed_uses_new_route_steps(client, session
 
 
 @pytest.mark.asyncio
-async def test_force_seed_is_forbidden_in_production(client, session, monkeypatch) -> None:
+@pytest.mark.parametrize("env_value", ["prod", "production"])
+async def test_force_seed_is_forbidden_in_production(client, session, monkeypatch, env_value) -> None:
     await _seed_default_sections(session)
-    monkeypatch.setattr(settings, "ENV", "production")
+    monkeypatch.setattr(settings, "ENV", env_value)
 
     response = await client.post("/api/routes-seed?force=true")
 

@@ -1,6 +1,8 @@
 """Seed endpoint — fills ALL reference data in one shot:
 ImportTemplate + RouteRuleProfile + Routes + SelectionRules."""
 
+import logging
+
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -8,6 +10,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import settings
 from app.core.database import get_db
 from app.seeds.run_seed import run_full_seed
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/routes-seed", tags=["routes-seed"])
 
@@ -25,7 +29,7 @@ async def seed_all(
     db: AsyncSession = Depends(get_db),
 ) -> SeedSummary:
     """Seed all reference data: templates, profiles, routes, selection rules."""
-    if force and settings.ENV == "production":
+    if force and settings.ENV in ("prod", "production"):
         raise HTTPException(status_code=403, detail="force=true is not allowed in production")
     try:
         result = await run_full_seed(db, force=force)
@@ -39,6 +43,7 @@ async def seed_all(
     except RuntimeError as e:
         await db.rollback()
         raise HTTPException(status_code=400, detail=str(e))
-    except Exception:
+    except Exception as e:
+        logger.exception("Seed failed")
         await db.rollback()
-        raise HTTPException(status_code=500, detail="Seed failed")
+        raise HTTPException(status_code=500, detail=str(e))
