@@ -192,6 +192,31 @@ async def test_combined_op_group_merges_anod_tasks(client, session) -> None:
     assert tasks[0].status == WorkTaskStatus.ready
     assert all(task.status == WorkTaskStatus.waiting_previous for task in tasks[1:])
 
+    # Проверяем что у каждой задачи заполнены operation_code и operation_name
+    # и они соответствуют этапу маршрута
+    from app.services.shopfloor.queries_sections import get_section_board
+
+    # Проверяем для первого участка (Склад сырья)
+    raw_section = sections[0]
+    board = await get_section_board(session, section_id=raw_section.id)
+    assert len(board["tasks"]) == 1
+    raw_task_data = board["tasks"][0]
+    assert raw_task_data["operation_code"] == "ISSUE_RAW"
+    assert raw_task_data["operation_name"] == "Выдача сырья"
+    assert raw_task_data["signature"]["operation_code"] == "ISSUE_RAW"
+    assert raw_task_data["signature"]["operation_name"] == "Выдача сырья"
+    # route_history должен быть пустым для первого этапа
+    assert raw_task_data["route_history"] == []
+    assert raw_task_data["signature"]["route_history"] == []
+
+    # Проверяем для участка ANOD (комбинированный этап)
+    anod_section = sections[2]
+    board_anod = await get_section_board(session, section_id=anod_section.id)
+    assert len(board_anod["tasks"]) == 1
+    anod_task_data = board_anod["tasks"][0]
+    # Операция должна быть определена (из route_step или source_payload)
+    assert anod_task_data["operation_code"] is not None or anod_task_data["operation_name"] is not None
+
 
 @pytest.mark.asyncio
 async def test_no_combined_op_group_creates_separate_tasks(client, session) -> None:

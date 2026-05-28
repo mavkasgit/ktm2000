@@ -150,7 +150,7 @@ export function ExecutionPage() {
       const summary = summarizeBulkResults(results);
       setBulkResults(results);
       setBulkSummary(summary);
-      setBulkResultsOpen(true);
+      if (summary.failed > 0 || summary.skipped > 0) setBulkResultsOpen(true);
       const successCount = summary.success;
       const failCount = summary.failed;
       const alreadyCount = summary.skipped;
@@ -734,7 +734,7 @@ export function ExecutionPage() {
     const summary = summarizeBulkResults(results);
     setBulkResults(results);
     setBulkSummary(summary);
-    setBulkResultsOpen(true);
+    if (summary.failed > 0 || summary.skipped > 0) setBulkResultsOpen(true);
     queryClient.invalidateQueries({ queryKey: ["production-planning-rows"] });
     queryClient.invalidateQueries({ queryKey: ["production-planning-row-detail"] });
     queryClient.invalidateQueries({ queryKey: ["plans"] });
@@ -770,7 +770,7 @@ export function ExecutionPage() {
     const summary = summarizeBulkResults(results);
     setBulkResults(results);
     setBulkSummary(summary);
-    setBulkResultsOpen(true);
+    if (summary.failed > 0 || summary.skipped > 0) setBulkResultsOpen(true);
     queryClient.invalidateQueries({ queryKey: ["production-planning-rows"] });
     queryClient.invalidateQueries({ queryKey: ["production-planning-row-detail"] });
     queryClient.invalidateQueries({ queryKey: ["plans"] });

@@ -157,6 +157,22 @@ function PlanTable({ title, tasks, profile, onSettingsClick, emptyMessage }: Pla
             const task = group.tasks[0];
             const sig = task.signature;
 
+            // Collect unique operations across all tasks in the group.
+            // Deduplicate by operation_name to avoid showing duplicates like
+            // "Выдача сырья • Выдача сырья" for combined profiles where different
+            // branches have different operation_codes but the same operation_name.
+            const uniqueOps = new Map<string, { code: string; icon?: string; iconColor?: string }>();
+            for (const t of group.tasks) {
+              const opName = t.signature.operation_name ?? "—";
+              if (!uniqueOps.has(opName)) {
+                uniqueOps.set(opName, {
+                  code: t.signature.operation_code ?? "—",
+                  icon: (t.signature as any).icon,
+                  iconColor: (t.signature as any).icon_color,
+                });
+              }
+            }
+
             return (
               <tr key={group.key} className="border-b hover:bg-gray-50">
                 {/* Артикул */}
@@ -167,7 +183,25 @@ function PlanTable({ title, tasks, profile, onSettingsClick, emptyMessage }: Pla
                 {/* Операция */}
                 {profile.criteria.includes("operationCode") && (
                   <td className="px-2 py-2 text-sm max-w-[140px] break-words">
-                    <div className="font-medium">{sig.operation_name ?? "—"}</div>
+                    {uniqueOps.size === 1 ? (
+                      <div className="font-medium">{Array.from(uniqueOps.keys())[0]}</div>
+                    ) : (
+                      <div className="flex flex-wrap items-center gap-1 text-[10px]">
+                        {Array.from(uniqueOps.entries()).map(([opName, op], i) => (
+                          <React.Fragment key={i}>
+                            {i > 0 && <span className="text-muted-foreground">•</span>}
+                            <span
+                              className="inline-flex items-center gap-0.5 px-1 py-0.5 rounded bg-gray-100"
+                              style={{ color: op.iconColor || undefined }}
+                              title={opName}
+                            >
+                              {op.icon && renderIcon(op.icon, "h-3 w-3")}
+                              <span className="truncate max-w-[60px]">{opName}</span>
+                            </span>
+                          </React.Fragment>
+                        ))}
+                      </div>
+                    )}
                     {sig.route_history?.length > 0 && (
                       <div className="flex flex-wrap items-center gap-1 mt-1 text-[10px]">
                         {sig.route_history.map((op: RouteHistoryOp, i: number) => (
