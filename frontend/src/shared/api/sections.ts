@@ -40,11 +40,6 @@ export async function patchSection(sectionId: number, payload: PatchSectionInput
   return data;
 }
 
-export async function seedSections() {
-  const { data } = await apiClient.post<Section[]>("/sections-seed");
-  return data;
-}
-
 export async function reorderSections(ids: number[]) {
   await apiClient.post("/sections/reorder", { ids });
 }

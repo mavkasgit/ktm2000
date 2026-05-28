@@ -1,4 +1,4 @@
-import { HardDrive, Database, Trash2, Download, Check, X, Loader2 } from "lucide-react"
+import { HardDrive, Database, Trash2, Download, Check, X, Loader2, UserCog } from "lucide-react"
 import { useNavigate } from "react-router-dom"
 import { useState } from "react"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
@@ -7,15 +7,17 @@ import { AlertDialog, AlertDialogContent, AlertDialogHeader, AlertDialogTitle, A
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/shared/ui/Dialog"
 import { toast } from "@/shared/ui"
 import { resetAllPlans } from "@/shared/api/productionPlans"
-import { seedRoutes, listRoutes, listRouteRuleProfiles, listRouteSelectionRules } from "@/shared/api/routes"
+import { seedRoutes, listRoutes, listRouteRuleProfiles, listRouteSelectionRules, reseedSystemUser } from "@/shared/api/routes"
 import { listImportTemplates } from "@/shared/api/importTemplates"
+import { listSections } from "@/shared/api/sections"
 
 function useCurrentData() {
   const routes = useQuery({ queryKey: ["routes"], queryFn: () => listRoutes() })
   const profiles = useQuery({ queryKey: ["route-rule-profiles"], queryFn: () => listRouteRuleProfiles() })
   const selectionRules = useQuery({ queryKey: ["route-selection-rules"], queryFn: () => listRouteSelectionRules() })
   const templates = useQuery({ queryKey: ["import-templates"], queryFn: () => listImportTemplates() })
-  return { routes, profiles, selectionRules, templates }
+  const sections = useQuery({ queryKey: ["sections"], queryFn: () => listSections() })
+  return { routes, profiles, selectionRules, templates, sections }
 }
 
 const SEED_DATA = {
@@ -23,19 +25,22 @@ const SEED_DATA = {
   route_rule_profiles: 1,
   routes: 12,
   selection_rules: 9,
+  sections: 11,
+  section_operations: 21,
 }
 
 function SeedDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (v: boolean) => void }) {
-  const { routes, profiles, selectionRules, templates } = useCurrentData()
+  const { routes, profiles, selectionRules, templates, sections } = useCurrentData()
   const [seeding, setSeeding] = useState(false)
   const queryClient = useQueryClient()
 
-  const loading = routes.isLoading || profiles.isLoading || selectionRules.isLoading || templates.isLoading
+  const loading = routes.isLoading || profiles.isLoading || selectionRules.isLoading || templates.isLoading || sections.isLoading
 
   const currentRoutes = routes.data?.length ?? 0
   const currentProfiles = profiles.data?.length ?? 0
   const currentRules = selectionRules.data?.length ?? 0
   const currentTemplates = templates.data?.length ?? 0
+  const currentSections = sections.data?.length ?? 0
 
   const handleSeed = async () => {
     setSeeding(true)
@@ -59,7 +64,7 @@ function SeedDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (v: b
     }
   }
 
-  const hasData = currentRoutes > 0 || currentProfiles > 0 || currentRules > 0 || currentTemplates > 0
+  const hasData = currentRoutes > 0 || currentProfiles > 0 || currentRules > 0 || currentTemplates > 0 || currentSections > 0
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -87,6 +92,7 @@ function SeedDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (v: b
 
             {/* Rows */}
             {[
+              { label: "Участки", current: currentSections, seed: SEED_DATA.sections },
               { label: "Шаблоны импорта", current: currentTemplates, seed: SEED_DATA.import_templates },
               { label: "Профили правил", current: currentProfiles, seed: SEED_DATA.route_rule_profiles },
               { label: "Маршруты", current: currentRoutes, seed: SEED_DATA.routes },
@@ -133,6 +139,7 @@ export function SettingsPage() {
   const [confirmOpen, setConfirmOpen] = useState(false)
   const [resetting, setResetting] = useState(false)
   const [seedOpen, setSeedOpen] = useState(false)
+  const [reseedingUser, setReseedingUser] = useState(false)
 
   const handleReset = async () => {
     setConfirmOpen(false)
@@ -145,6 +152,18 @@ export function SettingsPage() {
       toast({ title: "Ошибка", description: e instanceof Error ? e.message : "Не удалось очистить планы", variant: "destructive" })
     } finally {
       setResetting(false)
+    }
+  }
+
+  const handleReseedUser = async () => {
+    setReseedingUser(true)
+    try {
+      const result = await reseedSystemUser()
+      toast({ title: "Системный пользователь восстановлен", description: `ID: ${result.user_id}, Email: ${result.email}`, variant: "success" })
+    } catch (e) {
+      toast({ title: "Ошибка", description: e instanceof Error ? e.message : "Не удалось восстановить пользователя", variant: "destructive" })
+    } finally {
+      setReseedingUser(false)
     }
   }
 
@@ -204,6 +223,22 @@ export function SettingsPage() {
           </div>
           <Button variant="destructive" onClick={() => setConfirmOpen(true)} disabled={resetting} className="w-full">
             {resetting ? "Очистка..." : "Очистить"}
+          </Button>
+        </div>
+
+        <div className="rounded-lg border bg-card p-6 space-y-4">
+          <div className="flex items-center gap-3">
+            <div className="rounded-lg bg-violet-500/10 p-2">
+              <UserCog className="h-5 w-5 text-violet-500" />
+            </div>
+            <div>
+              <h3 className="font-medium">Системный пользователь</h3>
+              <p className="text-sm text-muted-foreground">Восстановить ID=1 для dev-режима</p>
+            </div>
+          </div>
+          <Button onClick={handleReseedUser} disabled={reseedingUser} className="w-full">
+            {reseedingUser ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : <UserCog className="h-4 w-4 mr-1" />}
+            {reseedingUser ? "Восстановление..." : "Восстановить"}
           </Button>
         </div>
       </div>

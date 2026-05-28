@@ -198,10 +198,17 @@ export type SeedSummary = {
   route_rule_profiles: number;
   routes: number;
   selection_rules: number;
+  sections: number;
+  section_operations: number;
 };
 
 export async function seedRoutes() {
   const { data } = await apiClient.post<SeedSummary>("/routes-seed");
+  return data;
+}
+
+export async function reseedSystemUser() {
+  const { data } = await apiClient.post<{ user_id: number; email: string }>("/routes-seed/reseed-system-user");
   return data;
 }
 

@@ -20,7 +20,7 @@ READER_ROLES: frozenset[UserRole] = frozenset(
 
 
 def _fake_user() -> User:
-    """Dev-mode placeholder user. Matches migration 012 seed (id=1)."""
+    """Dev-mode placeholder user. email 'system@local' signals a fake/dev user."""
     return User(
         id=1,
         email="system@local",

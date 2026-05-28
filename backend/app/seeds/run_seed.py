@@ -10,7 +10,7 @@ from app.seeds.seeders.cleanup_seeder import clear_generated_production_data
 from app.seeds.seeders.import_template_seeder import seed_import_template
 from app.seeds.seeders.route_rule_profile_seeder import seed_route_rule_profile
 from app.seeds.seeders.routes_seeder import seed_routes
-from app.seeds.seeders.sections_seeder import seed_sections
+from app.seeds.seeders.sections_seeder import seed_section_operations, seed_sections
 from app.seeds.seeders.selection_rules_seeder import seed_selection_rules
 from app.seeds.seeders.users_seeder import seed_users
 
@@ -32,6 +32,10 @@ async def run_full_seed(db: AsyncSession, force: bool = False) -> dict:
     # 1. Sections (required by routes)
     sections_map = await seed_sections(db)
     result["sections"] = len(sections_map)
+
+    # 1.1. Section operations
+    ops_count = await seed_section_operations(db, sections_map)
+    result["section_operations"] = ops_count
 
     # 2. ImportTemplate
     template_data = IMPORT_TEMPLATES[0] if IMPORT_TEMPLATES else None
