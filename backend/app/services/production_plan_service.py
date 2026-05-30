@@ -130,6 +130,7 @@ async def apply_change_set(db: AsyncSession, change_set_id: int, *, skip_invalid
                     position.period_end = _date_from_payload(after, "period_end")
                     position.has_pack_ops = _bool_or_none(after.get("has_pack_ops"))
                     position.route_id = after.get("route_id")
+                    position.route_profile_id = after.get("route_profile_id")
                     position.route_origin = _route_origin_from_after(after)
                     position.route_match_quality = _route_match_quality_from_after(after)
                     position.route_match_reason = _route_match_reason_from_after(after)
@@ -161,6 +162,7 @@ async def apply_change_set(db: AsyncSession, change_set_id: int, *, skip_invalid
                 production_plan_id=change_set.production_plan_id,
                 product_id=after.get("product_id"),
                 route_id=after.get("route_id"),
+                route_profile_id=after.get("route_profile_id"),
                 source_type=PlanSourceType.excel_import,
                 source_system="excel",
                 source_ref=after.get("source_ref"),

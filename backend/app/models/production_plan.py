@@ -124,6 +124,7 @@ class PlanPosition(Base):
     priority: Mapped[int] = mapped_column(BigInteger, nullable=False, server_default=text("100"), default=100)
     source_row_number: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     route_id: Mapped[int | None] = mapped_column(ForeignKey("production_routes.id"), nullable=True)
+    route_profile_id: Mapped[int | None] = mapped_column(ForeignKey("route_rule_profiles.id"), nullable=True)
     has_pack_ops: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     route_origin: Mapped[PlanPositionRouteOrigin | None] = mapped_column(
         Enum(PlanPositionRouteOrigin, name="plan_position_route_origin"),

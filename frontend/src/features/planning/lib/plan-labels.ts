@@ -95,6 +95,9 @@ export function formatRouteAssignedAt(value: string | null | undefined): string 
 
 export function routeMetaLabel(pos: PlanPositionOut): string {
   const assignedAt = formatRouteAssignedAt(pos.route_assigned_at)
+  if (pos.route_source === "dynamic_build") {
+    return `динамический • ${assignedAt}`
+  }
   if (pos.route_origin === "manual_confirmed" || pos.route_source === "manual") {
     return `вручную • ${assignedAt}`
   }

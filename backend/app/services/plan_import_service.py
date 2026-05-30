@@ -717,6 +717,7 @@ async def _make_change_items(
             "route_match_reason": route_match_reason,
             "route_assigned_at": route_assigned_at,
             "route_manual_confirmed_at": None,
+            "route_profile_id": rule_profile_id if rule_profile_id else None,
             "route_selection": {
                 "matched_rule_ids": selection.matched_rule_ids,
                 "required_sections": selection.required_sections,

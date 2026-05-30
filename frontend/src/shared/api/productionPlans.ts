@@ -134,6 +134,7 @@ export type PlanPositionOut = {
   source_ref?: string | null;
   product_id: number | null;
   route_id: number | null;
+  route_profile_id: number | null;
   route_name: string | null;
   route_source: string | null;
   route_origin: string | null;

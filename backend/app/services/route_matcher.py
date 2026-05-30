@@ -14,8 +14,9 @@ from app.models.production_plan import (
     PlanPositionRouteMatchReason,
     PlanPositionRouteOrigin,
 )
-from app.models.route import ProductionRoute
+from app.models.route import ProductionRoute, RouteRuleProfile
 from app.services.route_selection import RouteCandidateDiagnostic, select_route_for_payload
+from app.services.route_builder import build_route_from_profile
 
 
 @dataclass(slots=True)
@@ -118,6 +119,30 @@ async def resolve_position_route(
             route_manual_confirmed_at=manual_confirmed_at,
             error=None,
         )
+
+    # No stored route_id - check if we have a dynamic route profile
+    if position.route_profile_id is not None:
+        profile = await db.get(RouteRuleProfile, position.route_profile_id)
+        if profile is not None and profile.route_sections:
+            # Build dynamic route from profile
+            try:
+                product = await db.get(Product, position.product_id) if position.product_id is not None else None
+                built_route = await build_route_from_profile(db, profile, position.source_payload, position)
+                
+                if not built_route.error:
+                    return ResolvedRouteInfo(
+                        route_id=None,  # Dynamic route, no static ProductionRoute
+                        route_name=built_route.name or f"Dynamic: {profile.name}",
+                        source="dynamic_build",
+                        route_origin=PlanPositionRouteOrigin.auto.value,
+                        route_match_quality=PlanPositionRouteMatchQuality.exact.value,
+                        route_match_reason=PlanPositionRouteMatchReason.selection_rules.value,
+                        route_assigned_at=position.route_assigned_at,
+                        route_manual_confirmed_at=position.route_manual_confirmed_at,
+                        error=None,
+                    )
+            except Exception:
+                pass  # Fall through to normal route selection if dynamic build fails
 
     # No stored route_id - try to resolve from source_payload
     import_batch = await db.get(ImportBatch, position.import_batch_id) if position.import_batch_id is not None else None
