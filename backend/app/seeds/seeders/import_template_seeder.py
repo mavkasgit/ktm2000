@@ -21,7 +21,6 @@ async def seed_import_template(db: AsyncSession, data: dict) -> ImportTemplate:
     obj.is_active = data.get("is_active", True)
     obj.sort_order = data.get("sort_order", 0)
     obj.column_mapping = data.get("column_mapping", {})
-    obj.normalization_rules = data.get("normalization_rules", {})
     if "button_label" in data:
         obj.button_label = data["button_label"]
     if "description" in data:

@@ -9,7 +9,7 @@ from app.seeds.selection_rules import SELECTION_RULES
 from app.seeds.seeders.cleanup_seeder import clear_generated_production_data
 from app.seeds.seeders.import_template_seeder import seed_import_template
 from app.seeds.seeders.route_rule_profile_seeder import seed_route_rule_profile
-from app.seeds.seeders.routes_seeder import seed_routes
+from app.seeds.seeders.routes_seeder import seed_routes, seed_production_routes_from_profiles
 from app.seeds.seeders.sections_seeder import seed_section_operations, seed_sections
 from app.seeds.seeders.selection_rules_seeder import seed_selection_rules
 from app.seeds.seeders.users_seeder import seed_users
@@ -37,6 +37,15 @@ async def run_full_seed(db: AsyncSession, force: bool = False) -> dict:
     ops_count = await seed_section_operations(db, sections_map)
     result["section_operations"] = ops_count
 
+    # 1.2. ProductionRoutes from RouteRuleProfile (ONE step per section)
+    dynamic_routes_count = await seed_production_routes_from_profiles(db)
+    result["routes"] = dynamic_routes_count
+
+    # 1.3. Static universal route (contains all sections, filtered by rules)
+    if ROUTES:
+        static_routes = await seed_routes(db, ROUTES, force=force)
+        result["routes"] += len(static_routes)
+
     # 2. ImportTemplate
     template_data = IMPORT_TEMPLATES[0] if IMPORT_TEMPLATES else None
     if template_data is None:
@@ -55,9 +64,7 @@ async def run_full_seed(db: AsyncSession, force: bool = False) -> dict:
     )
     result["route_rule_profiles"] = 1
 
-    # 3. Routes (independent of profile)
-    routes_map = await seed_routes(db, ROUTES, force=force)
-    result["routes"] = len(routes_map)
+    # 3. Routes (static routes replaced by dynamic production routes above)
 
     # 4. SelectionRules (needs profile)
     rules_count = await seed_selection_rules(db, SELECTION_RULES, profile)

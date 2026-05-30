@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm.attributes import flag_modified
 
 from app.models.route import RouteRuleProfile, RouteSelectionRule
 from app.models.section import Section
@@ -41,8 +42,18 @@ async def seed_selection_rules(
                 "action": action_def["action"],
                 "section_id": sections_by_code[section_code].id if section_code else None,
             }
+            # Preserve section_code and group_code for set_operation actions
+            if "section_code" in action_def:
+                action_dict["section_code"] = action_def["section_code"]
+            if "group_code" in action_def:
+                action_dict["group_code"] = action_def["group_code"]
             if "operation_code" in action_def:
                 action_dict["operation_code"] = action_def["operation_code"]
+            # Preserve mapping and lookup_field for set_operation_by_mapping actions
+            if "lookup_field" in action_def:
+                action_dict["lookup_field"] = action_def["lookup_field"]
+            if "mapping" in action_def:
+                action_dict["mapping"] = action_def["mapping"]
             actions.append(action_dict)
 
         # Upsert by code
@@ -58,6 +69,8 @@ async def seed_selection_rules(
         rule.phase = rule_def.get("phase", "route_select")
         rule.conditions = conditions
         rule.actions = actions
+        flag_modified(rule, "conditions")
+        flag_modified(rule, "actions")
         count += 1
 
     await db.flush()

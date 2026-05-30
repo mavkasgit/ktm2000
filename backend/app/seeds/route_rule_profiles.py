@@ -6,7 +6,9 @@ ROUTE_RULE_PROFILES = [
         "name": "Упаковочная карта РП",
         "is_active": True,
         "priority": 1000,
+        "route_name_pattern": "{output_kind} - {press_op} - {drill_op} - {shot_op} - {color} - {pack_op}",
         "import_template_code": "upakovochnaya_karta_rp",
+        "route_sections": ["WH", "DRILL", "PRESS", "SHOT", "ANOD", "WIP_WH", "SAW", "PACK", "FG_WH", "SHIPMENT", "SENT"],
         "excel_column_passport": [
             {"index": 1, "header": "Артикул", "letter": "A", "field_path": "sku"},
             {"index": 2, "header": "пополнение", "letter": "B", "field_path": "replenishment"},
@@ -22,7 +24,6 @@ ROUTE_RULE_PROFILES = [
             {"index": 12, "header": "кол-во штук готовой продукции", "letter": "L", "field_path": "output_quantity"},
             {"index": 13, "header": "Запад", "letter": "M", "field_path": "west_quantity"},
             {"index": 14, "header": "Восток", "letter": "N", "field_path": "east_quantity"},
-            {"index": 15, "header": "Вид конечного продукта", "letter": "O", "field_path": "output_kind"},
             {"index": 16, "header": "Примечание", "letter": "P", "field_path": "comments"},
             {"index": 19, "header": "Упаковка в 1,8", "letter": "S", "field_path": "packaging_1_8_quantity"},
             {"index": 20, "header": "Добавить", "letter": "T", "field_path": "add_quantity"},

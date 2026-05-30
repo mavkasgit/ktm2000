@@ -7,7 +7,7 @@ from app.models.defect import Defect
 from app.models.internal_plan import SectionPlanLine
 from app.models.movement import Movement
 from app.models.rework_task import ReworkTask
-from app.models.route import ProductionRoute, RouteStep
+from app.models.route import ProductionRoute, RouteRuleProfile, RouteStep, SectionOperation
 from app.models.section import Section
 from app.models.transfer import Transfer
 from app.models.work_task import WorkTask
@@ -28,7 +28,14 @@ async def seed_routes(
     routes_data: list[dict],
     force: bool = False,
 ) -> dict[str, ProductionRoute]:
-    """Upsert all routes by code. Replace steps entirely. Returns {code: route} map."""
+    """Upsert all routes by code. Replace steps entirely. Returns {code: route} map.
+
+    Note: Old static routes are replaced by dynamic route building.
+    If routes_data is empty, return empty dict without errors.
+    """
+    if not routes_data:
+        return {}
+
     # Load sections
     sections_result = await db.execute(select(Section).where(Section.is_active.is_(True)))
     sections = list(sections_result.scalars().all())
@@ -160,3 +167,81 @@ async def seed_routes(
         result[template["code"]] = route
 
     return result
+
+
+async def seed_production_routes_from_profiles(db: AsyncSession) -> int:
+    """Create ProductionRoute for each RouteRuleProfile that has route_sections.
+
+    This ensures the frontend sees routes after seeding.
+    Each section gets ONE RouteStep (operation_code=None) - operations resolved at runtime.
+    """
+    profiles = (await db.execute(
+        select(RouteRuleProfile).where(RouteRuleProfile.is_active.is_(True))
+    )).scalars().all()
+
+    sections = (await db.execute(
+        select(Section).where(Section.is_active.is_(True))
+    )).scalars().all()
+    sections_by_code = {s.code: s for s in sections}
+
+    created_count = 0
+
+    for profile in profiles:
+        route_section_codes = profile.route_sections or []
+        if not route_section_codes:
+            continue
+
+        route_name = f"Dynamic: {profile.name}"
+        route_code = f"dynamic_{profile.code}"
+
+        # Check if route already exists
+        route = await db.scalar(
+            select(ProductionRoute).where(
+                (ProductionRoute.code == route_code) | (ProductionRoute.name == route_name)
+            )
+        )
+
+        if route is None:
+            route = ProductionRoute(
+                code=route_code,
+                name=route_name,
+                description=f"Автоматический маршрут из профиля '{profile.name}'",
+                is_active=True,
+                sort_order=profile.priority,
+            )
+            db.add(route)
+            await db.flush()
+
+        # Clear existing steps
+        existing_steps = (await db.execute(
+            select(RouteStep).where(RouteStep.route_id == route.id)
+        )).scalars().all()
+        for step in existing_steps:
+            await db.delete(step)
+        await db.flush()
+
+        # Build ONE step per section (operations resolved at runtime)
+        sequence = 0
+        for section_code in route_section_codes:
+            section = sections_by_code.get(section_code)
+            if not section:
+                continue
+
+            sequence += 1
+            db.add(RouteStep(
+                route_id=route.id,
+                sequence=sequence,
+                section_id=section.id,
+                operation_code=None,  # Resolved dynamically at import time
+                operation_name=section.name,
+                is_significant=True,
+                is_final=(section_code == "SENT"),
+                requires_acceptance=True,
+                allow_parallel=False,
+                combined_op_group=None,
+            ))
+
+        created_count += 1
+
+    await db.flush()
+    return created_count
