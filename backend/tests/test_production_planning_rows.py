@@ -81,10 +81,7 @@ async def _make_product_with_combined_anod_route(session, sku: str = "FG-COMBO-S
     session.add_all([product, *sections])
     await session.flush()
     session.add_all([
-        SectionOperation(
-            section_id=sections[2].id, operation_code="ANOD_05", operation_name="Чёрный",
-            resolver_type="anod", resolver_config={"color_map": {"черный": "ANOD_05", "чёрный": "ANOD_05"}},
-        ),
+        SectionOperation(section_id=sections[2].id, operation_code="ANOD_05", operation_name="Чёрный"),
         SectionOperation(section_id=sections[2].id, operation_code="PACK_STRETCH", operation_name="Стрейч"),
     ])
 
@@ -100,7 +97,7 @@ async def _make_product_with_combined_anod_route(session, sku: str = "FG-COMBO-S
     steps_config = [
         (sections[0], "ISSUE_RAW", "Issue", None, False),
         (sections[1], "SHOT", "Shot", None, False),
-        (sections[2], None, "Анодирование", "anod_pack", False),
+        (sections[2], "ANOD_05", "Чёрный", "anod_pack", False),
         (sections[2], "PACK_STRETCH", "Стрейч", "anod_pack", False),
         (sections[3], "MOVE_TO_WIP", "WIP", None, False),
         (sections[4], "ACCEPT_FINISHED", "Final", None, True),
@@ -137,10 +134,7 @@ async def _make_product_with_multi_combined_route(session, sku: str = "FG-MULTI-
 
     # Operations for ANOD section (combined group "anod_color")
     session.add_all([
-        SectionOperation(
-            section_id=sections[2].id, operation_code="ANOD_BLACK", operation_name="Чёрный",
-            resolver_type="anod", resolver_config={"color_map": {"черный матовый": "ANOD_MATTE", "чёрный матовый": "ANOD_MATTE", "черный": "ANOD_BLACK", "чёрный": "ANOD_BLACK"}},
-        ),
+        SectionOperation(section_id=sections[2].id, operation_code="ANOD_BLACK", operation_name="Чёрный"),
         SectionOperation(section_id=sections[2].id, operation_code="ANOD_MATTE", operation_name="Матовый"),
     ])
     # Operations for PACK section (combined group "pack_ops")
@@ -165,10 +159,10 @@ async def _make_product_with_multi_combined_route(session, sku: str = "FG-MULTI-
         (sections[0], "ISSUE_RAW", "Выдача", None, False),
         (sections[1], "DRILL", "Дробеструй", None, False),
         # ANOD combined group
-        (sections[2], None, "Анодирование", "anod_color", False),
+        (sections[2], "ANOD_BLACK", "Чёрный", "anod_color", False),
         (sections[2], "ANOD_MATTE", "Матовый", "anod_color", False),
         # PACK combined group
-        (sections[3], None, "Упаковка", "pack_ops", False),
+        (sections[3], "PACK_LABEL", "Этикетка", "pack_ops", False),
         (sections[3], "PACK_BOX", "Коробка", "pack_ops", False),
         (sections[4], "MOVE_TO_WIP", "Склад п/ф", None, False),
         (sections[5], "ACCEPT_FINISHED", "Склад ГП", None, True),
@@ -351,24 +345,22 @@ async def test_rows_list_and_detail_merge_multiple_combined_groups(client, sessi
     assert stage_names.count("Упаковка") == 1, f"Упаковка appears {stage_names.count('Упаковка')} times"
 
     # Check merged operation names
-    # First step (placeholder) resolves from source_payload: color="черный матовый" → ANOD_MATTE → "Матовый"
+    # First step has explicit operation_code="ANOD_BLACK" → "Чёрный"
     # Second step has operation_code="ANOD_MATTE" → "Матовый"
     anod_stage = next(s for s in data["stages"] if s["section_name"] == "Анодирование")
     assert anod_stage["sequence"] == 3
-    assert anod_stage["operation_name"] == "Матовый / Матовый"
+    assert anod_stage["operation_name"] == "Чёрный / Матовый"
     assert anod_stage["planned_quantity"] == 500.0
 
     pack_stage = next(s for s in data["stages"] if s["section_name"] == "Упаковка")
     assert pack_stage["sequence"] == 5
-    # First step (placeholder) has no resolver_type on PACK section → stays "Упаковка"
-    # Second step has operation_code="PACK_BOX" → "Коробка"
-    assert pack_stage["operation_name"] == "Упаковка / Коробка"
+    assert pack_stage["operation_name"] == "Этикетка / Коробка"
     assert pack_stage["planned_quantity"] == 500.0
 
 
 @pytest.mark.asyncio
-async def test_rows_detail_resolves_press_operation_from_payload(client, session) -> None:
-    """PRESS route step has operation_code=None; operation code and name must resolve from source_payload."""
+async def test_rows_detail_has_press_operation_from_route_step(client, session) -> None:
+    """PRESS route step has explicit operation_code from route_select rules."""
     product = Product(sku="FG-PRESS-TEST", name="Press Test", type=ProductType.finished_good, unit="pcs")
     sections = [
         Section(code="PRESS-RAW", name="Склад сырья", kind="raw_stock"),
@@ -378,12 +370,8 @@ async def test_rows_detail_resolves_press_operation_from_payload(client, session
     session.add_all([product, *sections])
     await session.flush()
 
-    # Press operations — resolver needed to resolve placeholder from payload
     session.add_all([
-        SectionOperation(
-            section_id=sections[1].id, operation_code="PRESS_WINDOW", operation_name="Пресс окно",
-            resolver_type="press",
-        ),
+        SectionOperation(section_id=sections[1].id, operation_code="PRESS_WINDOW", operation_name="Пресс окно"),
         SectionOperation(section_id=sections[1].id, operation_code="PRESS_COMB", operation_name="Пресс комб"),
     ])
 
@@ -391,10 +379,10 @@ async def test_rows_detail_resolves_press_operation_from_payload(client, session
     session.add(route)
     await session.flush()
 
-    # PRESS step with operation_code=None — placeholder, resolves from payload
+    # PRESS step with explicit operation_code (set by route_select rules)
     steps_config = [
         (sections[0], "ISSUE_RAW", "Выдача сырья", None, False),
-        (sections[1], None, "Пресс", None, False),  # placeholder
+        (sections[1], "PRESS_WINDOW", "Пресс окно", None, False),
         (sections[2], "ACCEPT_FINISHED", "Склад ГП", None, True),
     ]
     for idx, (section, operation_code, operation_name, combined_op_group, is_final) in enumerate(steps_config, start=1):
@@ -430,7 +418,7 @@ async def test_rows_detail_resolves_press_operation_from_payload(client, session
     assert response.status_code == 200
     data = response.json()
 
-    # Check that PRESS operation_code resolved to PRESS_WINDOW
+    # Check that PRESS operation_code is PRESS_WINDOW (from route_select rules)
     press_stage = next(s for s in data["stages"] if s["section_name"] == "Пресс")
     assert press_stage["operation_code"] == "PRESS_WINDOW"
     assert press_stage["planned_quantity"] == 200.0

@@ -9,7 +9,6 @@ from app.models.product import Product, ProductType
 from app.models.route import ProductionRoute, RouteStep
 from app.models.section import Section
 from app.models.techcard import Techcard, TechcardLine
-from app.services.import_normalization import default_import_normalization_rules
 
 
 def _single_row_workbook() -> bytes:
@@ -145,7 +144,6 @@ async def test_single_row_import_yup_2630_passes_when_product_techcard_and_route
         code="single-row-template",
         is_active=True,
         column_mapping={"sku": {"header": "Артикул", "column": "A"}},
-        normalization_rules=default_import_normalization_rules(),
     )
     session.add(template)
     await session.commit()

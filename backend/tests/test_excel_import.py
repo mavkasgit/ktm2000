@@ -9,7 +9,6 @@ from app.models.imports import ImportBatch, ImportFile
 from app.models.production_plan import PlanChangeItem, PlanChangeSet, ProductionPlan
 from app.models.route import RouteRuleProfile
 from app.services.excel_import import parse_factory_plan_workbook, parse_row_selection
-from app.services.import_normalization import default_import_normalization_rules
 
 
 def _workbook_bytes() -> bytes:
@@ -95,7 +94,6 @@ async def _create_template(session, *, name: str, code: str) -> ImportTemplate:
         code=code,
         is_active=True,
         column_mapping={"sku": {"header": "Артикул", "column": "A"}},
-        normalization_rules=default_import_normalization_rules(),
     )
     session.add(template)
     await session.flush()
@@ -340,7 +338,8 @@ def test_factory_plan_parser_with_custom_mapping() -> None:
     assert row.payload["order_ref"] == "ORD-001"
 
 
-def test_factory_plan_parser_maps_additional_pack_operations() -> None:
+def test_factory_plan_parser_preserves_raw_operation_and_output_kind() -> None:
+    """Normalization is handled by route selection rules now; parser only preserves raw values."""
     wb = Workbook()
     ws = wb.active
     ws.title = "План май 26 05"
@@ -377,24 +376,27 @@ def test_factory_plan_parser_maps_additional_pack_operations() -> None:
     parsed = parse_factory_plan_workbook(
         out.getvalue(),
         "pack_ops.xlsx",
-        normalization_rules=default_import_normalization_rules(),
     )
     assert len(parsed.parsed_rows) == 3
 
+    # operation_code/operation_name/additional_pack_operations are now determined by selection rules
     glue = parsed.parsed_rows[0].payload
-    assert glue["operation_code"] == "PACK"
-    assert glue["operation_name"] == "Упаковка"
-    assert glue["additional_pack_operations"][0]["operation_code"] == "PACK_GLUE"
+    assert glue["operation_code"] is None
+    assert glue["operation_name"] is None
+    assert glue["additional_pack_operations"] == []
+    assert glue["operation"] == "клей"
+    assert glue["output_kind"] == "ГП"
+    assert glue["output_kind_raw"] == "ГП"
 
     diffuser = parsed.parsed_rows[1].payload
-    assert diffuser["operation_code"] == "PACK"
-    assert diffuser["operation_name"] == "Упаковка"
-    assert diffuser["additional_pack_operations"][0]["operation_code"] == "PACK_DIFFUSER"
+    assert diffuser["operation_code"] is None
+    assert diffuser["operation"] == "рассеиватель"
+    assert diffuser["output_kind"] == "ГП"
 
     no_diff = parsed.parsed_rows[2].payload
-    assert no_diff["operation_code"] == "PACK"
-    assert no_diff["operation_name"] == "Упаковка"
-    assert no_diff["additional_pack_operations"][0]["operation_code"] == "PACK_CUSTOM"
+    assert no_diff["operation_code"] is None
+    assert no_diff["operation"] == "Без рассеивателя"
+    assert no_diff["output_kind"] == "П/ф"
 
 
 from datetime import date, datetime
@@ -529,7 +531,6 @@ async def test_import_excel_resolves_profile_by_template_priority(client, sessio
         code="template-profiles",
         is_active=True,
         column_mapping={"sku": {"header": "Артикул", "column": "A"}},
-        normalization_rules=default_import_normalization_rules(),
     )
     session.add(template)
     await session.flush()
@@ -584,7 +585,6 @@ async def test_import_excel_template_without_profile_uses_fallback(client, sessi
         code="template-no-profile",
         is_active=True,
         column_mapping={"sku": {"header": "Артикул", "column": "A"}},
-        normalization_rules=default_import_normalization_rules(),
     )
     session.add(template)
     await session.commit()
@@ -613,7 +613,6 @@ async def test_preview_excel_uses_template_profile_for_rule_selection(client, se
         code="template-preview-profile",
         is_active=True,
         column_mapping={"sku": {"header": "Артикул", "column": "A"}},
-        normalization_rules=default_import_normalization_rules(),
     )
     session.add(template)
     await session.flush()
