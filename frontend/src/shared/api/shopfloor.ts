@@ -46,6 +46,7 @@ export type SectionBoardTask = {
   icon_color?: string | null;
   planned_quantity: string;
   status: string;
+  output_kind?: string | null;
   cache: {
     available_quantity: string;
     issued_quantity: string;
@@ -378,6 +379,8 @@ export interface SectionOperation {
   icon?: string | null;
   icon_color?: string | null;
   group_code?: string | null;
+  group_name?: string | null;
+  sort_order?: number;
 }
 
 export async function getSectionOperations(

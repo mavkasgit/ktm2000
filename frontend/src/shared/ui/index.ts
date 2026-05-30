@@ -30,3 +30,5 @@ export type { TableToolbarProps } from "./TableToolbar";
 export { FiltersPanel, type FiltersPanelProps, type FiltersPanelField, type FiltersPanelOption } from "./FiltersPanel";
 export { VirtualizedTableBody } from "./VirtualizedTableBody";
 export type { VirtualizedTableBodyProps } from "./VirtualizedTableBody";
+export { RouteStepsDisplay } from "./RouteStepsDisplay";
+export type { RouteStepsDisplayProps } from "./RouteStepsDisplay";

@@ -5,6 +5,7 @@ import { uploadExcel, applyChangeSet, discardImport } from "./api"
 import { getExcelSheetNames, previewExcelSheet, type SheetPreviewResponse } from "shared/api/imports"
 import { Button, Input, AlertDialog, AlertDialogContent, AlertDialogHeader, AlertDialogTitle, AlertDialogDescription, AlertDialogFooter, AlertDialogAction, AlertDialogCancel, FiltersPanel, Select, SelectContent, SelectItem, SelectTrigger, SelectValue, type FiltersPanelField } from "shared/ui"
 import { buildActiveFilterSummary } from "shared/ui/buildActiveFilterSummary"
+import { RouteStepsDisplay } from "shared/ui/RouteStepsDisplay"
 import { useQuery } from "@tanstack/react-query"
 import { listImportTemplates, type ImportTemplate } from "@/shared/api/importTemplates"
 import { getErrorMessage } from "@/shared/api/client"
@@ -309,6 +310,17 @@ function RawPreviewTable({ rows, sortConfig, onSort, expanded }: RawPreviewTable
           })() : null;
           const qtyAdjusted = normalizedOriginal && normalizedOriginal !== displayQty;
 
+          // Get route steps from after_data
+          const routeSteps = afterData.route_steps as Array<{
+            sequence: number
+            section_code: string
+            section_name: string
+            operation_code: string | null
+            operation_name: string
+            is_significant: boolean
+            combined_op_group: string | null
+          }> | undefined;
+
           // Get hanger count from after_data (backend calculates it)
           const hangerCountRaw = afterData.hanger_count as number | null | undefined;
           const hangerCountDisplay = hangerCountRaw != null
@@ -362,15 +374,21 @@ function RawPreviewTable({ rows, sortConfig, onSort, expanded }: RawPreviewTable
               <td className="p-2">{displayName}</td>
               <td className="p-2 text-xs">
                 {displayRouteName ? (
-                  <span title={routeMeta}>
-                    {displayRouteName}{" "}
+                  <div>
+                    <span title={routeMeta} className="font-medium">
+                      {displayRouteName}
+                    </span>
                     {routeMeta && (
-                      <span className="text-muted-foreground">
+                      <span className="text-muted-foreground ml-1">
                         ({routeMeta})
                       </span>
                     )}
-                  </span>
-                ) : "—"}
+                  </div>
+                ) : routeSteps && routeSteps.length > 0 ? (
+                  <RouteStepsDisplay steps={routeSteps} compact />
+                ) : (
+                  <span className="text-muted-foreground">—</span>
+                )}
               </td>
               <td className="p-2 text-red-600">{errors}</td>
               <td className="p-2 text-amber-600">{warnings}</td>

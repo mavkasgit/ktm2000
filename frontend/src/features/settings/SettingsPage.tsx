@@ -7,7 +7,7 @@ import { AlertDialog, AlertDialogContent, AlertDialogHeader, AlertDialogTitle, A
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/shared/ui/Dialog"
 import { toast } from "@/shared/ui"
 import { resetAllPlans } from "@/shared/api/productionPlans"
-import { seedRoutes, listRoutes, listRouteRuleProfiles, listRouteSelectionRules, reseedSystemUser } from "@/shared/api/routes"
+import { seedRoutes, listRoutes, listRouteRuleProfiles, listRouteSelectionRules, reseedSystemUser, seedPreview } from "@/shared/api/routes"
 import { listImportTemplates } from "@/shared/api/importTemplates"
 import { listSections } from "@/shared/api/sections"
 
@@ -20,27 +20,21 @@ function useCurrentData() {
   return { routes, profiles, selectionRules, templates, sections }
 }
 
-const SEED_DATA = {
-  import_templates: 1,
-  route_rule_profiles: 1,
-  routes: 12,
-  selection_rules: 9,
-  sections: 11,
-  section_operations: 21,
-}
-
 function SeedDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (v: boolean) => void }) {
   const { routes, profiles, selectionRules, templates, sections } = useCurrentData()
+  const preview = useQuery({ queryKey: ["seed-preview"], queryFn: () => seedPreview() })
   const [seeding, setSeeding] = useState(false)
   const queryClient = useQueryClient()
 
-  const loading = routes.isLoading || profiles.isLoading || selectionRules.isLoading || templates.isLoading || sections.isLoading
+  const loading = routes.isLoading || profiles.isLoading || selectionRules.isLoading || templates.isLoading || sections.isLoading || preview.isLoading
 
   const currentRoutes = routes.data?.length ?? 0
   const currentProfiles = profiles.data?.length ?? 0
   const currentRules = selectionRules.data?.length ?? 0
   const currentTemplates = templates.data?.length ?? 0
   const currentSections = sections.data?.length ?? 0
+
+  const seed = preview.data
 
   const handleSeed = async () => {
     setSeeding(true)
@@ -92,11 +86,11 @@ function SeedDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (v: b
 
             {/* Rows */}
             {[
-              { label: "Участки", current: currentSections, seed: SEED_DATA.sections },
-              { label: "Шаблоны импорта", current: currentTemplates, seed: SEED_DATA.import_templates },
-              { label: "Профили правил", current: currentProfiles, seed: SEED_DATA.route_rule_profiles },
-              { label: "Маршруты", current: currentRoutes, seed: SEED_DATA.routes },
-              { label: "Правила выбора", current: currentRules, seed: SEED_DATA.selection_rules },
+              { label: "Участки", current: currentSections, seed: seed?.sections ?? 0 },
+              { label: "Шаблоны импорта", current: currentTemplates, seed: seed?.import_templates ?? 0 },
+              { label: "Профили правил", current: currentProfiles, seed: seed?.route_rule_profiles ?? 0 },
+              { label: "Маршруты", current: currentRoutes, seed: seed?.routes ?? 0 },
+              { label: "Правила выбора", current: currentRules, seed: seed?.selection_rules ?? 0 },
             ].map((row) => {
               const isMatch = row.current >= row.seed
               return (

@@ -350,6 +350,7 @@ export interface EntityDialogProps {
   editDescription: string
   addLabel: string
   saveLabel: string
+  dialogWidth?: string
 }
 
 export function EntityDialog({
@@ -366,6 +367,7 @@ export function EntityDialog({
   editDescription,
   addLabel,
   saveLabel,
+  dialogWidth,
 }: EntityDialogProps) {
   const [values, setValues] = useState<Record<string, unknown>>({})
   const [errors, setErrors] = useState<Record<string, string>>({})
@@ -608,7 +610,7 @@ export function EntityDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-[420px]" onKeyDown={handleKeyDown}>
+      <DialogContent className={dialogWidth ? dialogWidth : "sm:max-w-[420px]"} onKeyDown={handleKeyDown}>
         <DialogHeader>
           <DialogTitle>{mode === "add" ? addTitle : editTitle}</DialogTitle>
           <DialogDescription>

@@ -22,11 +22,12 @@ type Props = {
 
 type RuleScope = "global" | "profile";
 type RuleSource = RoutesAPI.RouteSelectionCondition["source"];
-type RulePhase = "normalize" | "route_select";
+type RulePhase = "normalize" | "route_select" | "resolve_operations";
 
 const phaseLabels: Record<RulePhase, string> = {
   normalize: "Нормализация",
   route_select: "Выбор маршрута",
+  resolve_operations: "Резолв операций",
 };
 
 type FieldOption = {
@@ -77,10 +78,13 @@ const actionLabels: Record<RoutesAPI.RouteSelectionAction["action"], string> = {
   set: "Установить (set)",
   add: "Добавить в список (add)",
   remove: "Удалить из списка (remove)",
+  set_operation: "Установить операцию",
+  resolve_by_type: "Резолв по типу",
 };
 
 const isDslAction = (action: string): boolean => action === "set" || action === "add" || action === "remove";
 const isSectionAction = (action: string): boolean => action === "require_section" || action === "exclude_section";
+const isGroupAction = (action: string): boolean => action === "set_operation" || action === "resolve_by_type";
 
 const HEADER_KEY_BY_NAME: Record<string, string> = {
   "артикул": "sku",
@@ -165,6 +169,13 @@ const emptyDslAction: RoutesAPI.RouteSelectionAction = {
   action: "set",
   path: "ctx.",
   value: null,
+};
+
+const emptyGroupAction: RoutesAPI.RouteSelectionAction = {
+  action: "set_operation",
+  section_code: "",
+  group_code: "",
+  operation_code: "",
 };
 
 const emptyForm: RoutesAPI.RouteSelectionRuleInput = {
@@ -540,6 +551,22 @@ export function RouteSelectionRulesSection({ refreshKey }: Props) {
   const [sectionOps, setSectionOps] = useState<Record<number, SectionOperation[]>>({});
   const fetchedSectionsRef = useRef<Set<number>>(new Set());
 
+  // Build groups map: sectionCode -> Set of group_codes (from cached ops)
+  const sectionGroupsMap = useMemo(() => {
+    const map: Record<string, Set<string>> = {};
+    for (const section of sections) {
+      const ops = sectionOps[section.id] ?? [];
+      const groups = new Set<string>();
+      for (const op of ops) {
+        if (op.group_code) groups.add(op.group_code);
+      }
+      if (groups.size > 0) {
+        map[section.code] = groups;
+      }
+    }
+    return map;
+  }, [sections, sectionOps]);
+
   const activeSections = useMemo(() => sections.filter((section) => section.is_active), [sections]);
   const selectedProfile = useMemo(
     () => profiles.find((profile) => profile.id === selectedProfileId) ?? null,
@@ -640,9 +667,13 @@ export function RouteSelectionRulesSection({ refreshKey }: Props) {
   // Auto-fetch operations for section_ids that are already in form actions
   useEffect(() => {
     const sectionIds = new Set<number>();
+    const sectionCodes = new Set<string>();
     for (const action of form.actions) {
       if (isSectionAction(action.action) && action.section_id) {
         sectionIds.add(action.section_id);
+      }
+      if (isGroupAction(action.action) && action.section_code) {
+        sectionCodes.add(action.section_code);
       }
     }
     for (const sectionId of sectionIds) {
@@ -657,7 +688,21 @@ export function RouteSelectionRulesSection({ refreshKey }: Props) {
           });
       }
     }
-  }, [form.actions]);
+    // Also fetch by section_code for group actions
+    for (const code of sectionCodes) {
+      const section = sections.find((s) => s.code === code);
+      if (section && !fetchedSectionsRef.current.has(section.id)) {
+        fetchedSectionsRef.current.add(section.id);
+        getSectionOperations(section.id)
+          .then((ops) => {
+            setSectionOps((prev) => ({ ...prev, [section.id]: ops }));
+          })
+          .catch(() => {
+            setSectionOps((prev) => ({ ...prev, [section.id]: [] }));
+          });
+      }
+    }
+  }, [form.actions, sections]);
 
   useEffect(() => {
     void loadData();
@@ -691,6 +736,8 @@ export function RouteSelectionRulesSection({ refreshKey }: Props) {
         return {
           action: action.action,
           section_id: null,
+          section_code: null,
+          group_code: null,
           operation_code: null,
           path: action.path?.trim() || null,
           value: action.value,
@@ -700,6 +747,19 @@ export function RouteSelectionRulesSection({ refreshKey }: Props) {
         return {
           action: action.action,
           section_id: Number(action.section_id),
+          section_code: null,
+          group_code: null,
+          operation_code: action.operation_code?.trim() || null,
+          path: null,
+          value: null,
+        };
+      }
+      if (isGroupAction(action.action)) {
+        return {
+          action: action.action,
+          section_id: null,
+          section_code: action.section_code?.trim() || null,
+          group_code: action.group_code?.trim() || null,
           operation_code: action.operation_code?.trim() || null,
           path: null,
           value: null,
@@ -708,6 +768,8 @@ export function RouteSelectionRulesSection({ refreshKey }: Props) {
       return {
         action: action.action,
         section_id: Number(action.section_id),
+        section_code: null,
+        group_code: null,
         operation_code: null,
         path: null,
         value: null,
@@ -748,6 +810,8 @@ export function RouteSelectionRulesSection({ refreshKey }: Props) {
       actions: rule.actions.map((action) => ({
         action: action.action,
         section_id: action.section_id,
+        section_code: action.section_code,
+        group_code: action.group_code,
         operation_code: action.operation_code,
         path: action.path,
         value: action.value,
@@ -767,6 +831,10 @@ export function RouteSelectionRulesSection({ refreshKey }: Props) {
         if (!action.path?.startsWith("ctx.")) return "DSL действие: путь должен начинаться с 'ctx.'";
       } else if (isSectionAction(action.action)) {
         if (!action.section_id) return "В каждом действии по участкам должен быть выбран участок";
+      } else if (isGroupAction(action.action)) {
+        if (!action.section_code) return "В действии операции должен быть выбран участок (section_code)";
+        if (!action.group_code) return "В действии операции должна быть выбрана группа (group_code)";
+        if (!action.operation_code) return "В действии операции должна быть выбрана операция";
       }
     }
 
@@ -1069,9 +1137,10 @@ export function RouteSelectionRulesSection({ refreshKey }: Props) {
                       {rule.actions.map((action, index) => {
                         const isDsl = isDslAction(action.action);
                         const isSection = isSectionAction(action.action);
+                        const isGroup = isGroupAction(action.action);
                         return (
                           <Badge key={`${rule.id}-${index}`} variant={isDsl ? "outline" : (action.action === "require_section" ? "default" : "secondary")}>
-                            {actionLabels[action.action]} {isDsl ? (action.path ?? "") : isSection && action.operation_code ? `${action.section_code ?? action.section_id} → ${action.operation_code}` : (action.section_code ?? action.section_id)}
+                            {actionLabels[action.action]} {isDsl ? (action.path ?? "") : isGroup ? `${action.section_code ?? ""} / ${action.group_code ?? ""} → ${action.operation_code ?? ""}` : isSection && action.operation_code ? `${action.section_code ?? action.section_id} → ${action.operation_code}` : (action.section_code ?? action.section_id)}
                           </Badge>
                         );
                       })}
@@ -1197,6 +1266,8 @@ export function RouteSelectionRulesSection({ refreshKey }: Props) {
                   <Button size="sm" variant="outline" onClick={() => {
                     if (form.phase === "normalize") {
                       setForm((current) => ({ ...current, actions: [...current.actions, { ...emptyDslAction }] }));
+                    } else if (form.phase === "resolve_operations") {
+                      setForm((current) => ({ ...current, actions: [...current.actions, { ...emptyGroupAction }] }));
                     } else {
                       setForm((current) => ({ ...current, actions: [...current.actions, { ...emptyAction, section_id: activeSections[0]?.id ?? 0 }] }));
                     }
@@ -1215,6 +1286,11 @@ export function RouteSelectionRulesSection({ refreshKey }: Props) {
                           <>
                             <th className="text-left py-1 px-2 text-xs font-medium">Путь (ctx.*)</th>
                             <th className="text-left py-1 px-2 text-xs font-medium">Значение (JSON)</th>
+                          </>
+                        ) : form.phase === "resolve_operations" ? (
+                          <>
+                            <th className="text-left py-1 px-2 text-xs font-medium">Участок (code)</th>
+                            <th className="text-left py-1 px-2 text-xs font-medium">Группа / Операция</th>
                           </>
                         ) : (
                           <>
@@ -1241,9 +1317,11 @@ export function RouteSelectionRulesSection({ refreshKey }: Props) {
                               <Select value={action.action} onValueChange={(value) => {
                                 const newAction = value as RoutesAPI.RouteSelectionAction["action"];
                                 if (isDslAction(newAction)) {
-                                  updateAction(index, { action: newAction, section_id: null, path: action.path ?? "ctx.", value: action.value ?? null });
+                                  updateAction(index, { action: newAction, section_id: null, section_code: null, group_code: null, path: action.path ?? "ctx.", value: action.value ?? null });
+                                } else if (isGroupAction(newAction)) {
+                                  updateAction(index, { action: newAction, section_id: null, section_code: action.section_code ?? "", group_code: action.group_code ?? "", operation_code: action.operation_code ?? "" });
                                 } else {
-                                  updateAction(index, { action: newAction, path: null, value: null, section_id: action.section_id ?? 0 });
+                                  updateAction(index, { action: newAction, path: null, value: null, section_id: action.section_id ?? 0, section_code: null, group_code: null });
                                 }
                               }}>
                                 <SelectTrigger className="h-6 text-xs">
@@ -1280,6 +1358,81 @@ export function RouteSelectionRulesSection({ refreshKey }: Props) {
                                     placeholder='null, "text", 42, [1,2]'
                                     className="h-6 text-xs"
                                   />
+                                </td>
+                              </>
+                            ) : isGroupAction(action.action) ? (
+                              <>
+                                <td className="py-0.5 px-2">
+                                  <Select
+                                    value={action.section_code ?? "__none__"}
+                                    onValueChange={(value) => {
+                                      const sectionCode = value === "__none__" ? "" : value;
+                                      updateAction(index, { section_code: sectionCode, group_code: "", operation_code: "" });
+                                      // Fetch operations for this section
+                                      const section = sections.find((s) => s.code === sectionCode);
+                                      if (section) fetchSectionOperations(section.id);
+                                    }}
+                                  >
+                                    <SelectTrigger className="h-6 text-xs">
+                                      <SelectValue placeholder="Участок" />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                      <SelectItem value="__none__">—</SelectItem>
+                                      {sections.filter((s) => s.is_active).map((s) => (
+                                        <SelectItem key={s.code} value={s.code}>{s.name} ({s.code})</SelectItem>
+                                      ))}
+                                    </SelectContent>
+                                  </Select>
+                                </td>
+                                <td className="py-0.5 px-2">
+                                  <div className="flex gap-1">
+                                    <Select
+                                      value={action.group_code ?? "__none__"}
+                                      onValueChange={(value) => {
+                                        updateAction(index, { group_code: value === "__none__" ? "" : value, operation_code: "" });
+                                      }}
+                                      disabled={!action.section_code}
+                                    >
+                                      <SelectTrigger className="h-6 text-xs flex-1">
+                                        <SelectValue placeholder="Группа" />
+                                      </SelectTrigger>
+                                      <SelectContent>
+                                        <SelectItem value="__none__">—</SelectItem>
+                                        {action.section_code && Array.from(sectionGroupsMap[action.section_code] ?? []).length === 0 && (
+                                          <SelectItem value="__empty__" disabled>Нет групп</SelectItem>
+                                        )}
+                                        {action.section_code && Array.from(sectionGroupsMap[action.section_code] ?? []).map((gc) => (
+                                          <SelectItem key={gc} value={gc}>{gc}</SelectItem>
+                                        ))}
+                                      </SelectContent>
+                                    </Select>
+                                    <Select
+                                      value={action.operation_code ?? "__none__"}
+                                      onValueChange={(value) => {
+                                        updateAction(index, { operation_code: value === "__none__" ? "" : value });
+                                      }}
+                                      disabled={!action.section_code || !action.group_code}
+                                    >
+                                      <SelectTrigger className="h-6 text-xs flex-1">
+                                        <SelectValue placeholder="Операция" />
+                                      </SelectTrigger>
+                                      <SelectContent>
+                                        <SelectItem value="__none__">—</SelectItem>
+                                        {action.section_code && action.group_code && (() => {
+                                          const section = sections.find((s) => s.code === action.section_code);
+                                          if (!section) return null;
+                                          const ops = (sectionOps[section.id] ?? []).filter((o) => o.group_code === action.group_code && !o.operation_code.startsWith("__"));
+                                          if (ops.length === 0) return <SelectItem value="__empty__" disabled>Нет операций</SelectItem>;
+                                          return ops.map((op) => (
+                                            <SelectItem key={op.operation_code} value={op.operation_code}>{op.operation_name} ({op.operation_code})</SelectItem>
+                                          ));
+                                        })()}
+                                        {(!action.section_code || !action.group_code) && (
+                                          <SelectItem value="__empty__" disabled>Выберите группу</SelectItem>
+                                        )}
+                                      </SelectContent>
+                                    </Select>
+                                  </div>
                                 </td>
                               </>
                             ) : isSectionAction(action.action) ? (

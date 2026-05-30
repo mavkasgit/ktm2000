@@ -46,10 +46,11 @@ export type RouteSelectionCondition = {
 };
 
 export type RouteSelectionAction = {
-  action: "require_section" | "exclude_section" | "set" | "add" | "remove";
+  action: "require_section" | "exclude_section" | "set" | "add" | "remove" | "set_operation" | "resolve_by_type";
   section_id?: number | null;
   section_code?: string | null;
   section_name?: string | null;
+  group_code?: string | null;
   operation_code?: string | null;
   operation_name?: string | null;
   path?: string | null;
@@ -65,7 +66,7 @@ export type RouteSelectionRule = {
   profile_name: string | null;
   priority: number;
   is_active: boolean;
-  phase: "normalize" | "route_select";
+  phase: "normalize" | "route_select" | "resolve_operations";
   conditions: RouteSelectionCondition[];
   actions: RouteSelectionAction[];
 };
@@ -76,7 +77,7 @@ export type RouteSelectionRuleInput = {
   profile_id?: number | null;
   priority: number;
   is_active: boolean;
-  phase?: "normalize" | "route_select";
+  phase?: "normalize" | "route_select" | "resolve_operations";
   conditions: RouteSelectionCondition[];
   actions: RouteSelectionAction[];
 };
@@ -173,6 +174,11 @@ export type SeedSummary = {
 
 export async function seedRoutes() {
   const { data } = await apiClient.post<SeedSummary>("/routes-seed");
+  return data;
+}
+
+export async function seedPreview() {
+  const { data } = await apiClient.get<SeedSummary>("/routes-seed/preview");
   return data;
 }
 

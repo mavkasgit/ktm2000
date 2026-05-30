@@ -93,103 +93,6 @@ function transliterateToCode(name: string): string {
     .slice(0, 40)
 }
 
-type OperationNormalizationRow = {
-  contains: string
-  operation_code: string
-  operation_name: string
-  pack_op_code: string
-  pack_op_name: string
-  normalized_pack_op_family: string
-  priority: number
-}
-
-type OutputKindNormalizationRow = {
-  contains: string
-  result: string
-  priority: number
-}
-
-const DEFAULT_NORMALIZATION_RULES: Record<string, unknown> = {
-  version: 1,
-  operation: {
-    rules: [
-      { priority: 100, contains: ["без рассеив"], result: { operation_code: "PACK", operation_name: "Упаковка", additional_pack_operations: [{ operation_code: "PACK_CUSTOM", operation_name_template: "Доп. упаковочная операция: {raw}" }], normalized_pack_op_family: "CUSTOM" } },
-      { priority: 90, contains: ["окн"], result: { operation_code: "PRESS_WINDOW", operation_name: "Пресс окно", additional_pack_operations: [], normalized_pack_op_family: "NONE" } },
-      { priority: 80, contains: ["греб"], result: { operation_code: "PRESS_COMB", operation_name: "Пресс гребенка", additional_pack_operations: [], normalized_pack_op_family: "NONE" } },
-      { priority: 70, contains: ["сверл", "сверло"], result: { operation_code: "DRILL", operation_name: "Сверловка", additional_pack_operations: [], normalized_pack_op_family: "NONE" } },
-      { priority: 60, contains: ["клей"], result: { operation_code: "PACK", operation_name: "Упаковка", additional_pack_operations: [{ operation_code: "PACK_GLUE", operation_name: "Упаковка с клеевой операцией" }], normalized_pack_op_family: "GLUE" } },
-      { priority: 50, contains: ["рассеив"], result: { operation_code: "PACK", operation_name: "Упаковка", additional_pack_operations: [{ operation_code: "PACK_DIFFUSER", operation_name: "Упаковка с рассеивателем" }], normalized_pack_op_family: "DIFFUSER" } },
-    ],
-    fallback: {
-      operation_code: "PACK",
-      operation_name: "Упаковка",
-      additional_pack_operations: [{ operation_code: "PACK_CUSTOM", operation_name_template: "Доп. упаковочная операция: {raw}" }],
-      normalized_pack_op_family: "CUSTOM",
-    },
-  },
-  output_kind: {
-    rules: [
-      { priority: 100, contains: ["гп", "гп."], result: "finished_good" },
-      { priority: 90, contains: ["пф", "пф."], result: "semi_finished_shipment" },
-    ],
-    fallback: "raw",
-  },
-}
-
-function parseOperationRules(raw: unknown): OperationNormalizationRow[] {
-  const rules = ((raw as any)?.operation?.rules ?? []) as unknown[]
-  const rows = rules
-    .filter((rule) => rule && typeof rule === "object")
-    .map((rule) => {
-      const rec = rule as Record<string, any>
-      const res = (rec.result ?? {}) as Record<string, any>
-      const pack = Array.isArray(res.additional_pack_operations) ? (res.additional_pack_operations[0] as Record<string, any> | undefined) : undefined
-      const contains = Array.isArray(rec.contains) ? rec.contains.map((v) => String(v)).join(", ") : String(rec.contains ?? "")
-      return {
-        contains,
-        operation_code: String(res.operation_code ?? ""),
-        operation_name: String(res.operation_name ?? ""),
-        pack_op_code: String(pack?.operation_code ?? ""),
-        pack_op_name: String(pack?.operation_name ?? pack?.operation_name_template ?? ""),
-        normalized_pack_op_family: String(res.normalized_pack_op_family ?? "NONE"),
-        priority: Number(rec.priority ?? 0),
-      } as OperationNormalizationRow
-    })
-  return rows.length > 0 ? rows : parseOperationRules(DEFAULT_NORMALIZATION_RULES)
-}
-
-function parseOutputKindRules(raw: unknown): OutputKindNormalizationRow[] {
-  const rules = ((raw as any)?.output_kind?.rules ?? []) as unknown[]
-  const rows = rules
-    .filter((rule) => rule && typeof rule === "object")
-    .map((rule) => {
-      const rec = rule as Record<string, any>
-      const contains = Array.isArray(rec.contains) ? rec.contains.map((v) => String(v)).join(", ") : String(rec.contains ?? "")
-      return {
-        contains,
-        result: String(rec.result ?? ""),
-        priority: Number(rec.priority ?? 0),
-      } as OutputKindNormalizationRow
-    })
-  return rows.length > 0 ? rows : parseOutputKindRules(DEFAULT_NORMALIZATION_RULES)
-}
-
-function parseOperationFallback(raw: unknown): OperationNormalizationRow {
-  const fallback = ((raw as any)?.operation?.fallback ?? (DEFAULT_NORMALIZATION_RULES as any).operation.fallback) as Record<string, any>
-  const pack = Array.isArray(fallback.additional_pack_operations)
-    ? (fallback.additional_pack_operations[0] as Record<string, any> | undefined)
-    : undefined
-  return {
-    contains: "",
-    operation_code: String(fallback.operation_code ?? "PACK"),
-    operation_name: String(fallback.operation_name ?? "Упаковка"),
-    pack_op_code: String(pack?.operation_code ?? "PACK_CUSTOM"),
-    pack_op_name: String(pack?.operation_name ?? pack?.operation_name_template ?? "Доп. упаковочная операция: {raw}"),
-    normalized_pack_op_family: String(fallback.normalized_pack_op_family ?? "CUSTOM"),
-    priority: 0,
-  }
-}
-
 export function ImportTemplatesPage() {
   const queryClient = useQueryClient()
   const { data: templates, isLoading } = useQuery({
@@ -353,10 +256,6 @@ function TemplateDialog(props: {
 
   type PassportColumn = { column: string; header: string; key: string }
   const [passportColumns, setPassportColumns] = useState<PassportColumn[]>([])
-  const [operationRules, setOperationRules] = useState<OperationNormalizationRow[]>([])
-  const [operationFallback, setOperationFallback] = useState<OperationNormalizationRow>(parseOperationFallback(DEFAULT_NORMALIZATION_RULES))
-  const [outputKindRules, setOutputKindRules] = useState<OutputKindNormalizationRow[]>([])
-  const [outputKindFallback, setOutputKindFallback] = useState<string>("raw")
 
   // Excel passport loading
   const fileInputRef = useRef<HTMLInputElement>(null)
@@ -386,11 +285,6 @@ function TemplateDialog(props: {
     })
     cols.sort((a, b) => a.column.localeCompare(b.column, undefined, { numeric: true }))
     setPassportColumns(cols)
-    const normalization = props.template?.normalization_rules ?? DEFAULT_NORMALIZATION_RULES
-    setOperationRules(parseOperationRules(normalization))
-    setOperationFallback(parseOperationFallback(normalization))
-    setOutputKindRules(parseOutputKindRules(normalization))
-    setOutputKindFallback(String((normalization as any)?.output_kind?.fallback ?? "raw"))
     // Reset file state on dialog open
     setPassportFile(null)
     setSheetNames([])
@@ -511,108 +405,6 @@ function TemplateDialog(props: {
     setPassportColumns(prev => prev.filter((_, i) => i !== idx))
   }
 
-  const updateOperationRule = (idx: number, patch: Partial<OperationNormalizationRow>) => {
-    setOperationRules((prev) => prev.map((row, i) => (i === idx ? { ...row, ...patch } : row)))
-  }
-
-  const addOperationRule = () => {
-    setOperationRules((prev) => [
-      ...prev,
-      {
-        contains: "",
-        operation_code: "",
-        operation_name: "",
-        pack_op_code: "",
-        pack_op_name: "",
-        normalized_pack_op_family: "NONE",
-        priority: 0,
-      },
-    ])
-  }
-
-  const removeOperationRule = (idx: number) => {
-    setOperationRules((prev) => prev.filter((_, i) => i !== idx))
-  }
-
-  const updateOutputKindRule = (idx: number, patch: Partial<OutputKindNormalizationRow>) => {
-    setOutputKindRules((prev) => prev.map((row, i) => (i === idx ? { ...row, ...patch } : row)))
-  }
-
-  const addOutputKindRule = () => {
-    setOutputKindRules((prev) => [...prev, { contains: "", result: "", priority: 0 }])
-  }
-
-  const removeOutputKindRule = (idx: number) => {
-    setOutputKindRules((prev) => prev.filter((_, i) => i !== idx))
-  }
-
-  const buildNormalizationRules = (): Record<string, unknown> => {
-    const operation = operationRules
-      .map((row) => {
-        const contains = row.contains.split(",").map((item) => item.trim()).filter(Boolean)
-        if (contains.length === 0 || !row.operation_code.trim()) return null
-        const packOpCode = row.pack_op_code.trim()
-        const packOpName = row.pack_op_name.trim()
-        const packOps = packOpCode
-          ? [
-              packOpCode === "PACK_CUSTOM"
-                ? { operation_code: packOpCode, operation_name_template: packOpName || "Доп. упаковочная операция: {raw}" }
-                : { operation_code: packOpCode, operation_name: packOpName || packOpCode },
-            ]
-          : []
-        return {
-          priority: Number(row.priority) || 0,
-          contains,
-          result: {
-            operation_code: row.operation_code.trim(),
-            operation_name: row.operation_name.trim() || row.operation_code.trim(),
-            additional_pack_operations: packOps,
-            normalized_pack_op_family: row.normalized_pack_op_family.trim() || "NONE",
-          },
-        }
-      })
-      .filter(Boolean)
-
-    const outputKind = outputKindRules
-      .map((row) => {
-        const contains = row.contains.split(",").map((item) => item.trim()).filter(Boolean)
-        if (contains.length === 0 || !row.result.trim()) return null
-        return {
-          priority: Number(row.priority) || 0,
-          contains,
-          result: row.result.trim(),
-        }
-      })
-      .filter(Boolean)
-
-    const fallbackPackOpCode = operationFallback.pack_op_code.trim()
-    const fallbackPackOpName = operationFallback.pack_op_name.trim()
-    const fallbackPackOps = fallbackPackOpCode
-      ? [
-          fallbackPackOpCode === "PACK_CUSTOM"
-            ? { operation_code: fallbackPackOpCode, operation_name_template: fallbackPackOpName || "Доп. упаковочная операция: {raw}" }
-            : { operation_code: fallbackPackOpCode, operation_name: fallbackPackOpName || fallbackPackOpCode },
-        ]
-      : []
-
-    return {
-      version: 1,
-      operation: {
-        rules: operation,
-        fallback: {
-          operation_code: operationFallback.operation_code.trim() || "PACK",
-          operation_name: operationFallback.operation_name.trim() || "Упаковка",
-          additional_pack_operations: fallbackPackOps,
-          normalized_pack_op_family: operationFallback.normalized_pack_op_family.trim() || "CUSTOM",
-        },
-      },
-      output_kind: {
-        rules: outputKind,
-        fallback: outputKindFallback.trim() || "raw",
-      },
-    }
-  }
-
   const handleSave = async () => {
     if (!name.trim()) {
       setError("Название обязательно")
@@ -638,7 +430,6 @@ function TemplateDialog(props: {
         sort_order: Number(sortOrder) || 0,
         is_active: isActive,
         column_mapping: columnMapping,
-        normalization_rules: buildNormalizationRules(),
       }
       if (isEdit && props.template) {
         await updateImportTemplate(props.template.id, input)
@@ -813,6 +604,7 @@ function TemplateDialog(props: {
               </tbody>
             </table>
             </div>
+            </div>
           </div>
           <div className="mt-2 flex gap-2">
             <Button variant="outline" size="sm" onClick={addPassportColumn}>
@@ -820,104 +612,6 @@ function TemplateDialog(props: {
               Добавить
             </Button>
           </div>
-        </div>
-
-        <div className="mt-6 space-y-4">
-          <h3 className="text-sm font-medium">Правила нормализации</h3>
-
-          <div className="rounded-lg border overflow-hidden">
-            <div className="border-b bg-muted/40 px-3 py-2 text-xs font-medium">Операция: сырой текст → operation_code</div>
-            <div className="max-h-[220px] overflow-y-auto">
-              <table className="w-full text-xs">
-                <thead className="border-b bg-background sticky top-0 z-10">
-                  <tr>
-                    <th className="text-left py-2 px-1">contains</th>
-                    <th className="text-left py-2 px-1">operation_code</th>
-                    <th className="text-left py-2 px-1">operation_name</th>
-                    <th className="text-left py-2 px-1">pack_op_code</th>
-                    <th className="text-left py-2 px-1">pack_op_name</th>
-                    <th className="text-left py-2 px-1">pack_family</th>
-                    <th className="text-left py-2 px-1">priority</th>
-                    <th className="py-2 px-1" />
-                  </tr>
-                </thead>
-                <tbody>
-                  {operationRules.map((row, idx) => (
-                    <tr key={idx} className="border-b">
-                      <td className="py-0.5 px-1"><Input value={row.contains} onChange={e => updateOperationRule(idx, { contains: e.target.value })} className="h-6 text-xs py-0 px-1" /></td>
-                      <td className="py-0.5 px-1"><Input value={row.operation_code} onChange={e => updateOperationRule(idx, { operation_code: e.target.value })} className="h-6 text-xs py-0 px-1" /></td>
-                      <td className="py-0.5 px-1"><Input value={row.operation_name} onChange={e => updateOperationRule(idx, { operation_name: e.target.value })} className="h-6 text-xs py-0 px-1" /></td>
-                      <td className="py-0.5 px-1"><Input value={row.pack_op_code} onChange={e => updateOperationRule(idx, { pack_op_code: e.target.value })} className="h-6 text-xs py-0 px-1" /></td>
-                      <td className="py-0.5 px-1"><Input value={row.pack_op_name} onChange={e => updateOperationRule(idx, { pack_op_name: e.target.value })} className="h-6 text-xs py-0 px-1" /></td>
-                      <td className="py-0.5 px-1"><Input value={row.normalized_pack_op_family} onChange={e => updateOperationRule(idx, { normalized_pack_op_family: e.target.value })} className="h-6 text-xs py-0 px-1" /></td>
-                      <td className="py-0.5 px-1"><Input type="number" value={String(row.priority)} onChange={e => updateOperationRule(idx, { priority: Number(e.target.value) || 0 })} className="h-6 w-16 text-xs py-0 px-1" /></td>
-                      <td className="py-0.5 px-1">
-                        <Button variant="ghost" size="sm" className="h-5 w-5 p-0 text-red-600" onClick={() => removeOperationRule(idx)}>
-                          <Trash2 className="h-3 w-3" />
-                        </Button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-            <div className="px-2 py-2">
-              <Button variant="outline" size="sm" onClick={addOperationRule}>
-                <Plus className="h-3.5 w-3.5 mr-1" />
-                Добавить правило операции
-              </Button>
-            </div>
-          </div>
-
-          <div className="rounded-lg border p-3 text-xs grid grid-cols-1 md:grid-cols-5 gap-2">
-            <div className="font-medium md:col-span-5">Fallback для операции</div>
-            <Input value={operationFallback.operation_code} onChange={e => setOperationFallback(prev => ({ ...prev, operation_code: e.target.value }))} placeholder="operation_code" className="h-7 text-xs" />
-            <Input value={operationFallback.operation_name} onChange={e => setOperationFallback(prev => ({ ...prev, operation_name: e.target.value }))} placeholder="operation_name" className="h-7 text-xs" />
-            <Input value={operationFallback.pack_op_code} onChange={e => setOperationFallback(prev => ({ ...prev, pack_op_code: e.target.value }))} placeholder="pack_op_code" className="h-7 text-xs" />
-            <Input value={operationFallback.pack_op_name} onChange={e => setOperationFallback(prev => ({ ...prev, pack_op_name: e.target.value }))} placeholder="pack_op_name/template" className="h-7 text-xs" />
-            <Input value={operationFallback.normalized_pack_op_family} onChange={e => setOperationFallback(prev => ({ ...prev, normalized_pack_op_family: e.target.value }))} placeholder="pack_family" className="h-7 text-xs" />
-          </div>
-
-          <div className="rounded-lg border overflow-hidden">
-            <div className="border-b bg-muted/40 px-3 py-2 text-xs font-medium">Output kind: сырой текст → normalized value</div>
-            <div className="max-h-[180px] overflow-y-auto">
-              <table className="w-full text-xs">
-                <thead className="border-b bg-background sticky top-0 z-10">
-                  <tr>
-                    <th className="text-left py-2 px-1">contains</th>
-                    <th className="text-left py-2 px-1">result</th>
-                    <th className="text-left py-2 px-1">priority</th>
-                    <th className="py-2 px-1" />
-                  </tr>
-                </thead>
-                <tbody>
-                  {outputKindRules.map((row, idx) => (
-                    <tr key={idx} className="border-b">
-                      <td className="py-0.5 px-1"><Input value={row.contains} onChange={e => updateOutputKindRule(idx, { contains: e.target.value })} className="h-6 text-xs py-0 px-1" /></td>
-                      <td className="py-0.5 px-1"><Input value={row.result} onChange={e => updateOutputKindRule(idx, { result: e.target.value })} className="h-6 text-xs py-0 px-1" /></td>
-                      <td className="py-0.5 px-1"><Input type="number" value={String(row.priority)} onChange={e => updateOutputKindRule(idx, { priority: Number(e.target.value) || 0 })} className="h-6 w-16 text-xs py-0 px-1" /></td>
-                      <td className="py-0.5 px-1">
-                        <Button variant="ghost" size="sm" className="h-5 w-5 p-0 text-red-600" onClick={() => removeOutputKindRule(idx)}>
-                          <Trash2 className="h-3 w-3" />
-                        </Button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-            <div className="px-2 py-2 flex items-center gap-2">
-              <Button variant="outline" size="sm" onClick={addOutputKindRule}>
-                <Plus className="h-3.5 w-3.5 mr-1" />
-                Добавить правило output_kind
-              </Button>
-              <div className="ml-auto flex items-center gap-2">
-                <span className="text-xs text-muted-foreground">fallback</span>
-                <Input value={outputKindFallback} onChange={e => setOutputKindFallback(e.target.value)} className="h-7 w-36 text-xs" />
-              </div>
-            </div>
-          </div>
-        </div>
         </div>
 
         <DialogFooter className="flex items-center justify-between w-full sm:justify-between">
