@@ -44,8 +44,8 @@ export function TaskGroupRow({
 }: TaskGroupRowProps) {
   const [expanded, setExpanded] = useState(defaultExpanded);
 
-  const sig = group.tasks[0].signature;
-  const isTransforming = isTransformingTask(group.tasks[0]);
+  const firstTask = group.tasks[0];
+  const isTransforming = isTransformingTask(firstTask);
   const status = groupStatus(group);
   const progress = groupProgress(group);
 
@@ -71,31 +71,31 @@ export function TaskGroupRow({
           <div className="font-medium">
             {isTransforming ? (
               <>
-                <span className="text-muted-foreground">{sig.input_sku}</span>
+                <span className="text-muted-foreground">{firstTask.input_sku}</span>
                 <span className="mx-1 text-blue-500">→</span>
-                <span className="font-semibold">{sig.output_sku}</span>
+                <span className="font-semibold">{firstTask.output_sku}</span>
               </>
             ) : (
-              <span>{sig.output_sku}</span>
+              <span>{firstTask.output_sku}</span>
             )}
           </div>
 
           {/* Код операции */}
-          {profile.criteria.includes("operationCode") && sig.operation_code && (
+          {profile.criteria.includes("operationCode") && firstTask.operation_code && (
             <span className="inline-flex items-center rounded-md bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-700">
-              {sig.operation_code}
+              {firstTask.operation_code}
             </span>
           )}
 
           {/* Цвет/тип */}
-          {sig.output_kind && (
-            <ColorDot kind={sig.output_kind} />
+          {firstTask.output_kind && (
+            <ColorDot kind={firstTask.output_kind} />
           )}
 
           {/* Ссылка на заказ */}
-          {profile.criteria.includes("sourceRef") && sig.source_ref && (
+          {profile.criteria.includes("sourceRef") && firstTask.source_ref && (
             <span className="inline-flex items-center rounded-md bg-purple-50 px-2 py-0.5 text-xs font-medium text-purple-700">
-              {sig.source_ref}
+              {firstTask.source_ref}
             </span>
           )}
         </div>
@@ -150,7 +150,7 @@ function TaskRow({ task }: TaskRowProps) {
   return (
     <div className={`flex items-center justify-between gap-3 px-3 py-1.5 rounded text-sm ${taskRowBgClass(task.status)}`}>
       <span className="text-muted-foreground">
-        {task.signature.source_ref ?? `#${task.id}`}
+        {task.source_ref ?? `#${task.id}`}
       </span>
 
       <span className="text-sm">

@@ -1201,6 +1201,7 @@ export function SectionsTasksPage() {
         sectionId={sectionId ?? 0}
         sectionName={selectedSection?.name || "—"}
         tasks={tasks}
+        availableOperations={board?.available_operations || []}
       />
 
       {/* Grouping settings modal */}

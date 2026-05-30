@@ -13,9 +13,10 @@ from app.seeds.run_seed import run_full_seed
 
 
 async def main():
+    force = "--force" in sys.argv
     async with async_session() as db:
         try:
-            result = await run_full_seed(db)
+            result = await run_full_seed(db, force=force)
             await db.commit()
             print("Seed completed successfully:")
             for key, value in result.items():

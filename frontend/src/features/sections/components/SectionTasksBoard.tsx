@@ -316,8 +316,6 @@ function TableTaskGroupRow({
   const taskIds = group.tasks.map((t) => t.id);
   const allSelected = bulkSelection?.isAllSelected(taskIds) ?? false;
   const firstTask = group.tasks[0];
-  const sig = firstTask.signature;
-  const skuChanged = sig.input_sku !== sig.output_sku;
 
   return (
     <tr

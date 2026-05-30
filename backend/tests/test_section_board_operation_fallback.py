@@ -205,3 +205,124 @@ async def test_section_board_no_source_payload_uses_step_operation(session):
     task_codes = [t["operation_code"] for t in board["tasks"]]
     # operation_code should be None (from route_step) — displayed as empty or "—"
     assert None in task_codes or "" in task_codes, f"Expected NULL or empty operation_code in {task_codes}"
+
+
+@pytest.mark.asyncio
+async def test_section_board_combined_anod_tasks_have_resolvable_operations(session):
+    """On the anodizing section, combined tasks may have operation_code=None
+    but combined_operation_names contains the actual operation names.
+    The board response must include both available_operations and per-task
+    operation data so the frontend can filter correctly.
+    """
+    # Create anodizing section with multiple operations
+    raw_section = Section(code="ANOD-RAW", name="Склад сырья", kind="raw_stock", is_active=True)
+    anod_section = Section(code="ANOD", name="Анодирование", kind="production", is_active=True)
+    session.add_all([raw_section, anod_section])
+    await session.flush()
+
+    # Register operations on anodizing section
+    session.add_all([
+        SectionOperation(section_id=anod_section.id, operation_code="ANOD_05", operation_name="Чёрный", is_significant=True),
+        SectionOperation(section_id=anod_section.id, operation_code="PACK_STRETCH", operation_name="Стрейч", is_significant=True),
+        SectionOperation(section_id=raw_section.id, operation_code="ISSUE_RAW", operation_name="Выдача сырья"),
+    ])
+    await session.flush()
+
+    route = ProductionRoute(name="Anod Route", is_active=True)
+    session.add(route)
+    await session.flush()
+
+    # Route steps: raw warehouse → anodizing combined group (2 steps same cog)
+    raw_step = RouteStep(route_id=route.id, sequence=1, section_id=raw_section.id, operation_code="ISSUE_RAW", operation_name="Выдача сырья", is_final=False)
+    # First step of combined group — operation_code=None (placeholder)
+    anod_step1 = RouteStep(route_id=route.id, sequence=2, section_id=anod_section.id, operation_code=None, operation_name="Анодирование", combined_op_group="anod_pack", is_final=False)
+    # Second step of combined group — has operation_code
+    anod_step2 = RouteStep(route_id=route.id, sequence=3, section_id=anod_section.id, operation_code="PACK_STRETCH", operation_name="Стрейч", combined_op_group="anod_pack", is_final=True)
+    session.add_all([raw_step, anod_step1, anod_step2])
+    await session.flush()
+
+    # Create a product with source_payload specifying the anodizing color
+    product = Product(sku="ANOD-TEST-1", name="Test Anodized", type=ProductType.finished_good, unit="pcs")
+    session.add(product)
+    await session.flush()
+
+    plan = ProductionPlan(plan_no="PLAN-ANOD", name="Anod Plan")
+    session.add(plan)
+    await session.flush()
+
+    internal_plan = InternalPlan(production_plan_id=plan.id, status=InternalPlanStatus.active)
+    session.add(internal_plan)
+    await session.flush()
+
+    pp = PlanPosition(
+        production_plan_id=plan.id,
+        product_id=product.id,
+        source_type=PlanSourceType.excel_import,
+        source_sku=product.sku,
+        output_sku=product.sku,
+        quantity=Decimal("100"),
+        status=PlanPositionStatus.released,
+        validation_status=PlanPositionValidationStatus.valid,
+        route_id=route.id,
+        source_payload={"operation_code": "ANOD_05", "operation_name": "Чёрный"},
+    )
+    session.add(pp)
+    await session.flush()
+
+    # Create SectionPlanLines for each step
+    raw_line = SectionPlanLine(
+        internal_plan_id=internal_plan.id, plan_position_id=pp.id, route_id=route.id,
+        route_step_id=raw_step.id, section_id=raw_section.id, product_id=product.id,
+        sequence=1, planned_quantity=Decimal("100"),
+    )
+    anod_line1 = SectionPlanLine(
+        internal_plan_id=internal_plan.id, plan_position_id=pp.id, route_id=route.id,
+        route_step_id=anod_step1.id, section_id=anod_section.id, product_id=product.id,
+        sequence=2, planned_quantity=Decimal("100"),
+    )
+    anod_line2 = SectionPlanLine(
+        internal_plan_id=internal_plan.id, plan_position_id=pp.id, route_id=route.id,
+        route_step_id=anod_step2.id, section_id=anod_section.id, product_id=product.id,
+        sequence=3, planned_quantity=Decimal("100"),
+    )
+    session.add_all([raw_line, anod_line1, anod_line2])
+    await session.flush()
+
+    # Create work tasks
+    raw_task = WorkTask(section_plan_line_id=raw_line.id, section_id=raw_section.id, product_id=product.id, route_step_id=raw_step.id, planned_quantity=Decimal("100"), status=WorkTaskStatus.completed)
+    anod_task1 = WorkTask(section_plan_line_id=anod_line1.id, section_id=anod_section.id, product_id=product.id, route_step_id=anod_step1.id, planned_quantity=Decimal("100"), status=WorkTaskStatus.ready)
+    anod_task2 = WorkTask(section_plan_line_id=anod_line2.id, section_id=anod_section.id, product_id=product.id, route_step_id=anod_step2.id, planned_quantity=Decimal("100"), status=WorkTaskStatus.waiting_previous)
+    session.add_all([raw_task, anod_task1, anod_task2])
+    await session.commit()
+
+    # Get board for anodizing section
+    board = await get_section_board(session, section_id=anod_section.id)
+
+    # Verify available_operations has both anodizing operations
+    avail_codes = {op["operation_code"] for op in board["available_operations"]}
+    avail_names = {op["operation_name"] for op in board["available_operations"]}
+    assert "ANOD_05" in avail_codes, f"ANOD_05 not in available_operations codes: {avail_codes}"
+    assert "PACK_STRETCH" in avail_codes, f"PACK_STRETCH not in available_operations codes: {avail_codes}"
+    assert "Чёрный" in avail_names, f"'Чёрный' not in available_operations names: {avail_names}"
+    assert "Стрейч" in avail_names, f"'Стрейч' not in available_operations names: {avail_names}"
+
+    # Each task on the board must have resolvable operation:
+    # either operation_code or combined_operation_names matching available_operations
+    for task in board["tasks"]:
+        op_code = task.get("operation_code")
+        combined_names = task.get("combined_operation_names", [])
+        is_combined = task.get("is_combined_primary", False)
+
+        if is_combined:
+            # Combined task — check that combined_operation_names overlaps with available
+            matching_names = [n for n in combined_names if n in avail_names]
+            assert len(matching_names) > 0, (
+                f"Combined task {task['id']} has combined_operation_names={combined_names} "
+                f"but none match available_operations names: {avail_names}"
+            )
+        else:
+            # Non-combined task — operation_code should be in available_operations
+            assert op_code in avail_codes, (
+                f"Task {task['id']} has operation_code='{op_code}' "
+                f"not in available_operations: {avail_codes}"
+            )

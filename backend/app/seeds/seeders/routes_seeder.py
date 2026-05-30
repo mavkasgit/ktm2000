@@ -133,6 +133,18 @@ async def seed_routes(
         for idx, step_def in enumerate(template["steps"], start=1):
             section = sections_by_code[step_def["section_code"]]
             cog = step_def.get("combined_op_group")
+            # Use explicit is_significant if provided, otherwise auto-detect from operation_code
+            step_is_sig = step_def.get("is_significant")
+            if step_is_sig is None:
+                step_is_sig = _is_significant(step_def["operation_code"])
+            # Steps in a combined group (cog) are always significant
+            if cog:
+                step_is_sig = True
+            # Production section steps with None operation_code are still significant
+            # (the actual operation comes from source_payload per-task)
+            production_sections = {"PRESS", "ANOD"}
+            if step_def["operation_code"] is None and step_def["section_code"] in production_sections:
+                step_is_sig = True
             db.add(
                 RouteStep(
                     route_id=route.id,
@@ -140,7 +152,7 @@ async def seed_routes(
                     section_id=section.id,
                     operation_code=step_def["operation_code"],
                     operation_name=step_def["operation_name"],
-                    is_significant=_is_significant(step_def["operation_code"]),
+                    is_significant=step_is_sig,
                     is_final=bool(step_def.get("is_final", False)),
                     requires_acceptance=True,
                     allow_parallel=False,

@@ -11,7 +11,7 @@
  */
 
 import React, { useEffect, useMemo, useState } from "react";
-import type { SectionBoardTask, RouteHistoryOp } from "@/shared/api/shopfloor";
+import type { SectionBoardTask, RouteHistoryOp, SectionOperation } from "@/shared/api/shopfloor";
 import { groupTasksByProfile } from "../lib/groupTasksByProfile";
 import { GroupingSettingsModal } from "./GroupingSettingsModal";
 import { PRESET_PROFILES, type GroupingProfile } from "../lib/groupingProfiles";
@@ -28,6 +28,7 @@ interface PlanModalProps {
   sectionId: number;
   sectionName: string;
   tasks: SectionBoardTask[];
+  availableOperations?: SectionOperation[];
 }
 
 
@@ -69,6 +70,16 @@ function sumCache(
   );
 }
 
+/** Insert zero-width spaces after '+' so line breaks happen after the plus, not mid-SKU. Also strip trailing arrow. */
+function renderSkuWithBreakHints(sku: string): React.ReactNode {
+  const cleaned = sku.replace(/\s*→\s*$/, '');
+  const parts = cleaned.split(/(\+)/g);
+  if (parts.length <= 1) return cleaned;
+  return parts.map((part, i) =>
+    part === "+" ? <span key={i}>+<wbr /></span> : <React.Fragment key={i}>{part}</React.Fragment>
+  );
+}
+
 
 // ---------------------------------------------------------------------------
 // PlanTable — переиспользуемая таблица (issue / send)
@@ -83,7 +94,12 @@ interface PlanTableProps {
 }
 
 function PlanTable({ title, tasks, profile, onSettingsClick, emptyMessage }: PlanTableProps) {
-  const groups = useMemo(() => groupTasksByProfile(tasks, profile), [tasks, profile]);
+  const allGroups = useMemo(() => groupTasksByProfile(tasks, profile), [tasks, profile]);
+
+  const groups = useMemo(
+    () => allGroups.filter((g) => g.totalQtyPlan - g.totalQtyDone > 0),
+    [allGroups],
+  );
 
   const totalQtyPlan = useMemo(
     () => groups.reduce((sum, g) => sum + g.totalQtyPlan, 0),
@@ -96,7 +112,7 @@ function PlanTable({ title, tasks, profile, onSettingsClick, emptyMessage }: Pla
   const totalOrders = useMemo(() => groups.reduce((s, g) => s + g.tasks.length, 0), [groups]);
 
   const colSpan = 1 +
-    (profile.criteria.includes("operationCode") ? 1 : 0) +
+    (profile.criteria.includes("operationCode") ? 2 : 0) +
     (profile.criteria.includes("outputKind") ? 1 : 0) +
     (profile.criteria.includes("sourceRef") ? 1 : 0);
 
@@ -137,7 +153,10 @@ function PlanTable({ title, tasks, profile, onSettingsClick, emptyMessage }: Pla
           <tr className="border-b">
             <th className="text-left px-2 py-2 font-medium max-w-[120px] break-words">Артикул</th>
             {profile.criteria.includes("operationCode") && (
-              <th className="text-left px-2 py-2 font-medium max-w-[140px] break-words">Операция</th>
+              <>
+                <th className="text-left px-2 py-2 font-medium w-[1px] whitespace-nowrap">Маршрут</th>
+                <th className="text-left px-2 py-2 font-medium max-w-[140px] break-words">Операция</th>
+              </>
             )}
             {profile.criteria.includes("outputKind") && (
               <th className="text-left px-2 py-2 font-medium">Цвет</th>
@@ -155,21 +174,24 @@ function PlanTable({ title, tasks, profile, onSettingsClick, emptyMessage }: Pla
         <tbody>
           {groups.map((group) => {
             const task = group.tasks[0];
-            const sig = task.signature;
 
-            // Collect unique operations across all tasks in the group.
-            // Deduplicate by operation_name to avoid showing duplicates like
-            // "Выдача сырья • Выдача сырья" for combined profiles where different
-            // branches have different operation_codes but the same operation_name.
-            const uniqueOps = new Map<string, { code: string; icon?: string; iconColor?: string }>();
-            for (const t of group.tasks) {
-              const opName = t.signature.operation_name ?? "—";
-              if (!uniqueOps.has(opName)) {
-                uniqueOps.set(opName, {
-                  code: t.signature.operation_code ?? "—",
-                  icon: (t.signature as any).icon,
-                  iconColor: (t.signature as any).icon_color,
-                });
+            // Build the full sequence of significant operations for display.
+            // For routeHistory profile ("До"): ONLY route_history (previous sections, NOT including current)
+            // For routeHistoryAfter profile ("После"): route_history_after (includes current section's operation)
+            // Only include significant operations (is_significant=true).
+            const isAfterProfile = profile.criteria.includes("routeHistoryAfter");
+            const allOps: RouteHistoryOp[] = isAfterProfile
+              ? (task.route_history_after ?? [])
+              : (task.route_history ?? []).filter((op) => op.is_significant);
+
+            // Chips display — all significant ops including current
+            const chipOps: RouteHistoryOp[] = allOps;
+
+            // Collect unique operation names for the main display line
+            const uniqueOpNames = new Set<string>();
+            for (const op of allOps) {
+              if (op.is_significant) {
+                uniqueOpNames.add(op.operation_name ?? "—");
               }
             }
 
@@ -177,59 +199,50 @@ function PlanTable({ title, tasks, profile, onSettingsClick, emptyMessage }: Pla
               <tr key={group.key} className="border-b hover:bg-gray-50">
                 {/* Артикул */}
                 <td className="px-2 py-2 max-w-[120px] break-words">
-                  {task.product_sku}
+                  {renderSkuWithBreakHints(task.product_sku)}
                 </td>
 
-                {/* Операция */}
+                {/* Операция — split into Маршрут (chips) + Операция (text) */}
                 {profile.criteria.includes("operationCode") && (
-                  <td className="px-2 py-2 text-sm max-w-[140px] break-words">
-                    {uniqueOps.size === 1 ? (
-                      <div className="font-medium">{Array.from(uniqueOps.keys())[0]}</div>
-                    ) : (
-                      <div className="flex flex-wrap items-center gap-1 text-[10px]">
-                        {Array.from(uniqueOps.entries()).map(([opName, op], i) => (
-                          <React.Fragment key={i}>
-                            {i > 0 && <span className="text-muted-foreground">•</span>}
-                            <span
-                              className="inline-flex items-center gap-0.5 px-1 py-0.5 rounded bg-gray-100"
-                              style={{ color: op.iconColor || undefined }}
-                              title={opName}
-                            >
-                              {op.icon && renderIcon(op.icon, "h-3 w-3")}
-                              <span className="truncate max-w-[60px]">{opName}</span>
-                            </span>
-                          </React.Fragment>
-                        ))}
+                  <>
+                    {/* Маршрут — icon chips */}
+                    <td className="px-2 py-2">
+                      {chipOps.length > 0 ? (
+                        <div className="flex items-center gap-1">
+                          {chipOps.map((op: RouteHistoryOp, i: number) => (
+                            <React.Fragment key={i}>
+                              {i > 0 && <span className="text-muted-foreground">→</span>}
+                              <span
+                                className="inline-flex items-center justify-center w-5 h-5 rounded bg-gray-100 text-[9px] font-medium"
+                                style={{ color: op.icon_color || undefined }}
+                                title={op.operation_name}
+                              >
+                                {op.icon ? renderIcon(op.icon, "h-3 w-3") : (op.operation_name || "?")[0]}
+                              </span>
+                            </React.Fragment>
+                          ))}
+                        </div>
+                      ) : (
+                        <span className="text-muted-foreground">—</span>
+                      )}
+                    </td>
+                    {/* Операция — text */}
+                    <td className="px-2 py-2 text-sm max-w-[140px] break-words">
+                      <div className="font-medium">
+                        {uniqueOpNames.size > 0 ? Array.from(uniqueOpNames).join(" / ") : "—"}
                       </div>
-                    )}
-                    {sig.route_history?.length > 0 && (
-                      <div className="flex flex-wrap items-center gap-1 mt-1 text-[10px]">
-                        {sig.route_history.map((op: RouteHistoryOp, i: number) => (
-                          <React.Fragment key={i}>
-                            {i > 0 && <span className="text-muted-foreground">→</span>}
-                            <span
-                              className="inline-flex items-center gap-0.5 px-1 py-0.5 rounded bg-gray-100"
-                              style={{ color: op.icon_color || undefined }}
-                              title={op.operation_name}
-                            >
-                              {op.icon && renderIcon(op.icon, "h-3 w-3")}
-                              <span className="truncate max-w-[60px]">{op.operation_name}</span>
-                            </span>
-                          </React.Fragment>
-                        ))}
-                      </div>
-                    )}
-                  </td>
+                    </td>
+                  </>
                 )}
 
                 {/* Цвет */}
                 {profile.criteria.includes("outputKind") && (
-                  <td className="px-2 py-2 text-sm">{sig.output_kind ?? "—"}</td>
+                  <td className="px-2 py-2 text-sm">{task.output_kind ?? "—"}</td>
                 )}
 
                 {/* Заказ */}
                 {profile.criteria.includes("sourceRef") && (
-                  <td className="px-2 py-2 text-sm">{sig.source_ref ?? "—"}</td>
+                  <td className="px-2 py-2 text-sm">{task.source_ref ?? "—"}</td>
                 )}
 
                 {/* Количество */}
@@ -281,6 +294,7 @@ export function PlanModal({
   sectionId,
   sectionName,
   tasks,
+  availableOperations,
 }: PlanModalProps) {
   const [beforeSettingsOpen, setBeforeSettingsOpen] = useState(false);
   const [afterSettingsOpen, setAfterSettingsOpen] = useState(false);
@@ -298,11 +312,32 @@ export function PlanModal({
     setAfterProfile(loadProfile(`plan-after-group-profile-${sectionId}`, "sku+routeHistoryAfter"));
   }, [sectionId]);
 
-  // Все задачи для плана
-  const allTasks = useMemo(
-    () => tasks,
-    [tasks],
+  // Задачи уже отфильтрованы по section_id на бэкенде (get_section_board).
+  // "До" и "После" — одни и те же задачи, но с разной группировкой:
+  //   До = по route_history (что приходит на участок)
+  //   После = по route_history_after (что уйдёт с участка после завершения)
+  const filteredTasks = tasks;
+
+  // Check if "До" and "После" are effectively identical:
+  // no significant operations and no route history at all.
+  // In that case, show a single table without the operation column.
+  const hasSignificantOps = useMemo(
+    () => filteredTasks.some((t) => t.is_significant),
+    [filteredTasks],
   );
+  const hasRouteHistory = useMemo(
+    () => filteredTasks.some((t) => (t.route_history ?? []).length > 0),
+    [filteredTasks],
+  );
+  const showSingleTable = !hasSignificantOps && !hasRouteHistory;
+
+  // When showing single table, use a profile without operationCode
+  const singleProfile = useMemo(() => {
+    if (showSingleTable) {
+      return { ...beforeProfile, criteria: beforeProfile.criteria.filter((c) => c !== "operationCode" && c !== "routeHistory" && c !== "routeHistoryAfter") };
+    }
+    return null;
+  }, [showSingleTable, beforeProfile]);
 
   if (!open) return null;
 
@@ -325,28 +360,40 @@ export function PlanModal({
           </button>
         </div>
 
-        {/* Таблицы — две колонки: До / После */}
+        {/* Таблицы — две колонки: До / После (или одна, если идентичны) */}
         <div className="flex-1 overflow-y-auto overflow-x-hidden p-4">
-          <div className="grid grid-cols-2 gap-4 min-w-0">
+          {showSingleTable ? (
             <div className="min-w-0">
               <PlanTable
-                title="До"
-                tasks={allTasks}
-                profile={beforeProfile}
+                title="План"
+                tasks={filteredTasks}
+                profile={singleProfile!}
                 onSettingsClick={() => setBeforeSettingsOpen(true)}
                 emptyMessage="Нет данных"
               />
             </div>
-            <div className="min-w-0">
-              <PlanTable
-                title="После"
-                tasks={allTasks}
-                profile={afterProfile}
-                onSettingsClick={() => setAfterSettingsOpen(true)}
-                emptyMessage="Нет данных"
-              />
+          ) : (
+            <div className="grid grid-cols-2 gap-4 min-w-0">
+              <div className="min-w-0">
+                <PlanTable
+                  title="До"
+                  tasks={filteredTasks}
+                  profile={beforeProfile}
+                  onSettingsClick={() => setBeforeSettingsOpen(true)}
+                  emptyMessage="Нет данных"
+                />
+              </div>
+              <div className="min-w-0">
+                <PlanTable
+                  title="После"
+                  tasks={filteredTasks}
+                  profile={afterProfile}
+                  onSettingsClick={() => setAfterSettingsOpen(true)}
+                  emptyMessage="Нет данных"
+                />
+              </div>
             </div>
-          </div>
+          )}
         </div>
 
         <div className="flex justify-end p-4 border-t">
@@ -359,23 +406,28 @@ export function PlanModal({
         </div>
       </div>
 
-      {/* Before settings */}
+      {/* Before settings (or single table settings) */}
       {beforeSettingsOpen && (
         <GroupingSettingsModal
           sectionId={0}
           sectionName={sectionName}
-          currentProfile={beforeProfile}
+          currentProfile={showSingleTable ? singleProfile! : beforeProfile}
           onClose={() => setBeforeSettingsOpen(false)}
           onApply={(newProfile) => {
             setBeforeSettingsOpen(false);
-            setBeforeProfile(newProfile);
-            saveProfile(`plan-before-group-profile-${sectionId}`, newProfile);
+            if (showSingleTable) {
+              setBeforeProfile(newProfile);
+              saveProfile(`plan-before-group-profile-${sectionId}`, newProfile);
+            } else {
+              setBeforeProfile(newProfile);
+              saveProfile(`plan-before-group-profile-${sectionId}`, newProfile);
+            }
           }}
         />
       )}
 
-      {/* After settings */}
-      {afterSettingsOpen && (
+      {/* After settings (only in dual table mode) */}
+      {!showSingleTable && afterSettingsOpen && (
         <GroupingSettingsModal
           sectionId={0}
           sectionName={sectionName}

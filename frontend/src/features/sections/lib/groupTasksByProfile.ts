@@ -20,14 +20,9 @@ function buildGroupKey(
   task: SectionBoardTask,
   profile: GroupingProfile,
 ): string {
-  const s = task.signature;
-
-  // Check if there are actual operations BEFORE the current stage.
-  // This matters for both routeHistory and routeHistoryAfter profiles:
-  // - routeHistory is empty on first stage → don't split by operationCode
-  // - routeHistoryAfter always has current op, but we still need to check
-  //   if there were operations BEFORE it to justify splitting
-  const hasHistoryBefore = (s.route_history ?? []).length > 0;
+  // Check if there are any production operations BEFORE the current stage.
+  // Empty route_history means this is the first production section.
+  const hasHistoryBefore = (task.route_history ?? []).length > 0;
 
   const parts = profile.criteria.map((criterion: GroupingCriterion) => {
     switch (criterion) {
@@ -38,30 +33,30 @@ function buildGroupKey(
         return String(task.route_step_id);
 
       case "operationCode":
-        // Skip operationCode in key if there's no history before current stage.
-        // On the first stage, all tasks should group by productSku only,
-        // regardless of their operation_code.
-        if ((profile.criteria.includes("routeHistory") || profile.criteria.includes("routeHistoryAfter")) && !hasHistoryBefore) {
+        // For routeHistory profile: skip operationCode if there's no history before current stage.
+        // On the first stage, all tasks should group by productSku only (before = no current section op).
+        // For routeHistoryAfter profile: always include operationCode to split by current section's operation.
+        if (profile.criteria.includes("routeHistory") && !hasHistoryBefore) {
           return "__no_history__";
         }
-        return s.operation_code ?? "—";
+        return task.operation_code ?? "—";
 
       case "outputKind":
-        return s.output_kind ?? "—";
+        return task.output_kind ?? "—";
 
       case "sourceRef":
-        return s.source_ref ?? "—";
+        return task.source_ref ?? "—";
 
       case "fingerprint":
-        return s.source_fingerprint;
+        return task.source_fingerprint ?? "—";
 
       case "routeHistory":
-        return (s.route_history ?? [])
+        return (task.route_history_full ?? [])
           .map((op: any) => typeof op === "string" ? op : (op.operation_code || op.operation_name || ""))
           .join("→");
 
       case "routeHistoryAfter":
-        return (s.route_history_after ?? [])
+        return (task.route_history_after_full ?? [])
           .map((op: any) => typeof op === "string" ? op : (op.operation_code || op.operation_name || ""))
           .join("→");
 
@@ -71,7 +66,7 @@ function buildGroupKey(
           return "__all__";
         }
         return fields
-          .map((field) => String(s.source_payload[field] ?? "—"))
+          .map((field) => String(task.source_payload[field] ?? "—"))
           .join("|");
       }
     }
@@ -89,7 +84,6 @@ function buildGroupLabel(
   task: SectionBoardTask,
   profile: GroupingProfile,
 ): string {
-  const s = task.signature;
   const parts: string[] = [];
 
   parts.push(task.product_sku);
@@ -104,19 +98,19 @@ function buildGroupLabel(
         break;
 
       case "operationCode":
-        if (s.operation_code) {
+        if (task.operation_code) {
           const opLabels: Record<string, string> = {
             press_window: "окно",
             press_comb:   "гребенка",
             anodize:      "анодирование",
             cut:          "порезка",
           };
-          parts.push(opLabels[s.operation_code] ?? s.operation_code);
+          parts.push(opLabels[task.operation_code] ?? task.operation_code);
         }
         break;
 
       case "outputKind":
-        if (s.output_kind) {
+        if (task.output_kind) {
           const kindLabels: Record<string, string> = {
             silver:    "серебро",
             black:     "чёрный",
@@ -124,32 +118,32 @@ function buildGroupLabel(
             champagne: "шампань",
             natural:   "натуральный",
           };
-          parts.push(kindLabels[s.output_kind] ?? s.output_kind);
+          parts.push(kindLabels[task.output_kind] ?? task.output_kind);
         }
         break;
 
       case "sourceRef":
-        if (s.source_ref) {
-          parts.push(s.source_ref);
+        if (task.source_ref) {
+          parts.push(task.source_ref);
         }
         break;
 
       case "fingerprint":
-        if (s.operation_code) parts.push(s.operation_code);
-        if (s.output_kind) parts.push(s.output_kind);
+        if (task.operation_code) parts.push(task.operation_code);
+        if (task.output_kind) parts.push(task.output_kind);
         break;
 
       case "routeHistory":
-        if (s.route_history && s.route_history.length > 0) {
-          parts.push(s.route_history
+        if (task.route_history_full && task.route_history_full.length > 0) {
+          parts.push(task.route_history_full
             .map((op: any) => typeof op === "string" ? op : op.operation_name)
             .join(" → "));
         }
         break;
 
       case "routeHistoryAfter":
-        if (s.route_history_after && s.route_history_after.length > 0) {
-          parts.push(s.route_history_after
+        if (task.route_history_after_full && task.route_history_after_full.length > 0) {
+          parts.push(task.route_history_after_full
             .map((op: any) => typeof op === "string" ? op : op.operation_name)
             .join(" → "));
         }
@@ -157,7 +151,7 @@ function buildGroupLabel(
 
       case "customField":
         for (const field of profile.customFields ?? []) {
-          const val = s.source_payload[field];
+          const val = task.source_payload[field];
           if (val !== null && val !== undefined) {
             parts.push(`${field}: ${val}`);
           }

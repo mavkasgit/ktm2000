@@ -14,7 +14,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.internal_plan import SectionPlanLine
-from app.models.route import RouteStep
+from app.models.route import RouteStep, SectionOperation
+from app.models.section import Section
 from app.models.work_task import WorkTask, WorkTaskStatus
 
 
@@ -113,35 +114,100 @@ async def resolve_combined_group(db: AsyncSession, task_id: int) -> CombinedGrou
 async def get_combined_info_for_board(
     db: AsyncSession,
     plan_position_id: int,
+    source_payload: dict | None = None,
 ) -> dict[str, dict]:
     """
     Для всех combined групп в пределах plan_position_id вернуть информацию.
-    Returns: {combined_op_group: {"primary_line_id": ..., "secondary_line_ids": [...], "operation_names": [...]}}
+    Returns: {combined_op_group: {"primary_line_id": ..., "secondary_line_ids": [...], "operation_names": [...], "operation_codes": [...]}}
     """
-    lines_steps = (await db.execute(
-        select(SectionPlanLine, RouteStep)
-        .join(RouteStep, SectionPlanLine.route_step_id == RouteStep.id)
-        .where(
-            SectionPlanLine.plan_position_id == plan_position_id,
-            RouteStep.combined_op_group.isnot(None),
-        )
-        .order_by(SectionPlanLine.sequence)
-    )).all()
+    from app.services.route_resolution import resolve_operation
 
-    if not lines_steps:
+    # Get route_id from any SectionPlanLine for this position
+    first_line = await db.scalar(
+        select(SectionPlanLine.route_step_id)
+        .where(SectionPlanLine.plan_position_id == plan_position_id)
+        .limit(1)
+    )
+    if not first_line:
         return {}
 
+    # Get route_id from the route_step
+    first_step = await db.get(RouteStep, first_line)
+    if not first_step:
+        return {}
+    route_id = first_step.route_id
+
+    # Get ALL RouteSteps for this route that have combined_op_group
+    # (not filtered by SectionPlanLine, since secondary steps don't have lines)
+    route_steps = (await db.execute(
+        select(RouteStep)
+        .where(
+            RouteStep.route_id == route_id,
+            RouteStep.combined_op_group.isnot(None),
+        )
+        .order_by(RouteStep.sequence)
+    )).scalars().all()
+
+    if not route_steps:
+        return {}
+
+    # Collect unique section_ids
+    section_ids = {step.section_id for step in route_steps}
+    section_by_id = {}
+    if section_ids:
+        sections = (await db.execute(
+            select(Section).where(Section.id.in_(section_ids))
+        )).scalars().all()
+        section_by_id = {s.id: s for s in sections}
+
+    # Build operation name lookup
+    op_name_map: dict[tuple[int, str], str] = {}
+    if section_ids:
+        ops = (await db.execute(
+            select(SectionOperation).where(SectionOperation.section_id.in_(section_ids))
+        )).scalars().all()
+        for op in ops:
+            op_name_map[(op.section_id, op.operation_code)] = op.operation_name
+
+    # Build SectionPlanLine lookup: route_step_id -> line_id
+    line_ids_by_step = {}
+    lines = (await db.execute(
+        select(SectionPlanLine.route_step_id, SectionPlanLine.id)
+        .where(SectionPlanLine.plan_position_id == plan_position_id)
+    )).all()
+    for step_id, line_id in lines:
+        line_ids_by_step[step_id] = line_id
+
+    # Group by combined_op_group
     groups: dict[str, dict] = {}
-    for spl_line, route_step in lines_steps:
+    for route_step in route_steps:
         cog = route_step.combined_op_group
+        section = section_by_id.get(route_step.section_id)
+        section_code = section.code if section else ""
+
+        # Resolve operation code
+        resolved_code = route_step.operation_code
+        if resolved_code is None and source_payload:
+            resolved_code = resolve_operation(section_code, source_payload)
+
+        # Resolve operation name
+        resolved_name = route_step.operation_name
+        if resolved_code is not None:
+            resolved_name = op_name_map.get((route_step.section_id, resolved_code), route_step.operation_name)
+
+        line_id = line_ids_by_step.get(route_step.id)
+
         if cog not in groups:
             groups[cog] = {
-                "primary_line_id": spl_line.id,
+                "primary_line_id": line_id,
                 "secondary_line_ids": [],
                 "operation_names": [],
+                "operation_codes": [],
             }
         else:
-            groups[cog]["secondary_line_ids"].append(spl_line.id)
-        groups[cog]["operation_names"].append(route_step.operation_name)
+            if line_id:
+                groups[cog]["secondary_line_ids"].append(line_id)
+        groups[cog]["operation_names"].append(resolved_name)
+        groups[cog]["operation_codes"].append(resolved_code)
 
     return groups

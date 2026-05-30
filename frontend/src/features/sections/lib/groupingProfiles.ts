@@ -22,16 +22,16 @@
 // ---------------------------------------------------------------------------
 
 /**
- * Критерий группировки — одно поле сигнатуры задачи.
+ * Критерий группировки — одно поле задачи.
  *
  * МАППИНГ на поля SectionBoardTask:
- *   productSku    → task.signature.output_sku
+ *   productSku    → task.product_sku
  *   routeStepId   → task.route_step_id
- *   operationCode → task.signature.operation_code
- *   outputKind    → task.signature.output_kind
- *   sourceRef     → task.signature.source_ref
- *   fingerprint   → task.signature.source_fingerprint
- *   customField   → task.signature.source_payload[key]
+ *   operationCode → task.operation_code
+ *   outputKind    → task.output_kind
+ *   sourceRef     → task.source_ref
+ *   fingerprint   → task.source_fingerprint
+ *   customField   → task.source_payload[key]
  */
 export type GroupingCriterion =
   | "productSku"     // Артикул (output_sku)

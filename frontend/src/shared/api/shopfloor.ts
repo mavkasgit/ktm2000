@@ -21,23 +21,6 @@ export interface RouteHistoryOp {
   icon_color?: string | null;
 }
 
-export interface SourceSignature {
-  input_sku: string;
-  output_sku: string;
-  display_sku: string;
-  operation_code: string | null;
-  operation_name: string | null;
-  is_significant: boolean;
-  icon?: string | null;
-  icon_color?: string | null;
-  output_kind: string | null;
-  source_ref: string | null;
-  source_payload: Record<string, unknown>;
-  source_fingerprint: string;
-  route_history: RouteHistoryOp[];
-  route_history_after: RouteHistoryOp[];
-}
-
 export type TaskStatus = "pending" | "in_work" | "done" | "partially" | "blocked";
 
 export type TaskGroup = {
@@ -58,6 +41,10 @@ export type SectionBoardTask = {
   sequence: number;
   operation_code: string | null;
   operation_name: string | null;
+  is_significant: boolean;
+  icon?: string | null;
+  icon_color?: string | null;
+  output_kind: string | null;
   planned_quantity: string;
   status: string;
   cache: {
@@ -88,11 +75,13 @@ export type SectionBoardTask = {
   display_sku: string;
   route_history: RouteHistoryOp[];
   route_history_after: RouteHistoryOp[];
-  signature: SourceSignature;
+  route_history_full: RouteHistoryOp[];
+  route_history_after_full: RouteHistoryOp[];
   // --- combined operations ---
   is_combined_primary: boolean;
   combined_task_ids: number[];
   combined_operation_names: string[];
+  combined_operation_codes: (string | null)[];
 };
 
 export type SectionBoardResponse = {
@@ -340,7 +329,7 @@ export async function acceptTransfer(
  * Проверяет, является ли операция трансформирующей (меняет артикул).
  */
 export function isTransformingTask(task: SectionBoardTask): boolean {
-  return task.signature.input_sku !== task.signature.output_sku;
+  return task.input_sku !== task.output_sku;
 }
 
 /**

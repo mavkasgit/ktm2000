@@ -203,11 +203,8 @@ async def test_combined_op_group_merges_anod_tasks(client, session) -> None:
     raw_task_data = board["tasks"][0]
     assert raw_task_data["operation_code"] == "ISSUE_RAW"
     assert raw_task_data["operation_name"] == "Выдача сырья"
-    assert raw_task_data["signature"]["operation_code"] == "ISSUE_RAW"
-    assert raw_task_data["signature"]["operation_name"] == "Выдача сырья"
     # route_history должен быть пустым для первого этапа
     assert raw_task_data["route_history"] == []
-    assert raw_task_data["signature"]["route_history"] == []
 
     # Проверяем для участка ANOD (комбинированный этап)
     anod_section = sections[2]

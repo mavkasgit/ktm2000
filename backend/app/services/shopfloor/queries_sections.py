@@ -120,7 +120,13 @@ async def get_section_board(
     for line in all_lines:
         lines_by_pos_seq[(line.plan_position_id, line.sequence)] = line
 
-    # Load all WorkTask for next task lookup
+    # Load PlanPosition for source_payload lookup (needed for previous stages effective_op_code)
+    all_positions = (await db.execute(
+        select(PlanPosition).where(PlanPosition.id.in_(plan_position_ids))
+    )).scalars().all()
+    position_by_id: dict[int, PlanPosition] = {p.id: p for p in all_positions}
+
+    # Load all WorkTask for next task lookup AND for previous stages operation lookup
     next_line_ids = [line.id for line in all_lines]
     all_tasks = (await db.execute(
         select(WorkTask).where(WorkTask.section_plan_line_id.in_(next_line_ids))
@@ -132,12 +138,21 @@ async def get_section_board(
         if existing is None or t.id > existing.id:
             tasks_by_line[t.section_plan_line_id] = t
 
-    # Load section operations for the dropdown
-    section_ops = (await db.execute(
+    # Collect all section_ids from route steps (needed for previous stages operation lookup)
+    all_section_ids = set()
+    for s in all_steps:
+        all_section_ids.add(s.section_id)
+    all_section_ids.add(section_id)  # Ensure current section is included
+
+    # Load section operations for ALL sections involved in the routes
+    all_section_ops = (await db.execute(
         select(SectionOperation)
-        .where(SectionOperation.section_id == section_id)
+        .where(SectionOperation.section_id.in_(all_section_ids))
         .order_by(SectionOperation.operation_code)
     )).scalars().all()
+
+    # Also load for current section dropdown
+    section_ops = [op for op in all_section_ops if op.section_id == section_id]
     available_operations = [
         {
             "id": op.id,
@@ -150,14 +165,14 @@ async def get_section_board(
         for op in section_ops
     ]
 
-    # Build lookup: section_id -> {operation_code -> operation_name}
+    # Build lookup: section_id -> {operation_code -> operation_name} for ALL sections
     op_name_by_section: dict[int, dict[str, str]] = {}
-    for op in section_ops:
+    for op in all_section_ops:
         op_name_by_section.setdefault(op.section_id, {})[op.operation_code] = op.operation_name
 
-    # Build lookup: (section_id, operation_code) -> {icon, icon_color}
+    # Build lookup: (section_id, operation_code) -> {icon, icon_color} for ALL sections
     icon_by_section_op: dict[tuple[int, str], dict] = {}
-    for op in section_ops:
+    for op in all_section_ops:
         if op.icon or op.icon_color:
             icon_by_section_op[(op.section_id, op.operation_code)] = {
                 "icon": op.icon,
@@ -167,48 +182,98 @@ async def get_section_board(
     tasks_data = []
     for task, line, step, product_sku, source_ref, source_payload, source_fingerprint, source_sku, output_sku, output_kind in rows:
         # Determine effective operation_code.
-        # Priority: task override > source_payload (100% confirmed) > route_step
+        # Priority: task override > source_payload (if belongs to current section) > route_step
         effective_op_code = task.selected_operation_code
         if not effective_op_code:
             src_op = (source_payload or {}).get("operation_code")
-            if src_op:
+            # Only use source_payload operation if it belongs to the current section.
+            # For combined tasks, source_payload may contain an operation from a previous
+            # section (e.g., PRESS_WINDOW on the anodizing section) — skip it.
+            if src_op and src_op in op_name_by_section.get(task.section_id, {}):
                 effective_op_code = src_op
             else:
                 effective_op_code = step.operation_code
         # Look up operation_name from section operations if available
         effective_op_name = op_name_by_section.get(task.section_id, {}).get(effective_op_code) or step.operation_name
-        # Determine is_significant from section operations
+        # Determine is_significant from section operations (use all_section_ops for cross-section lookup)
+        # If operation is not found in section_operations, default to False — significance is controlled
+        # exclusively by section settings, not by RouteStep.is_significant.
         effective_is_significant = False
-        for op in section_ops:
+        for op in all_section_ops:
             if op.section_id == task.section_id and op.operation_code == effective_op_code:
                 effective_is_significant = op.is_significant
                 break
-        else:
-            effective_is_significant = step.is_significant
         # Prev step — dict lookup
         route_steps = steps_by_route.get(line.route_id, [])
-        # Build route history: only significant operations up to (but NOT including) current step
+
+        # Build route history from actual effective operations of previous stages.
+        # Instead of using static RouteStep.operation_name, find the WorkTask for each
+        # previous stage and use its effective_op_code to get the real operation.
+        # - route_history (visual): only significant ops up to (NOT including) current step
+        # - route_history_full: ALL ops up to current step
         route_history = []
+        route_history_full = []
         for s in route_steps:
-            if s.sequence < step.sequence and s.is_significant:
-                op_icon = icon_by_section_op.get((s.section_id, s.operation_code))
-                route_history.append({
-                    "operation_code": s.operation_code or "",
-                    "operation_name": s.operation_name,
-                    "is_significant": s.is_significant,
-                    "icon": op_icon["icon"] if op_icon else None,
-                    "icon_color": op_icon["icon_color"] if op_icon else None,
-                })
-        # route_history_after = route_history + current step operation (what it will look like after completion)
-        # IMPORTANT: prefer route_step's operation_code (the operation of THIS stage).
-        # If route_step.operation_code is NULL (e.g. press section), fall back to effective_op_code
-        # which comes from source_payload. This ensures:
-        #   - Raw warehouse: always shows ISSUE_RAW (from route_step), never PRESS_WINDOW from payload
-        #   - Press: shows PRESS_WINDOW/PRESS_COMB (from source_payload, since route_step has NULL)
+            if s.sequence < step.sequence:
+                # Find the actual effective operation for this previous stage
+                prev_line = lines_by_pos_seq.get((line.plan_position_id, s.sequence))
+                prev_work_task = tasks_by_line.get(prev_line.id) if prev_line else None
+
+                if prev_work_task:
+                    # Get source_payload from PlanPosition
+                    prev_position = position_by_id.get(prev_line.plan_position_id) if prev_line else None
+                    prev_source_payload = (prev_position.source_payload or {}) if prev_position else {}
+
+                    # Compute effective_op_code for the previous task
+                    prev_eff_op_code = prev_work_task.selected_operation_code
+                    if not prev_eff_op_code:
+                        prev_src_op = prev_source_payload.get("operation_code")
+                        if prev_src_op and prev_src_op in op_name_by_section.get(prev_work_task.section_id, {}):
+                            prev_eff_op_code = prev_src_op
+                        else:
+                            prev_eff_op_code = s.operation_code
+
+                    # Look up operation_name from section operations
+                    prev_op_name = op_name_by_section.get(s.section_id, {}).get(prev_eff_op_code) or s.operation_name
+
+                    # Determine is_significant from section operations (use all_section_ops for cross-section lookup)
+                    # If operation is not found in section_operations, default to False.
+                    prev_is_significant = False
+                    for op in all_section_ops:
+                        if op.section_id == s.section_id and op.operation_code == prev_eff_op_code:
+                            prev_is_significant = op.is_significant
+                            break
+
+                    prev_icon = icon_by_section_op.get((s.section_id, prev_eff_op_code))
+                else:
+                    # Fallback: use RouteStep data if no WorkTask found
+                    prev_eff_op_code = s.operation_code
+                    prev_op_name = s.operation_name
+                    # is_significant determined by section_operations only, default False
+                    prev_is_significant = False
+                    for op in all_section_ops:
+                        if op.section_id == s.section_id and op.operation_code == (s.operation_code or ""):
+                            prev_is_significant = op.is_significant
+                            break
+                    prev_icon = icon_by_section_op.get((s.section_id, s.operation_code))
+
+                op_obj = {
+                    "operation_code": prev_eff_op_code or "",
+                    "operation_name": prev_op_name,
+                    "is_significant": prev_is_significant,
+                    "icon": prev_icon["icon"] if prev_icon else None,
+                    "icon_color": prev_icon["icon_color"] if prev_icon else None,
+                }
+                route_history_full.append(op_obj)
+                if prev_is_significant:
+                    route_history.append(op_obj)
+
+        # route_history_after = visual history + current step operation
+        # route_history_after_full = full history + current step operation
         if step.operation_code:
             after_op_code = step.operation_code
             after_op_name = step.operation_name
-            after_is_significant = step.is_significant
+            after_is_significant = effective_is_significant
             after_icon = icon_by_section_op.get((task.section_id, step.operation_code))
         else:
             after_op_code = effective_op_code or ""
@@ -224,6 +289,7 @@ async def get_section_board(
             "icon_color": after_icon["icon_color"] if after_icon else None,
         }
         route_history_after = route_history + [current_op_obj] if current_op_obj["operation_code"] else route_history
+        route_history_after_full = route_history_full + [current_op_obj] if current_op_obj["operation_code"] else route_history_full
         prev_step = next((s for s in route_steps if s.sequence == step.sequence - 1), None)
 
         prev_stage_info = None
@@ -264,7 +330,7 @@ async def get_section_board(
         fingerprint = _compute_fingerprint(
             source_sku, output_sku, effective_op_code, output_kind, source_payload
         )
-        sig_output_kind_value = output_kind.value if hasattr(output_kind, "value") else output_kind
+        output_kind_value = output_kind.value if hasattr(output_kind, "value") else output_kind
 
         # For paired profiles, source_sku contains both articles (e.g., "ЮП-2616+ЮП-2604")
         # Use source_sku directly for paired profiles, otherwise use display_sku or product_sku
@@ -274,8 +340,12 @@ async def get_section_board(
         else:
             effective_display_sku = display_sku if (source_sku and source_sku != (output_sku or "")) else (product_sku or "")
 
+        # Icon for current operation
+        op_icon_info = icon_by_section_op.get((task.section_id, effective_op_code))
+
         tasks_data.append({
             "id": task.id,
+            "section_id": task.section_id,
             "product_id": task.product_id,
             "product_sku": effective_display_sku,
             "section_plan_line_id": line.id,
@@ -284,6 +354,10 @@ async def get_section_board(
             "sequence": step.sequence,
             "operation_code": effective_op_code,
             "operation_name": effective_op_name,
+            "is_significant": effective_is_significant,
+            "icon": op_icon_info["icon"] if op_icon_info else None,
+            "icon_color": op_icon_info["icon_color"] if op_icon_info else None,
+            "output_kind": output_kind_value,
             "planned_quantity": str(task.planned_quantity),
             "status": task.status.value,
             "cache": {
@@ -303,26 +377,13 @@ async def get_section_board(
             "source_ref": source_ref,
             "source_payload": source_payload or {},
             "source_fingerprint": fingerprint,
-            # --- новые поля ---
             "input_sku": source_sku or "",
             "output_sku": output_sku or "",
             "display_sku": effective_display_sku,
             "route_history": route_history,
             "route_history_after": route_history_after,
-            "signature": {
-                "input_sku": source_sku or "",
-                "output_sku": output_sku or "",
-                "display_sku": effective_display_sku,
-                "operation_code": effective_op_code,
-                "operation_name": effective_op_name,
-                "is_significant": effective_is_significant,
-                "output_kind": sig_output_kind_value,
-                "source_ref": source_ref,
-                "source_payload": source_payload or {},
-                "source_fingerprint": fingerprint,
-                "route_history": route_history,
-                "route_history_after": route_history_after,
-            },
+            "route_history_full": route_history_full,
+            "route_history_after_full": route_history_after_full,
         })
 
     # --- Combined operations processing ---
@@ -332,7 +393,10 @@ async def get_section_board(
     # Get combined group info for all plan positions
     combined_by_pos: dict[int, dict] = {}
     for pos_id in plan_position_ids:
-        info = await get_combined_info_for_board(db, pos_id)
+        # Get source_payload for this position
+        pos = position_by_id.get(pos_id)
+        src_payload = (pos.source_payload or {}) if pos else {}
+        info = await get_combined_info_for_board(db, pos_id, src_payload)
         if info:
             combined_by_pos[pos_id] = info
 
@@ -380,11 +444,39 @@ async def get_section_board(
 
             td["is_combined_primary"] = True
             td["combined_task_ids"] = sec_task_ids
-            td["combined_operation_names"] = group_info.get("operation_names", [])
+            op_names = group_info.get("operation_names", [])
+            op_codes = group_info.get("operation_codes", [])
+            td["combined_operation_names"] = op_names
+            td["combined_operation_codes"] = op_codes
+            # For combined tasks, replace generic section name with actual operation names
+            if op_names:
+                td["operation_name"] = " / ".join(op_names)
+                # Update task's own operation fields to reflect the first combined operation
+                first_op_code = op_codes[0] if op_codes else ""
+                td["operation_code"] = first_op_code
+                first_icon_info = icon_by_section_op.get((td["section_id"], first_op_code)) if first_op_code else None
+                td["icon"] = first_icon_info["icon"] if first_icon_info else None
+                td["icon_color"] = first_icon_info["icon_color"] if first_icon_info else None
+                td["is_significant"] = True  # Combined operations are always significant
+                # Build combined operations for both visual and full histories
+                combined_ops_after = []
+                for op_name, op_code in zip(op_names, op_codes):
+                    icon_info = icon_by_section_op.get((td["section_id"], op_code)) if op_code else None
+                    combined_ops_after.append({
+                        "operation_code": op_code or "",
+                        "operation_name": op_name,
+                        "is_significant": True,
+                        "icon": icon_info["icon"] if icon_info else None,
+                        "icon_color": icon_info["icon_color"] if icon_info else None,
+                    })
+                # Update both visual and full route_history_after
+                td["route_history_after"] = td["route_history"] + combined_ops_after
+                td["route_history_after_full"] = td["route_history_full"] + combined_ops_after
         else:
             td["is_combined_primary"] = False
             td["combined_task_ids"] = []
             td["combined_operation_names"] = []
+            td["combined_operation_codes"] = []
 
         filtered_tasks_data.append(td)
 
