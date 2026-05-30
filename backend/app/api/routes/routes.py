@@ -5,8 +5,7 @@ from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
-from app.models.route import ProductionRoute, RouteMatchingRule, RouteSignatureRule, RouteStep, SectionOperation
-from app.models.routing import RouteOperationFamily, RouteOutputKind
+from app.models.route import ProductionRoute, RouteMatchingRule, RouteStep, SectionOperation
 from app.models.section import Section
 from app.models.internal_plan import SectionPlanLine
 from app.models.release_batch import ReleaseBatchPosition
@@ -16,14 +15,6 @@ router = APIRouter(prefix="/routes", tags=["routes"])
 
 
 # --- Pydantic schemas ---
-
-class RouteRuleIn(BaseModel):
-    priority: int = 0
-    operation_family: RouteOperationFamily
-    output_kind: RouteOutputKind
-    has_pack_ops: bool | None = None
-    is_active: bool = True
-
 
 class RouteCreate(BaseModel):
     name: str
@@ -65,9 +56,6 @@ class RuleOut(BaseModel):
     id: int
     route_id: int
     priority: int
-    operation_family: RouteOperationFamily
-    output_kind: RouteOutputKind
-    has_pack_ops: bool | None = None
     is_active: bool = True
 
 
@@ -169,9 +157,9 @@ async def get_route(route_id: int, db: AsyncSession = Depends(get_db)) -> RouteD
         ))
 
     rules_result = await db.execute(
-        select(RouteSignatureRule)
-        .where(RouteSignatureRule.route_id == route.id)
-        .order_by(RouteSignatureRule.priority.desc(), RouteSignatureRule.id.asc())
+        select(RouteMatchingRule)
+        .where(RouteMatchingRule.route_id == route.id)
+        .order_by(RouteMatchingRule.priority.desc(), RouteMatchingRule.id.asc())
     )
     rules = []
     for rule in rules_result.scalars().all():
@@ -179,10 +167,7 @@ async def get_route(route_id: int, db: AsyncSession = Depends(get_db)) -> RouteD
             id=rule.id,
             route_id=rule.route_id,
             priority=rule.priority,
-            operation_family=rule.operation_family,
-            output_kind=rule.output_kind,
-            has_pack_ops=rule.has_pack_ops,
-            is_active=rule.is_active,
+            is_active=True,
         ))
 
     return RouteDetailOut(
@@ -236,7 +221,6 @@ async def check_route_delete(route_id: int, db: AsyncSession = Depends(get_db)):
 
     steps_count = await db.scalar(select(func.count()).select_from(RouteStep).where(RouteStep.route_id == route_id))
     legacy_rules_count = await db.scalar(select(func.count()).select_from(RouteMatchingRule).where(RouteMatchingRule.route_id == route_id))
-    rules_count = await db.scalar(select(func.count()).select_from(RouteSignatureRule).where(RouteSignatureRule.route_id == route_id))
     spl_count = await db.scalar(select(func.count()).select_from(SectionPlanLine).where(SectionPlanLine.route_id == route_id))
     rbp_count = await db.scalar(select(func.count()).select_from(ReleaseBatchPosition).where(ReleaseBatchPosition.route_id == route_id))
     plan_positions_count = await db.scalar(select(func.count()).select_from(PlanPosition).where(PlanPosition.route_id == route_id))
@@ -244,8 +228,8 @@ async def check_route_delete(route_id: int, db: AsyncSession = Depends(get_db)):
     warning_parts = []
     if steps_count:
         warning_parts.append(f"{steps_count} шаг(ов) маршрута")
-    if rules_count or legacy_rules_count:
-        warning_parts.append(f"{(rules_count or 0) + (legacy_rules_count or 0)} правило(ок) привязки")
+    if legacy_rules_count:
+        warning_parts.append(f"{legacy_rules_count} правило(ок) привязки")
     if spl_count:
         warning_parts.append(f"{spl_count} линия(ий) плана участков")
     if rbp_count:
@@ -257,7 +241,7 @@ async def check_route_delete(route_id: int, db: AsyncSession = Depends(get_db)):
         "has_relations": bool(warning_parts),
         "warning": f"Будут удалены: {', '.join(warning_parts)}." if warning_parts else None,
         "steps_count": steps_count or 0,
-        "rules_count": (rules_count or 0) + (legacy_rules_count or 0),
+        "rules_count": legacy_rules_count or 0,
         "spl_count": spl_count or 0,
         "rbp_count": rbp_count or 0,
         "plan_positions_count": plan_positions_count or 0,
@@ -288,18 +272,17 @@ async def delete_route(
     # Check for relations
     steps_count = await db.scalar(select(func.count()).select_from(RouteStep).where(RouteStep.route_id == route_id))
     legacy_rules_count = await db.scalar(select(func.count()).select_from(RouteMatchingRule).where(RouteMatchingRule.route_id == route_id))
-    rules_count = await db.scalar(select(func.count()).select_from(RouteSignatureRule).where(RouteSignatureRule.route_id == route_id))
     spl_count = await db.scalar(select(func.count()).select_from(SectionPlanLine).where(SectionPlanLine.route_id == route_id))
     rbp_count = await db.scalar(select(func.count()).select_from(ReleaseBatchPosition).where(ReleaseBatchPosition.route_id == route_id))
     plan_positions_count = await db.scalar(select(func.count()).select_from(PlanPosition).where(PlanPosition.route_id == route_id))
 
     # If not force deletion and there are relations, return warning
-    if not force_bool and (steps_count or rules_count or legacy_rules_count or spl_count or rbp_count or plan_positions_count):
+    if not force_bool and (steps_count or legacy_rules_count or spl_count or rbp_count or plan_positions_count):
         warning_parts = []
         if steps_count:
             warning_parts.append(f"{steps_count} шаг(ов) маршрута")
-        if rules_count or legacy_rules_count:
-            warning_parts.append(f"{(rules_count or 0) + (legacy_rules_count or 0)} правило(ок) привязки")
+        if legacy_rules_count:
+            warning_parts.append(f"{legacy_rules_count} правило(ок) привязки")
         if spl_count:
             warning_parts.append(f"{spl_count} линия(ий) плана участков")
         if rbp_count:
@@ -316,8 +299,6 @@ async def delete_route(
     # Delete related records in proper order
     if steps_count:
         await db.execute(delete(RouteStep).where(RouteStep.route_id == route_id))
-    if rules_count:
-        await db.execute(delete(RouteSignatureRule).where(RouteSignatureRule.route_id == route_id))
     if legacy_rules_count:
         await db.execute(delete(RouteMatchingRule).where(RouteMatchingRule.route_id == route_id))
     if spl_count:
@@ -459,66 +440,3 @@ async def replace_route_steps(route_id: int, payload: list[StepUpdate], db: Asyn
             combined_op_group=step.combined_op_group,
         ))
     return result
-
-
-@router.post("/{route_id}/rules", response_model=RuleOut, status_code=status.HTTP_201_CREATED)
-async def add_route_rule(route_id: int, payload: RouteRuleIn, db: AsyncSession = Depends(get_db)) -> RuleOut:
-    route = await db.get(ProductionRoute, route_id)
-    if route is None:
-        raise HTTPException(status_code=404, detail="Route not found")
-
-    rule = RouteSignatureRule(
-        route_id=route_id,
-        priority=payload.priority,
-        operation_family=payload.operation_family,
-        output_kind=payload.output_kind,
-        has_pack_ops=payload.has_pack_ops,
-        is_active=payload.is_active,
-    )
-    db.add(rule)
-    await db.flush()
-    await db.refresh(rule)
-
-    return RuleOut(
-        id=rule.id,
-        route_id=rule.route_id,
-        priority=rule.priority,
-        operation_family=rule.operation_family,
-        output_kind=rule.output_kind,
-        has_pack_ops=rule.has_pack_ops,
-        is_active=rule.is_active,
-    )
-
-
-@router.put("/{route_id}/rules/{rule_id}", response_model=RuleOut)
-async def update_route_rule(route_id: int, rule_id: int, payload: RouteRuleIn, db: AsyncSession = Depends(get_db)) -> RuleOut:
-    rule = await db.get(RouteSignatureRule, rule_id)
-    if rule is None or rule.route_id != route_id:
-        raise HTTPException(status_code=404, detail="Rule not found")
-
-    rule.priority = payload.priority
-    rule.operation_family = payload.operation_family
-    rule.output_kind = payload.output_kind
-    rule.has_pack_ops = payload.has_pack_ops
-    rule.is_active = payload.is_active
-    await db.flush()
-    await db.refresh(rule)
-
-    return RuleOut(
-        id=rule.id,
-        route_id=rule.route_id,
-        priority=rule.priority,
-        operation_family=rule.operation_family,
-        output_kind=rule.output_kind,
-        has_pack_ops=rule.has_pack_ops,
-        is_active=rule.is_active,
-    )
-
-
-@router.delete("/{route_id}/rules/{rule_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_route_rule(route_id: int, rule_id: int, db: AsyncSession = Depends(get_db)) -> None:
-    rule = await db.get(RouteSignatureRule, rule_id)
-    if rule is None or rule.route_id != route_id:
-        raise HTTPException(status_code=404, detail="Rule not found")
-    await db.delete(rule)
-    await db.flush()

@@ -284,13 +284,11 @@ async def test_validate_position_detects_missing_route(session) -> None:
     session.add(TechcardLine(techcard_id=techcard.id, component_product_id=component.id, quantity=1, unit="pcs"))
     await session.flush()
 
-    from app.models.routing import RouteOperationFamily, RouteOutputKind
+    
 
     plan, position = await _make_plan_position(
         session,
         product,
-        operation_family=RouteOperationFamily.NONE,
-        output_kind=RouteOutputKind.finished_good,
         has_pack_ops=False,
     )
     await session.flush()

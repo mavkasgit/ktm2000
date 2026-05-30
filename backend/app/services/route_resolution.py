@@ -2,7 +2,108 @@ from __future__ import annotations
 
 from typing import Any
 
-# ─── Operation code lookup tables ────────────────────────────────────────────
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.models.route import SectionOperation
+from app.models.section import Section
+
+
+# ─── Public API ──────────────────────────────────────────────────────────────
+
+
+async def resolve_operation(
+    db: AsyncSession,
+    section_code: str,
+    source_payload: dict[str, Any] | None,
+) -> str | None:
+    """Resolve the concrete operation_code for a placeholder route step.
+
+    Route templates store certain section steps with operation_code=None.
+    This function extracts the actual operation code from the import payload
+    based on the resolver_type stored in SectionOperation records.
+
+    Returns None if no match found or resolver_type is not set.
+    """
+    if not source_payload:
+        return None
+
+    # Find resolver_type from SectionOperation for this section
+    resolver_type, resolver_config = await _get_resolver_config(db, section_code)
+    if not resolver_type:
+        return None
+
+    operation_code = (source_payload.get("operation_code") or "").strip().upper()
+
+    if resolver_type == "press":
+        return _resolve_press(operation_code)
+
+    if resolver_type == "anod":
+        return _resolve_anod(operation_code, source_payload, resolver_config)
+
+    return None
+
+
+# ─── Internal helpers ────────────────────────────────────────────────────────
+
+
+async def _get_resolver_config(db: AsyncSession, section_code: str) -> tuple[str | None, dict]:
+    """Find resolver_type and resolver_config from any SectionOperation of the given section."""
+    section = await db.scalar(select(Section).where(Section.code == section_code))
+    if not section:
+        return None, {}
+
+    sop = await db.scalar(
+        select(SectionOperation)
+        .where(
+            SectionOperation.section_id == section.id,
+            SectionOperation.resolver_type.isnot(None),
+        )
+        .limit(1)
+    )
+    if not sop:
+        return None, {}
+
+    return sop.resolver_type, sop.resolver_config or {}
+
+
+def _resolve_press(operation_code: str) -> str | None:
+    if operation_code in ("PRESS_WINDOW", "PRESS_COMB", "PRESS"):
+        return operation_code
+    return None
+
+
+def _resolve_anod(
+    operation_code: str,
+    source_payload: dict[str, Any],
+    resolver_config: dict,
+) -> str | None:
+    # Explicit ANOD codes
+    if operation_code.startswith("ANOD_"):
+        return operation_code
+
+    # Pack operations performed by ANOD section
+    if operation_code in ("PACK_SPUNBOND", "PACK_STRETCH"):
+        return operation_code
+
+    # Resolve by color using config from DB
+    color_map = resolver_config.get("color_map", {})
+    if not color_map:
+        return None
+
+    color = (source_payload.get("color") or "").strip().lower().replace("ё", "е")
+    # Find the longest matching token to avoid partial matches
+    # (e.g. "черный матовый" should match before "черный")
+    best_match: tuple[int, str | None] = (0, None)
+    for token, anod_code in color_map.items():
+        normalized = token.replace("ё", "е")
+        if normalized in color and len(normalized) > best_match[0]:
+            best_match = (len(normalized), anod_code)
+    return best_match[1]
+
+
+# ─── Backwards compatibility (sync, hardcoded) ──────────────────────────────
+# Kept for existing callers; new code should use the async resolve_operation().
 
 ANOD_OPERATION_BY_COLOR = {
     "серебро": "ANOD_01",
@@ -21,92 +122,13 @@ ANOD_OPERATION_BY_COLOR = {
     "титан": "ANOD_08",
 }
 
-# Sections that use placeholder operation_code=None and resolves from payload.
-# Exact matches: PRESS, ANOD
-# Suffix matches: *-ANOD (e.g. FG-COMBO-STAGE-ANOD), *-PRESS
-_PLACEHOLDER_EXACT = {"PRESS", "ANOD"}
-
-
-def _is_placeholder_section(section_code: str) -> bool:
-    if section_code in _PLACEHOLDER_EXACT:
-        return True
-    # Suffix-based placeholders
-    if section_code.endswith("-ANOD") or section_code.endswith("-PRESS"):
-        return True
-    return False
-
-# ─── Public API ──────────────────────────────────────────────────────────────
-
-
-def resolve_operation(
-    section_code: str,
-    source_payload: dict[str, Any] | None,
-) -> str | None:
-    """Resolve the concrete operation_code for a placeholder route step.
-
-    Route templates store certain section steps with operation_code=None.
-    This function extracts the actual operation code from the import payload
-    based on the section type.
-
-    Supported placeholder sections:
-      - PRESS / *-PRESS: resolves to PRESS_WINDOW, PRESS_COMB, or PRESS
-      - ANOD / *-ANOD:   resolves to ANOD_01..ANOD_08 by color, or PACK_SPUNBOND/PACK_STRETCH
-
-    Returns None if the section does not use placeholders or no match found.
-    """
-    if not _is_placeholder_section(section_code):
-        return None
-    if not source_payload:
-        return None
-
-    operation_code = (source_payload.get("operation_code") or "").strip().upper()
-
-    if section_code == "PRESS" or section_code.endswith("-PRESS"):
-        return _resolve_press(operation_code)
-
-    if section_code == "ANOD" or section_code.endswith("-ANOD"):
-        return _resolve_anod(operation_code, source_payload)
-
-    return None
-
-
-# ─── Internal resolvers ──────────────────────────────────────────────────────
-
-
-def _resolve_press(operation_code: str) -> str | None:
-    if operation_code in ("PRESS_WINDOW", "PRESS_COMB", "PRESS"):
-        return operation_code
-    return None
-
-
-def _resolve_anod(operation_code: str, source_payload: dict[str, Any]) -> str | None:
-    # Explicit ANOD codes
-    if operation_code.startswith("ANOD_"):
-        return operation_code
-
-    # Pack operations performed by ANOD section
-    if operation_code in ("PACK_SPUNBOND", "PACK_STRETCH"):
-        return operation_code
-
-    # Resolve by color
-    color = (source_payload.get("color") or "").strip().lower().replace("ё", "е")
-    for token, anod_code in ANOD_OPERATION_BY_COLOR.items():
-        if token.replace("ё", "е") in color:
-            return anod_code
-
-    return None
-
-
-# ─── Backwards compatibility ─────────────────────────────────────────────────
-# Kept for existing callers; new code should use resolve_operation().
-
 
 def resolve_anod_operation(source_payload: dict[str, Any] | None) -> str | None:
     """Resolve the specific ANOD operation code from source_payload."""
     if not source_payload:
         return None
     operation_code = (source_payload.get("operation_code") or "").strip().upper()
-    return _resolve_anod(operation_code, source_payload)
+    return _resolve_anod_compat(operation_code, source_payload)
 
 
 def resolve_press_operation(source_payload: dict[str, Any] | None) -> str | None:
@@ -115,3 +137,17 @@ def resolve_press_operation(source_payload: dict[str, Any] | None) -> str | None
         return None
     operation_code = (source_payload.get("operation_code") or "").strip().upper()
     return _resolve_press(operation_code)
+
+
+def _resolve_anod_compat(operation_code: str, source_payload: dict[str, Any]) -> str | None:
+    if operation_code.startswith("ANOD_"):
+        return operation_code
+    if operation_code in ("PACK_SPUNBOND", "PACK_STRETCH"):
+        return operation_code
+    color = (source_payload.get("color") or "").strip().lower().replace("ё", "е")
+    best_match: tuple[int, str | None] = (0, None)
+    for token, anod_code in ANOD_OPERATION_BY_COLOR.items():
+        normalized = token.replace("ё", "е")
+        if normalized in color and len(normalized) > best_match[0]:
+            best_match = (len(normalized), anod_code)
+    return best_match[1]

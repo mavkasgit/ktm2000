@@ -140,11 +140,6 @@ async def seed_routes(
             # Steps in a combined group (cog) are always significant
             if cog:
                 step_is_sig = True
-            # Production section steps with None operation_code are still significant
-            # (the actual operation comes from source_payload per-task)
-            production_sections = {"PRESS", "ANOD"}
-            if step_def["operation_code"] is None and step_def["section_code"] in production_sections:
-                step_is_sig = True
             db.add(
                 RouteStep(
                     route_id=route.id,

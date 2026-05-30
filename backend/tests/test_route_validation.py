@@ -14,11 +14,10 @@ from app.models.production_plan import (
     PlanSourceType,
     ProductionPlan,
 )
-from app.models.routing import RouteOperationFamily, RouteOutputKind
+
 from app.models.route import ProductionRoute, RouteSelectionRule, RouteStep
 from app.models.section import Section
 from app.services.route_validation import validate_route_match
-from app.services.routing_signature import canonical_signature_from_payload
 
 
 async def _make_factory_route(
@@ -86,7 +85,7 @@ async def _make_plan_position(
     )
     session.add(plan)
     await session.flush()
-    signature = canonical_signature_from_payload(source_payload)
+    output_kind_val = source_payload.get("output_kind")
     position = PlanPosition(
         production_plan_id=plan.id,
         product_id=product.id,
@@ -99,9 +98,7 @@ async def _make_plan_position(
         validation_status=PlanPositionValidationStatus.pending,
         validation_errors=[],
         route_id=route_id,
-        operation_family=signature.operation_family if signature else RouteOperationFamily.NONE,
-        output_kind=signature.output_kind if signature else RouteOutputKind.finished_good,
-        has_pack_ops=signature.has_pack_ops if signature else False,
+        has_pack_ops=bool(source_payload.get("additional_pack_operations")),
     )
     session.add(position)
     await session.flush()

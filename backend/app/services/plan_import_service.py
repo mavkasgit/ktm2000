@@ -37,7 +37,6 @@ from app.services.excel_import import (
     validate_excel_extension,
 )
 from app.services.route_selection import load_selection_rules_for_profile, select_route_for_payload
-from app.services.routing_signature import canonical_signature_from_payload
 from app.services.hanger_quantity import adjust_quantity_to_hanger
 
 
@@ -579,7 +578,8 @@ async def _make_change_items(
                     }
                     warnings = [w for w in warnings if w != "paired_profile_product_unmapped"]
 
-        signature = canonical_signature_from_payload(row.payload)
+        payload_has_pack_ops = bool(row.payload.get("additional_pack_operations"))
+
         selection = await select_route_for_payload(
             db, row.payload, product, profile_id=rule_profile_id,
             template_column_mapping=template_column_mapping,
@@ -729,9 +729,7 @@ async def _make_change_items(
                 "ctx_snapshot": selection.ctx_snapshot,
                 "route_select_matched_rule_ids": selection.route_select_matched_rule_ids,
             },
-            "operation_family": signature.operation_family.value if signature else None,
-            "output_kind": signature.output_kind.value if signature else None,
-            "has_pack_ops": signature.has_pack_ops if signature else None,
+            "has_pack_ops": payload_has_pack_ops,
         }
         if adjusted_quantities_by_component:
             after_data["adjusted_quantities_by_component"] = adjusted_quantities_by_component
@@ -779,8 +777,6 @@ async def _make_change_items(
                             "source_fingerprint": existing_by_fp.source_fingerprint,
                             "source_row_hash": existing_by_fp.source_row_hash,
                             "source_payload": existing_by_fp.source_payload,
-                            "operation_family": existing_by_fp.operation_family.value if existing_by_fp.operation_family else None,
-                            "output_kind": existing_by_fp.output_kind.value if existing_by_fp.output_kind else None,
                             "has_pack_ops": existing_by_fp.has_pack_ops,
                         }
                 elif existing_by_fp.status == PlanPositionStatus.released:
@@ -870,8 +866,6 @@ async def _make_change_items(
                             "source_fingerprint": pos.source_fingerprint,
                             "source_row_hash": pos.source_row_hash,
                             "source_payload": pos.source_payload,
-                            "operation_family": pos.operation_family.value if pos.operation_family else None,
-                            "output_kind": pos.output_kind.value if pos.output_kind else None,
                             "has_pack_ops": pos.has_pack_ops,
                         },
                         after_data={},

@@ -90,7 +90,7 @@ async def create_release_batch(
                 plan_position_id=position.id,
                 release_quantity=release_quantity,
                 route_id=route.id,
-                route_snapshot=_route_snapshot(route, steps, position, operation_names_by_key),
+                route_snapshot=await _route_snapshot(db, route, steps, position, operation_names_by_key),
             )
         )
 
@@ -316,37 +316,40 @@ async def _get_route_steps_with_sections(db: AsyncSession, route: ProductionRout
     return result
 
 
-def _route_snapshot(
+async def _route_snapshot(
+    db: AsyncSession,
     route: ProductionRoute,
     steps: list[tuple[RouteStep, Section]],
     position: PlanPosition | None = None,
     operation_names_by_key: dict[tuple[int, str], str] | None = None,
 ) -> dict:
     op_names = operation_names_by_key or {}
+    snapshot_steps = []
+    for step, section in steps:
+        operation_code = await _resolve_step_operation_code(db, step.operation_code, section.code, position)
+        snapshot_steps.append({
+            "route_step_id": step.id,
+            "sequence": step.sequence,
+            "section_id": section.id,
+            "section_code": section.code,
+            "section_name": section.name,
+            "section_kind": section.kind,
+            "operation_code": operation_code,
+            "operation_name": await _resolve_route_step_operation_name(db, step, section, position, op_names),
+            "requires_acceptance": step.requires_acceptance,
+            "allow_parallel": step.allow_parallel,
+            "is_final": step.is_final,
+            "combined_op_group": step.combined_op_group,
+        })
     return {
         "route_id": route.id,
         "route_name": route.name,
-        "steps": [
-            {
-                "route_step_id": step.id,
-                "sequence": step.sequence,
-                "section_id": section.id,
-                "section_code": section.code,
-                "section_name": section.name,
-                "section_kind": section.kind,
-                "operation_code": _resolve_step_operation_code(step.operation_code, section.code, position),
-                "operation_name": _resolve_route_step_operation_name(step, section, position, op_names),
-                "requires_acceptance": step.requires_acceptance,
-                "allow_parallel": step.allow_parallel,
-                "is_final": step.is_final,
-                "combined_op_group": step.combined_op_group,
-            }
-            for step, section in steps
-        ],
+        "steps": snapshot_steps,
     }
 
 
-def _resolve_route_step_operation_name(
+async def _resolve_route_step_operation_name(
+    db: AsyncSession,
     step: RouteStep,
     section: Section,
     position: PlanPosition | None,
@@ -358,7 +361,7 @@ def _resolve_route_step_operation_name(
     operation name from SectionOperation using the resolved operation_code.
     Works for ANY section, not just ANOD.
     """
-    resolved_code = _resolve_step_operation_code(step.operation_code, section.code, position)
+    resolved_code = await _resolve_step_operation_code(db, step.operation_code, section.code, position)
     if resolved_code is not None:
         return operation_names_by_key.get((section.id, resolved_code), step.operation_name)
     return step.operation_name

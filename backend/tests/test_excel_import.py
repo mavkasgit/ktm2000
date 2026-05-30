@@ -178,8 +178,6 @@ async def test_import_excel_creates_batch_and_change_set(client, session, tmp_pa
     assert body["summary"]["paired_profile_positions"] == 1
     assert len(body["items"]) == 3
     assert body["items"][0]["after_data"]["source_sku"] == "ЮП-2616+ЮП-2604"
-    assert body["items"][0]["after_data"]["operation_family"] == "NONE"
-    assert body["items"][0]["after_data"]["output_kind"] == "semi_finished_shipment"
     assert body["items"][0]["after_data"]["has_pack_ops"] is False
     assert body["items"][0]["warnings"] == ["paired_profile_product_unmapped"]
     # ЮП-2083 not seeded in tests, so product_not_found is expected
@@ -421,8 +419,8 @@ async def test_replace_draft_mode_creates_cancel_for_missing_rows(client, sessio
 
     from app.models.techcard import Techcard, TechcardLine
     from app.models.product import Product, ProductType
-    from app.models.route import ProductionRoute, RouteSignatureRule, RouteStep
-    from app.models.routing import RouteOperationFamily, RouteOutputKind
+    from app.models.route import ProductionRoute, RouteStep
+    
     from app.models.section import Section
 
     product = Product(sku="FG-TEST", name="Test Product", type=ProductType.finished_good, unit="pcs")
@@ -442,16 +440,6 @@ async def test_replace_draft_mode_creates_cancel_for_missing_rows(client, sessio
     route = ProductionRoute(name="Main", is_active=True)
     session.add(route)
     await session.flush()
-    session.add(
-        RouteSignatureRule(
-            route_id=route.id,
-            operation_family=RouteOperationFamily.NONE,
-            output_kind=RouteOutputKind.finished_good,
-            has_pack_ops=False,
-            priority=10,
-            is_active=True,
-        )
-    )
     for index, section in enumerate(sections, start=1):
         session.add(
             RouteStep(
@@ -731,8 +719,8 @@ async def test_import_with_normalize_hanger_quantity_rounds_up(
 
     from app.models.product import Product, ProductType
     from app.models.techcard import Techcard, TechcardLine
-    from app.models.route import ProductionRoute, RouteSignatureRule, RouteStep
-    from app.models.routing import RouteOperationFamily, RouteOutputKind
+    from app.models.route import ProductionRoute, RouteStep
+    
     from app.models.section import Section
 
     product = Product(sku="FG-TEST", name="Test Product", type=ProductType.finished_good, unit="pcs", quantity_per_hanger=5)
@@ -749,16 +737,6 @@ async def test_import_with_normalize_hanger_quantity_rounds_up(
     route = ProductionRoute(name="Main", is_active=True)
     session.add(route)
     await session.flush()
-    session.add(
-        RouteSignatureRule(
-            route_id=route.id,
-            operation_family=RouteOperationFamily.NONE,
-            output_kind=RouteOutputKind.finished_good,
-            has_pack_ops=False,
-            priority=10,
-            is_active=True,
-        )
-    )
     for index, section in enumerate(sections, start=1):
         session.add(
             RouteStep(
@@ -812,8 +790,8 @@ async def test_import_without_normalize_hanger_quantity_keeps_original(
 
     from app.models.product import Product, ProductType
     from app.models.techcard import Techcard, TechcardLine
-    from app.models.route import ProductionRoute, RouteSignatureRule, RouteStep
-    from app.models.routing import RouteOperationFamily, RouteOutputKind
+    from app.models.route import ProductionRoute, RouteStep
+    
     from app.models.section import Section
 
     product = Product(sku="FG-TEST", name="Test Product", type=ProductType.finished_good, unit="pcs", quantity_per_hanger=5)
@@ -830,16 +808,6 @@ async def test_import_without_normalize_hanger_quantity_keeps_original(
     route = ProductionRoute(name="Main", is_active=True)
     session.add(route)
     await session.flush()
-    session.add(
-        RouteSignatureRule(
-            route_id=route.id,
-            operation_family=RouteOperationFamily.NONE,
-            output_kind=RouteOutputKind.finished_good,
-            has_pack_ops=False,
-            priority=10,
-            is_active=True,
-        )
-    )
     for index, section in enumerate(sections, start=1):
         session.add(
             RouteStep(
@@ -883,8 +851,8 @@ async def test_import_product_without_quantity_per_hanger_shows_warning(
 
     from app.models.product import Product, ProductType
     from app.models.techcard import Techcard, TechcardLine
-    from app.models.route import ProductionRoute, RouteSignatureRule, RouteStep
-    from app.models.routing import RouteOperationFamily, RouteOutputKind
+    from app.models.route import ProductionRoute, RouteStep
+    
     from app.models.section import Section
 
     # Продукт БЕЗ quantity_per_hanger
@@ -902,16 +870,6 @@ async def test_import_product_without_quantity_per_hanger_shows_warning(
     route = ProductionRoute(name="Main", is_active=True)
     session.add(route)
     await session.flush()
-    session.add(
-        RouteSignatureRule(
-            route_id=route.id,
-            operation_family=RouteOperationFamily.NONE,
-            output_kind=RouteOutputKind.finished_good,
-            has_pack_ops=False,
-            priority=10,
-            is_active=True,
-        )
-    )
     for index, section in enumerate(sections, start=1):
         session.add(
             RouteStep(
@@ -955,8 +913,8 @@ async def test_import_already_multiple_no_warning(
 
     from app.models.product import Product, ProductType
     from app.models.techcard import Techcard, TechcardLine
-    from app.models.route import ProductionRoute, RouteSignatureRule, RouteStep
-    from app.models.routing import RouteOperationFamily, RouteOutputKind
+    from app.models.route import ProductionRoute, RouteStep
+    
     from app.models.section import Section
 
     product = Product(sku="FG-TEST", name="Test Product", type=ProductType.finished_good, unit="pcs", quantity_per_hanger=5)
@@ -973,16 +931,6 @@ async def test_import_already_multiple_no_warning(
     route = ProductionRoute(name="Main", is_active=True)
     session.add(route)
     await session.flush()
-    session.add(
-        RouteSignatureRule(
-            route_id=route.id,
-            operation_family=RouteOperationFamily.NONE,
-            output_kind=RouteOutputKind.finished_good,
-            has_pack_ops=False,
-            priority=10,
-            is_active=True,
-        )
-    )
     for index, section in enumerate(sections, start=1):
         session.add(
             RouteStep(

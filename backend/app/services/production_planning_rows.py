@@ -18,7 +18,14 @@ from app.services.route_resolution import resolve_operation
 MANUAL_ROUTE_PASS_PREFIX = "manual_route_pass:"
 
 
-def _resolve_step_operation_code(step_operation_code: str | None, section_code: str, position: PlanPosition) -> str | None:
+async def _resolve_step_operation_code(
+    db: AsyncSession,
+    step_operation_code: str | None,
+    section_code: str,
+    position: PlanPosition,
+    *,
+    combined_op_group: str | None = None,
+) -> str | None:
     """Resolve operation_code for a route step.
 
     For steps with operation_code=None, resolve from position source_payload
@@ -28,10 +35,11 @@ def _resolve_step_operation_code(step_operation_code: str | None, section_code: 
     if step_operation_code is not None:
         return step_operation_code
 
-    return resolve_operation(section_code, position.source_payload)
+    return await resolve_operation(db, section_code, position.source_payload)
 
 
-def _resolve_current_stage_operation(
+async def _resolve_current_stage_operation(
+    db: AsyncSession,
     operation_name: str,
     operation_code: str | None,
     section_code: str,
@@ -45,19 +53,23 @@ def _resolve_current_stage_operation(
     (operation_code=None) are resolved from position source_payload
     for ANY section, not only ANOD.
     """
-    resolved_code = _resolve_step_operation_code(operation_code, section_code, position)
+    resolved_code = await _resolve_step_operation_code(db, operation_code, section_code, position)
     if resolved_code is not None:
         return operation_names_by_key.get((section_id, resolved_code), operation_name)
     return operation_name
 
 
-def _resolve_step_operation_name(
+async def _resolve_step_operation_name(
+    db: AsyncSession,
     step: RouteStep,
     section: Section,
     position: PlanPosition,
     operation_names_by_key: dict[tuple[int, str], str],
 ) -> str:
-    operation_code = _resolve_step_operation_code(step.operation_code, section.code, position)
+    operation_code = await _resolve_step_operation_code(
+        db, step.operation_code, section.code, position,
+        combined_op_group=step.combined_op_group,
+    )
     if operation_code is not None:
         return operation_names_by_key.get((section.id, operation_code), step.operation_name)
     return step.operation_name
@@ -176,22 +188,6 @@ async def list_production_planning_rows(db: AsyncSession) -> list[dict]:
         for row in task_counts
         if row.total_tasks > 0 and row.completed_tasks == row.total_tasks
     }
-
-    shipment_completed_rows = (
-        await db.execute(
-            select(SectionPlanLine.plan_position_id)
-            .join(WorkTask, WorkTask.section_plan_line_id == SectionPlanLine.id)
-            .join(Section, Section.id == SectionPlanLine.section_id)
-            .where(
-                SectionPlanLine.plan_position_id.in_(position_ids),
-                WorkTask.status == WorkTaskStatus.completed,
-                Section.code == "SHIPMENT",
-            )
-            .group_by(SectionPlanLine.plan_position_id)
-        )
-    ).all()
-    shipment_completed_set = {row[0] for row in shipment_completed_rows}
-    completed_set |= shipment_completed_set
 
     # Also treat position as completed when the final route step task is completed.
     # This covers routes where terminal section is SENT (or any custom final section),
@@ -348,7 +344,8 @@ async def list_production_planning_rows(db: AsyncSession) -> list[dict]:
         # Resolve operation name for current stage using position-specific payload
         current_stage_operation = None
         if raw_stage_info:
-            current_stage_operation = _resolve_current_stage_operation(
+            current_stage_operation = await _resolve_current_stage_operation(
+                db,
                 operation_name=raw_stage_info.get("current_stage_operation_name", ""),
                 operation_code=raw_stage_info.get("current_stage_operation_code"),
                 section_code=raw_stage_info.get("current_stage_section_code", ""),
@@ -669,6 +666,32 @@ async def get_production_planning_row_detail(db: AsyncSession, position_id: int)
 
         grouped_steps = _group_combined_route_steps(steps)
 
+        # Build route_snapshot steps with async resolution
+        snapshot_steps = []
+        for group in grouped_steps:
+            _step, section = group[0]
+            first_step = group[0][0]
+            op_code = await _resolve_step_operation_code(
+                db, first_step.operation_code, section.code, pos,
+                combined_op_group=first_step.combined_op_group,
+            )
+            op_names = [
+                await _resolve_step_operation_name(db, step, group_section, pos, operation_names_by_key)
+                for step, group_section in group
+            ]
+            snapshot_steps.append({
+                "route_step_id": group[0][0].id,
+                "sequence": group[0][0].sequence,
+                "section_id": section.id,
+                "section_code": section.code,
+                "section_name": section.name,
+                "section_kind": section.kind,
+                "section_icon": section.icon,
+                "section_icon_color": section.icon_color,
+                "operation_code": op_code,
+                "operation_name": " / ".join(op_names),
+            })
+
         route_snapshot = {
             "route_id": route_info.route_id,
             "route_name": route_info.route_name,
@@ -680,25 +703,7 @@ async def get_production_planning_row_detail(db: AsyncSession, position_id: int)
             "route_manual_confirmed_at": (
                 route_info.route_manual_confirmed_at.isoformat() if route_info.route_manual_confirmed_at else None
             ),
-            "steps": [
-                {
-                    "route_step_id": group[0][0].id,
-                    "sequence": group[0][0].sequence,
-                    "section_id": section.id,
-                    "section_code": section.code,
-                    "section_name": section.name,
-                    "section_kind": section.kind,
-                    "section_icon": section.icon,
-                    "section_icon_color": section.icon_color,
-                    "operation_code": _resolve_step_operation_code(group[0][0].operation_code, section.code, pos),
-                    "operation_name": " / ".join(
-                        _resolve_step_operation_name(step, group_section, pos, operation_names_by_key)
-                        for step, group_section in group
-                    ),
-                }
-                for group in grouped_steps
-                for _step, section in [group[0]]
-            ],
+            "steps": snapshot_steps,
         }
 
         for group in grouped_steps:
@@ -729,6 +734,15 @@ async def get_production_planning_row_detail(db: AsyncSession, position_id: int)
                 )
             )
 
+            op_code = await _resolve_step_operation_code(
+                db, step.operation_code, section.code, pos,
+                combined_op_group=step.combined_op_group,
+            )
+            op_names = [
+                await _resolve_step_operation_name(db, group_step, group_section, pos, operation_names_by_key)
+                for group_step, group_section in group
+            ]
+
             steps_data.append(
                 {
                     "route_step_id": step.id,
@@ -738,11 +752,8 @@ async def get_production_planning_row_detail(db: AsyncSession, position_id: int)
                     "section_icon": section.icon,
                     "section_icon_color": section.icon_color,
                     "sequence": step.sequence,
-                    "operation_code": _resolve_step_operation_code(step.operation_code, section.code, pos),
-                    "operation_name": " / ".join(
-                        _resolve_step_operation_name(group_step, group_section, pos, operation_names_by_key)
-                        for group_step, group_section in group
-                    ),
+                    "operation_code": op_code,
+                    "operation_name": " / ".join(op_names),
                     "planned_quantity": round(planned_quantity, 3),
                     "completed_quantity": round(completed_quantity, 3),
                     "transferred_quantity": round(transferred_quantity, 3),
@@ -857,7 +868,8 @@ async def get_production_planning_row_detail(db: AsyncSession, position_id: int)
                 current_stage_row = fallback_stage_rows[-1]
 
         if current_stage_row:
-            resolved_op_name = _resolve_current_stage_operation(
+            resolved_op_name = await _resolve_current_stage_operation(
+                db,
                 operation_name=current_stage_row.operation_name,
                 operation_code=current_stage_row.operation_code,
                 section_code=current_stage_row.section_code,

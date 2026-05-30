@@ -24,7 +24,6 @@ from app.models.production_plan import (
     ProductionPlan,
     ProductionPlanStatus,
 )
-from app.models.routing import RouteOperationFamily, RouteOutputKind
 from app.services.plan_validation import validate_plan_position
 
 
@@ -129,8 +128,6 @@ async def apply_change_set(db: AsyncSession, change_set_id: int, *, skip_invalid
                     position.source_row_number = (after.get("source_row_numbers") or [item.source_row_number])[0]
                     position.period_start = _date_from_payload(after, "period_start")
                     position.period_end = _date_from_payload(after, "period_end")
-                    position.operation_family = _operation_family_from_after(after)
-                    position.output_kind = _output_kind_from_after(after)
                     position.has_pack_ops = _bool_or_none(after.get("has_pack_ops"))
                     position.route_id = after.get("route_id")
                     position.route_origin = _route_origin_from_after(after)
@@ -177,8 +174,6 @@ async def apply_change_set(db: AsyncSession, change_set_id: int, *, skip_invalid
                 period_start=_date_from_payload(after, "period_start"),
                 period_end=_date_from_payload(after, "period_end"),
                 source_row_number=(after.get("source_row_numbers") or [item.source_row_number])[0],
-                operation_family=_operation_family_from_after(after),
-                output_kind=_output_kind_from_after(after),
                 has_pack_ops=_bool_or_none(after.get("has_pack_ops")),
                 route_origin=_route_origin_from_after(after),
                 route_match_quality=_route_match_quality_from_after(after),
@@ -237,8 +232,6 @@ async def rollback_change_set(db: AsyncSession, change_set_id: int) -> dict:
                 position.quantity = Decimal(item.before_data.get("quantity", str(position.quantity)))
                 position.source_payload = item.before_data.get("source_payload", position.source_payload)
                 position.source_name = item.before_data.get("source_name", position.source_name)
-                position.operation_family = _operation_family_from_after(item.before_data)
-                position.output_kind = _output_kind_from_after(item.before_data)
                 position.has_pack_ops = _bool_or_none(item.before_data.get("has_pack_ops"))
                 position.status = PlanPositionStatus.draft
         elif item.change_action == PlanChangeAction.cancel_draft_position and item.plan_position_id:
@@ -447,26 +440,6 @@ def _date_from_payload(after: dict, key: str):
 
     value = (after.get("source_payload") or {}).get(key)
     return date.fromisoformat(value) if value else None
-
-
-def _operation_family_from_after(after: dict) -> RouteOperationFamily | None:
-    value = after.get("operation_family")
-    if not value:
-        return None
-    try:
-        return RouteOperationFamily(str(value))
-    except ValueError:
-        return None
-
-
-def _output_kind_from_after(after: dict) -> RouteOutputKind | None:
-    value = after.get("output_kind")
-    if not value:
-        return None
-    try:
-        return RouteOutputKind(str(value))
-    except ValueError:
-        return None
 
 
 def _bool_or_none(value):

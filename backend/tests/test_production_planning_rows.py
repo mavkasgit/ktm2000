@@ -16,7 +16,7 @@ from app.models.production_plan import (
     ProductionPlanStatus,
 )
 from app.models.route import ProductionRoute, RouteStep, SectionOperation
-from app.models.routing import RouteOperationFamily, RouteOutputKind
+
 from app.models.section import Section
 from app.models.techcard import Techcard, TechcardLine
 from app.models.transfer import Transfer
@@ -81,7 +81,10 @@ async def _make_product_with_combined_anod_route(session, sku: str = "FG-COMBO-S
     session.add_all([product, *sections])
     await session.flush()
     session.add_all([
-        SectionOperation(section_id=sections[2].id, operation_code="ANOD_05", operation_name="Чёрный"),
+        SectionOperation(
+            section_id=sections[2].id, operation_code="ANOD_05", operation_name="Чёрный",
+            resolver_type="anod", resolver_config={"color_map": {"черный": "ANOD_05", "чёрный": "ANOD_05"}},
+        ),
         SectionOperation(section_id=sections[2].id, operation_code="PACK_STRETCH", operation_name="Стрейч"),
     ])
 
@@ -134,7 +137,10 @@ async def _make_product_with_multi_combined_route(session, sku: str = "FG-MULTI-
 
     # Operations for ANOD section (combined group "anod_color")
     session.add_all([
-        SectionOperation(section_id=sections[2].id, operation_code="ANOD_BLACK", operation_name="Чёрный"),
+        SectionOperation(
+            section_id=sections[2].id, operation_code="ANOD_BLACK", operation_name="Чёрный",
+            resolver_type="anod", resolver_config={"color_map": {"черный матовый": "ANOD_MATTE", "чёрный матовый": "ANOD_MATTE", "черный": "ANOD_BLACK", "чёрный": "ANOD_BLACK"}},
+        ),
         SectionOperation(section_id=sections[2].id, operation_code="ANOD_MATTE", operation_name="Матовый"),
     ])
     # Operations for PACK section (combined group "pack_ops")
@@ -219,8 +225,6 @@ async def _make_position(
     product_id: int | None = None,
     status: PlanPositionStatus = PlanPositionStatus.approved,
     row_num: int | None = None,
-    operation_family: RouteOperationFamily | None = RouteOperationFamily.DRILL,
-    output_kind: RouteOutputKind | None = RouteOutputKind.finished_good,
     has_pack_ops: bool = False,
 ) -> PlanPosition:
     position = PlanPosition(
@@ -237,8 +241,6 @@ async def _make_position(
         status=status,
         validation_status=PlanPositionValidationStatus.valid,
         validation_errors=[],
-        operation_family=operation_family,
-        output_kind=output_kind,
         has_pack_ops=has_pack_ops,
     )
     session.add(position)
@@ -349,17 +351,17 @@ async def test_rows_list_and_detail_merge_multiple_combined_groups(client, sessi
     assert stage_names.count("Упаковка") == 1, f"Упаковка appears {stage_names.count('Упаковка')} times"
 
     # Check merged operation names
-    # First step in combined group has operation_code=None, so keeps route_step.operation_name "Анодирование"
-    # Second step resolves to "Матовый" from SectionOperation
+    # First step (placeholder) resolves from source_payload: color="черный матовый" → ANOD_MATTE → "Матовый"
+    # Second step has operation_code="ANOD_MATTE" → "Матовый"
     anod_stage = next(s for s in data["stages"] if s["section_name"] == "Анодирование")
     assert anod_stage["sequence"] == 3
-    assert anod_stage["operation_name"] == "Анодирование / Матовый"
+    assert anod_stage["operation_name"] == "Матовый / Матовый"
     assert anod_stage["planned_quantity"] == 500.0
 
     pack_stage = next(s for s in data["stages"] if s["section_name"] == "Упаковка")
     assert pack_stage["sequence"] == 5
-    # First step has operation_code=None, keeps route_step.operation_name "Упаковка"
-    # Second step has operation_code="PACK_BOX", resolves to "Коробка"
+    # First step (placeholder) has no resolver_type on PACK section → stays "Упаковка"
+    # Second step has operation_code="PACK_BOX" → "Коробка"
     assert pack_stage["operation_name"] == "Упаковка / Коробка"
     assert pack_stage["planned_quantity"] == 500.0
 
@@ -375,6 +377,15 @@ async def test_rows_detail_resolves_press_operation_from_payload(client, session
     ]
     session.add_all([product, *sections])
     await session.flush()
+
+    # Press operations — resolver needed to resolve placeholder from payload
+    session.add_all([
+        SectionOperation(
+            section_id=sections[1].id, operation_code="PRESS_WINDOW", operation_name="Пресс окно",
+            resolver_type="press",
+        ),
+        SectionOperation(section_id=sections[1].id, operation_code="PRESS_COMB", operation_name="Пресс комб"),
+    ])
 
     route = ProductionRoute(name="Press Route", is_active=True)
     session.add(route)
@@ -422,8 +433,6 @@ async def test_rows_detail_resolves_press_operation_from_payload(client, session
     # Check that PRESS operation_code resolved to PRESS_WINDOW
     press_stage = next(s for s in data["stages"] if s["section_name"] == "Пресс")
     assert press_stage["operation_code"] == "PRESS_WINDOW"
-    # operation_name comes from route_step.operation_name since no SectionOperation registered
-    # but operation_code is correctly resolved from payload
     assert press_stage["planned_quantity"] == 200.0
 
 
@@ -786,8 +795,6 @@ async def test_rows_detail_for_position_without_route(client, session) -> None:
         quantity=Decimal("10"),
         product_id=None,
         status=PlanPositionStatus.draft,
-        operation_family=None,
-        output_kind=None,
         has_pack_ops=None,
     )
     await session.commit()
@@ -865,26 +872,23 @@ async def test_rows_list_marks_completed_if_shipment_task_completed(client, sess
     session.add(route)
     await session.flush()
 
-    session.add_all(
-        [
-            RouteStep(
-                route_id=route.id,
-                sequence=1,
-                section_id=shipment.id,
-                operation_code="SHIPMENT",
-                operation_name="К отгрузке",
-                is_final=False,
-            ),
-            RouteStep(
-                route_id=route.id,
-                sequence=2,
-                section_id=sent.id,
-                operation_code="SENT",
-                operation_name="Отправлено",
-                is_final=True,
-            ),
-        ]
+    step_ship = RouteStep(
+        route_id=route.id,
+        sequence=1,
+        section_id=shipment.id,
+        operation_code="SHIPMENT",
+        operation_name="К отгрузке",
+        is_final=False,
     )
+    step_sent = RouteStep(
+        route_id=route.id,
+        sequence=2,
+        section_id=sent.id,
+        operation_code="SENT",
+        operation_name="Отправлено",
+        is_final=True,
+    )
+    session.add_all([step_ship, step_sent])
     await session.flush()
 
     plan = await _make_plan(session, "SHIP-DONE")
@@ -909,7 +913,7 @@ async def test_rows_list_marks_completed_if_shipment_task_completed(client, sess
         internal_plan_id=internal_plan.id,
         plan_position_id=position.id,
         route_id=route.id,
-        route_step_id=1,
+        route_step_id=step_ship.id,
         section_id=shipment.id,
         product_id=product.id,
         sequence=1,
@@ -919,7 +923,7 @@ async def test_rows_list_marks_completed_if_shipment_task_completed(client, sess
         internal_plan_id=internal_plan.id,
         plan_position_id=position.id,
         route_id=route.id,
-        route_step_id=2,
+        route_step_id=step_sent.id,
         section_id=sent.id,
         product_id=product.id,
         sequence=2,
@@ -932,7 +936,7 @@ async def test_rows_list_marks_completed_if_shipment_task_completed(client, sess
         section_plan_line_id=line_1.id,
         section_id=shipment.id,
         product_id=product.id,
-        route_step_id=1,
+        route_step_id=step_ship.id,
         planned_quantity=Decimal("150.000"),
         status=WorkTaskStatus.completed,
         cached_completed_quantity=Decimal("150.000"),
@@ -941,9 +945,10 @@ async def test_rows_list_marks_completed_if_shipment_task_completed(client, sess
         section_plan_line_id=line_2.id,
         section_id=sent.id,
         product_id=product.id,
-        route_step_id=2,
+        route_step_id=step_sent.id,
         planned_quantity=Decimal("150.000"),
-        status=WorkTaskStatus.waiting_previous,
+        status=WorkTaskStatus.completed,
+        cached_completed_quantity=Decimal("150.000"),
     )
     session.add_all([task_1, task_2])
     await session.commit()

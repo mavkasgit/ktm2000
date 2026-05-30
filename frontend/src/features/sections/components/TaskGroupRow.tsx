@@ -5,17 +5,23 @@
  *
  * ВИЗУАЛЬНАЯ ЛОГИКА:
  *   - display_sku с трансформацией (→)
- *   - operation_code / output_kind бейджи
- *   - ColorDot для анодирования
+ *   - operation_code бейджи
  *   - Прогресс qty_done / qty_plan
  *   - Раскрывающийся список задач
  */
 
-import { useState } from "react";
-import type { SectionBoardTask, TaskGroup } from "@/shared/api/shopfloor";
+import React, { useState } from "react";
+import type { SectionBoardTask, TaskGroup, RouteHistoryOp } from "@/shared/api/shopfloor";
 import { isTransformingTask, taskProgress, groupProgress } from "@/shared/api/shopfloor";
 import type { GroupingProfile } from "../lib/groupingProfiles";
 import { groupStatus } from "../lib/groupTasksByProfile";
+
+
+function renderIcon(icon: string, className: string) {
+  // Lucide icons are rendered as SVG paths
+  // For simplicity, show first letter as fallback
+  return <span className={className}>{icon[0]?.toUpperCase()}</span>;
+}
 
 
 // ---------------------------------------------------------------------------
@@ -48,6 +54,22 @@ export function TaskGroupRow({
   const isTransforming = isTransformingTask(firstTask);
   const status = groupStatus(group);
   const progress = groupProgress(group);
+
+  // Build icon lookup for combined operations
+  const iconByOpCode = new Map<string, { icon?: string | null; iconColor?: string | null }>();
+  if (firstTask.combined_operation_codes) {
+    // Icons come from the task's own fields and route_history_after
+    const allOps = firstTask.route_history_after ?? [];
+    for (const op of allOps) {
+      if (op.operation_code) {
+        iconByOpCode.set(op.operation_code, { icon: op.icon, iconColor: op.icon_color });
+      }
+    }
+    // Also use the task's own icon
+    if (firstTask.operation_code) {
+      iconByOpCode.set(firstTask.operation_code, { icon: firstTask.icon, iconColor: firstTask.icon_color });
+    }
+  }
 
   return (
     <div
@@ -87,9 +109,30 @@ export function TaskGroupRow({
             </span>
           )}
 
-          {/* Цвет/тип */}
-          {firstTask.output_kind && (
-            <ColorDot kind={firstTask.output_kind} />
+          {/* Комбинированные операции */}
+          {firstTask.is_combined_primary && firstTask.combined_operation_names?.length > 0 && (
+            <div className="flex items-center gap-1">
+              {firstTask.combined_operation_names.map((opName: string, i: number) => {
+                const opCode = firstTask.combined_operation_codes?.[i];
+                const iconInfo = opCode ? iconByOpCode.get(opCode) : null;
+                return (
+                  <React.Fragment key={i}>
+                    {i > 0 && <span className="text-muted-foreground text-xs">→</span>}
+                    <span
+                      className="inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-xs font-medium"
+                      style={{
+                        backgroundColor: iconInfo?.iconColor ? iconInfo.iconColor + "18" : undefined,
+                        color: iconInfo?.iconColor || undefined,
+                      }}
+                      title={opName}
+                    >
+                      {iconInfo?.icon && renderIcon(iconInfo.icon, "h-3 w-3")}
+                      {opName}
+                    </span>
+                  </React.Fragment>
+                );
+              })}
+            </div>
           )}
 
           {/* Ссылка на заказ */}
@@ -168,40 +211,6 @@ function TaskRow({ task }: TaskRowProps) {
 
       <StatusBadge status={task.status} compact />
     </div>
-  );
-}
-
-
-// ---------------------------------------------------------------------------
-// ColorDot
-// ---------------------------------------------------------------------------
-
-interface ColorDotProps {
-  kind: string;
-}
-
-function ColorDot({ kind }: ColorDotProps) {
-  const COLOR_MAP: Record<string, { bg: string; label: string; border?: string }> = {
-    silver:    { bg: "#C0C0C0", label: "серебро" },
-    black:     { bg: "#1a1a1a", label: "чёрный" },
-    bronze:    { bg: "#CD7F32", label: "бронза" },
-    champagne: { bg: "#F7E7CE", label: "шампань", border: "1px solid #ccc" },
-    natural:   { bg: "#D4A96A", label: "натуральный" },
-    gold:      { bg: "#FFD700", label: "золото" },
-  };
-
-  const meta = COLOR_MAP[kind];
-
-  return (
-    <span
-      className="inline-block w-4 h-4 rounded-full"
-      style={{
-        backgroundColor: meta?.bg ?? "#888",
-        border: meta?.border,
-      }}
-      title={meta?.label ?? kind}
-      aria-label={meta?.label ?? kind}
-    />
   );
 }
 

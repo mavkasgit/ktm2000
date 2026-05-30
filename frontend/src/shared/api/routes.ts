@@ -23,22 +23,15 @@ export type RouteStep = {
   requires_acceptance?: boolean;
 };
 
-export type RouteOperationFamily = "NONE" | "DRILL" | "PRESS" | "PACK";
-export type RouteOutputKind = "finished_good" | "semi_finished_shipment";
+export type RouteDetail = ProductionRoute & {
+  steps: RouteStep[];
+  rules: RouteMatchingRule[];
+};
 
-export type RouteSignatureRule = {
+export type RouteMatchingRule = {
   id: number;
   route_id: number;
   priority: number;
-  operation_family: RouteOperationFamily;
-  output_kind: RouteOutputKind;
-  has_pack_ops: boolean | null;
-  is_active: boolean;
-};
-
-export type RouteDetail = ProductionRoute & {
-  steps: RouteStep[];
-  rules: RouteSignatureRule[];
 };
 
 export type RouteSelectionCondition = {
@@ -111,16 +104,6 @@ export type StepInput = {
   is_final?: boolean;
 };
 
-export type RuleInput = {
-  priority: number;
-  operation_family: RouteOperationFamily;
-  output_kind: RouteOutputKind;
-  has_pack_ops: boolean | null;
-  is_active: boolean;
-};
-
-export type RuleUpdateInput = RuleInput;
-
 export async function listRoutes(q?: string) {
   const { data } = await apiClient.get<ProductionRoute[]>("/routes", { params: q ? { q } : undefined });
   return data;
@@ -158,20 +141,6 @@ export async function createStep(routeId: number, payload: StepInput) {
 export async function replaceSteps(routeId: number, steps: StepInput[]) {
   const { data } = await apiClient.put<RouteStep[]>(`/routes/${routeId}/steps`, steps);
   return data;
-}
-
-export async function addRule(routeId: number, payload: RuleInput) {
-  const { data } = await apiClient.post<RouteSignatureRule>(`/routes/${routeId}/rules`, payload);
-  return data;
-}
-
-export async function updateRule(routeId: number, ruleId: number, payload: RuleUpdateInput) {
-  const { data } = await apiClient.put<RouteSignatureRule>(`/routes/${routeId}/rules/${ruleId}`, payload);
-  return data;
-}
-
-export async function deleteRule(routeId: number, ruleId: number) {
-  await apiClient.delete(`/routes/${routeId}/rules/${ruleId}`);
 }
 
 export async function listRouteSelectionRules(params?: { scope?: "global" | "profile" | "all"; profile_id?: number }) {

@@ -22,7 +22,7 @@ from app.models.production_plan import (
 )
 from app.models.release_batch import ReleaseBatchPosition
 from app.models.route import ProductionRoute, RouteStep
-from app.models.routing import RouteOperationFamily, RouteOutputKind
+
 from app.models.section import Section
 from app.models.work_task import WorkTask, WorkTaskStatus
 
@@ -103,8 +103,6 @@ async def _make_plan_position(
     product: Product,
     quantity: Decimal = Decimal("100"),
     *,
-    operation_family=RouteOperationFamily.DRILL,
-    output_kind=RouteOutputKind.finished_good,
     has_pack_ops: bool = False,
     route_id: int | None = None,
 ) -> tuple[ProductionPlan, PlanPosition]:
@@ -134,8 +132,6 @@ async def _make_plan_position(
         status=PlanPositionStatus.approved,
         validation_status=PlanPositionValidationStatus.valid,
         validation_errors=[],
-        operation_family=operation_family,
-        output_kind=output_kind,
         has_pack_ops=has_pack_ops,
         route_id=route_id,
         route_origin=PlanPositionRouteOrigin.manual_confirmed if route_id else None,
@@ -412,8 +408,6 @@ async def test_release_blocked_on_route_mismatch(client, session) -> None:
     # then validation should fail because the route lacks required steps.
     plan, position = await _make_plan_position(
         session, product,
-        operation_family=RouteOperationFamily.DRILL,
-        output_kind=RouteOutputKind.finished_good,
         has_pack_ops=True,
     )
     # Still need to assign route_id for release_batch check, but set it

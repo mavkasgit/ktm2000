@@ -16,7 +16,7 @@ from app.models.production_plan import (
     ProductionPlanStatus,
 )
 from app.models.route import ProductionRoute, RouteStep
-from app.models.routing import RouteOperationFamily, RouteOutputKind
+
 from app.models.section import Section
 from app.models.techcard import Techcard, TechcardLine
 from app.models.user import User, UserRole
@@ -95,8 +95,6 @@ async def _make_product_route_plan(session, sku: str = "FG-TTW") -> tuple[Produc
         validation_errors=[],
         period_start=plan.period_start,
         period_end=plan.period_end,
-        operation_family=RouteOperationFamily.DRILL,
-        output_kind=RouteOutputKind.finished_good,
         has_pack_ops=False,
     )
     session.add(pos)

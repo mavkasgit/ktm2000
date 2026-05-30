@@ -44,7 +44,6 @@ export type SectionBoardTask = {
   is_significant: boolean;
   icon?: string | null;
   icon_color?: string | null;
-  output_kind: string | null;
   planned_quantity: string;
   status: string;
   cache: {
@@ -378,6 +377,7 @@ export interface SectionOperation {
   is_significant: boolean;
   icon?: string | null;
   icon_color?: string | null;
+  group_code?: string | null;
 }
 
 export async function getSectionOperations(

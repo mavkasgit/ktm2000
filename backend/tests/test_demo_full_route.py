@@ -6,7 +6,7 @@ from app.core.security import create_access_token
 from app.models.product import Product, ProductType
 from app.models.production_plan import PlanPosition, ProductionPlan, ProductionPlanStatus
 from app.models.route import ProductionRoute, RouteStep
-from app.models.routing import RouteOperationFamily, RouteOutputKind
+
 from app.models.section import Section
 from app.models.techcard import Techcard, TechcardLine
 from app.models.user import User, UserRole

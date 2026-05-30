@@ -32,14 +32,12 @@ def _compute_fingerprint(
     source_sku: str | None,
     output_sku: str | None,
     operation_code: str | None,
-    output_kind: str | None,
     source_payload: dict | None,
 ) -> str:
     payload = {
         "input_sku": source_sku or "",
         "output_sku": output_sku or "",
         "operation_code": operation_code or "",
-        "output_kind": output_kind or "",
         **(source_payload or {}),
     }
     canonical = json.dumps(payload, sort_keys=True, ensure_ascii=True)
@@ -65,7 +63,6 @@ async def get_section_board(
         PlanPosition.source_fingerprint,
         PlanPosition.source_sku,
         PlanPosition.output_sku,
-        PlanPosition.output_kind,
     ).join(
         SectionPlanLine, WorkTask.section_plan_line_id == SectionPlanLine.id,
     ).join(
@@ -161,6 +158,7 @@ async def get_section_board(
             "is_significant": op.is_significant,
             "icon": op.icon,
             "icon_color": op.icon_color,
+            "group_code": op.group_code,
         }
         for op in section_ops
     ]
@@ -180,7 +178,7 @@ async def get_section_board(
             }
 
     tasks_data = []
-    for task, line, step, product_sku, source_ref, source_payload, source_fingerprint, source_sku, output_sku, output_kind in rows:
+    for task, line, step, product_sku, source_ref, source_payload, source_fingerprint, source_sku, output_sku in rows:
         # Determine effective operation_code.
         # Priority: task override > source_payload (if belongs to current section) > route_step
         effective_op_code = task.selected_operation_code
@@ -328,9 +326,8 @@ async def get_section_board(
 
         display_sku = _compute_display_sku(source_sku or "", output_sku or "")
         fingerprint = _compute_fingerprint(
-            source_sku, output_sku, effective_op_code, output_kind, source_payload
+            source_sku, output_sku, effective_op_code, source_payload
         )
-        output_kind_value = output_kind.value if hasattr(output_kind, "value") else output_kind
 
         # For paired profiles, source_sku contains both articles (e.g., "ЮП-2616+ЮП-2604")
         # Use source_sku directly for paired profiles, otherwise use display_sku or product_sku
@@ -357,7 +354,6 @@ async def get_section_board(
             "is_significant": effective_is_significant,
             "icon": op_icon_info["icon"] if op_icon_info else None,
             "icon_color": op_icon_info["icon_color"] if op_icon_info else None,
-            "output_kind": output_kind_value,
             "planned_quantity": str(task.planned_quantity),
             "status": task.status.value,
             "cache": {

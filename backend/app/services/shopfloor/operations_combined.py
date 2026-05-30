@@ -185,10 +185,10 @@ async def get_combined_info_for_board(
         section = section_by_id.get(route_step.section_id)
         section_code = section.code if section else ""
 
-        # Resolve operation code
+        # Resolve operation code from source_payload for placeholder steps
         resolved_code = route_step.operation_code
         if resolved_code is None and source_payload:
-            resolved_code = resolve_operation(section_code, source_payload)
+            resolved_code = await resolve_operation(db, section_code, source_payload)
 
         # Resolve operation name
         resolved_name = route_step.operation_name

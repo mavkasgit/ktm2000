@@ -86,7 +86,7 @@ class SourceSignature(BaseModel):
 
       source_fingerprint — 12-символьный SHA1-хеш всех значимых полей.
                            Уникален для каждой комбинации:
-                           input_sku + output_sku + operation_code + output_kind
+                           input_sku + output_sku + operation_code
                            Используется профилем "Полная сигнатура".
     """
     input_sku: str
@@ -95,7 +95,6 @@ class SourceSignature(BaseModel):
     operation_code: str | None = None
     operation_name: str | None = None
     is_significant: bool = False
-    output_kind: str | None = None
     source_ref: str | None = None
     source_payload: dict[str, Any] = {}
     source_fingerprint: str
