@@ -15,17 +15,18 @@ depends_on = None
 
 def upgrade() -> None:
     # Drop columns from plan_positions (created in 004)
-    op.drop_column("plan_positions", "output_kind")
-    op.drop_column("plan_positions", "operation_family")
+    op.execute("ALTER TABLE plan_positions DROP COLUMN IF EXISTS output_kind")
+    op.execute("ALTER TABLE plan_positions DROP COLUMN IF EXISTS operation_family")
 
     # Drop columns from route_matching_rules (created in 005)
-    op.drop_column("route_matching_rules", "output_kind")
-    op.drop_column("route_matching_rules", "operation_family")
+    op.execute("ALTER TABLE route_matching_rules DROP COLUMN IF EXISTS output_kind")
+    op.execute("ALTER TABLE route_matching_rules DROP COLUMN IF EXISTS operation_family")
 
     # Drop columns from route_signature_rules (created in 005)
-    op.drop_index("ix_route_signature_rules_lookup", table_name="route_signature_rules")
-    op.drop_column("route_signature_rules", "output_kind")
-    op.drop_column("route_signature_rules", "operation_family")
+    op.execute("ALTER TABLE route_signature_rules DROP COLUMN IF EXISTS output_kind")
+    op.execute("ALTER TABLE route_signature_rules DROP COLUMN IF EXISTS operation_family")
+    # Recreate index without dropped columns
+    op.execute("DROP INDEX IF EXISTS ix_route_signature_rules_lookup")
     op.create_index(
         "ix_route_signature_rules_lookup",
         "route_signature_rules",
@@ -33,8 +34,8 @@ def upgrade() -> None:
     )
 
     # Drop enum types
-    sa.Enum(name="route_output_kind").drop(op.get_bind(), checkfirst=True)
-    sa.Enum(name="route_operation_family").drop(op.get_bind(), checkfirst=True)
+    op.execute("DROP TYPE IF EXISTS route_output_kind")
+    op.execute("DROP TYPE IF EXISTS route_operation_family")
 
 
 def downgrade() -> None:

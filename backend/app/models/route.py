@@ -66,6 +66,8 @@ class SectionOperation(Base):
     icon: Mapped[str | None] = mapped_column(String(50), nullable=True)
     icon_color: Mapped[str | None] = mapped_column(String(7), nullable=True)
     group_code: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    group_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default=text("0"))
     resolver_type: Mapped[str | None] = mapped_column(String(50), nullable=True)
     resolver_config: Mapped[dict] = mapped_column(JSONB, nullable=False, server_default=text("'{}'::jsonb"), default=dict)
 
@@ -125,6 +127,8 @@ class RouteRuleProfile(Base):
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("true"), default=True)
     priority: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"), default=0)
+    route_sections: Mapped[list] = mapped_column(JSONB, nullable=False, server_default=text("'[]'::jsonb"), default=list)
+    route_name_pattern: Mapped[str] = mapped_column(String(255), nullable=False, server_default=text("'{output_kind} - {operations}'"), default="{output_kind} - {operations}")
     import_template_id: Mapped[int | None] = mapped_column(ForeignKey("import_templates.id"), nullable=True)
     excel_column_passport: Mapped[list] = mapped_column(JSONB, nullable=False, server_default=text("'[]'::jsonb"), default=list)
     excel_passport_meta: Mapped[dict] = mapped_column(JSONB, nullable=False, server_default=text("'{}'::jsonb"), default=dict)

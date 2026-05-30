@@ -120,7 +120,6 @@ async def get_combined_info_for_board(
     Для всех combined групп в пределах plan_position_id вернуть информацию.
     Returns: {combined_op_group: {"primary_line_id": ..., "secondary_line_ids": [...], "operation_names": [...], "operation_codes": [...]}}
     """
-    from app.services.route_resolution import resolve_operation
 
     # Get route_id from any SectionPlanLine for this position
     first_line = await db.scalar(
@@ -185,10 +184,8 @@ async def get_combined_info_for_board(
         section = section_by_id.get(route_step.section_id)
         section_code = section.code if section else ""
 
-        # Resolve operation code from source_payload for placeholder steps
+        # Operation code is explicit in route step (set by set_operation rules)
         resolved_code = route_step.operation_code
-        if resolved_code is None and source_payload:
-            resolved_code = await resolve_operation(db, section_code, source_payload)
 
         # Resolve operation name
         resolved_name = route_step.operation_name

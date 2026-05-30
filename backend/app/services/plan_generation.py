@@ -11,13 +11,14 @@ from app.models.internal_plan import InternalPlan, SectionPlanLine
 from app.models.production_plan import PlanPosition, PlanPositionStatus, PositionStatusHistory, ProductionPlan, ProductionPlanStatus
 from app.models.product import Product
 from app.models.release_batch import ReleaseBatch, ReleaseBatchPosition, ReleaseBatchStatus, ReleaseBatchType
-from app.models.route import ProductionRoute, RouteStep, SectionOperation
+from app.models.route import ProductionRoute, RouteRuleProfile, RouteStep, SectionOperation
 from app.models.section import Section
 from app.models.work_task import WorkTask, WorkTaskStatus
+from app.models.imports import ImportBatch
 from app.services.plan_validation import _find_paired_techcard, _paired_component_skus
 from app.services.route_validation import validate_route_match
 from app.services.route_matcher import resolve_position_route
-from app.services.production_planning_rows import _resolve_step_operation_code
+from app.services.route_builder import build_route_steps_for_release
 
 
 async def create_release_batch(
@@ -51,48 +52,84 @@ async def create_release_batch(
 
     for position, release_quantity in selected_positions:
         route_info = await resolve_position_route(db, position)
-        if route_info.route_id is None:
-            raise ValueError(
-                f"route_not_found for position {position.id}: "
-                f"{route_info.error or 'unknown'}; checked_rules={route_info.checked_rules}"
-            )
-        route = await db.get(ProductionRoute, route_info.route_id)
-        if route is None or not route.is_active:
-            raise ValueError(f"Route for position {position.id} is not active")
+
+        # Get profile for dynamic route building
+        import_batch = await db.get(ImportBatch, position.import_batch_id) if position.import_batch_id is not None else None
+        profile_id = import_batch.rule_profile_id if import_batch is not None else None
+        profile = await db.get(RouteRuleProfile, profile_id) if profile_id else None
 
         await _validate_active_techcard(db, position)
 
-        # Only validate route match for auto-detected routes, not manual overrides
-        if route_info.source != "manual":
-            route_issues = await validate_route_match(db, position)
-            if route_issues:
-                raise ValueError(f"Route mismatch for position {position.id}: " + "; ".join(route_issues))
+        # Use dynamic route if profile has route_sections, otherwise fallback to static route
+        if profile and profile.route_sections:
+            # Dynamic route building
+            steps = await build_route_steps_for_release(db, profile, position.source_payload, position)
+            remaining = await _remaining_quantity(db, position)
+            if release_quantity <= 0:
+                raise ValueError("Release quantity must be > 0")
+            if release_quantity > remaining:
+                raise ValueError("Release quantity exceeds approved remaining quantity")
 
-        steps = await _get_route_steps_with_sections(db, route)
-        remaining = await _remaining_quantity(db, position)
-        if release_quantity <= 0:
-            raise ValueError("Release quantity must be > 0")
-        if release_quantity > remaining:
-            raise ValueError("Release quantity exceeds approved remaining quantity")
+            # Load operation names for display
+            section_ids = {step["section_id"] for step in steps}
+            operation_names_by_key = {
+                (op.section_id, op.operation_code): op.operation_name
+                for op in (
+                    await db.execute(select(SectionOperation).where(SectionOperation.section_id.in_(section_ids)))
+                ).scalars().all()
+            }
 
-        # Load operation names for generic resolution (any section with operation_code=None)
-        section_ids = {section.id for _step, section in steps}
-        operation_names_by_key = {
-            (op.section_id, op.operation_code): op.operation_name
-            for op in (
-                await db.execute(select(SectionOperation).where(SectionOperation.section_id.in_(section_ids)))
-            ).scalars().all()
-        }
-
-        db.add(
-            ReleaseBatchPosition(
-                release_batch_id=batch.id,
-                plan_position_id=position.id,
-                release_quantity=release_quantity,
-                route_id=route.id,
-                route_snapshot=await _route_snapshot(db, route, steps, position, operation_names_by_key),
+            db.add(
+                ReleaseBatchPosition(
+                    release_batch_id=batch.id,
+                    plan_position_id=position.id,
+                    release_quantity=release_quantity,
+                    route_id=None,  # Dynamic route, no static ProductionRoute
+                    route_snapshot=_dynamic_route_snapshot(profile, steps, position, operation_names_by_key),
+                )
             )
-        )
+        else:
+            # Fallback to static route
+            if route_info.route_id is None:
+                raise ValueError(
+                    f"route_not_found for position {position.id}: "
+                    f"{route_info.error or 'unknown'}; checked_rules={route_info.checked_rules}"
+                )
+            route = await db.get(ProductionRoute, route_info.route_id)
+            if route is None or not route.is_active:
+                raise ValueError(f"Route for position {position.id} is not active")
+
+            # Only validate route match for auto-detected routes, not manual overrides
+            if route_info.source != "manual":
+                route_issues = await validate_route_match(db, position)
+                if route_issues:
+                    raise ValueError(f"Route mismatch for position {position.id}: " + "; ".join(route_issues))
+
+            steps = await _get_route_steps_with_sections(db, route)
+            remaining = await _remaining_quantity(db, position)
+            if release_quantity <= 0:
+                raise ValueError("Release quantity must be > 0")
+            if release_quantity > remaining:
+                raise ValueError("Release quantity exceeds approved remaining quantity")
+
+            # Load operation names for generic resolution (any section with operation_code=None)
+            section_ids = {section.id for _step, section in steps}
+            operation_names_by_key = {
+                (op.section_id, op.operation_code): op.operation_name
+                for op in (
+                    await db.execute(select(SectionOperation).where(SectionOperation.section_id.in_(section_ids)))
+                ).scalars().all()
+            }
+
+            db.add(
+                ReleaseBatchPosition(
+                    release_batch_id=batch.id,
+                    plan_position_id=position.id,
+                    release_quantity=release_quantity,
+                    route_id=route.id,
+                    route_snapshot=await _route_snapshot(db, route, steps, position, operation_names_by_key),
+                )
+            )
 
     await db.flush()
     return await get_release_batch_summary(db, batch.id)
@@ -316,6 +353,47 @@ async def _get_route_steps_with_sections(db: AsyncSession, route: ProductionRout
     return result
 
 
+def _dynamic_route_snapshot(
+    profile: RouteRuleProfile,
+    steps: list[dict],
+    position: PlanPosition | None = None,
+    operation_names_by_key: dict[tuple[int, str], str] | None = None,
+) -> dict:
+    """Создать route_snapshot для динамического маршрута.
+
+    steps — список dict из build_route_steps_for_release
+    """
+    op_names = operation_names_by_key or {}
+    return {
+        "route_id": None,  # Dynamic route
+        "route_name": f"Dynamic: {profile.name}",
+        "profile_id": profile.id,
+        "profile_code": profile.code,
+        "steps": [
+            {
+                "route_step_id": None,  # No static RouteStep
+                "sequence": step["sequence"],
+                "section_id": step["section_id"],
+                "section_code": step["section_code"],
+                "section_name": step["section_name"],
+                "section_kind": step["section_kind"],
+                "group_code": step.get("group_code"),
+                "group_name": step.get("group_name"),
+                "operation_code": step["operation_code"],
+                "operation_name": op_names.get(
+                    (step["section_id"], step["operation_code"]),
+                    step["operation_name"],
+                ) if step["operation_code"] else step["operation_name"],
+                "requires_acceptance": True,
+                "allow_parallel": False,
+                "is_final": step.get("is_final", False),
+                "combined_op_group": step.get("combined_op_group"),
+            }
+            for step in steps
+        ],
+    }
+
+
 async def _route_snapshot(
     db: AsyncSession,
     route: ProductionRoute,
@@ -326,7 +404,7 @@ async def _route_snapshot(
     op_names = operation_names_by_key or {}
     snapshot_steps = []
     for step, section in steps:
-        operation_code = await _resolve_step_operation_code(db, step.operation_code, section.code, position)
+        operation_code = step.operation_code
         snapshot_steps.append({
             "route_step_id": step.id,
             "sequence": step.sequence,
@@ -355,15 +433,9 @@ async def _resolve_route_step_operation_name(
     position: PlanPosition | None,
     operation_names_by_key: dict[tuple[int, str], str],
 ) -> str:
-    """Resolve display operation name for a route step.
-
-    For steps with operation_code=None (placeholders), resolve the specific
-    operation name from SectionOperation using the resolved operation_code.
-    Works for ANY section, not just ANOD.
-    """
-    resolved_code = await _resolve_step_operation_code(db, step.operation_code, section.code, position)
-    if resolved_code is not None:
-        return operation_names_by_key.get((section.id, resolved_code), step.operation_name)
+    """Return display operation name for a route step."""
+    if step.operation_code is not None:
+        return operation_names_by_key.get((section.id, step.operation_code), step.operation_name)
     return step.operation_name
 
 

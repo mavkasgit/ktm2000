@@ -9,9 +9,6 @@ from io import BytesIO
 from pathlib import Path
 from typing import Any
 
-from app.services.import_normalization import apply_import_normalization
-
-
 SUPPORTED_EXCEL_EXTENSIONS = {".xls", ".xlsx", ".xlsm", ".xlsb", ".ods"}
 
 HEADER_ALIASES = {
@@ -121,7 +118,6 @@ def parse_factory_plan_workbook(
     filename: str,
     sheet_index: int = 0,
     column_mapping: dict[str, str] | None = None,
-    normalization_rules: dict[str, Any] | None = None,
     row_selection: str | None = None,
     normalize_hanger_quantity: bool = True,
 ) -> ParsedWorkbook:
@@ -155,7 +151,6 @@ def parse_factory_plan_workbook(
         column_map,
         period_start,
         period_end,
-        normalization_rules,
     )
     selected_rows = parse_row_selection(row_selection) if row_selection else None
     auto_included_rows: set[int] = set()
@@ -291,7 +286,6 @@ def _parse_rows(
     column_map: dict[str, int],
     period_start: date | None,
     period_end: date | None,
-    normalization_rules: dict[str, Any] | None,
 ) -> list[ParsedPlanRow]:
     parsed: list[ParsedPlanRow] = []
     last_full_by_sku: dict[str, dict[str, Any]] = {}
@@ -323,7 +317,6 @@ def _parse_rows(
             period_start,
             period_end,
             inherited,
-            normalization_rules,
         )
 
         if parsed and _can_join_as_paired_profile(parsed[-1], candidate):
@@ -366,30 +359,24 @@ def _make_plan_row(
     period_start: date | None,
     period_end: date | None,
     inherited: bool,
-    normalization_rules: dict[str, Any] | None,
 ) -> ParsedPlanRow:
     component = _component_from_raw(row_number, raw)
     raw_operation = _cell_text(raw.get("operation")) or None
     raw_output_kind = _cell_text(raw.get("output_kind")) or None
-    normalized = apply_import_normalization(
-        raw_operation=raw_operation,
-        raw_output_kind=raw_output_kind,
-        normalization_rules=normalization_rules,
-    )
     payload = {
         "row_numbers": [row_number],
         "components": [component],
         "color": _cell_text(raw.get("color")) or None,
         "input_length": _decimal_to_str(_decimal_or_none(raw.get("input_length"))),
         "operation": raw_operation,
-        "operation_code": normalized.get("operation_code"),
-        "operation_name": normalized.get("operation_name"),
-        "additional_pack_operations": normalized.get("additional_pack_operations", []),
-        "normalized_pack_op_family": normalized.get("normalized_pack_op_family", "NONE"),
+        "operation_code": None,
+        "operation_name": None,
+        "additional_pack_operations": [],
+        "normalized_pack_op_family": "NONE",
         "packaging": _cell_text(raw.get("packaging")) or None,
         "note": _cell_text(raw.get("note")) or None,
         "output_length": _decimal_to_str(_decimal_or_none(raw.get("output_length"))),
-        "output_kind": normalized.get("output_kind"),
+        "output_kind": raw_output_kind,
         "output_kind_raw": raw_output_kind,
         "shipping": {
             "west_quantity": _decimal_to_str(_decimal_or_none(raw.get("west_quantity"))),

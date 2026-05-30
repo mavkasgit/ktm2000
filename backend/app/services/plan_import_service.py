@@ -38,6 +38,7 @@ from app.services.excel_import import (
 )
 from app.services.route_selection import load_selection_rules_for_profile, select_route_for_payload
 from app.services.hanger_quantity import adjust_quantity_to_hanger
+from app.services.route_builder import build_route_from_profile
 
 
 async def preview_excel_sheet(
@@ -49,7 +50,6 @@ async def preview_excel_sheet(
     mode: ImportBatchMode = ImportBatchMode.create_plan,
     production_plan_id: int | None = None,
     column_mapping: dict | None = None,
-    normalization_rules: dict | None = None,
     row_selection: str | None = None,
     rule_profile_id: int | None = None,
     normalize_hanger_quantity: bool = True,
@@ -60,7 +60,6 @@ async def preview_excel_sheet(
         filename,
         sheet_index=sheet_index,
         column_mapping=column_mapping,
-        normalization_rules=normalization_rules,
         row_selection=row_selection,
         normalize_hanger_quantity=normalize_hanger_quantity,
     )
@@ -129,7 +128,6 @@ async def create_excel_import_change_set(
     plan_month: str | None = None,
     plan_version: str | None = None,
     column_mapping: dict | None = None,
-    normalization_rules: dict | None = None,
     row_selection: str | None = None,
     template_id: int | None = None,
     rule_profile_id: int | None = None,
@@ -143,7 +141,6 @@ async def create_excel_import_change_set(
         filename,
         sheet_index=sheet_index,
         column_mapping=column_mapping,
-        normalization_rules=normalization_rules,
         row_selection=row_selection,
         normalize_hanger_quantity=normalize_hanger_quantity,
     )
@@ -592,7 +589,9 @@ async def _make_change_items(
         ]
 
         if route is None:
-            errors.append(selection.error or "no_route_candidate")
+            # Only add error if we won't build a dynamic route
+            if not rule_profile_id:
+                errors.append(selection.error or "no_route_candidate")
         else:
             steps = (
                 await db.execute(select(RouteStep).where(RouteStep.route_id == route.id).order_by(RouteStep.sequence))
@@ -731,6 +730,37 @@ async def _make_change_items(
             },
             "has_pack_ops": payload_has_pack_ops,
         }
+        
+        # Build dynamic route steps for preview
+        if rule_profile_id is not None:
+            try:
+                profile = await db.get(
+                    __import__("app.models.route", fromlist=["RouteRuleProfile"]).RouteRuleProfile,
+                    rule_profile_id,
+                )
+                if profile is not None:
+                    built_route = await build_route_from_profile(
+                        db, profile, row.payload, None
+                    )
+                    if not built_route.error:
+                        after_data["route_steps"] = [
+                            {
+                                "sequence": step.sequence,
+                                "section_code": step.section_code,
+                                "section_name": step.section_name,
+                                "operation_code": step.operation_code,
+                                "operation_name": step.operation_name,
+                                "is_significant": step.is_significant,
+                                "combined_op_group": step.combined_op_group,
+                            }
+                            for step in built_route.steps
+                        ]
+                        # Use built route name and assign dynamic route
+                        if built_route.name:
+                            after_data["route_name"] = built_route.name
+                            after_data["route_source"] = "dynamic_build"
+            except Exception:
+                pass  # Silently ignore route building errors for preview
         if adjusted_quantities_by_component:
             after_data["adjusted_quantities_by_component"] = adjusted_quantities_by_component
 

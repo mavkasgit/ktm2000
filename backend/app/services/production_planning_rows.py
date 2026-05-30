@@ -13,29 +13,22 @@ from app.models.section import Section
 from app.models.transfer import Transfer
 from app.models.work_task import WorkTask, WorkTaskStatus
 from app.services.route_matcher import ResolvedRouteInfo, resolve_position_route
-from app.services.route_resolution import resolve_operation
 
 MANUAL_ROUTE_PASS_PREFIX = "manual_route_pass:"
 
 
-async def _resolve_step_operation_code(
-    db: AsyncSession,
+def _resolve_step_operation_code(
     step_operation_code: str | None,
     section_code: str,
     position: PlanPosition,
     *,
     combined_op_group: str | None = None,
 ) -> str | None:
-    """Resolve operation_code for a route step.
+    """Return operation_code for a route step.
 
-    For steps with operation_code=None, resolve from position source_payload
-    using the unified resolve_operation helper (covers PRESS, ANOD placeholders).
-    For steps with explicit operation_code, return as-is.
+    All route steps now have explicit operation_code from dynamic route building.
     """
-    if step_operation_code is not None:
-        return step_operation_code
-
-    return await resolve_operation(db, section_code, position.source_payload)
+    return step_operation_code
 
 
 async def _resolve_current_stage_operation(
@@ -47,15 +40,9 @@ async def _resolve_current_stage_operation(
     position: PlanPosition,
     operation_names_by_key: dict[tuple[int, str], str],
 ) -> str:
-    """Resolve the display operation name for current-stage info.
-
-    Mirrors _resolve_step_operation_name logic so that placeholders
-    (operation_code=None) are resolved from position source_payload
-    for ANY section, not only ANOD.
-    """
-    resolved_code = await _resolve_step_operation_code(db, operation_code, section_code, position)
-    if resolved_code is not None:
-        return operation_names_by_key.get((section_id, resolved_code), operation_name)
+    """Return operation name for current-stage info."""
+    if operation_code is not None:
+        return operation_names_by_key.get((section_id, operation_code), operation_name)
     return operation_name
 
 
@@ -66,8 +53,8 @@ async def _resolve_step_operation_name(
     position: PlanPosition,
     operation_names_by_key: dict[tuple[int, str], str],
 ) -> str:
-    operation_code = await _resolve_step_operation_code(
-        db, step.operation_code, section.code, position,
+    operation_code = _resolve_step_operation_code(
+        step.operation_code, section.code, position,
         combined_op_group=step.combined_op_group,
     )
     if operation_code is not None:
@@ -671,8 +658,8 @@ async def get_production_planning_row_detail(db: AsyncSession, position_id: int)
         for group in grouped_steps:
             _step, section = group[0]
             first_step = group[0][0]
-            op_code = await _resolve_step_operation_code(
-                db, first_step.operation_code, section.code, pos,
+            op_code = _resolve_step_operation_code(
+                first_step.operation_code, section.code, pos,
                 combined_op_group=first_step.combined_op_group,
             )
             op_names = [
@@ -734,8 +721,8 @@ async def get_production_planning_row_detail(db: AsyncSession, position_id: int)
                 )
             )
 
-            op_code = await _resolve_step_operation_code(
-                db, step.operation_code, section.code, pos,
+            op_code = _resolve_step_operation_code(
+                step.operation_code, section.code, pos,
                 combined_op_group=step.combined_op_group,
             )
             op_names = [

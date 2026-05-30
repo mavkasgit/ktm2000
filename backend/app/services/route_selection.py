@@ -44,6 +44,7 @@ class RouteSelectionResult:
     normalize_applied_actions: list[dict[str, Any]] = field(default_factory=list)
     ctx_snapshot: dict[str, Any] = field(default_factory=dict)
     route_select_matched_rule_ids: list[int] = field(default_factory=list)
+    resolved_operations: dict[tuple[str, str], str] = field(default_factory=dict)  # (section_code, group_code) -> operation_code
 
 
 def build_route_rule_context(source_payload: dict[str, Any] | None, product: Product | None = None) -> dict[str, Any]:
@@ -237,6 +238,68 @@ async def select_route_for_payload(
     if isinstance(ctx_excluded, list):
         excluded.update(ctx_excluded)
 
+    # Phase 3: resolve_operations — determine specific operation codes per group
+    resolve_rules = _load_rules_by_phase(all_rules, "resolve_operations")
+    resolved_operations: dict[tuple[str, str], str] = {}
+    resolve_required_codes: set[str] = set()
+    resolve_excluded_codes: set[str] = set()
+    for rule in resolve_rules:
+        conditions = list(rule.conditions or [])
+        conditions_matched = True
+        for condition in conditions:
+            matched, _diagnostic = _evaluate_condition_with_diagnostic(context, condition)
+            if not matched:
+                conditions_matched = False
+                break
+        if not conditions_matched:
+            continue
+
+        matched_rule_ids.append(rule.id)
+        for action in rule.actions or []:
+            action_kind = str(action.get("action") or "")
+            if action_kind == "set_operation":
+                section_code = str(action.get("section_code") or "")
+                group_code = str(action.get("group_code") or "")
+                operation_code = str(action.get("operation_code") or "")
+                if section_code and group_code and operation_code:
+                    resolved_operations[(section_code, group_code)] = operation_code
+            elif action_kind == "set_operation_by_mapping":
+                section_code = str(action.get("section_code") or "")
+                group_code = str(action.get("group_code") or "")
+                lookup_field = str(action.get("lookup_field") or "color")
+                mapping = action.get("mapping") or []
+                if section_code and group_code and mapping:
+                    # Get the actual value from payload
+                    actual_value = context.get("payload", {}).get(lookup_field) or ""
+                    if isinstance(actual_value, str):
+                        actual_lower = actual_value.lower()
+                        # Find first matching keyword in mapping
+                        for entry in mapping:
+                            keyword = str(entry.get("keyword") or "").lower()
+                            if keyword and keyword in actual_lower:
+                                op_code = str(entry.get("operation_code") or "")
+                                if op_code:
+                                    resolved_operations[(section_code, group_code)] = op_code
+                                    break
+            elif action_kind == "require_section":
+                sc = str(action.get("section_code") or "")
+                if sc:
+                    resolve_required_codes.add(sc)
+            elif action_kind == "exclude_section":
+                sc = str(action.get("section_code") or "")
+                if sc:
+                    resolve_excluded_codes.add(sc)
+
+    # Resolve section codes from resolve_operations phase to IDs
+    for code in resolve_required_codes:
+        sid = await _section_id_by_code(db, code)
+        if sid is not None:
+            required.add(sid)
+    for code in resolve_excluded_codes:
+        sid = await _section_id_by_code(db, code)
+        if sid is not None:
+            excluded.add(sid)
+
     conflict = required & excluded
     sections_by_id = await _sections_by_id(db, required | excluded)
     if conflict:
@@ -254,6 +317,7 @@ async def select_route_for_payload(
             normalize_applied_actions=normalize_applied_actions,
             ctx_snapshot=dict(ctx),
             route_select_matched_rule_ids=route_select_matched_rule_ids,
+            resolved_operations=resolved_operations,
         )
 
     routes = (
@@ -299,6 +363,7 @@ async def select_route_for_payload(
             normalize_applied_actions=normalize_applied_actions,
             ctx_snapshot=dict(ctx),
             route_select_matched_rule_ids=route_select_matched_rule_ids,
+            resolved_operations=resolved_operations,
         )
 
     extra_count, _sort_order, _route_id, selected, _diagnostic = sorted(candidates, key=lambda item: (item[0], item[1], item[2]))[0]
@@ -317,6 +382,7 @@ async def select_route_for_payload(
         normalize_applied_actions=normalize_applied_actions,
         ctx_snapshot=dict(ctx),
         route_select_matched_rule_ids=route_select_matched_rule_ids,
+        resolved_operations=resolved_operations,
     )
 
 
@@ -352,6 +418,11 @@ async def _sections_by_id(db: AsyncSession, ids: set[int]) -> dict[int, Section]
         return {}
     rows = (await db.execute(select(Section).where(Section.id.in_(ids)))).scalars().all()
     return {section.id: section for section in rows}
+
+
+async def _section_id_by_code(db: AsyncSession, code: str) -> int | None:
+    section = await db.scalar(select(Section).where(Section.code == code))
+    return section.id if section else None
 
 
 async def _route_sections(db: AsyncSession, route_ids: list[int]) -> dict[int, list[tuple[int, str]]]:
