@@ -46,6 +46,45 @@ async def reseed_system_user(db: AsyncSession = Depends(get_db)) -> UserSeedResu
         raise HTTPException(status_code=500, detail=str(e))
 
 
+class SeedPreview(BaseModel):
+    """Counts that would be created from seed files (without touching DB)."""
+    import_templates: int
+    route_rule_profiles: int
+    routes: int
+    selection_rules: int
+    sections: int
+    section_operations: int
+
+
+@router.get("/preview", response_model=SeedPreview)
+async def seed_preview() -> SeedPreview:
+    """Return counts from seed files without touching the database."""
+    from app.seeds.import_templates import IMPORT_TEMPLATES
+    from app.seeds.route_rule_profiles import ROUTE_RULE_PROFILES
+    from app.seeds.routes import ROUTES
+    from app.seeds.selection_rules import SELECTION_RULES
+
+    # Sections and operations are defined in the seeder itself
+    from app.seeds.seeders.sections_seeder import SECTIONS_DATA, SECTION_OPS
+
+    # Count total operations (skip None placeholders)
+    total_ops = sum(
+        1 for ops in SECTION_OPS.values()
+        for op in ops
+        if op[3] is not None  # op_code is index 3
+    )
+
+    return SeedPreview(
+        import_templates=len(IMPORT_TEMPLATES),
+        route_rule_profiles=len(ROUTE_RULE_PROFILES),
+        # Static routes + 1 dynamic route per profile with route_sections
+        routes=len(ROUTES) + sum(1 for p in ROUTE_RULE_PROFILES if p.get("route_sections")),
+        selection_rules=len(SELECTION_RULES),
+        sections=len(SECTIONS_DATA),
+        section_operations=total_ops,
+    )
+
+
 @router.post("", response_model=SeedSummary, status_code=status.HTTP_201_CREATED)
 async def seed_all(
     force: bool = Query(False, description="Force replace routes and dependent data"),

@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import get_db
 from app.models.import_template import ImportTemplate
 from app.models.route import RouteRuleProfile, RouteSelectionRule
+from app.services.route_builder import build_route_from_profile
 
 router = APIRouter(prefix="/route-rule-profiles", tags=["route-rule-profiles"])
 
@@ -31,6 +32,7 @@ class RouteRuleProfileIn(BaseModel):
     import_template_id: int | None = None
     excel_column_passport: list[ExcelColumnPassportItem] = Field(default_factory=list)
     excel_passport_meta: dict[str, Any] = Field(default_factory=dict)
+    route_sections: list[str] = Field(default_factory=list)
 
 
 class RouteRuleProfileOut(BaseModel):
@@ -44,6 +46,7 @@ class RouteRuleProfileOut(BaseModel):
     template_name: str | None = None
     excel_column_passport: list[ExcelColumnPassportItem] = Field(default_factory=list)
     excel_passport_meta: dict[str, Any] = Field(default_factory=dict)
+    route_sections: list[str] = Field(default_factory=list)
     created_at: datetime | None = None
 
 
@@ -86,6 +89,7 @@ async def create_route_rule_profile(
         import_template_id=payload.import_template_id,
         excel_column_passport=passport,
         excel_passport_meta=meta,
+        route_sections=payload.route_sections or [],
     )
     db.add(profile)
     await db.flush()
@@ -129,6 +133,7 @@ async def update_route_rule_profile(
     profile.import_template_id = payload.import_template_id
     profile.excel_column_passport = passport
     profile.excel_passport_meta = meta
+    profile.route_sections = payload.route_sections or []
     await db.flush()
     await db.refresh(profile)
     return await _profile_out(profile, db)
@@ -150,6 +155,77 @@ async def delete_route_rule_profile(profile_id: int, db: AsyncSession = Depends(
 
     await db.delete(profile)
     await db.flush()
+
+
+class RouteStepPreview(BaseModel):
+    sequence: int
+    section_id: int
+    section_code: str
+    section_name: str
+    section_kind: str
+    group_code: str | None = None
+    group_name: str | None = None
+    operation_code: str | None = None
+    operation_name: str = ""
+    is_significant: bool = False
+    is_final: bool = False
+    combined_op_group: str | None = None
+
+
+class RoutePreviewResponse(BaseModel):
+    profile_id: int
+    profile_code: str
+    profile_name: str
+    route_sections: list[str]
+    excluded_sections: list[str] = Field(default_factory=list)
+    steps: list[RouteStepPreview]
+    error: str | None = None
+
+
+@router.get("/{profile_id}/route-preview", response_model=RoutePreviewResponse)
+async def preview_profile_route(
+    profile_id: int,
+    db: AsyncSession = Depends(get_db),
+) -> RoutePreviewResponse:
+    """Показать маршрут для выбранного профиля правил.
+
+    Строит динамический маршрут из profile.route_sections, применяет
+    exclude_section правила и возвращает итоговые шаги.
+    """
+    profile = await db.get(RouteRuleProfile, profile_id)
+    if profile is None:
+        raise HTTPException(status_code=404, detail="Profile not found")
+
+    if not profile.route_sections:
+        raise HTTPException(status_code=400, detail="Profile has no route_sections defined")
+
+    route = await build_route_from_profile(db, profile, source_payload=None, position=None)
+
+    return RoutePreviewResponse(
+        profile_id=profile.id,
+        profile_code=profile.code,
+        profile_name=profile.name,
+        route_sections=list(profile.route_sections or []),
+        excluded_sections=route.excluded_sections,
+        steps=[
+            RouteStepPreview(
+                sequence=step.sequence,
+                section_id=step.section_id,
+                section_code=step.section_code,
+                section_name=step.section_name,
+                section_kind=step.section_kind,
+                group_code=step.group_code,
+                group_name=step.group_name,
+                operation_code=step.operation_code,
+                operation_name=step.operation_name,
+                is_significant=step.is_significant,
+                is_final=step.is_final,
+                combined_op_group=step.combined_op_group,
+            )
+            for step in route.steps
+        ],
+        error=route.error,
+    )
 
 
 def _normalize_passport(
@@ -211,5 +287,6 @@ async def _profile_out(profile: RouteRuleProfile, db: AsyncSession) -> RouteRule
         template_name=template_name,
         excel_column_passport=[ExcelColumnPassportItem(**item) for item in (profile.excel_column_passport or [])],
         excel_passport_meta=dict(profile.excel_passport_meta or {}),
+        route_sections=list(profile.route_sections or []),
         created_at=profile.created_at,
     )

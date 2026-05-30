@@ -34,7 +34,6 @@ from app.models.user import User
 from app.models.work_task import WorkTask
 from app.services.plan_generation import create_release_batch, release_batch
 from app.services.plan_import_service import create_excel_import_change_set
-from app.services.import_normalization import default_import_normalization_rules
 from app.services.production_plan_service import apply_change_set, approve_plan_position
 from app.services.shopfloor_service import complete_task, issue_to_work, transfer_receive, transfer_send
 
@@ -322,7 +321,6 @@ async def run_full_route_test(
         plan_month=payload.plan_month,
         plan_version=payload.plan_version,
         column_mapping=None,
-        normalization_rules=default_import_normalization_rules(),
     )
 
     change_set_id = int(import_result["change_set_id"])

@@ -4,7 +4,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
-from app.models.route import ProductionRoute, RouteStep
+from app.models.route import ProductionRoute, RouteStep, SectionOperation
 from app.models.section import Section
 
 router = APIRouter(prefix="/sections", tags=["sections"])
@@ -100,5 +100,243 @@ async def delete_section(section_id: int, db: AsyncSession = Depends(get_db)):
         routes = (await db.execute(select(ProductionRoute).where(ProductionRoute.id.in_(route_ids)))).scalars().all()
         route_names = ", ".join(f"«{r.name}»" for r in routes)
         raise HTTPException(status_code=409, detail=f"Нельзя удалить: участок используется в маршрутах {route_names}")
+    # Cascade delete: operations first (via ORM relationship cascade)
+    ops = (await db.execute(select(SectionOperation).where(SectionOperation.section_id == section_id))).scalars().all()
+    for op in ops:
+        await db.delete(op)
     await db.delete(item)
+    await db.flush()
+
+
+# ─── Operation Groups CRUD ────────────────────────────────────────────────────
+
+
+class OperationGroupOut(BaseModel):
+    group_code: str | None
+    group_name: str | None
+    sort_order: int
+    operations: list[dict]
+
+
+class OperationGroupCreate(BaseModel):
+    group_code: str
+    group_name: str
+    sort_order: int = 0
+
+
+class OperationGroupUpdate(BaseModel):
+    group_name: str | None = None
+    sort_order: int | None = None
+
+
+class OperationMoveRequest(BaseModel):
+    operation_id: int
+    new_group_code: str
+
+
+@router.get("/{section_id}/operation-groups", response_model=list[OperationGroupOut])
+async def list_section_operation_groups(section_id: int, db: AsyncSession = Depends(get_db)) -> list[OperationGroupOut]:
+    """List all operation groups for a section, with operations in each group."""
+    section = await db.get(Section, section_id)
+    if section is None:
+        raise HTTPException(status_code=404, detail="Section not found")
+
+    ops = (await db.execute(
+        select(SectionOperation)
+        .where(SectionOperation.section_id == section_id)
+        .order_by(SectionOperation.sort_order, SectionOperation.group_code, SectionOperation.operation_code)
+    )).scalars().all()
+
+    # Group by group_code
+    groups: dict[str | None, dict] = {}
+    for op in ops:
+        gc = op.group_code
+        if gc not in groups:
+            groups[gc] = {
+                "group_code": gc,
+                "group_name": op.group_name,
+                "sort_order": op.sort_order,
+                "operations": [],
+            }
+        groups[gc]["operations"].append({
+            "id": op.id,
+            "operation_code": op.operation_code,
+            "operation_name": op.operation_name,
+            "is_significant": op.is_significant,
+            "icon": op.icon,
+            "icon_color": op.icon_color,
+            "group_code": op.group_code,
+            "group_name": op.group_name,
+            "sort_order": op.sort_order,
+            "resolver_type": op.resolver_type,
+        })
+
+    return [OperationGroupOut.model_validate(g) for g in sorted(groups.values(), key=lambda g: g["sort_order"])]
+
+
+@router.post("/{section_id}/operation-groups", response_model=OperationGroupOut, status_code=status.HTTP_201_CREATED)
+async def create_operation_group(
+    section_id: int,
+    payload: OperationGroupCreate,
+    db: AsyncSession = Depends(get_db),
+) -> OperationGroupOut:
+    """Create a new operation group by updating group_code and group_name on all section operations.
+
+    Actually, a group is just a unique group_code value. Creating a "group" means
+    we need to have at least one operation with that group_code.
+    This endpoint creates a placeholder operation for the group.
+    """
+    section = await db.get(Section, section_id)
+    if section is None:
+        raise HTTPException(status_code=404, detail="Section not found")
+
+    # Check if group_code already exists for this section
+    existing = await db.scalar(
+        select(SectionOperation).where(
+            SectionOperation.section_id == section_id,
+            SectionOperation.group_code == payload.group_code,
+        ).limit(1)
+    )
+    if existing:
+        raise HTTPException(status_code=409, detail="Group code already exists for this section")
+
+    # Create a placeholder operation for the group
+    op = SectionOperation(
+        section_id=section_id,
+        operation_code=f"__{payload.group_code}__",
+        operation_name=payload.group_name,
+        is_significant=False,
+        group_code=payload.group_code,
+        group_name=payload.group_name,
+        sort_order=payload.sort_order,
+    )
+    db.add(op)
+    await db.flush()
+    await db.refresh(op)
+
+    return OperationGroupOut(
+        group_code=op.group_code,
+        group_name=op.group_name,
+        sort_order=op.sort_order,
+        operations=[{
+            "id": op.id,
+            "operation_code": op.operation_code,
+            "operation_name": op.operation_name,
+            "is_significant": op.is_significant,
+            "icon": op.icon,
+            "icon_color": op.icon_color,
+            "group_code": op.group_code,
+            "group_name": op.group_name,
+            "sort_order": op.sort_order,
+            "resolver_type": op.resolver_type,
+        }],
+    )
+
+
+@router.put("/{section_id}/operation-groups/{group_code}", response_model=OperationGroupOut)
+async def update_operation_group(
+    section_id: int,
+    group_code: str,
+    payload: OperationGroupUpdate,
+    db: AsyncSession = Depends(get_db),
+) -> OperationGroupOut:
+    """Update group_name and/or sort_order for all operations in a group."""
+    section = await db.get(Section, section_id)
+    if section is None:
+        raise HTTPException(status_code=404, detail="Section not found")
+
+    ops = (await db.execute(
+        select(SectionOperation).where(
+            SectionOperation.section_id == section_id,
+            SectionOperation.group_code == group_code,
+        )
+    )).scalars().all()
+
+    if not ops:
+        raise HTTPException(status_code=404, detail="Operation group not found")
+
+    for op in ops:
+        if payload.group_name is not None:
+            op.group_name = payload.group_name
+        if payload.sort_order is not None:
+            op.sort_order = payload.sort_order
+
+    await db.flush()
+    await db.refresh(ops[0])
+
+    return OperationGroupOut(
+        group_code=ops[0].group_code,
+        group_name=ops[0].group_name,
+        sort_order=ops[0].sort_order,
+        operations=[{
+            "id": op.id,
+            "operation_code": op.operation_code,
+            "operation_name": op.operation_name,
+            "is_significant": op.is_significant,
+            "icon": op.icon,
+            "icon_color": op.icon_color,
+            "group_code": op.group_code,
+            "group_name": op.group_name,
+            "sort_order": op.sort_order,
+            "resolver_type": op.resolver_type,
+        } for op in ops],
+    )
+
+
+@router.delete("/{section_id}/operation-groups/{group_code}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_operation_group(
+    section_id: int,
+    group_code: str,
+    db: AsyncSession = Depends(get_db),
+):
+    """Delete all operations in a group."""
+    section = await db.get(Section, section_id)
+    if section is None:
+        raise HTTPException(status_code=404, detail="Section not found")
+
+    ops = (await db.execute(
+        select(SectionOperation).where(
+            SectionOperation.section_id == section_id,
+            SectionOperation.group_code == group_code,
+        )
+    )).scalars().all()
+
+    if not ops:
+        raise HTTPException(status_code=404, detail="Operation group not found")
+
+    for op in ops:
+        await db.delete(op)
+
+    await db.flush()
+
+
+@router.put("/{section_id}/operations/{operation_id}/move", status_code=status.HTTP_204_NO_CONTENT)
+async def move_operation_to_group(
+    section_id: int,
+    operation_id: int,
+    payload: OperationMoveRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """Move an operation to a different group."""
+    section = await db.get(Section, section_id)
+    if section is None:
+        raise HTTPException(status_code=404, detail="Section not found")
+
+    op = await db.get(SectionOperation, operation_id)
+    if op is None or op.section_id != section_id:
+        raise HTTPException(status_code=404, detail="Operation not found in this section")
+
+    # Check if target group exists (has at least one operation)
+    target_group = await db.scalar(
+        select(SectionOperation).where(
+            SectionOperation.section_id == section_id,
+            SectionOperation.group_code == payload.new_group_code,
+        ).limit(1)
+    )
+    if not target_group:
+        raise HTTPException(status_code=400, detail="Target group does not exist")
+
+    op.group_code = payload.new_group_code
+    op.group_name = target_group.group_name
+
     await db.flush()
