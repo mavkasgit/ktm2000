@@ -6,6 +6,7 @@ import { cn } from "@/shared/utils/cn"
 import { PlanPositionOut } from "@/shared/api/productionPlans"
 import { ProductionRoute } from "@/shared/api/routes"
 import { routeCheck } from "@/shared/api/productionPlans"
+import { PLAN_POSITIONS_GRID } from "../lib/gridTemplates"
 import {
   translateLabel,
   routeMetaLabel,
@@ -168,9 +169,10 @@ export function PositionRow({ pos, onApprove, onDelete, selected, routes, onAssi
 
   return (
     <>
-    <tr
+    <div
       id={`plan-position-${pos.id}`}
-      className={`border-b ${hasErrors || hasDuplicateConflict ? "bg-red-50" : hasWarnings ? "bg-amber-50" : ""} ${selected ? "bg-blue-100 ring-1 ring-blue-300" : ""} cursor-pointer hover:bg-accent hover:ring-1 hover:ring-ring/20 transition-colors`}
+      className={`grid items-start border-b ${hasErrors || hasDuplicateConflict ? "bg-red-50" : hasWarnings ? "bg-amber-50" : ""} ${selected ? "bg-blue-100 ring-1 ring-blue-300" : ""} cursor-pointer hover:bg-accent hover:ring-1 hover:ring-ring/20 transition-colors`}
+      style={{ gridTemplateColumns: PLAN_POSITIONS_GRID }}
       onClick={(e) => {
         if (onSelect) {
           e.stopPropagation()
@@ -180,12 +182,12 @@ export function PositionRow({ pos, onApprove, onDelete, selected, routes, onAssi
         }
       }}
     >
-      <td className="p-2 text-sm w-[80px]">
+      <div className="p-2 text-sm">
         <span className="text-muted-foreground">#{pos.id}</span>
-      </td>
-      <td className="p-2 text-sm font-medium w-[80px]">{rowNum}</td>
-      <td className="p-2 text-sm w-[120px]">{pos.source_sku}</td>
-      <td className="p-2 text-sm whitespace-nowrap w-[100px]">
+      </div>
+      <div className="p-2 text-sm font-medium">{rowNum}</div>
+      <div className="p-2 text-sm">{pos.source_sku}</div>
+      <div className="p-2 text-sm whitespace-nowrap">
         {qtyAdjusted ? (
           <span>
             <span className="text-muted-foreground">{originalQtyDisplay}</span>
@@ -199,11 +201,11 @@ export function PositionRow({ pos, onApprove, onDelete, selected, routes, onAssi
             {qtyStr}{hangerDisplay ? ` (${hangerDisplay}П)` : ''}
           </span>
         )}
-      </td>
-      <td className="p-2 text-sm truncate whitespace-nowrap" title={pos.source_name ?? undefined}>{pos.source_name ?? "—"}</td>
-      <td className="p-2 text-sm truncate overflow-hidden" colSpan={routeColSpan}>
+      </div>
+      <div className="p-2 text-sm truncate whitespace-nowrap" title={pos.source_name ?? undefined}>{pos.source_name ?? "—"}</div>
+      <div className="p-2 text-sm truncate overflow-hidden">
         {routes && onAssignRoute ? (
-          <div onClick={(e) => e.stopPropagation()}>
+          <div onClick={(e) => e.stopPropagation()} className="truncate">
           <Combobox
             options={[{ label: "— Снять маршрут —", value: "__clear__" }, ...routes.map(r => ({ label: r.name, value: String(r.id) }))]}
             value={pos.route_id ? String(pos.route_id) : undefined}
@@ -211,7 +213,7 @@ export function PositionRow({ pos, onApprove, onDelete, selected, routes, onAssi
             placeholder={routeError || "Не назначен"}
             emptyText="Маршрут не найден"
             className={cn(
-              "rounded-md border border-dashed border-input px-2 py-1.5 hover:bg-accent/50 hover:border-primary/50 transition-colors cursor-pointer group",
+              "rounded-md border border-dashed border-input px-2 py-1.5 hover:bg-accent/50 hover:border-primary/50 transition-colors cursor-pointer group w-full",
               pos.route_id ? "border-solid border-blue-200 bg-blue-50/50" : "bg-muted/20",
             )}
             triggerContent={
@@ -242,8 +244,8 @@ export function PositionRow({ pos, onApprove, onDelete, selected, routes, onAssi
             {routeError || "Не назначен"}
           </span>
         )}
-      </td>
-      <td className="p-2 text-xs w-[150px]">
+      </div>
+      <div className="p-2 text-xs">
         {noErrors ? null : (
         <div className="space-y-1 text-red-600">
           {hasDuplicateConflict && (
@@ -273,15 +275,15 @@ export function PositionRow({ pos, onApprove, onDelete, selected, routes, onAssi
           )}
         </div>
         )}
-      </td>
-      <td className="p-2 text-xs w-[120px]">
+      </div>
+      <div className="p-2 text-xs">
         {noWarnings ? null : (
         <span className="truncate block text-amber-600" title={translatedWarnings.join("\n")}>
           {translatedWarnings.join(", ")}
         </span>
         )}
-      </td>
-      <td className="p-2 w-[120px]">
+      </div>
+      <div className="p-2">
         <div className="flex gap-1">
           {canApprove && (
             <>
@@ -299,8 +301,8 @@ export function PositionRow({ pos, onApprove, onDelete, selected, routes, onAssi
             </Button>
           )}
         </div>
-      </td>
-    </tr>
+      </div>
+    </div>
 
     <AlertDialog open={approveDialogOpen} onOpenChange={setApproveDialogOpen}>
       <AlertDialogContent>

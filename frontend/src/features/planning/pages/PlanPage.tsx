@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from "react"
 import { FileSpreadsheet, Plus, Upload, ListChecks } from "lucide-react"
 import { ImportWizard } from "../ImportWizard"
-import { Button, Select, SelectContent, SelectItem, SelectTrigger, SelectValue, AlertDialog, AlertDialogContent, AlertDialogHeader, AlertDialogTitle, AlertDialogDescription, AlertDialogFooter, AlertDialogAction, AlertDialogCancel, SortableFilterHeader, VirtualizedTableBody, FiltersPanel, type FiltersPanelField, Badge } from "@/shared/ui"
+import { Button, Select, SelectContent, SelectItem, SelectTrigger, SelectValue, AlertDialog, AlertDialogContent, AlertDialogHeader, AlertDialogTitle, AlertDialogDescription, AlertDialogFooter, AlertDialogAction, AlertDialogCancel, SortableFilterHeader, FiltersPanel, type FiltersPanelField, Badge } from "@/shared/ui"
 import { buildActiveFilterSummary } from "@/shared/ui/buildActiveFilterSummary"
 import { useTableQueryEngine, SortConfig, ColumnSortDef } from "@/shared/hooks/useTableQueryEngine"
 import { nextMultiSortConfigs } from "@/shared/lib/multiSort"
+import { PLAN_POSITIONS_GRID } from "../lib/gridTemplates"
 import { toast } from "@/shared/ui"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { allPlanFiles, allPlanPositions, PlanPositionOut, listPlans, batchAssignRouteGlobal, deleteImportBatch, approveProductionPlanPosition, getPlanDuplicates } from "@/shared/api/productionPlans"
@@ -722,112 +723,106 @@ export function PlanPage() {
             {posLoading && <p className="text-sm text-muted-foreground">Загрузка...</p>}
             {positions && positions.length > 0 && (
               <>
-              <div
-                ref={tableScrollRef}
-                className="rounded-lg border overflow-auto"
-                style={{ maxHeight: bulkMode ? undefined : '70vh' }}
-              >
-                <table className="w-full border-separate border-spacing-0">
-                  <thead className="[&_th]:sticky [&_th]:top-0 [&_th]:z-20 [&_th]:bg-background [&_th]:border-b">
-                    <tr>
-                      <th className="text-left p-2 w-[80px]">
-                        <SortableFilterHeader
-                          field="id"
-                          label="Id"
-                          currentSorts={sortConfigs}
-                          onSortChange={handleSortChange}
-                          values={uniqueValuesByField.id}
-                          selectedValues={columnFilters.id ?? new Set()}
-                          onFilterChange={handleColumnFilterChange}
-                        />
-                      </th>
-                      <th className="text-left p-2 w-[80px]">
-                        <SortableFilterHeader
-                          field="rowNum"
-                          label="Строка"
-                          currentSorts={sortConfigs}
-                          onSortChange={handleSortChange}
-                          values={uniqueValuesByField.rowNum}
-                          selectedValues={columnFilters.rowNum ?? new Set()}
-                          onFilterChange={handleColumnFilterChange}
-                        />
-                      </th>
-                      <th className="text-left p-2 w-[120px]">
-                        <SortableFilterHeader
-                          field="sku"
-                          label="Артикул"
-                          currentSorts={sortConfigs}
-                          onSortChange={handleSortChange}
-                          values={uniqueValuesByField.sku}
-                          selectedValues={columnFilters.sku ?? new Set()}
-                          onFilterChange={handleColumnFilterChange}
-                        />
-                      </th>
-                      <th className="text-left p-2 w-[100px]">
-                        <SortableFilterHeader
-                          field="qty"
-                          label="Кол-во"
-                          currentSorts={sortConfigs}
-                          onSortChange={handleSortChange}
-                          values={uniqueValuesByField.qty}
-                          selectedValues={columnFilters.qty ?? new Set()}
-                          onFilterChange={handleColumnFilterChange}
-                          valueLabel={(v) => v}
-                        />
-                      </th>
-                      <th className="text-left p-2">
-                        <SortableFilterHeader
-                          field="name"
-                          label="Наименование"
-                          currentSorts={sortConfigs}
-                          onSortChange={handleSortChange}
-                          values={uniqueValuesByField.name}
-                          selectedValues={columnFilters.name ?? new Set()}
-                          onFilterChange={handleColumnFilterChange}
-                        />
-                      </th>
-                      <th className="text-left p-2">
-                        <SortableFilterHeader
-                          field="route"
-                          label="Маршрут"
-                          currentSorts={sortConfigs}
-                          onSortChange={handleSortChange}
-                          values={uniqueValuesByField.route}
-                          selectedValues={columnFilters.route ?? new Set()}
-                          onFilterChange={handleColumnFilterChange}
-                        />
-                      </th>
-                      <th className="text-left p-2 w-[150px]">
-                        <SortableFilterHeader
-                          field="errors"
-                          label="Ошибки"
-                          currentSorts={sortConfigs}
-                          onSortChange={handleSortChange}
-                          values={uniqueValuesByField.errors}
-                          selectedValues={columnFilters.errors ?? new Set()}
-                          onFilterChange={handleColumnFilterChange}
-                        />
-                      </th>
-                      <th className="text-left p-2 w-[120px]">
-                        <SortableFilterHeader
-                          field="warnings"
-                          label="Предупр."
-                          currentSorts={sortConfigs}
-                          onSortChange={handleSortChange}
-                          values={uniqueValuesByField.warnings}
-                          selectedValues={columnFilters.warnings ?? new Set()}
-                          onFilterChange={handleColumnFilterChange}
-                        />
-                      </th>
-                      <th className="text-left p-2 w-[120px] text-xs font-medium text-muted-foreground">Действия</th>
-                    </tr>
-                  </thead>
-                  <VirtualizedTableBody
-                    rows={processedRows}
-                    rowHeight={48}
-                    colSpan={9}
-                    scrollContainerRef={tableScrollRef}
-                    renderRow={(p) => (
+              <div style={{ maxWidth: detailOpen ? 1600 : 1850, width: '100%' }}>
+                  {/* Header row */}
+                  <div className="grid items-start border-b bg-muted/50 text-xs font-medium text-muted-foreground sticky top-0 z-20 bg-background"
+                    style={{ gridTemplateColumns: PLAN_POSITIONS_GRID }}
+                  >
+                    <div className="p-2">
+                      <SortableFilterHeader
+                        field="id"
+                        label="Id"
+                        currentSorts={sortConfigs}
+                        onSortChange={handleSortChange}
+                        values={uniqueValuesByField.id}
+                        selectedValues={columnFilters.id ?? new Set()}
+                        onFilterChange={handleColumnFilterChange}
+                      />
+                    </div>
+                    <div className="p-2">
+                      <SortableFilterHeader
+                        field="rowNum"
+                        label="Строка"
+                        currentSorts={sortConfigs}
+                        onSortChange={handleSortChange}
+                        values={uniqueValuesByField.rowNum}
+                        selectedValues={columnFilters.rowNum ?? new Set()}
+                        onFilterChange={handleColumnFilterChange}
+                      />
+                    </div>
+                    <div className="p-2">
+                      <SortableFilterHeader
+                        field="sku"
+                        label="Артикул"
+                        currentSorts={sortConfigs}
+                        onSortChange={handleSortChange}
+                        values={uniqueValuesByField.sku}
+                        selectedValues={columnFilters.sku ?? new Set()}
+                        onFilterChange={handleColumnFilterChange}
+                      />
+                    </div>
+                    <div className="p-2">
+                      <SortableFilterHeader
+                        field="qty"
+                        label="Кол-во"
+                        currentSorts={sortConfigs}
+                        onSortChange={handleSortChange}
+                        values={uniqueValuesByField.qty}
+                        selectedValues={columnFilters.qty ?? new Set()}
+                        onFilterChange={handleColumnFilterChange}
+                        valueLabel={(v) => v}
+                      />
+                    </div>
+                    <div className="p-2">
+                      <SortableFilterHeader
+                        field="name"
+                        label="Наименование"
+                        currentSorts={sortConfigs}
+                        onSortChange={handleSortChange}
+                        values={uniqueValuesByField.name}
+                        selectedValues={columnFilters.name ?? new Set()}
+                        onFilterChange={handleColumnFilterChange}
+                      />
+                    </div>
+                    <div className="p-2">
+                      <SortableFilterHeader
+                        field="route"
+                        label="Маршрут"
+                        currentSorts={sortConfigs}
+                        onSortChange={handleSortChange}
+                        values={uniqueValuesByField.route}
+                        selectedValues={columnFilters.route ?? new Set()}
+                        onFilterChange={handleColumnFilterChange}
+                      />
+                    </div>
+                    <div className="p-2">
+                      <SortableFilterHeader
+                        field="errors"
+                        label="Ошибки"
+                        currentSorts={sortConfigs}
+                        onSortChange={handleSortChange}
+                        values={uniqueValuesByField.errors}
+                        selectedValues={columnFilters.errors ?? new Set()}
+                        onFilterChange={handleColumnFilterChange}
+                      />
+                    </div>
+                    <div className="p-2">
+                      <SortableFilterHeader
+                        field="warnings"
+                        label="Предупр."
+                        currentSorts={sortConfigs}
+                        onSortChange={handleSortChange}
+                        values={uniqueValuesByField.warnings}
+                        selectedValues={columnFilters.warnings ?? new Set()}
+                        onFilterChange={handleColumnFilterChange}
+                      />
+                    </div>
+                    <div className="p-2 text-xs font-medium text-muted-foreground">Действия</div>
+                  </div>
+
+                  {/* Data rows */}
+                  <div className="overflow-auto" style={{ maxHeight: bulkMode ? undefined : '70vh' }}>
+                    {processedRows.map((p) => (
                       <PositionRow
                         key={p.id}
                         pos={p}
@@ -841,13 +836,12 @@ export function PlanPage() {
                         onJumpToPosition={jumpToPosition}
                         onSelect={bulkMode ? toggleSelect : undefined}
                       />
+                    ))}
+                    {processedRows.length === 0 && !posLoading && (
+                      <p className="text-sm text-muted-foreground p-4 text-center">Нет позиций, соответствующих фильтру</p>
                     )}
-                  />
-                </table>
-              </div>
-              {processedRows.length === 0 && (
-                <p className="text-sm text-muted-foreground p-4 text-center">Нет позиций, соответствующих фильтру</p>
-              )}
+                  </div>
+                </div>
               </>
             )}
             </div>

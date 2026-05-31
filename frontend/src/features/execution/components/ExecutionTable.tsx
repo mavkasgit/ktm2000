@@ -267,6 +267,7 @@ export function ExecutionTable({
             }
             style={bulkMode ? undefined : { maxHeight: '70vh' }}
           >
+            <div style={{ maxWidth: 1850 }}>
             <table className="execution-table w-full table-fixed border-separate border-spacing-0">
               <colgroup>
                 {visibleColumns.map((column) => (
@@ -328,6 +329,7 @@ export function ExecutionTable({
                 )}
               />
             </table>
+            </div>
             {filteredRows.length === 0 && (
               <p className="p-4 text-sm text-muted-foreground text-center">Нет строк по выбранному фильтру</p>
             )}

@@ -15,6 +15,7 @@ import type { SectionBoardTask, RouteHistoryOp, SectionOperation } from "@/share
 import { groupTasksByProfile } from "../lib/groupTasksByProfile";
 import { GroupingSettingsModal } from "./GroupingSettingsModal";
 import { PRESET_PROFILES, type GroupingProfile } from "../lib/groupingProfiles";
+import { PlanPrintPreviewModal } from "./PlanPrintPreviewModal";
 import { renderIcon } from "@/shared/ui";
 
 
@@ -298,6 +299,8 @@ export function PlanModal({
 }: PlanModalProps) {
   const [beforeSettingsOpen, setBeforeSettingsOpen] = useState(false);
   const [afterSettingsOpen, setAfterSettingsOpen] = useState(false);
+  const [printSettingsOpen, setPrintSettingsOpen] = useState(false);
+  const [tableMode, setTableMode] = useState<"before" | "after" | "both">("both");
 
   const [beforeProfile, setBeforeProfile] = useState<GroupingProfile>(() =>
     loadProfile(`plan-before-group-profile-${sectionId}`, "sku+routeHistory"),
@@ -350,7 +353,43 @@ export function PlanModal({
 
         {/* Заголовок */}
         <div className="flex items-center justify-between p-4 border-b">
-          <h2 className="text-lg font-semibold">План: {sectionName}</h2>
+          <div className="flex items-center gap-3">
+            <h2 className="text-lg font-semibold">План: {sectionName}</h2>
+            {!showSingleTable && (
+              <div className="flex gap-1">
+                {[
+                  { key: "before" as const, label: "План выдачи" },
+                  { key: "after" as const, label: "План сдачи" },
+                  { key: "both" as const, label: "Оба" },
+                ].map((mode) => (
+                  <button
+                    key={mode.key}
+                    type="button"
+                    onClick={() => setTableMode(mode.key)}
+                    className={`px-2 py-1 text-[11px] font-medium rounded-md border transition-colors ${
+                      tableMode === mode.key
+                        ? "bg-blue-600 text-white border-blue-600"
+                        : "bg-white text-gray-700 border-gray-300 hover:bg-gray-50"
+                    }`}
+                  >
+                    {mode.label}
+                  </button>
+                ))}
+              </div>
+            )}
+            <button
+              className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-md border text-xs font-medium hover:bg-gray-50"
+              onClick={() => setPrintSettingsOpen(true)}
+              title="Печать плана"
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" className="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <polyline points="6 9 6 2 18 2 18 9"></polyline>
+                <path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"></path>
+                <rect x="6" y="14" width="12" height="8"></rect>
+              </svg>
+              Печать
+            </button>
+          </div>
           <button
             className="text-muted-foreground hover:text-foreground text-2xl leading-none"
             onClick={() => onOpenChange(false)}
@@ -360,7 +399,7 @@ export function PlanModal({
           </button>
         </div>
 
-        {/* Таблицы — две колонки: До / После (или одна, если идентичны) */}
+        {/* Таблицы — переключение по tableMode */}
         <div className="flex-1 overflow-y-auto overflow-x-hidden p-4">
           {showSingleTable ? (
             <div className="min-w-0">
@@ -372,11 +411,11 @@ export function PlanModal({
                 emptyMessage="Нет данных"
               />
             </div>
-          ) : (
+          ) : tableMode === "both" ? (
             <div className="grid grid-cols-2 gap-4 min-w-0">
               <div className="min-w-0">
                 <PlanTable
-                  title="До"
+                  title="План выдачи на участок"
                   tasks={filteredTasks}
                   profile={beforeProfile}
                   onSettingsClick={() => setBeforeSettingsOpen(true)}
@@ -385,13 +424,33 @@ export function PlanModal({
               </div>
               <div className="min-w-0">
                 <PlanTable
-                  title="После"
+                  title="План сдачи с участка"
                   tasks={filteredTasks}
                   profile={afterProfile}
                   onSettingsClick={() => setAfterSettingsOpen(true)}
                   emptyMessage="Нет данных"
                 />
               </div>
+            </div>
+          ) : tableMode === "before" ? (
+            <div className="min-w-0">
+              <PlanTable
+                title="План выдачи на участок"
+                tasks={filteredTasks}
+                profile={beforeProfile}
+                onSettingsClick={() => setBeforeSettingsOpen(true)}
+                emptyMessage="Нет данных"
+              />
+            </div>
+          ) : (
+            <div className="min-w-0">
+              <PlanTable
+                title="План сдачи с участка"
+                tasks={filteredTasks}
+                profile={afterProfile}
+                onSettingsClick={() => setAfterSettingsOpen(true)}
+                emptyMessage="Нет данных"
+              />
             </div>
           )}
         </div>
@@ -438,6 +497,22 @@ export function PlanModal({
             setAfterProfile(newProfile);
             saveProfile(`plan-after-group-profile-${sectionId}`, newProfile);
           }}
+        />
+      )}
+
+      {/* Print settings */}
+      {printSettingsOpen && (
+        <PlanPrintPreviewModal
+          sectionId={sectionId}
+          sectionName={sectionName}
+          onClose={() => setPrintSettingsOpen(false)}
+          hasBefore={!showSingleTable}
+          hasAfter={!showSingleTable}
+          tasks={filteredTasks}
+          beforeProfile={beforeProfile}
+          afterProfile={afterProfile}
+          singleProfile={singleProfile}
+          showSingleTable={showSingleTable}
         />
       )}
     </div>
