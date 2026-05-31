@@ -153,3 +153,40 @@ npm run prod:tunnel:up
 | `npm run test:pytest` | Запустить тесты |
 | `npm run prod:up/down` | Production up/down |
 | `npm run prod:logs` | Production логи |
+
+
+TEST
+▪ Как запускать тесты в ktm2000
+
+  Правильная команда:
+   1 cd C:\Users\user\VibeCoding\ktm2000\backend
+   2 python -m pytest tests/ -v
+  Один тест:
+   1 python -m pytest
+     tests/test_shopfloor_api.py::test_shopfloor_over_issue_rejected -v
+  Несколько тестов из файла:
+   1 python -m pytest tests/test_routes_seed.py -v
+  Вывод в файл (без ошибок с 2>&1):
+   1 python -m pytest tests/ -v > /tmp/test_out.txt 2>&1
+   2 cat /tmp/test_out.txt
+  ---
+
+  Почему была ошибка file or directory not found: 2
+
+  2>&1 | head -80 на Windows Git Bash ломает pytest — символ 2 становится
+  аргументом.
+
+  Не делай так:
+   1 pytest tests/ -v 2>&1 | head -80  # ❌ ломается
+  Делай так:
+   1 pytest tests/ -v > /tmp/out.txt 2>&1  # ✅ в файл
+   2 cat /tmp/out.txt
+  Или просто без перенаправления:
+   1 pytest tests/ -v  # ✅ напрямую
+  ---
+
+  Рабочая директория
+
+  Всегда запускай из backend/:
+   1 cd C:\Users\user\VibeCoding\ktm2000\backend
+  Там лежит pytest.ini и conftest.py.
