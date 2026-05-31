@@ -19,7 +19,7 @@ from app.models.route import ProductionRoute, RouteStep
 from app.models.section import Section
 from app.models.user import User
 from app.services.production_planning_rows import get_production_planning_row_detail, list_production_planning_rows
-from app.services.production_plan_service import record_status_change, restore_plan_position
+from app.services.production_plan_service import _refresh_plan_status, record_status_change, restore_plan_position
 from app.services.plan_generation import create_release_batch, release_batch
 from app.services.route_matcher import resolve_position_route
 from app.services.shopfloor_service import complete_task, final_release, issue_to_work, transfer_receive, transfer_send
@@ -785,6 +785,7 @@ async def cancel_position(
     from_status = pos.status.value
     pos.status = PlanPositionStatus.cancelled
     record_status_change(db, position_id, from_status, PlanPositionStatus.cancelled.value, current_user.id, payload.reason if payload else None)
+    await _refresh_plan_status(db, pos.production_plan_id)
     await db.commit()
 
     return {
@@ -804,11 +805,18 @@ async def cancel_positions_batch(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> BatchActionResponse:
-    results = [
-        await _process_position_cancel(db, position_id, current_user.id, payload.reason)
-        for position_id in payload.position_ids
-    ]
+    plan_ids: set[int] = set()
+    results = []
+    for position_id in payload.position_ids:
+        result = await _process_position_cancel(db, position_id, current_user.id, payload.reason)
+        results.append(result)
+        if result.status == "success":
+            pos = await db.get(PlanPosition, position_id)
+            if pos:
+                plan_ids.add(pos.production_plan_id)
     await db.commit()
+    for plan_id in plan_ids:
+        await _refresh_plan_status(db, plan_id)
     return BatchActionResponse(results=results)
 
 
@@ -839,7 +847,7 @@ async def restore_position(
             )
             .order_by(PositionStatusHistory.changed_at.desc())
         )
-    ).scalar_one_or_none()
+    ).scalars().first()
 
     if last_cancel is None:
         raise HTTPException(status_code=400, detail="Нет истории отмены — восстановление невозможно")
@@ -850,6 +858,7 @@ async def restore_position(
 
     pos.status = PlanPositionStatus(target_status_value)
     record_status_change(db, position_id, PlanPositionStatus.cancelled.value, target_status_value, current_user.id, payload.reason if payload else None)
+    await _refresh_plan_status(db, pos.production_plan_id)
     await db.commit()
 
     return {
@@ -869,11 +878,18 @@ async def restore_positions_batch(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> BatchActionResponse:
-    results = [
-        await _process_position_restore(db, position_id, current_user.id, payload.reason)
-        for position_id in payload.position_ids
-    ]
+    plan_ids: set[int] = set()
+    results = []
+    for position_id in payload.position_ids:
+        result = await _process_position_restore(db, position_id, current_user.id, payload.reason)
+        results.append(result)
+        if result.status == "success":
+            pos = await db.get(PlanPosition, position_id)
+            if pos:
+                plan_ids.add(pos.production_plan_id)
     await db.commit()
+    for plan_id in plan_ids:
+        await _refresh_plan_status(db, plan_id)
     return BatchActionResponse(results=results)
 
 
@@ -930,7 +946,7 @@ async def _process_position_restore(
             )
             .order_by(PositionStatusHistory.changed_at.desc())
         )
-    ).scalar_one_or_none()
+    ).scalars().first()
 
     if last_cancel is None:
         return BatchActionResult(position_id=position_id, status="failed", reason="Нет истории отмены — восстановление невозможно")

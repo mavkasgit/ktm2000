@@ -304,8 +304,52 @@ async def cancel_plan_position(
     from_status = position.status.value
     position.status = PlanPositionStatus.cancelled
     record_status_change(db, position_id, from_status, PlanPositionStatus.cancelled.value, changed_by, reason)
+    await _refresh_plan_status(db, production_plan_id)
     await db.flush()
     return position
+
+
+async def _refresh_plan_status(db: AsyncSession, production_plan_id: int) -> None:
+    """Update production plan status based on current positions' statuses."""
+    plan = await db.get(ProductionPlan, production_plan_id)
+    if plan is None:
+        return
+
+    positions = (
+        await db.execute(
+            select(PlanPosition).where(
+                PlanPosition.production_plan_id == production_plan_id,
+                PlanPosition.deleted_at.is_(None),
+            )
+        )
+    ).scalars().all()
+
+    if not positions:
+        plan.status = ProductionPlanStatus.draft
+        return
+
+    status_counts = Counter(pos.status for pos in positions)
+    released_count = status_counts.get(PlanPositionStatus.released, 0)
+    approved_count = status_counts.get(PlanPositionStatus.approved, 0)
+    
+    # Count active positions (approved or released)
+    active_count = approved_count + released_count
+    
+    if active_count == 0:
+        # No active positions - go back to draft or validated
+        if status_counts.get(PlanPositionStatus.draft, 0) > 0:
+            plan.status = ProductionPlanStatus.draft
+        else:
+            plan.status = ProductionPlanStatus.validated
+    elif released_count == 0:
+        # No released positions, only approved - plan should be approved
+        plan.status = ProductionPlanStatus.approved
+    elif released_count == active_count:
+        # All active positions are released
+        plan.status = ProductionPlanStatus.released
+    else:
+        # Some released, some approved
+        plan.status = ProductionPlanStatus.partially_released
 
 
 async def restore_plan_position(
@@ -332,7 +376,7 @@ async def restore_plan_position(
             )
             .order_by(PositionStatusHistory.changed_at.desc())
         )
-    ).scalar_one_or_none()
+    ).scalars().first()
 
     if last_cancel is None:
         raise ValueError("Нет истории отмены — восстановление невозможно")
@@ -344,6 +388,7 @@ async def restore_plan_position(
     target_status = PlanPositionStatus(target_status_value)
     position.status = target_status
     record_status_change(db, position_id, PlanPositionStatus.cancelled.value, target_status_value, changed_by, reason)
+    await _refresh_plan_status(db, production_plan_id)
     await db.flush()
     return position
 
