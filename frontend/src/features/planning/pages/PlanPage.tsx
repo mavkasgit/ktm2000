@@ -730,7 +730,7 @@ export function PlanPage() {
                 <table className="w-full border-separate border-spacing-0">
                   <thead className="[&_th]:sticky [&_th]:top-0 [&_th]:z-20 [&_th]:bg-background [&_th]:border-b">
                     <tr>
-                      <th className="text-left p-2">
+                      <th className="text-left p-2 w-[80px]">
                         <SortableFilterHeader
                           field="id"
                           label="Id"
@@ -741,7 +741,7 @@ export function PlanPage() {
                           onFilterChange={handleColumnFilterChange}
                         />
                       </th>
-                      <th className="text-left p-2">
+                      <th className="text-left p-2 w-[80px]">
                         <SortableFilterHeader
                           field="rowNum"
                           label="Строка"
@@ -752,7 +752,7 @@ export function PlanPage() {
                           onFilterChange={handleColumnFilterChange}
                         />
                       </th>
-                      <th className="text-left p-2">
+                      <th className="text-left p-2 w-[120px]">
                         <SortableFilterHeader
                           field="sku"
                           label="Артикул"
@@ -763,7 +763,7 @@ export function PlanPage() {
                           onFilterChange={handleColumnFilterChange}
                         />
                       </th>
-                      <th className="text-left p-2">
+                      <th className="text-left p-2 w-[100px]">
                         <SortableFilterHeader
                           field="qty"
                           label="Кол-во"
@@ -786,7 +786,7 @@ export function PlanPage() {
                           onFilterChange={handleColumnFilterChange}
                         />
                       </th>
-                      <th className="text-left p-2 min-w-[200px]">
+                      <th className="text-left p-2">
                         <SortableFilterHeader
                           field="route"
                           label="Маршрут"
@@ -797,7 +797,7 @@ export function PlanPage() {
                           onFilterChange={handleColumnFilterChange}
                         />
                       </th>
-                      <th className="text-left p-2">
+                      <th className="text-left p-2 w-[150px]">
                         <SortableFilterHeader
                           field="errors"
                           label="Ошибки"
@@ -808,7 +808,7 @@ export function PlanPage() {
                           onFilterChange={handleColumnFilterChange}
                         />
                       </th>
-                      <th className="text-left p-2">
+                      <th className="text-left p-2 w-[120px]">
                         <SortableFilterHeader
                           field="warnings"
                           label="Предупр."
@@ -819,7 +819,7 @@ export function PlanPage() {
                           onFilterChange={handleColumnFilterChange}
                         />
                       </th>
-                      <th className="text-left p-2 text-xs font-medium text-muted-foreground">Действия</th>
+                      <th className="text-left p-2 w-[120px] text-xs font-medium text-muted-foreground">Действия</th>
                     </tr>
                   </thead>
                   <VirtualizedTableBody

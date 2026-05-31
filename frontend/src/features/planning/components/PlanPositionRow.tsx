@@ -30,6 +30,9 @@ export function PositionRow({ pos, onApprove, onDelete, selected, routes, onAssi
 }) {
   const hasErrors = pos.errors && pos.errors.length > 0
   const hasWarnings = pos.warnings && pos.warnings.length > 0
+  const noErrors = !hasErrors && !duplicateConflict
+  const noWarnings = !hasWarnings
+  const routeColSpan = noErrors && noWarnings ? 3 : noWarnings ? 2 : 1
   const qty = Number(pos.quantity || 0)
   const qtyStr = Number.isInteger(qty) ? String(qty) : qty.toFixed(3).replace(/\.?0+$/, '')
   const originalQtyRaw = (pos.payload?.original_quantity as string | number | null | undefined) ?? null
@@ -177,12 +180,12 @@ export function PositionRow({ pos, onApprove, onDelete, selected, routes, onAssi
         }
       }}
     >
-      <td className="p-2 text-sm">
+      <td className="p-2 text-sm w-[80px]">
         <span className="text-muted-foreground">#{pos.id}</span>
       </td>
-      <td className="p-2 text-sm font-medium">{rowNum}</td>
-      <td className="p-2 text-sm">{pos.source_sku}</td>
-      <td className="p-2 text-sm whitespace-nowrap">
+      <td className="p-2 text-sm font-medium w-[80px]">{rowNum}</td>
+      <td className="p-2 text-sm w-[120px]">{pos.source_sku}</td>
+      <td className="p-2 text-sm whitespace-nowrap w-[100px]">
         {qtyAdjusted ? (
           <span>
             <span className="text-muted-foreground">{originalQtyDisplay}</span>
@@ -197,8 +200,8 @@ export function PositionRow({ pos, onApprove, onDelete, selected, routes, onAssi
           </span>
         )}
       </td>
-      <td className="p-2 text-sm">{pos.source_name ?? "—"}</td>
-      <td className="p-2 text-sm min-w-[200px]">
+      <td className="p-2 text-sm truncate whitespace-nowrap" title={pos.source_name ?? undefined}>{pos.source_name ?? "—"}</td>
+      <td className="p-2 text-sm truncate overflow-hidden" colSpan={routeColSpan}>
         {routes && onAssignRoute ? (
           <div onClick={(e) => e.stopPropagation()}>
           <Combobox
@@ -212,15 +215,15 @@ export function PositionRow({ pos, onApprove, onDelete, selected, routes, onAssi
               pos.route_id ? "border-solid border-blue-200 bg-blue-50/50" : "bg-muted/20",
             )}
             triggerContent={
-              <span className="inline-flex items-center gap-1.5 w-full">
+              <span className="inline-flex items-center gap-1.5 w-full min-w-0">
                 <Route className={cn("h-3.5 w-3.5 shrink-0", pos.route_id ? "text-blue-600" : "text-muted-foreground group-hover:text-primary")} />
                 {pos.route_name ? (
-                  <span className="text-blue-700">
+                  <span className="text-blue-700 truncate" title={`${pos.route_name}${routeSourceLabel ? ` (${routeSourceLabel})` : ''}`}>
                     {pos.route_name}
                     {routeSourceLabel && <span className="text-xs text-muted-foreground ml-1">({routeSourceLabel})</span>}
                   </span>
                 ) : (
-                  <span className={cn("text-xs", routeError ? "text-red-600" : "text-muted-foreground group-hover:text-foreground")}>
+                  <span className={cn("text-xs truncate", routeError ? "text-red-600" : "text-muted-foreground group-hover:text-foreground")} title={routeError || undefined}>
                     {routeError || "Нажмите для выбора"}
                   </span>
                 )}
@@ -229,56 +232,56 @@ export function PositionRow({ pos, onApprove, onDelete, selected, routes, onAssi
           />
           </div>
         ) : pos.route_name ? (
-          <span className="inline-flex items-center gap-1 text-blue-700" title={`Маршрут #${pos.route_id} ${routeSourceLabel}`}>
-            <Route className="h-3 w-3" />
+          <span className="inline-flex items-center gap-1 text-blue-700 truncate" title={`Маршрут #${pos.route_id} ${routeSourceLabel}`}>
+            <Route className="h-3 w-3 shrink-0" />
             {pos.route_name}
             {routeSourceLabel && <span className="text-xs text-muted-foreground">({routeSourceLabel})</span>}
           </span>
         ) : (
-          <span className={routeError ? "text-red-600 text-xs" : "text-muted-foreground text-xs"} title={routeError || undefined}>
+          <span className={routeError ? "text-red-600 text-xs truncate" : "text-muted-foreground text-xs truncate"} title={routeError || undefined}>
             {routeError || "Не назначен"}
           </span>
         )}
       </td>
-      <td className="p-2 text-xs text-red-600 max-w-[200px]">
-        {hasErrors || hasDuplicateConflict ? (
-          <div className="space-y-1">
-            {hasDuplicateConflict && (
-              <div className="text-red-700">
-                <span className="block">Дубликат Excel-строки</span>
-                <div className="flex flex-wrap gap-1 mt-1">
-                  {duplicateConflict?.conflictIds.map((id) => (
-                    <button
-                      key={id}
-                      type="button"
-                      className="underline hover:no-underline"
-                      onClick={(e) => {
-                        e.stopPropagation()
-                        onJumpToPosition?.(id)
-                      }}
-                    >
-                      #{id}
-                    </button>
-                  ))}
-                </div>
+      <td className="p-2 text-xs w-[150px]">
+        {noErrors ? null : (
+        <div className="space-y-1 text-red-600">
+          {hasDuplicateConflict && (
+            <div>
+              <span className="block">Дубликат Excel-строки</span>
+              <div className="flex flex-wrap gap-1 mt-1">
+                {duplicateConflict?.conflictIds.map((id) => (
+                  <button
+                    key={id}
+                    type="button"
+                    className="underline hover:no-underline"
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      onJumpToPosition?.(id)
+                    }}
+                  >
+                    #{id}
+                  </button>
+                ))}
               </div>
-            )}
-            {hasErrors && (
-              <span className="truncate block" title={translatedErrors.join("\n")}>
-                {translatedErrors.join(", ")}
-              </span>
-            )}
-          </div>
-        ) : "—"}
+            </div>
+          )}
+          {hasErrors && (
+            <span className="truncate block" title={translatedErrors.join("\n")}>
+              {translatedErrors.join(", ")}
+            </span>
+          )}
+        </div>
+        )}
       </td>
-      <td className="p-2 text-xs text-amber-600 max-w-[150px]">
-        {hasWarnings ? (
-          <span className="truncate block" title={translatedWarnings.join("\n")}>
-            {translatedWarnings.join(", ")}
-          </span>
-        ) : "—"}
+      <td className="p-2 text-xs w-[120px]">
+        {noWarnings ? null : (
+        <span className="truncate block text-amber-600" title={translatedWarnings.join("\n")}>
+          {translatedWarnings.join(", ")}
+        </span>
+        )}
       </td>
-      <td className="p-2">
+      <td className="p-2 w-[120px]">
         <div className="flex gap-1">
           {canApprove && (
             <>
