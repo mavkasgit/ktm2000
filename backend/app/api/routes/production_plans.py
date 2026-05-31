@@ -257,8 +257,10 @@ async def delete_import_batch(
     batch_id: int,
     db: AsyncSession = Depends(get_db),
 ) -> dict:
-    """Rollback and delete an import batch along with all its positions and change sets."""
+    """Rollback and delete an import batch along with all its positions, change sets, section plan lines, and work tasks."""
     from app.models.imports import ImportBatch
+    from app.models.internal_plan import SectionPlanLine
+    from app.models.work_task import WorkTask
     from sqlalchemy import delete
 
     batch = await db.get(ImportBatch, batch_id)
@@ -282,7 +284,134 @@ async def delete_import_batch(
         # Delete the change set
         await db.delete(cs)
 
+    # Find all plan positions for this batch to cascade delete related entities
+    positions = (
+        await db.execute(select(PlanPosition.id).where(PlanPosition.import_batch_id == batch_id))
+    ).scalars().all()
+
+    if positions:
+        # Find all section plan lines for these positions
+        section_plan_lines = (
+            await db.execute(
+                select(SectionPlanLine.id).where(SectionPlanLine.plan_position_id.in_(positions))
+            )
+        ).scalars().all()
+
+        if section_plan_lines:
+            from app.models.defect import Defect, DefectDecision, DefectItem, TransferDiscrepancyDefectItem
+            from app.models.movement import Movement
+            from app.models.transfer import Transfer, TransferDiscrepancy
+
+            # Find all work task IDs for these section plan lines
+            task_ids = (
+                await db.execute(
+                    select(WorkTask.id).where(WorkTask.section_plan_line_id.in_(section_plan_lines))
+                )
+            ).scalars().all()
+
+            if task_ids:
+                # Find affected transfers
+                affected_transfer_ids = (
+                    await db.execute(
+                        select(Transfer.id).where(
+                            (Transfer.from_task_id.in_(task_ids)) | (Transfer.to_task_id.in_(task_ids))
+                        )
+                    )
+                ).scalars().all() or []
+
+                # Find all movements for these tasks/section_plan_lines/transfers
+                affected_movement_ids = (
+                    await db.execute(
+                        select(Movement.id).where(
+                            (Movement.task_id.in_(task_ids)) |
+                            (Movement.section_plan_line_id.in_(section_plan_lines)) |
+                            (Movement.transfer_id.in_(affected_transfer_ids))
+                        )
+                    )
+                ).scalars().all() if affected_transfer_ids else (
+                    await db.execute(
+                        select(Movement.id).where(
+                            (Movement.task_id.in_(task_ids)) |
+                            (Movement.section_plan_line_id.in_(section_plan_lines))
+                        )
+                    )
+                ).scalars().all()
+
+                if affected_movement_ids:
+                    # Delete defect decisions for defects linked to these movements
+                    defect_ids = (
+                        await db.execute(
+                            select(Defect.id).where(Defect.movement_id.in_(affected_movement_ids))
+                        )
+                    ).scalars().all()
+
+                    if defect_ids:
+                        # Delete defect items for these defects
+                        await db.execute(
+                            delete(DefectItem).where(DefectItem.defect_id.in_(defect_ids))
+                        )
+                        # Delete defect decisions for these defects
+                        await db.execute(
+                            delete(DefectDecision).where(DefectDecision.defect_id.in_(defect_ids))
+                        )
+                        # Delete the defects themselves
+                        await db.execute(
+                            delete(Defect).where(Defect.id.in_(defect_ids))
+                        )
+
+                # Delete movements
+                if affected_movement_ids:
+                    await db.execute(
+                        delete(Movement).where(Movement.id.in_(affected_movement_ids))
+                    )
+
+                # Handle transfers
+                if affected_transfer_ids:
+                    # Find discrepancies for these transfers
+                    discrepancy_ids = (
+                        await db.execute(
+                            select(TransferDiscrepancy.id).where(
+                                TransferDiscrepancy.transfer_id.in_(affected_transfer_ids)
+                            )
+                        )
+                    ).scalars().all()
+
+                    if discrepancy_ids:
+                        # Delete defect items linked to discrepancies
+                        await db.execute(
+                            delete(TransferDiscrepancyDefectItem).where(
+                                TransferDiscrepancyDefectItem.transfer_discrepancy_id.in_(discrepancy_ids)
+                            )
+                        )
+                        # Delete the discrepancies
+                        await db.execute(
+                            delete(TransferDiscrepancy).where(
+                                TransferDiscrepancy.id.in_(discrepancy_ids)
+                            )
+                        )
+
+                    # Delete the transfers themselves
+                    await db.execute(
+                        delete(Transfer).where(
+                            (Transfer.from_task_id.in_(task_ids)) | (Transfer.to_task_id.in_(task_ids))
+                        )
+                    )
+
+                # Delete all work tasks linked via section plan lines for these positions
+                await db.execute(delete(WorkTask).where(WorkTask.section_plan_line_id.in_(section_plan_lines)))
+
+        # Delete all section plan lines for these positions
+        await db.execute(delete(SectionPlanLine).where(SectionPlanLine.plan_position_id.in_(positions)))
+
     # Delete all plan positions created by this batch
+    # First delete status history for these positions
+    from app.models.production_plan import PositionStatusHistory
+
+    if positions:
+        await db.execute(delete(PositionStatusHistory).where(PositionStatusHistory.plan_position_id.in_(positions)))
+        # Delete release batch positions linked to these plan positions
+        from app.models.release_batch import ReleaseBatchPosition
+        await db.execute(delete(ReleaseBatchPosition).where(ReleaseBatchPosition.plan_position_id.in_(positions)))
     await db.execute(delete(PlanPosition).where(PlanPosition.import_batch_id == batch_id))
 
     # Delete the batch and source file only when it is no longer referenced.

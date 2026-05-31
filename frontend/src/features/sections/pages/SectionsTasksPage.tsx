@@ -712,14 +712,13 @@ export function SectionsTasksPage() {
     setBulkSummary(summary);
     if (summary.failed > 0) setBulkResultsOpen(true);
     setBulkProgress(null);
-    bulkSelection.clear();
-    invalidateShopfloor();
+    // Don't clear selection — user should see the result
     toast({
       title: summary.failed > 0 ? "Частичный успех" : "Массовая операция",
       description: `${summary.success} успешно, ${summary.failed} ошибок${summary.skipped > 0 ? `, ${summary.skipped} пропущено` : ""}`,
       variant: summary.failed > 0 ? "destructive" : "success",
     });
-  }, [bulkSelection, invalidateShopfloor]);
+  }, [bulkSelection]);
 
   const handleBulkExecuteAll = useCallback(async (data: {
     issueEntries: { taskId: number; quantity: string }[];
@@ -751,7 +750,6 @@ export function SectionsTasksPage() {
         }
         setBulkProgress({ total, completed: i + 1, running: true });
       }
-      invalidateShopfloor();
       // Wait for DB to update
       await new Promise(r => setTimeout(r, 500));
     }
@@ -779,7 +777,6 @@ export function SectionsTasksPage() {
         }
         setBulkProgress({ total, completed: data.issueEntries.length + i + 1, running: true });
       }
-      invalidateShopfloor();
       // Wait for DB to update
       await new Promise(r => setTimeout(r, 500));
     }
@@ -805,6 +802,10 @@ export function SectionsTasksPage() {
         setBulkProgress({ total, completed: data.issueEntries.length + data.completeEntries.length + i + 1, running: i + 1 < data.sendEntries.length });
       }
     }
+
+    invalidateShopfloor();
+    // Wait for DB to update
+    await new Promise(r => setTimeout(r, 500));
 
     finishBulk(allResults);
   }, [issueMutation, completeMutation, sendMutation, me?.id, invalidateShopfloor, finishBulk]);
@@ -1034,6 +1035,7 @@ export function SectionsTasksPage() {
                 tasks={selectedTasks}
                 onExecuteAll={handleBulkExecuteAll}
                 pending={bulkExecuting}
+                onDone={() => setBulkMode(false)}
               />
             )}
 

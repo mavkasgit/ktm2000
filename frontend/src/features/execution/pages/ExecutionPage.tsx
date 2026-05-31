@@ -94,6 +94,16 @@ export function ExecutionPage() {
   }, [sections]);
 
   const queryClient = useQueryClient();
+
+  const invalidateAll = useCallback(() => {
+    queryClient.invalidateQueries({ queryKey: ["production-planning-rows"] });
+    queryClient.invalidateQueries({ queryKey: ["production-planning-row-detail"] });
+    queryClient.invalidateQueries({ queryKey: ["plans"] });
+    queryClient.invalidateQueries({ queryKey: ["shopfloor-board"] });
+    queryClient.invalidateQueries({ queryKey: ["shopfloor-sections-summary"] });
+    queryClient.invalidateQueries({ queryKey: ["shopfloor-incoming-transfers"] });
+  }, [queryClient]);
+
   const bulkSelection = useBulkSelection<number>();
   const [selectedBulkActionId, setSelectedBulkActionId] = useState("take-to-work");
   const [bulkProgress, setBulkProgress] = useState<BulkRunnerProgress | null>(null);
@@ -159,9 +169,7 @@ export function ExecutionPage() {
       } else {
         toast({ title: "Запуск завершён", description: `${successCount} запущено, ${alreadyCount} уже было запущено`, variant: "success" });
       }
-      queryClient.invalidateQueries({ queryKey: ["production-planning-rows"] });
-      queryClient.invalidateQueries({ queryKey: ["production-planning-row-detail"] });
-      queryClient.invalidateQueries({ queryKey: ["plans"] });
+      invalidateAll();
       bulkSelection.clear();
       setSelectionOrder([]);
     },
@@ -194,8 +202,7 @@ export function ExecutionPage() {
         description: `Пропущено этапов: ${data.skipped_stages}. Создано фактов: ${data.movements_created}.`,
         variant: data.complete_route && !data.position_completed ? "destructive" : "success",
       });
-      queryClient.invalidateQueries({ queryKey: ["production-planning-rows"] });
-      queryClient.invalidateQueries({ queryKey: ["production-planning-row-detail", data.position_id] });
+      invalidateAll();
       setManualPassDialog({ open: false, positionId: null, targetRouteStepId: "", comment: "" });
     },
     onError: (err) => toast({ title: "Ошибка сквозного прохода", description: getErrorMessage(err), variant: "destructive" }),
@@ -211,9 +218,7 @@ export function ExecutionPage() {
     mutationFn: cancelPositionExecution,
     onSuccess: () => {
       toast({ title: "Позиция отменена", variant: "success" });
-      queryClient.invalidateQueries({ queryKey: ["production-planning-rows"] });
-      queryClient.invalidateQueries({ queryKey: ["production-planning-row-detail"] });
-      queryClient.invalidateQueries({ queryKey: ["plans"] });
+      invalidateAll();
     },
     onError: (err) => toast({ title: "Ошибка отмены", description: getErrorMessage(err), variant: "destructive" }),
   });
@@ -228,9 +233,7 @@ export function ExecutionPage() {
     mutationFn: ({ positionId, reason }: { positionId: number; reason?: string }) => restorePositionExecution(positionId, reason),
     onSuccess: () => {
       toast({ title: "Позиция восстановлена", variant: "success" });
-      queryClient.invalidateQueries({ queryKey: ["production-planning-rows"] });
-      queryClient.invalidateQueries({ queryKey: ["production-planning-row-detail"] });
-      queryClient.invalidateQueries({ queryKey: ["plans"] });
+      invalidateAll();
     },
     onError: (err) => toast({ title: "Ошибка восстановления", description: getErrorMessage(err), variant: "destructive" }),
   });
@@ -246,9 +249,7 @@ export function ExecutionPage() {
       softDeleteCancelledPosition(planId, positionId, reason),
     onSuccess: () => {
       toast({ title: "Позиция удалена из списка", variant: "success" });
-      queryClient.invalidateQueries({ queryKey: ["production-planning-rows"] });
-      queryClient.invalidateQueries({ queryKey: ["production-planning-row-detail"] });
-      queryClient.invalidateQueries({ queryKey: ["plans"] });
+      invalidateAll();
     },
     onError: (err) => toast({ title: "Ошибка удаления", description: getErrorMessage(err), variant: "destructive" }),
   });
@@ -277,8 +278,8 @@ export function ExecutionPage() {
       toast({ title: "Невозможно запустить", description: reason, variant: "destructive" });
       return;
     }
-    setLaunchDialog({ open: true, mode: "single", positionIds: [row.plan_position_id] });
-  }, []);
+    takeToWorkMutation.mutate([row.plan_position_id]);
+  }, [takeToWorkMutation]);
 
   const handleManualPass = useCallback((row: ProductionPlanningRow) => {
     if (!row.route_id || !["approved", "released"].includes(row.position_status)) {
@@ -353,9 +354,7 @@ export function ExecutionPage() {
     setBulkSummary(summary);
     if (summary.failed > 0) setBulkResultsOpen(true);
     setBulkProgress(null);
-    queryClient.invalidateQueries({ queryKey: ["production-planning-rows"] });
-    queryClient.invalidateQueries({ queryKey: ["production-planning-row-detail"] });
-    queryClient.invalidateQueries({ queryKey: ["plans"] });
+    invalidateAll();
     toast({
       title: summary.failed > 0 ? "Частичный успех" : "Массовый сквозной проход",
       description: summary.failed > 0
@@ -461,9 +460,7 @@ export function ExecutionPage() {
     if (summary.failed > 0) setBulkResultsOpen(true);
     setBulkSoftDeleting(false);
     setBulkProgress(null);
-    queryClient.invalidateQueries({ queryKey: ["production-planning-rows"] });
-    queryClient.invalidateQueries({ queryKey: ["production-planning-row-detail"] });
-    queryClient.invalidateQueries({ queryKey: ["plans"] });
+    invalidateAll();
     toast({
       title: summary.failed > 0 ? "Частичный успех" : "Массовое удаление",
       description: summary.failed > 0
@@ -735,9 +732,7 @@ export function ExecutionPage() {
     setBulkResults(results);
     setBulkSummary(summary);
     if (summary.failed > 0 || summary.skipped > 0) setBulkResultsOpen(true);
-    queryClient.invalidateQueries({ queryKey: ["production-planning-rows"] });
-    queryClient.invalidateQueries({ queryKey: ["production-planning-row-detail"] });
-    queryClient.invalidateQueries({ queryKey: ["plans"] });
+    invalidateAll();
     toast({
       title: summary.failed > 0 ? "Частичный успех" : "Массовое действие выполнено",
       description: `${summary.success} успешно, ${summary.skipped} пропущено, ${summary.failed} ошибок`,
@@ -746,7 +741,7 @@ export function ExecutionPage() {
     bulkSelection.clear();
     setSelectionOrder([]);
     setBulkProgress(null);
-  }, [bulkSelection, executionBulkActions, queryClient, rowById]);
+  }, [bulkSelection, executionBulkActions, queryClient, rowById, invalidateAll]);
 
   const runSelectedBulkAction = useCallback(async (actionId?: string) => {
     if (bulkSelection.selectedCount === 0) {
@@ -765,15 +760,111 @@ export function ExecutionPage() {
       });
       return;
     }
+    // take-to-work: execute per-item sequentially with progress
+    if (resolvedActionId === "take-to-work") {
+      const selectedIds = Array.from(bulkSelection.selectedIds);
+      const results: BulkActionResultItem<number>[] = [];
+      setBulkProgress({ total: selectedIds.length, completed: 0, running: true });
+      for (let i = 0; i < selectedIds.length; i++) {
+        const id = selectedIds[i];
+        try {
+          const data = await takeToWork([id]);
+          const result = data.results[0];
+          if (result) {
+            results.push({
+              id: result.position_id,
+              status: result.status === "already_started" ? "skipped" : result.status,
+              reason: result.reason,
+              meta: { tasks_created: result.tasks_created },
+            });
+          }
+        } catch (e) {
+          results.push({ id, status: "failed", reason: getErrorMessage(e) });
+        }
+        setBulkProgress({ total: selectedIds.length, completed: i + 1, running: i + 1 < selectedIds.length });
+      }
+      const summary = summarizeBulkResults(results);
+      setBulkResults(results);
+      setBulkSummary(summary);
+      if (summary.failed > 0 || summary.skipped > 0) setBulkResultsOpen(true);
+      invalidateAll();
+      toast({
+        title: summary.failed > 0 ? "Частичный успех" : "Массовое действие выполнено",
+        description: `${summary.success} успешно, ${summary.skipped} пропущено, ${summary.failed} ошибок`,
+        variant: summary.failed > 0 ? "destructive" : "success",
+      });
+      bulkSelection.clear();
+      setSelectionOrder([]);
+      setBulkProgress(null);
+      return;
+    }
+    // cancel: execute per-item sequentially with progress
+    if (resolvedActionId === "cancel") {
+      const selectedIds = Array.from(bulkSelection.selectedIds);
+      const results: BulkActionResultItem<number>[] = [];
+      setBulkProgress({ total: selectedIds.length, completed: 0, running: true });
+      for (let i = 0; i < selectedIds.length; i++) {
+        const id = selectedIds[i];
+        try {
+          await cancelPositionExecution(id);
+          results.push({ id, status: "success" });
+        } catch (e) {
+          results.push({ id, status: "failed", reason: getErrorMessage(e) });
+        }
+        setBulkProgress({ total: selectedIds.length, completed: i + 1, running: i + 1 < selectedIds.length });
+      }
+      const summary = summarizeBulkResults(results);
+      setBulkResults(results);
+      setBulkSummary(summary);
+      if (summary.failed > 0 || summary.skipped > 0) setBulkResultsOpen(true);
+      invalidateAll();
+      toast({
+        title: summary.failed > 0 ? "Частичный успех" : "Массовое действие выполнено",
+        description: `${summary.success} успешно, ${summary.skipped} пропущено, ${summary.failed} ошибок`,
+        variant: summary.failed > 0 ? "destructive" : "success",
+      });
+      bulkSelection.clear();
+      setSelectionOrder([]);
+      setBulkProgress(null);
+      return;
+    }
+    // restore: execute per-item sequentially with progress
+    if (resolvedActionId === "restore") {
+      const selectedIds = Array.from(bulkSelection.selectedIds);
+      const results: BulkActionResultItem<number>[] = [];
+      setBulkProgress({ total: selectedIds.length, completed: 0, running: true });
+      for (let i = 0; i < selectedIds.length; i++) {
+        const id = selectedIds[i];
+        try {
+          await restorePositionExecution(id);
+          results.push({ id, status: "success" });
+        } catch (e) {
+          results.push({ id, status: "failed", reason: getErrorMessage(e) });
+        }
+        setBulkProgress({ total: selectedIds.length, completed: i + 1, running: i + 1 < selectedIds.length });
+      }
+      const summary = summarizeBulkResults(results);
+      setBulkResults(results);
+      setBulkSummary(summary);
+      if (summary.failed > 0 || summary.skipped > 0) setBulkResultsOpen(true);
+      invalidateAll();
+      toast({
+        title: summary.failed > 0 ? "Частичный успех" : "Массовое действие выполнено",
+        description: `${summary.success} успешно, ${summary.skipped} пропущено, ${summary.failed} ошибок`,
+        variant: summary.failed > 0 ? "destructive" : "success",
+      });
+      bulkSelection.clear();
+      setSelectionOrder([]);
+      setBulkProgress(null);
+      return;
+    }
     setBulkProgress({ total: bulkSelection.selectedCount, completed: 0, running: true });
     const results = await runBulkAction(action, bulkSelection.selectedIds, rowById, setBulkProgress);
     const summary = summarizeBulkResults(results);
     setBulkResults(results);
     setBulkSummary(summary);
     if (summary.failed > 0 || summary.skipped > 0) setBulkResultsOpen(true);
-    queryClient.invalidateQueries({ queryKey: ["production-planning-rows"] });
-    queryClient.invalidateQueries({ queryKey: ["production-planning-row-detail"] });
-    queryClient.invalidateQueries({ queryKey: ["plans"] });
+    invalidateAll();
     toast({
       title: summary.failed > 0 ? "Частичный успех" : "Массовое действие выполнено",
       description: `${summary.success} успешно, ${summary.skipped} пропущено, ${summary.failed} ошибок`,
@@ -782,7 +873,7 @@ export function ExecutionPage() {
     bulkSelection.clear();
     setSelectionOrder([]);
     setBulkProgress(null);
-  }, [bulkSelection, executionBulkActions, queryClient, rowById, selectedBulkActionId]);
+  }, [bulkSelection, executionBulkActions, queryClient, rowById, selectedBulkActionId, invalidateAll]);
 
   const tableScrollRef = useRef<HTMLDivElement>(null);
 
