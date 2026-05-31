@@ -195,6 +195,7 @@ async def test_shopfloor_happy_path_with_discrepancy_link(client, session) -> No
 
 @pytest.mark.asyncio
 async def test_shopfloor_over_issue_rejected(client, session) -> None:
+    """Verify that over-issue is allowed and extra quantity is tracked."""
     user = await _make_user(session, "shopfloor2@test.local")
     _, plan, pos = await _make_product_route_plan(session, "FG-SF-2")
     headers = _auth_headers(user)
@@ -210,13 +211,19 @@ async def test_shopfloor_over_issue_rejected(client, session) -> None:
     ).scalars().first()
     assert task is not None
 
+    # Over-issue should be allowed (quantity 101 > planned 100)
     res = await client.post(
         f"/api/shopfloor/tasks/{task.id}/issue",
         json={"quantity": "101"},
         headers=headers,
     )
-    assert res.status_code == 400
-    assert "exceeds available" in res.json()["detail"]
+    assert res.status_code == 200
+    data = res.json()
+    # Verify that issued quantity is tracked correctly
+    assert data["status"] in ("in_progress", "issued")
+    # The task should track 101 issued
+    await session.refresh(task)
+    assert task.cached_issued_quantity == Decimal("101")
 
 
 @pytest.mark.asyncio
@@ -269,13 +276,16 @@ async def test_shopfloor_second_stage_available_not_inflated_by_plan(client, ses
     row = next(item for item in board_res.json()["tasks"] if item["id"] == second_task.id)
     assert Decimal(row["cache"]["available_quantity"]) == Decimal("25")
 
+    # Over-issue on second stage should be allowed (26 > available 25)
     over_issue = await client.post(
         f"/api/shopfloor/tasks/{second_task.id}/issue",
         json={"quantity": "26"},
         headers=headers,
     )
-    assert over_issue.status_code == 400
-    assert "exceeds available" in over_issue.json()["detail"]
+    assert over_issue.status_code == 200
+    # Extra quantity should be tracked
+    await session.refresh(second_task)
+    assert second_task.cached_issued_quantity == Decimal("26")
 
 
 @pytest.mark.asyncio

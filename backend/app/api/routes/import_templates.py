@@ -7,7 +7,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
 from app.models.import_template import ImportTemplate
-from app.services.import_normalization import default_import_normalization_rules, has_valid_normalization_rules
 
 router = APIRouter(prefix="/import-templates", tags=["import-templates"])
 
@@ -19,7 +18,6 @@ class ImportTemplateIn(BaseModel):
     is_active: bool = True
     sort_order: int = 0
     column_mapping: dict | None = None
-    normalization_rules: dict | None = None
     description: str | None = None
     created_by: int | None = None
 
@@ -34,7 +32,6 @@ class ImportTemplateOut(BaseModel):
     is_active: bool
     sort_order: int
     column_mapping: dict
-    normalization_rules: dict
     description: str | None = None
     created_by: int | None = None
     created_at: datetime | None = None
@@ -64,8 +61,6 @@ async def create_template(payload: ImportTemplateIn, db: AsyncSession = Depends(
     data["name"] = payload.name.strip()
     if data.get("column_mapping") is None:
         data["column_mapping"] = {}
-    if not has_valid_normalization_rules(data.get("normalization_rules")):
-        data["normalization_rules"] = default_import_normalization_rules()
     item = ImportTemplate(**data)
     db.add(item)
     await db.flush()
@@ -98,11 +93,6 @@ async def update_template(
     item.is_active = payload.is_active
     item.sort_order = payload.sort_order
     item.column_mapping = payload.column_mapping or {}
-    item.normalization_rules = (
-        payload.normalization_rules
-        if has_valid_normalization_rules(payload.normalization_rules)
-        else default_import_normalization_rules()
-    )
     item.description = payload.description
     await db.flush()
     await db.refresh(item)
@@ -127,7 +117,6 @@ async def _template_out(db: AsyncSession, item: ImportTemplate) -> ImportTemplat
         is_active=item.is_active,
         sort_order=item.sort_order,
         column_mapping=item.column_mapping,
-        normalization_rules=item.normalization_rules,
         description=item.description,
         created_by=item.created_by,
         created_at=item.created_at,

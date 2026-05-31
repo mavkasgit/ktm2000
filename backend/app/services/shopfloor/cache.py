@@ -82,8 +82,9 @@ async def _refresh_task_cache(db: AsyncSession, task_id: int) -> WorkTask:
     task.cached_available_quantity = available
     task.cached_remaining_quantity = remaining
 
-    # Task is completed only when all planned is completed AND all completed is transferred
-    if completed >= task.planned_quantity and transferred >= completed:
+    # Task is completed when all planned is completed AND (all completed is transferred OR all completed is finally released)
+    final_released = sums.get(MovementType.final_release.value, Decimal("0"))
+    if completed >= task.planned_quantity and (transferred >= completed or final_released >= completed):
         task.status = WorkTaskStatus.completed
     elif completed + rejected > 0:
         task.status = WorkTaskStatus.partially_completed

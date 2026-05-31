@@ -1,13 +1,15 @@
 """Tests for dynamic route_steps in import preview."""
 from io import BytesIO
 
+from decimal import Decimal
+
 import pytest
 from openpyxl import Workbook
 
 from app.core.config import settings
 from app.models.import_template import ImportTemplate
 from app.models.product import Product, ProductType
-from app.models.route import RouteRuleProfile, SectionOperation
+from app.models.route import ProductionRoute, RouteRuleProfile, RouteStep, SectionOperation
 from app.models.section import Section
 from app.models.techcard import Techcard, TechcardLine
 from app.seeds.selection_rules import SELECTION_RULES
@@ -105,11 +107,16 @@ async def _seed_infrastructure(session, profile: RouteRuleProfile):
     # Create sections
     sections = {
         "WH": ("Склад заготовок", "warehouse", 1),
-        "SHOT": ("Дробеструй", "processing", 2),
-        "ANOD": ("Анодирование", "processing", 3),
-        "FG_WH": ("Склад готовой продукции", "warehouse", 4),
-        "SHIPMENT": ("Отгрузка", "processing", 5),
-        "SENT": ("Отправлено", "final", 6),
+        "DRILL": ("Сверловка", "processing", 2),
+        "PRESS": ("Пресс", "processing", 3),
+        "SHOT": ("Дробеструй", "processing", 4),
+        "ANOD": ("Анодирование", "processing", 5),
+        "WIP_WH": ("Склад промежуточной продукции", "warehouse", 6),
+        "SAW": ("Пила", "processing", 7),
+        "PACK": ("Упаковка", "processing", 8),
+        "FG_WH": ("Склад готовой продукции", "warehouse", 9),
+        "SHIPMENT": ("Отгрузка", "processing", 10),
+        "SENT": ("Отправлено", "final", 11),
     }
     
     section_map = {}
@@ -139,6 +146,35 @@ async def _seed_infrastructure(session, profile: RouteRuleProfile):
     
     # Seed selection rules
     await seed_selection_rules(session, SELECTION_RULES, profile)
+    
+    # Create product + techcard + route so route resolution works
+    product = Product(sku="TEST-001", name="Test Product", type=ProductType.finished_good, unit="pcs")
+    session.add(product)
+    await session.flush()
+    
+    route = ProductionRoute(name="Test Route", is_active=True)
+    session.add(route)
+    await session.flush()
+    
+    techcard = Techcard(product_id=product.id, version="v1", is_active=True)
+    session.add(techcard)
+    await session.flush()
+    session.add(TechcardLine(techcard_id=techcard.id, component_product_id=product.id, quantity=Decimal("1"), unit="pcs"))
+    
+    # Create route steps for each section in profile's route_sections
+    step_ops = ["ISSUE_RAW", "SHOT_BLAST", "ANOD", "MOVE_TO_FG", "SHIPMENT", "SENT"]
+    for idx, (section_code, op_code) in enumerate(zip(profile.route_sections, step_ops, strict=True), start=1):
+        section = section_map[section_code]
+        session.add(
+            RouteStep(
+                route_id=route.id,
+                sequence=idx,
+                section_id=section.id,
+                operation_code=op_code,
+                operation_name=op_code,
+                is_final=idx == len(profile.route_sections),
+            )
+        )
     
     await session.commit()
 

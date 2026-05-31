@@ -22,7 +22,7 @@ from app.services.production_planning_rows import get_production_planning_row_de
 from app.services.production_plan_service import record_status_change, restore_plan_position
 from app.services.plan_generation import create_release_batch, release_batch
 from app.services.route_matcher import resolve_position_route
-from app.services.shopfloor_service import complete_task, issue_to_work, transfer_receive, transfer_send
+from app.services.shopfloor_service import complete_task, final_release, issue_to_work, transfer_receive, transfer_send
 
 router = APIRouter(prefix="/production-planning", tags=["execution-control"])
 MANUAL_ROUTE_PASS_PREFIX = "manual_route_pass:"
@@ -698,6 +698,18 @@ async def manual_pass_to_stage(
                         performed_at=now,
                         accounted_at=now,
                     )
+                elif step.is_final:
+                    await final_release(
+                        db,
+                        task_id=task.id,
+                        quantity=quantity,
+                        actor_id=current_user.id,
+                        comment=manual_comment,
+                        idempotency_key=f"{operation_key}:final_release",
+                        executor_user_id=current_user.id,
+                        performed_at=now,
+                        accounted_at=now,
+                    )
             except ValueError as exc:
                 raise HTTPException(status_code=400, detail=f"Manual pass failed at step {step.sequence}: {exc}") from exc
 
@@ -739,8 +751,18 @@ async def take_rows_to_work(
     results: list[TakeToWorkResult] = []
 
     for position_id in payload.position_ids:
-        result = await _process_position_take_to_work(db, position_id)
-        results.append(result)
+        try:
+            result = await _process_position_take_to_work(db, position_id)
+            results.append(result)
+        except Exception as exc:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.exception(f"take-to-work failed for position {position_id}")
+            results.append(TakeToWorkResult(
+                position_id=position_id,
+                status="failed",
+                reason=f"Internal error: {str(exc)}",
+            ))
 
     return TakeToWorkResponse(results=results)
 
@@ -1017,4 +1039,13 @@ async def _process_position_take_to_work(
             position_id=position_id,
             status="failed",
             reason=str(exc),
+        )
+    except Exception as exc:
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.exception(f"take-to-work failed for position {position_id}: {exc}")
+        return TakeToWorkResult(
+            position_id=position_id,
+            status="failed",
+            reason=f"Internal error: {str(exc)}",
         )

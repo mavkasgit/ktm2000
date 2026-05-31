@@ -328,11 +328,13 @@ function RawPreviewTable({ rows, sortConfig, onSort, expanded }: RawPreviewTable
             : null;
           const displayName = String(afterData.source_name ?? row.source_name ?? "");
           const displayRouteName = String(afterData.route_name ?? row.route_name ?? "");
-          const predictedId = (row as any)._predicted_id as number | undefined;
+          const expectedId = afterData.expected_id as number | undefined;
           const planPosId = row.plan_position_id as number | undefined;
-          const dbId = planPosId ?? predictedId;
           const duplicateExistingId = afterData.duplicate_existing_id as number | undefined;
-          const idDisplay = dbId != null ? `#${dbId}` : "—";
+
+          // ID display: expected_id for new, existing_id for duplicates
+          const newId = expectedId ?? "—";
+          const idDisplay = planPosId != null ? `#${planPosId}` : `#${newId}`;
           const idDisplayWithDuplicate = duplicateExistingId != null
             ? `${idDisplay} / #${duplicateExistingId}`
             : idDisplay;
@@ -403,7 +405,7 @@ function RawPreviewTable({ rows, sortConfig, onSort, expanded }: RawPreviewTable
                         <td colSpan={9} className="p-2 pl-6 text-[11px] leading-relaxed font-mono">
                           <div className="flex items-start gap-2">
                             <span className="font-bold text-muted-foreground shrink-0">
-                              {dbId != null ? `(#${dbId}) ` : ""}
+                              {planPosId != null ? `(#${planPosId}) ` : ""}
                               {duplicateExistingId != null ? `(#${duplicateExistingId}) ` : ""}
                               #{r.rowNumber}:
                             </span>
@@ -675,6 +677,10 @@ export function ImportWizard(props: {
     }
     return counts
   }, [allRows])
+
+  const errorBreakdownEntries = useMemo(() => {
+    return Object.entries(errorBreakdown).sort((a, b) => b[1] - a[1])
+  }, [errorBreakdown])
 
   async function handleFileSelect(e: React.ChangeEvent<HTMLInputElement>) {
     const f = e.target.files?.[0]
@@ -1190,9 +1196,25 @@ export function ImportWizard(props: {
               </div>
             </div>
             {applyStats.invalid > 0 && (
-              <AlertDialogDescription>
-                Режим "Пропустить ошибки" загрузит только строки без ошибок.
-              </AlertDialogDescription>
+              <div className="rounded border border-red-200 bg-red-50 p-3">
+                <div className="font-medium text-red-900 mb-2">
+                  Ошибки в {applyStats.invalid} строках:
+                </div>
+                <div className="space-y-1 max-h-40 overflow-y-auto text-xs">
+                  {errorBreakdownEntries.map(([error, count]) => (
+                    <div key={error} className="flex items-start gap-2 text-red-800">
+                      <span className="text-red-600 mt-0.5">•</span>
+                      <span className="font-medium">{error}</span>
+                      <span className="text-red-600 ml-auto">{count} строк</span>
+                    </div>
+                  ))}
+                </div>
+                <div className="mt-2 pt-2 border-t border-red-200">
+                  <AlertDialogDescription className="text-red-700">
+                    Режим "Пропустить ошибки" загрузит только строки без ошибок.
+                  </AlertDialogDescription>
+                </div>
+              </div>
             )}
           </div>
         </AlertDialogHeader>

@@ -135,6 +135,7 @@ async def test_validate_position_fails_on_duplicate_sku_due_date(session) -> Non
         quantity=Decimal("10"),
         due_date=date(2026, 5, 15),
         source_payload={},
+        source_fingerprint="fp-duplicate-sku",
         status=PlanPositionStatus.draft,
         validation_status=PlanPositionValidationStatus.pending,
         validation_errors=[],
@@ -151,6 +152,7 @@ async def test_validate_position_fails_on_duplicate_sku_due_date(session) -> Non
         quantity=Decimal("20"),
         due_date=date(2026, 5, 15),
         source_payload={},
+        source_fingerprint="fp-duplicate-sku",
         status=PlanPositionStatus.draft,
         validation_status=PlanPositionValidationStatus.pending,
         validation_errors=[],
@@ -178,6 +180,7 @@ async def test_validate_position_ignores_cancelled_duplicate(session) -> None:
         quantity=Decimal("10"),
         due_date=date(2026, 5, 15),
         source_payload={},
+        source_fingerprint="fp-dup-cancelled",
         status=PlanPositionStatus.cancelled,
         validation_status=PlanPositionValidationStatus.valid,
         validation_errors=[],
@@ -194,6 +197,7 @@ async def test_validate_position_ignores_cancelled_duplicate(session) -> None:
         quantity=Decimal("20"),
         due_date=date(2026, 5, 15),
         source_payload={},
+        source_fingerprint="fp-dup-cancelled",
         status=PlanPositionStatus.draft,
         validation_status=PlanPositionValidationStatus.pending,
         validation_errors=[],
@@ -294,7 +298,7 @@ async def test_validate_position_detects_missing_route(session) -> None:
     await session.flush()
 
     errors = await validate_plan_position(session, position)
-    assert "route_not_found" in errors
+    assert "no_route_candidate" in errors
 
 
 @pytest.mark.asyncio

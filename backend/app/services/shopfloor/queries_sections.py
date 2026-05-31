@@ -25,7 +25,7 @@ from .operations_combined import get_combined_info_for_board
 
 
 def _compute_display_sku(source_sku: str, output_sku: str) -> str:
-    return f"{source_sku} \u2192 {output_sku}" if source_sku != output_sku else output_sku
+    return output_sku
 
 
 def _compute_fingerprint(
@@ -330,12 +330,8 @@ async def get_section_board(
         )
 
         # For paired profiles, source_sku contains both articles (e.g., "ЮП-2616+ЮП-2604")
-        # Use source_sku directly for paired profiles, otherwise use display_sku or product_sku
         is_paired = source_sku and "+" in source_sku
-        if is_paired:
-            effective_display_sku = source_sku
-        else:
-            effective_display_sku = display_sku if (source_sku and source_sku != (output_sku or "")) else (product_sku or "")
+        effective_display_sku = source_sku if is_paired else (product_sku or "")
 
         # Icon for current operation
         op_icon_info = icon_by_section_op.get((task.section_id, effective_op_code))
