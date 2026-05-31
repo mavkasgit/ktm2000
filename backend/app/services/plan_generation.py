@@ -11,14 +11,10 @@ from app.models.internal_plan import InternalPlan, SectionPlanLine
 from app.models.production_plan import PlanPosition, PlanPositionStatus, PositionStatusHistory, ProductionPlan, ProductionPlanStatus
 from app.models.product import Product
 from app.models.release_batch import ReleaseBatch, ReleaseBatchPosition, ReleaseBatchStatus, ReleaseBatchType
-from app.models.route import ProductionRoute, RouteRuleProfile, RouteStep, SectionOperation
+from app.models.route import ProductionRoute, RouteStep, SectionOperation
 from app.models.section import Section
 from app.models.work_task import WorkTask, WorkTaskStatus
-from app.models.imports import ImportBatch
 from app.services.plan_validation import _find_paired_techcard, _paired_component_skus
-from app.services.route_validation import validate_route_match
-from app.services.route_matcher import resolve_position_route
-from app.services.route_builder import build_route_steps_for_release
 
 
 async def create_release_batch(
@@ -51,85 +47,40 @@ async def create_release_batch(
     await db.flush()
 
     for position, release_quantity in selected_positions:
-        route_info = await resolve_position_route(db, position)
-
-        # Get profile for dynamic route building
-        import_batch = await db.get(ImportBatch, position.import_batch_id) if position.import_batch_id is not None else None
-        profile_id = import_batch.rule_profile_id if import_batch is not None else None
-        profile = await db.get(RouteRuleProfile, profile_id) if profile_id else None
-
         await _validate_active_techcard(db, position)
 
-        # Use dynamic route if profile has route_sections, otherwise fallback to static route
-        if profile and profile.route_sections:
-            # Dynamic route building
-            steps = await build_route_steps_for_release(db, profile, position.source_payload, position)
-            remaining = await _remaining_quantity(db, position)
-            if release_quantity <= 0:
-                raise ValueError("Release quantity must be > 0")
-            if release_quantity > remaining:
-                raise ValueError("Release quantity exceeds approved remaining quantity")
+        # Position must have a persisted route_id (from import)
+        if position.route_id is None:
+            raise ValueError(f"Position {position.id} has no route assigned - cannot release without route")
 
-            # Load operation names for display
-            section_ids = {step["section_id"] for step in steps}
-            operation_names_by_key = {
-                (op.section_id, op.operation_code): op.operation_name
-                for op in (
-                    await db.execute(select(SectionOperation).where(SectionOperation.section_id.in_(section_ids)))
-                ).scalars().all()
-            }
+        route = await db.get(ProductionRoute, position.route_id)
+        if route is None or not route.is_active:
+            raise ValueError(f"Route for position {position.id} is not active")
 
-            db.add(
-                ReleaseBatchPosition(
-                    release_batch_id=batch.id,
-                    plan_position_id=position.id,
-                    release_quantity=release_quantity,
-                    route_id=None,  # Dynamic route, no static ProductionRoute
-                    route_snapshot=_dynamic_route_snapshot(profile, steps, position, operation_names_by_key),
-                )
+        steps = await _get_route_steps_with_sections(db, route)
+        remaining = await _remaining_quantity(db, position)
+        if release_quantity <= 0:
+            raise ValueError("Release quantity must be > 0")
+        if release_quantity > remaining:
+            raise ValueError("Release quantity exceeds approved remaining quantity")
+
+        section_ids = {section.id for _step, section in steps}
+        operation_names_by_key = {
+            (op.section_id, op.operation_code): op.operation_name
+            for op in (
+                await db.execute(select(SectionOperation).where(SectionOperation.section_id.in_(section_ids)))
+            ).scalars().all()
+        }
+
+        db.add(
+            ReleaseBatchPosition(
+                release_batch_id=batch.id,
+                plan_position_id=position.id,
+                release_quantity=release_quantity,
+                route_id=route.id,
+                route_snapshot=await _route_snapshot(db, route, steps, position, operation_names_by_key),
             )
-        else:
-            # Fallback to static route
-            if route_info.route_id is None:
-                raise ValueError(
-                    f"route_not_found for position {position.id}: "
-                    f"{route_info.error or 'unknown'}; checked_rules={route_info.checked_rules}"
-                )
-            route = await db.get(ProductionRoute, route_info.route_id)
-            if route is None or not route.is_active:
-                raise ValueError(f"Route for position {position.id} is not active")
-
-            # Only validate route match for auto-detected routes, not manual overrides
-            if route_info.source != "manual":
-                route_issues = await validate_route_match(db, position)
-                if route_issues:
-                    raise ValueError(f"Route mismatch for position {position.id}: " + "; ".join(route_issues))
-
-            steps = await _get_route_steps_with_sections(db, route)
-            remaining = await _remaining_quantity(db, position)
-            if release_quantity <= 0:
-                raise ValueError("Release quantity must be > 0")
-            if release_quantity > remaining:
-                raise ValueError("Release quantity exceeds approved remaining quantity")
-
-            # Load operation names for generic resolution (any section with operation_code=None)
-            section_ids = {section.id for _step, section in steps}
-            operation_names_by_key = {
-                (op.section_id, op.operation_code): op.operation_name
-                for op in (
-                    await db.execute(select(SectionOperation).where(SectionOperation.section_id.in_(section_ids)))
-                ).scalars().all()
-            }
-
-            db.add(
-                ReleaseBatchPosition(
-                    release_batch_id=batch.id,
-                    plan_position_id=position.id,
-                    release_quantity=release_quantity,
-                    route_id=route.id,
-                    route_snapshot=await _route_snapshot(db, route, steps, position, operation_names_by_key),
-                )
-            )
+        )
 
     await db.flush()
     return await get_release_batch_summary(db, batch.id)

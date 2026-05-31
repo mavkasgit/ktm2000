@@ -32,20 +32,51 @@ SELECTION_RULES = [
             {"action": "exclude_section", "section_code": "PRESS"},
         ],
     },
-    # PRESS operation resolution — determines Окно vs Гребёнка and selects section
+    {
+        "code": "press_section",
+        "name": "Пресс: участок маршрута",
+        "profile_code": "packaging_map_rp",
+        "priority": 850,
+        "is_active": True,
+        "phase": "route_select",
+        "conditions": [
+            {"source": "payload", "field_path": "operation", "operator": "contains", "value": "окн"},
+            {"source": "payload", "field_path": "operation", "operator": "not_contains", "value": "сверл"},
+        ],
+        "condition_logic": "and",
+        "actions": [
+            {"action": "require_section", "section_code": "PRESS"},
+            {"action": "exclude_section", "section_code": "DRILL"},
+        ],
+    },
+    {
+        "code": "press_section_comb",
+        "name": "Пресс гребёнка: участок маршрута",
+        "profile_code": "packaging_map_rp",
+        "priority": 850,
+        "is_active": True,
+        "phase": "route_select",
+        "conditions": [
+            {"source": "payload", "field_path": "operation", "operator": "contains", "value": "греб"},
+            {"source": "payload", "field_path": "operation", "operator": "not_contains", "value": "сверл"},
+        ],
+        "condition_logic": "and",
+        "actions": [
+            {"action": "require_section", "section_code": "PRESS"},
+            {"action": "exclude_section", "section_code": "DRILL"},
+        ],
+    },
     {
         "code": "press_types",
         "name": "Пресс: определение типа",
         "profile_code": "packaging_map_rp",
-        "priority": 200,
+        "priority": 100,
         "is_active": True,
         "phase": "resolve_operations",
         "conditions": [
             {"source": "payload", "field_path": "operation", "operator": "not_empty", "value": None},
         ],
         "actions": [
-            {"action": "require_section", "section_code": "PRESS"},
-            {"action": "exclude_section", "section_code": "DRILL"},
             {
                 "action": "set_operation_by_mapping",
                 "section_code": "PRESS",
@@ -91,13 +122,13 @@ SELECTION_RULES = [
     },
     {
         "code": "pack_spunbond_branch",
-        "name": "Спанбонд упаковка — без промежуточных этапов (П/Ф)",
+        "name": "Спанбонд упаковка — без промежуточных этапов (П/ф)",
         "profile_code": "packaging_map_rp",
         "priority": 700,
         "is_active": True,
         "phase": "route_select",
         "conditions": [
-            {"source": "payload", "field_path": "output_kind", "operator": "contains", "value": "П/Ф"},
+            {"source": "payload", "field_path": "output_kind", "operator": "contains", "value": "П/ф"},
         ],
         "actions": [
             {"action": "exclude_section", "section_code": "WIP_WH"},
@@ -184,7 +215,7 @@ SELECTION_RULES = [
                 "lookup_field": "output_kind",
                 "mapping": [
                     {"keyword": "ГП", "operation_code": "PACK_STRETCH"},
-                    {"keyword": "П/Ф", "operation_code": "PACK_SPUNBOND"},
+                    {"keyword": "П/ф", "operation_code": "PACK_SPUNBOND"},
                 ],
             },
         ],

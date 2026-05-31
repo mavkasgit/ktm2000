@@ -37,23 +37,14 @@ async def run_full_seed(db: AsyncSession, force: bool = False) -> dict:
     ops_count = await seed_section_operations(db, sections_map)
     result["section_operations"] = ops_count
 
-    # 1.2. ProductionRoutes from RouteRuleProfile (ONE step per section)
-    dynamic_routes_count = await seed_production_routes_from_profiles(db)
-    result["routes"] = dynamic_routes_count
-
-    # 1.3. Static universal route (contains all sections, filtered by rules)
-    if ROUTES:
-        static_routes = await seed_routes(db, ROUTES, force=force)
-        result["routes"] += len(static_routes)
-
-    # 2. ImportTemplate
+    # 1.2. ImportTemplate (needed by profile)
     template_data = IMPORT_TEMPLATES[0] if IMPORT_TEMPLATES else None
     if template_data is None:
         raise RuntimeError("No import templates defined")
     template = await seed_import_template(db, template_data)
     result["import_templates"] = 1
 
-    # 2. RouteRuleProfile (needs template.id)
+    # 1.3. RouteRuleProfile (needs template.id)
     profile_data = ROUTE_RULE_PROFILES[0] if ROUTE_RULE_PROFILES else None
     if profile_data is None:
         raise RuntimeError("No route rule profiles defined")
@@ -63,6 +54,18 @@ async def run_full_seed(db: AsyncSession, force: bool = False) -> dict:
         import_template_id=template.id,
     )
     result["route_rule_profiles"] = 1
+
+    # 1.4. ProductionRoutes from RouteRuleProfile (ONE step per section)
+    # Must run AFTER profile creation so lookup by profile.code/name works for idempotency
+    dynamic_routes_count = await seed_production_routes_from_profiles(db)
+    result["routes"] = dynamic_routes_count
+
+    # 1.5. Static universal route (contains all sections, filtered by rules)
+    if ROUTES:
+        static_routes = await seed_routes(db, ROUTES, force=force)
+        result["routes"] += len(static_routes)
+
+    # 2. ImportTemplate and profile already seeded above (moved up for dependency order)
 
     # 3. Routes (static routes replaced by dynamic production routes above)
 

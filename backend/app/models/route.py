@@ -27,6 +27,7 @@ class ProductionRoute(Base):
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default=text("true"))
     sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default=text("0"))
+    import_template_id: Mapped[int | None] = mapped_column(ForeignKey("import_templates.id"), nullable=True)
 
     steps: Mapped[list["RouteStep"]] = relationship("RouteStep", back_populates="route", lazy="selectin")
     rules: Mapped[list["RouteMatchingRule"]] = relationship("RouteMatchingRule", back_populates="route", lazy="selectin")

@@ -225,6 +225,12 @@ async def select_route_for_payload(
         for action in actions:
             action_kind = str(action.get("action") or "")
             section_id = _int_or_none(action.get("section_id"))
+            section_code = action.get("section_code")
+            
+            # Resolve section_code to ID if needed
+            if section_id is None and section_code is not None:
+                section_id = await _section_id_by_code(db, section_code)
+            
             if action_kind == "require_section" and section_id is not None:
                 required.add(section_id)
             elif action_kind == "exclude_section" and section_id is not None:

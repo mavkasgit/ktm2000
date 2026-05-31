@@ -79,6 +79,11 @@ async def build_route_from_profile(
     product: Product | None = None
     if position and position.product_id:
         product = await db.get(Product, position.product_id)
+    elif source_payload:
+        # Try to resolve product from source_payload product_id (preview path)
+        payload_product_id = source_payload.get("product_id")
+        if payload_product_id:
+            product = await db.get(Product, int(payload_product_id))
 
     # Вычислить excluded sections из route_select правил
     excluded_codes = await _compute_excluded_sections(db, profile.id, source_payload, product)
@@ -162,13 +167,9 @@ async def build_route_from_profile(
                 combined_op_group=None,
             ))
         else:
-            # Участок с группами — все группы = один sequence (combined этап)
-            sequence += 1
-            section_sequence = sequence
-
-            # combined_op_group = section_code.lower() когда >1 группы
-            combined_tag = section_code.lower() if len(section_groups) > 1 else None
-
+            # Участок с группами — каждый шаг получает уникальный sequence
+            # combined_op_group связывает шаги одного участка
+            
             sorted_groups = sorted(
                 section_groups.items(),
                 key=lambda item: _group_sort_key(item[0], item[1]),
@@ -182,17 +183,24 @@ async def build_route_from_profile(
                 if resolved_op_code:
                     # Взять только операцию которая соответствует resolved
                     matched_op = next((op for op in group_ops if op.operation_code == resolved_op_code), None)
-                    ops_to_add = [matched_op] if matched_op else group_ops
+                    if matched_op is None:
+                        # Resolved op not found in this group - skip this group
+                        import logging
+                        logger = logging.getLogger(__name__)
+                        logger.warning(f"Resolved op {resolved_op_code} not found in group {group_code} of section {section_code}")
+                        continue
+                    ops_to_add = [matched_op]
                 else:
-                    # Нет resolved — добавить все операции группы (fallback)
-                    ops_to_add = group_ops
+                    # Нет resolved — взять ПЕРВУЮ операцию группы (не все!)
+                    ops_to_add = [group_ops[0]] if group_ops else []
 
                 for op in ops_to_add:
+                    sequence += 1  # Каждый шаг получает уникальный sequence
                     is_sig = op.is_significant
                     group_name = op.group_name
 
                     steps.append(BuiltRouteStep(
-                        sequence=section_sequence,
+                        sequence=sequence,
                         section_id=section.id,
                         section_code=section.code,
                         section_name=section.name,
@@ -203,7 +211,7 @@ async def build_route_from_profile(
                         operation_name=op.operation_name,
                         is_significant=is_sig,
                         is_final=(section_code == "SENT"),
-                        combined_op_group=combined_tag,
+                        combined_op_group=section_code.lower(),  # Всегда устанавливаем для группировки
                     ))
 
     # Generate descriptive name from profile template
@@ -254,10 +262,22 @@ async def _compute_excluded_sections(
 
         for action in rule.actions or []:
             action_kind = str(action.get("action") or "")
-            if action_kind == "exclude_section":
+            if action_kind in ("exclude_section", "require_section"):
                 section_id = action.get("section_id")
-                if section_id is not None:
-                    excluded_ids.add(int(section_id))
+                section_code = action.get("section_code")
+                resolved_section_id = section_id
+                
+                # Resolve section_code to ID if needed
+                if resolved_section_id is None and section_code is not None:
+                    from sqlalchemy import select as sa_select
+                    resolved_section_id = await db.scalar(
+                        sa_select(Section.id).where(Section.code == section_code).limit(1)
+                    )
+                
+                if resolved_section_id is not None:
+                    if action_kind == "exclude_section":
+                        excluded_ids.add(int(resolved_section_id))
+                    # Note: require_section is handled similarly if needed
 
     if not excluded_ids:
         return set()
@@ -306,6 +326,24 @@ async def _resolve_operations(
                 operation_code = str(action.get("operation_code") or "")
                 if section_code and group_code and operation_code:
                     resolved[(section_code, group_code)] = operation_code
+            elif action_kind == "set_operation_by_mapping":
+                section_code = str(action.get("section_code") or "")
+                group_code = str(action.get("group_code") or "")
+                lookup_field = str(action.get("lookup_field") or "color")
+                mapping = action.get("mapping") or []
+                if section_code and group_code and mapping:
+                    # Get the actual value from payload
+                    actual_value = context.get("payload", {}).get(lookup_field) or ""
+                    if isinstance(actual_value, str):
+                        actual_lower = actual_value.lower()
+                        # Find first matching keyword in mapping
+                        for entry in mapping:
+                            keyword = str(entry.get("keyword") or "").lower()
+                            if keyword and keyword in actual_lower:
+                                op_code = str(entry.get("operation_code") or "")
+                                if op_code:
+                                    resolved[(section_code, group_code)] = op_code
+                                    break
 
     return resolved
 

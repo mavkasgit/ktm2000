@@ -26,7 +26,7 @@ from app.models.production_plan import (
     PlanPositionStatus,
     ProductionPlan,
 )
-from app.models.route import ProductionRoute, RouteStep
+from app.models.route import ProductionRoute, RouteStep, RouteRuleProfile
 from app.models.section import Section
 from app.services.excel_import import (
     ParsedWorkbook,
@@ -459,6 +459,17 @@ async def _make_change_items(
 
     items: list[PlanChangeItem] = []
     matched_fingerprints: set[str] = set()
+    
+    # Cache product.is_active to prevent autoflush when accessing expired objects
+    product_is_active_cache: dict[int, bool] = {}
+    for prod in products_by_sku.values():
+        try:
+            product_is_active_cache[prod.id] = prod.is_active
+        except Exception:
+            product_is_active_cache[prod.id] = False
+    
+    # Cache for already created/found routes by route_name -> route_id
+    route_cache: dict[str, int] = {}
 
     # Track fingerprints within this import to detect intra-import duplicates.
     # Use row hashes (not just first row number) so real duplicates are detected
@@ -525,7 +536,9 @@ async def _make_change_items(
                 else:
                     errors.append("product_not_found")
         else:
-            if not product.is_active:
+            # Use cached value to avoid triggering autoflush
+            is_active = product_is_active_cache.get(product.id, False)
+            if not is_active:
                 errors.append("product_inactive")
 
             if row.payload.get("paired_profile"):
@@ -740,8 +753,12 @@ async def _make_change_items(
                     rule_profile_id,
                 )
                 if profile is not None:
+                    # Include product_id in payload for preview so product-based rules work
+                    preview_payload = row.payload
+                    if product is not None:
+                        preview_payload = {**row.payload, "product_id": product.id}
                     built_route = await build_route_from_profile(
-                        db, profile, row.payload, None
+                        db, profile, preview_payload, None
                     )
                     if not built_route.error:
                         after_data["route_steps"] = [
@@ -760,8 +777,150 @@ async def _make_change_items(
                         if built_route.name:
                             after_data["route_name"] = built_route.name
                             after_data["route_source"] = "dynamic_build"
+                            after_data["route_assigned_at"] = datetime.now(UTC).isoformat()
+                            after_data["route_match_quality"] = PlanPositionRouteMatchQuality.exact.value
             except Exception:
                 pass  # Silently ignore route building errors for preview
+        
+        # Build dynamic route and persist as real ProductionRoute (for real import, not preview)
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.info(f"Route persistence check: rule_profile_id={rule_profile_id}, change_set_id={change_set_id}")
+        
+        if rule_profile_id is not None and change_set_id != 0:
+            try:
+                logger.info(f"Building dynamic route for product {product.id if product else 'None'}")
+                profile = await db.get(RouteRuleProfile, rule_profile_id)
+                logger.info(f"Profile found: {profile is not None}")
+                if profile is not None:
+                    payload_for_route = {**row.payload, "product_id": product.id} if product else row.payload
+                    built_route = await build_route_from_profile(
+                        db, profile, payload_for_route, None
+                    )
+                    
+                    # Log route building result
+                    import logging
+                    logger = logging.getLogger(__name__)
+                    logger.info(f"Built route: name={built_route.name}, error={built_route.error}, steps_count={len(built_route.steps)}")
+                    if len(built_route.steps) == 0:
+                        logger.warning(f"Built route has NO STEPS! route_sections={built_route.route_sections}, excluded={built_route.excluded_sections}")
+                    
+                    if not built_route.error and built_route.name:
+                        # Cache key must be based on resolved operations only
+                        # (name can differ due to payload but route structure is the same)
+                        resolved_ops_summary = tuple(
+                            (step.section_code, step.operation_code)
+                            for step in built_route.steps
+                            if step.operation_code
+                        )
+                        cache_key = resolved_ops_summary
+                        
+                        import logging
+                        logger = logging.getLogger(__name__)
+                        logger.info(f"Route cache key: ops={resolved_ops_summary}")
+                        
+                        # Check cache first
+                        if cache_key in route_cache:
+                            created_route_id = route_cache[cache_key]
+                            # Use cached route - steps already exist
+                        else:
+                            # Lookup existing ProductionRoute
+                            existing_route = await db.scalar(
+                                select(ProductionRoute).where(
+                                    ProductionRoute.name == built_route.name,
+                                )
+                            )
+                            
+                            if existing_route is not None:
+                                # Route already exists - it should have steps
+                                created_route_id = existing_route.id
+                                route_cache[cache_key] = created_route_id
+                            else:
+                                # Create new ProductionRoute with steps
+                                created_route = ProductionRoute(
+                                    name=built_route.name,
+                                    is_active=True,
+                                    import_template_id=template_id,
+                                )
+                                db.add(created_route)
+                                await db.flush()
+                                
+                                # Create route steps with savepoint protection
+                                steps_created_successfully = False
+                                try:
+                                    async with db.begin_nested():
+                                        steps_added = 0
+                                        for step in built_route.steps:
+                                            section = await db.scalar(
+                                                select(Section).where(Section.code == step.section_code).limit(1)
+                                            )
+                                            if section is not None:
+                                                route_step = RouteStep(
+                                                    route_id=created_route.id,
+                                                    sequence=step.sequence,
+                                                    section_id=section.id,
+                                                    operation_code=step.operation_code,
+                                                    operation_name=step.operation_name,
+                                                    is_significant=step.is_significant,
+                                                    combined_op_group=step.combined_op_group,
+                                                )
+                                                db.add(route_step)
+                                                steps_added += 1
+                                            else:
+                                                import logging
+                                                logger = logging.getLogger(__name__)
+                                                logger.warning(f"Section not found for code: {step.section_code}")
+                                        
+                                        if steps_added == 0:
+                                            # No steps were added - this is a problem
+                                            import logging
+                                            logger = logging.getLogger(__name__)
+                                            logger.error(f"No steps added for route {built_route.name}. Built route has {len(built_route.steps)} steps. Steps: {[(s.section_code, s.operation_code) for s in built_route.steps]}")
+                                            raise ValueError(f"No steps added for route {built_route.name}. Built route has {len(built_route.steps)} steps.")
+                                        
+                                        await db.flush()
+                                        steps_created_successfully = True
+                                except Exception as step_error:
+                                    # Savepoint is automatically rolled back
+                                    # Check if steps exist (maybe created by concurrent process)
+                                    existing_steps_count = await db.scalar(
+                                        select(func.count(RouteStep.id)).where(
+                                            RouteStep.route_id == created_route.id
+                                        )
+                                    )
+                                    if existing_steps_count > 0:
+                                        # Steps exist, we can use this route
+                                        steps_created_successfully = True
+                                    else:
+                                        # Steps don't exist and creation failed - log and propagate
+                                        import logging
+                                        logger = logging.getLogger(__name__)
+                                        logger.error(f"Failed to create steps for route {built_route.name}: {step_error}", exc_info=True)
+                                        raise
+                                
+                                if steps_created_successfully:
+                                    created_route_id = created_route.id
+                                    route_cache[cache_key] = created_route_id
+                                else:
+                                    # This shouldn't happen, but just in case
+                                    raise ValueError(f"Route {built_route.name} created without steps")
+                        
+                        # Update after_data with the created route
+                        after_data["route_id"] = created_route_id
+                        after_data["route_name"] = built_route.name
+                        after_data["route_source"] = "dynamic_build"
+                        after_data["route_origin"] = PlanPositionRouteOrigin.auto.value
+                        after_data["route_assigned_at"] = datetime.now(UTC).isoformat()
+                        after_data["route_match_quality"] = PlanPositionRouteMatchQuality.exact.value
+            except Exception as route_error:
+                # Log route building errors but don't fail the entire import
+                import logging
+                logger = logging.getLogger(__name__)
+                logger.warning(f"Route building failed for row {row.source_sku}: {route_error}", exc_info=True)
+        
+        # Log final route_id
+        import logging
+        logging.getLogger(__name__).info(f"Final route_id for row {row.source_sku}: {after_data.get('route_id')}")
         if adjusted_quantities_by_component:
             after_data["adjusted_quantities_by_component"] = adjusted_quantities_by_component
 
