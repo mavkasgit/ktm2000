@@ -32,7 +32,7 @@ const errorLabelsRaw: Record<string, string> = {
   active_route_has_no_steps: "Маршрут без этапов",
   route_sequence_invalid: "Неверная последовательность маршрута",
   route_contains_inactive_section: "Неактивный участок в маршруте",
-  duplicate_sku_due_date: "Дубликат строки Excel: такая же строка уже есть",
+  duplicate_sku_due_date: "Дубликат строки",
   route_primary_operation_mismatch: "Основная операция маршрута не совпадает",
   route_not_matching_import_signature: "Маршрут не совпадает с ожидаемым",
   route_missing_required_step: "Отсутствует обязательный этап в маршруте",

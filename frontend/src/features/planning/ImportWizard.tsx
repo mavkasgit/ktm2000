@@ -46,7 +46,7 @@ const errorLabelsRaw: Record<string, string> = {
   active_route_has_no_steps: "Маршрут без этапов",
   route_sequence_invalid: "Неверная последовательность маршрута",
   route_contains_inactive_section: "Неактивный участок",
-  duplicate_sku_due_date: "Дубликат строки Excel",
+  duplicate_sku_due_date: "Дубликат строки",
   route_primary_operation_mismatch: "Основная операция маршрута не совпадает",
   route_not_matching_import_signature: "Маршрут не совпадает",
   route_missing_required_step: "Отсутствует обязательный этап",
@@ -87,8 +87,11 @@ function translateLabels(codes: string[] | unknown, labels: Record<string, strin
       }
       if (duplicateType === "against_existing") {
         const existingRow = afterData.duplicate_existing_row as number | undefined;
+        const existingId = afterData.duplicate_existing_id as number | undefined;
         if (existingRow != null) {
-          return `Дубликат строки #${existingRow} из плана`;
+          const rowPart = `#${existingRow}`;
+          const idPart = existingId != null ? ` / #${existingId}` : "";
+          return `Дубликат строки ${rowPart}${idPart} из плана`;
         }
       }
     }
@@ -123,7 +126,7 @@ function buildRouteMetaLabel(row: Record<string, unknown>): string {
     return `автомаппинг (${quality}) • ${assignedAt}`;
   }
   if (routeOrigin === "legacy" || routeSource === "legacy") {
-    return "legacy • дата неизвестна";
+    return `legacy • ${assignedAt}`;
   }
   if (routeSource === "missing") {
     return "не найден";
@@ -182,14 +185,14 @@ function RawPreviewTable({ rows, sortConfig, onSort, expanded }: RawPreviewTable
           </th>
           <th
             onClick={() => onSort?.("source_name")}
-            className="text-left p-2 w-[250px] cursor-pointer select-none whitespace-nowrap"
+            className="text-left p-2 w-[350px] cursor-pointer select-none whitespace-nowrap"
           >
             Наименование
             {sortConfig?.key === "source_name" ? (sortConfig.dir === "asc" ? " ▲" : " ▼") : ""}
           </th>
           <th
             onClick={() => onSort?.("route_name")}
-            className="text-left p-2 w-[250px] cursor-pointer select-none whitespace-nowrap"
+            className="text-left p-2 w-[280px] cursor-pointer select-none whitespace-nowrap"
           >
             Маршрут
             {sortConfig?.key === "route_name" ? (sortConfig.dir === "asc" ? " ▲" : " ▼") : ""}
@@ -216,6 +219,9 @@ function RawPreviewTable({ rows, sortConfig, onSort, expanded }: RawPreviewTable
           const status = String(row.status ?? "");
           const errors = translateLabels(row.errors as string[] | undefined, errorLabelsRaw, afterData);
           const warnings = translateLabels(row.warnings as string[] | undefined, warningLabelsRaw);
+          const noErrors = errors === "—";
+          const noWarnings = warnings === "—";
+          const routeColSpan = noErrors && noWarnings ? 3 : noWarnings ? 2 : 1;
           const rowNumbers = ((row.payload as any)?.row_numbers as number[] | undefined) ?? (afterData.source_row_numbers as number[] | undefined);
           const uniqueRowNumbers = Array.isArray(rowNumbers)
             ? Array.from(new Set(rowNumbers.filter((n): n is number => Number.isFinite(n))))
@@ -373,11 +379,11 @@ function RawPreviewTable({ rows, sortConfig, onSort, expanded }: RawPreviewTable
                   </span>
                 )}
               </td>
-              <td className="p-2">{displayName}</td>
-              <td className="p-2 text-xs">
+              <td className="p-2 max-w-[350px] truncate whitespace-nowrap" title={displayName}>{displayName}</td>
+              <td className="p-2 text-xs whitespace-nowrap" colSpan={routeColSpan}>
                 {displayRouteName ? (
-                  <div>
-                    <span title={routeMeta} className="font-medium">
+                  <div className="truncate" title={`${displayRouteName} ${routeMeta ? `(${routeMeta})` : ''}`}>
+                    <span className="font-medium">
                       {displayRouteName}
                     </span>
                     {routeMeta && (
@@ -387,13 +393,15 @@ function RawPreviewTable({ rows, sortConfig, onSort, expanded }: RawPreviewTable
                     )}
                   </div>
                 ) : routeSteps && routeSteps.length > 0 ? (
-                  <RouteStepsDisplay steps={routeSteps} compact />
+                  <div className="truncate whitespace-nowrap">
+                    <RouteStepsDisplay steps={routeSteps} compact />
+                  </div>
                 ) : (
                   <span className="text-muted-foreground">—</span>
                 )}
               </td>
-              <td className="p-2 text-red-600">{errors}</td>
-              <td className="p-2 text-amber-600">{warnings}</td>
+              {noErrors ? null : <td className="p-2 text-red-600">{errors}</td>}
+              {noWarnings ? null : <td className="p-2 text-amber-600">{warnings}</td>}
             </tr>
             {isExpanded && (effectiveRawRows.length > 0 || dupExistingRawRows.length > 0) && (
               <>
@@ -402,7 +410,7 @@ function RawPreviewTable({ rows, sortConfig, onSort, expanded }: RawPreviewTable
                     {effectiveRawRows.map((r, rowIdx) => {
                       return (
                       <tr key={`raw-${rowIdx}`} className="border-b bg-muted/30">
-                        <td colSpan={9} className="p-2 pl-6 text-[11px] leading-relaxed font-mono">
+                        <td colSpan={9 - (noErrors ? 1 : 0) - (noWarnings ? 1 : 0)} className="p-2 pl-6 text-[11px] leading-relaxed font-mono">
                           <div className="flex items-start gap-2">
                             <span className="font-bold text-muted-foreground shrink-0">
                               {planPosId != null ? `(#${planPosId}) ` : ""}
@@ -423,7 +431,7 @@ function RawPreviewTable({ rows, sortConfig, onSort, expanded }: RawPreviewTable
                       const dupId = afterData.duplicate_existing_id as number | undefined;
                       return (
                       <tr key={`dup-${rowIdx}`} className="border-b bg-red-50/50">
-                        <td colSpan={9} className="p-2 pl-6 text-[11px] leading-relaxed font-mono">
+                        <td colSpan={9 - (noErrors ? 1 : 0) - (noWarnings ? 1 : 0)} className="p-2 pl-6 text-[11px] leading-relaxed font-mono">
                           <div className="flex items-start gap-2">
                             <span className="font-bold text-red-600 shrink-0">
                               {dupId ? `(#${dupId}) ` : ""}#{r.rowNumber} (дубликат):
@@ -482,6 +490,8 @@ export function ImportWizard(props: {
   const [showRawRows, setShowRawRows] = useState(false)
   const [activeTemplateId, setActiveTemplateId] = useState<number | null>(props.templateId ?? null)
   const [normalizeHangerQuantity, setNormalizeHangerQuantity] = useState(true)
+  const [loadingStartTime, setLoadingStartTime] = useState<number | null>(null)
+  const [loadingElapsed, setLoadingElapsed] = useState(0)
 
   const fileInputRef = useRef<HTMLInputElement>(null)
   const navigate = useNavigate()
@@ -520,6 +530,24 @@ export function ImportWizard(props: {
     [selectedSheet, activeTemplateId, rowSelection, normalizeHangerQuantity],
   )
   const currentPreview = sheetPreviews[currentPreviewKey] ?? null
+
+  // Timer for loading progress
+  useEffect(() => {
+    if (previewLoading[currentPreviewKey] && !loadingStartTime) {
+      setLoadingStartTime(Date.now())
+    } else if (!previewLoading[currentPreviewKey] && loadingStartTime) {
+      setLoadingStartTime(null)
+      setLoadingElapsed(0)
+    }
+  }, [previewLoading, currentPreviewKey, loadingStartTime])
+
+  useEffect(() => {
+    if (!loadingStartTime) return
+    const interval = setInterval(() => {
+      setLoadingElapsed(Math.floor((Date.now() - loadingStartTime) / 1000))
+    }, 1000)
+    return () => clearInterval(interval)
+  }, [loadingStartTime])
 
   const allRows = useMemo(() => {
     const base = (currentPreview?.items as Record<string, unknown>[]) ?? []
@@ -940,6 +968,34 @@ export function ImportWizard(props: {
 
         {step === "preview" && file && sheets.length > 0 && (
           <div className="flex-1 overflow-hidden flex flex-col space-y-3">
+            {/* Loading state: spinner + progress bar */}
+            {previewLoading[currentPreviewKey] && (
+              <div className="flex-1 flex flex-col items-center justify-center p-8">
+                <div className="w-full max-w-md space-y-6">
+                  {/* Spinner */}
+                  <div className="flex justify-center">
+                    <div className="relative">
+                      <div className="w-12 h-12 border-4 border-muted rounded-full" />
+                      <div className="absolute inset-0 w-12 h-12 border-4 border-primary rounded-full border-t-transparent animate-spin" />
+                    </div>
+                  </div>
+
+                  {/* Progress bar with time */}
+                  <div className="space-y-2">
+                    <div className="h-2 bg-muted rounded-full overflow-hidden">
+                      <div
+                        className="h-full bg-primary rounded-full transition-all duration-1000 ease-linear"
+                        style={{ width: `${Math.min(95, 10 + (loadingElapsed / 6) * 85)}%` }}
+                      />
+                    </div>
+                    <div className="text-center text-xs text-muted-foreground">
+                      Загружено {loadingElapsed}с...
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+
             {/* Compact horizontal controls */}
             {currentPreview && (
               <>
@@ -1101,7 +1157,21 @@ export function ImportWizard(props: {
 
                 <div className="flex-1 overflow-auto border rounded-lg">
                   {previewLoading[currentPreviewKey] ? (
-                    <div className="flex items-center justify-center h-32 text-sm text-muted-foreground">Загрузка…</div>
+                    <div className="p-4 space-y-3">
+                      {Array.from({ length: 8 }).map((_, i) => (
+                        <div key={i} className="flex items-center gap-3 animate-pulse">
+                          <div className="w-6 h-4 bg-muted rounded" />
+                          <div className="w-12 h-4 bg-muted rounded" />
+                          <div className="w-8 h-4 bg-muted rounded" />
+                          <div className="w-20 h-4 bg-muted rounded" />
+                          <div className="w-10 h-4 bg-muted rounded" />
+                          <div className="flex-1 h-4 bg-muted rounded" style={{ maxWidth: "300px" }} />
+                          <div className="flex-1 h-4 bg-muted rounded" style={{ maxWidth: "250px" }} />
+                          <div className="flex-1 h-4 bg-muted rounded" style={{ maxWidth: "120px" }} />
+                          <div className="flex-1 h-4 bg-muted rounded" style={{ maxWidth: "180px" }} />
+                        </div>
+                      ))}
+                    </div>
                   ) : allRows.length === 0 ? (
                     <div className="flex items-center justify-center h-32 text-sm text-muted-foreground">Нет данных для отображения</div>
                   ) : (
