@@ -204,6 +204,45 @@ async def snapshot_spg(spg_id: int, db: AsyncSession = Depends(get_db)):
     return await get_spg_snapshot(db, spg_id=spg_id)
 
 
+@router.get("/{spg_id}/availability", dependencies=[Depends(require_role(list(READER_ROLES)))])
+async def get_spg_availability(
+    spg_id: int,
+    product_id: int,
+    section_id: int,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Return current available quantity for a product in a section, plus the SPG's requires_lot flag.
+
+    Used by the UI to cap the manual-operation out-quantity when requires_lot is set.
+    """
+    spg = await db.get(StorageProductionGroup, spg_id)
+    if spg is None:
+        raise HTTPException(status_code=404, detail="SPG not found")
+
+    section_ids = (await db.execute(
+        select(SpgSection.section_id).where(SpgSection.spg_id == spg_id)
+    )).scalars().all()
+    if section_id not in section_ids:
+        raise HTTPException(status_code=400, detail="Section does not belong to this SPG")
+
+    available = await db.scalar(
+        select(func.coalesce(func.sum(WarehouseRemainder.remainder_quantity), 0))
+        .where(
+            WarehouseRemainder.product_id == product_id,
+            WarehouseRemainder.section_id == section_id,
+            WarehouseRemainder.consumed_at.is_(None),
+        )
+    )
+
+    return {
+        "spg_id": spg_id,
+        "product_id": product_id,
+        "section_id": section_id,
+        "available": float(available or 0),
+        "requires_lot": spg.requires_lot,
+    }
+
+
 # ─── Manual Remainders (Inventory) ───────────────────────────────────────────
 
 

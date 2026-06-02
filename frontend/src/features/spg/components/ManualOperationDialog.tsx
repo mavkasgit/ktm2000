@@ -6,9 +6,12 @@ import { Button, Dialog, DialogContent, DialogHeader, DialogTitle, Input, Badge 
 import { listProducts, type Product } from "@/shared/api/products";
 import {
   performManualStockOperation,
+  getSpgAvailability,
   type ManualOperationType,
   type ManualOperationInput,
+  type SpgAvailability,
 } from "@/shared/api/spg";
+import { spgI18n } from "@/shared/i18n/spg";
 
 type SectionOption = {
   section_id: number;
@@ -52,6 +55,8 @@ export function ManualOperationDialog({
   const [comment, setComment] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [availability, setAvailability] = useState<SpgAvailability | null>(null);
+  const [availabilityLoading, setAvailabilityLoading] = useState(false);
 
   useEffect(() => {
     if (open) {
@@ -63,11 +68,34 @@ export function ManualOperationDialog({
       setComment("");
       setError(null);
       setProductSearch("");
+      setAvailability(null);
       if (products.length === 0) {
         listProducts({ limit: 200 }).then(setProducts).catch(() => {});
       }
     }
   }, [open, defaultProductId, defaultSectionId, defaultType, sections, products.length]);
+
+  useEffect(() => {
+    if (!open || selectedProductId == null || sectionId == null) {
+      setAvailability(null);
+      return;
+    }
+    let cancelled = false;
+    setAvailabilityLoading(true);
+    getSpgAvailability(spgId, selectedProductId, sectionId)
+      .then((data) => {
+        if (!cancelled) setAvailability(data);
+      })
+      .catch(() => {
+        if (!cancelled) setAvailability(null);
+      })
+      .finally(() => {
+        if (!cancelled) setAvailabilityLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [open, spgId, selectedProductId, sectionId]);
 
   const filteredProducts = productSearch.trim()
     ? products.filter(
@@ -113,11 +141,27 @@ export function ManualOperationDialog({
 
   const isIn = operationType === "in";
 
+  const isOutOfStock =
+    availability !== null && availability.available <= 0 && operationType === "out";
+  const exceedsAvailable =
+    availability !== null &&
+    operationType === "out" &&
+    parseFloat(quantity || "0") > availability.available;
+  const submitDisabled =
+    saving || isOutOfStock || exceedsAvailable;
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-[520px]">
         <DialogHeader>
-          <DialogTitle>Ручная операция с остатком</DialogTitle>
+          <div className="flex items-center">
+            <DialogTitle>Ручная операция с остатком</DialogTitle>
+            {availability?.requires_lot && (
+              <Badge variant="destructive" className="ml-2">
+                {spgI18n.ru.requiresLotBadge}
+              </Badge>
+            )}
+          </div>
         </DialogHeader>
 
         <div className="space-y-4 py-2">
@@ -139,11 +183,13 @@ export function ManualOperationDialog({
               </button>
               <button
                 type="button"
+                disabled={isOutOfStock}
+                title={isOutOfStock ? spgI18n.ru.availableNone : undefined}
                 className={`flex items-center justify-center gap-2 rounded-md border px-3 py-2 text-sm font-medium transition-colors ${
                   !isIn
                     ? "border-amber-500 bg-amber-50 text-amber-700"
                     : "hover:bg-accent text-muted-foreground"
-                }`}
+                } ${isOutOfStock ? "opacity-50 cursor-not-allowed" : ""}`}
                 onClick={() => setOperationType("out")}
               >
                 <ArrowUp className="h-4 w-4" />
@@ -214,12 +260,30 @@ export function ManualOperationDialog({
               value={quantity}
               onChange={(e) => setQuantity(e.target.value)}
               placeholder="0"
+              aria-invalid={exceedsAvailable}
+              className={exceedsAvailable ? "border-red-500 focus-visible:ring-red-500" : undefined}
             />
-            <p className="text-xs text-muted-foreground">
-              {isIn
-                ? "Будет добавлено к текущему остатку артикула на выбранном участке"
-                : "Будет списано. Допускается уход в минус (фиксируется постфактум)."}
-            </p>
+            {availabilityLoading ? (
+              <p className="text-xs text-muted-foreground">
+                <Loader2 className="inline h-3 w-3 mr-1 animate-spin" />
+                {spgI18n.ru.loading}
+              </p>
+            ) : availability ? (
+              <p className="text-sm text-muted-foreground">
+                {spgI18n.ru.availableLabel}: {availability.available}
+              </p>
+            ) : (
+              <p className="text-xs text-muted-foreground">
+                {isIn
+                  ? "Будет добавлено к текущему остатку артикула на выбранном участке"
+                  : "Будет списано. Допускается уход в минус (фиксируется постфактум)."}
+              </p>
+            )}
+            {exceedsAvailable && (
+              <p className="text-sm text-red-600 mt-1">
+                {spgI18n.ru.quantityExceedsAvailable}
+              </p>
+            )}
           </div>
 
           {/* Reason */}
@@ -248,7 +312,7 @@ export function ManualOperationDialog({
             <Button variant="outline" onClick={() => onOpenChange(false)} disabled={saving}>
               Отмена
             </Button>
-            <Button onClick={handleSave} disabled={saving}>
+            <Button onClick={handleSave} disabled={submitDisabled}>
               {saving ? (
                 <>
                   <Loader2 className="h-4 w-4 mr-1 animate-spin" />

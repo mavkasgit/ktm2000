@@ -304,3 +304,25 @@ export async function getRemainderHistory(
   );
   return data;
 }
+
+// ─── SPG Availability (requires_lot gate) ───────────────────────────────────
+
+export interface SpgAvailability {
+  spg_id: number;
+  product_id: number;
+  section_id: number;
+  available: number;
+  requires_lot: boolean;
+}
+
+export async function getSpgAvailability(
+  spgId: number,
+  productId: number,
+  sectionId: number,
+): Promise<SpgAvailability> {
+  const { data } = await apiClient.get<SpgAvailability>(
+    `/spg/${spgId}/availability`,
+    { params: { product_id: productId, section_id: sectionId } },
+  );
+  return data;
+}
