@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.defect import Defect
 from app.models.route import RouteStep
 from app.models.transfer import Transfer
+from app.models.user import User
 from app.models.work_task import WorkTask
 
 def _to_decimal(value: Decimal | int | float | str) -> Decimal:
@@ -57,4 +58,17 @@ async def _get_route_step(db: AsyncSession, route_step_id: int) -> RouteStep:
 
 def _transfer_no() -> str:
     return f"TR-{datetime.now(UTC).strftime('%Y%m%d%H%M%S%f')}"
+
+
+async def _get_user_snapshot_name(db: AsyncSession, user_id: int | None) -> str | None:
+    """Look up a user's display name (full_name, falling back to email) for snapshot purposes.
+
+    Returns None if user_id is None or the user doesn't exist (e.g., legacy data).
+    """
+    if user_id is None:
+        return None
+    user = await db.get(User, user_id)
+    if user is None:
+        return None
+    return user.full_name or user.email
 

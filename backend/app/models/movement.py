@@ -44,6 +44,8 @@ class Movement(Base):
     comment: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_by: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
     executor_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    created_by_user_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    executor_user_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     performed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     accounted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())

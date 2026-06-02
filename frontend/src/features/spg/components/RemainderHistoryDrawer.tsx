@@ -16,6 +16,7 @@ import {
   type RemainderHistoryResponse,
   type RemainderHistoryMovement,
 } from "@/shared/api/spg";
+import { spgI18n } from "@/shared/i18n/spg";
 
 interface RemainderHistoryDrawerProps {
   open: boolean;
@@ -61,6 +62,15 @@ function fmtDate(iso: string | null): string {
   });
 }
 
+function formatActor(
+  userId: number | null | undefined,
+  userName: string | null | undefined,
+): string {
+  if (userId != null) return userName ?? `Пользователь #${userId}`;
+  if (userName) return `Удалённый пользователь: ${userName}`;
+  return "Система";
+}
+
 function MovementRow({ m }: { m: RemainderHistoryMovement }) {
   const meta = MOVEMENT_TYPE_LABELS[m.movement_type] || {
     label: m.movement_type,
@@ -79,6 +89,18 @@ function MovementRow({ m }: { m: RemainderHistoryMovement }) {
         </div>
         <div className="text-xs text-muted-foreground mt-0.5">
           {fmtDate(m.performed_at || m.created_at)}
+        </div>
+        <div className="text-xs text-muted-foreground mt-1 space-y-0.5">
+          <p>
+            <span className="font-medium">{spgI18n.ru.createdBy}:</span>{" "}
+            {formatActor(m.created_by, m.created_by_user_name)}
+          </p>
+          {m.executor_user_id !== m.created_by && (
+            <p>
+              <span className="font-medium">{spgI18n.ru.executedBy}:</span>{" "}
+              {formatActor(m.executor_user_id, m.executor_user_name)}
+            </p>
+          )}
         </div>
         {(m.reason || m.comment) && (
           <div className="text-xs text-muted-foreground mt-0.5 truncate">
@@ -199,6 +221,9 @@ export function RemainderHistoryDrawer({
                     Использован: {fmtDate(data.remainder.consumed_at)}
                   </div>
                 )}
+                <div className="text-xs text-muted-foreground pt-2 border-t">
+                  {spgI18n.ru.createdBy}: {formatActor(data.remainder.created_by, data.remainder.created_by_user_name)}
+                </div>
               </div>
 
               {/* Origin */}

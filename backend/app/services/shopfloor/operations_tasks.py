@@ -14,7 +14,7 @@ from app.models.warehouse_remainder import WarehouseRemainder
 from app.models.work_task import WorkTask, WorkTaskStatus
 
 from .cache import _refresh_section_plan_line_cache, _refresh_task_cache
-from .common import _check_idempotency, _ensure_positive, _get_route_step, _get_task, _to_decimal
+from .common import _check_idempotency, _ensure_positive, _get_route_step, _get_task, _get_user_snapshot_name, _to_decimal
 
 async def issue_to_work(
     db: AsyncSession,
@@ -45,6 +45,9 @@ async def issue_to_work(
     # Allow over-plan issuing: no longer restrict by cached_available_quantity
 
     now = datetime.now(UTC)
+    eff_executor = executor_user_id or actor_id
+    actor_name = await _get_user_snapshot_name(db, actor_id)
+    executor_name = await _get_user_snapshot_name(db, eff_executor)
     movement = Movement(
         product_id=task.product_id,
         task_id=task.id,
@@ -57,7 +60,9 @@ async def issue_to_work(
         idempotency_key=idempotency_key,
         comment=comment,
         created_by=actor_id,
-        executor_user_id=executor_user_id or actor_id,
+        executor_user_id=eff_executor,
+        created_by_user_name=actor_name,
+        executor_user_name=executor_name,
         performed_at=performed_at or now,
         accounted_at=accounted_at or now,
     )
@@ -83,6 +88,18 @@ async def complete_task(
     performed_at: datetime | None = None,
     accounted_at: datetime | None = None,
 ) -> dict:
+    """Complete (good + defect) quantity on a SectionTask.
+
+    The completion is bounded by `cached_in_work_quantity` — i.e. by what
+    the section has issued into work, which itself is bounded by what was
+    available in the SPG (`cached_available_quantity`, the sum of the
+    initial planned amount for the first stage and any quantity received
+    via transfers from the previous SPG).
+
+    Transfer of the completed quantity to the next SPG is a SEPARATE
+    process handled by the transfers module; this function does NOT
+    initiate or depend on it.
+    """
     task = await _get_task(db, task_id)
 
     if idempotency_key:
@@ -119,6 +136,8 @@ async def complete_task(
     eff_performed = performed_at or now
     eff_accounted = accounted_at or now
     eff_executor = executor_user_id or actor_id
+    actor_name = await _get_user_snapshot_name(db, actor_id)
+    executor_name = await _get_user_snapshot_name(db, eff_executor)
 
     movement_ids: list[int] = []
     defect_id: int | None = None
@@ -136,6 +155,8 @@ async def complete_task(
             created_by=actor_id,
             idempotency_key=idempotency_key,
             executor_user_id=eff_executor,
+            created_by_user_name=actor_name,
+            executor_user_name=executor_name,
             performed_at=eff_performed,
             accounted_at=eff_accounted,
         )
@@ -158,6 +179,8 @@ async def complete_task(
             created_by=actor_id,
             idempotency_key=f"{idempotency_key}:reject" if idempotency_key else None,
             executor_user_id=eff_executor,
+            created_by_user_name=actor_name,
+            executor_user_name=executor_name,
             performed_at=eff_performed,
             accounted_at=eff_accounted,
         )
@@ -227,6 +250,9 @@ async def final_release(
     if quantity > releasable:
         raise ValueError("Final release exceeds releasable quantity")
 
+    eff_executor = executor_user_id or actor_id
+    actor_name = await _get_user_snapshot_name(db, actor_id)
+    executor_name = await _get_user_snapshot_name(db, eff_executor)
     movement = Movement(
         product_id=task.product_id,
         task_id=task.id,
@@ -238,7 +264,9 @@ async def final_release(
         comment=comment,
         created_by=actor_id,
         idempotency_key=idempotency_key,
-        executor_user_id=executor_user_id or actor_id,
+        executor_user_id=eff_executor,
+        created_by_user_name=actor_name,
+        executor_user_name=executor_name,
         performed_at=performed_at or datetime.now(UTC),
         accounted_at=accounted_at or datetime.now(UTC),
     )
@@ -364,6 +392,8 @@ async def return_remainder_to_stock(
             })
 
     # Create remainder record
+    actor_name = await _get_user_snapshot_name(db, actor_id)
+    executor_name = await _get_user_snapshot_name(db, eff_executor)
     remainder = WarehouseRemainder(
         product_id=task.product_id,
         section_id=task.section_id,
@@ -373,6 +403,8 @@ async def return_remainder_to_stock(
         remainder_quantity=quantity,
         original_issued=quantity,
         completed_stages_json=completed_stages,
+        created_by=actor_id,
+        created_by_user_name=actor_name,
     )
     db.add(remainder)
 
@@ -389,6 +421,8 @@ async def return_remainder_to_stock(
         created_by=actor_id,
         idempotency_key=idempotency_key,
         executor_user_id=eff_executor,
+        created_by_user_name=actor_name,
+        executor_user_name=executor_name,
         performed_at=eff_performed,
         accounted_at=eff_accounted,
     )
@@ -437,6 +471,8 @@ async def consume_remainder(
     eff_executor = executor_user_id or actor_id
 
     # Create issue movement
+    actor_name = await _get_user_snapshot_name(db, actor_id)
+    executor_name = await _get_user_snapshot_name(db, eff_executor)
     movement = Movement(
         product_id=task.product_id,
         task_id=task.id,
@@ -450,6 +486,8 @@ async def consume_remainder(
         created_by=actor_id,
         idempotency_key=idempotency_key,
         executor_user_id=eff_executor,
+        created_by_user_name=actor_name,
+        executor_user_name=executor_name,
         performed_at=eff_performed,
         accounted_at=eff_accounted,
     )

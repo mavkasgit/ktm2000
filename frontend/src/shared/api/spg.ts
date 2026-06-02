@@ -223,6 +223,8 @@ export type RemainderHistoryRemainder = {
   }>;
   created_at: string;
   consumed_at: string | null;
+  created_by?: number | null;
+  created_by_user_name?: string | null;
 };
 
 export type RemainderHistoryOrigin = {
@@ -279,6 +281,10 @@ export type RemainderHistoryMovement = {
   comment: string | null;
   created_at: string;
   performed_at: string | null;
+  created_by?: number | null;
+  created_by_user_name?: string | null;
+  executor_user_id?: number | null;
+  executor_user_name?: string | null;
 };
 
 export type RemainderHistoryResponse = {

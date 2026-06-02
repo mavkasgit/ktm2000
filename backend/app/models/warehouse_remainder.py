@@ -30,6 +30,10 @@ class WarehouseRemainder(Base):
     original_issued: Mapped[Decimal] = mapped_column(Numeric(14, 3), nullable=False)
     completed_stages_json: Mapped[dict] = mapped_column(JSONB, nullable=False, server_default=text("'[]'::jsonb"), default=list)
     source: Mapped[str] = mapped_column(String(20), nullable=False, server_default=text("'task'"), default="task")
+    created_by: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    created_by_user_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
     consumed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     consumed_by_task_id: Mapped[int | None] = mapped_column(ForeignKey("work_tasks.id"), nullable=True)

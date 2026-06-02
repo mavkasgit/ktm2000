@@ -10,7 +10,7 @@ from app.models.movement import Movement, MovementType
 from app.models.rework_task import ReworkTask, ReworkTaskStatus
 
 from .cache import _refresh_section_plan_line_cache, _refresh_task_cache
-from .common import _check_idempotency, _ensure_positive, _get_defect, _get_task, _to_decimal
+from .common import _check_idempotency, _ensure_positive, _get_defect, _get_task, _get_user_snapshot_name, _to_decimal
 
 async def create_defect(
     db: AsyncSession,
@@ -132,6 +132,7 @@ async def defect_decide(
 
     rework_task_id: int | None = None
     if decision_type == DefectDecisionType.scrap:
+        actor_name = await _get_user_snapshot_name(db, actor_id)
         movement = Movement(
             product_id=task.product_id,
             task_id=task.id,
@@ -143,6 +144,7 @@ async def defect_decide(
             reason=reason,
             comment=comment,
             created_by=actor_id,
+            created_by_user_name=actor_name,
         )
         db.add(movement)
         defect.status = DefectStatus.scrapped

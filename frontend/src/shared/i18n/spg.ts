@@ -17,6 +17,11 @@ export const spgI18n = {
     availableNone: "Нет в наличии",
     quantityExceedsAvailable: "Превышает доступное количество",
     loading: "Загрузка...",
+    createdBy: "Создал",
+    executedBy: "Исполнитель",
+    systemUser: "Система",
+    deletedUser: "Удалённый пользователь",
+    userFallback: "Пользователь #",
   },
   en: {
     manualOperation: "Manual operation",
@@ -36,6 +41,11 @@ export const spgI18n = {
     availableNone: "Out of stock",
     quantityExceedsAvailable: "Exceeds available quantity",
     loading: "Loading...",
+    createdBy: "Created by",
+    executedBy: "Executed by",
+    systemUser: "System",
+    deletedUser: "Deleted user",
+    userFallback: "User #",
   },
 };
 

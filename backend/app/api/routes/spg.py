@@ -16,6 +16,7 @@ from app.models.spg import SpgSection, StorageProductionGroup
 from app.models.user import User
 from app.models.warehouse_remainder import WarehouseRemainder
 from app.models.work_task import WorkTask
+from app.services.shopfloor.common import _get_user_snapshot_name
 from app.services.shopfloor.queries_spg import get_spg_snapshot
 
 router = APIRouter(prefix="/spg", tags=["spg"])
@@ -330,6 +331,7 @@ async def create_manual_remainder(
     spg_id: int,
     payload: ManualRemainderCreate,
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ) -> RemainderOut:
     """Create a manual remainder (inventory entry) for a product in a SPG section."""
     spg = await db.get(StorageProductionGroup, spg_id)
@@ -356,6 +358,7 @@ async def create_manual_remainder(
 
     stages = [s.model_dump() for s in payload.completed_stages]
 
+    actor_name = await _get_user_snapshot_name(db, current_user.id)
     remainder = WarehouseRemainder(
         product_id=payload.product_id,
         section_id=payload.section_id,
@@ -366,6 +369,8 @@ async def create_manual_remainder(
         original_issued=payload.quantity,
         completed_stages_json=stages,
         source="manual",
+        created_by=current_user.id,
+        created_by_user_name=actor_name,
     )
     db.add(remainder)
     await db.flush()
@@ -559,6 +564,7 @@ async def manual_stock_operation(
         raise HTTPException(status_code=404, detail="Section not found")
 
     now = datetime.now()
+    actor_name = await _get_user_snapshot_name(db, current_user.id)
     affected_remainder_id: int | None = None
     new_qty: float = 0.0
 
@@ -590,6 +596,8 @@ async def manual_stock_operation(
                 original_issued=qty,
                 completed_stages_json=[],
                 source="manual",
+                created_by=current_user.id,
+                created_by_user_name=actor_name,
             )
             db.add(rem)
             await db.flush()
@@ -622,6 +630,8 @@ async def manual_stock_operation(
                 original_issued=qty,
                 completed_stages_json=[],
                 source="manual",
+                created_by=current_user.id,
+                created_by_user_name=actor_name,
             )
             db.add(rem)
             await db.flush()
@@ -641,6 +651,8 @@ async def manual_stock_operation(
         comment=payload.comment,
         created_by=current_user.id,
         executor_user_id=current_user.id,
+        created_by_user_name=actor_name,
+        executor_user_name=actor_name,
         performed_at=now,
         accounted_at=now,
         idempotency_key=payload.idempotency_key,
@@ -703,6 +715,8 @@ async def get_remainder_history(
         "original_issued": float(remainder.original_issued),
         "source": remainder.source,
         "completed_stages": remainder.completed_stages_json,
+        "created_by": remainder.created_by,
+        "created_by_user_name": remainder.created_by_user_name,
         "created_at": remainder.created_at.isoformat(),
         "consumed_at": remainder.consumed_at.isoformat() if remainder.consumed_at else None,
     }
@@ -800,6 +814,10 @@ async def get_remainder_history(
             "to_section_id": m.to_section_id,
             "reason": m.reason,
             "comment": m.comment,
+            "created_by": m.created_by,
+            "created_by_user_name": m.created_by_user_name,
+            "executor_user_id": m.executor_user_id,
+            "executor_user_name": m.executor_user_name,
             "created_at": m.created_at.isoformat(),
             "performed_at": m.performed_at.isoformat() if m.performed_at else None,
         })
