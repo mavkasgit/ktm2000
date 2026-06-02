@@ -6,6 +6,7 @@ import { PlanPage } from "../features/planning/pages/PlanPage"
 import { PlanPreviewPage } from "../features/planning/pages/PlanPreviewPage"
 import { ExecutionPage } from "../features/execution/pages/ExecutionPage"
 import { SectionsTasksPage } from "../features/sections/pages/SectionsTasksPage"
+import { SpgSnapshotPage } from "../features/spg/pages/SpgSnapshotPage"
 import { SettingsPage } from "../features/settings/SettingsPage"
 import { BackupsPage } from "../features/settings/SettingsBackupsPage"
 
@@ -32,6 +33,8 @@ export const router = createBrowserRouter([
       { path: "execution", element: <ExecutionPage /> },
       { path: "shopfloor-tasks", element: <SectionsTasksPage /> },
       { path: "shopfloor-tasks/:sectionId", element: <SectionsTasksPage /> },
+      { path: "spg", element: <SpgSnapshotPage /> },
+      { path: "spg/:spgId", element: <SpgSnapshotPage /> },
       {
         path: "settings",
         element: <SettingsPage />,

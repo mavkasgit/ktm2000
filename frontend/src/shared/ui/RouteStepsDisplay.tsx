@@ -11,7 +11,7 @@ type RouteStep = {
   combined_op_group: string | null
 }
 
-type RouteStepsDisplayProps = {
+export type RouteStepsDisplayProps = {
   steps: RouteStep[]
   compact?: boolean
 }
