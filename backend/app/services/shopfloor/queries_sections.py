@@ -21,7 +21,6 @@ from app.models.work_task import WorkTask, WorkTaskStatus
 
 from .cache import _compute_available_from_balances
 from .common import _to_decimal
-from .operations_combined import get_combined_info_for_board
 
 
 def _compute_display_sku(source_sku: str, output_sku: str) -> str:
@@ -378,101 +377,7 @@ async def get_section_board(
             "route_history_after_full": route_history_after_full,
         })
 
-    # --- Combined operations processing ---
-    # Collect unique plan_position_ids
-    plan_position_ids = {row[1].plan_position_id for row in rows}  # row[1] = SectionPlanLine
-
-    # Get combined group info for all plan positions
-    combined_by_pos: dict[int, dict] = {}
-    for pos_id in plan_position_ids:
-        # Get source_payload for this position
-        pos = position_by_id.get(pos_id)
-        src_payload = (pos.source_payload or {}) if pos else {}
-        info = await get_combined_info_for_board(db, pos_id, src_payload)
-        if info:
-            combined_by_pos[pos_id] = info
-
-    # Build lookup: line_id -> combined_op_group
-    line_to_cog: dict[int, str] = {}
-    for task, line, step, *_ in rows:
-        if step.combined_op_group:
-            line_to_cog[line.id] = step.combined_op_group
-
-    # Identify secondary line IDs per plan_position
-    secondary_line_ids: set[int] = set()
-    for pos_id, groups in combined_by_pos.items():
-        for cog, group_info in groups.items():
-            for sec_line_id in group_info.get("secondary_line_ids", []):
-                secondary_line_ids.add(sec_line_id)
-
-    # Build lookup: plan_position_id + cog -> operation_names
-    cog_op_names: dict[tuple[int, str], list[str]] = {}
-    for pos_id, groups in combined_by_pos.items():
-        for cog, group_info in groups.items():
-            cog_op_names[(pos_id, cog)] = group_info.get("operation_names", [])
-
-    # Filter out secondary tasks and add combined fields to primary tasks
-    td_all_by_line_id = tasks_data  # Reference for secondary task lookup
-
-    filtered_tasks_data = []
-    for td in tasks_data:
-        line_id = td["section_plan_line_id"]
-        if line_id in secondary_line_ids:
-            # Skip secondary tasks — they are executed together with primary
-            continue
-
-        # Check if this is a primary task in a combined group
-        pos_id = td["plan_position_id"]
-        cog = line_to_cog.get(line_id)
-        if cog and pos_id in combined_by_pos and cog in combined_by_pos[pos_id]:
-            # This is a primary task
-            group_info = combined_by_pos[pos_id][cog]
-            # Find secondary task IDs
-            sec_task_ids = []
-            for sec_line_id in group_info.get("secondary_line_ids", []):
-                sec_task = next((t for t in td_all_by_line_id if t["section_plan_line_id"] == sec_line_id), None)
-                if sec_task:
-                    sec_task_ids.append(sec_task["id"])
-
-            td["is_combined_primary"] = True
-            td["combined_task_ids"] = sec_task_ids
-            op_names = group_info.get("operation_names", [])
-            op_codes = group_info.get("operation_codes", [])
-            td["combined_operation_names"] = op_names
-            td["combined_operation_codes"] = op_codes
-            # For combined tasks, replace generic section name with actual operation names
-            if op_names:
-                td["operation_name"] = " / ".join(op_names)
-                # Update task's own operation fields to reflect the first combined operation
-                first_op_code = op_codes[0] if op_codes else ""
-                td["operation_code"] = first_op_code
-                first_icon_info = icon_by_section_op.get((td["section_id"], first_op_code)) if first_op_code else None
-                td["icon"] = first_icon_info["icon"] if first_icon_info else None
-                td["icon_color"] = first_icon_info["icon_color"] if first_icon_info else None
-                td["is_significant"] = True  # Combined operations are always significant
-                # Build combined operations for both visual and full histories
-                combined_ops_after = []
-                for op_name, op_code in zip(op_names, op_codes):
-                    icon_info = icon_by_section_op.get((td["section_id"], op_code)) if op_code else None
-                    combined_ops_after.append({
-                        "operation_code": op_code or "",
-                        "operation_name": op_name,
-                        "is_significant": True,
-                        "icon": icon_info["icon"] if icon_info else None,
-                        "icon_color": icon_info["icon_color"] if icon_info else None,
-                    })
-                # Update both visual and full route_history_after
-                td["route_history_after"] = td["route_history"] + combined_ops_after
-                td["route_history_after_full"] = td["route_history_full"] + combined_ops_after
-        else:
-            td["is_combined_primary"] = False
-            td["combined_task_ids"] = []
-            td["combined_operation_names"] = []
-            td["combined_operation_codes"] = []
-
-        filtered_tasks_data.append(td)
-
-    return {"section_id": section_id, "tasks": filtered_tasks_data, "available_operations": available_operations}
+    return {"section_id": section_id, "tasks": tasks_data, "available_operations": available_operations}
 
 
 async def get_sections_summary(db: AsyncSession) -> dict:
@@ -570,88 +475,16 @@ async def get_section_incoming_transfers(
     *,
     section_id: int,
 ) -> dict:
-    """Return incoming open transfers for a section."""
-    from_section = aliased(Section)
-    to_section = aliased(Section)
-    from_task = aliased(WorkTask)
-    to_task = aliased(WorkTask)
-    from_step = aliased(RouteStep)
-    to_step = aliased(RouteStep)
-    from_line = aliased(SectionPlanLine)
+    """Return incoming open transfers for a section.
 
-    rows = (
-        await db.execute(
-            select(
-                Transfer,
-                from_section,
-                to_section,
-                from_task,
-                to_task,
-                from_step,
-                to_step,
-                from_line,
-                Product.sku,
-            )
-            .join(from_section, from_section.id == Transfer.from_section_id)
-            .join(to_section, to_section.id == Transfer.to_section_id)
-            .join(from_task, from_task.id == Transfer.from_task_id)
-            .join(to_task, to_task.id == Transfer.to_task_id)
-            .join(from_step, from_step.id == from_task.route_step_id)
-            .join(to_step, to_step.id == to_task.route_step_id)
-            .join(from_line, from_line.id == from_task.section_plan_line_id)
-            .join(Product, Product.id == from_task.product_id)
-            .where(
-                Transfer.to_section_id == section_id,
-                Transfer.status.in_([TransferStatus.sent, TransferStatus.partially_accepted]),
-            )
-            .order_by(Transfer.sent_at.desc().nullslast(), Transfer.id.desc())
-        )
-    ).all()
+    Moved to :mod:`app.transfers.queries`.  Kept here as a thin
+    re-export for backward compatibility with the legacy
+    ``from app.services.shopfloor.queries_sections import
+    get_section_incoming_transfers`` import path.
+    """
+    from app.transfers.queries import get_section_incoming_transfers as _impl
 
-    transfers = []
-    for transfer, from_sec, to_sec, src_task, dst_task, src_step, dst_step, src_line, product_sku in rows:
-        sent = _to_decimal(transfer.sent_quantity or 0)
-        accepted = _to_decimal(transfer.accepted_quantity or 0)
-        rejected = _to_decimal(transfer.rejected_quantity or 0)
-        remaining = sent - accepted - rejected
-        if remaining < 0:
-            remaining = Decimal("0")
-
-        transfers.append(
-            {
-                "transfer_id": transfer.id,
-                "transfer_no": transfer.transfer_no,
-                "status": transfer.status.value,
-                "from_task_id": transfer.from_task_id,
-                "to_task_id": transfer.to_task_id,
-                "from_section_id": transfer.from_section_id,
-                "from_section_code": from_sec.code,
-                "from_section_name": from_sec.name,
-                "to_section_id": transfer.to_section_id,
-                "to_section_code": to_sec.code,
-                "to_section_name": to_sec.name,
-                "from_operation_name": src_step.operation_name,
-                "to_operation_name": dst_step.operation_name,
-                "sent_quantity": str(sent),
-                "accepted_quantity": str(accepted),
-                "rejected_quantity": str(rejected),
-                "remaining_quantity": str(remaining),
-                "comment": transfer.comment,
-                "sent_at": transfer.sent_at.isoformat() if transfer.sent_at else None,
-                "created_at": transfer.created_at.isoformat() if transfer.created_at else None,
-                "from_task_status": src_task.status.value,
-                "to_task_status": dst_task.status.value,
-                "product_sku": product_sku,
-                "from_line_id": src_line.id,
-                "from_line_sequence": src_line.sequence,
-                "plan_position_id": src_line.plan_position_id,
-            }
-        )
-
-    return {
-        "section_id": section_id,
-        "incoming_transfers": transfers,
-    }
+    return await _impl(db, section_id=section_id)
 
 
 async def get_section_daily_stats(

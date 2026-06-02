@@ -7,6 +7,7 @@ import { PlanPreviewPage } from "../features/planning/pages/PlanPreviewPage"
 import { ExecutionPage } from "../features/execution/pages/ExecutionPage"
 import { SectionsTasksPage } from "../features/sections/pages/SectionsTasksPage"
 import { SpgSnapshotPage } from "../features/spg/pages/SpgSnapshotPage"
+import { TransfersPage } from "../features/transfers/pages/TransfersPage"
 import { SettingsPage } from "../features/settings/SettingsPage"
 import { BackupsPage } from "../features/settings/SettingsBackupsPage"
 
@@ -35,6 +36,7 @@ export const router = createBrowserRouter([
       { path: "shopfloor-tasks/:sectionId", element: <SectionsTasksPage /> },
       { path: "spg", element: <SpgSnapshotPage /> },
       { path: "spg/:spgId", element: <SpgSnapshotPage /> },
+      { path: "transfers", element: <TransfersPage /> },
       {
         path: "settings",
         element: <SettingsPage />,

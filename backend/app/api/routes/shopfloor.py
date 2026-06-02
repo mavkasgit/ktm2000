@@ -28,19 +28,19 @@ from app.services.shopfloor_service import (
     get_route_stage_aggregates_for_plan_position,
     get_section_board,
     get_section_daily_stats,
-    get_section_incoming_transfers,
     get_section_payload_keys,
     get_sections_summary,
     get_task_details,
-    get_transfer_details,
     get_warehouse_remainders,
     issue_to_work,
     link_attachment,
     prepare_section_task,
-    resolve_combined_group,
-    resolve_transfer_discrepancy_link,
     return_remainder_to_stock,
     rework_create,
+)
+from app.transfers.queries import get_section_incoming_transfers, get_transfer_details
+from app.transfers.services import (
+    resolve_transfer_discrepancy_link,
     transfer_receive,
     transfer_send,
 )
@@ -240,34 +240,6 @@ async def issue_task(
 ) -> dict:
     await _ensure_task_lock(db, task_id, locked_section_id)
     try:
-        combined = await resolve_combined_group(db, task_id)
-        if combined:
-            # Issue all tasks in the combined group
-            movement_ids = []
-            task_ids = []
-            status = None
-            for t in combined.all_tasks:
-                result = await issue_to_work(
-                    db,
-                    task_id=t.id,
-                    quantity=payload.quantity,
-                    actor_id=current_user.id,
-                    comment=payload.comment,
-                    source_ref=payload.source_ref,
-                    idempotency_key=payload.idempotency_key,
-                    executor_user_id=payload.executor_user_id,
-                    performed_at=payload.performed_at,
-                    accounted_at=payload.accounted_at,
-                )
-                movement_ids.append(result["movement_id"])
-                task_ids.append(result["task_id"])
-                status = result["status"]
-            return {
-                "movement_ids": movement_ids,
-                "task_ids": task_ids,
-                "status": status,
-                "combined_group": True,
-            }
         return await issue_to_work(
             db,
             task_id=task_id,
@@ -294,38 +266,6 @@ async def complete_task_endpoint(
 ) -> dict:
     await _ensure_task_lock(db, task_id, locked_section_id)
     try:
-        combined = await resolve_combined_group(db, task_id)
-        if combined:
-            movement_ids = []
-            task_ids = []
-            defect_ids = []
-            status = None
-            for t in combined.all_tasks:
-                result = await complete_task(
-                    db,
-                    task_id=t.id,
-                    good_quantity=payload.good_quantity,
-                    defect_quantity=payload.defect_quantity,
-                    actor_id=current_user.id,
-                    defect_reason=payload.defect_reason,
-                    comment=payload.comment,
-                    idempotency_key=payload.idempotency_key,
-                    executor_user_id=payload.executor_user_id,
-                    performed_at=payload.performed_at,
-                    accounted_at=payload.accounted_at,
-                )
-                movement_ids.extend(result["movement_ids"])
-                task_ids.append(result["task_id"])
-                if result.get("defect_id"):
-                    defect_ids.append(result["defect_id"])
-                status = result["status"]
-            return {
-                "movement_ids": movement_ids,
-                "task_ids": task_ids,
-                "defect_ids": defect_ids,
-                "status": status,
-                "combined_group": True,
-            }
         return await complete_task(
             db,
             task_id=task_id,
@@ -387,35 +327,14 @@ async def create_transfer(
     current_user: User = Depends(get_current_user),
     locked_section_id: int | None = Depends(get_single_window_locked_section_id),
 ) -> dict:
+    """Deprecated: thin proxy for ``POST /api/transfers``.
+
+    Kept so external clients that still hit
+    ``/api/shopfloor/transfers`` keep working.  New code MUST call
+    ``/api/transfers`` directly.
+    """
     await _ensure_task_lock(db, payload.from_task_id, locked_section_id)
     try:
-        combined = await resolve_combined_group(db, payload.from_task_id)
-        if combined:
-            transfer_ids = []
-            to_task_ids = []
-            status = None
-            for t in combined.all_tasks:
-                result = await transfer_send(
-                    db,
-                    from_task_id=t.id,
-                    to_task_id=None,  # Auto-create target task
-                    quantity=payload.quantity,
-                    actor_id=current_user.id,
-                    comment=payload.comment,
-                    idempotency_key=payload.idempotency_key,
-                    executor_user_id=payload.executor_user_id,
-                    performed_at=payload.performed_at,
-                    accounted_at=payload.accounted_at,
-                )
-                transfer_ids.append(result["transfer_id"])
-                to_task_ids.append(result["to_task_id"])
-                status = result["status"]
-            return {
-                "transfer_ids": transfer_ids,
-                "to_task_ids": to_task_ids,
-                "status": status,
-                "combined_group": True,
-            }
         return await transfer_send(
             db,
             from_task_id=payload.from_task_id,

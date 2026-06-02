@@ -25,6 +25,7 @@ from app.api.routes.shopfloor_operations import router as shopfloor_ops_router
 from app.api.routes.spg import router as spg_router
 from app.api.routes.demo import router as demo_router
 from app.api.backups import router as backups_router
+from app.transfers.api import router as transfers_router
 from app.core.config import settings
 from app.core.database import async_session
 
@@ -67,6 +68,7 @@ app.include_router(shopfloor_ops_router, prefix="/api")
 app.include_router(spg_router, prefix="/api")
 app.include_router(demo_router, prefix="/api")
 app.include_router(backups_router, prefix="/api")
+app.include_router(transfers_router, prefix="/api")
 
 
 @app.get("/api/health")

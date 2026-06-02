@@ -4,17 +4,16 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.attachment import Attachment, AttachmentLink
-from app.models.defect import DefectDecision, DefectItem, TransferDiscrepancyDefectItem
+from app.models.defect import DefectDecision, DefectItem
 from app.models.entity_comment import EntityComment, EntityType
 from app.models.internal_plan import SectionPlanLine
 from app.models.movement import Movement
 from app.models.rework_task import ReworkTask
 from app.models.route import RouteStep
 from app.models.section import Section
-from app.models.transfer import TransferDiscrepancy
 
 from .cache import _compute_available_from_balances
-from .common import _get_defect, _get_task, _get_transfer, _to_decimal
+from .common import _get_defect, _get_task, _to_decimal
 
 async def get_task_details(db: AsyncSession, task_id: int) -> dict:
     task = await _get_task(db, task_id)
@@ -71,52 +70,16 @@ async def get_task_details(db: AsyncSession, task_id: int) -> dict:
     }
 
 async def get_transfer_details(db: AsyncSession, transfer_id: int) -> dict:
-    transfer = await _get_transfer(db, transfer_id)
-    discrepancies = (
-        await db.execute(
-            select(TransferDiscrepancy).where(TransferDiscrepancy.transfer_id == transfer.id).order_by(TransferDiscrepancy.id)
-        )
-    ).scalars().all()
-    result_discrepancies = []
-    for d in discrepancies:
-        links = (
-            await db.execute(
-                select(TransferDiscrepancyDefectItem, DefectItem)
-                .join(DefectItem, DefectItem.id == TransferDiscrepancyDefectItem.defect_item_id)
-                .where(TransferDiscrepancyDefectItem.transfer_discrepancy_id == d.id)
-            )
-        ).all()
-        result_discrepancies.append(
-            {
-                "id": d.id,
-                "discrepancy_quantity": str(d.discrepancy_quantity),
-                "resolved_quantity": str(d.resolved_quantity),
-                "unresolved_quantity": str(d.unresolved_quantity),
-                "status": d.status.value,
-                "reason": d.reason,
-                "comment": d.comment,
-                "links": [
-                    {
-                        "id": link.id,
-                        "defect_item_id": item.id,
-                        "defect_id": item.defect_id,
-                        "quantity": str(link.quantity),
-                    }
-                    for link, item in links
-                ],
-            }
-        )
-    return {
-        "id": transfer.id,
-        "transfer_no": transfer.transfer_no,
-        "status": transfer.status.value,
-        "from_task_id": transfer.from_task_id,
-        "to_task_id": transfer.to_task_id,
-        "sent_quantity": str(transfer.sent_quantity),
-        "accepted_quantity": str(transfer.accepted_quantity) if transfer.accepted_quantity is not None else None,
-        "rejected_quantity": str(transfer.rejected_quantity) if transfer.rejected_quantity is not None else None,
-        "discrepancies": result_discrepancies,
-    }
+    """Transfer details with discrepancies.
+
+    Moved to :mod:`app.transfers.queries`.  Kept here as a thin
+    re-export for backward compatibility with the legacy
+    ``from app.services.shopfloor.queries_details import
+    get_transfer_details`` import path.
+    """
+    from app.transfers.queries import get_transfer_details as _impl
+
+    return await _impl(db, transfer_id)
 
 async def get_defect_details(db: AsyncSession, defect_id: int) -> dict:
     defect = await _get_defect(db, defect_id)

@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from "react"
 import { NavLink, Outlet, useLocation } from "react-router-dom"
-import { Boxes, ClipboardList, Gauge, Factory, Cog, Wrench, Layers, Menu, X } from "lucide-react"
+import { Boxes, ClipboardList, Gauge, Factory, Cog, Wrench, Layers, Menu, X, ArrowRightLeft } from "lucide-react"
 
 const navItems = [
   { to: "/", label: "Обзор", icon: Gauge },
@@ -8,6 +8,7 @@ const navItems = [
   { to: "/planning", label: "План", icon: ClipboardList },
   { to: "/execution", label: "Контроль выполнения", icon: Factory },
   { to: "/shopfloor-tasks", label: "Участки", icon: Wrench },
+  { to: "/transfers", label: "Передачи", icon: ArrowRightLeft },
   { to: "/spg", label: "Группы (SPG)", icon: Layers },
   { to: "/settings", label: "Настройки", icon: Cog },
 ]
