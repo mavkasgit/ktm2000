@@ -13,7 +13,16 @@ import {
 // Helpers
 // ---------------------------------------------------------------------------
 
-function makeTask(overrides: Partial<MockTask> & { id: number }): MockTask {
+type MakeTaskOverrides = {
+  id: number;
+  product_sku?: string;
+  operation_name?: string;
+  operation_code?: string | null;
+  planned_quantity?: string;
+  cache?: Partial<MockTask["cache"]>;
+};
+
+function makeTask(overrides: MakeTaskOverrides): MockTask {
   return {
     id: overrides.id,
     product_sku: overrides.product_sku ?? "TEST-001",
