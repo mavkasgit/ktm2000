@@ -829,7 +829,7 @@ async def return_remainder(
 
 
 @router.post("/remainders/consume", dependencies=[Depends(require_role(list(WRITER_ROLES)))])
-async def consume_remainder(
+async def consume_remainder_endpoint(
     payload: ConsumeRemainderPayload,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
@@ -852,3 +852,53 @@ async def consume_remainder(
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+# ─── SPG Available for Task ──────────────────────────────────────────────────
+
+
+@router.get("/tasks/{task_id}/spg-available")
+async def task_spg_available(
+    task_id: int,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Return available remainders in the SPG for a task's product + section."""
+    from app.models.spg import SpgSection, StorageProductionGroup
+    from app.models.warehouse_remainder import WarehouseRemainder
+    from sqlalchemy import func
+
+    task = await db.get(WorkTask, task_id)
+    if task is None:
+        raise HTTPException(status_code=404, detail="Task not found")
+
+    # Find SPG for this task's section
+    spg_section = await db.scalar(
+        select(SpgSection).where(SpgSection.section_id == task.section_id)
+    )
+    if spg_section is None:
+        return {"spg_available": 0, "spg_id": None, "spg_name": None, "spg_code": None}
+
+    spg = await db.get(StorageProductionGroup, spg_section.spg_id)
+    if spg is None:
+        return {"spg_available": 0, "spg_id": None, "spg_name": None, "spg_code": None}
+
+    spg_section_ids = (await db.execute(
+        select(SpgSection.section_id).where(SpgSection.spg_id == spg.id)
+    )).scalars().all()
+
+    available = await db.scalar(
+        select(func.coalesce(func.sum(WarehouseRemainder.remainder_quantity), 0))
+        .where(
+            WarehouseRemainder.product_id == task.product_id,
+            WarehouseRemainder.section_id.in_(spg_section_ids),
+            WarehouseRemainder.consumed_at.is_(None),
+            WarehouseRemainder.remainder_quantity > 0,
+        )
+    )
+
+    return {
+        "spg_available": float(available or 0),
+        "spg_id": spg.id,
+        "spg_name": spg.name,
+        "spg_code": spg.code,
+    }

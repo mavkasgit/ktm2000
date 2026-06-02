@@ -28,3 +28,4 @@ class Section(Base):
 
     users = relationship("User", back_populates="section")
     operations = relationship("SectionOperation", back_populates="section", cascade="all, delete-orphan")
+    spg_links = relationship("StorageProductionGroup", secondary="spg_sections", back_populates="sections", lazy="selectin")

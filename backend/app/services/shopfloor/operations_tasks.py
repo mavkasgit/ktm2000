@@ -426,8 +426,6 @@ async def consume_remainder(
         raise ValueError("Remainder not found")
     if remainder.consumed_at is not None:
         raise ValueError("Remainder already consumed")
-    if quantity > remainder.remainder_quantity:
-        raise ValueError("Consume quantity exceeds remainder quantity")
 
     task = await _get_task(db, task_id)
     if task.status not in {WorkTaskStatus.ready, WorkTaskStatus.in_progress, WorkTaskStatus.partially_completed}:
@@ -457,9 +455,9 @@ async def consume_remainder(
     )
     db.add(movement)
 
-    # Update remainder
+    # Update remainder (allow negative when consuming more than available)
     remainder.remainder_quantity -= quantity
-    if remainder.remainder_quantity <= 0:
+    if remainder.remainder_quantity == 0:
         remainder.consumed_at = now
         remainder.consumed_by_task_id = task.id
 

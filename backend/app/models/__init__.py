@@ -40,6 +40,7 @@ from .rework_task import ReworkTask, ReworkTaskStatus
 from .entity_comment import EntityComment, EntityType
 from .attachment import Attachment, AttachmentLink
 from .warehouse_remainder import WarehouseRemainder
+from .spg import StorageProductionGroup, SpgSection
 
 __all__ = [
     "Base",
@@ -105,4 +106,6 @@ __all__ = [
     "Attachment",
     "AttachmentLink",
     "WarehouseRemainder",
+    "StorageProductionGroup",
+    "SpgSection",
 ]

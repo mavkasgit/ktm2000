@@ -6,12 +6,14 @@ from app.seeds.import_templates import IMPORT_TEMPLATES
 from app.seeds.route_rule_profiles import ROUTE_RULE_PROFILES
 from app.seeds.routes import ROUTES
 from app.seeds.selection_rules import SELECTION_RULES
+from app.seeds.spgs import SPGS_DATA
 from app.seeds.seeders.cleanup_seeder import clear_generated_production_data
 from app.seeds.seeders.import_template_seeder import seed_import_template
 from app.seeds.seeders.route_rule_profile_seeder import seed_route_rule_profile
 from app.seeds.seeders.routes_seeder import seed_routes, seed_production_routes_from_profiles
 from app.seeds.seeders.sections_seeder import seed_section_operations, seed_sections
 from app.seeds.seeders.selection_rules_seeder import seed_selection_rules
+from app.seeds.seeders.spgs_seeder import seed_spgs
 from app.seeds.seeders.users_seeder import seed_users
 
 
@@ -37,7 +39,11 @@ async def run_full_seed(db: AsyncSession, force: bool = False) -> dict:
     ops_count = await seed_section_operations(db, sections_map)
     result["section_operations"] = ops_count
 
-    # 1.2. ImportTemplate (needed by profile)
+    # 1.2. Storage Production Groups (SPG)
+    spgs_count = await seed_spgs(db, SPGS_DATA, sections_map)
+    result["spgs"] = spgs_count
+
+    # 1.3. ImportTemplate (needed by profile)
     template_data = IMPORT_TEMPLATES[0] if IMPORT_TEMPLATES else None
     if template_data is None:
         raise RuntimeError("No import templates defined")
