@@ -1,9 +1,17 @@
+import enum
 from datetime import datetime
 
-from sqlalchemy import BigInteger, Boolean, DateTime, ForeignKey, Identity, Integer, String, Text, UniqueConstraint, func, text
+from sqlalchemy import BigInteger, Boolean, DateTime, Enum as SAEnum, ForeignKey, Identity, Integer, String, Text, UniqueConstraint, func, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base
+
+
+class SpgStorageKind(str, enum.Enum):
+    raw = "raw"
+    wip = "wip"
+    finished = "finished"
+    quarantine = "quarantine"
 
 
 class StorageProductionGroup(Base):
@@ -13,6 +21,15 @@ class StorageProductionGroup(Base):
     code: Mapped[str] = mapped_column(String(100), unique=True, nullable=False)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    storage_kind: Mapped[SpgStorageKind] = mapped_column(
+        SAEnum(SpgStorageKind, name="spg_storage_kind"),
+        nullable=False,
+        server_default=text("'wip'"),
+        default=SpgStorageKind.wip,
+    )
+    requires_lot: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("false"), default=False
+    )
     sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default=text("0"))
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default=text("true"))
     icon: Mapped[str | None] = mapped_column(String(50), nullable=True)
