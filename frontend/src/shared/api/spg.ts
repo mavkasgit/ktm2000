@@ -50,6 +50,7 @@ export type SpgSnapshotRow = {
   spg_available: number;
   completion_pct: number;
   current_section: string | null;
+  negative_remainder_count: number;
   per_section: Record<string, SpgSnapshotPerSection>;
 };
 
@@ -60,6 +61,8 @@ export type SpgSnapshotTotals = {
   issued: number;
   remainders: number;
   spg_available: number;
+  negative_total: number;
+  negative_remainder_count: number;
 };
 
 export type SpgSnapshotResponse = {

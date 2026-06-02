@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { ArrowDownUp, History as HistoryIcon, Pencil, Plus, Trash2 } from "lucide-react";
+import { IconAlertTriangle } from "@tabler/icons-react";
 
 import {
   Dialog,
@@ -306,9 +307,18 @@ export function RemaindersListPanel({
                         {r.remainder_quantity}
                       </span>
                       {isNegative && (
-                        <Badge variant="destructive" className="ml-2 text-[10px]">
-                          в минусе
-                        </Badge>
+                        <span
+                          title="Остаток ушёл в минус — зафиксируйте ручной операцией"
+                          className="inline-block"
+                        >
+                          <Badge
+                            variant="destructive"
+                            className="ml-2 text-[10px] inline-flex items-center gap-1"
+                          >
+                            <IconAlertTriangle size={12} />
+                            Отрицательный
+                          </Badge>
+                        </span>
                       )}
                     </td>
                     <td className="p-2 text-center">

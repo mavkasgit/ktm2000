@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from decimal import Decimal
 
-from sqlalchemy import func, select
+from sqlalchemy import Integer, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.product import Product
@@ -39,7 +39,7 @@ async def get_spg_snapshot(
             "spg_name": spg.name,
             "sections": [],
             "rows": [],
-            "totals": {"planned": 0, "completed": 0, "in_work": 0, "remainders": 0},
+            "totals": {"planned": 0, "completed": 0, "in_work": 0, "remainders": 0, "negative_total": 0, "negative_remainder_count": 0},
         }
 
     # Fetch sections info
@@ -87,6 +87,49 @@ async def get_spg_snapshot(
     )
     rem_rows = (await db.execute(rem_agg_q)).all()
 
+    # Aggregate negative remainders across all sections in this SPG
+    neg_agg_q = (
+        select(
+            func.coalesce(
+                func.sum(func.least(WarehouseRemainder.remainder_quantity, 0)),
+                0,
+            ).label("neg_total"),
+            func.coalesce(
+                func.sum(
+                    func.cast(WarehouseRemainder.remainder_quantity < 0, Integer)
+                ),
+                0,
+            ).label("neg_count"),
+        )
+        .where(
+            WarehouseRemainder.section_id.in_(section_ids),
+            WarehouseRemainder.consumed_at.is_(None),
+        )
+    )
+    neg_row = (await db.execute(neg_agg_q)).one()
+    neg_total = float(neg_row.neg_total or 0)
+    neg_count = int(neg_row.neg_count or 0)
+
+    # Per-product negative remainder count
+    neg_count_per_product_q = (
+        select(
+            WarehouseRemainder.product_id,
+            func.coalesce(
+                func.sum(func.cast(WarehouseRemainder.remainder_quantity < 0, Integer)),
+                0,
+            ).label("neg_count"),
+        )
+        .where(
+            WarehouseRemainder.section_id.in_(section_ids),
+            WarehouseRemainder.consumed_at.is_(None),
+        )
+        .group_by(WarehouseRemainder.product_id)
+    )
+    neg_count_per_product_rows = (await db.execute(neg_count_per_product_q)).all()
+    neg_count_per_product = {
+        r.product_id: int(r.neg_count or 0) for r in neg_count_per_product_rows
+    }
+
     # Collect all product_ids
     product_ids = {r.product_id for r in task_rows} | {r.product_id for r in rem_rows}
     if not product_ids:
@@ -96,7 +139,7 @@ async def get_spg_snapshot(
             "spg_name": spg.name,
             "sections": sections_out,
             "rows": [],
-            "totals": {"planned": 0, "completed": 0, "in_work": 0, "remainders": 0},
+            "totals": {"planned": 0, "completed": 0, "in_work": 0, "remainders": 0, "negative_total": 0, "negative_remainder_count": 0},
         }
 
     # Fetch products
@@ -162,7 +205,7 @@ async def get_spg_snapshot(
                 if location_val > max_location_value:
                     max_location_value = location_val
                     current_section_code = scode
-            elif rem > 0:
+            elif rem != 0:
                 per_section[scode] = {
                     "planned": 0, "completed": 0, "in_work": 0, "available": 0,
                     "issued": 0, "transferred": 0, "received": 0, "remainder": rem,
@@ -183,6 +226,7 @@ async def get_spg_snapshot(
             "spg_available": remainder_total,
             "completion_pct": completion_pct,
             "current_section": current_section_code,
+            "negative_remainder_count": neg_count_per_product.get(pid, 0),
             "per_section": per_section,
         })
 
@@ -208,5 +252,7 @@ async def get_spg_snapshot(
             "issued": totals_issued,
             "remainders": totals_remainders,
             "spg_available": totals_remainders,
+            "negative_total": neg_total,
+            "negative_remainder_count": neg_count,
         },
     }

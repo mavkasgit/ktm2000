@@ -66,7 +66,9 @@ function DataRow({ row, sectionCodes, onShowRemainders }: { row: SpgSnapshotRow;
     if (clickable && onShowRemainders) onShowRemainders(row.product_id);
   };
   return (
-    <tr className="border-b hover:bg-muted/30">
+    <tr
+      className={`border-b hover:bg-muted/30${row.negative_remainder_count > 0 ? " bg-red-50 hover:bg-red-100" : ""}`}
+    >
       <td className="p-2">
         <div className="font-medium">{row.sku}</div>
         <div className="text-xs text-muted-foreground truncate max-w-[200px]">

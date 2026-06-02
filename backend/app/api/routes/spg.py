@@ -462,6 +462,26 @@ async def manual_stock_operation(
     if qty <= 0:
         raise HTTPException(status_code=400, detail="quantity must be positive")
 
+    spg = await db.get(StorageProductionGroup, spg_id)
+    if spg is None:
+        raise HTTPException(status_code=404, detail="SPG not found")
+
+    if payload.operation_type == "out" and spg.requires_lot:
+        # Check current available for this product+section
+        available = await db.scalar(
+            select(func.coalesce(func.sum(WarehouseRemainder.remainder_quantity), 0))
+            .where(
+                WarehouseRemainder.product_id == payload.product_id,
+                WarehouseRemainder.section_id == payload.section_id,
+                WarehouseRemainder.consumed_at.is_(None),
+            )
+        )
+        if qty > available:
+            raise HTTPException(
+                status_code=400,
+                detail=f"SPG requires lot tracking: cannot go negative (available={available}, requested={qty})",
+            )
+
     # Idempotency
     if payload.idempotency_key:
         existing_movement = await db.scalar(
@@ -483,10 +503,6 @@ async def manual_stock_operation(
                 new_remainder_quantity=0,
                 idempotent_replay=True,
             )
-
-    spg = await db.get(StorageProductionGroup, spg_id)
-    if spg is None:
-        raise HTTPException(status_code=404, detail="SPG not found")
 
     # Validate section belongs to SPG
     section_ids = (await db.execute(
