@@ -11,7 +11,7 @@ from app.models.internal_plan import InternalPlan, SectionPlanLine
 from app.models.production_plan import PlanPosition, PlanPositionStatus, PositionStatusHistory, ProductionPlan, ProductionPlanStatus
 from app.models.product import Product
 from app.models.release_batch import ReleaseBatch, ReleaseBatchPosition, ReleaseBatchStatus, ReleaseBatchType
-from app.models.route import ProductionRoute, RouteStep, SectionOperation
+from app.models.route import ProductionRoute, RouteOperation, RouteStage, RouteStep, SectionOperation
 from app.models.section import Section
 from app.models.work_task import WorkTask, WorkTaskStatus
 from app.services.plan_validation import _find_paired_techcard, _paired_component_skus
@@ -57,14 +57,14 @@ async def create_release_batch(
         if route is None or not route.is_active:
             raise ValueError(f"Route for position {position.id} is not active")
 
-        steps = await _get_route_steps_with_sections(db, route)
+        steps = await _get_route_stages_with_sections(db, route)
         remaining = await _remaining_quantity(db, position)
         if release_quantity <= 0:
             raise ValueError("Release quantity must be > 0")
         if release_quantity > remaining:
             raise ValueError("Release quantity exceeds approved remaining quantity")
 
-        section_ids = {section.id for _step, section in steps}
+        section_ids = {section.id for _stage, section, _ops in steps}
         operation_names_by_key = {
             (op.section_id, op.operation_code): op.operation_name
             for op in (
@@ -137,42 +137,24 @@ async def release_batch(db: AsyncSession, release_batch_id: int) -> dict:
 
         steps = sorted(batch_position.route_snapshot.get("steps", []), key=lambda step: step["sequence"])
 
-        # Group steps by combined_op_group to avoid duplicate SectionPlanLines
-        # Steps with same combined_op_group and section_id should be merged into one line
-        grouped_steps: list[list[dict]] = []
-        current_group: list[dict] = []
-        current_cog: str | None = None
-        current_section_id: int | None = None
-
-        for step in steps:
-            step_cog = step.get("combined_op_group")
-            step_section = step["section_id"]
-
-            if step_cog is not None and step_cog == current_cog and step_section == current_section_id:
-                # Continue current combined group
-                current_group.append(step)
-            else:
-                # Start new group
-                if current_group:
-                    grouped_steps.append(current_group)
-                current_group = [step]
-                current_cog = step_cog
-                current_section_id = step_section
-
-        if current_group:
-            grouped_steps.append(current_group)
-
+        # Each RouteStage is a self-contained task on a section; we
+        # create exactly one SectionPlanLine per stage.
+        seen_stage_ids: set[int] = set()
         line_index = 0
-        for group in grouped_steps:
-            primary_step = group[0]
+        for step in steps:
+            stage_id = step.get("route_stage_id")
+            if stage_id is None or stage_id in seen_stage_ids:
+                continue
+            seen_stage_ids.add(stage_id)
             line = SectionPlanLine(
                 internal_plan_id=internal_plan.id,
                 plan_position_id=position.id,
-                section_id=primary_step["section_id"],
+                section_id=step["section_id"],
                 product_id=effective_product_id,
                 route_id=batch_position.route_id,
-                route_step_id=primary_step["route_step_id"],
-                sequence=primary_step["sequence"],
+                route_step_id=step.get("route_step_id"),
+                route_stage_id=stage_id,
+                sequence=step["sequence"],
                 planned_quantity=batch_position.release_quantity,
                 due_date=position.due_date,
             )
@@ -285,22 +267,28 @@ async def _validate_active_techcard(db: AsyncSession, position: PlanPosition) ->
         raise ValueError("Активная техкарта не содержит строк")
 
 
-async def _get_route_steps_with_sections(db: AsyncSession, route: ProductionRoute) -> list[tuple[RouteStep, Section]]:
-    steps = (
-        await db.execute(select(RouteStep).where(RouteStep.route_id == route.id).order_by(RouteStep.sequence))
+async def _get_route_stages_with_sections(
+    db: AsyncSession, route: ProductionRoute
+) -> list[tuple[RouteStage, Section, list[RouteOperation]]]:
+    stages = (
+        await db.execute(
+            select(RouteStage)
+            .where(RouteStage.route_id == route.id)
+            .order_by(RouteStage.sequence)
+        )
     ).scalars().all()
-    if not steps:
-        raise ValueError("Route has no steps")
+    if not stages:
+        raise ValueError("Route has no stages")
     result = []
     previous = 0
-    for step in steps:
-        if step.sequence <= previous:
+    for stage in stages:
+        if stage.sequence <= previous:
             raise ValueError("Route sequence is invalid")
-        previous = step.sequence
-        section = await db.get(Section, step.section_id)
+        previous = stage.sequence
+        section = await db.get(Section, stage.section_id)
         if section is None or not section.is_active:
             raise ValueError("Route contains inactive section")
-        result.append((step, section))
+        result.append((stage, section, list(stage.operations)))
     return result
 
 
@@ -348,27 +336,39 @@ def _dynamic_route_snapshot(
 async def _route_snapshot(
     db: AsyncSession,
     route: ProductionRoute,
-    steps: list[tuple[RouteStep, Section]],
+    steps: list[tuple[RouteStage, Section, list[RouteOperation]]],
     position: PlanPosition | None = None,
     operation_names_by_key: dict[tuple[int, str], str] | None = None,
 ) -> dict:
     op_names = operation_names_by_key or {}
     snapshot_steps = []
-    for step, section in steps:
-        operation_code = step.operation_code
+    for stage, section, operations in steps:
+        primary = operations[0] if operations else None
+        operation_code = primary.operation_code if primary else None
+        operation_name = await _resolve_route_stage_operation_name(
+            db, stage, operations, section, position, op_names
+        )
         snapshot_steps.append({
-            "route_step_id": step.id,
-            "sequence": step.sequence,
+            "route_stage_id": stage.id,
+            "route_step_id": stage.route_step_id,
+            "sequence": stage.sequence,
             "section_id": section.id,
             "section_code": section.code,
             "section_name": section.name,
             "section_kind": section.kind,
             "operation_code": operation_code,
-            "operation_name": await _resolve_route_step_operation_name(db, step, section, position, op_names),
-            "requires_acceptance": step.requires_acceptance,
-            "allow_parallel": step.allow_parallel,
-            "is_final": step.is_final,
-            "combined_op_group": step.combined_op_group,
+            "operation_name": operation_name,
+            "operations": [
+                {
+                    "operation_code": op.operation_code,
+                    "operation_name": op.operation_name,
+                    "sequence": op.sequence,
+                }
+                for op in operations
+            ],
+            "requires_acceptance": stage.requires_acceptance,
+            "allow_parallel": stage.allow_parallel,
+            "is_final": stage.is_final,
         })
     return {
         "route_id": route.id,
@@ -377,17 +377,31 @@ async def _route_snapshot(
     }
 
 
-async def _resolve_route_step_operation_name(
+async def _resolve_route_stage_operation_name(
     db: AsyncSession,
-    step: RouteStep,
+    stage: RouteStage,
+    operations: list[RouteOperation],
     section: Section,
     position: PlanPosition | None,
     operation_names_by_key: dict[tuple[int, str], str],
 ) -> str:
-    """Return display operation name for a route step."""
-    if step.operation_code is not None:
-        return operation_names_by_key.get((section.id, step.operation_code), step.operation_name)
-    return step.operation_name
+    """Return display operation name for a route stage.
+
+    Aggregates operation names from all operations in the stage:
+    "Анодирование / Стрейч".  Falls back to section name when no
+    operations are defined.
+    """
+    if not operations:
+        return section.name
+    names: list[str] = []
+    for op in operations:
+        if op.operation_code is not None:
+            names.append(
+                operation_names_by_key.get((section.id, op.operation_code), op.operation_name)
+            )
+        else:
+            names.append(op.operation_name)
+    return " / ".join(names)
 
 
 async def _remaining_quantity(db: AsyncSession, position: PlanPosition) -> Decimal:
