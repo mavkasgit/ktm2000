@@ -143,12 +143,15 @@ async def test_combined_op_group_merges_anod_tasks(client, session) -> None:
     assert create_response.status_code == 201
     batch = create_response.json()
 
-    # Проверяем что в snapshot оба шага с combined_op_group
+    # Проверяем что в snapshot один шаг ANOD с двумя операциями внутри
     snapshot_steps = batch["positions"][0]["route_snapshot"]["steps"]
     anod_steps = [s for s in snapshot_steps if s["section_code"].endswith("ANOD")]
-    assert len(anod_steps) == 2  # В snapshot оба шага
-    assert anod_steps[0]["combined_op_group"] == "anod_pack"
-    assert anod_steps[1]["combined_op_group"] == "anod_pack"
+    assert len(anod_steps) == 1  # Под RouteStage ANOD = одна задача с операциями
+    assert len(anod_steps[0]["operations"]) == 2  # Две операции внутри
+    assert anod_steps[0]["operations"][0]["operation_name"] == "Анодирование"
+    assert anod_steps[0]["operations"][1]["operation_name"] == "Стрейч"
+    assert anod_steps[0]["operations"][0]["operation_code"] is None
+    assert anod_steps[0]["operations"][1]["operation_code"] == "PACK_STRETCH"
 
     # Релизим
     release_response = await client.post(f"/api/release-batches/{batch['id']}/release")

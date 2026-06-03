@@ -138,22 +138,34 @@ async def release_batch(db: AsyncSession, release_batch_id: int) -> dict:
         steps = sorted(batch_position.route_snapshot.get("steps", []), key=lambda step: step["sequence"])
 
         # Each RouteStage is a self-contained task on a section; we
-        # create exactly one SectionPlanLine per stage.
-        seen_stage_ids: set[int] = set()
+        # create exactly one SectionPlanLine per stage.  The snapshot
+        # carries ``route_step_id`` for legacy routes (where the stage
+        # id is a synthetic stand-in for the step id and not a real
+        # ``route_stages.id`` row).  We dedup by the real primary key
+        # that exists in the database.
+        seen_keys: set[tuple[str, int]] = set()
         line_index = 0
         for step in steps:
             stage_id = step.get("route_stage_id")
-            if stage_id is None or stage_id in seen_stage_ids:
+            step_id = step.get("route_step_id")
+            step_persisted = step.get("route_stage_persisted", True)
+            if step_persisted and stage_id is not None:
+                dedup_key = ("stage", stage_id)
+                plan_route_stage_id: int | None = stage_id
+            else:
+                dedup_key = ("step", step_id or 0)
+                plan_route_stage_id = None
+            if dedup_key in seen_keys:
                 continue
-            seen_stage_ids.add(stage_id)
+            seen_keys.add(dedup_key)
             line = SectionPlanLine(
                 internal_plan_id=internal_plan.id,
                 plan_position_id=position.id,
                 section_id=step["section_id"],
                 product_id=effective_product_id,
                 route_id=batch_position.route_id,
-                route_step_id=step.get("route_step_id"),
-                route_stage_id=stage_id,
+                route_step_id=step_id,
+                route_stage_id=plan_route_stage_id,
                 sequence=step["sequence"],
                 planned_quantity=batch_position.release_quantity,
                 due_date=position.due_date,
@@ -270,6 +282,14 @@ async def _validate_active_techcard(db: AsyncSession, position: PlanPosition) ->
 async def _get_route_stages_with_sections(
     db: AsyncSession, route: ProductionRoute
 ) -> list[tuple[RouteStage, Section, list[RouteOperation]]]:
+    """Return ordered list of ``(RouteStage, Section, operations)`` for a route.
+
+    Prefers the new ``RouteStage`` model.  Falls back to the legacy
+    ``RouteStep`` model when no stages have been created yet (transition
+    period).  Each legacy step is wrapped in an ad-hoc stage with a
+    single synthetic operation so the rest of the pipeline sees a
+    uniform shape.
+    """
     stages = (
         await db.execute(
             select(RouteStage)
@@ -277,8 +297,80 @@ async def _get_route_stages_with_sections(
             .order_by(RouteStage.sequence)
         )
     ).scalars().all()
+
     if not stages:
-        raise ValueError("Route has no stages")
+        legacy_steps = (
+            await db.execute(
+                select(RouteStep)
+                .where(RouteStep.route_id == route.id)
+                .order_by(RouteStep.sequence)
+            )
+        ).scalars().all()
+        if not legacy_steps:
+            raise ValueError("Route has no stages")
+        result: list[tuple[RouteStage, Section, list[RouteOperation]]] = []
+        previous = 0
+        current_group: list[RouteStep] = []
+        current_group_section: Section | None = None
+        current_cog: str | None = None
+        current_section_id: int | None = None
+
+        def _flush_group(group: list[RouteStep], group_section: Section | None) -> None:
+            if not group or group_section is None:
+                return
+            primary = group[0]
+            ops = [
+                RouteOperation(
+                    id=-(s.id * 10 + idx),
+                    route_stage_id=primary.id,
+                    sequence=idx + 1,
+                    operation_code=s.operation_code,
+                    operation_name=s.operation_name,
+                )
+                for idx, s in enumerate(group)
+            ]
+            synthetic_stage = RouteStage(
+                id=primary.id,
+                route_id=primary.route_id,
+                sequence=primary.sequence,
+                section_id=primary.section_id,
+                is_significant=primary.is_significant,
+                norm_time_minutes=primary.norm_time_minutes,
+                requires_acceptance=primary.requires_acceptance,
+                allow_parallel=primary.allow_parallel,
+                is_final=any(s.is_final for s in group),
+                sort_order=primary.sequence,
+                route_step_id=primary.id,
+            )
+            synthetic_stage._synthetic = True  # type: ignore[attr-defined]
+            result.append((synthetic_stage, group_section, ops))
+
+        for step in legacy_steps:
+            if step.sequence <= previous:
+                raise ValueError("Route sequence is invalid")
+            previous = step.sequence
+            section = await db.get(Section, step.section_id)
+            if section is None or not section.is_active:
+                raise ValueError("Route contains inactive section")
+
+            step_cog = step.combined_op_group
+            same_group = (
+                step_cog is not None
+                and step_cog == current_cog
+                and step.section_id == current_section_id
+            )
+            if same_group:
+                current_group.append(step)
+            else:
+                _flush_group(current_group, current_group_section)
+                current_group = [step]
+                current_group_section = section
+                current_cog = step_cog
+                current_section_id = step.section_id
+
+        _flush_group(current_group, current_group_section)
+        return result
+
     result = []
     previous = 0
     for stage in stages:
@@ -289,6 +381,8 @@ async def _get_route_stages_with_sections(
         if section is None or not section.is_active:
             raise ValueError("Route contains inactive section")
         result.append((stage, section, list(stage.operations)))
+    for stage, _section, _ops in result:
+        stage._synthetic = False  # type: ignore[attr-defined]
     return result
 
 
@@ -350,6 +444,7 @@ async def _route_snapshot(
         )
         snapshot_steps.append({
             "route_stage_id": stage.id,
+            "route_stage_persisted": not getattr(stage, "_synthetic", False),
             "route_step_id": stage.route_step_id,
             "sequence": stage.sequence,
             "section_id": section.id,
