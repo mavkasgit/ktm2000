@@ -11,7 +11,7 @@ from app.models.internal_plan import InternalPlan, SectionPlanLine
 from app.models.production_plan import PlanPosition, PlanPositionStatus, PositionStatusHistory, ProductionPlan, ProductionPlanStatus
 from app.models.product import Product
 from app.models.release_batch import ReleaseBatch, ReleaseBatchPosition, ReleaseBatchStatus, ReleaseBatchType
-from app.models.route import ProductionRoute, RouteOperation, RouteStage, RouteStep, SectionOperation
+from app.models.route import ProductionRoute, RouteOperation, RouteStage, SectionOperation
 from app.models.section import Section
 from app.models.work_task import WorkTask, WorkTaskStatus
 from app.services.plan_validation import _find_paired_techcard, _paired_component_skus
@@ -138,23 +138,14 @@ async def release_batch(db: AsyncSession, release_batch_id: int) -> dict:
         steps = sorted(batch_position.route_snapshot.get("steps", []), key=lambda step: step["sequence"])
 
         # Each RouteStage is a self-contained task on a section; we
-        # create exactly one SectionPlanLine per stage.  The snapshot
-        # carries ``route_step_id`` for legacy routes (where the stage
-        # id is a synthetic stand-in for the step id and not a real
-        # ``route_stages.id`` row).  We dedup by the real primary key
-        # that exists in the database.
+        # create exactly one SectionPlanLine per stage.
         seen_keys: set[tuple[str, int]] = set()
         line_index = 0
         for step in steps:
             stage_id = step.get("route_stage_id")
-            step_id = step.get("route_step_id")
-            step_persisted = step.get("route_stage_persisted", True)
-            if step_persisted and stage_id is not None:
-                dedup_key = ("stage", stage_id)
-                plan_route_stage_id: int | None = stage_id
-            else:
-                dedup_key = ("step", step_id or 0)
-                plan_route_stage_id = None
+            if stage_id is None:
+                continue
+            dedup_key = ("stage", stage_id)
             if dedup_key in seen_keys:
                 continue
             seen_keys.add(dedup_key)
@@ -164,8 +155,7 @@ async def release_batch(db: AsyncSession, release_batch_id: int) -> dict:
                 section_id=step["section_id"],
                 product_id=effective_product_id,
                 route_id=batch_position.route_id,
-                route_step_id=step_id,
-                route_stage_id=plan_route_stage_id,
+                route_stage_id=stage_id,
                 sequence=step["sequence"],
                 planned_quantity=batch_position.release_quantity,
                 due_date=position.due_date,
@@ -177,7 +167,7 @@ async def release_batch(db: AsyncSession, release_batch_id: int) -> dict:
                     section_plan_line_id=line.id,
                     section_id=line.section_id,
                     product_id=line.product_id,
-                    route_step_id=line.route_step_id,
+                    route_stage_id=line.route_stage_id,
                     planned_quantity=line.planned_quantity,
                     status=WorkTaskStatus.ready if line_index == 0 else WorkTaskStatus.waiting_previous,
                     due_date=line.due_date,
@@ -282,14 +272,7 @@ async def _validate_active_techcard(db: AsyncSession, position: PlanPosition) ->
 async def _get_route_stages_with_sections(
     db: AsyncSession, route: ProductionRoute
 ) -> list[tuple[RouteStage, Section, list[RouteOperation]]]:
-    """Return ordered list of ``(RouteStage, Section, operations)`` for a route.
-
-    Prefers the new ``RouteStage`` model.  Falls back to the legacy
-    ``RouteStep`` model when no stages have been created yet (transition
-    period).  Each legacy step is wrapped in an ad-hoc stage with a
-    single synthetic operation so the rest of the pipeline sees a
-    uniform shape.
-    """
+    """Return ordered list of ``(RouteStage, Section, operations)`` for a route."""
     stages = (
         await db.execute(
             select(RouteStage)
@@ -299,77 +282,7 @@ async def _get_route_stages_with_sections(
     ).scalars().all()
 
     if not stages:
-        legacy_steps = (
-            await db.execute(
-                select(RouteStep)
-                .where(RouteStep.route_id == route.id)
-                .order_by(RouteStep.sequence)
-            )
-        ).scalars().all()
-        if not legacy_steps:
-            raise ValueError("Route has no stages")
-        result: list[tuple[RouteStage, Section, list[RouteOperation]]] = []
-        previous = 0
-        current_group: list[RouteStep] = []
-        current_group_section: Section | None = None
-        current_cog: str | None = None
-        current_section_id: int | None = None
-
-        def _flush_group(group: list[RouteStep], group_section: Section | None) -> None:
-            if not group or group_section is None:
-                return
-            primary = group[0]
-            ops = [
-                RouteOperation(
-                    id=-(s.id * 10 + idx),
-                    route_stage_id=primary.id,
-                    sequence=idx + 1,
-                    operation_code=s.operation_code,
-                    operation_name=s.operation_name,
-                )
-                for idx, s in enumerate(group)
-            ]
-            synthetic_stage = RouteStage(
-                id=primary.id,
-                route_id=primary.route_id,
-                sequence=primary.sequence,
-                section_id=primary.section_id,
-                is_significant=primary.is_significant,
-                norm_time_minutes=primary.norm_time_minutes,
-                requires_acceptance=primary.requires_acceptance,
-                allow_parallel=primary.allow_parallel,
-                is_final=any(s.is_final for s in group),
-                sort_order=primary.sequence,
-                route_step_id=primary.id,
-            )
-            synthetic_stage._synthetic = True  # type: ignore[attr-defined]
-            result.append((synthetic_stage, group_section, ops))
-
-        for step in legacy_steps:
-            if step.sequence <= previous:
-                raise ValueError("Route sequence is invalid")
-            previous = step.sequence
-            section = await db.get(Section, step.section_id)
-            if section is None or not section.is_active:
-                raise ValueError("Route contains inactive section")
-
-            step_cog = step.combined_op_group
-            same_group = (
-                step_cog is not None
-                and step_cog == current_cog
-                and step.section_id == current_section_id
-            )
-            if same_group:
-                current_group.append(step)
-            else:
-                _flush_group(current_group, current_group_section)
-                current_group = [step]
-                current_group_section = section
-                current_cog = step_cog
-                current_section_id = step.section_id
-
-        _flush_group(current_group, current_group_section)
-        return result
+        raise ValueError("Route has no stages")
 
     result = []
     previous = 0
@@ -404,7 +317,8 @@ def _dynamic_route_snapshot(
         "profile_code": profile.code,
         "steps": [
             {
-                "route_step_id": None,  # No static RouteStep
+                "route_stage_id": None,  # No static RouteStage yet
+                "route_stage_persisted": False,
                 "sequence": step["sequence"],
                 "section_id": step["section_id"],
                 "section_code": step["section_code"],
@@ -420,7 +334,6 @@ def _dynamic_route_snapshot(
                 "requires_acceptance": True,
                 "allow_parallel": False,
                 "is_final": step.get("is_final", False),
-                "combined_op_group": step.get("combined_op_group"),
             }
             for step in steps
         ],
@@ -444,8 +357,7 @@ async def _route_snapshot(
         )
         snapshot_steps.append({
             "route_stage_id": stage.id,
-            "route_stage_persisted": not getattr(stage, "_synthetic", False),
-            "route_step_id": stage.route_step_id,
+            "route_stage_persisted": True,
             "sequence": stage.sequence,
             "section_id": section.id,
             "section_code": section.code,

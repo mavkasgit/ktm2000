@@ -22,7 +22,7 @@ from sqlalchemy.orm import aliased
 from app.models.defect import DefectItem, TransferDiscrepancyDefectItem
 from app.models.internal_plan import SectionPlanLine
 from app.models.product import Product
-from app.models.route import RouteStep
+from app.models.route import RouteStage, RouteOperation
 from app.models.section import Section
 from app.models.spg import SpgSection
 from app.models.transfer import (
@@ -117,8 +117,8 @@ async def get_section_incoming_transfers(
     to_section = aliased(Section)
     from_task = aliased(WorkTask)
     to_task = aliased(WorkTask)
-    from_step = aliased(RouteStep)
-    to_step = aliased(RouteStep)
+    from_stage = aliased(RouteStage)
+    to_stage = aliased(RouteStage)
     from_line = aliased(SectionPlanLine)
 
     rows = (
@@ -129,8 +129,8 @@ async def get_section_incoming_transfers(
                 to_section,
                 from_task,
                 to_task,
-                from_step,
-                to_step,
+                from_stage,
+                to_stage,
                 from_line,
                 Product.sku,
             )
@@ -138,8 +138,8 @@ async def get_section_incoming_transfers(
             .join(to_section, to_section.id == Transfer.to_section_id)
             .join(from_task, from_task.id == Transfer.from_task_id)
             .join(to_task, to_task.id == Transfer.to_task_id)
-            .join(from_step, from_step.id == from_task.route_step_id)
-            .join(to_step, to_step.id == to_task.route_step_id)
+            .join(from_stage, from_stage.id == from_task.route_stage_id)
+            .join(to_stage, to_stage.id == to_task.route_stage_id)
             .join(from_line, from_line.id == from_task.section_plan_line_id)
             .join(Product, Product.id == from_task.product_id)
             .where(
@@ -151,13 +151,16 @@ async def get_section_incoming_transfers(
     ).all()
 
     transfers = []
-    for transfer, from_sec, to_sec, src_task, dst_task, src_step, dst_step, src_line, product_sku in rows:
+    for transfer, from_sec, to_sec, src_task, dst_task, src_stage, dst_stage, src_line, product_sku in rows:
         sent = _to_decimal(transfer.sent_quantity or 0)
         accepted = _to_decimal(transfer.accepted_quantity or 0)
         rejected = _to_decimal(transfer.rejected_quantity or 0)
         remaining = sent - accepted - rejected
         if remaining < 0:
             remaining = Decimal("0")
+
+        from_op_name = ", ".join(op.operation_name for op in src_stage.operations) if src_stage and src_stage.operations else ""
+        to_op_name = ", ".join(op.operation_name for op in dst_stage.operations) if dst_stage and dst_stage.operations else ""
 
         transfers.append(
             {
@@ -172,8 +175,8 @@ async def get_section_incoming_transfers(
                 "to_section_id": transfer.to_section_id,
                 "to_section_code": to_sec.code,
                 "to_section_name": to_sec.name,
-                "from_operation_name": src_step.operation_name,
-                "to_operation_name": dst_step.operation_name,
+                "from_operation_name": from_op_name,
+                "to_operation_name": to_op_name,
                 "sent_quantity": _fmt_qty(sent),
                 "accepted_quantity": _fmt_qty(accepted),
                 "rejected_quantity": _fmt_qty(rejected),
@@ -217,8 +220,8 @@ async def list_ready_to_transfer(
     """
     from_section = aliased(Section, name="from_section")
     next_section = aliased(Section, name="next_section")
-    from_step = aliased(RouteStep, name="from_step")
-    next_step = aliased(RouteStep, name="next_step")
+    from_stage = aliased(RouteStage, name="from_stage")
+    next_stage = aliased(RouteStage, name="next_stage")
     from_line = aliased(SectionPlanLine, name="from_line")
     next_line = aliased(SectionPlanLine, name="next_line")
 
@@ -226,15 +229,15 @@ async def list_ready_to_transfer(
         select(
             WorkTask,
             from_line,
-            from_step,
+            from_stage,
             from_section,
             Product.sku,
             next_line,
-            next_step,
+            next_stage,
             next_section,
         )
         .join(from_line, from_line.id == WorkTask.section_plan_line_id)
-        .join(from_step, from_step.id == WorkTask.route_step_id)
+        .join(from_stage, from_stage.id == WorkTask.route_stage_id)
         .join(from_section, from_section.id == WorkTask.section_id)
         .join(Product, Product.id == WorkTask.product_id)
         .outerjoin(
@@ -242,7 +245,7 @@ async def list_ready_to_transfer(
             (next_line.plan_position_id == from_line.plan_position_id)
             & (next_line.sequence == from_line.sequence + 1),
         )
-        .outerjoin(next_step, next_step.id == next_line.route_step_id)
+        .outerjoin(next_stage, next_stage.id == next_line.route_stage_id)
         .outerjoin(next_section, next_section.id == next_line.section_id)
         .where(
             WorkTask.status.notin_(
@@ -270,11 +273,11 @@ async def list_ready_to_transfer(
     for (
         task,
         line,
-        step,
+        stage,
         section,
         product_sku,
         next_l,
-        next_s,
+        next_stg,
         next_sec,
     ) in rows:
         completed = _to_decimal(task.cached_completed_quantity or 0)
@@ -283,12 +286,16 @@ async def list_ready_to_transfer(
         if transferable <= 0:
             continue
 
-        has_next = next_l is not None and next_s is not None and not bool(next_s.is_final)
-        is_final_step = bool(step.is_final)
+        has_next = next_l is not None and next_stg is not None and not bool(next_stg.is_final)
+        is_final_step = bool(stage.is_final)
         # Final step tasks should never appear in "ready to transfer" — they
         # need ``final_release`` instead.
         if is_final_step:
             continue
+
+        op_code = stage.operations[0].operation_code if stage and stage.operations else None
+        op_name = ", ".join(op.operation_name for op in stage.operations) if stage and stage.operations else ""
+        next_op_name = ", ".join(op.operation_name for op in next_stg.operations) if next_stg and next_stg.operations else None
 
         items.append(
             {
@@ -297,10 +304,10 @@ async def list_ready_to_transfer(
                 "section_code": section.code,
                 "section_name": section.name,
                 "plan_position_id": line.plan_position_id,
-                "route_step_id": step.id,
-                "sequence": step.sequence,
-                "operation_code": step.operation_code,
-                "operation_name": step.operation_name,
+                "route_step_id": stage.id,
+                "sequence": stage.sequence,
+                "operation_code": op_code,
+                "operation_name": op_name,
                 "product_id": task.product_id,
                 "product_sku": product_sku,
                 "planned_quantity": _fmt_qty(task.planned_quantity),
@@ -311,9 +318,9 @@ async def list_ready_to_transfer(
                 "next_section_id": next_sec.id if next_sec is not None else None,
                 "next_section_code": next_sec.code if next_sec is not None else None,
                 "next_section_name": next_sec.name if next_sec is not None else None,
-                "next_operation_name": next_s.operation_name if next_s is not None else None,
-                "next_step_sequence": next_s.sequence if next_s is not None else None,
-                "next_step_is_final": bool(next_s.is_final) if next_s is not None else None,
+                "next_operation_name": next_op_name,
+                "next_step_sequence": next_stg.sequence if next_stg is not None else None,
+                "next_step_is_final": bool(next_stg.is_final) if next_stg is not None else None,
                 "is_final": False,
             }
         )

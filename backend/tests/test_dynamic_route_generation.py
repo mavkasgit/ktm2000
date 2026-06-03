@@ -25,7 +25,7 @@ from app.models.production_plan import (
     PlanSourceType,
     ProductionPlan,
 )
-from app.models.route import ProductionRoute, RouteRuleProfile, RouteSelectionRule, RouteStep, SectionOperation
+from app.models.route import ProductionRoute, RouteRuleProfile, RouteSelectionRule, RouteStage, RouteOperation, SectionOperation
 from app.models.section import Section
 from app.models.techcard import Techcard, TechcardLine
 from app.services.plan_import_service import _make_change_items
@@ -269,12 +269,12 @@ async def test_dynamic_route_creates_real_production_route(session) -> None:
     assert route.import_template_id == template.id
     assert route.is_active is True
 
-    # Verify route steps were created
-    steps_result = await session.execute(
-        select(RouteStep).where(RouteStep.route_id == route_id).order_by(RouteStep.sequence)
+    # Verify route stages were created
+    stages_result = await session.execute(
+        select(RouteStage).where(RouteStage.route_id == route_id).order_by(RouteStage.sequence)
     )
-    steps = steps_result.scalars().all()
-    assert len(steps) > 0, "Route should have steps"
+    stages = stages_result.scalars().all()
+    assert len(stages) > 0, "Route should have stages"
 
     # Verify route_assigned_at is set
     assert item.after_data.get("route_assigned_at") is not None

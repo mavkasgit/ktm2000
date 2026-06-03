@@ -8,7 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.product import Product
-from app.models.route import ProductionRoute, RouteSelectionRule, RouteStep
+from app.models.route import ProductionRoute, RouteSelectionRule, RouteStage
 from app.models.section import Section
 
 
@@ -436,10 +436,10 @@ async def _route_sections(db: AsyncSession, route_ids: list[int]) -> dict[int, l
         return {}
     rows = (
         await db.execute(
-            select(RouteStep.route_id, Section.id, Section.code)
-            .join(Section, Section.id == RouteStep.section_id)
-            .where(RouteStep.route_id.in_(route_ids))
-            .order_by(RouteStep.route_id, RouteStep.sequence)
+            select(RouteStage.route_id, Section.id, Section.code)
+            .join(Section, Section.id == RouteStage.section_id)
+            .where(RouteStage.route_id.in_(route_ids))
+            .order_by(RouteStage.route_id, RouteStage.sequence)
         )
     ).all()
     result: dict[int, list[tuple[int, str]]] = {}

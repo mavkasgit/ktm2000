@@ -9,7 +9,7 @@ from openpyxl import Workbook
 from app.core.config import settings
 from app.models.import_template import ImportTemplate
 from app.models.product import Product, ProductType
-from app.models.route import ProductionRoute, RouteRuleProfile, RouteStep, SectionOperation
+from app.models.route import ProductionRoute, RouteRuleProfile, RouteStage, RouteOperation, SectionOperation
 from app.models.section import Section
 from app.models.techcard import Techcard, TechcardLine
 from app.seeds.selection_rules import SELECTION_RULES
@@ -166,13 +166,18 @@ async def _seed_infrastructure(session, profile: RouteRuleProfile):
     for idx, (section_code, op_code) in enumerate(zip(profile.route_sections, step_ops, strict=True), start=1):
         section = section_map[section_code]
         session.add(
-            RouteStep(
+            RouteStage(
                 route_id=route.id,
                 sequence=idx,
                 section_id=section.id,
-                operation_code=op_code,
-                operation_name=op_code,
                 is_final=idx == len(profile.route_sections),
+                operations=[
+                    RouteOperation(
+                        sequence=1,
+                        operation_code=op_code,
+                        operation_name=op_code,
+                    )
+                ]
             )
         )
     

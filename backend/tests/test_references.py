@@ -3,7 +3,7 @@ from sqlalchemy.exc import IntegrityError
 
 from app.models.techcard import Techcard, TechcardLine
 from app.models.product import Product, ProductType
-from app.models.route import ProductionRoute, RouteStep
+from app.models.route import ProductionRoute, RouteStage, RouteOperation
 from app.models.section import Section
 
 
@@ -46,8 +46,14 @@ async def test_route_step_sequence_uniqueness(session) -> None:
     session.add(route)
     await session.flush()
 
-    session.add(RouteStep(route_id=route.id, sequence=1, section_id=section.id, operation_name="Op1", is_final=False))
-    session.add(RouteStep(route_id=route.id, sequence=1, section_id=section.id, operation_name="Op2", is_final=True))
+    stage1 = RouteStage(route_id=route.id, sequence=1, section_id=section.id, is_final=False)
+    session.add(stage1)
+    await session.flush()
+    op1 = RouteOperation(route_stage_id=stage1.id, sequence=1, operation_name="Op1")
+    session.add(op1)
+
+    stage2 = RouteStage(route_id=route.id, sequence=1, section_id=section.id, is_final=True)
+    session.add(stage2)
     with pytest.raises(IntegrityError):
         await session.commit()
 

@@ -15,7 +15,7 @@ from app.models.production_plan import (
     ProductionPlan,
 )
 
-from app.models.route import ProductionRoute, RouteSelectionRule, RouteStep
+from app.models.route import ProductionRoute, RouteSelectionRule, RouteStage, RouteOperation
 from app.models.section import Section
 from app.services.route_validation import validate_route_match
 
@@ -61,13 +61,20 @@ async def _make_factory_route(
 
     for index, (logical_code, _kind, op_name) in enumerate(step_defs, start=1):
         section = next(s for s in sections if s.name == logical_code)
+        stage = RouteStage(
+            route_id=route.id,
+            sequence=index,
+            section_id=section.id,
+            is_final=index == len(step_defs),
+        )
+        session.add(stage)
+        await session.flush()
         session.add(
-            RouteStep(
-                route_id=route.id,
-                sequence=index,
-                section_id=section.id,
+            RouteOperation(
+                route_stage_id=stage.id,
+                sequence=1,
+                operation_code=logical_code,
                 operation_name=op_name,
-                is_final=index == len(step_defs),
             )
         )
     await session.flush()

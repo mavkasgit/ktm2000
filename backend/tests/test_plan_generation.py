@@ -21,7 +21,7 @@ from app.models.production_plan import (
     ProductionPlanStatus,
 )
 from app.models.release_batch import ReleaseBatchPosition
-from app.models.route import ProductionRoute, RouteStep
+from app.models.route import ProductionRoute, RouteStage, RouteOperation
 
 from app.models.section import Section
 from app.models.work_task import WorkTask, WorkTaskStatus
@@ -52,14 +52,20 @@ async def _make_ready_product(session, sku: str = "FG-1") -> tuple[Product, list
 
     step_ops = ["ISSUE_RAW", "DRILL", "SHOT", "ANOD", "MOVE_TO_WIP", "ACCEPT_FINISHED"]
     for index, (section, op_code) in enumerate(zip(sections, step_ops, strict=True), start=1):
+        stage = RouteStage(
+            route_id=route.id,
+            sequence=index,
+            section_id=section.id,
+            is_final=index == len(sections),
+        )
+        session.add(stage)
+        await session.flush()
         session.add(
-            RouteStep(
-                route_id=route.id,
-                sequence=index,
-                section_id=section.id,
+            RouteOperation(
+                route_stage_id=stage.id,
+                sequence=1,
                 operation_code=op_code,
                 operation_name=op_code,
-                is_final=index == len(sections),
             )
         )
     await session.flush()
@@ -85,13 +91,20 @@ async def _make_matching_route_product(session, sku: str = "FG-MATCH") -> tuple[
 
     step_ops = ["Issue raw", "DRILL", "SHOT", "ANOD", "Move to WIP", "Accept finished"]
     for index, (section, op_name) in enumerate(zip(sections, step_ops, strict=True), start=1):
+        stage = RouteStage(
+            route_id=route.id,
+            sequence=index,
+            section_id=section.id,
+            is_final=index == len(sections),
+        )
+        session.add(stage)
+        await session.flush()
         session.add(
-            RouteStep(
-                route_id=route.id,
-                sequence=index,
-                section_id=section.id,
+            RouteOperation(
+                route_stage_id=stage.id,
+                sequence=1,
+                operation_code=None,
                 operation_name=op_name,
-                is_final=index == len(sections),
             )
         )
     await session.flush()
@@ -392,14 +405,20 @@ async def test_release_blocked_on_route_mismatch(client, session) -> None:
     await session.flush()
     step_ops = ["ISSUE_RAW", "DRILL", "ACCEPT_FINISHED"]
     for index, (section, op_code) in enumerate(zip(sections, step_ops, strict=True), start=1):
+        stage = RouteStage(
+            route_id=route.id,
+            sequence=index,
+            section_id=section.id,
+            is_final=index == len(sections),
+        )
+        session.add(stage)
+        await session.flush()
         session.add(
-            RouteStep(
-                route_id=route.id,
-                sequence=index,
-                section_id=section.id,
+            RouteOperation(
+                route_stage_id=stage.id,
+                sequence=1,
                 operation_code=op_code,
                 operation_name=op_code,
-                is_final=index == len(sections),
             )
         )
     await session.flush()

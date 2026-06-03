@@ -421,7 +421,7 @@ async def test_replace_draft_mode_creates_cancel_for_missing_rows(client, sessio
 
     from app.models.techcard import Techcard, TechcardLine
     from app.models.product import Product, ProductType
-    from app.models.route import ProductionRoute, RouteStep
+    from app.models.route import ProductionRoute, RouteStage, RouteOperation
     
     from app.models.section import Section
 
@@ -443,13 +443,19 @@ async def test_replace_draft_mode_creates_cancel_for_missing_rows(client, sessio
     session.add(route)
     await session.flush()
     for index, section in enumerate(sections, start=1):
+        stage = RouteStage(
+            route_id=route.id,
+            sequence=index * 10,
+            section_id=section.id,
+            is_final=index == len(sections),
+        )
+        session.add(stage)
+        await session.flush()
         session.add(
-            RouteStep(
-                route_id=route.id,
-                sequence=index,
-                section_id=section.id,
+            RouteOperation(
+                route_stage_id=stage.id,
+                sequence=1,
                 operation_name=f"Step {index}",
-                is_final=index == len(sections),
             )
         )
     await session.commit()
@@ -718,7 +724,7 @@ async def test_import_with_normalize_hanger_quantity_rounds_up(
 
     from app.models.product import Product, ProductType
     from app.models.techcard import Techcard, TechcardLine
-    from app.models.route import ProductionRoute, RouteStep
+    from app.models.route import ProductionRoute, RouteStage, RouteOperation
     
     from app.models.section import Section
 
@@ -737,13 +743,19 @@ async def test_import_with_normalize_hanger_quantity_rounds_up(
     session.add(route)
     await session.flush()
     for index, section in enumerate(sections, start=1):
+        stage = RouteStage(
+            route_id=route.id,
+            sequence=index * 10,
+            section_id=section.id,
+            is_final=index == len(sections),
+        )
+        session.add(stage)
+        await session.flush()
         session.add(
-            RouteStep(
-                route_id=route.id,
-                sequence=index,
-                section_id=section.id,
+            RouteOperation(
+                route_stage_id=stage.id,
+                sequence=1,
                 operation_name=f"Step {index}",
-                is_final=index == len(sections),
             )
         )
     await session.commit()
@@ -789,7 +801,7 @@ async def test_import_without_normalize_hanger_quantity_keeps_original(
 
     from app.models.product import Product, ProductType
     from app.models.techcard import Techcard, TechcardLine
-    from app.models.route import ProductionRoute, RouteStep
+    from app.models.route import ProductionRoute, RouteStage, RouteOperation
     
     from app.models.section import Section
 
@@ -808,13 +820,19 @@ async def test_import_without_normalize_hanger_quantity_keeps_original(
     session.add(route)
     await session.flush()
     for index, section in enumerate(sections, start=1):
+        stage = RouteStage(
+            route_id=route.id,
+            sequence=index * 10,
+            section_id=section.id,
+            is_final=index == len(sections),
+        )
+        session.add(stage)
+        await session.flush()
         session.add(
-            RouteStep(
-                route_id=route.id,
-                sequence=index,
-                section_id=section.id,
+            RouteOperation(
+                route_stage_id=stage.id,
+                sequence=1,
                 operation_name=f"Step {index}",
-                is_final=index == len(sections),
             )
         )
     await session.commit()
@@ -850,7 +868,7 @@ async def test_import_product_without_quantity_per_hanger_shows_warning(
 
     from app.models.product import Product, ProductType
     from app.models.techcard import Techcard, TechcardLine
-    from app.models.route import ProductionRoute, RouteStep
+    from app.models.route import ProductionRoute, RouteStage, RouteOperation
     
     from app.models.section import Section
 
@@ -870,13 +888,19 @@ async def test_import_product_without_quantity_per_hanger_shows_warning(
     session.add(route)
     await session.flush()
     for index, section in enumerate(sections, start=1):
+        stage = RouteStage(
+            route_id=route.id,
+            sequence=index * 10,
+            section_id=section.id,
+            is_final=index == len(sections),
+        )
+        session.add(stage)
+        await session.flush()
         session.add(
-            RouteStep(
-                route_id=route.id,
-                sequence=index,
-                section_id=section.id,
+            RouteOperation(
+                route_stage_id=stage.id,
+                sequence=1,
                 operation_name=f"Step {index}",
-                is_final=index == len(sections),
             )
         )
     await session.commit()
@@ -912,7 +936,7 @@ async def test_import_already_multiple_no_warning(
 
     from app.models.product import Product, ProductType
     from app.models.techcard import Techcard, TechcardLine
-    from app.models.route import ProductionRoute, RouteStep
+    from app.models.route import ProductionRoute, RouteStage, RouteOperation
     
     from app.models.section import Section
 
@@ -931,13 +955,19 @@ async def test_import_already_multiple_no_warning(
     session.add(route)
     await session.flush()
     for index, section in enumerate(sections, start=1):
+        stage = RouteStage(
+            route_id=route.id,
+            sequence=index * 10,
+            section_id=section.id,
+            is_final=index == len(sections),
+        )
+        session.add(stage)
+        await session.flush()
         session.add(
-            RouteStep(
-                route_id=route.id,
-                sequence=index,
-                section_id=section.id,
+            RouteOperation(
+                route_stage_id=stage.id,
+                sequence=1,
                 operation_name=f"Step {index}",
-                is_final=index == len(sections),
             )
         )
     await session.commit()

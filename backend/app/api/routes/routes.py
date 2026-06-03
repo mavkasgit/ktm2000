@@ -5,12 +5,11 @@ from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
-from app.models.route import ProductionRoute, RouteMatchingRule, RouteStep, SectionOperation
+from app.models.route import ProductionRoute, RouteMatchingRule, RouteStage, RouteOperation, SectionOperation
 from app.models.section import Section
 from app.models.internal_plan import SectionPlanLine
 from app.models.release_batch import ReleaseBatchPosition
 from app.models.production_plan import PlanPosition, PlanChangeItem
-from app.services.route_sync import sync_stages_for_steps
 
 router = APIRouter(prefix="/routes", tags=["routes"])
 
@@ -220,7 +219,7 @@ async def check_route_delete(route_id: int, db: AsyncSession = Depends(get_db)):
     if route is None:
         raise HTTPException(status_code=404, detail="Route not found")
 
-    steps_count = await db.scalar(select(func.count()).select_from(RouteStep).where(RouteStep.route_id == route_id))
+    steps_count = await db.scalar(select(func.count()).select_from(RouteStage).where(RouteStage.route_id == route_id))
     legacy_rules_count = await db.scalar(select(func.count()).select_from(RouteMatchingRule).where(RouteMatchingRule.route_id == route_id))
     spl_count = await db.scalar(select(func.count()).select_from(SectionPlanLine).where(SectionPlanLine.route_id == route_id))
     rbp_count = await db.scalar(select(func.count()).select_from(ReleaseBatchPosition).where(ReleaseBatchPosition.route_id == route_id))
@@ -271,7 +270,7 @@ async def delete_route(
         raise HTTPException(status_code=404, detail="Route not found")
 
     # Check for relations
-    steps_count = await db.scalar(select(func.count()).select_from(RouteStep).where(RouteStep.route_id == route_id))
+    steps_count = await db.scalar(select(func.count()).select_from(RouteStage).where(RouteStage.route_id == route_id))
     legacy_rules_count = await db.scalar(select(func.count()).select_from(RouteMatchingRule).where(RouteMatchingRule.route_id == route_id))
     spl_count = await db.scalar(select(func.count()).select_from(SectionPlanLine).where(SectionPlanLine.route_id == route_id))
     rbp_count = await db.scalar(select(func.count()).select_from(ReleaseBatchPosition).where(ReleaseBatchPosition.route_id == route_id))
@@ -299,7 +298,7 @@ async def delete_route(
 
     # Delete related records in proper order
     if steps_count:
-        await db.execute(delete(RouteStep).where(RouteStep.route_id == route_id))
+        await db.execute(delete(RouteStage).where(RouteStage.route_id == route_id))
     if legacy_rules_count:
         await db.execute(delete(RouteMatchingRule).where(RouteMatchingRule.route_id == route_id))
     if spl_count:
@@ -349,34 +348,46 @@ async def create_route_step(route_id: int, payload: StepCreate, db: AsyncSession
 
     if payload.is_final:
         final_exists = await db.scalar(
-            select(RouteStep).where(RouteStep.route_id == route_id, RouteStep.is_final.is_(True))
+            select(RouteStage).where(RouteStage.route_id == route_id, RouteStage.is_final.is_(True))
         )
         if final_exists:
             raise HTTPException(status_code=409, detail="Only one final step allowed")
 
-    step = RouteStep(route_id=route_id, **payload.model_dump())
-    db.add(step)
+    stage = RouteStage(
+        route_id=route_id,
+        sequence=payload.sequence,
+        section_id=payload.section_id,
+        norm_time_minutes=payload.norm_time_minutes,
+        requires_acceptance=payload.requires_acceptance,
+        allow_parallel=payload.allow_parallel,
+        is_final=payload.is_final,
+    )
+    db.add(stage)
     await db.flush()
-    await db.refresh(step)
-    all_steps = (
-        await db.execute(
-            select(RouteStep).where(RouteStep.route_id == route_id).order_by(RouteStep.sequence)
-        )
-    ).scalars().all()
-    await sync_stages_for_steps(db, route_id, all_steps)
-    section = await db.get(Section, step.section_id)
+    
+    op = RouteOperation(
+        route_stage_id=stage.id,
+        sequence=1,
+        operation_code=payload.operation_code,
+        operation_name=payload.operation_name,
+    )
+    db.add(op)
+    await db.flush()
+    await db.refresh(stage)
+
+    section = await db.get(Section, stage.section_id)
     return StepOut(
-        id=step.id,
-        route_id=step.route_id,
-        sequence=step.sequence,
-        section_id=step.section_id,
+        id=stage.id,
+        route_id=stage.route_id,
+        sequence=stage.sequence,
+        section_id=stage.section_id,
         section_code=section.code if section else None,
         section_name=section.name if section else None,
-        operation_code=step.operation_code,
-        operation_name=step.operation_name,
-        norm_time_minutes=step.norm_time_minutes,
-        is_final=step.is_final,
-        combined_op_group=step.combined_op_group,
+        operation_code=op.operation_code,
+        operation_name=op.operation_name,
+        norm_time_minutes=stage.norm_time_minutes,
+        is_final=stage.is_final,
+        combined_op_group=None,
     )
 
 
@@ -386,13 +397,13 @@ async def replace_route_steps(route_id: int, payload: list[StepUpdate], db: Asyn
     if route is None:
         raise HTTPException(status_code=404, detail="Route not found")
 
-    # Delete existing steps
-    existing_steps = (await db.execute(select(RouteStep).where(RouteStep.route_id == route_id))).scalars().all()
-    for step in existing_steps:
-        await db.delete(step)
+    # Delete existing stages
+    existing_stages = (await db.execute(select(RouteStage).where(RouteStage.route_id == route_id))).scalars().all()
+    for stage in existing_stages:
+        await db.delete(stage)
     await db.flush()
 
-    # Create new steps
+    # Create new stages & operations
     result = []
     for item in payload:
         if item.sequence <= 0:
@@ -418,40 +429,40 @@ async def replace_route_steps(route_id: int, payload: list[StepUpdate], db: Asyn
                     detail=f"Operation '{item.operation_code}' is not registered for section {item.section_id}",
                 )
 
-        step = RouteStep(
+        stage = RouteStage(
             route_id=route_id,
             sequence=item.sequence,
             section_id=item.section_id,
-            operation_code=item.operation_code,
-            operation_name=item.operation_name,
             norm_time_minutes=item.norm_time_minutes,
             requires_acceptance=item.requires_acceptance,
             allow_parallel=item.allow_parallel,
             is_final=item.is_final,
-            combined_op_group=item.combined_op_group,
         )
-        db.add(step)
+        db.add(stage)
         await db.flush()
-        await db.refresh(step)
-    all_steps = (
-        await db.execute(
-            select(RouteStep).where(RouteStep.route_id == route_id).order_by(RouteStep.sequence)
+
+        op = RouteOperation(
+            route_stage_id=stage.id,
+            sequence=1,
+            operation_code=item.operation_code,
+            operation_name=item.operation_name,
         )
-    ).scalars().all()
-    await sync_stages_for_steps(db, route_id, all_steps)
-    for step in all_steps:
-        section = await db.get(Section, step.section_id)
+        db.add(op)
+        await db.flush()
+        await db.refresh(stage)
+
+        section = await db.get(Section, stage.section_id)
         result.append(StepOut(
-            id=step.id,
-            route_id=step.route_id,
-            sequence=step.sequence,
-            section_id=step.section_id,
+            id=stage.id,
+            route_id=stage.route_id,
+            sequence=stage.sequence,
+            section_id=stage.section_id,
             section_code=section.code if section else None,
             section_name=section.name if section else None,
-            operation_code=step.operation_code,
-            operation_name=step.operation_name,
-            norm_time_minutes=step.norm_time_minutes,
-            is_final=step.is_final,
-            combined_op_group=step.combined_op_group,
+            operation_code=op.operation_code,
+            operation_name=op.operation_name,
+            norm_time_minutes=stage.norm_time_minutes,
+            is_final=stage.is_final,
+            combined_op_group=None,
         ))
     return result

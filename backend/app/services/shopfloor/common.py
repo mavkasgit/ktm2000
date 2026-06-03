@@ -7,7 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.defect import Defect
-from app.models.route import RouteStep
+from app.models.route import RouteStage
 from app.models.transfer import Transfer
 from app.models.user import User
 from app.models.work_task import WorkTask
@@ -50,11 +50,11 @@ async def _check_idempotency(
         select(entity_type).where(entity_type.idempotency_key == idempotency_key)
     )
 
-async def _get_route_step(db: AsyncSession, route_step_id: int) -> RouteStep:
-    step = await db.get(RouteStep, route_step_id)
-    if step is None:
-        raise ValueError("Route step not found")
-    return step
+async def _get_route_stage(db: AsyncSession, route_stage_id: int) -> RouteStage:
+    stage = await db.get(RouteStage, route_stage_id)
+    if stage is None:
+        raise ValueError("Route stage not found")
+    return stage
 
 def _transfer_no() -> str:
     return f"TR-{datetime.now(UTC).strftime('%Y%m%d%H%M%S%f')}"

@@ -15,7 +15,7 @@ from app.models.production_plan import (
     ProductionPlan,
     ProductionPlanStatus,
 )
-from app.models.route import ProductionRoute, RouteStep, SectionOperation
+from app.models.route import ProductionRoute, RouteStage, RouteOperation, SectionOperation
 
 from app.models.section import Section
 from app.models.techcard import Techcard, TechcardLine
@@ -55,14 +55,20 @@ async def _make_product_with_route(session, sku: str = "FG-EXEC") -> tuple[Produ
 
     step_ops = ["ISSUE_RAW", "DRILL", "SHOT", "ANOD", "MOVE_TO_WIP", "ACCEPT_FINISHED"]
     for idx, (section, op_code) in enumerate(zip(sections, step_ops, strict=True), start=1):
+        stage = RouteStage(
+            route_id=route.id,
+            sequence=idx,
+            section_id=section.id,
+            is_final=idx == len(sections),
+        )
+        session.add(stage)
+        await session.flush()
         session.add(
-            RouteStep(
-                route_id=route.id,
-                sequence=idx,
-                section_id=section.id,
+            RouteOperation(
+                route_stage_id=stage.id,
+                sequence=1,
                 operation_code=op_code,
                 operation_name=op_code,
-                is_final=idx == len(sections),
             )
         )
     await session.flush()
@@ -94,26 +100,31 @@ async def _make_product_with_combined_anod_route(session, sku: str = "FG-COMBO-S
     await session.flush()
     session.add(TechcardLine(techcard_id=techcard.id, component_product_id=product.id, quantity=Decimal("1"), unit="pcs"))
 
-    steps_config = [
-        (sections[0], "ISSUE_RAW", "Issue", None, False),
-        (sections[1], "SHOT", "Shot", None, False),
-        (sections[2], "ANOD_05", "Чёрный", "anod_pack", False),
-        (sections[2], "PACK_STRETCH", "Стрейч", "anod_pack", False),
-        (sections[3], "MOVE_TO_WIP", "WIP", None, False),
-        (sections[4], "ACCEPT_FINISHED", "Final", None, True),
+    stages_data = [
+        (sections[0], [("ISSUE_RAW", "Issue")], False),
+        (sections[1], [("SHOT", "Shot")], False),
+        (sections[2], [("ANOD_05", "Чёрный"), ("PACK_STRETCH", "Стрейч")], False),
+        (sections[3], [("MOVE_TO_WIP", "WIP")], False),
+        (sections[4], [("ACCEPT_FINISHED", "Final")], True),
     ]
-    for idx, (section, operation_code, operation_name, combined_op_group, is_final) in enumerate(steps_config, start=1):
-        session.add(
-            RouteStep(
-                route_id=route.id,
-                sequence=idx,
-                section_id=section.id,
-                operation_code=operation_code,
-                operation_name=operation_name,
-                combined_op_group=combined_op_group,
-                is_final=is_final,
-            )
+    for idx, (section, ops, is_final) in enumerate(stages_data, start=1):
+        stage = RouteStage(
+            route_id=route.id,
+            sequence=idx,
+            section_id=section.id,
+            is_final=is_final,
         )
+        session.add(stage)
+        await session.flush()
+        for op_idx, (op_code, op_name) in enumerate(ops, start=1):
+            session.add(
+                RouteOperation(
+                    route_stage_id=stage.id,
+                    sequence=op_idx,
+                    operation_code=op_code,
+                    operation_name=op_name,
+                )
+            )
     await session.flush()
     return product, route
 
@@ -132,12 +143,12 @@ async def _make_product_with_multi_combined_route(session, sku: str = "FG-MULTI-
     session.add_all([product, *sections])
     await session.flush()
 
-    # Operations for ANOD section (combined group "anod_color")
+    # Operations for ANOD section
     session.add_all([
         SectionOperation(section_id=sections[2].id, operation_code="ANOD_BLACK", operation_name="Чёрный"),
         SectionOperation(section_id=sections[2].id, operation_code="ANOD_MATTE", operation_name="Матовый"),
     ])
-    # Operations for PACK section (combined group "pack_ops")
+    # Operations for PACK section
     session.add_all([
         SectionOperation(section_id=sections[3].id, operation_code="PACK_LABEL", operation_name="Этикетка"),
         SectionOperation(section_id=sections[3].id, operation_code="PACK_BOX", operation_name="Коробка"),
@@ -152,33 +163,32 @@ async def _make_product_with_multi_combined_route(session, sku: str = "FG-MULTI-
     await session.flush()
     session.add(TechcardLine(techcard_id=techcard.id, component_product_id=product.id, quantity=Decimal("1"), unit="pcs"))
 
-    # Route steps with TWO separate combined groups:
-    # 1. ANOD: two steps with combined_op_group="anod_color"
-    # 2. PACK: two steps with combined_op_group="pack_ops"
-    steps_config = [
-        (sections[0], "ISSUE_RAW", "Выдача", None, False),
-        (sections[1], "DRILL", "Дробеструй", None, False),
-        # ANOD combined group
-        (sections[2], "ANOD_BLACK", "Чёрный", "anod_color", False),
-        (sections[2], "ANOD_MATTE", "Матовый", "anod_color", False),
-        # PACK combined group
-        (sections[3], "PACK_LABEL", "Этикетка", "pack_ops", False),
-        (sections[3], "PACK_BOX", "Коробка", "pack_ops", False),
-        (sections[4], "MOVE_TO_WIP", "Склад п/ф", None, False),
-        (sections[5], "ACCEPT_FINISHED", "Склад ГП", None, True),
+    stages_data = [
+        (sections[0], [("ISSUE_RAW", "Выдача")], False),
+        (sections[1], [("DRILL", "Дробеструй")], False),
+        (sections[2], [("ANOD_BLACK", "Чёрный"), ("ANOD_MATTE", "Матовый")], False),
+        (sections[3], [("PACK_LABEL", "Этикетка"), ("PACK_BOX", "Коробка")], False),
+        (sections[4], [("MOVE_TO_WIP", "Склад п/ф")], False),
+        (sections[5], [("ACCEPT_FINISHED", "Склад ГП")], True),
     ]
-    for idx, (section, operation_code, operation_name, combined_op_group, is_final) in enumerate(steps_config, start=1):
-        session.add(
-            RouteStep(
-                route_id=route.id,
-                sequence=idx,
-                section_id=section.id,
-                operation_code=operation_code,
-                operation_name=operation_name,
-                combined_op_group=combined_op_group,
-                is_final=is_final,
-            )
+    for idx, (section, ops, is_final) in enumerate(stages_data, start=1):
+        stage = RouteStage(
+            route_id=route.id,
+            sequence=idx,
+            section_id=section.id,
+            is_final=is_final,
         )
+        session.add(stage)
+        await session.flush()
+        for op_idx, (op_code, op_name) in enumerate(ops, start=1):
+            session.add(
+                RouteOperation(
+                    route_stage_id=stage.id,
+                    sequence=op_idx,
+                    operation_code=op_code,
+                    operation_name=op_name,
+                )
+            )
     await session.flush()
     return product, route
 
@@ -295,9 +305,10 @@ async def test_rows_list_merges_combined_anod_route_steps(client, session) -> No
     row = next(item for item in response.json() if item["plan_position_id"] == position.id)
     route_steps = row["route_steps"]
     assert len(route_steps) == 5
-    anod_section_id = next(step.section_id for step in await _route_steps(session, route.id) if step.combined_op_group == "anod_pack")
+    stages = await _route_stages(session, route.id)
+    anod_section_id = next(stage.section_id for stage in stages if len(stage.operations) > 1)
     assert [step["section_id"] for step in route_steps].count(anod_section_id) == 1
-    assert [step["sequence"] for step in route_steps] == [1, 2, 3, 5, 6]
+    assert [step["sequence"] for step in route_steps] == [1, 2, 3, 4, 5]
 
 
 @pytest.mark.asyncio
@@ -329,7 +340,7 @@ async def test_rows_list_and_detail_merge_multiple_combined_groups(client, sessi
     assert len(route_steps) == 6, f"Expected 6 grouped route_steps, got {len(route_steps)}: {[s['sequence'] for s in route_steps]}"
 
     # Check sequences are preserved (merged steps keep first sequence of group)
-    assert [step["sequence"] for step in route_steps] == [1, 2, 3, 5, 7, 8]
+    assert [step["sequence"] for step in route_steps] == [1, 2, 3, 4, 5, 6]
 
     # Check detail endpoint
     response = await client.get(f"/api/production-planning/rows/{position.id}")
@@ -353,7 +364,7 @@ async def test_rows_list_and_detail_merge_multiple_combined_groups(client, sessi
     assert anod_stage["planned_quantity"] == 500.0
 
     pack_stage = next(s for s in data["stages"] if s["section_name"] == "Упаковка")
-    assert pack_stage["sequence"] == 5
+    assert pack_stage["sequence"] == 4
     assert pack_stage["operation_name"] == "Этикетка / Коробка"
     assert pack_stage["planned_quantity"] == 500.0
 
@@ -379,24 +390,29 @@ async def test_rows_detail_has_press_operation_from_route_step(client, session) 
     session.add(route)
     await session.flush()
 
-    # PRESS step with explicit operation_code (set by route_select rules)
-    steps_config = [
-        (sections[0], "ISSUE_RAW", "Выдача сырья", None, False),
-        (sections[1], "PRESS_WINDOW", "Пресс окно", None, False),
-        (sections[2], "ACCEPT_FINISHED", "Склад ГП", None, True),
+    stages_data = [
+        (sections[0], [("ISSUE_RAW", "Выдача сырья")], False),
+        (sections[1], [("PRESS_WINDOW", "Пресс окно")], False),
+        (sections[2], [("ACCEPT_FINISHED", "Склад ГП")], True),
     ]
-    for idx, (section, operation_code, operation_name, combined_op_group, is_final) in enumerate(steps_config, start=1):
-        session.add(
-            RouteStep(
-                route_id=route.id,
-                sequence=idx,
-                section_id=section.id,
-                operation_code=operation_code,
-                operation_name=operation_name,
-                combined_op_group=combined_op_group,
-                is_final=is_final,
-            )
+    for idx, (section, ops, is_final) in enumerate(stages_data, start=1):
+        stage = RouteStage(
+            route_id=route.id,
+            sequence=idx,
+            section_id=section.id,
+            is_final=is_final,
         )
+        session.add(stage)
+        await session.flush()
+        for op_idx, (op_code, op_name) in enumerate(ops, start=1):
+            session.add(
+                RouteOperation(
+                    route_stage_id=stage.id,
+                    sequence=op_idx,
+                    operation_code=op_code,
+                    operation_name=op_name,
+                )
+            )
     await session.flush()
 
     plan = await _make_plan(session, "PRESS-TEST")
@@ -516,12 +532,12 @@ async def _tasks_for_position(session, position_id: int) -> list[WorkTask]:
     ).scalars().all()
 
 
-async def _route_steps(session, route_id: int) -> list[RouteStep]:
+async def _route_stages(session, route_id: int) -> list[RouteStage]:
     return (
         await session.execute(
-            select(RouteStep)
-            .where(RouteStep.route_id == route_id)
-            .order_by(RouteStep.sequence)
+            select(RouteStage)
+            .where(RouteStage.route_id == route_id)
+            .order_by(RouteStage.sequence)
         )
     ).scalars().all()
 
@@ -540,15 +556,15 @@ async def test_manual_pass_to_first_stage_creates_tasks_without_movements(client
     )
     position.route_id = route.id
     await session.commit()
-    first_step = (await _route_steps(session, route.id))[0]
+    first_stage = (await _route_stages(session, route.id))[0]
 
     response = await client.post(
         f"/api/production-planning/rows/{position.id}/manual-pass",
-        json={"target_route_step_id": first_step.id, "idempotency_key": "manual-first"},
+        json={"target_route_stage_id": first_stage.id, "idempotency_key": "manual-first"},
     )
     assert response.status_code == 200
     body = response.json()
-    assert body["target_route_step_id"] == first_step.id
+    assert body["target_route_stage_id"] == first_stage.id
     assert body["tasks_created"] == 6
     assert body["movements_created"] == 0
     assert body["transfers_created"] == 0
@@ -575,13 +591,13 @@ async def test_manual_pass_to_middle_stage_creates_manual_facts_and_ready_target
     )
     position.route_id = route.id
     await session.commit()
-    steps = await _route_steps(session, route.id)
-    target_step = steps[2]
+    stages = await _route_stages(session, route.id)
+    target_stage = stages[2]
 
     response = await client.post(
         f"/api/production-planning/rows/{position.id}/manual-pass",
         json={
-            "target_route_step_id": target_step.id,
+            "target_route_stage_id": target_stage.id,
             "idempotency_key": "manual-mid",
             "comment": "Пропущено по факту",
         },
@@ -650,8 +666,8 @@ async def test_manual_pass_replay_with_same_idempotency_key_does_not_duplicate(c
     )
     position.route_id = route.id
     await session.commit()
-    target_step = (await _route_steps(session, route.id))[1]
-    payload = {"target_route_step_id": target_step.id, "idempotency_key": "manual-idem"}
+    target_stage = (await _route_stages(session, route.id))[1]
+    payload = {"target_route_stage_id": target_stage.id, "idempotency_key": "manual-idem"}
 
     first = await client.post(f"/api/production-planning/rows/{position.id}/manual-pass", json=payload)
     assert first.status_code == 200
@@ -729,7 +745,7 @@ async def test_manual_pass_rejects_position_with_existing_nonmanual_facts(client
     )
     position.route_id = route.id
     await session.commit()
-    first_step, second_step = (await _route_steps(session, route.id))[:2]
+    first_stage, second_stage = (await _route_stages(session, route.id))[:2]
 
     launch = await client.post("/api/production-planning/rows/take-to-work", json={"position_ids": [position.id]})
     assert launch.status_code == 200
@@ -740,11 +756,11 @@ async def test_manual_pass_rejects_position_with_existing_nonmanual_facts(client
 
     response = await client.post(
         f"/api/production-planning/rows/{position.id}/manual-pass",
-        json={"target_route_step_id": second_step.id, "idempotency_key": "manual-block"},
+        json={"target_route_stage_id": second_stage.id, "idempotency_key": "manual-block"},
     )
     assert response.status_code == 400
     assert "already has execution facts" in response.json()["detail"]
-    assert first_step.id != second_step.id
+    assert first_stage.id != second_stage.id
 
 
 @pytest.mark.asyncio
@@ -762,14 +778,14 @@ async def test_manual_pass_rejects_target_step_from_another_route(client, sessio
     )
     position.route_id = route.id
     await session.commit()
-    wrong_step = (await _route_steps(session, other_route.id))[0]
+    wrong_stage = (await _route_stages(session, other_route.id))[0]
 
     response = await client.post(
         f"/api/production-planning/rows/{position.id}/manual-pass",
-        json={"target_route_step_id": wrong_step.id, "idempotency_key": "manual-wrong"},
+        json={"target_route_stage_id": wrong_stage.id, "idempotency_key": "manual-wrong"},
     )
     assert response.status_code == 400
-    assert response.json()["detail"] == "target_route_step_id not found in this position route"
+    assert response.json()["detail"] == "target_route_stage_id not found in this position route"
 
 
 @pytest.mark.asyncio
@@ -860,23 +876,39 @@ async def test_rows_list_marks_completed_if_shipment_task_completed(client, sess
     session.add(route)
     await session.flush()
 
-    step_ship = RouteStep(
+    stage_ship = RouteStage(
         route_id=route.id,
         sequence=1,
         section_id=shipment.id,
-        operation_code="SHIPMENT",
-        operation_name="К отгрузке",
         is_final=False,
     )
-    step_sent = RouteStep(
+    session.add(stage_ship)
+    await session.flush()
+    session.add(
+        RouteOperation(
+            route_stage_id=stage_ship.id,
+            sequence=1,
+            operation_code="SHIPMENT",
+            operation_name="К отгрузке",
+        )
+    )
+
+    stage_sent = RouteStage(
         route_id=route.id,
         sequence=2,
         section_id=sent.id,
-        operation_code="SENT",
-        operation_name="Отправлено",
         is_final=True,
     )
-    session.add_all([step_ship, step_sent])
+    session.add(stage_sent)
+    await session.flush()
+    session.add(
+        RouteOperation(
+            route_stage_id=stage_sent.id,
+            sequence=1,
+            operation_code="SENT",
+            operation_name="Отправлено",
+        )
+    )
     await session.flush()
 
     plan = await _make_plan(session, "SHIP-DONE")
@@ -901,7 +933,7 @@ async def test_rows_list_marks_completed_if_shipment_task_completed(client, sess
         internal_plan_id=internal_plan.id,
         plan_position_id=position.id,
         route_id=route.id,
-        route_step_id=step_ship.id,
+        route_stage_id=stage_ship.id,
         section_id=shipment.id,
         product_id=product.id,
         sequence=1,
@@ -911,7 +943,7 @@ async def test_rows_list_marks_completed_if_shipment_task_completed(client, sess
         internal_plan_id=internal_plan.id,
         plan_position_id=position.id,
         route_id=route.id,
-        route_step_id=step_sent.id,
+        route_stage_id=stage_sent.id,
         section_id=sent.id,
         product_id=product.id,
         sequence=2,
@@ -924,7 +956,7 @@ async def test_rows_list_marks_completed_if_shipment_task_completed(client, sess
         section_plan_line_id=line_1.id,
         section_id=shipment.id,
         product_id=product.id,
-        route_step_id=step_ship.id,
+        route_stage_id=stage_ship.id,
         planned_quantity=Decimal("150.000"),
         status=WorkTaskStatus.completed,
         cached_completed_quantity=Decimal("150.000"),
@@ -933,7 +965,7 @@ async def test_rows_list_marks_completed_if_shipment_task_completed(client, sess
         section_plan_line_id=line_2.id,
         section_id=sent.id,
         product_id=product.id,
-        route_step_id=step_sent.id,
+        route_stage_id=stage_sent.id,
         planned_quantity=Decimal("150.000"),
         status=WorkTaskStatus.completed,
         cached_completed_quantity=Decimal("150.000"),
@@ -961,23 +993,34 @@ async def test_rows_list_marks_completed_if_final_task_completed(client, session
     session.add(route)
     await session.flush()
 
+    stage_ship = RouteStage(
+        route_id=route.id,
+        sequence=1,
+        section_id=shipment.id,
+        is_final=False,
+    )
+    stage_sent = RouteStage(
+        route_id=route.id,
+        sequence=2,
+        section_id=sent.id,
+        is_final=True,
+    )
+    session.add_all([stage_ship, stage_sent])
+    await session.flush()
+
     session.add_all(
         [
-            RouteStep(
-                route_id=route.id,
+            RouteOperation(
+                route_stage_id=stage_ship.id,
                 sequence=1,
-                section_id=shipment.id,
                 operation_code="SHIPMENT",
                 operation_name="К отгрузке",
-                is_final=False,
             ),
-            RouteStep(
-                route_id=route.id,
-                sequence=2,
-                section_id=sent.id,
+            RouteOperation(
+                route_stage_id=stage_sent.id,
+                sequence=1,
                 operation_code="SENT",
                 operation_name="Отправлено",
-                is_final=True,
             ),
         ]
     )
@@ -1005,7 +1048,7 @@ async def test_rows_list_marks_completed_if_final_task_completed(client, session
         internal_plan_id=internal_plan.id,
         plan_position_id=position.id,
         route_id=route.id,
-        route_step_id=1,
+        route_stage_id=stage_ship.id,
         section_id=shipment.id,
         product_id=product.id,
         sequence=1,
@@ -1015,7 +1058,7 @@ async def test_rows_list_marks_completed_if_final_task_completed(client, session
         internal_plan_id=internal_plan.id,
         plan_position_id=position.id,
         route_id=route.id,
-        route_step_id=2,
+        route_stage_id=stage_sent.id,
         section_id=sent.id,
         product_id=product.id,
         sequence=2,
@@ -1028,7 +1071,7 @@ async def test_rows_list_marks_completed_if_final_task_completed(client, session
         section_plan_line_id=line_1.id,
         section_id=shipment.id,
         product_id=product.id,
-        route_step_id=1,
+        route_stage_id=stage_ship.id,
         planned_quantity=Decimal("100.000"),
         status=WorkTaskStatus.partially_completed,
         cached_completed_quantity=Decimal("80.000"),
@@ -1037,7 +1080,7 @@ async def test_rows_list_marks_completed_if_final_task_completed(client, session
         section_plan_line_id=line_2.id,
         section_id=sent.id,
         product_id=product.id,
-        route_step_id=2,
+        route_stage_id=stage_sent.id,
         planned_quantity=Decimal("100.000"),
         status=WorkTaskStatus.completed,
         cached_completed_quantity=Decimal("100.000"),

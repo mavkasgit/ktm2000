@@ -112,9 +112,9 @@ async def test_seed_routes_creates_characteristic_routes(client, session) -> Non
     response = await client.post("/api/routes-seed")
     assert response.status_code == 201
     data = response.json()
-    assert data == {"import_templates": 1, "route_rule_profiles": 1, "routes": 2, "selection_rules": 10, "sections": 11, "section_operations": 20}
+    assert data == {"import_templates": 1, "route_rule_profiles": 1, "routes": 2, "selection_rules": 12, "sections": 11, "section_operations": 20}
     first_rules_count = len((await session.execute(select(RouteSelectionRule))).scalars().all())
-    assert first_rules_count == 10
+    assert first_rules_count == 12
 
     # idempotency/update behavior
     response2 = await client.post("/api/routes-seed")

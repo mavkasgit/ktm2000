@@ -35,7 +35,7 @@ from app.models.production_plan import (
     ProductionPlan,
     ProductionPlanStatus,
 )
-from app.models.route import ProductionRoute, RouteStep, SectionOperation
+from app.models.route import ProductionRoute, RouteStage, RouteOperation, SectionOperation
 from app.models.section import Section
 from app.models.techcard import Techcard, TechcardLine
 from app.models.work_task import WorkTask, WorkTaskStatus
@@ -72,8 +72,8 @@ async def _make_transformation_route(session, sku: str = "SPLIT-1") -> tuple[Pro
     # Section operations
     session.add_all([
         SectionOperation(section_id=sections[0].id, operation_code="ISSUE_RAW", operation_name="Выдача сырья", is_significant=True),
-        SectionOperation(section_id=sections[1].id, operation_code="PRESS_WINDOW", operation_name="Пресс (окно)", is_significant=True),
-        SectionOperation(section_id=sections[1].id, operation_code="PRESS_COMB", operation_name="Пресс (гребенка)", is_significant=True),
+        SectionOperation(section_id=sections[1].id, operation_code="PRESS_WINDOW", operation_name="Пресс (окно)", is_significant=False),
+        SectionOperation(section_id=sections[1].id, operation_code="PRESS_COMB", operation_name="Пресс (гребенка)", is_significant=False),
         SectionOperation(section_id=sections[2].id, operation_code="ANODIZE", operation_name="Анодирование", is_significant=True),
         SectionOperation(section_id=sections[3].id, operation_code="PACK_STRETCH", operation_name="Стрейч"),
         SectionOperation(section_id=sections[3].id, operation_code="PACK_SPUNBOND", operation_name="Спанбонд"),
@@ -98,15 +98,21 @@ async def _make_transformation_route(session, sku: str = "SPLIT-1") -> tuple[Pro
     ]
 
     for idx, cfg in enumerate(steps_config, start=1):
+        stage = RouteStage(
+            route_id=route.id,
+            sequence=idx,
+            section_id=sections[cfg["section_idx"]].id,
+            is_significant=cfg.get("significant", False),
+            is_final=cfg.get("is_final", False),
+        )
+        session.add(stage)
+        await session.flush()
         session.add(
-            RouteStep(
-                route_id=route.id,
-                sequence=idx,
-                section_id=sections[cfg["section_idx"]].id,
+            RouteOperation(
+                route_stage_id=stage.id,
+                sequence=1,
                 operation_code=cfg.get("op_code"),
                 operation_name=cfg["op_name"],
-                is_significant=cfg.get("significant", False),
-                is_final=cfg.get("is_final", False),
             )
         )
 
@@ -141,11 +147,11 @@ async def _create_six_positions_and_tasks(
     """
     from datetime import UTC, datetime
 
-    route_steps = (
+    route_stages = (
         await session.execute(
-            select(RouteStep)
-            .where(RouteStep.route_id == route.id)
-            .order_by(RouteStep.sequence)
+            select(RouteStage)
+            .where(RouteStage.route_id == route.id)
+            .order_by(RouteStage.sequence)
         )
     ).scalars().all()
 
@@ -205,12 +211,12 @@ async def _create_six_positions_and_tasks(
         internal_plans.append(internal_plan)
 
         # SectionPlanLine + WorkTask for each route step
-        for step_idx, step in enumerate(route_steps, start=1):
+        for step_idx, step in enumerate(route_stages, start=1):
             line = SectionPlanLine(
                 internal_plan_id=internal_plan.id,
                 plan_position_id=pos.id,
                 route_id=route.id,
-                route_step_id=step.id,
+                route_stage_id=step.id,
                 section_id=step.section_id,
                 product_id=product.id,
                 sequence=step_idx,
@@ -235,7 +241,7 @@ async def _create_six_positions_and_tasks(
                 section_plan_line_id=line.id,
                 section_id=step.section_id,
                 product_id=product.id,
-                route_step_id=step.id,
+                route_stage_id=step.id,
                 planned_quantity=qty,
                 status=status,
                 selected_operation_code=effective_op_code,

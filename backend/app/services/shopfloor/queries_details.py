@@ -9,7 +9,7 @@ from app.models.entity_comment import EntityComment, EntityType
 from app.models.internal_plan import SectionPlanLine
 from app.models.movement import Movement
 from app.models.rework_task import ReworkTask
-from app.models.route import RouteStep
+from app.models.route import RouteStage
 from app.models.section import Section
 
 from .cache import _compute_available_from_balances
@@ -17,11 +17,11 @@ from .common import _get_defect, _get_task, _to_decimal
 
 async def get_task_details(db: AsyncSession, task_id: int) -> dict:
     task = await _get_task(db, task_id)
-    step = await db.get(RouteStep, task.route_step_id)
+    stage = await db.get(RouteStage, task.route_stage_id)
     movements = (
         await db.execute(select(Movement).where(Movement.task_id == task.id).order_by(Movement.created_at, Movement.id))
     ).scalars().all()
-    is_first_stage = bool(step and step.sequence == 1)
+    is_first_stage = bool(stage and stage.sequence == 1)
     available = _compute_available_from_balances(
         planned_quantity=_to_decimal(task.planned_quantity),
         received_quantity=_to_decimal(task.cached_received_quantity),
@@ -43,11 +43,11 @@ async def get_task_details(db: AsyncSession, task_id: int) -> dict:
             "remaining_quantity": str(task.cached_remaining_quantity),
         },
         "route_step": {
-            "id": step.id if step else None,
-            "sequence": step.sequence if step else None,
-            "operation_code": step.operation_code if step else None,
-            "operation_name": step.operation_name if step else None,
-            "is_final": step.is_final if step else None,
+            "id": stage.id if stage else None,
+            "sequence": stage.sequence if stage else None,
+            "operation_code": stage.operations[0].operation_code if stage and stage.operations else None,
+            "operation_name": ", ".join(op.operation_name for op in stage.operations) if stage and stage.operations else None,
+            "is_final": stage.is_final if stage else None,
         },
         "movements": [
             {
@@ -164,9 +164,9 @@ async def get_defect_details(db: AsyncSession, defect_id: int) -> dict:
 async def get_route_stage_aggregates_for_plan_position(db: AsyncSession, plan_position_id: int) -> dict:
     lines = (
         await db.execute(
-            select(SectionPlanLine, RouteStep, Section)
-            .join(RouteStep, RouteStep.id == SectionPlanLine.route_step_id)
-            .join(Section, Section.id == RouteStep.section_id)
+            select(SectionPlanLine, RouteStage, Section)
+            .join(RouteStage, RouteStage.id == SectionPlanLine.route_stage_id)
+            .join(Section, Section.id == RouteStage.section_id)
             .where(SectionPlanLine.plan_position_id == plan_position_id)
             .order_by(SectionPlanLine.sequence)
         )
@@ -179,16 +179,16 @@ async def get_route_stage_aggregates_for_plan_position(db: AsyncSession, plan_po
         "stages": [
             {
                 "section_plan_line_id": line.id,
-                "route_step_id": line.route_step_id,
-                "section_id": step.section_id,
+                "route_step_id": line.route_stage_id,
+                "section_id": stage.section_id,
                 "section_code": section.code,
                 "section_name": section.name,
                 "section_icon": section.icon,
                 "section_icon_color": section.icon_color,
                 "sequence": line.sequence,
-                "operation_code": step.operation_code,
-                "operation_name": step.operation_name,
-                "is_final": step.is_final,
+                "operation_code": stage.operations[0].operation_code if stage.operations else None,
+                "operation_name": ", ".join(op.operation_name for op in stage.operations) if stage.operations else "",
+                "is_final": stage.is_final,
                 "planned_quantity": str(line.planned_quantity),
                 "available_quantity": str(line.cached_available_quantity),
                 "issued_quantity": str(line.cached_issued_quantity),
@@ -198,7 +198,7 @@ async def get_route_stage_aggregates_for_plan_position(db: AsyncSession, plan_po
                 "rejected_quantity": str(line.cached_rejected_quantity),
                 "remaining_quantity": str(line.cached_remaining_quantity),
             }
-            for line, step, section in lines
+            for line, stage, section in lines
         ],
     }
 

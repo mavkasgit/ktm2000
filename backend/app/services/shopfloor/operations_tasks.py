@@ -14,7 +14,7 @@ from app.models.warehouse_remainder import WarehouseRemainder
 from app.models.work_task import WorkTask, WorkTaskStatus
 
 from .cache import _refresh_section_plan_line_cache, _refresh_task_cache
-from .common import _check_idempotency, _ensure_positive, _get_route_step, _get_task, _get_user_snapshot_name, _to_decimal
+from .common import _check_idempotency, _ensure_positive, _get_route_stage, _get_task, _get_user_snapshot_name, _to_decimal
 
 async def issue_to_work(
     db: AsyncSession,
@@ -235,9 +235,9 @@ async def final_release(
             return {"movement_id": existing.id, "task_id": task_id, "idempotent_replay": True}
 
     task = await _get_task(db, task_id)
-    step = await _get_route_step(db, task.route_step_id)
-    if not step.is_final:
-        raise ValueError("Final release allowed only for final route step")
+    stage = await _get_route_stage(db, task.route_stage_id)
+    if not stage.is_final:
+        raise ValueError("Final release allowed only for final route stage")
 
     quantity = _to_decimal(quantity)
     _ensure_positive(quantity, "quantity")
@@ -324,7 +324,7 @@ async def prepare_section_task(
         section_plan_line_id=line.id,
         section_id=section_id,
         product_id=line.product_id,
-        route_step_id=line.route_step_id,
+        route_stage_id=line.route_stage_id,
         planned_quantity=quantity,
         status=WorkTaskStatus.ready,
         due_date=line.due_date,
@@ -376,19 +376,19 @@ async def return_remainder_to_stock(
     line = await db.get(SectionPlanLine, task.section_plan_line_id)
     completed_stages = []
     if line is not None:
-        from app.models.route import RouteStep
-        steps = await db.execute(
-            select(RouteStep)
-            .where(RouteStep.route_id == line.route_id)
-            .where(RouteStep.sequence <= line.sequence)
-            .order_by(RouteStep.sequence)
+        from app.models.route import RouteStage
+        stages = await db.execute(
+            select(RouteStage)
+            .where(RouteStage.route_id == line.route_id)
+            .where(RouteStage.sequence <= line.sequence)
+            .order_by(RouteStage.sequence)
         )
-        for step in steps.scalars().all():
+        for stage in stages.scalars().all():
             completed_stages.append({
-                "section_id": step.section_id,
-                "operation_code": step.operation_code,
-                "operation_name": step.operation_name,
-                "sequence": step.sequence,
+                "section_id": stage.section_id,
+                "operation_code": stage.operations[0].operation_code if stage.operations else None,
+                "operation_name": ", ".join(op.operation_name for op in stage.operations) if stage.operations else "",
+                "sequence": stage.sequence,
             })
 
     # Create remainder record
@@ -397,7 +397,7 @@ async def return_remainder_to_stock(
     remainder = WarehouseRemainder(
         product_id=task.product_id,
         section_id=task.section_id,
-        route_step_id=task.route_step_id,
+        route_stage_id=task.route_stage_id,
         section_plan_line_id=task.section_plan_line_id,
         origin_task_id=task.id,
         remainder_quantity=quantity,

@@ -29,32 +29,8 @@ class ProductionRoute(Base):
     sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default=text("0"))
     import_template_id: Mapped[int | None] = mapped_column(ForeignKey("import_templates.id"), nullable=True)
 
-    steps: Mapped[list["RouteStep"]] = relationship("RouteStep", back_populates="route", lazy="selectin")
     stages: Mapped[list["RouteStage"]] = relationship("RouteStage", back_populates="route", lazy="selectin")
     rules: Mapped[list["RouteMatchingRule"]] = relationship("RouteMatchingRule", back_populates="route", lazy="selectin")
-
-
-class RouteStep(Base):
-    __tablename__ = "route_steps"
-
-    id: Mapped[int] = mapped_column(BigInteger, Identity(always=True), primary_key=True)
-    route_id: Mapped[int] = mapped_column(ForeignKey("production_routes.id"), nullable=False)
-    sequence: Mapped[int] = mapped_column(Integer, nullable=False)
-    section_id: Mapped[int] = mapped_column(ForeignKey("sections.id"), nullable=False)
-    operation_code: Mapped[str | None] = mapped_column(String(100), nullable=True)
-    operation_name: Mapped[str] = mapped_column(String(255), nullable=False)
-    is_significant: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default=text("false"))
-    norm_time_minutes: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    requires_acceptance: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default=text("true"))
-    allow_parallel: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default=text("false"))
-    is_final: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default=text("false"))
-    combined_op_group: Mapped[str | None] = mapped_column(String(100), nullable=True)
-
-    route: Mapped["ProductionRoute"] = relationship("ProductionRoute", back_populates="steps")
-
-    __table_args__ = (
-        UniqueConstraint("route_id", "sequence", name="uq_route_steps_sequence"),
-    )
 
 
 class RouteStage(Base):
@@ -78,7 +54,6 @@ class RouteStage(Base):
     allow_parallel: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default=text("false"))
     is_final: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default=text("false"))
     sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default=text("0"))
-    route_step_id: Mapped[int | None] = mapped_column(ForeignKey("route_steps.id"), nullable=True)
 
     route: Mapped["ProductionRoute"] = relationship("ProductionRoute", back_populates="stages")
     operations: Mapped[list["RouteOperation"]] = relationship(

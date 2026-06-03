@@ -13,7 +13,7 @@ from app.models.internal_plan import SectionPlanLine
 from app.models.production_plan import PlanPosition
 from app.models.movement import Movement, MovementType
 from app.models.product import Product
-from app.models.route import RouteStep, SectionOperation
+from app.models.route import RouteStage, SectionOperation
 from app.models.section import Section
 from app.models.transfer import Transfer, TransferStatus
 from app.models.warehouse_remainder import WarehouseRemainder
@@ -55,7 +55,7 @@ async def get_section_board(
     query = select(
         WorkTask,
         SectionPlanLine,
-        RouteStep,
+        RouteStage,
         Product.sku,
         PlanPosition.source_ref,
         PlanPosition.source_payload,
@@ -65,7 +65,7 @@ async def get_section_board(
     ).join(
         SectionPlanLine, WorkTask.section_plan_line_id == SectionPlanLine.id,
     ).join(
-        RouteStep, WorkTask.route_step_id == RouteStep.id,
+        RouteStage, WorkTask.route_stage_id == RouteStage.id,
     ).join(
         Product, WorkTask.product_id == Product.id,
     ).outerjoin(
@@ -94,17 +94,17 @@ async def get_section_board(
     plan_position_ids: set[int] = set()
     for row in rows:
         line = row[1]  # SectionPlanLine
-        step = row[2]  # RouteStep
-        route_ids.add(step.route_id)
+        stage = row[2]  # RouteStage
+        route_ids.add(stage.route_id)
         plan_position_ids.add(line.plan_position_id)
 
-    # Load all route steps for involved routes
-    all_steps = (await db.execute(
-        select(RouteStep).where(RouteStep.route_id.in_(route_ids))
+    # Load all route stages for involved routes
+    all_stages = (await db.execute(
+        select(RouteStage).where(RouteStage.route_id.in_(route_ids))
     )).scalars().all()
-    steps_by_route: dict[int, list[RouteStep]] = {}
-    for s in all_steps:
-        steps_by_route.setdefault(s.route_id, []).append(s)
+    stages_by_route: dict[int, list[RouteStage]] = {}
+    for s in all_stages:
+        stages_by_route.setdefault(s.route_id, []).append(s)
 
     # Load all SectionPlanLine for prev/next lookup
     all_lines = (await db.execute(
@@ -116,7 +116,7 @@ async def get_section_board(
     for line in all_lines:
         lines_by_pos_seq[(line.plan_position_id, line.sequence)] = line
 
-    # Load PlanPosition for source_payload lookup (needed for previous stages effective_op_code)
+    # Load PlanPosition for source_payload lookup
     all_positions = (await db.execute(
         select(PlanPosition).where(PlanPosition.id.in_(plan_position_ids))
     )).scalars().all()
@@ -134,9 +134,9 @@ async def get_section_board(
         if existing is None or t.id > existing.id:
             tasks_by_line[t.section_plan_line_id] = t
 
-    # Collect all section_ids from route steps (needed for previous stages operation lookup)
+    # Collect all section_ids from route stages
     all_section_ids = set()
-    for s in all_steps:
+    for s in all_stages:
         all_section_ids.add(s.section_id)
     all_section_ids.add(section_id)  # Ensure current section is included
 
@@ -177,64 +177,48 @@ async def get_section_board(
             }
 
     tasks_data = []
-    for task, line, step, product_sku, source_ref, source_payload, source_fingerprint, source_sku, output_sku in rows:
+    for task, line, stage, product_sku, source_ref, source_payload, source_fingerprint, source_sku, output_sku in rows:
         # Determine effective operation_code.
-        # Priority: task override > source_payload (if belongs to current section) > route_step
         effective_op_code = task.selected_operation_code
         if not effective_op_code:
             src_op = (source_payload or {}).get("operation_code")
-            # Only use source_payload operation if it belongs to the current section.
-            # For combined tasks, source_payload may contain an operation from a previous
-            # section (e.g., PRESS_WINDOW on the anodizing section) — skip it.
             if src_op and src_op in op_name_by_section.get(task.section_id, {}):
                 effective_op_code = src_op
             else:
-                effective_op_code = step.operation_code
-        # Look up operation_name from section operations if available
-        effective_op_name = op_name_by_section.get(task.section_id, {}).get(effective_op_code) or step.operation_name
-        # Determine is_significant from section operations (use all_section_ops for cross-section lookup)
-        # If operation is not found in section_operations, default to False — significance is controlled
-        # exclusively by section settings, not by RouteStep.is_significant.
+                effective_op_code = stage.operations[0].operation_code if stage.operations else None
+
+        stage_primary_op_name = stage.operations[0].operation_name if stage.operations else ""
+        effective_op_name = op_name_by_section.get(task.section_id, {}).get(effective_op_code) or stage_primary_op_name
         effective_is_significant = False
         for op in all_section_ops:
             if op.section_id == task.section_id and op.operation_code == effective_op_code:
                 effective_is_significant = op.is_significant
                 break
-        # Prev step — dict lookup
-        route_steps = steps_by_route.get(line.route_id, [])
 
-        # Build route history from actual effective operations of previous stages.
-        # Instead of using static RouteStep.operation_name, find the WorkTask for each
-        # previous stage and use its effective_op_code to get the real operation.
-        # - route_history (visual): only significant ops up to (NOT including) current step
-        # - route_history_full: ALL ops up to current step
+        route_stages = stages_by_route.get(line.route_id, [])
+
         route_history = []
         route_history_full = []
-        for s in route_steps:
-            if s.sequence < step.sequence:
-                # Find the actual effective operation for this previous stage
+        for s in route_stages:
+            if s.sequence < stage.sequence:
                 prev_line = lines_by_pos_seq.get((line.plan_position_id, s.sequence))
                 prev_work_task = tasks_by_line.get(prev_line.id) if prev_line else None
 
                 if prev_work_task:
-                    # Get source_payload from PlanPosition
                     prev_position = position_by_id.get(prev_line.plan_position_id) if prev_line else None
                     prev_source_payload = (prev_position.source_payload or {}) if prev_position else {}
 
-                    # Compute effective_op_code for the previous task
                     prev_eff_op_code = prev_work_task.selected_operation_code
                     if not prev_eff_op_code:
                         prev_src_op = prev_source_payload.get("operation_code")
                         if prev_src_op and prev_src_op in op_name_by_section.get(prev_work_task.section_id, {}):
                             prev_eff_op_code = prev_src_op
                         else:
-                            prev_eff_op_code = s.operation_code
+                            prev_eff_op_code = s.operations[0].operation_code if s.operations else None
 
-                    # Look up operation_name from section operations
-                    prev_op_name = op_name_by_section.get(s.section_id, {}).get(prev_eff_op_code) or s.operation_name
+                    prev_primary_op_name = s.operations[0].operation_name if s.operations else ""
+                    prev_op_name = op_name_by_section.get(s.section_id, {}).get(prev_eff_op_code) or prev_primary_op_name
 
-                    # Determine is_significant from section operations (use all_section_ops for cross-section lookup)
-                    # If operation is not found in section_operations, default to False.
                     prev_is_significant = False
                     for op in all_section_ops:
                         if op.section_id == s.section_id and op.operation_code == prev_eff_op_code:
@@ -243,16 +227,14 @@ async def get_section_board(
 
                     prev_icon = icon_by_section_op.get((s.section_id, prev_eff_op_code))
                 else:
-                    # Fallback: use RouteStep data if no WorkTask found
-                    prev_eff_op_code = s.operation_code
-                    prev_op_name = s.operation_name
-                    # is_significant determined by section_operations only, default False
+                    prev_eff_op_code = s.operations[0].operation_code if s.operations else None
+                    prev_op_name = s.operations[0].operation_name if s.operations else ""
                     prev_is_significant = False
                     for op in all_section_ops:
-                        if op.section_id == s.section_id and op.operation_code == (s.operation_code or ""):
+                        if op.section_id == s.section_id and op.operation_code == (prev_eff_op_code or ""):
                             prev_is_significant = op.is_significant
                             break
-                    prev_icon = icon_by_section_op.get((s.section_id, s.operation_code))
+                    prev_icon = icon_by_section_op.get((s.section_id, prev_eff_op_code))
 
                 op_obj = {
                     "operation_code": prev_eff_op_code or "",
@@ -265,13 +247,11 @@ async def get_section_board(
                 if prev_is_significant:
                     route_history.append(op_obj)
 
-        # route_history_after = visual history + current step operation
-        # route_history_after_full = full history + current step operation
-        if step.operation_code:
-            after_op_code = step.operation_code
-            after_op_name = step.operation_name
+        if stage.operations and stage.operations[0].operation_code:
+            after_op_code = stage.operations[0].operation_code
+            after_op_name = stage.operations[0].operation_name
             after_is_significant = effective_is_significant
-            after_icon = icon_by_section_op.get((task.section_id, step.operation_code))
+            after_icon = icon_by_section_op.get((task.section_id, stage.operations[0].operation_code))
         else:
             after_op_code = effective_op_code or ""
             after_op_name = effective_op_name
@@ -287,11 +267,11 @@ async def get_section_board(
         }
         route_history_after = route_history + [current_op_obj] if current_op_obj["operation_code"] else route_history
         route_history_after_full = route_history_full + [current_op_obj] if current_op_obj["operation_code"] else route_history_full
-        prev_step = next((s for s in route_steps if s.sequence == step.sequence - 1), None)
+        prev_stage = next((s for s in route_stages if s.sequence == stage.sequence - 1), None)
 
         prev_stage_info = None
-        if prev_step:
-            prev_line = lines_by_pos_seq.get((line.plan_position_id, prev_step.sequence))
+        if prev_stage:
+            prev_line = lines_by_pos_seq.get((line.plan_position_id, prev_stage.sequence))
             if prev_line:
                 prev_stage_info = {
                     "section_plan_line_id": prev_line.id,
@@ -301,7 +281,7 @@ async def get_section_board(
                 }
 
         # Next line — dict lookup
-        next_line = lines_by_pos_seq.get((line.plan_position_id, step.sequence + 1))
+        next_line = lines_by_pos_seq.get((line.plan_position_id, stage.sequence + 1))
         next_task_id: int | None = None
         next_task_status: str | None = None
         next_operation_name: str | None = None
@@ -310,11 +290,10 @@ async def get_section_board(
             if next_task:
                 next_task_id = next_task.id
                 next_task_status = next_task.status.value
-            # Next step from already-loaded steps
-            next_route_steps = steps_by_route.get(next_line.route_id, [])
-            next_step = next((s for s in next_route_steps if s.id == next_line.route_step_id), None)
-            if next_step:
-                next_operation_name = next_step.operation_name
+            next_route_stages = stages_by_route.get(next_line.route_id, [])
+            next_stage = next((s for s in next_route_stages if s.id == next_line.route_stage_id), None)
+            if next_stage:
+                next_operation_name = ", ".join(op.operation_name for op in next_stage.operations) if next_stage.operations else ""
 
         available = _compute_available_from_balances(
             planned_quantity=_to_decimal(task.planned_quantity),
@@ -328,11 +307,9 @@ async def get_section_board(
             source_sku, output_sku, effective_op_code, source_payload
         )
 
-        # For paired profiles, source_sku contains both articles (e.g., "ЮП-2616+ЮП-2604")
         is_paired = source_sku and "+" in source_sku
         effective_display_sku = source_sku if is_paired else (product_sku or "")
 
-        # Icon for current operation
         op_icon_info = icon_by_section_op.get((task.section_id, effective_op_code))
 
         tasks_data.append({
@@ -342,8 +319,8 @@ async def get_section_board(
             "product_sku": effective_display_sku,
             "section_plan_line_id": line.id,
             "plan_position_id": line.plan_position_id,
-            "route_step_id": step.id,
-            "sequence": step.sequence,
+            "route_step_id": stage.id,
+            "sequence": stage.sequence,
             "operation_code": effective_op_code,
             "operation_name": effective_op_name,
             "is_significant": effective_is_significant,
@@ -595,15 +572,13 @@ async def get_warehouse_remainders(
         Product.name,
         Section.code.label("section_code"),
         Section.name.label("section_name"),
-        RouteStep.sequence.label("route_step_sequence"),
-        RouteStep.operation_code,
-        RouteStep.operation_name,
+        RouteStage,
     ).join(
         Product, WarehouseRemainder.product_id == Product.id,
     ).join(
         Section, WarehouseRemainder.section_id == Section.id,
     ).join(
-        RouteStep, WarehouseRemainder.route_step_id == RouteStep.id,
+        RouteStage, WarehouseRemainder.route_stage_id == RouteStage.id,
     ).where(
         WarehouseRemainder.consumed_at.is_(None),
         WarehouseRemainder.remainder_quantity > 0,
@@ -617,7 +592,9 @@ async def get_warehouse_remainders(
     rows = (await db.execute(query)).all()
 
     remainders = []
-    for remainder, product_sku, product_name, section_code, section_name, step_sequence, op_code, op_name in rows:
+    for remainder, product_sku, product_name, section_code, section_name, stage in rows:
+        op_code = stage.operations[0].operation_code if stage.operations else None
+        op_name = ", ".join(op.operation_name for op in stage.operations) if stage.operations else ""
         remainders.append({
             "id": remainder.id,
             "product_id": remainder.product_id,
@@ -626,8 +603,8 @@ async def get_warehouse_remainders(
             "section_id": remainder.section_id,
             "section_code": section_code,
             "section_name": section_name,
-            "route_step_id": remainder.route_step_id,
-            "route_step_sequence": step_sequence,
+            "route_step_id": remainder.route_stage_id,
+            "route_step_sequence": stage.sequence,
             "operation_code": op_code,
             "operation_name": op_name,
             "section_plan_line_id": remainder.section_plan_line_id,

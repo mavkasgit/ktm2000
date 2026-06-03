@@ -8,7 +8,7 @@ from app.models.production_plan import (
     PlanPositionValidationStatus,
     PlanSourceType,
 )
-from app.models.route import ProductionRoute, RouteRuleProfile, RouteSelectionRule, RouteStep
+from app.models.route import ProductionRoute, RouteRuleProfile, RouteSelectionRule, RouteStage, RouteOperation
 from app.models.section import Section
 from app.services.route_matcher import resolve_position_route
 from app.services.route_selection import _condition_match, select_route_for_payload
@@ -79,7 +79,7 @@ async def test_excel_condition_diagnostics_capture_header_mismatch(session) -> N
     route = ProductionRoute(name="Warehouse route", is_active=True, sort_order=1)
     session.add_all([section, route])
     await session.flush()
-    session.add(RouteStep(route_id=route.id, sequence=1, section_id=section.id, operation_name="WH"))
+    session.add(RouteStage(route_id=route.id, sequence=1, section_id=section.id, operations=[RouteOperation(sequence=1, operation_name="WH")]))
     session.add(
         RouteSelectionRule(
             code="excel-mismatch",
@@ -160,10 +160,10 @@ async def test_select_route_scores_by_extra_sections_sort_order_then_id(session)
     await session.flush()
     session.add_all(
         [
-            RouteStep(route_id=route_extra.id, sequence=1, section_id=required.id, operation_name="DRILL"),
-            RouteStep(route_id=route_extra.id, sequence=2, section_id=extra.id, operation_name="PRESS"),
-            RouteStep(route_id=route_late.id, sequence=1, section_id=required.id, operation_name="DRILL"),
-            RouteStep(route_id=route_best.id, sequence=1, section_id=required.id, operation_name="DRILL"),
+            RouteStage(route_id=route_extra.id, sequence=1, section_id=required.id, operations=[RouteOperation(sequence=1, operation_name="DRILL")]),
+            RouteStage(route_id=route_extra.id, sequence=2, section_id=extra.id, operations=[RouteOperation(sequence=1, operation_name="PRESS")]),
+            RouteStage(route_id=route_late.id, sequence=1, section_id=required.id, operations=[RouteOperation(sequence=1, operation_name="DRILL")]),
+            RouteStage(route_id=route_best.id, sequence=1, section_id=required.id, operations=[RouteOperation(sequence=1, operation_name="DRILL")]),
             RouteSelectionRule(
                 code="need-drill",
                 name="Need drill",
@@ -202,7 +202,7 @@ async def test_select_route_returns_no_candidate_without_fallback(session) -> No
     await session.flush()
     session.add_all(
         [
-            RouteStep(route_id=route.id, sequence=1, section_id=other.id, operation_name="PRESS"),
+            RouteStage(route_id=route.id, sequence=1, section_id=other.id, operations=[RouteOperation(sequence=1, operation_name="PRESS")]),
             RouteSelectionRule(
                 code="need-drill",
                 name="Need drill",
@@ -240,10 +240,10 @@ async def test_select_route_uses_global_and_profile_rules(session) -> None:
 
     session.add_all(
         [
-            RouteStep(route_id=route_ok.id, sequence=1, section_id=wh.id, operation_name="WH"),
-            RouteStep(route_id=route_ok.id, sequence=2, section_id=drill.id, operation_name="DRILL"),
-            RouteStep(route_id=route_bad.id, sequence=1, section_id=wh.id, operation_name="WH"),
-            RouteStep(route_id=route_bad.id, sequence=2, section_id=press.id, operation_name="PRESS"),
+            RouteStage(route_id=route_ok.id, sequence=1, section_id=wh.id, operations=[RouteOperation(sequence=1, operation_name="WH")]),
+            RouteStage(route_id=route_ok.id, sequence=2, section_id=drill.id, operations=[RouteOperation(sequence=1, operation_name="DRILL")]),
+            RouteStage(route_id=route_bad.id, sequence=1, section_id=wh.id, operations=[RouteOperation(sequence=1, operation_name="WH")]),
+            RouteStage(route_id=route_bad.id, sequence=2, section_id=press.id, operations=[RouteOperation(sequence=1, operation_name="PRESS")]),
             RouteSelectionRule(
                 code="global-wh",
                 name="Global WH",

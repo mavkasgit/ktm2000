@@ -6,7 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.product import Product
 from app.models.imports import ImportBatch
 from app.models.production_plan import PlanPosition
-from app.models.route import RouteStep
+from app.models.route import RouteStage
 from app.models.section import Section
 from app.services.route_matcher import resolve_position_route
 from app.services.route_selection import select_route_for_payload
@@ -57,9 +57,9 @@ async def validate_route_match(db: AsyncSession, position: PlanPosition) -> list
 
     steps = (
         await db.execute(
-            select(RouteStep)
-            .where(RouteStep.route_id == route_info.route_id)
-            .order_by(RouteStep.sequence)
+            select(RouteStage)
+            .where(RouteStage.route_id == route_info.route_id)
+            .order_by(RouteStage.sequence)
         )
     ).scalars().all()
     if not steps:

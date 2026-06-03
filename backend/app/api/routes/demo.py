@@ -27,7 +27,7 @@ from app.models.production_plan import (
     ProductionPlan,
     ProductionPlanStatus,
 )
-from app.models.route import ProductionRoute, RouteStep
+from app.models.route import ProductionRoute, RouteStage
 from app.models.section import Section
 from app.models.techcard import Techcard
 from app.models.user import User
@@ -222,15 +222,15 @@ async def _check_run_id_exists(db: AsyncSession, run_id: str) -> bool:
     return existing is not None
 
 
-async def _collect_tasks_for_position(db: AsyncSession, plan_position_id: int) -> list[tuple[WorkTask, SectionPlanLine, RouteStep, Section]]:
+async def _collect_tasks_for_position(db: AsyncSession, plan_position_id: int) -> list[tuple[WorkTask, SectionPlanLine, RouteStage, Section]]:
     rows = (
         await db.execute(
-            select(WorkTask, SectionPlanLine, RouteStep, Section)
+            select(WorkTask, SectionPlanLine, RouteStage, Section)
             .join(SectionPlanLine, WorkTask.section_plan_line_id == SectionPlanLine.id)
-            .join(RouteStep, WorkTask.route_step_id == RouteStep.id)
-            .join(Section, RouteStep.section_id == Section.id)
+            .join(RouteStage, WorkTask.route_stage_id == RouteStage.id)
+            .join(Section, RouteStage.section_id == Section.id)
             .where(SectionPlanLine.plan_position_id == plan_position_id)
-            .order_by(RouteStep.sequence, WorkTask.id)
+            .order_by(RouteStage.sequence, WorkTask.id)
         )
     ).all()
     return rows

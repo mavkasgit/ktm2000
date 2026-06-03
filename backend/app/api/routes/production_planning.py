@@ -15,7 +15,7 @@ from app.models.movement import Movement
 from app.models.production_plan import PlanPosition, PlanPositionStatus, ProductionPlan
 from app.models.transfer import Transfer
 from app.models.work_task import WorkTask, WorkTaskStatus
-from app.models.route import ProductionRoute, RouteStep
+from app.models.route import ProductionRoute, RouteStage
 from app.models.section import Section
 from app.models.user import User
 from app.services.production_planning_rows import get_production_planning_row_detail, list_production_planning_rows
@@ -64,7 +64,7 @@ class BatchActionResponse(BaseModel):
 class ManualPassRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    target_route_step_id: int | None = None
+    target_route_stage_id: int | None = None
     complete_route: bool = False
     comment: str | None = None
     idempotency_key: str | None = None
@@ -72,7 +72,7 @@ class ManualPassRequest(BaseModel):
 
 class ManualPassResponse(BaseModel):
     position_id: int
-    target_route_step_id: int
+    target_route_stage_id: int
     target_task_id: int
     complete_route: bool = False
     position_completed: bool = False
@@ -97,7 +97,7 @@ class TakeToWorkResponse(BaseModel):
 
 class WorkTaskOut(BaseModel):
     id: int
-    route_step_id: int
+    route_stage_id: int
     operation_name: str | None
     operation_code: str | None
     status: str
@@ -174,7 +174,7 @@ class PlanningRowOut(BaseModel):
 
 
 class PlanningRouteSnapshotStepOut(BaseModel):
-    route_step_id: int
+    route_stage_id: int
     sequence: int
     section_id: int
     section_code: str
@@ -208,7 +208,7 @@ class PlanningStageOut(BaseModel):
         transfer_id: int | None = None
         manual_route_pass: bool = False
 
-    route_step_id: int
+    route_stage_id: int
     section_id: int
     section_code: str
     section_name: str
@@ -317,23 +317,23 @@ async def get_production_planning_overview(
 
     # Collect all section IDs from resolved routes
     section_ids: set[int] = set()
-    route_steps_cache: dict[int, list[RouteStep]] = {}
+    route_stages_cache: dict[int, list[RouteStage]] = {}
     for pos in positions:
         route_id = position_route_map[pos.id][0]
         if route_id is not None:
-            if route_id not in route_steps_cache:
-                steps = (
+            if route_id not in route_stages_cache:
+                stages = (
                     await db.execute(
-                        select(RouteStep)
-                        .where(RouteStep.route_id == route_id)
-                        .join(Section, RouteStep.section_id == Section.id)
+                        select(RouteStage)
+                        .where(RouteStage.route_id == route_id)
+                        .join(Section, RouteStage.section_id == Section.id)
                         .where(Section.is_active == True)
-                        .order_by(RouteStep.sequence)
+                        .order_by(RouteStage.sequence)
                     )
                 ).scalars().all()
-                route_steps_cache[route_id] = steps
-            for step in route_steps_cache[route_id]:
-                section_ids.add(step.section_id)
+                route_stages_cache[route_id] = stages
+            for stage in route_stages_cache[route_id]:
+                section_ids.add(stage.section_id)
 
     if not section_ids:
         return ProductionPlanningOverview(sections=[])
@@ -400,18 +400,18 @@ async def get_production_planning_overview(
                     if wt.status == WorkTaskStatus.completed:
                         completed_steps += 1
 
-                    # Get operation info from route step
-                    step = await db.get(RouteStep, wt.route_step_id)
+                    # Get operation info from route stage
+                    stage = await db.get(RouteStage, wt.route_stage_id)
                     work_tasks_out.append(
                         WorkTaskOut(
                             id=wt.id,
-                            route_step_id=wt.route_step_id,
-                            operation_name=step.operation_name if step else None,
-                            operation_code=step.operation_code if step else None,
+                            route_stage_id=wt.route_stage_id,
+                            operation_name=", ".join(op.operation_name for op in stage.operations) if stage and stage.operations else None,
+                            operation_code=wt.selected_operation_code or (stage.operations[0].operation_code if stage and stage.operations else None),
                             status=wt.status.value if hasattr(wt.status, 'value') else wt.status,
                             planned_quantity=float(wt.planned_quantity),
                             completed_quantity=float(wt.cached_completed_quantity),
-                            sequence=step.sequence if step else 0,
+                            sequence=stage.sequence if stage else 0,
                         )
                     )
 
@@ -419,20 +419,20 @@ async def get_production_planning_overview(
                 # No work tasks yet — position is in queue for this section
                 # Show it if the route includes this section
                 if route_id is not None:
-                    steps = route_steps_cache.get(route_id, [])
-                    for step in steps:
-                        if step.section_id == section.id:
+                    stages = route_stages_cache.get(route_id, [])
+                    for stage in stages:
+                        if stage.section_id == section.id:
                             total_steps += 1
                             work_tasks_out.append(
                                 WorkTaskOut(
                                     id=0,
-                                    route_step_id=step.id,
-                                    operation_name=step.operation_name,
-                                    operation_code=step.operation_code,
+                                    route_stage_id=stage.id,
+                                    operation_name=", ".join(op.operation_name for op in stage.operations) if stage.operations else "",
+                                    operation_code=stage.operations[0].operation_code if stage.operations else None,
                                     status="waiting",
                                     planned_quantity=float(pos.quantity),
                                     completed_quantity=0.0,
-                                    sequence=step.sequence,
+                                    sequence=stage.sequence,
                                 )
                             )
 
@@ -490,12 +490,12 @@ async def get_production_planning_overview(
 async def _collect_task_rows_for_position(
     db: AsyncSession,
     position_id: int,
-) -> list[tuple[WorkTask, SectionPlanLine, RouteStep]]:
+) -> list[tuple[WorkTask, SectionPlanLine, RouteStage]]:
     return (
         await db.execute(
-            select(WorkTask, SectionPlanLine, RouteStep)
+            select(WorkTask, SectionPlanLine, RouteStage)
             .join(SectionPlanLine, WorkTask.section_plan_line_id == SectionPlanLine.id)
-            .join(RouteStep, WorkTask.route_step_id == RouteStep.id)
+            .join(RouteStage, WorkTask.route_stage_id == RouteStage.id)
             .where(SectionPlanLine.plan_position_id == position_id)
             .order_by(SectionPlanLine.sequence, WorkTask.id)
         )
@@ -613,36 +613,36 @@ async def manual_pass_to_stage(
     complete_route = bool(payload.complete_route)
     if complete_route:
         target_index = len(task_rows) - 1
-        target_route_step_id = task_rows[target_index][2].id
+        target_route_stage_id = task_rows[target_index][2].id
         stages_to_execute = len(task_rows)
     else:
-        if payload.target_route_step_id is None:
-            raise HTTPException(status_code=400, detail="target_route_step_id is required unless complete_route is true")
+        if payload.target_route_stage_id is None:
+            raise HTTPException(status_code=400, detail="target_route_stage_id is required unless complete_route is true")
         target_index: int | None = None
-        for idx, (_task, _line, step) in enumerate(task_rows):
-            if step.id == payload.target_route_step_id:
+        for idx, (_task, _line, stage) in enumerate(task_rows):
+            if stage.id == payload.target_route_stage_id:
                 target_index = idx
                 break
         if target_index is None:
-            raise HTTPException(status_code=400, detail="target_route_step_id not found in this position route")
-        target_route_step_id = payload.target_route_step_id
+            raise HTTPException(status_code=400, detail="target_route_stage_id not found in this position route")
+        target_route_stage_id = payload.target_route_stage_id
         stages_to_execute = target_index
 
     target_task = task_rows[target_index][0]
     if not is_replay:
         now = datetime.now(UTC)
-        target_step = task_rows[target_index][2]
+        target_stage = task_rows[target_index][2]
         manual_comment = payload.comment or (
             "Ручной сквозной проход: полное завершение"
             if complete_route
-            else f"Ручной сквозной проход до этапа #{target_step.sequence}"
+            else f"Ручной сквозной проход до этапа #{target_stage.sequence}"
         )
 
         for idx in range(stages_to_execute):
-            task, _line, step = task_rows[idx]
+            task, _line, stage = task_rows[idx]
             next_task = task_rows[idx + 1][0] if idx < len(task_rows) - 1 else None
             quantity = Decimal(str(task.planned_quantity))
-            operation_key = f"{source_ref}:step:{step.sequence}"
+            operation_key = f"{source_ref}:step:{stage.sequence}"
 
             try:
                 await issue_to_work(
@@ -698,7 +698,7 @@ async def manual_pass_to_stage(
                         performed_at=now,
                         accounted_at=now,
                     )
-                elif step.is_final:
+                elif stage.is_final:
                     await final_release(
                         db,
                         task_id=task.id,
@@ -711,7 +711,7 @@ async def manual_pass_to_stage(
                         accounted_at=now,
                     )
             except ValueError as exc:
-                raise HTTPException(status_code=400, detail=f"Manual pass failed at step {step.sequence}: {exc}") from exc
+                raise HTTPException(status_code=400, detail=f"Manual pass failed at step {stage.sequence}: {exc}") from exc
 
     movements_created, transfers_created = await _manual_pass_counts(db, position_id=position_id, source_ref=source_ref)
     total_tasks = await db.scalar(
@@ -730,7 +730,7 @@ async def manual_pass_to_stage(
     position_completed = bool(total_tasks and completed_tasks == total_tasks)
     return ManualPassResponse(
         position_id=position_id,
-        target_route_step_id=target_route_step_id,
+        target_route_stage_id=target_route_stage_id,
         target_task_id=target_task.id,
         complete_route=complete_route,
         position_completed=position_completed,
@@ -1017,21 +1017,21 @@ async def _process_position_take_to_work(
         )
 
     # Verify route has active sections
-    steps = (
+    stages = (
         await db.execute(
-            select(RouteStep)
-            .where(RouteStep.route_id == route_info.route_id)
-            .join(Section, RouteStep.section_id == Section.id)
+            select(RouteStage)
+            .where(RouteStage.route_id == route_info.route_id)
+            .join(Section, RouteStage.section_id == Section.id)
             .where(Section.is_active == True)
-            .order_by(RouteStep.sequence)
+            .order_by(RouteStage.sequence)
         )
     ).scalars().all()
 
-    if not steps:
+    if not stages:
         return TakeToWorkResult(
             position_id=position_id,
             status="failed",
-            reason="Route has no active steps",
+            reason="Route has no active stages",
         )
 
     # Create and release batch

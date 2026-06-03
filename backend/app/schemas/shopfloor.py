@@ -115,8 +115,8 @@ class SectionBoardTaskOut(BaseModel):
     plan_position_id: int
 
     # Маршрут
-    route_step_id: int
-    route_step_sequence: int   # Порядок операции в маршруте (1, 2, 3...)
+    route_stage_id: int
+    route_stage_sequence: int   # Порядок операции в маршруте (1, 2, 3...)
 
     # Количество — строки для сохранения точности Decimal
     qty_plan: str

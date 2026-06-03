@@ -5,7 +5,7 @@ import pytest
 from app.core.security import create_access_token
 from app.models.product import Product, ProductType
 from app.models.production_plan import PlanPosition, ProductionPlan, ProductionPlanStatus
-from app.models.route import ProductionRoute, RouteStep
+from app.models.route import ProductionRoute, RouteStage, RouteOperation
 
 from app.models.section import Section
 from app.models.techcard import Techcard, TechcardLine
@@ -46,14 +46,20 @@ async def _make_demo_route(session, code_prefix: str, step_defs: list[tuple[str,
     await session.flush()
 
     for idx, (suffix, op_code, op_name, is_final) in enumerate(step_defs, start=1):
+        stage = RouteStage(
+            route_id=route.id,
+            sequence=idx,
+            section_id=sections[idx - 1].id,
+            is_final=is_final,
+        )
+        session.add(stage)
+        await session.flush()
         session.add(
-            RouteStep(
-                route_id=route.id,
-                sequence=idx,
-                section_id=sections[idx - 1].id,
+            RouteOperation(
+                route_stage_id=stage.id,
+                sequence=1,
                 operation_code=op_code,
                 operation_name=op_name,
-                is_final=is_final,
             )
         )
     await session.commit()
@@ -217,14 +223,20 @@ async def test_demo_stage_preset_before_approve(client, session) -> None:
     route = ProductionRoute(name="Demo BA Route", description="A", is_active=True)
     session.add(route)
     await session.flush()
+    stage = RouteStage(
+        route_id=route.id,
+        sequence=1,
+        section_id=sections[0].id,
+        is_final=True,
+    )
+    session.add(stage)
+    await session.flush()
     session.add(
-        RouteStep(
-            route_id=route.id,
+        RouteOperation(
+            route_stage_id=stage.id,
             sequence=1,
-            section_id=sections[0].id,
             operation_code="BA-OP1",
             operation_name="BA Operation 1",
-            is_final=True,
         )
     )
     await session.commit()
@@ -278,14 +290,20 @@ async def test_demo_stage_preset_after_approve(client, session) -> None:
     route = ProductionRoute(name="Demo AA Route", description="A", is_active=True)
     session.add(route)
     await session.flush()
+    stage = RouteStage(
+        route_id=route.id,
+        sequence=1,
+        section_id=sections[0].id,
+        is_final=True,
+    )
+    session.add(stage)
+    await session.flush()
     session.add(
-        RouteStep(
-            route_id=route.id,
+        RouteOperation(
+            route_stage_id=stage.id,
             sequence=1,
-            section_id=sections[0].id,
             operation_code="AA-OP1",
             operation_name="AA Operation 1",
-            is_final=True,
         )
     )
     await session.commit()
@@ -392,10 +410,10 @@ async def test_demo_stage_preset_to_step_ready_first_step(client, session) -> No
     ]
     route = await _make_demo_route(session, "DEMO-TSR", route_steps_def)
 
-    # Get the first route step id
+    # Get the first route stage id
     from sqlalchemy import select as sa_select
-    first_step = await session.scalar(
-        sa_select(RouteStep).where(RouteStep.route_id == route.id).order_by(RouteStep.sequence).limit(1)
+    first_stage = await session.scalar(
+        sa_select(RouteStage).where(RouteStage.route_id == route.id).order_by(RouteStage.sequence).limit(1)
     )
 
     # Target first step: no steps should be executed
@@ -407,14 +425,14 @@ async def test_demo_stage_preset_to_step_ready_first_step(client, session) -> No
             "route_id": route.id,
             "run_id": "demo-tsr-001",
             "stage_preset": "to_step_ready",
-            "target_route_step_id": first_step.id,
+            "target_route_step_id": first_stage.id,
         },
         headers=headers,
     )
     assert response.status_code == 200, response.text
     body = response.json()
     assert body["stage_preset"] == "to_step_ready"
-    assert body["stopped_at_stage"] == f"step_{first_step.id}_ready"
+    assert body["stopped_at_stage"] == f"step_{first_stage.id}_ready"
     assert body["tasks_created"] == 0
     assert len(body["stage_results"]) == 0
 
@@ -451,14 +469,14 @@ async def test_demo_stage_preset_to_step_ready_middle_step(client, session) -> N
     ]
     route = await _make_demo_route(session, "DEMO-TSRM", route_steps_def)
 
-    # Get route steps to target middle step (step 3 = ANOD, 0-indexed = 2)
+    # Get route stages to target middle stage (stage 3 = ANOD, 0-indexed = 2)
     from sqlalchemy import select as sa_select
-    all_steps = (
+    all_stages = (
         await session.execute(
-            sa_select(RouteStep).where(RouteStep.route_id == route.id).order_by(RouteStep.sequence)
+            sa_select(RouteStage).where(RouteStage.route_id == route.id).order_by(RouteStage.sequence)
         )
     ).scalars().all()
-    target_step = all_steps[2]  # ANOD (3rd step)
+    target_stage = all_stages[2]  # ANOD (3rd step)
 
     # Target middle step (step 3): steps 1-2 should be executed, step 3 stays ready
     response = await client.post(
@@ -469,14 +487,14 @@ async def test_demo_stage_preset_to_step_ready_middle_step(client, session) -> N
             "route_id": route.id,
             "run_id": "demo-tsrm-001",
             "stage_preset": "to_step_ready",
-            "target_route_step_id": target_step.id,
+            "target_route_step_id": target_stage.id,
         },
         headers=headers,
     )
     assert response.status_code == 200, response.text
     body = response.json()
     assert body["stage_preset"] == "to_step_ready"
-    assert body["stopped_at_stage"] == f"step_{target_step.id}_ready"
+    assert body["stopped_at_stage"] == f"step_{target_stage.id}_ready"
     assert body["tasks_created"] == 2  # Steps 1-2 executed
     assert len(body["stage_results"]) == 2
     assert body["stage_results"][0]["section_code"].startswith("DEMO-TSRM-ISSUE")
@@ -516,14 +534,20 @@ async def test_demo_paired_profile_scenario_imports_as_paired_row(client, sessio
     route = ProductionRoute(name="Demo Pair Route", description="A", is_active=True)
     session.add(route)
     await session.flush()
+    stage = RouteStage(
+        route_id=route.id,
+        sequence=1,
+        section_id=section.id,
+        is_final=True,
+    )
+    session.add(stage)
+    await session.flush()
     session.add(
-        RouteStep(
-            route_id=route.id,
+        RouteOperation(
+            route_stage_id=stage.id,
             sequence=1,
-            section_id=section.id,
             operation_code="PAIR-OP1",
             operation_name="Pair Operation 1",
-            is_final=True,
         )
     )
     await session.commit()

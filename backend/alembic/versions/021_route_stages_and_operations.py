@@ -51,8 +51,8 @@ def upgrade() -> None:
         sa.text(
             """
             SELECT id, route_id, sequence, section_id, operation_code, operation_name,
-                   is_significant, norm_time_minutes, requires_acceptance,
-                   allow_parallel, is_final, combined_op_group
+                   norm_time_minutes, requires_acceptance,
+                   allow_parallel, is_final
             FROM route_steps
             ORDER BY route_id, sequence
             """
@@ -64,7 +64,7 @@ def upgrade() -> None:
         group_key = (
             step.route_id,
             step.section_id,
-            step.combined_op_group if step.combined_op_group else f"__solo_{step.id}",
+            f"__solo_{step.id}",
         )
         groups.setdefault(group_key, []).append(step)
 
@@ -89,7 +89,7 @@ def upgrade() -> None:
                 "route_id": route_id,
                 "sequence": first.sequence,
                 "section_id": section_id,
-                "is_significant": first.is_significant,
+                "is_significant": False,
                 "norm_time_minutes": first.norm_time_minutes,
                 "requires_acceptance": first.requires_acceptance,
                 "allow_parallel": first.allow_parallel,

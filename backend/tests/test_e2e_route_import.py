@@ -20,7 +20,7 @@ from app.models.production_plan import (
     PlanPositionRouteOrigin,
     ProductionPlan,
 )
-from app.models.route import ProductionRoute, RouteRuleProfile, RouteSelectionRule, RouteStep, SectionOperation
+from app.models.route import ProductionRoute, RouteRuleProfile, RouteSelectionRule, RouteStage, RouteOperation, SectionOperation
 from app.models.section import Section
 from app.models.techcard import Techcard, TechcardLine
 from app.services.plan_import_service import create_excel_import_change_set
@@ -243,9 +243,9 @@ async def test_e2e_excel_import_creates_routes_with_steps(session) -> None:
         if route_id and route_id not in route_ids_seen:
             route_ids_seen.add(route_id)
             
-            # Get route steps from DB
+            # Get route stages from DB
             steps_result = await session.execute(
-                select(RouteStep).where(RouteStep.route_id == route_id).order_by(RouteStep.sequence)
+                select(RouteStage).where(RouteStage.route_id == route_id).order_by(RouteStage.sequence)
             )
             steps = steps_result.scalars().all()
             
@@ -275,16 +275,17 @@ async def test_e2e_excel_import_creates_routes_with_steps(session) -> None:
         print(f"  Steps: {detail['steps_count']} ({detail['significant_steps']} significant)")
         print(f"  Steps sequence: {detail['steps']}")
         
-        # Show detailed steps with operations
+        # Show detailed stages with operations
         steps_result = await session.execute(
-            select(RouteStep).where(RouteStep.route_id == detail["route_id"]).order_by(RouteStep.sequence)
+            select(RouteStage).where(RouteStage.route_id == detail["route_id"]).order_by(RouteStage.sequence)
         )
         steps = steps_result.scalars().all()
-        print(f"  Step details:")
+        print(f"  Stage details:")
         for step in steps:
             section = await session.get(Section, step.section_id)
             section_code = section.code if section else "?"
-            print(f"    {step.sequence}: section={section_code}, op_code={step.operation_code}, op_name={step.operation_name}, significant={step.is_significant}")
+            ops_str = ", ".join(f"{op.operation_code or 'None'}:{op.operation_name}" for op in step.operations)
+            print(f"    {step.sequence}: section={section_code}, ops=[{ops_str}], significant={step.is_significant}")
         
         # Count how many items use this route
         items_using_route = sum(
@@ -397,16 +398,16 @@ async def test_e2e_excel_import_multiple_rows_reuse_routes(session) -> None:
     if items_with_routes:
         route_id = items_with_routes[0]["after_data"].get("route_id")
         
-        # Verify route has steps
+        # Verify route has stages
         steps_result = await session.execute(
-            select(RouteStep).where(RouteStep.route_id == route_id)
+            select(RouteStage).where(RouteStage.route_id == route_id)
         )
         steps = steps_result.scalars().all()
-        assert len(steps) > 0, "Route MUST have steps!"
+        assert len(steps) > 0, "Route MUST have stages!"
         
-        # Verify step sequences are unique
+        # Verify stage sequences are unique
         step_sequences = [s.sequence for s in steps]
-        assert len(step_sequences) == len(set(step_sequences)), "Step sequences must be unique"
+        assert len(step_sequences) == len(set(step_sequences)), "Stage sequences must be unique"
         
         print(f"✅ Route {route_id} has {len(steps)} steps")
         print(f"   Total items: {len(result['items'])}, with routes: {len(items_with_routes)}")

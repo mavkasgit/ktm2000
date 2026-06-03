@@ -26,8 +26,7 @@ from app.models.production_plan import (
     PlanPositionStatus,
     ProductionPlan,
 )
-from app.models.route import ProductionRoute, RouteStep, RouteRuleProfile
-from app.services.route_sync import sync_stages_for_steps
+from app.models.route import ProductionRoute, RouteStage, RouteOperation, RouteRuleProfile
 from app.models.section import Section
 from app.services.excel_import import (
     ParsedWorkbook,
@@ -607,14 +606,14 @@ async def _make_change_items(
             if not rule_profile_id:
                 errors.append(selection.error or "no_route_candidate")
         else:
-            steps = (
-                await db.execute(select(RouteStep).where(RouteStep.route_id == route.id).order_by(RouteStep.sequence))
+            stages = (
+                await db.execute(select(RouteStage).where(RouteStage.route_id == route.id).order_by(RouteStage.sequence))
             ).scalars().all()
-            if not steps:
+            if not stages:
                 errors.append("active_route_has_no_steps")
             else:
-                for step in steps:
-                    section = await db.get(Section, step.section_id)
+                for stage in stages:
+                    section = await db.get(Section, stage.section_id)
                     if section is None or not section.is_active:
                         errors.append("route_contains_inactive_section")
                         break
@@ -846,69 +845,97 @@ async def _make_change_items(
                                 db.add(created_route)
                                 await db.flush()
                                 
-                                # Create route steps with savepoint protection
+                                # Create route stages and operations with savepoint protection
                                 steps_created_successfully = False
                                 try:
                                     async with db.begin_nested():
-                                        steps_added = 0
-                                        for step in built_route.steps:
+                                        # Group built_route.steps by section_code and combined_op_group
+                                        groups = []
+                                        current = []
+                                        current_cog = None
+                                        current_section_id = None
+
+                                        for step in sorted(built_route.steps, key=lambda s: s.sequence):
                                             section = await db.scalar(
                                                 select(Section).where(Section.code == step.section_code).limit(1)
                                             )
-                                            if section is not None:
-                                                route_step = RouteStep(
-                                                    route_id=created_route.id,
-                                                    sequence=step.sequence,
-                                                    section_id=section.id,
-                                                    operation_code=step.operation_code,
-                                                    operation_name=step.operation_name,
-                                                    is_significant=step.is_significant,
-                                                    combined_op_group=step.combined_op_group,
-                                                )
-                                                db.add(route_step)
-                                                steps_added += 1
-                                            else:
+                                            if section is None:
                                                 import logging
                                                 logger = logging.getLogger(__name__)
                                                 logger.warning(f"Section not found for code: {step.section_code}")
-                                        
-                                        if steps_added == 0:
-                                            # No steps were added - this is a problem
-                                            import logging
-                                            logger = logging.getLogger(__name__)
-                                            logger.error(f"No steps added for route {built_route.name}. Built route has {len(built_route.steps)} steps. Steps: {[(s.section_code, s.operation_code) for s in built_route.steps]}")
-                                            raise ValueError(f"No steps added for route {built_route.name}. Built route has {len(built_route.steps)} steps.")
+                                                continue
+
+                                            step_cog = step.combined_op_group
+                                            same_group = (
+                                                step_cog is not None
+                                                and step_cog == current_cog
+                                                and section.id == current_section_id
+                                            )
+
+                                            step_info = (step, section)
+                                            if same_group:
+                                                current.append(step_info)
+                                            else:
+                                                if current:
+                                                    groups.append(current)
+                                                current = [step_info]
+                                                current_cog = step_cog
+                                                current_section_id = section.id
+                                        if current:
+                                            groups.append(current)
+
+                                        if not groups:
+                                            raise ValueError(f"No steps/stages added for route {built_route.name}. Built route has {len(built_route.steps)} steps.")
+
+                                        stage_seq = 1
+                                        for group in groups:
+                                            primary_step, primary_section = group[0]
+                                            stage = RouteStage(
+                                                route_id=created_route.id,
+                                                sequence=stage_seq,
+                                                section_id=primary_section.id,
+                                                is_significant=primary_step.is_significant,
+                                                requires_acceptance=True,
+                                                allow_parallel=False,
+                                                is_final=any(s[0].is_final for s in group),
+                                            )
+                                            db.add(stage)
+                                            await db.flush()
+
+                                            for op_idx, (step, _) in enumerate(group, start=1):
+                                                op = RouteOperation(
+                                                    route_stage_id=stage.id,
+                                                    sequence=op_idx,
+                                                    operation_code=step.operation_code,
+                                                    operation_name=step.operation_name,
+                                                )
+                                                db.add(op)
+                                            
+                                            stage_seq += 1
 
                                         await db.flush()
-                                        route_steps_list = (await db.execute(
-                                            select(RouteStep).where(RouteStep.route_id == created_route.id).order_by(RouteStep.sequence)
-                                        )).scalars().all()
-                                        await sync_stages_for_steps(db, created_route.id, route_steps_list)
                                         steps_created_successfully = True
                                 except Exception as step_error:
                                     # Savepoint is automatically rolled back
-                                    # Check if steps exist (maybe created by concurrent process)
-                                    existing_steps_count = await db.scalar(
-                                        select(func.count(RouteStep.id)).where(
-                                            RouteStep.route_id == created_route.id
+                                    # Check if stages exist (maybe created by concurrent process)
+                                    existing_stages_count = await db.scalar(
+                                        select(func.count(RouteStage.id)).where(
+                                            RouteStage.route_id == created_route.id
                                         )
                                     )
-                                    if existing_steps_count > 0:
-                                        # Steps exist, we can use this route
+                                    if existing_stages_count > 0:
                                         steps_created_successfully = True
                                     else:
-                                        # Steps don't exist and creation failed - log and propagate
                                         import logging
                                         logger = logging.getLogger(__name__)
-                                        logger.error(f"Failed to create steps for route {built_route.name}: {step_error}", exc_info=True)
+                                        logger.error(f"Failed to create stages for route {built_route.name}: {step_error}", exc_info=True)
                                         raise
                                 
                                 if steps_created_successfully:
                                     created_route_id = created_route.id
                                     route_cache[cache_key] = created_route_id
                                 else:
-                                    # This shouldn't happen, but just in case
-                                    raise ValueError(f"Route {built_route.name} created without steps")
+                                    raise ValueError(f"Route {built_route.name} created without stages")
                         
                         # Update after_data with the created route
                         after_data["route_id"] = created_route_id

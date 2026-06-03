@@ -1,17 +1,14 @@
-from __future__ import annotations
-
-from sqlalchemy import select
+from sqlalchemy import select, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.defect import Defect
 from app.models.internal_plan import SectionPlanLine
 from app.models.movement import Movement
 from app.models.rework_task import ReworkTask
-from app.models.route import ProductionRoute, RouteRuleProfile, RouteStep, SectionOperation
+from app.models.route import ProductionRoute, RouteRuleProfile, RouteStage, RouteOperation, SectionOperation
 from app.models.section import Section
 from app.models.transfer import Transfer
 from app.models.work_task import WorkTask
-from app.services.route_sync import sync_stages_for_steps
 
 # Operations that affect plan grouping (technological)
 SIGNIFICANT_OPS = {
@@ -29,7 +26,7 @@ async def seed_routes(
     routes_data: list[dict],
     force: bool = False,
 ) -> dict[str, ProductionRoute]:
-    """Upsert all routes by code. Replace steps entirely. Returns {code: route} map.
+    """Upsert all routes by code. Replace stages entirely. Returns {code: route} map.
 
     Note: Old static routes are replaced by dynamic route building.
     If routes_data is empty, return empty dict without errors.
@@ -76,13 +73,13 @@ async def seed_routes(
             route.is_active = True
             route.sort_order = template["sort_order"]
 
-        # Replace all steps — clear all dependent data in correct FK order
-        existing = (await db.execute(select(RouteStep).where(RouteStep.route_id == route.id))).scalars().all()
+        # Replace all stages — clear all dependent data in correct FK order
+        existing = (await db.execute(select(RouteStage).where(RouteStage.route_id == route.id))).scalars().all()
         if existing:
-            step_ids = [s.id for s in existing]
-            # Find section_plan_lines referencing these steps
+            stage_ids = [s.id for s in existing]
+            # Find section_plan_lines referencing these stages
             spl_rows = (await db.execute(
-                select(SectionPlanLine.id).where(SectionPlanLine.route_step_id.in_(step_ids))
+                select(SectionPlanLine.id).where(SectionPlanLine.route_stage_id.in_(stage_ids))
             )).scalars().all()
             if spl_rows:
                 spl_ids = list(spl_rows)
@@ -131,44 +128,74 @@ async def seed_routes(
                 # Delete section_plan_lines
                 await db.execute(
                     SectionPlanLine.__table__.delete().where(
-                        SectionPlanLine.route_step_id.in_(step_ids)
+                        SectionPlanLine.route_stage_id.in_(stage_ids)
                     )
                 )
-        for step in existing:
-            await db.delete(step)
+        for stage in existing:
+            await db.delete(stage)
         await db.flush()
+
+        # Group steps by section_code and combined_op_group
+        groups = []
+        current = []
+        current_cog = None
+        current_section_id = None
 
         for idx, step_def in enumerate(template["steps"], start=1):
             section = sections_by_code[step_def["section_code"]]
             cog = step_def.get("combined_op_group")
-            # Use explicit is_significant if provided, otherwise auto-detect from operation_code
             step_is_sig = step_def.get("is_significant")
             if step_is_sig is None:
                 step_is_sig = _is_significant(step_def["operation_code"])
-            # Steps in a combined group (cog) are always significant
             if cog:
                 step_is_sig = True
-            db.add(
-                RouteStep(
-                    route_id=route.id,
-                    sequence=idx,
-                    section_id=section.id,
-                    operation_code=step_def["operation_code"],
-                    operation_name=step_def["operation_name"],
-                    is_significant=step_is_sig,
-                    is_final=bool(step_def.get("is_final", False)),
-                    requires_acceptance=True,
-                    allow_parallel=False,
-                    combined_op_group=cog,
-                )
+
+            same_group = (
+                cog is not None
+                and cog == current_cog
+                and section.id == current_section_id
             )
 
-        await db.flush()
-        all_steps = (await db.execute(
-            select(RouteStep).where(RouteStep.route_id == route.id).order_by(RouteStep.sequence)
-        )).scalars().all()
-        await sync_stages_for_steps(db, route.id, all_steps)
+            step_info = (step_def, section, step_is_sig)
+            if same_group:
+                current.append(step_info)
+            else:
+                if current:
+                    groups.append(current)
+                current = [step_info]
+                current_cog = cog
+                current_section_id = section.id
+        if current:
+            groups.append(current)
 
+        stage_seq = 1
+        for group in groups:
+            primary_step_def, primary_section, primary_is_sig = group[0]
+            stage = RouteStage(
+                route_id=route.id,
+                sequence=stage_seq,
+                section_id=primary_section.id,
+                is_significant=primary_is_sig,
+                norm_time_minutes=primary_step_def.get("norm_time_minutes"),
+                requires_acceptance=True,
+                allow_parallel=False,
+                is_final=any(bool(s[0].get("is_final", False)) for s in group),
+            )
+            db.add(stage)
+            await db.flush()
+
+            for op_idx, (step_def, _, _) in enumerate(group, start=1):
+                op = RouteOperation(
+                    route_stage_id=stage.id,
+                    sequence=op_idx,
+                    operation_code=step_def["operation_code"],
+                    operation_name=step_def["operation_name"],
+                )
+                db.add(op)
+            
+            stage_seq += 1
+
+        await db.flush()
         result[template["code"]] = route
 
     return result
@@ -217,15 +244,15 @@ async def seed_production_routes_from_profiles(db: AsyncSession) -> int:
             db.add(route)
             await db.flush()
 
-        # Clear existing steps
-        existing_steps = (await db.execute(
-            select(RouteStep).where(RouteStep.route_id == route.id)
+        # Clear existing stages
+        existing_stages = (await db.execute(
+            select(RouteStage).where(RouteStage.route_id == route.id)
         )).scalars().all()
-        for step in existing_steps:
-            await db.delete(step)
+        for stage in existing_stages:
+            await db.delete(stage)
         await db.flush()
 
-        # Build ONE step per section (operations resolved at runtime)
+        # Build ONE stage per section (operations resolved at runtime)
         sequence = 0
         for section_code in route_section_codes:
             section = sections_by_code.get(section_code)
@@ -233,24 +260,26 @@ async def seed_production_routes_from_profiles(db: AsyncSession) -> int:
                 continue
 
             sequence += 1
-            db.add(RouteStep(
+            stage = RouteStage(
                 route_id=route.id,
                 sequence=sequence,
                 section_id=section.id,
-                operation_code=None,  # Resolved dynamically at import time
-                operation_name=section.name,
                 is_significant=True,
                 is_final=(section_code == "SENT"),
                 requires_acceptance=True,
                 allow_parallel=False,
-                combined_op_group=None,
-            ))
+            )
+            db.add(stage)
+            await db.flush()
 
-        await db.flush()
-        all_steps = (await db.execute(
-            select(RouteStep).where(RouteStep.route_id == route.id).order_by(RouteStep.sequence)
-        )).scalars().all()
-        await sync_stages_for_steps(db, route.id, all_steps)
+            op = RouteOperation(
+                route_stage_id=stage.id,
+                sequence=1,
+                operation_code=None,  # Resolved dynamically at import time
+                operation_name=section.name,
+            )
+            db.add(op)
+
         created_count += 1
 
     await db.flush()

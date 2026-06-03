@@ -10,7 +10,7 @@ from app.api.deps import READER_ROLES, WRITER_ROLES, get_current_user, require_r
 from app.core.database import get_db
 from app.models.movement import Movement, MovementType
 from app.models.product import Product
-from app.models.route import ProductionRoute, RouteStep
+from app.models.route import ProductionRoute, RouteStage, RouteOperation
 from app.models.section import Section
 from app.models.spg import SpgSection, StorageProductionGroup
 from app.models.user import User
@@ -362,7 +362,7 @@ async def create_manual_remainder(
     remainder = WarehouseRemainder(
         product_id=payload.product_id,
         section_id=payload.section_id,
-        route_step_id=None,
+        route_stage_id=None,
         section_plan_line_id=None,
         origin_task_id=None,
         remainder_quantity=payload.quantity,
@@ -589,7 +589,7 @@ async def manual_stock_operation(
             rem = WarehouseRemainder(
                 product_id=payload.product_id,
                 section_id=payload.section_id,
-                route_step_id=None,
+                route_stage_id=None,
                 section_plan_line_id=None,
                 origin_task_id=None,
                 remainder_quantity=qty,
@@ -623,7 +623,7 @@ async def manual_stock_operation(
             rem = WarehouseRemainder(
                 product_id=payload.product_id,
                 section_id=payload.section_id,
-                route_step_id=None,
+                route_stage_id=None,
                 section_plan_line_id=None,
                 origin_task_id=None,
                 remainder_quantity=-qty,
@@ -728,7 +728,9 @@ async def get_remainder_history(
     if remainder.origin_task_id is not None:
         task = await db.get(WorkTask, remainder.origin_task_id)
         if task is not None:
-            step = await db.get(RouteStep, task.route_step_id)
+            stage = await db.get(RouteStage, task.route_stage_id)
+            op_code = stage.operations[0].operation_code if stage and stage.operations else None
+            op_name = ", ".join(op.operation_name for op in stage.operations) if stage and stage.operations else ""
             origin_payload = {
                 "task_id": task.id,
                 "task_status": task.status.value,
@@ -738,9 +740,9 @@ async def get_remainder_history(
                 "in_work_quantity": float(task.cached_in_work_quantity),
                 "transferred_quantity": float(task.cached_transferred_quantity),
                 "section_id": task.section_id,
-                "operation_code": step.operation_code if step else None,
-                "operation_name": step.operation_name if step else None,
-                "sequence": step.sequence if step else None,
+                "operation_code": op_code,
+                "operation_name": op_name,
+                "sequence": stage.sequence if stage else None,
                 "created_at": task.created_at.isoformat(),
             }
 
@@ -751,21 +753,23 @@ async def get_remainder_history(
                 if line is not None:
                     route = await db.get(ProductionRoute, line.route_id)
                     if route is not None:
-                        steps_rows = (await db.execute(
-                            select(RouteStep)
-                            .where(RouteStep.route_id == route.id)
-                            .order_by(RouteStep.sequence)
+                        stages_rows = (await db.execute(
+                            select(RouteStage)
+                            .where(RouteStage.route_id == route.id)
+                            .order_by(RouteStage.sequence)
                         )).scalars().all()
                         steps_out = []
-                        for s in steps_rows:
+                        for s in stages_rows:
                             sec = await db.get(Section, s.section_id)
+                            sop_code = s.operations[0].operation_code if s.operations else None
+                            sop_name = ", ".join(op.operation_name for op in s.operations) if s.operations else ""
                             steps_out.append({
                                 "sequence": s.sequence,
                                 "section_id": s.section_id,
                                 "section_code": sec.code if sec else "",
                                 "section_name": sec.name if sec else "",
-                                "operation_code": s.operation_code,
-                                "operation_name": s.operation_name,
+                                "operation_code": sop_code,
+                                "operation_name": sop_name,
                                 "is_significant": s.is_significant,
                                 "is_final": s.is_final,
                             })
@@ -782,14 +786,16 @@ async def get_remainder_history(
     if remainder.consumed_by_task_id is not None:
         task = await db.get(WorkTask, remainder.consumed_by_task_id)
         if task is not None:
-            step = await db.get(RouteStep, task.route_step_id)
+            stage = await db.get(RouteStage, task.route_stage_id)
+            op_code = stage.operations[0].operation_code if stage and stage.operations else None
+            op_name = ", ".join(op.operation_name for op in stage.operations) if stage and stage.operations else ""
             consumed_by_payload = {
                 "task_id": task.id,
                 "task_status": task.status.value,
                 "section_id": task.section_id,
-                "operation_code": step.operation_code if step else None,
-                "operation_name": step.operation_name if step else None,
-                "sequence": step.sequence if step else None,
+                "operation_code": op_code,
+                "operation_name": op_name,
+                "sequence": stage.sequence if stage else None,
             }
 
     # ── Movements log (all movements touching this product in this section) ──

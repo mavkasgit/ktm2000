@@ -6,7 +6,7 @@ from sqlalchemy import select
 
 from app.models.import_template import ImportTemplate
 from app.models.product import Product, ProductType
-from app.models.route import ProductionRoute, RouteStep
+from app.models.route import ProductionRoute, RouteStage, RouteOperation
 from app.models.section import Section
 from app.models.techcard import Techcard, TechcardLine
 
@@ -125,16 +125,22 @@ async def test_single_row_import_yup_2630_passes_when_product_techcard_and_route
         route = ProductionRoute(name="Route ЮП-2630", is_active=True)
         session.add(route)
         await session.flush()
-    step_count = await session.scalar(select(RouteStep.id).where(RouteStep.route_id == route.id).limit(1))
-    if step_count is None:
+    stage_count = await session.scalar(select(RouteStage.id).where(RouteStage.route_id == route.id).limit(1))
+    if stage_count is None:
         for seq, section in enumerate(sections, start=1):
+            stage = RouteStage(
+                route_id=route.id,
+                sequence=seq * 10,
+                section_id=section.id,
+                is_final=seq == len(sections),
+            )
+            session.add(stage)
+            await session.flush()
             session.add(
-                RouteStep(
-                    route_id=route.id,
-                    sequence=seq * 10,
-                    section_id=section.id,
+                RouteOperation(
+                    route_stage_id=stage.id,
+                    sequence=1,
                     operation_name=f"Step {seq}",
-                    is_final=seq == len(sections),
                 )
             )
     await session.commit()

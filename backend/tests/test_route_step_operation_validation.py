@@ -6,7 +6,7 @@ that is not registered in section_operations for the target section.
 
 import pytest
 
-from app.models.route import ProductionRoute, RouteStep, SectionOperation
+from app.models.route import ProductionRoute, RouteStage, RouteOperation, SectionOperation
 from app.models.section import Section
 
 

@@ -14,7 +14,7 @@ from app.models.production_plan import (
     ProductionPlan,
     ProductionPlanStatus,
 )
-from app.models.route import ProductionRoute, RouteStep
+from app.models.route import ProductionRoute, RouteStage, RouteOperation
 
 from app.models.section import Section
 from app.models.techcard import Techcard, TechcardLine
@@ -61,14 +61,20 @@ async def _make_product_route_plan(session, sku: str = "FG-SHOP") -> tuple[Produ
 
     step_ops = ["ISSUE_RAW", "DRILL", "SHOT", "ANOD", "MOVE_TO_WIP", "ACCEPT_FINISHED"]
     for idx, (section, op_code) in enumerate(zip(sections, step_ops, strict=True), start=1):
+        stage = RouteStage(
+            route_id=route.id,
+            sequence=idx,
+            section_id=section.id,
+            is_final=idx == len(sections),
+        )
+        session.add(stage)
+        await session.flush()
         session.add(
-            RouteStep(
-                route_id=route.id,
-                sequence=idx,
-                section_id=section.id,
+            RouteOperation(
+                route_stage_id=stage.id,
+                sequence=1,
                 operation_code=op_code,
                 operation_name=op_code,
-                is_final=idx == len(sections),
             )
         )
 
@@ -499,14 +505,15 @@ async def test_shopfloor_sections_summary_and_incoming_transfers(client, session
     section_a = await session.scalar(select(Section).where(Section.code == "FG-SF-SUM-ISSUE"))
     section_b = await session.scalar(select(Section).where(Section.code == "FG-SF-SUM-DRILL"))
     assert section_a is not None and section_b is not None
-    route_steps = (
+    route_stages = (
         await session.execute(
-            select(RouteStep)
-            .where(RouteStep.operation_code.in_(["ISSUE_RAW", "DRILL"]))
-            .order_by(RouteStep.sequence)
+            select(RouteStage)
+            .join(RouteOperation)
+            .where(RouteOperation.operation_code.in_(["ISSUE_RAW", "DRILL"]))
+            .order_by(RouteStage.sequence)
         )
     ).scalars().all()
-    assert len(route_steps) == 2
+    assert len(route_stages) == 2
 
     internal_plan = InternalPlan(production_plan_id=plan.id)
     session.add(internal_plan)
@@ -517,8 +524,8 @@ async def test_shopfloor_sections_summary_and_incoming_transfers(client, session
         plan_position_id=pos.id,
         section_id=section_a.id,
         product_id=product.id,
-        route_id=route_steps[0].route_id,
-        route_step_id=route_steps[0].id,
+        route_id=route_stages[0].route_id,
+        route_stage_id=route_stages[0].id,
         sequence=1,
         planned_quantity=Decimal("100"),
         cached_available_quantity=Decimal("100"),
@@ -529,8 +536,8 @@ async def test_shopfloor_sections_summary_and_incoming_transfers(client, session
         plan_position_id=pos.id,
         section_id=section_b.id,
         product_id=product.id,
-        route_id=route_steps[1].route_id,
-        route_step_id=route_steps[1].id,
+        route_id=route_stages[1].route_id,
+        route_stage_id=route_stages[1].id,
         sequence=2,
         planned_quantity=Decimal("100"),
         cached_available_quantity=Decimal("100"),
@@ -543,7 +550,7 @@ async def test_shopfloor_sections_summary_and_incoming_transfers(client, session
         section_plan_line_id=line1.id,
         section_id=section_a.id,
         product_id=product.id,
-        route_step_id=route_steps[0].id,
+        route_stage_id=route_stages[0].id,
         planned_quantity=Decimal("100"),
         status=WorkTaskStatus.ready,
         cached_available_quantity=Decimal("100"),
@@ -553,7 +560,7 @@ async def test_shopfloor_sections_summary_and_incoming_transfers(client, session
         section_plan_line_id=line2.id,
         section_id=section_b.id,
         product_id=product.id,
-        route_step_id=route_steps[1].id,
+        route_stage_id=route_stages[1].id,
         planned_quantity=Decimal("100"),
         status=WorkTaskStatus.waiting_previous,
         cached_available_quantity=Decimal("100"),

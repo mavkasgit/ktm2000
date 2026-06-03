@@ -24,7 +24,7 @@ from app.models.production_plan import (
     ProductionPlanStatus,
 )
 from app.models.release_batch import ReleaseBatch, ReleaseBatchPosition
-from app.models.route import ProductionRoute, RouteStep
+from app.models.route import ProductionRoute, RouteStage, RouteOperation
 from app.models.section import Section
 from app.models.techcard import Techcard, TechcardLine
 from app.services.plan_generation import create_release_batch
@@ -79,15 +79,22 @@ async def test_take_position_to_work_with_dynamic_route(session) -> None:
 
     for step_data in steps_data:
         section = (await session.execute(select(Section).where(Section.code == step_data["section_code"]))).scalar_one()
-        step = RouteStep(
+        stage = RouteStage(
             route_id=route.id,
             sequence=step_data["sequence"],
             section_id=section.id,
-            operation_code=step_data["op_code"],
-            operation_name=step_data["op_name"],
             is_significant=step_data["is_significant"],
         )
-        session.add(step)
+        session.add(stage)
+        await session.flush()
+        session.add(
+            RouteOperation(
+                route_stage_id=stage.id,
+                sequence=1,
+                operation_code=step_data["op_code"],
+                operation_name=step_data["op_name"],
+            )
+        )
     await session.commit()
 
     # Create plan

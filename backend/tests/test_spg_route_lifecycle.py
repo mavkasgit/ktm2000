@@ -41,7 +41,7 @@ from app.models.production_plan import (
     ProductionPlan,
     ProductionPlanStatus,
 )
-from app.models.route import ProductionRoute, RouteStep
+from app.models.route import ProductionRoute, RouteStage, RouteOperation
 from app.models.section import Section
 from app.models.spg import SpgSection, StorageProductionGroup
 from app.models.techcard import Techcard, TechcardLine
@@ -131,14 +131,20 @@ async def _make_product_with_route_and_spgs(
 
     step_ops = ["ISSUE_RAW", "DRILL", "SHOT", "ANOD", "MOVE_TO_WIP", "PACK"]
     for idx, (section, op_code) in enumerate(zip(sections, step_ops, strict=True), start=1):
+        stage = RouteStage(
+            route_id=route.id,
+            sequence=idx,
+            section_id=section.id,
+            is_final=(idx == len(sections)),
+        )
+        session.add(stage)
+        await session.flush()
         session.add(
-            RouteStep(
-                route_id=route.id,
-                sequence=idx,
-                section_id=section.id,
+            RouteOperation(
+                route_stage_id=stage.id,
+                sequence=1,
                 operation_code=op_code,
                 operation_name=op_code,
-                is_final=(idx == len(sections)),
             )
         )
     await session.flush()

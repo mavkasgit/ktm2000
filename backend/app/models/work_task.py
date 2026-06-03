@@ -35,7 +35,7 @@ class WorkTask(Base):
     section_plan_line_id: Mapped[int] = mapped_column(ForeignKey("section_plan_lines.id"), nullable=False)
     section_id: Mapped[int] = mapped_column(ForeignKey("sections.id"), nullable=False)
     product_id: Mapped[int] = mapped_column(ForeignKey("products.id"), nullable=False)
-    route_step_id: Mapped[int] = mapped_column(ForeignKey("route_steps.id"), nullable=False)
+    route_stage_id: Mapped[int] = mapped_column(ForeignKey("route_stages.id"), nullable=False)
     planned_quantity: Mapped[Decimal] = mapped_column(Numeric(14, 3), nullable=False)
     status: Mapped[WorkTaskStatus] = mapped_column(Enum(WorkTaskStatus, name="work_task_status"), nullable=False)
     due_date: Mapped[date | None] = mapped_column(Date, nullable=True)

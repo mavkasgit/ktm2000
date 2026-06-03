@@ -22,7 +22,7 @@ from app.models.production_plan import (
 from app.models.imports import ImportBatch
 from app.models.product import Product
 from app.models.release_batch import ReleaseBatchType
-from app.models.route import ProductionRoute, RouteStep
+from app.models.route import ProductionRoute, RouteStage
 from app.models.section import Section
 from app.models.user import User
 from app.services.plan_generation import create_release_batch
@@ -625,11 +625,11 @@ async def route_check(
     if route_info.route_id is None:
         issues = [route_info.error or "route_not_found", *issues]
     if route_info.route_id:
-        steps_result = await db.execute(
-            select(RouteStep, Section)
-            .join(Section, RouteStep.section_id == Section.id)
-            .where(RouteStep.route_id == route_info.route_id)
-            .order_by(RouteStep.sequence)
+        stages_result = await db.execute(
+            select(RouteStage, Section)
+            .join(Section, RouteStage.section_id == Section.id)
+            .where(RouteStage.route_id == route_info.route_id)
+            .order_by(RouteStage.sequence)
         )
         active_route_snapshot = {
             "route_id": route_info.route_id,
@@ -637,14 +637,14 @@ async def route_check(
             "route_source": route_info.source,
             "steps": [
                 {
-                    "sequence": step.sequence,
-                    "section_id": step.section_id,
+                    "sequence": stage.sequence,
+                    "section_id": stage.section_id,
                     "section_code": section.code,
                     "section_name": section.name,
                     "section_kind": section.kind,
-                    "operation_name": step.operation_name,
+                    "operation_name": ", ".join(op.operation_name for op in stage.operations) if stage.operations else "",
                 }
-                for step, section in steps_result.all()
+                for stage, section in stages_result.all()
             ],
             "diagnostic": {
                 "error": route_info.error,
@@ -705,15 +705,15 @@ async def section_totals(
         if route_info.route_id is None:
             continue
 
-        steps = (
+        stages = (
             await db.execute(
-                select(RouteStep, Section)
-                .join(Section, RouteStep.section_id == Section.id)
-                .where(RouteStep.route_id == route_info.route_id)
-                .order_by(RouteStep.sequence)
+                select(RouteStage, Section)
+                .join(Section, RouteStage.section_id == Section.id)
+                .where(RouteStage.route_id == route_info.route_id)
+                .order_by(RouteStage.sequence)
             )
         ).all()
-        for _, section in steps:
+        for _, section in stages:
             bucket = totals_by_section.setdefault(
                 section.id,
                 {

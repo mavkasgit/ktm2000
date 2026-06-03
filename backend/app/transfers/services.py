@@ -38,7 +38,7 @@ from app.services.shopfloor.cache import (
 from app.services.shopfloor.common import (
     _check_idempotency,
     _ensure_positive,
-    _get_route_step,
+    _get_route_stage,
     _get_task,
     _get_transfer,
     _get_user_snapshot_name,
@@ -116,7 +116,7 @@ async def transfer_send(
                 section_plan_line_id=next_line.id,
                 section_id=next_line.section_id,
                 product_id=next_line.product_id,
-                route_step_id=next_line.route_step_id,
+                route_stage_id=next_line.route_stage_id,
                 planned_quantity=from_line.planned_quantity,
                 status=WorkTaskStatus.waiting_previous,
                 due_date=next_line.due_date,
@@ -132,9 +132,9 @@ async def transfer_send(
     if to_line is None or from_line.plan_position_id != to_line.plan_position_id:
         raise ValueError("Transfer tasks must belong to same plan position")
 
-    from_step = await _get_route_step(db, from_task.route_step_id)
-    to_step = await _get_route_step(db, to_task.route_step_id)
-    if to_step.sequence <= from_step.sequence:
+    from_stage = await _get_route_stage(db, from_task.route_stage_id)
+    to_stage = await _get_route_stage(db, to_task.route_stage_id)
+    if to_stage.sequence <= from_stage.sequence:
         raise ValueError("Transfer target must be next route step")
 
     quantity = _to_decimal(quantity)

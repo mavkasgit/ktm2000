@@ -25,7 +25,7 @@ from app.models.production_plan import (
     ProductionPlanStatus,
 )
 from app.models.release_batch import ReleaseBatch, ReleaseBatchPosition, ReleaseBatchStatus
-from app.models.route import ProductionRoute, RouteStep
+from app.models.route import ProductionRoute, RouteStage, RouteOperation
 from app.models.section import Section
 from app.models.techcard import Techcard, TechcardLine
 from app.models.work_task import WorkTask, WorkTaskStatus
@@ -56,27 +56,53 @@ async def _make_combined_route_product(session, sku: str = "COMBO-1") -> tuple[P
 
     # Шаги: WH → SHOT → ANOD(Анодирование) → ANOD(Стрейч) → WIP → SHIP
     # Два шага ANOD с одинаковым combined_op_group должны стать одной задачей
-    steps_config = [
-        {"section_idx": 0, "op_code": "ISSUE_RAW", "op_name": "Выдача сырья"},
-        {"section_idx": 1, "op_code": "SHOT", "op_name": "Дробеструй"},
-        {"section_idx": 2, "op_code": None, "op_name": "Анодирование", "cog": "anod_pack"},
-        {"section_idx": 2, "op_code": "PACK_STRETCH", "op_name": "Стрейч", "cog": "anod_pack"},
-        {"section_idx": 3, "op_code": "FG_WH", "op_name": "Склад ГП"},
-        {"section_idx": 4, "op_code": "SHIPMENT", "op_name": "Отгрузка", "is_final": True},
+    stages_config = [
+        {
+            "sequence": 1,
+            "section_idx": 0,
+            "ops": [("ISSUE_RAW", "Выдача сырья")],
+        },
+        {
+            "sequence": 2,
+            "section_idx": 1,
+            "ops": [("SHOT", "Дробеструй")],
+        },
+        {
+            "sequence": 3,
+            "section_idx": 2,
+            "ops": [(None, "Анодирование"), ("PACK_STRETCH", "Стрейч")],
+        },
+        {
+            "sequence": 4,
+            "section_idx": 3,
+            "ops": [("FG_WH", "Склад ГП")],
+        },
+        {
+            "sequence": 5,
+            "section_idx": 4,
+            "ops": [("SHIPMENT", "Отгрузка")],
+            "is_final": True,
+        },
     ]
 
-    for index, cfg in enumerate(steps_config, start=1):
-        session.add(
-            RouteStep(
-                route_id=route.id,
-                sequence=index,
-                section_id=sections[cfg["section_idx"]].id,
-                operation_code=cfg.get("op_code"),
-                operation_name=cfg["op_name"],
-                combined_op_group=cfg.get("cog"),
-                is_final=cfg.get("is_final", False),
-            )
+    for cfg in stages_config:
+        stage = RouteStage(
+            route_id=route.id,
+            sequence=cfg["sequence"],
+            section_id=sections[cfg["section_idx"]].id,
+            is_final=cfg.get("is_final", False),
         )
+        session.add(stage)
+        await session.flush()
+        for op_idx, (op_code, op_name) in enumerate(cfg["ops"], start=1):
+            session.add(
+                RouteOperation(
+                    route_stage_id=stage.id,
+                    sequence=op_idx,
+                    operation_code=op_code,
+                    operation_name=op_name,
+                )
+            )
     await session.flush()
     return product, sections, route
 
@@ -243,13 +269,29 @@ async def test_no_combined_op_group_creates_separate_tasks(client, session) -> N
     session.add(route)
     await session.flush()
 
-    # Два шага ANOD БЕЗ combined_op_group
-    session.add_all([
-        RouteStep(route_id=route.id, sequence=1, section_id=sections[0].id, operation_code="ISSUE_RAW", operation_name="Выдача"),
-        RouteStep(route_id=route.id, sequence=2, section_id=sections[1].id, operation_code=None, operation_name="Анодирование"),
-        RouteStep(route_id=route.id, sequence=3, section_id=sections[1].id, operation_code="PACK_STRETCH", operation_name="Стрейч"),
-        RouteStep(route_id=route.id, sequence=4, section_id=sections[2].id, operation_code="FINAL", operation_name="Финал", is_final=True),
-    ])
+    stages_data = [
+        {"seq": 1, "sec_idx": 0, "op_code": "ISSUE_RAW", "op_name": "Выдача"},
+        {"seq": 2, "sec_idx": 1, "op_code": None, "op_name": "Анодирование"},
+        {"seq": 3, "sec_idx": 1, "op_code": "PACK_STRETCH", "op_name": "Стрейч"},
+        {"seq": 4, "sec_idx": 2, "op_code": "FINAL", "op_name": "Финал", "is_final": True},
+    ]
+    for s_cfg in stages_data:
+        stage = RouteStage(
+            route_id=route.id,
+            sequence=s_cfg["seq"],
+            section_id=sections[s_cfg["sec_idx"]].id,
+            is_final=s_cfg.get("is_final", False),
+        )
+        session.add(stage)
+        await session.flush()
+        session.add(
+            RouteOperation(
+                route_stage_id=stage.id,
+                sequence=1,
+                operation_code=s_cfg["op_code"],
+                operation_name=s_cfg["op_name"],
+            )
+        )
     await session.flush()
 
     plan, position = await _make_plan_position(session, product, route)
@@ -296,13 +338,29 @@ async def test_different_cog_same_section_creates_separate_tasks(client, session
     session.add(route)
     await session.flush()
 
-    # Два шага ANOD с РАЗНЫМИ combined_op_group
-    session.add_all([
-        RouteStep(route_id=route.id, sequence=1, section_id=sections[0].id, operation_code="ISSUE_RAW", operation_name="Выдача"),
-        RouteStep(route_id=route.id, sequence=2, section_id=sections[1].id, operation_name="Анодирование", combined_op_group="anod_pack"),
-        RouteStep(route_id=route.id, sequence=3, section_id=sections[1].id, operation_code="PACK_SPUNBOND", operation_name="Спанбонд", combined_op_group="anod_spunbond"),
-        RouteStep(route_id=route.id, sequence=4, section_id=sections[2].id, operation_code="FINAL", operation_name="Финал", is_final=True),
-    ])
+    stages_data = [
+        {"seq": 1, "sec_idx": 0, "op_code": "ISSUE_RAW", "op_name": "Выдача"},
+        {"seq": 2, "sec_idx": 1, "op_code": None, "op_name": "Анодирование"},
+        {"seq": 3, "sec_idx": 1, "op_code": "PACK_SPUNBOND", "op_name": "Спанбонд"},
+        {"seq": 4, "sec_idx": 2, "op_code": "FINAL", "op_name": "Финал", "is_final": True},
+    ]
+    for s_cfg in stages_data:
+        stage = RouteStage(
+            route_id=route.id,
+            sequence=s_cfg["seq"],
+            section_id=sections[s_cfg["sec_idx"]].id,
+            is_final=s_cfg.get("is_final", False),
+        )
+        session.add(stage)
+        await session.flush()
+        session.add(
+            RouteOperation(
+                route_stage_id=stage.id,
+                sequence=1,
+                operation_code=s_cfg["op_code"],
+                operation_name=s_cfg["op_name"],
+            )
+        )
     await session.flush()
 
     plan, position = await _make_plan_position(session, product, route)

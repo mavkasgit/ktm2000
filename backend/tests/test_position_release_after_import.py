@@ -21,7 +21,7 @@ from app.models.production_plan import (
     PlanSourceType,
     ProductionPlan,
 )
-from app.models.route import ProductionRoute, RouteStep
+from app.models.route import ProductionRoute, RouteStage, RouteOperation
 from app.models.section import Section
 from app.models.techcard import Techcard, TechcardLine
 
@@ -74,15 +74,22 @@ async def test_plan_position_can_be_released_after_import(session) -> None:
 
     for step_data in steps_data:
         section = (await session.execute(select(Section).where(Section.code == step_data["section_code"]))).scalar_one()
-        step = RouteStep(
+        stage = RouteStage(
             route_id=route.id,
             sequence=step_data["sequence"],
             section_id=section.id,
-            operation_code=step_data["op_code"],
-            operation_name=step_data["op_name"],
             is_significant=step_data["is_significant"],
         )
-        session.add(step)
+        session.add(stage)
+        await session.flush()
+        session.add(
+            RouteOperation(
+                route_stage_id=stage.id,
+                sequence=1,
+                operation_code=step_data["op_code"],
+                operation_name=step_data["op_name"],
+            )
+        )
     await session.commit()
 
     # Create production plan
@@ -121,14 +128,14 @@ async def test_plan_position_can_be_released_after_import(session) -> None:
     assert position.route_id is not None
     assert position.route_assigned_at is not None
 
-    # Verify route has steps
-    steps_result = await session.execute(
-        select(RouteStep).where(RouteStep.route_id == route.id).order_by(RouteStep.sequence)
+    # Verify route has stages
+    stages_result = await session.execute(
+        select(RouteStage).where(RouteStage.route_id == route.id).order_by(RouteStage.sequence)
     )
-    steps = steps_result.scalars().all()
-    assert len(steps) == 3, f"Route should have 3 steps, got {len(steps)}"
+    stages = stages_result.scalars().all()
+    assert len(stages) == 3, f"Route should have 3 stages, got {len(stages)}"
     
-    print(f"✅ Position {position.id} created with route {route.id} ({len(steps)} steps)")
+    print(f"✅ Position {position.id} created with route {route.id} ({len(stages)} stages)")
 
     # VERIFY 2: Position can be released
     # Simulate release action
@@ -144,21 +151,21 @@ async def test_plan_position_can_be_released_after_import(session) -> None:
 
     print(f"✅ Position {position.id} released successfully")
 
-    # VERIFY 3: Route steps are still accessible after release
-    steps_result = await session.execute(
-        select(RouteStep).where(RouteStep.route_id == route.id).order_by(RouteStep.sequence)
+    # VERIFY 3: Route stages are still accessible after release
+    stages_result = await session.execute(
+        select(RouteStage).where(RouteStage.route_id == route.id).order_by(RouteStage.sequence)
     )
-    steps = steps_result.scalars().all()
-    assert len(steps) == 3, "Route steps must be preserved after release"
+    stages = stages_result.scalars().all()
+    assert len(stages) == 3, "Route stages must be preserved after release"
 
-    # Verify step details
-    assert steps[0].operation_code == "STOCK_IN"
-    assert steps[1].operation_code == "ANOD_01"
-    assert steps[1].is_significant is True
-    assert steps[2].operation_code == "PACK_STRETCH"
+    # Verify stage and operation details
+    assert stages[0].operations[0].operation_code == "STOCK_IN"
+    assert stages[1].operations[0].operation_code == "ANOD_01"
+    assert stages[1].is_significant is True
+    assert stages[2].operations[0].operation_code == "PACK_STRETCH"
 
-    print(f"✅ Route steps verified after release")
-    print(f"   Steps: {[(s.sequence, s.operation_code) for s in steps]}")
+    print(f"✅ Route stages verified after release")
+    print(f"   Stages: {[(s.sequence, s.operations[0].operation_code) for s in stages]}")
 
 
 @pytest.mark.asyncio

@@ -23,7 +23,7 @@ class WarehouseRemainder(Base):
     id: Mapped[int] = mapped_column(BigInteger, Identity(always=True), primary_key=True)
     product_id: Mapped[int] = mapped_column(ForeignKey("products.id"), nullable=False)
     section_id: Mapped[int] = mapped_column(ForeignKey("sections.id"), nullable=False)
-    route_step_id: Mapped[int | None] = mapped_column(ForeignKey("route_steps.id"), nullable=True)
+    route_stage_id: Mapped[int | None] = mapped_column(ForeignKey("route_stages.id"), nullable=True)
     section_plan_line_id: Mapped[int | None] = mapped_column(ForeignKey("section_plan_lines.id"), nullable=True)
     origin_task_id: Mapped[int | None] = mapped_column(ForeignKey("work_tasks.id"), nullable=True)
     remainder_quantity: Mapped[Decimal] = mapped_column(Numeric(14, 3), nullable=False, server_default=text("0"))

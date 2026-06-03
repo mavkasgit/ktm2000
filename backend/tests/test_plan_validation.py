@@ -12,7 +12,7 @@ from app.models.production_plan import (
     PlanSourceType,
     ProductionPlan,
 )
-from app.models.route import ProductionRoute, RouteStep
+from app.models.route import ProductionRoute, RouteStage, RouteOperation
 from app.models.section import Section
 from app.services.plan_validation import validate_plan_position
 
@@ -37,13 +37,20 @@ async def _make_ready_product(session, sku: str = "FG-1") -> tuple[Product, list
     session.add(route)
     await session.flush()
     for index, section in enumerate(sections, start=1):
+        stage = RouteStage(
+            route_id=route.id,
+            sequence=index,
+            section_id=section.id,
+            is_final=index == len(sections),
+        )
+        session.add(stage)
+        await session.flush()
         session.add(
-            RouteStep(
-                route_id=route.id,
-                sequence=index,
-                section_id=section.id,
+            RouteOperation(
+                route_stage_id=stage.id,
+                sequence=1,
+                operation_code=None,
                 operation_name=f"Step {index}",
-                is_final=index == len(sections),
             )
         )
     await session.flush()
@@ -340,7 +347,10 @@ async def test_validate_position_detects_inactive_section(session) -> None:
     route = ProductionRoute(name="Main", is_active=True)
     session.add(route)
     await session.flush()
-    session.add(RouteStep(route_id=route.id, sequence=1, section_id=section.id, operation_name="Cut", is_final=True))
+    stage = RouteStage(route_id=route.id, sequence=1, section_id=section.id, is_final=True)
+    session.add(stage)
+    await session.flush()
+    session.add(RouteOperation(route_stage_id=stage.id, sequence=1, operation_code=None, operation_name="Cut"))
     await session.flush()
 
     plan, position = await _make_plan_position(session, product, route_id=route.id)

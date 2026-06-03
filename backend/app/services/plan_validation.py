@@ -6,7 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.techcard import Techcard, TechcardLine
 from app.models.product import Product
 from app.models.production_plan import PlanPosition, PlanPositionStatus
-from app.models.route import ProductionRoute, RouteStep
+from app.models.route import ProductionRoute, RouteStage
 from app.models.section import Section
 from app.services.route_matcher import resolve_position_route
 
@@ -131,7 +131,7 @@ async def validate_plan_position(db: AsyncSession, position: PlanPosition) -> li
         errors.append(route_info.error or "route_not_found")
     else:
         steps = (
-            await db.execute(select(RouteStep).where(RouteStep.route_id == route_info.route_id).order_by(RouteStep.sequence))
+            await db.execute(select(RouteStage).where(RouteStage.route_id == route_info.route_id).order_by(RouteStage.sequence))
         ).scalars().all()
         if not steps:
             errors.append("active_route_has_no_steps")
