@@ -10,6 +10,7 @@ from app.models.section import Section
 from app.models.internal_plan import SectionPlanLine
 from app.models.release_batch import ReleaseBatchPosition
 from app.models.production_plan import PlanPosition, PlanChangeItem
+from app.services.route_sync import sync_stages_for_steps
 
 router = APIRouter(prefix="/routes", tags=["routes"])
 
@@ -357,6 +358,12 @@ async def create_route_step(route_id: int, payload: StepCreate, db: AsyncSession
     db.add(step)
     await db.flush()
     await db.refresh(step)
+    all_steps = (
+        await db.execute(
+            select(RouteStep).where(RouteStep.route_id == route_id).order_by(RouteStep.sequence)
+        )
+    ).scalars().all()
+    await sync_stages_for_steps(db, route_id, all_steps)
     section = await db.get(Section, step.section_id)
     return StepOut(
         id=step.id,
@@ -426,13 +433,21 @@ async def replace_route_steps(route_id: int, payload: list[StepUpdate], db: Asyn
         db.add(step)
         await db.flush()
         await db.refresh(step)
+    all_steps = (
+        await db.execute(
+            select(RouteStep).where(RouteStep.route_id == route_id).order_by(RouteStep.sequence)
+        )
+    ).scalars().all()
+    await sync_stages_for_steps(db, route_id, all_steps)
+    for step in all_steps:
+        section = await db.get(Section, step.section_id)
         result.append(StepOut(
             id=step.id,
             route_id=step.route_id,
             sequence=step.sequence,
             section_id=step.section_id,
-            section_code=section.code,
-            section_name=section.name,
+            section_code=section.code if section else None,
+            section_name=section.name if section else None,
             operation_code=step.operation_code,
             operation_name=step.operation_name,
             norm_time_minutes=step.norm_time_minutes,

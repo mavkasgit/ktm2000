@@ -27,6 +27,7 @@ from app.models.production_plan import (
     ProductionPlan,
 )
 from app.models.route import ProductionRoute, RouteStep, RouteRuleProfile
+from app.services.route_sync import sync_stages_for_steps
 from app.models.section import Section
 from app.services.excel_import import (
     ParsedWorkbook,
@@ -877,8 +878,12 @@ async def _make_change_items(
                                             logger = logging.getLogger(__name__)
                                             logger.error(f"No steps added for route {built_route.name}. Built route has {len(built_route.steps)} steps. Steps: {[(s.section_code, s.operation_code) for s in built_route.steps]}")
                                             raise ValueError(f"No steps added for route {built_route.name}. Built route has {len(built_route.steps)} steps.")
-                                        
+
                                         await db.flush()
+                                        route_steps_list = (await db.execute(
+                                            select(RouteStep).where(RouteStep.route_id == created_route.id).order_by(RouteStep.sequence)
+                                        )).scalars().all()
+                                        await sync_stages_for_steps(db, created_route.id, route_steps_list)
                                         steps_created_successfully = True
                                 except Exception as step_error:
                                     # Savepoint is automatically rolled back

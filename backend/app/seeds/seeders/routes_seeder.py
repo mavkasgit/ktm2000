@@ -11,6 +11,7 @@ from app.models.route import ProductionRoute, RouteRuleProfile, RouteStep, Secti
 from app.models.section import Section
 from app.models.transfer import Transfer
 from app.models.work_task import WorkTask
+from app.services.route_sync import sync_stages_for_steps
 
 # Operations that affect plan grouping (technological)
 SIGNIFICANT_OPS = {
@@ -163,6 +164,10 @@ async def seed_routes(
             )
 
         await db.flush()
+        all_steps = (await db.execute(
+            select(RouteStep).where(RouteStep.route_id == route.id).order_by(RouteStep.sequence)
+        )).scalars().all()
+        await sync_stages_for_steps(db, route.id, all_steps)
 
         result[template["code"]] = route
 
@@ -241,6 +246,11 @@ async def seed_production_routes_from_profiles(db: AsyncSession) -> int:
                 combined_op_group=None,
             ))
 
+        await db.flush()
+        all_steps = (await db.execute(
+            select(RouteStep).where(RouteStep.route_id == route.id).order_by(RouteStep.sequence)
+        )).scalars().all()
+        await sync_stages_for_steps(db, route.id, all_steps)
         created_count += 1
 
     await db.flush()
