@@ -41,6 +41,7 @@ class SectionPlanLine(Base):
     product_id: Mapped[int] = mapped_column(ForeignKey("products.id"), nullable=False)
     route_id: Mapped[int] = mapped_column(ForeignKey("production_routes.id"), nullable=False)
     route_step_id: Mapped[int] = mapped_column(ForeignKey("route_steps.id"), nullable=False)
+    route_stage_id: Mapped[int | None] = mapped_column(ForeignKey("route_stages.id"), nullable=True)
     sequence: Mapped[int] = mapped_column(Integer, nullable=False)
     planned_quantity: Mapped[Decimal] = mapped_column(Numeric(14, 3), nullable=False)
     due_date: Mapped[date | None] = mapped_column(Date, nullable=True)
