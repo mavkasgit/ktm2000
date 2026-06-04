@@ -93,7 +93,7 @@ class ReadyToTransferTaskOut(BaseModel):
     section_code: str | None = None
     section_name: str | None = None
     plan_position_id: int
-    route_step_id: int
+    route_stage_id: int
     sequence: int
     operation_code: str | None = None
     operation_name: str | None = None

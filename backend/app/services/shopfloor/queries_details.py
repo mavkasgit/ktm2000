@@ -179,7 +179,7 @@ async def get_route_stage_aggregates_for_plan_position(db: AsyncSession, plan_po
         "stages": [
             {
                 "section_plan_line_id": line.id,
-                "route_step_id": line.route_stage_id,
+                "route_stage_id": line.route_stage_id,
                 "section_id": stage.section_id,
                 "section_code": section.code,
                 "section_name": section.name,

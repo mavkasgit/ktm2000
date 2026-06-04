@@ -304,7 +304,7 @@ async def list_ready_to_transfer(
                 "section_code": section.code,
                 "section_name": section.name,
                 "plan_position_id": line.plan_position_id,
-                "route_step_id": stage.id,
+                "route_stage_id": stage.id,
                 "sequence": stage.sequence,
                 "operation_code": op_code,
                 "operation_name": op_name,
