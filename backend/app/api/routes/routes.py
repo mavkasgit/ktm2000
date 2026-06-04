@@ -37,7 +37,7 @@ class StepCreate(BaseModel):
     requires_acceptance: bool = True
     allow_parallel: bool = False
     is_final: bool = False
-    combined_op_group: str | None = None
+
 
 
 class StepUpdate(BaseModel):
@@ -49,7 +49,7 @@ class StepUpdate(BaseModel):
     requires_acceptance: bool = True
     allow_parallel: bool = False
     is_final: bool = False
-    combined_op_group: str | None = None
+
 
 
 class RuleOut(BaseModel):
@@ -70,7 +70,7 @@ class StepOut(BaseModel):
     operation_name: str
     norm_time_minutes: int | None = None
     is_final: bool
-    combined_op_group: str | None = None
+
 
     model_config = {"from_attributes": True}
 
@@ -131,7 +131,7 @@ async def get_route(route_id: int, db: AsyncSession = Depends(get_db)) -> RouteD
     from sqlalchemy import text
     steps_result = await db.execute(text("""
         SELECT rs.id, rs.route_id, rs.sequence, rs.section_id, rs.operation_code,
-               rs.operation_name, rs.norm_time_minutes, rs.is_final, rs.combined_op_group,
+               rs.operation_name, rs.norm_time_minutes, rs.is_final,
                s.code as section_code, s.name as section_name
         FROM route_steps rs
         LEFT JOIN sections s ON rs.section_id = s.id
@@ -153,7 +153,7 @@ async def get_route(route_id: int, db: AsyncSession = Depends(get_db)) -> RouteD
             operation_name=step.operation_name,
             norm_time_minutes=step.norm_time_minutes,
             is_final=step.is_final,
-            combined_op_group=step.combined_op_group,
+
         ))
 
     rules_result = await db.execute(
@@ -387,7 +387,7 @@ async def create_route_step(route_id: int, payload: StepCreate, db: AsyncSession
         operation_name=op.operation_name,
         norm_time_minutes=stage.norm_time_minutes,
         is_final=stage.is_final,
-        combined_op_group=None,
+
     )
 
 
@@ -463,6 +463,6 @@ async def replace_route_steps(route_id: int, payload: list[StepUpdate], db: Asyn
             operation_name=op.operation_name,
             norm_time_minutes=stage.norm_time_minutes,
             is_final=stage.is_final,
-            combined_op_group=None,
+    
         ))
     return result

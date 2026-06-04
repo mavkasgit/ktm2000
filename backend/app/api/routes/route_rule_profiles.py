@@ -169,7 +169,7 @@ class RouteStepPreview(BaseModel):
     operation_name: str = ""
     is_significant: bool = False
     is_final: bool = False
-    combined_op_group: str | None = None
+
 
 
 class RoutePreviewResponse(BaseModel):
@@ -220,7 +220,7 @@ async def preview_profile_route(
                 operation_name=step.operation_name,
                 is_significant=step.is_significant,
                 is_final=step.is_final,
-                combined_op_group=step.combined_op_group,
+
             )
             for step in route.steps
         ],

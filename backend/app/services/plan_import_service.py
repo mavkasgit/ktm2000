@@ -769,7 +769,6 @@ async def _make_change_items(
                                 "operation_code": step.operation_code,
                                 "operation_name": step.operation_name,
                                 "is_significant": step.is_significant,
-                                "combined_op_group": step.combined_op_group,
                             }
                             for step in built_route.steps
                         ]
@@ -849,10 +848,9 @@ async def _make_change_items(
                                 steps_created_successfully = False
                                 try:
                                     async with db.begin_nested():
-                                        # Group built_route.steps by section_code and combined_op_group
+                                        # Group built_route.steps by section_code
                                         groups = []
                                         current = []
-                                        current_cog = None
                                         current_section_id = None
 
                                         for step in sorted(built_route.steps, key=lambda s: s.sequence):
@@ -865,11 +863,8 @@ async def _make_change_items(
                                                 logger.warning(f"Section not found for code: {step.section_code}")
                                                 continue
 
-                                            step_cog = step.combined_op_group
                                             same_group = (
-                                                step_cog is not None
-                                                and step_cog == current_cog
-                                                and section.id == current_section_id
+                                                section.id == current_section_id
                                             )
 
                                             step_info = (step, section)
@@ -879,7 +874,6 @@ async def _make_change_items(
                                                 if current:
                                                     groups.append(current)
                                                 current = [step_info]
-                                                current_cog = step_cog
                                                 current_section_id = section.id
                                         if current:
                                             groups.append(current)
