@@ -288,7 +288,6 @@ async def test_new_release_after_force_seed_uses_new_route_steps(client, session
     batch = create_response.json()
     snapshot_steps = batch["positions"][0]["route_snapshot"]["steps"]
     assert len(snapshot_steps) == 9
-    assert [step["combined_op_group"] for step in snapshot_steps if step["section_code"] == "ANOD"] == ["anod_pack", "anod_pack"]
 
     release_response = await client.post(f"/api/release-batches/{batch['id']}/release")
     assert release_response.status_code == 200

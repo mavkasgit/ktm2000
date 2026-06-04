@@ -230,7 +230,6 @@ async def test_preview_includes_route_steps_for_resolved_route(client, session, 
     assert "operation_code" in first_step
     assert "operation_name" in first_step
     assert "is_significant" in first_step
-    assert "combined_op_group" in first_step
 
 
 @pytest.mark.asyncio

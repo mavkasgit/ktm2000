@@ -44,7 +44,7 @@ class BuiltRouteStep:
     operation_name: str = ""
     is_significant: bool = False
     is_final: bool = False
-    combined_op_group: str | None = None
+
 
 
 @dataclass
@@ -164,7 +164,7 @@ async def build_route_from_profile(
                 operation_name=first_op.operation_name,
                 is_significant=first_op.is_significant,
                 is_final=(section_code == "SENT"),
-                combined_op_group=None,
+
             ))
         else:
             # Участок с группами — каждый шаг получает уникальный sequence
@@ -211,7 +211,7 @@ async def build_route_from_profile(
                         operation_name=op.operation_name,
                         is_significant=is_sig,
                         is_final=(section_code == "SENT"),
-                        combined_op_group=section_code.lower(),  # Всегда устанавливаем для группировки
+
                     ))
 
     # Generate descriptive name from profile template
@@ -472,7 +472,7 @@ async def build_route_steps_for_release(
             "operation_name": step.operation_name,
             "is_significant": step.is_significant,
             "is_final": step.is_final,
-            "combined_op_group": step.combined_op_group,
+
         }
         for step in route.steps
     ]
