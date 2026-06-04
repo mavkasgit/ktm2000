@@ -425,7 +425,7 @@ async def test_demo_stage_preset_to_step_ready_first_step(client, session) -> No
             "route_id": route.id,
             "run_id": "demo-tsr-001",
             "stage_preset": "to_step_ready",
-            "target_route_step_id": first_stage.id,
+            "target_route_stage_id": first_stage.id,
         },
         headers=headers,
     )
@@ -487,7 +487,7 @@ async def test_demo_stage_preset_to_step_ready_middle_step(client, session) -> N
             "route_id": route.id,
             "run_id": "demo-tsrm-001",
             "stage_preset": "to_step_ready",
-            "target_route_step_id": target_stage.id,
+            "target_route_stage_id": target_stage.id,
         },
         headers=headers,
     )

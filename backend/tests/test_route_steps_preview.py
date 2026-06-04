@@ -1,4 +1,4 @@
-"""Tests for dynamic route_steps in import preview."""
+"""Tests for dynamic route stages and operations in import preview."""
 from io import BytesIO
 
 from decimal import Decimal
@@ -72,8 +72,8 @@ async def _make_section_operation(
 
 async def _make_template(session) -> ImportTemplate:
     template = ImportTemplate(
-        name="Route Steps Test",
-        code="route-steps-test",
+        name="Route Stages Test",
+        code="route-stages-test",
         is_active=True,
         column_mapping={
             "sku": {"header": "Артикул", "column": "A"},
@@ -91,7 +91,7 @@ async def _make_template(session) -> ImportTemplate:
 
 async def _make_profile(session, template_id: int) -> RouteRuleProfile:
     profile = RouteRuleProfile(
-        name="Route Steps Test Profile",
+        name="Route Stages Test Profile",
         code="packaging_map_rp",  # Use the actual profile code from seeds
         import_template_id=template_id,
         is_active=True,
@@ -161,9 +161,9 @@ async def _seed_infrastructure(session, profile: RouteRuleProfile):
     await session.flush()
     session.add(TechcardLine(techcard_id=techcard.id, component_product_id=product.id, quantity=Decimal("1"), unit="pcs"))
     
-    # Create route steps for each section in profile's route_sections
-    step_ops = ["ISSUE_RAW", "SHOT_BLAST", "ANOD", "MOVE_TO_FG", "SHIPMENT", "SENT"]
-    for idx, (section_code, op_code) in enumerate(zip(profile.route_sections, step_ops, strict=True), start=1):
+    # Create route stages and operations for each section in profile's route_sections
+    stage_ops = ["ISSUE_RAW", "SHOT_BLAST", "ANOD", "MOVE_TO_FG", "SHIPMENT", "SENT"]
+    for idx, (section_code, op_code) in enumerate(zip(profile.route_sections, stage_ops, strict=True), start=1):
         section = section_map[section_code]
         session.add(
             RouteStage(
@@ -185,8 +185,8 @@ async def _seed_infrastructure(session, profile: RouteRuleProfile):
 
 
 @pytest.mark.asyncio
-async def test_preview_includes_route_steps_for_resolved_route(client, session, tmp_path, monkeypatch) -> None:
-    """Verify that preview response includes route_steps when route is resolved."""
+async def test_preview_includes_route_stages_for_resolved_route(client, session, tmp_path, monkeypatch) -> None:
+    """Verify that preview response includes route stages and operations when route is resolved."""
     monkeypatch.setattr(settings, "IMPORT_STORAGE_DIR", str(tmp_path))
 
     # Setup template, profile, and infrastructure
@@ -216,28 +216,28 @@ async def test_preview_includes_route_steps_for_resolved_route(client, session, 
     assert after_data["route_id"] is not None
     assert after_data["route_name"] is not None
 
-    # route_steps should be present
+    # route stages should be present
     assert "route_steps" in after_data
-    route_steps = after_data["route_steps"]
-    assert isinstance(route_steps, list)
-    assert len(route_steps) > 0
+    route_stages = after_data["route_steps"]
+    assert isinstance(route_stages, list)
+    assert len(route_stages) > 0
 
-    # Verify structure of route steps
-    first_step = route_steps[0]
-    assert "sequence" in first_step
-    assert "section_code" in first_step
-    assert "section_name" in first_step
-    assert "operation_code" in first_step
-    assert "operation_name" in first_step
-    assert "is_significant" in first_step
-    assert "combined_op_group" in first_step
+    # Verify structure of route stages
+    first_stage = route_stages[0]
+    assert "sequence" in first_stage
+    assert "section_code" in first_stage
+    assert "section_name" in first_stage
+    assert "operation_code" in first_stage
+    assert "operation_name" in first_stage
+    assert "is_significant" in first_stage
+    assert "combined_op_group" in first_stage
 
 
 @pytest.mark.asyncio
-async def test_preview_route_steps_resolves_anod_operation_by_color(
+async def test_preview_route_stages_resolves_anod_operation_by_color(
     client, session, tmp_path, monkeypatch
 ) -> None:
-    """Verify that route_steps resolves ANOD operation based on color."""
+    """Verify that route stages resolve ANOD operation based on color."""
     monkeypatch.setattr(settings, "IMPORT_STORAGE_DIR", str(tmp_path))
 
     template = await _make_template(session)
@@ -259,21 +259,21 @@ async def test_preview_route_steps_resolves_anod_operation_by_color(
     assert response.status_code == 200
     body = response.json()
     item = body["items"][0]
-    route_steps = item["after_data"]["route_steps"]
+    route_stages = item["after_data"]["route_steps"]
 
-    # Find ANOD step
-    anod_step = next((s for s in route_steps if s["section_code"] == "ANOD"), None)
-    assert anod_step is not None
+    # Find ANOD stage
+    anod_stage = next((s for s in route_stages if s["section_code"] == "ANOD"), None)
+    assert anod_stage is not None
 
     # Should resolve to ANOD_05 (black)
-    assert "ANOD_05" in (anod_step["operation_code"] or "")
+    assert "ANOD_05" in (anod_stage["operation_code"] or "")
 
 
 @pytest.mark.asyncio
-async def test_preview_route_steps_excludes_sections_for_empty_operation(
+async def test_preview_route_stages_excludes_sections_for_empty_operation(
     client, session, tmp_path, monkeypatch
 ) -> None:
-    """Verify that route_steps excludes DRILL and PRESS when operation is empty."""
+    """Verify that route stages exclude DRILL and PRESS when operation is empty."""
     monkeypatch.setattr(settings, "IMPORT_STORAGE_DIR", str(tmp_path))
 
     template = await _make_template(session)
@@ -294,19 +294,19 @@ async def test_preview_route_steps_excludes_sections_for_empty_operation(
     assert response.status_code == 200
     body = response.json()
     item = body["items"][0]
-    route_steps = item["after_data"]["route_steps"]
+    route_stages = item["after_data"]["route_steps"]
 
     # Should not contain DRILL or PRESS sections
-    section_codes = [s["section_code"] for s in route_steps]
+    section_codes = [s["section_code"] for s in route_stages]
     assert "DRILL" not in section_codes
     assert "PRESS" not in section_codes
 
 
 @pytest.mark.asyncio
-async def test_preview_no_route_steps_when_route_not_found(
+async def test_preview_no_route_stages_when_route_not_found(
     client, session, tmp_path, monkeypatch
 ) -> None:
-    """Verify that route_steps is not present when route cannot be resolved."""
+    """Verify that route stages are not present when route cannot be resolved."""
     monkeypatch.setattr(settings, "IMPORT_STORAGE_DIR", str(tmp_path))
 
     # Create template WITHOUT profile - route won't be resolved
@@ -332,5 +332,5 @@ async def test_preview_no_route_steps_when_route_not_found(
     # Route should not be resolved
     assert after_data["route_id"] is None
 
-    # route_steps should not be present
+    # route stages should not be present
     assert "route_steps" not in after_data

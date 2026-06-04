@@ -61,7 +61,7 @@ class FullRouteRunRequest(BaseModel):
     plan_month: str | None = None
     plan_version: str | None = None
     stage_preset: StagePreset = StagePreset.before_approve
-    target_route_step_id: int | None = None
+    target_route_stage_id: int | None = None
     scenario_id: str | None = None
 
 
@@ -255,8 +255,8 @@ async def run_full_route_test(
         raise HTTPException(status_code=409, detail=f"run_id '{run_id}' already exists. Each run_id must be unique.")
 
     # Validate stage_preset requirements
-    if payload.stage_preset == StagePreset.to_step_ready and not payload.target_route_step_id:
-        raise HTTPException(status_code=400, detail="target_route_step_id is required for 'to_step_ready' preset")
+    if payload.stage_preset == StagePreset.to_step_ready and not payload.target_route_stage_id:
+        raise HTTPException(status_code=400, detail="target_route_stage_id is required for 'to_step_ready' preset")
 
     start_at = payload.start_performed_at or datetime.now(UTC)
     if start_at.tzinfo is None:
@@ -430,11 +430,11 @@ async def run_full_route_test(
     if payload.stage_preset == StagePreset.to_step_ready:
         target_step_index = None
         for idx, (_task, _line, step, _section) in enumerate(task_rows):
-            if step.id == payload.target_route_step_id:
+            if step.id == payload.target_route_stage_id:
                 target_step_index = idx
                 break
         if target_step_index is None:
-            raise HTTPException(status_code=400, detail="target_route_step_id not found in route steps")
+            raise HTTPException(status_code=400, detail="target_route_stage_id not found in route steps")
 
     # Auto-execute steps with early stop for to_step_ready
     stage_results: list[StageRunResult] = []
@@ -538,7 +538,7 @@ async def run_full_route_test(
 
     stopped_stage = payload.stage_preset.value
     if payload.stage_preset == StagePreset.to_step_ready:
-        stopped_stage = f"step_{payload.target_route_step_id}_ready"
+        stopped_stage = f"step_{payload.target_route_stage_id}_ready"
     elif payload.stage_preset == StagePreset.full_route:
         stopped_stage = "completed"
 
