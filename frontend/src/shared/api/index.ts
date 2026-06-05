@@ -7,3 +7,5 @@ export * from "./imports";
 export * from "./importTemplates";
 export * from "./productionPlans";
 export * from "./releaseBatches";
+export * from "./spg";
+export * from "./defects";

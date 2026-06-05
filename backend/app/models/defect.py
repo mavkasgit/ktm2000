@@ -48,7 +48,9 @@ class Defect(Base):
     id: Mapped[int] = mapped_column(BigInteger, Identity(always=True), primary_key=True)
     product_id: Mapped[int] = mapped_column(ForeignKey("products.id"), nullable=False)
     section_id: Mapped[int] = mapped_column(ForeignKey("sections.id"), nullable=False)
-    task_id: Mapped[int] = mapped_column(ForeignKey("work_tasks.id"), nullable=False)
+    task_id: Mapped[int | None] = mapped_column(ForeignKey("work_tasks.id"), nullable=True)
+    route_stage_id: Mapped[int | None] = mapped_column(ForeignKey("route_stages.id", ondelete="SET NULL"), nullable=True)
+    spg_remainder_id: Mapped[int | None] = mapped_column(ForeignKey("spg_remainders.id", ondelete="SET NULL"), nullable=True)
     movement_id: Mapped[int | None] = mapped_column(ForeignKey("movements.id"), nullable=True)
     status: Mapped[DefectStatus] = mapped_column(
         Enum(DefectStatus, name="defect_status"),

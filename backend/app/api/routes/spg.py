@@ -1,16 +1,18 @@
 from datetime import datetime
 from decimal import Decimal
+from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, File, UploadFile
 from pydantic import BaseModel
 from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.api.deps import READER_ROLES, WRITER_ROLES, get_current_user, require_role
 from app.core.database import get_db
 from app.models.movement import Movement, MovementType
 from app.models.product import Product
-from app.models.route import ProductionRoute, RouteStage, RouteOperation
+from app.models.route import ProductionRoute, RouteStage, RouteOperation, RouteRuleProfile, SectionOperation
 from app.models.section import Section
 from app.models.spg import SpgSection, StorageProductionGroup
 from app.models.user import User
@@ -18,6 +20,7 @@ from app.models.spg_remainder import SpgRemainder
 from app.models.work_task import WorkTask
 from app.services.shopfloor.common import _get_user_snapshot_name
 from app.services.shopfloor.queries_spg import get_spg_snapshot
+from app.services.route_selection import select_route_for_payload
 
 router = APIRouter(prefix="/spg", tags=["spg"])
 
@@ -979,3 +982,404 @@ async def get_remainder_history(
         completed_stages=remainder.completed_stages_json,
         movements=movements_out,
     )
+
+
+def _decimal_or_none(value: Any) -> Decimal | None:
+    if value is None or value == "":
+        return None
+    try:
+        if isinstance(value, Decimal):
+            return value
+        if isinstance(value, int):
+            return Decimal(value)
+        if isinstance(value, float):
+            return Decimal(str(value))
+        normalized = str(value).replace(" ", "").replace(",", ".").strip()
+        if not normalized:
+            return None
+        return Decimal(normalized)
+    except Exception:
+        return None
+
+
+async def _resolve_completed_stages_for_product_excel(
+    db: AsyncSession,
+    product: Product,
+    completed_ops_str: str,
+) -> list[dict]:
+    # 1. Fetch route stages for this product (same logic as GET /products/{product_id}/route-stages)
+    profiles = (
+        await db.execute(
+            select(RouteRuleProfile)
+            .where(RouteRuleProfile.is_active == True)
+            .order_by(RouteRuleProfile.priority.desc(), RouteRuleProfile.id.asc())
+        )
+    ).scalars().all()
+
+    matched_route = None
+    for profile in profiles:
+        selection = await select_route_for_payload(db, {}, product, profile_id=profile.id)
+        if selection.route is not None:
+            matched_route = selection.route
+            break
+
+    if not matched_route:
+        selection = await select_route_for_payload(db, {}, product)
+        if selection.route is not None:
+            matched_route = selection.route
+
+    if not matched_route:
+        if product.profile_type:
+            matched_route = await db.scalar(
+                select(ProductionRoute)
+                .where(ProductionRoute.is_active == True)
+                .where(ProductionRoute.name.ilike(f"%{product.profile_type}%"))
+                .limit(1)
+            )
+        if not matched_route and product.type:
+            matched_route = await db.scalar(
+                select(ProductionRoute)
+                .where(ProductionRoute.is_active == True)
+                .where(ProductionRoute.name.ilike(f"%{product.type}%"))
+                .limit(1)
+            )
+        if not matched_route:
+            matched_route = await db.scalar(
+                select(ProductionRoute)
+                .where(ProductionRoute.is_active == True)
+                .order_by(ProductionRoute.sort_order, ProductionRoute.id)
+                .limit(1)
+            )
+
+    if not matched_route:
+        return []
+
+    # Load stages
+    stages = (
+        await db.execute(
+            select(RouteStage)
+            .where(RouteStage.route_id == matched_route.id)
+            .order_by(RouteStage.sequence)
+            .options(selectinload(RouteStage.operations))
+        )
+    ).scalars().all()
+
+    section_ids = {stage.section_id for stage in stages}
+    sections_dict = {}
+    if section_ids:
+        sec_rows = (await db.execute(select(Section).where(Section.id.in_(section_ids)))).scalars().all()
+        sections_dict = {s.id: s for s in sec_rows}
+
+    # Load section operations
+    section_ops_dict = {}
+    if section_ids:
+        ops_rows = (
+            await db.execute(
+                select(SectionOperation)
+                .where(SectionOperation.section_id.in_(section_ids))
+                .where(SectionOperation.group_code.isnot(None))
+                .order_by(SectionOperation.section_id, SectionOperation.sort_order, SectionOperation.operation_code)
+            )
+        ).scalars().all()
+        for op in ops_rows:
+            section_ops_dict.setdefault(op.section_id, []).append(op)
+
+    # 2. Parse completed operations
+    tokens = [t.strip().lower() for t in completed_ops_str.split(",") if t.strip()]
+
+    completed = []
+    for token in tokens:
+        found = False
+        for stage in stages:
+            section = sections_dict.get(stage.section_id)
+            if not section:
+                continue
+
+            if any(c["section_id"] == stage.section_id for c in completed):
+                continue
+
+            has_specific_ops = any(op.operation_code is not None for op in stage.operations)
+            ops_list = []
+            if has_specific_ops:
+                ops_list = [op for op in stage.operations if op.operation_code is not None]
+            else:
+                ops_list = section_ops_dict.get(stage.section_id) or []
+
+            for op in ops_list:
+                op_name_lower = op.operation_name.lower()
+                op_code_lower = op.operation_code.lower() if op.operation_code else ""
+                
+                if token in op_name_lower or (op_code_lower and token in op_code_lower) or token in section.name.lower() or token in section.code.lower():
+                    completed.append({
+                        "section_id": stage.section_id,
+                        "operation_code": op.operation_code,
+                        "operation_name": op.operation_name,
+                        "sequence": stage.sequence,
+                    })
+                    found = True
+                    break
+            if found:
+                break
+    return sorted(completed, key=lambda x: x["sequence"])
+
+
+@router.get("/{spg_id}/defects", dependencies=[Depends(require_role(list(READER_ROLES)))])
+async def get_spg_defects(
+    spg_id: int,
+    db: AsyncSession = Depends(get_db),
+) -> list[dict]:
+    # Get all sections associated with this SPG
+    section_ids = (await db.execute(
+        select(SpgSection.section_id).where(SpgSection.spg_id == spg_id)
+    )).scalars().all()
+
+    if not section_ids:
+        return []
+
+    # Get all defects for these sections
+    from app.models.defect import Defect, DefectItem, DefectDecision
+    from app.models.product import Product
+    from app.models.section import Section
+    from app.models.user import User
+
+    stmt = (
+        select(Defect)
+        .where(Defect.section_id.in_(section_ids))
+        .order_by(Defect.created_at.desc())
+    )
+    defects = (await db.execute(stmt)).scalars().all()
+
+    if not defects:
+        return []
+
+    defect_ids = [d.id for d in defects]
+
+    # Load all items for these defects
+    items_rows = (await db.execute(
+        select(DefectItem).where(DefectItem.defect_id.in_(defect_ids))
+    )).scalars().all()
+    items_by_defect = {}
+    for item in items_rows:
+        items_by_defect.setdefault(item.defect_id, []).append(item)
+
+    # Load all decisions for these defects
+    decisions_rows = (await db.execute(
+        select(DefectDecision).where(DefectDecision.defect_id.in_(defect_ids))
+    )).scalars().all()
+    decisions_by_defect = {}
+    for dec in decisions_rows:
+        decisions_by_defect.setdefault(dec.defect_id, []).append(dec)
+
+    # Fetch product, section, user, route_stage maps in bulk
+    prod_ids = {d.product_id for d in defects}
+    products_map = {}
+    if prod_ids:
+        prod_rows = (await db.execute(select(Product).where(Product.id.in_(prod_ids)))).scalars().all()
+        products_map = {p.id: p for p in prod_rows}
+
+    sect_ids = {d.section_id for d in defects} | {d.responsible_section_id for d in defects if d.responsible_section_id}
+    sections_map = {}
+    if sect_ids:
+        sect_rows = (await db.execute(select(Section).where(Section.id.in_(sect_ids)))).scalars().all()
+        sections_map = {s.id: s for s in sect_rows}
+
+    user_ids = {d.created_by for d in defects}
+    users_map = {}
+    if user_ids:
+        user_rows = (await db.execute(select(User).where(User.id.in_(user_ids)))).scalars().all()
+        users_map = {u.id: u for u in user_rows}
+
+    stage_ids = {d.route_stage_id for d in defects if d.route_stage_id}
+    stages_map = {}
+    if stage_ids:
+        stage_rows = (await db.execute(
+            select(RouteStage)
+            .where(RouteStage.id.in_(stage_ids))
+            .options(selectinload(RouteStage.operations))
+        )).scalars().all()
+        stages_map = {s.id: s for s in stage_rows}
+
+    result = []
+    for d in defects:
+        product = products_map.get(d.product_id)
+        section = sections_map.get(d.section_id)
+        resp_section = sections_map.get(d.responsible_section_id) if d.responsible_section_id else None
+        creator = users_map.get(d.created_by)
+        stage = stages_map.get(d.route_stage_id) if d.route_stage_id else None
+
+        d_items = items_by_defect.get(d.id, [])
+        d_decisions = decisions_by_defect.get(d.id, [])
+
+        total_quantity = sum(item.quantity for item in d_items)
+        reasons_list = [item.defect_type_name_snapshot or item.reason_code for item in d_items if item.defect_type_name_snapshot or item.reason_code]
+        reason_str = ", ".join(reasons_list) if reasons_list else d.comment
+
+        stage_payload = None
+        if stage:
+            op_code = stage.operations[0].operation_code if stage.operations else None
+            op_name = ", ".join(op.operation_name for op in stage.operations) if stage.operations else ""
+            stage_payload = {
+                "id": stage.id,
+                "sequence": stage.sequence,
+                "operation_code": op_code,
+                "operation_name": op_name,
+            }
+
+        result.append({
+            "id": d.id,
+            "status": d.status.value,
+            "product_id": d.product_id,
+            "product_sku": product.sku if product else "",
+            "product_name": product.name if product else "",
+            "section_id": d.section_id,
+            "section_code": section.code if section else "",
+            "section_name": section.name if section else "",
+            "task_id": d.task_id,
+            "route_stage_id": d.route_stage_id,
+            "route_stage": stage_payload,
+            "spg_remainder_id": d.spg_remainder_id,
+            "responsible_section_id": d.responsible_section_id,
+            "responsible_section_code": resp_section.code if resp_section else None,
+            "responsible_section_name": resp_section.name if resp_section else None,
+            "comment": d.comment,
+            "created_by": d.created_by,
+            "created_by_user_name": creator.full_name or creator.username if creator else None,
+            "created_at": d.created_at.isoformat(),
+            "total_quantity": float(total_quantity),
+            "reason": reason_str,
+            "items": [
+                {
+                    "id": item.id,
+                    "quantity": float(item.quantity),
+                    "defect_type_code_snapshot": item.defect_type_code_snapshot,
+                    "defect_type_name_snapshot": item.defect_type_name_snapshot,
+                    "description": item.description,
+                }
+                for item in d_items
+            ],
+            "decisions": [
+                {
+                    "id": dec.id,
+                    "decision_type": dec.decision_type.value,
+                    "quantity": float(dec.quantity),
+                    "reason": dec.reason,
+                    "comment": dec.comment,
+                    "decided_at": dec.decided_at.isoformat(),
+                }
+                for dec in d_decisions
+            ],
+        })
+
+    return result
+
+
+@router.post("/{spg_id}/remainders/import", dependencies=[Depends(require_role(list(WRITER_ROLES)))])
+async def import_remainders_excel(
+    spg_id: int,
+    file: UploadFile = File(...),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    from python_calamine import load_workbook
+    from io import BytesIO
+
+    content = await file.read()
+    try:
+        workbook = load_workbook(BytesIO(content))
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid Excel file: {exc}")
+
+    # Use first sheet
+    sheet = workbook.get_sheet_by_index(0)
+    rows = list(sheet.iter_rows())
+    if not rows:
+        raise HTTPException(status_code=400, detail="Excel sheet is empty")
+
+    # Find headers
+    headers = [str(cell).strip().lower() for cell in rows[0]]
+    sku_idx = -1
+    qty_idx = -1
+    ops_idx = -1
+
+    for idx, h in enumerate(headers):
+        if h in ("sku", "артикул", "код", "продукт", "sku/артикул", "артикул / sku"):
+            sku_idx = idx
+        elif h in ("quantity", "количество", "кол-во", "кол-во, шт", "кол-во шт"):
+            qty_idx = idx
+        elif h in ("operations", "operations_completed", "completed_stages", "операции", "стадии", "выполненные стадии", "выполненные операции"):
+            ops_idx = idx
+
+    # Fallback search if not found in first row
+    if sku_idx == -1 or qty_idx == -1:
+        for r_idx, r in enumerate(rows[:10]):
+            r_headers = [str(cell).strip().lower() for cell in r]
+            for idx, h in enumerate(r_headers):
+                if h in ("sku", "артикул", "код", "продукт", "sku/артикул", "артикул / sku"):
+                    sku_idx = idx
+                elif h in ("quantity", "количество", "кол-во", "кол-во, шт", "кол-во шт"):
+                    qty_idx = idx
+                elif h in ("operations", "operations_completed", "completed_stages", "операции", "стадии", "выполненные стадии", "выполненные операции"):
+                    ops_idx = idx
+            if sku_idx != -1 and qty_idx != -1:
+                rows = rows[r_idx:]
+                break
+
+    if sku_idx == -1:
+        sku_idx = 0
+    if qty_idx == -1:
+        qty_idx = 1
+
+    actor_name = await _get_user_snapshot_name(db, current_user.id)
+    imported_count = 0
+    errors = []
+    
+    data_rows = rows[1:]
+    for r_idx, row in enumerate(data_rows, start=2):
+        if len(row) <= max(sku_idx, qty_idx):
+            continue
+        
+        sku_val = str(row[sku_idx]).strip()
+        if not sku_val or sku_val == "None":
+            continue
+
+        qty_val = row[qty_idx]
+        qty_dec = _decimal_or_none(qty_val)
+        if qty_dec is None or qty_dec <= 0:
+            errors.append(f"Строка {r_idx}: Неверное количество '{qty_val}'")
+            continue
+
+        product = await db.scalar(select(Product).where(Product.sku == sku_val))
+        if not product:
+            errors.append(f"Строка {r_idx}: Продукт с SKU '{sku_val}' не найден")
+            continue
+
+        completed_stages = []
+        if ops_idx != -1 and ops_idx < len(row):
+            ops_val = str(row[ops_idx]).strip()
+            if ops_val and ops_val != "None":
+                completed_stages = await _resolve_completed_stages_for_product_excel(db, product, ops_val)
+
+        remainder = SpgRemainder(
+            product_id=product.id,
+            spg_id=spg_id,
+            route_stage_id=None,
+            section_plan_line_id=None,
+            origin_task_id=None,
+            remainder_quantity=qty_dec,
+            original_issued=qty_dec,
+            completed_stages_json=completed_stages,
+            source="manual",
+            created_by=current_user.id,
+            created_by_user_name=actor_name,
+        )
+        db.add(remainder)
+        imported_count += 1
+
+    await db.flush()
+
+    return {
+        "success": True,
+        "imported_count": imported_count,
+        "errors": errors,
+    }
+

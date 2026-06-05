@@ -173,11 +173,27 @@ class ConsumeRemainderPayload(BaseModel):
 
 
 class CreateDefectPayload(BaseModel):
-    task_id: int
+    task_id: int | None = None
+    product_id: int | None = None
+    section_id: int | None = None
+    route_stage_id: int | None = None
+    spg_remainder_id: int | None = None
     quantity: Decimal
     reason: str | None = None
     comment: str | None = None
     idempotency_key: str | None = None
+
+
+class DefectTypeOut(BaseModel):
+    id: int
+    code: str
+    name: str
+    category: str | None = None
+    severity: int
+    requires_quality_decision: bool
+    description: str | None = None
+
+    model_config = {"from_attributes": True}
 
 
 class AddDefectItemPayload(BaseModel):
@@ -433,6 +449,10 @@ async def create_defect_endpoint(
         return await create_defect(
             db,
             task_id=payload.task_id,
+            product_id=payload.product_id,
+            section_id=payload.section_id,
+            route_stage_id=payload.route_stage_id,
+            spg_remainder_id=payload.spg_remainder_id,
             quantity=payload.quantity,
             actor_id=current_user.id,
             reason=payload.reason,
@@ -593,6 +613,16 @@ async def defect_details(defect_id: int, db: AsyncSession = Depends(get_db)) -> 
         return await get_defect_details(db, defect_id)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.get("/defect-types", response_model=list[DefectTypeOut], dependencies=[Depends(require_role(list(READER_ROLES)))])
+async def list_defect_types(
+    db: AsyncSession = Depends(get_db),
+) -> list[DefectTypeOut]:
+    from app.models.defect import DefectType
+    stmt = select(DefectType).where(DefectType.is_active == True).order_by(DefectType.category, DefectType.name)
+    items = (await db.execute(stmt)).scalars().all()
+    return items
 
 
 @router.get("/plan-positions/{plan_position_id}/route-stage-aggregates", dependencies=[Depends(require_role(list(READER_ROLES)))])

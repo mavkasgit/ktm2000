@@ -14,17 +14,21 @@ import { SpgSnapshotTable } from "../components/SpgSnapshotTable";
 import { RemaindersListPanel } from "../components/RemainderEditDialog";
 import { ProductRemaindersDialog } from "../components/ProductRemaindersDialog";
 import { ManualOperationDialog } from "../components/ManualOperationDialog";
+import { DefectsListPanel } from "../components/DefectsListPanel";
+import { getSpgDefects, type DefectOut } from "@/shared/api/defects";
 
-type Tab = "snapshot" | "remainders";
+type Tab = "snapshot" | "remainders" | "defects";
 
 export function SpgSnapshotPage() {
   const [spgs, setSpgs] = useState<SpgOut[]>([]);
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [snapshot, setSnapshot] = useState<SpgSnapshotResponse | null>(null);
   const [remainders, setRemainders] = useState<SpgRemainder[]>([]);
+  const [defects, setDefects] = useState<DefectOut[]>([]);
   const [loadingList, setLoadingList] = useState(true);
   const [loadingSnapshot, setLoadingSnapshot] = useState(false);
   const [loadingRemainders, setLoadingRemainders] = useState(false);
+  const [loadingDefects, setLoadingDefects] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [tab, setTab] = useState<Tab>("snapshot");
   const [productRemaindersFor, setProductRemaindersFor] = useState<number | null>(null);
@@ -69,17 +73,31 @@ export function SpgSnapshotPage() {
     }
   }, []);
 
+  const loadDefects = useCallback(async (spgId: number) => {
+    setLoadingDefects(true);
+    try {
+      const data = await getSpgDefects(spgId);
+      setDefects(data);
+    } catch {
+      // silently fail
+    } finally {
+      setLoadingDefects(false);
+    }
+  }, []);
+
   useEffect(() => {
     if (selectedId !== null) {
       loadSnapshot(selectedId);
       loadRemainders(selectedId);
+      loadDefects(selectedId);
     }
-  }, [selectedId, loadSnapshot, loadRemainders]);
+  }, [selectedId, loadSnapshot, loadRemainders, loadDefects]);
 
   const handleRefresh = () => {
     if (selectedId !== null) {
       loadSnapshot(selectedId);
       loadRemainders(selectedId);
+      loadDefects(selectedId);
     }
   };
 
@@ -149,6 +167,17 @@ export function SpgSnapshotPage() {
           >
             Остатки (инвентаризация)
           </button>
+          <button
+            type="button"
+            onClick={() => setTab("defects")}
+            className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
+              tab === "defects"
+                ? "border-primary text-primary"
+                : "border-transparent text-muted-foreground hover:text-foreground"
+            }`}
+          >
+            Брак (дефекты)
+          </button>
         </div>
       )}
 
@@ -174,6 +203,22 @@ export function SpgSnapshotPage() {
           remainders={remainders}
           isLoading={loadingRemainders}
           onRefresh={() => {
+            loadRemainders(selectedId!);
+            loadSnapshot(selectedId!);
+            loadDefects(selectedId!);
+          }}
+        />
+      )}
+
+      {tab === "defects" && selectedSpg && (
+        <DefectsListPanel
+          spgId={selectedId!}
+          sections={selectedSpg.sections}
+          remainders={remainders}
+          defects={defects}
+          isLoading={loadingDefects}
+          onRefresh={() => {
+            loadDefects(selectedId!);
             loadRemainders(selectedId!);
             loadSnapshot(selectedId!);
           }}
@@ -207,6 +252,7 @@ export function SpgSnapshotPage() {
           onSaved={() => {
             loadSnapshot(selectedId);
             loadRemainders(selectedId);
+            loadDefects(selectedId);
           }}
         />
       )}
