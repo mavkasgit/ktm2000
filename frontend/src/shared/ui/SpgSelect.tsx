@@ -1,9 +1,17 @@
 import { useMemo } from "react";
-import type { Section } from "@/shared/api/sections";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue, renderIcon } from "@/shared/ui";
 
-export type SectionSelectProps = {
-  sections: Section[];
+export type SpgSelectItem = {
+  id: number;
+  code: string;
+  name: string;
+  icon?: string | null;
+  icon_color?: string | null;
+  is_active: boolean;
+};
+
+export type SpgSelectProps = {
+  spgs: SpgSelectItem[];
   value: number | null | undefined;
   onValueChange: (value: number | null) => void;
   placeholder?: string;
@@ -11,31 +19,31 @@ export type SectionSelectProps = {
   emptyLabel?: string;
 };
 
-export function SectionSelect({
-  sections,
+export function SpgSelect({
+  spgs,
   value,
   onValueChange,
-  placeholder = "Участок",
+  placeholder = "ГХП",
   className,
   emptyLabel,
-}: SectionSelectProps) {
-  const activeSections = useMemo(() => sections.filter((s) => s.is_active), [sections]);
+}: SpgSelectProps) {
+  const activeSpgs = useMemo(() => spgs.filter((s) => s.is_active), [spgs]);
 
-  const selectedSection = activeSections.find((s) => s.id === value);
-  const iconColor = selectedSection?.icon_color || "#2563EB";
+  const selectedSpg = activeSpgs.find((s) => s.id === value);
+  const iconColor = selectedSpg?.icon_color || "#3B82F6";
 
   return (
     <Select value={value ? String(value) : "empty"} onValueChange={(v) => onValueChange(v === "empty" ? null : Number(v))}>
       <SelectTrigger className={className ?? "h-6 text-xs"}>
-        {selectedSection && selectedSection.icon ? (
+        {selectedSpg && selectedSpg.icon ? (
           <div className="flex items-center gap-1.5">
             <span
               className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded"
               style={{ backgroundColor: `${iconColor}20`, color: iconColor }}
             >
-              {renderIcon(selectedSection.icon, "h-3 w-3")}
+              {renderIcon(selectedSpg.icon, "h-3 w-3")}
             </span>
-            <span className="truncate">{selectedSection.code} · {selectedSection.name}</span>
+            <span className="truncate">{selectedSpg.code} · {selectedSpg.name}</span>
           </div>
         ) : (
           <SelectValue placeholder={placeholder} />
@@ -47,20 +55,20 @@ export function SectionSelect({
             <span className="text-muted-foreground">{emptyLabel}</span>
           </SelectItem>
         )}
-        {activeSections.map((section) => {
-          const color = section.icon_color || "#2563EB";
+        {activeSpgs.map((spg) => {
+          const color = spg.icon_color || "#3B82F6";
           return (
-            <SelectItem key={section.id} value={String(section.id)}>
+            <SelectItem key={spg.id} value={String(spg.id)}>
               <div className="flex items-center gap-1.5">
-                {section.icon && (
+                {spg.icon && (
                   <span
                     className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded"
                     style={{ backgroundColor: `${color}20`, color: color }}
                   >
-                    {renderIcon(section.icon, "h-3 w-3")}
+                    {renderIcon(spg.icon, "h-3 w-3")}
                   </span>
                 )}
-                <span className="truncate">{section.code} · {section.name}</span>
+                <span className="truncate">{spg.code} · {spg.name}</span>
               </div>
             </SelectItem>
           );

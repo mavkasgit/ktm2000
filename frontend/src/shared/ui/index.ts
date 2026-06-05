@@ -21,6 +21,8 @@ export { DateTimePicker } from "./DateTimePicker";
 export type { DateTimePickerProps } from "./DateTimePicker";
 export { SectionSelect } from "./SectionSelect";
 export type { SectionSelectProps } from "./SectionSelect";
+export { SpgSelect } from "./SpgSelect";
+export type { SpgSelectProps, SpgSelectItem } from "./SpgSelect";
 export { SortableHeader } from "./SortableHeader";
 export type { SortableHeaderProps } from "./SortableHeader";
 export { SortableFilterHeader } from "./SortableFilterHeader";

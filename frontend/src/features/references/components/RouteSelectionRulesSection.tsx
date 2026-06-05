@@ -1443,7 +1443,7 @@ export function RouteSelectionRulesSection({ refreshKey }: Props) {
                                     value={action.section_id ?? 0}
                                     onValueChange={(value) => {
                                       updateAction(index, { section_id: value });
-                                      fetchSectionOperations(value);
+                                      if (value) fetchSectionOperations(value);
                                     }}
                                     className="h-6 text-xs"
                                   />

@@ -9,7 +9,7 @@ const navItems = [
   { to: "/execution", label: "Контроль выполнения", icon: Factory },
   { to: "/shopfloor-tasks", label: "Участки", icon: Wrench },
   { to: "/transfers", label: "Передачи", icon: ArrowRightLeft },
-  { to: "/spg", label: "Группы (SPG)", icon: Layers },
+  { to: "/spg", label: "ГХП", icon: Layers },
   { to: "/settings", label: "Настройки", icon: Cog },
 ]
 

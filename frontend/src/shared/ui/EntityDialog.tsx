@@ -11,6 +11,13 @@ import {
   DialogTitle,
 } from "./Dialog"
 import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "./Select"
+import {
   Popover,
   PopoverContent,
   PopoverTrigger,
@@ -326,7 +333,7 @@ function IconColorPicker({
 /* ───────── EntityDialog ───────── */
 
 export interface EntityDialogField {
-  type: "text" | "number" | "color" | "icon" | "select" | "checkbox"
+  type: "text" | "number" | "color" | "icon" | "select" | "checkbox" | "custom"
   label: string
   placeholder?: string
   required?: boolean
@@ -334,6 +341,13 @@ export interface EntityDialogField {
   rowGroup?: string
   testId?: string
   options?: { value: string; label: string }[]
+  render?: (ctx: {
+    value: unknown
+    onChange: (v: unknown) => void
+    id: string
+    hasError: boolean
+    inputClasses: string
+  }) => ReactNode
 }
 
 export interface EntityDialogProps {
@@ -389,6 +403,7 @@ export function EntityDialog({
         else if (f.type === "select") defaults[key] = f.options?.[0]?.value ?? ""
         else if (f.type === "color") defaults[key] = COLOR_PRESETS[Math.floor(Math.random() * COLOR_PRESETS.length)]
         else if (f.type === "checkbox") defaults[key] = initialValues[key] ?? false
+        else if (f.type === "custom") defaults[key] = initialValues[key] ?? null
         else defaults[key] = initialValues[key] ?? ""
       }
       setValues(defaults)
@@ -454,19 +469,32 @@ export function EntityDialog({
       )
     }
 
+    if (field.type === "custom" && field.render) {
+      return field.render({
+        value: val,
+        onChange: (v) => setValue(key, v),
+        id: inputId,
+        hasError,
+        inputClasses,
+      })
+    }
+
     if (field.type === "select") {
       const selectValue = (val as string) || field.options?.[0]?.value || ""
       return (
-        <select
-          id={inputId}
+        <Select
           value={selectValue}
-          className={cn("h-10 w-full rounded-md border border-input bg-background px-3 text-sm", inputClasses)}
-          onChange={(e) => setValue(key, e.target.value)}
+          onValueChange={(v) => setValue(key, v)}
         >
-          {field.options?.map((o) => (
-            <option key={o.value} value={o.value}>{o.label}</option>
-          ))}
-        </select>
+          <SelectTrigger id={inputId} className={cn("h-10 w-full", inputClasses)}>
+            <SelectValue placeholder={field.placeholder ?? "Выберите значение"} />
+          </SelectTrigger>
+          <SelectContent>
+            {field.options?.map((o) => (
+              <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
       )
     }
 

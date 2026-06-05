@@ -1,11 +1,12 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import select, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
 from app.models.route import ProductionRoute, RouteStage, SectionOperation
 from app.models.section import Section
+from app.models.spg import SpgSection, StorageProductionGroup
 
 router = APIRouter(prefix="/sections", tags=["sections"])
 
@@ -19,6 +20,7 @@ class SectionIn(BaseModel):
     kind: str = "production"
     icon: str | None = None
     icon_color: str | None = None
+    spg_ids: list[int] = []
 
 
 class SectionPatch(BaseModel):
@@ -29,10 +31,19 @@ class SectionPatch(BaseModel):
     kind: str | None = None
     icon: str | None = None
     icon_color: str | None = None
+    spg_ids: list[int] | None = None
+
+
+class SpgBriefOut(BaseModel):
+    id: int
+    code: str
+    name: str
 
 
 class SectionOut(SectionIn):
     id: int
+    spg_links: list[SpgBriefOut] = []
+    operations_count: int = 0
 
 
 @router.get("", response_model=list[SectionOut])
@@ -54,9 +65,24 @@ async def create_section(payload: SectionIn, db: AsyncSession = Depends(get_db))
     existing = await db.scalar(select(Section).where(Section.code == payload.code))
     if existing:
         raise HTTPException(status_code=409, detail="Section code already exists")
-    item = Section(**payload.model_dump())
+    
+    spg_ids = payload.spg_ids
+    data = payload.model_dump(exclude={"spg_ids"})
+    
+    if spg_ids:
+        existing_spgs = (await db.execute(select(StorageProductionGroup.id).where(StorageProductionGroup.id.in_(spg_ids)))).scalars().all()
+        if len(existing_spgs) != len(spg_ids):
+            raise HTTPException(status_code=400, detail="Some SPG IDs do not exist")
+
+    item = Section(**data)
     db.add(item)
     await db.flush()
+
+    if spg_ids:
+        for idx, spg_id in enumerate(spg_ids):
+            db.add(SpgSection(spg_id=spg_id, section_id=item.id, sort_order=idx * 10))
+        await db.flush()
+
     await db.refresh(item)
     return SectionOut.model_validate(item, from_attributes=True)
 
@@ -66,8 +92,24 @@ async def patch_section(section_id: int, payload: SectionPatch, db: AsyncSession
     item = await db.get(Section, section_id)
     if item is None:
         raise HTTPException(status_code=404, detail="Section not found")
-    for key, value in payload.model_dump(exclude_unset=True).items():
+    
+    data = payload.model_dump(exclude_unset=True)
+    spg_ids = data.pop("spg_ids", None)
+
+    if spg_ids is not None:
+        if spg_ids:
+            existing_spgs = (await db.execute(select(StorageProductionGroup.id).where(StorageProductionGroup.id.in_(spg_ids)))).scalars().all()
+            if len(existing_spgs) != len(spg_ids):
+                raise HTTPException(status_code=400, detail="Some SPG IDs do not exist")
+
+    for key, value in data.items():
         setattr(item, key, value)
+
+    if spg_ids is not None:
+        await db.execute(delete(SpgSection).where(SpgSection.section_id == section_id))
+        for idx, spg_id in enumerate(spg_ids):
+            db.add(SpgSection(spg_id=spg_id, section_id=section_id, sort_order=idx * 10))
+
     await db.flush()
     await db.refresh(item)
     return SectionOut.model_validate(item, from_attributes=True)

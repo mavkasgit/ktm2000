@@ -1,13 +1,16 @@
 import React, { useCallback, useEffect, useState } from "react";
-import { Plus, ArrowUp, ArrowDown, GripVertical, Settings, X, Pencil, Trash2, Move } from "lucide-react";
+import { Plus, ArrowUp, ArrowDown, GripVertical, Settings, X, Pencil, Trash2, Move, Layers, ChevronRight } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 import * as API from "shared/api";
 import * as SectionsAPI from "shared/api/sections";
 import * as ShopfloorAPI from "shared/api/shopfloor";
+import * as SpgAPI from "shared/api/spg";
 import * as UI from "shared/ui";
 import { Button } from "@/shared/ui/Button";
 import { Badge } from "@/shared/ui/Badge";
 import { EntityDialog, renderIcon } from "@/shared/ui/EntityDialog";
+import { SpgSelect } from "@/shared/ui/SpgSelect";
+import { cn } from "@/shared/utils/cn";
 import { Popover, PopoverTrigger, PopoverContent } from "@/shared/ui/Popover";
 import { AlertDialog, AlertDialogContent, AlertDialogHeader, AlertDialogTitle, AlertDialogDescription, AlertDialogFooter, AlertDialogCancel, AlertDialogAction } from "@/shared/ui/AlertDialog";
 import { toast } from "@/shared/ui/use-toast";
@@ -23,6 +26,8 @@ type Section = {
   icon?: string | null;
   icon_color?: string | null;
   sort_order?: number;
+  spg_links?: { id: number; code: string; name: string }[];
+  operations_count?: number;
 };
 
 const KIND_LABELS: Record<string, string> = {
@@ -57,12 +62,21 @@ const GROUP_FIELDS: Record<string, EntityDialogField> = {
 };
 
 const SECTION_FIELDS: Record<string, EntityDialogField> = {
-  code: { type: "text", label: "Код", placeholder: "DRILL", required: true, rowGroup: "row1" },
-  name: { type: "text", label: "Название", placeholder: "Сверловка", required: true, rowGroup: "row1" },
+  code: { type: "text", label: "Код", placeholder: "Введите код", required: true, rowGroup: "row1" },
+  name: { type: "text", label: "Название", placeholder: "Введите название", required: true, rowGroup: "row1" },
   kind: { type: "select", label: "Тип", required: true, options: KIND_OPTIONS },
   icon: { type: "icon", label: "Иконка" },
   icon_color: { type: "color", label: "Цвет" },
-  description: { type: "text", label: "Описание", placeholder: "Необязательно" },
+  description: { type: "text", label: "Описание", placeholder: "Введите описание (необязательно)" },
+};
+
+const SPG_FIELDS: Record<string, EntityDialogField> = {
+  code: { type: "text", label: "Код", placeholder: "Введите код", required: true, rowGroup: "row1" },
+  name: { type: "text", label: "Название", placeholder: "Введите название", required: true, rowGroup: "row1" },
+  is_active: { type: "checkbox", label: "Активна", rowGroup: "row1" },
+  icon: { type: "icon", label: "Иконка" },
+  icon_color: { type: "color", label: "Цвет" },
+  description: { type: "text", label: "Описание", placeholder: "Введите описание (необязательно)" },
 };
 
 async function apiListSections(): Promise<Section[]> {
@@ -130,11 +144,17 @@ export function SectionsPage() {
   const [editingItem, setEditingItem] = useState<Section | null>(null);
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [draggedIndex, setDraggedIndex] = useState<number | null>(null);
+  const [spgs, setSpgs] = useState<SpgAPI.SpgOut[]>([]);
+  const [spgDialogOpen, setSpgDialogOpen] = useState(false);
+  const [spgDialogMode, setSpgDialogMode] = useState<"add" | "edit">("add");
+  const [editingSpg, setEditingSpg] = useState<SpgAPI.SpgOut | null>(null);
+  const [deleteSpgDialog, setDeleteSpgDialog] = useState<{ id: number; name: string } | null>(null);
 
   // Operations panel — now uses groups
   const [expandedSectionId, setExpandedSectionId] = useState<number | null>(null);
   const [expandedSectionName, setExpandedSectionName] = useState<string>("");
   const [opGroups, setOpGroups] = useState<OperationGroup[]>([]);
+  const [opsCountById, setOpsCountById] = useState<Record<number, number | undefined>>({});
   const [opsLoading, setOpsLoading] = useState(false);
   const [deleteOpDialog, setDeleteOpDialog] = useState<{ sectionId: number; opId: number; opName: string } | null>(null);
   const [opDialogOpen, setOpDialogOpen] = useState(false);
@@ -162,6 +182,8 @@ export function SectionsPage() {
     try {
       const groups = await SectionsAPI.getSectionOperationGroups(sectionId);
       setOpGroups(groups);
+      const total = groups.reduce((sum, g) => sum + g.operations.length, 0);
+      setOpsCountById((prev) => ({ ...prev, [sectionId]: total }));
     } catch (e) {
       toast({ title: "Ошибка загрузки групп", description: API.getErrorMessage(e), variant: "destructive" });
     } finally {
@@ -259,6 +281,7 @@ export function SectionsPage() {
           });
         }
         await queryClient.invalidateQueries({ queryKey: ["shopfloor"] });
+        setOpsCountById((prev) => ({ ...prev, [opDialogSectionId]: (prev[opDialogSectionId] ?? 0) + 1 }));
         setOpDialogOpen(false);
       } catch (e) {
         toast({ title: "Ошибка создания", description: API.getErrorMessage(e), variant: "destructive" });
@@ -296,6 +319,10 @@ export function SectionsPage() {
         ...g,
         operations: g.operations.filter((o) => o.id !== opId),
       })).filter((g) => g.operations.length > 0 || g.group_code !== null));
+      setOpsCountById((prev) => {
+        const cur = prev[sectionId] ?? 0;
+        return { ...prev, [sectionId]: Math.max(0, cur - 1) };
+      });
       await queryClient.invalidateQueries({ queryKey: ["shopfloor"] });
     } catch (e) {
       toast({ title: "Ошибка удаления", description: API.getErrorMessage(e), variant: "destructive" });
@@ -335,6 +362,7 @@ export function SectionsPage() {
         };
         const created = await SectionsAPI.createOperationGroup(groupDialogSectionId, payload);
         setOpGroups((prev) => [...prev, created]);
+        setOpsCountById((prev) => ({ ...prev, [groupDialogSectionId]: (prev[groupDialogSectionId] ?? 0) + created.operations.length }));
         setGroupDialogOpen(false);
       } catch (e) {
         toast({ title: "Ошибка создания группы", description: API.getErrorMessage(e), variant: "destructive" });
@@ -357,13 +385,18 @@ export function SectionsPage() {
     if (!deleteGroupDialog) return;
     const { sectionId, groupCode } = deleteGroupDialog;
     try {
+      const removedCount = opGroups.find((g) => g.group_code === groupCode)?.operations.length ?? 0;
       await SectionsAPI.deleteOperationGroup(sectionId, groupCode);
       setOpGroups((prev) => prev.filter((g) => g.group_code !== groupCode));
+      setOpsCountById((prev) => {
+        const cur = prev[sectionId] ?? 0;
+        return { ...prev, [sectionId]: Math.max(0, cur - removedCount) };
+      });
       setDeleteGroupDialog(null);
     } catch (e) {
       toast({ title: "Ошибка удаления группы", description: API.getErrorMessage(e), variant: "destructive" });
     }
-  }, [deleteGroupDialog]);
+  }, [deleteGroupDialog, opGroups]);
 
   const openMoveOp = useCallback((sectionId: number, op: SectionOperationInfo) => {
     setMoveOpDialog({ sectionId, opId: op.id, opName: op.operation_name, currentGroup: op.group_code });
@@ -416,7 +449,17 @@ export function SectionsPage() {
     setLoading(true);
     setError("");
     try {
-      setItems(await apiListSections());
+      const sections = await apiListSections();
+      setItems(sections);
+      setOpsCountById((prev) => {
+        const next = { ...prev };
+        sections.forEach((s) => {
+          if (s.id !== undefined) {
+            next[Number(s.id)] = s.operations_count ?? 0;
+          }
+        });
+        return next;
+      });
     } catch (e) {
       setError(e instanceof Error ? e.message : "Unknown error");
     } finally {
@@ -469,9 +512,88 @@ export function SectionsPage() {
     setDraggedIndex(null);
   }, []);
 
+  const loadSpgs = useCallback(async () => {
+    try {
+      const list = await SpgAPI.getSpgList();
+      setSpgs(list);
+    } catch (e) {
+      console.error("Failed to load SPGs:", e);
+    }
+  }, []);
+
   useEffect(() => {
     void load();
-  }, [load]);
+    void loadSpgs();
+  }, [load, loadSpgs]);
+
+  const openAddSpg = () => {
+    setSpgDialogMode("add");
+    setEditingSpg(null);
+    setSpgDialogOpen(true);
+  };
+
+  const openEditSpg = (item: SpgAPI.SpgOut) => {
+    setSpgDialogMode("edit");
+    setEditingSpg(item);
+    setSpgDialogOpen(true);
+  };
+
+  const handleSaveSpg = async (values: Record<string, unknown>) => {
+    const icon = (values.icon as string) || null;
+    const icon_color = (values.icon_color as string) || null;
+    const description = (values.description as string) || null;
+
+    try {
+      if (spgDialogMode === "edit" && editingSpg) {
+        const payload: SpgAPI.SpgPatchInput = {
+          name: (values.name as string)?.trim(),
+          description,
+          is_active: values.is_active !== false,
+          icon,
+          icon_color,
+        };
+        await SpgAPI.patchSpg(editingSpg.id, payload);
+        toast({ title: "Сохранено", description: `ГХП "${payload.name}" обновлено`, variant: "success" });
+      } else {
+        const payload = {
+          code: (values.code as string)?.trim(),
+          name: (values.name as string)?.trim(),
+          icon,
+          icon_color,
+          description,
+          is_active: values.is_active !== false,
+          sort_order: 0,
+          section_ids: [],
+        };
+        const response = await fetch("/api/spg", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+        if (!response.ok) throw new Error(`Failed to create SPG: ${response.status}`);
+        toast({ title: "Создано", description: `Группа ГХП "${payload.name}" успешно создана`, variant: "success" });
+      }
+      setSpgDialogOpen(false);
+      setEditingSpg(null);
+      await loadSpgs();
+    } catch (e) {
+      const action = spgDialogMode === "edit" ? "обновления" : "создания";
+      toast({ title: `Ошибка ${action} ГХП`, description: API.getErrorMessage(e), variant: "destructive" });
+    }
+  };
+
+  const confirmDeleteSpg = async () => {
+    if (!deleteSpgDialog) return;
+    try {
+      await SpgAPI.deleteSpg(deleteSpgDialog.id);
+      toast({ title: "Удалено", description: `ГХП "${deleteSpgDialog.name}" удалено`, variant: "success" });
+      await Promise.all([loadSpgs(), load()]);
+    } catch (e) {
+      toast({ title: "Ошибка удаления ГХП", description: API.getErrorMessage(e), variant: "destructive" });
+    } finally {
+      setDeleteSpgDialog(null);
+    }
+  };
 
   const openAdd = () => {
     setDialogMode("add");
@@ -486,6 +608,7 @@ export function SectionsPage() {
   };
 
   const handleSave = async (values: Record<string, unknown>) => {
+    const spgIdVal = (values.spg_id as number | null | undefined) ?? null;
     const payload = {
       code: (values.code as string)?.trim(),
       name: (values.name as string)?.trim(),
@@ -493,6 +616,7 @@ export function SectionsPage() {
       icon: (values.icon as string) || null,
       icon_color: (values.icon_color as string) || null,
       description: (values.description as string) || null,
+      spg_ids: spgIdVal ? [spgIdVal] : [],
     };
 
     try {
@@ -525,6 +649,38 @@ export function SectionsPage() {
     }
   };
 
+  const dialogFields = React.useMemo(() => {
+    return {
+      code: SECTION_FIELDS.code,
+      name: SECTION_FIELDS.name,
+      spg_id: {
+        type: "custom" as const,
+        label: "Группа хранения и производства (ГХП)",
+        required: false,
+        render: ({ value, onChange, hasError, inputClasses }: {
+          value: unknown
+          onChange: (v: unknown) => void
+          id: string
+          hasError: boolean
+          inputClasses: string
+        }) => (
+          <SpgSelect
+            spgs={spgs}
+            value={(value as number | null | undefined) ?? null}
+            onValueChange={(v) => onChange(v)}
+            placeholder="Выберите ГХП"
+            emptyLabel="Без ГХП"
+            className={cn("h-10 w-full", hasError ? "border-destructive focus-visible:ring-destructive" : inputClasses)}
+          />
+        ),
+      },
+      kind: SECTION_FIELDS.kind,
+      icon: SECTION_FIELDS.icon,
+      icon_color: SECTION_FIELDS.icon_color,
+      description: SECTION_FIELDS.description,
+    };
+  }, [spgs]);
+
   const initialValues = dialogMode === "edit"
     ? {
         code: editingItem?.code ?? "",
@@ -533,21 +689,28 @@ export function SectionsPage() {
         icon: editingItem?.icon ?? "",
         icon_color: editingItem?.icon_color ?? "#3B82F6",
         description: editingItem?.description ?? "",
+        spg_id: editingItem?.spg_links?.[0]?.id ?? null,
       }
-    : { kind: "production" };
+    : { kind: "production", spg_id: null };
 
   return (
     <section style={{ display: "grid", gap: 12 }}>
       <div className="flex items-center justify-between">
         <h2 className="text-lg font-semibold">Участки</h2>
-        <Button size="sm" onClick={openAdd}>
-          <Plus className="h-4 w-4 mr-1" />
-          Добавить участок
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button size="sm" variant="outline" onClick={openAddSpg}>
+            <Plus className="h-4 w-4 mr-1" />
+            Добавить ГХП
+          </Button>
+          <Button size="sm" onClick={openAdd}>
+            <Plus className="h-4 w-4 mr-1" />
+            Добавить участок
+          </Button>
+        </div>
       </div>
 
       <EntityDialog
-        fields={SECTION_FIELDS}
+        fields={dialogFields}
         open={dialogOpen}
         onOpenChange={setDialogOpen}
         mode={dialogMode}
@@ -599,19 +762,21 @@ export function SectionsPage() {
       {error ? <div role="alert">{error}</div> : null}
       {loading ? <div>Загрузка...</div> : null}
 
-      <div className="overflow-x-auto">
-        <Table className="w-auto">
-          <thead>
-            <tr>
-              <th className="py-3 px-2 text-left text-sm font-medium whitespace-nowrap w-10">⇅</th>
-              <th className="py-3 px-4 text-left text-sm font-medium whitespace-nowrap">Иконка</th>
-              <th className="py-3 px-4 text-left text-sm font-medium whitespace-nowrap">Название</th>
-              <th className="py-3 px-4 text-left text-sm font-medium whitespace-nowrap">Код</th>
-              <th className="py-3 px-4 text-left text-sm font-medium whitespace-nowrap">Тип</th>
-              <th className="py-3 px-4 text-left text-sm font-medium whitespace-nowrap">Описание</th>
-              <th className="py-3 px-4 text-left text-sm font-medium whitespace-nowrap">Операции</th>
-            </tr>
-          </thead>
+      <div className="grid gap-3 items-start" style={{ gridTemplateColumns: "minmax(0, 1fr) 260px" }}>
+        <div className="overflow-x-auto pr-5">
+          <Table className="w-full table-auto">
+            <thead>
+              <tr>
+                <th className="py-3 px-2 text-left text-sm font-medium whitespace-nowrap" style={{ width: "44px", minWidth: "44px" }}>⇅</th>
+                <th className="py-3 px-3 text-left text-sm font-medium whitespace-nowrap" style={{ width: "56px", minWidth: "56px" }}>Иконка</th>
+                <th className="py-3 px-3 text-left text-sm font-medium whitespace-nowrap" style={{ minWidth: "180px", maxWidth: "350px", width: "30%" }}>Название</th>
+                <th className="py-3 px-3 text-left text-sm font-medium whitespace-nowrap" style={{ width: "90px", minWidth: "90px" }}>Код</th>
+                <th className="py-3 px-3 text-left text-sm font-medium whitespace-nowrap" style={{ minWidth: "140px", maxWidth: "300px", width: "25%" }}>ГХП</th>
+                <th className="py-3 px-3 text-left text-sm font-medium whitespace-nowrap" style={{ width: "130px", minWidth: "130px" }}>Тип</th>
+                <th className="py-3 px-3 text-left text-sm font-medium whitespace-nowrap" style={{ minWidth: "120px", maxWidth: "350px", width: "25%" }}>Описание</th>
+                <th className="py-3 px-3 text-center text-sm font-medium whitespace-nowrap" style={{ width: "120px", minWidth: "120px" }}>Операции</th>
+              </tr>
+            </thead>
           <tbody>
             {items.map((item, i) => (
               <React.Fragment key={String(item.id ?? `${item.code}-${i}`)}>
@@ -673,20 +838,35 @@ export function SectionsPage() {
                     <span className="text-muted-foreground text-sm">—</span>
                   )}
                 </td>
-                <td className="py-3 px-4 text-sm whitespace-nowrap cursor-pointer" onClick={() => openEdit(item)}>{item.name}</td>
-                <td className="py-3 px-4 text-sm whitespace-nowrap cursor-pointer" onClick={() => openEdit(item)}>{item.code}</td>
-                <td className="py-3 px-4 text-sm whitespace-nowrap cursor-pointer" onClick={() => openEdit(item)}>{KIND_LABELS[item.kind ?? "production"] ?? item.kind ?? "-"}</td>
-                <td className="py-3 px-4 text-sm cursor-pointer" onClick={() => openEdit(item)}>{item.description ?? "-"}</td>
-                <td className="py-3 px-4 text-sm">
-                  <Button size="sm" variant="ghost" onClick={() => toggleSectionOps(Number(item.id), item.name)}>
-                    <Settings className="h-4 w-4 mr-1" />
-                    {expandedSectionId === item.id ? "Скрыть" : "Настроить"}
-                  </Button>
+                <td className="py-3 px-4 text-sm whitespace-nowrap cursor-pointer" style={{ minWidth: "180px", maxWidth: "350px", width: "30%" }} onClick={() => openEdit(item)}>{item.name}</td>
+                <td className="py-3 px-4 text-sm whitespace-nowrap cursor-pointer" style={{ width: "90px", minWidth: "90px" }} onClick={() => openEdit(item)}>{item.code}</td>
+                <td className="py-3 px-4 text-sm truncate cursor-pointer" style={{ minWidth: "140px", maxWidth: "300px", width: "25%" }} title={item.spg_links?.map(g => g.name).join(", ") || "—"} onClick={() => openEdit(item)}>
+                  {item.spg_links?.map(g => g.name).join(", ") || "—"}
+                </td>
+                <td className="py-3 px-4 text-sm truncate cursor-pointer" style={{ width: "130px", minWidth: "130px" }} title={KIND_LABELS[item.kind ?? "production"] ?? item.kind ?? "-"} onClick={() => openEdit(item)}>{KIND_LABELS[item.kind ?? "production"] ?? item.kind ?? "-"}</td>
+                <td className="py-3 px-4 text-sm truncate cursor-pointer" style={{ minWidth: "120px", maxWidth: "350px", width: "25%" }} title={item.description ?? "-"} onClick={() => openEdit(item)}>{item.description ?? "-"}</td>
+                <td className="py-3 px-2 text-sm text-center">
+                  <button
+                    type="button"
+                    onClick={() => toggleSectionOps(Number(item.id), item.name)}
+                    className={`inline-flex items-center gap-1.5 px-2 py-1 rounded-md text-sm border transition-colors ${
+                      expandedSectionId === Number(item.id)
+                        ? "bg-primary/10 border-primary/30 text-primary"
+                        : "bg-muted/50 border-border text-foreground hover:bg-muted hover:border-primary/30"
+                    }`}
+                    title={expandedSectionId === Number(item.id) ? "Скрыть операции" : "Показать операции"}
+                  >
+                    <span className="text-muted-foreground text-xs">Опер.</span>
+                    <span className="tabular-nums font-medium">{opsCountById[Number(item.id)] ?? "—"}</span>
+                    <ChevronRight
+                      className={`h-3.5 w-3.5 transition-transform ${expandedSectionId === Number(item.id) ? "rotate-90" : ""}`}
+                    />
+                  </button>
                 </td>
               </tr>
               {expandedSectionId === Number(item.id) && (
                 <tr key={`ops-${item.id}`}>
-                  <td colSpan={7} className="p-0">
+                  <td colSpan={8} className="p-0">
                     <div className="max-w-2xl">
                     <div className="bg-muted/30 border-l-4 border-blue-400 p-4 m-2 rounded">
                       <div className="flex items-center gap-2 mb-3">
@@ -813,6 +993,58 @@ export function SectionsPage() {
             ))}
           </tbody>
         </Table>
+        </div>
+
+        <details open className="border rounded-lg bg-card overflow-hidden self-start sticky top-2">
+          <summary className="cursor-pointer select-none px-3 py-2 flex items-center gap-2 text-sm font-medium hover:bg-accent/40 transition-colors">
+            <Layers className="h-4 w-4 text-muted-foreground" />
+            <span className="flex-1">ГХП</span>
+            <Badge variant="secondary" className="text-xs">{spgs.length}</Badge>
+          </summary>
+          <div className="border-t">
+            <Table className="w-full">
+              <thead>
+                <tr>
+                  <th className="py-1.5 px-2 text-left text-xs font-medium w-8"></th>
+                  <th className="py-1.5 px-2 text-left text-xs font-medium">Название</th>
+                  <th className="py-1.5 px-2 text-right text-xs font-medium w-10">Уч.</th>
+                </tr>
+              </thead>
+              <tbody>
+                {spgs.length === 0 ? (
+                  <tr>
+                    <td colSpan={3} className="py-2 px-2 text-xs text-muted-foreground">
+                      Нет ГХП
+                    </td>
+                  </tr>
+                ) : (
+                  spgs.map((spg) => (
+                    <tr
+                      key={spg.id}
+                      onClick={() => openEditSpg(spg)}
+                      className="cursor-pointer transition-colors hover:bg-accent/40"
+                      style={spg.icon_color ? { backgroundColor: spg.icon_color + "0C" } : undefined}
+                    >
+                      <td className="py-1.5 px-2">
+                        {spg.icon ? (
+                          <span style={{ color: spg.icon_color || undefined }}>
+                            {renderIcon(spg.icon, "h-4 w-4")}
+                          </span>
+                        ) : spg.icon_color ? (
+                          <span className="inline-block size-4 rounded-full bg-current" style={{ color: spg.icon_color }} />
+                        ) : null}
+                      </td>
+                      <td className="py-1.5 px-2 text-sm truncate" title={spg.name}>{spg.name}</td>
+                      <td className="py-1.5 px-2 text-xs text-muted-foreground text-right tabular-nums">
+                        {spg.sections?.length ?? 0}
+                      </td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </Table>
+          </div>
+        </details>
       </div>
     <EntityDialog
         fields={OP_FIELDS}
@@ -891,6 +1123,49 @@ export function SectionsPage() {
           </div>
           <AlertDialogFooter className="flex-col-reverse sm:flex-row gap-2">
             <AlertDialogCancel>Отмена</AlertDialogCancel>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <EntityDialog
+        fields={SPG_FIELDS}
+        open={spgDialogOpen}
+        onOpenChange={(open) => {
+          setSpgDialogOpen(open);
+          if (!open) setEditingSpg(null);
+        }}
+        mode={spgDialogMode}
+        initialValues={spgDialogMode === "edit" && editingSpg ? {
+          code: editingSpg.code,
+          name: editingSpg.name,
+          is_active: editingSpg.is_active,
+          icon: editingSpg.icon ?? "",
+          icon_color: editingSpg.icon_color ?? "#3B82F6",
+          description: editingSpg.description ?? "",
+        } : { is_active: true }}
+        onSave={handleSaveSpg}
+        onDelete={spgDialogMode === "edit" && editingSpg ? () => setDeleteSpgDialog({ id: editingSpg.id, name: editingSpg.name }) : undefined}
+        addTitle="Новая группа хранения и производства (ГХП)"
+        editTitle="Редактировать ГХП"
+        addDescription="Заполните информацию о ГХП"
+        editDescription="Измените параметры ГХП"
+        addLabel="Создать"
+        saveLabel="Сохранить"
+      />
+
+      <AlertDialog open={!!deleteSpgDialog} onOpenChange={(open) => !open && setDeleteSpgDialog(null)}>
+        <AlertDialogContent className="max-w-sm">
+          <AlertDialogHeader>
+            <AlertDialogTitle>Удалить ГХП &laquo;{deleteSpgDialog?.name}&raquo;?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Это действие нельзя отменить. Группа хранения и производства и все её привязки к участкам будут удалены.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter className="flex-col-reverse sm:flex-row gap-2">
+            <AlertDialogCancel>Отмена</AlertDialogCancel>
+            <AlertDialogAction onClick={confirmDeleteSpg} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">
+              Удалить
+            </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>

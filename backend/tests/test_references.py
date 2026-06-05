@@ -5,6 +5,7 @@ from app.models.techcard import Techcard, TechcardLine
 from app.models.product import Product, ProductType
 from app.models.route import ProductionRoute, RouteStage, RouteOperation
 from app.models.section import Section
+from app.models.spg import StorageProductionGroup
 
 
 @pytest.mark.asyncio
@@ -131,3 +132,54 @@ async def test_list_sections_ordered_by_sort_order(client, session) -> None:
     test_sections = [s for s in data if s["code"] in ("Z-LAST", "A-FIRST", "M-MIDDLE")]
     codes = [s["code"] for s in test_sections]
     assert codes == ["A-FIRST", "M-MIDDLE", "Z-LAST"]
+
+
+@pytest.mark.asyncio
+async def test_create_patch_section_with_spg(client, session) -> None:
+    # 1. Create StorageProductionGroups
+    spg1 = StorageProductionGroup(code="SPG1", name="SPG One")
+    spg2 = StorageProductionGroup(code="SPG2", name="SPG Two")
+    session.add_all([spg1, spg2])
+    await session.commit()
+
+    # 2. Create Section with SPG1
+    payload = {
+        "code": "SEC-SPG",
+        "name": "Sec with SPG",
+        "spg_ids": [spg1.id]
+    }
+    resp = await client.post("/api/sections", json=payload)
+    assert resp.status_code == 201
+    data = resp.json()
+    assert len(data["spg_links"]) == 1
+    assert data["spg_links"][0]["id"] == spg1.id
+    section_id = data["id"]
+
+    # 3. Patch Section to SPG2
+    patch_payload = {
+        "spg_ids": [spg2.id]
+    }
+    resp = await client.patch(f"/api/sections/{section_id}", json=patch_payload)
+    assert resp.status_code == 200
+    data = resp.json()
+    assert len(data["spg_links"]) == 1
+    assert data["spg_links"][0]["id"] == spg2.id
+
+    # 4. Patch Section to no SPG
+    patch_payload = {
+        "spg_ids": []
+    }
+    resp = await client.patch(f"/api/sections/{section_id}", json=patch_payload)
+    assert resp.status_code == 200
+    data = resp.json()
+    assert len(data["spg_links"]) == 0
+
+    # 5. Try to create with invalid SPG ID
+    invalid_payload = {
+        "code": "SEC-INVALID-SPG",
+        "name": "Sec Invalid SPG",
+        "spg_ids": [99999]
+    }
+    resp = await client.post("/api/sections", json=invalid_payload)
+    assert resp.status_code == 400
+    assert "some spg ids do not exist" in resp.json()["detail"].lower()

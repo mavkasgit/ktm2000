@@ -32,7 +32,7 @@ export function SpgRemaindersDialog({
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Package className="h-5 w-5" />
-            Остатки в группах хранения (SPG)
+            Остатки в ГХП
           </DialogTitle>
         </DialogHeader>
 
@@ -46,7 +46,7 @@ export function SpgRemaindersDialog({
               <thead className="border-b bg-muted/50 sticky top-0 bg-background">
                 <tr>
                   <th className="text-left p-2 font-medium">Продукт</th>
-                  <th className="text-left p-2 font-medium">Группа хранения (SPG)</th>
+                  <th className="text-left p-2 font-medium">Группа хранения и производства (ГХП)</th>
                   <th className="text-left p-2 font-medium">Пройденные этапы</th>
                   <th className="text-right p-2 font-medium">Остаток</th>
                   <th className="text-center p-2 font-medium">Действие</th>
