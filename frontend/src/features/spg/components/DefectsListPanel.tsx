@@ -1,11 +1,12 @@
 import { useState } from "react";
-import { AlertCircle, Clock, CheckCircle, ShieldAlert, Plus, Search, ShieldCheck } from "lucide-react";
+import { AlertCircle, Clock, CheckCircle, ShieldAlert, Plus, Search, ShieldCheck, Upload } from "lucide-react";
 
 import { Button, Input, Badge } from "@/shared/ui";
 import type { DefectOut } from "@/shared/api/defects";
 import type { SpgOut, SpgRemainder } from "@/shared/api/spg";
 import { CreateDefectDialog } from "./CreateDefectDialog";
 import { DecideDefectDialog } from "./DecideDefectDialog";
+import { ImportDefectsDialog } from "./ImportDefectsDialog";
 
 interface DefectsListPanelProps {
   spgId: number;
@@ -25,6 +26,7 @@ export function DefectsListPanel({
   onRefresh,
 }: DefectsListPanelProps) {
   const [createOpen, setCreateOpen] = useState(false);
+  const [importOpen, setImportOpen] = useState(false);
   const [decideOpen, setDecideOpen] = useState(false);
   const [selectedDefect, setSelectedDefect] = useState<DefectOut | null>(null);
 
@@ -97,10 +99,16 @@ export function DefectsListPanel({
         <h3 className="text-sm font-semibold">
           Зарегистрированный брак ({filteredDefects.length} из {defects.length})
         </h3>
-        <Button size="sm" onClick={() => setCreateOpen(true)} className="inline-flex items-center gap-1">
-          <Plus className="h-3.5 w-3.5" />
-          Зарегистрировать брак
-        </Button>
+        <div className="flex gap-2">
+          <Button size="sm" variant="outline" onClick={() => setImportOpen(true)} className="inline-flex items-center gap-1">
+            <Upload className="h-3.5 w-3.5" />
+            Импортировать брак
+          </Button>
+          <Button size="sm" onClick={() => setCreateOpen(true)} className="inline-flex items-center gap-1">
+            <Plus className="h-3.5 w-3.5" />
+            Зарегистрировать брак
+          </Button>
+        </div>
       </div>
 
       {/* Search and Filters */}
@@ -261,6 +269,13 @@ export function DefectsListPanel({
         spgId={spgId}
         sections={sections}
         remainders={remainders}
+        onSaved={onRefresh}
+      />
+
+      <ImportDefectsDialog
+        open={importOpen}
+        onOpenChange={setImportOpen}
+        spgId={spgId}
         onSaved={onRefresh}
       />
 

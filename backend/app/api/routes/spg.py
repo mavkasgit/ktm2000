@@ -1383,3 +1383,184 @@ async def import_remainders_excel(
         "errors": errors,
     }
 
+
+@router.post("/{spg_id}/defects/import", dependencies=[Depends(require_role(list(WRITER_ROLES)))])
+async def import_defects_excel(
+    spg_id: int,
+    file: UploadFile = File(...),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    from python_calamine import load_workbook
+    from io import BytesIO
+    from app.models.defect import Defect, DefectItem, DefectType, DefectStatus
+
+    content = await file.read()
+    try:
+        workbook = load_workbook(BytesIO(content))
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid Excel file: {exc}")
+
+    sheet = workbook.get_sheet_by_index(0)
+    rows = list(sheet.iter_rows())
+    if not rows:
+        raise HTTPException(status_code=400, detail="Excel sheet is empty")
+
+    # Get all sections associated with this SPG
+    section_ids = (await db.execute(
+        select(SpgSection.section_id).where(SpgSection.spg_id == spg_id)
+    )).scalars().all()
+    if not section_ids:
+        raise HTTPException(status_code=400, detail="No sections associated with this SPG")
+
+    # Find headers
+    headers = [str(cell).strip().lower() for cell in rows[0]]
+    sku_idx = -1
+    qty_idx = -1
+    sec_idx = -1
+    type_idx = -1
+    cmt_idx = -1
+
+    for idx, h in enumerate(headers):
+        if h in ("sku", "артикул", "код", "продукт", "sku/артикул", "артикул / sku"):
+            sku_idx = idx
+        elif h in ("quantity", "количество", "кол-во", "кол-во, шт", "кол-во шт"):
+            qty_idx = idx
+        elif h in ("section", "участок", "код участка", "название участка"):
+            sec_idx = idx
+        elif h in ("defect_type", "тип брака", "тип дефекта", "код дефекта"):
+            type_idx = idx
+        elif h in ("comment", "комментарий", "примечание"):
+            cmt_idx = idx
+
+    # Fallback search if not found in first row
+    if sku_idx == -1 or qty_idx == -1 or sec_idx == -1:
+        for r_idx, r in enumerate(rows[:10]):
+            r_headers = [str(cell).strip().lower() for cell in r]
+            for idx, h in enumerate(r_headers):
+                if h in ("sku", "артикул", "код", "продукт", "sku/артикул", "артикул / sku"):
+                    sku_idx = idx
+                elif h in ("quantity", "количество", "кол-во", "кол-во, шт", "кол-во шт"):
+                    qty_idx = idx
+                elif h in ("section", "участок", "код участка", "название участка"):
+                    sec_idx = idx
+                elif h in ("defect_type", "тип брака", "тип дефекта", "код дефекта"):
+                    type_idx = idx
+                elif h in ("comment", "комментарий", "примечание"):
+                    cmt_idx = idx
+            if sku_idx != -1 and qty_idx != -1 and sec_idx != -1:
+                rows = rows[r_idx:]
+                break
+
+    if sku_idx == -1:
+        sku_idx = 0
+    if qty_idx == -1:
+        qty_idx = 1
+    if sec_idx == -1:
+        sec_idx = 2
+
+    imported_count = 0
+    errors = []
+
+    # Cache sections
+    sections_list = (await db.execute(
+        select(Section).where(Section.id.in_(section_ids))
+    )).scalars().all()
+
+    data_rows = rows[1:]
+    for r_idx, row in enumerate(data_rows, start=2):
+        if len(row) <= max(sku_idx, qty_idx, sec_idx):
+            continue
+
+        sku_val = str(row[sku_idx]).strip()
+        if not sku_val or sku_val == "None":
+            continue
+
+        qty_val = row[qty_idx]
+        qty_dec = _decimal_or_none(qty_val)
+        if qty_dec is None or qty_dec <= 0:
+            errors.append(f"Строка {r_idx}: Неверное количество '{qty_val}'")
+            continue
+
+        sec_val = str(row[sec_idx]).strip().lower()
+        if not sec_val or sec_val == "None":
+            errors.append(f"Строка {r_idx}: Не указан участок")
+            continue
+
+        # Find section among linked sections
+        target_section = None
+        for s in sections_list:
+            if s.code.lower() == sec_val or s.name.lower() == sec_val:
+                target_section = s
+                break
+
+        if not target_section:
+            # Check if it exists globally to give a better error message
+            global_section = await db.scalar(
+                select(Section).where((Section.code.ilike(sec_val)) | (Section.name.ilike(sec_val)))
+            )
+            if global_section:
+                errors.append(f"Строка {r_idx}: Участок '{row[sec_idx]}' не привязан к данной ГХП")
+            else:
+                errors.append(f"Строка {r_idx}: Участок '{row[sec_idx]}' не найден в системе")
+            continue
+
+        product = await db.scalar(select(Product).where(Product.sku == sku_val))
+        if not product:
+            errors.append(f"Строка {r_idx}: Продукт с SKU '{sku_val}' не найден")
+            continue
+
+        # Defect Type resolution
+        defect_type = None
+        defect_type_code = None
+        defect_type_name = None
+        if type_idx != -1 and type_idx < len(row):
+            type_val = str(row[type_idx]).strip()
+            if type_val and type_val != "None":
+                defect_type = await db.scalar(
+                    select(DefectType).where(
+                        (DefectType.code.ilike(type_val)) | (DefectType.name.ilike(type_val))
+                    )
+                )
+                if defect_type:
+                    defect_type_code = defect_type.code
+                    defect_type_name = defect_type.name
+                else:
+                    defect_type_name = type_val
+
+        cmt_val = None
+        if cmt_idx != -1 and cmt_idx < len(row):
+            val = str(row[cmt_idx]).strip()
+            if val and val != "None":
+                cmt_val = val
+
+        # Create Defect and DefectItem
+        defect = Defect(
+            product_id=product.id,
+            section_id=target_section.id,
+            status=DefectStatus.open,
+            comment=cmt_val,
+            created_by=current_user.id,
+        )
+        db.add(defect)
+        await db.flush()
+
+        defect_item = DefectItem(
+            defect_id=defect.id,
+            defect_type_id=defect_type.id if defect_type else None,
+            defect_type_code_snapshot=defect_type_code,
+            defect_type_name_snapshot=defect_type_name,
+            quantity=qty_dec,
+            created_by=current_user.id,
+        )
+        db.add(defect_item)
+        imported_count += 1
+
+    await db.flush()
+
+    return {
+        "success": True,
+        "imported_count": imported_count,
+        "errors": errors,
+    }
+

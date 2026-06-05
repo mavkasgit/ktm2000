@@ -108,3 +108,28 @@ export async function defectDecide(
   }>(`/shopfloor/defects/${defectId}/decisions`, payload);
   return data;
 }
+
+export type ImportDefectsResponse = {
+  success: boolean;
+  imported_count: number;
+  errors: string[];
+};
+
+export async function importDefectsExcel(
+  spgId: number,
+  file: File,
+): Promise<ImportDefectsResponse> {
+  const formData = new FormData();
+  formData.append("file", file);
+  const { data } = await apiClient.post<ImportDefectsResponse>(
+    `/spg/${spgId}/defects/import`,
+    formData,
+    {
+      headers: {
+        "Content-Type": "multipart/form-data",
+      },
+    },
+  );
+  return data;
+}
+
