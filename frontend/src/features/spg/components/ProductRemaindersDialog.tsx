@@ -59,7 +59,7 @@ export function ProductRemaindersDialog({
             {productRow && (
               <div className="grid grid-cols-3 gap-2 text-xs">
                 <div className="rounded border p-2 bg-muted/20">
-                  <div className="text-muted-foreground">Доступно (SPG)</div>
+                  <div className="text-muted-foreground">Доступно в ГХП</div>
                   <div className="font-semibold text-base text-purple-700">
                     {productRow.spg_available}
                   </div>
