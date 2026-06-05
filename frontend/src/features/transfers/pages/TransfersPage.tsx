@@ -99,21 +99,6 @@ export function TransfersPage() {
     void refetchHistory();
   }
 
-  const handleCancelTransfer = async (id: number, transferNo: string) => {
-    if (!confirm(`Вы действительно хотите аннулировать передачу ${transferNo}? Это вернет остатки в исходное состояние.`)) {
-      return;
-    }
-    try {
-      await cancelTransfer(id);
-      toast({ variant: "success", title: "Передача отменена", description: `Запись ${transferNo} успешно аннулирована` });
-      void queryClient.invalidateQueries({ queryKey: ["transfers-ready"] });
-      void queryClient.invalidateQueries({ queryKey: ["transfers-history"] });
-    } catch (err) {
-      const msg = getErrorMessage(err);
-      toast({ variant: "destructive", title: "Ошибка отмены", description: msg });
-    }
-  };
-
   return (
     <div className="p-6 space-y-6 max-w-screen-2xl">
       <header className="page-header">
@@ -288,13 +273,6 @@ export function TransfersPage() {
                                 onClick={() => setEditTransferRecord(t)}
                               >
                                 Изменить
-                              </Button>
-                              <Button
-                                size="sm"
-                                variant="destructive"
-                                onClick={() => handleCancelTransfer(t.transfer_id, t.transfer_no)}
-                              >
-                                Отменить
                               </Button>
                             </div>
                           )}
@@ -481,14 +459,34 @@ function EditTransferDialog({
   const [comment, setComment] = useState(transfer.comment || "");
   const [error, setError] = useState<string | null>(null);
 
+  const oldQty = parseFloat(transfer.sent_quantity);
+  const qtyNum = parseFloat(quantity || "0");
+  const hasChanged = qtyNum !== oldQty;
+
   const mutation = useMutation({
-    mutationFn: () =>
-      correctTransfer(transfer.transfer_id, {
+    mutationFn: () => {
+      if (qtyNum === 0) {
+        return cancelTransfer(transfer.transfer_id);
+      }
+      return correctTransfer(transfer.transfer_id, {
         quantity,
         comment: comment || undefined,
-      }),
+      });
+    },
     onSuccess: () => {
-      toast({ variant: "success", title: "Количество изменено", description: `Передача ${transfer.transfer_no} успешно скорректирована` });
+      if (qtyNum === 0) {
+        toast({
+          variant: "success",
+          title: "Передача отменена",
+          description: `Передача ${transfer.transfer_no} успешно аннулирована`,
+        });
+      } else {
+        toast({
+          variant: "success",
+          title: "Количество изменено",
+          description: `Передача ${transfer.transfer_no} успешно скорректирована`,
+        });
+      }
       onSuccess();
     },
     onError: (err: unknown) => {
@@ -496,10 +494,6 @@ function EditTransferDialog({
       setError(message);
     },
   });
-
-  const oldQty = parseFloat(transfer.sent_quantity);
-  const qtyNum = parseFloat(quantity || "0");
-  const hasChanged = qtyNum !== oldQty;
 
   return (
     <Dialog open onOpenChange={(open) => !open && onClose()}>
@@ -538,6 +532,12 @@ function EditTransferDialog({
                 setError(null);
               }}
             />
+            {qtyNum === 0 && (
+              <div className="mt-1.5 text-xs text-amber-600 flex items-center gap-1 bg-amber-50 p-2 rounded border border-amber-200">
+                <AlertCircle className="h-3.5 w-3.5 flex-shrink-0" />
+                <span>Установка количества в 0 приведет к отмене (аннулированию) передачи.</span>
+              </div>
+            )}
           </div>
 
           <div>
@@ -560,8 +560,13 @@ function EditTransferDialog({
               Отмена
             </Button>
             <Button
-              onClick={() => mutation.mutate()}
-              disabled={mutation.isPending || qtyNum <= 0 || !hasChanged}
+              onClick={() => {
+                if (qtyNum === 0 && !confirm(`Вы действительно хотите аннулировать передачу ${transfer.transfer_no}? Это вернет остатки в исходное состояние.`)) {
+                  return;
+                }
+                mutation.mutate();
+              }}
+              disabled={mutation.isPending || qtyNum < 0 || !hasChanged}
             >
               {mutation.isPending ? "Сохранение..." : "Сохранить"}
             </Button>
