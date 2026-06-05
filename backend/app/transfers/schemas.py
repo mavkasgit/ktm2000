@@ -111,3 +111,9 @@ class ReadyToTransferTaskOut(BaseModel):
     next_step_sequence: int | None = None
     next_step_is_final: bool | None = None
     is_final: bool
+
+
+class CorrectTransferPayload(BaseModel):
+    quantity: Decimal
+    comment: str | None = None
+

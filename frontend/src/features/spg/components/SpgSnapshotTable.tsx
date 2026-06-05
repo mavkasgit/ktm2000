@@ -44,19 +44,51 @@ function SectionCell({ data }: { data: SpgSnapshotPerSection | undefined }) {
   );
 }
 
-function CompletionBar({ pct }: { pct: number }) {
+function MultiProgressBar({
+  planned,
+  available,
+  issued,
+  completionPct,
+}: {
+  planned: number;
+  available: number;
+  issued: number;
+  completionPct: number;
+}) {
+  const total = Math.max(planned, available + issued);
+  if (total <= 0) return <span className="text-xs text-muted-foreground">—</span>;
+
+  const availablePct = Math.min(100, (available / total) * 100);
+  const issuedPct = Math.min(100, (issued / total) * 100);
+  const completedPct = Math.min(100, completionPct);
+
   return (
-    <td className="p-2">
-      <div className="flex items-center gap-2">
-        <div className="h-2 w-16 rounded-full bg-muted">
-          <div
-            className="h-2 rounded-full bg-emerald-500 transition-all"
-            style={{ width: `${Math.min(100, pct)}%` }}
-          />
-        </div>
-        <span className="text-xs font-medium">{pct}%</span>
+    <div className="flex flex-col gap-1 w-28">
+      <div className="h-2.5 w-full rounded-full bg-muted overflow-hidden flex">
+        {/* Выполнено (зеленый) */}
+        <div
+          className="h-full bg-emerald-500 transition-all"
+          style={{ width: `${completedPct}%` }}
+          title={`Выполнено: ${completedPct}%`}
+        />
+        {/* Выдано в работу (оранжевый) */}
+        <div
+          className="h-full bg-amber-500 transition-all border-l border-background/20"
+          style={{ width: `${issuedPct}%` }}
+          title={`В работе: ${fmtNum(issued)} шт.`}
+        />
+        {/* Доступный задел (фиолетовый) */}
+        <div
+          className="h-full bg-purple-500 transition-all border-l border-background/20"
+          style={{ width: `${availablePct}%` }}
+          title={`Доступный задел: ${fmtNum(available)} шт.`}
+        />
       </div>
-    </td>
+      <div className="flex justify-between text-[10px] text-muted-foreground">
+        <span>План: {fmtNum(planned)}</span>
+        <span>Факт: {completedPct}%</span>
+      </div>
+    </div>
   );
 }
 
@@ -114,7 +146,14 @@ function DataRow({ row, sectionCodes, onShowRemainders }: { row: SpgSnapshotRow;
       {sectionCodes.map((code) => (
         <SectionCell key={code} data={row.per_section[code]} />
       ))}
-      <CompletionBar pct={row.completion_pct} />
+      <td className="p-2">
+        <MultiProgressBar
+          planned={row.planned_total}
+          available={row.spg_available}
+          issued={row.issued_total}
+          completionPct={row.completion_pct}
+        />
+      </td>
       <td className="p-2 text-right">
         {row.remainder_total > 0 ? (
           <Badge variant="secondary" className="text-purple-700">
@@ -226,7 +265,14 @@ export function SpgSnapshotTable({ snapshot, onShowProductRemainders }: SpgSnaps
                 </td>
               );
             })}
-            <CompletionBar pct={totalsPct} />
+            <td className="p-2">
+              <MultiProgressBar
+                planned={totals.planned}
+                available={totals.spg_available}
+                issued={totals.issued}
+                completionPct={totalsPct}
+              />
+            </td>
             <td className="p-2 text-right">
               {totals.remainders > 0 && (
                 <Badge variant="secondary" className="text-purple-700">

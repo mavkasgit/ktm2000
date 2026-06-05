@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { ArrowDownUp, History as HistoryIcon, Pencil, Plus, Trash2 } from "lucide-react";
+import { ArrowDownUp, History as HistoryIcon, Pencil, Plus, Trash2, Check, X, Search } from "lucide-react";
 import { IconAlertTriangle } from "@tabler/icons-react";
 
 import {
@@ -237,14 +237,57 @@ export function RemaindersListPanel({
   const [manualOpOpen, setManualOpOpen] = useState(false);
   const [historyRemainderId, setHistoryRemainderId] = useState<number | null>(null);
 
+  // Состояния для inline-редактирования
+  const [inlineEditingId, setInlineEditingId] = useState<number | null>(null);
+  const [inlineEditingQuantity, setInlineEditingQuantity] = useState("");
+  const [inlineEditingError, setInlineEditingError] = useState<string | null>(null);
+  const [isInlineSaving, setIsInlineSaving] = useState(false);
+
+  // Состояния для фильтрации
+  const [searchQuery, setSearchQuery] = useState("");
+  const [sectionFilter, setSectionFilter] = useState<string>("");
+
   const handleAdd = () => {
     setEditing(null);
     setDialogOpen(true);
   };
 
   const handleEdit = (r: SpgRemainder) => {
-    setEditing(r);
-    setDialogOpen(true);
+    setInlineEditingId(r.id);
+    setInlineEditingQuantity(String(r.remainder_quantity));
+    setInlineEditingError(null);
+  };
+
+  const handleInlineSave = async (r: SpgRemainder) => {
+    const qty = parseFloat(inlineEditingQuantity);
+    if (isNaN(qty) || qty <= 0) {
+      setInlineEditingError("Должно быть > 0");
+      return;
+    }
+    setIsInlineSaving(true);
+    setInlineEditingError(null);
+    try {
+      await updateManualRemainder(spgId, r.id, {
+        quantity: qty,
+        section_id: r.section_id,
+      });
+      setInlineEditingId(null);
+      setInlineEditingQuantity("");
+      onRefresh();
+    } catch (e: unknown) {
+      const msg = e && typeof e === "object" && "response" in e
+        ? (e as { response?: { data?: { detail?: string } } }).response?.data?.detail
+        : undefined;
+      setInlineEditingError(msg || "Ошибка сохранения");
+    } finally {
+      setIsInlineSaving(false);
+    }
+  };
+
+  const handleInlineCancel = () => {
+    setInlineEditingId(null);
+    setInlineEditingQuantity("");
+    setInlineEditingError(null);
   };
 
   const handleDelete = async (r: SpgRemainder) => {
@@ -253,11 +296,22 @@ export function RemaindersListPanel({
     onRefresh();
   };
 
+  // Применение фильтрации и поиска перед маппингом
+  const filteredRemainders = remainders.filter((r) => {
+    const matchesSearch =
+      !searchQuery.trim() ||
+      r.product_sku.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      r.product_name.toLowerCase().includes(searchQuery.toLowerCase());
+    const matchesSection =
+      sectionFilter === "" || r.section_id === Number(sectionFilter);
+    return matchesSearch && matchesSection;
+  });
+
   return (
     <div className="space-y-3">
       <div className="flex items-center justify-between">
         <h3 className="text-sm font-semibold">
-          Остатки ({remainders.length})
+          Остатки ({filteredRemainders.length} из {remainders.length})
         </h3>
         <div className="flex items-center gap-2">
           <Button size="sm" variant="outline" onClick={() => setManualOpOpen(true)}>
@@ -271,94 +325,170 @@ export function RemaindersListPanel({
         </div>
       </div>
 
+      {/* Панель поиска и фильтрации */}
+      <div className="flex flex-col sm:flex-row items-center gap-2 bg-muted/10 p-2 rounded-lg border">
+        <div className="relative w-full sm:flex-1">
+          <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
+          <Input
+            placeholder="Поиск по артикулу или названию..."
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            className="w-full bg-background pl-9 h-9"
+          />
+        </div>
+        <select
+          className="w-full sm:w-[200px] rounded-md border border-input px-3 py-2 text-sm bg-background h-9 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+          value={sectionFilter}
+          onChange={(e) => setSectionFilter(e.target.value)}
+        >
+          <option value="">Все участки</option>
+          {sections.map((s) => (
+            <option key={s.section_id} value={s.section_id}>
+              {s.section_code} — {s.section_name}
+            </option>
+          ))}
+        </select>
+      </div>
+
       {isLoading ? (
         <p className="text-sm text-muted-foreground">Загрузка...</p>
       ) : remainders.length === 0 ? (
         <p className="text-sm text-muted-foreground">Остатков нет</p>
       ) : (
         <div className="overflow-x-auto border rounded-lg">
-          <table className="w-full text-sm">
-            <thead className="bg-muted/50 border-b">
-              <tr>
-                <th className="p-2 text-left font-medium">Артикул</th>
-                <th className="p-2 text-left font-medium">Участок</th>
-                <th className="p-2 text-right font-medium">Кол-во</th>
-                <th className="p-2 text-center font-medium">Источник</th>
-                <th className="p-2 text-center font-medium">Действия</th>
-              </tr>
-            </thead>
-            <tbody>
-              {remainders.map((r) => {
-                const isNegative = r.remainder_quantity < 0;
-                return (
-                  <tr key={r.id} className="border-b hover:bg-muted/30">
-                    <td className="p-2">
-                      <div className="font-medium">{r.product_sku}</div>
-                      <div className="text-xs text-muted-foreground truncate max-w-[180px]">
-                        {r.product_name}
-                      </div>
-                    </td>
-                    <td className="p-2">
-                      <div className="text-xs font-medium">{r.section_code}</div>
-                      <div className="text-xs text-muted-foreground">{r.section_name}</div>
-                    </td>
-                    <td className="p-2 text-right">
-                      <span className={`font-semibold ${isNegative ? "text-amber-700" : ""}`}>
-                        {r.remainder_quantity}
-                      </span>
-                      {isNegative && (
-                        <span
-                          title="Остаток ушёл в минус — зафиксируйте ручной операцией"
-                          className="inline-block"
-                        >
-                          <Badge
-                            variant="destructive"
-                            className="ml-2 text-[10px] inline-flex items-center gap-1"
-                          >
-                            <IconAlertTriangle size={12} />
-                            Отрицательный
-                          </Badge>
-                        </span>
-                      )}
-                    </td>
-                    <td className="p-2 text-center">
-                      <Badge variant={r.source === "manual" ? "default" : "secondary"} className="text-xs">
-                        {r.source === "manual" ? "Ручной" : "Задача"}
-                      </Badge>
-                    </td>
-                    <td className="p-2 text-center">
-                      <div className="flex items-center justify-center gap-1">
-                        <button
-                          type="button"
-                          onClick={() => setHistoryRemainderId(r.id)}
-                          className="p-1 rounded hover:bg-accent text-blue-600"
-                          title="История"
-                        >
-                          <HistoryIcon className="h-3.5 w-3.5" />
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => handleEdit(r)}
-                          className="p-1 rounded hover:bg-accent"
-                          title="Редактировать"
-                        >
-                          <Pencil className="h-3.5 w-3.5" />
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => handleDelete(r)}
-                          className="p-1 rounded hover:bg-destructive/10 text-destructive"
-                          title="Удалить"
-                        >
-                          <Trash2 className="h-3.5 w-3.5" />
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
+          {filteredRemainders.length === 0 ? (
+            <div className="p-8 text-center text-sm text-muted-foreground">
+              Нет остатков, соответствующих критериям поиска
+            </div>
+          ) : (
+            <table className="w-full text-sm">
+              <thead className="bg-muted/50 border-b">
+                <tr>
+                  <th className="p-2 text-left font-medium">Артикул</th>
+                  <th className="p-2 text-left font-medium">Участок</th>
+                  <th className="p-2 text-right font-medium">Кол-во</th>
+                  <th className="p-2 text-center font-medium">Источник</th>
+                  <th className="p-2 text-center font-medium">Действия</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filteredRemainders.map((r) => {
+                  const isNegative = r.remainder_quantity < 0;
+                  return (
+                    <tr key={r.id} className="border-b hover:bg-muted/30">
+                      <td className="p-2">
+                        <div className="font-medium">{r.product_sku}</div>
+                        <div className="text-xs text-muted-foreground truncate max-w-[180px]">
+                          {r.product_name}
+                        </div>
+                      </td>
+                      <td className="p-2">
+                        <div className="text-xs font-medium">{r.section_code}</div>
+                        <div className="text-xs text-muted-foreground">{r.section_name}</div>
+                      </td>
+                      <td className="p-2 text-right">
+                        {inlineEditingId === r.id ? (
+                          <div className="flex flex-col items-end gap-1">
+                            <Input
+                              type="number"
+                              className="h-8 w-24 text-right p-1"
+                              min="0"
+                              step="any"
+                              value={inlineEditingQuantity}
+                              onChange={(e) => setInlineEditingQuantity(e.target.value)}
+                              disabled={isInlineSaving}
+                              autoFocus
+                            />
+                            {inlineEditingError && (
+                              <div className="text-[10px] text-destructive max-w-[120px] text-right leading-tight">
+                                {inlineEditingError}
+                              </div>
+                            )}
+                          </div>
+                        ) : (
+                          <>
+                            <span className={`font-semibold ${isNegative ? "text-amber-700" : ""}`}>
+                              {r.remainder_quantity}
+                            </span>
+                            {isNegative && (
+                              <span
+                                title="Остаток ушёл в минус — зафиксируйте ручной операцией"
+                                className="inline-block"
+                              >
+                                <Badge
+                                  variant="destructive"
+                                  className="ml-2 text-[10px] inline-flex items-center gap-1"
+                                >
+                                  <IconAlertTriangle size={12} />
+                                  Отрицательный
+                                </Badge>
+                              </span>
+                            )}
+                          </>
+                        )}
+                      </td>
+                      <td className="p-2 text-center">
+                        <Badge variant={r.source === "manual" ? "default" : "secondary"} className="text-xs">
+                          {r.source === "manual" ? "Ручной" : "Задача"}
+                        </Badge>
+                      </td>
+                      <td className="p-2 text-center">
+                        {inlineEditingId === r.id ? (
+                          <div className="flex items-center justify-center gap-1">
+                            <button
+                              type="button"
+                              onClick={() => handleInlineSave(r)}
+                              disabled={isInlineSaving}
+                              className="p-1 rounded hover:bg-emerald-100 text-emerald-600 dark:hover:bg-emerald-950/30"
+                              title="Сохранить"
+                            >
+                              <Check className="h-4 w-4" />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={handleInlineCancel}
+                              disabled={isInlineSaving}
+                              className="p-1 rounded hover:bg-rose-100 text-rose-600 dark:hover:bg-rose-950/30"
+                              title="Отменить"
+                            >
+                              <X className="h-4 w-4" />
+                            </button>
+                          </div>
+                        ) : (
+                          <div className="flex items-center justify-center gap-1">
+                            <button
+                              type="button"
+                              onClick={() => setHistoryRemainderId(r.id)}
+                              className="p-1 rounded hover:bg-accent text-blue-600"
+                              title="История"
+                            >
+                              <HistoryIcon className="h-3.5 w-3.5" />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleEdit(r)}
+                              className="p-1 rounded hover:bg-accent"
+                              title="Редактировать"
+                            >
+                              <Pencil className="h-3.5 w-3.5" />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleDelete(r)}
+                              className="p-1 rounded hover:bg-destructive/10 text-destructive"
+                              title="Удалить"
+                            >
+                              <Trash2 className="h-3.5 w-3.5" />
+                            </button>
+                          </div>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          )}
         </div>
       )}
 

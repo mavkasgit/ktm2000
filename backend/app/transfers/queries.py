@@ -326,3 +326,97 @@ async def list_ready_to_transfer(
         )
 
     return {"items": items, "filters": {"section_id": section_id, "spg_id": spg_id}}
+
+
+async def get_section_transfer_history(
+    db: AsyncSession,
+    *,
+    section_id: int,
+    limit: int = 100,
+) -> dict:
+    """Return both incoming and outgoing transfers for a section (history log)."""
+    from_section = aliased(Section)
+    to_section = aliased(Section)
+    from_task = aliased(WorkTask)
+    to_task = aliased(WorkTask)
+    from_stage = aliased(RouteStage)
+    to_stage = aliased(RouteStage)
+    from_line = aliased(SectionPlanLine)
+
+    rows = (
+        await db.execute(
+            select(
+                Transfer,
+                from_section,
+                to_section,
+                from_task,
+                to_task,
+                from_stage,
+                to_stage,
+                from_line,
+                Product.sku,
+            )
+            .join(from_section, from_section.id == Transfer.from_section_id)
+            .join(to_section, to_section.id == Transfer.to_section_id)
+            .join(from_task, from_task.id == Transfer.from_task_id)
+            .join(to_task, to_task.id == Transfer.to_task_id)
+            .join(from_stage, from_stage.id == from_task.route_stage_id)
+            .join(to_stage, to_stage.id == to_task.route_stage_id)
+            .join(from_line, from_line.id == from_task.section_plan_line_id)
+            .join(Product, Product.id == from_task.product_id)
+            .where(
+                (Transfer.from_section_id == section_id) | (Transfer.to_section_id == section_id)
+            )
+            .order_by(Transfer.created_at.desc(), Transfer.id.desc())
+            .limit(limit)
+        )
+    ).all()
+
+    transfers = []
+    for transfer, from_sec, to_sec, src_task, dst_task, src_stage, dst_stage, src_line, product_sku in rows:
+        sent = _to_decimal(transfer.sent_quantity or 0)
+        accepted = _to_decimal(transfer.accepted_quantity or 0)
+        rejected = _to_decimal(transfer.rejected_quantity or 0)
+        remaining = sent - accepted - rejected
+        if remaining < 0:
+            remaining = Decimal("0")
+
+        from_op_name = ", ".join(op.operation_name for op in src_stage.operations) if src_stage and src_stage.operations else ""
+        to_op_name = ", ".join(op.operation_name for op in dst_stage.operations) if dst_stage and dst_stage.operations else ""
+
+        transfers.append(
+            {
+                "transfer_id": transfer.id,
+                "transfer_no": transfer.transfer_no,
+                "status": transfer.status.value,
+                "from_task_id": transfer.from_task_id,
+                "to_task_id": transfer.to_task_id,
+                "from_section_id": transfer.from_section_id,
+                "from_section_code": from_sec.code,
+                "from_section_name": from_sec.name,
+                "to_section_id": transfer.to_section_id,
+                "to_section_code": to_sec.code,
+                "to_section_name": to_sec.name,
+                "from_operation_name": from_op_name,
+                "to_operation_name": to_op_name,
+                "sent_quantity": _fmt_qty(sent),
+                "accepted_quantity": _fmt_qty(accepted),
+                "rejected_quantity": _fmt_qty(rejected),
+                "remaining_quantity": _fmt_qty(remaining),
+                "comment": transfer.comment,
+                "sent_at": transfer.sent_at.isoformat() if transfer.sent_at else None,
+                "created_at": transfer.created_at.isoformat() if transfer.created_at else None,
+                "from_task_status": src_task.status.value,
+                "to_task_status": dst_task.status.value,
+                "product_sku": product_sku,
+                "from_line_id": src_line.id,
+                "from_line_sequence": src_line.sequence,
+                "plan_position_id": src_line.plan_position_id,
+            }
+        )
+
+    return {
+        "section_id": section_id,
+        "transfers": transfers,
+    }
+

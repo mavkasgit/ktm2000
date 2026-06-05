@@ -16,6 +16,7 @@ existing UI keeps functioning during the migration.
 
 from __future__ import annotations
 
+from decimal import Decimal
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Header, Query
@@ -25,7 +26,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import READER_ROLES, WRITER_ROLES, require_role
 from app.api.deps import get_current_user
 from app.core.database import get_db
-from app.models.transfer import Transfer
+from app.models.transfer import Transfer, TransferStatus
 from app.models.user import User
 from app.models.work_task import WorkTask
 
@@ -33,16 +34,20 @@ from app.transfers.queries import (
     get_section_incoming_transfers,
     get_transfer_details,
     list_ready_to_transfer,
+    get_section_transfer_history,
 )
 from app.transfers.schemas import (
     AcceptTransferPayload,
     CreateTransferPayload,
     ResolveDiscrepancyPayload,
+    CorrectTransferPayload,
 )
 from app.transfers.services import (
     resolve_transfer_discrepancy_link,
     transfer_receive,
     transfer_send,
+    correct_transfer,
+    cancel_transfer,
 )
 
 router = APIRouter(prefix="/transfers", tags=["transfers"])
@@ -94,7 +99,8 @@ async def create_transfer(
     """
     await _ensure_task_lock(db, payload.from_task_id, locked_section_id)
     try:
-        return await transfer_send(
+        # 1. Send transfer (status 'sent' and create movements/record)
+        send_res = await transfer_send(
             db,
             from_task_id=payload.from_task_id,
             to_task_id=payload.to_task_id,
@@ -106,6 +112,31 @@ async def create_transfer(
             performed_at=payload.performed_at,
             accounted_at=payload.accounted_at,
         )
+        if send_res.get("idempotent_replay"):
+            return send_res
+
+        # 2. Auto-accept immediately (status 'accepted' and create receive movement)
+        rec_idempotency = f"{payload.idempotency_key}:auto_receive" if payload.idempotency_key else None
+        
+        receive_res = await transfer_receive(
+            db,
+            transfer_id=send_res["transfer_id"],
+            accepted_quantity=payload.quantity,
+            rejected_quantity=Decimal("0"),
+            actor_id=current_user.id,
+            comment=payload.comment,
+            idempotency_key=rec_idempotency,
+            executor_user_id=payload.executor_user_id,
+            performed_at=payload.performed_at,
+            accounted_at=payload.accounted_at,
+        )
+        
+        return {
+            "transfer_id": send_res["transfer_id"],
+            "transfer_no": send_res["transfer_no"],
+            "status": receive_res["status"],
+            "to_task_id": send_res["to_task_id"],
+        }
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -153,6 +184,14 @@ async def accept_transfer(
     locked_section_id: int | None = Depends(get_single_window_locked_section_id),
 ) -> dict:
     await _ensure_transfer_target_lock(db, transfer_id, locked_section_id)
+    # Compatibility: if already accepted, just return success
+    transfer = await db.get(Transfer, transfer_id)
+    if transfer is not None and transfer.status == TransferStatus.accepted:
+        return {
+            "transfer_id": transfer.id,
+            "status": transfer.status.value,
+            "discrepancy_id": None,
+        }
     try:
         return await transfer_receive(
             db,
@@ -202,3 +241,57 @@ async def transfer_details(transfer_id: int, db: AsyncSession = Depends(get_db))
         return await get_transfer_details(db, transfer_id)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.put("/{transfer_id}", dependencies=[Depends(require_role(list(WRITER_ROLES)))])
+async def correct_transfer_qty(
+    transfer_id: int,
+    payload: CorrectTransferPayload,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    try:
+        return await correct_transfer(
+            db,
+            transfer_id=transfer_id,
+            new_quantity=payload.quantity,
+            actor_id=current_user.id,
+            comment=payload.comment,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/{transfer_id}/cancel", dependencies=[Depends(require_role(list(WRITER_ROLES)))])
+async def cancel_transfer_qty(
+    transfer_id: int,
+    comment: Optional[str] = Query(default=None),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    try:
+        return await cancel_transfer(
+            db,
+            transfer_id=transfer_id,
+            actor_id=current_user.id,
+            comment=comment,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get(
+    "/sections/{section_id}/history",
+    dependencies=[Depends(require_role(list(READER_ROLES)))],
+)
+async def transfer_history(
+    section_id: int,
+    limit: int = Query(default=100),
+    db: AsyncSession = Depends(get_db),
+    locked_section_id: int | None = Depends(get_single_window_locked_section_id),
+) -> dict:
+    if locked_section_id is not None and section_id != locked_section_id:
+        raise HTTPException(status_code=403, detail=LOCKED_SECTION_ERROR)
+    return await get_section_transfer_history(db, section_id=section_id, limit=limit)
+
+

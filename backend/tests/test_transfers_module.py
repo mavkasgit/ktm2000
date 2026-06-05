@@ -280,7 +280,7 @@ async def test_list_ready_to_transfer_spg_filter(client, session) -> None:
 
 @pytest.mark.asyncio
 async def test_new_transfers_send_and_accept_via_new_endpoints(client, session) -> None:
-    """End-to-end happy path through the new /transfers endpoints."""
+    """End-to-end happy path: send auto-accepts and updates target balances immediately."""
     user = await _make_user(session, "xfer-new@test.local")
     headers = _auth_headers(user)
     ctx = await _make_six_section_fixture(session, sku="FG-XF-NEW", planned_qty=Decimal("100"))
@@ -300,7 +300,7 @@ async def test_new_transfers_send_and_accept_via_new_endpoints(client, session) 
         headers=headers,
     )
 
-    # SEND via the new /transfers endpoint
+    # SEND via the new /transfers endpoint (auto-accepts immediately)
     send = await client.post(
         "/api/transfers",
         json={"from_task_id": first_task.id, "to_task_id": second_task.id, "quantity": "100", "idempotency_key": "xf-new:send"},
@@ -308,10 +308,10 @@ async def test_new_transfers_send_and_accept_via_new_endpoints(client, session) 
     )
     assert send.status_code == 200, send.text
     send_body = send.json()
-    assert send_body["status"] == "sent"
+    assert send_body["status"] == "accepted"
     transfer_id = send_body["transfer_id"]
 
-    # ACCEPT via the new /transfers endpoint
+    # ACCEPT endpoint handles compatibility with already accepted transfers
     accept = await client.post(
         f"/api/transfers/{transfer_id}/accept",
         json={"accepted_quantity": "100", "rejected_quantity": "0", "idempotency_key": "xf-new:accept"},
@@ -320,21 +320,21 @@ async def test_new_transfers_send_and_accept_via_new_endpoints(client, session) 
     assert accept.status_code == 200, accept.text
     assert accept.json()["status"] == "accepted"
 
-    # Verify GET /transfers/{id} returns the new shape
+    # Verify GET /transfers/{id} returns accepted
     details = await client.get(f"/api/transfers/{transfer_id}", headers=headers)
     assert details.status_code == 200
     body = details.json()
     assert body["id"] == transfer_id
     assert body["sent_quantity"] == "100"
     assert body["accepted_quantity"] == "100"
-    assert body["discrepancies"] == []
 
 
 @pytest.mark.asyncio
-async def test_new_transfers_partial_accept_creates_discrepancy(client, session) -> None:
-    user = await _make_user(session, "xfer-partial@test.local")
+async def test_transfers_correction_and_validation(client, session) -> None:
+    """Test editing transfer quantities and validating limit rules."""
+    user = await _make_user(session, "xfer-correct@test.local")
     headers = _auth_headers(user)
-    ctx = await _make_six_section_fixture(session, sku="FG-XF-PART", planned_qty=Decimal("100"))
+    ctx = await _make_six_section_fixture(session, sku="FG-XF-CORRECT", planned_qty=Decimal("100"))
     await _release_via_take_to_work(client, ctx["position"].id)
     tasks = await _tasks_by_sequence(session, ctx["position"].id)
     first_task = tasks[0]
@@ -342,32 +342,142 @@ async def test_new_transfers_partial_accept_creates_discrepancy(client, session)
 
     await client.post(
         f"/api/shopfloor/tasks/{first_task.id}/issue",
-        json={"quantity": "100", "idempotency_key": "xf-partial:issue"},
+        json={"quantity": "100", "idempotency_key": "xf-corr:issue"},
         headers=headers,
     )
     await client.post(
         f"/api/shopfloor/tasks/{first_task.id}/complete",
-        json={"good_quantity": "100", "defect_quantity": "0", "idempotency_key": "xf-partial:complete"},
+        json={"good_quantity": "100", "defect_quantity": "0", "idempotency_key": "xf-corr:complete"},
         headers=headers,
     )
 
+    # 1. Create transfer
     send = await client.post(
         "/api/transfers",
-        json={"from_task_id": first_task.id, "to_task_id": second_task.id, "quantity": "100", "idempotency_key": "xf-partial:send"},
+        json={"from_task_id": first_task.id, "to_task_id": second_task.id, "quantity": "50", "idempotency_key": "xf-corr:send"},
         headers=headers,
     )
     assert send.status_code == 200
     transfer_id = send.json()["transfer_id"]
 
-    accept = await client.post(
-        f"/api/transfers/{transfer_id}/accept",
-        json={"accepted_quantity": "90", "rejected_quantity": "10", "reason": "short", "idempotency_key": "xf-partial:accept"},
+    # Verify cache
+    await session.commit()
+    ref_first = await session.get(WorkTask, first_task.id)
+    ref_second = await session.get(WorkTask, second_task.id)
+    assert ref_first.cached_transferred_quantity == Decimal("50")
+    assert ref_second.cached_available_quantity == Decimal("50")
+
+    # 2. Correct quantity: 50 -> 70 (valid)
+    correct = await client.put(
+        f"/api/transfers/{transfer_id}",
+        json={"quantity": 70, "comment": "Increased"},
         headers=headers,
     )
-    assert accept.status_code == 200
-    body = accept.json()
-    assert body["status"] == "partially_accepted"
-    assert body["discrepancy_id"] is not None
+    assert correct.status_code == 200
+    assert correct.json()["quantity"] == "70"
+
+    await session.commit()
+    ref_first = await session.get(WorkTask, first_task.id)
+    ref_second = await session.get(WorkTask, second_task.id)
+    assert ref_first.cached_transferred_quantity == Decimal("70")
+    assert ref_second.cached_available_quantity == Decimal("70")
+
+    # 3. Correct quantity exceeds source limit (completed is 100, we try to set to 120)
+    correct_fail = await client.put(
+        f"/api/transfers/{transfer_id}",
+        json={"quantity": 120},
+        headers=headers,
+    )
+    assert correct_fail.status_code == 400
+    assert "exceeds" in correct_fail.json()["detail"]
+
+    # 4. Correct quantity below target task's availability limit.
+    # First, let's issue 60 parts in second task (so only 10 available remain)
+    await client.post(
+        f"/api/shopfloor/tasks/{second_task.id}/issue",
+        json={"quantity": "60", "idempotency_key": "xf-corr:sec-issue"},
+        headers=headers,
+    )
+    
+    # Try to reduce transfer from 70 to 50 (takes 20 parts away, but only 10 are available)
+    correct_fail2 = await client.put(
+        f"/api/transfers/{transfer_id}",
+        json={"quantity": 50},
+        headers=headers,
+    )
+    assert correct_fail2.status_code == 400
+    assert "already consumed" in correct_fail2.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_transfers_cancellation_and_validation(client, session) -> None:
+    """Test cancelling transfers and validate limits."""
+    user = await _make_user(session, "xfer-cancel@test.local")
+    headers = _auth_headers(user)
+    ctx = await _make_six_section_fixture(session, sku="FG-XF-CANCEL", planned_qty=Decimal("100"))
+    await _release_via_take_to_work(client, ctx["position"].id)
+    tasks = await _tasks_by_sequence(session, ctx["position"].id)
+    first_task = tasks[0]
+    second_task = tasks[1]
+
+    await client.post(
+        f"/api/shopfloor/tasks/{first_task.id}/issue",
+        json={"quantity": "100", "idempotency_key": "xf-cnl:issue"},
+        headers=headers,
+    )
+    await client.post(
+        f"/api/shopfloor/tasks/{first_task.id}/complete",
+        json={"good_quantity": "100", "defect_quantity": "0", "idempotency_key": "xf-cnl:complete"},
+        headers=headers,
+    )
+
+    # 1. Create transfer 1 (40 parts)
+    send = await client.post(
+        "/api/transfers",
+        json={"from_task_id": first_task.id, "to_task_id": second_task.id, "quantity": "40", "idempotency_key": "xf-cnl:send-1"},
+        headers=headers,
+    )
+    assert send.status_code == 200
+    transfer_id_1 = send.json()["transfer_id"]
+
+    # Issue 30 parts on target (10 remains available from transfer 1)
+    await client.post(
+        f"/api/shopfloor/tasks/{second_task.id}/issue",
+        json={"quantity": "30", "idempotency_key": "xf-cnl:sec-issue"},
+        headers=headers,
+    )
+
+    # Cancel transfer 1 should fail (trying to take 40 away, but only 10 available)
+    cancel_fail = await client.post(
+        f"/api/transfers/{transfer_id_1}/cancel",
+        headers=headers,
+    )
+    assert cancel_fail.status_code == 400
+    assert "already consumed" in cancel_fail.json()["detail"]
+
+    # 2. Create transfer 2 (50 parts)
+    send2 = await client.post(
+        "/api/transfers",
+        json={"from_task_id": first_task.id, "to_task_id": second_task.id, "quantity": "50", "idempotency_key": "xf-cnl:send-2"},
+        headers=headers,
+    )
+    assert send2.status_code == 200
+    transfer_id_2 = send2.json()["transfer_id"]
+
+    # Cancel transfer 2 should succeed (the 50 parts are fully available)
+    cancel = await client.post(
+        f"/api/transfers/{transfer_id_2}/cancel",
+        headers=headers,
+    )
+    assert cancel.status_code == 200
+    assert cancel.json()["status"] == "cancelled"
+
+    await session.commit()
+    ref_first = await session.get(WorkTask, first_task.id)
+    ref_second = await session.get(WorkTask, second_task.id)
+    # Only transfer 1 (40 parts) should remain active
+    assert ref_first.cached_transferred_quantity == Decimal("40")
+    assert ref_second.cached_available_quantity == Decimal("10") # 40 received - 30 issued = 10 available
 
 
 # ─── Decoupled "completed" status ────────────────────────────────────────────

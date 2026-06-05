@@ -25,10 +25,11 @@ import {
 } from "@/shared/ui";
 import { listSections } from "@/shared/api/sections";
 import {
-  acceptTransfer,
+  cancelTransfer,
+  correctTransfer,
   createTransfer,
-  listIncomingTransfers,
   listReadyToTransfer,
+  listTransferHistory,
   type IncomingTransfer,
   type ReadyToTransferTask,
 } from "@/shared/api/transfers";
@@ -69,7 +70,7 @@ export function TransfersPage() {
   const queryClient = useQueryClient();
   const [sectionId, setSectionId] = useState<number | null>(null);
   const [sendTask, setSendTask] = useState<ReadyToTransferTask | null>(null);
-  const [acceptTransferRecord, setAcceptTransferRecord] = useState<IncomingTransfer | null>(null);
+  const [editTransferRecord, setEditTransferRecord] = useState<IncomingTransfer | null>(null);
 
   const { data: sections } = useQuery({
     queryKey: ["sections"],
@@ -84,19 +85,34 @@ export function TransfersPage() {
     enabled: activeSectionId != null,
   });
 
-  const { data: incomingData, isLoading: incomingLoading, refetch: refetchIncoming } = useQuery({
-    queryKey: ["transfers-incoming", activeSectionId],
-    queryFn: () => (activeSectionId != null ? listIncomingTransfers(activeSectionId) : null),
+  const { data: historyData, isLoading: historyLoading, refetch: refetchHistory } = useQuery({
+    queryKey: ["transfers-history", activeSectionId],
+    queryFn: () => (activeSectionId != null ? listTransferHistory(activeSectionId) : null),
     enabled: activeSectionId != null,
   });
 
   const readyItems = readyData?.items ?? [];
-  const incomingItems = incomingData?.incoming_transfers ?? [];
+  const historyItems = historyData?.transfers ?? [];
 
   function handleRefresh() {
     void refetchReady();
-    void refetchIncoming();
+    void refetchHistory();
   }
+
+  const handleCancelTransfer = async (id: number, transferNo: string) => {
+    if (!confirm(`Вы действительно хотите аннулировать передачу ${transferNo}? Это вернет остатки в исходное состояние.`)) {
+      return;
+    }
+    try {
+      await cancelTransfer(id);
+      toast({ variant: "success", title: "Передача отменена", description: `Запись ${transferNo} успешно аннулирована` });
+      void queryClient.invalidateQueries({ queryKey: ["transfers-ready"] });
+      void queryClient.invalidateQueries({ queryKey: ["transfers-history"] });
+    } catch (err) {
+      const msg = getErrorMessage(err);
+      toast({ variant: "destructive", title: "Ошибка отмены", description: msg });
+    }
+  };
 
   return (
     <div className="p-6 space-y-6 max-w-screen-2xl">
@@ -208,52 +224,84 @@ export function TransfersPage() {
           <CardHeader className="flex flex-row items-center justify-between">
             <CardTitle className="flex items-center gap-2">
               <Inbox className="h-4 w-4" />
-              Входящие передачи
-              {incomingItems.length > 0 && <Badge variant="secondary">{incomingItems.length}</Badge>}
+              Журнал передач
+              {historyItems.length > 0 && <Badge variant="secondary">{historyItems.length}</Badge>}
             </CardTitle>
           </CardHeader>
           <CardContent>
-            {incomingLoading ? (
+            {historyLoading ? (
               <div className="text-sm text-muted-foreground py-4 text-center">Загрузка…</div>
-            ) : incomingItems.length === 0 ? (
+            ) : historyItems.length === 0 ? (
               <div className="text-sm text-muted-foreground py-6 text-center">
-                Нет открытых входящих передач для выбранного участка.
+                Нет записей в журнале передач для выбранного участка.
               </div>
             ) : (
               <Table>
                 <TableHeader>
                   <TableRow>
+                    <TableHead>Направление</TableHead>
                     <TableHead>№</TableHead>
-                    <TableHead>Откуда</TableHead>
+                    <TableHead>Контрагент</TableHead>
                     <TableHead>Артикул</TableHead>
-                    <TableHead className="text-right">Отправлено</TableHead>
+                    <TableHead className="text-right">Количество</TableHead>
+                    <TableHead>Статус</TableHead>
                     <TableHead />
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {incomingItems.map((t) => (
-                    <TableRow key={t.transfer_id}>
-                      <TableCell className="font-mono text-xs">{t.transfer_no}</TableCell>
-                      <TableCell>
-                        <div className="text-xs">
-                          <div className="font-medium">{t.from_section_name}</div>
-                          <div className="text-muted-foreground">{t.from_operation_name ?? "—"}</div>
-                        </div>
-                      </TableCell>
-                      <TableCell className="text-xs">{t.product_sku}</TableCell>
-                      <TableCell className="text-right tabular-nums">
-                        {fmtQty(t.sent_quantity)}
-                        <div className="text-[10px] text-muted-foreground">
-                          ост. {fmtQty(t.remaining_quantity)}
-                        </div>
-                      </TableCell>
-                      <TableCell>
-                        <Button size="sm" variant="outline" onClick={() => setAcceptTransferRecord(t)}>
-                          Принять
-                        </Button>
-                      </TableCell>
-                    </TableRow>
-                  ))}
+                  {historyItems.map((t) => {
+                    const isIncoming = t.to_section_id === activeSectionId;
+                    const isCancelled = t.status === "cancelled";
+                    return (
+                      <TableRow key={t.transfer_id} className={isCancelled ? "opacity-60" : ""}>
+                        <TableCell>
+                          <Badge variant={isIncoming ? "default" : "secondary"}>
+                            {isIncoming ? "Входящая" : "Исходящая"}
+                          </Badge>
+                        </TableCell>
+                        <TableCell className="font-mono text-xs">{t.transfer_no}</TableCell>
+                        <TableCell>
+                          <div className="text-xs">
+                            <div className="font-medium">
+                              {isIncoming ? t.from_section_name : t.to_section_name}
+                            </div>
+                            <div className="text-muted-foreground">
+                              {isIncoming ? t.from_operation_name : t.to_operation_name}
+                            </div>
+                          </div>
+                        </TableCell>
+                        <TableCell className="text-xs font-medium">{t.product_sku}</TableCell>
+                        <TableCell className="text-right tabular-nums font-semibold">
+                          {fmtQty(t.sent_quantity)}
+                        </TableCell>
+                        <TableCell>
+                          <Badge variant={isCancelled ? "destructive" : "outline"}>
+                            {isCancelled ? "Аннулирована" : "Принята"}
+                          </Badge>
+                        </TableCell>
+                        <TableCell>
+                          {!isCancelled && (
+                            <div className="flex gap-1 justify-end">
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                onClick={() => setEditTransferRecord(t)}
+                              >
+                                Изменить
+                              </Button>
+                              <Button
+                                size="sm"
+                                variant="destructive"
+                                onClick={() => handleCancelTransfer(t.transfer_id, t.transfer_no)}
+                              >
+                                Отменить
+                              </Button>
+                            </div>
+                          )}
+                        </TableCell>
+                      </TableRow>
+                    );
+                  })}
                 </TableBody>
               </Table>
             )}
@@ -268,19 +316,19 @@ export function TransfersPage() {
           onSuccess={() => {
             setSendTask(null);
             void queryClient.invalidateQueries({ queryKey: ["transfers-ready"] });
-            void queryClient.invalidateQueries({ queryKey: ["transfers-incoming"] });
+            void queryClient.invalidateQueries({ queryKey: ["transfers-history"] });
           }}
         />
       )}
 
-      {acceptTransferRecord && activeSectionId != null && (
-        <AcceptTransferDialog
-          transfer={acceptTransferRecord}
-          sectionId={activeSectionId}
-          onClose={() => setAcceptTransferRecord(null)}
+      {editTransferRecord && (
+        <EditTransferDialog
+          transfer={editTransferRecord}
+          onClose={() => setEditTransferRecord(null)}
           onSuccess={() => {
-            setAcceptTransferRecord(null);
-            void queryClient.invalidateQueries({ queryKey: ["transfers-incoming"] });
+            setEditTransferRecord(null);
+            void queryClient.invalidateQueries({ queryKey: ["transfers-ready"] });
+            void queryClient.invalidateQueries({ queryKey: ["transfers-history"] });
           }}
         />
       )}
@@ -417,153 +465,89 @@ function CreateTransferDialog({
 }
 
 // ---------------------------------------------------------------------------
-// Accept transfer dialog
+// Edit transfer dialog
 // ---------------------------------------------------------------------------
 
-function AcceptTransferDialog({
+function EditTransferDialog({
   transfer,
-  sectionId,
   onClose,
   onSuccess,
 }: {
   transfer: IncomingTransfer;
-  sectionId: number;
   onClose: () => void;
   onSuccess: () => void;
 }) {
-  const remaining = parseFloat(transfer.remaining_quantity);
-  const [accepted, setAccepted] = useState(transfer.remaining_quantity);
-  const [rejected, setRejected] = useState("0");
-  const [reason, setReason] = useState("");
-  const [comment, setComment] = useState("");
+  const [quantity, setQuantity] = useState(transfer.sent_quantity);
+  const [comment, setComment] = useState(transfer.comment || "");
   const [error, setError] = useState<string | null>(null);
 
   const mutation = useMutation({
     mutationFn: () =>
-      acceptTransfer(
-        transfer.transfer_id,
-        {
-          accepted_quantity: accepted,
-          rejected_quantity: rejected,
-          reason: reason || undefined,
-          comment: comment || undefined,
-          idempotency_key: makeIdempotencyKey(`transfer-accept-${transfer.transfer_id}`),
-        },
-        { singleSectionLockId: sectionId },
-      ),
+      correctTransfer(transfer.transfer_id, {
+        quantity,
+        comment: comment || undefined,
+      }),
     onSuccess: () => {
-      toast({ variant: "success", title: "Передача принята", description: transfer.transfer_no });
+      toast({ variant: "success", title: "Количество изменено", description: `Передача ${transfer.transfer_no} успешно скорректирована` });
       onSuccess();
     },
     onError: (err: unknown) => {
       const message = getErrorMessage(err);
-      const hint = conflictHintFromTransferError(message);
-      setError(hint ?? message);
+      setError(message);
     },
   });
 
-  const acc = parseFloat(accepted || "0");
-  const rej = parseFloat(rejected || "0");
-  const sumExceeds = acc + rej > remaining;
-  const sumZero = acc + rej <= 0;
+  const oldQty = parseFloat(transfer.sent_quantity);
+  const qtyNum = parseFloat(quantity || "0");
+  const hasChanged = qtyNum !== oldQty;
 
   return (
     <Dialog open onOpenChange={(open) => !open && onClose()}>
       <DialogContent className="max-w-md">
         <DialogHeader>
-          <DialogTitle>Принять передачу {transfer.transfer_no}</DialogTitle>
+          <DialogTitle>Корректировка количества: {transfer.transfer_no}</DialogTitle>
           <DialogDescription>
-            Откуда: {transfer.from_section_name} ({transfer.from_operation_name ?? "—"})
+            Изменение объема передаваемых деталей между участками.
           </DialogDescription>
         </DialogHeader>
         <div className="space-y-3">
           <div className="rounded-lg border bg-muted/20 p-3 text-xs grid grid-cols-2 gap-2">
             <div>
-              Отправлено: <span className="font-medium">{fmtQty(transfer.sent_quantity)}</span>
+              Отправитель: <span className="font-medium">{transfer.from_section_name}</span>
             </div>
             <div>
-              Осталось: <span className="font-medium">{fmtQty(transfer.remaining_quantity)}</span>
+              Получатель: <span className="font-medium">{transfer.to_section_name}</span>
             </div>
-            <div className="col-span-2">Артикул: {transfer.product_sku}</div>
+            <div className="col-span-2">
+              Продукт: <span className="font-medium">{transfer.product_sku}</span>
+            </div>
+            <div className="col-span-2">
+              Текущее количество: <span className="font-medium">{fmtQty(transfer.sent_quantity)}</span>
+            </div>
           </div>
 
           <div>
-            <label className="text-sm font-medium">Принято</label>
+            <label className="text-sm font-medium">Новое количество</label>
             <Input
               type="number"
               step="1"
               min="0"
-              value={accepted}
+              value={quantity}
               onChange={(e) => {
-                setAccepted(e.target.value);
+                setQuantity(e.target.value);
                 setError(null);
               }}
             />
           </div>
-          <div>
-            <label className="text-sm font-medium">Отклонено (брак/недостача)</label>
-            <Input
-              type="number"
-              step="1"
-              min="0"
-              value={rejected}
-              onChange={(e) => {
-                setRejected(e.target.value);
-                setError(null);
-              }}
-            />
-            <div className="mt-2 flex flex-wrap gap-1">
-              <Button
-                type="button"
-                size="sm"
-                variant="outline"
-                onClick={() => {
-                  setAccepted(transfer.remaining_quantity);
-                  setRejected("0");
-                }}
-              >
-                Всё принять
-              </Button>
-              <Button
-                type="button"
-                size="sm"
-                variant="outline"
-                onClick={() => {
-                  setAccepted("0");
-                  setRejected(transfer.remaining_quantity);
-                }}
-              >
-                Всё отклонить
-              </Button>
-            </div>
-          </div>
-
-          {(rej > 0 || reason) && (
-            <div>
-              <label className="text-sm font-medium">Причина отклонения</label>
-              <Input value={reason} onChange={(e) => setReason(e.target.value)} />
-            </div>
-          )}
 
           <div>
-            <label className="text-sm font-medium">Комментарий</label>
+            <label className="text-sm font-medium">Причина изменения / Комментарий</label>
             <Input
               value={comment}
               onChange={(e) => setComment(e.target.value)}
-              placeholder="Опционально"
+              placeholder="Укажите причину корректировки"
             />
           </div>
-
-          {sumExceeds && (
-            <div className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-800">
-              Сумма «принято + отклонено» больше отправленного количества.
-            </div>
-          )}
-          {sumZero && (
-            <div className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-800">
-              Укажите количество в одном из полей.
-            </div>
-          )}
 
           {error && (
             <div className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-800">
@@ -577,9 +561,9 @@ function AcceptTransferDialog({
             </Button>
             <Button
               onClick={() => mutation.mutate()}
-              disabled={mutation.isPending || sumExceeds || sumZero}
+              disabled={mutation.isPending || qtyNum <= 0 || !hasChanged}
             >
-              {mutation.isPending ? "Принятие..." : "Подтвердить"}
+              {mutation.isPending ? "Сохранение..." : "Сохранить"}
             </Button>
           </div>
         </div>

@@ -197,3 +197,45 @@ export async function getTransferDetails(transferId: number): Promise<{
   const { data } = await apiClient.get(`/transfers/${transferId}`);
   return data;
 }
+
+export async function correctTransfer(
+  transferId: number,
+  payload: { quantity: number | string; comment?: string },
+  options?: ShopfloorRequestOptions,
+): Promise<{ transfer_id: number; status: string; quantity: string }> {
+  const { data } = await apiClient.put(
+    `/transfers/${transferId}`,
+    payload,
+    makeRequestConfig(options),
+  );
+  return data;
+}
+
+export async function cancelTransfer(
+  transferId: number,
+  comment?: string,
+  options?: ShopfloorRequestOptions,
+): Promise<{ transfer_id: number; status: string }> {
+  const qs = comment ? `?comment=${encodeURIComponent(comment)}` : "";
+  const { data } = await apiClient.post(
+    `/transfers/${transferId}/cancel${qs}`,
+    {},
+    makeRequestConfig(options),
+  );
+  return data;
+}
+
+export async function listTransferHistory(
+  sectionId: number,
+  limit?: number,
+  options?: ShopfloorRequestOptions,
+): Promise<{ section_id: number; transfers: IncomingTransfer[] }> {
+  const qs = limit ? `?limit=${limit}` : "";
+  const { data } = await apiClient.get<{ section_id: number; transfers: IncomingTransfer[] }>(
+    `/transfers/sections/${sectionId}/history${qs}`,
+    makeRequestConfig(options),
+  );
+  return data;
+}
+
+

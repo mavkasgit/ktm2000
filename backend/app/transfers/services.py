@@ -352,3 +352,131 @@ async def resolve_transfer_discrepancy_link(
         "resolved_quantity": str(discrepancy.resolved_quantity),
         "unresolved_quantity": str(discrepancy.unresolved_quantity),
     }
+
+
+async def correct_transfer(
+    db: AsyncSession,
+    *,
+    transfer_id: int,
+    new_quantity: Decimal,
+    actor_id: int,
+    comment: str | None = None,
+) -> dict:
+    transfer = await _get_transfer(db, transfer_id)
+    if transfer.status != TransferStatus.accepted:
+        raise ValueError("Only accepted transfers can be corrected")
+
+    new_quantity = _to_decimal(new_quantity)
+    _ensure_positive(new_quantity, "quantity")
+    
+    old_quantity = transfer.sent_quantity
+    if new_quantity == old_quantity:
+        return {
+            "transfer_id": transfer.id,
+            "status": transfer.status.value,
+            "quantity": str(transfer.sent_quantity),
+        }
+
+    from_task = await _get_task(db, transfer.from_task_id)
+    to_task = await _get_task(db, transfer.to_task_id)
+    
+    # 1. Validate source limit
+    transferable = from_task.cached_completed_quantity - from_task.cached_transferred_quantity + old_quantity
+    if new_quantity > transferable:
+        raise ValueError(
+            f"Corrected quantity exceeds transferable amount of source task. "
+            f"Available to transfer: {transferable}"
+        )
+
+    # 2. Validate target limit
+    diff = new_quantity - old_quantity
+    if diff < 0:
+        if to_task.cached_available_quantity + diff < 0:
+            raise ValueError(
+                f"Target task has already consumed or issued parts. "
+                f"Cannot reduce transfer by {abs(diff)} as target task only has {to_task.cached_available_quantity} available stock"
+            )
+
+    # 3. Update Transfer
+    transfer.sent_quantity = new_quantity
+    transfer.accepted_quantity = new_quantity
+    if comment:
+        transfer.comment = comment
+
+    # 4. Update Movements
+    movements_res = await db.execute(
+        select(Movement).where(Movement.transfer_id == transfer.id)
+    )
+    movements = movements_res.scalars().all()
+    for m in movements:
+        m.quantity = new_quantity
+        if comment:
+            m.comment = comment
+
+    await db.flush()
+
+    # 5. Refresh cache
+    await _refresh_task_cache(db, from_task.id)
+    await _refresh_task_cache(db, to_task.id)
+    await _refresh_section_plan_line_cache(db, from_task.section_plan_line_id)
+    await _refresh_section_plan_line_cache(db, to_task.section_plan_line_id)
+
+    return {
+        "transfer_id": transfer.id,
+        "status": transfer.status.value,
+        "quantity": str(transfer.sent_quantity),
+    }
+
+
+async def cancel_transfer(
+    db: AsyncSession,
+    *,
+    transfer_id: int,
+    actor_id: int,
+    comment: str | None = None,
+) -> dict:
+    transfer = await _get_transfer(db, transfer_id)
+    if transfer.status == TransferStatus.cancelled:
+        return {
+            "transfer_id": transfer.id,
+            "status": transfer.status.value,
+        }
+    if transfer.status != TransferStatus.accepted:
+        raise ValueError("Only accepted transfers can be cancelled")
+
+    from_task = await _get_task(db, transfer.from_task_id)
+    to_task = await _get_task(db, transfer.to_task_id)
+
+    # Validate target available stock before cancellation
+    diff = -transfer.sent_quantity
+    if to_task.cached_available_quantity + diff < 0:
+        raise ValueError(
+            f"Target task has already consumed or issued parts. "
+            f"Cannot cancel transfer as target task only has {to_task.cached_available_quantity} available stock"
+        )
+
+    # Update Transfer
+    transfer.status = TransferStatus.cancelled
+    transfer.accepted_quantity = Decimal("0")
+    if comment:
+        transfer.comment = comment
+    # Delete movements to restore balances (movements table requires quantity > 0)
+    movements_res = await db.execute(
+        select(Movement).where(Movement.transfer_id == transfer.id)
+    )
+    movements = movements_res.scalars().all()
+    for m in movements:
+        await db.delete(m)
+
+    await db.flush()
+    # Refresh cache
+    await _refresh_task_cache(db, from_task.id)
+    await _refresh_task_cache(db, to_task.id)
+    await _refresh_section_plan_line_cache(db, from_task.section_plan_line_id)
+    await _refresh_section_plan_line_cache(db, to_task.section_plan_line_id)
+
+    return {
+        "transfer_id": transfer.id,
+        "status": transfer.status.value,
+    }
+
