@@ -79,6 +79,25 @@ export async function getSpgList(): Promise<SpgOut[]> {
   return data;
 }
 
+export type SpgPatchInput = {
+  name?: string;
+  description?: string | null;
+  sort_order?: number;
+  is_active?: boolean;
+  icon?: string | null;
+  icon_color?: string | null;
+  section_ids?: number[];
+};
+
+export async function patchSpg(id: number, payload: SpgPatchInput): Promise<SpgOut> {
+  const { data } = await apiClient.patch<SpgOut>(`/spg/${id}`, payload);
+  return data;
+}
+
+export async function deleteSpg(id: number): Promise<void> {
+  await apiClient.delete(`/spg/${id}`);
+}
+
 export async function getSpgSnapshot(spgId: number): Promise<SpgSnapshotResponse> {
   const { data } = await apiClient.get<SpgSnapshotResponse>(`/spg/${spgId}/snapshot`);
   return data;
@@ -329,6 +348,30 @@ export async function getSpgAvailability(
   const { data } = await apiClient.get<SpgAvailability>(
     `/spg/${spgId}/availability`,
     { params: { product_id: productId, section_id: sectionId } },
+  );
+  return data;
+}
+
+export type ImportRemaindersResponse = {
+  success: boolean;
+  imported_count: number;
+  errors: string[];
+};
+
+export async function importRemaindersExcel(
+  spgId: number,
+  file: File,
+): Promise<ImportRemaindersResponse> {
+  const formData = new FormData();
+  formData.append("file", file);
+  const { data } = await apiClient.post<ImportRemaindersResponse>(
+    `/spg/${spgId}/remainders/import`,
+    formData,
+    {
+      headers: {
+        "Content-Type": "multipart/form-data",
+      },
+    },
   );
   return data;
 }

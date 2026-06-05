@@ -197,3 +197,26 @@ export async function listProcessingFlags() {
   const { data } = await apiClient.get<ProcessingFlag[]>("/products/processing-flags");
   return data;
 }
+
+export type ProductRouteOperationOut = {
+  id: number | null;
+  operation_code: string | null;
+  operation_name: string;
+};
+
+export type ProductRouteStageOut = {
+  id: number;
+  sequence: number;
+  section_id: number;
+  section_code: string;
+  section_name: string;
+  is_significant: boolean;
+  requires_acceptance: boolean;
+  is_final: boolean;
+  operations: ProductRouteOperationOut[];
+};
+
+export async function getProductRouteStages(productId: number): Promise<ProductRouteStageOut[]> {
+  const { data } = await apiClient.get<ProductRouteStageOut[]>(`/products/${productId}/route-stages`);
+  return data;
+}

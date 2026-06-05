@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { ArrowDownUp, History as HistoryIcon, Pencil, Plus, Trash2, Check, X, Search } from "lucide-react";
+import { ArrowDownUp, History as HistoryIcon, Pencil, Plus, Trash2, Check, X, Search, Upload, Loader2 } from "lucide-react";
 import { IconAlertTriangle } from "@tabler/icons-react";
 
 import {
@@ -23,9 +23,10 @@ import {
   deleteManualRemainder,
 } from "@/shared/api/spg";
 import type { Product } from "@/shared/api/products";
-import { listProducts } from "@/shared/api/products";
+import { listProducts, getProductRouteStages } from "@/shared/api/products";
 import { ManualOperationDialog } from "./ManualOperationDialog";
 import { RemainderHistoryDrawer } from "./RemainderHistoryDrawer";
+import { ImportRemaindersDialog } from "./ImportRemaindersDialog";
 
 interface RemainderEditDialogProps {
   open: boolean;
@@ -52,6 +53,11 @@ export function RemainderEditDialog({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // Completed stages states
+  const [routeStages, setRouteStages] = useState<any[]>([]);
+  const [completedStageIds, setCompletedStageIds] = useState<number[]>([]);
+  const [loadingStages, setLoadingStages] = useState(false);
+
   useEffect(() => {
     if (open) {
       listProducts({ limit: 200 }).then((items) => setProducts(items)).catch(() => {});
@@ -69,6 +75,38 @@ export function RemainderEditDialog({
       setError(null);
     }
   }, [open, editingRemainder, sections]);
+
+  useEffect(() => {
+    if (open && selectedProductId) {
+      setLoadingStages(true);
+      getProductRouteStages(selectedProductId)
+        .then((items) => {
+          setRouteStages(items);
+          if (editingRemainder) {
+            const completedNamesOrCodes = (editingRemainder.completed_stages || []).map(
+              (cs: any) => cs.operation_code || cs.operation_name
+            );
+            const initialIds = items
+              .filter((st) =>
+                st.operations.some(
+                  (op: any) =>
+                    completedNamesOrCodes.includes(op.operation_code) ||
+                    completedNamesOrCodes.includes(op.operation_name)
+                ) || completedNamesOrCodes.includes(st.section_name)
+              )
+              .map((st) => st.id);
+            setCompletedStageIds(initialIds);
+          } else {
+            setCompletedStageIds([]);
+          }
+        })
+        .catch(() => setRouteStages([]))
+        .finally(() => setLoadingStages(false));
+    } else {
+      setRouteStages([]);
+      setCompletedStageIds([]);
+    }
+  }, [selectedProductId, open, editingRemainder]);
 
   const filteredProducts = productSearch.trim()
     ? products.filter(
@@ -88,6 +126,16 @@ export function RemainderEditDialog({
       setError("Количество должно быть положительным");
       return;
     }
+
+    const completed_stages = routeStages
+      .filter((st) => completedStageIds.includes(st.id))
+      .map((st) => ({
+        section_id: st.section_id,
+        operation_code: st.operations?.[0]?.operation_code || null,
+        operation_name: st.operations?.[0]?.operation_name || st.section_name,
+        sequence: st.sequence,
+      }));
+
     setSaving(true);
     setError(null);
     try {
@@ -95,6 +143,7 @@ export function RemainderEditDialog({
         const payload: ManualRemainderUpdateInput = {
           quantity: qty,
           section_id: selectedSectionId,
+          completed_stages,
         };
         await updateManualRemainder(spgId, editingRemainder.id, payload);
       } else {
@@ -102,6 +151,7 @@ export function RemainderEditDialog({
           product_id: selectedProductId,
           section_id: selectedSectionId,
           quantity: qty,
+          completed_stages,
         };
         await createManualRemainder(spgId, payload);
       }
@@ -186,18 +236,51 @@ export function RemainderEditDialog({
             </select>
           </div>
 
-          {/* Quantity */}
-          <div className="space-y-1">
-            <label className="text-sm font-medium">Количество</label>
-            <Input
-              type="number"
-              min="0"
-              step="1"
-              value={quantity}
-              onChange={(e) => setQuantity(e.target.value)}
-              placeholder="0"
-            />
-          </div>
+          {/* Completed stages checkboxes */}
+          {selectedProductId && (
+            <div className="space-y-2 border-t pt-2">
+              <label className="text-sm font-medium text-foreground">Завершенные этапы производства</label>
+              {loadingStages ? (
+                <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  Загрузка этапов маршрута...
+                </div>
+              ) : routeStages.length === 0 ? (
+                <div className="text-xs text-muted-foreground bg-muted p-2 rounded">
+                  Технологический маршрут не найден. Остаток будет создан без пройденных стадий.
+                </div>
+              ) : (
+                <div className="space-y-1 max-h-[160px] overflow-y-auto border rounded-md p-2 bg-muted/10">
+                  {routeStages.map((st) => {
+                    const isChecked = completedStageIds.includes(st.id);
+                    const opName = st.operations?.[0]?.operation_name || st.section_name;
+                    return (
+                      <label
+                        key={st.id}
+                        className="flex items-center gap-2 text-sm hover:bg-accent/40 p-1 rounded cursor-pointer"
+                      >
+                        <input
+                          type="checkbox"
+                          checked={isChecked}
+                          onChange={(e) => {
+                            if (e.target.checked) {
+                              setCompletedStageIds((prev) => [...prev, st.id]);
+                            } else {
+                              setCompletedStageIds((prev) => prev.filter((id) => id !== st.id));
+                            }
+                          }}
+                          className="rounded border-gray-300 text-primary focus:ring-primary h-4 w-4"
+                        />
+                        <span>
+                          Шаг {st.sequence}: <span className="font-medium">{st.section_code}</span> — {opName}
+                        </span>
+                      </label>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          )}
 
           {error && <div className="text-sm text-destructive">{error}</div>}
 
@@ -236,6 +319,7 @@ export function RemaindersListPanel({
   const [editing, setEditing] = useState<SpgRemainder | null>(null);
   const [manualOpOpen, setManualOpOpen] = useState(false);
   const [historyRemainderId, setHistoryRemainderId] = useState<number | null>(null);
+  const [importDialogOpen, setImportDialogOpen] = useState(false);
 
   // Состояния для inline-редактирования
   const [inlineEditingId, setInlineEditingId] = useState<number | null>(null);
@@ -314,6 +398,10 @@ export function RemaindersListPanel({
           Остатки ({filteredRemainders.length} из {remainders.length})
         </h3>
         <div className="flex items-center gap-2">
+          <Button size="sm" variant="outline" onClick={() => setImportDialogOpen(true)}>
+            <Upload className="h-3.5 w-3.5 mr-1" />
+            Импорт Excel
+          </Button>
           <Button size="sm" variant="outline" onClick={() => setManualOpOpen(true)}>
             <ArrowDownUp className="h-3.5 w-3.5 mr-1" />
             Ручная операция
@@ -516,6 +604,13 @@ export function RemaindersListPanel({
         }}
         spgId={spgId}
         remainderId={historyRemainderId}
+      />
+
+      <ImportRemaindersDialog
+        open={importDialogOpen}
+        onOpenChange={setImportDialogOpen}
+        spgId={spgId}
+        onSaved={onRefresh}
       />
     </div>
   );

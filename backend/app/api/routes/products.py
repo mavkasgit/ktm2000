@@ -16,6 +16,9 @@ from app.models.techcard import Techcard, TechcardLine
 from app.models.production_plan import PlanPosition
 from app.models.work_task import WorkTask
 from app.models.internal_plan import SectionPlanLine
+from app.models.route import ProductionRoute, RouteRuleProfile, RouteStage, RouteOperation, SectionOperation
+from app.models.section import Section
+from app.services.route_selection import select_route_for_payload
 
 router = APIRouter(prefix="/products", tags=["products"])
 
@@ -507,3 +510,152 @@ async def upload_product_photo(
     await db.flush()
     await db.refresh(item, attribute_names=["lengths", "processing_flags"])
     return _to_product_out(item)
+
+
+class RouteOperationOut(BaseModel):
+    id: int | None = None
+    operation_code: str | None = None
+    operation_name: str
+
+
+class RouteStageOut(BaseModel):
+    id: int
+    sequence: int
+    section_id: int
+    section_code: str
+    section_name: str
+    is_significant: bool
+    requires_acceptance: bool
+    is_final: bool
+    operations: list[RouteOperationOut]
+
+
+@router.get("/{product_id}/route-stages", response_model=list[RouteStageOut])
+async def get_product_route_stages(
+    product_id: int,
+    db: AsyncSession = Depends(get_db),
+) -> list[RouteStageOut]:
+    product = await db.get(Product, product_id)
+    if product is None:
+        raise HTTPException(status_code=404, detail="Product not found")
+
+    # 1. Try to find route matching the product across all profiles
+    profiles = (
+        await db.execute(
+            select(RouteRuleProfile)
+            .where(RouteRuleProfile.is_active == True)
+            .order_by(RouteRuleProfile.priority.desc(), RouteRuleProfile.id.asc())
+        )
+    ).scalars().all()
+
+    matched_route = None
+    for profile in profiles:
+        selection = await select_route_for_payload(db, {}, product, profile_id=profile.id)
+        if selection.route is not None:
+            matched_route = selection.route
+            break
+
+    # 2. Fallback: try global selection without profile_id
+    if not matched_route:
+        selection = await select_route_for_payload(db, {}, product)
+        if selection.route is not None:
+            matched_route = selection.route
+
+    # 3. Double Fallback: if still no route, try to find a route whose name/code matches product profile_type or type
+    if not matched_route:
+        if product.profile_type:
+            matched_route = await db.scalar(
+                select(ProductionRoute)
+                .where(ProductionRoute.is_active == True)
+                .where(ProductionRoute.name.ilike(f"%{product.profile_type}%"))
+                .limit(1)
+            )
+        if not matched_route and product.type:
+            matched_route = await db.scalar(
+                select(ProductionRoute)
+                .where(ProductionRoute.is_active == True)
+                .where(ProductionRoute.name.ilike(f"%{product.type}%"))
+                .limit(1)
+            )
+        if not matched_route:
+            matched_route = await db.scalar(
+                select(ProductionRoute)
+                .where(ProductionRoute.is_active == True)
+                .order_by(ProductionRoute.sort_order, ProductionRoute.id)
+                .limit(1)
+            )
+
+    if not matched_route:
+        raise HTTPException(status_code=404, detail="No route found for this product")
+
+    # Load stages
+    stages = (
+        await db.execute(
+            select(RouteStage)
+            .where(RouteStage.route_id == matched_route.id)
+            .order_by(RouteStage.sequence)
+            .options(selectinload(RouteStage.operations))
+        )
+    ).scalars().all()
+
+    section_ids = {stage.section_id for stage in stages}
+    sections_dict = {}
+    if section_ids:
+        sec_rows = (await db.execute(select(Section).where(Section.id.in_(section_ids)))).scalars().all()
+        sections_dict = {s.id: s for s in sec_rows}
+
+    # Load section operations
+    section_ops_dict = {}
+    if section_ids:
+        ops_rows = (
+            await db.execute(
+                select(SectionOperation)
+                .where(SectionOperation.section_id.in_(section_ids))
+                .where(SectionOperation.group_code.isnot(None))
+                .order_by(SectionOperation.section_id, SectionOperation.sort_order, SectionOperation.operation_code)
+            )
+        ).scalars().all()
+        for op in ops_rows:
+            section_ops_dict.setdefault(op.section_id, []).append(op)
+
+    out_stages = []
+    for stage in stages:
+        section = sections_dict.get(stage.section_id)
+        if not section:
+            continue
+
+        # Determine operations
+        has_specific_ops = any(op.operation_code is not None for op in stage.operations)
+        ops_list = []
+        if has_specific_ops:
+            for op in stage.operations:
+                if op.operation_code is not None:
+                    ops_list.append(RouteOperationOut(
+                        id=op.id,
+                        operation_code=op.operation_code,
+                        operation_name=op.operation_name,
+                    ))
+        else:
+            # Fall back to section operations
+            section_ops = section_ops_dict.get(stage.section_id) or []
+            for op in section_ops:
+                ops_list.append(RouteOperationOut(
+                    id=op.id,
+                    operation_code=op.operation_code,
+                    operation_name=op.operation_name,
+                ))
+
+        out_stages.append(RouteStageOut(
+            id=stage.id,
+            sequence=stage.sequence,
+            section_id=stage.section_id,
+            section_code=section.code,
+            section_name=section.name,
+            is_significant=stage.is_significant,
+            requires_acceptance=stage.requires_acceptance,
+            is_final=stage.is_final,
+            operations=ops_list,
+        ))
+
+    return out_stages
+
