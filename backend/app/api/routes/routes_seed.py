@@ -12,6 +12,8 @@ from app.core.config import settings
 from app.core.database import get_db
 from app.seeds.run_seed import run_full_seed
 from app.seeds.seeders.users_seeder import seed_users
+from app.seeds.seeders.demo_production_seeder import seed_demo_production
+from app.seeds.seeders.cleanup_seeder import clear_generated_production_data
 
 logger = logging.getLogger(__name__)
 
@@ -109,5 +111,49 @@ async def seed_all(
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         logger.exception("Seed failed")
+        await db.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+class DemoSeedSummary(BaseModel):
+    products: int
+    remainders: int
+    defects: int
+
+
+@router.post("/demo-production", response_model=DemoSeedSummary, status_code=status.HTTP_201_CREATED)
+async def seed_demo_production_endpoint(
+    db: AsyncSession = Depends(get_db),
+) -> DemoSeedSummary:
+    """Seed only demo production data (remainders, stages, defects)."""
+    try:
+        stats = await seed_demo_production(db)
+        await db.commit()
+        return DemoSeedSummary(
+            products=stats.get("products", 0),
+            remainders=stats.get("remainders", 0),
+            defects=stats.get("defects", 0),
+        )
+    except Exception as e:
+        logger.exception("Demo seed failed")
+        await db.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+class ClearSummary(BaseModel):
+    cleanup: dict
+
+
+@router.post("/clear-demo-production", response_model=ClearSummary)
+async def clear_demo_production_endpoint(
+    db: AsyncSession = Depends(get_db),
+) -> ClearSummary:
+    """Clear generated production data (remainders, defects, tasks, etc.)."""
+    try:
+        stats = await clear_generated_production_data(db)
+        await db.commit()
+        return ClearSummary(cleanup=stats)
+    except Exception as e:
+        logger.exception("Clear production data failed")
         await db.rollback()
         raise HTTPException(status_code=500, detail=str(e))

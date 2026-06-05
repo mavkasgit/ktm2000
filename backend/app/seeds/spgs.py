@@ -46,7 +46,7 @@ SPGS_DATA = [
     },
     {
         "code": "FG",
-        "name": "Готовый склад",
+        "name": "Склад готовой продукции",
         "description": "Склад ГП, отгрузка, отправлено",
         "sort_order": 60,
         "icon": "Container",

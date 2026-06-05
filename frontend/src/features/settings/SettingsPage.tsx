@@ -7,7 +7,7 @@ import { AlertDialog, AlertDialogContent, AlertDialogHeader, AlertDialogTitle, A
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/shared/ui/Dialog"
 import { toast } from "@/shared/ui"
 import { resetAllPlans } from "@/shared/api/productionPlans"
-import { seedRoutes, listRoutes, listRouteRuleProfiles, listRouteSelectionRules, reseedSystemUser, seedPreview } from "@/shared/api/routes"
+import { seedRoutes, listRoutes, listRouteRuleProfiles, listRouteSelectionRules, reseedSystemUser, seedPreview, seedDemoProduction, clearDemoProduction } from "@/shared/api/routes"
 import { listImportTemplates } from "@/shared/api/importTemplates"
 import { listSections } from "@/shared/api/sections"
 
@@ -134,6 +134,10 @@ export function SettingsPage() {
   const [resetting, setResetting] = useState(false)
   const [seedOpen, setSeedOpen] = useState(false)
   const [reseedingUser, setReseedingUser] = useState(false)
+  
+  const [seedingDemo, setSeedingDemo] = useState(false)
+  const [clearingDemo, setClearingDemo] = useState(false)
+  const [confirmDemoClearOpen, setConfirmDemoClearOpen] = useState(false)
 
   const handleReset = async () => {
     setConfirmOpen(false)
@@ -158,6 +162,50 @@ export function SettingsPage() {
       toast({ title: "Ошибка", description: e instanceof Error ? e.message : "Не удалось восстановить пользователя", variant: "destructive" })
     } finally {
       setReseedingUser(false)
+    }
+  }
+
+  const handleSeedDemo = async () => {
+    setSeedingDemo(true)
+    try {
+      const summary = await seedDemoProduction()
+      queryClient.invalidateQueries()
+      toast({
+        title: "Демо-данные загружены",
+        description: `Продуктов: ${summary.products}, Остатков: ${summary.remainders}, Дефектов: ${summary.defects}`,
+        variant: "success",
+      })
+    } catch (e) {
+      toast({
+        variant: "destructive",
+        title: "Ошибка",
+        description: e instanceof Error ? e.message : "Не удалось загрузить демо-данные",
+      })
+    } finally {
+      setSeedingDemo(false)
+    }
+  }
+
+  const handleClearDemo = async () => {
+    setConfirmDemoClearOpen(false)
+    setClearingDemo(true)
+    try {
+      const summary = await clearDemoProduction()
+      queryClient.invalidateQueries()
+      const clearedCount = Object.values(summary.cleanup).reduce((a: number, b: any) => a + (typeof b === "number" ? b : 0), 0)
+      toast({
+        title: "Демо-данные очищены",
+        description: `Удалено записей: ${clearedCount}`,
+        variant: "success",
+      })
+    } catch (e) {
+      toast({
+        variant: "destructive",
+        title: "Ошибка",
+        description: e instanceof Error ? e.message : "Не удалось очистить демо-данные",
+      })
+    } finally {
+      setClearingDemo(false)
     }
   }
 
@@ -222,6 +270,28 @@ export function SettingsPage() {
 
         <div className="rounded-lg border bg-card p-6 space-y-4">
           <div className="flex items-center gap-3">
+            <div className="rounded-lg bg-emerald-500/10 p-2">
+              <Database className="h-5 w-5 text-emerald-500" />
+            </div>
+            <div>
+              <h3 className="font-medium">Демо-производство</h3>
+              <p className="text-sm text-muted-foreground">Остатки ГХП, этапы маршрута и брак</p>
+            </div>
+          </div>
+          <div className="flex gap-2">
+            <Button onClick={handleSeedDemo} disabled={seedingDemo} className="flex-1">
+              {seedingDemo ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : <Download className="h-4 w-4 mr-1" />}
+              {seedingDemo ? "Загрузка..." : "Загрузить демо"}
+            </Button>
+            <Button variant="outline" onClick={() => setConfirmDemoClearOpen(true)} disabled={clearingDemo} className="text-destructive hover:bg-destructive/10">
+              {clearingDemo ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : <Trash2 className="h-4 w-4" />}
+              {clearingDemo ? "Очистить" : "Очистить"}
+            </Button>
+          </div>
+        </div>
+
+        <div className="rounded-lg border bg-card p-6 space-y-4">
+          <div className="flex items-center gap-3">
             <div className="rounded-lg bg-violet-500/10 p-2">
               <UserCog className="h-5 w-5 text-violet-500" />
             </div>
@@ -254,6 +324,24 @@ export function SettingsPage() {
             <AlertDialogCancel>Отмена</AlertDialogCancel>
             <AlertDialogAction onClick={handleReset} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">
               Удалить
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog open={confirmDemoClearOpen} onOpenChange={setConfirmDemoClearOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Очистить демонстрационные данные?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Это действие удалит все зарегистрированные остатки ГХП, брак, принятые решения, а также связанные задачи (work_tasks / rework_tasks).
+              Справочники и профили правил останутся без изменений.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Отмена</AlertDialogCancel>
+            <AlertDialogAction onClick={handleClearDemo} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">
+              Очистить
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

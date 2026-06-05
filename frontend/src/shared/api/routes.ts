@@ -187,6 +187,22 @@ export async function reseedSystemUser() {
   return data;
 }
 
+export type DemoSeedSummary = {
+  products: number;
+  remainders: number;
+  defects: number;
+};
+
+export async function seedDemoProduction() {
+  const { data } = await apiClient.post<DemoSeedSummary>("/routes-seed/demo-production");
+  return data;
+}
+
+export async function clearDemoProduction() {
+  const { data } = await apiClient.post<{ cleanup: Record<string, number> }>("/routes-seed/clear-demo-production");
+  return data;
+}
+
 export async function reorderRoutes(ids: number[]) {
   await apiClient.post("/routes/reorder", { ids });
 }

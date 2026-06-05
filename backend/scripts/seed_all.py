@@ -16,7 +16,7 @@ async def main():
     force = "--force" in sys.argv
     async with async_session() as db:
         try:
-            result = await run_full_seed(db, force=force)
+            result = await run_full_seed(db, force=force, include_demo=True)
             await db.commit()
             print("Seed completed successfully:")
             for key, value in result.items():

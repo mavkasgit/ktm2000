@@ -15,9 +15,10 @@ from app.seeds.seeders.sections_seeder import seed_section_operations, seed_sect
 from app.seeds.seeders.selection_rules_seeder import seed_selection_rules
 from app.seeds.seeders.spgs_seeder import seed_spgs
 from app.seeds.seeders.users_seeder import seed_users
+from app.seeds.seeders.demo_production_seeder import seed_demo_production
 
 
-async def run_full_seed(db: AsyncSession, force: bool = False) -> dict:
+async def run_full_seed(db: AsyncSession, force: bool = False, include_demo: bool = False) -> dict:
     """Seed all reference data in one transaction.
 
     Returns counters for each entity type.
@@ -78,5 +79,10 @@ async def run_full_seed(db: AsyncSession, force: bool = False) -> dict:
     # 4. SelectionRules (needs profile)
     rules_count = await seed_selection_rules(db, SELECTION_RULES, profile)
     result["selection_rules"] = rules_count
+
+    # 5. Demo production data (remainders, stages, defects)
+    if include_demo:
+        demo_stats = await seed_demo_production(db)
+        result.update(demo_stats)
 
     return result
