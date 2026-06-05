@@ -583,3 +583,68 @@ async def test_legacy_shopfloor_transfers_endpoint_still_works(client, session) 
     # The transfer was already accepted, so it should NOT appear in
     # the open-incoming list.
     assert incoming.json()["incoming_transfers"] == []
+
+
+@pytest.mark.asyncio
+async def test_transfers_history_generic_endpoints(client, session) -> None:
+    user = await _make_user(session, "xfer-history@test.local")
+    headers = _auth_headers(user)
+    ctx = await _make_six_section_fixture(session, sku="FG-XF-HIST", planned_qty=Decimal("100"))
+    
+    # Associate first section with SPG
+    from app.models.spg import StorageProductionGroup, SpgSection
+    spg = StorageProductionGroup(code="SPG-HIST", name="SPG History Test", is_active=True, sort_order=1)
+    session.add(spg)
+    await session.commit()
+    await session.refresh(spg)
+    
+    spg_sec = SpgSection(spg_id=spg.id, section_id=ctx["sections"][0].id, sort_order=1)
+    session.add(spg_sec)
+    await session.commit()
+
+    await _release_via_take_to_work(client, ctx["position"].id)
+    tasks = await _tasks_by_sequence(session, ctx["position"].id)
+    first_task = tasks[0]
+    second_task = tasks[1]
+
+    await client.post(
+        f"/api/shopfloor/tasks/{first_task.id}/issue",
+        json={"quantity": "100", "idempotency_key": "xf-hist:issue"},
+        headers=headers,
+    )
+    await client.post(
+        f"/api/shopfloor/tasks/{first_task.id}/complete",
+        json={"good_quantity": "100", "defect_quantity": "0", "idempotency_key": "xf-leg:complete"},
+        headers=headers,
+    )
+
+    # Send a transfer
+    send = await client.post(
+        "/api/transfers",
+        json={"from_task_id": first_task.id, "to_task_id": second_task.id, "quantity": "40", "idempotency_key": "xf-hist:send"},
+        headers=headers,
+    )
+    assert send.status_code == 200
+
+    # 1. Query history by section_id
+    history_sec = await client.get(
+        f"/api/transfers/history?section_id={ctx['sections'][0].id}",
+        headers=headers,
+    )
+    assert history_sec.status_code == 200
+    data_sec = history_sec.json()
+    assert "transfers" in data_sec
+    assert len(data_sec["transfers"]) == 1
+    assert data_sec["transfers"][0]["sent_quantity"] == "40"
+
+    # 2. Query history by spg_id
+    history_spg = await client.get(
+        f"/api/transfers/history?spg_id={spg.id}",
+        headers=headers,
+    )
+    assert history_spg.status_code == 200
+    data_spg = history_spg.json()
+    assert "transfers" in data_spg
+    assert len(data_spg["transfers"]) == 1
+    assert data_spg["transfers"][0]["sent_quantity"] == "40"
+

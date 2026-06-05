@@ -331,10 +331,11 @@ async def list_ready_to_transfer(
 async def get_section_transfer_history(
     db: AsyncSession,
     *,
-    section_id: int,
+    section_id: int | None = None,
+    spg_id: int | None = None,
     limit: int = 100,
 ) -> dict:
-    """Return both incoming and outgoing transfers for a section (history log)."""
+    """Return both incoming and outgoing transfers for a section or SPG (history log)."""
     from_section = aliased(Section)
     to_section = aliased(Section)
     from_task = aliased(WorkTask)
@@ -343,30 +344,50 @@ async def get_section_transfer_history(
     to_stage = aliased(RouteStage)
     from_line = aliased(SectionPlanLine)
 
+    base_query = (
+        select(
+            Transfer,
+            from_section,
+            to_section,
+            from_task,
+            to_task,
+            from_stage,
+            to_stage,
+            from_line,
+            Product.sku,
+        )
+        .join(from_section, from_section.id == Transfer.from_section_id)
+        .join(to_section, to_section.id == Transfer.to_section_id)
+        .join(from_task, from_task.id == Transfer.from_task_id)
+        .join(to_task, to_task.id == Transfer.to_task_id)
+        .join(from_stage, from_stage.id == from_task.route_stage_id)
+        .join(to_stage, to_stage.id == to_task.route_stage_id)
+        .join(from_line, from_line.id == from_task.section_plan_line_id)
+        .join(Product, Product.id == from_task.product_id)
+    )
+
+    if spg_id is not None:
+        from app.models.spg import SpgSection
+        spg_section_ids = (
+            await db.execute(
+                select(SpgSection.section_id).where(SpgSection.spg_id == spg_id)
+            )
+        ).scalars().all()
+        if not spg_section_ids:
+            return {"transfers": []}
+        base_query = base_query.where(
+            (Transfer.from_section_id.in_(spg_section_ids)) | (Transfer.to_section_id.in_(spg_section_ids))
+        )
+    elif section_id is not None:
+        base_query = base_query.where(
+            (Transfer.from_section_id == section_id) | (Transfer.to_section_id == section_id)
+        )
+    else:
+        raise ValueError("Either section_id or spg_id must be provided")
+
     rows = (
         await db.execute(
-            select(
-                Transfer,
-                from_section,
-                to_section,
-                from_task,
-                to_task,
-                from_stage,
-                to_stage,
-                from_line,
-                Product.sku,
-            )
-            .join(from_section, from_section.id == Transfer.from_section_id)
-            .join(to_section, to_section.id == Transfer.to_section_id)
-            .join(from_task, from_task.id == Transfer.from_task_id)
-            .join(to_task, to_task.id == Transfer.to_task_id)
-            .join(from_stage, from_stage.id == from_task.route_stage_id)
-            .join(to_stage, to_stage.id == to_task.route_stage_id)
-            .join(from_line, from_line.id == from_task.section_plan_line_id)
-            .join(Product, Product.id == from_task.product_id)
-            .where(
-                (Transfer.from_section_id == section_id) | (Transfer.to_section_id == section_id)
-            )
+            base_query
             .order_by(Transfer.created_at.desc(), Transfer.id.desc())
             .limit(limit)
         )

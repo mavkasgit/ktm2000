@@ -226,13 +226,16 @@ export async function cancelTransfer(
 }
 
 export async function listTransferHistory(
-  sectionId: number,
-  limit?: number,
+  params: { section_id?: number | null; spg_id?: number | null; limit?: number } = {},
   options?: ShopfloorRequestOptions,
-): Promise<{ section_id: number; transfers: IncomingTransfer[] }> {
-  const qs = limit ? `?limit=${limit}` : "";
-  const { data } = await apiClient.get<{ section_id: number; transfers: IncomingTransfer[] }>(
-    `/transfers/sections/${sectionId}/history${qs}`,
+): Promise<{ section_id: number | null; spg_id: number | null; transfers: IncomingTransfer[] }> {
+  const search = new URLSearchParams();
+  if (params.section_id) search.set("section_id", String(params.section_id));
+  if (params.spg_id) search.set("spg_id", String(params.spg_id));
+  if (params.limit) search.set("limit", String(params.limit));
+  const qs = search.toString();
+  const { data } = await apiClient.get<{ section_id: number | null; spg_id: number | null; transfers: IncomingTransfer[] }>(
+    `/transfers/history${qs ? `?${qs}` : ""}`,
     makeRequestConfig(options),
   );
   return data;

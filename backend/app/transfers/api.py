@@ -235,6 +235,25 @@ async def resolve_discrepancy(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+@router.get(
+    "/history",
+    dependencies=[Depends(require_role(list(READER_ROLES)))],
+)
+async def transfer_history_generic(
+    section_id: Optional[int] = Query(default=None),
+    spg_id: Optional[int] = Query(default=None),
+    limit: int = Query(default=100),
+    db: AsyncSession = Depends(get_db),
+    locked_section_id: int | None = Depends(get_single_window_locked_section_id),
+) -> dict:
+    if locked_section_id is not None:
+        if section_id is None:
+            section_id = locked_section_id
+        if section_id != locked_section_id:
+            raise HTTPException(status_code=403, detail=LOCKED_SECTION_ERROR)
+    return await get_section_transfer_history(db, section_id=section_id, spg_id=spg_id, limit=limit)
+
+
 @router.get("/{transfer_id}", dependencies=[Depends(require_role(list(READER_ROLES)))])
 async def transfer_details(transfer_id: int, db: AsyncSession = Depends(get_db)) -> dict:
     try:
@@ -280,6 +299,9 @@ async def cancel_transfer_qty(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+
+
+
 @router.get(
     "/sections/{section_id}/history",
     dependencies=[Depends(require_role(list(READER_ROLES)))],
@@ -293,5 +315,6 @@ async def transfer_history(
     if locked_section_id is not None and section_id != locked_section_id:
         raise HTTPException(status_code=403, detail=LOCKED_SECTION_ERROR)
     return await get_section_transfer_history(db, section_id=section_id, limit=limit)
+
 
 

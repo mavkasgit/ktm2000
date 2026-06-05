@@ -22,8 +22,9 @@ import {
   TableHeader,
   TableRow,
   toast,
+  SpgSelect,
 } from "@/shared/ui";
-import { listSections } from "@/shared/api/sections";
+import { getSpgList } from "@/shared/api/spg";
 import {
   cancelTransfer,
   correctTransfer,
@@ -68,27 +69,27 @@ function makeIdempotencyKey(prefix: string): string {
 
 export function TransfersPage() {
   const queryClient = useQueryClient();
-  const [sectionId, setSectionId] = useState<number | null>(null);
+  const [spgId, setSpgId] = useState<number | null>(null);
   const [sendTask, setSendTask] = useState<ReadyToTransferTask | null>(null);
   const [editTransferRecord, setEditTransferRecord] = useState<IncomingTransfer | null>(null);
 
-  const { data: sections } = useQuery({
-    queryKey: ["sections"],
-    queryFn: listSections,
+  const { data: spgs } = useQuery({
+    queryKey: ["spgs"],
+    queryFn: getSpgList,
   });
 
-  const activeSectionId = sectionId ?? sections?.find((s) => s.is_active)?.id ?? null;
+  const activeSpgId = spgId ?? spgs?.find((s) => s.is_active)?.id ?? null;
 
   const { data: readyData, isLoading: readyLoading, refetch: refetchReady } = useQuery({
-    queryKey: ["transfers-ready", activeSectionId],
-    queryFn: () => listReadyToTransfer({ section_id: activeSectionId }),
-    enabled: activeSectionId != null,
+    queryKey: ["transfers-ready", activeSpgId],
+    queryFn: () => listReadyToTransfer({ spg_id: activeSpgId }),
+    enabled: activeSpgId != null,
   });
 
   const { data: historyData, isLoading: historyLoading, refetch: refetchHistory } = useQuery({
-    queryKey: ["transfers-history", activeSectionId],
-    queryFn: () => (activeSectionId != null ? listTransferHistory(activeSectionId) : null),
-    enabled: activeSectionId != null,
+    queryKey: ["transfers-history", activeSpgId],
+    queryFn: () => listTransferHistory({ spg_id: activeSpgId }),
+    enabled: activeSpgId != null,
   });
 
   const readyItems = readyData?.items ?? [];
@@ -99,31 +100,39 @@ export function TransfersPage() {
     void refetchHistory();
   }
 
+  if (spgs !== undefined && spgs.length === 0) {
+    return (
+      <div className="p-6 text-center">
+        <h1 className="text-xl font-semibold mb-2">Передачи между ГХП</h1>
+        <p className="text-muted-foreground">В системе нет зарегистрированных групп хранения и производства (ГХП).</p>
+      </div>
+    );
+  }
+
   return (
     <div className="p-6 space-y-6 max-w-screen-2xl">
       <header className="page-header">
         <div>
-          <h1 className="page-title">Передачи между SPG</h1>
+          <h1 className="page-title">Передачи между ГХП</h1>
           <p className="page-subtitle">
-            Отдельный процесс передачи завершённых заданий на следующий SPG по маршруту.
+            Отдельный процесс передачи завершённых заданий на следующую ГХП по маршруту.
             В разделе «Готово к передаче» — задания текущего участка, у которых есть
             фактически выполненное количество, ожидающее отправки.
           </p>
         </div>
         <div className="flex items-center gap-2">
-          <select
-            value={sectionId ?? ""}
-            onChange={(e) => setSectionId(e.target.value ? Number(e.target.value) : null)}
-            className="border rounded-md px-3 py-2 text-sm bg-background"
-            aria-label="Участок"
-          >
-            <option value="">Текущий участок</option>
-            {sections?.map((s) => (
-              <option key={s.id} value={s.id}>
-                {s.code} — {s.name}
-              </option>
-            ))}
-          </select>
+          <SpgSelect
+            spgs={spgs ?? []}
+            value={spgId}
+            onValueChange={(val) => {
+              setSpgId(val);
+              setSendTask(null);
+              setEditTransferRecord(null);
+            }}
+            placeholder="Выберите ГХП"
+            emptyLabel="Выберите ГХП"
+            className="w-[260px] bg-background h-10 border text-sm"
+          />
           <Button variant="outline" size="sm" onClick={handleRefresh}>
             <RefreshCw className="h-4 w-4 mr-1" /> Обновить
           </Button>
@@ -144,7 +153,7 @@ export function TransfersPage() {
               <div className="text-sm text-muted-foreground py-4 text-center">Загрузка…</div>
             ) : readyItems.length === 0 ? (
               <div className="text-sm text-muted-foreground py-6 text-center">
-                Нет заданий, готовых к передаче. Завершите работу на участке, чтобы появились задания
+                Нет заданий, готовых к передаче на участках выбранной ГХП. Завершите работу на этапе, чтобы появились задания
                 с доступным к передаче количеством.
               </div>
             ) : (
@@ -218,7 +227,7 @@ export function TransfersPage() {
               <div className="text-sm text-muted-foreground py-4 text-center">Загрузка…</div>
             ) : historyItems.length === 0 ? (
               <div className="text-sm text-muted-foreground py-6 text-center">
-                Нет записей в журнале передач для выбранного участка.
+                Нет записей в журнале передач для выбранной ГХП.
               </div>
             ) : (
               <Table>
@@ -235,7 +244,9 @@ export function TransfersPage() {
                 </TableHeader>
                 <TableBody>
                   {historyItems.map((t) => {
-                    const isIncoming = t.to_section_id === activeSectionId;
+                    const activeSpg = spgs?.find((s) => s.id === activeSpgId);
+                    const sectionIdsInSpg = new Set(activeSpg?.sections.map((sec) => sec.section_id) ?? []);
+                    const isIncoming = sectionIdsInSpg.has(t.to_section_id);
                     const isCancelled = t.status === "cancelled";
                     return (
                       <TableRow key={t.transfer_id} className={isCancelled ? "opacity-60" : ""}>
