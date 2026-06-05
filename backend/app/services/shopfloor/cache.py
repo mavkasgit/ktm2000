@@ -65,7 +65,14 @@ async def _refresh_task_cache(db: AsyncSession, task_id: int) -> WorkTask:
         in_work = Decimal("0")
 
     base_available = await _initial_available_quantity(db, task)
-    available = base_available + received - issued
+    consumed_from_remainders = await db.scalar(
+        select(func.coalesce(func.sum(Movement.quantity), 0)).where(
+            Movement.task_id == task_id,
+            Movement.movement_type == MovementType.issue_to_work,
+            Movement.source_ref.like("remainder:%"),
+        )
+    ) or Decimal("0")
+    available = base_available + received + consumed_from_remainders - issued
     if available < 0:
         available = Decimal("0")
 

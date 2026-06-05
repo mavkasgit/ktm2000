@@ -52,7 +52,7 @@ async def test_work_task_cache_constraints_exist(client, session) -> None:
         "ck_work_tasks_cached_received_quantity_non_negative",
         "ck_work_tasks_cached_rejected_quantity_non_negative",
         "ck_work_tasks_cached_remaining_quantity_non_negative",
-        "ck_work_tasks_planned_quantity_positive",
+        "ck_work_tasks_planned_quantity_non_negative",
     ]
     for name in expected:
         result = (await session.execute(text(

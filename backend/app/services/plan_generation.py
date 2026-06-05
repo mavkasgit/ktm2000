@@ -13,6 +13,7 @@ from app.models.product import Product
 from app.models.release_batch import ReleaseBatch, ReleaseBatchPosition, ReleaseBatchStatus, ReleaseBatchType
 from app.models.route import ProductionRoute, RouteOperation, RouteStage, SectionOperation
 from app.models.section import Section
+from app.models.spg_remainder import SpgRemainder
 from app.models.work_task import WorkTask, WorkTaskStatus
 from app.services.plan_validation import _find_paired_techcard, _paired_component_skus
 
@@ -137,10 +138,28 @@ async def release_batch(db: AsyncSession, release_batch_id: int) -> dict:
 
         steps = sorted(batch_position.route_snapshot.get("steps", []), key=lambda step: step["sequence"])
 
-        # Each RouteStage is a self-contained task on a section; we
-        # create exactly one SectionPlanLine per stage.
+        # ── MRP: find and reserve compatible remainders ───────────────────────
+        release_quantity = batch_position.release_quantity
+        reserved_remainders = await _find_and_reserve_compatible_remainders(
+            db,
+            product_id=effective_product_id,
+            position_id=position.id,
+            route_steps=steps,
+        )
+        # Build lookup: max completed sequence for each reserved remainder
+        # remainder → max sequence from completed_stages_json
+        remainder_max_seq: list[tuple[SpgRemainder, int]] = []
+        for rem in reserved_remainders:
+            stages_json = rem.completed_stages_json or []
+            max_seq = max((s.get("sequence", 0) for s in stages_json), default=0)
+            remainder_max_seq.append((rem, max_seq))
+
+        # ── Create SectionPlanLines + WorkTasks ───────────────────────────────
         seen_keys: set[tuple[str, int]] = set()
-        line_index = 0
+        # Track the first step index with quantity > 0 for status assignment
+        first_nonzero_index: int | None = None
+        step_planned_quantities: list[tuple[dict, Decimal]] = []
+
         for step in steps:
             stage_id = step.get("route_stage_id")
             if stage_id is None:
@@ -149,6 +168,25 @@ async def release_batch(db: AsyncSession, release_batch_id: int) -> dict:
             if dedup_key in seen_keys:
                 continue
             seen_keys.add(dedup_key)
+
+            step_seq = step["sequence"]
+            # planned_quantity = release_quantity - sum of remainders that cover this step
+            covered_qty = sum(
+                rem.remainder_quantity
+                for rem, max_seq in remainder_max_seq
+                if max_seq >= step_seq
+            )
+            planned_qty = max(Decimal("0"), release_quantity - covered_qty)
+            step_planned_quantities.append((step, planned_qty))
+            if planned_qty > 0 and first_nonzero_index is None:
+                first_nonzero_index = len(step_planned_quantities) - 1
+
+        line_index = 0
+        for idx, (step, planned_qty) in enumerate(step_planned_quantities):
+            stage_id = step.get("route_stage_id")
+            if stage_id is None:
+                continue
+
             line = SectionPlanLine(
                 internal_plan_id=internal_plan.id,
                 plan_position_id=position.id,
@@ -157,19 +195,29 @@ async def release_batch(db: AsyncSession, release_batch_id: int) -> dict:
                 route_id=batch_position.route_id,
                 route_stage_id=stage_id,
                 sequence=step["sequence"],
-                planned_quantity=batch_position.release_quantity,
+                planned_quantity=planned_qty,
                 due_date=position.due_date,
             )
             db.add(line)
             await db.flush()
+
+            if planned_qty <= 0:
+                # Stage fully covered by remainders: auto-complete so chain continues
+                task_status = WorkTaskStatus.completed
+            elif first_nonzero_index is not None and idx == first_nonzero_index:
+                # First stage that actually needs work: ready
+                task_status = WorkTaskStatus.ready
+            else:
+                task_status = WorkTaskStatus.waiting_previous
+
             db.add(
                 WorkTask(
                     section_plan_line_id=line.id,
                     section_id=line.section_id,
                     product_id=line.product_id,
                     route_stage_id=line.route_stage_id,
-                    planned_quantity=line.planned_quantity,
-                    status=WorkTaskStatus.ready if line_index == 0 else WorkTaskStatus.waiting_previous,
+                    planned_quantity=planned_qty,
+                    status=task_status,
                     due_date=line.due_date,
                 )
             )
@@ -442,3 +490,79 @@ async def _refresh_plan_release_status(db: AsyncSession, production_plan_id: int
 
 def _make_batch_no() -> str:
     return f"RB-{datetime.now(UTC).strftime('%Y%m%d%H%M%S%f')}"
+
+
+async def _find_and_reserve_compatible_remainders(
+    db: AsyncSession,
+    *,
+    product_id: int,
+    position_id: int,
+    route_steps: list[dict],
+) -> list[SpgRemainder]:
+    """Find free SPG remainders compatible with the given route, reserve them.
+
+    A remainder is considered *compatible* when its ``completed_stages_json``
+    is a **prefix** of the new route steps sequence.  That is, every stage
+    recorded in the remainder must match the beginning of the new route
+    (same sequence number AND same section_id).
+
+    Compatible remainders are reserved by setting
+    ``reserved_for_plan_position_id = position_id`` and returned FIFO.
+
+    Edge cases handled:
+    - Remainder with empty completed_stages_json → not compatible (no progress).
+    - Route with no steps → returns [].
+    - Remainder already consumed or reserved → skipped.
+    """
+    if not route_steps:
+        return []
+
+    # Build route prefix lookup: sequence → section_id
+    route_seq_to_section: dict[int, int] = {
+        step["sequence"]: step["section_id"]
+        for step in route_steps
+        if step.get("route_stage_id") is not None
+    }
+
+    # Load free remainders for this product, FIFO order
+    free_remainders: list[SpgRemainder] = (
+        await db.execute(
+            select(SpgRemainder)
+            .where(
+                SpgRemainder.product_id == product_id,
+                SpgRemainder.remainder_quantity > 0,
+                SpgRemainder.consumed_at.is_(None),
+                SpgRemainder.reserved_for_plan_position_id.is_(None),
+            )
+            .order_by(SpgRemainder.created_at)
+        )
+    ).scalars().all()
+
+    compatible: list[SpgRemainder] = []
+    for rem in free_remainders:
+        stages_json: list[dict] = rem.completed_stages_json or []
+        if not stages_json:
+            # No completed stages recorded → cannot determine compatibility
+            continue
+
+        # All stages in the remainder must exactly match the start of the route
+        is_prefix = True
+        for stage_entry in stages_json:
+            seq = stage_entry.get("sequence")
+            section_id = stage_entry.get("section_id")
+            if seq is None or section_id is None:
+                is_prefix = False
+                break
+            expected_section = route_seq_to_section.get(seq)
+            if expected_section is None or expected_section != section_id:
+                is_prefix = False
+                break
+
+        if not is_prefix:
+            continue
+
+        # Reserve the remainder
+        rem.reserved_for_plan_position_id = position_id
+        compatible.append(rem)
+
+    return compatible

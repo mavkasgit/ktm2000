@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.product import Product
 from app.models.spg import SpgSection, StorageProductionGroup
 from app.models.section import Section
-from app.models.warehouse_remainder import WarehouseRemainder
+from app.models.spg_remainder import SpgRemainder
 from app.models.work_task import WorkTask
 
 
@@ -72,18 +72,17 @@ async def get_spg_snapshot(
     )
     task_rows = (await db.execute(task_agg_q)).all()
 
-    # Aggregate warehouse_remainders per (product_id, section_id)
+    # Aggregate spg_remainders per product_id for this SPG
     rem_agg_q = (
         select(
-            WarehouseRemainder.product_id,
-            WarehouseRemainder.section_id,
-            func.sum(WarehouseRemainder.remainder_quantity).label("remainder_total"),
+            SpgRemainder.product_id,
+            func.sum(SpgRemainder.remainder_quantity).label("remainder_total"),
         )
         .where(
-            WarehouseRemainder.section_id.in_(section_ids),
-            WarehouseRemainder.consumed_at.is_(None),
+            SpgRemainder.spg_id == spg_id,
+            SpgRemainder.consumed_at.is_(None),
         )
-        .group_by(WarehouseRemainder.product_id, WarehouseRemainder.section_id)
+        .group_by(SpgRemainder.product_id)
     )
     rem_rows = (await db.execute(rem_agg_q)).all()
 
@@ -91,19 +90,19 @@ async def get_spg_snapshot(
     neg_agg_q = (
         select(
             func.coalesce(
-                func.sum(func.least(WarehouseRemainder.remainder_quantity, 0)),
+                func.sum(func.least(SpgRemainder.remainder_quantity, 0)),
                 0,
             ).label("neg_total"),
             func.coalesce(
                 func.sum(
-                    func.cast(WarehouseRemainder.remainder_quantity < 0, Integer)
+                    func.cast(SpgRemainder.remainder_quantity < 0, Integer)
                 ),
                 0,
             ).label("neg_count"),
         )
         .where(
-            WarehouseRemainder.section_id.in_(section_ids),
-            WarehouseRemainder.consumed_at.is_(None),
+            SpgRemainder.spg_id == spg_id,
+            SpgRemainder.consumed_at.is_(None),
         )
     )
     neg_row = (await db.execute(neg_agg_q)).one()
@@ -113,17 +112,17 @@ async def get_spg_snapshot(
     # Per-product negative remainder count
     neg_count_per_product_q = (
         select(
-            WarehouseRemainder.product_id,
+            SpgRemainder.product_id,
             func.coalesce(
-                func.sum(func.cast(WarehouseRemainder.remainder_quantity < 0, Integer)),
+                func.sum(func.cast(SpgRemainder.remainder_quantity < 0, Integer)),
                 0,
             ).label("neg_count"),
         )
         .where(
-            WarehouseRemainder.section_id.in_(section_ids),
-            WarehouseRemainder.consumed_at.is_(None),
+            SpgRemainder.spg_id == spg_id,
+            SpgRemainder.consumed_at.is_(None),
         )
-        .group_by(WarehouseRemainder.product_id)
+        .group_by(SpgRemainder.product_id)
     )
     neg_count_per_product_rows = (await db.execute(neg_count_per_product_q)).all()
     neg_count_per_product = {
@@ -161,9 +160,9 @@ async def get_spg_snapshot(
             "received": float(r.received or 0),
         }
 
-    rem_lookup: dict[tuple[int, int], float] = {}
+    rem_lookup: dict[int, float] = {}
     for r in rem_rows:
-        rem_lookup[(r.product_id, r.section_id)] = float(r.remainder_total or 0)
+        rem_lookup[r.product_id] = float(r.remainder_total or 0)
 
     # Build rows
     rows = []
@@ -182,22 +181,23 @@ async def get_spg_snapshot(
         planned_total = 0.0
         completed_total = 0.0
         in_work_total = 0.0
-        remainder_total = 0.0
+        remainder_total = rem_lookup.get(pid, 0.0)
         issued_total = 0.0
         max_location_value = -1.0
         current_section_code: str | None = None
 
+        first_section_code = section_id_to_code[section_ids[0]] if section_ids else None
+
         for sid in section_ids:
             scode = section_id_to_code[sid]
             t = task_lookup.get((pid, sid))
-            rem = rem_lookup.get((pid, sid), 0.0)
+            rem = remainder_total if scode == first_section_code else 0.0
 
             if t:
                 per_section[scode] = {**t, "remainder": rem}
                 planned_total += t["planned"]
                 completed_total += t["completed"]
                 in_work_total += t["in_work"]
-                remainder_total += rem
                 issued_total += t["issued"]
 
                 # Current section = where most material is (in_work + available)
@@ -210,7 +210,6 @@ async def get_spg_snapshot(
                     "planned": 0, "completed": 0, "in_work": 0, "available": 0,
                     "issued": 0, "transferred": 0, "received": 0, "remainder": rem,
                 }
-                remainder_total += rem
 
         completion_pct = round(completed_total / planned_total * 100, 1) if planned_total > 0 else 0.0
 

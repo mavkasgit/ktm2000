@@ -11,7 +11,7 @@ from app.models.production_plan import PlanChangeItem, PlanChangeSet, PlanPositi
 from app.models.release_batch import ReleaseBatch, ReleaseBatchPosition
 from app.models.rework_task import ReworkTask
 from app.models.transfer import Transfer, TransferDiscrepancy
-from app.models.warehouse_remainder import WarehouseRemainder
+from app.models.spg_remainder import SpgRemainder
 from app.models.work_task import WorkTask
 
 
@@ -32,7 +32,7 @@ async def clear_generated_production_data(db: AsyncSession) -> dict[str, int]:
     await execute_delete(Movement, "movements")
     await execute_delete(TransferDiscrepancy, "transfer_discrepancies")
     await execute_delete(Transfer, "transfers")
-    await execute_delete(WarehouseRemainder, "warehouse_remainders")
+    await execute_delete(SpgRemainder, "spg_remainders")
 
     await execute_delete(WorkTask, "work_tasks")
     await execute_delete(SectionPlanLine, "section_plan_lines")

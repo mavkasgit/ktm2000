@@ -10,7 +10,7 @@ from app.models.product import Product, ProductType
 from app.models.section import Section
 from app.models.spg import SpgSection, StorageProductionGroup
 from app.models.user import User, UserRole
-from app.models.warehouse_remainder import WarehouseRemainder
+from app.models.spg_remainder import SpgRemainder
 
 
 async def _make_admin(session, email: str = "admin-spg@test.local") -> User:
@@ -78,9 +78,10 @@ async def test_manual_operation_in_creates_remainder(client, session):
 
     # Verify a manual remainder was created.
     remainder = (await session.execute(
-        select(WarehouseRemainder).where(WarehouseRemainder.id == body["remainder_id"])
+        select(SpgRemainder).where(SpgRemainder.id == body["remainder_id"])
     )).scalar_one()
     assert remainder.source == "manual"
+    assert remainder.spg_id == spg.id
     assert remainder.remainder_quantity == Decimal("50")
 
     # Verify a movement was logged.
@@ -115,7 +116,7 @@ async def test_manual_operation_out_creates_negative_remainder(client, session):
 
     # The remainder should now be negative.
     remainder = (await session.execute(
-        select(WarehouseRemainder).where(WarehouseRemainder.id == body["remainder_id"])
+        select(SpgRemainder).where(SpgRemainder.id == body["remainder_id"])
     )).scalar_one()
     assert remainder.remainder_quantity == Decimal("-10")
 

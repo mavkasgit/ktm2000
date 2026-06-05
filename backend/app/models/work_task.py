@@ -28,7 +28,7 @@ class WorkTask(Base):
         CheckConstraint("cached_received_quantity >= 0", name="ck_work_tasks_cached_received_quantity_non_negative"),
         CheckConstraint("cached_rejected_quantity >= 0", name="ck_work_tasks_cached_rejected_quantity_non_negative"),
         CheckConstraint("cached_remaining_quantity >= 0", name="ck_work_tasks_cached_remaining_quantity_non_negative"),
-        CheckConstraint("planned_quantity > 0", name="ck_work_tasks_planned_quantity_positive"),
+        CheckConstraint("planned_quantity >= 0", name="ck_work_tasks_planned_quantity_non_negative"),
     )
 
     id: Mapped[int] = mapped_column(BigInteger, Identity(always=True), primary_key=True)

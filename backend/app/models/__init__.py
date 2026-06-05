@@ -39,7 +39,7 @@ from .defect import (
 from .rework_task import ReworkTask, ReworkTaskStatus
 from .entity_comment import EntityComment, EntityType
 from .attachment import Attachment, AttachmentLink
-from .warehouse_remainder import WarehouseRemainder
+from .spg_remainder import SpgRemainder
 from .spg import StorageProductionGroup, SpgSection
 
 __all__ = [
@@ -106,7 +106,7 @@ __all__ = [
     "EntityType",
     "Attachment",
     "AttachmentLink",
-    "WarehouseRemainder",
+    "SpgRemainder",
     "StorageProductionGroup",
     "SpgSection",
 ]

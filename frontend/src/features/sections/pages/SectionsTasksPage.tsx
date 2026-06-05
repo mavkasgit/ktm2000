@@ -13,13 +13,13 @@ import {
   getSectionBoard,
   getSectionDailyStats,
   getSectionsSummary,
-  getWarehouseRemainders,
+  getSpgRemainders,
   issueTask,
   returnRemainder,
   type AcceptTransferInput,
   type DailyStatsRow,
   type SectionBoardTask,
-  type WarehouseRemainder,
+  type SpgRemainder,
 } from "@/shared/api/shopfloor";
 import { DatePicker, renderIcon, toast, Button, Popover, PopoverTrigger, PopoverContent } from "@/shared/ui";
 import { Inbox } from "lucide-react";
@@ -32,7 +32,7 @@ import { TaskActionDrawer } from "../components/TaskActionDrawer";
 import { BulkOperationsPanel } from "../components/BulkOperationsPanel";
 import { PlanModal } from "../components/PlanModal";
 import { GroupingSettingsModal } from "../components/GroupingSettingsModal";
-import { WarehouseRemaindersDialog } from "../components/WarehouseRemaindersDialog";
+import { SpgRemaindersDialog } from "../components/SpgRemaindersDialog";
 import { loadProfileForSection, PRESET_PROFILES, type GroupingProfile, saveProfileForSection } from "../lib/groupingProfiles";
 
 type MeResponse = {
@@ -147,7 +147,8 @@ export function SectionsTasksPage() {
   const [planModalOpen, setPlanModalOpen] = useState(false);
   const [groupingModalOpen, setGroupingModalOpen] = useState(false);
   const [remaindersDialogOpen, setRemaindersDialogOpen] = useState(false);
-  const [selectedRemainder, setSelectedRemainder] = useState<WarehouseRemainder | null>(null);
+  const [remaindersPlanPositionId, setRemaindersPlanPositionId] = useState<number | null>(null);
+  const [selectedRemainder, setSelectedRemainder] = useState<SpgRemainder | null>(null);
 
   // Bulk mode state
   const [bulkMode, setBulkMode] = useState(searchParams.get("bulk") === "1" || searchParams.get("singleWindow") === "1");
@@ -298,8 +299,8 @@ export function SectionsTasksPage() {
   });
 
   const { data: remaindersData, isLoading: remaindersLoading } = useQuery({
-    queryKey: ["shopfloor-remainders", sectionId],
-    queryFn: () => getWarehouseRemainders(sectionId ?? undefined),
+    queryKey: ["shopfloor-remainders", sectionId, remaindersPlanPositionId],
+    queryFn: () => getSpgRemainders(sectionId ?? undefined, remaindersPlanPositionId ?? undefined),
     enabled: remaindersDialogOpen && sectionId !== null,
     retry: false,
   });
@@ -856,7 +857,7 @@ export function SectionsTasksPage() {
     }
   }, [incomingTransfers, acceptTransferMutation]);
 
-  const handleUseRemainder = useCallback((remainder: WarehouseRemainder) => {
+  const handleUseRemainder = useCallback((remainder: SpgRemainder) => {
     // Find a task in the current section that matches the product
     const matchingTask = tasks.find(
       (t) => t.product_sku === remainder.product_sku &&
@@ -1043,7 +1044,10 @@ export function SectionsTasksPage() {
               <Button variant="outline" size="sm" onClick={() => setPlanModalOpen(true)}>
                 План
               </Button>
-              <Button variant="outline" size="sm" onClick={() => setRemaindersDialogOpen(true)} title="Складские остатки">
+              <Button variant="outline" size="sm" onClick={() => {
+                setRemaindersPlanPositionId(actionDialog.task?.plan_position_id ?? null);
+                setRemaindersDialogOpen(true);
+              }} title="Складские остатки">
                 Остатки
               </Button>
               <Button variant="outline" size="sm" onClick={() => setGroupingModalOpen(true)} title="Настройки группировки">
@@ -1217,13 +1221,14 @@ export function SectionsTasksPage() {
         />
       )}
 
-      {/* Warehouse remainders dialog */}
-      <WarehouseRemaindersDialog
+      {/* Spg remainders dialog */}
+      <SpgRemaindersDialog
         open={remaindersDialogOpen}
         onOpenChange={setRemaindersDialogOpen}
         remainders={remaindersData?.remainders || []}
         isLoading={remaindersLoading}
         onUseRemainder={handleUseRemainder}
+        currentPlanPositionId={remaindersPlanPositionId}
       />
     </>
   );

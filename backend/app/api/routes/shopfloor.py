@@ -716,10 +716,15 @@ async def section_daily_stats(
 @router.get("/remainders", dependencies=[Depends(require_role(list(READER_ROLES)))])
 async def list_warehouse_remainders(
     section_id: int | None = Query(None),
+    plan_position_id: int | None = Query(None),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
-    """List active warehouse remainders (surplus returned to stock)."""
-    return await get_warehouse_remainders(db, section_id=section_id)
+    """List active warehouse remainders (surplus returned to stock).
+
+    If ``plan_position_id`` is provided, only returns remainders that are
+    either unreserved or reserved for this specific plan position.
+    """
+    return await get_warehouse_remainders(db, section_id=section_id, plan_position_id=plan_position_id)
 
 
 @router.post("/remainders/return", dependencies=[Depends(require_role(list(WRITER_ROLES)))])
@@ -783,7 +788,7 @@ async def task_spg_available(
 ) -> dict:
     """Return available remainders in the SPG for a task's product + section."""
     from app.models.spg import SpgSection, StorageProductionGroup
-    from app.models.warehouse_remainder import WarehouseRemainder
+    from app.models.spg_remainder import SpgRemainder
     from sqlalchemy import func
 
     task = await db.get(WorkTask, task_id)
@@ -801,17 +806,13 @@ async def task_spg_available(
     if spg is None:
         return {"spg_available": 0, "spg_id": None, "spg_name": None, "spg_code": None}
 
-    spg_section_ids = (await db.execute(
-        select(SpgSection.section_id).where(SpgSection.spg_id == spg.id)
-    )).scalars().all()
-
     available = await db.scalar(
-        select(func.coalesce(func.sum(WarehouseRemainder.remainder_quantity), 0))
+        select(func.coalesce(func.sum(SpgRemainder.remainder_quantity), 0))
         .where(
-            WarehouseRemainder.product_id == task.product_id,
-            WarehouseRemainder.section_id.in_(spg_section_ids),
-            WarehouseRemainder.consumed_at.is_(None),
-            WarehouseRemainder.remainder_quantity > 0,
+            SpgRemainder.product_id == task.product_id,
+            SpgRemainder.spg_id == spg.id,
+            SpgRemainder.consumed_at.is_(None),
+            SpgRemainder.remainder_quantity > 0,
         )
     )
 

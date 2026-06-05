@@ -6,7 +6,7 @@ from app.models.product import Product, ProductType
 from app.models.section import Section
 from app.models.spg import SpgSection, StorageProductionGroup
 from app.models.user import User, UserRole
-from app.models.warehouse_remainder import WarehouseRemainder
+from app.models.spg_remainder import SpgRemainder
 
 
 async def _make_admin(session, email: str = "audit-admin@test.local", name: str = "Audit Admin") -> User:
@@ -61,8 +61,7 @@ async def test_manual_operation_remainder_has_user_name_snapshot(client, session
     assert in_resp.status_code == 200
     rid = in_resp.json()["remainder_id"]
 
-    remainder = await session.get(WarehouseRemainder, rid)
-    # WarehouseRemainder didn't have created_by before — the migration adds it.
+    remainder = await session.get(SpgRemainder, rid)
     assert remainder.created_by == admin.id
     assert remainder.created_by_user_name == "Rem Snapshotter"
 
@@ -110,9 +109,9 @@ async def test_deleted_user_snapshot_survives_in_history(session):
     from datetime import datetime
     from decimal import Decimal
     from app.models.movement import Movement, MovementType
-    rem = WarehouseRemainder(
+    rem = SpgRemainder(
         product_id=product.id,
-        section_id=section.id,
+        spg_id=spg.id,
         remainder_quantity=Decimal("3"),
         original_issued=Decimal("3"),
         source="manual",
@@ -135,14 +134,13 @@ async def test_deleted_user_snapshot_survives_in_history(session):
     await session.flush()
 
     # Simulate user deletion: NULL the FK on both rows, keep the snapshot.
-    # WarehouseRemainder.created_by is nullable (SET NULL FK), so we can flush.
     rem.created_by = None
     await session.flush()
     # Movement.created_by is NOT NULL, so we can't flush the NULL — keep it in-memory.
     # The identity map will return the cached object with the in-memory value.
     mov.created_by = None
 
-    reloaded_rem = await session.get(WarehouseRemainder, rem.id)
+    reloaded_rem = await session.get(SpgRemainder, rem.id)
     reloaded_mov = await session.get(Movement, mov.id)
     assert reloaded_rem.created_by is None
     assert reloaded_rem.created_by_user_name == "Ghost User"

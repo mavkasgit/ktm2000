@@ -14,7 +14,7 @@ from app.models.route import ProductionRoute, RouteStage, RouteOperation
 from app.models.section import Section
 from app.models.spg import SpgSection, StorageProductionGroup
 from app.models.user import User
-from app.models.warehouse_remainder import WarehouseRemainder
+from app.models.spg_remainder import SpgRemainder
 from app.models.work_task import WorkTask
 from app.services.shopfloor.common import _get_user_snapshot_name
 from app.services.shopfloor.queries_spg import get_spg_snapshot
@@ -227,11 +227,11 @@ async def get_spg_availability(
         raise HTTPException(status_code=400, detail="Section does not belong to this SPG")
 
     available = await db.scalar(
-        select(func.coalesce(func.sum(WarehouseRemainder.remainder_quantity), 0))
+        select(func.coalesce(func.sum(SpgRemainder.remainder_quantity), 0))
         .where(
-            WarehouseRemainder.product_id == product_id,
-            WarehouseRemainder.section_id == section_id,
-            WarehouseRemainder.consumed_at.is_(None),
+            SpgRemainder.product_id == product_id,
+            SpgRemainder.spg_id == spg_id,
+            SpgRemainder.consumed_at.is_(None),
         )
     )
 
@@ -272,9 +272,12 @@ class RemainderOut(BaseModel):
     product_id: int
     product_sku: str
     product_name: str
-    section_id: int
-    section_code: str
-    section_name: str
+    spg_id: int
+    spg_code: str
+    spg_name: str
+    section_id: int | None = None
+    section_code: str | None = None
+    section_name: str | None = None
     remainder_quantity: float
     original_issued: float
     completed_stages: list[dict]
@@ -289,22 +292,15 @@ async def list_spg_remainders(spg_id: int, db: AsyncSession = Depends(get_db)) -
     if spg is None:
         raise HTTPException(status_code=404, detail="SPG not found")
 
-    section_ids = (await db.execute(
-        select(SpgSection.section_id).where(SpgSection.spg_id == spg_id)
-    )).scalars().all()
-
-    if not section_ids:
-        return []
-
     rows = (await db.execute(
-        select(WarehouseRemainder, Product.sku, Product.name, Section.code, Section.name)
-        .join(Product, WarehouseRemainder.product_id == Product.id)
-        .join(Section, WarehouseRemainder.section_id == Section.id)
+        select(SpgRemainder, Product.sku, Product.name, StorageProductionGroup.code, StorageProductionGroup.name)
+        .join(Product, SpgRemainder.product_id == Product.id)
+        .join(StorageProductionGroup, SpgRemainder.spg_id == StorageProductionGroup.id)
         .where(
-            WarehouseRemainder.section_id.in_(section_ids),
-            WarehouseRemainder.consumed_at.is_(None),
+            SpgRemainder.spg_id == spg_id,
+            SpgRemainder.consumed_at.is_(None),
         )
-        .order_by(WarehouseRemainder.created_at.desc())
+        .order_by(SpgRemainder.created_at.desc())
     )).all()
 
     return [
@@ -313,16 +309,16 @@ async def list_spg_remainders(spg_id: int, db: AsyncSession = Depends(get_db)) -
             product_id=r.product_id,
             product_sku=sku,
             product_name=name,
-            section_id=r.section_id,
-            section_code=scode,
-            section_name=sname,
+            spg_id=r.spg_id,
+            spg_code=spg_code,
+            spg_name=spg_name,
             remainder_quantity=float(r.remainder_quantity),
             original_issued=float(r.original_issued),
             completed_stages=r.completed_stages_json,
             source=r.source,
             created_at=r.created_at.isoformat(),
         )
-        for r, sku, name, scode, sname in rows
+        for r, sku, name, spg_code, spg_name in rows
     ]
 
 
@@ -333,7 +329,7 @@ async def create_manual_remainder(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> RemainderOut:
-    """Create a manual remainder (inventory entry) for a product in a SPG section."""
+    """Create a manual remainder (inventory entry) for a product in a SPG."""
     spg = await db.get(StorageProductionGroup, spg_id)
     if spg is None:
         raise HTTPException(status_code=404, detail="SPG not found")
@@ -359,9 +355,9 @@ async def create_manual_remainder(
     stages = [s.model_dump() for s in payload.completed_stages]
 
     actor_name = await _get_user_snapshot_name(db, current_user.id)
-    remainder = WarehouseRemainder(
+    remainder = SpgRemainder(
         product_id=payload.product_id,
-        section_id=payload.section_id,
+        spg_id=spg_id,
         route_stage_id=None,
         section_plan_line_id=None,
         origin_task_id=None,
@@ -381,6 +377,9 @@ async def create_manual_remainder(
         product_id=product.id,
         product_sku=product.sku,
         product_name=product.name,
+        spg_id=spg.id,
+        spg_code=spg.code,
+        spg_name=spg.name,
         section_id=section.id,
         section_code=section.code,
         section_name=section.name,
@@ -400,7 +399,7 @@ async def update_manual_remainder(
     db: AsyncSession = Depends(get_db),
 ) -> RemainderOut:
     """Update a manual remainder quantity or stages."""
-    remainder = await db.get(WarehouseRemainder, remainder_id)
+    remainder = await db.get(SpgRemainder, remainder_id)
     if remainder is None:
         raise HTTPException(status_code=404, detail="Remainder not found")
 
@@ -415,7 +414,9 @@ async def update_manual_remainder(
         )).scalars().all()
         if payload.section_id not in section_ids:
             raise HTTPException(status_code=400, detail="Section does not belong to this SPG")
-        remainder.section_id = payload.section_id
+        # In the new logic, remainder is bound to SPG. So section_id just validates belonging to the SPG.
+        # But we keep it in mind. We can update spg_id if a section of a different SPG was selected.
+        remainder.spg_id = spg_id
 
     if payload.completed_stages is not None:
         remainder.completed_stages_json = [s.model_dump() for s in payload.completed_stages]
@@ -424,16 +425,23 @@ async def update_manual_remainder(
     await db.refresh(remainder)
 
     product = await db.get(Product, remainder.product_id)
-    section = await db.get(Section, remainder.section_id)
+    spg = await db.get(StorageProductionGroup, remainder.spg_id)
+
+    # For backward compatibility fields
+    section_id = payload.section_id or (section_ids[0] if 'section_ids' in locals() and section_ids else None)
+    section = await db.get(Section, section_id) if section_id else None
 
     return RemainderOut(
         id=remainder.id,
         product_id=product.id,
         product_sku=product.sku,
         product_name=product.name,
-        section_id=section.id,
-        section_code=section.code,
-        section_name=section.name,
+        spg_id=spg.id,
+        spg_code=spg.code,
+        spg_name=spg.name,
+        section_id=section.id if section else None,
+        section_code=section.code if section else None,
+        section_name=section.name if section else None,
         remainder_quantity=float(remainder.remainder_quantity),
         original_issued=float(remainder.original_issued),
         completed_stages=remainder.completed_stages_json,
@@ -445,7 +453,7 @@ async def update_manual_remainder(
 @router.delete("/{spg_id}/remainders/{remainder_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_manual_remainder(spg_id: int, remainder_id: int, db: AsyncSession = Depends(get_db)):
     """Delete a manual remainder (mark as consumed)."""
-    remainder = await db.get(WarehouseRemainder, remainder_id)
+    remainder = await db.get(SpgRemainder, remainder_id)
     if remainder is None:
         raise HTTPException(status_code=404, detail="Remainder not found")
     # Soft-delete: mark as consumed
@@ -511,13 +519,13 @@ async def manual_stock_operation(
         raise HTTPException(status_code=404, detail="SPG not found")
 
     if payload.operation_type == "out" and spg.requires_lot:
-        # Check current available for this product+section
+        # Check current available for this product+SPG
         available = await db.scalar(
-            select(func.coalesce(func.sum(WarehouseRemainder.remainder_quantity), 0))
+            select(func.coalesce(func.sum(SpgRemainder.remainder_quantity), 0))
             .where(
-                WarehouseRemainder.product_id == payload.product_id,
-                WarehouseRemainder.section_id == payload.section_id,
-                WarehouseRemainder.consumed_at.is_(None),
+                SpgRemainder.product_id == payload.product_id,
+                SpgRemainder.spg_id == spg_id,
+                SpgRemainder.consumed_at.is_(None),
             )
         )
         if qty > available:
@@ -569,26 +577,28 @@ async def manual_stock_operation(
     new_qty: float = 0.0
 
     if payload.operation_type == "in":
-        # Find existing active manual remainder for this product+section
+        # Find existing active manual remainder for this product+SPG
         existing = await db.scalar(
-            select(WarehouseRemainder)
+            select(SpgRemainder)
             .where(
-                WarehouseRemainder.product_id == payload.product_id,
-                WarehouseRemainder.section_id == payload.section_id,
-                WarehouseRemainder.source == "manual",
-                WarehouseRemainder.consumed_at.is_(None),
+                SpgRemainder.product_id == payload.product_id,
+                SpgRemainder.spg_id == spg_id,
+                SpgRemainder.source == "manual",
+                SpgRemainder.consumed_at.is_(None),
             )
-            .order_by(WarehouseRemainder.created_at.desc())
+            .order_by(SpgRemainder.created_at.desc())
         )
         if existing is not None:
             existing.remainder_quantity = Decimal(str(existing.remainder_quantity)) + qty
             existing.original_issued = Decimal(str(existing.original_issued)) + qty
+            if existing.remainder_quantity == 0:
+                existing.consumed_at = now
             affected_remainder_id = existing.id
             new_qty = float(existing.remainder_quantity)
         else:
-            rem = WarehouseRemainder(
+            rem = SpgRemainder(
                 product_id=payload.product_id,
-                section_id=payload.section_id,
+                spg_id=spg_id,
                 route_stage_id=None,
                 section_plan_line_id=None,
                 origin_task_id=None,
@@ -604,25 +614,27 @@ async def manual_stock_operation(
             affected_remainder_id = rem.id
             new_qty = float(rem.remainder_quantity)
     else:  # "out"
-        # Find oldest active remainder (FIFO) for this product+section
+        # Find oldest active remainder (FIFO) for this product+SPG
         existing = await db.scalar(
-            select(WarehouseRemainder)
+            select(SpgRemainder)
             .where(
-                WarehouseRemainder.product_id == payload.product_id,
-                WarehouseRemainder.section_id == payload.section_id,
-                WarehouseRemainder.consumed_at.is_(None),
+                SpgRemainder.product_id == payload.product_id,
+                SpgRemainder.spg_id == spg_id,
+                SpgRemainder.consumed_at.is_(None),
             )
-            .order_by(WarehouseRemainder.created_at.asc())
+            .order_by(SpgRemainder.created_at.asc())
         )
         if existing is not None:
             existing.remainder_quantity = Decimal(str(existing.remainder_quantity)) - qty
+            if existing.remainder_quantity == 0:
+                existing.consumed_at = now
             affected_remainder_id = existing.id
             new_qty = float(existing.remainder_quantity)
         else:
             # No remainder — create a negative one to record the over-issue
-            rem = WarehouseRemainder(
+            rem = SpgRemainder(
                 product_id=payload.product_id,
-                section_id=payload.section_id,
+                spg_id=spg_id,
                 route_stage_id=None,
                 section_plan_line_id=None,
                 origin_task_id=None,
@@ -673,6 +685,128 @@ async def manual_stock_operation(
     )
 
 
+class SpgReconcileIn(BaseModel):
+    product_id: int
+    section_id: int
+    actual_quantity: Decimal
+    comment: str | None = None
+
+
+class SpgReconcileOut(BaseModel):
+    remainder_id: int
+    product_id: int
+    section_id: int
+    actual_quantity: float
+    adjustment_quantity: float
+
+
+@router.post(
+    "/{spg_id}/reconcile",
+    response_model=SpgReconcileOut,
+    dependencies=[Depends(require_role(list(WRITER_ROLES)))],
+)
+async def reconcile_stock(
+    spg_id: int,
+    payload: SpgReconcileIn,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> SpgReconcileOut:
+    """Reconcile inventory: set exact actual quantity, expire old remainders, and log adjustment movement."""
+    if payload.actual_quantity < 0:
+        raise HTTPException(status_code=400, detail="actual_quantity must be non-negative")
+
+    spg = await db.get(StorageProductionGroup, spg_id)
+    if spg is None:
+        raise HTTPException(status_code=404, detail="SPG not found")
+
+    # Validate section belongs to SPG
+    section_ids = (await db.execute(
+        select(SpgSection.section_id).where(SpgSection.spg_id == spg_id)
+    )).scalars().all()
+    if payload.section_id not in section_ids:
+        raise HTTPException(status_code=400, detail="Section does not belong to this SPG")
+
+    product = await db.get(Product, payload.product_id)
+    if product is None:
+        raise HTTPException(status_code=404, detail="Product not found")
+
+    section = await db.get(Section, payload.section_id)
+    if section is None:
+        raise HTTPException(status_code=404, detail="Section not found")
+
+    now = datetime.now()
+    actor_name = await _get_user_snapshot_name(db, current_user.id)
+
+    # 1. Fetch active remainders
+    active_remainders = (await db.execute(
+        select(SpgRemainder)
+        .where(
+            SpgRemainder.product_id == payload.product_id,
+            SpgRemainder.spg_id == spg_id,
+            SpgRemainder.consumed_at.is_(None),
+        )
+    )).scalars().all()
+
+    current_qty = sum((r.remainder_quantity for r in active_remainders), Decimal("0"))
+    adjustment_qty = payload.actual_quantity - current_qty
+
+    # 2. Mark old remainders as consumed/expired
+    for r in active_remainders:
+        r.consumed_at = now
+        r.remainder_quantity = Decimal("0")
+
+    # 3. Create one new active remainder if actual_quantity > 0
+    new_remainder_id = 0
+    if payload.actual_quantity > 0:
+        rem = SpgRemainder(
+            product_id=payload.product_id,
+            spg_id=spg_id,
+            route_stage_id=None,
+            section_plan_line_id=None,
+            origin_task_id=None,
+            remainder_quantity=payload.actual_quantity,
+            original_issued=payload.actual_quantity,
+            completed_stages_json=[],
+            source="manual",
+            created_by=current_user.id,
+            created_by_user_name=actor_name,
+            created_at=now,
+        )
+        db.add(rem)
+        await db.flush()
+        new_remainder_id = rem.id
+
+    # 4. Log adjustment movement if difference exists
+    if abs(adjustment_qty) > 0:
+        movement = Movement(
+            product_id=payload.product_id,
+            task_id=None,
+            section_plan_line_id=None,
+            from_section_id=payload.section_id if adjustment_qty < 0 else None,
+            to_section_id=payload.section_id if adjustment_qty > 0 else None,
+            movement_type=MovementType.adjustment,
+            quantity=abs(adjustment_qty),
+            reason="inventory_reconciliation",
+            comment=payload.comment,
+            created_by=current_user.id,
+            executor_user_id=current_user.id,
+            created_by_user_name=actor_name,
+            executor_user_name=actor_name,
+            performed_at=now,
+            accounted_at=now,
+        )
+        db.add(movement)
+        await db.flush()
+
+    return SpgReconcileOut(
+        remainder_id=new_remainder_id,
+        product_id=payload.product_id,
+        section_id=payload.section_id,
+        actual_quantity=float(payload.actual_quantity),
+        adjustment_quantity=float(adjustment_qty),
+    )
+
+
 # ─── History ────────────────────────────────────────────────────────────────
 
 
@@ -696,19 +830,27 @@ async def get_remainder_history(
     db: AsyncSession = Depends(get_db),
 ) -> RemainderHistoryOut:
     """Return full traceability chain for a single remainder."""
-    remainder = await db.get(WarehouseRemainder, remainder_id)
+    remainder = await db.get(SpgRemainder, remainder_id)
     if remainder is None:
         raise HTTPException(status_code=404, detail="Remainder not found")
 
     product = await db.get(Product, remainder.product_id)
-    section = await db.get(Section, remainder.section_id)
+    spg = await db.get(StorageProductionGroup, remainder.spg_id)
+
+    spg_section_ids = (await db.execute(
+        select(SpgSection.section_id).where(SpgSection.spg_id == remainder.spg_id)
+    )).scalars().all()
+    section = await db.get(Section, spg_section_ids[0]) if spg_section_ids else None
 
     remainder_payload = {
         "id": remainder.id,
         "product_id": remainder.product_id,
         "product_sku": product.sku if product else "",
         "product_name": product.name if product else "",
-        "section_id": remainder.section_id,
+        "spg_id": remainder.spg_id,
+        "spg_code": spg.code if spg else "",
+        "spg_name": spg.name if spg else "",
+        "section_id": section.id if section else None,
         "section_code": section.code if section else "",
         "section_name": section.name if section else "",
         "remainder_quantity": float(remainder.remainder_quantity),
@@ -798,35 +940,36 @@ async def get_remainder_history(
                 "sequence": stage.sequence if stage else None,
             }
 
-    # ── Movements log (all movements touching this product in this section) ──
-    movements_rows = (await db.execute(
-        select(Movement)
-        .where(
-            Movement.product_id == remainder.product_id,
-            (Movement.from_section_id == remainder.section_id) | (Movement.to_section_id == remainder.section_id),
-        )
-        .order_by(Movement.created_at.desc())
-        .limit(200)
-    )).scalars().all()
-
+    # ── Movements log (all movements touching this product in this SPG) ──
     movements_out = []
-    for m in movements_rows:
-        movements_out.append({
-            "id": m.id,
-            "movement_type": m.movement_type.value,
-            "quantity": float(m.quantity),
-            "task_id": m.task_id,
-            "from_section_id": m.from_section_id,
-            "to_section_id": m.to_section_id,
-            "reason": m.reason,
-            "comment": m.comment,
-            "created_by": m.created_by,
-            "created_by_user_name": m.created_by_user_name,
-            "executor_user_id": m.executor_user_id,
-            "executor_user_name": m.executor_user_name,
-            "created_at": m.created_at.isoformat(),
-            "performed_at": m.performed_at.isoformat() if m.performed_at else None,
-        })
+    if spg_section_ids:
+        movements_rows = (await db.execute(
+            select(Movement)
+            .where(
+                Movement.product_id == remainder.product_id,
+                (Movement.from_section_id.in_(spg_section_ids)) | (Movement.to_section_id.in_(spg_section_ids)),
+            )
+            .order_by(Movement.created_at.desc())
+            .limit(200)
+        )).scalars().all()
+
+        for m in movements_rows:
+            movements_out.append({
+                "id": m.id,
+                "movement_type": m.movement_type.value,
+                "quantity": float(m.quantity),
+                "task_id": m.task_id,
+                "from_section_id": m.from_section_id,
+                "to_section_id": m.to_section_id,
+                "reason": m.reason,
+                "comment": m.comment,
+                "created_by": m.created_by,
+                "created_by_user_name": m.created_by_user_name,
+                "executor_user_id": m.executor_user_id,
+                "executor_user_name": m.executor_user_name,
+                "created_at": m.created_at.isoformat(),
+                "performed_at": m.performed_at.isoformat() if m.performed_at else None,
+            })
 
     return RemainderHistoryOut(
         remainder=remainder_payload,

@@ -16,7 +16,7 @@ from app.models.product import Product
 from app.models.route import RouteStage, SectionOperation
 from app.models.section import Section
 from app.models.transfer import Transfer, TransferStatus
-from app.models.warehouse_remainder import WarehouseRemainder
+from app.models.spg_remainder import SpgRemainder
 from app.models.work_task import WorkTask, WorkTaskStatus
 
 from .cache import _compute_available_from_balances
@@ -560,39 +560,61 @@ async def get_warehouse_remainders(
     db: AsyncSession,
     *,
     section_id: int | None = None,
+    plan_position_id: int | None = None,
 ) -> dict:
-    """Return active warehouse remainders (not fully consumed).
+    """Return active warehouse remainders (not fully consumed) from SPG.
 
-    These are surplus quantities returned to stock after task completion
-    where issued > completed. Includes completed stages info for display.
+    If ``plan_position_id`` is given, filters to show only:
+    - remainders not reserved for any position (available for everyone), OR
+    - remainders reserved specifically for this plan position.
+    Remainders reserved for *other* positions are excluded.
     """
+    from app.models.spg import StorageProductionGroup, SpgSection
+
     query = select(
-        WarehouseRemainder,
+        SpgRemainder,
         Product.sku,
         Product.name,
-        Section.code.label("section_code"),
-        Section.name.label("section_name"),
+        StorageProductionGroup.id.label("spg_id"),
+        StorageProductionGroup.code.label("spg_code"),
+        StorageProductionGroup.name.label("spg_name"),
         RouteStage,
     ).join(
-        Product, WarehouseRemainder.product_id == Product.id,
+        Product, SpgRemainder.product_id == Product.id,
     ).join(
-        Section, WarehouseRemainder.section_id == Section.id,
+        StorageProductionGroup, SpgRemainder.spg_id == StorageProductionGroup.id,
     ).join(
-        RouteStage, WarehouseRemainder.route_stage_id == RouteStage.id,
+        RouteStage, SpgRemainder.route_stage_id == RouteStage.id,
     ).where(
-        WarehouseRemainder.consumed_at.is_(None),
-        WarehouseRemainder.remainder_quantity > 0,
+        SpgRemainder.consumed_at.is_(None),
+        SpgRemainder.remainder_quantity > 0,
     )
 
     if section_id is not None:
-        query = query.where(WarehouseRemainder.section_id == section_id)
+        spg_id = await db.scalar(
+            select(SpgSection.spg_id).where(SpgSection.section_id == section_id)
+        )
+        if spg_id is not None:
+            query = query.where(SpgRemainder.spg_id == spg_id)
+        else:
+            return {"remainders": []}
 
-    query = query.order_by(WarehouseRemainder.created_at.desc())
+    if plan_position_id is not None:
+        # Show only: unreserved OR reserved for this exact position
+        from sqlalchemy import or_
+        query = query.where(
+            or_(
+                SpgRemainder.reserved_for_plan_position_id.is_(None),
+                SpgRemainder.reserved_for_plan_position_id == plan_position_id,
+            )
+        )
+
+    query = query.order_by(SpgRemainder.created_at.desc())
 
     rows = (await db.execute(query)).all()
 
     remainders = []
-    for remainder, product_sku, product_name, section_code, section_name, stage in rows:
+    for remainder, product_sku, product_name, spg_id, spg_code, spg_name, stage in rows:
         op_code = stage.operations[0].operation_code if stage.operations else None
         op_name = ", ".join(op.operation_name for op in stage.operations) if stage.operations else ""
         remainders.append({
@@ -600,9 +622,9 @@ async def get_warehouse_remainders(
             "product_id": remainder.product_id,
             "product_sku": product_sku,
             "product_name": product_name,
-            "section_id": remainder.section_id,
-            "section_code": section_code,
-            "section_name": section_name,
+            "spg_id": spg_id,
+            "spg_code": spg_code,
+            "spg_name": spg_name,
             "route_step_id": remainder.route_stage_id,
             "route_step_sequence": stage.sequence,
             "operation_code": op_code,
@@ -613,6 +635,8 @@ async def get_warehouse_remainders(
             "original_issued": str(remainder.original_issued),
             "completed_stages": remainder.completed_stages_json,
             "created_at": remainder.created_at.isoformat() if remainder.created_at else None,
+            "reserved_for_plan_position_id": remainder.reserved_for_plan_position_id,
         })
 
     return {"remainders": remainders}
+

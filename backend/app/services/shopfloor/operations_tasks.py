@@ -10,7 +10,7 @@ from app.models.defect import Defect, DefectItem, DefectStatus
 from app.models.internal_plan import SectionPlanLine
 from app.models.movement import Movement, MovementType
 from app.models.production_plan import PlanPosition, PlanPositionStatus
-from app.models.warehouse_remainder import WarehouseRemainder
+from app.models.spg_remainder import SpgRemainder
 from app.models.work_task import WorkTask, WorkTaskStatus
 
 from .cache import _refresh_section_plan_line_cache, _refresh_task_cache
@@ -48,6 +48,7 @@ async def issue_to_work(
     eff_executor = executor_user_id or actor_id
     actor_name = await _get_user_snapshot_name(db, actor_id)
     executor_name = await _get_user_snapshot_name(db, eff_executor)
+
     movement = Movement(
         product_id=task.product_id,
         task_id=task.id,
@@ -67,6 +68,8 @@ async def issue_to_work(
         accounted_at=accounted_at or now,
     )
     db.add(movement)
+    await db.flush()
+
     task.status = WorkTaskStatus.in_progress
     await db.flush()
     await _refresh_task_cache(db, task.id)
@@ -271,9 +274,53 @@ async def final_release(
         accounted_at=accounted_at or datetime.now(UTC),
     )
     db.add(movement)
+
+    # Create warehouse remainder for finished goods in SPG
+    from app.models.spg import SpgSection
+    spg_section = await db.scalar(
+        select(SpgSection).where(SpgSection.section_id == task.section_id)
+    )
+    remainder = None
+    if spg_section is not None:
+        spg_id = spg_section.spg_id
+
+        line = await db.get(SectionPlanLine, task.section_plan_line_id)
+        completed_stages = []
+        if line is not None:
+            from app.models.route import RouteStage
+            stages = (await db.execute(
+                select(RouteStage)
+                .where(RouteStage.route_id == line.route_id)
+                .where(RouteStage.sequence <= line.sequence)
+                .order_by(RouteStage.sequence)
+            )).scalars().all()
+            for s in stages:
+                completed_stages.append({
+                    "section_id": s.section_id,
+                    "operation_code": s.operations[0].operation_code if s.operations else None,
+                    "operation_name": ", ".join(op.operation_name for op in s.operations) if s.operations else "",
+                    "sequence": s.sequence,
+                })
+
+        remainder = SpgRemainder(
+            product_id=task.product_id,
+            spg_id=spg_id,
+            route_stage_id=task.route_stage_id,
+            section_plan_line_id=task.section_plan_line_id,
+            origin_task_id=task.id,
+            remainder_quantity=quantity,
+            original_issued=quantity,
+            completed_stages_json=completed_stages,
+            source="final_release",
+            created_by=actor_id,
+            created_by_user_name=actor_name,
+            created_at=performed_at or datetime.now(UTC),
+        )
+        db.add(remainder)
+
     await _refresh_task_cache(db, task.id)
     await _refresh_section_plan_line_cache(db, task.section_plan_line_id)
-    return {"movement_id": movement.id, "task_id": task.id}
+    return {"movement_id": movement.id, "remainder_id": remainder.id if remainder else None, "task_id": task.id}
 
 async def prepare_section_task(
     db: AsyncSession,
@@ -391,12 +438,20 @@ async def return_remainder_to_stock(
                 "sequence": stage.sequence,
             })
 
-    # Create remainder record
+    # Create remainder record in SPG
+    from app.models.spg import SpgSection
+    spg_section = await db.scalar(
+        select(SpgSection).where(SpgSection.section_id == task.section_id)
+    )
+    if spg_section is None:
+        raise ValueError("Section is not bound to any SPG")
+    spg_id = spg_section.spg_id
+
     actor_name = await _get_user_snapshot_name(db, actor_id)
     executor_name = await _get_user_snapshot_name(db, eff_executor)
-    remainder = WarehouseRemainder(
+    remainder = SpgRemainder(
         product_id=task.product_id,
-        section_id=task.section_id,
+        spg_id=spg_id,
         route_stage_id=task.route_stage_id,
         section_plan_line_id=task.section_plan_line_id,
         origin_task_id=task.id,
@@ -405,6 +460,7 @@ async def return_remainder_to_stock(
         completed_stages_json=completed_stages,
         created_by=actor_id,
         created_by_user_name=actor_name,
+        created_at=eff_performed,
     )
     db.add(remainder)
 
@@ -455,7 +511,7 @@ async def consume_remainder(
         task = await _get_task(db, task_id)
         return {"movement_id": existing.id, "task_id": task.id, "idempotent_replay": True}
 
-    remainder = await db.get(WarehouseRemainder, remainder_id)
+    remainder = await db.get(SpgRemainder, remainder_id)
     if remainder is None:
         raise ValueError("Remainder not found")
     if remainder.consumed_at is not None:

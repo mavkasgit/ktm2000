@@ -782,6 +782,16 @@ async def cancel_position(
     if pos.status not in {PlanPositionStatus.approved, PlanPositionStatus.released}:
         raise HTTPException(status_code=400, detail=f"Нельзя отменить позицию со статусом '{pos.status.value}'")
 
+    # Release SPG remainder reservations for this position
+    from app.models.spg_remainder import SpgRemainder
+    reserved_remainders = (
+        await db.execute(
+            select(SpgRemainder).where(SpgRemainder.reserved_for_plan_position_id == position_id)
+        )
+    ).scalars().all()
+    for rem in reserved_remainders:
+        rem.reserved_for_plan_position_id = None
+
     from_status = pos.status.value
     pos.status = PlanPositionStatus.cancelled
     record_status_change(db, position_id, from_status, PlanPositionStatus.cancelled.value, current_user.id, payload.reason if payload else None)
@@ -911,10 +921,21 @@ async def _process_position_cancel(
             reason=f"Нельзя отменить позицию со статусом '{pos.status.value}'",
         )
 
+    # Release SPG remainder reservations for this position
+    from app.models.spg_remainder import SpgRemainder
+    reserved_remainders = (
+        await db.execute(
+            select(SpgRemainder).where(SpgRemainder.reserved_for_plan_position_id == position_id)
+        )
+    ).scalars().all()
+    for rem in reserved_remainders:
+        rem.reserved_for_plan_position_id = None
+
     from_status = pos.status.value
     pos.status = PlanPositionStatus.cancelled
     record_status_change(db, position_id, from_status, PlanPositionStatus.cancelled.value, current_user_id, reason)
     return BatchActionResult(position_id=position_id, status="success")
+
 
 
 async def _process_position_restore(

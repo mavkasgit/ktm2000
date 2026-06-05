@@ -8,7 +8,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 from app.models.base import Base
 
 
-class WarehouseRemainder(Base):
+class SpgRemainder(Base):
     """Stores surplus quantities returned to stock after task completion.
 
     When a task is completed with issued > completed, the excess quantity
@@ -18,11 +18,11 @@ class WarehouseRemainder(Base):
     Quantity can go negative when manual operations issue more than the
     available stock — this is allowed so users can fix shortages post-factum.
     """
-    __tablename__ = "warehouse_remainders"
+    __tablename__ = "spg_remainders"
 
     id: Mapped[int] = mapped_column(BigInteger, Identity(always=True), primary_key=True)
     product_id: Mapped[int] = mapped_column(ForeignKey("products.id"), nullable=False)
-    section_id: Mapped[int] = mapped_column(ForeignKey("sections.id"), nullable=False)
+    spg_id: Mapped[int] = mapped_column(ForeignKey("storage_production_groups.id", ondelete="CASCADE"), nullable=False)
     route_stage_id: Mapped[int | None] = mapped_column(ForeignKey("route_stages.id"), nullable=True)
     section_plan_line_id: Mapped[int | None] = mapped_column(ForeignKey("section_plan_lines.id"), nullable=True)
     origin_task_id: Mapped[int | None] = mapped_column(ForeignKey("work_tasks.id"), nullable=True)
@@ -37,3 +37,6 @@ class WarehouseRemainder(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
     consumed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     consumed_by_task_id: Mapped[int | None] = mapped_column(ForeignKey("work_tasks.id"), nullable=True)
+    reserved_for_plan_position_id: Mapped[int | None] = mapped_column(
+        ForeignKey("plan_positions.id", ondelete="SET NULL"), nullable=True
+    )

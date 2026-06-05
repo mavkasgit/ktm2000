@@ -46,7 +46,7 @@ from app.models.section import Section
 from app.models.spg import SpgSection, StorageProductionGroup
 from app.models.techcard import Techcard, TechcardLine
 from app.models.user import User, UserRole
-from app.models.warehouse_remainder import WarehouseRemainder
+from app.models.spg_remainder import SpgRemainder
 from app.models.work_task import WorkTask, WorkTaskStatus
 
 
@@ -476,11 +476,11 @@ async def test_spg_route_full_lifecycle_with_mixed_remainders(client, session) -
     assert len(raw_items) == 1
     assert raw_items[0]["remainder_quantity"] == 20
 
-    # SPG-WIP: 1 remainder in DRILL section, qty 5.
+    # SPG-WIP: 1 remainder, qty 5.
     wip_items = (await client.get(f"/api/spg/{spg_wip.id}/remainders")).json()
     assert len(wip_items) == 1
     assert wip_items[0]["remainder_quantity"] == 5
-    assert wip_items[0]["section_code"] == "FG-SPG-E2E-DRILL"
+    assert wip_items[0]["spg_code"] == spg_wip.code
 
     # Transfer 70 from DRILL to SHOT
     await _transfer_to_next(
@@ -505,7 +505,7 @@ async def test_spg_route_full_lifecycle_with_mixed_remainders(client, session) -
     wip_items = (await client.get(f"/api/spg/{spg_wip.id}/remainders")).json()
     assert len(wip_items) == 1
     assert wip_items[0]["remainder_quantity"] == 5
-    assert wip_items[0]["section_code"] == "FG-SPG-E2E-SHOT"
+    assert wip_items[0]["spg_code"] == spg_wip.code
 
     # Transfer 60 from SHOT to ANOD
     await _transfer_to_next(
@@ -698,7 +698,7 @@ async def test_spg_consume_remainder_allows_going_negative(client, session) -> N
     assert body["task_id"] == raw_task.id
 
     # Verify in DB
-    remainder = await session.get(WarehouseRemainder, remainder_id)
+    remainder = await session.get(SpgRemainder, remainder_id)
     assert remainder.remainder_quantity == Decimal("-20")
     # The endpoint must NOT mark the remainder consumed when it's negative
     assert remainder.consumed_at is None
@@ -763,7 +763,7 @@ async def test_spg_manual_operation_balances_negative_remainders(client, session
     assert consume_resp.status_code == 200
 
     # Sanity: remainder is -20
-    neg_rem = await session.get(WarehouseRemainder, remainder_id)
+    neg_rem = await session.get(SpgRemainder, remainder_id)
     assert neg_rem.remainder_quantity == Decimal("-20")
 
     # 2) Apply manual in 30 → remainder should be -20 + 30 = 10
@@ -783,7 +783,7 @@ async def test_spg_manual_operation_balances_negative_remainders(client, session
     assert fix_resp.json()["new_remainder_quantity"] == 10
 
     # DB row reflects the balance
-    final_rem = await session.get(WarehouseRemainder, remainder_id)
+    final_rem = await session.get(SpgRemainder, remainder_id)
     assert final_rem.remainder_quantity == Decimal("10")
     assert final_rem.consumed_at is None
 

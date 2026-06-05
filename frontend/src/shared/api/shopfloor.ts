@@ -437,7 +437,7 @@ export async function setTaskOperation(
 }
 
 // ---------------------------------------------------------------------------
-// Warehouse Remainders API
+// SPG Remainders API
 // ---------------------------------------------------------------------------
 
 export type CompletedStage = {
@@ -447,14 +447,14 @@ export type CompletedStage = {
   sequence: number;
 };
 
-export type WarehouseRemainder = {
+export type SpgRemainder = {
   id: number;
   product_id: number;
   product_sku: string;
   product_name: string;
-  section_id: number;
-  section_code: string;
-  section_name: string;
+  spg_id: number;
+  spg_code: string;
+  spg_name: string;
   route_step_id: number;
   route_step_sequence: number;
   operation_code: string | null;
@@ -465,19 +465,22 @@ export type WarehouseRemainder = {
   original_issued: string;
   completed_stages: CompletedStage[];
   created_at: string | null;
+  reserved_for_plan_position_id: number | null;
 };
 
-export type WarehouseRemaindersResponse = {
-  remainders: WarehouseRemainder[];
+export type SpgRemaindersResponse = {
+  remainders: SpgRemainder[];
 };
 
-export async function getWarehouseRemainders(
+export async function getSpgRemainders(
   sectionId?: number,
-): Promise<WarehouseRemaindersResponse> {
+  planPositionId?: number,
+): Promise<SpgRemaindersResponse> {
   const params = new URLSearchParams();
   if (sectionId) params.set("section_id", String(sectionId));
+  if (planPositionId) params.set("plan_position_id", String(planPositionId));
   const qs = params.toString();
-  const { data } = await apiClient.get<WarehouseRemaindersResponse>(
+  const { data } = await apiClient.get<SpgRemaindersResponse>(
     `/shopfloor/remainders${qs ? `?${qs}` : ""}`,
   );
   return data;
