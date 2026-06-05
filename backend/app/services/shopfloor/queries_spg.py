@@ -9,7 +9,10 @@ from app.models.product import Product
 from app.models.spg import SpgSection, StorageProductionGroup
 from app.models.section import Section
 from app.models.spg_remainder import SpgRemainder
-from app.models.work_task import WorkTask
+from app.models.work_task import WorkTask, WorkTaskStatus
+from app.models.internal_plan import SectionPlanLine
+from app.models.production_plan import PlanPosition, PlanPositionStatus
+from app.models.route import RouteStage
 
 
 async def get_spg_snapshot(
@@ -54,7 +57,18 @@ async def get_spg_snapshot(
     ]
     section_id_to_code = {s.id: s.code for s in sections_rows}
 
-    # Aggregate work_tasks per (product_id, section_id)
+    # Subquery: find plan positions that have already completed their final route stage task
+    completed_positions_subq = (
+        select(SectionPlanLine.plan_position_id)
+        .join(WorkTask, WorkTask.section_plan_line_id == SectionPlanLine.id)
+        .join(RouteStage, RouteStage.id == SectionPlanLine.route_stage_id)
+        .where(
+            WorkTask.status == WorkTaskStatus.completed,
+            RouteStage.is_final.is_(True),
+        )
+    )
+
+    # Aggregate work_tasks per (product_id, section_id), excluding completed/cancelled/deleted positions
     task_agg_q = (
         select(
             WorkTask.product_id,
@@ -67,7 +81,14 @@ async def get_spg_snapshot(
             func.sum(WorkTask.cached_transferred_quantity).label("transferred"),
             func.sum(WorkTask.cached_received_quantity).label("received"),
         )
-        .where(WorkTask.section_id.in_(section_ids))
+        .join(SectionPlanLine, WorkTask.section_plan_line_id == SectionPlanLine.id)
+        .join(PlanPosition, SectionPlanLine.plan_position_id == PlanPosition.id)
+        .where(
+            WorkTask.section_id.in_(section_ids),
+            PlanPosition.deleted_at.is_(None),
+            PlanPosition.status != PlanPositionStatus.cancelled,
+            SectionPlanLine.plan_position_id.notin_(completed_positions_subq),
+        )
         .group_by(WorkTask.product_id, WorkTask.section_id)
     )
     task_rows = (await db.execute(task_agg_q)).all()

@@ -292,7 +292,7 @@ export function ManualOperationDialog({
             <Input
               value={reason}
               onChange={(e) => setReason(e.target.value)}
-              placeholder="например, возврат от заказчика / списание брака / инвентаризация"
+              placeholder="например, возврат от заказчика / списание брака / корректировка остатков"
             />
           </div>
 

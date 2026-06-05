@@ -165,7 +165,7 @@ export function SpgSnapshotPage() {
                 : "border-transparent text-muted-foreground hover:text-foreground"
             }`}
           >
-            Остатки (инвентаризация)
+            Остатки
           </button>
           <button
             type="button"

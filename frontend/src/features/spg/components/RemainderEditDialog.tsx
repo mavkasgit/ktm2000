@@ -172,7 +172,7 @@ export function RemainderEditDialog({
       <DialogContent className="sm:max-w-[480px]">
         <DialogHeader>
           <DialogTitle>
-            {editingRemainder ? "Редактировать остаток" : "Добавить остаток (инвентаризация)"}
+            {editingRemainder ? "Редактировать остаток" : "Добавить остаток"}
           </DialogTitle>
         </DialogHeader>
 

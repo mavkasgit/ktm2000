@@ -1,6 +1,6 @@
 """defects_refactoring
 
-Revision ID: 2a3e47ca3db2
+Revision ID: 009_defects_refactoring
 Revises: 008_comments_and_attachments
 Create Date: 2026-06-05 16:04:21.635134
 """
@@ -13,7 +13,7 @@ import sqlalchemy as sa
 
 
 # revision identifiers, used by Alembic.
-revision: str = '2a3e47ca3db2'
+revision: str = '009_defects_refactoring'
 down_revision: Union[str, None] = '008_comments_and_attachments'
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None

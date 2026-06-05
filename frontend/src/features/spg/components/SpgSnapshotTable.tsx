@@ -107,7 +107,6 @@ function DataRow({ row, sectionCodes, onShowRemainders }: { row: SpgSnapshotRow;
           {row.product_name}
         </div>
       </td>
-      <td className="p-2 text-right font-semibold">{fmtNum(row.planned_total)}</td>
       <td className="p-2 text-right">
         {row.spg_available !== 0 ? (
           <button
@@ -127,6 +126,10 @@ function DataRow({ row, sectionCodes, onShowRemainders }: { row: SpgSnapshotRow;
         ) : (
           <span className="text-muted-foreground text-xs">0</span>
         )}
+      </td>
+      <td className="p-2 text-right font-semibold">{fmtNum(row.planned_total)}</td>
+      <td className="p-2 text-right text-emerald-700 font-medium">
+        {row.completed_total !== 0 ? fmtNum(row.completed_total) : <span className="text-muted-foreground text-xs">0</span>}
       </td>
       <td className="p-2 text-right">
         {row.issued_total !== 0 ? (
@@ -153,15 +156,6 @@ function DataRow({ row, sectionCodes, onShowRemainders }: { row: SpgSnapshotRow;
           issued={row.issued_total}
           completionPct={row.completion_pct}
         />
-      </td>
-      <td className="p-2 text-right">
-        {row.remainder_total > 0 ? (
-          <Badge variant="secondary" className="text-purple-700">
-            {fmtNum(row.remainder_total)}
-          </Badge>
-        ) : (
-          <span className="text-muted-foreground">—</span>
-        )}
       </td>
       <td className="p-2 text-center">
         {row.current_section && (
@@ -195,16 +189,16 @@ export function SpgSnapshotTable({ snapshot, onShowProductRemainders }: SpgSnaps
         <thead className="bg-muted/50 border-b">
           <tr>
             <th className="p-2 text-left font-medium sticky left-0 bg-muted/50">Артикул / Название</th>
+            <th className="p-2 text-right font-medium text-purple-700">Доступно</th>
             <th className="p-2 text-right font-medium">План</th>
-            <th className="p-2 text-right font-medium">Доступно</th>
-            <th className="p-2 text-right font-medium">Выдано</th>
+            <th className="p-2 text-right font-medium text-emerald-700">Выполнено</th>
+            <th className="p-2 text-right font-medium text-amber-700">Выдано</th>
             {snapshot.sections.map((s) => (
               <th key={s.code} className="p-2 text-center font-medium text-xs whitespace-nowrap">
                 {s.name}
               </th>
             ))}
             <th className="p-2 text-left font-medium">%</th>
-            <th className="p-2 text-right font-medium">Остатки</th>
             <th className="p-2 text-center font-medium">Где сейчас</th>
           </tr>
         </thead>
@@ -221,20 +215,27 @@ export function SpgSnapshotTable({ snapshot, onShowProductRemainders }: SpgSnaps
         <tfoot className="bg-muted/30 border-t font-semibold">
           <tr>
             <td className="p-2 sticky left-0 bg-muted/30">Итого</td>
-            <td className="p-2 text-right">{fmtNum(totals.planned)}</td>
-            <td className="p-2 text-right">
-              {totals.spg_available !== 0 && (
+            <td className="p-2 text-right text-purple-700">
+              {totals.spg_available !== 0 ? (
                 <Badge
                   variant="secondary"
                   className={totals.spg_available < 0 ? "text-amber-700" : "text-purple-700"}
                 >
                   {fmtNum(totals.spg_available)}
                 </Badge>
+              ) : (
+                <span className="text-muted-foreground text-xs">0</span>
               )}
             </td>
+            <td className="p-2 text-right">{fmtNum(totals.planned)}</td>
+            <td className="p-2 text-right text-emerald-700">
+              {totals.completed !== 0 ? fmtNum(totals.completed) : <span className="text-muted-foreground text-xs">0</span>}
+            </td>
             <td className="p-2 text-right">
-              {totals.issued !== 0 && (
+              {totals.issued !== 0 ? (
                 <Badge variant="secondary" className="text-amber-700">{fmtNum(totals.issued)}</Badge>
+              ) : (
+                <span className="text-muted-foreground text-xs">0</span>
               )}
             </td>
             {sectionCodes.map((code) => {
@@ -272,13 +273,6 @@ export function SpgSnapshotTable({ snapshot, onShowProductRemainders }: SpgSnaps
                 issued={totals.issued}
                 completionPct={totalsPct}
               />
-            </td>
-            <td className="p-2 text-right">
-              {totals.remainders > 0 && (
-                <Badge variant="secondary" className="text-purple-700">
-                  {fmtNum(totals.remainders)}
-                </Badge>
-              )}
             </td>
             <td className="p-2"></td>
           </tr>
