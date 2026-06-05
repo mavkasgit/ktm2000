@@ -43,7 +43,7 @@ export function SpgRemaindersDialog({
         ) : (
           <div className="max-h-[500px] overflow-auto">
             <table className="w-full text-sm">
-              <thead className="border-b bg-muted/50 sticky top-0 bg-background">
+              <thead className="border-b bg-muted sticky top-0">
                 <tr>
                   <th className="text-left p-2 font-medium">Продукт</th>
                   <th className="text-left p-2 font-medium">Группа хранения и производства (ГХП)</th>

@@ -640,7 +640,7 @@ export function BackupsPage() {
                 <h3 className="text-sm font-medium">Таблицы БД</h3>
                 <div className="border rounded-lg overflow-hidden max-h-[280px] overflow-y-auto">
                 <table className="w-full text-sm">
-                  <thead className="bg-muted/50 text-xs sticky top-0">
+                  <thead className="bg-muted text-xs sticky top-0">
                     <tr>
                       <th className="text-left px-3 py-2 font-medium">Таблица</th>
                       <th className="text-right px-3 py-2 font-medium">Записей</th>

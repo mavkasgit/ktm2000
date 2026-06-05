@@ -639,9 +639,9 @@ export function PlanPage() {
       )}
 
       {activePlan && (
-        <div className={bulkMode ? "fixed inset-0 z-50 bg-background flex flex-col p-4 overflow-auto" : undefined}>
+        <div className={bulkMode ? "fixed inset-0 z-50 bg-background flex flex-col p-4" : undefined}>
           {bulkMode && (
-            <div className="mb-3">
+            <div className="mb-3 shrink-0">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2">
                   <ListChecks className="h-5 w-5 text-primary" />
@@ -659,7 +659,7 @@ export function PlanPage() {
           )}
 
           {/* Aggregated positions */}
-          <section className="flex-1 flex flex-col">
+          <section className="flex-1 flex flex-col min-h-0">
             {!bulkMode && (
             <div className="flex items-center gap-2 mb-2">
               <h3 className="text-base font-semibold">Сводная таблица позиций</h3>
@@ -719,13 +719,13 @@ export function PlanPage() {
             />
 
 
-            <div className="flex-1 min-h-0">
+            <div className="flex-1 flex flex-col min-h-0">
             {posLoading && <p className="text-sm text-muted-foreground">Загрузка...</p>}
             {positions && positions.length > 0 && (
               <>
-              <div style={{ maxWidth: detailOpen ? 1600 : 1850, width: '100%' }}>
+              <div className="flex-1 flex flex-col min-h-0" style={{ maxWidth: detailOpen ? 1600 : 1850, width: '100%' }}>
                   {/* Header row */}
-                  <div className="grid items-start border-b bg-muted/50 text-xs font-medium text-muted-foreground sticky top-0 z-20 bg-background"
+                  <div className="grid items-start border-b bg-muted text-xs font-medium text-muted-foreground sticky top-0 z-20 shrink-0"
                     style={{ gridTemplateColumns: PLAN_POSITIONS_GRID }}
                   >
                     <div className="p-2">
@@ -821,7 +821,7 @@ export function PlanPage() {
                   </div>
 
                   {/* Data rows */}
-                  <div className="overflow-auto" style={{ maxHeight: bulkMode ? undefined : '70vh' }}>
+                  <div className="flex-1 overflow-auto min-h-0" style={{ maxHeight: bulkMode ? 'none' : '70vh' }}>
                     {processedRows.map((p) => (
                       <PositionRow
                         key={p.id}
