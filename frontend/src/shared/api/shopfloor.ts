@@ -530,3 +530,90 @@ export async function consumeRemainder(
   );
   return data;
 }
+
+// ---------------------------------------------------------------------------
+// Bulk operation endpoints (savepoint-isolated per item)
+// ---------------------------------------------------------------------------
+
+export type BulkActionStatus = "success" | "failed" | "skipped";
+
+export type BulkActionResult = {
+  id: number;
+  status: BulkActionStatus;
+  reason: string | null;
+  meta?: Record<string, unknown> | null;
+};
+
+export type BulkActionResponse = {
+  results: BulkActionResult[];
+};
+
+export type BulkIssueEntry = {
+  task_id: number;
+  quantity: number | string;
+  comment?: string | null;
+  source_ref?: string | null;
+  idempotency_key?: string | null;
+  executor_user_id?: number | null;
+  performed_at?: string | null;
+  accounted_at?: string | null;
+};
+
+export type BulkCompleteEntry = {
+  task_id: number;
+  good_quantity: number | string;
+  defect_quantity?: number | string;
+  defect_reason?: string | null;
+  comment?: string | null;
+  idempotency_key?: string | null;
+  executor_user_id?: number | null;
+  performed_at?: string | null;
+  accounted_at?: string | null;
+};
+
+export type BulkTransferSendEntry = {
+  from_task_id: number;
+  to_task_id?: number | null;
+  quantity: number | string;
+  comment?: string | null;
+  idempotency_key?: string | null;
+  executor_user_id?: number | null;
+  performed_at?: string | null;
+  accounted_at?: string | null;
+};
+
+export async function bulkIssueTasks(
+  entries: BulkIssueEntry[],
+  options?: ShopfloorRequestOptions,
+): Promise<BulkActionResponse> {
+  const { data } = await apiClient.post<BulkActionResponse>(
+    "/shopfloor/tasks/bulk-issue",
+    { entries },
+    makeRequestConfig(options),
+  );
+  return data;
+}
+
+export async function bulkCompleteTasks(
+  entries: BulkCompleteEntry[],
+  options?: ShopfloorRequestOptions,
+): Promise<BulkActionResponse> {
+  const { data } = await apiClient.post<BulkActionResponse>(
+    "/shopfloor/tasks/bulk-complete",
+    { entries },
+    makeRequestConfig(options),
+  );
+  return data;
+}
+
+export async function bulkSendTransfers(
+  entries: BulkTransferSendEntry[],
+  options?: ShopfloorRequestOptions,
+): Promise<BulkActionResponse> {
+  const { data } = await apiClient.post<BulkActionResponse>(
+    "/shopfloor/tasks/bulk-send",
+    { entries },
+    makeRequestConfig(options),
+  );
+  return data;
+}

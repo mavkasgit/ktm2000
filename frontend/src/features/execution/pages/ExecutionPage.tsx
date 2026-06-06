@@ -11,6 +11,8 @@ import {
   restorePositionExecution,
   restorePositionsExecutionBatch,
   softDeleteCancelledPosition,
+  softDeletePositionsExecutionBatch,
+  manualPassPositionsExecutionBatch,
   getPositionHistory,
   type ProductionPlanningRow,
   type StatusHistoryEntry,
@@ -325,30 +327,50 @@ export function ExecutionPage() {
     const results: BulkActionResultItem<number>[] = [];
     setBulkProgress({ total: manualPassBulkDialog.positionIds.length, completed: 0, running: true });
 
-    for (let i = 0; i < manualPassBulkDialog.positionIds.length; i++) {
-      const id = manualPassBulkDialog.positionIds[i];
+    // Pre-filter: only send eligible positions to the bulk endpoint.
+    const eligibleIds: number[] = [];
+    for (const id of manualPassBulkDialog.positionIds) {
       const row = selectedPositionsMap.get(id);
       if (!row) {
         results.push({ id, status: "failed", reason: "Позиция не найдена" });
       } else if (!row.route_id || !["approved", "released"].includes(row.position_status)) {
         results.push({ id, status: "skipped", reason: "Нужна утвержденная или запущенная строка с маршрутом" });
       } else {
-        try {
-          const completeRoute = manualPassBulkDialog.targetRouteStepId === "complete";
-          await manualPassToStage(id, {
-            target_route_step_id: completeRoute ? undefined : Number(manualPassBulkDialog.targetRouteStepId),
-            complete_route: completeRoute,
-            comment: manualPassBulkDialog.comment.trim() || undefined,
-            idempotency_key: `manual-pass-bulk-${id}-${manualPassBulkDialog.targetRouteStepId}-${Date.now()}`,
-          });
-          results.push({ id, status: "success" });
-        } catch (e) {
-          results.push({ id, status: "failed", reason: getErrorMessage(e) });
-        }
+        eligibleIds.push(id);
       }
-      setBulkProgress({ total: manualPassBulkDialog.positionIds.length, completed: i + 1, running: i + 1 < manualPassBulkDialog.positionIds.length });
     }
 
+    if (eligibleIds.length > 0) {
+      const completeRoute = manualPassBulkDialog.targetRouteStepId === "complete";
+      try {
+        const response = await manualPassPositionsExecutionBatch({
+          position_ids: eligibleIds,
+          target_route_stage_id: completeRoute ? null : Number(manualPassBulkDialog.targetRouteStepId),
+          complete_route: completeRoute,
+          comment: manualPassBulkDialog.comment.trim() || null,
+          idempotency_key: `manual-pass-bulk-${manualPassBulkDialog.targetRouteStepId}-${Date.now()}`,
+        });
+        for (const result of response.results) {
+          results.push({
+            id: result.position_id,
+            status: result.status,
+            reason: result.reason,
+            meta: {
+              movements_created: result.movements_created,
+              transfers_created: result.transfers_created,
+              tasks_created: result.tasks_created,
+            },
+          });
+        }
+      } catch (e) {
+        const reason = getErrorMessage(e);
+        for (const id of eligibleIds) {
+          results.push({ id, status: "failed", reason });
+        }
+      }
+    }
+
+    setBulkProgress({ total: manualPassBulkDialog.positionIds.length, completed: manualPassBulkDialog.positionIds.length, running: false });
     const summary = summarizeBulkResults(results);
     setBulkResults(results);
     setBulkSummary(summary);
@@ -436,24 +458,39 @@ export function ExecutionPage() {
     setBulkProgress({ total: selectedIds.length, completed: 0, running: true });
     setBulkSoftDeleting(true);
 
-    for (let i = 0; i < selectedIds.length; i++) {
-      const id = selectedIds[i];
+    // Pre-filter: only send cancelled positions to the bulk endpoint.
+    // Others are reported as "skipped" without hitting the API.
+    const eligibleIds: number[] = [];
+    for (const id of selectedIds) {
       const row = selectedPositionsMap.get(id);
       if (!row) {
         results.push({ id, status: "failed", reason: "Позиция не найдена" });
       } else if (row.position_status !== "cancelled") {
         results.push({ id, status: "skipped", reason: `Статус "${positionStatusLabels[row.position_status] || row.position_status}"` });
       } else {
-        try {
-          await softDeleteCancelledPosition(row.production_plan_id, id);
-          results.push({ id, status: "success" });
-        } catch (e) {
-          results.push({ id, status: "failed", reason: getErrorMessage(e) });
-        }
+        eligibleIds.push(id);
       }
-      setBulkProgress({ total: selectedIds.length, completed: i + 1, running: i + 1 < selectedIds.length });
     }
 
+    if (eligibleIds.length > 0) {
+      try {
+        const response = await softDeletePositionsExecutionBatch({ position_ids: eligibleIds });
+        for (const result of response.results) {
+          results.push({
+            id: result.position_id,
+            status: result.status,
+            reason: result.reason,
+          });
+        }
+      } catch (e) {
+        const reason = getErrorMessage(e);
+        for (const id of eligibleIds) {
+          results.push({ id, status: "failed", reason });
+        }
+      }
+    }
+
+    setBulkProgress({ total: selectedIds.length, completed: selectedIds.length, running: false });
     const summary = summarizeBulkResults(results);
     setBulkResults(results);
     setBulkSummary(summary);
@@ -681,22 +718,13 @@ export function ExecutionPage() {
         const row = context.get(id);
         return row ? getSoftDeleteBlockReason(row) : "Строка не найдена";
       },
-      run: async (ids, context) => {
-        const results: BulkActionResultItem<number>[] = [];
-        for (const id of ids) {
-          const row = context.get(id);
-          if (!row) {
-            results.push({ id, status: "failed", reason: "Позиция не найдена" });
-            continue;
-          }
-          try {
-            await softDeleteCancelledPosition(row.production_plan_id, id);
-            results.push({ id, status: "success" });
-          } catch (e) {
-            results.push({ id, status: "failed", reason: getErrorMessage(e) });
-          }
-        }
-        return results;
+      run: async (ids) => {
+        const response = await softDeletePositionsExecutionBatch({ position_ids: ids });
+        return response.results.map((result) => ({
+          id: result.position_id,
+          status: result.status,
+          reason: result.reason,
+        }));
       },
     },
     {
@@ -758,104 +786,6 @@ export function ExecutionPage() {
         comment: "",
         positionIds: Array.from(bulkSelection.selectedIds),
       });
-      return;
-    }
-    // take-to-work: execute per-item sequentially with progress
-    if (resolvedActionId === "take-to-work") {
-      const selectedIds = Array.from(bulkSelection.selectedIds);
-      const results: BulkActionResultItem<number>[] = [];
-      setBulkProgress({ total: selectedIds.length, completed: 0, running: true });
-      for (let i = 0; i < selectedIds.length; i++) {
-        const id = selectedIds[i];
-        try {
-          const data = await takeToWork([id]);
-          const result = data.results[0];
-          if (result) {
-            results.push({
-              id: result.position_id,
-              status: result.status === "already_started" ? "skipped" : result.status,
-              reason: result.reason,
-              meta: { tasks_created: result.tasks_created },
-            });
-          }
-        } catch (e) {
-          results.push({ id, status: "failed", reason: getErrorMessage(e) });
-        }
-        setBulkProgress({ total: selectedIds.length, completed: i + 1, running: i + 1 < selectedIds.length });
-      }
-      const summary = summarizeBulkResults(results);
-      setBulkResults(results);
-      setBulkSummary(summary);
-      if (summary.failed > 0 || summary.skipped > 0) setBulkResultsOpen(true);
-      invalidateAll();
-      toast({
-        title: summary.failed > 0 ? "Частичный успех" : "Массовое действие выполнено",
-        description: `${summary.success} успешно, ${summary.skipped} пропущено, ${summary.failed} ошибок`,
-        variant: summary.failed > 0 ? "destructive" : "success",
-      });
-      bulkSelection.clear();
-      setSelectionOrder([]);
-      setBulkProgress(null);
-      return;
-    }
-    // cancel: execute per-item sequentially with progress
-    if (resolvedActionId === "cancel") {
-      const selectedIds = Array.from(bulkSelection.selectedIds);
-      const results: BulkActionResultItem<number>[] = [];
-      setBulkProgress({ total: selectedIds.length, completed: 0, running: true });
-      for (let i = 0; i < selectedIds.length; i++) {
-        const id = selectedIds[i];
-        try {
-          await cancelPositionExecution(id);
-          results.push({ id, status: "success" });
-        } catch (e) {
-          results.push({ id, status: "failed", reason: getErrorMessage(e) });
-        }
-        setBulkProgress({ total: selectedIds.length, completed: i + 1, running: i + 1 < selectedIds.length });
-      }
-      const summary = summarizeBulkResults(results);
-      setBulkResults(results);
-      setBulkSummary(summary);
-      if (summary.failed > 0 || summary.skipped > 0) setBulkResultsOpen(true);
-      invalidateAll();
-      toast({
-        title: summary.failed > 0 ? "Частичный успех" : "Массовое действие выполнено",
-        description: `${summary.success} успешно, ${summary.skipped} пропущено, ${summary.failed} ошибок`,
-        variant: summary.failed > 0 ? "destructive" : "success",
-      });
-      bulkSelection.clear();
-      setSelectionOrder([]);
-      setBulkProgress(null);
-      return;
-    }
-    // restore: execute per-item sequentially with progress
-    if (resolvedActionId === "restore") {
-      const selectedIds = Array.from(bulkSelection.selectedIds);
-      const results: BulkActionResultItem<number>[] = [];
-      setBulkProgress({ total: selectedIds.length, completed: 0, running: true });
-      for (let i = 0; i < selectedIds.length; i++) {
-        const id = selectedIds[i];
-        try {
-          await restorePositionExecution(id);
-          results.push({ id, status: "success" });
-        } catch (e) {
-          results.push({ id, status: "failed", reason: getErrorMessage(e) });
-        }
-        setBulkProgress({ total: selectedIds.length, completed: i + 1, running: i + 1 < selectedIds.length });
-      }
-      const summary = summarizeBulkResults(results);
-      setBulkResults(results);
-      setBulkSummary(summary);
-      if (summary.failed > 0 || summary.skipped > 0) setBulkResultsOpen(true);
-      invalidateAll();
-      toast({
-        title: summary.failed > 0 ? "Частичный успех" : "Массовое действие выполнено",
-        description: `${summary.success} успешно, ${summary.skipped} пропущено, ${summary.failed} ошибок`,
-        variant: summary.failed > 0 ? "destructive" : "success",
-      });
-      bulkSelection.clear();
-      setSelectionOrder([]);
-      setBulkProgress(null);
       return;
     }
     setBulkProgress({ total: bulkSelection.selectedCount, completed: 0, running: true });

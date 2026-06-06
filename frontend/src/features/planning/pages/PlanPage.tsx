@@ -8,7 +8,7 @@ import { nextMultiSortConfigs } from "@/shared/lib/multiSort"
 import { PLAN_POSITIONS_GRID } from "../lib/gridTemplates"
 import { toast } from "@/shared/ui"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
-import { allPlanFiles, allPlanPositions, PlanPositionOut, listPlans, batchAssignRouteGlobal, deleteImportBatch, approveProductionPlanPosition, getPlanDuplicates } from "@/shared/api/productionPlans"
+import { allPlanFiles, allPlanPositions, PlanPositionOut, listPlans, batchAssignRouteGlobal, deleteImportBatch, approveProductionPlanPosition, getPlanDuplicates, bulkApprovePositions, bulkDeletePositions } from "@/shared/api/productionPlans"
 import { listRoutes } from "@/shared/api/routes"
 import { listImportTemplates } from "@/shared/api/importTemplates"
 import { apiClient, getErrorMessage } from "@/shared/api/client"
@@ -221,23 +221,43 @@ export function PlanPage() {
     setBulkProgress({ total: selectedIds.length, completed: 0, running: true })
     setBulkApproving(true)
 
-    for (let i = 0; i < selectedIds.length; i++) {
-      const id = selectedIds[i]
+    // Pre-filter: only send positions that pass client-side eligibility.
+    // Ineligible positions are reported as "skipped" without hitting the API.
+    const eligibleIds: number[] = []
+    for (const id of selectedIds) {
       const pos = selectedPositionsMap.get(id)
       if (!pos) {
         results.push({ id, status: "failed", reason: "Позиция не найдена" })
       } else if (!canApprovePosition(pos)) {
         results.push({ id, status: "skipped", reason: getApproveIneligibleReason(pos) ?? "Не может быть утверждена" })
       } else {
+        eligibleIds.push(id)
+      }
+    }
+
+    if (eligibleIds.length > 0) {
+      const targetPlanId = activePlan?.id
+      if (targetPlanId != null) {
         try {
-          await approveProductionPlanPosition(pos.production_plan_id, id, { force: false })
-          results.push({ id, status: "success" })
+          const response = await bulkApprovePositions(targetPlanId, eligibleIds, false)
+          for (const result of response.results) {
+            results.push({
+              id: result.id,
+              status: result.status,
+              reason: result.reason,
+              meta: result.meta ?? undefined,
+            })
+          }
         } catch (e) {
-          results.push({ id, status: "failed", reason: getErrorMessage(e) })
+          const reason = getErrorMessage(e)
+          for (const id of eligibleIds) {
+            results.push({ id, status: "failed", reason })
+          }
         }
       }
-      setBulkProgress({ total: selectedIds.length, completed: i + 1, running: i + 1 < selectedIds.length })
     }
+
+    setBulkProgress({ total: selectedIds.length, completed: selectedIds.length, running: false })
 
     const summary = summarizeBulkResults(results)
     setBulkResults(results)
@@ -275,21 +295,39 @@ export function PlanPage() {
     setBulkProgress({ total: selectedIds.length, completed: 0, running: true })
     setBulkDeleting(true)
 
-    for (let i = 0; i < selectedIds.length; i++) {
-      const id = selectedIds[i]
+    // Group selected positions by plan_id and issue a single bulk request per plan.
+    const byPlan = new Map<number, number[]>()
+    for (const id of selectedIds) {
       const pos = selectedPositionsMap.get(id)
       if (!pos) {
         results.push({ id, status: "failed", reason: "Позиция не найдена" })
-      } else {
-        try {
-          await apiClient.delete(`/production-plans/${pos.production_plan_id}/positions/${id}`)
-          results.push({ id, status: "success" })
-        } catch (e) {
-          results.push({ id, status: "failed", reason: e instanceof Error ? e.message : "Не удалось удалить" })
+        continue
+      }
+      const list = byPlan.get(pos.production_plan_id) ?? []
+      list.push(id)
+      byPlan.set(pos.production_plan_id, list)
+    }
+
+    for (const [planId, ids] of byPlan.entries()) {
+      try {
+        const response = await bulkDeletePositions(planId, ids)
+        for (const result of response.results) {
+          results.push({
+            id: result.id,
+            status: result.status,
+            reason: result.reason,
+            meta: result.meta ?? undefined,
+          })
+        }
+      } catch (e) {
+        const reason = e instanceof Error ? e.message : "Не удалось удалить"
+        for (const id of ids) {
+          results.push({ id, status: "failed", reason })
         }
       }
-      setBulkProgress({ total: selectedIds.length, completed: i + 1, running: i + 1 < selectedIds.length })
     }
+
+    setBulkProgress({ total: selectedIds.length, completed: selectedIds.length, running: false })
 
     const summary = summarizeBulkResults(results)
     setBulkResults(results)

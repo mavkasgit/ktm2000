@@ -1,8 +1,9 @@
 from datetime import UTC, datetime
 from decimal import Decimal
+from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -553,6 +554,142 @@ async def delete_position(
     # Hard delete for draft/invalid/valid
     await db.delete(position)
     await db.commit()
+
+
+# --- Bulk action endpoints -------------------------------------------------
+
+
+class BulkActionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    ids: list[int]
+    reason: str | None = None
+    force: bool = False
+
+
+class BulkActionResultItem(BaseModel):
+    id: int
+    status: Literal["success", "failed", "skipped"]
+    reason: str | None = None
+    meta: dict | None = None
+
+
+class BulkActionResponse(BaseModel):
+    results: list[BulkActionResultItem]
+
+
+@router.post(
+    "/{production_plan_id}/positions/bulk-approve",
+    response_model=BulkActionResponse,
+    dependencies=[Depends(require_role(list(WRITER_ROLES)))],
+)
+async def bulk_approve_positions(
+    production_plan_id: int,
+    payload: BulkActionRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> BulkActionResponse:
+    """Approve multiple plan positions in a single request.
+
+    Each position is processed in a savepoint so a single failure does
+    not roll back the rest of the batch.
+    """
+    import logging
+    logger = logging.getLogger(__name__)
+
+    results: list[BulkActionResultItem] = []
+    for position_id in payload.ids:
+        try:
+            async with db.begin_nested():
+                position = await approve_plan_position(
+                    db,
+                    production_plan_id,
+                    position_id,
+                    force=payload.force,
+                    changed_by=current_user.id,
+                )
+                results.append(
+                    BulkActionResultItem(
+                        id=position.id,
+                        status="success",
+                        meta={"production_plan_id": position.production_plan_id, "status": position.status.value},
+                    )
+                )
+        except ValueError as exc:
+            logger.warning(
+                "bulk_approve_positions: position %s failed: %s", position_id, exc,
+            )
+            results.append(BulkActionResultItem(id=position_id, status="failed", reason=str(exc)))
+        except Exception as exc:
+            logger.exception("bulk_approve_positions: unexpected error for id %s", position_id)
+            results.append(
+                BulkActionResultItem(id=position_id, status="failed", reason="Внутренняя ошибка сервера")
+            )
+    return BulkActionResponse(results=results)
+
+
+@router.post(
+    "/{production_plan_id}/positions/bulk-delete",
+    response_model=BulkActionResponse,
+    dependencies=[Depends(require_role(list(WRITER_ROLES)))],
+)
+async def bulk_delete_positions(
+    production_plan_id: int,
+    payload: BulkActionRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> BulkActionResponse:
+    """Delete multiple plan positions in a single request.
+
+    Cancelled positions are soft-deleted; all other eligible positions
+    are hard-deleted together with their related ``PlanChangeItem`` rows.
+    Each item runs in a savepoint.
+    """
+    import logging
+    logger = logging.getLogger(__name__)
+
+    results: list[BulkActionResultItem] = []
+    for position_id in payload.ids:
+        try:
+            async with db.begin_nested():
+                position = await db.get(PlanPosition, position_id)
+                if position is None or position.production_plan_id != production_plan_id:
+                    raise ValueError("Position not found")
+                if position.deleted_at is not None:
+                    results.append(
+                        BulkActionResultItem(id=position_id, status="skipped", reason="Позиция уже удалена")
+                    )
+                    continue
+                if position.status == PlanPositionStatus.cancelled:
+                    await soft_delete_cancelled_position(
+                        db,
+                        production_plan_id,
+                        position_id,
+                        changed_by=current_user.id,
+                        reason=payload.reason or "Удалена из списка",
+                    )
+                elif position.status in {PlanPositionStatus.approved, PlanPositionStatus.released}:
+                    raise ValueError(
+                        "Нельзя удалить утверждённую или запущенную позицию. Используйте отмену."
+                    )
+                else:
+                    await db.execute(
+                        PlanChangeItem.__table__.delete().where(
+                            PlanChangeItem.plan_position_id == position_id
+                        )
+                    )
+                    await db.delete(position)
+                results.append(BulkActionResultItem(id=position_id, status="success"))
+        except ValueError as exc:
+            logger.warning(
+                "bulk_delete_positions: position %s failed: %s", position_id, exc,
+            )
+            results.append(BulkActionResultItem(id=position_id, status="failed", reason=str(exc)))
+        except Exception as exc:
+            logger.exception("bulk_delete_positions: unexpected error for id %s", position_id)
+            results.append(
+                BulkActionResultItem(id=position_id, status="failed", reason="Внутренняя ошибка сервера")
+            )
+    return BulkActionResponse(results=results)
 
 
 @router.post("/{production_plan_id}/release-batches", status_code=status.HTTP_201_CREATED)

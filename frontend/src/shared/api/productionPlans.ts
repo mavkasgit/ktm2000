@@ -635,3 +635,95 @@ export async function getPositionHistory(planId: number, positionId: number) {
 export async function resetAllPlans() {
   await apiClient.post("/production-plans/reset-all");
 }
+
+// --- Bulk action schemas (shared with backend BulkActionResponse) ----------
+
+export type BulkActionStatus = "success" | "failed" | "skipped";
+
+export type BulkActionResult<TMeta = Record<string, unknown>> = {
+  id: number;
+  status: BulkActionStatus;
+  reason: string | null;
+  meta?: TMeta | null;
+};
+
+export type BulkActionResponse<TMeta = Record<string, unknown>> = {
+  results: BulkActionResult<TMeta>[];
+};
+
+export type BulkActionRequest = {
+  ids: number[];
+  reason?: string | null;
+  force?: boolean;
+};
+
+export type SoftDeleteExecutionRequest = {
+  position_ids: number[];
+  reason?: string | null;
+};
+
+export type ManualPassExecutionRequest = {
+  position_ids: number[];
+  target_route_stage_id?: number | null;
+  complete_route?: boolean;
+  comment?: string | null;
+  idempotency_key?: string | null;
+};
+
+export type ManualPassExecutionResult = {
+  position_id: number;
+  status: BulkActionStatus;
+  reason: string | null;
+  movements_created?: number | null;
+  transfers_created?: number | null;
+  tasks_created?: number | null;
+  position_completed?: boolean | null;
+};
+
+export type ManualPassExecutionResponse = {
+  results: ManualPassExecutionResult[];
+};
+
+export async function bulkApprovePositions(
+  planId: number,
+  ids: number[],
+  force = false,
+): Promise<BulkActionResponse> {
+  const { data } = await apiClient.post<BulkActionResponse>(
+    `/production-plans/${planId}/positions/bulk-approve`,
+    { ids, force },
+  );
+  return data;
+}
+
+export async function bulkDeletePositions(
+  planId: number,
+  ids: number[],
+  reason?: string,
+): Promise<BulkActionResponse> {
+  const { data } = await apiClient.post<BulkActionResponse>(
+    `/production-plans/${planId}/positions/bulk-delete`,
+    { ids, reason },
+  );
+  return data;
+}
+
+export async function softDeletePositionsExecutionBatch(
+  payload: SoftDeleteExecutionRequest,
+): Promise<BatchActionResponse> {
+  const { data } = await apiClient.post<BatchActionResponse>(
+    "/production-planning/rows/soft-delete-batch",
+    payload,
+  );
+  return data;
+}
+
+export async function manualPassPositionsExecutionBatch(
+  payload: ManualPassExecutionRequest,
+): Promise<ManualPassExecutionResponse> {
+  const { data } = await apiClient.post<ManualPassExecutionResponse>(
+    "/production-planning/rows/manual-pass-batch",
+    payload,
+  );
+  return data;
+}

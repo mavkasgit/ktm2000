@@ -19,7 +19,7 @@ from app.models.route import ProductionRoute, RouteStage
 from app.models.section import Section
 from app.models.user import User
 from app.services.production_planning_rows import get_production_planning_row_detail, list_production_planning_rows
-from app.services.production_plan_service import _refresh_plan_status, record_status_change, restore_plan_position
+from app.services.production_plan_service import _refresh_plan_status, record_status_change, restore_plan_position, soft_delete_cancelled_position
 from app.services.plan_generation import create_release_batch, release_batch
 from app.services.route_matcher import resolve_position_route
 from app.services.shopfloor_service import complete_task, final_release, issue_to_work, transfer_receive, transfer_send
@@ -578,6 +578,15 @@ async def manual_pass_to_stage(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> ManualPassResponse:
+    return await _do_manual_pass(db, position_id, payload, current_user)
+
+
+async def _do_manual_pass(
+    db: AsyncSession,
+    position_id: int,
+    payload: ManualPassRequest,
+    current_user: User,
+) -> ManualPassResponse:
     pos = await db.get(PlanPosition, position_id)
     if pos is None or pos.deleted_at is not None:
         raise HTTPException(status_code=404, detail="Position not found")
@@ -815,16 +824,31 @@ async def cancel_positions_batch(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> BatchActionResponse:
+    import logging
+    logger = logging.getLogger(__name__)
+
     plan_ids: set[int] = set()
-    results = []
+    results: list[BatchActionResult] = []
     for position_id in payload.position_ids:
-        result = await _process_position_cancel(db, position_id, current_user.id, payload.reason)
-        results.append(result)
-        if result.status == "success":
-            pos = await db.get(PlanPosition, position_id)
-            if pos:
-                plan_ids.add(pos.production_plan_id)
-    await db.commit()
+        try:
+            async with db.begin_nested():
+                result = await _process_position_cancel(
+                    db, position_id, current_user.id, payload.reason
+                )
+                results.append(result)
+                if result.status == "success":
+                    pos = await db.get(PlanPosition, position_id)
+                    if pos:
+                        plan_ids.add(pos.production_plan_id)
+        except Exception as exc:
+            logger.exception("cancel_positions_batch: unexpected error for id %s", position_id)
+            results.append(
+                BatchActionResult(
+                    position_id=position_id,
+                    status="failed",
+                    reason="Внутренняя ошибка сервера",
+                )
+            )
     for plan_id in plan_ids:
         await _refresh_plan_status(db, plan_id)
     return BatchActionResponse(results=results)
@@ -888,19 +912,184 @@ async def restore_positions_batch(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> BatchActionResponse:
+    import logging
+    logger = logging.getLogger(__name__)
+
     plan_ids: set[int] = set()
-    results = []
+    results: list[BatchActionResult] = []
     for position_id in payload.position_ids:
-        result = await _process_position_restore(db, position_id, current_user.id, payload.reason)
-        results.append(result)
-        if result.status == "success":
-            pos = await db.get(PlanPosition, position_id)
-            if pos:
-                plan_ids.add(pos.production_plan_id)
-    await db.commit()
+        try:
+            async with db.begin_nested():
+                result = await _process_position_restore(
+                    db, position_id, current_user.id, payload.reason
+                )
+                results.append(result)
+                if result.status == "success":
+                    pos = await db.get(PlanPosition, position_id)
+                    if pos:
+                        plan_ids.add(pos.production_plan_id)
+        except Exception as exc:
+            logger.exception("restore_positions_batch: unexpected error for id %s", position_id)
+            results.append(
+                BatchActionResult(
+                    position_id=position_id,
+                    status="failed",
+                    reason="Внутренняя ошибка сервера",
+                )
+            )
     for plan_id in plan_ids:
         await _refresh_plan_status(db, plan_id)
     return BatchActionResponse(results=results)
+
+
+# --- New bulk endpoints with savepoint isolation ----------------------------
+
+
+class SoftDeleteBatchRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    position_ids: list[int]
+    reason: str | None = None
+
+
+@router.post(
+    "/rows/soft-delete-batch",
+    response_model=BatchActionResponse,
+    dependencies=[Depends(require_role(list(WRITER_ROLES)))],
+)
+async def soft_delete_positions_batch(
+    payload: SoftDeleteBatchRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> BatchActionResponse:
+    """Soft-delete multiple cancelled positions in a single request.
+
+    Each position is processed in a savepoint; failures on one row
+    never roll back the rest of the batch.
+    """
+    import logging
+    logger = logging.getLogger(__name__)
+
+    results: list[BatchActionResult] = []
+    for position_id in payload.position_ids:
+        try:
+            async with db.begin_nested():
+                pos = await db.get(PlanPosition, position_id)
+                if pos is None or pos.deleted_at is not None:
+                    raise ValueError("Position not found")
+                if pos.status != PlanPositionStatus.cancelled:
+                    results.append(
+                        BatchActionResult(
+                            position_id=position_id,
+                            status="skipped",
+                            reason=f"Статус '{pos.status.value}' — можно удалять только отменённые позиции",
+                        )
+                    )
+                    continue
+                await soft_delete_cancelled_position(
+                    db,
+                    pos.production_plan_id,
+                    position_id,
+                    changed_by=current_user.id,
+                    reason=payload.reason or "Удалена из списка",
+                )
+                results.append(BatchActionResult(position_id=position_id, status="success"))
+        except ValueError as exc:
+            results.append(BatchActionResult(position_id=position_id, status="failed", reason=str(exc)))
+        except Exception as exc:
+            logger.exception("soft_delete_positions_batch: unexpected error for id %s", position_id)
+            results.append(
+                BatchActionResult(position_id=position_id, status="failed", reason="Внутренняя ошибка сервера")
+            )
+    return BatchActionResponse(results=results)
+
+
+class ManualPassBatchRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    position_ids: list[int]
+    target_route_stage_id: int | None = None
+    complete_route: bool = False
+    comment: str | None = None
+    idempotency_key: str | None = None
+
+
+class ManualPassBatchResult(BaseModel):
+    position_id: int
+    status: Literal["success", "failed", "skipped"]
+    reason: str | None = None
+    movements_created: int | None = None
+    transfers_created: int | None = None
+    tasks_created: int | None = None
+    position_completed: bool | None = None
+
+
+class ManualPassBatchResponse(BaseModel):
+    results: list[ManualPassBatchResult]
+
+
+@router.post(
+    "/rows/manual-pass-batch",
+    response_model=ManualPassBatchResponse,
+    dependencies=[Depends(require_role(list(WRITER_ROLES)))],
+)
+async def manual_pass_positions_batch(
+    payload: ManualPassBatchRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> ManualPassBatchResponse:
+    """Run a manual through-pass for many positions in a single request.
+
+    Each position runs in a savepoint so the failure of one position
+    does not poison the others.
+    """
+    import logging
+    logger = logging.getLogger(__name__)
+
+    base_key = (payload.idempotency_key or uuid4().hex).strip() or uuid4().hex
+    results: list[ManualPassBatchResult] = []
+
+    for index, position_id in enumerate(payload.position_ids):
+        per_position_key = f"{base_key}:{index}"
+        try:
+            async with db.begin_nested():
+                result = await _do_manual_pass(
+                    db,
+                    position_id,
+                    ManualPassRequest(
+                        target_route_stage_id=payload.target_route_stage_id,
+                        complete_route=payload.complete_route,
+                        comment=payload.comment,
+                        idempotency_key=per_position_key,
+                    ),
+                    current_user,
+                )
+                results.append(
+                    ManualPassBatchResult(
+                        position_id=position_id,
+                        status="success",
+                        movements_created=result.movements_created,
+                        transfers_created=result.transfers_created,
+                        tasks_created=result.tasks_created,
+                        position_completed=result.position_completed,
+                    )
+                )
+        except HTTPException as exc:
+            results.append(
+                ManualPassBatchResult(
+                    position_id=position_id,
+                    status="failed",
+                    reason=str(exc.detail),
+                )
+            )
+        except ValueError as exc:
+            results.append(ManualPassBatchResult(position_id=position_id, status="failed", reason=str(exc)))
+        except Exception as exc:
+            logger.exception("manual_pass_positions_batch: unexpected error for id %s", position_id)
+            results.append(
+                ManualPassBatchResult(position_id=position_id, status="failed", reason="Внутренняя ошибка сервера")
+            )
+    return ManualPassBatchResponse(results=results)
 
 
 async def _process_position_cancel(

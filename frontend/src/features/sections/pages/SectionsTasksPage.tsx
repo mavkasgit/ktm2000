@@ -6,6 +6,9 @@ import { apiClient, getErrorMessage } from "@/shared/api/client";
 import { listSections } from "@/shared/api/sections";
 import {
   acceptTransfer,
+  bulkCompleteTasks,
+  bulkIssueTasks,
+  bulkSendTransfers,
   completeTask,
   consumeRemainder,
   createTransfer,
@@ -635,77 +638,85 @@ export function SectionsTasksPage() {
   // Bulk operations via panel
   const handleBulkIssue = useCallback(async (entries: { taskId: number; quantity: string }[]) => {
     setBulkProgress({ total: entries.length, completed: 0, running: true });
-    const results: BulkActionResultItem<number>[] = [];
-    for (let i = 0; i < entries.length; i++) {
-      const entry = entries[i];
-      try {
-        await issueMutation.mutateAsync({
-          taskId: entry.taskId,
-          payload: {
-            quantity: entry.quantity,
-            idempotency_key: makeIdempotencyKey("bulk-issue"),
-            executor_user_id: me?.id,
-            performed_at: nowLocalDateTime(),
-            accounted_at: nowLocalDateTime(),
-          },
-        });
-        results.push({ id: entry.taskId, status: "success" });
-      } catch (e) {
-        results.push({ id: entry.taskId, status: "failed", reason: getErrorMessage(e) });
-      }
-      setBulkProgress({ total: entries.length, completed: i + 1, running: i + 1 < entries.length });
+    const lockOptions = lockedSectionId !== null ? { singleSectionLockId: lockedSectionId } : undefined;
+    try {
+      const response = await bulkIssueTasks(
+        entries.map((entry) => ({
+          task_id: entry.taskId,
+          quantity: entry.quantity,
+          idempotency_key: makeIdempotencyKey("bulk-issue"),
+          executor_user_id: me?.id,
+          performed_at: nowLocalDateTime(),
+          accounted_at: nowLocalDateTime(),
+        })),
+        lockOptions,
+      );
+      const results: BulkActionResultItem<number>[] = response.results.map((r) => ({
+        id: r.id,
+        status: r.status,
+        reason: r.reason,
+      }));
+      finishBulk(results);
+    } catch (e) {
+      const reason = getErrorMessage(e);
+      finishBulk(entries.map((entry) => ({ id: entry.taskId, status: "failed" as const, reason })));
     }
-    finishBulk(results);
-  }, [issueMutation, me?.id, invalidateShopfloor]);
+  }, [me?.id, lockedSectionId]);
 
   const handleBulkComplete = useCallback(async (entries: { taskId: number; goodQty: string; defectQty: string }[]) => {
     setBulkProgress({ total: entries.length, completed: 0, running: true });
-    const results: BulkActionResultItem<number>[] = [];
-    for (let i = 0; i < entries.length; i++) {
-      const entry = entries[i];
-      try {
-        await completeMutation.mutateAsync({
-          taskId: entry.taskId,
-          payload: {
-            good_quantity: entry.goodQty,
-            defect_quantity: entry.defectQty || "0",
-            idempotency_key: makeIdempotencyKey("bulk-complete"),
-            executor_user_id: me?.id,
-            performed_at: nowLocalDateTime(),
-            accounted_at: nowLocalDateTime(),
-          },
-        });
-        results.push({ id: entry.taskId, status: "success" });
-      } catch (e) {
-        results.push({ id: entry.taskId, status: "failed", reason: getErrorMessage(e) });
-      }
-      setBulkProgress({ total: entries.length, completed: i + 1, running: i + 1 < entries.length });
+    const lockOptions = lockedSectionId !== null ? { singleSectionLockId: lockedSectionId } : undefined;
+    try {
+      const response = await bulkCompleteTasks(
+        entries.map((entry) => ({
+          task_id: entry.taskId,
+          good_quantity: entry.goodQty,
+          defect_quantity: entry.defectQty || "0",
+          idempotency_key: makeIdempotencyKey("bulk-complete"),
+          executor_user_id: me?.id,
+          performed_at: nowLocalDateTime(),
+          accounted_at: nowLocalDateTime(),
+        })),
+        lockOptions,
+      );
+      const results: BulkActionResultItem<number>[] = response.results.map((r) => ({
+        id: r.id,
+        status: r.status,
+        reason: r.reason,
+      }));
+      finishBulk(results);
+    } catch (e) {
+      const reason = getErrorMessage(e);
+      finishBulk(entries.map((entry) => ({ id: entry.taskId, status: "failed" as const, reason })));
     }
-    finishBulk(results);
-  }, [completeMutation, me?.id, invalidateShopfloor]);
+  }, [me?.id, lockedSectionId]);
 
   const handleBulkSend = useCallback(async (entries: { taskId: number; quantity: string }[]) => {
     setBulkProgress({ total: entries.length, completed: 0, running: true });
-    const results: BulkActionResultItem<number>[] = [];
-    for (let i = 0; i < entries.length; i++) {
-      const entry = entries[i];
-      try {
-        await sendMutation.mutateAsync({
+    const lockOptions = lockedSectionId !== null ? { singleSectionLockId: lockedSectionId } : undefined;
+    try {
+      const response = await bulkSendTransfers(
+        entries.map((entry) => ({
           from_task_id: entry.taskId,
           quantity: entry.quantity,
           idempotency_key: makeIdempotencyKey("bulk-send"),
           executor_user_id: me?.id,
           performed_at: nowLocalDateTime(),
           accounted_at: nowLocalDateTime(),
-        });
-        results.push({ id: entry.taskId, status: "success" });
-      } catch (e) {
-        results.push({ id: entry.taskId, status: "failed", reason: getErrorMessage(e) });
-      }
-      setBulkProgress({ total: entries.length, completed: i + 1, running: i + 1 < entries.length });
+        })),
+        lockOptions,
+      );
+      const results: BulkActionResultItem<number>[] = response.results.map((r) => ({
+        id: r.id,
+        status: r.status,
+        reason: r.reason,
+      }));
+      finishBulk(results);
+    } catch (e) {
+      const reason = getErrorMessage(e);
+      finishBulk(entries.map((entry) => ({ id: entry.taskId, status: "failed" as const, reason })));
     }
-    finishBulk(results);
-  }, [sendMutation, me?.id, invalidateShopfloor]);
+  }, [me?.id, lockedSectionId]);
 
   const finishBulk = useCallback((results: BulkActionResultItem<number>[]) => {
     const summary = summarizeBulkResults(results);
@@ -727,89 +738,105 @@ export function SectionsTasksPage() {
     sendEntries: { taskId: number; quantity: string }[];
   }) => {
     const allResults: BulkActionResultItem<number>[] = [];
-    let total = data.issueEntries.length + data.completeEntries.length + data.sendEntries.length;
+    const total = data.issueEntries.length + data.completeEntries.length + data.sendEntries.length;
+    const lockOptions = lockedSectionId !== null ? { singleSectionLockId: lockedSectionId } : undefined;
+    let completed = 0;
 
-    // Step 1: Issue
+    // Step 1: Issue all
     if (data.issueEntries.length > 0) {
       setBulkProgress({ total, completed: 0, running: true });
-      for (let i = 0; i < data.issueEntries.length; i++) {
-        const entry = data.issueEntries[i];
-        try {
-          await issueMutation.mutateAsync({
-            taskId: entry.taskId,
-            payload: {
-              quantity: entry.quantity,
-              idempotency_key: makeIdempotencyKey("bulk-issue"),
-              executor_user_id: me?.id,
-              performed_at: nowLocalDateTime(),
-              accounted_at: nowLocalDateTime(),
-            },
-          });
-          allResults.push({ id: entry.taskId, status: "success" });
-        } catch (e) {
-          allResults.push({ id: entry.taskId, status: "failed", reason: getErrorMessage(e) });
+      try {
+        const response = await bulkIssueTasks(
+          data.issueEntries.map((entry) => ({
+            task_id: entry.taskId,
+            quantity: entry.quantity,
+            idempotency_key: makeIdempotencyKey("bulk-issue"),
+            executor_user_id: me?.id,
+            performed_at: nowLocalDateTime(),
+            accounted_at: nowLocalDateTime(),
+          })),
+          lockOptions,
+        );
+        for (const r of response.results) {
+          allResults.push({ id: r.id, status: r.status, reason: r.reason });
         }
-        setBulkProgress({ total, completed: i + 1, running: true });
+      } catch (e) {
+        const reason = getErrorMessage(e);
+        for (const entry of data.issueEntries) {
+          allResults.push({ id: entry.taskId, status: "failed", reason });
+        }
       }
+      completed += data.issueEntries.length;
+      setBulkProgress({ total, completed, running: true });
       // Wait for DB to update
       await new Promise(r => setTimeout(r, 500));
     }
 
-    // Step 2: Complete
+    // Step 2: Complete all
     if (data.completeEntries.length > 0) {
-      setBulkProgress({ total, completed: data.issueEntries.length, running: true });
-      for (let i = 0; i < data.completeEntries.length; i++) {
-        const entry = data.completeEntries[i];
-        try {
-          await completeMutation.mutateAsync({
-            taskId: entry.taskId,
-            payload: {
-              good_quantity: entry.goodQty,
-              defect_quantity: entry.defectQty,
-              idempotency_key: makeIdempotencyKey("bulk-complete"),
-              executor_user_id: me?.id,
-              performed_at: nowLocalDateTime(),
-              accounted_at: nowLocalDateTime(),
-            },
-          });
-          allResults.push({ id: entry.taskId, status: "success" });
-        } catch (e) {
-          allResults.push({ id: entry.taskId, status: "failed", reason: getErrorMessage(e) });
+      setBulkProgress({ total, completed, running: true });
+      try {
+        const response = await bulkCompleteTasks(
+          data.completeEntries.map((entry) => ({
+            task_id: entry.taskId,
+            good_quantity: entry.goodQty,
+            defect_quantity: entry.defectQty,
+            idempotency_key: makeIdempotencyKey("bulk-complete"),
+            executor_user_id: me?.id,
+            performed_at: nowLocalDateTime(),
+            accounted_at: nowLocalDateTime(),
+          })),
+          lockOptions,
+        );
+        for (const r of response.results) {
+          allResults.push({ id: r.id, status: r.status, reason: r.reason });
         }
-        setBulkProgress({ total, completed: data.issueEntries.length + i + 1, running: true });
+      } catch (e) {
+        const reason = getErrorMessage(e);
+        for (const entry of data.completeEntries) {
+          allResults.push({ id: entry.taskId, status: "failed", reason });
+        }
       }
+      completed += data.completeEntries.length;
+      setBulkProgress({ total, completed, running: true });
       // Wait for DB to update
       await new Promise(r => setTimeout(r, 500));
     }
 
-    // Step 3: Send (now completed is in DB)
+    // Step 3: Send all
     if (data.sendEntries.length > 0) {
-      setBulkProgress({ total, completed: data.issueEntries.length + data.completeEntries.length, running: true });
-      for (let i = 0; i < data.sendEntries.length; i++) {
-        const entry = data.sendEntries[i];
-        try {
-          await sendMutation.mutateAsync({
+      setBulkProgress({ total, completed, running: true });
+      try {
+        const response = await bulkSendTransfers(
+          data.sendEntries.map((entry) => ({
             from_task_id: entry.taskId,
             quantity: entry.quantity,
             idempotency_key: makeIdempotencyKey("bulk-send"),
             executor_user_id: me?.id,
             performed_at: nowLocalDateTime(),
             accounted_at: nowLocalDateTime(),
-          });
-          allResults.push({ id: entry.taskId, status: "success" });
-        } catch (e) {
-          allResults.push({ id: entry.taskId, status: "failed", reason: getErrorMessage(e) });
+          })),
+          lockOptions,
+        );
+        for (const r of response.results) {
+          allResults.push({ id: r.id, status: r.status, reason: r.reason });
         }
-        setBulkProgress({ total, completed: data.issueEntries.length + data.completeEntries.length + i + 1, running: i + 1 < data.sendEntries.length });
+      } catch (e) {
+        const reason = getErrorMessage(e);
+        for (const entry of data.sendEntries) {
+          allResults.push({ id: entry.taskId, status: "failed", reason });
+        }
       }
+      completed += data.sendEntries.length;
     }
 
     invalidateShopfloor();
+    setBulkProgress({ total, completed, running: false });
     // Wait for DB to update
     await new Promise(r => setTimeout(r, 500));
 
     finishBulk(allResults);
-  }, [issueMutation, completeMutation, sendMutation, me?.id, invalidateShopfloor, finishBulk]);
+  }, [me?.id, lockedSectionId, invalidateShopfloor, finishBulk]);
 
   const pendingMutation = issueMutation.isPending || completeMutation.isPending || sendMutation.isPending || returnRemainderMutation.isPending;
   const tasks = board?.tasks || [];
