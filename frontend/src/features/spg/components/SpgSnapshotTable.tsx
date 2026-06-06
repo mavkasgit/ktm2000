@@ -103,9 +103,11 @@ function DataRow({ row, sectionCodes, onShowRemainders }: { row: SpgSnapshotRow;
     >
       <td className="p-2">
         <div className="font-medium">{row.sku}</div>
-        <div className="text-xs text-muted-foreground truncate max-w-[200px]">
-          {row.product_name}
-        </div>
+        {row.product_name !== row.sku && (
+          <div className="text-xs text-muted-foreground truncate max-w-[200px]">
+            {row.product_name}
+          </div>
+        )}
       </td>
       <td className="p-2 text-right">
         {row.spg_available !== 0 ? (
@@ -157,13 +159,6 @@ function DataRow({ row, sectionCodes, onShowRemainders }: { row: SpgSnapshotRow;
           completionPct={row.completion_pct}
         />
       </td>
-      <td className="p-2 text-center">
-        {row.current_section && (
-          <Badge variant="outline" className="text-xs">
-            {row.current_section}
-          </Badge>
-        )}
-      </td>
     </tr>
   );
 }
@@ -199,7 +194,6 @@ export function SpgSnapshotTable({ snapshot, onShowProductRemainders }: SpgSnaps
               </th>
             ))}
             <th className="p-2 text-left font-medium">%</th>
-            <th className="p-2 text-center font-medium">Где сейчас</th>
           </tr>
         </thead>
         <tbody>
@@ -274,7 +268,6 @@ export function SpgSnapshotTable({ snapshot, onShowProductRemainders }: SpgSnaps
                 completionPct={totalsPct}
               />
             </td>
-            <td className="p-2"></td>
           </tr>
         </tfoot>
       </table>
