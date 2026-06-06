@@ -5,33 +5,24 @@ import { useLocation, useNavigate, useParams, useSearchParams } from "react-rout
 import { apiClient, getErrorMessage } from "@/shared/api/client";
 import { listSections } from "@/shared/api/sections";
 import {
-  acceptTransfer,
   bulkCompleteTasks,
   completeTask,
-  consumeRemainder,
-  getIncomingTransfers,
   getSectionBoard,
   getSectionDailyStats,
   getSectionsSummary,
-  getSpgRemainders,
-  type AcceptTransferInput,
   type DailyStatsRow,
   type SectionBoardTask,
-  type SpgRemainder,
   type TaskGroup,
 } from "@/shared/api/shopfloor";
-import { DatePicker, renderIcon, toast, Button, Popover, PopoverTrigger, PopoverContent, Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/shared/ui";
-import { Inbox } from "lucide-react";
+import { DateRangePicker, renderIcon, toast, Button, type DateRangeValue } from "@/shared/ui";
 import { useBulkSelection } from "@/shared/bulk";
 import { BulkResultsDialog, summarizeBulkResults, type BulkActionResultItem, type BulkActionSummary, type BulkRunnerProgress } from "@/shared/bulk";
-import { IncomingTransfersPanel } from "../components/IncomingTransfersPanel";
 import { SectionSwitcherTiles } from "../components/SectionSwitcherTiles";
 import { SectionTasksBoard, type TaskActionDialogType, type TaskBoardViewMode } from "../components/SectionTasksBoard";
 import { TaskActionDrawer } from "../components/TaskActionDrawer";
 import { BulkOperationsPanel } from "../components/BulkOperationsPanel";
 import { PlanModal } from "../components/PlanModal";
 import { GroupingSettingsModal } from "../components/GroupingSettingsModal";
-import { SpgRemaindersDialog } from "../components/SpgRemaindersDialog";
 import { loadProfileForSection, PRESET_PROFILES, type GroupingProfile, saveProfileForSection } from "../lib/groupingProfiles";
 
 type MeResponse = {
@@ -124,8 +115,9 @@ export function SectionsTasksPage() {
   }
 
   const [viewMode, setViewMode] = useState<TaskBoardViewMode>("active");
-  const [dateFrom, setDateFrom] = useState<string>("");
-  const [dateTo, setDateTo] = useState<string>("");
+  const [dateRange, setDateRange] = useState<DateRangeValue>({ from: "", to: "" });
+  const dateFrom = dateRange.from;
+  const dateTo = dateRange.to;
   const [conflictHint, setConflictHint] = useState<string | null>(null);
   const [actionLog, setActionLog] = useState<ActionLogEntry[]>([]);
 
@@ -147,9 +139,6 @@ export function SectionsTasksPage() {
   const [actionComment, setActionComment] = useState("");
   const [planModalOpen, setPlanModalOpen] = useState(false);
   const [groupingModalOpen, setGroupingModalOpen] = useState(false);
-  const [remaindersDialogOpen, setRemaindersDialogOpen] = useState(false);
-  const [remaindersPlanPositionId, setRemaindersPlanPositionId] = useState<number | null>(null);
-  const [selectedRemainder, setSelectedRemainder] = useState<SpgRemainder | null>(null);
 
   // Bulk mode state
   const [bulkMode, setBulkMode] = useState(searchParams.get("bulk") === "1" || searchParams.get("singleWindow") === "1");
@@ -282,13 +271,6 @@ export function SectionsTasksPage() {
     retry: false,
   });
 
-  const { data: incomingTransfersData, isLoading: incomingLoading } = useQuery({
-    queryKey: ["shopfloor-incoming-transfers", sectionId, requestOptions?.singleSectionLockId ?? null],
-    queryFn: () => getIncomingTransfers(sectionId as number, requestOptions),
-    enabled: sectionId !== null && !!me?.id && !isSingleWindowBlocked,
-    retry: false,
-  });
-
   const { data: stats } = useQuery({
     queryKey: ["shopfloor-stats", sectionId, dateFrom, dateTo, requestOptions?.singleSectionLockId ?? null],
     queryFn: () =>
@@ -297,13 +279,6 @@ export function SectionsTasksPage() {
         date_to: `${dateTo}T23:59:59`,
       }, requestOptions),
     enabled: sectionId !== null && !!me?.id && !!dateFrom && !!dateTo && !isSingleWindow && !isSingleWindowBlocked,
-    retry: false,
-  });
-
-  const { data: remaindersData, isLoading: remaindersLoading } = useQuery({
-    queryKey: ["shopfloor-remainders", sectionId, remaindersPlanPositionId],
-    queryFn: () => getSpgRemainders(sectionId ?? undefined, remaindersPlanPositionId ?? undefined),
-    enabled: remaindersDialogOpen && sectionId !== null,
     retry: false,
   });
 
@@ -327,6 +302,68 @@ export function SectionsTasksPage() {
     queryClient.invalidateQueries({ queryKey: ["shopfloor-incoming-transfers"] });
     queryClient.invalidateQueries({ queryKey: ["shopfloor-sections-summary"] });
   }, [queryClient]);
+
+  const openActionDialog = useCallback((_type: TaskActionDialogType, task: SectionBoardTask) => {
+    const now = nowLocalDateTimeParts();
+    setActionDialog({ open: true, type: "complete", task, tasks: null });
+    setPerformedDate(now.date);
+    setPerformedShift("1");
+    setActionComment("");
+    setConflictHint(null);
+    setActionQty("");
+    setDefectQty("");
+  }, []);
+
+  // Escape key: double-Escape exits single-window mode, single-Escape exits bulk mode.
+  useEffect(() => {
+    if (!bulkMode && !isSingleWindow) return;
+    const DOUBLE_ESCAPE_TIMEOUT_MS = 1500;
+    const lastEscapeAtRef = { current: 0 };
+    let resetTimer: ReturnType<typeof setTimeout> | null = null;
+    const handler = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      if (actionDialog.open || bulkResultsOpen) return;
+      e.preventDefault();
+      if (isSingleWindow) {
+        const now = Date.now();
+        if (now - lastEscapeAtRef.current < DOUBLE_ESCAPE_TIMEOUT_MS) {
+          if (resetTimer) {
+            clearTimeout(resetTimer);
+            resetTimer = null;
+          }
+          lastEscapeAtRef.current = 0;
+          activatedSingleWindowRef.current = false;
+          navigate(sectionId ? `/shopfloor-tasks/${sectionId}` : "/shopfloor-tasks");
+        } else {
+          lastEscapeAtRef.current = now;
+          toast({
+            variant: "default",
+            title: "Нажмите Escape ещё раз, чтобы выйти из режима одного окна",
+          });
+          if (resetTimer) clearTimeout(resetTimer);
+          resetTimer = setTimeout(() => {
+            lastEscapeAtRef.current = 0;
+            resetTimer = null;
+          }, DOUBLE_ESCAPE_TIMEOUT_MS);
+        }
+      } else if (bulkMode) {
+        toggleBulkMode();
+      }
+    };
+    window.addEventListener("keydown", handler);
+    return () => {
+      window.removeEventListener("keydown", handler);
+      if (resetTimer) clearTimeout(resetTimer);
+    };
+  }, [
+    bulkMode,
+    isSingleWindow,
+    actionDialog.open,
+    bulkResultsOpen,
+    navigate,
+    sectionId,
+    toggleBulkMode,
+  ]);
 
   const closeActionDrawer = useCallback(() => {
     setActionDialog({ open: false, type: "complete", task: null, tasks: null });
@@ -378,61 +415,9 @@ export function SectionsTasksPage() {
     },
   });
 
-  const acceptTransferMutation = useMutation({
-    mutationFn: ({ transferId, payload }: { transferId: number; payload: AcceptTransferInput }) =>
-      acceptTransfer(transferId, payload, requestOptions),
-    onSuccess: (result) => {
-      const status = result.status === "accepted" ? "Принято полностью" : result.status === "partially_accepted" ? "Принято частично" : "Отклонено";
-      toast({ title: "Входящая передача обновлена", description: status, variant: "success" });
-      pushActionLog({ status: "success", title: "Приемка", message: `Передача #${result.transfer_id}: ${status}.` });
-      invalidateShopfloor();
-    },
-    onError: (err) => {
-      const message = getErrorMessage(err);
-      toast({ title: "Ошибка приемки", description: message, variant: "destructive" });
-      pushActionLog({ status: "error", title: "Приемка", message });
-    },
-  });
-
-  const consumeRemainderMutation = useMutation({
-    mutationFn: (payload: Parameters<typeof consumeRemainder>[0]) =>
-      consumeRemainder(payload, requestOptions),
-    onSuccess: () => {
-      toast({ title: "Остаток использован", variant: "success" });
-      pushActionLog({ status: "success", title: "Использование остатка", message: "Остаток применен к задаче." });
-      invalidateShopfloor();
-      setRemaindersDialogOpen(false);
-      setSelectedRemainder(null);
-    },
-    onError: (err) => {
-      const message = getErrorMessage(err);
-      toast({ title: "Ошибка", description: message, variant: "destructive" });
-      pushActionLog({ status: "error", title: "Использование остатка", message });
-    },
-  });
-
-  const openActionDialog = useCallback((_type: TaskActionDialogType, task: SectionBoardTask) => {
-    const now = nowLocalDateTimeParts();
-    setActionDialog({ open: true, type: "complete", task, tasks: null });
-    setPerformedDate(now.date);
-    setPerformedShift("1");
-    setActionComment("");
-    setConflictHint(null);
-    setActionQty("");
-    setDefectQty("");
-  }, []);
-
-  // Escape key to exit bulk mode
-  useEffect(() => {
-    if (!bulkMode) return;
-    const handler = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
-        toggleBulkMode();
-      }
-    };
-    window.addEventListener("keydown", handler);
-    return () => window.removeEventListener("keydown", handler);
-  }, [bulkMode, toggleBulkMode]);
+  const pendingMutation =
+    completeMutation.isPending ||
+    groupCompleteMutation.isPending;
 
   const submitAction = useCallback(() => {
     const task = actionDialog.task;
@@ -457,7 +442,7 @@ export function SectionsTasksPage() {
       ? tasks.reduce((sum, t) => sum + toInteger(t.cache.in_work_quantity), 0)
       : toInteger(task!.cache.in_work_quantity);
 
-    if (Number.isFinite(inWork) && good + defect > inWork) {
+    if (inWork > 0 && good + defect > inWork) {
       setConflictHint(
         isGroup
           ? `Сумма факта и брака больше общего объема в работе всей группы (${fmtQty(String(inWork))}).`
@@ -468,57 +453,43 @@ export function SectionsTasksPage() {
 
     if (isGroup) {
       const entries: Parameters<typeof bulkCompleteTasks>[0] = [];
-      let remainingGood = good;
-      let remainingDefect = defect;
 
-      for (const t of tasks) {
-        const tInWork = toInteger(t.cache.in_work_quantity);
-        if (tInWork <= 0) continue;
+      // Заполняем задачи по порядку, пока не израсходуем good/defect.
+      // Не пропускаем задачи с in_work=0 — бэкенд сделает auto-issue, если задача
+      // в статусе ready.
+      if (good > 0 || defect > 0) {
+        let remainingGood = good;
+        let remainingDefect = defect;
 
-        // Distribute good quantity first up to in-work capacity of this task
-        const goodQty = Math.min(remainingGood, tInWork);
-        remainingGood -= goodQty;
+        for (let i = 0; i < tasks.length; i++) {
+          const t = tasks[i];
+          const capacity = Math.max(0, toInteger(t.planned_quantity));
 
-        // Distribute defect quantity up to the remaining capacity of this task
-        const defectQty = Math.min(remainingDefect, tInWork - goodQty);
-        remainingDefect -= defectQty;
+          // good: минимум из остатка, planned_quantity и in_work (если in_work>0)
+          const tInWork = toInteger(t.cache.in_work_quantity);
+          const goodCapacity = tInWork > 0 ? Math.min(capacity, tInWork) : capacity;
+          const goodQty = Math.min(remainingGood, goodCapacity);
+          remainingGood -= goodQty;
 
-        if (goodQty > 0 || defectQty > 0) {
-          entries.push({
-            task_id: t.id,
-            good_quantity: String(goodQty),
-            defect_quantity: String(defectQty),
-            comment: actionComment || undefined,
-            idempotency_key: makeIdempotencyKey(`complete-${t.id}`),
-            executor_user_id: executorUserId,
-            performed_at: effectivePerformedAt,
-            accounted_at: effectiveAccountedAt,
-          });
-        }
+          // defect: до remaining, лимит — capacity - goodQty (или tInWork - goodQty при tInWork>0)
+          const defectLimit = tInWork > 0 ? Math.max(0, tInWork - goodQty) : Math.max(0, capacity - goodQty);
+          const defectQty = Math.min(remainingDefect, defectLimit);
+          remainingDefect -= defectQty;
 
-        if (remainingGood <= 0 && remainingDefect <= 0) {
-          break;
-        }
-      }
+          if (goodQty > 0 || defectQty > 0) {
+            entries.push({
+              task_id: t.id,
+              good_quantity: String(goodQty),
+              defect_quantity: String(defectQty),
+              comment: actionComment || undefined,
+              idempotency_key: makeIdempotencyKey(`complete-${t.id}`),
+              executor_user_id: executorUserId,
+              performed_at: effectivePerformedAt,
+              accounted_at: effectiveAccountedAt,
+            });
+          }
 
-      // Overflow fallback: add leftover to the last task
-      if (remainingGood > 0 || remainingDefect > 0) {
-        const lastTask = tasks[tasks.length - 1];
-        const existingEntry = entries.find((e) => e.task_id === lastTask.id);
-        if (existingEntry) {
-          existingEntry.good_quantity = String(toInteger(existingEntry.good_quantity ?? 0) + remainingGood);
-          existingEntry.defect_quantity = String(toInteger(existingEntry.defect_quantity ?? 0) + remainingDefect);
-        } else {
-          entries.push({
-            task_id: lastTask.id,
-            good_quantity: String(remainingGood),
-            defect_quantity: String(remainingDefect),
-            comment: actionComment || undefined,
-            idempotency_key: makeIdempotencyKey(`complete-${lastTask.id}`),
-            executor_user_id: executorUserId,
-            performed_at: effectivePerformedAt,
-            accounted_at: effectiveAccountedAt,
-          });
+          if (remainingGood <= 0 && remainingDefect <= 0) break;
         }
       }
 
@@ -647,11 +618,7 @@ export function SectionsTasksPage() {
     setDefectQty("");
   }, []);
 
-  const pendingMutation =
-    completeMutation.isPending ||
-    groupCompleteMutation.isPending ||
-    acceptTransferMutation.isPending ||
-    consumeRemainderMutation.isPending;
+
   const tasks = board?.tasks || [];
   const selectedTasks = useMemo(
     () => tasks.filter((t) => bulkSelection.selectedIds.has(t.id)),
@@ -662,65 +629,7 @@ export function SectionsTasksPage() {
     bulkSelection.selectAll(ids);
   }, [bulkSelection]);
 
-  const incomingTransfers = incomingTransfersData?.incoming_transfers || [];
-  const [incomingPopoverOpen, setIncomingPopoverOpen] = useState(false);
 
-  useEffect(() => {
-    if (incomingTransfers.length > 0 && !incomingLoading) {
-      setIncomingPopoverOpen(true);
-    }
-  }, [incomingTransfers.length, incomingLoading]);
-
-  const handleAcceptTransfer = useCallback(
-    (transferId: number, payload: AcceptTransferInput) => {
-      acceptTransferMutation.mutate({ transferId, payload });
-    },
-    [acceptTransferMutation]
-  );
-
-  const handleAcceptAll = useCallback(() => {
-    const transfersWithRemaining = incomingTransfers.filter((t) => {
-      const sent = toInteger(t.sent_quantity);
-      const accepted = toInteger(t.accepted_quantity);
-      const rejected = toInteger(t.rejected_quantity);
-      return sent - accepted - rejected > 0;
-    });
-
-    for (const transfer of transfersWithRemaining) {
-      acceptTransferMutation.mutate({
-        transferId: transfer.transfer_id,
-        payload: {
-          accepted_quantity: String(Math.round(parseFloat(transfer.sent_quantity) || 0)),
-          rejected_quantity: "0",
-        },
-      });
-    }
-  }, [incomingTransfers, acceptTransferMutation]);
-
-  const handleUseRemainder = useCallback((remainder: SpgRemainder) => {
-    // Find a task in the current section that matches the product
-    const matchingTask = tasks.find(
-      (t) => t.product_sku === remainder.product_sku &&
-        (t.status === "ready" || t.status === "in_work")
-    );
-    if (!matchingTask) {
-      toast({
-        title: "Нет подходящей задачи",
-        description: `Не найдена задача для ${remainder.product_sku} в статусе готовности или работы.`,
-        variant: "destructive",
-      });
-      return;
-    }
-    consumeRemainderMutation.mutate({
-      remainder_id: remainder.id,
-      task_id: matchingTask.id,
-      quantity: remainder.remainder_quantity,
-      idempotency_key: makeIdempotencyKey("consume-remainder"),
-      executor_user_id: me?.id,
-      performed_at: nowLocalDateTime(),
-      accounted_at: nowLocalDateTime(),
-    });
-  }, [tasks, consumeRemainderMutation, me?.id]);
 
   const selectedSection = useMemo(
     () => (sections || []).find((s) => s.id === sectionId) || null,
@@ -861,13 +770,6 @@ export function SectionsTasksPage() {
           />
         )}
 
-        {!isSingleWindow && (
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-            <DatePicker value={dateFrom} onChange={setDateFrom} placeholder="Дата от" className="w-full" />
-            <DatePicker value={dateTo} onChange={setDateTo} placeholder="Дата до" className="w-full" />
-          </div>
-        )}
-
         {!isSingleWindowBlocked && sectionId && (
           <div className="space-y-4">
             {/* Bulk operations panel */}
@@ -882,41 +784,19 @@ export function SectionsTasksPage() {
 
             {/* Group operations panel (opened by «Завершить группу») is now handled by TaskActionDrawer */}
 
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
+              <DateRangePicker
+                from={dateRange.from}
+                to={dateRange.to}
+                onChange={setDateRange}
+                className="w-full sm:w-auto sm:min-w-[280px] max-w-md"
+              />
               <Button variant="outline" size="sm" onClick={() => setPlanModalOpen(true)}>
                 План
-              </Button>
-              <Button variant="outline" size="sm" onClick={() => {
-                setRemaindersPlanPositionId(actionDialog.task?.plan_position_id ?? null);
-                setRemaindersDialogOpen(true);
-              }} title="Складские остатки">
-                Остатки
               </Button>
               <Button variant="outline" size="sm" onClick={() => setGroupingModalOpen(true)} title="Настройки группировки">
                 {profile.name}
               </Button>
-              <Popover open={incomingPopoverOpen} onOpenChange={setIncomingPopoverOpen}>
-                <PopoverTrigger asChild>
-                  <Button variant="outline" size="sm">
-                    <Inbox className="h-4 w-4 mr-1" />
-                    Входящие передачи
-                    {incomingTransfers.length > 0 && (
-                      <span className="ml-1 px-1.5 py-0.5 text-[10px] font-semibold rounded-full bg-red-600 text-white">
-                        {incomingTransfers.length}
-                      </span>
-                    )}
-                  </Button>
-                </PopoverTrigger>
-                <PopoverContent side="right" avoidCollisions={false} align="start" className="w-[600px] max-h-[80vh] overflow-auto p-0">
-                  <IncomingTransfersPanel
-                    transfers={incomingTransfers}
-                    isLoading={incomingLoading}
-                    isPending={acceptTransferMutation.isPending}
-                    onAccept={handleAcceptTransfer}
-                    onAcceptAll={handleAcceptAll}
-                  />
-                </PopoverContent>
-              </Popover>
             </div>
 
             <SectionTasksBoard
@@ -1056,15 +936,7 @@ export function SectionsTasksPage() {
         />
       )}
 
-      {/* Spg remainders dialog */}
-      <SpgRemaindersDialog
-        open={remaindersDialogOpen}
-        onOpenChange={setRemaindersDialogOpen}
-        remainders={remaindersData?.remainders || []}
-        isLoading={remaindersLoading}
-        onUseRemainder={handleUseRemainder}
-        currentPlanPositionId={remaindersPlanPositionId}
-      />
+
     </>
   );
 }

@@ -364,11 +364,14 @@ async def get_sections_summary(db: AsyncSession) -> dict:
             select(
                 WorkTask.section_id.label("section_id"),
                 func.count(WorkTask.id).label("total_tasks"),
-                func.sum(case((WorkTask.status == WorkTaskStatus.ready, 1), else_=0)).label("ready_count"),
                 func.sum(
                     case(
                         (
-                            WorkTask.status.in_([WorkTaskStatus.in_progress, WorkTaskStatus.partially_completed]),
+                            WorkTask.status.in_([
+                                WorkTaskStatus.ready,
+                                WorkTaskStatus.in_progress,
+                                WorkTaskStatus.partially_completed,
+                            ]),
                             1,
                         ),
                         else_=0,
@@ -386,6 +389,25 @@ async def get_sections_summary(db: AsyncSession) -> dict:
         )
     ).all()
 
+    completed_counts = (
+        await db.execute(
+            select(
+                WorkTask.section_id.label("section_id"),
+                func.count(WorkTask.id).label("completed_count"),
+            )
+            .outerjoin(SectionPlanLine, WorkTask.section_plan_line_id == SectionPlanLine.id)
+            .outerjoin(PlanPosition, SectionPlanLine.plan_position_id == PlanPosition.id)
+            .where(
+                WorkTask.status == WorkTaskStatus.completed,
+                (PlanPosition.deleted_at.is_(None)) | (PlanPosition.id.is_(None)),
+            )
+            .group_by(WorkTask.section_id)
+        )
+    ).all()
+    completed_by_section: dict[int, int] = {
+        row.section_id: int(row.completed_count or 0) for row in completed_counts
+    }
+
     incoming_counts = (
         await db.execute(
             select(
@@ -401,7 +423,7 @@ async def get_sections_summary(db: AsyncSession) -> dict:
     for row in status_counts:
         by_section[row.section_id] = {
             "total_tasks": int(row.total_tasks or 0),
-            "ready_count": int(row.ready_count or 0),
+            "completed_count": completed_by_section.get(row.section_id, 0),
             "in_progress_count": int(row.in_progress_count or 0),
             "waiting_count": int(row.waiting_count or 0),
             "incoming_transfers_count": 0,
@@ -412,7 +434,7 @@ async def get_sections_summary(db: AsyncSession) -> dict:
             row.section_id,
             {
                 "total_tasks": 0,
-                "ready_count": 0,
+                "completed_count": 0,
                 "in_progress_count": 0,
                 "waiting_count": 0,
                 "incoming_transfers_count": 0,
@@ -437,7 +459,7 @@ async def get_sections_summary(db: AsyncSession) -> dict:
                 "icon": section.icon,
                 "icon_color": section.icon_color,
                 "total_tasks": by_section.get(section.id, {}).get("total_tasks", 0),
-                "ready_count": by_section.get(section.id, {}).get("ready_count", 0),
+                "completed_count": by_section.get(section.id, {}).get("completed_count", 0),
                 "in_progress_count": by_section.get(section.id, {}).get("in_progress_count", 0),
                 "waiting_count": by_section.get(section.id, {}).get("waiting_count", 0),
                 "incoming_transfers_count": by_section.get(section.id, {}).get("incoming_transfers_count", 0),

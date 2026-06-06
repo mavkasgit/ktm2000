@@ -112,7 +112,7 @@ export type SectionSummary = {
   icon: string | null;
   icon_color: string | null;
   total_tasks: number;
-  ready_count: number;
+  completed_count: number;
   in_progress_count: number;
   waiting_count: number;
   incoming_transfers_count: number;

@@ -117,7 +117,7 @@ export function TaskActionDrawer({
         <div className="flex-1 overflow-auto p-6 space-y-4">
           {(task || isGroup) && (
             <div className="rounded-lg border bg-muted/20 p-3 text-xs">
-              <div className="grid grid-cols-2 gap-2">
+              <div className="flex flex-row flex-wrap gap-x-4 gap-y-1">
                 <div>В работе: <span className="font-medium">{maxQty}</span></div>
                 <div>Годные: <span className="font-medium">{completedQty}</span></div>
                 <div>Брак: <span className="font-medium">{rejectedQty}</span></div>
@@ -139,39 +139,55 @@ export function TaskActionDrawer({
             </div>
           )}
 
-          <div>
-            <label className="text-sm font-medium">Факт (годные)</label>
-            <Input type="number" step="1" min="0" value={actionQty} onChange={(e) => setActionQty(normalizeIntegerInput(e.target.value))} />
-            <div className="mt-2 flex flex-wrap gap-1">
-              {(task || isGroup) && (
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="outline"
-                  onClick={() => setActionQty(String(plannedQty))}
-                >
-                  Плановое ({plannedQty})
-                </Button>
-              )}
+          <div className="flex flex-row flex-wrap items-end gap-3">
+            <div className="flex flex-col gap-1.5">
+              <label className="text-sm font-medium">Факт (годные)</label>
+              <Input
+                type="number"
+                step="1"
+                min="0"
+                value={actionQty}
+                onChange={(e) => setActionQty(normalizeIntegerInput(e.target.value))}
+                className="w-[150px] h-8"
+              />
+            </div>
+            <div className="flex flex-col gap-1.5">
+              <label className="text-sm font-medium">Брак</label>
+              <Input
+                type="number"
+                step="1"
+                min="0"
+                value={defectQty}
+                onChange={(e) => setDefectQty(normalizeIntegerInput(e.target.value))}
+                className="w-[150px] h-8"
+              />
+            </div>
+          </div>
+          {outOfRange && (
+            <div className="mt-1 text-xs text-red-600">
+              Сумма факта и брака больше объема в работе: {maxQty}
+            </div>
+          )}
+
+          <div className="flex flex-row flex-wrap gap-2">
+            {(task || isGroup) && (
               <Button
                 type="button"
-                size="sm"
                 variant="outline"
-                onClick={() => setActionQty(maxQty > 0 ? String(maxQty) : "0")}
+                onClick={() => setActionQty(String(plannedQty))}
+                className="shrink-0 w-[150px] h-8"
               >
-                Максимальное ({maxQty})
+                Плановое ({plannedQty})
               </Button>
-            </div>
-            {outOfRange && (
-              <div className="mt-1 text-xs text-red-600">
-                Сумма факта и брака больше объема в работе: {maxQty}
-              </div>
             )}
-          </div>
-
-          <div>
-            <label className="text-sm font-medium">Брак</label>
-            <Input type="number" step="1" min="0" value={defectQty} onChange={(e) => setDefectQty(normalizeIntegerInput(e.target.value))} />
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setActionQty(maxQty > 0 ? String(maxQty) : "0")}
+              className="shrink-0 w-[150px] h-8"
+            >
+              Максимальное ({maxQty})
+            </Button>
           </div>
 
           <div className="flex flex-row gap-4 items-end">

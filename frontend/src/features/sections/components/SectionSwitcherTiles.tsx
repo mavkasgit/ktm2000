@@ -16,7 +16,7 @@ type SectionSwitcherTilesProps = {
 
 function totals(summary: SectionSummary | undefined) {
   return {
-    ready: summary?.ready_count ?? 0,
+    completed: summary?.completed_count ?? 0,
     inProgress: summary?.in_progress_count ?? 0,
     waiting: summary?.waiting_count ?? 0,
     incoming: summary?.incoming_transfers_count ?? 0,
@@ -101,7 +101,7 @@ export function SectionSwitcherTiles({
             </Badge>
             <Badge variant="secondary" className="text-[11px] justify-center">ОЖ: {stats.waiting}</Badge>
             <Badge variant="secondary" className="text-[11px] justify-center">ВР: {stats.inProgress}</Badge>
-            <Badge variant="secondary" className="text-[11px] justify-center">Г: {stats.ready}</Badge>
+            <Badge variant="secondary" className="text-[11px] justify-center">Г: {stats.completed}</Badge>
           </div>
         ) : (
           <div className="mt-2 flex flex-wrap gap-1">
@@ -113,7 +113,7 @@ export function SectionSwitcherTiles({
             )}
             <Badge variant="secondary" className="text-[11px]">ОЖ: {stats.waiting}</Badge>
             <Badge variant="secondary" className="text-[11px]">ВР: {stats.inProgress}</Badge>
-            <Badge variant="secondary" className="text-[11px]">Г: {stats.ready}</Badge>
+            <Badge variant="secondary" className="text-[11px]">Г: {stats.completed}</Badge>
           </div>
         )}
       </button>

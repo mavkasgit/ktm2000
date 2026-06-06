@@ -81,21 +81,42 @@ function getOperationName(task: SectionBoardTask): string {
   return task.operation_name || "—";
 }
 
-function distributeQtyUncapped(
+function distributeQtyProportional(
   tasks: SectionBoardTask[],
   totalQty: number,
 ): Record<number, number> {
   const result: Record<number, number> = {};
-  let remaining = totalQty;
-  for (const task of tasks) {
-    if (remaining <= 0) {
-      result[task.id] = 0;
-      continue;
-    }
-    result[task.id] = remaining;
-    remaining = 0;
+  if (tasks.length === 0 || totalQty <= 0) {
+    for (const task of tasks) result[task.id] = 0;
+    return result;
   }
+
+  // Берём ёмкость каждой задачи из её плана (planned_quantity).
+  const capacities = tasks.map((t) => Math.max(0, toInteger(t.planned_quantity)));
+  const totalCapacity = capacities.reduce((s, c) => s + c, 0);
+
+  if (totalCapacity === 0) {
+    for (const task of tasks) result[task.id] = 0;
+    return result;
+  }
+
+  // Распределяем пропорционально ёмкости. Остаток от округления кладём
+  // в последнюю задачу, чтобы сумма точно совпала с totalQty.
+  let remaining = totalQty;
+  for (let i = 0; i < tasks.length - 1; i++) {
+    const share = Math.round((totalQty * capacities[i]) / totalCapacity);
+    result[tasks[i].id] = share;
+    remaining -= share;
+  }
+  result[tasks[tasks.length - 1].id] = Math.max(0, remaining);
   return result;
+}
+
+function distributeQtyUncapped(
+  tasks: SectionBoardTask[],
+  totalQty: number,
+): Record<number, number> {
+  return distributeQtyProportional(tasks, totalQty);
 }
 
 function sumTasks(
@@ -305,6 +326,13 @@ export function BulkOperationsPanel({
     }).join(", ");
   };
 
+  const getPlanBreakdown = (group: BulkOpGroup): string => {
+    if (group.tasks.length <= 1) return fmtQty(group.totalPlan);
+    return group.tasks
+      .map((t) => fmtQty(toInteger(t.planned_quantity)))
+      .join("+");
+  };
+
   return (
     <div className="rounded-lg border bg-card inline-block">
       <div className="overflow-auto">
@@ -314,7 +342,25 @@ export function BulkOperationsPanel({
               <th rowSpan={2} className="text-center p-2 text-xs font-medium text-muted-foreground whitespace-nowrap border-r">Этап</th>
               <th rowSpan={2} className="text-center p-2 text-xs font-medium text-muted-foreground whitespace-nowrap border-r">Артикул</th>
               <th rowSpan={2} className="text-center p-2 text-xs font-medium text-muted-foreground whitespace-nowrap border-r">Операция</th>
-              <th rowSpan={2} className="text-center p-2 text-xs font-medium text-muted-foreground whitespace-nowrap border-r">План</th>
+              <th rowSpan={2} className="text-center p-1 text-xs font-medium whitespace-nowrap border-r">
+                <button
+                  type="button"
+                  onClick={fillPlannedQuantities}
+                  disabled={pending}
+                  title="Заполнить столбец «+ Добавить» планом"
+                  className={cn(
+                    "inline-flex items-center justify-center px-2 py-1 rounded-md w-full",
+                    "border border-blue-300 bg-white text-blue-700 font-medium",
+                    "transition-all duration-150",
+                    "hover:bg-blue-50 hover:border-blue-500 hover:shadow-sm hover:-translate-y-px",
+                    "focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-1",
+                    "active:translate-y-0 active:shadow-none",
+                    "disabled:opacity-50 disabled:pointer-events-none disabled:hover:translate-y-0 disabled:hover:shadow-none",
+                  )}
+                >
+                  План
+                </button>
+              </th>
               <th rowSpan={2} className="text-center p-2 text-xs font-medium text-muted-foreground whitespace-nowrap leading-tight border-r">
                 <div>Завершено</div>
                 <div className="text-[10px] font-normal mt-0.5">Годн/Брак</div>
@@ -350,11 +396,28 @@ export function BulkOperationsPanel({
                   <td className="p-2 text-center whitespace-nowrap font-mono text-xs border-r">
                     <button
                       type="button"
-                      className="hover:underline text-blue-600 focus:outline-none w-full text-center"
                       onClick={() => updateGroupQty(group.key, "addQty", String(group.totalPlan))}
-                      title="Скопировать план в '+ Добавить'"
+                      title={
+                        group.tasks.length > 1
+                          ? `Заполнит ${group.tasks.length} заданий: ${getPlanBreakdown(group)} = ${fmtQty(group.totalPlan)}`
+                          : "Скопировать план в '+ Добавить'"
+                      }
+                      className={cn(
+                        "inline-flex flex-col items-center justify-center min-w-[3rem] px-2 py-1 rounded-md",
+                        "border border-blue-300 bg-white text-blue-700 font-mono leading-tight",
+                        "transition-all duration-150",
+                        "hover:bg-blue-50 hover:border-blue-500 hover:shadow-sm hover:-translate-y-px",
+                        "focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-1",
+                        "active:translate-y-0 active:shadow-none",
+                        "disabled:opacity-50 disabled:pointer-events-none",
+                      )}
                     >
-                      {fmtQty(group.totalPlan)}
+                      <span className="font-semibold">{fmtQty(group.totalPlan)}</span>
+                      {group.tasks.length > 1 && (
+                        <span className="text-[10px] text-blue-500/80 mt-0.5">
+                          ({getPlanBreakdown(group)})
+                        </span>
+                      )}
                     </button>
                   </td>
                   <td className="p-2 text-center whitespace-nowrap font-mono text-xs border-r">
@@ -444,15 +507,6 @@ export function BulkOperationsPanel({
               disabled={pending}
             >
               Очистить
-            </Button>
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              onClick={fillPlannedQuantities}
-              disabled={pending}
-            >
-              План
             </Button>
             <Button
               size="sm"
