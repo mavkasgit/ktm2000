@@ -10,7 +10,7 @@ import { getErrorMessage } from "@/shared/api/client";
 
 type ProcessingType = "standart_processing" | "paired_processing";
 
-const ui = UI as Record<string, React.ComponentType<any>>;
+const ui = UI as unknown as Record<string, React.ComponentType<any>>;
 const Button = ui.Button ?? "button";
 const Input = ui.Input ?? "input";
 

@@ -19,6 +19,14 @@ export { DatePicker } from "./date-picker";
 export type { DatePickerProps } from "./date-picker";
 export { DateTimePicker } from "./DateTimePicker";
 export type { DateTimePickerProps } from "./DateTimePicker";
+export {
+  DateRangePicker,
+  defaultDateRangePresets,
+  findActivePreset,
+  formatDateRu,
+  parseRuDate,
+} from "./DateRangePicker";
+export type { DateRangePickerProps, DateRangePreset, DateRangeValue } from "./DateRangePicker";
 export { SectionSelect } from "./SectionSelect";
 export type { SectionSelectProps } from "./SectionSelect";
 export { SpgSelect } from "./SpgSelect";

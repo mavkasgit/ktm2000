@@ -44,7 +44,7 @@ const KIND_OPTIONS = [
   { value: "finished_stock", label: "Склад готовой продукции" },
 ];
 
-const ui = UI as Record<string, React.ComponentType<any>>;
+const ui = UI as unknown as Record<string, React.ComponentType<any>>;
 const Table = ui.Table ?? "table";
 
 const OP_FIELDS: Record<string, EntityDialogField> = {
