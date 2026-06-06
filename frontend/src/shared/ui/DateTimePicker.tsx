@@ -97,7 +97,7 @@ export function DateTimePicker({
           {label}
         </label>
       )}
-      <div className={cn("grid grid-cols-2 gap-2", disabled && "opacity-50 pointer-events-none")}>
+      <div className={cn("flex flex-row gap-2", disabled && "opacity-50 pointer-events-none")}>
         <input
           id={`${id}-time`}
           type="text"
@@ -107,7 +107,7 @@ export function DateTimePicker({
           onChange={(e) => handleTimeChange(e.target.value)}
           onFocus={(e) => e.target.select()}
           onKeyDown={(e) => { if (e.key === "Enter") e.currentTarget.blur() }}
-          className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-0 placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+          className="flex h-10 w-[130px] rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-0 placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
           maxLength={5}
           disabled={disabled}
         />
@@ -115,13 +115,13 @@ export function DateTimePicker({
           id={id}
           type="text"
           placeholder={placeholder || "ДД.ММ.ГГГГ"}
-          aria-label={`${label || placeholder || "Дата и время"}: дата`}
+          aria-label={`${label || placeholder || "Дата и time"}: дата`}
           value={dateInputValue}
           onChange={(e) => handleDateChange(e.target.value)}
           onFocus={(e) => e.target.select()}
           onKeyDown={(e) => { if (e.key === "Enter") e.currentTarget.blur() }}
           className={cn(
-            "flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-0 placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
+            "flex h-10 w-[130px] rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-0 placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
             dateDisabled && "bg-muted text-muted-foreground"
           )}
           maxLength={10}

@@ -180,26 +180,6 @@ export type CompleteTaskInput = {
   accounted_at?: string;
 };
 
-export type IssueTaskInput = {
-  quantity: number | string;
-  comment?: string;
-  idempotency_key?: string;
-  executor_user_id?: number;
-  performed_at?: string;
-  accounted_at?: string;
-};
-
-export type TransferSendInput = {
-  from_task_id: number;
-  to_task_id?: number;
-  quantity: number | string;
-  comment?: string;
-  idempotency_key?: string;
-  executor_user_id?: number;
-  performed_at?: string;
-  accounted_at?: string;
-};
-
 export type AcceptTransferInput = {
   accepted_quantity: number | string;
   rejected_quantity: number | string;
@@ -277,31 +257,6 @@ export async function completeTask(
 ): Promise<{ task_id: number; movement_ids: number[]; defect_id: number | null; status: string; idempotent_replay?: boolean }> {
   const { data } = await apiClient.post(
     `/shopfloor/tasks/${taskId}/complete`,
-    payload,
-    makeRequestConfig(options)
-  );
-  return data;
-}
-
-export async function issueTask(
-  taskId: number,
-  payload: IssueTaskInput,
-  options?: ShopfloorRequestOptions
-): Promise<{ movement_id: number; task_id: number; status: string; idempotent_replay?: boolean }> {
-  const { data } = await apiClient.post(
-    `/shopfloor/tasks/${taskId}/issue`,
-    payload,
-    makeRequestConfig(options)
-  );
-  return data;
-}
-
-export async function createTransfer(
-  payload: TransferSendInput,
-  options?: ShopfloorRequestOptions
-): Promise<{ transfer_id: number; transfer_no: string; status: string; idempotent_replay?: boolean }> {
-  const { data } = await apiClient.post(
-    "/shopfloor/transfers",
     payload,
     makeRequestConfig(options)
   );
@@ -486,16 +441,6 @@ export async function getSpgRemainders(
   return data;
 }
 
-export type ReturnRemainderInput = {
-  task_id: number;
-  quantity: number | string;
-  comment?: string;
-  idempotency_key?: string;
-  executor_user_id?: number;
-  performed_at?: string;
-  accounted_at?: string;
-};
-
 export type ConsumeRemainderInput = {
   remainder_id: number;
   task_id: number;
@@ -506,18 +451,6 @@ export type ConsumeRemainderInput = {
   performed_at?: string;
   accounted_at?: string;
 };
-
-export async function returnRemainder(
-  payload: ReturnRemainderInput,
-  options?: ShopfloorRequestOptions,
-): Promise<{ movement_id: number; remainder_id: number; task_id: number; idempotent_replay?: boolean }> {
-  const { data } = await apiClient.post(
-    "/shopfloor/remainders/return",
-    payload,
-    makeRequestConfig(options),
-  );
-  return data;
-}
 
 export async function consumeRemainder(
   payload: ConsumeRemainderInput,
@@ -548,17 +481,6 @@ export type BulkActionResponse = {
   results: BulkActionResult[];
 };
 
-export type BulkIssueEntry = {
-  task_id: number;
-  quantity: number | string;
-  comment?: string | null;
-  source_ref?: string | null;
-  idempotency_key?: string | null;
-  executor_user_id?: number | null;
-  performed_at?: string | null;
-  accounted_at?: string | null;
-};
-
 export type BulkCompleteEntry = {
   task_id: number;
   good_quantity: number | string;
@@ -571,47 +493,12 @@ export type BulkCompleteEntry = {
   accounted_at?: string | null;
 };
 
-export type BulkTransferSendEntry = {
-  from_task_id: number;
-  to_task_id?: number | null;
-  quantity: number | string;
-  comment?: string | null;
-  idempotency_key?: string | null;
-  executor_user_id?: number | null;
-  performed_at?: string | null;
-  accounted_at?: string | null;
-};
-
-export async function bulkIssueTasks(
-  entries: BulkIssueEntry[],
-  options?: ShopfloorRequestOptions,
-): Promise<BulkActionResponse> {
-  const { data } = await apiClient.post<BulkActionResponse>(
-    "/shopfloor/tasks/bulk-issue",
-    { entries },
-    makeRequestConfig(options),
-  );
-  return data;
-}
-
 export async function bulkCompleteTasks(
   entries: BulkCompleteEntry[],
   options?: ShopfloorRequestOptions,
 ): Promise<BulkActionResponse> {
   const { data } = await apiClient.post<BulkActionResponse>(
     "/shopfloor/tasks/bulk-complete",
-    { entries },
-    makeRequestConfig(options),
-  );
-  return data;
-}
-
-export async function bulkSendTransfers(
-  entries: BulkTransferSendEntry[],
-  options?: ShopfloorRequestOptions,
-): Promise<BulkActionResponse> {
-  const { data } = await apiClient.post<BulkActionResponse>(
-    "/shopfloor/tasks/bulk-send",
     { entries },
     makeRequestConfig(options),
   );

@@ -303,36 +303,12 @@ async def complete_task_endpoint(
 # --- Bulk action endpoints (savepoint-isolated) -----------------------------
 
 
-class BulkIssueEntry(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    task_id: int
-    quantity: Decimal
-    comment: str | None = None
-    source_ref: str | None = None
-    idempotency_key: str | None = None
-    executor_user_id: int | None = None
-    performed_at: datetime | None = None
-    accounted_at: datetime | None = None
-
-
 class BulkCompleteEntry(BaseModel):
     model_config = ConfigDict(extra="forbid")
     task_id: int
     good_quantity: Decimal = Decimal("0")
     defect_quantity: Decimal = Decimal("0")
     defect_reason: str | None = None
-    comment: str | None = None
-    idempotency_key: str | None = None
-    executor_user_id: int | None = None
-    performed_at: datetime | None = None
-    accounted_at: datetime | None = None
-
-
-class BulkTransferSendEntry(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    from_task_id: int
-    to_task_id: int | None = None
-    quantity: Decimal
     comment: str | None = None
     idempotency_key: str | None = None
     executor_user_id: int | None = None
@@ -354,62 +330,6 @@ class BulkActionResultItem(BaseModel):
 
 class BulkActionResponse(BaseModel):
     results: list[BulkActionResultItem]
-
-
-@router.post(
-    "/tasks/bulk-issue",
-    response_model=BulkActionResponse,
-    dependencies=[Depends(require_role(list(WRITER_ROLES)))],
-)
-async def bulk_issue_tasks(
-    payload: BulkActionRequest,
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-    locked_section_id: int | None = Depends(get_single_window_locked_section_id),
-) -> BulkActionResponse:
-    """Issue many tasks in a single request with savepoint isolation per item."""
-    import logging
-    logger = logging.getLogger(__name__)
-
-    results: list[BulkActionResultItem] = []
-    for raw in payload.entries:
-        try:
-            entry = BulkIssueEntry.model_validate(raw)
-        except Exception as exc:
-            results.append(
-                BulkActionResultItem(id=0, status="failed", reason=f"Invalid entry: {exc}")
-            )
-            continue
-        try:
-            async with db.begin_nested():
-                await _ensure_task_lock(db, entry.task_id, locked_section_id)
-                await issue_to_work(
-                    db,
-                    task_id=entry.task_id,
-                    quantity=entry.quantity,
-                    actor_id=current_user.id,
-                    comment=entry.comment,
-                    source_ref=entry.source_ref,
-                    idempotency_key=entry.idempotency_key,
-                    executor_user_id=entry.executor_user_id,
-                    performed_at=entry.performed_at,
-                    accounted_at=entry.accounted_at,
-                )
-            results.append(BulkActionResultItem(id=entry.task_id, status="success"))
-        except HTTPException as exc:
-            results.append(
-                BulkActionResultItem(id=entry.task_id, status="failed", reason=str(exc.detail))
-            )
-        except ValueError as exc:
-            results.append(
-                BulkActionResultItem(id=entry.task_id, status="failed", reason=str(exc))
-            )
-        except Exception as exc:
-            logger.exception("bulk_issue_tasks: unexpected error for task %s", entry.task_id)
-            results.append(
-                BulkActionResultItem(id=entry.task_id, status="failed", reason="Внутренняя ошибка сервера")
-            )
-    return BulkActionResponse(results=results)
 
 
 @router.post(
@@ -465,68 +385,6 @@ async def bulk_complete_tasks(
             logger.exception("bulk_complete_tasks: unexpected error for task %s", entry.task_id)
             results.append(
                 BulkActionResultItem(id=entry.task_id, status="failed", reason="Внутренняя ошибка сервера")
-            )
-    return BulkActionResponse(results=results)
-
-
-@router.post(
-    "/tasks/bulk-send",
-    response_model=BulkActionResponse,
-    dependencies=[Depends(require_role(list(WRITER_ROLES)))],
-)
-async def bulk_send_transfers(
-    payload: BulkActionRequest,
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-    locked_section_id: int | None = Depends(get_single_window_locked_section_id),
-) -> BulkActionResponse:
-    """Send many transfers in a single request with savepoint isolation per item."""
-    import logging
-    logger = logging.getLogger(__name__)
-
-    results: list[BulkActionResultItem] = []
-    for raw in payload.entries:
-        try:
-            entry = BulkTransferSendEntry.model_validate(raw)
-        except Exception as exc:
-            results.append(
-                BulkActionResultItem(id=0, status="failed", reason=f"Invalid entry: {exc}")
-            )
-            continue
-        try:
-            async with db.begin_nested():
-                await _ensure_task_lock(db, entry.from_task_id, locked_section_id)
-                transfer_result = await transfer_send(
-                    db,
-                    from_task_id=entry.from_task_id,
-                    to_task_id=entry.to_task_id,
-                    quantity=entry.quantity,
-                    actor_id=current_user.id,
-                    comment=entry.comment,
-                    idempotency_key=entry.idempotency_key,
-                    executor_user_id=entry.executor_user_id,
-                    performed_at=entry.performed_at,
-                    accounted_at=entry.accounted_at,
-                )
-            results.append(
-                BulkActionResultItem(
-                    id=entry.from_task_id,
-                    status="success",
-                    meta={"transfer_id": transfer_result.get("transfer_id")},
-                )
-            )
-        except HTTPException as exc:
-            results.append(
-                BulkActionResultItem(id=entry.from_task_id, status="failed", reason=str(exc.detail))
-            )
-        except ValueError as exc:
-            results.append(
-                BulkActionResultItem(id=entry.from_task_id, status="failed", reason=str(exc))
-            )
-        except Exception as exc:
-            logger.exception("bulk_send_transfers: unexpected error for task %s", entry.from_task_id)
-            results.append(
-                BulkActionResultItem(id=entry.from_task_id, status="failed", reason="Внутренняя ошибка сервера")
             )
     return BulkActionResponse(results=results)
 

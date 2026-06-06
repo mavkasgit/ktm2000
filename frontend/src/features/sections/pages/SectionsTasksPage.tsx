@@ -7,24 +7,20 @@ import { listSections } from "@/shared/api/sections";
 import {
   acceptTransfer,
   bulkCompleteTasks,
-  bulkIssueTasks,
-  bulkSendTransfers,
   completeTask,
   consumeRemainder,
-  createTransfer,
   getIncomingTransfers,
   getSectionBoard,
   getSectionDailyStats,
   getSectionsSummary,
   getSpgRemainders,
-  issueTask,
-  returnRemainder,
   type AcceptTransferInput,
   type DailyStatsRow,
   type SectionBoardTask,
   type SpgRemainder,
+  type TaskGroup,
 } from "@/shared/api/shopfloor";
-import { DatePicker, renderIcon, toast, Button, Popover, PopoverTrigger, PopoverContent } from "@/shared/ui";
+import { DatePicker, renderIcon, toast, Button, Popover, PopoverTrigger, PopoverContent, Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/shared/ui";
 import { Inbox } from "lucide-react";
 import { useBulkSelection } from "@/shared/bulk";
 import { BulkResultsDialog, summarizeBulkResults, type BulkActionResultItem, type BulkActionSummary, type BulkRunnerProgress } from "@/shared/bulk";
@@ -133,19 +129,21 @@ export function SectionsTasksPage() {
   const [conflictHint, setConflictHint] = useState<string | null>(null);
   const [actionLog, setActionLog] = useState<ActionLogEntry[]>([]);
 
-  const [actionDialog, setActionDialog] = useState<{ open: boolean; type: TaskActionDialogType; task: SectionBoardTask | null }>({
+  const [actionDialog, setActionDialog] = useState<{
+    open: boolean;
+    type: TaskActionDialogType;
+    task: SectionBoardTask | null;
+    tasks: SectionBoardTask[] | null;
+  }>({
     open: false,
     type: "complete",
     task: null,
+    tasks: null,
   });
   const [actionQty, setActionQty] = useState("");
   const [defectQty, setDefectQty] = useState("");
-  const [timesMatch, setTimesMatch] = useState(true);
   const [performedDate, setPerformedDate] = useState("");
-  const [performedTime, setPerformedTime] = useState("");
-  const [accountedDate, setAccountedDate] = useState("");
-  const [accountedTime, setAccountedTime] = useState("");
-  const [dateToday, setDateToday] = useState(true);
+  const [performedShift, setPerformedShift] = useState<"1" | "2">("1");
   const [actionComment, setActionComment] = useState("");
   const [planModalOpen, setPlanModalOpen] = useState(false);
   const [groupingModalOpen, setGroupingModalOpen] = useState(false);
@@ -198,6 +196,7 @@ export function SectionsTasksPage() {
   const [bulkResults, setBulkResults] = useState<BulkActionResultItem<number>[]>([]);
   const [bulkResultsOpen, setBulkResultsOpen] = useState(false);
   const [bulkSummary, setBulkSummary] = useState<BulkActionSummary | null>(null);
+  // groupPanelTasks removed, using actionDialog.tasks instead
   const bulkExecuting = bulkProgress?.running ?? false;
 
   const { data: me } = useQuery({
@@ -330,24 +329,34 @@ export function SectionsTasksPage() {
   }, [queryClient]);
 
   const closeActionDrawer = useCallback(() => {
-    setActionDialog({ open: false, type: "complete", task: null });
+    setActionDialog({ open: false, type: "complete", task: null, tasks: null });
   }, []);
 
-  const issueMutation = useMutation({
-    mutationFn: ({ taskId, payload }: { taskId: number; payload: Parameters<typeof issueTask>[1] }) =>
-      issueTask(taskId, payload, requestOptions),
-    onSuccess: () => {
-      toast({ title: "Выдача записана", variant: "success" });
-      pushActionLog({ status: "success", title: "Выдача", message: "Операция успешно записана." });
+  const groupCompleteMutation = useMutation({
+    mutationFn: ({ entries }: { entries: Parameters<typeof bulkCompleteTasks>[0] }) =>
+      bulkCompleteTasks(entries, requestOptions),
+    onSuccess: (response) => {
+      const summary = summarizeBulkResults(response.results.map(r => ({ id: r.id, status: r.status, reason: r.reason })));
+      if (summary.failed > 0) {
+        toast({
+          title: "Частичный успех",
+          description: `${summary.success} успешно, ${summary.failed} ошибок`,
+          variant: "destructive",
+        });
+        setConflictHint(`Не удалось завершить часть задач: ${response.results.filter(r => r.status === "failed").map(r => r.reason).join(", ")}`);
+      } else {
+        toast({ title: "Группа завершена", variant: "success" });
+        pushActionLog({ status: "success", title: "Завершение группы", message: `Группа из ${response.results.length} задач успешно завершена.` });
+        closeActionDrawer();
+        setConflictHint(null);
+      }
       invalidateShopfloor();
-      closeActionDrawer();
-      setConflictHint(null);
     },
     onError: (err) => {
       const message = getErrorMessage(err);
-      toast({ title: "Ошибка", description: message, variant: "destructive" });
-      pushActionLog({ status: "error", title: "Выдача", message });
-      setConflictHint(conflictHintFromError(message));
+      toast({ title: "Ошибка завершения группы", description: message, variant: "destructive" });
+      pushActionLog({ status: "error", title: "Завершение группы", message });
+      setConflictHint(message);
     },
   });
 
@@ -369,23 +378,6 @@ export function SectionsTasksPage() {
     },
   });
 
-  const sendMutation = useMutation({
-    mutationFn: (payload: Parameters<typeof createTransfer>[0]) => createTransfer(payload, requestOptions),
-    onSuccess: () => {
-      toast({ title: "Передача отправлена", variant: "success" });
-      pushActionLog({ status: "success", title: "Передача", message: "Передача на следующий этап отправлена." });
-      invalidateShopfloor();
-      closeActionDrawer();
-      setConflictHint(null);
-    },
-    onError: (err) => {
-      const message = getErrorMessage(err);
-      toast({ title: "Ошибка", description: message, variant: "destructive" });
-      pushActionLog({ status: "error", title: "Передача", message });
-      setConflictHint(conflictHintFromError(message));
-    },
-  });
-
   const acceptTransferMutation = useMutation({
     mutationFn: ({ transferId, payload }: { transferId: number; payload: AcceptTransferInput }) =>
       acceptTransfer(transferId, payload, requestOptions),
@@ -399,24 +391,6 @@ export function SectionsTasksPage() {
       const message = getErrorMessage(err);
       toast({ title: "Ошибка приемки", description: message, variant: "destructive" });
       pushActionLog({ status: "error", title: "Приемка", message });
-    },
-  });
-
-  const returnRemainderMutation = useMutation({
-    mutationFn: (payload: Parameters<typeof returnRemainder>[0]) =>
-      returnRemainder(payload, requestOptions),
-    onSuccess: () => {
-      toast({ title: "Возврат на склад записан", variant: "success" });
-      pushActionLog({ status: "success", title: "Возврат", message: "Остаток возвращен на склад." });
-      invalidateShopfloor();
-      closeActionDrawer();
-      setConflictHint(null);
-    },
-    onError: (err) => {
-      const message = getErrorMessage(err);
-      toast({ title: "Ошибка", description: message, variant: "destructive" });
-      pushActionLog({ status: "error", title: "Возврат", message });
-      setConflictHint(conflictHintFromError(message));
     },
   });
 
@@ -437,61 +411,16 @@ export function SectionsTasksPage() {
     },
   });
 
-  const openActionDialog = useCallback((type: TaskActionDialogType, task: SectionBoardTask) => {
+  const openActionDialog = useCallback((_type: TaskActionDialogType, task: SectionBoardTask) => {
     const now = nowLocalDateTimeParts();
-    setActionDialog({ open: true, type, task });
-    setTimesMatch(true);
-    setDateToday(true);
+    setActionDialog({ open: true, type: "complete", task, tasks: null });
     setPerformedDate(now.date);
-    setPerformedTime(now.time);
-    setAccountedDate(now.date);
-    setAccountedTime(now.time);
+    setPerformedShift("1");
     setActionComment("");
     setConflictHint(null);
-    if (type === "complete") {
-      setActionQty("");
-      setDefectQty("");
-    } else if (type === "issue") {
-      setActionQty(fmtQty(task.cache.remaining_quantity));
-      setDefectQty("");
-    } else if (type === "return") {
-      const returnable = Math.max(0, toInteger(task.cache.issued_quantity) - toInteger(task.cache.completed_quantity) - toInteger(task.cache.transferred_quantity));
-      setActionQty(Number.isFinite(returnable) ? String(returnable) : "");
-      setDefectQty("");
-    } else {
-      const transferable = Math.max(0, toInteger(task.cache.completed_quantity) - toInteger(task.cache.transferred_quantity));
-      setActionQty(Number.isFinite(transferable) ? String(transferable) : "");
-      setDefectQty("");
-    }
+    setActionQty("");
+    setDefectQty("");
   }, []);
-
-  const handleTimesMatchChange = useCallback(
-    (checked: boolean) => {
-      setTimesMatch(checked);
-      if (checked) {
-        setAccountedDate(performedDate);
-        setAccountedTime(performedTime);
-      }
-    },
-    [performedDate, performedTime]
-  );
-
-  useEffect(() => {
-    if (!timesMatch) return;
-    setAccountedDate(performedDate);
-    setAccountedTime(performedTime);
-  }, [timesMatch, performedDate, performedTime]);
-
-  useEffect(() => {
-    if (!dateToday) return;
-    const today = nowLocalDateTimeParts().date;
-    if (performedDate !== today) {
-      setPerformedDate(today);
-    }
-    if (accountedDate !== today) {
-      setAccountedDate(today);
-    }
-  }, [dateToday, performedDate, accountedDate]);
 
   // Escape key to exit bulk mode
   useEffect(() => {
@@ -507,66 +436,96 @@ export function SectionsTasksPage() {
 
   const submitAction = useCallback(() => {
     const task = actionDialog.task;
-    if (!task) return;
+    const tasks = actionDialog.tasks;
+    const isGroup = !!tasks && tasks.length > 0;
+    if (!task && !isGroup) return;
 
     const qty = toInteger(actionQty || "0");
-    const toIsoDateTime = (dateStr: string, timeStr: string): string => {
-      if (!timeStr) return nowLocalDateTime();
-      if (!dateStr) {
-        const d = new Date();
-        const p = (v: number) => String(v).padStart(2, "0");
-        const today = `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
-        return `${today}T${timeStr}`;
-      }
-      if (/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) {
-        return `${dateStr}T${timeStr}`;
-      }
-      const [dd, mm, yyyy] = dateStr.split(".");
-      const [hh, min] = timeStr.split(":");
-      if (!dd || !mm || !yyyy || !hh || !min) return nowLocalDateTime();
-      return `${yyyy}-${mm}-${dd}T${hh}:${min}`;
-    };
-    const effectivePerformedAt = toIsoDateTime(performedDate, performedTime);
-    const effectiveAccountedAt = toIsoDateTime(accountedDate, accountedTime) || effectivePerformedAt;
+    const effectivePerformedAt = `${performedDate}T${performedShift === "1" ? "08:00" : "20:00"}`;
+    const effectiveAccountedAt = nowLocalDateTime();
     const executorUserId = me?.id;
 
-    if (!(qty > 0)) {
-      toast({ title: "Ошибка", description: "Количество должно быть больше 0", variant: "destructive" });
-      setConflictHint("Укажите количество больше нуля.");
+    const good = qty;
+    const defect = toInteger(defectQty || "0");
+    if (good + defect <= 0) {
+      toast({ title: "Ошибка", description: "Укажите факт или брак", variant: "destructive" });
+      setConflictHint("Укажите хотя бы одно количество: годные или брак.");
       return;
     }
 
-    if (actionDialog.type === "issue") {
-      issueMutation.mutate({
-        taskId: task.id,
-        payload: {
-          quantity: String(qty),
-          comment: actionComment || undefined,
-          idempotency_key: makeIdempotencyKey("issue"),
-          executor_user_id: executorUserId,
-          performed_at: effectivePerformedAt,
-          accounted_at: effectiveAccountedAt,
-        },
-      });
+    const inWork = isGroup
+      ? tasks.reduce((sum, t) => sum + toInteger(t.cache.in_work_quantity), 0)
+      : toInteger(task!.cache.in_work_quantity);
+
+    if (Number.isFinite(inWork) && good + defect > inWork) {
+      setConflictHint(
+        isGroup
+          ? `Сумма факта и брака больше общего объема в работе всей группы (${fmtQty(String(inWork))}).`
+          : `Сумма факта и брака больше объема в работе (${fmtQty(String(inWork))}).`
+      );
       return;
     }
 
-    if (actionDialog.type === "complete") {
-      const parsedDefect = toInteger(defectQty || "0");
-      const good = qty;
-      const defect = Number.isFinite(parsedDefect) ? parsedDefect : 0;
-      if (good + defect <= 0) {
-        toast({ title: "Ошибка", description: "Укажите факт или брак", variant: "destructive" });
-        setConflictHint("Укажите хотя бы одно количество: годные или брак.");
-        return;
+    if (isGroup) {
+      const entries: Parameters<typeof bulkCompleteTasks>[0] = [];
+      let remainingGood = good;
+      let remainingDefect = defect;
+
+      for (const t of tasks) {
+        const tInWork = toInteger(t.cache.in_work_quantity);
+        if (tInWork <= 0) continue;
+
+        // Distribute good quantity first up to in-work capacity of this task
+        const goodQty = Math.min(remainingGood, tInWork);
+        remainingGood -= goodQty;
+
+        // Distribute defect quantity up to the remaining capacity of this task
+        const defectQty = Math.min(remainingDefect, tInWork - goodQty);
+        remainingDefect -= defectQty;
+
+        if (goodQty > 0 || defectQty > 0) {
+          entries.push({
+            task_id: t.id,
+            good_quantity: String(goodQty),
+            defect_quantity: String(defectQty),
+            comment: actionComment || undefined,
+            idempotency_key: makeIdempotencyKey(`complete-${t.id}`),
+            executor_user_id: executorUserId,
+            performed_at: effectivePerformedAt,
+            accounted_at: effectiveAccountedAt,
+          });
+        }
+
+        if (remainingGood <= 0 && remainingDefect <= 0) {
+          break;
+        }
       }
-      const inWork = toInteger(task.cache.in_work_quantity);
-      if (Number.isFinite(inWork) && good + defect > inWork) {
-        setConflictHint(`Сумма факта и брака больше объема в работе (${fmtQty(String(inWork))}).`);
-        return;
+
+      // Overflow fallback: add leftover to the last task
+      if (remainingGood > 0 || remainingDefect > 0) {
+        const lastTask = tasks[tasks.length - 1];
+        const existingEntry = entries.find((e) => e.task_id === lastTask.id);
+        if (existingEntry) {
+          existingEntry.good_quantity = String(toInteger(existingEntry.good_quantity ?? 0) + remainingGood);
+          existingEntry.defect_quantity = String(toInteger(existingEntry.defect_quantity ?? 0) + remainingDefect);
+        } else {
+          entries.push({
+            task_id: lastTask.id,
+            good_quantity: String(remainingGood),
+            defect_quantity: String(remainingDefect),
+            comment: actionComment || undefined,
+            idempotency_key: makeIdempotencyKey(`complete-${lastTask.id}`),
+            executor_user_id: executorUserId,
+            performed_at: effectivePerformedAt,
+            accounted_at: effectiveAccountedAt,
+          });
+        }
       }
+
+      groupCompleteMutation.mutate({ entries });
+    } else {
       completeMutation.mutate({
-        taskId: task.id,
+        taskId: task!.id,
         payload: {
           good_quantity: String(good),
           defect_quantity: String(defect),
@@ -577,92 +536,20 @@ export function SectionsTasksPage() {
           accounted_at: effectiveAccountedAt,
         },
       });
-      return;
     }
-
-    if (actionDialog.type === "return") {
-      const returnable = Math.max(0, toInteger(task.cache.issued_quantity) - toInteger(task.cache.completed_quantity) - toInteger(task.cache.transferred_quantity));
-      if (Number.isFinite(returnable) && qty > returnable) {
-        setConflictHint(`Количество возврата больше доступного (${fmtQty(String(returnable))}).`);
-        return;
-      }
-      returnRemainderMutation.mutate({
-        task_id: task.id,
-        quantity: qty,
-        comment: actionComment || undefined,
-        idempotency_key: makeIdempotencyKey("return"),
-        executor_user_id: executorUserId,
-        performed_at: effectivePerformedAt,
-        accounted_at: effectiveAccountedAt,
-      });
-      return;
-    }
-
-    if (!task.next_operation_name) {
-      const message = "Финальный этап маршрута: передача на следующий этап не требуется.";
-      toast({ title: "Передача недоступна", description: message, variant: "destructive" });
-      setConflictHint(message);
-      return;
-    }
-
-    const transferable = Math.max(0, toInteger(task.cache.completed_quantity) - toInteger(task.cache.transferred_quantity));
-    if (Number.isFinite(transferable) && qty > transferable) {
-      setConflictHint(`Количество передачи больше доступного (${fmtQty(String(transferable))}).`);
-      return;
-    }
-    sendMutation.mutate({
-      from_task_id: task.id,
-      quantity: String(qty),
-      comment: actionComment || undefined,
-      idempotency_key: makeIdempotencyKey("send"),
-      executor_user_id: executorUserId,
-      performed_at: effectivePerformedAt,
-      accounted_at: effectiveAccountedAt,
-    });
   }, [
     actionDialog,
     actionQty,
     performedDate,
-    performedTime,
-    accountedDate,
-    accountedTime,
+    performedShift,
     me?.id,
-    issueMutation,
     completeMutation,
-    sendMutation,
-    returnRemainderMutation,
+    groupCompleteMutation,
     actionComment,
     defectQty,
   ]);
 
   // Bulk operations via panel
-  const handleBulkIssue = useCallback(async (entries: { taskId: number; quantity: string }[]) => {
-    setBulkProgress({ total: entries.length, completed: 0, running: true });
-    const lockOptions = lockedSectionId !== null ? { singleSectionLockId: lockedSectionId } : undefined;
-    try {
-      const response = await bulkIssueTasks(
-        entries.map((entry) => ({
-          task_id: entry.taskId,
-          quantity: entry.quantity,
-          idempotency_key: makeIdempotencyKey("bulk-issue"),
-          executor_user_id: me?.id,
-          performed_at: nowLocalDateTime(),
-          accounted_at: nowLocalDateTime(),
-        })),
-        lockOptions,
-      );
-      const results: BulkActionResultItem<number>[] = response.results.map((r) => ({
-        id: r.id,
-        status: r.status,
-        reason: r.reason,
-      }));
-      finishBulk(results);
-    } catch (e) {
-      const reason = getErrorMessage(e);
-      finishBulk(entries.map((entry) => ({ id: entry.taskId, status: "failed" as const, reason })));
-    }
-  }, [me?.id, lockedSectionId]);
-
   const handleBulkComplete = useCallback(async (entries: { taskId: number; goodQty: string; defectQty: string }[]) => {
     setBulkProgress({ total: entries.length, completed: 0, running: true });
     const lockOptions = lockedSectionId !== null ? { singleSectionLockId: lockedSectionId } : undefined;
@@ -673,33 +560,6 @@ export function SectionsTasksPage() {
           good_quantity: entry.goodQty,
           defect_quantity: entry.defectQty || "0",
           idempotency_key: makeIdempotencyKey("bulk-complete"),
-          executor_user_id: me?.id,
-          performed_at: nowLocalDateTime(),
-          accounted_at: nowLocalDateTime(),
-        })),
-        lockOptions,
-      );
-      const results: BulkActionResultItem<number>[] = response.results.map((r) => ({
-        id: r.id,
-        status: r.status,
-        reason: r.reason,
-      }));
-      finishBulk(results);
-    } catch (e) {
-      const reason = getErrorMessage(e);
-      finishBulk(entries.map((entry) => ({ id: entry.taskId, status: "failed" as const, reason })));
-    }
-  }, [me?.id, lockedSectionId]);
-
-  const handleBulkSend = useCallback(async (entries: { taskId: number; quantity: string }[]) => {
-    setBulkProgress({ total: entries.length, completed: 0, running: true });
-    const lockOptions = lockedSectionId !== null ? { singleSectionLockId: lockedSectionId } : undefined;
-    try {
-      const response = await bulkSendTransfers(
-        entries.map((entry) => ({
-          from_task_id: entry.taskId,
-          quantity: entry.quantity,
-          idempotency_key: makeIdempotencyKey("bulk-send"),
           executor_user_id: me?.id,
           performed_at: nowLocalDateTime(),
           accounted_at: nowLocalDateTime(),
@@ -733,48 +593,19 @@ export function SectionsTasksPage() {
   }, [bulkSelection]);
 
   const handleBulkExecuteAll = useCallback(async (data: {
-    issueEntries: { taskId: number; quantity: string }[];
     completeEntries: { taskId: number; goodQty: string; defectQty: string }[];
-    sendEntries: { taskId: number; quantity: string }[];
+    performedAt?: string;
+    accountedAt?: string;
   }) => {
-    const allResults: BulkActionResultItem<number>[] = [];
-    const total = data.issueEntries.length + data.completeEntries.length + data.sendEntries.length;
+    const total = data.completeEntries.length;
     const lockOptions = lockedSectionId !== null ? { singleSectionLockId: lockedSectionId } : undefined;
-    let completed = 0;
+    setBulkProgress({ total, completed: 0, running: true });
+    const allResults: BulkActionResultItem<number>[] = [];
 
-    // Step 1: Issue all
-    if (data.issueEntries.length > 0) {
-      setBulkProgress({ total, completed: 0, running: true });
-      try {
-        const response = await bulkIssueTasks(
-          data.issueEntries.map((entry) => ({
-            task_id: entry.taskId,
-            quantity: entry.quantity,
-            idempotency_key: makeIdempotencyKey("bulk-issue"),
-            executor_user_id: me?.id,
-            performed_at: nowLocalDateTime(),
-            accounted_at: nowLocalDateTime(),
-          })),
-          lockOptions,
-        );
-        for (const r of response.results) {
-          allResults.push({ id: r.id, status: r.status, reason: r.reason });
-        }
-      } catch (e) {
-        const reason = getErrorMessage(e);
-        for (const entry of data.issueEntries) {
-          allResults.push({ id: entry.taskId, status: "failed", reason });
-        }
-      }
-      completed += data.issueEntries.length;
-      setBulkProgress({ total, completed, running: true });
-      // Wait for DB to update
-      await new Promise(r => setTimeout(r, 500));
-    }
+    const effectivePerformedAt = data.performedAt || nowLocalDateTime();
+    const effectiveAccountedAt = data.accountedAt || effectivePerformedAt;
 
-    // Step 2: Complete all
     if (data.completeEntries.length > 0) {
-      setBulkProgress({ total, completed, running: true });
       try {
         const response = await bulkCompleteTasks(
           data.completeEntries.map((entry) => ({
@@ -783,8 +614,8 @@ export function SectionsTasksPage() {
             defect_quantity: entry.defectQty,
             idempotency_key: makeIdempotencyKey("bulk-complete"),
             executor_user_id: me?.id,
-            performed_at: nowLocalDateTime(),
-            accounted_at: nowLocalDateTime(),
+            performed_at: effectivePerformedAt,
+            accounted_at: effectiveAccountedAt,
           })),
           lockOptions,
         );
@@ -797,48 +628,30 @@ export function SectionsTasksPage() {
           allResults.push({ id: entry.taskId, status: "failed", reason });
         }
       }
-      completed += data.completeEntries.length;
-      setBulkProgress({ total, completed, running: true });
-      // Wait for DB to update
-      await new Promise(r => setTimeout(r, 500));
-    }
-
-    // Step 3: Send all
-    if (data.sendEntries.length > 0) {
-      setBulkProgress({ total, completed, running: true });
-      try {
-        const response = await bulkSendTransfers(
-          data.sendEntries.map((entry) => ({
-            from_task_id: entry.taskId,
-            quantity: entry.quantity,
-            idempotency_key: makeIdempotencyKey("bulk-send"),
-            executor_user_id: me?.id,
-            performed_at: nowLocalDateTime(),
-            accounted_at: nowLocalDateTime(),
-          })),
-          lockOptions,
-        );
-        for (const r of response.results) {
-          allResults.push({ id: r.id, status: r.status, reason: r.reason });
-        }
-      } catch (e) {
-        const reason = getErrorMessage(e);
-        for (const entry of data.sendEntries) {
-          allResults.push({ id: entry.taskId, status: "failed", reason });
-        }
-      }
-      completed += data.sendEntries.length;
     }
 
     invalidateShopfloor();
-    setBulkProgress({ total, completed, running: false });
-    // Wait for DB to update
-    await new Promise(r => setTimeout(r, 500));
-
+    setBulkProgress({ total, completed: total, running: false });
     finishBulk(allResults);
   }, [me?.id, lockedSectionId, invalidateShopfloor, finishBulk]);
 
-  const pendingMutation = issueMutation.isPending || completeMutation.isPending || sendMutation.isPending || returnRemainderMutation.isPending;
+  // Завершить группу: открывает боковую панель завершения группы
+  const handleCompleteGroup = useCallback((group: TaskGroup) => {
+    const now = nowLocalDateTimeParts();
+    setActionDialog({ open: true, type: "complete", task: null, tasks: group.tasks });
+    setPerformedDate(now.date);
+    setPerformedShift("1");
+    setActionComment("");
+    setConflictHint(null);
+    setActionQty("");
+    setDefectQty("");
+  }, []);
+
+  const pendingMutation =
+    completeMutation.isPending ||
+    groupCompleteMutation.isPending ||
+    acceptTransferMutation.isPending ||
+    consumeRemainderMutation.isPending;
   const tasks = board?.tasks || [];
   const selectedTasks = useMemo(
     () => tasks.filter((t) => bulkSelection.selectedIds.has(t.id)),
@@ -1067,6 +880,8 @@ export function SectionsTasksPage() {
               />
             )}
 
+            {/* Group operations panel (opened by «Завершить группу») is now handled by TaskActionDrawer */}
+
             <div className="flex items-center gap-2">
               <Button variant="outline" size="sm" onClick={() => setPlanModalOpen(true)}>
                 План
@@ -1115,6 +930,7 @@ export function SectionsTasksPage() {
               bulkSelection={bulkMode ? bulkSelection : undefined}
               profile={profile}
               onSelectAllVisible={handleSelectAll}
+              onCompleteGroup={handleCompleteGroup}
             />
 
               {!isSingleWindow && (
@@ -1193,24 +1009,16 @@ export function SectionsTasksPage() {
           if (!open) closeActionDrawer();
           else setActionDialog((prev) => ({ ...prev, open }));
         }}
-        type={actionDialog.type}
         task={actionDialog.task}
+        tasks={actionDialog.tasks}
         actionQty={actionQty}
         setActionQty={setActionQty}
         defectQty={defectQty}
         setDefectQty={setDefectQty}
-        timesMatch={timesMatch}
-        onTimesMatchChange={handleTimesMatchChange}
         performedDate={performedDate}
         setPerformedDate={setPerformedDate}
-        performedTime={performedTime}
-        setPerformedTime={setPerformedTime}
-        dateToday={dateToday}
-        onDateTodayChange={setDateToday}
-        accountedDate={accountedDate}
-        setAccountedDate={setAccountedDate}
-        accountedTime={accountedTime}
-        setAccountedTime={setAccountedTime}
+        performedShift={performedShift}
+        setPerformedShift={setPerformedShift}
         actionComment={actionComment}
         setActionComment={setActionComment}
         pending={pendingMutation}

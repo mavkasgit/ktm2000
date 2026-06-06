@@ -1,12 +1,13 @@
 import type { Dispatch, SetStateAction } from "react";
 import { AlertTriangle } from "lucide-react";
+import { cn } from "@/shared/utils/cn";
 
 import type { SectionBoardTask } from "@/shared/api/shopfloor";
 import {
   Badge,
   Button,
   Checkbox,
-  DateTimePicker,
+  DatePicker,
   Dialog,
   DialogContent,
   DialogDescription,
@@ -14,8 +15,6 @@ import {
   DialogTitle,
   Input,
 } from "@/shared/ui";
-
-import type { TaskActionDialogType } from "./SectionTasksBoard";
 
 function fmtQty(value: string): string {
   const n = parseFloat(value);
@@ -34,46 +33,24 @@ function normalizeIntegerInput(value: string): string {
   return String(parseInt(digits, 10));
 }
 
-function actionTitle(type: TaskActionDialogType): string {
-  if (type === "issue") return "Выдать в работу";
-  if (type === "send") return "Передать на следующий этап";
-  if (type === "return") return "Вернуть остаток на склад";
-  return "Внести факт";
-}
-
-function maxQuantity(type: TaskActionDialogType, task: SectionBoardTask | null): number {
+function inWorkQuantity(task: SectionBoardTask | null): number {
   if (!task) return 0;
-  if (type === "issue") return toNumber(task.cache.available_quantity);
-  if (type === "complete") return toNumber(task.cache.in_work_quantity);
-  if (type === "return") return Math.max(0, toNumber(task.cache.issued_quantity) - toNumber(task.cache.completed_quantity) - toNumber(task.cache.transferred_quantity));
-  return Math.max(0, toNumber(task.cache.completed_quantity) - toNumber(task.cache.transferred_quantity));
-}
-
-function isFinalStageTask(task: SectionBoardTask | null): boolean {
-  return !!task && !task.next_operation_name;
+  return toNumber(task.cache.in_work_quantity);
 }
 
 type TaskActionDrawerProps = {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  type: TaskActionDialogType;
   task: SectionBoardTask | null;
+  tasks?: SectionBoardTask[] | null;
   actionQty: string;
   setActionQty: Dispatch<SetStateAction<string>>;
   defectQty: string;
   setDefectQty: Dispatch<SetStateAction<string>>;
-  timesMatch: boolean;
-  onTimesMatchChange: (checked: boolean) => void;
   performedDate: string;
   setPerformedDate: Dispatch<SetStateAction<string>>;
-  performedTime: string;
-  setPerformedTime: Dispatch<SetStateAction<string>>;
-  dateToday: boolean;
-  onDateTodayChange: (checked: boolean) => void;
-  accountedDate: string;
-  setAccountedDate: Dispatch<SetStateAction<string>>;
-  accountedTime: string;
-  setAccountedTime: Dispatch<SetStateAction<string>>;
+  performedShift: "1" | "2";
+  setPerformedShift: Dispatch<SetStateAction<"1" | "2">>;
   actionComment: string;
   setActionComment: Dispatch<SetStateAction<string>>;
   pending: boolean;
@@ -84,67 +61,68 @@ type TaskActionDrawerProps = {
 export function TaskActionDrawer({
   open,
   onOpenChange,
-  type,
   task,
+  tasks,
   actionQty,
   setActionQty,
   defectQty,
   setDefectQty,
-  timesMatch,
-  onTimesMatchChange,
   performedDate,
   setPerformedDate,
-  performedTime,
-  setPerformedTime,
-  dateToday,
-  onDateTodayChange,
-  accountedDate,
-  setAccountedDate,
-  accountedTime,
-  setAccountedTime,
+  performedShift,
+  setPerformedShift,
   actionComment,
   setActionComment,
   pending,
   conflictHint,
   onSubmit,
 }: TaskActionDrawerProps) {
-  const maxQty = maxQuantity(type, task);
-  const isFinalSend = type === "send" && isFinalStageTask(task);
+  const isGroup = !!tasks && tasks.length > 0;
+
+  const maxQty = isGroup
+    ? tasks.reduce((sum, t) => sum + Math.max(0, Math.round(parseFloat(t.cache.in_work_quantity) || 0)), 0)
+    : inWorkQuantity(task);
+
+  const plannedQty = isGroup
+    ? tasks.reduce((sum, t) => sum + Math.max(0, Math.round(parseFloat(t.planned_quantity) || 0)), 0)
+    : (task ? Math.round(parseFloat(task.planned_quantity) || 0) : 0);
+
+  const completedQty = isGroup
+    ? tasks.reduce((sum, t) => sum + Math.max(0, Math.round(parseFloat(t.cache.completed_quantity) || 0)), 0)
+    : (task ? Math.round(parseFloat(task.cache.completed_quantity) || 0) : 0);
+
+  const rejectedQty = isGroup
+    ? tasks.reduce((sum, t) => sum + Math.max(0, Math.round(parseFloat(t.cache.rejected_quantity) || 0)), 0)
+    : (task ? Math.round(parseFloat(task.cache.rejected_quantity) || 0) : 0);
+
   const qtyNum = toNumber(actionQty);
-  const outOfRange = type !== "issue" && qtyNum > 0 && maxQty > 0 && qtyNum > maxQty;
+  const defectNum = toNumber(defectQty);
+  const outOfRange = qtyNum > 0 && maxQty > 0 && qtyNum + defectNum > maxQty;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="!left-auto !right-0 !top-0 !translate-x-0 !translate-y-0 h-screen max-h-screen w-[min(100vw,560px)] max-w-none rounded-none border-l p-0 flex flex-col gap-0">
         <div className="p-6 border-b">
           <DialogHeader>
-            <DialogTitle>{actionTitle(type)}</DialogTitle>
+            <DialogTitle>{isGroup ? "Завершить группу" : "Внести факт"}</DialogTitle>
             <DialogDescription>
-              {task?.operation_name || "—"} — Этап #{task?.sequence}
+              {isGroup
+                ? `${tasks[0]?.product_sku || ""} · ${tasks[0]?.operation_name || "—"} · ${tasks.length} заданий`
+                : `${task?.operation_name || "—"} — Этап #${task?.sequence}`
+              }
             </DialogDescription>
           </DialogHeader>
         </div>
 
         <div className="flex-1 overflow-auto p-6 space-y-4">
-          {task && (
+          {(task || isGroup) && (
             <div className="rounded-lg border bg-muted/20 p-3 text-xs">
               <div className="grid grid-cols-2 gap-2">
-                <div>Доступно: <span className="font-medium">{fmtQty(task.cache.available_quantity)}</span></div>
-                <div>В работе: <span className="font-medium">{fmtQty(task.cache.in_work_quantity)}</span></div>
-                <div>Факт: <span className="font-medium">{fmtQty(task.cache.completed_quantity)}</span></div>
-                <div>К передаче: <span className="font-medium">{fmtQty(String(maxQuantity("send", task)))}</span></div>
+                <div>В работе: <span className="font-medium">{maxQty}</span></div>
+                <div>Годные: <span className="font-medium">{completedQty}</span></div>
+                <div>Брак: <span className="font-medium">{rejectedQty}</span></div>
               </div>
-              {type === "send" && isFinalSend && (
-                <div className="mt-2">
-                  <Badge variant="secondary">Финальный этап: передача на следующий этап не требуется</Badge>
-                </div>
-              )}
-              {type === "send" && !isFinalSend && !task.next_task_id && (
-                <div className="mt-2">
-                  <Badge variant="secondary">Задача следующего этапа будет создана автоматически</Badge>
-                </div>
-              )}
-              {task.is_combined_primary && task.combined_operation_names.length > 1 && (
+              {!isGroup && task && task.is_combined_primary && task.combined_operation_names.length > 1 && (
                 <div className="mt-2">
                   <Badge variant="secondary">Будет выполнено: {task.combined_operation_names.join(" + ")}</Badge>
                 </div>
@@ -162,85 +140,76 @@ export function TaskActionDrawer({
           )}
 
           <div>
-            <label className="text-sm font-medium">
-              {type === "complete" ? "Факт (годные)" : "Количество"}
-            </label>
+            <label className="text-sm font-medium">Факт (годные)</label>
             <Input type="number" step="1" min="0" value={actionQty} onChange={(e) => setActionQty(normalizeIntegerInput(e.target.value))} />
             <div className="mt-2 flex flex-wrap gap-1">
-              {task && (
+              {(task || isGroup) && (
                 <Button
                   type="button"
                   size="sm"
                   variant="outline"
-                  onClick={() => setActionQty(fmtQty(task.planned_quantity))}
+                  onClick={() => setActionQty(String(plannedQty))}
                 >
-                  Плановое
+                  Плановое ({plannedQty})
                 </Button>
               )}
               <Button
                 type="button"
                 size="sm"
                 variant="outline"
-                onClick={() => setActionQty(maxQty > 0 ? String(Math.round(maxQty)) : "0")}
+                onClick={() => setActionQty(maxQty > 0 ? String(maxQty) : "0")}
               >
-                Максимальное
+                Максимальное ({maxQty})
               </Button>
             </div>
             {outOfRange && (
               <div className="mt-1 text-xs text-red-600">
-                Количество больше допустимого лимита: {fmtQty(String(maxQty))}
+                Сумма факта и брака больше объема в работе: {maxQty}
               </div>
             )}
           </div>
 
-          {type === "complete" && (
-            <div>
-              <label className="text-sm font-medium">Брак</label>
-              <Input type="number" step="1" min="0" value={defectQty} onChange={(e) => setDefectQty(normalizeIntegerInput(e.target.value))} />
-            </div>
-          )}
-
-          {type === "send" && !isFinalSend && (
-            <div className="text-xs text-muted-foreground">
-              Следующий этап: {task?.next_operation_name || "—"}
-            </div>
-          )}
-
-          <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
-            <div className="flex items-center gap-2">
-              <Checkbox
-                checked={dateToday}
-                onCheckedChange={(c) => onDateTodayChange(!!c)}
-                id="date-today"
-              />
-              <label htmlFor="date-today" className="text-sm">Дата = сегодня</label>
-            </div>
-            <div className="flex items-center gap-2">
-              <Checkbox checked={timesMatch} onCheckedChange={(c) => onTimesMatchChange(!!c)} id="times-match-action" />
-              <label htmlFor="times-match-action" className="text-sm">Время сдачи = Время учета</label>
-            </div>
+          <div>
+            <label className="text-sm font-medium">Брак</label>
+            <Input type="number" step="1" min="0" value={defectQty} onChange={(e) => setDefectQty(normalizeIntegerInput(e.target.value))} />
           </div>
 
-          <DateTimePicker
-            date={performedDate}
-            time={performedTime}
-            onDateChange={setPerformedDate}
-            onTimeChange={setPerformedTime}
-            label="Время сдачи (фактическое выполнение)"
-            dateDisabled={dateToday}
-          />
-          {!timesMatch && (
-            <>
-              <DateTimePicker
-                date={accountedDate}
-                time={accountedTime}
-                onDateChange={setAccountedDate}
-                onTimeChange={setAccountedTime}
-                label="Время учета (отражение в системе)"
-                dateDisabled={dateToday}
-              />
-            </>
-          )}
+          <div className="flex flex-row gap-4 items-end">
+            <DatePicker
+              value={performedDate}
+              onChange={setPerformedDate}
+              label="Дата"
+            />
+            <div className="flex flex-col gap-1.5">
+              <span className="text-sm font-medium">Смена</span>
+              <div className="flex gap-1 bg-muted p-0.5 rounded-md h-8 items-center">
+                <button
+                  type="button"
+                  onClick={() => setPerformedShift("1")}
+                  className={cn(
+                    "px-3 h-7 text-sm font-medium rounded transition-all flex items-center justify-center",
+                    performedShift === "1"
+                      ? "bg-background text-foreground shadow-sm"
+                      : "text-muted-foreground hover:text-foreground"
+                  )}
+                >
+                  1-я
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setPerformedShift("2")}
+                  className={cn(
+                    "px-3 h-7 text-sm font-medium rounded transition-all flex items-center justify-center",
+                    performedShift === "2"
+                      ? "bg-background text-foreground shadow-sm"
+                      : "text-muted-foreground hover:text-foreground"
+                  )}
+                >
+                  2-я
+                </button>
+              </div>
+            </div>
+          </div>
 
           <div>
             <label className="text-sm font-medium">Комментарий</label>
@@ -252,7 +221,7 @@ export function TaskActionDrawer({
           <Button variant="outline" onClick={() => onOpenChange(false)}>
             Отмена
           </Button>
-          <Button onClick={onSubmit} disabled={pending || isFinalSend}>
+          <Button onClick={onSubmit} disabled={pending}>
             {pending ? "Сохранение..." : "Сохранить"}
           </Button>
         </div>

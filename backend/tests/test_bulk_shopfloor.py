@@ -1,7 +1,7 @@
-"""Integration tests for bulk shopfloor endpoints.
+"""Integration tests for the bulk-complete shopfloor endpoint.
 
-Covers savepoint-isolated bulk issue, complete, and transfer-send
-operations, including the X-Shopfloor-Single-Section-Id lock check.
+Covers savepoint-isolated bulk completion, including the
+X-Shopfloor-Single-Section-Id lock check.
 """
 from __future__ import annotations
 
@@ -13,7 +13,6 @@ from sqlalchemy import select
 
 from app.core.security import create_access_token
 from app.models.internal_plan import InternalPlan, SectionPlanLine
-from app.models.movement import Movement
 from app.models.production_plan import (
     PlanPosition,
     PlanPositionStatus,
@@ -26,7 +25,6 @@ from app.models.product import Product, ProductType
 from app.models.route import ProductionRoute, RouteOperation, RouteStage
 from app.models.section import Section
 from app.models.techcard import Techcard, TechcardLine
-from app.models.transfer import Transfer
 from app.models.user import User, UserRole
 from app.models.work_task import WorkTask, WorkTaskStatus
 
@@ -173,73 +171,6 @@ def _auth_headers(user: User) -> dict[str, str]:
     return {"Authorization": f"Bearer {token}"}
 
 
-# --- bulk-issue ------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_bulk_issue_creates_movements_for_each_task(client, session) -> None:
-    user = await _make_user(session, "bulk-issue-ok@test.local")
-    plan, pos, tasks = await _make_released_position_with_tasks(session, "FG-BULK-ISSUE-OK")
-    # Create a second position with its own task chain.
-    plan2, pos2, tasks2 = await _make_released_position_with_tasks(
-        session, "FG-BULK-ISSUE-OK-2"
-    )
-    # Only the first task in each chain is in `ready` state and can be issued.
-    issueable = [tasks[0], tasks2[0]]
-    await session.commit()
-    headers = _auth_headers(user)
-
-    response = await client.post(
-        "/api/shopfloor/tasks/bulk-issue",
-        json={
-            "entries": [
-                {
-                    "task_id": t.id,
-                    "quantity": "5",
-                    "idempotency_key": f"bulk-issue-{t.id}",
-                }
-                for t in issueable
-            ]
-        },
-        headers=headers,
-    )
-    assert response.status_code == 200
-    payload = response.json()
-    assert len(payload["results"]) == len(issueable)
-    assert all(r["status"] == "success" for r in payload["results"])
-
-    # Verify movements were created — one per entry.
-    movements = (
-        await session.execute(
-            select(Movement).where(Movement.task_id.in_([t.id for t in issueable]))
-        )
-    ).scalars().all()
-    assert len(movements) == len(issueable)
-
-
-@pytest.mark.asyncio
-async def test_bulk_issue_isolates_unknown_task(client, session) -> None:
-    user = await _make_user(session, "bulk-issue-bad@test.local")
-    plan, pos, tasks = await _make_released_position_with_tasks(session, "FG-BULK-ISSUE-BAD")
-    headers = _auth_headers(user)
-
-    response = await client.post(
-        "/api/shopfloor/tasks/bulk-issue",
-        json={
-            "entries": [
-                {"task_id": tasks[0].id, "quantity": "1"},
-                {"task_id": 99_999, "quantity": "1"},
-            ]
-        },
-        headers=headers,
-    )
-    assert response.status_code == 200
-    payload = response.json()
-    by_id = {r["id"]: r for r in payload["results"]}
-    assert by_id[tasks[0].id]["status"] == "success"
-    assert by_id[99_999]["status"] == "failed"
-
-
 # --- bulk-complete ---------------------------------------------------------
 
 
@@ -251,22 +182,16 @@ async def test_bulk_complete_marks_tasks_done(client, session) -> None:
     )
     headers = _auth_headers(user)
 
-    # Issue first so complete has data to work with.
+    # Issue the quantity first so completion has data to work with.
     issue_res = await client.post(
-        "/api/shopfloor/tasks/bulk-issue",
+        f"/api/shopfloor/tasks/{tasks[0].id}/issue",
         json={
-            "entries": [
-                {
-                    "task_id": tasks[0].id,
-                    "quantity": "10",
-                    "idempotency_key": f"bulk-issue-pre-{tasks[0].id}",
-                }
-            ]
+            "quantity": "10",
+            "idempotency_key": f"pre-complete-{tasks[0].id}",
         },
         headers=headers,
     )
     assert issue_res.status_code == 200
-    assert issue_res.json()["results"][0]["status"] == "success"
 
     complete_res = await client.post(
         "/api/shopfloor/tasks/bulk-complete",
@@ -291,72 +216,54 @@ async def test_bulk_complete_marks_tasks_done(client, session) -> None:
     assert refreshed.status == WorkTaskStatus.completed
 
 
-# --- bulk-send -------------------------------------------------------------
-
-
 @pytest.mark.asyncio
-async def test_bulk_send_creates_transfers(client, session) -> None:
-    user = await _make_user(session, "bulk-send@test.local")
-    plan, pos, tasks = await _make_released_position_with_tasks(session, "FG-BULK-SEND")
+async def test_bulk_complete_isolates_unknown_task(client, session) -> None:
+    user = await _make_user(session, "bulk-complete-bad@test.local")
+    plan, pos, tasks = await _make_released_position_with_tasks(
+        session, "FG-BULK-COMPLETE-BAD"
+    )
     headers = _auth_headers(user)
 
-    # Issue + complete the first task to unlock the transfer.
+    # Issue some quantity to make completion possible.
     await client.post(
-        "/api/shopfloor/tasks/bulk-issue",
+        f"/api/shopfloor/tasks/{tasks[0].id}/issue",
         json={
-            "entries": [
-                {
-                    "task_id": tasks[0].id,
-                    "quantity": "10",
-                    "idempotency_key": f"bulk-send-pre-{tasks[0].id}",
-                }
-            ]
+            "quantity": "5",
+            "idempotency_key": f"pre-bad-{tasks[0].id}",
         },
         headers=headers,
     )
-    await client.post(
+
+    response = await client.post(
         "/api/shopfloor/tasks/bulk-complete",
         json={
             "entries": [
                 {
                     "task_id": tasks[0].id,
-                    "good_quantity": "10",
-                    "idempotency_key": f"bulk-send-pre-c-{tasks[0].id}",
-                }
-            ]
-        },
-        headers=headers,
-    )
-
-    send_res = await client.post(
-        "/api/shopfloor/tasks/bulk-send",
-        json={
-            "entries": [
+                    "good_quantity": "5",
+                    "idempotency_key": f"bulk-complete-good-{tasks[0].id}",
+                },
                 {
-                    "from_task_id": tasks[0].id,
-                    "to_task_id": tasks[1].id,
-                    "quantity": "10",
-                    "idempotency_key": f"bulk-send-{tasks[0].id}",
-                }
+                    "task_id": 99_999,
+                    "good_quantity": "1",
+                    "idempotency_key": "bulk-complete-bad",
+                },
             ]
         },
         headers=headers,
     )
-    assert send_res.status_code == 200
-    payload = send_res.json()
-    assert payload["results"][0]["status"] == "success"
-
-    transfers = (
-        await session.execute(select(Transfer).where(Transfer.from_task_id == tasks[0].id))
-    ).scalars().all()
-    assert len(transfers) == 1
+    assert response.status_code == 200
+    payload = response.json()
+    by_id = {r["id"]: r for r in payload["results"]}
+    assert by_id[tasks[0].id]["status"] == "success"
+    assert by_id[99_999]["status"] == "failed"
 
 
 # --- section-lock enforcement ---------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_bulk_issue_respects_section_lock(client, session) -> None:
+async def test_bulk_complete_respects_section_lock(client, session) -> None:
     user = await _make_user(session, "bulk-lock@test.local")
     plan, pos, tasks = await _make_released_position_with_tasks(
         session, "FG-BULK-LOCK"
@@ -370,12 +277,31 @@ async def test_bulk_issue_respects_section_lock(client, session) -> None:
         "X-Shopfloor-Single-Section-Id": str(locked_section_id),
     }
 
+    # Issue some quantity for both tasks first.
+    for task in (tasks[0], other_tasks[0]):
+        await client.post(
+            f"/api/shopfloor/tasks/{task.id}/issue",
+            json={
+                "quantity": "1",
+                "idempotency_key": f"pre-lock-{task.id}",
+            },
+            headers=headers,
+        )
+
     response = await client.post(
-        "/api/shopfloor/tasks/bulk-issue",
+        "/api/shopfloor/tasks/bulk-complete",
         json={
             "entries": [
-                {"task_id": tasks[0].id, "quantity": "1"},
-                {"task_id": other_tasks[0].id, "quantity": "1"},
+                {
+                    "task_id": tasks[0].id,
+                    "good_quantity": "1",
+                    "idempotency_key": f"bulk-lock-ok-{tasks[0].id}",
+                },
+                {
+                    "task_id": other_tasks[0].id,
+                    "good_quantity": "1",
+                    "idempotency_key": f"bulk-lock-bad-{other_tasks[0].id}",
+                },
             ]
         },
         headers=headers,

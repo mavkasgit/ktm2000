@@ -147,7 +147,7 @@ export function DatePicker({ value, onChange, label, placeholder, required = fal
   }
 
   return (
-    <div className={cn("relative", className)}>
+    <div className={cn("relative w-[130px]", className)}>
       {label && (
         <label htmlFor={id} className="text-sm font-medium whitespace-nowrap">
           {label}
@@ -164,7 +164,7 @@ export function DatePicker({ value, onChange, label, placeholder, required = fal
           onChange={(e) => handleInputChange(e.target.value)}
           onFocus={(e) => e.target.select()}
           onKeyDown={(e) => { if (e.key === "Enter") e.currentTarget.blur() }}
-          className="flex h-10 w-full rounded-l-md border-0 bg-background px-3 py-2 text-sm ring-offset-0 placeholder:text-muted-foreground focus-visible:outline-none"
+          className="flex h-8 w-full rounded-l-md border-0 bg-background px-3 py-1 text-sm ring-offset-0 placeholder:text-muted-foreground focus-visible:outline-none"
           maxLength={10}
           disabled={disabled}
           autoFocus={autoFocus}
@@ -175,7 +175,7 @@ export function DatePicker({ value, onChange, label, placeholder, required = fal
               type="button"
               variant="ghost"
               size="sm"
-              className="h-10 rounded-l-none px-2.5"
+              className="h-8 rounded-l-none px-2.5"
               disabled={disabled}
             >
               <Calendar className="h-4 w-4" />
