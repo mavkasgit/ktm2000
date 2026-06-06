@@ -12,7 +12,7 @@ from app.api.deps import WRITER_ROLES, get_current_user, require_role
 from app.core.database import get_db
 from app.models.internal_plan import SectionPlanLine
 from app.models.movement import Movement
-from app.models.production_plan import PlanPosition, PlanPositionStatus, ProductionPlan
+from app.models.production_plan import PlanPosition, PlanPositionStatus, ProductionPlan, ProductionPlanStatus
 from app.models.transfer import Transfer
 from app.models.work_task import WorkTask, WorkTaskStatus
 from app.models.route import ProductionRoute, RouteStage
@@ -1206,6 +1206,31 @@ async def _process_position_take_to_work(
             status="failed",
             reason=f"Position status is '{pos.status.value}', must be 'approved' or 'released'",
         )
+
+    # Check parent production plan is in a launchable state. If the plan status
+    # drifted out of sync with its positions (e.g. plan='released' but no
+    # positions are released yet), self-heal by re-deriving the status from the
+    # positions before failing.
+    plan = await db.get(ProductionPlan, pos.production_plan_id)
+    if plan is not None and plan.status not in {
+        ProductionPlanStatus.approved,
+        ProductionPlanStatus.partially_released,
+    }:
+        await _refresh_plan_status(db, plan.id)
+        await db.flush()
+        await db.refresh(plan)
+        if plan.status not in {
+            ProductionPlanStatus.approved,
+            ProductionPlanStatus.partially_released,
+        }:
+            return TakeToWorkResult(
+                position_id=position_id,
+                status="failed",
+                reason=(
+                    f"Production plan status is '{plan.status.value}'; "
+                    "only 'approved' or 'partially_released' plans can be launched"
+                ),
+            )
 
     # Resolve route
     route_info = await resolve_position_route(db, pos)

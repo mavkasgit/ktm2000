@@ -309,8 +309,22 @@ async def cancel_plan_position(
     return position
 
 
-async def _refresh_plan_status(db: AsyncSession, production_plan_id: int) -> None:
-    """Update production plan status based on current positions' statuses."""
+async def refresh_plan_status(db: AsyncSession, production_plan_id: int) -> None:
+    """Recompute the production plan status from its active positions.
+
+    This is the single source of truth for plan status derivation. Use it
+    after any operation that mutates PlanPosition.status (approve, release,
+    cancel, restore, delete) to keep the plan in sync.
+
+    Transition rules (active = approved | released):
+
+    - no active positions, all positions are draft  -> ``draft``
+    - no active positions, no draft positions         -> ``validated``
+    - all active positions are released               -> ``released``
+    - some active positions are released              -> ``partially_released``
+    - no released positions, only approved           -> ``approved``
+    - empty plan                                     -> ``draft``
+    """
     plan = await db.get(ProductionPlan, production_plan_id)
     if plan is None:
         return
@@ -331,25 +345,25 @@ async def _refresh_plan_status(db: AsyncSession, production_plan_id: int) -> Non
     status_counts = Counter(pos.status for pos in positions)
     released_count = status_counts.get(PlanPositionStatus.released, 0)
     approved_count = status_counts.get(PlanPositionStatus.approved, 0)
-    
-    # Count active positions (approved or released)
+
     active_count = approved_count + released_count
-    
+
     if active_count == 0:
-        # No active positions - go back to draft or validated
         if status_counts.get(PlanPositionStatus.draft, 0) > 0:
             plan.status = ProductionPlanStatus.draft
         else:
             plan.status = ProductionPlanStatus.validated
     elif released_count == 0:
-        # No released positions, only approved - plan should be approved
         plan.status = ProductionPlanStatus.approved
     elif released_count == active_count:
-        # All active positions are released
         plan.status = ProductionPlanStatus.released
     else:
-        # Some released, some approved
         plan.status = ProductionPlanStatus.partially_released
+
+
+async def _refresh_plan_status(db: AsyncSession, production_plan_id: int) -> None:
+    """Deprecated private alias; use :func:`refresh_plan_status`."""
+    await refresh_plan_status(db, production_plan_id)
 
 
 async def restore_plan_position(

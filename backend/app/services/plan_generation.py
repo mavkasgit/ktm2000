@@ -16,6 +16,7 @@ from app.models.section import Section
 from app.models.spg_remainder import SpgRemainder
 from app.models.work_task import WorkTask, WorkTaskStatus
 from app.services.plan_validation import _find_paired_techcard, _paired_component_skus
+from app.services.production_plan_service import refresh_plan_status
 
 
 async def create_release_batch(
@@ -210,17 +211,22 @@ async def release_batch(db: AsyncSession, release_batch_id: int) -> dict:
             else:
                 task_status = WorkTaskStatus.waiting_previous
 
-            db.add(
-                WorkTask(
-                    section_plan_line_id=line.id,
-                    section_id=line.section_id,
-                    product_id=line.product_id,
-                    route_stage_id=line.route_stage_id,
-                    planned_quantity=planned_qty,
-                    status=task_status,
-                    due_date=line.due_date,
-                )
+            task = WorkTask(
+                section_plan_line_id=line.id,
+                section_id=line.section_id,
+                product_id=line.product_id,
+                route_stage_id=line.route_stage_id,
+                planned_quantity=planned_qty,
+                status=task_status,
+                due_date=line.due_date,
             )
+            db.add(task)
+            await db.flush()
+
+            if task_status == WorkTaskStatus.ready:
+                actor_id = batch.released_by or batch.created_by or 1
+                from app.services.shopfloor.operations_tasks import auto_consume_available_remainders
+                await auto_consume_available_remainders(db, task, actor_id=actor_id)
             tasks_created += 1
             line_index += 1
 
@@ -238,7 +244,7 @@ async def release_batch(db: AsyncSession, release_batch_id: int) -> dict:
 
     batch.status = ReleaseBatchStatus.released
     batch.released_at = datetime.now(UTC)
-    await _refresh_plan_release_status(db, batch.production_plan_id)
+    await refresh_plan_status(db, batch.production_plan_id)
     await db.flush()
     summary = await get_release_batch_summary(db, release_batch_id)
     summary["tasks_created"] = tasks_created
@@ -473,19 +479,6 @@ async def _released_quantity(db: AsyncSession, position: PlanPosition) -> Decima
         )
     )
     return Decimal(str(value or 0))
-
-
-async def _refresh_plan_release_status(db: AsyncSession, production_plan_id: int) -> None:
-    plan = await db.get(ProductionPlan, production_plan_id)
-    if plan is None:
-        return
-    positions = (
-        await db.execute(select(PlanPosition).where(PlanPosition.production_plan_id == production_plan_id))
-    ).scalars().all()
-    if positions and all(position.status == PlanPositionStatus.released for position in positions):
-        plan.status = ProductionPlanStatus.released
-    elif any(position.status == PlanPositionStatus.released for position in positions):
-        plan.status = ProductionPlanStatus.partially_released
 
 
 def _make_batch_no() -> str:
