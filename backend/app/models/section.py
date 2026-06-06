@@ -33,3 +33,8 @@ class Section(Base):
     @property
     def operations_count(self) -> int:
         return len(self.operations)
+
+    @property
+    def spg_id(self) -> int | None:
+        return self.spg_links[0].id if self.spg_links else None
+

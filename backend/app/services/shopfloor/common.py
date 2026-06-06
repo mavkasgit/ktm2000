@@ -72,3 +72,18 @@ async def _get_user_snapshot_name(db: AsyncSession, user_id: int | None) -> str 
         return None
     return user.full_name or user.email
 
+
+async def sections_share_spg(db: AsyncSession, section_id_1: int, section_id_2: int) -> bool:
+    """Check if both sections share the same Storage Production Group (GHP/SPG)."""
+    if section_id_1 == section_id_2:
+        return True
+
+    from app.models.spg import SpgSection
+    
+    spg_1 = await db.scalar(select(SpgSection.spg_id).where(SpgSection.section_id == section_id_1))
+    if spg_1 is None:
+        return False
+        
+    spg_2 = await db.scalar(select(SpgSection.spg_id).where(SpgSection.section_id == section_id_2))
+    return spg_1 == spg_2
+

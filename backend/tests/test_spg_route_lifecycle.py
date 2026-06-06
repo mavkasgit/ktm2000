@@ -482,11 +482,7 @@ async def test_spg_route_full_lifecycle_with_mixed_remainders(client, session) -
     assert wip_items[0]["remainder_quantity"] == 5
     assert wip_items[0]["spg_code"] == spg_wip.code
 
-    # Transfer 70 from DRILL to SHOT
-    await _transfer_to_next(
-        client, headers, drill_task.id,
-        quantity=Decimal("70"), run_id="spg-e2e", stage="2",
-    )
+    # DRILL to SHOT is within the same SPG (spg_wip), no manual transfer needed.
 
     # ── 6. Step 3 (SHOT) — 5 from DRILL remainder + 65 direct, complete 60+5, return 5 ─
     await _issue_mixed(
@@ -507,11 +503,7 @@ async def test_spg_route_full_lifecycle_with_mixed_remainders(client, session) -
     assert wip_items[0]["remainder_quantity"] == 5
     assert wip_items[0]["spg_code"] == spg_wip.code
 
-    # Transfer 60 from SHOT to ANOD
-    await _transfer_to_next(
-        client, headers, shot_task.id,
-        quantity=Decimal("60"), run_id="spg-e2e", stage="3",
-    )
+    # SHOT to ANOD is within the same SPG (spg_wip), no manual transfer needed.
 
     # ── 7. Step 4 (ANOD) — direct 60, complete 60, no return ──────────────
     await _issue_mixed(
@@ -524,11 +516,7 @@ async def test_spg_route_full_lifecycle_with_mixed_remainders(client, session) -
         return_qty=Decimal("0"), run_id="spg-e2e", stage="4",
     )
 
-    # Transfer 60 from ANOD to WIP
-    await _transfer_to_next(
-        client, headers, anod_task.id,
-        quantity=Decimal("60"), run_id="spg-e2e", stage="4",
-    )
+    # ANOD to WIP is within the same SPG (spg_wip), no manual transfer needed.
 
     # ── 8. Step 5 (WIP) — direct 60, complete 50+5, return 5 ──────────────
     await _issue_mixed(

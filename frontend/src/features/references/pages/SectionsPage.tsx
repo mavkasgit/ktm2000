@@ -616,7 +616,7 @@ export function SectionsPage() {
       icon: (values.icon as string) || null,
       icon_color: (values.icon_color as string) || null,
       description: (values.description as string) || null,
-      spg_ids: spgIdVal ? [spgIdVal] : [],
+      spg_id: spgIdVal,
     };
 
     try {
@@ -656,7 +656,7 @@ export function SectionsPage() {
       spg_id: {
         type: "custom" as const,
         label: "Группа хранения и производства (ГХП)",
-        required: false,
+        required: true,
         render: ({ value, onChange, hasError, inputClasses }: {
           value: unknown
           onChange: (v: unknown) => void

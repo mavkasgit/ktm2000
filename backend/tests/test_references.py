@@ -87,8 +87,12 @@ async def test_inactive_section_rejected_in_route_step(client, session) -> None:
 
 
 @pytest.mark.asyncio
-async def test_create_section_with_sort_order(client) -> None:
-    payload = {"code": "TEST-SORT", "name": "Test Sort", "sort_order": 99}
+async def test_create_section_with_sort_order(client, session) -> None:
+    spg = StorageProductionGroup(code="SPG-SORT", name="SPG Sort")
+    session.add(spg)
+    await session.commit()
+
+    payload = {"code": "TEST-SORT", "name": "Test Sort", "sort_order": 99, "spg_id": spg.id}
     resp = await client.post("/api/sections", json=payload)
     assert resp.status_code == 201
     data = resp.json()
@@ -96,10 +100,14 @@ async def test_create_section_with_sort_order(client) -> None:
 
 
 @pytest.mark.asyncio
-async def test_get_section_by_id(client) -> None:
+async def test_get_section_by_id(client, session) -> None:
+    spg = StorageProductionGroup(code="SPG-GETME", name="SPG Get Me")
+    session.add(spg)
+    await session.commit()
+
     create_resp = await client.post(
         "/api/sections",
-        json={"code": "GETME", "name": "Get Me", "sort_order": 5},
+        json={"code": "GETME", "name": "Get Me", "sort_order": 5, "spg_id": spg.id},
     )
     section_id = create_resp.json()["id"]
 
@@ -146,7 +154,7 @@ async def test_create_patch_section_with_spg(client, session) -> None:
     payload = {
         "code": "SEC-SPG",
         "name": "Sec with SPG",
-        "spg_ids": [spg1.id]
+        "spg_id": spg1.id
     }
     resp = await client.post("/api/sections", json=payload)
     assert resp.status_code == 201
@@ -157,7 +165,7 @@ async def test_create_patch_section_with_spg(client, session) -> None:
 
     # 3. Patch Section to SPG2
     patch_payload = {
-        "spg_ids": [spg2.id]
+        "spg_id": spg2.id
     }
     resp = await client.patch(f"/api/sections/{section_id}", json=patch_payload)
     assert resp.status_code == 200
@@ -165,21 +173,13 @@ async def test_create_patch_section_with_spg(client, session) -> None:
     assert len(data["spg_links"]) == 1
     assert data["spg_links"][0]["id"] == spg2.id
 
-    # 4. Patch Section to no SPG
-    patch_payload = {
-        "spg_ids": []
-    }
-    resp = await client.patch(f"/api/sections/{section_id}", json=patch_payload)
-    assert resp.status_code == 200
-    data = resp.json()
-    assert len(data["spg_links"]) == 0
-
-    # 5. Try to create with invalid SPG ID
+    # 4. Try to create with invalid SPG ID
     invalid_payload = {
         "code": "SEC-INVALID-SPG",
         "name": "Sec Invalid SPG",
-        "spg_ids": [99999]
+        "spg_id": 99999
     }
     resp = await client.post("/api/sections", json=invalid_payload)
     assert resp.status_code == 400
-    assert "some spg ids do not exist" in resp.json()["detail"].lower()
+    assert "spg id does not exist" in resp.json()["detail"].lower()
+

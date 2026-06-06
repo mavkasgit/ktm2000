@@ -12,6 +12,9 @@ from app.models.spg import SpgSection, StorageProductionGroup
 from app.models.user import User, UserRole
 from app.models.spg_remainder import SpgRemainder
 
+pytestmark = pytest.mark.asyncio
+
+
 
 async def _make_admin(session, email: str = "admin-spg@test.local") -> User:
     user = User(

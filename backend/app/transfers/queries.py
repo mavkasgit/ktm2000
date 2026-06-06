@@ -286,6 +286,14 @@ async def list_ready_to_transfer(
         if transferable <= 0:
             continue
 
+        shares_spg = False
+        if next_l is not None:
+            from app.services.shopfloor.common import sections_share_spg
+            shares_spg = await sections_share_spg(db, line.section_id, next_l.section_id)
+
+        if shares_spg:
+            continue
+
         has_next = next_l is not None and next_stg is not None and not bool(next_stg.is_final)
         is_final_step = bool(stage.is_final)
         # Final step tasks should never appear in "ready to transfer" — they

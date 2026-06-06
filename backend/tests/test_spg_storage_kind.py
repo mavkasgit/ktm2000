@@ -7,6 +7,7 @@ from app.models.section import Section
 from app.models.user import User, UserRole
 
 
+@pytest.mark.asyncio
 async def test_spg_default_storage_kind_is_wip(session):
     spg = StorageProductionGroup(code="DEF-KIND", name="Default kind")
     session.add(spg)
@@ -15,6 +16,7 @@ async def test_spg_default_storage_kind_is_wip(session):
     assert spg.requires_lot is False
 
 
+@pytest.mark.asyncio
 async def test_spg_storage_kind_round_trip(session):
     spg = StorageProductionGroup(
         code="RT-KIND",
@@ -27,6 +29,7 @@ async def test_spg_storage_kind_round_trip(session):
     reloaded = await session.get(StorageProductionGroup, spg.id)
     assert reloaded.storage_kind == SpgStorageKind.quarantine
     assert reloaded.requires_lot is True
+
 
 
 async def _make_admin(session, email: str = "lot-admin@test.local") -> User:

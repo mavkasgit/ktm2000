@@ -32,11 +32,36 @@ async def _initial_available_quantity(db: AsyncSession, task: WorkTask) -> Decim
     """Base availability before incoming transfers.
 
     For the first route stage, task can start from planned quantity.
-    For subsequent stages, availability comes only from received transfers.
+    For subsequent stages, if the previous stage is in the same SPG/GHP,
+    availability comes from the completed quantity of the previous stage's task.
+    Otherwise, availability comes only from received transfers.
     """
     line = await db.get(SectionPlanLine, task.section_plan_line_id)
-    if line is not None and line.sequence == 1:
+    if line is None:
+        return Decimal("0")
+    if line.sequence == 1:
         return task.planned_quantity
+
+    # Find previous stage plan line
+    prev_line = await db.scalar(
+        select(SectionPlanLine).where(
+            SectionPlanLine.plan_position_id == line.plan_position_id,
+            SectionPlanLine.sequence == line.sequence - 1,
+        )
+    )
+    if prev_line is not None:
+        from .common import sections_share_spg
+        if await sections_share_spg(db, line.section_id, prev_line.section_id):
+            # Find the previous task
+            prev_task = await db.scalar(
+                select(WorkTask).where(
+                    WorkTask.section_plan_line_id == prev_line.id,
+                    WorkTask.status.notin_([WorkTaskStatus.cancelled]),
+                )
+            )
+            if prev_task is not None:
+                return prev_task.cached_completed_quantity
+
     return Decimal("0")
 
 def _compute_available_from_balances(
@@ -50,7 +75,13 @@ def _compute_available_from_balances(
     available = base_available + received_quantity - issued_quantity
     return available if available > 0 else Decimal("0")
 
-async def _refresh_task_cache(db: AsyncSession, task_id: int) -> WorkTask:
+async def _refresh_task_cache(db: AsyncSession, task_id: int, visited: set[int] | None = None) -> WorkTask:
+    if visited is None:
+        visited = set()
+    if task_id in visited:
+        return await _get_task(db, task_id)
+    visited.add(task_id)
+
     task = await _get_task(db, task_id)
     sums = await _task_movement_sums(db, task_id)
 
@@ -104,8 +135,30 @@ async def _refresh_task_cache(db: AsyncSession, task_id: int) -> WorkTask:
         task.status = WorkTaskStatus.partially_completed
     elif issued > 0:
         task.status = WorkTaskStatus.in_progress
-    elif received > 0 or task.status in {WorkTaskStatus.ready, WorkTaskStatus.waiting_previous}:
-        pass
+    elif available > 0 and task.status == WorkTaskStatus.waiting_previous:
+        task.status = WorkTaskStatus.ready
+
+    # Cascade refresh to the next task if it is in the same GHP
+    line = await db.get(SectionPlanLine, task.section_plan_line_id)
+    if line is not None:
+        next_line = await db.scalar(
+            select(SectionPlanLine).where(
+                SectionPlanLine.plan_position_id == line.plan_position_id,
+                SectionPlanLine.sequence == line.sequence + 1,
+            )
+        )
+        if next_line is not None:
+            from .common import sections_share_spg
+            if await sections_share_spg(db, line.section_id, next_line.section_id):
+                next_task = await db.scalar(
+                    select(WorkTask).where(
+                        WorkTask.section_plan_line_id == next_line.id,
+                        WorkTask.status.notin_([WorkTaskStatus.cancelled]),
+                    )
+                )
+                if next_task is not None:
+                    await _refresh_task_cache(db, next_task.id, visited)
+                    await _refresh_section_plan_line_cache(db, next_line.id)
 
     return task
 

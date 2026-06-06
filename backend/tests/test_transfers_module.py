@@ -648,3 +648,79 @@ async def test_transfers_history_generic_endpoints(client, session) -> None:
     assert len(data_spg["transfers"]) == 1
     assert data_spg["transfers"][0]["sent_quantity"] == "40"
 
+
+@pytest.mark.asyncio
+async def test_same_spg_auto_avail_and_status(client, session) -> None:
+    """Test that tasks in the same GHP automatically receive availability
+    on completion of the previous task, without manual transfers, and that
+    manual transfers between them are blocked.
+    """
+    user = await _make_user(session, "xfer-same-spg@test.local")
+    headers = _auth_headers(user)
+    ctx = await _make_six_section_fixture(
+        session, sku="FG-SAME-SPG", planned_qty=Decimal("100"), with_spg=True
+    )
+    await _release_via_take_to_work(client, ctx["position"].id)
+    tasks = await _tasks_by_sequence(session, ctx["position"].id)
+    first_task = tasks[0]
+    second_task = tasks[1]
+
+    # Refresh cache to populate initial cached quantities
+    from app.services.shopfloor.cache import _refresh_task_cache
+    await _refresh_task_cache(session, first_task.id)
+    await _refresh_task_cache(session, second_task.id)
+    await session.commit()
+    await session.refresh(first_task)
+    await session.refresh(second_task)
+
+    # Verify initial state
+    assert first_task.status == WorkTaskStatus.ready
+    assert first_task.cached_available_quantity == Decimal("100")
+    assert second_task.status == WorkTaskStatus.waiting_previous
+    assert second_task.cached_available_quantity == Decimal("0")
+
+    # Issue and complete quantity on first task
+    issue = await client.post(
+        f"/api/shopfloor/tasks/{first_task.id}/issue",
+        json={"quantity": "60", "idempotency_key": "same-spg:issue"},
+        headers=headers,
+    )
+    assert issue.status_code == 200
+
+    complete = await client.post(
+        f"/api/shopfloor/tasks/{first_task.id}/complete",
+        json={"good_quantity": "60", "defect_quantity": "0", "idempotency_key": "same-spg:complete"},
+        headers=headers,
+    )
+    assert complete.status_code == 200
+
+    # Refresh second task from db and verify automatic ready status and availability
+    await session.commit()
+    await session.refresh(second_task)
+    assert second_task.status == WorkTaskStatus.ready
+    assert second_task.cached_available_quantity == Decimal("60")
+
+    # Verify that first task is NOT listed in ready_to_transfer (since next is same GHP)
+    resp = await client.get(
+        f"/api/transfers/ready?section_id={ctx['sections'][0].id}",
+        headers=headers,
+    )
+    assert resp.status_code == 200
+    items = resp.json()["items"]
+    ours = [i for i in items if i["task_id"] == first_task.id]
+    assert len(ours) == 0
+
+    # Verify that manual transfer between them is rejected
+    send_manual = await client.post(
+        "/api/transfers",
+        json={
+            "from_task_id": first_task.id,
+            "to_task_id": second_task.id,
+            "quantity": "10",
+            "idempotency_key": "same-spg:send-manual",
+        },
+        headers=headers,
+    )
+    assert send_manual.status_code == 400
+    assert "not allowed" in send_manual.json()["detail"]
+

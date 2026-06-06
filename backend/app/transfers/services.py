@@ -137,6 +137,11 @@ async def transfer_send(
     if to_stage.sequence <= from_stage.sequence:
         raise ValueError("Transfer target must be next route step")
 
+    # Block same-GHP transfers
+    from app.services.shopfloor.common import sections_share_spg
+    if await sections_share_spg(db, from_task.section_id, to_task.section_id):
+        raise ValueError("Transfers within the same Storage Production Group (GHP) are not allowed")
+
     quantity = _to_decimal(quantity)
     _ensure_positive(quantity, "quantity")
     transferable = from_task.cached_completed_quantity - from_task.cached_transferred_quantity
