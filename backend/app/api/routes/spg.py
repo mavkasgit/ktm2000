@@ -375,6 +375,9 @@ async def create_manual_remainder(
     await db.flush()
     await db.refresh(remainder)
 
+    from app.services.shopfloor.operations_tasks import trigger_auto_consume_for_spg_tasks
+    await trigger_auto_consume_for_spg_tasks(db, spg_id=spg_id, product_id=payload.product_id, actor_id=current_user.id)
+
     return RemainderOut(
         id=remainder.id,
         product_id=product.id,
@@ -598,6 +601,7 @@ async def manual_stock_operation(
                 existing.consumed_at = now
             affected_remainder_id = existing.id
             new_qty = float(existing.remainder_quantity)
+            await db.flush()
         else:
             rem = SpgRemainder(
                 product_id=payload.product_id,
@@ -616,6 +620,9 @@ async def manual_stock_operation(
             await db.flush()
             affected_remainder_id = rem.id
             new_qty = float(rem.remainder_quantity)
+
+        from app.services.shopfloor.operations_tasks import trigger_auto_consume_for_spg_tasks
+        await trigger_auto_consume_for_spg_tasks(db, spg_id=spg_id, product_id=payload.product_id, actor_id=current_user.id)
     else:  # "out"
         # Find oldest active remainder (FIFO) for this product+SPG
         existing = await db.scalar(

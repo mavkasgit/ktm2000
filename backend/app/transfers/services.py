@@ -295,6 +295,22 @@ async def transfer_receive(
 
     if accepted_quantity > 0 and to_task.status == WorkTaskStatus.waiting_previous:
         to_task.status = WorkTaskStatus.ready
+        await db.flush()
+
+    if accepted_quantity > 0:
+        from app.services.shopfloor.operations_tasks import issue_to_work, auto_consume_available_remainders
+        await issue_to_work(
+            db,
+            task_id=to_task.id,
+            quantity=accepted_quantity,
+            actor_id=actor_id,
+            comment=f"Auto-issued on transfer receive {transfer.id}",
+            executor_user_id=executor_user_id,
+            performed_at=performed_at,
+            accounted_at=accounted_at,
+            transfer_id=transfer.id,
+        )
+        await auto_consume_available_remainders(db, to_task, actor_id=actor_id)
 
     await _refresh_task_cache(db, to_task.id)
     await _refresh_section_plan_line_cache(db, to_task.section_plan_line_id)
@@ -452,12 +468,11 @@ async def cancel_transfer(
     from_task = await _get_task(db, transfer.from_task_id)
     to_task = await _get_task(db, transfer.to_task_id)
 
-    # Validate target available stock before cancellation
-    diff = -transfer.sent_quantity
-    if to_task.cached_available_quantity + diff < 0:
+    # Validate target in-work quantity before cancellation
+    if to_task.cached_in_work_quantity < transfer.sent_quantity:
         raise ValueError(
-            f"Target task has already consumed or issued parts. "
-            f"Cannot cancel transfer as target task only has {to_task.cached_available_quantity} available stock"
+            f"Target task has already completed or rejected parts. "
+            f"Cannot cancel transfer as target task only has {to_task.cached_in_work_quantity} in work"
         )
 
     # Update Transfer

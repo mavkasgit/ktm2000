@@ -416,7 +416,9 @@ async def test_spg_route_full_lifecycle_with_mixed_remainders(client, session) -
 
     tasks = await _get_tasks_by_sequence(session, ctx["position"].id)
     assert len(tasks) == 6
-    assert tasks[0].status == WorkTaskStatus.ready
+    # В новой системе при take-to-work остатки (50 штук) автоматически выдаются в работу,
+    # переводя задачу в in_progress.
+    assert tasks[0].status == WorkTaskStatus.in_progress
     assert tasks[1].status == WorkTaskStatus.waiting_previous
 
     # Per-section lookup for cross-checking
@@ -428,16 +430,11 @@ async def test_spg_route_full_lifecycle_with_mixed_remainders(client, session) -
     wip_task = task_by_section[sections[4].id]
     pack_task = task_by_section[sections[5].id]
 
-    # ── 4. Step 1 (RAW) — 30 from SPG + 70 direct, complete 80+5 ─────────
-    # RAW is the "raw input" section: no return_remainder_to_stock is ever
-    # called here, so SPG-RAW never accumulates its own remainders beyond
-    # the manual-op-in seed. The 15 units of in_work (100 issued - 80 good
-    # - 5 defect) stay on the task as in_work and are *not* returned to the
-    # SPG.
+    # ── 4. Step 1 (RAW) — 30 from SPG (auto-consumed, already in work 50) + 50 direct, complete 80+5 ─────────
+    # We only issue 50 units directly, because 50 was already auto-issued from remainder!
     await _issue_mixed(
         client, headers, raw_task.id,
-        from_remainder_id=initial_raw_remainder_id, from_qty=Decimal("30"),
-        direct_qty=Decimal("70"), run_id="spg-e2e", stage="1",
+        direct_qty=Decimal("50"), run_id="spg-e2e", stage="1",
     )
     await _complete_with_return(
         client, headers, raw_task.id,
@@ -446,24 +443,21 @@ async def test_spg_route_full_lifecycle_with_mixed_remainders(client, session) -
         run_id="spg-e2e", stage="1",
     )
 
-    # SPG-RAW: only the original 50 → 20. No new return-remainder was created.
+    # SPG-RAW: the original 50 was fully auto-consumed.
     raw_items = (await client.get(f"/api/spg/{spg_raw.id}/remainders")).json()
-    assert len(raw_items) == 1
-    assert raw_items[0]["remainder_quantity"] == 20
-    assert raw_items[0]["source"] == "manual"
+    assert len(raw_items) == 0
 
-    # Transfer the 80 good units from RAW to DRILL → unlocks step 2
+    # Transfer the 80 good units from RAW to DRILL → unlocks step 2.
+    # Because of auto-issuing on transfer accept, the 80 units are automatically issued.
+    # Furthermore, because drill_task becomes ready/in_progress, the 20 units of initial_drill_remainder
+    # are also automatically consumed!
     await _transfer_to_next(
         client, headers, raw_task.id,
         quantity=Decimal("80"), run_id="spg-e2e", stage="1",
     )
 
-    # ── 5. Step 2 (DRILL) — 20 from SPG-WIP's DRILL seed + 60 direct, complete 70+5, return 5 ─
-    await _issue_mixed(
-        client, headers, drill_task.id,
-        from_remainder_id=initial_drill_remainder_id, from_qty=Decimal("20"),
-        direct_qty=Decimal("60"), run_id="spg-e2e", stage="2",
-    )
+    # ── 5. Step 2 (DRILL) — 20 from SPG-WIP's DRILL seed (auto-consumed) + 80 from transfer (auto-issued).
+    # All 100 units are already automatically in work! No manual issue needed.
     drill_return_id = await _complete_with_return(
         client, headers, drill_task.id,
         good=Decimal("70"), defect=Decimal("5"),
@@ -471,25 +465,27 @@ async def test_spg_route_full_lifecycle_with_mixed_remainders(client, session) -
     )
     assert drill_return_id is not None
 
-    # SPG-RAW: still just the original 20 (consume path stayed the same).
+    # SPG-RAW: still fully auto-consumed.
     raw_items = (await client.get(f"/api/spg/{spg_raw.id}/remainders")).json()
-    assert len(raw_items) == 1
-    assert raw_items[0]["remainder_quantity"] == 20
+    assert len(raw_items) == 0
 
-    # SPG-WIP: 1 remainder, qty 5.
+    # SPG-WIP: remainder was automatically consumed by shot_task, so wip remainders is empty.
     wip_items = (await client.get(f"/api/spg/{spg_wip.id}/remainders")).json()
-    assert len(wip_items) == 1
-    assert wip_items[0]["remainder_quantity"] == 5
-    assert wip_items[0]["spg_code"] == spg_wip.code
+    assert len(wip_items) == 0
+
+    # Verify that shot_task cache shows it has all 75 units in work (70 from drill_task complete + 5 from auto-consumed remainder)
+    await session.refresh(shot_task)
+    from app.services.shopfloor.cache import _refresh_task_cache
+    await _refresh_task_cache(session, shot_task.id)
+    assert shot_task.cached_in_work_quantity == Decimal("75")
 
     # DRILL to SHOT is within the same SPG (spg_wip), no manual transfer needed.
+    # Under the hood, completing DRILL auto-issued 70 good units to SHOT,
+    # and also auto-consumed the 5 unit remainder (drill_return_id).
+    # So SHOT task already has 75 units in work!
 
-    # ── 6. Step 3 (SHOT) — 5 from DRILL remainder + 65 direct, complete 60+5, return 5 ─
-    await _issue_mixed(
-        client, headers, shot_task.id,
-        from_remainder_id=drill_return_id, from_qty=Decimal("5"),
-        direct_qty=Decimal("65"), run_id="spg-e2e", stage="3",
-    )
+    # ── 6. Step 3 (SHOT) — 5 from DRILL remainder + 70 from DRILL task.
+    # All 75 units are already automatically in work! No manual issue needed.
     shot_return_id = await _complete_with_return(
         client, headers, shot_task.id,
         good=Decimal("60"), defect=Decimal("5"),
@@ -497,19 +493,21 @@ async def test_spg_route_full_lifecycle_with_mixed_remainders(client, session) -
     )
     assert shot_return_id is not None
 
-    # SPG-WIP: SHOT remainder 5 (DRILL was fully consumed)
+    # SPG-WIP remainder of 5 was automatically consumed by anod_task, so wip remainders is empty.
     wip_items = (await client.get(f"/api/spg/{spg_wip.id}/remainders")).json()
-    assert len(wip_items) == 1
-    assert wip_items[0]["remainder_quantity"] == 5
-    assert wip_items[0]["spg_code"] == spg_wip.code
+    assert len(wip_items) == 0
+
+    # Verify that anod_task cache shows it has 65 units in work (60 from shot_task complete + 5 from auto-consumed remainder)
+    await session.refresh(anod_task)
+    await _refresh_task_cache(session, anod_task.id)
+    assert anod_task.cached_in_work_quantity == Decimal("65")
 
     # SHOT to ANOD is within the same SPG (spg_wip), no manual transfer needed.
+    # Completing SHOT auto-issued 60 good units to ANOD, and also auto-consumed 5 units of shot_return_id.
+    # So ANOD has 65 units in work.
 
-    # ── 7. Step 4 (ANOD) — direct 60, complete 60, no return ──────────────
-    await _issue_mixed(
-        client, headers, anod_task.id,
-        direct_qty=Decimal("60"), run_id="spg-e2e", stage="4",
-    )
+    # ── 7. Step 4 (ANOD) — 65 units in work (auto-issued).
+    # We complete 60 good, 0 defect.
     await _complete_with_return(
         client, headers, anod_task.id,
         good=Decimal("60"), defect=Decimal("0"),
@@ -517,12 +515,11 @@ async def test_spg_route_full_lifecycle_with_mixed_remainders(client, session) -
     )
 
     # ANOD to WIP is within the same SPG (spg_wip), no manual transfer needed.
+    # Completing ANOD auto-issued 60 good units to WIP.
+    # So WIP has 60 units in work.
 
-    # ── 8. Step 5 (WIP) — direct 60, complete 50+5, return 5 ──────────────
-    await _issue_mixed(
-        client, headers, wip_task.id,
-        direct_qty=Decimal("60"), run_id="spg-e2e", stage="5",
-    )
+    # ── 8. Step 5 (WIP) — 60 units in work (auto-issued).
+    # We complete 50 good, 5 defect, 5 return to stock.
     wip_return_id = await _complete_with_return(
         client, headers, wip_task.id,
         good=Decimal("50"), defect=Decimal("5"),
@@ -530,22 +527,18 @@ async def test_spg_route_full_lifecycle_with_mixed_remainders(client, session) -
     )
     assert wip_return_id is not None
 
-    # SPG-WIP: SHOT 5 + WIP 5 = 10, 2 remainders
+    # SPG-WIP: Only WIP remainder is left (5 units), as SHOT remainder was consumed by anod_task.
     wip_items = (await client.get(f"/api/spg/{spg_wip.id}/remainders")).json()
-    assert len(wip_items) == 2
-    assert sum(r["remainder_quantity"] for r in wip_items) == 10
+    assert len(wip_items) == 1
+    assert wip_items[0]["remainder_quantity"] == 5
 
-    # Transfer 50 from WIP to PACK
+    # Transfer 50 from WIP to PACK (auto-accept + auto-issue to PACK)
     await _transfer_to_next(
         client, headers, wip_task.id,
         quantity=Decimal("50"), run_id="spg-e2e", stage="5",
     )
 
-    # ── 9. Step 6 (PACK, final) — direct 50, complete 50, final-release 50 ─
-    await _issue_mixed(
-        client, headers, pack_task.id,
-        direct_qty=Decimal("50"), run_id="spg-e2e", stage="6",
-    )
+    # ── 9. Step 6 (PACK, final) — 50 units in work (auto-issued).
     resp = await client.post(
         f"/api/shopfloor/tasks/{pack_task.id}/complete",
         json={
@@ -565,29 +558,27 @@ async def test_spg_route_full_lifecycle_with_mixed_remainders(client, session) -
     assert resp.status_code == 200, resp.text
 
     # ── 10. Final assertions on SPGs ──────────────────────────────────────
-    # SPG-RAW: only the original 50-seed remainder (now 20 after step 1 consumed 30).
+    # SPG-RAW: the original 50-seed remainder was fully auto-consumed.
     # No new return-remainders ever landed here.
     final_raw_items = (await client.get(f"/api/spg/{spg_raw.id}/remainders")).json()
-    assert len(final_raw_items) == 1
-    assert final_raw_items[0]["remainder_quantity"] == 20
-    assert final_raw_items[0]["source"] == "manual"
+    assert len(final_raw_items) == 0
 
-    # SPG-WIP: two task-source remainders (SHOT 5 + WIP 5).
+    # SPG-WIP: only the WIP remainder (5 units) is left.
     final_wip_items = (await client.get(f"/api/spg/{spg_wip.id}/remainders")).json()
-    assert len(final_wip_items) == 2
-    assert sum(r["remainder_quantity"] for r in final_wip_items) == 10
-    assert all(r["source"] == "task" for r in final_wip_items)
+    assert len(final_wip_items) == 1
+    assert final_wip_items[0]["remainder_quantity"] == 5
+    assert final_wip_items[0]["source"] == "task"
 
     # Snapshots
     snap_raw = (await client.get(f"/api/spg/{spg_raw.id}/snapshot")).json()
-    assert snap_raw["totals"]["spg_available"] == 20
+    assert snap_raw["totals"]["spg_available"] == 0
     # SPG-RAW only contains the RAW section, so totals are scoped to that section:
     # planned 100, completed 80 (5 defect + 15 in_work, but only "complete" movement counts).
     assert snap_raw["totals"]["planned"] == 100
     assert snap_raw["totals"]["completed"] == 80
 
     snap_wip = (await client.get(f"/api/spg/{spg_wip.id}/snapshot")).json()
-    assert snap_wip["totals"]["spg_available"] == 10
+    assert snap_wip["totals"]["spg_available"] == 5
 
     # ── 11. Remainder history drill-down on a WIP return ──────────────────
     history = (
@@ -596,7 +587,7 @@ async def test_spg_route_full_lifecycle_with_mixed_remainders(client, session) -
 
     assert history["remainder"]["id"] == shot_return_id
     assert history["remainder"]["source"] == "task"
-    assert history["remainder"]["remainder_quantity"] == 5
+    assert history["remainder"]["remainder_quantity"] == 0
 
     # Origin task must be our SHOT task
     assert history["origin"] is not None
@@ -645,21 +636,7 @@ async def test_spg_consume_remainder_allows_going_negative(client, session) -> N
     spg_raw = ctx["spg_raw"]
     sections = ctx["sections"]
 
-    # Seed 50 into SPG-RAW
-    in_resp = await client.post(
-        f"/api/spg/{spg_raw.id}/manual-operation",
-        json={
-            "product_id": ctx["product"].id,
-            "section_id": sections[0].id,
-            "operation_type": "in",
-            "quantity": 50,
-        },
-        headers=headers,
-    )
-    assert in_resp.status_code == 200
-    remainder_id = int(in_resp.json()["remainder_id"])
-
-    # Take to work → first task (RAW) is `ready`
+    # 1) Take to work → first task (RAW) is `ready`
     take_resp = await client.post(
         "/api/production-planning/rows/take-to-work",
         json={"position_ids": [ctx["position"].id]},
@@ -668,6 +645,26 @@ async def test_spg_consume_remainder_allows_going_negative(client, session) -> N
     assert take_resp.status_code == 200
     tasks = await _get_tasks_by_sequence(session, ctx["position"].id)
     raw_task = tasks[0]
+
+    # 2) Seed 50 into SPG-RAW with completed_stages sequence=1 so it is not auto-consumed by raw_task
+    in_resp = await client.post(
+        f"/api/spg/{spg_raw.id}/remainders",
+        json={
+            "product_id": ctx["product"].id,
+            "section_id": sections[0].id,
+            "quantity": 50,
+            "completed_stages": [
+                {
+                    "section_id": sections[0].id,
+                    "sequence": 1,
+                    "operation_name": "fake",
+                }
+            ]
+        },
+        headers=headers,
+    )
+    assert in_resp.status_code == 201, in_resp.text
+    remainder_id = int(in_resp.json()["id"])
 
     # Consume 70 from a 50-quantity remainder → should succeed with qty = -20
     resp = await client.post(
@@ -715,20 +712,7 @@ async def test_spg_manual_operation_balances_negative_remainders(client, session
     spg_raw = ctx["spg_raw"]
     sections = ctx["sections"]
 
-    # 1) Seed 50, take to work, over-consume to drive remainder to -20
-    in_resp = await client.post(
-        f"/api/spg/{spg_raw.id}/manual-operation",
-        json={
-            "product_id": ctx["product"].id,
-            "section_id": sections[0].id,
-            "operation_type": "in",
-            "quantity": 50,
-        },
-        headers=headers,
-    )
-    assert in_resp.status_code == 200
-    remainder_id = int(in_resp.json()["remainder_id"])
-
+    # 1) Take to work → first task (RAW) is `ready`
     take_resp = await client.post(
         "/api/production-planning/rows/take-to-work",
         json={"position_ids": [ctx["position"].id]},
@@ -737,6 +721,26 @@ async def test_spg_manual_operation_balances_negative_remainders(client, session
     assert take_resp.status_code == 200
     tasks = await _get_tasks_by_sequence(session, ctx["position"].id)
     raw_task = tasks[0]
+
+    # 2) Seed 50 into SPG-RAW with completed_stages sequence=1 so it is not auto-consumed by raw_task
+    in_resp = await client.post(
+        f"/api/spg/{spg_raw.id}/remainders",
+        json={
+            "product_id": ctx["product"].id,
+            "section_id": sections[0].id,
+            "quantity": 50,
+            "completed_stages": [
+                {
+                    "section_id": sections[0].id,
+                    "sequence": 1,
+                    "operation_name": "fake",
+                }
+            ]
+        },
+        headers=headers,
+    )
+    assert in_resp.status_code == 201, in_resp.text
+    remainder_id = int(in_resp.json()["id"])
 
     consume_resp = await client.post(
         "/api/shopfloor/remainders/consume",

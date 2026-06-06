@@ -28,6 +28,7 @@ async def issue_to_work(
     executor_user_id: int | None = None,
     performed_at: datetime | None = None,
     accounted_at: datetime | None = None,
+    transfer_id: int | None = None,
 ) -> dict:
     quantity = _to_decimal(quantity)
     _ensure_positive(quantity, "quantity")
@@ -53,6 +54,7 @@ async def issue_to_work(
         product_id=task.product_id,
         task_id=task.id,
         section_plan_line_id=task.section_plan_line_id,
+        transfer_id=transfer_id,
         from_section_id=task.section_id,
         to_section_id=task.section_id,
         movement_type=MovementType.issue_to_work,
@@ -133,7 +135,31 @@ async def complete_task(
 
     in_work = task.cached_issued_quantity - task.cached_completed_quantity - task.cached_rejected_quantity
     if total > in_work:
-        raise ValueError("Complete quantity exceeds quantity in work")
+        # Auto-issue the missing quantity for tasks that are still in 'ready'
+        # state with nothing issued yet. This makes the bulk-complete workflow
+        # work even when the take-to-work auto-consume did not produce any
+        # SPG remainders (e.g. raw stock was never received into SPG).
+        if task.status == WorkTaskStatus.ready and in_work == 0:
+            short = total - in_work
+            auto_issue_key = (
+                f"{idempotency_key}:auto-issue" if idempotency_key else None
+            )
+            await issue_to_work(
+                db,
+                task_id=task.id,
+                quantity=short,
+                actor_id=actor_id,
+                comment="Auto-issue from complete (no in-work)",
+                source_ref=source_ref,
+                idempotency_key=auto_issue_key,
+                executor_user_id=executor_user_id,
+                performed_at=performed_at,
+                accounted_at=accounted_at,
+            )
+            await db.refresh(task)
+            in_work = task.cached_issued_quantity - task.cached_completed_quantity - task.cached_rejected_quantity
+        if total > in_work:
+            raise ValueError("Complete quantity exceeds quantity in work")
 
     now = datetime.now(UTC)
     eff_performed = performed_at or now
@@ -218,6 +244,57 @@ async def complete_task(
 
     await _refresh_task_cache(db, task.id)
     await _refresh_section_plan_line_cache(db, task.section_plan_line_id)
+
+    # Cascade auto-issue to next task if it is in the same GHP
+    line = await db.get(SectionPlanLine, task.section_plan_line_id)
+    if line is not None and good_quantity > 0:
+        next_line = await db.scalar(
+            select(SectionPlanLine).where(
+                SectionPlanLine.plan_position_id == line.plan_position_id,
+                SectionPlanLine.sequence == line.sequence + 1,
+            )
+        )
+        if next_line is not None:
+            from app.services.shopfloor.common import sections_share_spg
+            if await sections_share_spg(db, line.section_id, next_line.section_id):
+                # Find or auto-create target task
+                next_task = await db.scalar(
+                    select(WorkTask).where(
+                        WorkTask.section_plan_line_id == next_line.id,
+                        WorkTask.status.notin_([WorkTaskStatus.completed, WorkTaskStatus.cancelled]),
+                    )
+                )
+                if not next_task:
+                    next_task = WorkTask(
+                        section_plan_line_id=next_line.id,
+                        section_id=next_line.section_id,
+                        product_id=next_line.product_id,
+                        route_stage_id=next_line.route_stage_id,
+                        planned_quantity=line.planned_quantity,
+                        status=WorkTaskStatus.ready,
+                        due_date=next_line.due_date,
+                    )
+                    db.add(next_task)
+                    await db.flush()
+
+                if next_task.status == WorkTaskStatus.waiting_previous:
+                    next_task.status = WorkTaskStatus.ready
+                    await db.flush()
+
+                # Auto-issue the completed quantity to work for next task
+                await issue_to_work(
+                    db,
+                    task_id=next_task.id,
+                    quantity=good_quantity,
+                    actor_id=actor_id,
+                    comment=f"Auto-issued from previous task {task.id} inside same GHP",
+                    executor_user_id=executor_user_id,
+                    performed_at=performed_at,
+                    accounted_at=accounted_at,
+                )
+                # Consume any other compatible remainders
+                await auto_consume_available_remainders(db, next_task, actor_id=actor_id)
+
     return {"task_id": task.id, "movement_ids": movement_ids, "defect_id": defect_id, "status": task.status.value}
 
 async def final_release(
@@ -378,6 +455,7 @@ async def prepare_section_task(
     )
     db.add(task)
     await db.flush()
+    await auto_consume_available_remainders(db, task, actor_id=actor_id)
     await _refresh_task_cache(db, task.id)
     await _refresh_section_plan_line_cache(db, task.section_plan_line_id)
     return {"task_id": task.id, "status": task.status.value}
@@ -486,6 +564,7 @@ async def return_remainder_to_stock(
     await db.flush()
     await _refresh_task_cache(db, task.id)
     await _refresh_section_plan_line_cache(db, task.section_plan_line_id)
+    await trigger_auto_consume_for_spg_tasks(db, spg_id=spg_id, product_id=task.product_id, actor_id=actor_id)
     return {"movement_id": movement.id, "remainder_id": remainder.id, "task_id": task.id}
 
 
@@ -560,4 +639,136 @@ async def consume_remainder(
     await _refresh_task_cache(db, task.id)
     await _refresh_section_plan_line_cache(db, task.section_plan_line_id)
     return {"movement_id": movement.id, "remainder_id": remainder.id, "task_id": task.id}
+
+
+async def get_section_spg_id(db: AsyncSession, section_id: int) -> int | None:
+    from app.models.spg import SpgSection
+    return await db.scalar(select(SpgSection.spg_id).where(SpgSection.section_id == section_id))
+
+
+async def auto_consume_available_remainders(db: AsyncSession, task: WorkTask, actor_id: int) -> Decimal:
+    """Find and consume compatible remainders for this task, issuing them to work."""
+    if task.status not in {WorkTaskStatus.ready, WorkTaskStatus.in_progress, WorkTaskStatus.partially_completed}:
+        return Decimal("0")
+
+    line = await db.get(SectionPlanLine, task.section_plan_line_id)
+    if not line:
+        return Decimal("0")
+
+    spg_id = await get_section_spg_id(db, task.section_id)
+    if not spg_id:
+        return Decimal("0")
+
+    # Get all active remainders for this product and SPG, ordered FIFO
+    active_remainders = (
+        await db.execute(
+            select(SpgRemainder)
+            .where(
+                SpgRemainder.product_id == task.product_id,
+                SpgRemainder.spg_id == spg_id,
+                SpgRemainder.remainder_quantity > 0,
+                SpgRemainder.consumed_at.is_(None),
+            )
+            .order_by(SpgRemainder.created_at.asc(), SpgRemainder.id.asc())
+        )
+    ).scalars().all()
+
+    # We also need the full route stages for this plan position to determine sequence ordering
+    from app.models.route import RouteStage
+    route_stages = (
+        await db.execute(
+            select(RouteStage)
+            .where(RouteStage.route_id == line.route_id)
+            .order_by(RouteStage.sequence.asc())
+        )
+    ).scalars().all()
+    route_sequences = [s.sequence for s in route_stages]
+
+    total_consumed = Decimal("0")
+
+    for rem in active_remainders:
+        # Check compatibility:
+        # 1. If reserved, it must be for this plan position
+        if rem.reserved_for_plan_position_id is not None:
+            if rem.reserved_for_plan_position_id != line.plan_position_id:
+                continue
+
+        # 2. Sequence compatibility:
+        # We find max_seq of completed stages
+        stages_json = rem.completed_stages_json or []
+        if stages_json:
+            max_seq = max((s.get("sequence", 0) for s in stages_json), default=0)
+            # The remainder belongs to this task's stage if line.sequence is the first stage in the route after max_seq
+            next_stages_in_route = [seq for seq in route_sequences if seq > max_seq]
+            if not next_stages_in_route:
+                continue
+            expected_seq = next_stages_in_route[0]
+        else:
+            # For manual remainders (empty stages_json), they are compatible with the first stage of this SPG in the route
+            from app.models.spg import SpgSection
+            spg_section_ids = await db.scalars(
+                select(SpgSection.section_id).where(SpgSection.spg_id == spg_id)
+            )
+            spg_section_ids = list(spg_section_ids)
+            
+            spg_stages_in_route = (
+                await db.execute(
+                    select(RouteStage.sequence)
+                    .where(
+                        RouteStage.route_id == line.route_id,
+                        RouteStage.section_id.in_(spg_section_ids),
+                    )
+                    .order_by(RouteStage.sequence.asc())
+                )
+            ).scalars().all()
+            if not spg_stages_in_route:
+                continue
+            expected_seq = spg_stages_in_route[0]
+
+        if line.sequence != expected_seq:
+            continue
+
+        # If we got here, this remainder is compatible and should be consumed for this task!
+        qty_to_consume = rem.remainder_quantity
+        if qty_to_consume > 0:
+            await consume_remainder(
+                db,
+                remainder_id=rem.id,
+                task_id=task.id,
+                quantity=qty_to_consume,
+                actor_id=actor_id,
+                comment=f"Auto-consumed remainder {rem.id} on task ready/in_progress",
+            )
+            total_consumed += qty_to_consume
+
+    return total_consumed
+
+
+async def trigger_auto_consume_for_spg_tasks(db: AsyncSession, spg_id: int, product_id: int, actor_id: int) -> None:
+    """Find all active tasks in this SPG for this product and trigger remainder auto-consumption on them."""
+    from app.models.spg import SpgSection
+    section_ids = await db.scalars(
+        select(SpgSection.section_id).where(SpgSection.spg_id == spg_id)
+    )
+    section_ids = list(section_ids)
+    if not section_ids:
+        return
+
+    tasks = (
+        await db.execute(
+            select(WorkTask)
+            .where(
+                WorkTask.product_id == product_id,
+                WorkTask.section_id.in_(section_ids),
+                WorkTask.status.in_([WorkTaskStatus.ready, WorkTaskStatus.in_progress, WorkTaskStatus.partially_completed]),
+            )
+            .join(SectionPlanLine, WorkTask.section_plan_line_id == SectionPlanLine.id)
+            .order_by(SectionPlanLine.sequence.asc(), WorkTask.id.asc())
+        )
+    ).scalars().all()
+
+    for task in tasks:
+        await auto_consume_available_remainders(db, task, actor_id=actor_id)
+
+
 

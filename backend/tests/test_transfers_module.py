@@ -365,7 +365,7 @@ async def test_transfers_correction_and_validation(client, session) -> None:
     ref_first = await session.get(WorkTask, first_task.id)
     ref_second = await session.get(WorkTask, second_task.id)
     assert ref_first.cached_transferred_quantity == Decimal("50")
-    assert ref_second.cached_available_quantity == Decimal("50")
+    assert ref_second.cached_in_work_quantity == Decimal("50")
 
     # 2. Correct quantity: 50 -> 70 (valid)
     correct = await client.put(
@@ -380,7 +380,7 @@ async def test_transfers_correction_and_validation(client, session) -> None:
     ref_first = await session.get(WorkTask, first_task.id)
     ref_second = await session.get(WorkTask, second_task.id)
     assert ref_first.cached_transferred_quantity == Decimal("70")
-    assert ref_second.cached_available_quantity == Decimal("70")
+    assert ref_second.cached_in_work_quantity == Decimal("70")
 
     # 3. Correct quantity exceeds source limit (completed is 100, we try to set to 120)
     correct_fail = await client.put(
@@ -391,15 +391,7 @@ async def test_transfers_correction_and_validation(client, session) -> None:
     assert correct_fail.status_code == 400
     assert "exceeds" in correct_fail.json()["detail"]
 
-    # 4. Correct quantity below target task's availability limit.
-    # First, let's issue 60 parts in second task (so only 10 available remain)
-    await client.post(
-        f"/api/shopfloor/tasks/{second_task.id}/issue",
-        json={"quantity": "60", "idempotency_key": "xf-corr:sec-issue"},
-        headers=headers,
-    )
-    
-    # Try to reduce transfer from 70 to 50 (takes 20 parts away, but only 10 are available)
+    # 4. Try to reduce transfer from 70 to 50 (takes 20 parts away, but all 70 are in work)
     correct_fail2 = await client.put(
         f"/api/transfers/{transfer_id}",
         json={"quantity": 50},
@@ -440,20 +432,20 @@ async def test_transfers_cancellation_and_validation(client, session) -> None:
     assert send.status_code == 200
     transfer_id_1 = send.json()["transfer_id"]
 
-    # Issue 30 parts on target (10 remains available from transfer 1)
+    # Complete 15 parts on target (25 remains in work from transfer 1)
     await client.post(
-        f"/api/shopfloor/tasks/{second_task.id}/issue",
-        json={"quantity": "30", "idempotency_key": "xf-cnl:sec-issue"},
+        f"/api/shopfloor/tasks/{second_task.id}/complete",
+        json={"good_quantity": "15", "defect_quantity": "0", "idempotency_key": "xf-cnl:sec-complete"},
         headers=headers,
     )
 
-    # Cancel transfer 1 should fail (trying to take 40 away, but only 10 available)
+    # Cancel transfer 1 should fail (trying to take 40 away, but only 25 in work)
     cancel_fail = await client.post(
         f"/api/transfers/{transfer_id_1}/cancel",
         headers=headers,
     )
     assert cancel_fail.status_code == 400
-    assert "already consumed" in cancel_fail.json()["detail"]
+    assert "already completed" in cancel_fail.json()["detail"].lower()
 
     # 2. Create transfer 2 (50 parts)
     send2 = await client.post(
@@ -464,7 +456,7 @@ async def test_transfers_cancellation_and_validation(client, session) -> None:
     assert send2.status_code == 200
     transfer_id_2 = send2.json()["transfer_id"]
 
-    # Cancel transfer 2 should succeed (the 50 parts are fully available)
+    # Cancel transfer 2 should succeed (the 50 parts are fully in work since 25 + 50 = 75 >= 50)
     cancel = await client.post(
         f"/api/transfers/{transfer_id_2}/cancel",
         headers=headers,
@@ -477,7 +469,7 @@ async def test_transfers_cancellation_and_validation(client, session) -> None:
     ref_second = await session.get(WorkTask, second_task.id)
     # Only transfer 1 (40 parts) should remain active
     assert ref_first.cached_transferred_quantity == Decimal("40")
-    assert ref_second.cached_available_quantity == Decimal("10") # 40 received - 30 issued = 10 available
+    assert ref_second.cached_in_work_quantity == Decimal("25") # 40 received - 15 completed = 25 in work
 
 
 # ─── Decoupled "completed" status ────────────────────────────────────────────
@@ -697,8 +689,8 @@ async def test_same_spg_auto_avail_and_status(client, session) -> None:
     # Refresh second task from db and verify automatic ready status and availability
     await session.commit()
     await session.refresh(second_task)
-    assert second_task.status == WorkTaskStatus.ready
-    assert second_task.cached_available_quantity == Decimal("60")
+    assert second_task.status == WorkTaskStatus.in_progress
+    assert second_task.cached_in_work_quantity == Decimal("60")
 
     # Verify that first task is NOT listed in ready_to_transfer (since next is same GHP)
     resp = await client.get(
