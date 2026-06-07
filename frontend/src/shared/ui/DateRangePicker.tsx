@@ -244,7 +244,7 @@ export function DateRangePicker({
   const previewTo = pendingTo || (pendingFrom && hoverIso && !isBeforeIso(hoverIso, pendingFrom) ? hoverIso : "");
 
   return (
-    <div className={cn("relative inline-block w-full sm:w-auto", className)}>
+    <div className={cn("relative block w-full sm:w-auto", className)}>
       {label && (
         <label htmlFor={id} className="text-sm font-medium whitespace-nowrap">
           {label}

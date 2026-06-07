@@ -17,9 +17,10 @@ from app.models.production_plan import (
     PlanPosition,
     PlanPositionRouteOrigin,
     PlanPositionStatus,
-    PositionStatusHistory,
     ProductionPlan,
 )
+from app.models.audit_log import AuditLog
+from app.api.routes.audit_logs import AuditLogOut
 from app.models.imports import ImportBatch
 from app.models.product import Product
 from app.models.release_batch import ReleaseBatchType
@@ -138,13 +139,7 @@ class UpdatePositionQuantityIn(BaseModel):
     quantity_per_hanger: int | None = None
 
 
-class StatusHistoryOut(BaseModel):
-    id: int
-    from_status: str
-    to_status: str
-    changed_by: int | None
-    changed_at: str
-    reason: str | None
+# Удален StatusHistoryOut, так как PositionStatusHistory удалена. История теперь читается через аудит-логи.
 
 
 class RouteCheckOut(BaseModel):
@@ -183,6 +178,7 @@ async def apply_plan_change_set(
     change_set_id: int,
     skip_invalid: bool = False,
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ) -> dict:
     change_set = await db.get(PlanChangeSet, change_set_id)
     if change_set is None:
@@ -190,7 +186,7 @@ async def apply_plan_change_set(
     if change_set.production_plan_id != production_plan_id:
         raise HTTPException(status_code=400, detail="Change set does not belong to production plan")
     try:
-        preview = await apply_change_set(db, change_set_id, skip_invalid=skip_invalid)
+        preview = await apply_change_set(db, change_set_id, skip_invalid=skip_invalid, changed_by=current_user.id)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return preview
@@ -201,6 +197,7 @@ async def rollback_plan_change_set(
     production_plan_id: int,
     change_set_id: int,
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ) -> dict:
     change_set = await db.get(PlanChangeSet, change_set_id)
     if change_set is None:
@@ -208,7 +205,7 @@ async def rollback_plan_change_set(
     if change_set.production_plan_id != production_plan_id:
         raise HTTPException(status_code=400, detail="Change set does not belong to production plan")
     try:
-        return await rollback_change_set(db, change_set_id)
+        return await rollback_change_set(db, change_set_id, changed_by=current_user.id)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -218,6 +215,7 @@ async def discard_plan_change_set(
     production_plan_id: int,
     change_set_id: int,
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ) -> dict:
     """Discard a change set: delete pending ones directly, rollback applied ones."""
     from sqlalchemy import delete
@@ -227,6 +225,20 @@ async def discard_plan_change_set(
         raise HTTPException(status_code=404, detail="Change set not found")
     if change_set.production_plan_id != production_plan_id:
         raise HTTPException(status_code=400, detail="Change set does not belong to production plan")
+
+    # Запись лога аудита (отклонение импорта)
+    from app.services.audit_log_service import log_action
+    from app.models.audit_log import AuditAction, AuditEntityType
+    await log_action(
+        db,
+        status="success",
+        title="Импорт плана (отклонен)",
+        message=f"Черновик пакета изменений импорта #{change_set_id} успешно отклонен и удален.",
+        user=current_user,
+        action=AuditAction.CANCEL,
+        entity_type=AuditEntityType.IMPORT_BATCH,
+        entity_id=batch_id,
+    )
 
     batch_id = change_set.import_batch_id
 
@@ -257,6 +269,7 @@ async def delete_import_batch(
     production_plan_id: int,
     batch_id: int,
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ) -> dict:
     """Rollback and delete an import batch along with all its positions, change sets, section plan lines, and work tasks."""
     from app.models.imports import ImportBatch
@@ -405,18 +418,29 @@ async def delete_import_batch(
         await db.execute(delete(SectionPlanLine).where(SectionPlanLine.plan_position_id.in_(positions)))
 
     # Delete all plan positions created by this batch
-    # First delete status history for these positions
-    from app.models.production_plan import PositionStatusHistory
-
+    # Delete release batch positions linked to these plan positions
     if positions:
-        await db.execute(delete(PositionStatusHistory).where(PositionStatusHistory.plan_position_id.in_(positions)))
-        # Delete release batch positions linked to these plan positions
         from app.models.release_batch import ReleaseBatchPosition
         await db.execute(delete(ReleaseBatchPosition).where(ReleaseBatchPosition.plan_position_id.in_(positions)))
     await db.execute(delete(PlanPosition).where(PlanPosition.import_batch_id == batch_id))
 
     # Delete the batch and source file only when it is no longer referenced.
     await _delete_batch_and_orphan_file(db, batch_id)
+
+    # Запись лога аудита
+    from app.services.audit_log_service import log_action
+    from app.models.audit_log import AuditAction, AuditEntityType
+    await log_action(
+        db,
+        status="success",
+        title="Удаление пакета импорта",
+        message=f"Пакет импорта плана #{batch_id} успешно удален со всеми связанными позициями, задачами и движениями.",
+        user=current_user,
+        action=AuditAction.DELETE,
+        entity_type=AuditEntityType.IMPORT_BATCH,
+        entity_id=batch_id,
+    )
+
     await db.commit()
 
     return {"deleted": True, "batch_id": batch_id}
@@ -488,35 +512,30 @@ async def restore_position(
     }
 
 
-@router.get("/{production_plan_id}/positions/{position_id}/history", response_model=list[StatusHistoryOut])
+@router.get("/{production_plan_id}/positions/{position_id}/history", response_model=list[AuditLogOut])
 async def position_history(
     production_plan_id: int,
     position_id: int,
     db: AsyncSession = Depends(get_db),
-) -> list[StatusHistoryOut]:
+) -> list[AuditLogOut]:
     position = await db.get(PlanPosition, position_id)
     if position is None or position.production_plan_id != production_plan_id:
         raise HTTPException(status_code=404, detail="Position not found")
 
-    history = (
+    # Получаем историю статусов из аудит-логов
+    from app.models.audit_log import AuditEntityType
+    logs = (
         await db.execute(
-            select(PositionStatusHistory)
-            .where(PositionStatusHistory.plan_position_id == position_id)
-            .order_by(PositionStatusHistory.changed_at.desc())
+            select(AuditLog)
+            .where(
+                AuditLog.entity_type == AuditEntityType.PLAN_POSITION.value,
+                AuditLog.entity_id == position_id,
+            )
+            .order_by(AuditLog.created_at.desc())
         )
     ).scalars().all()
 
-    return [
-        StatusHistoryOut(
-            id=h.id,
-            from_status=h.from_status,
-            to_status=h.to_status,
-            changed_by=h.changed_by,
-            changed_at=h.changed_at.isoformat(),
-            reason=h.reason,
-        )
-        for h in history
-    ]
+    return [AuditLogOut.model_validate(log) for log in logs]
 
 
 @router.delete("/{production_plan_id}/positions/{position_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -549,6 +568,22 @@ async def delete_position(
         PlanChangeItem.__table__.delete().where(
             PlanChangeItem.plan_position_id == position_id
         )
+    )
+
+    # Запись лога аудита
+    from app.services.audit_log_service import log_action
+    from app.models.audit_log import AuditAction, AuditEntityType
+    await log_action(
+        db,
+        status="success",
+        title="Удаление позиции (жесткое)",
+        message=f"Позиция плана #{position_id} (арт. {position.source_sku}) жестко удалена из системы.",
+        user=current_user,
+        product_sku=position.source_sku,
+        action=AuditAction.DELETE,
+        entity_type=AuditEntityType.PLAN_POSITION,
+        entity_id=position_id,
+        changes={"before": {"status": position.status.value}, "after": None},
     )
 
     # Hard delete for draft/invalid/valid
@@ -676,6 +711,21 @@ async def bulk_delete_positions(
                         PlanChangeItem.__table__.delete().where(
                             PlanChangeItem.plan_position_id == position_id
                         )
+                    )
+                    # Запись лога аудита (удаление позиции)
+                    from app.services.audit_log_service import log_action
+                    from app.models.audit_log import AuditAction, AuditEntityType
+                    await log_action(
+                        db,
+                        status="success",
+                        title="Удаление позиции (жесткое)",
+                        message=f"Позиция плана #{position_id} (арт. {position.source_sku}) жестко удалена из системы.",
+                        user=current_user,
+                        product_sku=position.source_sku,
+                        action=AuditAction.DELETE,
+                        entity_type=AuditEntityType.PLAN_POSITION,
+                        entity_id=position_id,
+                        changes={"before": {"status": position.status.value}, "after": None},
                     )
                     await db.delete(position)
                 results.append(BulkActionResultItem(id=position_id, status="success"))
@@ -1222,6 +1272,7 @@ class BatchAssignRouteOut(BaseModel):
 async def batch_assign_route_global(
     payload: BatchAssignRouteIn,
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ) -> BatchAssignRouteOut:
     """Assign route to positions by their IDs, regardless of which plan they belong to."""
     if not payload.position_ids:
@@ -1260,6 +1311,27 @@ async def batch_assign_route_global(
             pos.route_assigned_at = now
             pos.route_manual_confirmed_at = now
 
+    # Запись лога аудита (назначение маршрута)
+    from app.services.audit_log_service import log_action
+    from app.models.audit_log import AuditAction, AuditEntityType
+    route_details = f"маршрут '{route_name}'" if route_name else "автоматический маршрут (сброшен)"
+    
+    # Для группового действия логируем изменения для каждой позиции
+    changes_dict = {}
+    for pos in positions:
+        changes_dict[str(pos.id)] = {"before": {"route_id": pos.route_id}, "after": {"route_id": payload.route_id}}
+        
+    await log_action(
+        db,
+        status="success",
+        title="Назначение маршрута",
+        message=f"Позициям плана [{', '.join(map(str, payload.position_ids))}] назначен {route_details}.",
+        user=current_user,
+        action=AuditAction.UPDATE,
+        entity_type=AuditEntityType.PLAN_POSITION,
+        changes=changes_dict,
+    )
+
     await db.commit()
 
     return BatchAssignRouteOut(
@@ -1274,6 +1346,7 @@ async def batch_assign_route(
     production_plan_id: int,
     payload: BatchAssignRouteIn,
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ) -> BatchAssignRouteOut:
     print(f"DEBUG batch_assign_route: plan_id={production_plan_id}, position_ids={payload.position_ids}, route_id={payload.route_id}")
 
@@ -1320,6 +1393,26 @@ async def batch_assign_route(
             pos.route_match_reason = None
             pos.route_assigned_at = now
             pos.route_manual_confirmed_at = now
+
+    # Запись лога аудита (назначение маршрута)
+    from app.services.audit_log_service import log_action
+    from app.models.audit_log import AuditAction, AuditEntityType
+    route_details = f"маршрут '{route_name}'" if route_name else "автоматический маршрут (сброшен)"
+    
+    changes_dict = {}
+    for pos in positions:
+        changes_dict[str(pos.id)] = {"before": {"route_id": pos.route_id}, "after": {"route_id": payload.route_id}}
+
+    await log_action(
+        db,
+        status="success",
+        title="Назначение маршрута",
+        message=f"Позициям плана [{', '.join(map(str, payload.position_ids))}] назначен {route_details} в плане #{production_plan_id}.",
+        user=current_user,
+        action=AuditAction.UPDATE,
+        entity_type=AuditEntityType.PLAN_POSITION,
+        changes=changes_dict,
+    )
 
     await db.commit()
 
@@ -1423,7 +1516,10 @@ async def batch_preview(production_plan_id: int, batch_id: int, db: AsyncSession
 
 
 @router.post("/reset-all", status_code=status.HTTP_204_NO_CONTENT)
-async def reset_all_plans(db: AsyncSession = Depends(get_db)):
+async def reset_all_plans(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
     """Удалить все производственные планы, связанные данные и справочники (маршруты, правила, импорты)."""
     await db.execute(text("""
         TRUNCATE TABLE
@@ -1439,6 +1535,19 @@ async def reset_all_plans(db: AsyncSession = Depends(get_db)):
             sections
         CASCADE
     """))
+
+    # Запись лога аудита (полный сброс системы)
+    from app.services.audit_log_service import log_action
+    from app.models.audit_log import AuditAction
+    await log_action(
+        db,
+        status="success",
+        title="Сброс системы",
+        message="Все производственные планы, связанные данные, справочники, маршруты и импорты были полностью удалены (TRUNCATE CASCADE).",
+        user=current_user,
+        action=AuditAction.DELETE,
+    )
+
     await db.commit()
 
 
@@ -1464,13 +1573,14 @@ async def update_position_quantity(
     if position.deleted_at is not None:
         raise HTTPException(status_code=400, detail="Позиция удалена")
 
+    old_qty = position.quantity
     position.quantity = payload.quantity
 
     source_payload = position.source_payload or {}
 
     # Store original_quantity on first edit
     if "original_quantity" not in source_payload:
-        source_payload["original_quantity"] = str(position.quantity)
+        source_payload["original_quantity"] = str(old_qty)
 
     if payload.quantity_per_hanger is not None:
         source_payload["quantity_per_hanger"] = payload.quantity_per_hanger
@@ -1481,6 +1591,23 @@ async def update_position_quantity(
         PlanPositionValidationStatus.valid
         if not position.validation_errors
         else PlanPositionValidationStatus.invalid
+    )
+
+    # Запись лога аудита (изменение количества)
+    from app.services.audit_log_service import log_action
+    from app.models.audit_log import AuditAction, AuditEntityType
+    await log_action(
+        db,
+        status="success",
+        title="Изменение количества",
+        message=f"Количество в позиции плана #{position_id} (арт. {position.source_sku}) изменено с {old_qty} на {payload.quantity}.",
+        user=current_user,
+        product_sku=position.source_sku,
+        qty_text=f"{old_qty} -> {payload.quantity}",
+        action=AuditAction.UPDATE,
+        entity_type=AuditEntityType.PLAN_POSITION,
+        entity_id=position_id,
+        changes={"before": {"quantity": str(old_qty)}, "after": {"quantity": str(payload.quantity)}},
     )
 
     await db.commit()

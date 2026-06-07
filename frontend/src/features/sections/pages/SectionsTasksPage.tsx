@@ -24,7 +24,7 @@ import { TaskActionDrawer } from "../components/TaskActionDrawer";
 import { BulkOperationsPanel } from "../components/BulkOperationsPanel";
 import { PlanModal } from "../components/PlanModal";
 import { PRESET_PROFILES, type GroupingProfile } from "../lib/groupingProfiles";
-import { SessionLogModal, type ActionLogEntry } from "../components/SessionLogModal";
+import { createAuditLog, getAuditLogs, type AuditLogEntry } from "@/shared/api/auditLogs";
 
 type MeResponse = {
   id: number;
@@ -101,25 +101,13 @@ export function SectionsTasksPage() {
   const dateFrom = dateRange.from;
   const dateTo = dateRange.to;
   const [conflictHint, setConflictHint] = useState<string | null>(null);
-  const [actionLog, setActionLog] = useState<ActionLogEntry[]>(() => {
-    try {
-      const saved = localStorage.getItem("permanent_action_log");
-      return saved ? JSON.parse(saved) : [];
-    } catch (e) {
-      console.warn("Failed to load action log from localStorage:", e);
-      return [];
-    }
+
+  const { data: me } = useQuery({
+    queryKey: queryKeys.auth.me(),
+    queryFn: async () => (await apiClient.get<MeResponse>("/auth/me")).data,
+    retry: false,
   });
 
-  useEffect(() => {
-    try {
-      localStorage.setItem("permanent_action_log", JSON.stringify(actionLog));
-    } catch (e) {
-      console.warn("Failed to save action log to localStorage:", e);
-    }
-  }, [actionLog]);
-
-  const [logModalOpen, setLogModalOpen] = useState(false);
 
   const [actionDialog, setActionDialog] = useState<{
     open: boolean;
@@ -186,12 +174,6 @@ export function SectionsTasksPage() {
   const [bulkSummary, setBulkSummary] = useState<BulkActionSummary | null>(null);
   // groupPanelTasks removed, using actionDialog.tasks instead
   const bulkExecuting = bulkProgress?.running ?? false;
-
-  const { data: me } = useQuery({
-    queryKey: queryKeys.auth.me(),
-    queryFn: async () => (await apiClient.get<MeResponse>("/auth/me")).data,
-    retry: false,
-  });
 
   const { data: sections } = useQuery({
     queryKey: queryKeys.sections.all(),
@@ -286,22 +268,7 @@ export function SectionsTasksPage() {
     retry: false,
   });
 
-  const pushActionLog = useCallback((entry: Omit<ActionLogEntry, "id" | "createdAt" | "sectionId" | "sectionName" | "sectionCode"> & { sectionId?: number; sectionName?: string; sectionCode?: string }) => {
-    setActionLog((prev) => {
-      const next = [
-        {
-          id: `${Date.now()}-${Math.floor(Math.random() * 10000)}`,
-          createdAt: new Date().toISOString(),
-          sectionId: entry.sectionId ?? (sectionId || undefined),
-          sectionName: entry.sectionName ?? (selectedSection?.name || undefined),
-          sectionCode: entry.sectionCode ?? (selectedSection?.code || undefined),
-          ...entry,
-        },
-        ...prev,
-      ];
-      return next.slice(0, 100);
-    });
-  }, [sectionId, selectedSection]);
+  const pushActionLog = useCallback(() => {}, []);
 
   const invalidateShopfloor = useCallback(() => {
     void queryClient.invalidateQueries({ queryKey: queryKeys.shopfloor.board(sectionId as number) });
@@ -310,6 +277,7 @@ export function SectionsTasksPage() {
     void queryClient.invalidateQueries({ queryKey: queryKeys.shopfloor.summary() });
     void queryClient.invalidateQueries({ queryKey: queryKeys.transfers.readyAll() });
     void queryClient.invalidateQueries({ queryKey: queryKeys.transfers.historyAll() });
+    void queryClient.invalidateQueries({ queryKey: ["auditLogs"] });
   }, [queryClient, sectionId]);
 
   const openActionDialog = useCallback((_type: TaskActionDialogType, task: SectionBoardTask) => {
@@ -917,9 +885,6 @@ export function SectionsTasksPage() {
               <Button variant="outline" size="sm" onClick={() => setPlanModalOpen(true)}>
                 План
               </Button>
-              <Button variant="outline" size="sm" onClick={() => setLogModalOpen(true)}>
-                Журнал действий {actionLog.length > 0 && <span className="ml-1.5 px-1.5 py-0.5 rounded-full bg-slate-100 text-[10px] text-slate-700 font-bold">{actionLog.length}</span>}
-              </Button>
             </div>
 
             <SectionTasksBoard
@@ -1025,13 +990,7 @@ export function SectionsTasksPage() {
         tasks={tasks}
         availableOperations={board?.available_operations || []}
       />
-      {/* Session log modal */}
-      <SessionLogModal
-        open={logModalOpen}
-        onClose={() => setLogModalOpen(false)}
-        actionLog={actionLog}
-        sections={sections}
-      />
+
 
 
     </>

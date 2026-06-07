@@ -207,6 +207,10 @@ async def _make_plan(session, code: str = "EXEC") -> ProductionPlan:
 
 
 async def _ensure_system_user(session) -> User:
+    from sqlalchemy import select
+    existing = await session.scalar(select(User).where(User.email == "system@local"))
+    if existing:
+        return existing
     user = User(
         email="system@local",
         password_hash="x",

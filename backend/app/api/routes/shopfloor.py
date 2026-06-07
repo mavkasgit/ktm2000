@@ -50,6 +50,7 @@ from app.services.shopfloor_service import (
     list_entity_comments,
     list_entity_attachments,
 )
+from app.services.audit_log_service import log_action
 
 router = APIRouter(prefix="/shopfloor", tags=["sections-operations"])
 LOCKED_SECTION_ERROR = "Section is locked to single-window context"
@@ -259,7 +260,7 @@ async def issue_task(
 ) -> dict:
     await _ensure_task_lock(db, task_id, locked_section_id)
     try:
-        return await issue_to_work(
+        res = await issue_to_work(
             db,
             task_id=task_id,
             quantity=payload.quantity,
@@ -271,6 +272,46 @@ async def issue_task(
             performed_at=payload.performed_at,
             accounted_at=payload.accounted_at,
         )
+
+        # Запись лога аудита
+        task = await db.get(WorkTask, task_id)
+        if task:
+            from app.models.section import Section
+            from app.models.product import Product
+            from app.models.route import RouteStage
+            section = await db.get(Section, task.section_id)
+            product = await db.get(Product, task.product_id)
+            route_stage = await db.get(RouteStage, task.route_stage_id)
+            op_name = ", ".join(op.operation_name for op in route_stage.operations) if (route_stage and route_stage.operations) else "Операция"
+            
+            section_info = f"на участке \"{section.name}\" ({section.code})" if section else ""
+            task_info = f"для операции \"{op_name}\" (арт. {product.sku})" if product else ""
+            message = f"Задание #{task_id} {task_info} успешно выдано в работу {section_info}. Количество: {payload.quantity} шт."
+            if payload.comment:
+                message += f" (комментарий: \"{payload.comment}\")"
+            
+            from app.models.audit_log import AuditAction, AuditEntityType
+            await log_action(
+                db,
+                status="success",
+                title="Задание взято в работу",
+                message=message,
+                user=current_user,
+                section_id=task.section_id,
+                section_name=section.name if section else None,
+                section_code=section.code if section else None,
+                task_ids=[task_id],
+                product_sku=product.sku if product else None,
+                operation_name=op_name,
+                qty_text=f"выдано: {payload.quantity}",
+                comment=payload.comment,
+                action=AuditAction.UPDATE,
+                entity_type=AuditEntityType.WORK_TASK,
+                entity_id=task_id,
+                changes={"before": {"status": "pending"}, "after": {"status": "in_progress", "qty": str(payload.quantity)}},
+            )
+
+        return res
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -285,7 +326,7 @@ async def complete_task_endpoint(
 ) -> dict:
     await _ensure_task_lock(db, task_id, locked_section_id)
     try:
-        return await complete_task(
+        res = await complete_task(
             db,
             task_id=task_id,
             good_quantity=payload.good_quantity,
@@ -298,6 +339,53 @@ async def complete_task_endpoint(
             performed_at=payload.performed_at,
             accounted_at=payload.accounted_at,
         )
+
+        # Запись лога аудита
+        task = await db.get(WorkTask, task_id)
+        if task:
+            from app.models.section import Section
+            from app.models.product import Product
+            from app.models.route import RouteStage
+            section = await db.get(Section, task.section_id)
+            product = await db.get(Product, task.product_id)
+            route_stage = await db.get(RouteStage, task.route_stage_id)
+            op_name = ", ".join(op.operation_name for op in route_stage.operations) if (route_stage and route_stage.operations) else "Операция"
+            
+            section_info = f"на участке \"{section.name}\" ({section.code})" if section else ""
+            task_info = f"для операции \"{op_name}\" (арт. {product.sku})" if product else ""
+            message = f"Успешно подтверждено выполнение {task_info} {section_info}. Введено: годные = {payload.good_quantity} шт., брак = {payload.defect_quantity} шт."
+            if payload.comment:
+                message += f" (комментарий: \"{payload.comment}\")"
+            
+            from app.models.audit_log import AuditAction, AuditEntityType
+            await log_action(
+                db,
+                status="success",
+                title="Факт подтвержден",
+                message=message,
+                user=current_user,
+                section_id=task.section_id,
+                section_name=section.name if section else None,
+                section_code=section.code if section else None,
+                task_ids=[task_id],
+                product_sku=product.sku if product else None,
+                operation_name=op_name,
+                qty_text=f"годн: {payload.good_quantity}, брак: {payload.defect_quantity}",
+                comment=payload.comment,
+                action=AuditAction.UPDATE,
+                entity_type=AuditEntityType.WORK_TASK,
+                entity_id=task_id,
+                changes={
+                    "before": {"status": "in_progress"},
+                    "after": {
+                        "status": "completed" if task.status == "completed" else task.status,
+                        "good_quantity": str(payload.good_quantity),
+                        "defect_quantity": str(payload.defect_quantity),
+                    }
+                },
+            )
+
+        return res
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -388,6 +476,89 @@ async def bulk_complete_tasks(
             results.append(
                 BulkActionResultItem(id=entry.task_id, status="failed", reason="Внутренняя ошибка сервера")
             )
+
+    # Запись лога аудита
+    success_entries = [r for r in results if r.status == "success"]
+    failed_ids = [r.id for r in results if r.status == "failed"]
+    if success_entries:
+        total_good = Decimal("0")
+        total_defect = Decimal("0")
+        task_ids = []
+        product_skus = set()
+        operation_names = set()
+        
+        for raw in payload.entries:
+            try:
+                entry = BulkCompleteEntry.model_validate(raw)
+                if entry.task_id in [s.id for s in success_entries]:
+                    total_good += entry.good_quantity
+                    total_defect += entry.defect_quantity
+                    task_ids.append(entry.task_id)
+            except Exception:
+                pass
+
+        if task_ids:
+            first_task = await db.get(WorkTask, task_ids[0])
+            if first_task:
+                from app.models.section import Section
+                from app.models.product import Product
+                from app.models.route import RouteStage
+                section = await db.get(Section, first_task.section_id)
+                
+                for tid in task_ids:
+                    t = await db.get(WorkTask, tid)
+                    if t:
+                        p = await db.get(Product, t.product_id)
+                        if p:
+                            product_skus.add(p.sku)
+                        rs = await db.get(RouteStage, t.route_stage_id)
+                        if rs and rs.operations:
+                            for op in rs.operations:
+                                operation_names.add(op.operation_name)
+                
+                skus_str = ", ".join(product_skus)
+                ops_str = ", ".join(operation_names)
+                section_info = f"на участке \"{section.name}\" ({section.code})" if section else ""
+                task_info = f"для операций: {ops_str}" if ops_str else ""
+                
+                status_text = "success" if not failed_ids else "info"
+                title_text = "Группа подтверждена" if not failed_ids else "Групповое подтверждение (частично)"
+                message_text = f"Группа из {len(success_entries)} задач успешно подтверждена {section_info} {task_info}. Подтверждено всего: годные = {total_good} шт., брак = {total_defect} шт."
+                if failed_ids:
+                    message_text += f" Не удалось завершить задач: {len(failed_ids)}."
+                
+                from app.models.audit_log import AuditAction, AuditEntityType
+                
+                changes_dict = {}
+                for raw in payload.entries:
+                    try:
+                        entry = BulkCompleteEntry.model_validate(raw)
+                        if entry.task_id in [s.id for s in success_entries]:
+                            changes_dict[str(entry.task_id)] = {
+                                "before": {"status": "in_progress"},
+                                "after": {"status": "completed", "good_quantity": str(entry.good_quantity), "defect_quantity": str(entry.defect_quantity)}
+                            }
+                    except Exception:
+                        pass
+
+                await log_action(
+                    db,
+                    status=status_text,
+                    title=title_text,
+                    message=message_text,
+                    user=current_user,
+                    section_id=first_task.section_id,
+                    section_name=section.name if section else None,
+                    section_code=section.code if section else None,
+                    task_ids=task_ids,
+                    product_sku=skus_str or None,
+                    operation_name=ops_str or None,
+                    qty_text=f"годн: {total_good}, брак: {total_defect}",
+                    action=AuditAction.UPDATE,
+                    entity_type=AuditEntityType.WORK_TASK,
+                    changes=changes_dict,
+                )
+
     return BulkActionResponse(results=results)
 
 

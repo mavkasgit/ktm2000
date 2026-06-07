@@ -10,3 +10,4 @@ export * from "./productionPlans";
 export * from "./releaseBatches";
 export * from "./spg";
 export * from "./defects";
+export * from "./auditLogs";

@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.techcard import Techcard, TechcardLine
 from app.models.internal_plan import InternalPlan, SectionPlanLine
-from app.models.production_plan import PlanPosition, PlanPositionStatus, PositionStatusHistory, ProductionPlan, ProductionPlanStatus
+from app.models.production_plan import PlanPosition, PlanPositionStatus, ProductionPlan, ProductionPlanStatus
 from app.models.product import Product
 from app.models.release_batch import ReleaseBatch, ReleaseBatchPosition, ReleaseBatchStatus, ReleaseBatchType
 from app.models.route import ProductionRoute, RouteOperation, RouteStage, SectionOperation
@@ -233,12 +233,20 @@ async def release_batch(db: AsyncSession, release_batch_id: int) -> dict:
         released_total = await _released_quantity(db, position)
         new_status = PlanPositionStatus.released if released_total >= position.quantity else PlanPositionStatus.approved
         if position.status != new_status and new_status == PlanPositionStatus.released:
-            history = PositionStatusHistory(
-                plan_position_id=position.id,
-                from_status=position.status.value,
-                to_status=PlanPositionStatus.released.value,
+            from app.services.audit_log_service import log_action
+            from app.models.audit_log import AuditAction, AuditEntityType
+            await log_action(
+                db,
+                status="success",
+                title="Автовыпуск позиции",
+                message=f"Позиция #{position.id} автоматически выпущена при полном покрытии партиями выпуска.",
+                action=AuditAction.RELEASE,
+                entity_type=AuditEntityType.PLAN_POSITION,
+                entity_id=position.id,
+                changes={"before": {"status": position.status.value}, "after": {"status": new_status.value}},
+                user_id=batch.released_by or batch.created_by or 1,
+                comment="Auto-released when fully covered by release batches",
             )
-            db.add(history)
         position.status = new_status
         position.released_at = datetime.now(UTC) if position.status == PlanPositionStatus.released else None
 

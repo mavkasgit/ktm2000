@@ -7,7 +7,7 @@ from app.models.defect import Defect, DefectDecision, DefectItem, TransferDiscre
 from app.models.imports import ImportBatch, ImportFile
 from app.models.internal_plan import InternalPlan, SectionPlanLine
 from app.models.movement import Movement
-from app.models.production_plan import PlanChangeItem, PlanChangeSet, PlanPosition, PositionStatusHistory, ProductionPlan
+from app.models.production_plan import PlanChangeItem, PlanChangeSet, PlanPosition, ProductionPlan
 from app.models.release_batch import ReleaseBatch, ReleaseBatchPosition
 from app.models.rework_task import ReworkTask
 from app.models.transfer import Transfer, TransferDiscrepancy
@@ -41,7 +41,6 @@ async def clear_generated_production_data(db: AsyncSession) -> dict[str, int]:
     await execute_delete(ReleaseBatchPosition, "release_batch_positions")
     await execute_delete(ReleaseBatch, "release_batches")
 
-    await execute_delete(PositionStatusHistory, "position_status_history")
     await execute_delete(PlanChangeItem, "plan_change_items")
     await execute_delete(PlanChangeSet, "plan_change_sets")
     await execute_delete(PlanPosition, "plan_positions")

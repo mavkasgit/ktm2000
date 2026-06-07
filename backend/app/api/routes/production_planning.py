@@ -19,7 +19,7 @@ from app.models.route import ProductionRoute, RouteStage
 from app.models.section import Section
 from app.models.user import User
 from app.services.production_planning_rows import get_production_planning_row_detail, list_production_planning_rows
-from app.services.production_plan_service import _refresh_plan_status, record_status_change, restore_plan_position, soft_delete_cancelled_position
+from app.services.production_plan_service import _refresh_plan_status, restore_plan_position, soft_delete_cancelled_position
 from app.services.plan_generation import create_release_batch, release_batch
 from app.services.route_matcher import resolve_position_route
 from app.services.shopfloor_service import complete_task, final_release, issue_to_work, transfer_receive, transfer_send
@@ -803,7 +803,22 @@ async def cancel_position(
 
     from_status = pos.status.value
     pos.status = PlanPositionStatus.cancelled
-    record_status_change(db, position_id, from_status, PlanPositionStatus.cancelled.value, current_user.id, payload.reason if payload else None)
+
+    from app.services.audit_log_service import log_action
+    from app.models.audit_log import AuditAction, AuditEntityType
+    await log_action(
+        db,
+        status="success",
+        title="Отмена позиции",
+        message=f"Позиция #{position_id} отменена (предыдущий статус: '{from_status}').",
+        user_id=current_user.id,
+        action=AuditAction.CANCEL,
+        entity_type=AuditEntityType.PLAN_POSITION,
+        entity_id=position_id,
+        changes={"before": {"status": from_status}, "after": {"status": PlanPositionStatus.cancelled.value}},
+        comment=payload.reason if payload else None,
+    )
+
     await _refresh_plan_status(db, pos.production_plan_id)
     await db.commit()
 
@@ -869,29 +884,44 @@ async def restore_position(
     if pos.status != PlanPositionStatus.cancelled:
         raise HTTPException(status_code=400, detail=f"Нельзя восстановить позицию со статусом '{pos.status.value}'")
 
-    # Find last cancellation history record
-    from app.models.production_plan import PositionStatusHistory
+    # Find last cancellation history record from audit_logs
+    from app.models.audit_log import AuditLog, AuditAction, AuditEntityType
     from sqlalchemy import select
     last_cancel = (
         await db.execute(
-            select(PositionStatusHistory)
+            select(AuditLog)
             .where(
-                PositionStatusHistory.plan_position_id == position_id,
-                PositionStatusHistory.to_status == PlanPositionStatus.cancelled.value,
+                AuditLog.entity_type == AuditEntityType.PLAN_POSITION.value,
+                AuditLog.entity_id == position_id,
+                AuditLog.action == AuditAction.CANCEL.value,
             )
-            .order_by(PositionStatusHistory.changed_at.desc())
+            .order_by(AuditLog.created_at.desc())
         )
     ).scalars().first()
 
-    if last_cancel is None:
+    if last_cancel is None or not last_cancel.changes or "before" not in last_cancel.changes:
         raise HTTPException(status_code=400, detail="Нет истории отмены — восстановление невозможно")
 
-    target_status_value = last_cancel.from_status
+    target_status_value = last_cancel.changes["before"].get("status")
     if target_status_value not in {PlanPositionStatus.approved.value, PlanPositionStatus.released.value}:
         raise HTTPException(status_code=400, detail=f"Недопустимый статус для восстановления: '{target_status_value}'")
 
     pos.status = PlanPositionStatus(target_status_value)
-    record_status_change(db, position_id, PlanPositionStatus.cancelled.value, target_status_value, current_user.id, payload.reason if payload else None)
+    
+    from app.services.audit_log_service import log_action
+    await log_action(
+        db,
+        status="success",
+        title="Восстановление позиции",
+        message=f"Позиция #{position_id} восстановлена из отмененных в статус '{target_status_value}'.",
+        user_id=current_user.id,
+        action=AuditAction.RESTORE,
+        entity_type=AuditEntityType.PLAN_POSITION,
+        entity_id=position_id,
+        changes={"before": {"status": PlanPositionStatus.cancelled.value}, "after": {"status": target_status_value}},
+        comment=payload.reason if payload else None,
+    )
+    
     await _refresh_plan_status(db, pos.production_plan_id)
     await db.commit()
 
@@ -1122,7 +1152,21 @@ async def _process_position_cancel(
 
     from_status = pos.status.value
     pos.status = PlanPositionStatus.cancelled
-    record_status_change(db, position_id, from_status, PlanPositionStatus.cancelled.value, current_user_id, reason)
+
+    from app.services.audit_log_service import log_action
+    from app.models.audit_log import AuditAction, AuditEntityType
+    await log_action(
+        db,
+        status="success",
+        title="Отмена позиции",
+        message=f"Позиция #{position_id} отменена в пакете (предыдущий статус: '{from_status}').",
+        user_id=current_user_id,
+        action=AuditAction.CANCEL,
+        entity_type=AuditEntityType.PLAN_POSITION,
+        entity_id=position_id,
+        changes={"before": {"status": from_status}, "after": {"status": PlanPositionStatus.cancelled.value}},
+        comment=reason,
+    )
     return BatchActionResult(position_id=position_id, status="success")
 
 
@@ -1145,23 +1189,24 @@ async def _process_position_restore(
             reason=f"Нельзя восстановить позицию со статусом '{pos.status.value}'",
         )
 
-    from app.models.production_plan import PositionStatusHistory
-
+    # Find last cancellation history record from audit_logs
+    from app.models.audit_log import AuditLog, AuditAction, AuditEntityType
     last_cancel = (
         await db.execute(
-            select(PositionStatusHistory)
+            select(AuditLog)
             .where(
-                PositionStatusHistory.plan_position_id == position_id,
-                PositionStatusHistory.to_status == PlanPositionStatus.cancelled.value,
+                AuditLog.entity_type == AuditEntityType.PLAN_POSITION.value,
+                AuditLog.entity_id == position_id,
+                AuditLog.action == AuditAction.CANCEL.value,
             )
-            .order_by(PositionStatusHistory.changed_at.desc())
+            .order_by(AuditLog.created_at.desc())
         )
     ).scalars().first()
 
-    if last_cancel is None:
+    if last_cancel is None or not last_cancel.changes or "before" not in last_cancel.changes:
         return BatchActionResult(position_id=position_id, status="failed", reason="Нет истории отмены — восстановление невозможно")
 
-    target_status_value = last_cancel.from_status
+    target_status_value = last_cancel.changes["before"].get("status")
     if target_status_value not in {PlanPositionStatus.approved.value, PlanPositionStatus.released.value}:
         return BatchActionResult(
             position_id=position_id,
@@ -1170,7 +1215,20 @@ async def _process_position_restore(
         )
 
     pos.status = PlanPositionStatus(target_status_value)
-    record_status_change(db, position_id, PlanPositionStatus.cancelled.value, target_status_value, current_user_id, reason)
+    
+    from app.services.audit_log_service import log_action
+    await log_action(
+        db,
+        status="success",
+        title="Восстановление позиции",
+        message=f"Позиция #{position_id} восстановлена из отмененных в статус '{target_status_value}' в пакете.",
+        user_id=current_user_id,
+        action=AuditAction.RESTORE,
+        entity_type=AuditEntityType.PLAN_POSITION,
+        entity_id=position_id,
+        changes={"before": {"status": PlanPositionStatus.cancelled.value}, "after": {"status": target_status_value}},
+        comment=reason,
+    )
     return BatchActionResult(position_id=position_id, status="success")
 
 

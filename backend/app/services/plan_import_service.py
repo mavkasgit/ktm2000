@@ -132,6 +132,7 @@ async def create_excel_import_change_set(
     template_id: int | None = None,
     rule_profile_id: int | None = None,
     normalize_hanger_quantity: bool = True,
+    user = None,
 ) -> dict:
     extension = validate_excel_extension(filename)
     file_hash = sha256_bytes(content)
@@ -238,6 +239,20 @@ async def create_excel_import_change_set(
     )
     db.add(change_set)
     await db.flush()
+
+    # Запись лога аудита (загрузка черновика импорта)
+    from app.services.audit_log_service import log_action
+    from app.models.audit_log import AuditAction, AuditEntityType
+    await log_action(
+        db,
+        status="success",
+        title="Импорт плана (загружен)",
+        message=f"Черновик импорта из файла '{filename}' успешно создан (лист: '{parsed.sheet_name}', строк: {len(parsed.parsed_rows)}).",
+        user=user,
+        action=AuditAction.IMPORT,
+        entity_type=AuditEntityType.IMPORT_BATCH,
+        entity_id=import_batch.id,
+    )
 
     existing_positions = []
     if production_plan_id is not None and mode != ImportBatchMode.create_plan:

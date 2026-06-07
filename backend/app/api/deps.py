@@ -1,4 +1,4 @@
-from fastapi import Depends
+from fastapi import Depends, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 from typing import Callable, Sequence
 
@@ -44,7 +44,29 @@ def require_role(allowed_roles: Sequence[UserRole]) -> Callable:
 
 
 async def get_current_user(
+    request: Request,
     db: AsyncSession = Depends(get_db),
 ) -> User:
-    # TODO(auth): replace with real token validation + DB lookup
+    # Check Authorization header if present
+    auth_header = request.headers.get("Authorization")
+    if auth_header and auth_header.startswith("Bearer "):
+        token = auth_header[7:]
+        try:
+            from app.core.security import decode_access_token
+            from sqlalchemy import select
+            payload = decode_access_token(token)
+            email = payload.get("sub")
+            if email:
+                user = await db.scalar(select(User).where(User.email == email))
+                if user:
+                    return user
+        except Exception:
+            pass
+
+    # Fallback to globally seeded system@local user if present in DB
+    from sqlalchemy import select
+    user = await db.scalar(select(User).where(User.email == "system@local"))
+    if user:
+        return user
+
     return _fake_user()

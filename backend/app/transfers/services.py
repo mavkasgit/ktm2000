@@ -212,6 +212,36 @@ async def transfer_send(
 
     await _refresh_task_cache(db, from_task.id)
     await _refresh_section_plan_line_cache(db, from_task.section_plan_line_id)
+
+    # Запись лога аудита (передача)
+    from app.services.audit_log_service import log_action
+    from app.models.audit_log import AuditAction, AuditEntityType
+    from app.models.section import Section
+    from app.models.product import Product
+    
+    from_section = await db.get(Section, from_task.section_id)
+    to_section = await db.get(Section, to_task.section_id)
+    product = await db.get(Product, from_task.product_id)
+    
+    await log_action(
+        db,
+        status="success",
+        title="Отправка передачи",
+        message=f"Передача #{transfer.transfer_no} отправлена из участка \"{from_section.name if from_section else ''}\" в участок \"{to_section.name if to_section else ''}\" (арт. {product.sku if product else ''}). Количество: {quantity} шт.",
+        user_id=actor_id,
+        section_id=from_task.section_id,
+        section_name=from_section.name if from_section else None,
+        section_code=from_section.code if from_section else None,
+        task_ids=[from_task.id, to_task.id],
+        product_sku=product.sku if product else None,
+        qty_text=str(quantity),
+        comment=comment,
+        action=AuditAction.SEND,
+        entity_type=AuditEntityType.TRANSFER,
+        entity_id=transfer.id,
+        changes={"before": None, "after": {"status": "sent", "quantity": str(quantity)}},
+    )
+
     return {
         "transfer_id": transfer.id,
         "transfer_no": transfer.transfer_no,
@@ -345,6 +375,36 @@ async def transfer_receive(
 
     await _refresh_task_cache(db, to_task.id)
     await _refresh_section_plan_line_cache(db, to_task.section_plan_line_id)
+
+    # Запись лога аудита (прием передачи)
+    from app.services.audit_log_service import log_action
+    from app.models.audit_log import AuditAction, AuditEntityType
+    from app.models.section import Section
+    from app.models.product import Product
+    
+    from_section = await db.get(Section, transfer.from_section_id)
+    to_section = await db.get(Section, transfer.to_section_id)
+    product = await db.get(Product, transfer.product_id)
+    
+    await log_action(
+        db,
+        status="success",
+        title="Прием передачи",
+        message=f"Передача #{transfer.transfer_no} принята участком \"{to_section.name if to_section else ''}\" (арт. {product.sku if product else ''}). Принято: {accepted_quantity} шт., отклонено: {rejected_quantity} шт.",
+        user_id=actor_id,
+        section_id=transfer.to_section_id,
+        section_name=to_section.name if to_section else None,
+        section_code=to_section.code if to_section else None,
+        task_ids=[transfer.from_task_id, transfer.to_task_id],
+        product_sku=product.sku if product else None,
+        qty_text=f"принято: {accepted_quantity}, отклон: {rejected_quantity}",
+        comment=comment,
+        action=AuditAction.RECEIVE,
+        entity_type=AuditEntityType.TRANSFER,
+        entity_id=transfer.id,
+        changes={"before": {"status": "sent"}, "after": {"status": transfer.status.value, "accepted_quantity": str(accepted_quantity), "rejected_quantity": str(rejected_quantity)}},
+    )
+
     return {
         "transfer_id": transfer.id,
         "status": transfer.status.value,
@@ -473,6 +533,35 @@ async def correct_transfer(
     await _refresh_section_plan_line_cache(db, from_task.section_plan_line_id)
     await _refresh_section_plan_line_cache(db, to_task.section_plan_line_id)
 
+    # Запись лога аудита (корректировка передачи)
+    from app.services.audit_log_service import log_action
+    from app.models.audit_log import AuditAction, AuditEntityType
+    from app.models.section import Section
+    from app.models.product import Product
+    
+    from_section = await db.get(Section, transfer.from_section_id)
+    to_section = await db.get(Section, transfer.to_section_id)
+    product = await db.get(Product, transfer.product_id)
+    
+    await log_action(
+        db,
+        status="success",
+        title="Корректировка передачи",
+        message=f"Передача #{transfer.transfer_no} скорректирована. Количество изменено с {old_quantity} на {new_quantity} шт.",
+        user_id=actor_id,
+        section_id=transfer.from_section_id,
+        section_name=from_section.name if from_section else None,
+        section_code=from_section.code if from_section else None,
+        task_ids=[transfer.from_task_id, transfer.to_task_id],
+        product_sku=product.sku if product else None,
+        qty_text=f"{old_quantity} -> {new_quantity}",
+        comment=comment,
+        action=AuditAction.CORRECT,
+        entity_type=AuditEntityType.TRANSFER,
+        entity_id=transfer.id,
+        changes={"before": {"quantity": str(old_quantity)}, "after": {"quantity": str(new_quantity)}},
+    )
+
     return {
         "transfer_id": transfer.id,
         "status": transfer.status.value,
@@ -525,6 +614,35 @@ async def cancel_transfer(
     await _refresh_task_cache(db, to_task.id)
     await _refresh_section_plan_line_cache(db, from_task.section_plan_line_id)
     await _refresh_section_plan_line_cache(db, to_task.section_plan_line_id)
+
+    # Запись лога аудита (отмена передачи)
+    from app.services.audit_log_service import log_action
+    from app.models.audit_log import AuditAction, AuditEntityType
+    from app.models.section import Section
+    from app.models.product import Product
+    
+    from_section = await db.get(Section, transfer.from_section_id)
+    to_section = await db.get(Section, transfer.to_section_id)
+    product = await db.get(Product, transfer.product_id)
+    
+    await log_action(
+        db,
+        status="success",
+        title="Отмена передачи",
+        message=f"Передача #{transfer.transfer_no} успешно отменена.",
+        user_id=actor_id,
+        section_id=transfer.from_section_id,
+        section_name=from_section.name if from_section else None,
+        section_code=from_section.code if from_section else None,
+        task_ids=[transfer.from_task_id, transfer.to_task_id],
+        product_sku=product.sku if product else None,
+        qty_text="0",
+        comment=comment,
+        action=AuditAction.CANCEL,
+        entity_type=AuditEntityType.TRANSFER,
+        entity_id=transfer.id,
+        changes={"before": {"status": "accepted"}, "after": {"status": "cancelled"}},
+    )
 
     return {
         "transfer_id": transfer.id,

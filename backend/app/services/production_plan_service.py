@@ -20,11 +20,13 @@ from app.models.production_plan import (
     PlanPositionStatus,
     PlanPositionValidationStatus,
     PlanSourceType,
-    PositionStatusHistory,
     ProductionPlan,
     ProductionPlanStatus,
 )
+from app.models.audit_log import AuditAction, AuditEntityType, AuditLog
 from app.services.plan_validation import validate_plan_position
+from app.services.audit_log_service import log_action
+from app.models.user import User
 
 
 def _enrich_source_payload(
@@ -48,25 +50,8 @@ ALLOWED_TRANSITIONS = {
 }
 
 
-def record_status_change(
-    db: AsyncSession,
-    position_id: int,
-    from_status: str,
-    to_status: str,
-    changed_by: int | None = None,
-    reason: str | None = None,
-) -> None:
-    history = PositionStatusHistory(
-        plan_position_id=position_id,
-        from_status=from_status,
-        to_status=to_status,
-        changed_by=changed_by,
-        reason=reason,
-    )
-    db.add(history)
 
-
-async def apply_change_set(db: AsyncSession, change_set_id: int, *, skip_invalid: bool = False) -> dict:
+async def apply_change_set(db: AsyncSession, change_set_id: int, *, skip_invalid: bool = False, changed_by: int | None = None) -> dict:
     change_set = await db.get(PlanChangeSet, change_set_id)
     if change_set is None:
         raise ValueError("Change set not found")
@@ -201,6 +186,20 @@ async def apply_change_set(db: AsyncSession, change_set_id: int, *, skip_invalid
         if batch is not None:
             batch.status = ImportBatchStatus.applied
 
+    # Запись лога аудита (применение импорта)
+    user = await db.get(User, changed_by) if changed_by else None
+    await log_action(
+        db,
+        status="success",
+        title="Импорт плана (применен)",
+        message=f"Пакет изменений импорта #{change_set_id} успешно применен. Создано: {created}, обновлено: {updated}, отменено черновиков: {cancelled}, пропущено: {ignored}.",
+        user=user,
+        action=AuditAction.IMPORT,
+        entity_type=AuditEntityType.IMPORT_BATCH,
+        entity_id=change_set.import_batch_id,
+        changes={"created": created, "updated": updated, "cancelled": cancelled, "ignored": ignored},
+    )
+
     extra = {
         "created_positions": created,
         "updated_positions": updated,
@@ -211,7 +210,7 @@ async def apply_change_set(db: AsyncSession, change_set_id: int, *, skip_invalid
     return await get_plan_preview(db, change_set.production_plan_id, extra=extra)
 
 
-async def rollback_change_set(db: AsyncSession, change_set_id: int) -> dict:
+async def rollback_change_set(db: AsyncSession, change_set_id: int, changed_by: int | None = None) -> dict:
     change_set = await db.get(PlanChangeSet, change_set_id)
     if change_set is None:
         raise ValueError("Change set not found")
@@ -249,6 +248,19 @@ async def rollback_change_set(db: AsyncSession, change_set_id: int) -> dict:
         if batch:
             batch.status = ImportBatchStatus.cancelled
 
+    # Запись лога аудита (откат импорта)
+    user = await db.get(User, changed_by) if changed_by else None
+    await log_action(
+        db,
+        status="success",
+        title="Импорт плана (откат)",
+        message=f"Выполнен откат пакета изменений импорта #{change_set_id}.",
+        user=user,
+        action=AuditAction.CANCEL,
+        entity_type=AuditEntityType.IMPORT_BATCH,
+        entity_id=change_set.import_batch_id,
+    )
+
     await db.flush()
     return await get_plan_preview(db, change_set.production_plan_id)
 
@@ -279,10 +291,26 @@ async def approve_plan_position(
 
     from_status = position.status.value
     position.status = PlanPositionStatus.approved
-    record_status_change(db, position_id, from_status, PlanPositionStatus.approved.value, changed_by)
     plan = await db.get(ProductionPlan, production_plan_id)
     if plan is not None and plan.status in {ProductionPlanStatus.draft, ProductionPlanStatus.validated}:
         plan.status = ProductionPlanStatus.approved
+    
+    # Запись лога аудита
+    user = await db.get(User, changed_by) if changed_by else None
+    await log_action(
+        db,
+        status="success",
+        title="Утверждение позиции",
+        message=f"Позиция плана #{position_id} (арт. {position.source_sku}) успешно утверждена.",
+        user=user,
+        product_sku=position.source_sku,
+        qty_text=str(position.quantity),
+        action=AuditAction.APPROVE,
+        entity_type=AuditEntityType.PLAN_POSITION,
+        entity_id=position_id,
+        changes={"before": {"status": from_status}, "after": {"status": PlanPositionStatus.approved.value}},
+    )
+
     await db.flush()
     return position
 
@@ -303,8 +331,24 @@ async def cancel_plan_position(
 
     from_status = position.status.value
     position.status = PlanPositionStatus.cancelled
-    record_status_change(db, position_id, from_status, PlanPositionStatus.cancelled.value, changed_by, reason)
     await _refresh_plan_status(db, production_plan_id)
+
+    # Запись лога аудита
+    user = await db.get(User, changed_by) if changed_by else None
+    await log_action(
+        db,
+        status="success",
+        title="Отмена позиции",
+        message=f"Позиция плана #{position_id} (арт. {position.source_sku}) отменена. Причина: {reason or '—'}",
+        user=user,
+        product_sku=position.source_sku,
+        comment=reason,
+        action=AuditAction.CANCEL,
+        entity_type=AuditEntityType.PLAN_POSITION,
+        entity_id=position_id,
+        changes={"before": {"status": from_status}, "after": {"status": PlanPositionStatus.cancelled.value, "reason": reason}},
+    )
+
     await db.flush()
     return position
 
@@ -373,36 +417,52 @@ async def restore_plan_position(
     changed_by: int | None = None,
     reason: str | None = None,
 ) -> PlanPosition:
-    """Restore a cancelled position to its previous status (approved or released) based on history."""
+    """Restore a cancelled plan position."""
     position = await db.get(PlanPosition, position_id)
     if position is None or position.production_plan_id != production_plan_id:
         raise ValueError("Plan position not found")
     if position.status != PlanPositionStatus.cancelled:
         raise ValueError(f"Нельзя восстановить позицию со статусом '{position.status.value}'")
 
-    # Find the last cancellation record in history
+    # Find the last cancellation record in audit_logs
     last_cancel = (
         await db.execute(
-            select(PositionStatusHistory)
+            select(AuditLog)
             .where(
-                PositionStatusHistory.plan_position_id == position_id,
-                PositionStatusHistory.to_status == PlanPositionStatus.cancelled.value,
+                AuditLog.entity_type == AuditEntityType.PLAN_POSITION.value,
+                AuditLog.entity_id == position_id,
+                AuditLog.action == AuditAction.CANCEL.value,
             )
-            .order_by(PositionStatusHistory.changed_at.desc())
+            .order_by(AuditLog.created_at.desc())
         )
     ).scalars().first()
 
-    if last_cancel is None:
-        raise ValueError("Нет истории отмены — восстановление невозможно")
+    if last_cancel is None or last_cancel.changes is None or "before" not in last_cancel.changes:
+        raise ValueError("Нет истории отмены в логах аудита — восстановление невозможно")
 
-    target_status_value = last_cancel.from_status
+    target_status_value = last_cancel.changes["before"].get("status")
     if target_status_value not in {PlanPositionStatus.approved.value, PlanPositionStatus.released.value}:
         raise ValueError(f"Недопустимый статус для восстановления: '{target_status_value}'")
 
     target_status = PlanPositionStatus(target_status_value)
     position.status = target_status
-    record_status_change(db, position_id, PlanPositionStatus.cancelled.value, target_status_value, changed_by, reason)
     await _refresh_plan_status(db, production_plan_id)
+
+    # Запись лога аудита
+    user = await db.get(User, changed_by) if changed_by else None
+    await log_action(
+        db,
+        status="success",
+        title="Восстановление позиции",
+        message=f"Позиция плана #{position_id} (арт. {position.source_sku}) восстановлена до статуса '{target_status_value}'.",
+        user=user,
+        product_sku=position.source_sku,
+        action=AuditAction.RESTORE,
+        entity_type=AuditEntityType.PLAN_POSITION,
+        entity_id=position_id,
+        changes={"before": {"status": PlanPositionStatus.cancelled.value}, "after": {"status": target_status_value}},
+    )
+
     await db.flush()
     return position
 
@@ -428,12 +488,26 @@ async def soft_delete_cancelled_position(
     if position.status != PlanPositionStatus.cancelled:
         raise ValueError(f"Можно скрыть только отменённую позицию (текущий статус: '{position.status.value}')")
 
-    record_status_change(
-        db, position_id, PlanPositionStatus.cancelled.value, "deleted", changed_by, reason or "Удалена из списка"
-    )
     position.deleted_at = datetime.now(timezone.utc)
     position.deleted_by = changed_by
     position.delete_reason = reason
+
+    # Запись лога аудита
+    user = await db.get(User, changed_by) if changed_by else None
+    await log_action(
+        db,
+        status="success",
+        title="Удаление позиции (скрытие)",
+        message=f"Позиция плана #{position_id} (арт. {position.source_sku}) скрыта из плана. Причина: {reason or 'Удалена из списка'}",
+        user=user,
+        product_sku=position.source_sku,
+        comment=reason,
+        action=AuditAction.DELETE,
+        entity_type=AuditEntityType.PLAN_POSITION,
+        entity_id=position_id,
+        changes={"before": {"status": PlanPositionStatus.cancelled.value}, "after": {"status": "deleted", "reason": reason}},
+    )
+
     await db.flush()
 
     # Cancel all active related WorkTasks so they disappear from shopfloor board

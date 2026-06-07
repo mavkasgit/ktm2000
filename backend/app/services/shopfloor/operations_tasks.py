@@ -397,6 +397,35 @@ async def final_release(
 
     await _refresh_task_cache(db, task.id)
     await _refresh_section_plan_line_cache(db, task.section_plan_line_id)
+
+    # Запись лога аудита (финальный выпуск)
+    from app.services.audit_log_service import log_action
+    from app.models.audit_log import AuditAction, AuditEntityType
+    from app.models.section import Section
+    from app.models.product import Product
+    
+    section = await db.get(Section, task.section_id)
+    product = await db.get(Product, task.product_id)
+    
+    await log_action(
+        db,
+        status="success",
+        title="Финальный выпуск",
+        message=f"Выполнен финальный выпуск готовой продукции на участке \"{section.name if section else ''}\" (арт. {product.sku if product else ''}). Количество: {quantity} шт.",
+        user_id=actor_id,
+        section_id=task.section_id,
+        section_name=section.name if section else None,
+        section_code=section.code if section else None,
+        task_ids=[task.id],
+        product_sku=product.sku if product else None,
+        qty_text=str(quantity),
+        comment=comment,
+        action=AuditAction.RELEASE,
+        entity_type=AuditEntityType.WORK_TASK,
+        entity_id=task.id,
+        changes={"before": None, "after": {"status": "released", "quantity": str(quantity)}},
+    )
+
     return {"movement_id": movement.id, "remainder_id": remainder.id if remainder else None, "task_id": task.id}
 
 async def prepare_section_task(

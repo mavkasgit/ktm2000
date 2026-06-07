@@ -6,6 +6,7 @@ import { PlanPage } from "../features/planning/pages/PlanPage"
 import { PlanPreviewPage } from "../features/planning/pages/PlanPreviewPage"
 import { ExecutionPage } from "../features/execution/pages/ExecutionPage"
 import { SectionsTasksPage } from "../features/sections/pages/SectionsTasksPage"
+import { AuditLogsPage } from "../features/sections/pages/AuditLogsPage"
 import { SpgSnapshotPage } from "../features/spg/pages/SpgSnapshotPage"
 import { TransfersPage } from "../features/transfers/pages/TransfersPage"
 import { SettingsPage } from "../features/settings/SettingsPage"
@@ -37,6 +38,7 @@ export const router = createBrowserRouter([
       { path: "spg", element: <SpgSnapshotPage /> },
       { path: "spg/:spgId", element: <SpgSnapshotPage /> },
       { path: "transfers", element: <TransfersPage /> },
+      { path: "audit-logs", element: <AuditLogsPage /> },
       {
         path: "settings",
         element: <SettingsPage />,

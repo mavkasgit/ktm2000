@@ -252,6 +252,18 @@ async def session(engine: AsyncEngine) -> AsyncIterator[AsyncSession]:
         await conn.execute(text(f"SET search_path TO {_quote_ident(schema_name)}"))
         session_factory = async_sessionmaker(bind=conn, class_=AsyncSession, expire_on_commit=False)
         async with session_factory() as db:
+            # Seed default system user (id=1) to prevent foreign key errors in audit logs
+            from app.models.user import User, UserRole
+            system_user = User(
+                email="system@local",
+                password_hash="",
+                role=UserRole.admin,
+                full_name="System User",
+                is_active=True,
+            )
+            db.add(system_user)
+            await db.commit()
+
             try:
                 yield db
             finally:

@@ -26,14 +26,7 @@ def create_excel_file(headers: list[str], rows: list[list]) -> bytes:
 
 @pytest.mark.asyncio
 async def test_import_remainders_success(client, session) -> None:
-    # 1. Setup user (id=1) to satisfy foreign key constraints
-    from sqlalchemy import text
-    await session.execute(text(
-        "INSERT INTO users (id, email, password_hash, full_name, role, is_active) "
-        "OVERRIDING SYSTEM VALUE "
-        "VALUES (1, 'system@local', '', 'System User', 'admin', true)"
-    ))
-    await session.flush()
+    # 1. Setup user (seeded globally in conftest.py)
 
     # 2. Setup test entities
     spg = StorageProductionGroup(code="SPG-REM", name="Spg for Remainders")
@@ -71,14 +64,7 @@ async def test_import_remainders_success(client, session) -> None:
 
 @pytest.mark.asyncio
 async def test_import_defects_success(client, session) -> None:
-    # 1. Setup user (id=1)
-    from sqlalchemy import text
-    await session.execute(text(
-        "INSERT INTO users (id, email, password_hash, full_name, role, is_active) "
-        "OVERRIDING SYSTEM VALUE "
-        "VALUES (1, 'system@local', '', 'System User', 'admin', true)"
-    ))
-    await session.flush()
+    # 1. Setup user (seeded globally in conftest.py)
 
     # 2. Setup test entities
     spg = StorageProductionGroup(code="SPG-DEF", name="Spg for Defects")
@@ -126,14 +112,7 @@ async def test_import_defects_success(client, session) -> None:
 
 @pytest.mark.asyncio
 async def test_import_defects_errors(client, session) -> None:
-    # 1. Setup user (id=1)
-    from sqlalchemy import text
-    await session.execute(text(
-        "INSERT INTO users (id, email, password_hash, full_name, role, is_active) "
-        "OVERRIDING SYSTEM VALUE "
-        "VALUES (1, 'system@local', '', 'System User', 'admin', true)"
-    ))
-    await session.flush()
+    # 1. Setup user (seeded globally in conftest.py)
 
     # 2. Setup entities
     spg = StorageProductionGroup(code="SPG-ERR", name="Spg for Errors")

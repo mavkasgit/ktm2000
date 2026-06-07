@@ -87,6 +87,7 @@ htmlcov/
 # AI tools
 .qwen/
 .qoder/
+.agents/
 
 # Docs (temporary)
 docs/*

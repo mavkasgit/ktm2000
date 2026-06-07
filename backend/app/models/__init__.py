@@ -41,6 +41,7 @@ from .entity_comment import EntityComment, EntityType
 from .attachment import Attachment, AttachmentLink
 from .spg_remainder import SpgRemainder
 from .spg import StorageProductionGroup, SpgSection
+from .audit_log import AuditLog
 
 __all__ = [
     "Base",
@@ -109,4 +110,5 @@ __all__ = [
     "SpgRemainder",
     "StorageProductionGroup",
     "SpgSection",
+    "AuditLog",
 ]

@@ -1,4 +1,4 @@
-import { useState, useMemo, Fragment } from "react";
+import { useState, useMemo, Fragment, useEffect } from "react";
 import {
   CheckCircle2,
   AlertCircle,
@@ -9,251 +9,144 @@ import {
   ArrowUp,
   ArrowDown,
   Clock,
+  ChevronLeft,
+  ChevronRight,
 } from "lucide-react";
+import { useQuery } from "@tanstack/react-query";
+import { getAuditLogs, type AuditLogEntry } from "@/shared/api/auditLogs";
 import { SectionSelect, SortableFilterHeader } from "@/shared/ui";
 import type { Section } from "@/shared/api/sections";
-
-export interface ActionLogEntry {
-  id: string;
-  title: string;
-  status: "success" | "error" | "info";
-  message: string;
-  createdAt: string;
-  sectionId?: number;
-  sectionName?: string;
-  sectionCode?: string;
-  taskIds?: number[];
-  productSku?: string;
-  operationName?: string;
-  qtyText?: string;
-  comment?: string;
-  errorDetails?: string;
-}
+import { listSections } from "@/shared/api/sections";
 
 interface SessionLogModalProps {
   open: boolean;
   onClose: () => void;
-  actionLog: ActionLogEntry[];
+  defaultSectionId?: number;
   sections?: Section[];
 }
 
-type LogField = "status" | "createdAt" | "sectionName" | "productSku" | "taskIds" | "operationName" | "qtyText";
-
-// Регулярные выражения для парсинга старых записей
-function parseLegacyEntry(entry: ActionLogEntry): ActionLogEntry {
-  const parsed = { ...entry };
-
-  if (!parsed.productSku) {
-    const skuMatch = entry.message.match(/\(арт\.\s*([^)]+)\)/i) || entry.message.match(/арт\.\s*([a-zA-Z0-9_-]+)/i);
-    if (skuMatch) {
-      parsed.productSku = skuMatch[1].trim();
-    }
-  }
-
-  if (!parsed.operationName) {
-    const opMatch = entry.message.match(/для операции\s*"([^"]+)"/i) || entry.message.match(/для операций:\s*([^.]+)/i);
-    if (opMatch) {
-      parsed.operationName = opMatch[1].trim();
-    }
-  }
-
-  if (!parsed.qtyText) {
-    const goodMatch = entry.message.match(/годные\s*=\s*(\d+)/i) || entry.message.match(/годн:\s*(\d+)/i);
-    const defectMatch = entry.message.match(/брак\s*=\s*(\d+)/i) || entry.message.match(/брак:\s*(\d+)/i);
-    if (goodMatch || defectMatch) {
-      const g = goodMatch ? goodMatch[1] : "0";
-      const d = defectMatch ? defectMatch[1] : "0";
-      parsed.qtyText = `годн: ${g}, брак: ${d}`;
-    }
-  }
-
-  if (!parsed.comment) {
-    const commentMatch = entry.message.match(/комментарий:\s*"([^"]+)"/i);
-    if (commentMatch) {
-      parsed.comment = commentMatch[1].trim();
-    }
-  }
-
-  if (!parsed.errorDetails) {
-    const errorMatch = entry.message.match(/Причина:\s*([^.]+)/i);
-    if (errorMatch) {
-      parsed.errorDetails = errorMatch[1].trim();
-    }
-  }
-
-  return parsed;
+function formatDateTime(dateStr: string) {
+  const d = new Date(dateStr);
+  if (isNaN(d.getTime())) return dateStr;
+  const date = d.toLocaleDateString("ru-RU", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+  });
+  const time = d.toLocaleTimeString("ru-RU", {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  });
+  return `${date} ${time}`;
 }
 
+function highlightText(text: string, search: string) {
+  if (!search.trim()) return text;
+  const regex = new RegExp(`(${search.replace(/[-\/\\^$*+?.()|[\]{}]/g, "\\$&")})`, "gi");
+  const parts = text.split(regex);
+  return (
+    <>
+      {parts.map((part, i) =>
+        regex.test(part) ? (
+          <mark key={i} className="bg-amber-100 text-amber-950 px-0.5 rounded">
+            {part}
+          </mark>
+        ) : (
+          part
+        )
+      )}
+    </>
+  );
+}
+
+type LogField = "status" | "createdAt" | "sectionName" | "productSku" | "taskIds" | "operationName" | "qtyText";
 export function SessionLogModal({
   open,
   onClose,
-  actionLog,
+  defaultSectionId,
   sections,
 }: SessionLogModalProps) {
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<"all" | "success" | "error" | "info">("all");
-  const [selectedSectionId, setSelectedSectionId] = useState<string>("all");
+  const [selectedSectionId, setSelectedSectionId] = useState<string>(
+    defaultSectionId ? String(defaultSectionId) : "all"
+  );
   
+  // Синхронизация выбранного участка с внешними пропсами при их изменении
+  useEffect(() => {
+    setSelectedSectionId(defaultSectionId ? String(defaultSectionId) : "all");
+  }, [defaultSectionId]);
+
+  const [page, setPage] = useState(1);
+  const limit = 50;
+  const offset = (page - 1) * limit;
+
   // Состояния сортировки через системный формат SortConfig
   const [sortConfigs, setSortConfigs] = useState<{ field: LogField; order: "asc" | "desc" }[]>([
     { field: "createdAt", order: "desc" }
   ]);
 
-  // Состояние колоночных фильтров
-  const [columnFilters, setColumnFilters] = useState<Record<string, Set<string>>>({
-    status: new Set(),
-    sectionName: new Set(),
-    productSku: new Set(),
-    operationName: new Set(),
-    taskIds: new Set(),
+  // Состояние раскрытых строк
+  const [expandedRows, setExpandedRows] = useState<Set<number>>(new Set());
+
+  // Сброс страницы при изменении фильтров
+  useEffect(() => {
+    setPage(1);
+  }, [search, statusFilter, selectedSectionId]);
+
+  // Запрос списка участков, если они не переданы
+  const { data: queriedSections } = useQuery({
+    queryKey: ["sections"],
+    queryFn: listSections,
+    enabled: open && !sections,
   });
 
-  // Состояние раскрытых строк
-  const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set());
+  // Запрос логов аудита с бэкенда
+  const { data, isLoading } = useQuery({
+    queryKey: ["auditLogs", selectedSectionId, statusFilter, search, offset],
+    queryFn: () => getAuditLogs({
+      section_id: selectedSectionId === "all" ? undefined : Number(selectedSectionId),
+      status: statusFilter === "all" ? undefined : statusFilter,
+      search: search.trim() || undefined,
+      limit,
+      offset,
+    }),
+    enabled: open,
+  });
 
-  // Парсинг старых логов для обеспечения совместимости
   const parsedLogs = useMemo(() => {
-    return actionLog.map(parseLegacyEntry);
-  }, [actionLog]);
+    return data?.items || [];
+  }, [data]);
 
-  // Dynamically compute available sections from props or logs
-  const availableSections = useMemo(() => {
-    if (sections && sections.length > 0) {
-      return sections;
-    }
-    const unique = new Map<number, Section>();
-    parsedLogs.forEach((entry) => {
-      if (entry.sectionId && entry.sectionName) {
-        unique.set(entry.sectionId, {
-          id: entry.sectionId,
-          name: entry.sectionName,
-          code: entry.sectionCode || "",
-          description: null,
-          is_active: true,
-          icon: "lucide:Layers",
-          icon_color: "#64748B",
-          kind: "production",
-        });
-      }
-    });
-    return Array.from(unique.values());
-  }, [parsedLogs, sections]);
+  const total = data?.total || 0;
+  const totalPages = Math.ceil(total / limit) || 1;
 
-  // Get status counts for badges based on the currently selected section
+  // Группированные счетчики вкладок присылаются с бэкенда
   const counts = useMemo(() => {
-    return parsedLogs.reduce(
-      (acc, entry) => {
-        const matchesSection = selectedSectionId === "all" || entry.sectionId === Number(selectedSectionId);
-        if (!matchesSection) return acc;
+    return data?.counts || { all: 0, success: 0, error: 0, info: 0 };
+  }, [data]);
 
-        acc.all++;
-        if (entry.status === "success") acc.success++;
-        if (entry.status === "error") acc.error++;
-        if (entry.status === "info") acc.info++;
-        return acc;
-      },
-      { all: 0, success: 0, error: 0, info: 0 }
-    );
-  }, [parsedLogs, selectedSectionId]);
+  const taskStatuses = useMemo(() => {
+    return data?.task_statuses || {};
+  }, [data]);
 
-  // Вычисление уникальных значений для колоночных фильтров
+  const availableSections = sections || [];
+
+  // Вычисление уникальных значений (заглушка для совместимости с интерфейсом)
   const uniqueValues = useMemo(() => {
-    const status = new Set<string>();
-    const sectionName = new Set<string>();
-    const productSku = new Set<string>();
-    const operationName = new Set<string>();
-    const taskIds = new Set<string>();
-
-    parsedLogs.forEach((entry) => {
-      if (entry.status) status.add(entry.status);
-      if (entry.sectionName) sectionName.add(entry.sectionName);
-      if (entry.productSku) {
-        entry.productSku.split(", ").forEach(sku => {
-          if (sku.trim()) productSku.add(sku.trim());
-        });
-      }
-      if (entry.operationName) {
-        entry.operationName.split(", ").forEach(op => {
-          if (op.trim()) operationName.add(op.trim());
-        });
-      }
-      if (entry.taskIds && entry.taskIds.length > 0) {
-        entry.taskIds.forEach(id => {
-          taskIds.add(String(id));
-        });
-      }
-    });
-
     return {
-      status: Array.from(status).sort(),
-      sectionName: Array.from(sectionName).sort(),
-      productSku: Array.from(productSku).sort(),
-      operationName: Array.from(operationName).sort(),
-      taskIds: Array.from(taskIds).sort((a, b) => Number(a) - Number(b)),
+      status: [],
+      sectionName: [],
+      productSku: [],
+      operationName: [],
+      taskIds: [],
     };
-  }, [parsedLogs]);
+  }, []);
 
-  // Filter and sort logs
+  // Filter and sort logs (сортировка локальная в пределах текущей страницы)
   const processedLogs = useMemo(() => {
-    let result = parsedLogs.filter((entry) => {
-      // 1. Section Filter (сверху "Все участки")
-      const matchesSection = selectedSectionId === "all" || entry.sectionId === Number(selectedSectionId);
-      if (!matchesSection) return false;
-
-      // 2. Status Filter (вкладки "Успешные/Ошибки/Инфо")
-      const matchesStatus = statusFilter === "all" || entry.status === statusFilter;
-      if (!matchesStatus) return false;
-
-      // 3. Text & ID Search
-      if (search.trim()) {
-        const searchLower = search.toLowerCase().trim();
-        const searchAsNumber = Number(searchLower);
-        const matchesTaskId = !isNaN(searchAsNumber) && entry.taskIds?.includes(searchAsNumber);
-
-        const matchesText =
-          entry.title.toLowerCase().includes(searchLower) ||
-          entry.message.toLowerCase().includes(searchLower) ||
-          entry.sectionName?.toLowerCase().includes(searchLower) ||
-          entry.sectionCode?.toLowerCase().includes(searchLower) ||
-          entry.productSku?.toLowerCase().includes(searchLower) ||
-          entry.operationName?.toLowerCase().includes(searchLower) ||
-          entry.comment?.toLowerCase().includes(searchLower) ||
-          entry.errorDetails?.toLowerCase().includes(searchLower);
-
-        if (!matchesText && !matchesTaskId) return false;
-      }
-
-      // 4. Колоночные фильтры через SortableFilterHeader
-      if (columnFilters.status.size > 0 && !columnFilters.status.has(entry.status)) {
-        return false;
-      }
-      
-      if (columnFilters.sectionName.size > 0 && (!entry.sectionName || !columnFilters.sectionName.has(entry.sectionName))) {
-        return false;
-      }
-
-      if (columnFilters.taskIds.size > 0) {
-        if (!entry.taskIds || entry.taskIds.length === 0) return false;
-        const hasMatchedTaskId = entry.taskIds.some(id => columnFilters.taskIds.has(String(id)));
-        if (!hasMatchedTaskId) return false;
-      }
-
-      if (columnFilters.productSku.size > 0) {
-        if (!entry.productSku) return false;
-        const entrySkus = entry.productSku.split(", ").map(s => s.trim());
-        const hasMatchedSku = entrySkus.some(sku => columnFilters.productSku.has(sku));
-        if (!hasMatchedSku) return false;
-      }
-
-      if (columnFilters.operationName.size > 0) {
-        if (!entry.operationName) return false;
-        const entryOps = entry.operationName.split(", ").map(o => o.trim());
-        const hasMatchedOp = entryOps.some(op => columnFilters.operationName.has(op));
-        if (!hasMatchedOp) return false;
-      }
-
-      return true;
-    });
+    let result = [...parsedLogs];
 
     const activeSort = sortConfigs[0];
     if (activeSort) {
@@ -264,32 +157,32 @@ export function SessionLogModal({
 
         switch (field) {
           case "createdAt":
-            valA = new Date(a.createdAt).getTime();
-            valB = new Date(b.createdAt).getTime();
+            valA = new Date(a.created_at).getTime();
+            valB = new Date(b.created_at).getTime();
             break;
           case "status":
             valA = a.status;
             valB = b.status;
             break;
           case "sectionName":
-            valA = a.sectionName || "";
-            valB = b.sectionName || "";
+            valA = a.section_name || "";
+            valB = b.section_name || "";
             break;
           case "productSku":
-            valA = a.productSku || "";
-            valB = b.productSku || "";
+            valA = a.product_sku || "";
+            valB = b.product_sku || "";
             break;
           case "operationName":
-            valA = a.operationName || "";
-            valB = b.operationName || "";
+            valA = a.operation_name || "";
+            valB = b.operation_name || "";
             break;
           case "qtyText":
-            valA = a.qtyText || "";
-            valB = b.qtyText || "";
+            valA = a.qty_text || "";
+            valB = b.qty_text || "";
             break;
           case "taskIds":
-            valA = a.taskIds && a.taskIds.length > 0 ? a.taskIds[0] : 0;
-            valB = b.taskIds && b.taskIds.length > 0 ? b.taskIds[0] : 0;
+            valA = a.task_ids ? parseInt(a.task_ids.split(",")[0], 10) : 0;
+            valB = b.task_ids ? parseInt(b.task_ids.split(",")[0], 10) : 0;
             break;
         }
 
@@ -300,7 +193,7 @@ export function SessionLogModal({
     }
 
     return result;
-  }, [parsedLogs, search, statusFilter, selectedSectionId, columnFilters, sortConfigs]);
+  }, [parsedLogs, sortConfigs]);
 
   const handleSortChange = (field: LogField) => {
     setSortConfigs((prev) => {
@@ -315,14 +208,11 @@ export function SessionLogModal({
     });
   };
 
-  const handleColumnFilterChange = (field: string, selected: Set<string>) => {
-    setColumnFilters((prev) => ({
-      ...prev,
-      [field]: selected,
-    }));
+  const handleColumnFilterChange = () => {
+    // Временно заглушено, фильтрация идет через глобальные фильтры
   };
 
-  const toggleRow = (id: string) => {
+  const toggleRow = (id: number) => {
     setExpandedRows((prev) => {
       const next = new Set(prev);
       if (next.has(id)) {
@@ -334,42 +224,15 @@ export function SessionLogModal({
     });
   };
 
-  // Helper to highlight matching text
-  const highlightText = (text: string, searchWord: string) => {
-    if (!searchWord.trim()) return text;
-    const escaped = searchWord.replace(/[-\/\\^$*+?.()|[\]{}]/g, "\\$&");
-    const regex = new RegExp(`(${escaped})`, "gi");
-    const parts = text.split(regex);
-    return (
-      <>
-        {parts.map((part, i) =>
-          regex.test(part) ? (
-            <mark key={i} className="bg-amber-100 text-amber-900 rounded-[2px] px-0.5 font-semibold">
-              {part}
-            </mark>
-          ) : (
-            part
-          )
-        )}
-      </>
-    );
-  };
-
-  // Helper to format absolute local time
-  const formatDateTime = (dateString: string) => {
-    try {
-      return new Date(dateString).toLocaleString("ru-RU", {
-        day: "2-digit",
-        month: "2-digit",
-        year: "numeric",
-        hour: "2-digit",
-        minute: "2-digit",
-        second: "2-digit",
-      });
-    } catch (e) {
-      return dateString;
-    }
-  };
+  const columnFilters = useMemo(() => {
+    return {
+      status: new Set<string>(),
+      sectionName: new Set<string>(),
+      productSku: new Set<string>(),
+      operationName: new Set<string>(),
+      taskIds: new Set<string>(),
+    };
+  }, []);
 
   const renderSimpleSortHeader = (field: LogField, label: string) => {
     const activeSort = sortConfigs.find((s) => s.field === field);
@@ -545,7 +408,7 @@ export function SessionLogModal({
               </div>
               <p className="text-slate-600 font-semibold text-sm">Логи не найдены</p>
               <p className="text-xs text-slate-400 mt-1.5 max-w-sm px-4">
-                {actionLog.length === 0
+                {counts.all === 0
                   ? "История событий пуста."
                   : "Нет записей, соответствующих заданным фильтрам и поисковому запросу."}
               </p>
@@ -631,6 +494,9 @@ export function SessionLogModal({
                     const isError = entry.status === "error";
                     const isInfo = entry.status === "info";
                     const isExpanded = expandedRows.has(entry.id);
+                    const taskIdsArray = entry.task_ids
+                      ? entry.task_ids.split(",").map((id) => Number(id.trim())).filter((id) => !isNaN(id))
+                      : [];
 
                     return (
                       <Fragment key={entry.id}>
@@ -658,17 +524,17 @@ export function SessionLogModal({
 
                           {/* Timestamp */}
                           <td className="p-3 text-xs font-mono font-medium text-slate-600 align-middle">
-                            {formatDateTime(entry.createdAt)}
+                            {formatDateTime(entry.created_at)}
                           </td>
 
                           {/* Section Name */}
                           <td className="p-3 align-middle truncate">
-                            {entry.sectionName ? (
+                            {entry.section_name ? (
                               <span
                                 className="inline-flex items-center rounded-md px-2.5 py-0.8 text-xs font-semibold bg-slate-100 text-slate-700 border border-slate-200/60 max-w-full truncate"
-                                title={`${entry.sectionName} (${entry.sectionCode})`}
+                                title={`${entry.section_name} (${entry.section_code})`}
                               >
-                                {highlightText(entry.sectionName, search)}
+                                {highlightText(entry.section_name, search)}
                               </span>
                             ) : (
                               <span className="text-slate-400 font-medium">—</span>
@@ -677,20 +543,26 @@ export function SessionLogModal({
 
                           {/* Task IDs */}
                           <td className="p-3 align-middle font-mono text-xs font-semibold text-slate-500 truncate">
-                            {entry.taskIds && entry.taskIds.length > 0 ? (
+                            {taskIdsArray.length > 0 ? (
                               <div className="flex flex-wrap gap-1">
-                                {entry.taskIds.map((id) => (
-                                  <span
-                                    key={id}
-                                    className={`px-1.5 py-0.5 rounded text-[10.5px] border ${
-                                      search.trim() && String(id).includes(search.trim())
-                                        ? "bg-amber-100 border-amber-300 text-amber-950 font-bold"
-                                        : "bg-slate-50 border-slate-200/80 text-slate-650"
-                                    }`}
-                                  >
-                                    #{id}
-                                  </span>
-                                ))}
+                                {taskIdsArray.map((id) => {
+                                  const isDeleted = taskStatuses[id] === "deleted";
+                                  return (
+                                    <span
+                                      key={id}
+                                      className={`px-1.5 py-0.5 rounded text-[10.5px] border ${
+                                        isDeleted
+                                          ? "bg-red-50 border-red-200 text-red-650 line-through font-normal opacity-80"
+                                          : search.trim() && String(id).includes(search.trim())
+                                          ? "bg-amber-100 border-amber-300 text-amber-950 font-bold"
+                                          : "bg-slate-50 border-slate-200/80 text-slate-650"
+                                      }`}
+                                      title={isDeleted ? "Задание удалено и неактуально" : undefined}
+                                    >
+                                      #{id}
+                                    </span>
+                                  );
+                                })}
                               </div>
                             ) : (
                               <span className="text-slate-400 font-medium">—</span>
@@ -699,9 +571,9 @@ export function SessionLogModal({
 
                           {/* Product SKU */}
                           <td className="p-3 align-middle font-mono text-xs font-semibold text-slate-600 truncate">
-                            {entry.productSku ? (
-                              <span title={entry.productSku}>
-                                {highlightText(entry.productSku, search)}
+                            {entry.product_sku ? (
+                              <span title={entry.product_sku}>
+                                {highlightText(entry.product_sku, search)}
                               </span>
                             ) : (
                               <span className="text-slate-400 font-medium">—</span>
@@ -710,9 +582,9 @@ export function SessionLogModal({
 
                           {/* Operation Name */}
                           <td className="p-3 align-middle font-medium text-xs text-slate-700 truncate">
-                            {entry.operationName ? (
-                              <span title={entry.operationName}>
-                                {highlightText(entry.operationName, search)}
+                            {entry.operation_name ? (
+                              <span title={entry.operation_name}>
+                                {highlightText(entry.operation_name, search)}
                               </span>
                             ) : (
                               <span className="text-slate-400 font-medium">—</span>
@@ -721,8 +593,8 @@ export function SessionLogModal({
 
                           {/* Quantity */}
                           <td className="p-3 align-middle font-semibold text-xs text-slate-600 truncate">
-                            {entry.qtyText ? (
-                              <span title={entry.qtyText}>{entry.qtyText}</span>
+                            {entry.qty_text ? (
+                              <span title={entry.qty_text}>{entry.qty_text}</span>
                             ) : (
                               <span className="text-slate-400 font-medium">—</span>
                             )}
@@ -731,13 +603,18 @@ export function SessionLogModal({
                           {/* Compact Details Column */}
                           <td className="p-3 align-middle pr-10 relative">
                             <div className="flex items-center justify-between gap-2">
-                              <div className="truncate max-w-[200px]">
-                                {entry.errorDetails ? (
-                                  <span className="text-red-655 text-red-655 text-red-600 font-semibold text-xs truncate block" title={entry.errorDetails}>
-                                    ⚠️ {highlightText(entry.errorDetails, search)}
+                               <div className="flex items-center gap-1.5 truncate max-w-[200px]">
+                                {entry.user_name && (
+                                  <span className="bg-slate-100 text-slate-600 text-[10px] px-1.5 py-0.5 rounded font-medium" title={`Пользователь: ${entry.user_name}`}>
+                                    👤 {entry.user_name}
+                                  </span>
+                                )}
+                                {entry.error_details ? (
+                                  <span className="text-red-600 font-semibold text-xs truncate block" title={entry.error_details}>
+                                    ⚠️ {highlightText(entry.error_details, search)}
                                   </span>
                                 ) : entry.comment ? (
-                                  <span className="text-slate-655 text-slate-550 text-slate-500 italic text-xs truncate block" title={entry.comment}>
+                                  <span className="text-slate-500 italic text-xs truncate block" title={entry.comment}>
                                     💬 {highlightText(entry.comment, search)}
                                   </span>
                                 ) : (
@@ -769,21 +646,64 @@ export function SessionLogModal({
                                   <span className="text-slate-400 font-mono text-[10px]">ID: {entry.id}</span>
                                 </div>
                                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                  <div className="space-y-1">
-                                    <p className="text-slate-400 uppercase font-bold text-[9px] tracking-wider">Полное сообщение</p>
-                                    <p className="whitespace-pre-wrap leading-relaxed text-slate-700 font-medium bg-slate-50/50 p-2.5 rounded border border-slate-100">{entry.message}</p>
+                                  <div className="space-y-3">
+                                    <div>
+                                      <p className="text-slate-400 uppercase font-bold text-[9px] tracking-wider">Полное сообщение</p>
+                                      <p className="whitespace-pre-wrap leading-relaxed text-slate-700 font-medium bg-slate-50/50 p-2.5 rounded border border-slate-100">{entry.message}</p>
+                                    </div>
+                                    {entry.changes && (
+                                      <div>
+                                        <p className="text-slate-400 uppercase font-bold text-[9px] tracking-wider mb-1">Изменения полей (дифф)</p>
+                                        <div className="bg-slate-50 border border-slate-100 rounded p-2.5 space-y-1.5 font-mono text-[11px] text-slate-700">
+                                          <div className="grid grid-cols-3 font-bold border-b border-slate-200/60 pb-1 text-[9px] uppercase tracking-wider text-slate-400">
+                                            <span>Поле</span>
+                                            <span>Было</span>
+                                            <span>Стало</span>
+                                          </div>
+                                          {Object.keys({ ...(entry.changes.before || {}), ...(entry.changes.after || {}) }).map((key) => {
+                                            const valBefore = entry.changes?.before?.[key] !== undefined ? String(entry.changes.before[key]) : "—";
+                                            const valAfter = entry.changes?.after?.[key] !== undefined ? String(entry.changes.after[key]) : "—";
+                                            return (
+                                              <div key={key} className="grid grid-cols-3 py-0.5 border-b border-slate-100/60 last:border-0 items-center">
+                                                <span className="font-semibold text-slate-600 truncate pr-1" title={key}>{key}</span>
+                                                <span className="text-red-650 bg-red-50 px-1 rounded truncate mr-1" title={valBefore}>{valBefore}</span>
+                                                <span className="text-emerald-700 bg-emerald-50 px-1 rounded truncate" title={valAfter}>{valAfter}</span>
+                                              </div>
+                                            );
+                                          })}
+                                        </div>
+                                      </div>
+                                    )}
                                   </div>
                                   <div className="space-y-3 md:border-l md:border-slate-100 md:pl-4">
+                                    <div className="grid grid-cols-2 gap-2">
+                                      <div>
+                                        <p className="text-slate-400 uppercase font-bold text-[9px] tracking-wider">Сущность</p>
+                                        <p className="text-slate-700 font-semibold bg-slate-50 p-2 rounded border border-slate-100 mt-1">
+                                          {entry.entity_type ? `${entry.entity_type} #${entry.entity_id}` : "—"}
+                                        </p>
+                                      </div>
+                                      <div>
+                                        <p className="text-slate-400 uppercase font-bold text-[9px] tracking-wider">Операция (код)</p>
+                                        <p className="text-slate-700 font-semibold bg-slate-50 p-2 rounded border border-slate-100 mt-1">
+                                          {entry.action || "—"}
+                                        </p>
+                                      </div>
+                                    </div>
+                                    <div>
+                                      <p className="text-slate-400 uppercase font-bold text-[9px] tracking-wider">Пользователь</p>
+                                      <p className="text-slate-700 font-semibold bg-slate-50 p-2 rounded border border-slate-100 mt-1">👤 {entry.user_name || "—"}</p>
+                                    </div>
                                     {entry.comment && (
                                       <div>
                                         <p className="text-slate-400 uppercase font-bold text-[9px] tracking-wider">Комментарий исполнителя</p>
                                         <p className="text-slate-700 font-semibold italic bg-slate-50 p-2.5 rounded border border-slate-100 mt-1">💬 {entry.comment}</p>
                                       </div>
                                     )}
-                                    {entry.errorDetails && (
+                                    {entry.error_details && (
                                       <div>
                                         <p className="text-slate-400 uppercase font-bold text-[9px] tracking-wider">Сведения об ошибке</p>
-                                        <p className="text-red-750 text-red-655 text-red-655 text-red-600 font-semibold bg-red-50/40 p-2.5 rounded border border-red-100 mt-1">⚠️ {entry.errorDetails}</p>
+                                        <p className="text-red-600 font-semibold bg-red-50/40 p-2.5 rounded border border-red-100 mt-1">⚠️ {entry.error_details}</p>
                                       </div>
                                     )}
                                   </div>
@@ -802,9 +722,38 @@ export function SessionLogModal({
         </div>
 
         {/* Footer */}
-        <div className="flex items-center justify-end p-4 border-t border-slate-100 bg-slate-50 shrink-0">
+        <div className="flex items-center justify-between p-4 border-t border-slate-100 bg-slate-50 shrink-0">
+          <div className="flex items-center gap-2 text-xs text-slate-500 font-medium">
+            {totalPages > 1 && (
+              <>
+                <button
+                  onClick={() => setPage((p) => Math.max(1, p - 1))}
+                  disabled={page === 1}
+                  className="p-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 disabled:opacity-50 disabled:hover:bg-white transition-colors"
+                  aria-label="Предыдущая страница"
+                >
+                  <ChevronLeft className="h-4 w-4" />
+                </button>
+                <span className="px-2">
+                  Страница <strong className="text-slate-700">{page}</strong> из{" "}
+                  <strong className="text-slate-700">{totalPages}</strong>
+                </span>
+                <button
+                  onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+                  disabled={page === totalPages}
+                  className="p-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 disabled:opacity-50 disabled:hover:bg-white transition-colors"
+                  aria-label="Следующая страница"
+                >
+                  <ChevronRight className="h-4 w-4" />
+                </button>
+              </>
+            )}
+            <span className="ml-4">
+              Показано {processedLogs.length} из {total} записей
+            </span>
+          </div>
           <button
-            className="px-5 py-2.5 rounded-lg bg-slate-800 text-white hover:bg-slate-700 text-sm font-semibold transition-colors shadow-sm"
+            className="px-5 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-white text-sm font-semibold transition-colors shadow-sm"
             onClick={onClose}
           >
             Закрыть

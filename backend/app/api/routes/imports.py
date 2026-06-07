@@ -10,6 +10,8 @@ from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
+from app.api.deps import get_current_user
+from app.models.user import User
 from app.models.import_template import ImportTemplate
 from app.models.imports import ImportBatch, ImportBatchMode, ImportBatchStatus, ImportFile
 from app.models.production_plan import PlanChangeSet, PlanPosition, ProductionPlan
@@ -51,6 +53,7 @@ async def import_excel_plan(
     column_mapping: str | None = Query(None),
     normalize_hanger_quantity: bool = Form(True),
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ) -> ImportPreviewOut:
     if template_id is None:
         raise HTTPException(status_code=400, detail="template_id is required")
@@ -98,6 +101,7 @@ async def import_excel_plan(
             template_id=template_id,
             rule_profile_id=rule_profile_id,
             normalize_hanger_quantity=normalize_hanger_quantity,
+            user=current_user,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -249,6 +253,7 @@ async def import_test_excel(
     quantity: Decimal = Query(Decimal("100")),
     row_selection: str | None = Query(None),
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ) -> ImportPreviewOut:
     import logging
     logger = logging.getLogger(__name__)
@@ -287,6 +292,7 @@ async def import_test_excel(
             plan_version=plan_version,
             column_mapping=None,
             row_selection=row_selection,
+            user=current_user,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

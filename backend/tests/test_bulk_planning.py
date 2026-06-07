@@ -31,7 +31,7 @@ async def _make_user(session, email: str = "bulk-planner@test.local") -> User:
         email=email,
         password_hash="x",
         full_name="Bulk Planner",
-        role=UserRole.planner,
+        role=UserRole.admin,
         is_active=True,
     )
     session.add(user)

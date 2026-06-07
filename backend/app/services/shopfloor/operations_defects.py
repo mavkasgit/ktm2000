@@ -85,6 +85,36 @@ async def create_defect(
         created_by=actor_id,
     )
     db.add(item)
+    await db.flush()
+
+    # Запись лога аудита (регистрация брака)
+    from app.services.audit_log_service import log_action
+    from app.models.audit_log import AuditAction, AuditEntityType
+    from app.models.section import Section
+    from app.models.product import Product
+    
+    section = await db.get(Section, sect_id)
+    product = await db.get(Product, prod_id)
+    
+    await log_action(
+        db,
+        status="success",
+        title="Регистрация брака",
+        message=f"Зарегистрирован брак на участке \"{section.name if section else ''}\" (арт. {product.sku if product else ''}). Количество: {quantity} шт. Причина: {reason or '—'}",
+        user_id=actor_id,
+        section_id=sect_id,
+        section_name=section.name if section else None,
+        section_code=section.code if section else None,
+        task_ids=[task_id] if task_id else [],
+        product_sku=product.sku if product else None,
+        qty_text=str(quantity),
+        comment=comment,
+        action=AuditAction.CREATE,
+        entity_type=AuditEntityType.DEFECT,
+        entity_id=defect.id,
+        changes={"before": None, "after": {"status": "decision_required", "quantity": str(quantity), "reason": reason}},
+    )
+
     return {"defect_id": defect.id, "item_id": item.id}
 
 async def add_defect_item(
@@ -226,6 +256,35 @@ async def defect_decide(
     if task:
         await _refresh_task_cache(db, task.id)
         await _refresh_section_plan_line_cache(db, task.section_plan_line_id)
+
+    # Запись лога аудита (решение по браку)
+    from app.services.audit_log_service import log_action
+    from app.models.audit_log import AuditAction, AuditEntityType
+    from app.models.section import Section
+    from app.models.product import Product
+    
+    section = await db.get(Section, defect.section_id)
+    product = await db.get(Product, defect.product_id)
+    
+    await log_action(
+        db,
+        status="success",
+        title="Решение по браку",
+        message=f"Принято решение по браку #{defect.id} (арт. {product.sku if product else ''}) на участке \"{section.name if section else ''}\": {decision_type.value}. Количество: {quantity} шт.",
+        user_id=actor_id,
+        section_id=defect.section_id,
+        section_name=section.name if section else None,
+        section_code=section.code if section else None,
+        task_ids=[defect.task_id] if defect.task_id else [],
+        product_sku=product.sku if product else None,
+        qty_text=str(quantity),
+        comment=comment,
+        action=AuditAction.UPDATE,
+        entity_type=AuditEntityType.DEFECT_DECISION,
+        entity_id=decision.id,
+        changes={"before": {"status": "decision_required"}, "after": {"status": defect.status.value, "decision": decision_type.value}},
+    )
+
     return {"defect_id": defect.id, "decision_id": decision.id, "defect_status": defect.status.value, "rework_task_id": rework_task_id}
 
 async def rework_create(
@@ -261,5 +320,34 @@ async def rework_create(
     db.add(rework)
     await db.flush()
     defect.status = DefectStatus.rework_task_created
+    await db.flush()
+
+    # Запись лога аудита (задача на переделку)
+    from app.services.audit_log_service import log_action
+    from app.models.audit_log import AuditAction, AuditEntityType
+    from app.models.section import Section
+    from app.models.product import Product
+    
+    section = await db.get(Section, section_id)
+    product = await db.get(Product, source_task.product_id)
+    
+    await log_action(
+        db,
+        status="success",
+        title="Создание задачи на доработку",
+        message=f"Создана задача на переделку #{rework.id} брака #{defect_id} (арт. {product.sku if product else ''}) на участок \"{section.name if section else ''}\". Количество: {quantity} шт.",
+        user_id=actor_id,
+        section_id=section_id,
+        section_name=section.name if section else None,
+        section_code=section.code if section else None,
+        task_ids=[source_task_id],
+        product_sku=product.sku if product else None,
+        qty_text=str(quantity),
+        action=AuditAction.CREATE,
+        entity_type=AuditEntityType.REWORK_TASK,
+        entity_id=rework.id,
+        changes={"before": None, "after": {"status": "open", "quantity": str(quantity), "defect_id": defect_id}},
+    )
+
     return {"rework_task_id": rework.id}
 

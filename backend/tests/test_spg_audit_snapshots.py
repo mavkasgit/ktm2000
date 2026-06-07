@@ -7,7 +7,11 @@ from app.models.section import Section
 from app.models.spg import SpgSection, StorageProductionGroup
 from app.models.user import User, UserRole
 from app.models.spg_remainder import SpgRemainder
+from app.core.security import create_access_token
 
+
+def _auth_headers(user: User) -> dict[str, str]:
+    return {"Authorization": f"Bearer {create_access_token(subject=user.email)}"}
 
 async def _make_admin(session, email: str = "audit-admin@test.local", name: str = "Audit Admin") -> User:
     user = User(
@@ -35,6 +39,7 @@ async def test_manual_operation_movement_has_user_name_snapshot(client, session)
     in_resp = await client.post(
         f"/api/spg/{spg.id}/manual-operation",
         json={"product_id": product.id, "section_id": section.id, "operation_type": "in", "quantity": 7},
+        headers=_auth_headers(admin),
     )
     assert in_resp.status_code == 200
     movement_id = in_resp.json()["movement_id"]
@@ -57,6 +62,7 @@ async def test_manual_operation_remainder_has_user_name_snapshot(client, session
     in_resp = await client.post(
         f"/api/spg/{spg.id}/manual-operation",
         json={"product_id": product.id, "section_id": section.id, "operation_type": "in", "quantity": 4},
+        headers=_auth_headers(admin),
     )
     assert in_resp.status_code == 200
     rid = in_resp.json()["remainder_id"]
@@ -79,6 +85,7 @@ async def test_history_returns_user_snapshots_in_movements(client, session):
     in_resp = await client.post(
         f"/api/spg/{spg.id}/manual-operation",
         json={"product_id": product.id, "section_id": section.id, "operation_type": "in", "quantity": 10},
+        headers=_auth_headers(admin),
     )
     assert in_resp.status_code == 200
     rid = in_resp.json()["remainder_id"]
