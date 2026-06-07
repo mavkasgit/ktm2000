@@ -284,6 +284,7 @@ export function DefectsListPanel({
           open={decideOpen}
           onOpenChange={setDecideOpen}
           defect={selectedDefect}
+          spgId={spgId}
           onSaved={onRefresh}
         />
       )}

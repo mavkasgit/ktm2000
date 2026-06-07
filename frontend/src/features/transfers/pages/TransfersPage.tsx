@@ -35,6 +35,7 @@ import {
   type ReadyToTransferTask,
 } from "@/shared/api/transfers";
 import { getErrorMessage } from "@/shared/api/client";
+import { queryKeys } from "@/shared/api/queryKeys";
 
 function fmtQty(value: string | number | null | undefined): string {
   if (value == null) return "0";
@@ -44,18 +45,24 @@ function fmtQty(value: string | number | null | undefined): string {
 }
 
 function conflictHintFromTransferError(message: string): string | null {
-  const normalized = message.toLowerCase();
-  if (normalized.includes("exceeds transferable")) {
+  const n = message.toLowerCase();
+  if (n.includes("превышает доступный к передаче")) {
     return "Количество больше доступного к передаче.";
   }
-  if (normalized.includes("next route step")) {
+  if (n.includes("следующим этапом маршрута")) {
     return "Передавать можно только на следующий этап маршрута.";
   }
-  if (normalized.includes("must be sent")) {
+  if (n.includes("должна быть отправлена")) {
     return "Передача уже обработана. Обновите список входящих.";
   }
-  if (normalized.includes("accepted + rejected exceeds sent")) {
+  if (n.includes("сумма принятого и отклонённого")) {
     return "Сумма принятого и отклонённого превышает отправленное количество.";
+  }
+  if (n.includes("превышает доступный к передаче объём исходной задачи")) {
+    return "Скорректированное количество превышает доступный к передаче объём исходной задачи.";
+  }
+  if (n.includes("нельзя уменьшить передачу")) {
+    return "Нельзя уменьшить передачу: целевая задача уже использовала материалы.";
   }
   return null;
 }
@@ -74,20 +81,20 @@ export function TransfersPage() {
   const [editTransferRecord, setEditTransferRecord] = useState<IncomingTransfer | null>(null);
 
   const { data: spgs } = useQuery({
-    queryKey: ["spgs"],
+    queryKey: queryKeys.spg.list(),
     queryFn: getSpgList,
   });
 
   const activeSpgId = spgId ?? spgs?.find((s) => s.is_active)?.id ?? null;
 
   const { data: readyData, isLoading: readyLoading, refetch: refetchReady } = useQuery({
-    queryKey: ["transfers-ready", activeSpgId],
+    queryKey: queryKeys.transfers.ready(activeSpgId),
     queryFn: () => listReadyToTransfer({ spg_id: activeSpgId }),
     enabled: activeSpgId != null,
   });
 
   const { data: historyData, isLoading: historyLoading, refetch: refetchHistory } = useQuery({
-    queryKey: ["transfers-history", activeSpgId],
+    queryKey: queryKeys.transfers.history(activeSpgId),
     queryFn: () => listTransferHistory({ spg_id: activeSpgId }),
     enabled: activeSpgId != null,
   });
@@ -98,6 +105,24 @@ export function TransfersPage() {
   function handleRefresh() {
     void refetchReady();
     void refetchHistory();
+  }
+
+  function invalidateShopfloorCaches(fromSectionId: number | null, toSectionId: number | null) {
+    const sectionIds = new Set<number>();
+    if (fromSectionId != null) sectionIds.add(fromSectionId);
+    if (toSectionId != null && toSectionId !== fromSectionId) sectionIds.add(toSectionId);
+    sectionIds.forEach((sid) => {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.shopfloor.board(sid) });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.shopfloor.stats(sid) });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.shopfloor.incomingTransfers(sid) });
+    });
+    void queryClient.invalidateQueries({ queryKey: queryKeys.shopfloor.summary() });
+    void queryClient.invalidateQueries({ queryKey: queryKeys.sections.all() });
+  }
+
+  function invalidateTransfersCaches() {
+    void queryClient.invalidateQueries({ queryKey: queryKeys.transfers.ready(activeSpgId) });
+    void queryClient.invalidateQueries({ queryKey: queryKeys.transfers.history(activeSpgId) });
   }
 
   if (spgs !== undefined && spgs.length === 0) {
@@ -271,9 +296,24 @@ export function TransfersPage() {
                           {fmtQty(t.sent_quantity)}
                         </TableCell>
                         <TableCell>
-                          <Badge variant={isCancelled ? "destructive" : "outline"}>
-                            {isCancelled ? "Аннулирована" : "Принята"}
-                          </Badge>
+                          <div className="flex flex-col items-start gap-1">
+                            <Badge variant={isCancelled ? "destructive" : "outline"}>
+                              {isCancelled ? "Аннулирована" : "Принята"}
+                            </Badge>
+                            {t.is_post_factum && (
+                              <Badge
+                                variant="secondary"
+                                className="bg-amber-100 text-amber-800"
+                                title={
+                                  t.physical_handover_at
+                                    ? `Физически передано: ${new Date(t.physical_handover_at).toLocaleString("ru-RU")}`
+                                    : "Постфактум-передача"
+                                }
+                              >
+                                Постфактум
+                              </Badge>
+                            )}
+                          </div>
                         </TableCell>
                         <TableCell>
                           {!isCancelled && (
@@ -304,8 +344,8 @@ export function TransfersPage() {
           onClose={() => setSendTask(null)}
           onSuccess={() => {
             setSendTask(null);
-            void queryClient.invalidateQueries({ queryKey: ["transfers-ready"] });
-            void queryClient.invalidateQueries({ queryKey: ["transfers-history"] });
+            invalidateShopfloorCaches(sendTask.section_id, sendTask.next_section_id);
+            invalidateTransfersCaches();
           }}
         />
       )}
@@ -316,8 +356,8 @@ export function TransfersPage() {
           onClose={() => setEditTransferRecord(null)}
           onSuccess={() => {
             setEditTransferRecord(null);
-            void queryClient.invalidateQueries({ queryKey: ["transfers-ready"] });
-            void queryClient.invalidateQueries({ queryKey: ["transfers-history"] });
+            invalidateShopfloorCaches(editTransferRecord.from_section_id, editTransferRecord.to_section_id);
+            invalidateTransfersCaches();
           }}
         />
       )}

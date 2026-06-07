@@ -23,6 +23,7 @@ import { useTableQueryEngine, SortConfig, ColumnSortDef } from "@/shared/hooks/u
 import { nextMultiSortConfigs } from "@/shared/lib/multiSort";
 import { toast } from "@/shared/ui/use-toast";
 import { getErrorMessage } from "@/shared/api/client";
+import { queryKeys } from "@/shared/api/queryKeys";
 import {
   BulkResultsDialog,
   runBulkAction,
@@ -66,20 +67,20 @@ export function ExecutionPage() {
   );
 
   const { data: rows, isLoading, error } = useQuery({
-    queryKey: ["production-planning-rows"],
+    queryKey: queryKeys.execution.rows(),
     queryFn: listProductionPlanningRows,
   });
   const { data: plans } = useQuery({
-    queryKey: ["plans"],
+    queryKey: queryKeys.execution.plans(),
     queryFn: listPlans,
   });
   const { data: sections } = useQuery({
-    queryKey: ["sections"],
+    queryKey: queryKeys.sections.all(),
     queryFn: listSections,
   });
 
   const { data: detail, isLoading: detailLoading, error: detailError } = useQuery({
-    queryKey: ["production-planning-row-detail", selectedPositionId],
+    queryKey: queryKeys.execution.rowDetail(selectedPositionId as number),
     queryFn: () => getProductionPlanningRowDetail(selectedPositionId as number),
     enabled: drawerOpen && selectedPositionId !== null,
   });
@@ -98,12 +99,21 @@ export function ExecutionPage() {
   const queryClient = useQueryClient();
 
   const invalidateAll = useCallback(() => {
-    queryClient.invalidateQueries({ queryKey: ["production-planning-rows"] });
-    queryClient.invalidateQueries({ queryKey: ["production-planning-row-detail"] });
-    queryClient.invalidateQueries({ queryKey: ["plans"] });
-    queryClient.invalidateQueries({ queryKey: ["shopfloor-board"] });
-    queryClient.invalidateQueries({ queryKey: ["shopfloor-sections-summary"] });
-    queryClient.invalidateQueries({ queryKey: ["shopfloor-incoming-transfers"] });
+    queryClient.invalidateQueries({ queryKey: queryKeys.execution.rows() });
+    queryClient.invalidateQueries({ queryKey: queryKeys.execution.rowDetailAll() });
+    queryClient.invalidateQueries({ queryKey: queryKeys.execution.plans() });
+    queryClient.invalidateQueries({ queryKey: queryKeys.shopfloor.boardAll() });
+    queryClient.invalidateQueries({ queryKey: queryKeys.shopfloor.statsAll() });
+    queryClient.invalidateQueries({ queryKey: queryKeys.shopfloor.summary() });
+    queryClient.invalidateQueries({ queryKey: queryKeys.shopfloor.incomingTransfersAll() });
+    queryClient.invalidateQueries({ queryKey: queryKeys.transfers.readyAll() });
+    queryClient.invalidateQueries({ queryKey: queryKeys.transfers.historyAll() });
+    queryClient.invalidateQueries({ queryKey: queryKeys.spg.snapshotAll() });
+    queryClient.invalidateQueries({ queryKey: queryKeys.spg.remaindersAll() });
+    queryClient.invalidateQueries({ queryKey: queryKeys.spg.defectsAll() });
+    queryClient.invalidateQueries({ queryKey: queryKeys.plan.allPositions() });
+    queryClient.invalidateQueries({ queryKey: queryKeys.plan.previewAll() });
+    queryClient.invalidateQueries({ queryKey: queryKeys.sections.all() });
   }, [queryClient]);
 
   const bulkSelection = useBulkSelection<number>();
@@ -145,7 +155,7 @@ export function ExecutionPage() {
   });
 
   const { data: manualPassDetail, isLoading: manualPassDetailLoading } = useQuery<ProductionPlanningRowDetail>({
-    queryKey: ["production-planning-row-detail", manualPassDialog.positionId],
+    queryKey: queryKeys.execution.rowDetail(manualPassDialog.positionId as number),
     queryFn: () => getProductionPlanningRowDetail(manualPassDialog.positionId as number),
     enabled: manualPassDialog.open && manualPassDialog.positionId !== null,
   });

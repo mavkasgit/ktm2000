@@ -7,6 +7,7 @@ import { listSections } from "@/shared/api/sections"
 import { updatePositionQuantity } from "@/shared/api/productionPlans"
 import { toast } from "@/shared/ui"
 import { getErrorMessage } from "@/shared/api/client"
+import { queryKeys } from "@/shared/api/queryKeys"
 
 const statusLabels: Record<string, string> = {
   draft: "Черновик",
@@ -123,8 +124,15 @@ export function RowDetailsContent({
         setCurrentQuantity(newQty)
       }
       // Refetch position details to update the sidebar
-      queryClient.invalidateQueries({ queryKey: ["all-plan-positions"] })
-      queryClient.invalidateQueries({ queryKey: ["plan-position-detail", data.id] })
+      void queryClient.invalidateQueries({ queryKey: queryKeys.plan.allPositions() });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.plan.positionDetail(Number(data.id)) });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.sections.all() });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.shopfloor.boardAll() });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.shopfloor.statsAll() });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.shopfloor.summary() });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.transfers.readyAll() });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.transfers.historyAll() });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.plan.previewAll() });
       toast({ title: "Количество обновлено", variant: "success" })
       onSaved?.()
     },
@@ -174,7 +182,7 @@ export function RowDetailsContent({
   const hasCurrentStage = Boolean(data.currentStageSectionName && data.currentStageSequence)
 
   const { data: sectionsData } = useQuery({
-    queryKey: ["sections"],
+    queryKey: queryKeys.sections.all(),
     queryFn: listSections,
     enabled: hasCurrentStage || hasStages,
   })
@@ -520,8 +528,8 @@ export function RowDetailsContent({
                                   )}
                                   <span>{fmtQty(event.quantity)} шт.</span>
                                   <span className="text-muted-foreground">{fmtEventAt(event.event_at)}</span>
-                                  {event.task_id && <span className="text-muted-foreground">task #{event.task_id}</span>}
-                                  {event.transfer_id && <span className="text-muted-foreground">transfer #{event.transfer_id}</span>}
+                                  {event.task_id && <span className="text-muted-foreground">задача #{event.task_id}</span>}
+                                  {event.transfer_id && <span className="text-muted-foreground">передача #{event.transfer_id}</span>}
                                 </div>
                               ))
                             )}

@@ -6,9 +6,10 @@ import { getExcelSheetNames, previewExcelSheet, type SheetPreviewResponse } from
 import { Button, Input, AlertDialog, AlertDialogContent, AlertDialogHeader, AlertDialogTitle, AlertDialogDescription, AlertDialogFooter, AlertDialogAction, AlertDialogCancel, FiltersPanel, Select, SelectContent, SelectItem, SelectTrigger, SelectValue, type FiltersPanelField } from "shared/ui"
 import { buildActiveFilterSummary } from "shared/ui/buildActiveFilterSummary"
 import { RouteStepsDisplay } from "shared/ui/RouteStepsDisplay"
-import { useQuery } from "@tanstack/react-query"
+import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { listImportTemplates, type ImportTemplate } from "@/shared/api/importTemplates"
 import { getErrorMessage } from "@/shared/api/client"
+import { queryKeys } from "@/shared/api/queryKeys"
 import {
   Dialog,
   DialogContent,
@@ -161,7 +162,7 @@ function RawPreviewTable({ rows, sortConfig, onSort, expanded }: RawPreviewTable
       <thead className="border-b bg-muted/50">
         <tr>
           <th className="text-left p-2 w-10"></th>
-          <th className="text-left p-2 w-20 whitespace-nowrap">Id</th>
+          <th className="text-left p-2 w-20 whitespace-nowrap">ID</th>
           <th
             onClick={() => onSort?.("source_row_number")}
             className="text-left p-2 w-10 cursor-pointer select-none whitespace-nowrap"
@@ -469,6 +470,7 @@ export function ImportWizard(props: {
   productionPlanId?: number
   templateId?: number
 }) {
+  const queryClient = useQueryClient()
   const [step, setStep] = useState<"upload" | "preview" | "result">("upload")
   const [file, setFile] = useState<File | null>(null)
   const [sheets, setSheets] = useState<string[]>([])
@@ -496,7 +498,7 @@ export function ImportWizard(props: {
   const fileInputRef = useRef<HTMLInputElement>(null)
   const navigate = useNavigate()
   const { data: templates } = useQuery<ImportTemplate[]>({
-    queryKey: ["import-templates", "import-modal"],
+    queryKey: queryKeys.importTemplates.modal(),
     queryFn: listImportTemplates,
     enabled: props.open,
   })
@@ -809,6 +811,14 @@ export function ImportWizard(props: {
       setResult(data)
       setPendingChangeSet(null)
       setStep("result")
+      // Инвалидируем все домены, которые зависят от плана
+      void queryClient.invalidateQueries({ queryKey: queryKeys.plan.allPositions() });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.plan.preview(changeSet.planId) });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.shopfloor.boardAll() });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.sections.all() });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.spg.snapshotAll() });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.plan.batchPreview(changeSet.changeSetId) });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.importTemplates.all() });
       props.onSuccess(changeSet.planId, changeSet.changeSetId)
     } catch (e) {
       // If apply failed right after creating a change set, cleanup immediately.
@@ -843,6 +853,8 @@ export function ImportWizard(props: {
     // Discard any pending change set on reset
     if (pendingChangeSet) {
       discardImport(pendingChangeSet.planId, pendingChangeSet.changeSetId).catch(() => {})
+      void queryClient.invalidateQueries({ queryKey: queryKeys.plan.allPositions() });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.plan.preview(pendingChangeSet.planId) });
     }
     setStep("upload")
     setFile(null)

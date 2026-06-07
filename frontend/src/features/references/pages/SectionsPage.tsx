@@ -16,6 +16,7 @@ import { AlertDialog, AlertDialogContent, AlertDialogHeader, AlertDialogTitle, A
 import { toast } from "@/shared/ui/use-toast";
 import type { EntityDialogField } from "@/shared/ui/EntityDialog";
 import type { OperationGroup, SectionOperationInfo } from "shared/api/sections";
+import { queryKeys } from "@/shared/api/queryKeys";
 
 type Section = {
   id?: string | number;
@@ -175,6 +176,23 @@ export function SectionsPage() {
   // Move operation dialog
   const [moveOpDialog, setMoveOpDialog] = useState<{ sectionId: number; opId: number; opName: string; currentGroup: string | null } | null>(null);
 
+  // Единая точка инвалидации связанных кэшей после изменений секций/операций/ГХП.
+  const invalidateRelatedCaches = useCallback(() => {
+    void queryClient.invalidateQueries({ queryKey: queryKeys.sections.all() });
+    void queryClient.invalidateQueries({ queryKey: queryKeys.operations.all() });
+    void queryClient.invalidateQueries({ queryKey: queryKeys.operationGroups.all() });
+    void queryClient.invalidateQueries({ queryKey: queryKeys.spg.all() });
+    void queryClient.invalidateQueries({ queryKey: queryKeys.shopfloor.boardAll() });
+    void queryClient.invalidateQueries({ queryKey: queryKeys.shopfloor.statsAll() });
+    void queryClient.invalidateQueries({ queryKey: queryKeys.shopfloor.summary() });
+    void queryClient.invalidateQueries({ queryKey: queryKeys.shopfloor.incomingTransfersAll() });
+    void queryClient.invalidateQueries({ queryKey: queryKeys.transfers.readyAll() });
+    void queryClient.invalidateQueries({ queryKey: queryKeys.transfers.historyAll() });
+    void queryClient.invalidateQueries({ queryKey: queryKeys.spg.snapshotAll() });
+    void queryClient.invalidateQueries({ queryKey: queryKeys.routes.all() });
+    void queryClient.invalidateQueries({ queryKey: queryKeys.techcards.all() });
+  }, [queryClient]);
+
   const loadOpGroups = useCallback(async (sectionId: number, sectionName: string) => {
     setExpandedSectionId(sectionId);
     setExpandedSectionName(sectionName);
@@ -208,11 +226,11 @@ export function SectionsPage() {
         ...g,
         operations: g.operations.map((o) => o.id === opId ? { ...o, is_significant: !current } : o),
       })));
-      await queryClient.invalidateQueries({ queryKey: ["shopfloor"] });
+      invalidateRelatedCaches();
     } catch (e) {
       toast({ title: "Ошибка обновления", description: API.getErrorMessage(e), variant: "destructive" });
     }
-  }, [queryClient]);
+  }, [invalidateRelatedCaches]);
 
   const openAddOp = useCallback((sectionId: number, groupCode: string | null) => {
     setOpDialogSectionId(sectionId);
@@ -280,7 +298,7 @@ export function SectionsPage() {
             return [...prev, { group_code: null, group_name: null, sort_order: 0, operations: [created as SectionOperationInfo] }];
           });
         }
-        await queryClient.invalidateQueries({ queryKey: ["shopfloor"] });
+        await invalidateRelatedCaches();
         setOpsCountById((prev) => ({ ...prev, [opDialogSectionId]: (prev[opDialogSectionId] ?? 0) + 1 }));
         setOpDialogOpen(false);
       } catch (e) {
@@ -298,13 +316,13 @@ export function SectionsPage() {
           ...g,
           operations: g.operations.map((o) => o.id === opDialogOpId ? { ...o, ...updated } : o),
         })));
-        await queryClient.invalidateQueries({ queryKey: ["shopfloor"] });
+        await invalidateRelatedCaches();
         setOpDialogOpen(false);
       } catch (e) {
         toast({ title: "Ошибка обновления", description: API.getErrorMessage(e), variant: "destructive" });
       }
     }
-  }, [opDialogMode, opDialogSectionId, opDialogOpId, opDialogGroupCode, opGroups, queryClient]);
+  }, [opDialogMode, opDialogSectionId, opDialogOpId, opDialogGroupCode, opGroups, invalidateRelatedCaches]);
 
   const deleteOp = useCallback(async (sectionId: number, opId: number, opName: string) => {
     setDeleteOpDialog({ sectionId, opId, opName });
@@ -323,13 +341,13 @@ export function SectionsPage() {
         const cur = prev[sectionId] ?? 0;
         return { ...prev, [sectionId]: Math.max(0, cur - 1) };
       });
-      await queryClient.invalidateQueries({ queryKey: ["shopfloor"] });
+      await invalidateRelatedCaches();
     } catch (e) {
       toast({ title: "Ошибка удаления", description: API.getErrorMessage(e), variant: "destructive" });
     } finally {
       setDeleteOpDialog(null);
     }
-  }, [deleteOpDialog, queryClient]);
+  }, [deleteOpDialog, invalidateRelatedCaches]);
 
   // Group management
   const openAddGroup = useCallback((sectionId: number) => {
@@ -364,6 +382,7 @@ export function SectionsPage() {
         setOpGroups((prev) => [...prev, created]);
         setOpsCountById((prev) => ({ ...prev, [groupDialogSectionId]: (prev[groupDialogSectionId] ?? 0) + created.operations.length }));
         setGroupDialogOpen(false);
+        invalidateRelatedCaches();
       } catch (e) {
         toast({ title: "Ошибка создания группы", description: API.getErrorMessage(e), variant: "destructive" });
       }
@@ -375,11 +394,12 @@ export function SectionsPage() {
         const updated = await SectionsAPI.updateOperationGroup(groupDialogSectionId, groupDialogGroupCode, payload);
         setOpGroups((prev) => prev.map((g) => g.group_code === groupDialogGroupCode ? updated : g));
         setGroupDialogOpen(false);
+        invalidateRelatedCaches();
       } catch (e) {
         toast({ title: "Ошибка обновления группы", description: API.getErrorMessage(e), variant: "destructive" });
       }
     }
-  }, [groupDialogMode, groupDialogSectionId, groupDialogGroupCode]);
+  }, [groupDialogMode, groupDialogSectionId, groupDialogGroupCode, invalidateRelatedCaches]);
 
   const confirmedDeleteGroup = useCallback(async () => {
     if (!deleteGroupDialog) return;
@@ -393,10 +413,11 @@ export function SectionsPage() {
         return { ...prev, [sectionId]: Math.max(0, cur - removedCount) };
       });
       setDeleteGroupDialog(null);
+      invalidateRelatedCaches();
     } catch (e) {
       toast({ title: "Ошибка удаления группы", description: API.getErrorMessage(e), variant: "destructive" });
     }
-  }, [deleteGroupDialog, opGroups]);
+  }, [deleteGroupDialog, opGroups, invalidateRelatedCaches]);
 
   const openMoveOp = useCallback((sectionId: number, op: SectionOperationInfo) => {
     setMoveOpDialog({ sectionId, opId: op.id, opName: op.operation_name, currentGroup: op.group_code });
@@ -430,10 +451,11 @@ export function SectionsPage() {
         );
       });
       setMoveOpDialog(null);
+      invalidateRelatedCaches();
     } catch (e) {
       toast({ title: "Ошибка перемещения", description: API.getErrorMessage(e), variant: "destructive" });
     }
-  }, [moveOpDialog, opGroups]);
+  }, [moveOpDialog, opGroups, invalidateRelatedCaches]);
 
   const moveItem = useCallback((fromIndex: number, toIndex: number) => {
     setItems((prev) => {
@@ -472,14 +494,13 @@ export function SectionsPage() {
       const ids = items.map((item) => Number(item.id)).filter(Boolean);
       if (ids.length > 0) {
         await SectionsAPI.reorderSections(ids);
-        await queryClient.invalidateQueries({ queryKey: ["sections"] });
-        await queryClient.invalidateQueries({ queryKey: ["shopfloor-sections-summary"] });
+        invalidateRelatedCaches();
       }
     } catch (e) {
       toast({ title: "Ошибка сортировки", description: API.getErrorMessage(e), variant: "destructive" });
       await load();
     }
-  }, [items, load, queryClient]);
+  }, [items, load, invalidateRelatedCaches]);
 
   const moveItemUp = useCallback(async (index: number) => {
     moveItem(index, index - 1);
@@ -576,6 +597,7 @@ export function SectionsPage() {
       setSpgDialogOpen(false);
       setEditingSpg(null);
       await loadSpgs();
+      invalidateRelatedCaches();
     } catch (e) {
       const action = spgDialogMode === "edit" ? "обновления" : "создания";
       toast({ title: `Ошибка ${action} ГХП`, description: API.getErrorMessage(e), variant: "destructive" });
@@ -588,6 +610,7 @@ export function SectionsPage() {
       await SpgAPI.deleteSpg(deleteSpgDialog.id);
       toast({ title: "Удалено", description: `ГХП "${deleteSpgDialog.name}" удалено`, variant: "success" });
       await Promise.all([loadSpgs(), load()]);
+      invalidateRelatedCaches();
     } catch (e) {
       toast({ title: "Ошибка удаления ГХП", description: API.getErrorMessage(e), variant: "destructive" });
     } finally {
@@ -629,6 +652,7 @@ export function SectionsPage() {
       }
       setDialogOpen(false);
       await load();
+      invalidateRelatedCaches();
     } catch (e) {
       const action = dialogMode === "edit" ? `обновления: ${editingItem?.name} (ID: ${editingItem?.id})` : `создания: ${payload.name}`;
       toast({ title: `Ошибка ${action}`, description: API.getErrorMessage(e), variant: "destructive" });
@@ -642,6 +666,7 @@ export function SectionsPage() {
       toast({ title: "Удалено", description: `Участок "${editingItem.name}" (код: ${editingItem.code}, ID: ${editingItem.id}, тип: ${KIND_LABELS[editingItem.kind ?? "production"] ?? editingItem.kind}) успешно удалён`, variant: "success" });
       setDialogOpen(false);
       await load();
+      invalidateRelatedCaches();
     } catch (e) {
       toast({ title: `Ошибка удаления: ${editingItem.name} (код: ${editingItem.code}, ID: ${editingItem.id})`, description: API.getErrorMessage(e), variant: "destructive" });
     } finally {

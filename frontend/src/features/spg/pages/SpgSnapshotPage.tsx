@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useState } from "react";
+import { useState } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Loader2 } from "lucide-react";
 
 import {
@@ -16,92 +17,57 @@ import { ProductRemaindersDialog } from "../components/ProductRemaindersDialog";
 import { ManualOperationDialog } from "../components/ManualOperationDialog";
 import { DefectsListPanel } from "../components/DefectsListPanel";
 import { getSpgDefects, type DefectOut } from "@/shared/api/defects";
+import { queryKeys } from "@/shared/api/queryKeys";
 
 type Tab = "snapshot" | "remainders" | "defects";
 
 export function SpgSnapshotPage() {
-  const [spgs, setSpgs] = useState<SpgOut[]>([]);
   const [selectedId, setSelectedId] = useState<number | null>(null);
-  const [snapshot, setSnapshot] = useState<SpgSnapshotResponse | null>(null);
-  const [remainders, setRemainders] = useState<SpgRemainder[]>([]);
-  const [defects, setDefects] = useState<DefectOut[]>([]);
-  const [loadingList, setLoadingList] = useState(true);
-  const [loadingSnapshot, setLoadingSnapshot] = useState(false);
-  const [loadingRemainders, setLoadingRemainders] = useState(false);
-  const [loadingDefects, setLoadingDefects] = useState(false);
-  const [error, setError] = useState<string | null>(null);
   const [tab, setTab] = useState<Tab>("snapshot");
   const [productRemaindersFor, setProductRemaindersFor] = useState<number | null>(null);
   const [manualOpProductId, setManualOpProductId] = useState<number | null>(null);
+  const queryClient = useQueryClient();
 
-  useEffect(() => {
-    setLoadingList(true);
-    getSpgList()
-      .then((items) => {
-        setSpgs(items);
-        if (items.length > 0 && selectedId === null) {
-          setSelectedId(items[0].id);
-        }
-      })
-      .catch(() => setError("Не удалось загрузить список групп"))
-      .finally(() => setLoadingList(false));
-  }, []);
+  const { data: spgs = [], isLoading: loadingList } = useQuery({
+    queryKey: queryKeys.spg.all(),
+    queryFn: getSpgList,
+  });
 
-  const loadSnapshot = useCallback(async (spgId: number) => {
-    setLoadingSnapshot(true);
-    setError(null);
-    try {
-      const data = await getSpgSnapshot(spgId);
-      setSnapshot(data);
-    } catch {
-      setError("Не удалось загрузить данные");
-      setSnapshot(null);
-    } finally {
-      setLoadingSnapshot(false);
-    }
-  }, []);
+  const effectiveSpgId = selectedId ?? spgs[0]?.id ?? null;
 
-  const loadRemainders = useCallback(async (spgId: number) => {
-    setLoadingRemainders(true);
-    try {
-      const data = await listSpgRemainders(spgId);
-      setRemainders(data);
-    } catch {
-      // silently fail
-    } finally {
-      setLoadingRemainders(false);
-    }
-  }, []);
+  const { data: snapshot = null, isLoading: loadingSnapshot } = useQuery({
+    queryKey: effectiveSpgId ? queryKeys.spg.snapshot(effectiveSpgId) : ["spg-snapshot", "none"],
+    queryFn: () => getSpgSnapshot(effectiveSpgId as number),
+    enabled: effectiveSpgId !== null,
+  });
 
-  const loadDefects = useCallback(async (spgId: number) => {
-    setLoadingDefects(true);
-    try {
-      const data = await getSpgDefects(spgId);
-      setDefects(data);
-    } catch {
-      // silently fail
-    } finally {
-      setLoadingDefects(false);
-    }
-  }, []);
+  const { data: remainders = [], isLoading: loadingRemainders } = useQuery({
+    queryKey: effectiveSpgId ? queryKeys.spg.remainders(effectiveSpgId) : ["spg-remainders", "none"],
+    queryFn: () => listSpgRemainders(effectiveSpgId as number),
+    enabled: effectiveSpgId !== null,
+  });
 
-  useEffect(() => {
-    if (selectedId !== null) {
-      loadSnapshot(selectedId);
-      loadRemainders(selectedId);
-      loadDefects(selectedId);
-    }
-  }, [selectedId, loadSnapshot, loadRemainders, loadDefects]);
+  const { data: defects = [], isLoading: loadingDefects } = useQuery({
+    queryKey: effectiveSpgId ? queryKeys.spg.defects(effectiveSpgId) : ["spg-defects", "none"],
+    queryFn: () => getSpgDefects(effectiveSpgId as number),
+    enabled: effectiveSpgId !== null,
+  });
 
   const handleRefresh = () => {
-    if (selectedId !== null) {
-      loadSnapshot(selectedId);
-      loadRemainders(selectedId);
-      loadDefects(selectedId);
-    }
+    if (effectiveSpgId === null) return;
+    void queryClient.invalidateQueries({ queryKey: queryKeys.spg.snapshot(effectiveSpgId) });
+    void queryClient.invalidateQueries({ queryKey: queryKeys.spg.remainders(effectiveSpgId) });
+    void queryClient.invalidateQueries({ queryKey: queryKeys.spg.defects(effectiveSpgId) });
   };
 
-  const selectedSpg = spgs.find((s) => s.id === selectedId);
+  const refreshAll = () => {
+    if (effectiveSpgId === null) return;
+    void queryClient.invalidateQueries({ queryKey: queryKeys.spg.snapshot(effectiveSpgId) });
+    void queryClient.invalidateQueries({ queryKey: queryKeys.spg.remainders(effectiveSpgId) });
+    void queryClient.invalidateQueries({ queryKey: queryKeys.spg.defects(effectiveSpgId) });
+  };
+
+  const selectedSpg: SpgOut | undefined = spgs.find((s) => s.id === effectiveSpgId);
 
   return (
     <div className="space-y-6 p-4">
@@ -118,7 +84,7 @@ export function SpgSnapshotPage() {
           Загрузка групп...
         </div>
       ) : (
-        <SpgSelector spgs={spgs} selectedId={selectedId} onSelect={setSelectedId} />
+        <SpgSelector spgs={spgs} selectedId={effectiveSpgId} onSelect={setSelectedId} />
       )}
 
       {selectedSpg && (
@@ -140,10 +106,8 @@ export function SpgSnapshotPage() {
         </div>
       )}
 
-      {error && <div className="rounded-md bg-destructive/10 p-3 text-sm text-destructive">{error}</div>}
-
       {/* Tabs */}
-      {selectedId !== null && (
+      {effectiveSpgId !== null && (
         <div className="flex gap-1 border-b">
           <button
             type="button"
@@ -190,70 +154,58 @@ export function SpgSnapshotPage() {
           </div>
         ) : snapshot ? (
           <SpgSnapshotTable
-            snapshot={snapshot}
+            snapshot={snapshot as SpgSnapshotResponse}
             onShowProductRemainders={setProductRemaindersFor}
           />
         ) : null
       )}
 
-      {tab === "remainders" && selectedSpg && (
+      {tab === "remainders" && selectedSpg && effectiveSpgId !== null && (
         <RemaindersListPanel
-          spgId={selectedId!}
+          spgId={effectiveSpgId}
           sections={selectedSpg.sections}
-          remainders={remainders}
+          remainders={remainders as SpgRemainder[]}
           isLoading={loadingRemainders}
-          onRefresh={() => {
-            loadRemainders(selectedId!);
-            loadSnapshot(selectedId!);
-            loadDefects(selectedId!);
-          }}
+          onRefresh={refreshAll}
         />
       )}
 
-      {tab === "defects" && selectedSpg && (
+      {tab === "defects" && selectedSpg && effectiveSpgId !== null && (
         <DefectsListPanel
-          spgId={selectedId!}
+          spgId={effectiveSpgId}
           sections={selectedSpg.sections}
-          remainders={remainders}
-          defects={defects}
+          remainders={remainders as SpgRemainder[]}
+          defects={defects as DefectOut[]}
           isLoading={loadingDefects}
-          onRefresh={() => {
-            loadDefects(selectedId!);
-            loadRemainders(selectedId!);
-            loadSnapshot(selectedId!);
-          }}
+          onRefresh={refreshAll}
         />
       )}
 
       {/* Drill-down dialog from snapshot table */}
-      {selectedId !== null && selectedSpg && (
+      {effectiveSpgId !== null && selectedSpg && (
         <ProductRemaindersDialog
           open={productRemaindersFor !== null}
           onOpenChange={(o) => {
             if (!o) setProductRemaindersFor(null);
           }}
-          spgId={selectedId}
+          spgId={effectiveSpgId}
           productId={productRemaindersFor}
-          snapshot={snapshot}
+          snapshot={snapshot as SpgSnapshotResponse | null}
           onManualOperation={(pid) => setManualOpProductId(pid)}
         />
       )}
 
       {/* Manual stock operation launched from product drill-down */}
-      {selectedId !== null && selectedSpg && (
+      {effectiveSpgId !== null && selectedSpg && (
         <ManualOperationDialog
           open={manualOpProductId !== null}
           onOpenChange={(o) => {
             if (!o) setManualOpProductId(null);
           }}
-          spgId={selectedId}
+          spgId={effectiveSpgId}
           sections={selectedSpg.sections}
           defaultProductId={manualOpProductId}
-          onSaved={() => {
-            loadSnapshot(selectedId);
-            loadRemainders(selectedId);
-            loadDefects(selectedId);
-          }}
+          onSaved={refreshAll}
         />
       )}
     </div>

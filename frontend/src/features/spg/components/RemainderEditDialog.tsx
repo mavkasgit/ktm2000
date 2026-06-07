@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { ArrowDownUp, History as HistoryIcon, Pencil, Plus, Trash2, Check, X, Search, Upload, Loader2 } from "lucide-react";
 import { IconAlertTriangle } from "@tabler/icons-react";
 
@@ -27,6 +28,7 @@ import { listProducts, getProductRouteStages } from "@/shared/api/products";
 import { ManualOperationDialog } from "./ManualOperationDialog";
 import { RemainderHistoryDrawer } from "./RemainderHistoryDrawer";
 import { ImportRemaindersDialog } from "./ImportRemaindersDialog";
+import { queryKeys } from "@/shared/api/queryKeys";
 
 interface RemainderEditDialogProps {
   open: boolean;
@@ -45,12 +47,12 @@ export function RemainderEditDialog({
   editingRemainder,
   onSaved,
 }: RemainderEditDialogProps) {
+  const queryClient = useQueryClient();
   const [products, setProducts] = useState<Product[]>([]);
   const [productSearch, setProductSearch] = useState("");
   const [selectedProductId, setSelectedProductId] = useState<number | null>(null);
   const [selectedSectionId, setSelectedSectionId] = useState<number | null>(null);
   const [quantity, setQuantity] = useState("");
-  const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   // Completed stages states
@@ -116,7 +118,34 @@ export function RemainderEditDialog({
       )
     : products.slice(0, 50);
 
-  const handleSave = async () => {
+  const saveMutation = useMutation({
+    mutationFn: async (input: { kind: "create" | "update"; payload: ManualRemainderCreateInput | ManualRemainderUpdateInput }) => {
+      if (input.kind === "create") {
+        await createManualRemainder(spgId, input.payload as ManualRemainderCreateInput);
+      } else {
+        await updateManualRemainder(
+          spgId,
+          (editingRemainder as SpgRemainder).id,
+          input.payload as ManualRemainderUpdateInput,
+        );
+      }
+    },
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.spg.snapshot(spgId) });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.spg.remainders(spgId) });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.spg.remainderHistory(spgId) });
+      onSaved();
+      onOpenChange(false);
+    },
+    onError: (e: unknown) => {
+      const msg = e && typeof e === "object" && "response" in e
+        ? (e as { response?: { data?: { detail?: string } } }).response?.data?.detail
+        : undefined;
+      setError((msg as string | undefined) || "Ошибка сохранения");
+    },
+  });
+
+  const handleSave = () => {
     if (!selectedProductId || !selectedSectionId || !quantity) {
       setError("Заполните все поля");
       return;
@@ -136,34 +165,21 @@ export function RemainderEditDialog({
         sequence: st.sequence,
       }));
 
-    setSaving(true);
-    setError(null);
-    try {
-      if (editingRemainder) {
-        const payload: ManualRemainderUpdateInput = {
-          quantity: qty,
-          section_id: selectedSectionId,
-          completed_stages,
-        };
-        await updateManualRemainder(spgId, editingRemainder.id, payload);
-      } else {
-        const payload: ManualRemainderCreateInput = {
-          product_id: selectedProductId,
-          section_id: selectedSectionId,
-          quantity: qty,
-          completed_stages,
-        };
-        await createManualRemainder(spgId, payload);
-      }
-      onSaved();
-      onOpenChange(false);
-    } catch (e: unknown) {
-      const msg = e && typeof e === "object" && "response" in e
-        ? (e as { response?: { data?: { detail?: string } } }).response?.data?.detail
-        : undefined;
-      setError(msg || "Ошибка сохранения");
-    } finally {
-      setSaving(false);
+    if (editingRemainder) {
+      const payload: ManualRemainderUpdateInput = {
+        quantity: qty,
+        section_id: selectedSectionId,
+        completed_stages,
+      };
+      saveMutation.mutate({ kind: "update", payload });
+    } else {
+      const payload: ManualRemainderCreateInput = {
+        product_id: selectedProductId as number,
+        section_id: selectedSectionId,
+        quantity: qty,
+        completed_stages,
+      };
+      saveMutation.mutate({ kind: "create", payload });
     }
   };
 
@@ -288,8 +304,8 @@ export function RemainderEditDialog({
             <Button variant="outline" onClick={() => onOpenChange(false)}>
               Отмена
             </Button>
-            <Button onClick={handleSave} disabled={saving}>
-              {saving ? "Сохранение..." : editingRemainder ? "Обновить" : "Добавить"}
+            <Button onClick={handleSave} disabled={saveMutation.isPending}>
+              {saveMutation.isPending ? "Сохранение..." : editingRemainder ? "Обновить" : "Добавить"}
             </Button>
           </div>
         </div>
@@ -315,6 +331,7 @@ export function RemaindersListPanel({
   isLoading,
   onRefresh,
 }: RemaindersListPanelProps) {
+  const queryClient = useQueryClient();
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editing, setEditing] = useState<SpgRemainder | null>(null);
   const [manualOpOpen, setManualOpOpen] = useState(false);
@@ -325,7 +342,6 @@ export function RemaindersListPanel({
   const [inlineEditingId, setInlineEditingId] = useState<number | null>(null);
   const [inlineEditingQuantity, setInlineEditingQuantity] = useState("");
   const [inlineEditingError, setInlineEditingError] = useState<string | null>(null);
-  const [isInlineSaving, setIsInlineSaving] = useState(false);
 
   // Состояния для фильтрации
   const [searchQuery, setSearchQuery] = useState("");
@@ -342,30 +358,36 @@ export function RemaindersListPanel({
     setInlineEditingError(null);
   };
 
-  const handleInlineSave = async (r: SpgRemainder) => {
+  const inlineSaveMutation = useMutation({
+    mutationFn: (input: { remainder: SpgRemainder; quantity: number }) =>
+      updateManualRemainder(spgId, input.remainder.id, {
+        quantity: input.quantity,
+        section_id: input.remainder.section_id,
+      }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.spg.remainders(spgId) });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.spg.snapshot(spgId) });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.spg.remainderHistory(spgId) });
+      setInlineEditingId(null);
+      setInlineEditingQuantity("");
+      onRefresh();
+    },
+    onError: (e: unknown) => {
+      const msg = e && typeof e === "object" && "response" in e
+        ? (e as { response?: { data?: { detail?: string } } }).response?.data?.detail
+        : undefined;
+      setInlineEditingError((msg as string | undefined) || "Ошибка сохранения");
+    },
+  });
+
+  const handleInlineSave = (r: SpgRemainder) => {
     const qty = parseFloat(inlineEditingQuantity);
     if (isNaN(qty) || qty <= 0) {
       setInlineEditingError("Должно быть > 0");
       return;
     }
-    setIsInlineSaving(true);
     setInlineEditingError(null);
-    try {
-      await updateManualRemainder(spgId, r.id, {
-        quantity: qty,
-        section_id: r.section_id,
-      });
-      setInlineEditingId(null);
-      setInlineEditingQuantity("");
-      onRefresh();
-    } catch (e: unknown) {
-      const msg = e && typeof e === "object" && "response" in e
-        ? (e as { response?: { data?: { detail?: string } } }).response?.data?.detail
-        : undefined;
-      setInlineEditingError(msg || "Ошибка сохранения");
-    } finally {
-      setIsInlineSaving(false);
-    }
+    inlineSaveMutation.mutate({ remainder: r, quantity: qty });
   };
 
   const handleInlineCancel = () => {
@@ -374,10 +396,19 @@ export function RemaindersListPanel({
     setInlineEditingError(null);
   };
 
-  const handleDelete = async (r: SpgRemainder) => {
+  const deleteMutation = useMutation({
+    mutationFn: (r: SpgRemainder) => deleteManualRemainder(spgId, r.id),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.spg.remainders(spgId) });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.spg.snapshot(spgId) });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.spg.remainderHistory(spgId) });
+      onRefresh();
+    },
+  });
+
+  const handleDelete = (r: SpgRemainder) => {
     if (!confirm(`Удалить остаток ${r.product_sku} (${r.remainder_quantity} шт.)?`)) return;
-    await deleteManualRemainder(spgId, r.id);
-    onRefresh();
+    deleteMutation.mutate(r);
   };
 
   // Применение фильтрации и поиска перед маппингом
@@ -484,7 +515,7 @@ export function RemaindersListPanel({
                               step="any"
                               value={inlineEditingQuantity}
                               onChange={(e) => setInlineEditingQuantity(e.target.value)}
-                              disabled={isInlineSaving}
+                              disabled={inlineSaveMutation.isPending}
                               autoFocus
                             />
                             {inlineEditingError && (
@@ -526,7 +557,7 @@ export function RemaindersListPanel({
                             <button
                               type="button"
                               onClick={() => handleInlineSave(r)}
-                              disabled={isInlineSaving}
+                              disabled={inlineSaveMutation.isPending}
                               className="p-1 rounded hover:bg-emerald-100 text-emerald-600 dark:hover:bg-emerald-950/30"
                               title="Сохранить"
                             >
@@ -535,7 +566,7 @@ export function RemaindersListPanel({
                             <button
                               type="button"
                               onClick={handleInlineCancel}
-                              disabled={isInlineSaving}
+                              disabled={inlineSaveMutation.isPending}
                               className="p-1 rounded hover:bg-rose-100 text-rose-600 dark:hover:bg-rose-950/30"
                               title="Отменить"
                             >

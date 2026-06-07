@@ -6,6 +6,7 @@ import { cn } from "@/shared/utils/cn"
 import { PlanPositionOut } from "@/shared/api/productionPlans"
 import { ProductionRoute } from "@/shared/api/routes"
 import { routeCheck } from "@/shared/api/productionPlans"
+import { queryKeys } from "@/shared/api/queryKeys"
 import { PLAN_POSITIONS_GRID } from "../lib/gridTemplates"
 import {
   translateLabel,
@@ -71,7 +72,7 @@ export function PositionRow({ pos, onApprove, onDelete, selected, routes, onAssi
 
   // Route-check runs eagerly for all positions with an assigned route
   const { data: routeCheckData, isLoading: routeCheckLoading, error: routeCheckError } = useQuery({
-    queryKey: ["route-check", pos.production_plan_id, pos.id],
+    queryKey: queryKeys.plan.routeCheck(pos.production_plan_id as number, pos.id),
     queryFn: () => routeCheck(pos.production_plan_id!, pos.id),
     enabled: pos.route_id !== null && pos.validation_status === "valid",
     staleTime: 60_000,
