@@ -5,21 +5,21 @@
 export const TABLE_ROW_STYLES = {
   // Default rows
   defaultRow: "hover:bg-accent/60 hover:outline hover:outline-1 hover:outline-ring/30",
-  defaultGroupRow: "bg-blue-50/80 hover:bg-blue-100 hover:outline hover:outline-1 hover:outline-blue-300",
-  defaultGroupHeader: "bg-blue-50/80 hover:bg-blue-100 hover:outline hover:outline-1 hover:outline-blue-300",
-  defaultGroupContainer: "bg-muted/20",
+  defaultGroupRow: "hover:bg-accent/40 hover:outline hover:outline-1 hover:outline-ring/20",
+  defaultGroupHeader: "bg-slate-50/50 hover:bg-slate-100 hover:outline hover:outline-1 hover:outline-slate-200",
+  defaultGroupContainer: "bg-slate-50/30",
 
   // Selected rows (bulk)
-  selectedRow: "bg-green-100 ring-1 ring-green-400 hover:bg-green-200",
-  selectedMobileCard: "bg-green-100",
+  selectedRow: "bg-indigo-50/80 ring-1 ring-indigo-300 hover:bg-indigo-100/70",
+  selectedMobileCard: "bg-indigo-50/80 border border-indigo-200",
 
   // Selected group header
-  selectedGroupHeader: "bg-green-200 hover:bg-green-300",
-  selectedGroupContainer: "bg-green-200",
+  selectedGroupHeader: "bg-indigo-100/70 hover:bg-indigo-200/60",
+  selectedGroupContainer: "bg-indigo-50/40",
 
   // Selection label
-  selectedLabel: "text-green-700",
+  selectedLabel: "text-indigo-700 font-medium",
 
   // Ring for visual focus
-  selectedRing: "ring-1 ring-green-400",
+  selectedRing: "ring-1 ring-indigo-300",
 } as const;

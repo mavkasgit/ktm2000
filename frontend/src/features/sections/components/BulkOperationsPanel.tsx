@@ -176,6 +176,24 @@ function groupTasks(tasks: SectionBoardTask[]): BulkOpGroup[] {
   return Array.from(map.values()).map((groupTasks) => initGroup(groupTasks));
 }
 
+function StatusDot({ status }: { status: string }) {
+  let colorClass = "bg-slate-300";
+  if (["in_progress", "in_work"].includes(status)) {
+    colorClass = "bg-amber-500 animate-pulse";
+  } else if (["ready", "partially_completed", "partially"].includes(status)) {
+    colorClass = "bg-blue-500";
+  } else if (["completed", "done"].includes(status)) {
+    colorClass = "bg-emerald-500";
+  } else if (status === "blocked") {
+    colorClass = "bg-red-500";
+  } else if (["waiting_previous", "pending"].includes(status)) {
+    colorClass = "bg-yellow-400";
+  }
+  return (
+    <span className={`inline-block h-2.5 w-2.5 rounded-full ${colorClass}`} title={status} />
+  );
+}
+
 interface BulkOperationsPanelProps {
   tasks: SectionBoardTask[];
   onExecuteAll: (data: {
@@ -339,7 +357,7 @@ export function BulkOperationsPanel({
         <table className="text-sm">
           <thead className="sticky top-0 bg-background border-b z-20">
             <tr className="border-b">
-              <th rowSpan={2} className="text-center p-2 text-xs font-medium text-muted-foreground whitespace-nowrap border-r">Этап</th>
+              <th rowSpan={2} className="text-center p-2 text-xs font-medium text-muted-foreground whitespace-nowrap border-r">Статус</th>
               <th rowSpan={2} className="text-center p-2 text-xs font-medium text-muted-foreground whitespace-nowrap border-r">Артикул</th>
               <th rowSpan={2} className="text-center p-2 text-xs font-medium text-muted-foreground whitespace-nowrap border-r">Операция</th>
               <th rowSpan={2} className="text-center p-1 text-xs font-medium whitespace-nowrap border-r">
@@ -363,7 +381,7 @@ export function BulkOperationsPanel({
               </th>
               <th rowSpan={2} className="text-center p-2 text-xs font-medium text-muted-foreground whitespace-nowrap leading-tight border-r">
                 <div>Завершено</div>
-                <div className="text-[10px] font-normal mt-0.5">Годн/Брак</div>
+                <div className="text-[10px] font-normal mt-0.5">Годные/Брак</div>
               </th>
               <th colSpan={2} className="text-center p-1.5 text-xs font-medium text-muted-foreground whitespace-nowrap border-r border-b">
                 Добавить
@@ -378,10 +396,22 @@ export function BulkOperationsPanel({
           <tbody>
             {groups.map((group) => {
               const progress = getTaskProgress(group);
-
+ 
               return (
                 <tr key={group.key} className="border-b">
-                  <td className="p-2 text-center whitespace-nowrap border-r">#{group.tasks[0].sequence}</td>
+                  <td className="p-2 text-center whitespace-nowrap border-r">
+                    <div className="flex items-center justify-center gap-1.5 flex-wrap max-w-[60px] mx-auto">
+                      {(() => {
+                        const uniqueStatuses = Array.from(new Set(group.tasks.map((t) => t.status)));
+                        if (uniqueStatuses.length === 1) {
+                          return <StatusDot status={uniqueStatuses[0]} />;
+                        }
+                        return group.tasks.map((task) => (
+                          <StatusDot key={task.id} status={task.status} />
+                        ));
+                      })()}
+                    </div>
+                  </td>
                   <td className="p-2 text-center font-medium whitespace-nowrap border-r">{group.label}</td>
                   <td className="p-2 text-center text-xs whitespace-nowrap border-r">
                     <span className="inline-flex items-center gap-1">
@@ -413,11 +443,6 @@ export function BulkOperationsPanel({
                       )}
                     >
                       <span className="font-semibold">{fmtQty(group.totalPlan)}</span>
-                      {group.tasks.length > 1 && (
-                        <span className="text-[10px] text-blue-500/80 mt-0.5">
-                          ({getPlanBreakdown(group)})
-                        </span>
-                      )}
                     </button>
                   </td>
                   <td className="p-2 text-center whitespace-nowrap font-mono text-xs border-r">

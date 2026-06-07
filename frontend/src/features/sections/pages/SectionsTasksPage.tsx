@@ -14,6 +14,7 @@ import {
   type SectionBoardTask,
   type TaskGroup,
 } from "@/shared/api/shopfloor";
+import { queryKeys } from "@/shared/api/queryKeys";
 import { DateRangePicker, renderIcon, toast, Button, type DateRangeValue } from "@/shared/ui";
 import { useBulkSelection } from "@/shared/bulk";
 import { BulkResultsDialog, summarizeBulkResults, type BulkActionResultItem, type BulkActionSummary, type BulkRunnerProgress } from "@/shared/bulk";
@@ -22,8 +23,8 @@ import { SectionTasksBoard, type TaskActionDialogType, type TaskBoardViewMode } 
 import { TaskActionDrawer } from "../components/TaskActionDrawer";
 import { BulkOperationsPanel } from "../components/BulkOperationsPanel";
 import { PlanModal } from "../components/PlanModal";
-import { GroupingSettingsModal } from "../components/GroupingSettingsModal";
-import { loadProfileForSection, PRESET_PROFILES, type GroupingProfile, saveProfileForSection } from "../lib/groupingProfiles";
+import { PRESET_PROFILES, type GroupingProfile } from "../lib/groupingProfiles";
+import { SessionLogModal, type ActionLogEntry } from "../components/SessionLogModal";
 
 type MeResponse = {
   id: number;
@@ -32,14 +33,6 @@ type MeResponse = {
   role: "admin" | "planner" | "section_manager" | "operator" | "viewer";
   section_id: number | null;
   is_active: boolean;
-};
-
-type ActionLogEntry = {
-  id: string;
-  title: string;
-  status: "success" | "error" | "info";
-  message: string;
-  createdAt: string;
 };
 
 function fmtQty(value: string): string {
@@ -101,25 +94,32 @@ export function SectionsTasksPage() {
   const [sectionId, setSectionId] = useState<number | null>(
     params.sectionId && Number.isFinite(Number(params.sectionId)) ? Number(params.sectionId) : null
   );
-  const [profile, setProfile] = useState<GroupingProfile>(() =>
-    sectionId ? loadProfileForSection(sectionId) : PRESET_PROFILES[1]
-  );
+  const profile = PRESET_PROFILES.find((p) => p.id === "sku+routeHistoryAfter") || PRESET_PROFILES[2];
 
-  // При смене участка — загрузить его профиль группировки
-  useEffect(() => {
-    if (sectionId) setProfile(loadProfileForSection(sectionId));
-  }, [sectionId]);
-
-  function handleProfileApply(newProfile: GroupingProfile) {
-    setProfile(newProfile);
-  }
-
-  const [viewMode, setViewMode] = useState<TaskBoardViewMode>("active");
+  const [viewMode, setViewMode] = useState<TaskBoardViewMode>({ active: true, waiting: true, completed: false });
   const [dateRange, setDateRange] = useState<DateRangeValue>({ from: "", to: "" });
   const dateFrom = dateRange.from;
   const dateTo = dateRange.to;
   const [conflictHint, setConflictHint] = useState<string | null>(null);
-  const [actionLog, setActionLog] = useState<ActionLogEntry[]>([]);
+  const [actionLog, setActionLog] = useState<ActionLogEntry[]>(() => {
+    try {
+      const saved = localStorage.getItem("permanent_action_log");
+      return saved ? JSON.parse(saved) : [];
+    } catch (e) {
+      console.warn("Failed to load action log from localStorage:", e);
+      return [];
+    }
+  });
+
+  useEffect(() => {
+    try {
+      localStorage.setItem("permanent_action_log", JSON.stringify(actionLog));
+    } catch (e) {
+      console.warn("Failed to save action log to localStorage:", e);
+    }
+  }, [actionLog]);
+
+  const [logModalOpen, setLogModalOpen] = useState(false);
 
   const [actionDialog, setActionDialog] = useState<{
     open: boolean;
@@ -138,7 +138,6 @@ export function SectionsTasksPage() {
   const [performedShift, setPerformedShift] = useState<"1" | "2">("1");
   const [actionComment, setActionComment] = useState("");
   const [planModalOpen, setPlanModalOpen] = useState(false);
-  const [groupingModalOpen, setGroupingModalOpen] = useState(false);
 
   // Bulk mode state
   const [bulkMode, setBulkMode] = useState(searchParams.get("bulk") === "1" || searchParams.get("singleWindow") === "1");
@@ -189,18 +188,23 @@ export function SectionsTasksPage() {
   const bulkExecuting = bulkProgress?.running ?? false;
 
   const { data: me } = useQuery({
-    queryKey: ["auth-me"],
+    queryKey: queryKeys.auth.me(),
     queryFn: async () => (await apiClient.get<MeResponse>("/auth/me")).data,
     retry: false,
   });
 
   const { data: sections } = useQuery({
-    queryKey: ["sections"],
+    queryKey: queryKeys.sections.all(),
     queryFn: listSections,
   });
 
+  const selectedSection = useMemo(
+    () => (sections || []).find((s) => s.id === sectionId) || null,
+    [sections, sectionId]
+  );
+
   const { data: summary } = useQuery({
-    queryKey: ["shopfloor-sections-summary"],
+    queryKey: queryKeys.shopfloor.summary(),
     queryFn: getSectionsSummary,
     enabled: !!me?.id,
     retry: false,
@@ -282,26 +286,31 @@ export function SectionsTasksPage() {
     retry: false,
   });
 
-  const pushActionLog = useCallback((entry: Omit<ActionLogEntry, "id" | "createdAt">) => {
+  const pushActionLog = useCallback((entry: Omit<ActionLogEntry, "id" | "createdAt" | "sectionId" | "sectionName" | "sectionCode"> & { sectionId?: number; sectionName?: string; sectionCode?: string }) => {
     setActionLog((prev) => {
       const next = [
         {
           id: `${Date.now()}-${Math.floor(Math.random() * 10000)}`,
           createdAt: new Date().toISOString(),
+          sectionId: entry.sectionId ?? (sectionId || undefined),
+          sectionName: entry.sectionName ?? (selectedSection?.name || undefined),
+          sectionCode: entry.sectionCode ?? (selectedSection?.code || undefined),
           ...entry,
         },
         ...prev,
       ];
-      return next.slice(0, 10);
+      return next.slice(0, 100);
     });
-  }, []);
+  }, [sectionId, selectedSection]);
 
   const invalidateShopfloor = useCallback(() => {
-    queryClient.invalidateQueries({ queryKey: ["shopfloor-board"] });
-    queryClient.invalidateQueries({ queryKey: ["shopfloor-stats"] });
-    queryClient.invalidateQueries({ queryKey: ["shopfloor-incoming-transfers"] });
-    queryClient.invalidateQueries({ queryKey: ["shopfloor-sections-summary"] });
-  }, [queryClient]);
+    void queryClient.invalidateQueries({ queryKey: queryKeys.shopfloor.board(sectionId as number) });
+    void queryClient.invalidateQueries({ queryKey: queryKeys.shopfloor.stats(sectionId as number) });
+    void queryClient.invalidateQueries({ queryKey: queryKeys.shopfloor.incomingTransfers(sectionId as number) });
+    void queryClient.invalidateQueries({ queryKey: queryKeys.shopfloor.summary() });
+    void queryClient.invalidateQueries({ queryKey: queryKeys.transfers.readyAll() });
+    void queryClient.invalidateQueries({ queryKey: queryKeys.transfers.historyAll() });
+  }, [queryClient, sectionId]);
 
   const openActionDialog = useCallback((_type: TaskActionDialogType, task: SectionBoardTask) => {
     const now = nowLocalDateTimeParts();
@@ -370,10 +379,19 @@ export function SectionsTasksPage() {
   }, []);
 
   const groupCompleteMutation = useMutation({
-    mutationFn: ({ entries }: { entries: Parameters<typeof bulkCompleteTasks>[0] }) =>
+    mutationFn: ({ entries }: { entries: Parameters<typeof bulkCompleteTasks>[0]; tasks?: SectionBoardTask[] }) =>
       bulkCompleteTasks(entries, requestOptions),
-    onSuccess: (response) => {
+    onSuccess: (response, variables) => {
+      const tasks = variables.tasks || [];
       const summary = summarizeBulkResults(response.results.map(r => ({ id: r.id, status: r.status, reason: r.reason })));
+      const totalGood = variables.entries.reduce((sum, e) => sum + toInteger(e.good_quantity), 0);
+      const totalDefect = variables.entries.reduce((sum, e) => sum + toInteger(e.defect_quantity || "0"), 0);
+
+      const sectionInfo = selectedSection ? `на участке "${selectedSection.name}" (${selectedSection.code})` : "";
+      const taskInfo = tasks.length > 0
+        ? `для операций: ${tasks.map(t => t.operation_name || t.operation_code).filter(Boolean).join(", ")}`
+        : "";
+
       if (summary.failed > 0) {
         toast({
           title: "Частичный успех",
@@ -381,36 +399,107 @@ export function SectionsTasksPage() {
           variant: "destructive",
         });
         setConflictHint(`Не удалось завершить часть задач: ${response.results.filter(r => r.status === "failed").map(r => r.reason).join(", ")}`);
+        
+        pushActionLog({
+          status: "info",
+          title: "Групповое подтверждение (частично)",
+          message: `Подтверждено в группе: годные = ${totalGood} шт., брак = ${totalDefect} шт. ${sectionInfo} ${taskInfo}. Успешно: ${summary.success}, ошибок: ${summary.failed}.`,
+          taskIds: tasks.map(t => t.id),
+          productSku: Array.from(new Set(tasks.map(t => t.display_sku || t.product_sku).filter(Boolean))).join(", "),
+          operationName: Array.from(new Set(tasks.map(t => t.operation_name || t.operation_code).filter(Boolean))).join(", "),
+          qtyText: `годн: ${totalGood}, брак: ${totalDefect}`,
+          comment: variables.entries[0]?.comment || undefined,
+          errorDetails: `Не удалось завершить часть задач: ${response.results.filter(r => r.status === "failed").map(r => r.reason).join(", ")}`,
+        });
       } else {
         toast({ title: "Группа завершена", variant: "success" });
-        pushActionLog({ status: "success", title: "Завершение группы", message: `Группа из ${response.results.length} задач успешно завершена.` });
+        pushActionLog({
+          status: "success",
+          title: "Группа подтверждена",
+          message: `Группа из ${response.results.length} задач успешно подтверждена ${sectionInfo} ${taskInfo}. Подтверждено всего: годные = ${totalGood} шт., брак = ${totalDefect} шт.`,
+          taskIds: tasks.map(t => t.id),
+          productSku: Array.from(new Set(tasks.map(t => t.display_sku || t.product_sku).filter(Boolean))).join(", "),
+          operationName: Array.from(new Set(tasks.map(t => t.operation_name || t.operation_code).filter(Boolean))).join(", "),
+          qtyText: `годн: ${totalGood}, брак: ${totalDefect}`,
+          comment: variables.entries[0]?.comment || undefined,
+        });
         closeActionDrawer();
         setConflictHint(null);
       }
       invalidateShopfloor();
     },
-    onError: (err) => {
+    onError: (err, variables) => {
       const message = getErrorMessage(err);
+      const tasks = variables.tasks || [];
+      const taskInfo = tasks.length > 0
+        ? `для операций: ${tasks.map(t => t.operation_name || t.operation_code).filter(Boolean).join(", ")}`
+        : "";
+      const sectionInfo = selectedSection ? `на участке "${selectedSection.name}" (${selectedSection.code})` : "";
+
       toast({ title: "Ошибка завершения группы", description: message, variant: "destructive" });
-      pushActionLog({ status: "error", title: "Завершение группы", message });
+      pushActionLog({
+        status: "error",
+        title: "Ошибка завершения группы",
+        message: `Не удалось подтвердить группу задач ${sectionInfo} ${taskInfo}. Причина: ${message}`,
+        taskIds: tasks.map(t => t.id),
+        productSku: Array.from(new Set(tasks.map(t => t.display_sku || t.product_sku).filter(Boolean))).join(", "),
+        operationName: Array.from(new Set(tasks.map(t => t.operation_name || t.operation_code).filter(Boolean))).join(", "),
+        errorDetails: message,
+      });
       setConflictHint(message);
     },
   });
 
   const completeMutation = useMutation({
-    mutationFn: ({ taskId, payload }: { taskId: number; payload: Parameters<typeof completeTask>[1] }) =>
+    mutationFn: ({ taskId, payload }: { taskId: number; payload: Parameters<typeof completeTask>[1]; task?: SectionBoardTask }) =>
       completeTask(taskId, payload, requestOptions),
-    onSuccess: () => {
+    onSuccess: (data, variables) => {
+      const task = variables.task;
+      const goodQty = variables.payload.good_quantity;
+      const defectQty = variables.payload.defect_quantity;
+      const comment = variables.payload.comment;
+      const sectionInfo = selectedSection ? `на участке "${selectedSection.name}" (${selectedSection.code})` : "";
+
+      const taskDetails = task
+        ? `для операции "${task.operation_name || task.operation_code || "Операция"}" (арт. ${task.display_sku || task.product_sku})`
+        : `for task #${variables.taskId}`;
+
+      const message = `Успешно подтверждено выполнение ${taskDetails} ${sectionInfo}. Введено: годные = ${goodQty} шт., брак = ${defectQty} шт.${comment ? ` (комментарий: "${comment}")` : ""}.`;
+
       toast({ title: "Факт сохранен", variant: "success" });
-      pushActionLog({ status: "success", title: "Факт", message: "Фактическое выполнение сохранено." });
+      pushActionLog({
+        status: "success",
+        title: "Факт подтвержден",
+        message,
+        taskIds: [variables.taskId],
+        productSku: task?.display_sku || task?.product_sku,
+        operationName: task?.operation_name || task?.operation_code || undefined,
+        qtyText: `годн: ${goodQty}, брак: ${defectQty}`,
+        comment: comment || undefined,
+      });
       invalidateShopfloor();
       closeActionDrawer();
       setConflictHint(null);
     },
-    onError: (err) => {
+    onError: (err, variables) => {
       const message = getErrorMessage(err);
+      const task = variables.task;
+      const sectionInfo = selectedSection ? `на участке "${selectedSection.name}" (${selectedSection.code})` : "";
+      
+      const taskDetails = task
+        ? `для операции "${task.operation_name || task.operation_code || "Операция"}" (арт. ${task.display_sku || task.product_sku})`
+        : `for task #${variables.taskId}`;
+
       toast({ title: "Ошибка", description: message, variant: "destructive" });
-      pushActionLog({ status: "error", title: "Факт", message });
+      pushActionLog({
+        status: "error",
+        title: "Ошибка подтверждения факта",
+        message: `Не удалось подтвердить выполнение ${taskDetails} ${sectionInfo}. Причина: ${message}`,
+        taskIds: [variables.taskId],
+        productSku: task?.display_sku || task?.product_sku,
+        operationName: task?.operation_name || task?.operation_code || undefined,
+        errorDetails: message,
+      });
       setConflictHint(conflictHintFromError(message));
     },
   });
@@ -493,10 +582,11 @@ export function SectionsTasksPage() {
         }
       }
 
-      groupCompleteMutation.mutate({ entries });
+      groupCompleteMutation.mutate({ entries, tasks: tasks });
     } else {
       completeMutation.mutate({
         taskId: task!.id,
+        task: task!,
         payload: {
           good_quantity: String(good),
           defect_quantity: String(defect),
@@ -520,10 +610,57 @@ export function SectionsTasksPage() {
     defectQty,
   ]);
 
+  const finishBulk = useCallback((
+    results: BulkActionResultItem<number>[],
+    totalGood?: number,
+    totalDefect?: number
+  ) => {
+    const summary = summarizeBulkResults(results);
+    setBulkResults(results);
+    setBulkSummary(summary);
+    if (summary.failed > 0) setBulkResultsOpen(true);
+    setBulkProgress(null);
+
+    const sectionInfo = selectedSection ? `на участке "${selectedSection.name}" (${selectedSection.code})` : "";
+    const qtyInfo = (totalGood !== undefined || totalDefect !== undefined)
+      ? ` (введено всего: годные = ${totalGood || 0} шт., брак = ${totalDefect || 0} шт.)`
+      : "";
+
+    const matchedTasks = results
+      .map((r) => board?.tasks?.find((t) => t.id === r.id))
+      .filter(Boolean) as SectionBoardTask[];
+
+    const productSkus = Array.from(new Set(matchedTasks.map((t) => t.display_sku || t.product_sku).filter(Boolean))).join(", ");
+    const operationNames = Array.from(new Set(matchedTasks.map((t) => t.operation_name || t.operation_code).filter(Boolean))).join(", ");
+
+    pushActionLog({
+      status: summary.failed > 0 ? (summary.success > 0 ? "info" : "error") : "success",
+      title: "Массовое подтверждение",
+      message: `Массовое подтверждение ${sectionInfo}: успешно завершено задач: ${summary.success}, ошибок: ${summary.failed}${qtyInfo}.`,
+      taskIds: results.map((r) => r.id),
+      productSku: productSkus || undefined,
+      operationName: operationNames || undefined,
+      qtyText: (totalGood !== undefined || totalDefect !== undefined)
+        ? `годн: ${totalGood || 0}, брак: ${totalDefect || 0}`
+        : undefined,
+    });
+
+    // Don't clear selection — user should see the result
+    toast({
+      title: summary.failed > 0 ? "Частичный успех" : "Массовая операция",
+      description: `${summary.success} успешно, ${summary.failed} ошибок${summary.skipped > 0 ? `, ${summary.skipped} пропущено` : ""}`,
+      variant: summary.failed > 0 ? "destructive" : "success",
+    });
+  }, [bulkSelection, pushActionLog, selectedSection, board]);
+
   // Bulk operations via panel
   const handleBulkComplete = useCallback(async (entries: { taskId: number; goodQty: string; defectQty: string }[]) => {
     setBulkProgress({ total: entries.length, completed: 0, running: true });
     const lockOptions = lockedSectionId !== null ? { singleSectionLockId: lockedSectionId } : undefined;
+    
+    const totalGood = entries.reduce((sum, e) => sum + toInteger(e.goodQty), 0);
+    const totalDefect = entries.reduce((sum, e) => sum + toInteger(e.defectQty), 0);
+
     try {
       const response = await bulkCompleteTasks(
         entries.map((entry) => ({
@@ -542,26 +679,12 @@ export function SectionsTasksPage() {
         status: r.status,
         reason: r.reason,
       }));
-      finishBulk(results);
+      finishBulk(results, totalGood, totalDefect);
     } catch (e) {
       const reason = getErrorMessage(e);
-      finishBulk(entries.map((entry) => ({ id: entry.taskId, status: "failed" as const, reason })));
+      finishBulk(entries.map((entry) => ({ id: entry.taskId, status: "failed" as const, reason })), totalGood, totalDefect);
     }
-  }, [me?.id, lockedSectionId]);
-
-  const finishBulk = useCallback((results: BulkActionResultItem<number>[]) => {
-    const summary = summarizeBulkResults(results);
-    setBulkResults(results);
-    setBulkSummary(summary);
-    if (summary.failed > 0) setBulkResultsOpen(true);
-    setBulkProgress(null);
-    // Don't clear selection — user should see the result
-    toast({
-      title: summary.failed > 0 ? "Частичный успех" : "Массовая операция",
-      description: `${summary.success} успешно, ${summary.failed} ошибок${summary.skipped > 0 ? `, ${summary.skipped} пропущено` : ""}`,
-      variant: summary.failed > 0 ? "destructive" : "success",
-    });
-  }, [bulkSelection]);
+  }, [me?.id, lockedSectionId, finishBulk]);
 
   const handleBulkExecuteAll = useCallback(async (data: {
     completeEntries: { taskId: number; goodQty: string; defectQty: string }[];
@@ -575,6 +698,9 @@ export function SectionsTasksPage() {
 
     const effectivePerformedAt = data.performedAt || nowLocalDateTime();
     const effectiveAccountedAt = data.accountedAt || effectivePerformedAt;
+
+    const totalGood = data.completeEntries.reduce((sum, e) => sum + toInteger(e.goodQty), 0);
+    const totalDefect = data.completeEntries.reduce((sum, e) => sum + toInteger(e.defectQty), 0);
 
     if (data.completeEntries.length > 0) {
       try {
@@ -603,7 +729,7 @@ export function SectionsTasksPage() {
 
     invalidateShopfloor();
     setBulkProgress({ total, completed: total, running: false });
-    finishBulk(allResults);
+    finishBulk(allResults, totalGood, totalDefect);
   }, [me?.id, lockedSectionId, invalidateShopfloor, finishBulk]);
 
   // Завершить группу: открывает боковую панель завершения группы
@@ -631,10 +757,7 @@ export function SectionsTasksPage() {
 
 
 
-  const selectedSection = useMemo(
-    () => (sections || []).find((s) => s.id === sectionId) || null,
-    [sections, sectionId]
-  );
+
 
   const canToggleSingleWindow = sectionId !== null && !isSingleWindowBlocked;
   const selectedSectionColor = selectedSection?.icon_color || "#1D4ED8";
@@ -794,8 +917,8 @@ export function SectionsTasksPage() {
               <Button variant="outline" size="sm" onClick={() => setPlanModalOpen(true)}>
                 План
               </Button>
-              <Button variant="outline" size="sm" onClick={() => setGroupingModalOpen(true)} title="Настройки группировки">
-                {profile.name}
+              <Button variant="outline" size="sm" onClick={() => setLogModalOpen(true)}>
+                Журнал действий {actionLog.length > 0 && <span className="ml-1.5 px-1.5 py-0.5 rounded-full bg-slate-100 text-[10px] text-slate-700 font-bold">{actionLog.length}</span>}
               </Button>
             </div>
 
@@ -813,29 +936,7 @@ export function SectionsTasksPage() {
               onCompleteGroup={handleCompleteGroup}
             />
 
-              {!isSingleWindow && (
-                <div className="rounded-lg border p-4">
-                  <h3 className="text-sm font-semibold mb-3">Журнал действий (сессия)</h3>
-                  {actionLog.length === 0 && <div className="text-sm text-muted-foreground">Действий пока нет.</div>}
-                  {actionLog.length > 0 && (
-                    <div className="space-y-2">
-                      {actionLog.map((entry) => (
-                        <div key={entry.id} className="rounded-md border px-3 py-2">
-                          <div className="flex items-center justify-between gap-2">
-                            <div className="font-medium text-sm">{entry.title}</div>
-                            <div className="text-xs text-muted-foreground">
-                              {new Date(entry.createdAt).toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}
-                            </div>
-                          </div>
-                          <div className={`text-xs mt-1 ${entry.status === "error" ? "text-red-600" : entry.status === "success" ? "text-emerald-700" : "text-muted-foreground"}`}>
-                            {entry.message}
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              )}
+
 
               {!isSingleWindow && stats && (
                 <div className="rounded-lg border p-4">
@@ -924,17 +1025,13 @@ export function SectionsTasksPage() {
         tasks={tasks}
         availableOperations={board?.available_operations || []}
       />
-
-      {/* Grouping settings modal */}
-      {groupingModalOpen && sectionId && selectedSection && (
-        <GroupingSettingsModal
-          sectionId={sectionId}
-          sectionName={selectedSection.name}
-          currentProfile={profile}
-          onClose={() => setGroupingModalOpen(false)}
-          onApply={handleProfileApply}
-        />
-      )}
+      {/* Session log modal */}
+      <SessionLogModal
+        open={logModalOpen}
+        onClose={() => setLogModalOpen(false)}
+        actionLog={actionLog}
+        sections={sections}
+      />
 
 
     </>

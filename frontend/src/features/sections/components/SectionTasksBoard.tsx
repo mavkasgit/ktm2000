@@ -21,7 +21,11 @@ import { TABLE_ROW_STYLES } from "@/shared/lib/tableRowStyles";
 // Экспорты для обратной совместимости
 // ---------------------------------------------------------------------------
 
-export type TaskBoardViewMode = "active" | "waiting" | "completed";
+export type TaskBoardViewMode = {
+  active: boolean;
+  waiting: boolean;
+  completed: boolean;
+};
 export type TaskActionDialogType = "complete";
 
 export type BulkSelectionController = {
@@ -87,9 +91,62 @@ function fmtQty(value: string): string {
 }
 
 function isTaskVisible(task: SectionBoardTask, mode: TaskBoardViewMode): boolean {
-  if (mode === "active") return ["ready", "in_progress", "partially_completed", "in_work", "partially"].includes(task.status);
-  if (mode === "waiting") return task.status === "waiting_previous" || task.status === "pending" || task.status === "blocked";
-  return ["completed", "cancelled", "done"].includes(task.status);
+  if (mode.active && ["ready", "in_progress", "partially_completed", "in_work", "partially"].includes(task.status)) return true;
+  if (mode.waiting && (task.status === "waiting_previous" || task.status === "pending" || task.status === "blocked")) return true;
+  if (mode.completed && ["completed", "cancelled", "done"].includes(task.status)) return true;
+  return false;
+}
+
+function getStatusPriority(status: string): number {
+  if (["ready", "in_progress", "partially_completed", "in_work", "partially"].includes(status)) return 0; // Active
+  if (["waiting_previous", "pending", "blocked"].includes(status)) return 1; // Waiting
+  if (["completed", "cancelled", "done"].includes(status)) return 2; // Completed
+  return 3;
+}
+
+function getRowStatusClass(status: string, isSelected: boolean, isInGroup: boolean): string {
+  if (isSelected) return TABLE_ROW_STYLES.selectedRow;
+  
+  const isWaiting = ["waiting_previous", "pending", "blocked"].includes(status);
+  const isActive = ["ready", "in_progress", "partially_completed", "in_work", "partially"].includes(status);
+  const isCompleted = ["completed", "cancelled", "done"].includes(status);
+
+  if (isWaiting) {
+    return "bg-background hover:bg-slate-50 transition-colors border-l-4 border-l-yellow-400 text-slate-800";
+  }
+  if (isActive) {
+    if (["in_progress", "in_work"].includes(status)) {
+      return "bg-amber-50/30 hover:bg-amber-50/70 border-l-4 border-l-amber-400 text-slate-900 font-medium";
+    }
+    return "bg-blue-50/20 hover:bg-blue-50/50 border-l-4 border-l-blue-400 text-slate-900";
+  }
+  if (isCompleted) {
+    return "bg-emerald-50/10 text-emerald-700/80 line-through decoration-slate-300 hover:bg-emerald-50/30 border-l-4 border-l-emerald-300 opacity-60";
+  }
+
+  return isInGroup ? TABLE_ROW_STYLES.defaultGroupRow : TABLE_ROW_STYLES.defaultRow;
+}
+
+function getMobileCardStatusClass(status: string, isSelected: boolean): string {
+  if (isSelected) return TABLE_ROW_STYLES.selectedMobileCard;
+  
+  const isWaiting = ["waiting_previous", "pending", "blocked"].includes(status);
+  const isActive = ["ready", "in_progress", "partially_completed", "in_work", "partially"].includes(status);
+  const isCompleted = ["completed", "cancelled", "done"].includes(status);
+
+  if (isWaiting) {
+    return "border border-slate-200 bg-background text-slate-800 rounded-lg border-l-4 border-l-yellow-400";
+  }
+  if (isActive) {
+    if (["in_progress", "in_work"].includes(status)) {
+      return "border border-amber-200 bg-amber-50/30 text-slate-900 rounded-lg border-l-4 border-l-amber-400";
+    }
+    return "border border-blue-200 bg-blue-50/20 text-slate-900 rounded-lg border-l-4 border-l-blue-400";
+  }
+  if (isCompleted) {
+    return "border border-emerald-100 bg-emerald-50/10 text-slate-400 opacity-60 rounded-lg border-l-4 border-l-emerald-300 line-through decoration-slate-300";
+  }
+  return "border border-slate-200 rounded-lg bg-card text-card-foreground";
 }
 
 function getTaskCellValue(task: SectionBoardTask, field: TaskSortField): string {
@@ -105,6 +162,24 @@ function getTaskCellValue(task: SectionBoardTask, field: TaskSortField): string 
     case "rejectedQty": return String(parseFloat(task.cache.rejected_quantity) || 0);
     case "remainingQty": return String(parseFloat(task.cache.remaining_quantity) || 0);
   }
+}
+
+function StatusDot({ status }: { status: string }) {
+  let colorClass = "bg-slate-300";
+  if (["in_progress", "in_work"].includes(status)) {
+    colorClass = "bg-amber-500 animate-pulse";
+  } else if (["ready", "partially_completed", "partially"].includes(status)) {
+    colorClass = "bg-blue-500";
+  } else if (["completed", "done"].includes(status)) {
+    colorClass = "bg-emerald-500";
+  } else if (status === "blocked") {
+    colorClass = "bg-red-500";
+  } else if (["waiting_previous", "pending"].includes(status)) {
+    colorClass = "bg-yellow-400";
+  }
+  return (
+    <span className={`inline-block h-2.5 w-2.5 rounded-full ${colorClass}`} title={taskStatusLabels[status] || status} />
+  );
 }
 
 function renderTaskRow(
@@ -125,18 +200,20 @@ function renderTaskRow(
   return (
     <tr
       key={task.id}
-      className={`cursor-pointer transition-colors ${isSelected ? `${TABLE_ROW_STYLES.selectedRow}` : ""} ${isInGroup ? TABLE_ROW_STYLES.defaultGroupRow : TABLE_ROW_STYLES.defaultRow} ${isLastInGroup ? "border-b-2 border-blue-300" : "border-b"}`}
+      className={`cursor-pointer transition-colors ${getRowStatusClass(task.status, !!isSelected, isInGroup)} ${isLastInGroup ? "border-b-2 border-blue-300" : "border-b"}`}
       onClick={() => {
         if (bulkMode && bulkSelection) {
           bulkSelection.selectOne(task.id);
         }
       }}
     >
-      <td className="p-2">#{task.sequence}</td>
+      <td className="p-2 text-center">
+        <StatusDot status={task.status} />
+      </td>
       <td className="p-2 font-medium">{task.product_sku}</td>
       <td className="p-2">
-        {task.is_combined_primary && task.combined_operation_names.length > 1 ? (
-          <span className="text-xs font-medium">{task.combined_operation_names.join(" + ")}</span>
+        {task.operation_names && task.operation_names.length > 1 ? (
+          <span className="text-xs font-medium">{task.operation_names.join(" + ")}</span>
         ) : (
           <span className="text-xs">{task.operation_name || "—"}</span>
         )}
@@ -189,7 +266,7 @@ function renderMobileCard(
   return (
     <div
       key={task.id}
-      className={`p-4 space-y-3 cursor-pointer transition-colors ${isSelected ? TABLE_ROW_STYLES.selectedMobileCard : ""} ${isLastInGroup ? "border-b-2 border-blue-300 mb-3" : "mb-0"}`}
+      className={`p-4 space-y-3 cursor-pointer transition-colors ${getMobileCardStatusClass(task.status, !!isSelected)} ${isLastInGroup ? "border-b-2 border-blue-300 mb-3" : "mb-0"}`}
       onClick={() => {
         if (bulkMode && bulkSelection) {
           bulkSelection.selectOne(task.id);
@@ -197,9 +274,9 @@ function renderMobileCard(
       }}
     >
       <div className="flex items-center justify-between gap-2">
-        <div className="font-semibold">
-          <span className="text-muted-foreground">#{task.sequence}</span>
-          <span className="ml-2 text-sm font-medium">{task.product_sku}</span>
+        <div className="flex items-center gap-2 font-semibold">
+          <StatusDot status={task.status} />
+          <span className="text-sm font-medium">{task.product_sku}</span>
         </div>
         <Badge variant="secondary" className={taskStatusColor[task.status] || ""}>
           {taskStatusLabels[task.status] || task.status}
@@ -208,7 +285,7 @@ function renderMobileCard(
 
       <div className="grid grid-cols-2 gap-2 text-sm">
         <div><span className="text-muted-foreground">План:</span> {fmtQty(task.planned_quantity)}</div>
-        <div><span className="text-muted-foreground">Операция:</span> {task.is_combined_primary && task.combined_operation_names.length > 1 ? task.combined_operation_names.join(" + ") : (task.operation_name || "—")}</div>
+        <div><span className="text-muted-foreground">Операция:</span> {task.operation_names && task.operation_names.length > 1 ? task.operation_names.join(" + ") : (task.operation_name || "—")}</div>
         <div><span className="text-muted-foreground">Выдано:</span> {fmtQty(task.cache.issued_quantity)}</div>
         <div><span className="text-muted-foreground">В работе:</span> {fmtQty(task.cache.in_work_quantity)}</div>
         <div><span className="text-muted-foreground">Годные:</span> {fmtQty(task.cache.completed_quantity)}</div>
@@ -262,13 +339,13 @@ function TableTaskGroupRow({
 
   return (
     <tr
-      className={`border-y-2 border-blue-200 cursor-pointer transition-colors font-semibold ${isBulkMode && allSelected ? TABLE_ROW_STYLES.selectedGroupHeader : TABLE_ROW_STYLES.defaultGroupHeader}`}
+      className={`border-y border-slate-200 cursor-pointer transition-colors font-semibold ${isBulkMode && allSelected ? TABLE_ROW_STYLES.selectedGroupHeader : TABLE_ROW_STYLES.defaultGroupHeader}`}
       onClick={isBulkMode ? onSelectGroup : undefined}
     >
-      <td className="p-2">
-        <div className="flex items-center gap-1.5">
+      <td className="p-2 text-center">
+        <div className="flex items-center justify-center">
           <button
-            className="p-0.5 hover:bg-blue-200 rounded transition-colors"
+            className="p-1 hover:bg-slate-200 rounded transition-colors text-slate-500 hover:text-slate-800"
             onClick={(e) => {
               e.stopPropagation();
               onToggleCollapse();
@@ -276,30 +353,29 @@ function TableTaskGroupRow({
             title={isCollapsed ? "Раскрыть" : "Скрыть"}
           >
             {isCollapsed ? (
-              <ChevronRight className="h-4 w-4 shrink-0 text-blue-600" />
+              <ChevronRight className="h-4 w-4 shrink-0" />
             ) : (
-              <ChevronDown className="h-4 w-4 shrink-0 text-blue-600" />
+              <ChevronDown className="h-4 w-4 shrink-0" />
             )}
           </button>
-          <span className="text-blue-700">#{firstTask.sequence}</span>
         </div>
       </td>
-      <td className="p-2 text-blue-700">
+      <td className="p-2 text-slate-900">
         {firstTask.product_sku}
       </td>
-      <td className="p-2 text-xs text-blue-600 font-medium">
+      <td className="p-2 text-xs text-slate-500 font-medium">
         {firstTask.operation_name || "—"}
       </td>
-      <td className="p-2 text-blue-800">{fmtQty(String(group.totalQtyPlan))}</td>
-      <td className="p-2 text-blue-800">{fmtQty(String(group.tasks.reduce((s, t) => s + parseFloat(t.cache.issued_quantity), 0)))}</td>
-      <td className="p-2 text-blue-800">{fmtQty(String(group.tasks.reduce((s, t) => s + parseFloat(t.cache.in_work_quantity), 0)))}</td>
-      <td className="p-2 text-blue-800">{fmtQty(String(group.totalQtyDone))}</td>
-      <td className="p-2 text-blue-800">{fmtQty(String(group.tasks.reduce((s, t) => s + parseFloat(t.cache.rejected_quantity), 0)))}</td>
-      <td className="p-2 text-blue-800">{fmtQty(String(group.tasks.reduce((s, t) => s + parseFloat(t.cache.transferred_quantity), 0)))}</td>
-      <td className="p-2 text-blue-800">{fmtQty(String(group.tasks.reduce((s, t) => s + parseFloat(t.cache.remaining_quantity), 0)))}</td>
+      <td className="p-2 text-slate-700">{fmtQty(String(group.totalQtyPlan))}</td>
+      <td className="p-2 text-slate-700">{fmtQty(String(group.tasks.reduce((s, t) => s + parseFloat(t.cache.issued_quantity), 0)))}</td>
+      <td className="p-2 text-slate-700">{fmtQty(String(group.tasks.reduce((s, t) => s + parseFloat(t.cache.in_work_quantity), 0)))}</td>
+      <td className="p-2 text-slate-700">{fmtQty(String(group.totalQtyDone))}</td>
+      <td className="p-2 text-slate-700">{fmtQty(String(group.tasks.reduce((s, t) => s + parseFloat(t.cache.rejected_quantity), 0)))}</td>
+      <td className="p-2 text-slate-700">{fmtQty(String(group.tasks.reduce((s, t) => s + parseFloat(t.cache.transferred_quantity), 0)))}</td>
+      <td className="p-2 text-slate-700">{fmtQty(String(group.tasks.reduce((s, t) => s + parseFloat(t.cache.remaining_quantity), 0)))}</td>
       <td className="p-2">
         <div className="flex items-center gap-1">
-          <Badge variant="secondary" className="bg-blue-200 text-blue-800 font-bold">
+          <Badge variant="secondary" className="font-bold">
             &times;{group.tasks.length}
           </Badge>
           {isBulkMode && allSelected && (
@@ -455,7 +531,32 @@ export function SectionTasksBoard({
   const sortedTasks = result.rows;
 
   const groups = useMemo(() => {
-    return groupTasksByProfile(sortedTasks, profile);
+    const grouped = groupTasksByProfile(sortedTasks, profile);
+    
+    // Sort tasks inside each group by status priority, then by sequence
+    for (const g of grouped) {
+      g.tasks.sort((a, b) => {
+        const pA = getStatusPriority(a.status);
+        const pB = getStatusPriority(b.status);
+        if (pA !== pB) return pA - pB;
+        return a.sequence - b.sequence;
+      });
+    }
+
+    // Split groups into active/waiting and completed, preserving user's sorting order
+    const activeOrWaiting: typeof grouped = [];
+    const completed: typeof grouped = [];
+
+    for (const g of grouped) {
+      const isCompleted = g.tasks.every((t) => getStatusPriority(t.status) >= 2);
+      if (isCompleted) {
+        completed.push(g);
+      } else {
+        activeOrWaiting.push(g);
+      }
+    }
+
+    return [...activeOrWaiting, ...completed];
   }, [sortedTasks, profile]);
 
   // Группы по умолчанию свёрнуты; пользователь может раскрыть любую вручную.
@@ -508,8 +609,8 @@ export function SectionTasksBoard({
       key: "mode-active",
       label: "Активные",
       badgeCount: modeCounts.active,
-      checked: mode === "active",
-      onChange: () => onModeChange("active"),
+      checked: mode.active,
+      onChange: () => onModeChange({ ...mode, active: !mode.active }),
       layoutSpan: "min-w-[0px]",
     },
     {
@@ -517,8 +618,8 @@ export function SectionTasksBoard({
       key: "mode-waiting",
       label: "Ожидают",
       badgeCount: modeCounts.waiting,
-      checked: mode === "waiting",
-      onChange: () => onModeChange("waiting"),
+      checked: mode.waiting,
+      onChange: () => onModeChange({ ...mode, waiting: !mode.waiting }),
       layoutSpan: "min-w-[0px]",
     },
     {
@@ -526,8 +627,8 @@ export function SectionTasksBoard({
       key: "mode-completed",
       label: "Завершенные",
       badgeCount: modeCounts.completed,
-      checked: mode === "completed",
-      onChange: () => onModeChange("completed"),
+      checked: mode.completed,
+      onChange: () => onModeChange({ ...mode, completed: !mode.completed }),
       layoutSpan: "min-w-[0px]",
     },
   ], [mode, onModeChange, searchQuery, bulkMode, onBulkModeChange, modeCounts]);
@@ -571,16 +672,8 @@ export function SectionTasksBoard({
             <table className="w-full border-separate border-spacing-0 text-sm">
               <thead className="[&_th]:sticky [&_th]:top-0 [&_th]:z-20 [&_th]:bg-background [&_th]:border-b">
                 <tr>
-                  <th className="text-left p-2">
-                    <SortableFilterHeader
-                      field="sequence"
-                      label="Этап"
-                      currentSorts={sortConfigs}
-                      onSortChange={handleSortChange}
-                      values={uniqueValues.sequence}
-                      selectedValues={columnFilters.sequence ?? new Set()}
-                      onFilterChange={handleColumnFilterChange}
-                    />
+                  <th className="w-12 text-center p-2 text-xs font-semibold text-muted-foreground">
+                    Статус
                   </th>
                   <th className="text-left p-2">
                     <SortableFilterHeader

@@ -122,9 +122,9 @@ export function TaskActionDrawer({
                 <div>Годные: <span className="font-medium">{completedQty}</span></div>
                 <div>Брак: <span className="font-medium">{rejectedQty}</span></div>
               </div>
-              {!isGroup && task && task.is_combined_primary && task.combined_operation_names.length > 1 && (
+              {!isGroup && task && task.operation_names && task.operation_names.length > 1 && (
                 <div className="mt-2">
-                  <Badge variant="secondary">Будет выполнено: {task.combined_operation_names.join(" + ")}</Badge>
+                  <Badge variant="secondary">Будет выполнено: {task.operation_names.join(" + ")}</Badge>
                 </div>
               )}
             </div>

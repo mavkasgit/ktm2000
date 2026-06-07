@@ -312,6 +312,19 @@ async def get_section_board(
 
         op_icon_info = icon_by_section_op.get((task.section_id, effective_op_code))
 
+        # Determine all operations for the task/stage
+        operation_codes = []
+        operation_names = []
+
+        if stage.operations:
+            for op in stage.operations:
+                op_code = op.operation_code
+                if not op_code:
+                    op_code = effective_op_code
+                op_name = op_name_by_section.get(task.section_id, {}).get(op_code) or op.operation_name
+                operation_codes.append(op_code)
+                operation_names.append(op_name)
+
         tasks_data.append({
             "id": task.id,
             "section_id": task.section_id,
@@ -352,6 +365,8 @@ async def get_section_board(
             "route_history_after": route_history_after,
             "route_history_full": route_history_full,
             "route_history_after_full": route_history_after_full,
+            "operation_codes": operation_codes,
+            "operation_names": operation_names,
         })
 
     return {"section_id": section_id, "tasks": tasks_data, "available_operations": available_operations}

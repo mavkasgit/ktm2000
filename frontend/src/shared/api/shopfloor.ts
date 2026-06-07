@@ -77,11 +77,13 @@ export type SectionBoardTask = {
   route_history_after: RouteHistoryOp[];
   route_history_full: RouteHistoryOp[];
   route_history_after_full: RouteHistoryOp[];
-  // --- combined operations ---
-  is_combined_primary: boolean;
-  combined_task_ids: number[];
-  combined_operation_names: string[];
-  combined_operation_codes: (string | null)[];
+  // --- list of operations on this stage ---
+  operation_codes: (string | null)[];
+  operation_names: string[];
+  is_combined_primary?: boolean;
+  combined_task_ids?: number[];
+  combined_operation_names?: string[];
+  combined_operation_codes?: (string | null)[];
 };
 
 export type SectionBoardResponse = {
