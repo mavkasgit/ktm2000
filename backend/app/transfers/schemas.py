@@ -23,6 +23,8 @@ class CreateTransferPayload(BaseModel):
     executor_user_id: int | None = None
     performed_at: datetime | None = None
     accounted_at: datetime | None = None
+    post_factum: bool = False
+    physical_handover_at: datetime | None = None
 
 
 class AcceptTransferPayload(BaseModel):
@@ -76,6 +78,8 @@ class TransferOut(BaseModel):
     sent_at: str | None = None
     accepted_at: str | None = None
     created_at: str | None = None
+    is_post_factum: bool = False
+    physical_handover_at: str | None = None
     from_line_id: int | None = None
     from_line_sequence: int | None = None
     plan_position_id: int | None = None

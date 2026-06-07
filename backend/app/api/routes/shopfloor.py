@@ -117,6 +117,8 @@ class CreateTransferPayload(BaseModel):
     executor_user_id: int | None = None
     performed_at: datetime | None = None
     accounted_at: datetime | None = None
+    post_factum: bool = False
+    physical_handover_at: datetime | None = None
 
 
 class AcceptTransferPayload(BaseModel):
@@ -452,6 +454,8 @@ async def create_transfer(
             executor_user_id=payload.executor_user_id,
             performed_at=payload.performed_at,
             accounted_at=payload.accounted_at,
+            post_factum=payload.post_factum,
+            physical_handover_at=payload.physical_handover_at,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

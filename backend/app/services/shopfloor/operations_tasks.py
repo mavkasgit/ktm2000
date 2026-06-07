@@ -39,7 +39,7 @@ async def issue_to_work(
         return {"movement_id": existing.id, "task_id": task.id, "status": task.status.value, "idempotent_replay": True}
 
     task = await _get_task(db, task_id)
-    if task.status not in {WorkTaskStatus.ready, WorkTaskStatus.in_progress, WorkTaskStatus.partially_completed}:
+    if task.status not in {WorkTaskStatus.ready, WorkTaskStatus.in_progress, WorkTaskStatus.partially_completed, WorkTaskStatus.waiting_previous}:
         raise ValueError("Task must be ready/in_progress/partially_completed")
 
     task = await _refresh_task_cache(db, task.id)
@@ -123,7 +123,7 @@ async def complete_task(
                 "idempotent_replay": True,
             }
 
-    if task.status not in {WorkTaskStatus.in_progress, WorkTaskStatus.partially_completed, WorkTaskStatus.ready}:
+    if task.status not in {WorkTaskStatus.in_progress, WorkTaskStatus.partially_completed, WorkTaskStatus.ready, WorkTaskStatus.waiting_previous}:
         raise ValueError("Task must be in progress")
 
     good_quantity = _to_decimal(good_quantity)
@@ -136,10 +136,10 @@ async def complete_task(
     in_work = task.cached_issued_quantity - task.cached_completed_quantity - task.cached_rejected_quantity
     if total > in_work:
         # Auto-issue the missing quantity for tasks that are still in 'ready'
-        # state with nothing issued yet. This makes the bulk-complete workflow
+        # or 'waiting_previous' state with nothing issued yet. This makes the bulk-complete workflow
         # work even when the take-to-work auto-consume did not produce any
         # SPG remainders (e.g. raw stock was never received into SPG).
-        if task.status == WorkTaskStatus.ready and in_work == 0:
+        if task.status in {WorkTaskStatus.ready, WorkTaskStatus.waiting_previous} and in_work == 0:
             short = total - in_work
             auto_issue_key = (
                 f"{idempotency_key}:auto-issue" if idempotency_key else None
@@ -597,7 +597,7 @@ async def consume_remainder(
         raise ValueError("Remainder already consumed")
 
     task = await _get_task(db, task_id)
-    if task.status not in {WorkTaskStatus.ready, WorkTaskStatus.in_progress, WorkTaskStatus.partially_completed}:
+    if task.status not in {WorkTaskStatus.ready, WorkTaskStatus.in_progress, WorkTaskStatus.partially_completed, WorkTaskStatus.waiting_previous}:
         raise ValueError("Task must be ready/in_progress/partially_completed")
 
     now = datetime.now(UTC)

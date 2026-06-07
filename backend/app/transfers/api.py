@@ -111,13 +111,15 @@ async def create_transfer(
             executor_user_id=payload.executor_user_id,
             performed_at=payload.performed_at,
             accounted_at=payload.accounted_at,
+            post_factum=payload.post_factum,
+            physical_handover_at=payload.physical_handover_at,
         )
         if send_res.get("idempotent_replay"):
             return send_res
 
         # 2. Auto-accept immediately (status 'accepted' and create receive movement)
         rec_idempotency = f"{payload.idempotency_key}:auto_receive" if payload.idempotency_key else None
-        
+
         receive_res = await transfer_receive(
             db,
             transfer_id=send_res["transfer_id"],
@@ -130,7 +132,7 @@ async def create_transfer(
             performed_at=payload.performed_at,
             accounted_at=payload.accounted_at,
         )
-        
+
         return {
             "transfer_id": send_res["transfer_id"],
             "transfer_no": send_res["transfer_no"],

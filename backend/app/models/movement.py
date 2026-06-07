@@ -2,7 +2,7 @@ import enum
 from datetime import datetime
 from decimal import Decimal
 
-from sqlalchemy import BigInteger, CheckConstraint, DateTime, Enum, ForeignKey, Identity, Numeric, String, Text, func
+from sqlalchemy import BigInteger, Boolean, CheckConstraint, DateTime, Enum, ForeignKey, Identity, Numeric, String, Text, func, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base
@@ -48,4 +48,7 @@ class Movement(Base):
     executor_user_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     performed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     accounted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    is_post_factum: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("false"), default=False
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())

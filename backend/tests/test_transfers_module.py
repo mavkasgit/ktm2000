@@ -716,3 +716,447 @@ async def test_same_spg_auto_avail_and_status(client, session) -> None:
     assert send_manual.status_code == 400
     assert "not allowed" in send_manual.json()["detail"]
 
+
+# ─── post-factum transfers ───────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_post_factum_send_succeeds_when_sender_under_completed(
+    client, session
+) -> None:
+    """Sender has not yet completed the planned quantity, but the
+    physical handover has already taken place.  ``post_factum=True``
+    bypasses the ``quantity <= transferable`` check and lets the
+    formal Transfer be recorded against the actual physical
+    handover time.
+    """
+    from app.models.movement import Movement, MovementType
+
+    user = await _make_user(session, "xfer-postfactum@test.local")
+    headers = _auth_headers(user)
+    ctx = await _make_six_section_fixture(
+        session, sku="FG-XF-POSTFACTUM", planned_qty=Decimal("100")
+    )
+    await _release_via_take_to_work(client, ctx["position"].id)
+    tasks = await _tasks_by_sequence(session, ctx["position"].id)
+    first_task = tasks[0]
+    second_task = tasks[1]
+
+    # Sender: issue 100, complete 0.  transferable = 0.
+    await client.post(
+        f"/api/shopfloor/tasks/{first_task.id}/issue",
+        json={"quantity": "100", "idempotency_key": "xf-pf:issue-first"},
+        headers=headers,
+    )
+    await session.commit()
+
+    # Plain send should be REJECTED: transferable on sender is 0, but
+    # we want to send 80.  This is the guard the post_factum flag bypasses.
+    plain_send = await client.post(
+        "/api/transfers",
+        json={
+            "from_task_id": first_task.id,
+            "to_task_id": second_task.id,
+            "quantity": "80",
+            "idempotency_key": "xf-pf:plain",
+        },
+        headers=headers,
+    )
+    assert plain_send.status_code == 400
+    assert "exceeds transferable" in plain_send.json()["detail"]
+
+    # Post-factum send with physical handover 1h ago should SUCCEED.
+    from datetime import datetime, timedelta, timezone
+    physical_handover = datetime.now(timezone.utc) - timedelta(hours=1)
+    pf_send = await client.post(
+        "/api/transfers",
+        json={
+            "from_task_id": first_task.id,
+            "to_task_id": second_task.id,
+            "quantity": "80",
+            "idempotency_key": "xf-pf:send",
+            "post_factum": True,
+            "physical_handover_at": physical_handover.isoformat(),
+            "comment": "physical handover happened earlier",
+        },
+        headers=headers,
+    )
+    assert pf_send.status_code == 200, pf_send.text
+    pf_body = pf_send.json()
+    assert pf_body["status"] == "accepted"
+    transfer_id = pf_body["transfer_id"]
+
+    # Inspect DB: Transfer is flagged as post_factum
+    transfer = await session.get(Transfer, transfer_id)
+    assert transfer.is_post_factum is True
+    assert transfer.physical_handover_at is not None
+    from_db_iso = transfer.physical_handover_at.isoformat()
+    sent_dt = datetime.fromisoformat(physical_handover.isoformat())
+    from_dt = datetime.fromisoformat(from_db_iso)
+    if from_dt.tzinfo is None:
+        from_dt = from_dt.replace(tzinfo=timezone.utc)
+    if sent_dt.tzinfo is None:
+        sent_dt = sent_dt.replace(tzinfo=timezone.utc)
+    assert abs((from_dt - sent_dt).total_seconds()) < 1
+
+    # The post-factum transfer produces three ledger rows:
+    # transfer_send (sender side), transfer_receive (receiver side),
+    # and the auto-issue_to_work on receive.
+    movements = (
+        await session.execute(
+            select(Movement).where(Movement.transfer_id == transfer_id)
+        )
+    ).scalars().all()
+    assert len(movements) == 3
+    types = {m.movement_type for m in movements}
+    assert types == {MovementType.transfer_send, MovementType.transfer_receive, MovementType.issue_to_work}
+    for m in movements:
+        assert m.performed_at is not None
+        assert m.accounted_at is not None
+        if m.movement_type in {MovementType.transfer_send, MovementType.transfer_receive}:
+            # Both transfer movements inherit is_post_factum from the Transfer
+            assert m.is_post_factum is True
+            # performed_at for send/receive should be the physical handover time
+            # (which was 1 hour ago).
+            now = datetime.now(timezone.utc)
+            perf = m.performed_at
+            if perf.tzinfo is None:
+                perf = perf.replace(tzinfo=timezone.utc)
+            assert perf < now
+        # issue_to_work: is_post_factum is False (it's a separate op)
+
+
+@pytest.mark.asyncio
+async def test_post_factum_does_not_break_db_constraints(
+    client, session
+) -> None:
+    """Even when the sender has not yet completed the transferred
+    quantity, all ``cached_*`` cache values remain non-negative.  The
+    post-factum Transfer just records the movement; the receiving
+    task's in-work/cache still reflects what was actually issued.
+    """
+    user = await _make_user(session, "xfer-pf-cache@test.local")
+    headers = _auth_headers(user)
+    ctx = await _make_six_section_fixture(
+        session, sku="FG-XF-PF-CACHE", planned_qty=Decimal("100")
+    )
+    await _release_via_take_to_work(client, ctx["position"].id)
+    tasks = await _tasks_by_sequence(session, ctx["position"].id)
+    first_task = tasks[0]
+    second_task = tasks[1]
+
+    # Sender: issue 50, complete 0.  Receiver stays in waiting_previous.
+    await client.post(
+        f"/api/shopfloor/tasks/{first_task.id}/issue",
+        json={"quantity": "50", "idempotency_key": "xf-pfc:issue-f"},
+        headers=headers,
+    )
+    await session.commit()
+
+    # Post-factum send 50.  The auto-accept will:
+    #   1. flip second_task from waiting_previous -> ready
+    #   2. call issue_to_work(50) -> movement, status -> in_progress
+    resp = await client.post(
+        "/api/transfers",
+        json={
+            "from_task_id": first_task.id,
+            "to_task_id": second_task.id,
+            "quantity": "50",
+            "idempotency_key": "xf-pfc:send",
+            "post_factum": True,
+        },
+        headers=headers,
+    )
+    assert resp.status_code == 200, resp.text
+
+    # DB-level non-negative constraints are honoured for all cached_*.
+    await session.commit()
+    await session.refresh(first_task)
+    await session.refresh(second_task)
+    assert first_task.cached_transferred_quantity == Decimal("50")
+    assert first_task.cached_completed_quantity == Decimal("0")
+    assert first_task.cached_transferred_quantity >= 0
+    assert second_task.cached_received_quantity == Decimal("50")
+    assert second_task.cached_received_quantity >= 0
+    # The auto-accept issues the received quantity to work.
+    assert second_task.cached_issued_quantity == Decimal("50")
+    assert second_task.cached_completed_quantity == Decimal("0")
+    # All cached_* quantities stay non-negative on the post-factum path.
+    assert second_task.cached_in_work_quantity >= 0
+    assert second_task.cached_available_quantity >= 0
+    assert second_task.cached_remaining_quantity >= 0
+
+
+@pytest.mark.asyncio
+async def test_post_factum_default_off_blocks_over_transfer(
+    client, session
+) -> None:
+    """When ``post_factum`` is not set (or False), the historical
+    ``quantity <= transferable`` guard is preserved.
+    """
+    user = await _make_user(session, "xfer-pf-off@test.local")
+    headers = _auth_headers(user)
+    ctx = await _make_six_section_fixture(
+        session, sku="FG-XF-PF-OFF", planned_qty=Decimal("100")
+    )
+    await _release_via_take_to_work(client, ctx["position"].id)
+    tasks = await _tasks_by_sequence(session, ctx["position"].id)
+    first_task = tasks[0]
+    second_task = tasks[1]
+
+    # No completion on sender.
+    await client.post(
+        f"/api/shopfloor/tasks/{first_task.id}/issue",
+        json={"quantity": "100", "idempotency_key": "xf-pfo:issue"},
+        headers=headers,
+    )
+
+    # Plain send: should fail.
+    resp = await client.post(
+        "/api/transfers",
+        json={
+            "from_task_id": first_task.id,
+            "to_task_id": second_task.id,
+            "quantity": "100",
+            "idempotency_key": "xf-pfo:send",
+        },
+        headers=headers,
+    )
+    assert resp.status_code == 400
+    assert "exceeds transferable" in resp.json()["detail"]
+
+    # post_factum=False explicitly: also fails.
+    resp2 = await client.post(
+        "/api/transfers",
+        json={
+            "from_task_id": first_task.id,
+            "to_task_id": second_task.id,
+            "quantity": "100",
+            "idempotency_key": "xf-pfo:send2",
+            "post_factum": False,
+        },
+        headers=headers,
+    )
+    assert resp2.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_post_factum_idempotency(
+    client, session
+) -> None:
+    """Replaying the same post-factum call with the same
+    ``idempotency_key`` returns the existing transfer without
+    creating duplicate Movements.
+    """
+    from app.models.movement import Movement
+
+    user = await _make_user(session, "xfer-pf-idem@test.local")
+    headers = _auth_headers(user)
+    ctx = await _make_six_section_fixture(
+        session, sku="FG-XF-PF-IDEM", planned_qty=Decimal("100")
+    )
+    await _release_via_take_to_work(client, ctx["position"].id)
+    tasks = await _tasks_by_sequence(session, ctx["position"].id)
+    first_task = tasks[0]
+    second_task = tasks[1]
+
+    await client.post(
+        f"/api/shopfloor/tasks/{first_task.id}/issue",
+        json={"quantity": "100", "idempotency_key": "xf-pfi:issue"},
+        headers=headers,
+    )
+    await session.commit()
+
+    # First call: 200
+    r1 = await client.post(
+        "/api/transfers",
+        json={
+            "from_task_id": first_task.id,
+            "to_task_id": second_task.id,
+            "quantity": "60",
+            "idempotency_key": "xf-pfi:send",
+            "post_factum": True,
+        },
+        headers=headers,
+    )
+    assert r1.status_code == 200
+    tid_1 = r1.json()["transfer_id"]
+
+    # Replay with same idempotency_key: 200, same transfer id
+    r2 = await client.post(
+        "/api/transfers",
+        json={
+            "from_task_id": first_task.id,
+            "to_task_id": second_task.id,
+            "quantity": "60",
+            "idempotency_key": "xf-pfi:send",
+            "post_factum": True,
+        },
+        headers=headers,
+    )
+    assert r2.status_code == 200
+    assert r2.json().get("idempotent_replay") is True
+    assert r2.json()["transfer_id"] == tid_1
+
+    # No duplicate Movements.  The post-factum send+receive pair
+    # produces three ledger rows: transfer_send, transfer_receive, and
+    # the auto-issue_to_work on receive (always 3 for a fresh send).
+    await session.commit()
+    n_movements = (
+        await session.execute(
+            select(Movement).where(Movement.transfer_id == tid_1)
+        )
+    ).scalars().all()
+    assert len(n_movements) == 3
+    # Replay again: still 3 movements (no duplicates on the second replay either)
+    r3 = await client.post(
+        "/api/transfers",
+        json={
+            "from_task_id": first_task.id,
+            "to_task_id": second_task.id,
+            "quantity": "60",
+            "idempotency_key": "xf-pfi:send",
+            "post_factum": True,
+        },
+        headers=headers,
+    )
+    assert r3.status_code == 200
+    assert r3.json().get("idempotent_replay") is True
+    await session.commit()
+    n_movements2 = (
+        await session.execute(
+            select(Movement).where(Movement.transfer_id == tid_1)
+        )
+    ).scalars().all()
+    assert len(n_movements2) == 3
+
+
+@pytest.mark.asyncio
+async def test_post_factum_appears_in_history(
+    client, session
+) -> None:
+    """The transfer history endpoint surfaces the new ``is_post_factum``
+    and ``physical_handover_at`` fields so the UI can render the badge.
+    """
+    user = await _make_user(session, "xfer-pf-hist@test.local")
+    headers = _auth_headers(user)
+    ctx = await _make_six_section_fixture(
+        session, sku="FG-XF-PF-HIST", planned_qty=Decimal("100")
+    )
+    await _release_via_take_to_work(client, ctx["position"].id)
+    tasks = await _tasks_by_sequence(session, ctx["position"].id)
+    first_task = tasks[0]
+    second_task = tasks[1]
+    from_section = ctx["sections"][0]
+
+    await client.post(
+        f"/api/shopfloor/tasks/{first_task.id}/issue",
+        json={"quantity": "100", "idempotency_key": "xf-pfh:issue"},
+        headers=headers,
+    )
+    await session.commit()
+
+    await client.post(
+        "/api/transfers",
+        json={
+            "from_task_id": first_task.id,
+            "to_task_id": second_task.id,
+            "quantity": "40",
+            "idempotency_key": "xf-pfh:send",
+            "post_factum": True,
+            "physical_handover_at": "2026-06-01T08:00:00+00:00",
+        },
+        headers=headers,
+    )
+
+    resp = await client.get(
+        f"/api/transfers/history?section_id={from_section.id}",
+        headers=headers,
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert len(data["transfers"]) == 1
+    tr = data["transfers"][0]
+    assert tr["is_post_factum"] is True
+    assert tr["physical_handover_at"] is not None
+    assert tr["physical_handover_at"].startswith("2026-06-01T08:00:00")
+
+
+@pytest.mark.asyncio
+async def test_complete_waiting_task_before_transfer(
+    client, session
+) -> None:
+    """Verify that a task in waiting_previous status can be completed,
+    and that a subsequent post-factum transfer received does not
+    double-issue parts and maintains correct balances.
+    """
+    user = await _make_user(session, "xfer-pf-wait-comp@test.local")
+    headers = _auth_headers(user)
+    ctx = await _make_six_section_fixture(
+        session, sku="FG-XF-PF-WAIT-COMP", planned_qty=Decimal("100")
+    )
+    await _release_via_take_to_work(client, ctx["position"].id)
+    tasks = await _tasks_by_sequence(session, ctx["position"].id)
+    first_task = tasks[0]
+    second_task = tasks[1]
+
+    # Verify second_task starts in waiting_previous status
+    await session.refresh(second_task)
+    assert second_task.status == WorkTaskStatus.waiting_previous
+    assert second_task.cached_issued_quantity == Decimal("0")
+    assert second_task.cached_completed_quantity == Decimal("0")
+
+    # Complete 80 parts directly on the second_task (still in waiting_previous status)
+    resp_complete = await client.post(
+        f"/api/shopfloor/tasks/{second_task.id}/complete",
+        json={
+            "good_quantity": "80",
+            "defect_quantity": "0",
+            "idempotency_key": "xf-pfwc:complete-second",
+        },
+        headers=headers,
+    )
+    assert resp_complete.status_code == 200, resp_complete.text
+
+    # Verify that the complete operation auto-issued 80 parts and task is now partially_completed
+    await session.commit()
+    await session.refresh(second_task)
+    assert second_task.status == WorkTaskStatus.partially_completed
+    assert second_task.cached_issued_quantity == Decimal("80")
+    assert second_task.cached_completed_quantity == Decimal("80")
+    assert second_task.cached_in_work_quantity == Decimal("0")
+
+    # Register issue on the first task so it has some parts issued
+    await client.post(
+        f"/api/shopfloor/tasks/{first_task.id}/issue",
+        json={"quantity": "100", "idempotency_key": "xf-pfwc:issue-first"},
+        headers=headers,
+    )
+    await session.commit()
+
+    # Now register a post-factum transfer of 100 parts from first to second task
+    resp_transfer = await client.post(
+        "/api/transfers",
+        json={
+            "from_task_id": first_task.id,
+            "to_task_id": second_task.id,
+            "quantity": "100",
+            "idempotency_key": "xf-pfwc:send-transfer",
+            "post_factum": True,
+        },
+        headers=headers,
+    )
+    assert resp_transfer.status_code == 200, resp_transfer.text
+
+    # Verify that the second task has received the transfer,
+    # and has auto-issued only the remaining 20 parts (100 total received - 80 already issued)
+    # to avoid double-issuing the 80 parts already completed.
+    await session.commit()
+    await session.refresh(second_task)
+    assert second_task.cached_received_quantity == Decimal("100")
+    assert second_task.cached_issued_quantity == Decimal("100") # 80 from complete + 20 from transfer receive
+    assert second_task.cached_completed_quantity == Decimal("80")
+    assert second_task.cached_in_work_quantity == Decimal("20") # 100 issued - 80 completed
+    assert second_task.status == WorkTaskStatus.partially_completed
+
+

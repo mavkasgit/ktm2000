@@ -69,6 +69,8 @@ export type IncomingTransfer = {
   comment: string | null;
   sent_at: string | null;
   created_at: string | null;
+  is_post_factum: boolean;
+  physical_handover_at: string | null;
   from_task_status: string;
   to_task_status: string;
   product_sku: string;
@@ -91,6 +93,8 @@ export type CreateTransferInput = {
   executor_user_id?: number;
   performed_at?: string;
   accounted_at?: string;
+  post_factum?: boolean;
+  physical_handover_at?: string;
 };
 
 export type AcceptTransferInput = {

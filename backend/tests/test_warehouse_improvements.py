@@ -482,6 +482,7 @@ async def test_mrp_zero_quantity_stages_are_autocompleted(client, session):
     - Stages 1 and 2 get planned_qty = max(0, 30-30) = 0 → auto-completed.
     - Stage 3+ gets planned_qty = 30 → ready (first nonzero stage).
     """
+    await _make_user(session, "mrp-zero@test.local")
     ctx = await _make_six_section_fixture(session, sku="FG-MRP-ZERO", planned_qty=Decimal("30"), with_spg=True)
     product = ctx["product"]
     sections = ctx["sections"]
@@ -530,9 +531,9 @@ async def test_mrp_zero_quantity_stages_are_autocompleted(client, session):
     assert tasks[1].planned_quantity == Decimal("0")
     assert tasks[1].status == WorkTaskStatus.completed
 
-    # Stage 3: first nonzero → ready
+    # Stage 3: first nonzero → in_progress (auto-consumed remainder)
     assert tasks[2].planned_quantity == Decimal("30")
-    assert tasks[2].status == WorkTaskStatus.ready
+    assert tasks[2].status == WorkTaskStatus.in_progress
 
     # Stages 4-6: waiting
     for i in range(3, 6):

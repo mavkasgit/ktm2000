@@ -60,6 +60,8 @@ async def transfer_send(
     executor_user_id: int | None = None,
     performed_at: datetime | None = None,
     accounted_at: datetime | None = None,
+    post_factum: bool = False,
+    physical_handover_at: datetime | None = None,
 ) -> dict:
     """Send ``quantity`` from a completed SectionTask to the next route step.
 
@@ -72,6 +74,15 @@ async def transfer_send(
     ledger row are written.  Idempotency is keyed on the
     ``idempotency_key`` of the Transfer itself; the send-side movement
     uses a ``:send`` suffix.
+
+    When ``post_factum=True``, the cross-GHP ``quantity <= transferable``
+    guard is skipped: the receiving section may have already started
+    working on the parts, and the formal transfer is being recorded
+    after the physical handover.  The Transfer and resulting Movement
+    rows are tagged with ``is_post_factum=True`` for audit/history; the
+    ``performed_at`` is taken from ``physical_handover_at`` (or
+    ``performed_at``) so the ledger reflects when the work physically
+    moved between sections.
     """
     if idempotency_key:
         existing = await _check_idempotency(db, idempotency_key=idempotency_key, entity_type=Transfer)
@@ -137,16 +148,23 @@ async def transfer_send(
     if to_stage.sequence <= from_stage.sequence:
         raise ValueError("Transfer target must be next route step")
 
-    # Block same-GHP transfers
+    # Block same-GHP transfers (this is structural; the cross-GHP post-factum
+    # path still goes through here — the flag is on the Transfer, not on
+    # the GHP relationship)
     from app.services.shopfloor.common import sections_share_spg
     if await sections_share_spg(db, from_task.section_id, to_task.section_id):
         raise ValueError("Transfers within the same Storage Production Group (GHP) are not allowed")
 
     quantity = _to_decimal(quantity)
     _ensure_positive(quantity, "quantity")
-    transferable = from_task.cached_completed_quantity - from_task.cached_transferred_quantity
-    if quantity > transferable:
-        raise ValueError("Transfer quantity exceeds transferable amount")
+    if not post_factum:
+        transferable = from_task.cached_completed_quantity - from_task.cached_transferred_quantity
+        if quantity > transferable:
+            raise ValueError("Transfer quantity exceeds transferable amount")
+
+    now = datetime.now(UTC)
+    eff_performed = physical_handover_at or performed_at or now
+    eff_accounted = accounted_at or now
 
     transfer = Transfer(
         transfer_no=_transfer_no(),
@@ -158,9 +176,11 @@ async def transfer_send(
         sent_quantity=quantity,
         status=TransferStatus.sent,
         sent_by=actor_id,
-        sent_at=datetime.now(UTC),
+        sent_at=eff_accounted,
         comment=comment,
         idempotency_key=idempotency_key,
+        is_post_factum=post_factum,
+        physical_handover_at=physical_handover_at,
     )
     db.add(transfer)
     await db.flush()
@@ -184,8 +204,9 @@ async def transfer_send(
         executor_user_id=eff_executor,
         created_by_user_name=actor_name,
         executor_user_name=executor_name,
-        performed_at=performed_at or datetime.now(UTC),
-        accounted_at=accounted_at or datetime.now(UTC),
+        performed_at=eff_performed,
+        accounted_at=eff_accounted,
+        is_post_factum=post_factum,
     )
     db.add(movement)
 
@@ -255,6 +276,8 @@ async def transfer_receive(
         eff_executor = executor_user_id or actor_id
         actor_name = await _get_user_snapshot_name(db, actor_id)
         executor_name = await _get_user_snapshot_name(db, eff_executor)
+        eff_performed = performed_at or transfer.physical_handover_at or datetime.now(UTC)
+        eff_accounted = accounted_at or datetime.now(UTC)
         movement = Movement(
             product_id=transfer.product_id,
             task_id=to_task.id,
@@ -272,8 +295,9 @@ async def transfer_receive(
             executor_user_id=eff_executor,
             created_by_user_name=actor_name,
             executor_user_name=executor_name,
-            performed_at=performed_at or datetime.now(UTC),
-            accounted_at=accounted_at or datetime.now(UTC),
+            performed_at=eff_performed,
+            accounted_at=eff_accounted,
+            is_post_factum=transfer.is_post_factum,
         )
         db.add(movement)
 
@@ -298,19 +322,26 @@ async def transfer_receive(
         await db.flush()
 
     if accepted_quantity > 0:
-        from app.services.shopfloor.operations_tasks import issue_to_work, auto_consume_available_remainders
-        await issue_to_work(
-            db,
-            task_id=to_task.id,
-            quantity=accepted_quantity,
-            actor_id=actor_id,
-            comment=f"Auto-issued on transfer receive {transfer.id}",
-            executor_user_id=executor_user_id,
-            performed_at=performed_at,
-            accounted_at=accounted_at,
-            transfer_id=transfer.id,
-        )
-        await auto_consume_available_remainders(db, to_task, actor_id=actor_id)
+        # Calculate how much to auto-issue based on what is already issued to task
+        # to avoid double-issuing if the task was completed before transfer.
+        total_received = to_task.cached_received_quantity + accepted_quantity
+        total_issued = to_task.cached_issued_quantity
+        to_issue = total_received - total_issued
+        if to_issue > 0:
+            from app.services.shopfloor.operations_tasks import issue_to_work, auto_consume_available_remainders
+            await issue_to_work(
+                db,
+                task_id=to_task.id,
+                quantity=to_issue,
+                actor_id=actor_id,
+                comment=f"Auto-issued on transfer receive {transfer.id}",
+                source_ref=source_ref,
+                executor_user_id=executor_user_id,
+                performed_at=performed_at,
+                accounted_at=accounted_at,
+                transfer_id=transfer.id,
+            )
+            await auto_consume_available_remainders(db, to_task, actor_id=actor_id)
 
     await _refresh_task_cache(db, to_task.id)
     await _refresh_section_plan_line_cache(db, to_task.section_plan_line_id)

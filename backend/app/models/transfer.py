@@ -54,6 +54,10 @@ class Transfer(Base):
     accepted_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
     accepted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     comment: Mapped[str | None] = mapped_column(Text, nullable=True)
+    is_post_factum: Mapped[bool] = mapped_column(
+        nullable=False, server_default=text("false"), default=False
+    )
+    physical_handover_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
 
