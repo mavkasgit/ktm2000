@@ -9,6 +9,7 @@ import {
   type ImportTemplate,
   type CreateImportTemplateInput,
 } from "@/shared/api/importTemplates"
+import { queryKeys } from "@/shared/api/queryKeys"
 import { getExcelSheetNames, previewExcelSheet } from "@/shared/api/imports"
 import { Button } from "@/shared/ui/Button"
 import { Input } from "@/shared/ui/Input"
@@ -96,7 +97,7 @@ function transliterateToCode(name: string): string {
 export function ImportTemplatesPage() {
   const queryClient = useQueryClient()
   const { data: templates, isLoading } = useQuery({
-    queryKey: ["import-templates"],
+    queryKey: queryKeys.importTemplates.all(),
     queryFn: listImportTemplates,
   })
 
@@ -131,7 +132,7 @@ export function ImportTemplatesPage() {
     try {
       await deleteImportTemplate(deletingTemplate.id)
       toast({ title: "Шаблон удалён", variant: "success" })
-      queryClient.invalidateQueries({ queryKey: ["import-templates"] })
+      queryClient.invalidateQueries({ queryKey: queryKeys.importTemplates.all() })
     } catch (e) {
       toast({ title: "Ошибка", description: getErrorMessage(e), variant: "destructive" })
     } finally {
@@ -215,7 +216,7 @@ export function ImportTemplatesPage() {
         onSuccess={() => {
           setEditDialogOpen(false)
           setPendingCreateFile(null)
-          queryClient.invalidateQueries({ queryKey: ["import-templates"] })
+          queryClient.invalidateQueries({ queryKey: queryKeys.importTemplates.all() })
         }}
       />
 

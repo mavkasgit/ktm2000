@@ -1,4 +1,5 @@
 import { useState, useRef } from "react";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Upload, FileText, Loader2, AlertCircle, CheckCircle } from "lucide-react";
 
 import {
@@ -9,6 +10,7 @@ import {
   Button,
 } from "@/shared/ui";
 import { importDefectsExcel } from "@/shared/api/defects";
+import { queryKeys } from "@/shared/api/queryKeys";
 
 interface ImportDefectsDialogProps {
   open: boolean;
@@ -23,8 +25,8 @@ export function ImportDefectsDialog({
   spgId,
   onSaved,
 }: ImportDefectsDialogProps) {
+  const queryClient = useQueryClient();
   const [file, setFile] = useState<File | null>(null);
-  const [importing, setImporting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<{ imported_count: number; errors: string[] } | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -37,29 +39,34 @@ export function ImportDefectsDialog({
     }
   };
 
-  const handleImport = async () => {
-    if (!file) return;
-
-    setImporting(true);
-    setError(null);
-    setResult(null);
-    try {
-      const response = await importDefectsExcel(spgId, file);
+  const importMutation = useMutation({
+    mutationFn: () => importDefectsExcel(spgId, file as File),
+    onSuccess: (response) => {
       if (response.success) {
         setResult({
           imported_count: response.imported_count,
           errors: response.errors,
         });
+        void queryClient.invalidateQueries({ queryKey: queryKeys.spg.defects(spgId) });
+        void queryClient.invalidateQueries({ queryKey: queryKeys.spg.snapshot(spgId) });
         onSaved();
       } else {
         setError("Не удалось импортировать данные.");
       }
-    } catch (e: any) {
-      const msg = e.response?.data?.detail || "Ошибка при импорте Excel-файла";
-      setError(msg);
-    } finally {
-      setImporting(false);
-    }
+    },
+    onError: (e: unknown) => {
+      const msg = e && typeof e === "object" && "response" in e
+        ? (e as { response?: { data?: { detail?: string } } }).response?.data?.detail
+        : undefined;
+      setError((msg as string | undefined) || "Ошибка при импорте Excel-файла");
+    },
+  });
+
+  const handleImport = () => {
+    if (!file) return;
+    setError(null);
+    setResult(null);
+    importMutation.mutate();
   };
 
   const handleClose = () => {
@@ -99,7 +106,7 @@ export function ImportDefectsDialog({
                   onChange={handleFileChange}
                   accept=".xlsx, .xls"
                   className="hidden"
-                  disabled={importing}
+                  disabled={importMutation.isPending}
                 />
                 
                 {file ? (
@@ -131,11 +138,11 @@ export function ImportDefectsDialog({
               )}
 
               <div className="flex justify-end gap-2 pt-2 border-t">
-                <Button variant="outline" onClick={handleClose} disabled={importing}>
+                <Button variant="outline" onClick={handleClose} disabled={importMutation.isPending}>
                   Отмена
                 </Button>
-                <Button onClick={handleImport} disabled={importing || !file}>
-                  {importing ? (
+                <Button onClick={handleImport} disabled={importMutation.isPending || !file}>
+                  {importMutation.isPending ? (
                     <>
                       <Loader2 className="h-4 w-4 animate-spin mr-2" />
                       Импорт...

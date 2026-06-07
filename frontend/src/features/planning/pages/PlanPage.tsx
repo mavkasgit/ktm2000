@@ -12,6 +12,7 @@ import { allPlanFiles, allPlanPositions, PlanPositionOut, listPlans, batchAssign
 import { listRoutes } from "@/shared/api/routes"
 import { listImportTemplates } from "@/shared/api/importTemplates"
 import { apiClient, getErrorMessage } from "@/shared/api/client"
+import { queryKeys } from "@/shared/api/queryKeys"
 import { RowDetailsSidePanel, adaptPlanPositionOut } from "../components/row-details"
 import {
   BulkResultsDialog,
@@ -51,13 +52,13 @@ export function PlanPage() {
     setDetailOpen(true)
   }
 
-  const { data: plans } = useQuery({ queryKey: ["plans"], queryFn: listPlans })
+  const { data: plans } = useQuery({ queryKey: queryKeys.execution.plans(), queryFn: listPlans })
   const activePlan = plans && plans.length > 0 ? plans[0] : null
 
-  const { data: routes } = useQuery({ queryKey: ["routes"], queryFn: () => listRoutes() })
+  const { data: routes } = useQuery({ queryKey: queryKeys.routes.all(), queryFn: () => listRoutes() })
   const activeRoutes = routes?.filter(r => r.is_active) ?? []
 
-  const { data: templates } = useQuery({ queryKey: ["import-templates"], queryFn: listImportTemplates })
+  const { data: templates } = useQuery({ queryKey: queryKeys.importTemplates.all(), queryFn: listImportTemplates })
   const activeTemplates = (templates ?? []).filter(t => t.is_active).sort((a, b) => a.sort_order - b.sort_order)
 
   const [filters, setFilters] = useState<PlanFiltersState>({
@@ -76,7 +77,7 @@ export function PlanPage() {
   const [templateImportOpen, setTemplateImportOpen] = useState<number | null>(null)
 
   const { data: duplicateGroupsByPlan } = useQuery({
-    queryKey: ["plan-duplicates-all", plans?.map((p) => p.id).join(",")],
+    queryKey: queryKeys.plan.duplicates(plans?.map((p) => p.id).join(",")),
     queryFn: async () => {
       const planIds = (plans ?? []).map((p) => p.id)
       const entries = await Promise.all(
@@ -89,10 +90,10 @@ export function PlanPage() {
   })
 
   const handleSuccess = () => {
-    queryClient.invalidateQueries({ queryKey: ["plans"] })
-    queryClient.invalidateQueries({ queryKey: ["all-plan-files"] })
-    queryClient.invalidateQueries({ queryKey: ["all-plan-positions"] })
-    queryClient.invalidateQueries({ queryKey: ["plan-duplicates-all"] })
+    queryClient.invalidateQueries({ queryKey: queryKeys.execution.plans() })
+    queryClient.invalidateQueries({ queryKey: queryKeys.plan.allFiles() })
+    queryClient.invalidateQueries({ queryKey: queryKeys.plan.allPositions() })
+    queryClient.invalidateQueries({ queryKey: queryKeys.plan.duplicates() })
   }
 
   const handleApprove = async (positionId: number, planId?: number, force = false) => {
@@ -100,9 +101,9 @@ export function PlanPage() {
     if (!targetPlanId) return
     try {
       await approveProductionPlanPosition(targetPlanId, positionId, { force })
-      queryClient.invalidateQueries({ queryKey: ["all-plan-positions"] })
-      queryClient.invalidateQueries({ queryKey: ["plan-duplicates-all"] })
-      queryClient.invalidateQueries({ queryKey: ["production-planning-rows"] })
+      queryClient.invalidateQueries({ queryKey: queryKeys.plan.allPositions() })
+      queryClient.invalidateQueries({ queryKey: queryKeys.plan.duplicates() })
+      queryClient.invalidateQueries({ queryKey: queryKeys.execution.rows() })
       toast({ title: "Позиция утверждена", variant: "success" })
     } catch (e) {
       const msg = getErrorMessage(e)
@@ -124,8 +125,8 @@ export function PlanPage() {
     if (!targetPlanId) return
     try {
       await apiClient.delete(`/production-plans/${targetPlanId}/positions/${positionId}`)
-      queryClient.invalidateQueries({ queryKey: ["all-plan-positions"] })
-      queryClient.invalidateQueries({ queryKey: ["plan-duplicates-all"] })
+      queryClient.invalidateQueries({ queryKey: queryKeys.plan.allPositions() })
+      queryClient.invalidateQueries({ queryKey: queryKeys.plan.duplicates() })
       toast({ title: "Позиция удалена", variant: "success" })
     } catch (e) {
       toast({ title: "Ошибка", description: e instanceof Error ? e.message : "Не удалось удалить", variant: "destructive" })
@@ -136,8 +137,8 @@ export function PlanPage() {
     if (!activePlan) return
     try {
       await deleteImportBatch(activePlan.id, batchId)
-      queryClient.invalidateQueries({ queryKey: ["all-plan-files"] })
-      queryClient.invalidateQueries({ queryKey: ["all-plan-positions"] })
+      queryClient.invalidateQueries({ queryKey: queryKeys.plan.allFiles() })
+      queryClient.invalidateQueries({ queryKey: queryKeys.plan.allPositions() })
       toast({ title: "Импорт удалён", variant: "success" })
     } catch (e) {
       toast({ title: "Ошибка", description: e instanceof Error ? e.message : "Не удалось удалить импорт", variant: "destructive" })
@@ -176,7 +177,7 @@ export function PlanPage() {
     try {
       const rid = (routeId === null || Number.isNaN(routeId)) ? null : routeId
       await batchAssignRouteGlobal([positionId], rid)
-      queryClient.invalidateQueries({ queryKey: ["all-plan-positions"] })
+      queryClient.invalidateQueries({ queryKey: queryKeys.plan.allPositions() })
     } catch (e) {
       toast({
         title: "Ошибка",
@@ -265,9 +266,7 @@ export function PlanPage() {
     if (summary.failed > 0) setBulkResultsOpen(true)
     setBulkApproving(false)
     setBulkProgress(null)
-    queryClient.invalidateQueries({ queryKey: ["all-plan-positions"] })
-    queryClient.invalidateQueries({ queryKey: ["plan-duplicates-all"] })
-    queryClient.invalidateQueries({ queryKey: ["production-planning-rows"] })
+    queryClient.invalidateQueries({ queryKey: queryKeys.plan.allPositions() })
     const failedEntries = results.filter(r => r.status === "failed")
     toast({
       title: summary.failed > 0 ? "Частичный успех" : "Массовое утверждение",
@@ -335,8 +334,7 @@ export function PlanPage() {
     if (summary.failed > 0) setBulkResultsOpen(true)
     setBulkDeleting(false)
     setBulkProgress(null)
-    queryClient.invalidateQueries({ queryKey: ["all-plan-positions"] })
-    queryClient.invalidateQueries({ queryKey: ["plan-duplicates-all"] })
+    queryClient.invalidateQueries({ queryKey: queryKeys.plan.allPositions() })
     const failedEntries = results.filter(r => r.status === "failed")
     toast({
       title: summary.failed > 0 ? "Частичный успех" : "Массовое удаление",
@@ -350,12 +348,12 @@ export function PlanPage() {
   }
 
   const { data: files, isLoading: filesLoading } = useQuery({
-    queryKey: ["all-plan-files"],
+    queryKey: queryKeys.plan.allFiles(),
     queryFn: () => allPlanFiles(),
   })
 
   const { data: positions, isLoading: posLoading } = useQuery({
-    queryKey: ["all-plan-positions"],
+    queryKey: queryKeys.plan.allPositions(),
     queryFn: () => allPlanPositions(),
   })
 
@@ -905,7 +903,7 @@ export function PlanPage() {
         onOpenChange={setDetailOpen}
         data={detailData}
         onSaved={() => {
-          queryClient.invalidateQueries({ queryKey: ["all-plan-positions"] })
+          queryClient.invalidateQueries({ queryKey: queryKeys.plan.allPositions() })
         }}
       />
 
@@ -945,3 +943,5 @@ export function PlanPage() {
     </>
   )
 }
+
+

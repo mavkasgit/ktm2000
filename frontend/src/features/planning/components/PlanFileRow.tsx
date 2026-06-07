@@ -6,6 +6,7 @@ import { apiClient } from "@/shared/api/client"
 import { PlanFileInfo, PlanSummary } from "@/shared/api/productionPlans"
 import { getImportFileDownloadUrl } from "@/shared/api/imports"
 import { statusLabels, statusVariant } from "../lib/plan-labels"
+import { queryKeys } from "@/shared/api/queryKeys"
 
 export function FileRow({ file, activePlan, onDelete }: { file: PlanFileInfo; activePlan: PlanSummary; onDelete: (batchId: number) => void }) {
   const [previewOpen, setPreviewOpen] = useState(false)
@@ -13,7 +14,7 @@ export function FileRow({ file, activePlan, onDelete }: { file: PlanFileInfo; ac
   const downloadUrl = getImportFileDownloadUrl(file.file_id)
 
   const { data: previewData } = useQuery({
-    queryKey: ["batch-preview", file.batch_id],
+    queryKey: queryKeys.plan.batchPreview(file.batch_id),
     queryFn: () =>
       apiClient.get(`/production-plans/${activePlan!.id}/batches/${file.batch_id}/preview`).then(r => r.data),
     enabled: previewOpen && !!activePlan,

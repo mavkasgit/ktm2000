@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 
 import {
   Dialog,
@@ -10,11 +11,13 @@ import {
 } from "@/shared/ui";
 import type { DefectOut } from "@/shared/api/defects";
 import { defectDecide } from "@/shared/api/defects";
+import { queryKeys } from "@/shared/api/queryKeys";
 
 interface DecideDefectDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   defect: DefectOut | null;
+  spgId?: number;
   onSaved: () => void;
 }
 
@@ -22,12 +25,13 @@ export function DecideDefectDialog({
   open,
   onOpenChange,
   defect,
+  spgId,
   onSaved,
 }: DecideDefectDialogProps) {
+  const queryClient = useQueryClient();
   const [decisionType, setDecisionType] = useState("scrap");
   const [quantity, setQuantity] = useState("");
   const [comment, setComment] = useState("");
-  const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -39,7 +43,31 @@ export function DecideDefectDialog({
     }
   }, [open, defect]);
 
-  const handleSave = async () => {
+  const saveMutation = useMutation({
+    mutationFn: () =>
+      defectDecide(defect!.id, {
+        decision_type: decisionType,
+        quantity: parseFloat(quantity),
+        comment: comment || undefined,
+      }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.spg.defects(spgId ?? -1) });
+      if (spgId != null) {
+        void queryClient.invalidateQueries({ queryKey: queryKeys.spg.snapshot(spgId) });
+        void queryClient.invalidateQueries({ queryKey: queryKeys.spg.remainders(spgId) });
+      }
+      onSaved();
+      onOpenChange(false);
+    },
+    onError: (e: unknown) => {
+      const msg = e && typeof e === "object" && "response" in e
+        ? (e as { response?: { data?: { detail?: string } } }).response?.data?.detail
+        : undefined;
+      setError((msg as string | undefined) || "Ошибка при принятии решения");
+    },
+  });
+
+  const handleSave = () => {
     if (!defect) return;
 
     const qty = parseFloat(quantity);
@@ -52,23 +80,8 @@ export function DecideDefectDialog({
       setError(`Количество в решении (${qty}) не может превышать объем дефекта (${defect.total_quantity})`);
       return;
     }
-
-    setSaving(true);
     setError(null);
-    try {
-      await defectDecide(defect.id, {
-        decision_type: decisionType,
-        quantity: qty,
-        comment: comment || undefined,
-      });
-      onSaved();
-      onOpenChange(false);
-    } catch (e: any) {
-      const msg = e.response?.data?.detail || "Ошибка при принятии решения";
-      setError(msg);
-    } finally {
-      setSaving(false);
-    }
+    saveMutation.mutate();
   };
 
   if (!defect) return null;
@@ -141,8 +154,8 @@ export function DecideDefectDialog({
             <Button variant="outline" onClick={() => onOpenChange(false)}>
               Отмена
             </Button>
-            <Button onClick={handleSave} disabled={saving}>
-              {saving ? "Сохранение..." : "Применить решение"}
+            <Button onClick={handleSave} disabled={saveMutation.isPending}>
+              {saveMutation.isPending ? "Сохранение..." : "Применить решение"}
             </Button>
           </div>
         </div>

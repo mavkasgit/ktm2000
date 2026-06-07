@@ -1,16 +1,17 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import * as api from "./api";
+import { queryKeys } from "@/shared/api/queryKeys";
 
 export function useBackupConfig() {
   return useQuery({
-    queryKey: ["backup-config"],
+    queryKey: queryKeys.backups.config(),
     queryFn: api.fetchBackupConfig,
   });
 }
 
 export function useBackups() {
   return useQuery({
-    queryKey: ["backups"],
+    queryKey: queryKeys.backups.all(),
     queryFn: api.fetchBackups,
   });
 }
@@ -20,7 +21,7 @@ export function useCreateBackup() {
   return useMutation({
     mutationFn: api.createBackup,
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["backups"] });
+      queryClient.invalidateQueries({ queryKey: queryKeys.backups.all() });
     },
   });
 }
@@ -33,7 +34,7 @@ export function useStartBackupJob() {
 
 export function useBackupJob(jobId: string | null) {
   return useQuery({
-    queryKey: ["backup-job", jobId],
+    queryKey: queryKeys.backups.job(jobId as unknown as number),
     queryFn: () => api.fetchBackupJob(jobId!),
     enabled: Boolean(jobId),
     refetchInterval: 700,
@@ -53,8 +54,14 @@ export function usePreviewBackup() {
 }
 
 export function useUploadPreview() {
+  const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (file: File) => api.uploadPreview(file),
+    onSuccess: (_data, file) => {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.backups.all() });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.backups.previews((file as unknown as { batch_id?: number })?.batch_id ?? -1) });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.backups.currentPreview() });
+    },
   });
 }
 
@@ -64,7 +71,9 @@ export function useUpdateBackupComment() {
     mutationFn: ({ filename, comment }: { filename: string; comment: string }) =>
       api.updateBackupComment(filename, comment),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["backups"] });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.backups.all() });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.backups.currentPreview() });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.backups.previewsAll() });
     },
   });
 }
@@ -74,7 +83,10 @@ export function useDeleteBackup() {
   return useMutation({
     mutationFn: (filename: string) => api.deleteBackup(filename),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["backups"] });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.backups.all() });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.backups.previewsAll() });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.backups.currentPreview() });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.backups.jobs() });
     },
   });
 }
@@ -84,7 +96,9 @@ export function useBulkDeleteBackups() {
   return useMutation({
     mutationFn: (filenames: string[]) => api.bulkDeleteBackups(filenames),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["backups"] });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.backups.all() });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.backups.previewsAll() });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.backups.currentPreview() });
     },
   });
 }
@@ -94,21 +108,33 @@ export function useDeleteBackupsOlderThan() {
   return useMutation({
     mutationFn: (days: number) => api.deleteBackupsOlderThan(days),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["backups"] });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.backups.all() });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.backups.previewsAll() });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.backups.currentPreview() });
     },
   });
 }
 
 export function useRestoreBackup() {
+  const queryClient = useQueryClient();
   return useMutation({
     mutationFn: ({ filename, db_name }: { filename: string; db_name: string }) =>
       api.restoreBackup(filename, { db_name }),
+    onSuccess: () => {
+      // Восстановление БД — сбрасываем ВСЁ.
+      void queryClient.invalidateQueries();
+    },
   });
 }
 
 export function useUploadRestore() {
+  const queryClient = useQueryClient();
   return useMutation({
     mutationFn: ({ file, db_name }: { file: File; db_name: string }) =>
       api.uploadRestore(file, { db_name }),
+    onSuccess: () => {
+      // Восстановление БД — сбрасываем ВСЁ.
+      void queryClient.invalidateQueries();
+    },
   });
 }

@@ -10,19 +10,20 @@ import { resetAllPlans } from "@/shared/api/productionPlans"
 import { seedRoutes, listRoutes, listRouteRuleProfiles, listRouteSelectionRules, reseedSystemUser, seedPreview, seedDemoProduction, clearDemoProduction } from "@/shared/api/routes"
 import { listImportTemplates } from "@/shared/api/importTemplates"
 import { listSections } from "@/shared/api/sections"
+import { queryKeys } from "@/shared/api/queryKeys"
 
 function useCurrentData() {
-  const routes = useQuery({ queryKey: ["routes"], queryFn: () => listRoutes() })
-  const profiles = useQuery({ queryKey: ["route-rule-profiles"], queryFn: () => listRouteRuleProfiles() })
-  const selectionRules = useQuery({ queryKey: ["route-selection-rules"], queryFn: () => listRouteSelectionRules() })
-  const templates = useQuery({ queryKey: ["import-templates"], queryFn: () => listImportTemplates() })
-  const sections = useQuery({ queryKey: ["sections"], queryFn: () => listSections() })
+  const routes = useQuery({ queryKey: queryKeys.routes.all(), queryFn: () => listRoutes() })
+  const profiles = useQuery({ queryKey: queryKeys.routes.ruleProfiles(), queryFn: () => listRouteRuleProfiles() })
+  const selectionRules = useQuery({ queryKey: queryKeys.routes.selectionRules(), queryFn: () => listRouteSelectionRules() })
+  const templates = useQuery({ queryKey: queryKeys.importTemplates.all(), queryFn: () => listImportTemplates() })
+  const sections = useQuery({ queryKey: queryKeys.sections.all(), queryFn: () => listSections() })
   return { routes, profiles, selectionRules, templates, sections }
 }
 
 function SeedDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (v: boolean) => void }) {
   const { routes, profiles, selectionRules, templates, sections } = useCurrentData()
-  const preview = useQuery({ queryKey: ["seed-preview"], queryFn: () => seedPreview() })
+  const preview = useQuery({ queryKey: queryKeys.routes.seedPreview(), queryFn: () => seedPreview() })
   const [seeding, setSeeding] = useState(false)
   const queryClient = useQueryClient()
 
@@ -157,6 +158,7 @@ export function SettingsPage() {
     setReseedingUser(true)
     try {
       const result = await reseedSystemUser()
+      queryClient.invalidateQueries()
       toast({ title: "Системный пользователь восстановлен", description: `ID: ${result.user_id}, Email: ${result.email}`, variant: "success" })
     } catch (e) {
       toast({ title: "Ошибка", description: e instanceof Error ? e.message : "Не удалось восстановить пользователя", variant: "destructive" })

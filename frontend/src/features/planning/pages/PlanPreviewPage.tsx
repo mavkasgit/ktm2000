@@ -1,6 +1,7 @@
 import { Link, useParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { previewProductionPlan } from "@/shared/api/productionPlans";
+import { queryKeys } from "@/shared/api/queryKeys";
 
 type PreviewPosition = {
   id: number;
@@ -32,7 +33,7 @@ export function PlanPreviewPage() {
   const numericPlanId = Number(planId);
 
   const { data, isLoading, error } = useQuery({
-    queryKey: ["plan-preview-page", numericPlanId],
+    queryKey: queryKeys.plan.previewPage(numericPlanId),
     queryFn: () => previewProductionPlan(numericPlanId),
     enabled: Number.isFinite(numericPlanId) && numericPlanId > 0,
   });

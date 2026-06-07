@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Search, Loader2 } from "lucide-react";
 
 import {
@@ -15,6 +16,7 @@ import type { Product, ProductRouteStageOut } from "@/shared/api/products";
 import { listProducts, getProductRouteStages } from "@/shared/api/products";
 import type { DefectTypeOut } from "@/shared/api/defects";
 import { getDefectTypes, createDefect } from "@/shared/api/defects";
+import { queryKeys } from "@/shared/api/queryKeys";
 
 interface CreateDefectDialogProps {
   open: boolean;
@@ -33,27 +35,27 @@ export function CreateDefectDialog({
   remainders,
   onSaved,
 }: CreateDefectDialogProps) {
+  const queryClient = useQueryClient();
   const [products, setProducts] = useState<Product[]>([]);
   const [productSearch, setProductSearch] = useState("");
   const [selectedProductId, setSelectedProductId] = useState<number | null>(null);
   const [selectedSectionId, setSelectedSectionId] = useState<number | null>(null);
-  
+
   // Route stages states
   const [routeStages, setRouteStages] = useState<ProductRouteStageOut[]>([]);
   const [selectedStageId, setSelectedStageId] = useState<number | null>(null);
   const [loadingStages, setLoadingStages] = useState(false);
-  
+
   // Defect types states
   const [defectTypes, setDefectTypes] = useState<DefectTypeOut[]>([]);
   const [selectedTypeError, setSelectedTypeError] = useState(false);
   const [defectTypeCode, setDefectTypeCode] = useState("");
-  
+
   // Remainders states
   const [selectedRemainderId, setSelectedRemainderId] = useState<number | null>(null);
-  
+
   const [quantity, setQuantity] = useState("");
   const [comment, setComment] = useState("");
-  const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   // Load products and defect types when open
@@ -114,7 +116,33 @@ export function CreateDefectDialog({
     (r) => r.product_id === selectedProductId && r.section_id === selectedSectionId
   );
 
-  const handleSave = async () => {
+  const saveMutation = useMutation({
+    mutationFn: () =>
+      createDefect({
+        product_id: selectedProductId as number,
+        section_id: selectedSectionId as number,
+        route_stage_id: selectedStageId,
+        spg_remainder_id: selectedRemainderId,
+        quantity: parseFloat(quantity),
+        reason: defectTypeCode || null,
+        comment: comment || null,
+      }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.spg.defects(spgId) });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.spg.snapshot(spgId) });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.spg.remainders(spgId) });
+      onSaved();
+      onOpenChange(false);
+    },
+    onError: (e: unknown) => {
+      const msg = e && typeof e === "object" && "response" in e
+        ? (e as { response?: { data?: { detail?: string } } }).response?.data?.detail
+        : undefined;
+      setError((msg as string | undefined) || "Ошибка при сохранении дефекта");
+    },
+  });
+
+  const handleSave = () => {
     if (!selectedProductId) {
       setError("Выберите продукт");
       return;
@@ -137,27 +165,8 @@ export function CreateDefectDialog({
         return;
       }
     }
-
-    setSaving(true);
     setError(null);
-    try {
-      await createDefect({
-        product_id: selectedProductId,
-        section_id: selectedSectionId,
-        route_stage_id: selectedStageId,
-        spg_remainder_id: selectedRemainderId,
-        quantity: qty,
-        reason: defectTypeCode || null,
-        comment: comment || null,
-      });
-      onSaved();
-      onOpenChange(false);
-    } catch (e: any) {
-      const msg = e.response?.data?.detail || "Ошибка при сохранении дефекта";
-      setError(msg);
-    } finally {
-      setSaving(false);
-    }
+    saveMutation.mutate();
   };
 
   const selectedProduct = products.find((p) => p.id === selectedProductId);
@@ -345,8 +354,8 @@ export function CreateDefectDialog({
             <Button variant="outline" onClick={() => onOpenChange(false)}>
               Отмена
             </Button>
-            <Button onClick={handleSave} disabled={saving || !selectedProductId}>
-              {saving ? "Сохранение..." : "Зарегистрировать"}
+            <Button onClick={handleSave} disabled={saveMutation.isPending || !selectedProductId}>
+              {saveMutation.isPending ? "Сохранение..." : "Зарегистрировать"}
             </Button>
           </div>
         </div>

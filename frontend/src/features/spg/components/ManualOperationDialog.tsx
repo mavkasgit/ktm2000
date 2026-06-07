@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 
 import { ArrowDown, ArrowUp, Loader2 } from "lucide-react";
 
@@ -12,6 +13,7 @@ import {
   type SpgAvailability,
 } from "@/shared/api/spg";
 import { spgI18n } from "@/shared/i18n/spg";
+import { queryKeys } from "@/shared/api/queryKeys";
 
 type SectionOption = {
   section_id: number;
@@ -45,6 +47,7 @@ export function ManualOperationDialog({
   defaultType = "in",
   onSaved,
 }: ManualOperationDialogProps) {
+  const queryClient = useQueryClient();
   const [products, setProducts] = useState<Product[]>([]);
   const [productSearch, setProductSearch] = useState("");
   const [selectedProductId, setSelectedProductId] = useState<number | null>(null);
@@ -53,7 +56,6 @@ export function ManualOperationDialog({
   const [quantity, setQuantity] = useState("");
   const [reason, setReason] = useState("");
   const [comment, setComment] = useState("");
-  const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [availability, setAvailability] = useState<SpgAvailability | null>(null);
   const [availabilityLoading, setAvailabilityLoading] = useState(false);
@@ -105,7 +107,28 @@ export function ManualOperationDialog({
       )
     : products.slice(0, 50);
 
-  const handleSave = async () => {
+  const saveMutation = useMutation({
+    mutationFn: async (payload: ManualOperationInput) => {
+      await performManualStockOperation(spgId, payload);
+    },
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.spg.snapshot(spgId) });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.spg.remainders(spgId) });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.spg.defects(spgId) });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.spg.remainderHistory(spgId) });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.spg.manualOperations(spgId) });
+      onSaved();
+      onOpenChange(false);
+    },
+    onError: (e: unknown) => {
+      const msg = e && typeof e === "object" && "response" in e
+        ? (e as { response?: { data?: { detail?: string } } }).response?.data?.detail
+        : undefined;
+      setError((msg as string | undefined) || "Ошибка сохранения");
+    },
+  });
+
+  const handleSave = () => {
     setError(null);
     if (!selectedProductId || !sectionId || !quantity) {
       setError("Заполните все обязательные поля");
@@ -116,27 +139,15 @@ export function ManualOperationDialog({
       setError("Количество должно быть положительным числом");
       return;
     }
-    setSaving(true);
-    try {
-      const payload: ManualOperationInput = {
-        product_id: selectedProductId,
-        section_id: sectionId,
-        operation_type: operationType,
-        quantity: qty,
-        reason: reason || null,
-        comment: comment || null,
-      };
-      await performManualStockOperation(spgId, payload);
-      onSaved();
-      onOpenChange(false);
-    } catch (e: unknown) {
-      const msg = e && typeof e === "object" && "response" in e
-        ? (e as { response?: { data?: { detail?: string } } }).response?.data?.detail
-        : undefined;
-      setError(msg || "Ошибка сохранения");
-    } finally {
-      setSaving(false);
-    }
+    const payload: ManualOperationInput = {
+      product_id: selectedProductId,
+      section_id: sectionId,
+      operation_type: operationType,
+      quantity: qty,
+      reason: reason || null,
+      comment: comment || null,
+    };
+    saveMutation.mutate(payload);
   };
 
   const isIn = operationType === "in";
@@ -148,7 +159,7 @@ export function ManualOperationDialog({
     operationType === "out" &&
     parseFloat(quantity || "0") > availability.available;
   const submitDisabled =
-    saving || isOutOfStock || exceedsAvailable;
+    saveMutation.isPending || isOutOfStock || exceedsAvailable;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -309,11 +320,11 @@ export function ManualOperationDialog({
           {error && <div className="text-sm text-destructive">{error}</div>}
 
           <div className="flex justify-end gap-2 pt-2">
-            <Button variant="outline" onClick={() => onOpenChange(false)} disabled={saving}>
+            <Button variant="outline" onClick={() => onOpenChange(false)} disabled={saveMutation.isPending}>
               Отмена
             </Button>
             <Button onClick={handleSave} disabled={submitDisabled}>
-              {saving ? (
+              {saveMutation.isPending ? (
                 <>
                   <Loader2 className="h-4 w-4 mr-1 animate-spin" />
                   Сохранение...
