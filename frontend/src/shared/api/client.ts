@@ -1,5 +1,7 @@
 import axios from "axios";
 
+import { translateError } from "./errorMessages";
+
 const DEFAULT_API_BASE_URL = "/api";
 
 const envBaseUrl = import.meta.env.VITE_API_BASE_URL;
@@ -24,9 +26,9 @@ export function getErrorMessage(error: unknown): string {
     const axErr = error as { response?: { status?: number; data?: ApiErrorResponse } };
     const status = axErr.response?.status;
     const detail = axErr.response?.data?.detail;
-    if (detail) return detail;
-    if (status) return `HTTP ${status}: ${axErr.response?.data ? JSON.stringify(axErr.response.data) : "No response body"}`;
+    if (detail) return translateError(detail);
+    if (status) return `HTTP ${status}: ${axErr.response?.data ? JSON.stringify(axErr.response.data) : "Нет тела ответа"}`;
   }
-  if (error instanceof Error) return error.message;
-  return String(error ?? "Unknown error");
+  if (error instanceof Error) return translateError(error.message);
+  return translateError(String(error ?? ""));
 }
