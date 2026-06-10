@@ -18,14 +18,14 @@ const ROLE_LABELS: Record<UserRole, string> = {
 /** Карта доступа: какие роли имеют доступ к каждому пункту меню */
 const NAV_ACCESS: Record<string, UserRole[]> = {
   "/": ["admin", "planner", "section_manager", "operator", "viewer", "transporter"],
-  "/references": ["admin", "planner"],
+  "/references": ["admin", "planner", "section_manager", "operator", "viewer", "transporter"],
   "/planning": ["admin", "planner"],
   "/execution": ["admin", "planner", "section_manager"],
   "/shopfloor-tasks": ["admin", "planner", "section_manager", "operator", "viewer", "transporter"],
   "/transfers": ["admin", "planner", "section_manager", "operator", "transporter"],
   "/spg": ["admin", "planner", "section_manager", "operator", "viewer", "transporter"],
-  "/audit-logs": ["admin"],
-  "/settings": ["admin"],
+  "/audit-logs": ["admin", "planner", "section_manager", "operator", "viewer", "transporter"],
+  "/settings": ["admin", "planner", "section_manager", "operator", "viewer", "transporter"],
 }
 
 const navItems = [

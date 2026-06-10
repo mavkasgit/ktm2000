@@ -18,6 +18,7 @@ export interface RouteFlowNodeData extends Record<string, unknown> {
   allow_parallel: boolean;
   requires_acceptance: boolean;
   usedInRoutes?: number;
+  readOnly?: boolean;
   // Track whether port is occupied by any connection (incoming or outgoing)
   occupiedPorts?: {
     right?: boolean;
@@ -32,6 +33,7 @@ export interface RouteFlowNodeData extends Record<string, unknown> {
 function RouteFlowNodeComponent({ data, selected }: NodeProps<Node<RouteFlowNodeData>>) {
   const nodeData = data as RouteFlowNodeData;
   const occupied = nodeData.occupiedPorts || {};
+  const readOnly = nodeData.readOnly || false;
 
   const getPortStyle = (port: 'right' | 'left') => {
     const isOccupied = Boolean(occupied[port]);
@@ -43,8 +45,9 @@ function RouteFlowNodeComponent({ data, selected }: NodeProps<Node<RouteFlowNode
       border: '3px solid white',
       boxShadow: isOccupied ? '0 0 0 2px rgba(107, 114, 128, 0.5)' : '0 0 0 1px rgba(59, 130, 246, 0.3)',
       transition: 'all 0.15s ease',
-      cursor: isOccupied ? 'not-allowed' : 'crosshair',
-      opacity: isOccupied ? 0.6 : 1,
+      cursor: readOnly ? 'default' : isOccupied ? 'not-allowed' : 'crosshair',
+      opacity: readOnly ? 0 : isOccupied ? 0.6 : 1,
+      pointerEvents: (readOnly ? 'none' : 'all') as any,
       zIndex: 10,
     };
   };
@@ -128,27 +131,27 @@ function RouteFlowNodeComponent({ data, selected }: NodeProps<Node<RouteFlowNode
         title={getPortTitle('left')}
       />
 
-      {nodeData.isStartNode && (
+      {!readOnly && nodeData.isStartNode && (
         <button
           type="button"
           onClick={(e) => {
             e.stopPropagation();
             nodeData.onInsertAtStart?.();
           }}
-          className="absolute left-[-22px] top-1/2 -translate-y-1/2 h-6 w-6 rounded-full border bg-background text-muted-foreground hover:text-foreground hover:border-primary shadow-sm text-sm leading-none z-20"
+          className="absolute left-[-22px] top-1/2 -translate-y-1/2 h-6 w-6 rounded-full border bg-background text-muted-foreground hover:text-foreground hover:border-primary shadow-sm text-sm leading-none z-20 cursor-pointer"
           title="Добавить в начало"
         >
           +
         </button>
       )}
-      {nodeData.isEndNode && (
+      {!readOnly && nodeData.isEndNode && (
         <button
           type="button"
           onClick={(e) => {
             e.stopPropagation();
             nodeData.onInsertAtEnd?.();
           }}
-          className="absolute right-[-22px] top-1/2 -translate-y-1/2 h-6 w-6 rounded-full border bg-background text-muted-foreground hover:text-foreground hover:border-primary shadow-sm text-sm leading-none z-20"
+          className="absolute right-[-22px] top-1/2 -translate-y-1/2 h-6 w-6 rounded-full border bg-background text-muted-foreground hover:text-foreground hover:border-primary shadow-sm text-sm leading-none z-20 cursor-pointer"
           title="Добавить в конец"
         >
           +

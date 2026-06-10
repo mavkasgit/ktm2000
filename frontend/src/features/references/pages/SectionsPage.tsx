@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useState } from "react";
 import { Plus, ArrowUp, ArrowDown, GripVertical, Settings, X, Pencil, Trash2, Move, Layers, ChevronRight } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 import * as API from "shared/api";
+import { usePermission } from "@/features/auth/hooks/usePermission";
 import * as SectionsAPI from "shared/api/sections";
 import * as ShopfloorAPI from "shared/api/shopfloor";
 import * as SpgAPI from "shared/api/spg";
@@ -136,6 +137,8 @@ async function apiDeleteSection(id: number): Promise<void> {
 }
 
 export function SectionsPage() {
+  const { canEditReferences } = usePermission();
+  const isReadOnly = !canEditReferences;
   const queryClient = useQueryClient();
   const [items, setItems] = useState<Section[]>([]);
   const [loading, setLoading] = useState(false);
@@ -723,14 +726,18 @@ export function SectionsPage() {
       <div className="flex items-center justify-between">
         <h2 className="text-lg font-semibold">Участки</h2>
         <div className="flex items-center gap-2">
-          <Button size="sm" variant="outline" onClick={openAddSpg}>
-            <Plus className="h-4 w-4 mr-1" />
-            Добавить ГХП
-          </Button>
-          <Button size="sm" onClick={openAdd}>
-            <Plus className="h-4 w-4 mr-1" />
-            Добавить участок
-          </Button>
+          {!isReadOnly && (
+            <>
+              <Button size="sm" variant="outline" onClick={openAddSpg}>
+                <Plus className="h-4 w-4 mr-1" />
+                Добавить ГХП
+              </Button>
+              <Button size="sm" onClick={openAdd}>
+                <Plus className="h-4 w-4 mr-1" />
+                Добавить участок
+              </Button>
+            </>
+          )}
         </div>
       </div>
 
@@ -741,7 +748,8 @@ export function SectionsPage() {
         mode={dialogMode}
         initialValues={initialValues}
         onSave={handleSave}
-        onDelete={dialogMode === "edit" ? () => setDeleteDialogOpen(true) : undefined}
+        onDelete={dialogMode === "edit" && !isReadOnly ? () => setDeleteDialogOpen(true) : undefined}
+        readOnly={isReadOnly}
         addTitle="Новый участок"
         editTitle="Редактировать участок"
         addDescription="Заполните информацию об участке"
@@ -807,8 +815,9 @@ export function SectionsPage() {
               <React.Fragment key={String(item.id ?? `${item.code}-${i}`)}>
               <tr
                 className="transition-colors"
-                draggable
+                draggable={!isReadOnly}
                 onDragStart={(e) => {
+                  if (isReadOnly) return;
                   (e.currentTarget as HTMLTableRowElement).style.opacity = "0.4";
                   handleDragStart(i);
                 }}
@@ -831,27 +840,31 @@ export function SectionsPage() {
               >
                 <td className="py-3 px-2 text-sm">
                   <div className="flex items-center gap-0.5">
-                    <span className="cursor-grab active:cursor-grabbing text-muted-foreground hover:text-foreground">
-                      <GripVertical className="h-4 w-4" />
-                    </span>
-                    <button
-                      type="button"
-                      className="p-0.5 rounded hover:bg-accent text-muted-foreground hover:text-foreground disabled:opacity-30 disabled:cursor-default"
-                      disabled={i === 0}
-                      onClick={(e) => { e.stopPropagation(); moveItemUp(i); }}
-                      title="Переместить вверх"
-                    >
-                      <ArrowUp className="h-3.5 w-3.5" />
-                    </button>
-                    <button
-                      type="button"
-                      className="p-0.5 rounded hover:bg-accent text-muted-foreground hover:text-foreground disabled:opacity-30 disabled:cursor-default"
-                      disabled={i === items.length - 1}
-                      onClick={(e) => { e.stopPropagation(); moveItemDown(i); }}
-                      title="Переместить вниз"
-                    >
-                      <ArrowDown className="h-3.5 w-3.5" />
-                    </button>
+                    {!isReadOnly && (
+                      <>
+                        <span className="cursor-grab active:cursor-grabbing text-muted-foreground hover:text-foreground">
+                          <GripVertical className="h-4 w-4" />
+                        </span>
+                        <button
+                          type="button"
+                          className="p-0.5 rounded hover:bg-accent text-muted-foreground hover:text-foreground disabled:opacity-30 disabled:cursor-default"
+                          disabled={i === 0}
+                          onClick={(e) => { e.stopPropagation(); moveItemUp(i); }}
+                          title="Переместить вверх"
+                        >
+                          <ArrowUp className="h-3.5 w-3.5" />
+                        </button>
+                        <button
+                          type="button"
+                          className="p-0.5 rounded hover:bg-accent text-muted-foreground hover:text-foreground disabled:opacity-30 disabled:cursor-default"
+                          disabled={i === items.length - 1}
+                          onClick={(e) => { e.stopPropagation(); moveItemDown(i); }}
+                          title="Переместить вниз"
+                        >
+                          <ArrowDown className="h-3.5 w-3.5" />
+                        </button>
+                      </>
+                    )}
                   </div>
                 </td>
                 <td className="py-3 px-4 text-sm cursor-pointer" onClick={() => openEdit(item)}>
@@ -901,10 +914,12 @@ export function SectionsPage() {
                       </div>
 
                       <div className="flex items-center gap-2 mb-3">
-                        <Button size="sm" variant="outline" className="h-8" onClick={() => openAddGroup(Number(item.id))}>
-                          <Plus className="h-3 w-3 mr-1" />
-                          Добавить группу
-                        </Button>
+                        {!isReadOnly && (
+                          <Button size="sm" variant="outline" className="h-8" onClick={() => openAddGroup(Number(item.id))}>
+                            <Plus className="h-3 w-3 mr-1" />
+                            Добавить группу
+                          </Button>
+                        )}
                       </div>
 
                       {opsLoading ? (
@@ -925,7 +940,7 @@ export function SectionsPage() {
                                   <span className="text-xs text-muted-foreground">{group.operations.length} опер.</span>
                                 </div>
                                 <div className="flex items-center gap-1">
-                                  {group.group_code && (
+                                  {group.group_code && !isReadOnly && (
                                     <button
                                       type="button"
                                       onClick={() => openEditGroup(Number(item.id), group)}
@@ -935,11 +950,13 @@ export function SectionsPage() {
                                       <Pencil className="h-3.5 w-3.5" />
                                     </button>
                                   )}
-                                  <Button size="sm" variant="ghost" className="h-7 px-2 text-xs" onClick={() => openAddOp(Number(item.id), group.group_code)}>
-                                    <Plus className="h-3 w-3 mr-0.5" />
-                                    Добавить операцию
-                                  </Button>
-                                  {group.group_code && (
+                                  {!isReadOnly && (
+                                    <Button size="sm" variant="ghost" className="h-7 px-2 text-xs" onClick={() => openAddOp(Number(item.id), group.group_code)}>
+                                      <Plus className="h-3 w-3 mr-0.5" />
+                                      Добавить операцию
+                                    </Button>
+                                  )}
+                                  {group.group_code && !isReadOnly && (
                                     <button
                                       type="button"
                                       onClick={() => setDeleteGroupDialog({ sectionId: Number(item.id), groupCode: group.group_code!, groupName: group.group_name || group.group_code! })}
@@ -969,6 +986,7 @@ export function SectionsPage() {
                                           type="checkbox"
                                           checked={op.is_significant}
                                           onChange={() => toggleOpSignificant(Number(item.id), op.id, op.is_significant)}
+                                          disabled={isReadOnly}
                                           className="rounded border-gray-300 cursor-pointer h-3.5 w-3.5"
                                         />
                                         {op.icon ? (
@@ -981,26 +999,28 @@ export function SectionsPage() {
                                         <span className="font-mono text-xs text-muted-foreground">{op.operation_code}</span>
                                         <span className="text-xs">{op.operation_name}</span>
                                         {op.is_significant && <Badge variant="secondary" className="text-xs bg-green-100 text-green-700 shrink-0">★</Badge>}
-                                        <div className="flex items-center gap-0.5 opacity-0 group-hover/op:opacity-100 transition-opacity">
-                                          {opGroups.length > 1 && (
+                                        {!isReadOnly && (
+                                          <div className="flex items-center gap-0.5 opacity-0 group-hover/op:opacity-100 transition-opacity">
+                                            {opGroups.length > 1 && (
+                                              <button
+                                                type="button"
+                                                onClick={(e) => { e.stopPropagation(); openMoveOp(Number(item.id), op); }}
+                                                className="p-0.5 rounded hover:bg-accent text-muted-foreground hover:text-foreground"
+                                                title="Переместить в другую группу"
+                                              >
+                                                <Move className="h-3 w-3" />
+                                              </button>
+                                            )}
                                             <button
                                               type="button"
-                                              onClick={(e) => { e.stopPropagation(); openMoveOp(Number(item.id), op); }}
-                                              className="p-0.5 rounded hover:bg-accent text-muted-foreground hover:text-foreground"
-                                              title="Переместить в другую группу"
+                                              onClick={(e) => { e.stopPropagation(); deleteOp(Number(item.id), op.id, op.operation_name); }}
+                                              className="p-0.5 rounded hover:bg-destructive/20 text-muted-foreground hover:text-destructive"
+                                              title="Удалить"
                                             >
-                                              <Move className="h-3 w-3" />
+                                              <X className="h-3 w-3" />
                                             </button>
-                                          )}
-                                          <button
-                                            type="button"
-                                            onClick={(e) => { e.stopPropagation(); deleteOp(Number(item.id), op.id, op.operation_name); }}
-                                            className="p-0.5 rounded hover:bg-destructive/20 text-muted-foreground hover:text-destructive"
-                                            title="Удалить"
-                                          >
-                                            <X className="h-3 w-3" />
-                                          </button>
-                                        </div>
+                                          </div>
+                                        )}
                                       </div>
                                     ))
                                 )}
@@ -1095,6 +1115,7 @@ export function SectionsPage() {
         mode={groupDialogMode}
         initialValues={groupDialogInitial}
         onSave={handleSaveGroup}
+        readOnly={isReadOnly}
         addTitle="Новая группа операций"
         editTitle="Редактировать группу"
         addDescription="Заполните информацию о группе"
@@ -1169,7 +1190,8 @@ export function SectionsPage() {
           description: editingSpg.description ?? "",
         } : { is_active: true }}
         onSave={handleSaveSpg}
-        onDelete={spgDialogMode === "edit" && editingSpg ? () => setDeleteSpgDialog({ id: editingSpg.id, name: editingSpg.name }) : undefined}
+        onDelete={spgDialogMode === "edit" && editingSpg && !isReadOnly ? () => setDeleteSpgDialog({ id: editingSpg.id, name: editingSpg.name }) : undefined}
+        readOnly={isReadOnly}
         addTitle="Новая группа хранения и производства (ГХП)"
         editTitle="Редактировать ГХП"
         addDescription="Заполните информацию о ГХП"

@@ -8,10 +8,13 @@ import { RouteFlowBuilder } from "../components/RouteFlowBuilder";
 import { RouteSelectionRulesSection } from "../components/RouteSelectionRulesSection";
 import { RouteTreeOverview, type RouteTreeOverviewRef } from "../components/RouteTreeOverview";
 import { ImportTemplatesPage } from "./ImportTemplatesPage";
+import { usePermission } from "@/features/auth/hooks/usePermission";
 
 type TabKey = "routes" | "templates";
 
 export function RoutesPage() {
+  const { canEditReferences } = usePermission();
+  const isReadOnly = !canEditReferences;
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editRoute, setEditRoute] = useState<API.RouteDetail | null>(null);
   const [seedRevision, setSeedRevision] = useState(0);
@@ -80,16 +83,18 @@ export function RoutesPage() {
       {/* Content */}
       <div className="flex gap-4 items-start">
         {showRoutes && (
-          <div className={showTemplates ? "flex-1" : "flex-1"}>
-            <div className="flex items-center justify-between mb-4">
-              <Button size="sm" onClick={handleCreate}><Plus className="h-4 w-4 mr-1" />Создать маршрут</Button>
-            </div>
-            <RouteTreeOverview ref={treeRef} onEditRoute={handleEdit} />
+          <div className="flex-1">
+            {!isReadOnly && (
+              <div className="flex items-center justify-between mb-4">
+                <Button size="sm" onClick={handleCreate}><Plus className="h-4 w-4 mr-1" />Создать маршрут</Button>
+              </div>
+            )}
+            <RouteTreeOverview ref={treeRef} onEditRoute={handleEdit} readOnly={isReadOnly} />
           </div>
         )}
 
         {showTemplates && (
-          <div className={showRoutes ? "flex-1 space-y-4" : "flex-1 space-y-4"}>
+          <div className="flex-1 space-y-4">
             <div className="rounded-lg border p-4">
               <ImportTemplatesPage />
             </div>
@@ -104,6 +109,7 @@ export function RoutesPage() {
         onOpenChange={setDialogOpen}
         route={editRoute}
         onSave={handleSaved}
+        readOnly={isReadOnly}
       />
     </section>
   );

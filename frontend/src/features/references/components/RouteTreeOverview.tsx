@@ -12,13 +12,14 @@ import { toast } from "@/shared/ui/use-toast";
 
 interface RouteTreeOverviewProps {
   onEditRoute: (route: API.RouteDetail) => void;
+  readOnly?: boolean;
 }
 
 export interface RouteTreeOverviewRef {
   reload: () => void;
 }
 
-export const RouteTreeOverview = forwardRef<RouteTreeOverviewRef, RouteTreeOverviewProps>(function RouteTreeOverview({ onEditRoute }: RouteTreeOverviewProps, ref) {
+export const RouteTreeOverview = forwardRef<RouteTreeOverviewRef, RouteTreeOverviewProps>(function RouteTreeOverview({ onEditRoute, readOnly = false }: RouteTreeOverviewProps, ref) {
   const [routes, setRoutes] = useState<API.RouteDetail[]>([]);
   const [sections, setSections] = useState<Section[]>([]);
   const [loading, setLoading] = useState(true);
@@ -149,17 +150,17 @@ export const RouteTreeOverview = forwardRef<RouteTreeOverviewRef, RouteTreeOverv
             <Card
               key={route.id}
               className="overflow-hidden transition-opacity"
-              draggable
-              onDragStart={(e) => {
+              draggable={!readOnly}
+              onDragStart={readOnly ? undefined : (e) => {
                 (e.currentTarget as HTMLDivElement).style.opacity = "0.4";
                 handleDragStart(routeIndex);
               }}
-              onDragOver={(e) => handleDragOver(e, routeIndex)}
-              onDrop={(e) => {
+              onDragOver={readOnly ? undefined : (e) => handleDragOver(e, routeIndex)}
+              onDrop={readOnly ? undefined : (e) => {
                 (e.currentTarget as HTMLDivElement).style.opacity = "1";
                 handleDrop(e);
               }}
-              onDragEnd={(e) => {
+              onDragEnd={readOnly ? undefined : (e) => {
                 (e.currentTarget as HTMLDivElement).style.opacity = "1";
                 handleDragEnd();
               }}
@@ -170,29 +171,31 @@ export const RouteTreeOverview = forwardRef<RouteTreeOverviewRef, RouteTreeOverv
                 onClick={() => onEditRoute(route)}
               >
                 {/* Reorder controls */}
-                <div className="flex items-center gap-0.5 shrink-0" onClick={(e) => e.stopPropagation()}>
-                  <span className="cursor-grab active:cursor-grabbing text-muted-foreground hover:text-foreground">
-                    <GripVertical className="h-4 w-4" />
-                  </span>
-                  <button
-                    type="button"
-                    className="p-0.5 rounded hover:bg-accent text-muted-foreground hover:text-foreground disabled:opacity-30 disabled:cursor-default"
-                    disabled={routeIndex === 0}
-                    onClick={() => moveRouteUp(routeIndex)}
-                    title="Переместить вверх"
-                  >
-                    <ArrowUp className="h-3.5 w-3.5" />
-                  </button>
-                  <button
-                    type="button"
-                    className="p-0.5 rounded hover:bg-accent text-muted-foreground hover:text-foreground disabled:opacity-30 disabled:cursor-default"
-                    disabled={routeIndex === filteredRoutes.length - 1}
-                    onClick={() => moveRouteDown(routeIndex)}
-                    title="Переместить вниз"
-                  >
-                    <ArrowDown className="h-3.5 w-3.5" />
-                  </button>
-                </div>
+                {!readOnly && (
+                  <div className="flex items-center gap-0.5 shrink-0" onClick={(e) => e.stopPropagation()}>
+                    <span className="cursor-grab active:cursor-grabbing text-muted-foreground hover:text-foreground">
+                      <GripVertical className="h-4 w-4" />
+                    </span>
+                    <button
+                      type="button"
+                      className="p-0.5 rounded hover:bg-accent text-muted-foreground hover:text-foreground disabled:opacity-30 disabled:cursor-default cursor-pointer"
+                      disabled={routeIndex === 0}
+                      onClick={() => moveRouteUp(routeIndex)}
+                      title="Переместить вверх"
+                    >
+                      <ArrowUp className="h-3.5 w-3.5" />
+                    </button>
+                    <button
+                      type="button"
+                      className="p-0.5 rounded hover:bg-accent text-muted-foreground hover:text-foreground disabled:opacity-30 disabled:cursor-default cursor-pointer"
+                      disabled={routeIndex === filteredRoutes.length - 1}
+                      onClick={() => moveRouteDown(routeIndex)}
+                      title="Переместить вниз"
+                    >
+                      <ArrowDown className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
+                )}
                 <div className="min-w-0 max-w-[360px]">
                   <div className="font-medium">{route.name}</div>
                   {route.description && (

@@ -31,6 +31,7 @@ import * as API from "@/shared/api/routes";
 import type { Section } from "@/shared/api/sections";
 import { Button } from "@/shared/ui/Button";
 import { Input } from "@/shared/ui/Input";
+import { cn } from "@/shared/utils/cn";
 import {
   Dialog,
   DialogContent,
@@ -163,6 +164,7 @@ function FlowCanvas({
   onNodeClick,
   onPaneClick,
   onEdgeClick,
+  readOnly = false,
 }: {
   open: boolean;
   nodes: RouteNode[];
@@ -178,6 +180,7 @@ function FlowCanvas({
   onNodeClick: any;
   onPaneClick: any;
   onEdgeClick?: any;
+  readOnly?: boolean;
 }) {
   const { fitView } = useReactFlow();
   const nodesInitialized = useNodesInitialized();
@@ -198,6 +201,7 @@ function FlowCanvas({
       isEndNode: n.id === endNodeId,
       onInsertAtStart: () => onInsertAtStartClick(),
       onInsertAtEnd: () => onInsertAtEndClick(),
+      readOnly: readOnly,
     },
   }));
 
@@ -268,26 +272,28 @@ function FlowCanvas({
           path={edgePath}
           markerEnd={markerEnd}
           style={style}
-          interactionWidth={20}
+          interactionWidth={readOnly ? 0 : 20}
         />
-        <EdgeLabelRenderer>
-          <button
-            type="button"
-            className="absolute h-5 w-5 rounded-full border bg-background text-muted-foreground hover:text-foreground hover:border-primary shadow-sm text-xs leading-none"
-            style={{
-              transform: `translate(-50%, -50%) translate(${labelX}px, ${labelY + labelYOffset}px)`,
-              pointerEvents: "all",
-              zIndex: 30,
-            }}
-            onClick={(e) => {
-              e.stopPropagation();
-              onInsertEdgeClick(id);
-            }}
-            title="Вставить участок между этапами"
-          >
-            +
-          </button>
-        </EdgeLabelRenderer>
+        {!readOnly && (
+          <EdgeLabelRenderer>
+            <button
+              type="button"
+              className="absolute h-5 w-5 rounded-full border bg-background text-muted-foreground hover:text-foreground hover:border-primary shadow-sm text-xs leading-none cursor-pointer"
+              style={{
+                transform: `translate(-50%, -50%) translate(${labelX}px, ${labelY + labelYOffset}px)`,
+                pointerEvents: "all",
+                zIndex: 30,
+              }}
+              onClick={(e) => {
+                e.stopPropagation();
+                onInsertEdgeClick(id);
+              }}
+              title="Вставить участок между этапами"
+            >
+              +
+            </button>
+          </EdgeLabelRenderer>
+        )}
       </>
     );
   };
@@ -302,11 +308,11 @@ function FlowCanvas({
       edges={edges}
       onNodesChange={onNodesChange}
       onEdgesChange={onEdgesChange}
-      onConnect={onConnect}
-      onReconnect={onReconnect}
+      onConnect={readOnly ? undefined : onConnect}
+      onReconnect={readOnly ? undefined : onReconnect}
       isValidConnection={isValidConnection}
       onNodeClick={onNodeClick}
-      onEdgeClick={onEdgeClick}
+      onEdgeClick={readOnly ? undefined : onEdgeClick}
       onPaneClick={onPaneClick}
       nodeTypes={nodeTypes}
       edgeTypes={edgeTypes}
@@ -316,12 +322,12 @@ function FlowCanvas({
       maxZoom={1.5}
       defaultEdgeOptions={{
         type: 'smart',
-        reconnectable: true,
-        interactionWidth: 20,
+        reconnectable: !readOnly,
+        interactionWidth: readOnly ? 0 : 20,
         markerEnd: { type: MarkerType.ArrowClosed },
       }}
       connectionMode={ConnectionMode.Loose}
-      edgesReconnectable
+      edgesReconnectable={!readOnly}
       nodesDraggable={false}
       connectionLineStyle={{
         stroke: '#3b82f6',
@@ -330,38 +336,40 @@ function FlowCanvas({
     >
       <Controls />
       <Background />
-      <Panel position="top-right">
-        {showHintCard ? (
-          <div
-            className={`bg-card border rounded-md p-2 text-xs text-muted-foreground transition-all duration-400 ease-out ${
-              hintClosing ? "opacity-0 translate-y-1 scale-[0.98]" : "opacity-100 translate-y-0 scale-100"
-            }`}
-          >
-            <div className="font-semibold mb-1">Подсказка:</div>
-            <div>• Кликните по участку или + в палитре</div>
-            <div>• Нажмите + на линии, чтобы вставить этап</div>
-            <div>• Соедините ноды: точка → точка</div>
-            <div>• Кликните на ноду для настроек</div>
-            <div>• Delete — удалить ноду/соединение</div>
-          </div>
-        ) : (
-          <div className="relative group">
-            <div className="h-8 w-8 rounded-md border bg-card text-muted-foreground flex items-center justify-center">
-              <Info className="h-4 w-4" />
+      {!readOnly && (
+        <Panel position="top-right">
+          {showHintCard ? (
+            <div
+              className={`bg-card border rounded-md p-2 text-xs text-muted-foreground transition-all duration-400 ease-out ${
+                hintClosing ? "opacity-0 translate-y-1 scale-[0.98]" : "opacity-100 translate-y-0 scale-100"
+              }`}
+            >
+              <div className="font-semibold mb-1">Подсказка:</div>
+              <div>• Кликните по участку или + в палитре</div>
+              <div>• Нажмите + на линии, чтобы вставить этап</div>
+              <div>• Соедините ноды: точка → точка</div>
+              <div>• Кликните на ноду для настроек</div>
+              <div>• Delete — удалить ноду/соединение</div>
             </div>
-            <div className="absolute right-0 top-9 hidden group-hover:block z-20">
-              <div className="bg-card border rounded-md p-2 text-xs text-muted-foreground w-64 shadow-md">
-                <div className="font-semibold mb-1">Подсказка:</div>
-                <div>• Кликните по участку или + в палитре</div>
-                <div>• Нажмите + на линии, чтобы вставить этап</div>
-                <div>• Соедините ноды: точка → точка</div>
-                <div>• Кликните на ноду для настроек</div>
-                <div>• Delete — удалить ноду/соединение</div>
+          ) : (
+            <div className="relative group">
+              <div className="h-8 w-8 rounded-md border bg-card text-muted-foreground flex items-center justify-center">
+                <Info className="h-4 w-4" />
+              </div>
+              <div className="absolute right-0 top-9 hidden group-hover:block z-20">
+                <div className="bg-card border rounded-md p-2 text-xs text-muted-foreground w-64 shadow-md">
+                  <div className="font-semibold mb-1">Подсказка:</div>
+                  <div>• Кликните по участку или + в палитре</div>
+                  <div>• Нажмите + на линии, чтобы вставить этап</div>
+                  <div>• Соедините ноды: точка → точка</div>
+                  <div>• Кликните на ноду для настроек</div>
+                  <div>• Delete — удалить ноду/соединение</div>
+                </div>
               </div>
             </div>
-          </div>
-        )}
-      </Panel>
+          )}
+        </Panel>
+      )}
     </ReactFlow>
   );
 }
@@ -371,9 +379,10 @@ interface RouteFlowBuilderProps {
   onOpenChange: (v: boolean) => void;
   route: API.RouteDetail | null;
   onSave: () => void;
+  readOnly?: boolean;
 }
 
-export function RouteFlowBuilder({ open, onOpenChange, route, onSave }: RouteFlowBuilderProps) {
+export function RouteFlowBuilder({ open, onOpenChange, route, onSave, readOnly = false }: RouteFlowBuilderProps) {
   const [nodes, setNodes, onNodesChange] = useNodesState<RouteNode>([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState<RouteEdge>([]);
   const [sections, setSections] = useState<Section[]>([]);
@@ -458,7 +467,7 @@ export function RouteFlowBuilder({ open, onOpenChange, route, onSave }: RouteFlo
 
   // Keyboard handler for delete
   useEffect(() => {
-    if (!open) return;
+    if (!open || readOnly) return;
 
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Delete' || e.key === 'Backspace') {
@@ -831,9 +840,9 @@ export function RouteFlowBuilder({ open, onOpenChange, route, onSave }: RouteFlo
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-[1400px] max-h-[90vh] w-[90vw] h-[85vh] overflow-hidden flex flex-col">
         <DialogHeader>
-          <DialogTitle>{route ? "Редактирование маршрута" : "Новый маршрут"}</DialogTitle>
+          <DialogTitle>{readOnly ? "Просмотр маршрута" : route ? "Редактирование маршрута" : "Новый маршрут"}</DialogTitle>
           <DialogDescription>
-            Перетащите участки из палитры на холст и соедините их стрелками
+            {readOnly ? "Схема прохождения продукции по производственным участкам" : "Перетащите участки из палитры на холст и соедините их стрелками"}
           </DialogDescription>
         </DialogHeader>
 
@@ -841,15 +850,15 @@ export function RouteFlowBuilder({ open, onOpenChange, route, onSave }: RouteFlo
         <div className="flex items-end gap-4 py-2">
           <div className="w-52">
             <label className="text-sm font-medium">Название *</label>
-            <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="Основной маршрут" />
+            <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="Основной маршрут" disabled={readOnly} />
           </div>
           <div className="w-52">
             <label className="text-sm font-medium">Описание</label>
-            <Input value={description} onChange={(e) => setDescription(e.target.value)} placeholder="Необязательно" />
+            <Input value={description} onChange={(e) => setDescription(e.target.value)} placeholder="Необязательно" disabled={readOnly} />
           </div>
           <div>
-            <label className="flex items-center gap-2 text-sm cursor-pointer">
-              <input type="checkbox" checked={isActive} onChange={(e) => setIsActive(e.target.checked)} className="h-4 w-4" />
+            <label className={cn("flex items-center gap-2 text-sm", readOnly ? "cursor-not-allowed opacity-50" : "cursor-pointer")}>
+              <input type="checkbox" checked={isActive} onChange={(e) => setIsActive(e.target.checked)} className="h-4 w-4" disabled={readOnly} />
               Активен
             </label>
           </div>
@@ -858,60 +867,62 @@ export function RouteFlowBuilder({ open, onOpenChange, route, onSave }: RouteFlo
         {/* Flow Builder */}
         <div className="flex-1 flex gap-4 min-h-[500px]">
           {/* Palette */}
-          <div className="w-64 border rounded-lg p-3 overflow-y-auto bg-muted/30">
-            <div className="flex items-center justify-between mb-3">
-              <h3 className="text-sm font-semibold">Участки</h3>
-              <label className="flex items-center gap-1.5 text-xs cursor-pointer" title="Автоматически соединять новые участки с предыдущим">
-                <input
-                  type="checkbox"
-                  checked={autoConnect}
-                  onChange={(e) => setAutoConnect(e.target.checked)}
-                  className="h-3.5 w-3.5"
-                />
-                <span className="text-muted-foreground">Авто</span>
-              </label>
-            </div>
-            <div className="space-y-2">
-              {sections.map((section) => (
-                <div
-                  key={section.id}
-                  onClick={() => addSectionToRoute(section)}
-                  className="group flex items-center gap-2 p-2 rounded-md border bg-card cursor-pointer hover:shadow-md transition-all"
-                  style={{
-                    borderLeft: section.icon_color ? `3px solid ${section.icon_color}` : undefined,
-                  }}
-                >
-                  {section.icon && section.icon_color && (
-                    <div
-                      className="flex h-8 w-8 shrink-0 items-center justify-center rounded"
-                      style={{ backgroundColor: section.icon_color + "20" }}
-                    >
-                      <span style={{ color: section.icon_color }}>
-                        {renderIcon(section.icon, "h-4 w-4")}
-                      </span>
-                    </div>
-                  )}
-                  <div className="min-w-0">
-                    <div className="text-xs font-medium text-muted-foreground">{section.code}</div>
-                    <div className="text-sm truncate">{section.name}</div>
-                  </div>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    className="ml-1 h-7 w-7 p-0 shrink-0 opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto transition-opacity"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      addSectionToRoute(section);
+          {!readOnly && (
+            <div className="w-64 border rounded-lg p-3 overflow-y-auto bg-muted/30">
+              <div className="flex items-center justify-between mb-3">
+                <h3 className="text-sm font-semibold">Участки</h3>
+                <label className="flex items-center gap-1.5 text-xs cursor-pointer" title="Автоматически соединять новые участки с предыдущим">
+                  <input
+                    type="checkbox"
+                    checked={autoConnect}
+                    onChange={(e) => setAutoConnect(e.target.checked)}
+                    className="h-3.5 w-3.5"
+                  />
+                  <span className="text-muted-foreground">Авто</span>
+                </label>
+              </div>
+              <div className="space-y-2">
+                {sections.map((section) => (
+                  <div
+                    key={section.id}
+                    onClick={() => addSectionToRoute(section)}
+                    className="group flex items-center gap-2 p-2 rounded-md border bg-card cursor-pointer hover:shadow-md transition-all"
+                    style={{
+                      borderLeft: section.icon_color ? `3px solid ${section.icon_color}` : undefined,
                     }}
-                    title="Добавить в маршрут"
                   >
-                    <Plus className="h-3.5 w-3.5" />
-                  </Button>
-                </div>
-              ))}
+                    {section.icon && section.icon_color && (
+                      <div
+                        className="flex h-8 w-8 shrink-0 items-center justify-center rounded"
+                        style={{ backgroundColor: section.icon_color + "20" }}
+                      >
+                        <span style={{ color: section.icon_color }}>
+                          {renderIcon(section.icon, "h-4 w-4")}
+                        </span>
+                      </div>
+                    )}
+                    <div className="min-w-0">
+                      <div className="text-xs font-medium text-muted-foreground">{section.code}</div>
+                      <div className="text-sm truncate">{section.name}</div>
+                    </div>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="ml-1 h-7 w-7 p-0 shrink-0 opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto transition-opacity"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        addSectionToRoute(section);
+                      }}
+                      title="Добавить в маршрут"
+                    >
+                      <Plus className="h-3.5 w-3.5" />
+                    </Button>
+                  </div>
+                ))}
+              </div>
             </div>
-          </div>
+          )}
 
           {/* Canvas */}
           <div className="flex-1 border rounded-lg overflow-hidden min-h-[400px]">
@@ -926,15 +937,23 @@ export function RouteFlowBuilder({ open, onOpenChange, route, onSave }: RouteFlo
                 onReconnect={onReconnect}
                 isValidConnection={isValidConnection}
                 onInsertEdgeClick={(edgeId) => {
+                  if (readOnly) return;
                   setInsertTarget({ kind: "edge", edgeId });
                 }}
-                onInsertAtStartClick={() => setInsertTarget({ kind: "start" })}
-                onInsertAtEndClick={() => setInsertTarget({ kind: "end" })}
+                onInsertAtStartClick={() => {
+                  if (readOnly) return;
+                  setInsertTarget({ kind: "start" });
+                }}
+                onInsertAtEndClick={() => {
+                  if (readOnly) return;
+                  setInsertTarget({ kind: "end" });
+                }}
                 onNodeClick={((_, node) => {
                   setSelectedNodeId(node.id);
                   setSelectedEdgeId(null);
                 }) as NodeMouseHandler<RouteNode>}
                 onEdgeClick={((_, edge) => {
+                  if (readOnly) return;
                   setSelectedEdgeId(edge.id);
                   setSelectedNodeId(null);
                 }) as EdgeMouseHandler<RouteEdge>}
@@ -942,6 +961,7 @@ export function RouteFlowBuilder({ open, onOpenChange, route, onSave }: RouteFlo
                   setSelectedNodeId(null);
                   setSelectedEdgeId(null);
                 }}
+                readOnly={readOnly}
               />
             </ReactFlowProvider>
           </div>
@@ -960,7 +980,7 @@ export function RouteFlowBuilder({ open, onOpenChange, route, onSave }: RouteFlo
                 <div>
                   <label className="text-sm font-medium">Операция</label>
                   <select
-                    className="h-9 w-full rounded-md border border-input bg-background px-2 text-sm mt-1"
+                    className="h-9 w-full rounded-md border border-input bg-background px-2 text-sm mt-1 disabled:opacity-60 disabled:cursor-not-allowed"
                     value={(selectedNode.data as RouteFlowNodeData).operation_code || ""}
                     onChange={(e) => {
                       const op = OPERATIONS.find((o) => o.value === e.target.value);
@@ -969,6 +989,7 @@ export function RouteFlowBuilder({ open, onOpenChange, route, onSave }: RouteFlo
                         operation_name: op?.label || "",
                       });
                     }}
+                    disabled={readOnly}
                   >
                     <option value="">Выберите операцию</option>
                     {OPERATIONS.map((op) => (
@@ -988,43 +1009,49 @@ export function RouteFlowBuilder({ open, onOpenChange, route, onSave }: RouteFlo
                         norm_time_minutes: e.target.value ? Number(e.target.value) : null,
                       })
                     }
+                    disabled={readOnly}
                   />
                 </div>
 
                 <div className="space-y-2">
-                  <label className="flex items-center gap-2 text-sm cursor-pointer">
+                  <label className={cn("flex items-center gap-2 text-sm", readOnly ? "cursor-not-allowed opacity-50" : "cursor-pointer")}>
                     <input
                       type="checkbox"
                       checked={(selectedNode.data as RouteFlowNodeData).is_final}
                       onChange={(e) => updateNodeData(selectedNode.id, { is_final: e.target.checked })}
                       className="h-4 w-4"
+                      disabled={readOnly}
                     />
                     Финальный этап
                   </label>
-                  <label className="flex items-center gap-2 text-sm cursor-pointer">
+                  <label className={cn("flex items-center gap-2 text-sm", readOnly ? "cursor-not-allowed opacity-50" : "cursor-pointer")}>
                     <input
                       type="checkbox"
                       checked={(selectedNode.data as RouteFlowNodeData).allow_parallel}
                       onChange={(e) => updateNodeData(selectedNode.id, { allow_parallel: e.target.checked })}
                       className="h-4 w-4"
+                      disabled={readOnly}
                     />
                     Параллельное выполнение
                   </label>
-                  <label className="flex items-center gap-2 text-sm cursor-pointer">
+                  <label className={cn("flex items-center gap-2 text-sm", readOnly ? "cursor-not-allowed opacity-50" : "cursor-pointer")}>
                     <input
                       type="checkbox"
                       checked={(selectedNode.data as RouteFlowNodeData).requires_acceptance}
                       onChange={(e) => updateNodeData(selectedNode.id, { requires_acceptance: e.target.checked })}
                       className="h-4 w-4"
+                      disabled={readOnly}
                     />
                     Требует приемки
                   </label>
                 </div>
 
-                <Button variant="destructive" size="sm" className="w-full" onClick={() => deleteNode(selectedNode.id)}>
-                  <Trash2 className="h-4 w-4 mr-1" />
-                  Удалить этап
-                </Button>
+                {!readOnly && (
+                  <Button variant="destructive" size="sm" className="w-full" onClick={() => deleteNode(selectedNode.id)}>
+                    <Trash2 className="h-4 w-4 mr-1" />
+                    Удалить этап
+                  </Button>
+                )}
               </div>
             </div>
           )}
@@ -1033,30 +1060,34 @@ export function RouteFlowBuilder({ open, onOpenChange, route, onSave }: RouteFlo
         {/* Footer */}
         <div className="flex items-center justify-between pt-2 border-t">
           <div className="flex gap-2">
-            {route && (
+            {!readOnly && route && (
               <Button variant="destructive" onClick={() => handleDelete()}>
                 <Trash2 className="h-4 w-4 mr-1" />
                 Удалить маршрут
               </Button>
             )}
-            <Button
-              variant="outline"
-              onClick={() => {
-                setNodes([]);
-                setEdges([]);
-                setSelectedNodeId(null);
-                setSelectedEdgeId(null);
-                lastNodeId.current = null;
-              }}
-            >
-              Очистить
-            </Button>
+            {!readOnly && (
+              <Button
+                variant="outline"
+                onClick={() => {
+                  setNodes([]);
+                  setEdges([]);
+                  setSelectedNodeId(null);
+                  setSelectedEdgeId(null);
+                  lastNodeId.current = null;
+                }}
+              >
+                Очистить
+              </Button>
+            )}
           </div>
           <div className="flex gap-2">
-            <Button variant="outline" onClick={() => onOpenChange(false)}>Отмена</Button>
-            <Button onClick={handleSave} disabled={saving}>
-              {saving ? "Сохранение..." : "Сохранить"}
-            </Button>
+            <Button variant="outline" onClick={() => onOpenChange(false)}>{readOnly ? "Закрыть" : "Отмена"}</Button>
+            {!readOnly && (
+              <Button onClick={handleSave} disabled={saving}>
+                {saving ? "Сохранение..." : "Сохранить"}
+              </Button>
+            )}
           </div>
         </div>
       </DialogContent>

@@ -39,6 +39,7 @@ import {
 import type { BackupPreview } from "@/entities/backup/types"
 import { toast } from "@/shared/ui/use-toast"
 import { getErrorMessage } from "@/shared/api/client"
+import { usePermission } from "@/features/auth/hooks/usePermission"
 
 function formatBytes(bytes: number): string {
   if (bytes === 0) return "0 B"
@@ -78,6 +79,8 @@ function backupStageLabel(stage: string): string {
 }
 
 export function BackupsPage() {
+  const { canEditSettings } = usePermission()
+  const isReadOnly = !canEditSettings
   const { data: backups, isLoading, refetch: refetchBackups } = useBackups()
   const { data: config } = useBackupConfig()
   const dbName = config?.db_name || "unknown"
@@ -332,14 +335,16 @@ export function BackupsPage() {
       </div>
 
       <div className="flex gap-2 items-center flex-wrap">
-        <Button
-          size="sm"
-          onClick={handleCreateBackup}
-          disabled={startBackupJob.isPending || Boolean(activeBackupJobId)}
-        >
-          {startBackupJob.isPending || activeBackupJobId ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : <Database className="h-4 w-4 mr-1" />}
-          Создать бэкап
-        </Button>
+        {!isReadOnly && (
+          <Button
+            size="sm"
+            onClick={handleCreateBackup}
+            disabled={startBackupJob.isPending || Boolean(activeBackupJobId)}
+          >
+            {startBackupJob.isPending || activeBackupJobId ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : <Database className="h-4 w-4 mr-1" />}
+            Создать бэкап
+          </Button>
+        )}
 
         <Button
           variant="outline"
@@ -351,14 +356,16 @@ export function BackupsPage() {
           Структура текущей БД
         </Button>
 
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={() => fileInputRef.current?.click()}
-        >
-          <Upload className="h-4 w-4 mr-1" />
-          Загрузить файл .dump/.zip
-        </Button>
+        {!isReadOnly && (
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => fileInputRef.current?.click()}
+          >
+            <Upload className="h-4 w-4 mr-1" />
+            Загрузить файл .dump/.zip
+          </Button>
+        )}
         <input
           ref={fileInputRef}
           type="file"
@@ -414,39 +421,43 @@ export function BackupsPage() {
       )}
 
       {/* Bulk actions */}
-      <div className="flex gap-2 items-center flex-wrap">
-        <Button
-          variant="outline"
-          size="sm"
-          disabled={selectedFilenames.size === 0}
-          onClick={startBulkDelete}
-        >
-          <Trash2 className="h-4 w-4 mr-1" />
-          Удалить выбранные ({selectedFilenames.size})
-        </Button>
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={openOlderThan}
-        >
-          <Trash2 className="h-4 w-4 mr-1" />
-          Удалить старые
-        </Button>
-      </div>
+      {!isReadOnly && (
+        <div className="flex gap-2 items-center flex-wrap">
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={selectedFilenames.size === 0}
+            onClick={startBulkDelete}
+          >
+            <Trash2 className="h-4 w-4 mr-1" />
+            Удалить выбранные ({selectedFilenames.size})
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={openOlderThan}
+          >
+            <Trash2 className="h-4 w-4 mr-1" />
+            Удалить старые
+          </Button>
+        </div>
+      )}
 
       {/* Table */}
       <div className="border rounded-lg overflow-hidden max-w-[1100px]">
         <table className="w-full text-sm">
           <thead className="bg-muted/50 text-xs">
             <tr>
-              <th className="px-2 py-2 w-8">
-                <input
-                  type="checkbox"
-                  checked={allSelected}
-                  onChange={toggleAll}
-                  className="h-4 w-4"
-                />
-              </th>
+              {!isReadOnly && (
+                <th className="px-2 py-2 w-8">
+                  <input
+                    type="checkbox"
+                    checked={allSelected}
+                    onChange={toggleAll}
+                    className="h-4 w-4"
+                  />
+                </th>
+              )}
               <th className="text-left px-3 py-2 font-medium">Имя файла</th>
               <th className="text-left px-3 py-2 font-medium">База данных</th>
               <th className="text-left px-3 py-2 font-medium">Размер</th>
@@ -458,33 +469,40 @@ export function BackupsPage() {
           <tbody>
             {isLoading ? (
               <tr>
-                <td colSpan={7} className="px-3 py-4 text-center text-muted-foreground text-xs">
+                <td colSpan={isReadOnly ? 6 : 7} className="px-3 py-4 text-center text-muted-foreground text-xs">
                   Загрузка...
                 </td>
               </tr>
             ) : !backups || backups.length === 0 ? (
               <tr>
-                <td colSpan={7} className="px-3 py-4 text-center text-muted-foreground text-xs">
-                  Нет бэкапов. Нажмите "Создать бэкап"
+                <td colSpan={isReadOnly ? 6 : 7} className="px-3 py-4 text-center text-muted-foreground text-xs">
+                  Нет бэкапов. {isReadOnly ? "" : "Нажмите \"Создать бэкап\""}
                 </td>
               </tr>
             ) : (
               backups.map((b) => (
                 <tr key={b.filename} className="border-t hover:bg-muted/30">
-                  <td className="px-2 py-2">
-                    <input
-                      type="checkbox"
-                      checked={selectedFilenames.has(b.filename)}
-                      onChange={() => toggleSelection(b.filename)}
-                      className="h-4 w-4"
-                    />
-                  </td>
+                  {!isReadOnly && (
+                    <td className="px-2 py-2">
+                      <input
+                        type="checkbox"
+                        checked={selectedFilenames.has(b.filename)}
+                        onChange={() => toggleSelection(b.filename)}
+                        className="h-4 w-4"
+                      />
+                    </td>
+                  )}
                   <td className="px-3 py-2 font-mono text-xs">{b.filename}</td>
                   <td className="px-3 py-2">{b.db_name}</td>
                   <td className="px-3 py-2">{formatBytes(b.size)}</td>
                   <td className="px-3 py-2">{formatDate(b.created_at)}</td>
                   <td className="px-3 py-2">
-                    <div className="rounded-md border border-input h-8 w-full overflow-hidden">
+                    {isReadOnly ? (
+                      <span className="text-sm text-slate-600 block px-2 truncate" title={b.comment || undefined}>
+                        {b.comment || "—"}
+                      </span>
+                    ) : (
+                      <div className="rounded-md border border-input h-8 w-full overflow-hidden">
                       {editingComment === b.filename ? (
                         <Input
                           ref={commentInputRef}
@@ -507,6 +525,7 @@ export function BackupsPage() {
                         </button>
                       )}
                     </div>
+                  )}
                   </td>
                   <td className="px-2 py-2 text-right">
                     <div className="flex justify-end gap-1">
@@ -528,24 +547,28 @@ export function BackupsPage() {
                       >
                         <Download className="h-4 w-4" />
                       </Button>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        className="h-7 w-7 p-0 text-red-500 hover:text-red-700 hover:bg-red-50"
-                        onClick={() => handleRestoreClick(b.filename)}
-                        title="Восстановить"
-                      >
-                        <RotateCcw className="h-4 w-4" />
-                      </Button>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        className="h-7 w-7 p-0 text-red-500 hover:text-red-700 hover:bg-red-50"
-                        onClick={() => startDelete(b.filename)}
-                        title="Удалить"
-                      >
-                        <Trash2 className="h-4 w-4" />
-                      </Button>
+                      {!isReadOnly && (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="h-7 w-7 p-0 text-red-500 hover:text-red-700 hover:bg-red-50"
+                          onClick={() => handleRestoreClick(b.filename)}
+                          title="Восстановить"
+                        >
+                          <RotateCcw className="h-4 w-4" />
+                        </Button>
+                      )}
+                      {!isReadOnly && (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="h-7 w-7 p-0 text-red-500 hover:text-red-700 hover:bg-red-50"
+                          onClick={() => startDelete(b.filename)}
+                          title="Удалить"
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </Button>
+                      )}
                     </div>
                   </td>
                 </tr>
@@ -658,7 +681,7 @@ export function BackupsPage() {
                 </div>
               </div>
               <DialogFooter className="gap-2">
-                {uploadedRestoreFile && (
+                {uploadedRestoreFile && !isReadOnly && (
                   <Button
                     variant="default"
                     className="bg-destructive text-destructive-foreground hover:bg-destructive/90"

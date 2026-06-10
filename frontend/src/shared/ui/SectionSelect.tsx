@@ -9,6 +9,7 @@ export type SectionSelectProps = {
   placeholder?: string;
   className?: string;
   emptyLabel?: string;
+  disabled?: boolean;
 };
 
 export function SectionSelect({
@@ -18,6 +19,7 @@ export function SectionSelect({
   placeholder = "Участок",
   className,
   emptyLabel,
+  disabled = false,
 }: SectionSelectProps) {
   const activeSections = useMemo(() => sections.filter((s) => s.is_active), [sections]);
 
@@ -25,7 +27,7 @@ export function SectionSelect({
   const iconColor = selectedSection?.icon_color || "#2563EB";
 
   return (
-    <Select value={value ? String(value) : "empty"} onValueChange={(v) => onValueChange(v === "empty" ? null : Number(v))}>
+    <Select value={value ? String(value) : "empty"} onValueChange={(v) => onValueChange(v === "empty" ? null : Number(v))} disabled={disabled}>
       <SelectTrigger className={className ?? "h-6 text-xs"}>
         {selectedSection && selectedSection.icon ? (
           <div className="flex items-center gap-1.5">

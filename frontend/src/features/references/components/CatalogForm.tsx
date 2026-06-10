@@ -1,4 +1,4 @@
-import React, { useEffect, useImperativeHandle, useState, forwardRef, useCallback } from "react";
+import React, { useEffect, useImperativeHandle, useState, forwardRef, useCallback, useMemo } from "react";
 import { Image, Maximize2, Camera, Trash2, Plus, Minus } from "lucide-react";
 import { Button } from "@/shared/ui/Button";
 import { Input } from "@/shared/ui/Input";
@@ -64,6 +64,7 @@ export const CatalogForm = forwardRef<CatalogFormRef, {
   onAliasClick?: (sku: string) => void;
   onDirtyChange?: (dirty: boolean) => void;
   onChangesChange?: (changes: FieldChange[]) => void;
+  readOnly?: boolean;
 }>(function CatalogForm({
   product,
   mode,
@@ -73,10 +74,14 @@ export const CatalogForm = forwardRef<CatalogFormRef, {
   onAliasClick,
   onDirtyChange,
   onChangesChange,
+  readOnly = false,
 }, ref) {
   const isCreate = mode === "create";
   const initialLengths = getProductLengths(product);
   const [fullscreenPhoto, setFullscreenPhoto] = useState<string | null>(null);
+  const handleCloseFullscreen = useCallback(() => {
+    setFullscreenPhoto(null);
+  }, []);
   const [localPhotoFull, setLocalPhotoFull] = useState<string | null>(null);
   const [localPhotoThumb, setLocalPhotoThumb] = useState<string | null>(null);
   const [uploadFullModal, setUploadFullModal] = useState(false);
@@ -176,7 +181,7 @@ export const CatalogForm = forwardRef<CatalogFormRef, {
     setForm((f) => ({ ...f, [key]: value }));
   };
 
-  const changes = getChanges(form, product, isCreate);
+  const changes = useMemo(() => getChanges(form, product, isCreate), [form, product, isCreate]);
   const isDirty = changes.length > 0;
   useEffect(() => {
     onDirtyChange?.(isDirty);
@@ -221,7 +226,7 @@ export const CatalogForm = forwardRef<CatalogFormRef, {
         <FullscreenPhoto
           src={fullscreenPhoto}
           alt={product?.name || ""}
-          onClose={() => setFullscreenPhoto(null)}
+          onClose={handleCloseFullscreen}
         />
       )}
 
@@ -273,7 +278,7 @@ export const CatalogForm = forwardRef<CatalogFormRef, {
             type="button"
             variant="outline"
             className="w-full"
-            disabled={uploading || isCreate}
+            disabled={uploading || isCreate || readOnly}
             onClick={() => setUploadFullModal(true)}
           >
             <Camera className="w-4 h-4 mr-2" />
@@ -310,7 +315,7 @@ export const CatalogForm = forwardRef<CatalogFormRef, {
               type="button"
               variant="outline"
               className="flex-1"
-              disabled={uploading || isCreate}
+              disabled={uploading || isCreate || readOnly}
               onClick={() => setUploadThumbModal(true)}
             >
               <Camera className="w-4 h-4 mr-2" />
@@ -329,11 +334,11 @@ export const CatalogForm = forwardRef<CatalogFormRef, {
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div className="space-y-1">
               <label className="text-sm font-medium">Артикул *</label>
-              <Input value={form.sku} onChange={(e) => update("sku", e.target.value)} disabled={!isCreate} placeholder="ЮП-1234" />
+              <Input value={form.sku} onChange={(e) => update("sku", e.target.value)} disabled={!isCreate || readOnly} placeholder="ЮП-1234" />
             </div>
             <div className="space-y-1">
               <label className="text-sm font-medium">Наименование *</label>
-              <Input value={form.name} onChange={(e) => update("name", e.target.value)} placeholder="Полное название" />
+              <Input value={form.name} onChange={(e) => update("name", e.target.value)} disabled={readOnly} placeholder="Полное название" />
             </div>
             <div className="space-y-1">
               <label className="text-sm font-medium">Кол-во на подвесе, шт</label>
@@ -342,6 +347,7 @@ export const CatalogForm = forwardRef<CatalogFormRef, {
                 className="h-10"
                 value={form.quantity_per_hanger ?? ""}
                 onChange={(e) => update("quantity_per_hanger", e.target.value ? parseInt(e.target.value) : null)}
+                disabled={readOnly}
               />
             </div>
             <div className="space-y-1 sm:col-start-2">
@@ -354,6 +360,7 @@ export const CatalogForm = forwardRef<CatalogFormRef, {
                     className="w-32 h-10"
                     value={newLength}
                     onChange={(e) => setNewLength(e.target.value)}
+                    disabled={readOnly}
                     onKeyDown={(e) => {
                       if (e.key === "Enter") {
                         e.preventDefault();
@@ -365,6 +372,7 @@ export const CatalogForm = forwardRef<CatalogFormRef, {
                     type="button"
                     className="h-10 bg-green-600 hover:bg-green-700"
                     onClick={commitLength}
+                    disabled={readOnly}
                   >
                     <Plus className="h-3 w-3 mr-1" />
                     Добавить
@@ -376,16 +384,18 @@ export const CatalogForm = forwardRef<CatalogFormRef, {
                       return (
                         <div key={`${len}-${idx}`} className="inline-flex items-center gap-1 bg-secondary rounded-md px-2 py-1 text-sm">
                           <span>{len} мм</span>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              const vals = (form.lengths_mm ?? []).filter((_, i) => i !== idx);
-                              setLengths(vals);
-                            }}
-                            className="text-muted-foreground hover:text-destructive"
-                          >
-                            <Minus className="h-3 w-3" />
-                          </button>
+                          {!readOnly && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const vals = (form.lengths_mm ?? []).filter((_, i) => i !== idx);
+                                setLengths(vals);
+                              }}
+                              className="text-muted-foreground hover:text-destructive"
+                            >
+                              <Minus className="h-3 w-3" />
+                            </button>
+                          )}
                         </div>
                       );
                     })}
@@ -404,6 +414,7 @@ export const CatalogForm = forwardRef<CatalogFormRef, {
                   id="is_paired_profile"
                   checked={form.is_paired_profile ?? false}
                   onCheckedChange={(checked) => update("is_paired_profile", checked === true)}
+                  disabled={readOnly}
                 />
                 <label htmlFor="is_paired_profile" className="text-sm font-medium leading-none cursor-pointer">
                   Парный профиль
@@ -414,6 +425,7 @@ export const CatalogForm = forwardRef<CatalogFormRef, {
                   id="skip_shot_blast"
                   checked={form.skip_shot_blast ?? false}
                   onCheckedChange={(checked) => update("skip_shot_blast", checked === true)}
+                  disabled={readOnly}
                 />
                 <label htmlFor="skip_shot_blast" className="text-sm font-medium leading-none cursor-pointer">
                   Не дробеструится
@@ -424,6 +436,7 @@ export const CatalogForm = forwardRef<CatalogFormRef, {
                   id="is_laminated"
                   checked={form.is_laminated ?? false}
                   onCheckedChange={(checked) => update("is_laminated", checked === true)}
+                  disabled={readOnly}
                 />
                 <label htmlFor="is_laminated" className="text-sm font-medium leading-none cursor-pointer">
                   Ламинируется
@@ -439,6 +452,7 @@ export const CatalogForm = forwardRef<CatalogFormRef, {
                 onAliasClick={onAliasClick}
                 excludeSku={product?.sku}
                 placeholder="Поиск по артикулу"
+                disabled={readOnly}
               />
             </div>
           </div>
@@ -450,6 +464,7 @@ export const CatalogForm = forwardRef<CatalogFormRef, {
               value={form.notes ?? ""}
               onChange={(e) => update("notes", e.target.value || null)}
               placeholder="Дополнительная информация..."
+              disabled={readOnly}
             />
           </div>
         </div>
@@ -457,7 +472,7 @@ export const CatalogForm = forwardRef<CatalogFormRef, {
 
       <div className="flex justify-between gap-2 pt-2">
         <div>
-          {!isCreate && onDelete && (
+          {!isCreate && onDelete && !readOnly && (
             <Button type="button" variant="destructive" size="sm" onClick={onDelete}>
               <Trash2 className="w-4 h-4 mr-1" />
               Удалить
@@ -466,7 +481,9 @@ export const CatalogForm = forwardRef<CatalogFormRef, {
         </div>
         <div className="flex gap-2">
           <Button type="button" variant="outline" onClick={onCancel}>Закрыть</Button>
-          <Button type="submit" disabled={uploading}>{isCreate ? "Создать" : "Сохранить"}</Button>
+          {!readOnly && (
+            <Button type="submit" disabled={uploading}>{isCreate ? "Создать" : "Сохранить"}</Button>
+          )}
         </div>
       </div>
 

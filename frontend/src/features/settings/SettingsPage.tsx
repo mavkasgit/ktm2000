@@ -11,6 +11,7 @@ import { seedRoutes, listRoutes, listRouteRuleProfiles, listRouteSelectionRules,
 import { listImportTemplates } from "@/shared/api/importTemplates"
 import { listSections } from "@/shared/api/sections"
 import { queryKeys } from "@/shared/api/queryKeys"
+import { usePermission } from "@/features/auth/hooks/usePermission"
 
 function useCurrentData() {
   const routes = useQuery({ queryKey: queryKeys.routes.all(), queryFn: () => listRoutes() })
@@ -129,6 +130,8 @@ function SeedDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (v: b
 }
 
 export function SettingsPage() {
+  const { canEditSettings } = usePermission()
+  const isReadOnly = !canEditSettings
   const navigate = useNavigate()
   const queryClient = useQueryClient()
   const [confirmOpen, setConfirmOpen] = useState(false)
@@ -249,26 +252,32 @@ export function SettingsPage() {
               <p className="text-sm text-muted-foreground">Шаблоны, маршруты и правила маршрутизации</p>
             </div>
           </div>
-          <Button onClick={() => setSeedOpen(true)} className="w-full">
-            <Download className="h-4 w-4 mr-1" />
-            Загрузить справочники
-          </Button>
+          {!isReadOnly ? (
+            <Button onClick={() => setSeedOpen(true)} className="w-full">
+              <Download className="h-4 w-4 mr-1" />
+              Загрузить справочники
+            </Button>
+          ) : (
+            <p className="text-xs text-muted-foreground italic text-center py-2">Доступно только для администратора</p>
+          )}
         </div>
 
-        <div className="rounded-lg border bg-card p-6 space-y-4">
-          <div className="flex items-center gap-3">
-            <div className="rounded-lg bg-red-500/10 p-2">
-              <Trash2 className="h-5 w-5 text-red-500" />
+        {!isReadOnly && (
+          <div className="rounded-lg border bg-card p-6 space-y-4">
+            <div className="flex items-center gap-3">
+              <div className="rounded-lg bg-red-500/10 p-2">
+                <Trash2 className="h-5 w-5 text-red-500" />
+              </div>
+              <div>
+                <h3 className="font-medium">Очистка данных</h3>
+                <p className="text-sm text-muted-foreground">Удаление планов и справочников</p>
+              </div>
             </div>
-            <div>
-              <h3 className="font-medium">Очистка данных</h3>
-              <p className="text-sm text-muted-foreground">Удаление планов и справочников</p>
-            </div>
+            <Button variant="destructive" onClick={() => setConfirmOpen(true)} disabled={resetting} className="w-full">
+              {resetting ? "Очистка..." : "Очистить"}
+            </Button>
           </div>
-          <Button variant="destructive" onClick={() => setConfirmOpen(true)} disabled={resetting} className="w-full">
-            {resetting ? "Очистка..." : "Очистить"}
-          </Button>
-        </div>
+        )}
 
         <div className="rounded-lg border bg-card p-6 space-y-4">
           <div className="flex items-center gap-3">
@@ -280,48 +289,56 @@ export function SettingsPage() {
               <p className="text-sm text-muted-foreground">Остатки ГХП, этапы маршрута и брак</p>
             </div>
           </div>
-          <div className="flex gap-2">
-            <Button onClick={handleSeedDemo} disabled={seedingDemo} className="flex-1">
-              {seedingDemo ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : <Download className="h-4 w-4 mr-1" />}
-              {seedingDemo ? "Загрузка..." : "Загрузить демо"}
-            </Button>
-            <Button variant="outline" onClick={() => setConfirmDemoClearOpen(true)} disabled={clearingDemo} className="text-destructive hover:bg-destructive/10">
-              {clearingDemo ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : <Trash2 className="h-4 w-4" />}
-              {clearingDemo ? "Очистить" : "Очистить"}
-            </Button>
-          </div>
+          {!isReadOnly ? (
+            <div className="flex gap-2">
+              <Button onClick={handleSeedDemo} disabled={seedingDemo} className="flex-1">
+                {seedingDemo ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : <Download className="h-4 w-4 mr-1" />}
+                {seedingDemo ? "Загрузка..." : "Загрузить демо"}
+              </Button>
+              <Button variant="outline" onClick={() => setConfirmDemoClearOpen(true)} disabled={clearingDemo} className="text-destructive hover:bg-destructive/10">
+                {clearingDemo ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : <Trash2 className="h-4 w-4" />}
+                {clearingDemo ? "Очистить" : "Очистить"}
+              </Button>
+            </div>
+          ) : (
+            <p className="text-xs text-muted-foreground italic text-center py-2">Доступно только для администратора</p>
+          )}
         </div>
 
-        <div className="rounded-lg border bg-card p-6 space-y-4">
-          <div className="flex items-center gap-3">
-            <div className="rounded-lg bg-violet-500/10 p-2">
-              <UserCog className="h-5 w-5 text-violet-500" />
+        {!isReadOnly && (
+          <div className="rounded-lg border bg-card p-6 space-y-4">
+            <div className="flex items-center gap-3">
+              <div className="rounded-lg bg-violet-500/10 p-2">
+                <UserCog className="h-5 w-5 text-violet-500" />
+              </div>
+              <div>
+                <h3 className="font-medium">Системный пользователь</h3>
+                <p className="text-sm text-muted-foreground">Восстановить ID=1 для dev-режима</p>
+              </div>
             </div>
-            <div>
-              <h3 className="font-medium">Системный пользователь</h3>
-              <p className="text-sm text-muted-foreground">Восстановить ID=1 для dev-режима</p>
-            </div>
+            <Button onClick={handleReseedUser} disabled={reseedingUser} className="w-full">
+              {reseedingUser ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : <UserCog className="h-4 w-4 mr-1" />}
+              {reseedingUser ? "Восстановление..." : "Восстановить"}
+            </Button>
           </div>
-          <Button onClick={handleReseedUser} disabled={reseedingUser} className="w-full">
-            {reseedingUser ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : <UserCog className="h-4 w-4 mr-1" />}
-            {reseedingUser ? "Восстановление..." : "Восстановить"}
-          </Button>
-        </div>
+        )}
 
-        <div className="rounded-lg border bg-card p-6 space-y-4">
-          <div className="flex items-center gap-3">
-            <div className="rounded-lg bg-indigo-500/10 p-2">
-              <Users className="h-5 w-5 text-indigo-500" />
+        {!isReadOnly && (
+          <div className="rounded-lg border bg-card p-6 space-y-4">
+            <div className="flex items-center gap-3">
+              <div className="rounded-lg bg-indigo-500/10 p-2">
+                <Users className="h-5 w-5 text-indigo-500" />
+              </div>
+              <div>
+                <h3 className="font-medium">Пользователи</h3>
+                <p className="text-sm text-muted-foreground">Управление учетными записями и ролями</p>
+              </div>
             </div>
-            <div>
-              <h3 className="font-medium">Пользователи</h3>
-              <p className="text-sm text-muted-foreground">Управление учетными записями и ролями</p>
-            </div>
+            <Button onClick={() => navigate("/settings/users")} className="w-full">
+              Открыть
+            </Button>
           </div>
-          <Button onClick={() => navigate("/settings/users")} className="w-full">
-            Открыть
-          </Button>
-        </div>
+        )}
       </div>
 
       <SeedDialog open={seedOpen} onOpenChange={setSeedOpen} />

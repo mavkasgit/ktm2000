@@ -88,14 +88,17 @@ function ColorPicker({
   value,
   onChange,
   compact = false,
+  disabled = false,
 }: {
   value: string
   onChange: (v: string) => void
   compact?: boolean
+  disabled?: boolean
 }) {
   const colorInputRef = useRef<HTMLInputElement>(null)
 
   const openNativePicker = () => {
+    if (disabled) return
     colorInputRef.current?.click()
   }
 
@@ -106,37 +109,47 @@ function ColorPicker({
           <PopoverTrigger asChild>
             <button
               type="button"
-              className="size-10 shrink-0 rounded-md border shadow-sm cursor-pointer transition-transform hover:scale-105 active:scale-95"
+              disabled={disabled}
+              className={cn(
+                "size-10 shrink-0 rounded-md border shadow-sm transition-transform",
+                disabled ? "cursor-not-allowed opacity-60" : "cursor-pointer hover:scale-105 active:scale-95"
+              )}
               style={{ backgroundColor: value }}
             />
           </PopoverTrigger>
-          <PopoverContent className="w-auto" align="start">
-            <div className="grid grid-cols-4 gap-1.5">
-              {COLOR_PRESETS.map((c) => (
-                <button
-                  key={c}
-                  type="button"
-                  className={`size-8 rounded-md cursor-pointer transition-all hover:scale-110 ${
-                    value === c ? "ring-2 ring-foreground ring-offset-2" : ""
-                  }`}
-                  style={{ backgroundColor: c }}
-                  onClick={() => onChange(c)}
-                  title={c}
-                />
-              ))}
-            </div>
-          </PopoverContent>
+          {!disabled && (
+            <PopoverContent className="w-auto" align="start">
+              <div className="grid grid-cols-4 gap-1.5">
+                {COLOR_PRESETS.map((c) => (
+                  <button
+                    key={c}
+                    type="button"
+                    className={`size-8 rounded-md cursor-pointer transition-all hover:scale-110 ${
+                      value === c ? "ring-2 ring-foreground ring-offset-2" : ""
+                    }`}
+                    style={{ backgroundColor: c }}
+                    onClick={() => onChange(c)}
+                    title={c}
+                  />
+                ))}
+              </div>
+            </PopoverContent>
+          )}
         </Popover>
 
         <label
-          className="relative shrink-0 flex items-center gap-1 px-2 h-10 rounded-md border text-[12px] font-medium cursor-pointer transition-colors whitespace-nowrap hover:bg-accent"
+          className={cn(
+            "relative shrink-0 flex items-center gap-1 px-2 h-10 rounded-md border text-[12px] font-medium transition-colors whitespace-nowrap",
+            disabled ? "cursor-not-allowed opacity-50" : "cursor-pointer hover:bg-accent"
+          )}
         >
           <input
             ref={colorInputRef}
             type="color"
+            disabled={disabled}
             value={isValidHex(value) ? value : "#000000"}
             onChange={(e) => onChange(e.target.value)}
-            className="absolute inset-0 opacity-0 cursor-pointer"
+            className="absolute inset-0 opacity-0 cursor-pointer disabled:cursor-not-allowed"
           />
           <svg className="size-3 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
             <circle cx="13.5" cy="6.5" r="2.5" />
@@ -156,36 +169,45 @@ function ColorPicker({
           <PopoverTrigger asChild>
             <button
               type="button"
-              className="size-8 shrink-0 rounded-md border shadow-sm cursor-pointer transition-transform hover:scale-105 active:scale-95"
+              disabled={disabled}
+              className={cn(
+                "size-8 shrink-0 rounded-md border shadow-sm transition-transform",
+                disabled ? "cursor-not-allowed opacity-60" : "cursor-pointer hover:scale-105 active:scale-95"
+              )}
               style={{ backgroundColor: value }}
             />
           </PopoverTrigger>
-          <PopoverContent className="w-auto" align="start">
-            <div className="grid grid-cols-4 gap-1.5">
-              {COLOR_PRESETS.map((c) => (
-                <button
-                  key={c}
-                  type="button"
-                  className={`size-8 rounded-md cursor-pointer transition-all hover:scale-110 ${
-                    value === c ? "ring-2 ring-foreground ring-offset-2" : ""
-                  }`}
-                  style={{ backgroundColor: c }}
-                  onClick={() => onChange(c)}
-                  title={c}
-                />
-              ))}
-            </div>
-          </PopoverContent>
+          {!disabled && (
+            <PopoverContent className="w-auto" align="start">
+              <div className="grid grid-cols-4 gap-1.5">
+                {COLOR_PRESETS.map((c) => (
+                  <button
+                    key={c}
+                    type="button"
+                    className={`size-8 rounded-md cursor-pointer transition-all hover:scale-110 ${
+                      value === c ? "ring-2 ring-foreground ring-offset-2" : ""
+                    }`}
+                    style={{ backgroundColor: c }}
+                    onClick={() => onChange(c)}
+                    title={c}
+                  />
+                ))}
+              </div>
+            </PopoverContent>
+          )}
         </Popover>
 
         <span className="font-mono text-xs text-muted-foreground shrink-0">{isValidHex(value) ? value.toUpperCase() : value}</span>
 
         <button
           type="button"
+          disabled={disabled}
           onClick={openNativePicker}
-          className={`shrink-0 flex items-center gap-1 px-2 py-1 rounded-md border text-[12px] font-medium cursor-pointer transition-colors whitespace-nowrap hover:bg-accent ${
-            !COLOR_PRESETS.includes(value) ? "ring-2 ring-foreground ring-offset-1" : ""
-          }`}
+          className={cn(
+            "shrink-0 flex items-center gap-1 px-2 py-1 rounded-md border text-[12px] font-medium transition-colors whitespace-nowrap",
+            disabled ? "cursor-not-allowed opacity-50" : "cursor-pointer hover:bg-accent",
+            !COLOR_PRESETS.includes(value) && !disabled ? "ring-2 ring-foreground ring-offset-1" : ""
+          )}
         >
           <svg className="size-3 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
             <circle cx="13.5" cy="6.5" r="2.5" />
@@ -198,6 +220,7 @@ function ColorPicker({
         <input
           ref={colorInputRef}
           type="color"
+          disabled={disabled}
           value={isValidHex(value) ? value : "#000000"}
           onChange={(e) => onChange(e.target.value)}
           className="sr-only"
@@ -211,11 +234,12 @@ function ColorPicker({
             <button
               key={c}
               type="button"
-              className={`h-7 rounded-md cursor-pointer transition-all hover:scale-105 ${
-                value === c
-                  ? "ring-2 ring-foreground ring-offset-1"
-                  : "ring-1 ring-border"
-              }`}
+              disabled={disabled}
+              className={cn(
+                "h-7 rounded-md transition-all",
+                disabled ? "cursor-not-allowed opacity-60" : "cursor-pointer hover:scale-105",
+                value === c && !disabled ? "ring-2 ring-foreground ring-offset-1" : "ring-1 ring-border"
+              )}
               style={{ backgroundColor: c }}
               onClick={() => onChange(c)}
               title={c}
@@ -234,11 +258,13 @@ function IconColorPicker({
   colorValue,
   onIconChange,
   onColorChange,
+  disabled = false,
 }: {
   iconValue: string
   colorValue: string
   onIconChange: (v: string) => void
   onColorChange: (v: string) => void
+  disabled?: boolean
 }) {
   const [allOpen, setAllOpen] = useState(false)
   const preview = ICON_LIST.slice(0, 12)
@@ -252,17 +278,19 @@ function IconColorPicker({
             <>
               <span style={{ color: colorValue }}>{renderIcon(iconValue)}</span>
               <span className="text-muted-foreground">{iconValue}</span>
-              <button
-                type="button"
-                className="p-0.5 rounded hover:bg-destructive/20 text-muted-foreground hover:text-destructive transition-colors"
-                onClick={() => onIconChange("")}
-                title="Убрать иконку"
-              >
-                <svg className="size-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <line x1="18" y1="6" x2="6" y2="18" />
-                  <line x1="6" y1="6" x2="18" y2="18" />
-                </svg>
-              </button>
+              {!disabled && (
+                <button
+                  type="button"
+                  className="p-0.5 rounded hover:bg-destructive/20 text-muted-foreground hover:text-destructive transition-colors"
+                  onClick={() => onIconChange("")}
+                  title="Убрать иконку"
+                >
+                  <svg className="size-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <line x1="18" y1="6" x2="6" y2="18" />
+                    <line x1="6" y1="6" x2="18" y2="18" />
+                  </svg>
+                </button>
+              )}
             </>
           ) : (
             <>
@@ -279,52 +307,57 @@ function IconColorPicker({
             <button
               key={name}
               type="button"
-              className={`flex items-center justify-center size-9 rounded-md transition-all hover:bg-accent ${
+              disabled={disabled}
+              className={cn(
+                "flex items-center justify-center size-9 rounded-md transition-all",
+                disabled ? "cursor-not-allowed opacity-50" : "hover:bg-accent cursor-pointer",
                 iconValue === name ? "ring-2 ring-primary bg-accent" : "text-muted-foreground"
-              }`}
+              )}
               onClick={() => onIconChange(name)}
               title={name}
             >
               {renderIcon(name)}
             </button>
           ))}
-          <div className="col-span-4 flex justify-center pt-0.5">
-            <Popover open={allOpen} onOpenChange={setAllOpen}>
-              <PopoverTrigger asChild>
-                <button
-                  type="button"
-                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-md border text-xs text-muted-foreground hover:bg-accent hover:text-foreground transition-colors"
-                >
-                  <span>Все иконки</span>
-                  <span className="font-mono text-[10px]">({ICON_LIST.length})</span>
-                </button>
-              </PopoverTrigger>
-              <PopoverContent className="w-[620px]" align="center">
-                <h4 className="text-sm font-semibold mb-2">Все иконки</h4>
-                <div className="grid grid-cols-12 gap-1 rounded-md p-1">
-                  {ICON_LIST.map((name) => (
-                    <button
-                      key={name}
-                      type="button"
-                      className={`flex items-center justify-center size-9 rounded-md transition-all hover:bg-accent ${
-                        iconValue === name ? "ring-2 ring-primary bg-accent" : "text-muted-foreground"
-                      }`}
-                      onClick={() => { onIconChange(name); setAllOpen(false) }}
-                      title={name}
-                    >
-                      {renderIcon(name)}
-                    </button>
-                  ))}
-                </div>
-              </PopoverContent>
-            </Popover>
-          </div>
+          {!disabled && (
+            <div className="col-span-4 flex justify-center pt-0.5">
+              <Popover open={allOpen} onOpenChange={setAllOpen}>
+                <PopoverTrigger asChild>
+                  <button
+                    type="button"
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-md border text-xs text-muted-foreground hover:bg-accent hover:text-foreground transition-colors cursor-pointer"
+                  >
+                    <span>Все иконки</span>
+                    <span className="font-mono text-[10px]">({ICON_LIST.length})</span>
+                  </button>
+                </PopoverTrigger>
+                <PopoverContent className="w-[620px]" align="center">
+                  <h4 className="text-sm font-semibold mb-2">Все иконки</h4>
+                  <div className="grid grid-cols-12 gap-1 rounded-md p-1">
+                    {ICON_LIST.map((name) => (
+                      <button
+                        key={name}
+                        type="button"
+                        className={`flex items-center justify-center size-9 rounded-md transition-all hover:bg-accent ${
+                          iconValue === name ? "ring-2 ring-primary bg-accent" : "text-muted-foreground"
+                        }`}
+                        onClick={() => { onIconChange(name); setAllOpen(false) }}
+                        title={name}
+                      >
+                        {renderIcon(name)}
+                      </button>
+                    ))}
+                  </div>
+                </PopoverContent>
+              </Popover>
+            </div>
+          )}
         </div>
       </div>
 
       <div className="flex-1">
         <div className="text-xs text-muted-foreground mb-2 h-4">Цвет иконки</div>
-        <ColorPicker value={colorValue} onChange={onColorChange} />
+        <ColorPicker value={colorValue} onChange={onColorChange} disabled={disabled} />
       </div>
     </div>
   )
@@ -347,6 +380,7 @@ export interface EntityDialogField {
     id: string
     hasError: boolean
     inputClasses: string
+    disabled?: boolean
   }) => ReactNode
 }
 
@@ -365,6 +399,7 @@ export interface EntityDialogProps {
   addLabel: string
   saveLabel: string
   dialogWidth?: string
+  readOnly?: boolean
 }
 
 export function EntityDialog({
@@ -382,6 +417,7 @@ export function EntityDialog({
   addLabel,
   saveLabel,
   dialogWidth,
+  readOnly = false,
 }: EntityDialogProps) {
   const [values, setValues] = useState<Record<string, unknown>>({})
   const [errors, setErrors] = useState<Record<string, string>>({})
@@ -411,13 +447,14 @@ export function EntityDialog({
   }, [open, mode, initialValuesKey, fieldsKey])
 
   const setValue = useCallback((key: string, value: unknown) => {
+    if (readOnly) return
     setValues((prev) => ({ ...prev, [key]: value }))
     setErrors((prev) => {
       const next = { ...prev }
       delete next[key]
       return next
     })
-  }, [])
+  }, [readOnly])
 
   const validate = (): boolean => {
     const next: Record<string, string> = {}
@@ -431,7 +468,7 @@ export function EntityDialog({
   }
 
   const handleSave = () => {
-    if (!validate() || isSaving) return
+    if (readOnly || !validate() || isSaving) return
     setIsSaving(true)
     const result = onSave(values)
     if (result && typeof (result as Promise<void>).then === 'function') {
@@ -444,7 +481,7 @@ export function EntityDialog({
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault()
-      if (!isSaving) handleSave()
+      if (!isSaving && !readOnly) handleSave()
     }
   }
 
@@ -465,6 +502,7 @@ export function EntityDialog({
           className={cn("h-10", inputClasses)}
           onChange={(e) => setValue(key, e.target.value)}
           data-testid={field.testId}
+          disabled={readOnly}
         />
       )
     }
@@ -476,6 +514,7 @@ export function EntityDialog({
         id: inputId,
         hasError,
         inputClasses,
+        disabled: readOnly,
       })
     }
 
@@ -485,6 +524,7 @@ export function EntityDialog({
         <Select
           value={selectValue}
           onValueChange={(v) => setValue(key, v)}
+          disabled={readOnly}
         >
           <SelectTrigger id={inputId} className={cn("h-10 w-full", inputClasses)}>
             <SelectValue placeholder={field.placeholder ?? "Выберите значение"} />
@@ -511,6 +551,7 @@ export function EntityDialog({
             setValue(key, isNaN(parsed) ? min : parsed)
           }}
           min={min}
+          disabled={readOnly}
         />
       )
     }
@@ -521,9 +562,11 @@ export function EntityDialog({
         <button
           type="button"
           id={inputId}
+          disabled={readOnly}
           onClick={() => setValue(key, !checked)}
           className={cn(
-            "inline-flex items-center justify-center h-10 w-10 rounded-md border cursor-pointer transition-all",
+            "inline-flex items-center justify-center h-10 w-10 rounded-md border transition-all",
+            readOnly ? "cursor-not-allowed opacity-60" : "cursor-pointer",
             checked
               ? "bg-yellow-100 border-yellow-300 text-yellow-700 hover:bg-yellow-200"
               : "bg-background border-input text-muted-foreground/40 hover:bg-accent"
@@ -535,7 +578,7 @@ export function EntityDialog({
     }
 
     if (field.type === "color") {
-      return <ColorPicker value={(val as string) ?? "#000000"} onChange={(v) => setValue(key, v)} compact={compact} />
+      return <ColorPicker value={(val as string) ?? "#000000"} onChange={(v) => setValue(key, v)} compact={compact} disabled={readOnly} />
     }
 
     if (field.type === "icon") {
@@ -550,6 +593,7 @@ export function EntityDialog({
             colorValue={values[colorKey!] as string}
             onIconChange={(v) => setValue(iconKey!, v)}
             onColorChange={(v) => setValue(colorKey!, v)}
+            disabled={readOnly}
           />
         )
       }
@@ -560,9 +604,12 @@ export function EntityDialog({
             <button
               key={name}
               type="button"
-              className={`flex items-center justify-center size-8 rounded-md transition-all hover:bg-accent ${
+              disabled={readOnly}
+              className={cn(
+                "flex items-center justify-center size-8 rounded-md transition-all",
+                readOnly ? "cursor-not-allowed opacity-50" : "hover:bg-accent cursor-pointer",
                 val === name ? "ring-2 ring-primary bg-accent" : "text-muted-foreground"
-              }`}
+              )}
               onClick={() => setValue(key, name)}
               title={name}
             >
@@ -651,25 +698,27 @@ export function EntityDialog({
         </div>
 
         <DialogFooter className="sm:justify-between">
-          {mode === "edit" && onDelete && (
+          {mode === "edit" && onDelete && !readOnly && (
             <Button variant="destructive" onClick={onDelete} disabled={isSaving}>
               Удалить
             </Button>
           )}
           <div className="ml-auto flex gap-2">
             <Button variant="outline" onClick={() => onOpenChange(false)} disabled={isSaving}>
-              Отмена
+              {readOnly ? "Закрыть" : "Отмена"}
             </Button>
-            <Button onClick={handleSave} disabled={isSaving}>
-              {isSaving ? (
-                <>
-                  <L.Loader2 className="mr-2 size-4 animate-spin" />
-                  Сохранение...
-                </>
-              ) : (
-                <>{mode === "add" ? addLabel : saveLabel}</>
-              )}
-            </Button>
+            {!readOnly && (
+              <Button onClick={handleSave} disabled={isSaving}>
+                {isSaving ? (
+                  <>
+                    <L.Loader2 className="mr-2 size-4 animate-spin" />
+                    Сохранение...
+                  </>
+                ) : (
+                  <>{mode === "add" ? addLabel : saveLabel}</>
+                )}
+              </Button>
+            )}
           </div>
         </DialogFooter>
       </DialogContent>

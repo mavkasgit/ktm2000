@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Pencil, Plus, Trash2 } from "lucide-react";
+import { Eye, Pencil, Plus, Trash2 } from "lucide-react";
 import * as RoutesAPI from "@/shared/api/routes";
 import * as SectionsAPI from "@/shared/api/sections";
 import * as ImportTemplatesAPI from "@/shared/api/importTemplates";
@@ -15,6 +15,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { SectionSelect } from "@/shared/ui/SectionSelect";
 import { Table, TableBody, TableCell, TableContainer, TableHead, TableHeader, TableRow } from "@/shared/ui/Table";
 import { toast } from "@/shared/ui/use-toast";
+import { usePermission } from "@/features/auth/hooks/usePermission";
 
 type Props = {
   refreshKey: number;
@@ -355,6 +356,7 @@ type ConditionRowProps = {
   onApplyExcelColumn: (index: number, columnIndex: number) => void;
   onApplyValuePreset: (index: number, value: unknown) => void;
   onRemoveCondition: (index: number) => void;
+  readOnly?: boolean;
 };
 
 function ConditionRow({
@@ -369,6 +371,7 @@ function ConditionRow({
   onApplyExcelColumn,
   onApplyValuePreset,
   onRemoveCondition,
+  readOnly = false,
 }: ConditionRowProps) {
   const selectedFieldHint = fieldOptionsBySource[condition.source].find((option) => option.field_path === condition.field_path)?.hint;
   const presetKey = `${condition.source}:${condition.field_path}`;
@@ -398,6 +401,7 @@ function ConditionRow({
               excel_header: null,
             });
           }}
+          disabled={readOnly}
         >
           <SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger>
           <SelectContent>
@@ -424,7 +428,7 @@ function ConditionRow({
                   }
                   onApplyExcelColumn(index, Number(value));
                 }}
-                disabled={scope !== "profile" || ruleExcelColumns.length === 0}
+                disabled={readOnly || scope !== "profile" || ruleExcelColumns.length === 0}
               >
                 <SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger>
                 <SelectContent>
@@ -454,6 +458,7 @@ function ConditionRow({
                   onChange={(event) => onUpdateCondition(index, { field_path: event.target.value })}
                   placeholder="Ключ колонки"
                   className="h-7 text-xs"
+                  disabled={readOnly}
                 />
               )}
             </>
@@ -465,6 +470,7 @@ function ConditionRow({
                 onChange={(event) => onUpdateCondition(index, { field_path: event.target.value })}
                 placeholder="Например: output_kind"
                 className="h-8 text-xs"
+                disabled={readOnly}
               />
               <datalist id={`field-path-options-${index}`}>
                 {fieldOptionsBySource[condition.source].map((option) => (
@@ -479,7 +485,11 @@ function ConditionRow({
         </div>
       </td>
       <td className="p-1 min-w-[150px]">
-        <Select value={condition.operator} onValueChange={(value) => onUpdateCondition(index, { operator: value as RoutesAPI.RouteSelectionCondition["operator"] })}>
+        <Select
+          value={condition.operator}
+          onValueChange={(value) => onUpdateCondition(index, { operator: value as RoutesAPI.RouteSelectionCondition["operator"] })}
+          disabled={readOnly}
+        >
           <SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger>
           <SelectContent>
             {(Object.keys(operatorLabels) as RoutesAPI.RouteSelectionCondition["operator"][]).map((value) => (
@@ -491,19 +501,19 @@ function ConditionRow({
       <td className="p-1 min-w-[220px]">
         <div className="grid gap-1">
           <Input
-            disabled={condition.operator === "empty" || condition.operator === "not_empty"}
+            disabled={readOnly || condition.operator === "empty" || condition.operator === "not_empty"}
             value={String(condition.value ?? "")}
             onChange={(event) => onUpdateCondition(index, { value: event.target.value })}
             className="h-8 text-xs"
           />
-          {condition.operator !== "empty" && condition.operator !== "not_empty" && conditionValuePresets[presetKey]?.length ? (
+          {!readOnly && condition.operator !== "empty" && condition.operator !== "not_empty" && conditionValuePresets[presetKey]?.length ? (
             <div className="flex flex-wrap gap-1">
               {conditionValuePresets[presetKey].map((preset, presetIndex) => (
                 <button
                   key={`${presetKey}:${presetIndex}`}
                   type="button"
                   onClick={() => onApplyValuePreset(index, preset.value)}
-                  className="rounded border px-1.5 py-0.5 text-[10px] hover:bg-accent"
+                  className="rounded border px-1.5 py-0.5 text-[10px] hover:bg-accent cursor-pointer"
                 >
                   {preset.label}
                 </button>
@@ -514,20 +524,24 @@ function ConditionRow({
       </td>
       <td className="p-1 w-[64px]">
         <div className="flex items-center justify-center gap-1 pt-2">
-          <Checkbox checked={condition.case_sensitive} onCheckedChange={(checked) => onUpdateCondition(index, { case_sensitive: checked === true })} />
+          <Checkbox checked={condition.case_sensitive} onCheckedChange={(checked) => onUpdateCondition(index, { case_sensitive: checked === true })} disabled={readOnly} />
           <span className="text-[10px] text-muted-foreground">Aa</span>
         </div>
       </td>
       <td className="p-1 w-[52px]">
-        <Button size="sm" variant="ghost" className="h-8 w-8 p-0 text-red-600" onClick={() => onRemoveCondition(index)}>
-          <Trash2 className="h-4 w-4" />
-        </Button>
+        {!readOnly && (
+          <Button size="sm" variant="ghost" className="h-8 w-8 p-0 text-red-600" onClick={() => onRemoveCondition(index)}>
+            <Trash2 className="h-4 w-4" />
+          </Button>
+        )}
       </td>
     </tr>
   );
 }
 
 export function RouteSelectionRulesSection({ refreshKey }: Props) {
+  const { canEditReferences } = usePermission();
+  const isReadOnly = !canEditReferences;
   const [rules, setRules] = useState<RoutesAPI.RouteSelectionRule[]>([]);
   const [sections, setSections] = useState<SectionsAPI.Section[]>([]);
   const [profiles, setProfiles] = useState<RoutesAPI.RouteRuleProfile[]>([]);
@@ -1050,14 +1064,16 @@ export function RouteSelectionRulesSection({ refreshKey }: Props) {
             <CardTitle>Правила выбора маршрута</CardTitle>
             <p className="mt-1 text-sm text-muted-foreground">{rules.length} правил</p>
           </div>
-          <Button
-            size="sm"
-            onClick={openCreateDialog}
-            disabled={!activeSections.length || (scope === "profile" && !selectedProfileId)}
-          >
-            <Plus className="mr-1 h-4 w-4" />
-            Создать правило
-          </Button>
+          {!isReadOnly && (
+            <Button
+              size="sm"
+              onClick={openCreateDialog}
+              disabled={!activeSections.length || (scope === "profile" && !selectedProfileId)}
+            >
+              <Plus className="mr-1 h-4 w-4" />
+              Создать правило
+            </Button>
+          )}
         </div>
 
         <div className="mt-4 flex flex-wrap items-center gap-2">
@@ -1088,19 +1104,21 @@ export function RouteSelectionRulesSection({ refreshKey }: Props) {
               <button
                 onClick={(event) => { event.stopPropagation(); openProfileEdit(profile); }}
                 className="p-0.5 rounded hover:bg-black/10 transition-colors"
-                title="Редактировать группу"
+                title={isReadOnly ? "Просмотр группы" : "Редактировать группу"}
               >
-                <Pencil className="h-3 w-3" />
+                {isReadOnly ? <Eye className="h-3 w-3" /> : <Pencil className="h-3 w-3" />}
               </button>
             </span>
           ))}
-          <button
-            onClick={openProfileCreate}
-            className="inline-flex items-center gap-0.5 px-2 py-1 text-sm rounded-md border border-dashed hover:bg-accent transition-colors"
-            title="Создать группу"
-          >
-            <Plus className="h-3.5 w-3.5" />
-          </button>
+          {!isReadOnly && (
+            <button
+              onClick={openProfileCreate}
+              className="inline-flex items-center gap-0.5 px-2 py-1 text-sm rounded-md border border-dashed hover:bg-accent transition-colors"
+              title="Создать группу"
+            >
+              <Plus className="h-3.5 w-3.5" />
+            </button>
+          )}
         </div>
       </CardHeader>
 
@@ -1168,26 +1186,26 @@ export function RouteSelectionRulesSection({ refreshKey }: Props) {
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
         <DialogContent className="w-[min(980px,calc(100vw-2rem))] max-h-[90vh] flex flex-col">
           <DialogHeader>
-            <DialogTitle>{editingRule ? "Редактировать правило" : "Создать правило"}</DialogTitle>
+            <DialogTitle>{isReadOnly ? "Просмотр правила" : (editingRule ? "Редактировать правило" : "Создать правило")}</DialogTitle>
           </DialogHeader>
 
           <div className="grid gap-4 overflow-y-auto">
             <div className="grid gap-3 md:grid-cols-[1fr_1fr_120px_160px]">
               <label className="grid gap-1.5 text-sm font-medium">
                 Название правила
-                <Input value={form.name} onChange={(event) => setForm((current) => ({ ...current, name: event.target.value }))} />
+                <Input value={form.name} onChange={(event) => setForm((current) => ({ ...current, name: event.target.value }))} disabled={isReadOnly} />
               </label>
               <label className="grid gap-1.5 text-sm font-medium">
                 Код правила (опционально)
-                <Input value={form.code ?? ""} onChange={(event) => setForm((current) => ({ ...current, code: event.target.value }))} placeholder="Опционально" />
+                <Input value={form.code ?? ""} onChange={(event) => setForm((current) => ({ ...current, code: event.target.value }))} placeholder="Опционально" disabled={isReadOnly} />
               </label>
               <label className="grid gap-1.5 text-sm font-medium">
                 Приоритет
-                <Input type="number" value={form.priority} onChange={(event) => setForm((current) => ({ ...current, priority: Number(event.target.value) }))} />
+                <Input type="number" value={form.priority} onChange={(event) => setForm((current) => ({ ...current, priority: Number(event.target.value) }))} disabled={isReadOnly} />
               </label>
               <label className="grid gap-1.5 text-sm font-medium">
                 Фаза
-                <Select value={form.phase ?? "route_select"} onValueChange={(value) => setForm((current) => ({ ...current, phase: value as RulePhase }))}>
+                <Select value={form.phase ?? "route_select"} onValueChange={(value) => setForm((current) => ({ ...current, phase: value as RulePhase }))} disabled={isReadOnly}>
                   <SelectTrigger className="h-9"><SelectValue /></SelectTrigger>
                   <SelectContent>
                     {(Object.keys(phaseLabels) as RulePhase[]).map((phase) => (
@@ -1210,10 +1228,12 @@ export function RouteSelectionRulesSection({ refreshKey }: Props) {
               <div className="grid gap-2">
                 <div className="flex items-center justify-between">
                   <h3 className="text-sm font-semibold">Условия</h3>
-                  <Button size="sm" variant="outline" onClick={() => setForm((current) => ({ ...current, conditions: [...current.conditions, { ...emptyCondition }] }))}>
-                    <Plus className="mr-1 h-4 w-4" />
-                    Добавить условие
-                  </Button>
+                  {!isReadOnly && (
+                    <Button size="sm" variant="outline" onClick={() => setForm((current) => ({ ...current, conditions: [...current.conditions, { ...emptyCondition }] }))}>
+                      <Plus className="mr-1 h-4 w-4" />
+                      Добавить условие
+                    </Button>
+                  )}
                 </div>
 
                 {form.conditions.length > 0 ? (
@@ -1247,6 +1267,7 @@ export function RouteSelectionRulesSection({ refreshKey }: Props) {
                               ...current,
                               conditions: current.conditions.filter((_, idx) => idx !== conditionIndex),
                             }))}
+                            readOnly={isReadOnly}
                           />
                         ))}
                       </tbody>
@@ -1263,18 +1284,20 @@ export function RouteSelectionRulesSection({ refreshKey }: Props) {
                   <h3 className="text-sm font-semibold">
                     {form.phase === "normalize" ? "DSL-действия" : "Действия по участкам"}
                   </h3>
-                  <Button size="sm" variant="outline" onClick={() => {
-                    if (form.phase === "normalize") {
-                      setForm((current) => ({ ...current, actions: [...current.actions, { ...emptyDslAction }] }));
-                    } else if (form.phase === "resolve_operations") {
-                      setForm((current) => ({ ...current, actions: [...current.actions, { ...emptyGroupAction }] }));
-                    } else {
-                      setForm((current) => ({ ...current, actions: [...current.actions, { ...emptyAction, section_id: activeSections[0]?.id ?? 0 }] }));
-                    }
-                  }}>
-                    <Plus className="mr-1 h-4 w-4" />
-                    Добавить действие
-                  </Button>
+                  {!isReadOnly && (
+                    <Button size="sm" variant="outline" onClick={() => {
+                      if (form.phase === "normalize") {
+                        setForm((current) => ({ ...current, actions: [...current.actions, { ...emptyDslAction }] }));
+                      } else if (form.phase === "resolve_operations") {
+                        setForm((current) => ({ ...current, actions: [...current.actions, { ...emptyGroupAction }] }));
+                      } else {
+                        setForm((current) => ({ ...current, actions: [...current.actions, { ...emptyAction, section_id: activeSections[0]?.id ?? 0 }] }));
+                      }
+                    }}>
+                      <Plus className="mr-1 h-4 w-4" />
+                      Добавить действие
+                    </Button>
+                  )}
                 </div>
 
                 <div className="rounded-md border overflow-hidden">
@@ -1298,13 +1321,13 @@ export function RouteSelectionRulesSection({ refreshKey }: Props) {
                             <th className="text-left py-1 px-2 text-xs font-medium">Операция</th>
                           </>
                         )}
-                        <th className="py-1 px-1 w-8"></th>
+                        {!isReadOnly && <th className="py-1 px-1 w-8"></th>}
                       </tr>
                     </thead>
                     <tbody>
                       {form.actions.length === 0 ? (
                         <tr>
-                          <td colSpan={4} className="py-3 text-center text-muted-foreground text-xs">
+                          <td colSpan={isReadOnly ? 3 : 4} className="py-3 text-center text-muted-foreground text-xs">
                             Нет действий. Добавьте хотя бы одно.
                           </td>
                         </tr>
@@ -1323,7 +1346,7 @@ export function RouteSelectionRulesSection({ refreshKey }: Props) {
                                 } else {
                                   updateAction(index, { action: newAction, path: null, value: null, section_id: action.section_id ?? 0, section_code: null, group_code: null });
                                 }
-                              }}>
+                              }} disabled={isReadOnly}>
                                 <SelectTrigger className="h-6 text-xs">
                                   <SelectValue />
                                 </SelectTrigger>
@@ -1342,6 +1365,7 @@ export function RouteSelectionRulesSection({ refreshKey }: Props) {
                                     onChange={(e) => updateAction(index, { path: e.target.value })}
                                     placeholder="ctx.field"
                                     className="h-6 text-xs"
+                                    disabled={isReadOnly}
                                   />
                                 </td>
                                 <td className="py-0.5 px-2">
@@ -1357,6 +1381,7 @@ export function RouteSelectionRulesSection({ refreshKey }: Props) {
                                     }}
                                     placeholder='null, "text", 42, [1,2]'
                                     className="h-6 text-xs"
+                                    disabled={isReadOnly}
                                   />
                                 </td>
                               </>
@@ -1372,6 +1397,7 @@ export function RouteSelectionRulesSection({ refreshKey }: Props) {
                                       const section = sections.find((s) => s.code === sectionCode);
                                       if (section) fetchSectionOperations(section.id);
                                     }}
+                                    disabled={isReadOnly}
                                   >
                                     <SelectTrigger className="h-6 text-xs">
                                       <SelectValue placeholder="Участок" />
@@ -1391,7 +1417,7 @@ export function RouteSelectionRulesSection({ refreshKey }: Props) {
                                       onValueChange={(value) => {
                                         updateAction(index, { group_code: value === "__none__" ? "" : value, operation_code: "" });
                                       }}
-                                      disabled={!action.section_code}
+                                      disabled={isReadOnly || !action.section_code}
                                     >
                                       <SelectTrigger className="h-6 text-xs flex-1">
                                         <SelectValue placeholder="Группа" />
@@ -1411,7 +1437,7 @@ export function RouteSelectionRulesSection({ refreshKey }: Props) {
                                       onValueChange={(value) => {
                                         updateAction(index, { operation_code: value === "__none__" ? "" : value });
                                       }}
-                                      disabled={!action.section_code || !action.group_code}
+                                      disabled={isReadOnly || !action.section_code || !action.group_code}
                                     >
                                       <SelectTrigger className="h-6 text-xs flex-1">
                                         <SelectValue placeholder="Операция" />
@@ -1446,13 +1472,14 @@ export function RouteSelectionRulesSection({ refreshKey }: Props) {
                                       if (value) fetchSectionOperations(value);
                                     }}
                                     className="h-6 text-xs"
+                                    disabled={isReadOnly}
                                   />
                                 </td>
                                 <td className="py-0.5 px-2">
                                   <Select
                                     value={action.operation_code ?? "__none__"}
                                     onValueChange={(value) => updateAction(index, { operation_code: value === "__none__" ? null : value })}
-                                    disabled={!action.section_id}
+                                    disabled={isReadOnly || !action.section_id}
                                   >
                                     <SelectTrigger className="h-6 text-xs">
                                       <SelectValue placeholder="Выберите операцию" />
@@ -1480,19 +1507,22 @@ export function RouteSelectionRulesSection({ refreshKey }: Props) {
                                   value={action.section_id ?? 0}
                                   onValueChange={(value) => updateAction(index, { section_id: value })}
                                   className="h-6 text-xs"
+                                  disabled={isReadOnly}
                                 />
                               </td>
                             )}
-                            <td className="py-0.5 px-1 w-8">
-                              <Button
-                                variant="ghost"
-                                size="sm"
-                                className="h-5 w-5 p-0 text-red-600"
-                                onClick={() => setForm((current) => ({ ...current, actions: current.actions.filter((_, idx) => idx !== index) }))}
-                              >
-                                <Trash2 className="h-3 w-3" />
-                              </Button>
-                            </td>
+                            {!isReadOnly && (
+                              <td className="py-0.5 px-1 w-8">
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  className="h-5 w-5 p-0 text-red-600"
+                                  onClick={() => setForm((current) => ({ ...current, actions: current.actions.filter((_, idx) => idx !== index) }))}
+                                >
+                                  <Trash2 className="h-3 w-3" />
+                                </Button>
+                              </td>
+                            )}
                           </tr>
                           );
                         })
@@ -1506,7 +1536,7 @@ export function RouteSelectionRulesSection({ refreshKey }: Props) {
 
           <DialogFooter className="flex items-center justify-between w-full sm:justify-between">
             <div>
-              {editingRule && (
+              {editingRule && !isReadOnly && (
                 <Button variant="destructive" onClick={() => void handleDelete(editingRule)} disabled={deletingRuleId === editingRule.id || saving}>
                   <Trash2 className="mr-1 h-4 w-4" />
                   Удалить
@@ -1514,10 +1544,14 @@ export function RouteSelectionRulesSection({ refreshKey }: Props) {
               )}
             </div>
             <div className="flex gap-2 items-center">
-              <Checkbox checked={form.is_active} onCheckedChange={(checked) => setForm((current) => ({ ...current, is_active: checked === true }))} />
+              <Checkbox checked={form.is_active} onCheckedChange={(checked) => setForm((current) => ({ ...current, is_active: checked === true }))} disabled={isReadOnly} />
               <label className="text-sm">Активно</label>
-              <Button variant="outline" onClick={() => setDialogOpen(false)} disabled={saving}>Отмена</Button>
-              <Button onClick={() => void handleSave()} disabled={saving}>{saving ? "Сохранение..." : "Сохранить"}</Button>
+              <Button variant="outline" onClick={() => setDialogOpen(false)} disabled={saving}>
+                {isReadOnly ? "Закрыть" : "Отмена"}
+              </Button>
+              {!isReadOnly && (
+                <Button onClick={() => void handleSave()} disabled={saving}>{saving ? "Сохранение..." : "Сохранить"}</Button>
+              )}
             </div>
           </DialogFooter>
         </DialogContent>
@@ -1532,21 +1566,21 @@ export function RouteSelectionRulesSection({ refreshKey }: Props) {
       }}>
         <DialogContent className="w-[min(700px,calc(100vw-2rem))] max-h-[92vh] overflow-y-auto">
           <DialogHeader>
-            <DialogTitle>{editingProfile ? "Редактировать группу" : "Новая группа"}</DialogTitle>
+            <DialogTitle>{isReadOnly ? "Просмотр группы" : (editingProfile ? "Редактировать группу" : "Новая группа")}</DialogTitle>
           </DialogHeader>
 
           <div className="flex flex-wrap gap-4">
             <div className="w-[250px]">
               <label className="text-sm font-medium">Название</label>
-              <Input value={profileForm.name} onChange={(event) => setProfileForm((current) => ({ ...current, name: event.target.value }))} />
+              <Input value={profileForm.name} onChange={(event) => setProfileForm((current) => ({ ...current, name: event.target.value }))} disabled={isReadOnly} />
             </div>
             <div className="w-[250px]">
               <label className="text-sm font-medium">Код</label>
-              <Input value={profileForm.code} onChange={(event) => setProfileForm((current) => ({ ...current, code: event.target.value }))} />
+              <Input value={profileForm.code} onChange={(event) => setProfileForm((current) => ({ ...current, code: event.target.value }))} disabled={isReadOnly} />
             </div>
             <div className="w-[100px]">
               <label className="text-sm font-medium">Приоритет</label>
-              <Input type="number" value={profileForm.priority} onChange={(event) => setProfileForm((current) => ({ ...current, priority: Number(event.target.value) }))} />
+              <Input type="number" value={profileForm.priority} onChange={(event) => setProfileForm((current) => ({ ...current, priority: Number(event.target.value) }))} disabled={isReadOnly} />
             </div>
           </div>
 
@@ -1560,6 +1594,7 @@ export function RouteSelectionRulesSection({ refreshKey }: Props) {
                     ...current,
                     import_template_id: value === "__none__" ? null : Number(value),
                   }))}
+                  disabled={isReadOnly}
                 >
                   <SelectTrigger>
                     <SelectValue placeholder="Выберите шаблон импорта" />
@@ -1572,9 +1607,11 @@ export function RouteSelectionRulesSection({ refreshKey }: Props) {
                   </SelectContent>
                 </Select>
               </div>
-              <Button type="button" variant="outline" size="sm" onClick={handleSyncPassportFromTemplate}>
-                Применить
-              </Button>
+              {!isReadOnly && (
+                <Button type="button" variant="outline" size="sm" onClick={handleSyncPassportFromTemplate}>
+                  Применить
+                </Button>
+              )}
             </div>
             <span className="text-xs text-muted-foreground">Ручная синхронизация без автозамены при смене шаблона</span>
             <div className={`rounded-md border p-3 text-xs ${passportStatusClassName(profileFormPassportStatus.level)}`}>
@@ -1585,7 +1622,7 @@ export function RouteSelectionRulesSection({ refreshKey }: Props) {
 
           <DialogFooter className="flex items-center justify-between w-full sm:justify-between">
             <div>
-              {editingProfile && (
+              {editingProfile && !isReadOnly && (
                 <Button variant="destructive" onClick={() => void handleProfileDelete(editingProfile)} disabled={deletingProfileId === editingProfile.id || savingProfile}>
                   <Trash2 className="mr-1 h-4 w-4" />
                   Удалить
@@ -1593,14 +1630,16 @@ export function RouteSelectionRulesSection({ refreshKey }: Props) {
               )}
             </div>
             <div className="flex items-center gap-2">
-              <Checkbox checked={profileForm.is_active} onCheckedChange={(checked) => setProfileForm((current) => ({ ...current, is_active: checked === true }))} />
+              <Checkbox checked={profileForm.is_active} onCheckedChange={(checked) => setProfileForm((current) => ({ ...current, is_active: checked === true }))} disabled={isReadOnly} />
               <label className="text-sm">Активен</label>
               <Button variant="outline" onClick={() => { setProfileDialogOpen(false); }} disabled={savingProfile}>
-                Отмена
+                {isReadOnly ? "Закрыть" : "Отмена"}
               </Button>
-              <Button onClick={() => void handleProfileSave()} disabled={savingProfile}>
-                {savingProfile ? "Сохранение..." : "Сохранить"}
-              </Button>
+              {!isReadOnly && (
+                <Button onClick={() => void handleProfileSave()} disabled={savingProfile}>
+                  {savingProfile ? "Сохранение..." : "Сохранить"}
+                </Button>
+              )}
             </div>
           </DialogFooter>
         </DialogContent>

@@ -13,6 +13,7 @@ import { CatalogForm, type CatalogFormRef, type FieldChange } from "../component
 import { CatalogCard } from "../components/CatalogCard";
 import { getPhotoUrl } from "../components/getPhotoUrl";
 import type { Product, CreateProductInput, PatchProductInput, CatalogPreview } from "@/shared/api/products";
+import { usePermission } from "@/features/auth/hooks/usePermission";
 
 type ViewMode = "grid" | "table";
 type DialogMode = "create" | "edit";
@@ -30,6 +31,8 @@ function getProductLengths(product: Product): number[] {
 }
 
 export function RawMaterialsPage() {
+  const { canEditReferences } = usePermission();
+  const isReadOnly = !canEditReferences;
   const [items, setItems] = useState<Product[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -322,16 +325,20 @@ export function RawMaterialsPage() {
           <Button variant="outline" size="sm" onClick={() => setViewMode(viewMode === "grid" ? "table" : "grid")}>
             {viewMode === "grid" ? <List className="h-4 w-4" /> : <Grid className="h-4 w-4" />}
           </Button>
-          <label>
-            <input type="file" accept=".zip" className="hidden" onChange={handleImportZip} />
-            <Button variant="outline" size="sm" asChild>
-              <span><FileUp className="h-4 w-4 mr-1" />Импорт ZIP</span>
-            </Button>
-          </label>
-          <Button size="sm" onClick={openCreate}>
-            <Plus className="h-4 w-4 mr-1" />
-            Добавить
-          </Button>
+          {!isReadOnly && (
+            <>
+              <label>
+                <input type="file" accept=".zip" className="hidden" onChange={handleImportZip} disabled={isReadOnly} />
+                <Button variant="outline" size="sm" asChild>
+                  <span><FileUp className="h-4 w-4 mr-1" />Импорт ZIP</span>
+                </Button>
+              </label>
+              <Button size="sm" onClick={openCreate}>
+                <Plus className="h-4 w-4 mr-1" />
+                Добавить
+              </Button>
+            </>
+          )}
         </div>
       </div>
 
@@ -489,6 +496,7 @@ export function RawMaterialsPage() {
             mode={dialogMode}
             onSave={handleSave}
             onDelete={() => setDeleteDialogOpen(true)}
+            readOnly={isReadOnly}
             onCancel={() => {
               if (formDirty) {
                 openConfirm(() => {

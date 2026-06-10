@@ -35,6 +35,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Badge } from "@/shared/ui/Badge"
 import { toast } from "@/shared/ui/use-toast"
 import { getErrorMessage } from "@/shared/api/client"
+import { usePermission } from "@/features/auth/hooks/usePermission";
 
 // Reverse mapping: header name (normalized) → system key
 const HEADER_KEY_BY_NAME: Record<string, string> = {
@@ -95,6 +96,8 @@ function transliterateToCode(name: string): string {
 }
 
 export function ImportTemplatesPage() {
+  const { canEditReferences } = usePermission()
+  const isReadOnly = !canEditReferences
   const queryClient = useQueryClient()
   const { data: templates, isLoading } = useQuery({
     queryKey: queryKeys.importTemplates.all(),
@@ -158,10 +161,12 @@ export function ImportTemplatesPage() {
     <section className="space-y-4">
       <div className="flex items-center justify-between">
         <h2 className="text-l font-semibold">Шаблоны импорта</h2>
-        <Button size="sm" onClick={handleCreate}>
-          <Plus className="h-4 w-4 mr-1" />
-          Создать шаблон
-        </Button>
+        {!isReadOnly && (
+          <Button size="sm" onClick={handleCreate}>
+            <Plus className="h-4 w-4 mr-1" />
+            Создать шаблон
+          </Button>
+        )}
       </div>
 
       {isLoading && <p className="text-sm text-muted-foreground">Загрузка...</p>}
@@ -218,6 +223,7 @@ export function ImportTemplatesPage() {
           setPendingCreateFile(null)
           queryClient.invalidateQueries({ queryKey: queryKeys.importTemplates.all() })
         }}
+        readOnly={isReadOnly}
       />
 
       <AlertDialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
@@ -245,7 +251,9 @@ function TemplateDialog(props: {
   pendingCreateFile: File | null
   onFileProcessed: () => void
   onSuccess: () => void
+  readOnly?: boolean
 }) {
+  const isReadOnly = props.readOnly ?? false
   const [name, setName] = useState(props.template?.name ?? "")
   const [code, setCode] = useState(props.template?.code ?? "")
   const [buttonLabel, setButtonLabel] = useState(props.template?.button_label ?? "")
@@ -466,11 +474,13 @@ function TemplateDialog(props: {
     <Dialog open={props.open} onOpenChange={props.onOpenChange}>
       <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
         <DialogHeader>
-          <DialogTitle>{isEdit ? "Редактировать группу" : "Новый шаблон импорта"}</DialogTitle>
+          <DialogTitle>
+            {isReadOnly ? "Просмотр шаблона импорта" : (isEdit ? "Редактировать шаблон импорта" : "Новый шаблон импорта")}
+          </DialogTitle>
           <DialogDescription>
-            {isEdit
-              ? "Измените параметры шаблона импорта"
-              : "Создайте шаблон импорта с привязкой к профилю правил"}
+            {isReadOnly
+              ? "Просмотр параметров шаблона импорта"
+              : (isEdit ? "Измените параметры шаблона импорта" : "Создайте шаблон импорта с привязкой к профилю правил")}
           </DialogDescription>
         </DialogHeader>
 
@@ -494,11 +504,11 @@ function TemplateDialog(props: {
         <div className="flex flex-wrap gap-4">
           <div className="w-[250px]">
             <label className="text-sm font-medium">Название *</label>
-            <Input value={name} onChange={e => handleNameChange(e.target.value)} placeholder="Название шаблона" />
+            <Input value={name} onChange={e => handleNameChange(e.target.value)} placeholder="Название шаблона" disabled={isReadOnly} />
           </div>
           <div className="w-[250px]">
             <label className="text-sm font-medium">Код</label>
-            <Input value={code} onChange={e => setCode(e.target.value)} placeholder="Код шаблона" />
+            <Input value={code} onChange={e => setCode(e.target.value)} placeholder="Код шаблона" disabled={isReadOnly} />
           </div>
         </div>
 
@@ -514,22 +524,24 @@ function TemplateDialog(props: {
               className="hidden"
               onChange={handlePassportFileChange}
             />
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => fileInputRef.current?.click()}
-              disabled={loadingPassport}
-            >
-              <Upload className="h-3.5 w-3.5 mr-1" />
-              {loadingPassport ? "Загрузка..." : passportFile ? "Загрузить другой файл" : "Загрузить Excel"}
-            </Button>
+            {!isReadOnly && (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => fileInputRef.current?.click()}
+                disabled={loadingPassport}
+              >
+                <Upload className="h-3.5 w-3.5 mr-1" />
+                {loadingPassport ? "Загрузка..." : passportFile ? "Загрузить другой файл" : "Загрузить Excel"}
+              </Button>
+            )}
             {passportFile && (
               <span className="text-xs text-muted-foreground truncate max-w-[200px]">
                 {passportFile.name}
               </span>
             )}
             {sheetNames.length > 1 && (
-              <Select value={String(sheetIndex)} onValueChange={(v) => handleSheetChange(Number(v))}>
+              <Select value={String(sheetIndex)} onValueChange={(v) => handleSheetChange(Number(v))} disabled={isReadOnly}>
                 <SelectTrigger className="h-7 w-[180px]">
                   <SelectValue />
                 </SelectTrigger>
@@ -551,13 +563,13 @@ function TemplateDialog(props: {
                   <th className="text-left py-2 px-1 text-xs font-medium">Колонка</th>
                   <th className="text-left py-2 px-1 text-xs font-medium">Заголовок</th>
                   <th className="text-left py-2 px-1 text-xs font-medium">Системный ключ</th>
-                  <th className="py-2 px-1"></th>
+                  {!isReadOnly && <th className="py-2 px-1"></th>}
                 </tr>
               </thead>
               <tbody className="pt-1">
                 {passportColumns.length === 0 ? (
                   <tr>
-                    <td colSpan={5} className="py-3 text-center text-muted-foreground text-xs">
+                    <td colSpan={isReadOnly ? 4 : 5} className="py-3 text-center text-muted-foreground text-xs">
                       Паспорт колонок пуст.
                     </td>
                   </tr>
@@ -571,6 +583,7 @@ function TemplateDialog(props: {
                           onChange={e => updatePassportColumn(idx, "column", e.target.value)}
                           placeholder="A"
                           className="h-5 text-xs py-0 px-1"
+                          disabled={isReadOnly}
                         />
                       </td>
                       <td className="py-0.5 px-1">
@@ -579,6 +592,7 @@ function TemplateDialog(props: {
                           onChange={e => updatePassportColumn(idx, "header", e.target.value)}
                           placeholder="Заголовок"
                           className="h-5 text-xs py-0 px-1"
+                          disabled={isReadOnly}
                         />
                       </td>
                       <td className="py-0.5 px-1">
@@ -587,18 +601,21 @@ function TemplateDialog(props: {
                           onChange={e => updatePassportColumn(idx, "key", e.target.value)}
                           placeholder="Системный ключ"
                           className="h-5 text-xs py-0 px-1"
+                          disabled={isReadOnly}
                         />
                       </td>
-                      <td className="py-0.5 px-1 w-6">
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          className="h-5 w-5 p-0 text-red-600"
-                          onClick={() => removePassportColumn(idx)}
-                        >
-                          <Trash2 className="h-3 w-3" />
-                        </Button>
-                      </td>
+                      {!isReadOnly && (
+                        <td className="py-0.5 px-1 w-6">
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="h-5 w-5 p-0 text-red-600"
+                            onClick={() => removePassportColumn(idx)}
+                          >
+                            <Trash2 className="h-3 w-3" />
+                          </Button>
+                        </td>
+                      )}
                     </tr>
                   ))
                 )}
@@ -607,17 +624,19 @@ function TemplateDialog(props: {
             </div>
             </div>
           </div>
-          <div className="mt-2 flex gap-2">
-            <Button variant="outline" size="sm" onClick={addPassportColumn}>
-              <Plus className="h-3.5 w-3.5 mr-1" />
-              Добавить
-            </Button>
-          </div>
+          {!isReadOnly && (
+            <div className="mt-2 flex gap-2">
+              <Button variant="outline" size="sm" onClick={addPassportColumn}>
+                <Plus className="h-3.5 w-3.5 mr-1" />
+                Добавить
+              </Button>
+            </div>
+          )}
         </div>
 
         <DialogFooter className="flex items-center justify-between w-full sm:justify-between">
           <div>
-            {isEdit && (
+            {isEdit && !isReadOnly && (
               <Button variant="destructive" onClick={() => void handleDeleteFromDialog()} disabled={saving}>
                 <Trash2 className="mr-1 h-4 w-4" />
                 Удалить
@@ -631,14 +650,17 @@ function TemplateDialog(props: {
               checked={isActive}
               onChange={e => setIsActive(e.target.checked)}
               className="h-4 w-4"
+              disabled={isReadOnly}
             />
             <label htmlFor="tpl-active" className="text-sm">Активен</label>
             <Button variant="outline" onClick={() => props.onOpenChange(false)} disabled={saving}>
-              Отмена
+              {isReadOnly ? "Закрыть" : "Отмена"}
             </Button>
-            <Button onClick={handleSave} disabled={saving}>
-              {saving ? "Сохранение..." : "Сохранить"}
-            </Button>
+            {!isReadOnly && (
+              <Button onClick={handleSave} disabled={saving}>
+                {saving ? "Сохранение..." : "Сохранить"}
+              </Button>
+            )}
           </div>
         </DialogFooter>
       </DialogContent>

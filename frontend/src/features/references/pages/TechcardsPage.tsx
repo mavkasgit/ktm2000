@@ -7,6 +7,8 @@ import { AlertDialog, AlertDialogContent, AlertDialogHeader, AlertDialogTitle, A
 import { ProductSearchMulti } from "../components/ProductSearchMulti";
 import { toast } from "@/shared/ui/use-toast";
 import { getErrorMessage } from "@/shared/api/client";
+import { usePermission } from "@/features/auth/hooks/usePermission";
+import { cn } from "@/shared/utils/cn";
 
 type ProcessingType = "standart_processing" | "paired_processing";
 
@@ -15,6 +17,8 @@ const Button = ui.Button ?? "button";
 const Input = ui.Input ?? "input";
 
 export function TechcardsPage() {
+  const { canEditReferences } = usePermission();
+  const isReadOnly = !canEditReferences;
   const api = API as Record<string, any>;
   const [rawItems, setRawItems] = useState<any[]>([]);
   const [techcards, setTechcards] = useState<any[]>([]);
@@ -281,14 +285,18 @@ export function TechcardsPage() {
       <div className="flex items-center justify-between">
         <h2 className="text-lg font-semibold">Техкарты</h2>
         <div className="flex gap-2">
-          <Button size="sm" variant="outline" onClick={() => setBulkDialogOpen(true)}>
-            <Plus className="h-4 w-4 mr-1" />
-            Массовое создание
-          </Button>
-          <Button size="sm" variant="outline" onClick={() => setPairedDialogOpen(true)}>
-            <Plus className="h-4 w-4 mr-1" />
-            Создать парную
-          </Button>
+          {!isReadOnly && (
+            <>
+              <Button size="sm" variant="outline" onClick={() => setBulkDialogOpen(true)}>
+                <Plus className="h-4 w-4 mr-1" />
+                Массовое создание
+              </Button>
+              <Button size="sm" variant="outline" onClick={() => setPairedDialogOpen(true)}>
+                <Plus className="h-4 w-4 mr-1" />
+                Создать парную
+              </Button>
+            </>
+          )}
           <Button size="sm" variant="outline" onClick={() => setShowOneToOne(!showOneToOne)}>
             {showOneToOne ? "Скрыть стандартные" : "Показать стандартные"}
           </Button>
@@ -304,7 +312,7 @@ export function TechcardsPage() {
               <tr style={{ background: "#f9fafb", position: "sticky", top: 0 }}>
                 <th style={{ textAlign: "left", padding: 8 }}>Парный артикул</th>
                 <th style={{ textAlign: "left", padding: 8 }}>Кол-во</th>
-                <th style={{ textAlign: "left", padding: 8, width: 80 }}></th>
+                {!isReadOnly && <th style={{ textAlign: "left", padding: 8, width: 80 }}></th>}
               </tr>
             </thead>
             <tbody>
@@ -316,16 +324,18 @@ export function TechcardsPage() {
                   <tr key={card.id} className="cursor-pointer hover:bg-muted/50" onClick={() => openView(card.id)}>
                     <td style={{ padding: 8, fontWeight: 600, borderTop: "1px solid #f3f4f6" }}>{cardSkuA} + {cardSkuB}</td>
                     <td style={{ padding: 8, borderTop: "1px solid #f3f4f6" }}>{card.quantity_total ?? "—"} шт. ({qtyA}/{qtyB} на подвес)</td>
-                    <td style={{ padding: 8, borderTop: "1px solid #f3f4f6" }}>
-                      <button type="button" onClick={(e) => { e.stopPropagation(); confirmDelete({ type: "techcard", id: card.id }); }} className="text-destructive hover:text-destructive/80">
-                        <Trash2 className="h-4 w-4" />
-                      </button>
-                    </td>
+                    {!isReadOnly && (
+                      <td style={{ padding: 8, borderTop: "1px solid #f3f4f6" }}>
+                        <button type="button" onClick={(e) => { e.stopPropagation(); confirmDelete({ type: "techcard", id: card.id }); }} className="text-destructive hover:text-destructive/80">
+                          <Trash2 className="h-4 w-4" />
+                        </button>
+                      </td>
+                    )}
                   </tr>
                 );
               })}
               {pairedTechcards.length === 0 && (
-                <tr><td colSpan={3} style={{ padding: 16, textAlign: "center", color: "#9ca3af" }}>Нет парных техкарт</td></tr>
+                <tr><td colSpan={isReadOnly ? 2 : 3} style={{ padding: 16, textAlign: "center", color: "#9ca3af" }}>Нет парных техкарт</td></tr>
               )}
             </tbody>
           </table>
@@ -342,26 +352,28 @@ export function TechcardsPage() {
                 <tr style={{ background: "#f9fafb", position: "sticky", top: 0 }}>
                   <th style={{ textAlign: "left", padding: 8 }}>Артикул</th>
                   <th style={{ textAlign: "left", padding: 8 }}>Кол-во</th>
-                  <th style={{ textAlign: "left", padding: 8, width: 80 }}></th>
+                  {!isReadOnly && <th style={{ textAlign: "left", padding: 8, width: 80 }}></th>}
                 </tr>
               </thead>
               <tbody>
                 {oneToOneTechcards.map((card: any) => {
                   const product = rawItems.find((p) => Number(p.id) === card.product_id);
                   return (
-                    <tr key={card.id} className="cursor-pointer hover:bg-muted/50" onClick={() => openView(card.id)}>
+                     <tr key={card.id} className="cursor-pointer hover:bg-muted/50" onClick={() => openView(card.id)}>
                       <td style={{ padding: 8, fontWeight: 600, borderTop: "1px solid #f3f4f6" }}>{product?.sku ?? card.product_id}</td>
                       <td style={{ padding: 8, borderTop: "1px solid #f3f4f6" }}>{card.quantity_total ?? "—"}</td>
-                      <td style={{ padding: 8, borderTop: "1px solid #f3f4f6" }}>
-                        <button type="button" onClick={(e) => { e.stopPropagation(); confirmDelete({ type: "techcard", id: card.id }); }} className="text-destructive hover:text-destructive/80">
-                          <Trash2 className="h-4 w-4" />
-                        </button>
-                      </td>
+                      {!isReadOnly && (
+                        <td style={{ padding: 8, borderTop: "1px solid #f3f4f6" }}>
+                          <button type="button" onClick={(e) => { e.stopPropagation(); confirmDelete({ type: "techcard", id: card.id }); }} className="text-destructive hover:text-destructive/80">
+                            <Trash2 className="h-4 w-4" />
+                          </button>
+                        </td>
+                      )}
                     </tr>
                   );
                 })}
                 {oneToOneTechcards.length === 0 && (
-                  <tr><td colSpan={3} style={{ padding: 16, textAlign: "center", color: "#9ca3af" }}>Нет стандартных техкарт</td></tr>
+                  <tr><td colSpan={isReadOnly ? 2 : 3} style={{ padding: 16, textAlign: "center", color: "#9ca3af" }}>Нет стандартных техкарт</td></tr>
                 )}
               </tbody>
             </table>
@@ -517,18 +529,18 @@ export function TechcardsPage() {
                       <div className="flex flex-wrap gap-3">
                         <div>
                           <label className="text-sm font-medium">Общее кол-во</label>
-                          <Input className="w-48" type="number" min={1} value={editQuantityTotal} onChange={(e: any) => setEditQuantityTotal(Number(e.target.value || 1))} />
+                          <Input className="w-48" type="number" min={1} value={editQuantityTotal} onChange={(e: any) => setEditQuantityTotal(Number(e.target.value || 1))} disabled={isReadOnly} />
                         </div>
                         <>
                           {editDifferentQuantities ? (
                             <>
                               <div>
                                 <label className="text-sm font-medium">Кол-во {skuA} на подвес</label>
-                                <Input className="w-48" type="number" min={1} value={editQuantityAPerItem} onChange={(e: any) => setEditQuantityAPerItem(Number(e.target.value || 1))} />
+                                <Input className="w-48" type="number" min={1} value={editQuantityAPerItem} onChange={(e: any) => setEditQuantityAPerItem(Number(e.target.value || 1))} disabled={isReadOnly} />
                               </div>
                               <div>
                                 <label className="text-sm font-medium">Кол-во {skuB} на подвес</label>
-                                <Input className="w-48" type="number" min={1} value={editQuantityBPerItem} onChange={(e: any) => setEditQuantityBPerItem(Number(e.target.value || 1))} />
+                                <Input className="w-48" type="number" min={1} value={editQuantityBPerItem} onChange={(e: any) => setEditQuantityBPerItem(Number(e.target.value || 1))} disabled={isReadOnly} />
                               </div>
                             </>
                           ) : (
@@ -538,12 +550,12 @@ export function TechcardsPage() {
                                 const v = Number(e.target.value || 1);
                                 setEditQuantityAPerItem(v);
                                 setEditQuantityBPerItem(v);
-                              }} />
+                              }} disabled={isReadOnly} />
                             </div>
                           )}
                           <div className="w-full flex items-center">
-                            <label className="flex items-center gap-2 text-sm cursor-pointer">
-                              <input type="checkbox" checked={editDifferentQuantities} onChange={(e) => setEditDifferentQuantities(e.target.checked)} />
+                            <label className={cn("flex items-center gap-2 text-sm", isReadOnly ? "cursor-not-allowed opacity-50" : "cursor-pointer")}>
+                              <input type="checkbox" checked={editDifferentQuantities} onChange={(e) => setEditDifferentQuantities(e.target.checked)} disabled={isReadOnly} />
                               Разное кол-во
                             </label>
                           </div>
@@ -567,21 +579,25 @@ export function TechcardsPage() {
                   </div>
                   <div>
                     <label className="text-sm font-medium">Общее кол-во</label>
-                    <Input className="w-48" type="number" min={1} value={editQuantityTotal} onChange={(e: any) => setEditQuantityTotal(Number(e.target.value || 1))} />
+                    <Input className="w-48" type="number" min={1} value={editQuantityTotal} onChange={(e: any) => setEditQuantityTotal(Number(e.target.value || 1))} disabled={isReadOnly} />
                   </div>
                 </div>
               )}
 
               <DialogFooter className="sm:justify-between">
                 <div className="flex gap-2">
-                  <Button variant="destructive" onClick={() => confirmDelete({ type: "techcard", id: viewDetail.id })}>
-                    <Trash2 className="h-4 w-4 mr-1" />
-                    Удалить
-                  </Button>
+                  {!isReadOnly && (
+                    <Button variant="destructive" onClick={() => confirmDelete({ type: "techcard", id: viewDetail.id })}>
+                      <Trash2 className="h-4 w-4 mr-1" />
+                      Удалить
+                    </Button>
+                  )}
                 </div>
                 <div className="flex gap-2">
-                  <Button variant="outline" onClick={() => { setViewTechcardId(null); setViewDetail(null); }}>Отмена</Button>
-                  <Button onClick={saveTechcard}>Сохранить</Button>
+                  <Button variant="outline" onClick={() => { setViewTechcardId(null); setViewDetail(null); }}>
+                    {isReadOnly ? "Закрыть" : "Отмена"}
+                  </Button>
+                  {!isReadOnly && <Button onClick={saveTechcard}>Сохранить</Button>}
                 </div>
               </DialogFooter>
             </div>

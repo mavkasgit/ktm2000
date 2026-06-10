@@ -11,6 +11,7 @@ export function ProductSearchMulti({
   excludeValues,
   pairedOnly,
   placeholder = "Поиск по артикулу",
+  disabled = false,
 }: {
   values: string[];
   onChange: (values: string[]) => void;
@@ -19,6 +20,7 @@ export function ProductSearchMulti({
   excludeValues?: string[];
   pairedOnly?: boolean;
   placeholder?: string;
+  disabled?: boolean;
 }) {
   const [search, setSearch] = useState("");
   const [suggestions, setSuggestions] = useState<AliasSuggestion[]>([]);
@@ -93,59 +95,63 @@ export function ProductSearchMulti({
               title={onAliasClick ? "Перейти к профилю" : undefined}
             >
               {val}
-              <button
-                type="button"
-                className="ml-0.5 hover:text-destructive cursor-pointer opacity-60 hover:opacity-100 transition-opacity"
-                onClick={(e) => { e.stopPropagation(); remove(i); }}
-              >
-                <X className="w-3 h-3" />
-              </button>
+              {!disabled && (
+                <button
+                  type="button"
+                  className="ml-0.5 hover:text-destructive cursor-pointer opacity-60 hover:opacity-100 transition-opacity"
+                  onClick={(e) => { e.stopPropagation(); remove(i); }}
+                >
+                  <X className="w-3 h-3" />
+                </button>
+              )}
             </span>
           ))}
         </div>
       )}
-      <div className="relative">
-        <input
-          className="w-48 h-10 rounded-md border border-input bg-background px-3 text-sm outline-none placeholder:text-muted-foreground"
-          placeholder={placeholder}
-          value={search}
-          onChange={(e) => handleSearchChange(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Escape") {
-              setDropdownOpen(false);
-              setSearch("");
-            }
-          }}
-          onFocus={() => {
-            doSearch(search.trim());
-            setDropdownOpen(true);
-          }}
-        />
+      {!disabled && (
+        <div className="relative">
+          <input
+            className="w-48 h-10 rounded-md border border-input bg-background px-3 text-sm outline-none placeholder:text-muted-foreground"
+            placeholder={placeholder}
+            value={search}
+            onChange={(e) => handleSearchChange(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Escape") {
+                setDropdownOpen(false);
+                setSearch("");
+              }
+            }}
+            onFocus={() => {
+              doSearch(search.trim());
+              setDropdownOpen(true);
+            }}
+          />
 
-        {dropdownOpen && (
-          <div className="absolute z-50 w-48 left-0 mt-1 bg-popover border rounded-md shadow-lg max-h-48 overflow-y-auto">
-            {loading && (
-              <div className="px-3 py-1 text-sm text-muted-foreground">Поиск...</div>
-            )}
-            {!loading && suggestions.length === 0 && search.trim() && (
-              <div className="px-3 py-1 text-sm text-muted-foreground">Ничего не найдено</div>
-            )}
-            {!loading && suggestions.length === 0 && !search.trim() && (
-              <div className="px-3 py-1 text-sm text-muted-foreground">Нет доступных артикулов</div>
-            )}
-            {!loading && suggestions.map((s) => (
-              <button
-                key={s.id}
-                type="button"
-                className="w-full text-left px-3 py-1 text-sm hover:bg-muted cursor-pointer"
-                onClick={() => addFromSuggestion(s)}
-              >
-                <span className="font-medium">{s.sku}</span>
-              </button>
-            ))}
-          </div>
-        )}
-      </div>
+          {dropdownOpen && (
+            <div className="absolute z-50 w-48 left-0 mt-1 bg-popover border rounded-md shadow-lg max-h-48 overflow-y-auto">
+              {loading && (
+                <div className="px-3 py-1 text-sm text-muted-foreground">Поиск...</div>
+              )}
+              {!loading && suggestions.length === 0 && search.trim() && (
+                <div className="px-3 py-1 text-sm text-muted-foreground">Ничего не найдено</div>
+              )}
+              {!loading && suggestions.length === 0 && !search.trim() && (
+                <div className="px-3 py-1 text-sm text-muted-foreground">Нет доступных артикулов</div>
+              )}
+              {!loading && suggestions.map((s) => (
+                <button
+                  key={s.id}
+                  type="button"
+                  className="w-full text-left px-3 py-1 text-sm hover:bg-muted cursor-pointer"
+                  onClick={() => addFromSuggestion(s)}
+                >
+                  <span className="font-medium">{s.sku}</span>
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
