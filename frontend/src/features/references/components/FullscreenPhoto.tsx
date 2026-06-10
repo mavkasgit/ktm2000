@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
-import { Plus, X, Maximize2 } from "lucide-react";
+import { Plus, Minus, X, Maximize2 } from "lucide-react";
 
 export function FullscreenPhoto({
   src,
@@ -121,14 +121,18 @@ export function FullscreenPhoto({
       onContextMenu={handleContextMenu}
       onDoubleClick={handleDoubleClick}
     >
-      <div className="absolute top-4 right-4 flex gap-2 z-10">
+      <div
+        className="absolute top-4 right-4 flex gap-2 z-10"
+        onMouseDown={(e) => e.stopPropagation()}
+        onDoubleClick={(e) => e.stopPropagation()}
+      >
         <button
           onClick={() => {
             const newScale = Math.min(10, scale * 1.5);
             const rect = containerRef.current?.getBoundingClientRect();
             if (rect) zoomToPoint(rect.left + rect.width / 2, rect.top + rect.height / 2, newScale);
           }}
-          className="p-2 bg-black/50 hover:bg-black/70 text-white rounded-full"
+          className="p-2.5 bg-zinc-900/90 hover:bg-zinc-800 text-zinc-200 hover:text-white rounded-full border border-zinc-700/60 shadow-lg backdrop-blur-sm transition-all active:scale-95 duration-150"
           type="button"
           title="Приблизить (+)"
         >
@@ -140,15 +144,15 @@ export function FullscreenPhoto({
             const rect = containerRef.current?.getBoundingClientRect();
             if (rect) zoomToPoint(rect.left + rect.width / 2, rect.top + rect.height / 2, newScale);
           }}
-          className="p-2 bg-black/50 hover:bg-black/70 text-white rounded-full"
+          className="p-2.5 bg-zinc-900/90 hover:bg-zinc-800 text-zinc-200 hover:text-white rounded-full border border-zinc-700/60 shadow-lg backdrop-blur-sm transition-all active:scale-95 duration-150"
           type="button"
           title="Отдалить (-)"
         >
-          <X className="w-5 h-5" />
+          <Minus className="w-5 h-5" />
         </button>
         <button
           onClick={handleDoubleClick}
-          className="p-2 bg-black/50 hover:bg-black/70 text-white rounded-full"
+          className="p-2.5 bg-zinc-900/90 hover:bg-zinc-800 text-zinc-200 hover:text-white rounded-full border border-zinc-700/60 shadow-lg backdrop-blur-sm transition-all active:scale-95 duration-150"
           type="button"
           title="Сбросить (1:1)"
         >
@@ -159,7 +163,7 @@ export function FullscreenPhoto({
             e.stopPropagation();
             document.exitFullscreen().catch(() => {});
           }}
-          className="p-2 bg-black/50 hover:bg-black/70 text-white rounded-full"
+          className="p-2.5 bg-zinc-900/90 hover:bg-zinc-800 text-zinc-200 hover:text-white rounded-full border border-zinc-700/60 shadow-lg backdrop-blur-sm transition-all active:scale-95 duration-150"
           type="button"
           title="Закрыть"
         >

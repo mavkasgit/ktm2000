@@ -100,3 +100,6 @@ storage/
 # Git worktrees
 .worktrees/
 worktrees/
+
+# CodeGraph
+.codegraph/
