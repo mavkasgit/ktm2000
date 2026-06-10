@@ -14,6 +14,7 @@ class Settings(BaseSettings):
     SECRET_KEY: str = "ktm2000-dev-secret-change-me"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 1440
     ALGORITHM: str = "HS256"
+    DEV_BYPASS_AUTH: bool = False
 
     DB_POOL_SIZE: int = 20
     DB_MAX_OVERFLOW: int = 10

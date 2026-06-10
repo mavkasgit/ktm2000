@@ -7,6 +7,7 @@ from sqlalchemy import text
 
 from app.api.health import router as health_router
 from app.api.routes.auth import router as auth_router
+from app.api.routes.otp import router as otp_router
 from app.api.routes.products import router as products_router
 from app.api.routes.sections import router as sections_router
 from app.api.routes.techcards import router as techcards_router
@@ -27,6 +28,7 @@ from app.api.routes.demo import router as demo_router
 from app.api.backups import router as backups_router
 from app.transfers.api import router as transfers_router
 from app.api.routes.audit_logs import router as audit_logs_router
+from app.api.routes.users import router as users_router
 from app.core.config import settings
 from app.core.database import async_session
 
@@ -51,6 +53,7 @@ app.mount("/static", StaticFiles(directory=str(storage_dir)), name="static")
 
 app.include_router(health_router, prefix="/api")
 app.include_router(auth_router, prefix="/api")
+app.include_router(otp_router, prefix="/api")
 app.include_router(products_router, prefix="/api")
 app.include_router(sections_router, prefix="/api")
 app.include_router(techcards_router, prefix="/api")
@@ -71,6 +74,7 @@ app.include_router(demo_router, prefix="/api")
 app.include_router(backups_router, prefix="/api")
 app.include_router(transfers_router, prefix="/api")
 app.include_router(audit_logs_router, prefix="/api")
+app.include_router(users_router, prefix="/api")
 
 
 @app.get("/api/health")

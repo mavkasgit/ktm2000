@@ -11,11 +11,18 @@ import { SpgSnapshotPage } from "../features/spg/pages/SpgSnapshotPage"
 import { TransfersPage } from "../features/transfers/pages/TransfersPage"
 import { SettingsPage } from "../features/settings/SettingsPage"
 import { BackupsPage } from "../features/settings/SettingsBackupsPage"
+import { LoginPage } from "../features/auth/pages/LoginPage"
+import { ProtectedRoute } from "../features/auth/components/ProtectedRoute"
+import { UsersPage } from "../features/admin"
 
 export const router = createBrowserRouter([
   {
+    path: "/login",
+    element: <LoginPage />,
+  },
+  {
     path: "/",
-    element: <Layout />,
+    element: <ProtectedRoute><Layout /></ProtectedRoute>,
     children: [
       { index: true, element: <DashboardPage /> },
       {
@@ -47,7 +54,12 @@ export const router = createBrowserRouter([
         path: "settings/backups",
         element: <BackupsPage />,
       },
+      {
+        path: "settings/users",
+        element: <ProtectedRoute allowedRoles={["admin"]}><UsersPage /></ProtectedRoute>,
+      },
       { path: "dev", element: <DevPage /> },
     ],
   },
 ])
+

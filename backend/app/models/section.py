@@ -26,7 +26,8 @@ class Section(Base):
         DateTime(timezone=True), nullable=False, server_default=text("now()")
     )
 
-    users = relationship("User", back_populates="section")
+    legacy_users = relationship("User", back_populates="section")
+    users = relationship("User", secondary="user_sections", back_populates="sections", lazy="selectin")
     operations = relationship("SectionOperation", back_populates="section", cascade="all, delete-orphan", lazy="selectin")
     spg_links = relationship("StorageProductionGroup", secondary="spg_sections", back_populates="sections", lazy="selectin")
 

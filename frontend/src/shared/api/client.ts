@@ -16,6 +16,32 @@ export const apiClient = axios.create({
   timeout: 30_000,
 });
 
+const TOKEN_KEY = "ktm2000_token";
+
+/** Interceptor: подставляет Authorization-заголовок из localStorage */
+apiClient.interceptors.request.use((config) => {
+  const token = localStorage.getItem(TOKEN_KEY);
+  if (token) {
+    config.headers.Authorization = `Bearer ${token}`;
+  }
+  return config;
+});
+
+/** Interceptor: при 401 очищает токен и перенаправляет на /login */
+apiClient.interceptors.response.use(
+  (response) => response,
+  (error) => {
+    if (
+      error?.response?.status === 401 &&
+      window.location.pathname !== "/login"
+    ) {
+      localStorage.removeItem(TOKEN_KEY);
+      window.location.href = "/login";
+    }
+    return Promise.reject(error);
+  },
+);
+
 export type ApiErrorResponse = {
   detail?: string;
 };

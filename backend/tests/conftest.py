@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 import os
+os.environ.setdefault("DEV_BYPASS_AUTH", "true")
 import re
 import uuid
 
@@ -255,6 +256,7 @@ async def session(engine: AsyncEngine) -> AsyncIterator[AsyncSession]:
             # Seed default system user (id=1) to prevent foreign key errors in audit logs
             from app.models.user import User, UserRole
             system_user = User(
+                username="system",
                 email="system@local",
                 password_hash="",
                 role=UserRole.admin,
@@ -286,6 +288,46 @@ async def client(session: AsyncSession) -> AsyncIterator[AsyncClient]:
 
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        yield ac
+
+    app.dependency_overrides.clear()
+
+
+@pytest_asyncio.fixture
+async def auth_client(session: AsyncSession) -> AsyncIterator[AsyncClient]:
+    """Client with a valid JWT token in Authorization header."""
+    from app.core.security import create_access_token, get_password_hash
+    from app.models.user import User, UserRole
+
+    # Create a test user with hashed password
+    test_user = User(
+        username="testauth",
+        email="testauth@example.com",
+        password_hash=get_password_hash("testpass123"),
+        full_name="Test Auth User",
+        role=UserRole.admin,
+        is_active=True,
+    )
+    session.add(test_user)
+    await session.commit()
+
+    # Generate JWT token
+    token = create_access_token(subject=test_user.username)
+
+    async def override_get_db() -> AsyncIterator[AsyncSession]:
+        try:
+            yield session
+        finally:
+            await session.commit()
+
+    app.dependency_overrides[get_db] = override_get_db
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(
+        transport=transport,
+        base_url="http://test",
+        headers={"Authorization": f"Bearer {token}"},
+    ) as ac:
         yield ac
 
     app.dependency_overrides.clear()

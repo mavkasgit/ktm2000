@@ -1,6 +1,7 @@
 from .base import Base
 from .section import Section
 from .user import User, UserRole
+from .user_login_token import UserLoginToken
 from .product import Product, ProductType, ProductLength, ProcessingFlag, ProductProcessingFlag
 from .techcard import Techcard, TechcardLine
 from .route import ProductionRoute, RouteOperation, RouteRuleProfile, RouteSelectionRule, RouteStage
@@ -111,4 +112,5 @@ __all__ = [
     "StorageProductionGroup",
     "SpgSection",
     "AuditLog",
+    "UserLoginToken",
 ]

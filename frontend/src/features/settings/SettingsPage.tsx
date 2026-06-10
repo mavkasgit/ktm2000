@@ -1,4 +1,4 @@
-import { HardDrive, Database, Trash2, Download, Check, X, Loader2, UserCog } from "lucide-react"
+import { HardDrive, Database, Trash2, Download, Check, X, Loader2, UserCog, Users } from "lucide-react"
 import { useNavigate } from "react-router-dom"
 import { useState } from "react"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
@@ -305,6 +305,21 @@ export function SettingsPage() {
           <Button onClick={handleReseedUser} disabled={reseedingUser} className="w-full">
             {reseedingUser ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : <UserCog className="h-4 w-4 mr-1" />}
             {reseedingUser ? "Восстановление..." : "Восстановить"}
+          </Button>
+        </div>
+
+        <div className="rounded-lg border bg-card p-6 space-y-4">
+          <div className="flex items-center gap-3">
+            <div className="rounded-lg bg-indigo-500/10 p-2">
+              <Users className="h-5 w-5 text-indigo-500" />
+            </div>
+            <div>
+              <h3 className="font-medium">Пользователи</h3>
+              <p className="text-sm text-muted-foreground">Управление учетными записями и ролями</p>
+            </div>
+          </div>
+          <Button onClick={() => navigate("/settings/users")} className="w-full">
+            Открыть
           </Button>
         </div>
       </div>
