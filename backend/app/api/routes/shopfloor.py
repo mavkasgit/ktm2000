@@ -7,14 +7,14 @@ from pydantic import BaseModel, ConfigDict
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import READER_ROLES, WRITER_ROLES, require_role
+from app.api.deps import READER_ROLES, WRITER_ROLES, TRANSFER_WRITER_ROLES, require_role
 from app.api.deps import get_current_user
 from app.core.database import get_db
 from app.models.defect import DefectDecisionType
 from app.models.entity_comment import EntityType
 from app.models.route import SectionOperation
 from app.models.transfer import Transfer
-from app.models.user import User
+from app.models.user import User, UserRole
 from app.models.work_task import WorkTask
 from app.services.shopfloor_service import (
     add_defect_item,
@@ -67,7 +67,9 @@ def _ensure_section_lock(section_id: int, locked_section_id: int | None) -> None
         raise HTTPException(status_code=403, detail=LOCKED_SECTION_ERROR)
 
 
-async def _ensure_task_lock(db: AsyncSession, task_id: int, locked_section_id: int | None) -> None:
+async def _ensure_task_lock(db: AsyncSession, task_id: int, locked_section_id: int | None, current_user: User | None = None) -> None:
+    if current_user is not None and current_user.role == UserRole.transporter:
+        return
     if locked_section_id is None:
         return
     task_section_id = await db.scalar(select(WorkTask.section_id).where(WorkTask.id == task_id))
@@ -75,7 +77,9 @@ async def _ensure_task_lock(db: AsyncSession, task_id: int, locked_section_id: i
         raise HTTPException(status_code=403, detail=LOCKED_SECTION_ERROR)
 
 
-async def _ensure_transfer_target_lock(db: AsyncSession, transfer_id: int, locked_section_id: int | None) -> None:
+async def _ensure_transfer_target_lock(db: AsyncSession, transfer_id: int, locked_section_id: int | None, current_user: User | None = None) -> None:
+    if current_user is not None and current_user.role == UserRole.transporter:
+        return
     if locked_section_id is None:
         return
     transfer_target_section_id = await db.scalar(select(Transfer.to_section_id).where(Transfer.id == transfer_id))
@@ -599,7 +603,7 @@ async def patch_task_operation(
     }
 
 
-@router.post("/transfers", dependencies=[Depends(require_role(list(WRITER_ROLES)))])
+@router.post("/transfers", dependencies=[Depends(require_role(list(TRANSFER_WRITER_ROLES)))])
 async def create_transfer(
     payload: CreateTransferPayload,
     db: AsyncSession = Depends(get_db),
@@ -612,7 +616,7 @@ async def create_transfer(
     ``/api/shopfloor/transfers`` keep working.  New code MUST call
     ``/api/transfers`` directly.
     """
-    await _ensure_task_lock(db, payload.from_task_id, locked_section_id)
+    await _ensure_task_lock(db, payload.from_task_id, locked_section_id, current_user)
     try:
         return await transfer_send(
             db,
@@ -632,7 +636,7 @@ async def create_transfer(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
-@router.post("/transfers/{transfer_id}/accept", dependencies=[Depends(require_role(list(WRITER_ROLES)))])
+@router.post("/transfers/{transfer_id}/accept", dependencies=[Depends(require_role(list(TRANSFER_WRITER_ROLES)))])
 async def accept_transfer(
     transfer_id: int,
     payload: AcceptTransferPayload,
@@ -640,7 +644,7 @@ async def accept_transfer(
     current_user: User = Depends(get_current_user),
     locked_section_id: int | None = Depends(get_single_window_locked_section_id),
 ) -> dict:
-    await _ensure_transfer_target_lock(db, transfer_id, locked_section_id)
+    await _ensure_transfer_target_lock(db, transfer_id, locked_section_id, current_user)
     try:
         return await transfer_receive(
             db,

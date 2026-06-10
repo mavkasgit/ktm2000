@@ -23,11 +23,11 @@ from fastapi import APIRouter, Depends, HTTPException, Header, Query
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import READER_ROLES, WRITER_ROLES, require_role
+from app.api.deps import READER_ROLES, WRITER_ROLES, TRANSFER_WRITER_ROLES, require_role
 from app.api.deps import get_current_user
 from app.core.database import get_db
 from app.models.transfer import Transfer, TransferStatus
-from app.models.user import User
+from app.models.user import User, UserRole
 from app.models.work_task import WorkTask
 
 from app.transfers.queries import (
@@ -61,7 +61,9 @@ def get_single_window_locked_section_id(
     return x_shopfloor_single_section_id
 
 
-async def _ensure_task_lock(db: AsyncSession, task_id: int, locked_section_id: int | None) -> None:
+async def _ensure_task_lock(db: AsyncSession, task_id: int, locked_section_id: int | None, current_user: User) -> None:
+    if current_user.role == UserRole.transporter:
+        return
     if locked_section_id is None:
         return
     task_section_id = await db.scalar(
@@ -72,8 +74,10 @@ async def _ensure_task_lock(db: AsyncSession, task_id: int, locked_section_id: i
 
 
 async def _ensure_transfer_target_lock(
-    db: AsyncSession, transfer_id: int, locked_section_id: int | None
+    db: AsyncSession, transfer_id: int, locked_section_id: int | None, current_user: User
 ) -> None:
+    if current_user.role == UserRole.transporter:
+        return
     if locked_section_id is None:
         return
     transfer_target_section_id = await db.scalar(
@@ -83,7 +87,7 @@ async def _ensure_transfer_target_lock(
         raise HTTPException(status_code=403, detail=LOCKED_SECTION_ERROR)
 
 
-@router.post("", dependencies=[Depends(require_role(list(WRITER_ROLES)))])
+@router.post("", dependencies=[Depends(require_role(list(TRANSFER_WRITER_ROLES)))])
 async def create_transfer(
     payload: CreateTransferPayload,
     db: AsyncSession = Depends(get_db),
@@ -97,7 +101,7 @@ async def create_transfer(
     ``combined_op_group`` at plan-generation time, but no further
     splitting happens at transfer time.
     """
-    await _ensure_task_lock(db, payload.from_task_id, locked_section_id)
+    await _ensure_task_lock(db, payload.from_task_id, locked_section_id, current_user)
     try:
         # 1. Send transfer (status 'sent' and create movements/record)
         send_res = await transfer_send(
@@ -177,7 +181,7 @@ async def incoming_transfers(
     return await get_section_incoming_transfers(db, section_id=section_id)
 
 
-@router.post("/{transfer_id}/accept", dependencies=[Depends(require_role(list(WRITER_ROLES)))])
+@router.post("/{transfer_id}/accept", dependencies=[Depends(require_role(list(TRANSFER_WRITER_ROLES)))])
 async def accept_transfer(
     transfer_id: int,
     payload: AcceptTransferPayload,
@@ -185,7 +189,7 @@ async def accept_transfer(
     current_user: User = Depends(get_current_user),
     locked_section_id: int | None = Depends(get_single_window_locked_section_id),
 ) -> dict:
-    await _ensure_transfer_target_lock(db, transfer_id, locked_section_id)
+    await _ensure_transfer_target_lock(db, transfer_id, locked_section_id, current_user)
     # Compatibility: if already accepted, just return success
     transfer = await db.get(Transfer, transfer_id)
     if transfer is not None and transfer.status == TransferStatus.accepted:
@@ -214,7 +218,7 @@ async def accept_transfer(
 
 @router.post(
     "/{transfer_id}/discrepancies/{discrepancy_id}/resolve-link",
-    dependencies=[Depends(require_role(list(WRITER_ROLES)))],
+    dependencies=[Depends(require_role(list(TRANSFER_WRITER_ROLES)))],
 )
 async def resolve_discrepancy(
     transfer_id: int,
@@ -264,7 +268,7 @@ async def transfer_details(transfer_id: int, db: AsyncSession = Depends(get_db))
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
-@router.put("/{transfer_id}", dependencies=[Depends(require_role(list(WRITER_ROLES)))])
+@router.put("/{transfer_id}", dependencies=[Depends(require_role(list(TRANSFER_WRITER_ROLES)))])
 async def correct_transfer_qty(
     transfer_id: int,
     payload: CorrectTransferPayload,
@@ -283,7 +287,7 @@ async def correct_transfer_qty(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
-@router.post("/{transfer_id}/cancel", dependencies=[Depends(require_role(list(WRITER_ROLES)))])
+@router.post("/{transfer_id}/cancel", dependencies=[Depends(require_role(list(TRANSFER_WRITER_ROLES)))])
 async def cancel_transfer_qty(
     transfer_id: int,
     comment: Optional[str] = Query(default=None),
