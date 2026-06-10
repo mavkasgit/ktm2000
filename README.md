@@ -1,192 +1,160 @@
+<div align="center">
+
+<img src="./frontend/public/favicon.svg" alt="KTM-2000 Logo" align="center" height="64" />
+
 # KTM-2000
 
 Локальная система производственного планирования и контроля для цехового производства.
 
+[![TypeScript](https://img.shields.io/badge/TypeScript-blue?style=flat-square&logo=typescript&logoColor=white)](https://www.typescriptlang.org)
+[![Python](https://img.shields.io/badge/Python-3.12+-blue?style=flat-square&logo=python&logoColor=white)](https://www.python.org)
+[![FastAPI](https://img.shields.io/badge/FastAPI-v0.100+-green?style=flat-square&logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com)
+[![React](https://img.shields.io/badge/React-19-blue?style=flat-square&logo=react&logoColor=white)](https://react.dev)
+
+[Обзор](#обзор) • [Возможности](#возможности) • [Архитектура](#архитектура) • [Быстрый старт](#быстрый-старт) • [Разработка](#разработка) • [Production](#production)
+
+</div>
+
+---
+
+## Обзор
+
+KTM-2000 — это специализированное программное обеспечение для управления цеховыми процессами, отслеживания выполнения производственных планов, импорта номенклатур и ведения технологических карт. Система спроектирована для локального развертывания, обеспечивая высокую скорость работы и полную приватность данных предприятия.
+
+> [!TIP]
+> Система использует Docker-контейнеры для баз данных, а фронтенд и бэкенд в режиме разработки запускаются локально для максимального удобства отладки и горячей перезагрузки (Hot Reload).
+
 ## Возможности
 
-- **Участки (Shopfloor)** — управление задачами производственных участков, отображение SKU и данных плана
-- **Планирование** — маршруты производства, этапы, раскрытие деталей планов
-- **Секции** — гибкая настройка дат и времени планирования
-- **Импорт каталогов** — загрузка номенклатуры из Excel (.xls, .xlsx) по шаблонам
-- **Техкарты** — привязка технологий к продуктам
-- **Производственные планы** — ручное управление этапами, финальные этапы маршрута
-- **Бэкапы** — управление резервными копиями данных
+- **Участки (Shopfloor):** Управление задачами производственных участков, отслеживание SKU и плановых показателей.
+- **Планирование:** Визуализация маршрутов производства, этапов обработки и детализации планов.
+- **Секции:** Гибкая временная настройка интервалов планирования.
+- **Импорт каталогов:** Быстрый импорт номенклатуры из файлов Excel (`.xls`, `.xlsx`) по шаблонам.
+- **Технологические карты:** Привязка технологических процессов и этапов к выпускаемой продукции.
+- **Бэкапы:** Удобное управление резервными копиями базы данных непосредственно из интерфейса.
 
-## Технологический стек
+## Архитектура
 
-| Компонент | Технология |
-|---|---|
-| Backend | Python 3.12+, FastAPI, SQLAlchemy (async), Alembic |
-| Frontend | React 19+, Vite, shadcn/ui, TanStack Table |
-| Database | PostgreSQL 15 |
-| Containers | Docker Compose |
+Проект организован как монорепозиторий и разделен на три ключевые части:
+1. **Frontend:** Приложение на React 19+ и TypeScript, собранное с помощью Vite. Кодовая база структурирована по методологии **Feature-Sliced Design (FSD)**.
+2. **Backend:** Асинхронный API-сервис на FastAPI (Python 3.12+) с использованием SQLAlchemy и миграций Alembic.
+3. **Infrastructure:** Docker Compose конфигурации для развертывания баз данных Postgres в различных окружениях (dev, test, prod).
 
-## Структура проекта
+### Структура каталогов
 
 ```
-├── backend/            # FastAPI backend
+├── backend/            # Асинхронный FastAPI backend
 │   └── app/
-│       ├── api/        # API endpoints (auth, products, routes, shopfloor, imports...)
-│       ├── core/       # конфигурация, зависимости
-│       ├── models/     # SQLAlchemy модели
-│       ├── schemas/    # Pydantic схемы
-│       └── services/   # бизнес-логика
-├── frontend/           # React frontend
+│       ├── api/        # Эндпоинты (auth, products, routes, shopfloor, imports...)
+│       ├── core/       # Конфигурация, сессии БД, зависимости
+│       ├── models/     # SQLAlchemy ORM модели
+│       ├── schemas/    # Pydantic схемы валидации
+│       └── services/   # Бизнес-логика
+├── frontend/           # React frontend (Vite)
 │   └── src/
-│       ├── app/        # корневые компоненты, роутинг
-│       ├── entities/   # сущности (продукты, участки, маршруты...)
-│       ├── features/   # функциональные модули (execution, planning, references, sections, settings)
-│       └── shared/     # общие утилиты и компоненты
-├── infra/              # Docker Compose конфигурации (dev, test, prod)
-├── scripts/            # вспомогательные скрипты
-├── storage/            # файловое хранилище (фото продукции, импорты)
-└── data/               # данные PostgreSQL
+│       ├── app/        # Настройки приложения, стили, роутер
+│       ├── entities/   # Бизнес-сущности (продукты, участки, маршруты)
+│       ├── features/   # Интерактивные фичи (execution, planning, settings...)
+│       └── shared/     # UI-компоненты, API-клиенты, общие хуки
+└── infra/              # Скрипты развертывания и конфигурации Docker
 ```
 
-## Порты
+### Порты и окружение
 
-| Окружение | Frontend (external) | Postgres | Backend (internal) |
-|---|---:|---:|---:|
-| dev | 5180 | 5202 | 8000 |
-| test | 8100 | 5212 | 8000 |
-| prod | 8020 | 5432 (внутри Docker) | 8000 |
+| Окружение | Frontend (внешний) | Postgres (внешний) | Backend (внутренний) |
+|---|---|---|---|
+| **dev** | `5180` | `5202` | `8010` |
+| **test** | `8100` | `5212` | `8010` |
+| **prod** | `8020` | `5432` *(внутри Docker)* | `8010` |
 
-Для `dev` в Docker поднимается только PostgreSQL; backend и frontend запускаются локально.
+---
 
 ## Быстрый старт
 
 ### 1. Установка зависимостей
 
+Установите глобальные и фронтенд-зависимости:
 ```bash
 npm run setup
 ```
 
-Убедитесь, что установлены зависимости Python:
-
+Установите зависимости Python для бэкенда:
 ```bash
-cd backend && pip install -r requirements.txt
+cd backend
+python -m venv .venv
+# Активируйте виртуальное окружение:
+# Windows (PowerShell): .venv\Scripts\Activate.ps1
+# Linux/macOS: source .venv/bin/activate
+pip install -r requirements.txt
 ```
 
 ### 2. Настройка окружения
 
-Скопируйте `.env.example` в `.env.dev` и настройте переменные:
-
+Создайте файл `.env.dev` в корневой директории на основе примера:
 ```bash
 cp .env.example .env.dev
 ```
 
-### 3. Запуск (dev)
+### 3. Запуск dev-окружения
 
 ```bash
 npm run dev
 ```
 
-Команда автоматически:
-1. Поднимает PostgreSQL контейнер
-2. Ждёт его готовности (healthcheck)
-3. Применяет миграции Alembic
-4. Запускает backend (`:8010`) и frontend (`:3000`)
+> [!NOTE]
+> Эта команда автоматически поднимет PostgreSQL в Docker, дождется его готовности, применит миграции Alembic и запустит локальные серверы бэкенда (`localhost:8010`) и фронтенда (`localhost:5180`).
 
-### 4. Остановка
-
-```bash
-npm run db:down
-```
+---
 
 ## Разработка
 
-### Миграции БД
+### Миграции базы данных
 
+При изменении ORM-моделей в `backend/app/models/` выполните:
 ```bash
-# Создать миграцию
-npm run db:makemigrate "описание изменений"
+# Генерация новой миграции
+npm run db:makemigrate -- "описание изменений"
 
-# Применить миграции
+# Применение миграций
 npm run db:migrate
 ```
 
-### Тесты
+### Запуск тестов
 
-Тесты работают против отдельной БД `ktm2000_test` на `localhost:5212`:
+Тестирование выполняется с использованием pytest на отдельной базе данных.
 
-```bash
-npm run test:pytest
-```
-
-Полный цикл тестового окружения:
+> [!IMPORTANT]
+> Всегда запускайте тесты из директории `backend/`, так как там находятся файлы конфигурации `pytest.ini` и `conftest.py`.
 
 ```bash
-npm run test:up      # поднять все сервисы
-npm run test:pytest  # запустить pytest
-npm run test:down    # остановить
+cd backend
+python -m pytest tests/ -v
 ```
+
+> [!TIP]
+> Для ускорения прохождения всех тестов можно запускать их параллельно в 4 воркера с помощью пакета `pytest-xdist` (установите его в виртуальном окружении с помощью `pip install pytest-xdist`):
+> ```bash
+> python -m pytest tests/ -v -n 4
+> ```
+
+Для запуска конкретного теста:
+```bash
+python -m pytest tests/test_shopfloor_api.py::test_shopfloor_over_issue_rejected -v
+```
+
+> [!WARNING]
+> На Windows-системах перенаправление вывода `2>&1 | head -80` ломает выполнение pytest в некоторых эмуляторах терминала (символ `2` считывается как аргумент). Запускайте тесты напрямую или используйте перенаправление в файл: `pytest tests/ -v > out.txt 2>&1` с последующим чтением файла.
+
+---
 
 ## Production
 
-### Запуск
-
+Для запуска production-сборки в Docker контейнерах:
 ```bash
 npm run prod:up
 ```
 
-Включает Cloudflare Tunnel (опционально):
-
+Для остановки сервисов:
 ```bash
-npm run prod:tunnel:up
+npm run prod:down
 ```
-
-### Production файлы
-
-- `.env.prod` — переменные окружения
-- `infra/docker-compose.prod.yml` — конфигурация сервисов
-- `infra/nginx/default.conf` — конфигурация Nginx
-
-## NPM скрипты
-
-| Команда | Описание |
-|---|---|
-| `npm run dev` | Запуск dev-окружения |
-| `npm run devkill` | Остановить dev-серверы |
-| `npm run devrestart` | Перезапуск dev |
-| `npm run db:up/down` | PostgreSQL up/down |
-| `npm run db:migrate` | Применить миграции |
-| `npm run test:pytest` | Запустить тесты |
-| `npm run prod:up/down` | Production up/down |
-| `npm run prod:logs` | Production логи |
-
-
-TEST
-▪ Как запускать тесты в ktm2000
-
-  Правильная команда:
-   1 cd C:\Users\user\VibeCoding\ktm2000\backend
-   2 python -m pytest tests/ -v
-  Один тест:
-   1 python -m pytest
-     tests/test_shopfloor_api.py::test_shopfloor_over_issue_rejected -v
-  Несколько тестов из файла:
-   1 python -m pytest tests/test_routes_seed.py -v
-  Вывод в файл (без ошибок с 2>&1):
-   1 python -m pytest tests/ -v > /tmp/test_out.txt 2>&1
-   2 cat /tmp/test_out.txt
-  ---
-
-  Почему была ошибка file or directory not found: 2
-
-  2>&1 | head -80 на Windows Git Bash ломает pytest — символ 2 становится
-  аргументом.
-
-  Не делай так:
-   1 pytest tests/ -v 2>&1 | head -80  # ❌ ломается
-  Делай так:
-   1 pytest tests/ -v > /tmp/out.txt 2>&1  # ✅ в файл
-   2 cat /tmp/out.txt
-  Или просто без перенаправления:
-   1 pytest tests/ -v  # ✅ напрямую
-  ---
-
-  Рабочая директория
-
-  Всегда запускай из backend/:
-   1 cd C:\Users\user\VibeCoding\ktm2000\backend
-  Там лежит pytest.ini и conftest.py.
