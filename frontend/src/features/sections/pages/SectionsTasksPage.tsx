@@ -268,7 +268,7 @@ export function SectionsTasksPage() {
     retry: false,
   });
 
-  const pushActionLog = useCallback(() => {}, []);
+  const pushActionLog = useCallback((_payload: any) => {}, []);
 
   const invalidateShopfloor = useCallback(() => {
     void queryClient.invalidateQueries({ queryKey: queryKeys.shopfloor.board(sectionId as number) });
