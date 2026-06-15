@@ -2,7 +2,7 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, status, File, UploadFile
+from fastapi import APIRouter, Depends, HTTPException, status, File, UploadFile, Form
 from pydantic import BaseModel
 from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -295,10 +295,30 @@ async def list_spg_remainders(spg_id: int, db: AsyncSession = Depends(get_db)) -
     if spg is None:
         raise HTTPException(status_code=404, detail="SPG not found")
 
+    # Получаем первый связанный участок для этой SPG (дефолтный)
+    first_section = await db.scalar(
+        select(Section)
+        .join(SpgSection, SpgSection.section_id == Section.id)
+        .where(SpgSection.spg_id == spg_id)
+        .order_by(SpgSection.sort_order, Section.id)
+        .limit(1)
+    )
+
     rows = (await db.execute(
-        select(SpgRemainder, Product.sku, Product.name, StorageProductionGroup.code, StorageProductionGroup.name)
+        select(
+            SpgRemainder, 
+            Product.sku, 
+            Product.name, 
+            StorageProductionGroup.code, 
+            StorageProductionGroup.name,
+            Section.id.label("sec_id"),
+            Section.code.label("sec_code"),
+            Section.name.label("sec_name")
+        )
         .join(Product, SpgRemainder.product_id == Product.id)
         .join(StorageProductionGroup, SpgRemainder.spg_id == StorageProductionGroup.id)
+        .outerjoin(RouteStage, SpgRemainder.route_stage_id == RouteStage.id)
+        .outerjoin(Section, RouteStage.section_id == Section.id)
         .where(
             SpgRemainder.spg_id == spg_id,
             SpgRemainder.consumed_at.is_(None),
@@ -315,13 +335,16 @@ async def list_spg_remainders(spg_id: int, db: AsyncSession = Depends(get_db)) -
             spg_id=r.spg_id,
             spg_code=spg_code,
             spg_name=spg_name,
+            section_id=sec_id if sec_id is not None else (first_section.id if first_section else None),
+            section_code=sec_code if sec_code is not None else (first_section.code if first_section else None),
+            section_name=sec_name if sec_name is not None else (first_section.name if first_section else None),
             remainder_quantity=float(r.remainder_quantity),
             original_issued=float(r.original_issued),
             completed_stages=r.completed_stages_json,
             source=r.source,
             created_at=r.created_at.isoformat(),
         )
-        for r, sku, name, spg_code, spg_name in rows
+        for r, sku, name, spg_code, spg_name, sec_id, sec_code, sec_name in rows
     ]
 
 
@@ -337,20 +360,20 @@ async def create_manual_remainder(
     if spg is None:
         raise HTTPException(status_code=404, detail="SPG not found")
 
-    # Validate section belongs to this SPG
-    section_ids = (await db.execute(
-        select(SpgSection.section_id).where(SpgSection.spg_id == spg_id)
-    )).scalars().all()
-    if payload.section_id not in section_ids:
-        raise HTTPException(status_code=400, detail="Section does not belong to this SPG")
+    section = await db.get(Section, payload.section_id)
+    if section is None:
+        raise HTTPException(status_code=404, detail="Section not found")
+
+    # Находим целевую SPG для этого участка
+    spg_section = await db.scalar(
+        select(SpgSection).where(SpgSection.section_id == payload.section_id).limit(1)
+    )
+    target_spg_id = spg_section.spg_id if spg_section else spg_id
+    target_spg = await db.get(StorageProductionGroup, target_spg_id) if target_spg_id != spg_id else spg
 
     product = await db.get(Product, payload.product_id)
     if product is None:
         raise HTTPException(status_code=404, detail="Product not found")
-
-    section = await db.get(Section, payload.section_id)
-    if section is None:
-        raise HTTPException(status_code=404, detail="Section not found")
 
     if payload.quantity <= 0:
         raise HTTPException(status_code=400, detail="Quantity must be positive")
@@ -360,7 +383,7 @@ async def create_manual_remainder(
     actor_name = await _get_user_snapshot_name(db, current_user.id)
     remainder = SpgRemainder(
         product_id=payload.product_id,
-        spg_id=spg_id,
+        spg_id=target_spg_id,
         route_stage_id=None,
         section_plan_line_id=None,
         origin_task_id=None,
@@ -376,16 +399,16 @@ async def create_manual_remainder(
     await db.refresh(remainder)
 
     from app.services.shopfloor.operations_tasks import trigger_auto_consume_for_spg_tasks
-    await trigger_auto_consume_for_spg_tasks(db, spg_id=spg_id, product_id=payload.product_id, actor_id=current_user.id)
+    await trigger_auto_consume_for_spg_tasks(db, spg_id=target_spg_id, product_id=payload.product_id, actor_id=current_user.id)
 
     return RemainderOut(
         id=remainder.id,
         product_id=product.id,
         product_sku=product.sku,
         product_name=product.name,
-        spg_id=spg.id,
-        spg_code=spg.code,
-        spg_name=spg.name,
+        spg_id=target_spg.id,
+        spg_code=target_spg.code,
+        spg_name=target_spg.name,
         section_id=section.id,
         section_code=section.code,
         section_name=section.name,
@@ -414,15 +437,18 @@ async def update_manual_remainder(
             raise HTTPException(status_code=400, detail="Quantity must be positive")
         remainder.remainder_quantity = payload.quantity
 
+    target_spg_id = remainder.spg_id
     if payload.section_id is not None:
-        section_ids = (await db.execute(
-            select(SpgSection.section_id).where(SpgSection.spg_id == spg_id)
-        )).scalars().all()
-        if payload.section_id not in section_ids:
-            raise HTTPException(status_code=400, detail="Section does not belong to this SPG")
-        # In the new logic, remainder is bound to SPG. So section_id just validates belonging to the SPG.
-        # But we keep it in mind. We can update spg_id if a section of a different SPG was selected.
-        remainder.spg_id = spg_id
+        section = await db.get(Section, payload.section_id)
+        if section is None:
+            raise HTTPException(status_code=404, detail="Section not found")
+        # Находим целевую SPG
+        spg_section = await db.scalar(
+            select(SpgSection).where(SpgSection.section_id == payload.section_id).limit(1)
+        )
+        if spg_section:
+            target_spg_id = spg_section.spg_id
+        remainder.spg_id = target_spg_id
 
     if payload.completed_stages is not None:
         remainder.completed_stages_json = [s.model_dump() for s in payload.completed_stages]
@@ -433,8 +459,7 @@ async def update_manual_remainder(
     product = await db.get(Product, remainder.product_id)
     spg = await db.get(StorageProductionGroup, remainder.spg_id)
 
-    # For backward compatibility fields
-    section_id = payload.section_id or (section_ids[0] if 'section_ids' in locals() and section_ids else None)
+    section_id = payload.section_id
     section = await db.get(Section, section_id) if section_id else None
 
     return RemainderOut(
@@ -1009,10 +1034,17 @@ def _decimal_or_none(value: Any) -> Decimal | None:
         return None
 
 
+def _is_truthy_cell(val: str) -> bool:
+    val_clean = val.strip().lower()
+    if not val_clean or val_clean in ("none", "", "—", "0", "false", "нет", "no", "-", "empty", "null"):
+        return False
+    return True
+
+
 async def _resolve_completed_stages_for_product_excel(
     db: AsyncSession,
     product: Product,
-    completed_ops_str: str,
+    raw_ops_data: list[tuple[str, str]],
 ) -> list[dict]:
     # 1. Fetch route stages for this product (same logic as GET /products/{product_id}/route-stages)
     profiles = (
@@ -1091,42 +1123,90 @@ async def _resolve_completed_stages_for_product_excel(
         for op in ops_rows:
             section_ops_dict.setdefault(op.section_id, []).append(op)
 
-    # 2. Parse completed operations
-    tokens = [t.strip().lower() for t in completed_ops_str.split(",") if t.strip()]
+    # 2. Map route operations for matching
+    route_ops = []
+    for stage in stages:
+        section = sections_dict.get(stage.section_id)
+        if not section:
+            continue
+        
+        has_specific_ops = any(op.operation_code is not None for op in stage.operations)
+        ops_list = []
+        if has_specific_ops:
+            ops_list = [op for op in stage.operations if op.operation_code is not None]
+        else:
+            ops_list = section_ops_dict.get(stage.section_id) or []
+
+        for op in ops_list:
+            route_ops.append({
+                "stage": stage,
+                "section": section,
+                "op": op,
+                "op_name_lower": op.operation_name.lower(),
+                "op_code_lower": op.operation_code.lower() if op.operation_code else "",
+                "section_name_lower": section.name.lower(),
+                "section_code_lower": section.code.lower(),
+            })
 
     completed = []
-    for token in tokens:
-        found = False
-        for stage in stages:
-            section = sections_dict.get(stage.section_id)
-            if not section:
-                continue
+    completed_section_ids = set()
 
-            if any(c["section_id"] == stage.section_id for c in completed):
-                continue
+    def add_completed_op(ro_item):
+        st = ro_item["stage"]
+        sec = ro_item["section"]
+        o = ro_item["op"]
+        
+        if st.section_id in completed_section_ids:
+            return
+            
+        completed.append({
+            "section_id": st.section_id,
+            "section_code": sec.code,
+            "section_name": sec.name,
+            "operation_code": o.operation_code,
+            "operation_name": o.operation_name,
+            "sequence": st.sequence,
+            "is_significant": True,
+        })
+        completed_section_ids.add(st.section_id)
 
-            has_specific_ops = any(op.operation_code is not None for op in stage.operations)
-            ops_list = []
-            if has_specific_ops:
-                ops_list = [op for op in stage.operations if op.operation_code is not None]
+    # 3. Match Excel headers and cells
+    for header, cell_val in raw_ops_data:
+        header_lower = header.strip().lower()
+        cell_val_str = str(cell_val).strip() if cell_val is not None else ""
+        
+        if not cell_val_str or cell_val_str.lower() == "none" or cell_val_str == "—":
+            continue
+            
+        # Check if the header matches any route operation or section
+        matched_by_header = [
+            ro for ro in route_ops
+            if header_lower == ro["op_name_lower"]
+            or header_lower == ro["op_code_lower"]
+            or header_lower == ro["section_name_lower"]
+            or header_lower == ro["section_code_lower"]
+        ]
+        
+        if matched_by_header:
+            if _is_truthy_cell(cell_val_str):
+                for ro in matched_by_header:
+                    add_completed_op(ro)
+        else:
+            # Fallback: interpret cell value itself as the operation name/code (legacy format)
+            tokens = []
+            if "," in cell_val_str:
+                tokens = [t.strip().lower() for t in cell_val_str.split(",") if t.strip()]
             else:
-                ops_list = section_ops_dict.get(stage.section_id) or []
-
-            for op in ops_list:
-                op_name_lower = op.operation_name.lower()
-                op_code_lower = op.operation_code.lower() if op.operation_code else ""
+                tokens = [cell_val_str.strip().lower()]
                 
-                if token in op_name_lower or (op_code_lower and token in op_code_lower) or token in section.name.lower() or token in section.code.lower():
-                    completed.append({
-                        "section_id": stage.section_id,
-                        "operation_code": op.operation_code,
-                        "operation_name": op.operation_name,
-                        "sequence": stage.sequence,
-                    })
-                    found = True
-                    break
-            if found:
-                break
+            for token in tokens:
+                for ro in route_ops:
+                    if (token in ro["op_name_lower"]
+                        or (ro["op_code_lower"] and token in ro["op_code_lower"])
+                        or token in ro["section_name_lower"]
+                        or token in ro["section_code_lower"]):
+                        add_completed_op(ro)
+
     return sorted(completed, key=lambda x: x["sequence"])
 
 
@@ -1280,41 +1360,91 @@ async def get_spg_defects(
     return result
 
 
-@router.post("/{spg_id}/remainders/import", dependencies=[Depends(require_role(list(WRITER_ROLES)))])
-async def import_remainders_excel(
+@router.get("/{spg_id}/remainders/import/template")
+async def download_remainders_template(
     spg_id: int,
-    file: UploadFile = File(...),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
-) -> dict:
+):
+    from io import BytesIO
+    from fastapi.responses import StreamingResponse
+    from app.services.excel_templates import generate_remainders_excel_template
+
+    template_bytes = await generate_remainders_excel_template(db, spg_id)
+    import urllib.parse
+    filename = "Шаблон импорта остатков.xlsx"
+    encoded_filename = urllib.parse.quote(filename)
+    return StreamingResponse(
+        BytesIO(template_bytes),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{encoded_filename}"}
+    )
+
+
+@router.get("/{spg_id}/remainders/import/operations", dependencies=[Depends(require_role(list(READER_ROLES)))])
+async def get_spg_import_operations(
+    spg_id: int,
+    db: AsyncSession = Depends(get_db),
+) -> list[dict]:
+    """Returns a list of all significant operations available in the system."""
+    query = (
+        select(SectionOperation, Section.name.label("section_name"))
+        .join(Section, Section.id == SectionOperation.section_id)
+        .where(SectionOperation.is_significant == True)
+        .order_by(Section.sort_order, Section.id, SectionOperation.sort_order, SectionOperation.id)
+    )
+    res = (await db.execute(query)).all()
+    
+    seen = set()
+    unique_ops = []
+    for row in res:
+        op_name = row.SectionOperation.operation_name
+        if op_name not in seen:
+            seen.add(op_name)
+            unique_ops.append({
+                "operation_code": row.SectionOperation.operation_code,
+                "operation_name": op_name,
+                "section_name": row.section_name,
+            })
+    return unique_ops
+
+
+async def _parse_and_validate_remainders_excel(
+    db: AsyncSession,
+    content: bytes,
+    spg_id: int,
+    sheet_index: int,
+    row_selection: str | None,
+) -> tuple[str, int, list[dict], dict]:
     from python_calamine import load_workbook
     from io import BytesIO
+    from app.services.excel_import import parse_row_selection
 
-    content = await file.read()
     try:
         workbook = load_workbook(BytesIO(content))
     except Exception as exc:
-        raise HTTPException(status_code=400, detail=f"Invalid Excel file: {exc}")
+        raise HTTPException(status_code=400, detail=f"Некорректный Excel файл: {exc}")
 
-    # Use first sheet
-    sheet = workbook.get_sheet_by_index(0)
+    if sheet_index < 0 or sheet_index >= len(workbook.sheet_names):
+        raise HTTPException(status_code=400, detail=f"Неверный индекс листа: {sheet_index}")
+
+    sheet_name = workbook.sheet_names[sheet_index]
+    sheet = workbook.get_sheet_by_index(sheet_index)
     rows = list(sheet.iter_rows())
+    initial_total_rows = len(rows)
     if not rows:
-        raise HTTPException(status_code=400, detail="Excel sheet is empty")
+        return sheet_name, 0, [], {"total": 0, "valid": 0, "invalid": 0, "quantity_total": 0}
 
     # Find headers
     headers = [str(cell).strip().lower() for cell in rows[0]]
     sku_idx = -1
     qty_idx = -1
-    ops_idx = -1
 
     for idx, h in enumerate(headers):
         if h in ("sku", "артикул", "код", "продукт", "sku/артикул", "артикул / sku"):
             sku_idx = idx
         elif h in ("quantity", "количество", "кол-во", "кол-во, шт", "кол-во шт"):
             qty_idx = idx
-        elif h in ("operations", "operations_completed", "completed_stages", "операции", "стадии", "выполненные стадии", "выполненные операции"):
-            ops_idx = idx
 
     # Fallback search if not found in first row
     if sku_idx == -1 or qty_idx == -1:
@@ -1325,10 +1455,9 @@ async def import_remainders_excel(
                     sku_idx = idx
                 elif h in ("quantity", "количество", "кол-во", "кол-во, шт", "кол-во шт"):
                     qty_idx = idx
-                elif h in ("operations", "operations_completed", "completed_stages", "операции", "стадии", "выполненные стадии", "выполненные операции"):
-                    ops_idx = idx
             if sku_idx != -1 and qty_idx != -1:
                 rows = rows[r_idx:]
+                headers = r_headers
                 break
 
     if sku_idx == -1:
@@ -1336,45 +1465,165 @@ async def import_remainders_excel(
     if qty_idx == -1:
         qty_idx = 1
 
+    selected_rows = None
+    if row_selection and row_selection.strip():
+        try:
+            selected_rows = parse_row_selection(row_selection)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+
+    items = []
+    total_qty = Decimal("0")
+    valid_count = 0
+    invalid_count = 0
+
+    data_rows = rows[1:]
+    for r_idx, row in enumerate(data_rows, start=2):
+        if selected_rows is not None and r_idx not in selected_rows:
+            continue
+
+        if len(row) <= max(sku_idx, qty_idx):
+            continue
+
+        sku_val = str(row[sku_idx]).strip()
+        # Skip fully empty rows
+        if (not sku_val or sku_val == "None") and (qty_idx >= len(row) or not str(row[qty_idx]).strip() or str(row[qty_idx]) == "None"):
+            continue
+
+        row_errors = []
+        qty_val = row[qty_idx] if qty_idx < len(row) else None
+        qty_dec = _decimal_or_none(qty_val)
+
+        if not sku_val or sku_val == "None":
+            row_errors.append("Отсутствует артикул (SKU)")
+
+        if qty_dec is None:
+            row_errors.append(f"Неверное количество '{qty_val}'")
+        elif qty_dec <= 0:
+            row_errors.append(f"Неверное количество '{qty_val}'")
+
+        product = None
+        if sku_val and sku_val != "None":
+            product = await db.scalar(select(Product).where(Product.sku == sku_val))
+            if not product:
+                row_errors.append(f"Продукт с SKU '{sku_val}' не найден")
+
+        raw_ops_data = []
+        for idx, cell in enumerate(row):
+            if idx == sku_idx or idx == qty_idx:
+                continue
+            header = headers[idx] if idx < len(headers) else f"Стадия {idx}"
+            raw_ops_data.append((header, cell))
+
+        completed_stages = []
+        if product and raw_ops_data:
+            completed_stages = await _resolve_completed_stages_for_product_excel(db, product, raw_ops_data)
+
+        raw_values = [str(cell) if cell is not None else "" for cell in row]
+
+        status = "invalid" if row_errors else "pending"
+        if status == "invalid":
+            invalid_count += 1
+        else:
+            valid_count += 1
+            if qty_dec:
+                total_qty += qty_dec
+
+        items.append({
+            "source_row_number": r_idx,
+            "sku": sku_val,
+            "quantity": float(qty_dec) if qty_dec is not None else None,
+            "completed_stages": completed_stages,
+            "status": status,
+            "errors": row_errors,
+            "warnings": [],
+            "raw_values": raw_values,
+            "product_id": product.id if product else None,
+            "product_name": product.name if product else None,
+        })
+
+    summary = {
+        "total": len(items),
+        "valid": valid_count,
+        "invalid": invalid_count,
+        "quantity_total": float(total_qty),
+    }
+
+    return sheet_name, initial_total_rows, items, summary
+
+
+@router.post("/{spg_id}/remainders/import/preview", dependencies=[Depends(require_role(list(WRITER_ROLES)))])
+async def preview_remainders_excel_endpoint(
+    spg_id: int,
+    file: UploadFile = File(...),
+    sheet_index: int = Form(0),
+    row_selection: str | None = Form(None),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    content = await file.read()
+    sheet_name, total_rows, items, summary = await _parse_and_validate_remainders_excel(
+        db, content, spg_id, sheet_index, row_selection
+    )
+    return {
+        "sheet_name": sheet_name,
+        "total_rows": total_rows,
+        "summary": summary,
+        "items": items,
+    }
+
+
+@router.post("/{spg_id}/remainders/import", dependencies=[Depends(require_role(list(WRITER_ROLES)))])
+async def import_remainders_excel(
+    spg_id: int,
+    file: UploadFile = File(...),
+    sheet_index: int = Form(0),
+    row_selection: str | None = Form(None),
+    skip_invalid: bool = Form(True),
+    clear_existing: bool = Form(False),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    content = await file.read()
+    sheet_name, total_rows, items, summary = await _parse_and_validate_remainders_excel(
+        db, content, spg_id, sheet_index, row_selection
+    )
+
+    # If there are errors and skip_invalid is False, we fail the entire import
+    has_errors = any(item["status"] == "invalid" for item in items)
+    if has_errors and not skip_invalid:
+        all_errors = []
+        for item in items:
+            for err in item["errors"]:
+                all_errors.append(f"Строка {item['source_row_number']}: {err}")
+        return {
+            "success": False,
+            "imported_count": 0,
+            "errors": all_errors,
+        }
+
     actor_name = await _get_user_snapshot_name(db, current_user.id)
     imported_count = 0
     errors = []
-    
-    data_rows = rows[1:]
-    for r_idx, row in enumerate(data_rows, start=2):
-        if len(row) <= max(sku_idx, qty_idx):
-            continue
-        
-        sku_val = str(row[sku_idx]).strip()
-        if not sku_val or sku_val == "None":
-            continue
 
-        qty_val = row[qty_idx]
-        qty_dec = _decimal_or_none(qty_val)
-        if qty_dec is None or qty_dec <= 0:
-            errors.append(f"Строка {r_idx}: Неверное количество '{qty_val}'")
-            continue
+    # Clear existing remainders if requested
+    if clear_existing:
+        await db.execute(delete(SpgRemainder).where(SpgRemainder.spg_id == spg_id))
 
-        product = await db.scalar(select(Product).where(Product.sku == sku_val))
-        if not product:
-            errors.append(f"Строка {r_idx}: Продукт с SKU '{sku_val}' не найден")
+    for item in items:
+        if item["status"] == "invalid":
+            for err in item["errors"]:
+                errors.append(f"Строка {item['source_row_number']}: {err}")
             continue
-
-        completed_stages = []
-        if ops_idx != -1 and ops_idx < len(row):
-            ops_val = str(row[ops_idx]).strip()
-            if ops_val and ops_val != "None":
-                completed_stages = await _resolve_completed_stages_for_product_excel(db, product, ops_val)
 
         remainder = SpgRemainder(
-            product_id=product.id,
+            product_id=item["product_id"],
             spg_id=spg_id,
             route_stage_id=None,
             section_plan_line_id=None,
             origin_task_id=None,
-            remainder_quantity=qty_dec,
-            original_issued=qty_dec,
-            completed_stages_json=completed_stages,
+            remainder_quantity=Decimal(str(item["quantity"])),
+            original_issued=Decimal(str(item["quantity"])),
+            completed_stages_json=item["completed_stages"],
             source="manual",
             created_by=current_user.id,
             created_by_user_name=actor_name,

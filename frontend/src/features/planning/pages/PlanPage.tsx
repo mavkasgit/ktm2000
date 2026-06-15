@@ -240,7 +240,7 @@ export function PlanPage() {
       const targetPlanId = activePlan?.id
       if (targetPlanId != null) {
         try {
-          const response = await bulkApprovePositions(targetPlanId, eligibleIds, false)
+          const response = await bulkApprovePositions(targetPlanId, eligibleIds, true)
           for (const result of response.results) {
             results.push({
               id: result.id,

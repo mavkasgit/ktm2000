@@ -630,11 +630,28 @@ async def get_product_route_stages(
         if has_specific_ops:
             for op in stage.operations:
                 if op.operation_code is not None:
-                    ops_list.append(RouteOperationOut(
-                        id=op.id,
-                        operation_code=op.operation_code,
-                        operation_name=op.operation_name,
-                    ))
+                    # Ищем операцию в справочнике секции для определения group_code
+                    sec_ops = section_ops_dict.get(stage.section_id) or []
+                    ref_op = next((so for so in sec_ops if so.operation_code == op.operation_code), None)
+                    
+                    if ref_op and ref_op.group_code:
+                        # Если операция входит в группу, добавляем все операции этой группы для данной секции
+                        group_ops = [so for so in sec_ops if so.group_code == ref_op.group_code]
+                        for go in group_ops:
+                            if not any(added.operation_code == go.operation_code for added in ops_list):
+                                ops_list.append(RouteOperationOut(
+                                    id=go.id,
+                                    operation_code=go.operation_code,
+                                    operation_name=go.operation_name,
+                                ))
+                    else:
+                        # Если группы нет, добавляем только саму операцию
+                        if not any(added.operation_code == op.operation_code for added in ops_list):
+                            ops_list.append(RouteOperationOut(
+                                id=op.id,
+                                operation_code=op.operation_code,
+                                operation_name=op.operation_name,
+                            ))
         else:
             # Fall back to section operations
             section_ops = section_ops_dict.get(stage.section_id) or []

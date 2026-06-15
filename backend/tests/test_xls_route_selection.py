@@ -34,7 +34,15 @@ TEST_XLS_PATH = Path(__file__).resolve().parent.parent.parent / "test.xls"
 def _load_test_rows() -> list[dict]:
     """Load and return parsed rows from test.xls."""
     raw_bytes = TEST_XLS_PATH.read_bytes()
-    parsed = parse_factory_plan_workbook(raw_bytes, "test.xls")
+    
+    from python_calamine import load_workbook
+    from io import BytesIO
+    wb = load_workbook(BytesIO(raw_bytes))
+    sheet_index = 0
+    if "test" in wb.sheet_names:
+        sheet_index = wb.sheet_names.index("test")
+        
+    parsed = parse_factory_plan_workbook(raw_bytes, "test.xls", sheet_index=sheet_index)
     rows = []
     for prow in parsed.parsed_rows:
         rows.append({

@@ -125,3 +125,25 @@ export async function moveOperation(sectionId: number, payload: OperationMoveInp
     { new_group_code: payload.new_group_code },
   );
 }
+
+export type SectionWithOperations = {
+  id: number;
+  code: string;
+  name: string;
+  kind: string;
+  icon: string | null;
+  icon_color: string | null;
+  operations: Array<{
+    id: number;
+    operation_code: string;
+    operation_name: string;
+    is_significant: boolean;
+    group_code: string | null;
+    group_name: string | null;
+  }>;
+};
+
+export async function listSectionsWithOperations(): Promise<SectionWithOperations[]> {
+  const { data } = await apiClient.get<SectionWithOperations[]>("/sections/all/operations");
+  return data;
+}

@@ -8,7 +8,6 @@ type RouteStep = {
   operation_code: string | null
   operation_name: string
   is_significant: boolean
-  combined_op_group: string | null
 }
 
 export type RouteStepsDisplayProps = {
@@ -63,7 +62,7 @@ export function RouteStepsDisplay({ steps, compact = true }: RouteStepsDisplayPr
         {expanded && (
           <div className="mt-2 p-2 bg-muted/30 rounded border text-[11px] font-mono">
             {groupedSteps.map((group, idx) => {
-              const isCombined = group.length > 1 && group[0].combined_op_group
+              const isCombined = group.length > 1
               const sectionCode = group[0].section_code
               const sectionName = group[0].section_name
 
@@ -97,7 +96,7 @@ export function RouteStepsDisplay({ steps, compact = true }: RouteStepsDisplayPr
   return (
     <div className="space-y-1">
       {groupedSteps.map((group, idx) => {
-        const isCombined = group.length > 1 && group[0].combined_op_group
+        const isCombined = group.length > 1
         const sectionCode = group[0].section_code
         const sectionName = group[0].section_name
 

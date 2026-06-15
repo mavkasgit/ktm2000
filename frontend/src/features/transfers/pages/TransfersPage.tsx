@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useCallback } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Send, Inbox, RefreshCw, AlertCircle } from "lucide-react";
 
@@ -23,6 +23,7 @@ import {
   TableRow,
   toast,
   SpgSelect,
+  Checkbox,
 } from "@/shared/ui";
 import { getSpgList } from "@/shared/api/spg";
 import {
@@ -36,6 +37,14 @@ import {
 } from "@/shared/api/transfers";
 import { getErrorMessage } from "@/shared/api/client";
 import { queryKeys } from "@/shared/api/queryKeys";
+import {
+  useBulkSelection,
+  BulkResultsDialog,
+  summarizeBulkResults,
+  type BulkActionResultItem,
+  type BulkActionSummary,
+  type BulkRunnerProgress,
+} from "@/shared/bulk";
 
 function fmtQty(value: string | number | null | undefined): string {
   if (value == null) return "0";
@@ -79,6 +88,16 @@ export function TransfersPage() {
   const [spgId, setSpgId] = useState<number | null>(null);
   const [sendTask, setSendTask] = useState<ReadyToTransferTask | null>(null);
   const [editTransferRecord, setEditTransferRecord] = useState<IncomingTransfer | null>(null);
+
+  // Bulk Operations State
+  const [bulkMode, setBulkMode] = useState(false);
+  const bulkSelection = useBulkSelection<number>();
+  const [bulkProgress, setBulkProgress] = useState<BulkRunnerProgress | null>(null);
+  const [bulkResults, setBulkResults] = useState<BulkActionResultItem<number>[]>([]);
+  const [bulkSummary, setBulkSummary] = useState<BulkActionSummary | null>(null);
+  const [bulkResultsOpen, setBulkResultsOpen] = useState(false);
+  const [bulkSendOpen, setBulkSendOpen] = useState(false);
+  const [bulkComment, setBulkComment] = useState("");
 
   const { data: spgs } = useQuery({
     queryKey: queryKeys.spg.list(),
@@ -125,6 +144,87 @@ export function TransfersPage() {
     void queryClient.invalidateQueries({ queryKey: queryKeys.transfers.history(activeSpgId) });
   }
 
+  const exitBulkMode = useCallback(() => {
+    bulkSelection.clear();
+    setBulkMode(false);
+  }, [bulkSelection]);
+
+  const handleBulkTransferSubmit = useCallback(async (comment: string) => {
+    const selectedTasks = readyItems.filter(t => bulkSelection.isSelected(t.task_id));
+    if (selectedTasks.length === 0) return;
+
+    setBulkSendOpen(false);
+    setBulkProgress({ total: selectedTasks.length, completed: 0, running: true });
+
+    const results: BulkActionResultItem<number>[] = [];
+    let completedCount = 0;
+
+    const actionResults = [];
+    for (const task of selectedTasks) {
+      try {
+        await createTransfer({
+          from_task_id: task.task_id,
+          to_task_id: undefined,
+          quantity: task.transferable_quantity,
+          comment: comment.trim() || undefined,
+          idempotency_key: makeIdempotencyKey(`transfer-send-bulk-${task.task_id}`),
+        });
+
+        completedCount++;
+        setBulkProgress(prev => prev ? { ...prev, completed: completedCount } : null);
+
+        actionResults.push({
+          id: task.task_id,
+          status: "success" as const,
+          label: `Задание #${task.task_id} (${task.product_sku ?? "—"})`,
+        });
+      } catch (err) {
+        completedCount++;
+        setBulkProgress(prev => prev ? { ...prev, completed: completedCount } : null);
+
+        actionResults.push({
+          id: task.task_id,
+          status: "failed" as const,
+          reason: getErrorMessage(err),
+          label: `Задание #${task.task_id} (${task.product_sku ?? "—"})`,
+        });
+      }
+    }
+
+    results.push(...actionResults);
+
+    setBulkProgress(null);
+
+    const summary = summarizeBulkResults(results);
+    setBulkResults(results);
+    setBulkSummary(summary);
+
+    const sectionPairs = new Set<string>();
+    selectedTasks.forEach(task => {
+      sectionPairs.add(`${task.section_id}-${task.next_section_id}`);
+    });
+
+    sectionPairs.forEach(pair => {
+      const [fromId, toId] = pair.split("-").map(Number);
+      invalidateShopfloorCaches(fromId, toId);
+    });
+
+    invalidateTransfersCaches();
+
+    toast({
+      title: summary.failed > 0 ? "Частичный успех" : "Передача выполнена",
+      description: `Успешно отправлено ${summary.success} из ${summary.total} перемещений`,
+      variant: summary.failed > 0 ? "destructive" : "success",
+    });
+
+    if (summary.failed > 0 || summary.skipped > 0) {
+      setBulkResultsOpen(true);
+    }
+
+    bulkSelection.clear();
+    setBulkMode(false);
+  }, [readyItems, bulkSelection, invalidateShopfloorCaches, invalidateTransfersCaches]);
+
   if (spgs !== undefined && spgs.length === 0) {
     return (
       <div className="p-6 text-center">
@@ -153,6 +253,8 @@ export function TransfersPage() {
               setSpgId(val);
               setSendTask(null);
               setEditTransferRecord(null);
+              bulkSelection.clear();
+              setBulkMode(false);
             }}
             placeholder="Выберите ГХП"
             emptyLabel="Выберите ГХП"
@@ -166,14 +268,53 @@ export function TransfersPage() {
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         <Card>
-          <CardHeader className="flex flex-row items-center justify-between">
+          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-3">
             <CardTitle className="flex items-center gap-2">
               <Send className="h-4 w-4" />
               Готово к передаче
               {readyItems.length > 0 && <Badge variant="secondary">{readyItems.length}</Badge>}
             </CardTitle>
+            {readyItems.length > 0 && (
+              <Button
+                variant={bulkMode ? "default" : "outline"}
+                size="sm"
+                onClick={() => {
+                  if (bulkMode) {
+                    exitBulkMode();
+                  } else {
+                    setBulkMode(true);
+                  }
+                }}
+              >
+                Групповые операции
+              </Button>
+            )}
           </CardHeader>
           <CardContent>
+            {bulkMode && (
+              <div className="mb-4 p-2 bg-muted/40 rounded-lg flex items-center justify-between border border-dashed">
+                <span className="text-sm font-medium">Выбрано: {bulkSelection.selectedCount}</span>
+                <div className="flex gap-2">
+                  <Button
+                    size="sm"
+                    disabled={bulkSelection.selectedCount === 0}
+                    onClick={() => {
+                      setBulkSendOpen(true);
+                    }}
+                  >
+                    Передать выбранные
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => bulkSelection.clear()}
+                  >
+                    Сбросить
+                  </Button>
+                </div>
+              </div>
+            )}
+
             {readyLoading ? (
               <div className="text-sm text-muted-foreground py-4 text-center">Загрузка…</div>
             ) : readyItems.length === 0 ? (
@@ -185,54 +326,85 @@ export function TransfersPage() {
               <Table>
                 <TableHeader>
                   <TableRow>
+                    {bulkMode && (
+                      <TableHead className="w-[40px] p-2">
+                        <Checkbox
+                          checked={bulkSelection.isAllSelected(readyItems.map(t => t.task_id))}
+                          onCheckedChange={(checked) => {
+                            if (checked) {
+                              bulkSelection.selectAll(readyItems.map(t => t.task_id));
+                            } else {
+                              bulkSelection.clear();
+                            }
+                          }}
+                        />
+                      </TableHead>
+                    )}
                     <TableHead>Задание</TableHead>
                     <TableHead>Артикул</TableHead>
                     <TableHead>Этап</TableHead>
                     <TableHead className="text-right">К передаче</TableHead>
                     <TableHead>Следующий</TableHead>
-                    <TableHead />
+                    {!bulkMode && <TableHead />}
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {readyItems.map((t) => (
-                    <TableRow key={t.task_id}>
-                      <TableCell className="font-mono text-xs">#{t.task_id}</TableCell>
-                      <TableCell>{t.product_sku ?? "—"}</TableCell>
-                      <TableCell>
-                        <div className="text-xs">
-                          <div className="font-medium">{t.operation_name ?? "—"}</div>
-                          <div className="text-muted-foreground">#{t.sequence}</div>
-                        </div>
-                      </TableCell>
-                      <TableCell className="text-right tabular-nums">
-                        {fmtQty(t.transferable_quantity)}
-                        <div className="text-[10px] text-muted-foreground">
-                          из {fmtQty(t.planned_quantity)} план
-                        </div>
-                      </TableCell>
-                      <TableCell className="text-xs">
-                        {t.has_next_step ? (
-                          <>
-                            <div>{t.next_operation_name ?? "—"}</div>
-                            <div className="text-muted-foreground">
-                              {t.next_section_code ?? "—"} #{t.next_step_sequence ?? "—"}
-                            </div>
-                          </>
-                        ) : (
-                          <Badge variant="outline">Финальный</Badge>
+                  {readyItems.map((t) => {
+                    const isSelected = bulkSelection.isSelected(t.task_id);
+                    return (
+                      <TableRow
+                        key={t.task_id}
+                        className={bulkMode ? "cursor-pointer hover:bg-muted/50" : undefined}
+                        onClick={bulkMode ? () => bulkSelection.selectOne(t.task_id) : undefined}
+                      >
+                        {bulkMode && (
+                          <TableCell className="w-[40px] p-2" onClick={(e) => e.stopPropagation()}>
+                            <Checkbox
+                              checked={isSelected}
+                              onCheckedChange={() => bulkSelection.selectOne(t.task_id)}
+                            />
+                          </TableCell>
                         )}
-                      </TableCell>
-                      <TableCell>
-                        <Button
-                          size="sm"
-                          disabled={!t.has_next_step}
-                          onClick={() => setSendTask(t)}
-                        >
-                          Передать
-                        </Button>
-                      </TableCell>
-                    </TableRow>
-                  ))}
+                        <TableCell className="font-mono text-xs">#{t.task_id}</TableCell>
+                        <TableCell>{t.product_sku ?? "—"}</TableCell>
+                        <TableCell>
+                          <div className="text-xs">
+                            <div className="font-medium">{t.operation_name ?? "—"}</div>
+                            <div className="text-muted-foreground">#{t.sequence}</div>
+                          </div>
+                        </TableCell>
+                        <TableCell className="text-right tabular-nums">
+                          {fmtQty(t.transferable_quantity)}
+                          <div className="text-[10px] text-muted-foreground">
+                            из {fmtQty(t.planned_quantity)} план
+                          </div>
+                        </TableCell>
+                        <TableCell className="text-xs">
+                          {t.has_next_step ? (
+                            <>
+                              <div>{t.next_operation_name ?? "—"}</div>
+                              <div className="text-muted-foreground">
+                                {t.next_section_code ?? "—"} #{t.next_step_sequence ?? "—"}
+                              </div>
+                            </>
+                          ) : (
+                            <Badge variant="outline">Финальный</Badge>
+                          )}
+                        </TableCell>
+                        {!bulkMode && (
+                          <TableCell>
+                            <Button
+                              size="sm"
+                              disabled={!t.has_next_step}
+                              onClick={() => setSendTask(t)}
+                            >
+                              Передать
+                            </Button>
+                          </TableCell>
+                        )}
+                      </TableRow>
+                    );
+                  })}
                 </TableBody>
               </Table>
             )}
@@ -361,6 +533,22 @@ export function TransfersPage() {
           }}
         />
       )}
+
+      {bulkSendOpen && (
+        <CreateBulkTransferDialog
+          selectedTasks={readyItems.filter(t => bulkSelection.isSelected(t.task_id))}
+          onClose={() => setBulkSendOpen(false)}
+          onSubmit={handleBulkTransferSubmit}
+        />
+      )}
+
+      <BulkResultsDialog
+        open={bulkResultsOpen}
+        onOpenChange={setBulkResultsOpen}
+        title="Результаты групповой передачи"
+        summary={bulkSummary}
+        results={bulkResults}
+      />
     </div>
   );
 }
@@ -620,6 +808,73 @@ function EditTransferDialog({
               disabled={mutation.isPending || qtyNum < 0 || !hasChanged}
             >
               {mutation.isPending ? "Сохранение..." : "Сохранить"}
+            </Button>
+          </div>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Create bulk transfer dialog
+// ---------------------------------------------------------------------------
+
+function CreateBulkTransferDialog({
+  selectedTasks,
+  onClose,
+  onSubmit,
+}: {
+  selectedTasks: ReadyToTransferTask[];
+  onClose: () => void;
+  onSubmit: (comment: string) => void;
+}) {
+  const [comment, setComment] = useState("");
+
+  return (
+    <Dialog open onOpenChange={(open) => !open && onClose()}>
+      <DialogContent className="max-w-md">
+        <DialogHeader>
+          <DialogTitle>Групповая передача на следующий этап</DialogTitle>
+          <DialogDescription>
+            Будет отправлено {selectedTasks.length} заданий на соответствующие следующие этапы маршрутов.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="space-y-4">
+          <div className="max-h-[200px] overflow-y-auto rounded-lg border p-3 bg-muted/20 text-xs space-y-2">
+            {selectedTasks.map((task) => (
+              <div key={task.task_id} className="flex justify-between border-b pb-1 last:border-b-0 last:pb-0">
+                <div>
+                  <span className="font-mono font-medium">#{task.task_id}</span> ({task.product_sku})
+                  <div className="text-muted-foreground">
+                    {task.operation_name} &rarr; {task.next_operation_name}
+                  </div>
+                </div>
+                <div className="text-right font-medium">
+                  {fmtQty(task.transferable_quantity)} шт.
+                </div>
+              </div>
+            ))}
+          </div>
+
+          <div>
+            <label className="text-sm font-medium">Общий комментарий</label>
+            <Input
+              value={comment}
+              onChange={(e) => setComment(e.target.value)}
+              placeholder="Опционально (применится ко всем передачам)"
+            />
+          </div>
+
+          <div className="flex justify-end gap-2 pt-2">
+            <Button variant="outline" onClick={onClose}>
+              Отмена
+            </Button>
+            <Button
+              onClick={() => onSubmit(comment)}
+              disabled={selectedTasks.length === 0}
+            >
+              Отправить все
             </Button>
           </div>
         </div>

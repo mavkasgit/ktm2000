@@ -383,3 +383,93 @@ async def move_operation_to_group(
     op.group_name = target_group.group_name
 
     await db.flush()
+
+
+class SectionOperationOut(BaseModel):
+    id: int
+    operation_code: str | None
+    operation_name: str
+    is_significant: bool
+    group_code: str | None = None
+    group_name: str | None = None
+
+
+class SectionWithOperationsOut(BaseModel):
+    id: int
+    code: str
+    name: str
+    kind: str
+    icon: str | None = None
+    icon_color: str | None = None
+    operations: list[SectionOperationOut]
+
+
+@router.get("/all/operations", response_model=list[SectionWithOperationsOut])
+async def list_sections_with_operations(
+    db: AsyncSession = Depends(get_db),
+) -> list[SectionWithOperationsOut]:
+    """List all active sections with their operations, filtered and resolved."""
+    sections = (
+        await db.execute(
+            select(Section)
+            .where(Section.is_active == True)
+            .order_by(Section.sort_order, Section.id)
+        )
+    ).scalars().all()
+
+    section_ids = [s.id for s in sections]
+    ops_by_section = {}
+    if section_ids:
+        ops = (
+            await db.execute(
+                select(SectionOperation)
+                .where(SectionOperation.section_id.in_(section_ids))
+                .order_by(SectionOperation.sort_order, SectionOperation.id)
+            )
+        ).scalars().all()
+        for op in ops:
+            ops_by_section.setdefault(op.section_id, []).append(op)
+
+    result = []
+    for s in sections:
+        section_ops = ops_by_section.get(s.id, [])
+        # Исключаем служебные плейсхолдеры групп, например __xxx__
+        filtered_ops = [
+            op for op in section_ops
+            if op.operation_code and not (op.operation_code.startswith("__") and op.operation_code.endswith("__"))
+        ]
+
+        # Если операций нет, делаем одну виртуальную
+        if not filtered_ops:
+            filtered_ops = [
+                SectionOperation(
+                    id=0,
+                    section_id=s.id,
+                    operation_code=s.code,
+                    operation_name=s.name,
+                    is_significant=True,
+                )
+            ]
+
+        result.append(
+            SectionWithOperationsOut(
+                id=s.id,
+                code=s.code,
+                name=s.name,
+                kind=s.kind,
+                icon=s.icon,
+                icon_color=s.icon_color,
+                operations=[
+                    SectionOperationOut(
+                        id=op.id or 0,
+                        operation_code=op.operation_code,
+                        operation_name=op.operation_name,
+                        is_significant=op.is_significant,
+                        group_code=op.group_code,
+                        group_name=op.group_name,
+                    )
+                    for op in filtered_ops
+                ]
+            )
+        )
+    return result

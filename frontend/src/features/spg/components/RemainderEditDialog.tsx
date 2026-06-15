@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useMemo } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { ArrowDownUp, History as HistoryIcon, Pencil, Plus, Trash2, Check, X, Search, Upload, Loader2 } from "lucide-react";
 import { IconAlertTriangle } from "@tabler/icons-react";
@@ -24,7 +24,9 @@ import {
   deleteManualRemainder,
 } from "@/shared/api/spg";
 import type { Product } from "@/shared/api/products";
-import { listProducts, getProductRouteStages } from "@/shared/api/products";
+import { listProducts } from "@/shared/api/products";
+import { listSectionsWithOperations } from "@/shared/api/sections";
+import type { SectionWithOperations } from "@/shared/api/sections";
 import { ManualOperationDialog } from "./ManualOperationDialog";
 import { RemainderHistoryDrawer } from "./RemainderHistoryDrawer";
 import { ImportRemaindersDialog } from "./ImportRemaindersDialog";
@@ -56,9 +58,28 @@ export function RemainderEditDialog({
   const [error, setError] = useState<string | null>(null);
 
   // Completed stages states
-  const [routeStages, setRouteStages] = useState<any[]>([]);
-  const [completedStageIds, setCompletedStageIds] = useState<number[]>([]);
+  const [sectionsWithOps, setSectionsWithOps] = useState<SectionWithOperations[]>([]);
+  const [completedOperationKeys, setCompletedOperationKeys] = useState<string[]>([]);
   const [loadingStages, setLoadingStages] = useState(false);
+
+  const flatOperations = useMemo(() => {
+    const flatOps: any[] = [];
+    sectionsWithOps.forEach((sec, secIdx) => {
+      const sequence = (secIdx + 1) * 10;
+      sec.operations.forEach((op) => {
+        flatOps.push({
+          sectionId: sec.id,
+          sectionCode: sec.code,
+          sectionName: sec.name,
+          sequence: sequence,
+          operationCode: op.operation_code,
+          operationName: op.operation_name,
+          uniqueKey: `stage_${sec.id}_op_${op.operation_code || "default"}`,
+        });
+      });
+    });
+    return flatOps;
+  }, [sectionsWithOps]);
 
   useEffect(() => {
     if (open) {
@@ -79,36 +100,38 @@ export function RemainderEditDialog({
   }, [open, editingRemainder, sections]);
 
   useEffect(() => {
-    if (open && selectedProductId) {
+    if (open) {
       setLoadingStages(true);
-      getProductRouteStages(selectedProductId)
+      listSectionsWithOperations()
         .then((items) => {
-          setRouteStages(items);
+          setSectionsWithOps(items);
           if (editingRemainder) {
             const completedNamesOrCodes = (editingRemainder.completed_stages || []).map(
               (cs: any) => cs.operation_code || cs.operation_name
             );
-            const initialIds = items
-              .filter((st) =>
-                st.operations.some(
-                  (op: any) =>
-                    completedNamesOrCodes.includes(op.operation_code) ||
-                    completedNamesOrCodes.includes(op.operation_name)
-                ) || completedNamesOrCodes.includes(st.section_name)
-              )
-              .map((st) => st.id);
-            setCompletedStageIds(initialIds);
+            const initialKeys: string[] = [];
+            items.forEach((s) => {
+              s.operations.forEach((op) => {
+                if (
+                  completedNamesOrCodes.includes(op.operation_code) ||
+                  completedNamesOrCodes.includes(op.operation_name)
+                ) {
+                  initialKeys.push(`stage_${s.id}_op_${op.operation_code || "default"}`);
+                }
+              });
+            });
+            setCompletedOperationKeys(initialKeys);
           } else {
-            setCompletedStageIds([]);
+            setCompletedOperationKeys([]);
           }
         })
-        .catch(() => setRouteStages([]))
+        .catch(() => setSectionsWithOps([]))
         .finally(() => setLoadingStages(false));
     } else {
-      setRouteStages([]);
-      setCompletedStageIds([]);
+      setSectionsWithOps([]);
+      setCompletedOperationKeys([]);
     }
-  }, [selectedProductId, open, editingRemainder]);
+  }, [open, editingRemainder]);
 
   const filteredProducts = productSearch.trim()
     ? products.filter(
@@ -156,13 +179,13 @@ export function RemainderEditDialog({
       return;
     }
 
-    const completed_stages = routeStages
-      .filter((st) => completedStageIds.includes(st.id))
-      .map((st) => ({
-        section_id: st.section_id,
-        operation_code: st.operations?.[0]?.operation_code || null,
-        operation_name: st.operations?.[0]?.operation_name || st.section_name,
-        sequence: st.sequence,
+    const completed_stages = flatOperations
+      .filter((op) => completedOperationKeys.includes(op.uniqueKey))
+      .map((op) => ({
+        section_id: op.sectionId,
+        operation_code: op.operationCode,
+        operation_name: op.operationName,
+        sequence: op.sequence,
       }));
 
     if (editingRemainder) {
@@ -181,11 +204,9 @@ export function RemainderEditDialog({
       };
       saveMutation.mutate({ kind: "create", payload });
     }
-  };
-
-  return (
+  };  return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-[480px]">
+      <DialogContent className="sm:max-w-[760px]">
         <DialogHeader>
           <DialogTitle>
             {editingRemainder ? "Редактировать остаток" : "Добавить остаток"}
@@ -244,59 +265,72 @@ export function RemainderEditDialog({
               value={selectedSectionId ?? ""}
               onChange={(e) => setSelectedSectionId(Number(e.target.value))}
             >
-              {sections.map((s) => (
-                <option key={s.section_id} value={s.section_id}>
-                  {s.section_code} — {s.section_name}
+              {sectionsWithOps.map((s) => (
+                <option key={s.id} value={s.id}>
+                  {s.code} — {s.name}
                 </option>
               ))}
             </select>
           </div>
 
           {/* Completed stages checkboxes */}
-          {selectedProductId && (
-            <div className="space-y-2 border-t pt-2">
-              <label className="text-sm font-medium text-foreground">Завершенные этапы производства</label>
-              {loadingStages ? (
-                <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                  Загрузка этапов маршрута...
-                </div>
-              ) : routeStages.length === 0 ? (
-                <div className="text-xs text-muted-foreground bg-muted p-2 rounded">
-                  Технологический маршрут не найден. Остаток будет создан без пройденных стадий.
-                </div>
-              ) : (
-                <div className="space-y-1 max-h-[160px] overflow-y-auto border rounded-md p-2 bg-muted/10">
-                  {routeStages.map((st) => {
-                    const isChecked = completedStageIds.includes(st.id);
-                    const opName = st.operations?.[0]?.operation_name || st.section_name;
-                    return (
-                      <label
-                        key={st.id}
-                        className="flex items-center gap-2 text-sm hover:bg-accent/40 p-1 rounded cursor-pointer"
-                      >
-                        <input
-                          type="checkbox"
-                          checked={isChecked}
-                          onChange={(e) => {
-                            if (e.target.checked) {
-                              setCompletedStageIds((prev) => [...prev, st.id]);
-                            } else {
-                              setCompletedStageIds((prev) => prev.filter((id) => id !== st.id));
-                            }
-                          }}
-                          className="rounded border-gray-300 text-primary focus:ring-primary h-4 w-4"
-                        />
-                        <span>
-                          Шаг {st.sequence}: <span className="font-medium">{st.section_code}</span> — {opName}
+          <div className="space-y-2 border-t pt-2">
+            <label className="text-sm font-medium text-foreground">Завершенные этапы производства</label>
+            {loadingStages ? (
+              <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                <Loader2 className="h-4 w-4 animate-spin" />
+                Загрузка этапов...
+              </div>
+            ) : sectionsWithOps.length === 0 ? (
+              <div className="text-xs text-muted-foreground bg-muted p-2 rounded">
+                Участки и операции не найдены.
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3 max-h-[340px] overflow-y-auto border rounded-md p-3 bg-muted/5">
+                {sectionsWithOps.map((sec) => {
+                  if (sec.operations.length === 0) return null;
+                  return (
+                    <div key={sec.id} className="border rounded-md p-2 bg-background space-y-1.5 flex flex-col justify-start">
+                      <div className="flex items-center gap-1.5 border-b pb-1">
+                        <span className="font-semibold text-[10px] text-primary bg-primary/10 px-1.5 py-0.5 rounded uppercase font-mono">
+                          {sec.code}
                         </span>
-                      </label>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
-          )}
+                        <span className="font-medium text-xs text-foreground truncate">{sec.name}</span>
+                      </div>
+                      <div className="space-y-1">
+                        {sec.operations.map((op) => {
+                          const uniqueKey = `stage_${sec.id}_op_${op.operation_code || "default"}`;
+                          const isChecked = completedOperationKeys.includes(uniqueKey);
+                          return (
+                            <label
+                              key={uniqueKey}
+                              className="flex items-start gap-2 text-xs hover:bg-accent/40 p-1 rounded cursor-pointer min-w-0"
+                            >
+                              <input
+                                type="checkbox"
+                                checked={isChecked}
+                                onChange={(e) => {
+                                  if (e.target.checked) {
+                                    setCompletedOperationKeys((prev) => [...prev, uniqueKey]);
+                                  } else {
+                                    setCompletedOperationKeys((prev) => prev.filter((k) => k !== uniqueKey));
+                                  }
+                                }}
+                                className="rounded border-gray-300 text-primary focus:ring-primary h-3.5 w-3.5 mt-0.5"
+                              />
+                              <span className="text-foreground text-xs leading-normal min-w-0 break-words">
+                                {op.operation_name}
+                              </span>
+                            </label>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
 
           {error && <div className="text-sm text-destructive">{error}</div>}
 
