@@ -4,7 +4,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { ArrowDown, ArrowUp, Loader2 } from "lucide-react";
 
 import { Button, Dialog, DialogContent, DialogHeader, DialogTitle, Input, Badge } from "@/shared/ui";
-import { listProducts, type Product } from "@/shared/api/products";
+import { listProducts, getProduct, type Product } from "@/shared/api/products";
 import {
   performManualStockOperation,
   getSpgAvailability,
@@ -71,11 +71,50 @@ export function ManualOperationDialog({
       setError(null);
       setProductSearch("");
       setAvailability(null);
-      if (products.length === 0) {
-        listProducts({ limit: 200 }).then(setProducts).catch(() => {});
+      setProducts([]);
+
+      // Загружаем продукт по умолчанию, если он передан
+      if (defaultProductId !== null) {
+        getProduct(defaultProductId)
+          .then((prod) => {
+            setProducts((prev) => {
+              if (prev.some((p) => p.id === prod.id)) return prev;
+              return [prod, ...prev];
+            });
+            setProductSearch(prod.sku);
+          })
+          .catch(() => {});
       }
     }
-  }, [open, defaultProductId, defaultSectionId, defaultType, sections, products.length]);
+  }, [open, defaultProductId, defaultSectionId, defaultType, sections]);
+
+  useEffect(() => {
+    if (!open) return;
+
+    // Предотвращаем повторный поиск при клике на элемент
+    const selectedProduct = products.find((p) => p.id === selectedProductId);
+    if (selectedProduct && selectedProduct.sku === productSearch) {
+      return;
+    }
+
+    const delayDebounceFn = setTimeout(() => {
+      const query = productSearch.trim();
+      listProducts(query ? { q: query, limit: 100 } : { limit: 100 })
+        .then((data) => {
+          setProducts((prev) => {
+            const merged = [...data];
+            const defProd = prev.find((p) => p.id === selectedProductId);
+            if (defProd && !merged.some((p) => p.id === defProd.id)) {
+              merged.unshift(defProd);
+            }
+            return merged;
+          });
+        })
+        .catch(() => {});
+    }, 300);
+
+    return () => clearTimeout(delayDebounceFn);
+  }, [productSearch, open, selectedProductId]);
 
   useEffect(() => {
     if (!open || selectedProductId == null || sectionId == null) {

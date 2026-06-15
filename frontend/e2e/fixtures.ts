@@ -27,7 +27,7 @@ export const test = base.extend<{
     await page.getByLabel(/email|логин|почта/i).first().fill("admin@ktm2000.local");
     await page.getByLabel(/password|пароль/i).first().fill("admin");
     await page.getByRole("button", { name: /войти|login/i }).click();
-    await page.waitForURL("**/planning", { timeout: 10_000 }).catch(() => {});
+    await page.waitForURL((url) => url.pathname === "/" || url.pathname.includes("/planning"), { timeout: 10_000 }).catch(() => {});
 
     await use(page);
   },
@@ -41,7 +41,7 @@ export const test = base.extend<{
         await page.getByLabel(/email|логин|почта/i).first().fill("admin@ktm2000.local");
         await page.getByLabel(/password|пароль/i).first().fill("admin");
         await page.getByRole("button", { name: /войти|login/i }).click();
-        await page.waitForURL("**/planning", { timeout: 10_000 }).catch(() => {});
+        await page.waitForURL((url) => url.pathname === "/" || url.pathname.includes("/planning"), { timeout: 10_000 }).catch(() => {});
       }
     });
   },

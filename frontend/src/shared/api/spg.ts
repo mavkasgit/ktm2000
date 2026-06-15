@@ -358,12 +358,83 @@ export type ImportRemaindersResponse = {
   errors: string[];
 };
 
+export type SheetPreviewItem = {
+  source_row_number: number;
+  sku: string;
+  quantity: number | null;
+  completed_stages: Array<{
+    section_id: number;
+    section_code: string;
+    section_name: string;
+    operation_code: string | null;
+    operation_name: string;
+    sequence: number;
+    is_significant: boolean;
+  }>;
+  status: "pending" | "invalid";
+  errors: string[];
+  warnings: string[];
+  raw_values: string[];
+  product_id: number | null;
+  product_name: string | null;
+};
+
+export type SpgSheetPreviewResponse = {
+  sheet_name: string;
+  total_rows: number;
+  summary: {
+    total: number;
+    valid: number;
+    invalid: number;
+    quantity_total: number;
+  };
+  items: SheetPreviewItem[];
+};
+
+export async function previewSpgRemaindersExcel(
+  spgId: number,
+  file: File,
+  options?: {
+    sheet_index?: number;
+    row_selection?: string;
+  }
+): Promise<SpgSheetPreviewResponse> {
+  const formData = new FormData();
+  formData.append("file", file);
+  formData.append("sheet_index", String(options?.sheet_index ?? 0));
+  if (options?.row_selection?.trim()) {
+    formData.append("row_selection", options.row_selection.trim());
+  }
+  const { data } = await apiClient.post<SpgSheetPreviewResponse>(
+    `/spg/${spgId}/remainders/import/preview`,
+    formData,
+    {
+      headers: {
+        "Content-Type": "multipart/form-data",
+      },
+    }
+  );
+  return data;
+}
+
 export async function importRemaindersExcel(
   spgId: number,
   file: File,
+  options?: {
+    sheet_index?: number;
+    row_selection?: string;
+    skip_invalid?: boolean;
+    clear_existing?: boolean;
+  }
 ): Promise<ImportRemaindersResponse> {
   const formData = new FormData();
   formData.append("file", file);
+  formData.append("sheet_index", String(options?.sheet_index ?? 0));
+  if (options?.row_selection?.trim()) {
+    formData.append("row_selection", options.row_selection.trim());
+  }
+  formData.append("skip_invalid", String(options?.skip_invalid ?? false));
+  formData.append("clear_existing", String(options?.clear_existing ?? false));
   const { data } = await apiClient.post<ImportRemaindersResponse>(
     `/spg/${spgId}/remainders/import`,
     formData,
@@ -371,7 +442,18 @@ export async function importRemaindersExcel(
       headers: {
         "Content-Type": "multipart/form-data",
       },
-    },
+    }
   );
+  return data;
+}
+
+export type SpgImportOperation = {
+  operation_code: string | null;
+  operation_name: string;
+  section_name: string;
+};
+
+export async function getSpgImportOperations(spgId: number): Promise<SpgImportOperation[]> {
+  const { data } = await apiClient.get<SpgImportOperation[]>(`/spg/${spgId}/remainders/import/operations`);
   return data;
 }
