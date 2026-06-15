@@ -727,3 +727,37 @@ export async function manualPassPositionsExecutionBatch(
   );
   return data;
 }
+
+export type ProductWipRemainder = {
+  spg_id: number;
+  spg_code: string;
+  spg_name: string;
+  spg_icon: string | null;
+  spg_icon_color: string | null;
+  quantity: number;
+};
+
+export type ProductWipTask = {
+  section_id: number;
+  section_code: string;
+  section_name: string;
+  section_icon: string | null;
+  section_icon_color: string | null;
+  planned_qty: number;
+  completed_qty: number;
+  in_work_qty: number;
+  active_tasks_count: number;
+};
+
+export type ProductWipStats = {
+  sku: string;
+  product_name: string;
+  product_id: number | null;
+  remainders: ProductWipRemainder[];
+  in_work: ProductWipTask[];
+};
+
+export async function getProductWipStats(sku: string) {
+  const { data } = await apiClient.get<ProductWipStats>(`/production-planning/product-wip-stats/${encodeURIComponent(sku)}`);
+  return data;
+}

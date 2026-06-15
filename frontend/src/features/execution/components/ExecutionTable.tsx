@@ -77,9 +77,10 @@ interface ExecutionTableProps {
   onOpenHistory: (row: ProductionPlanningRow) => void;
   onToggleSelect: (id: number) => void;
   onSelectAll: () => void;
-  onRequestBulkSoftDelete: () => void;
   onResetAll: () => void;
+  onRequestBulkSoftDelete: () => void;
   onRemoveSelection?: (id: number) => void;
+  onSkuClick: (sku: string) => void;
   tableScrollRef: React.MutableRefObject<HTMLDivElement | null>;
 }
 
@@ -124,6 +125,7 @@ export function ExecutionTable({
   onResetAll,
   onRequestBulkSoftDelete,
   onRemoveSelection,
+  onSkuClick,
   tableScrollRef,
 }: ExecutionTableProps) {
   const visibleColumns = getExecutionTableColumns(hideColumnIds);
@@ -325,6 +327,7 @@ export function ExecutionTable({
                     onRestore={onRestore}
                     onSoftDelete={onSoftDelete}
                     onOpenHistory={onOpenHistory}
+                    onSkuClick={onSkuClick}
                   />
                 )}
               />

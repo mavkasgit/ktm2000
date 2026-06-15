@@ -46,6 +46,7 @@ interface ExecutionRowProps {
   onRestore: (row: ProductionPlanningRow) => void;
   onSoftDelete: (row: ProductionPlanningRow) => void;
   onOpenHistory: (row: ProductionPlanningRow) => void;
+  onSkuClick: (sku: string) => void;
 }
 
 export function ExecutionRow({
@@ -62,6 +63,7 @@ export function ExecutionRow({
   onRestore,
   onSoftDelete,
   onOpenHistory,
+  onSkuClick,
 }: ExecutionRowProps) {
   const canLaunch = row.position_status === "approved" && !row.has_tasks && !row.is_released && !!row.route_id;
   const canManualPass = !!row.route_id && ["approved", "released"].includes(row.position_status) && !row.is_completed;
@@ -89,9 +91,17 @@ export function ExecutionRow({
         );
       case "sku":
         return (
-          <span className="block truncate" title={row.source_sku}>
+          <button
+            type="button"
+            className="font-mono text-left text-blue-700 hover:underline focus:outline-none"
+            onClick={(e) => {
+              e.stopPropagation();
+              onSkuClick(row.source_sku);
+            }}
+            title="Показать сводную информацию по артикулу"
+          >
             {row.source_sku}
-          </span>
+          </button>
         );
       case "name":
         return (

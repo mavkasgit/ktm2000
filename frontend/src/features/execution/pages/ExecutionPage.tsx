@@ -37,6 +37,7 @@ import {
 } from "@/shared/bulk";
 import { ExecutionTable } from "../components/ExecutionTable";
 import { ExecutionDialogs } from "../components/ExecutionDialogs";
+import { ProductWipStatsDialog } from "../components/ProductWipStatsDialog";
 import {
   ExecutionSortField,
   positionStatusLabels,
@@ -51,6 +52,7 @@ import {
 
 export function ExecutionPage() {
   const [selectedPositionId, setSelectedPositionId] = useState<number | null>(null);
+  const [wipStatsSku, setWipStatsSku] = useState<string | null>(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [hideColumnIds, setHideColumnIds] = useState(false);
@@ -900,6 +902,7 @@ export function ExecutionPage() {
         onResetAll={handleResetAll}
         onRequestBulkSoftDelete={requestBulkSoftDelete}
         onRemoveSelection={(id) => setSelectionOrder((prev) => prev.filter((x) => x !== id))}
+        onSkuClick={setWipStatsSku}
         tableScrollRef={tableScrollRef}
       />
 
@@ -952,6 +955,14 @@ export function ExecutionPage() {
         onHistoryDialogChange={setHistoryDialogOpen}
         historyLoading={historyLoading}
         historyEntries={historyEntries}
+      />
+
+      <ProductWipStatsDialog
+        sku={wipStatsSku}
+        open={wipStatsSku !== null}
+        onOpenChange={(open) => {
+          if (!open) setWipStatsSku(null);
+        }}
       />
     </>
   );

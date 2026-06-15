@@ -18,6 +18,9 @@ from app.models.work_task import WorkTask, WorkTaskStatus
 from app.models.route import ProductionRoute, RouteStage
 from app.models.section import Section
 from app.models.user import User
+from app.models.product import Product
+from app.models.spg import StorageProductionGroup
+from app.models.spg_remainder import SpgRemainder
 from app.services.production_planning_rows import get_production_planning_row_detail, list_production_planning_rows
 from app.services.production_plan_service import _refresh_plan_status, restore_plan_position, soft_delete_cancelled_position
 from app.services.plan_generation import create_release_batch, release_batch
@@ -680,33 +683,35 @@ async def _do_manual_pass(
                     accounted_at=now,
                 )
                 if next_task is not None:
-                    transfer_result = await transfer_send(
-                        db,
-                        from_task_id=task.id,
-                        to_task_id=next_task.id,
-                        quantity=quantity,
-                        actor_id=current_user.id,
-                        comment=manual_comment,
-                        source_ref=source_ref,
-                        idempotency_key=f"{operation_key}:transfer",
-                        executor_user_id=current_user.id,
-                        performed_at=now,
-                        accounted_at=now,
-                    )
-                    await transfer_receive(
-                        db,
-                        transfer_id=int(transfer_result["transfer_id"]),
-                        accepted_quantity=quantity,
-                        rejected_quantity=Decimal("0"),
-                        actor_id=current_user.id,
-                        reason="manual_route_pass",
-                        comment=manual_comment,
-                        source_ref=source_ref,
-                        idempotency_key=f"{operation_key}:receive",
-                        executor_user_id=current_user.id,
-                        performed_at=now,
-                        accounted_at=now,
-                    )
+                    from app.services.shopfloor.common import sections_share_spg
+                    if not await sections_share_spg(db, task.section_id, next_task.section_id):
+                        transfer_result = await transfer_send(
+                            db,
+                            from_task_id=task.id,
+                            to_task_id=next_task.id,
+                            quantity=quantity,
+                            actor_id=current_user.id,
+                            comment=manual_comment,
+                            source_ref=source_ref,
+                            idempotency_key=f"{operation_key}:transfer",
+                            executor_user_id=current_user.id,
+                            performed_at=now,
+                            accounted_at=now,
+                        )
+                        await transfer_receive(
+                            db,
+                            transfer_id=int(transfer_result["transfer_id"]),
+                            accepted_quantity=quantity,
+                            rejected_quantity=Decimal("0"),
+                            actor_id=current_user.id,
+                            reason="manual_route_pass",
+                            comment=manual_comment,
+                            source_ref=source_ref,
+                            idempotency_key=f"{operation_key}:receive",
+                            executor_user_id=current_user.id,
+                            performed_at=now,
+                            accounted_at=now,
+                        )
                 elif stage.is_final:
                     await final_release(
                         db,
@@ -1358,3 +1363,126 @@ async def _process_position_take_to_work(
             status="failed",
             reason=f"Internal error: {str(exc)}",
         )
+
+
+class ProductWipRemainderOut(BaseModel):
+    spg_id: int
+    spg_code: str
+    spg_name: str
+    spg_icon: str | None = None
+    spg_icon_color: str | None = None
+    quantity: float
+
+class ProductWipTaskOut(BaseModel):
+    section_id: int
+    section_code: str
+    section_name: str
+    section_icon: str | None = None
+    section_icon_color: str | None = None
+    planned_qty: float
+    completed_qty: float
+    in_work_qty: float
+    active_tasks_count: int
+
+class ProductWipStatsOut(BaseModel):
+    sku: str
+    product_name: str
+    product_id: int | None = None
+    remainders: list[ProductWipRemainderOut]
+    in_work: list[ProductWipTaskOut]
+
+
+@router.get("/product-wip-stats/{sku}", response_model=ProductWipStatsOut)
+async def get_product_wip_stats(
+    sku: str,
+    db: AsyncSession = Depends(get_db),
+):
+    # 1. Поиск продукта по артикулу
+    product = (
+        await db.execute(select(Product).where(Product.sku == sku))
+    ).scalar_one_or_none()
+    
+    if not product:
+        raise HTTPException(status_code=404, detail="Product not found")
+
+    # 2. Поиск остатков на СПГ (ГХП)
+    rem_q = (
+        select(
+            SpgRemainder.spg_id,
+            StorageProductionGroup.code.label("spg_code"),
+            StorageProductionGroup.name.label("spg_name"),
+            StorageProductionGroup.icon.label("spg_icon"),
+            StorageProductionGroup.icon_color.label("spg_icon_color"),
+            func.sum(SpgRemainder.remainder_quantity).label("total_qty")
+        )
+        .join(StorageProductionGroup, SpgRemainder.spg_id == StorageProductionGroup.id)
+        .where(SpgRemainder.product_id == product.id)
+        .where(SpgRemainder.consumed_at.is_(None))
+        .group_by(
+            SpgRemainder.spg_id,
+            StorageProductionGroup.code,
+            StorageProductionGroup.name,
+            StorageProductionGroup.icon,
+            StorageProductionGroup.icon_color
+        )
+    )
+    rem_rows = (await db.execute(rem_q)).all()
+    remainders = [
+        ProductWipRemainderOut(
+            spg_id=r.spg_id,
+            spg_code=r.spg_code,
+            spg_name=r.spg_name,
+            spg_icon=r.spg_icon,
+            spg_icon_color=r.spg_icon_color,
+            quantity=float(r.total_qty or 0)
+        )
+        for r in rem_rows if float(r.total_qty or 0) != 0.0
+    ]
+
+    # 3. Поиск активных задач в работе (ready, in_progress) по всем секциям
+    work_q = (
+        select(
+            WorkTask.section_id,
+            Section.code.label("section_code"),
+            Section.name.label("section_name"),
+            Section.icon.label("section_icon"),
+            Section.icon_color.label("section_icon_color"),
+            func.sum(WorkTask.planned_quantity).label("planned_qty"),
+            func.sum(WorkTask.cached_completed_quantity).label("completed_qty"),
+            func.sum(WorkTask.cached_in_work_quantity).label("in_work_qty"),
+            func.count(WorkTask.id).label("active_tasks_count")
+        )
+        .join(Section, WorkTask.section_id == Section.id)
+        .where(WorkTask.product_id == product.id)
+        .where(WorkTask.status.in_([WorkTaskStatus.ready, WorkTaskStatus.in_progress]))
+        .group_by(
+            WorkTask.section_id,
+            Section.code,
+            Section.name,
+            Section.icon,
+            Section.icon_color
+        )
+    )
+    work_rows = (await db.execute(work_q)).all()
+    in_work = [
+        ProductWipTaskOut(
+            section_id=w.section_id,
+            section_code=w.section_code,
+            section_name=w.section_name,
+            section_icon=w.section_icon,
+            section_icon_color=w.section_icon_color,
+            planned_qty=float(w.planned_qty or 0),
+            completed_qty=float(w.completed_qty or 0),
+            in_work_qty=float(w.in_work_qty or 0),
+            active_tasks_count=w.active_tasks_count
+        )
+        for w in work_rows
+    ]
+
+    return ProductWipStatsOut(
+        sku=product.sku,
+        product_name=product.name,
+        product_id=product.id,
+        remainders=remainders,
+        in_work=in_work
+    )

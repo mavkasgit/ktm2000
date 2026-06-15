@@ -1100,3 +1100,113 @@ async def test_rows_list_marks_completed_if_final_task_completed(client, session
     row = next((item for item in rows if item["plan_position_id"] == position.id), None)
     assert row is not None
     assert row["is_completed"] is True
+
+
+async def test_get_product_wip_stats(client, session):
+    from app.models.spg import StorageProductionGroup
+    from app.models.spg_remainder import SpgRemainder
+
+    # 1. Создаем продукт с маршрутом
+    sku = "TEST-WIP-SKU-1"
+    product, route = await _make_product_with_route(session, sku=sku)
+
+    # Получаем этапы и секции
+    stages = (
+        await session.execute(
+            select(RouteStage).where(RouteStage.route_id == route.id).order_by(RouteStage.sequence)
+        )
+    ).scalars().all()
+    stage = stages[1]  # Второй этап (DRILL)
+    section_id = stage.section_id
+
+    # 2. Создаем СПГ и остаток
+    spg = StorageProductionGroup(code="TEST-SPG-1", name="Test SPG Warehouse", is_active=True)
+    session.add(spg)
+    await session.flush()
+
+    remainder = SpgRemainder(
+        spg_id=spg.id,
+        product_id=product.id,
+        remainder_quantity=Decimal("15.5"),
+        original_issued=Decimal("15.5"),
+    )
+    session.add(remainder)
+    await session.flush()
+
+    # 3. Создаем план, позицию плана, внутренний план, строку плана и активную задачу
+    plan = ProductionPlan(plan_no="PLAN-TEST-WIP", name="Plan Test WIP", status=ProductionPlanStatus.draft, period_start=date(2026, 6, 1))
+    session.add(plan)
+    await session.flush()
+
+    position = PlanPosition(
+        production_plan_id=plan.id,
+        product_id=product.id,
+        source_sku=sku,
+        source_name=product.name,
+        quantity=Decimal("100"),
+        status=PlanPositionStatus.approved,
+        validation_status=PlanPositionValidationStatus.valid,
+        source_type=PlanSourceType.manual,
+    )
+    session.add(position)
+    await session.flush()
+
+    internal_plan = InternalPlan(production_plan_id=plan.id)
+    session.add(internal_plan)
+    await session.flush()
+
+    line = SectionPlanLine(
+        internal_plan_id=internal_plan.id,
+        plan_position_id=position.id,
+        section_id=section_id,
+        product_id=product.id,
+        route_id=route.id,
+        route_stage_id=stage.id,
+        sequence=1,
+        planned_quantity=Decimal("100"),
+    )
+    session.add(line)
+    await session.flush()
+
+    task = WorkTask(
+        section_plan_line_id=line.id,
+        section_id=section_id,
+        product_id=product.id,
+        route_stage_id=stage.id,
+        planned_quantity=Decimal("100"),
+        status=WorkTaskStatus.in_progress,
+        cached_completed_quantity=Decimal("20"),
+        cached_in_work_quantity=Decimal("80"),
+    )
+    session.add(task)
+    await session.commit()
+
+    # 4. Запрос к эндпоинту статистики
+    response = await client.get(f"/api/production-planning/product-wip-stats/{sku}")
+    assert response.status_code == 200
+    data = response.json()
+
+    assert data["sku"] == sku
+    assert data["product_name"] == product.name
+    assert data["product_id"] == product.id
+
+    # Проверяем остатки
+    assert len(data["remainders"]) == 1
+    rem = data["remainders"][0]
+    assert rem["spg_id"] == spg.id
+    assert rem["spg_code"] == "TEST-SPG-1"
+    assert rem["spg_name"] == "Test SPG Warehouse"
+    assert rem["quantity"] == 15.5
+
+    # Проверяем задачи в работе
+    assert len(data["in_work"]) == 1
+    work = data["in_work"][0]
+    assert work["section_id"] == section_id
+    assert work["planned_qty"] == 100.0
+    assert work["completed_qty"] == 20.0
+    assert work["in_work_qty"] == 80.0
+    assert work["active_tasks_count"] == 1
+
+    # 5. Запрос по несуществующему SKU
+    response_404 = await client.get("/api/production-planning/product-wip-stats/NON-EXISTENT-SKU")
+    assert response_404.status_code == 404
