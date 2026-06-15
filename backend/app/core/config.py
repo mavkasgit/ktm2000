@@ -8,7 +8,7 @@ _env_file = os.getenv("ENV_FILE") or str(BASE_DIR.parent / ".env.dev")
 
 
 class Settings(BaseSettings):
-    DATABASE_URL: str = "postgresql+asyncpg://ktm2000_user:ktm2000_pass@localhost:5202/ktm2000_dev"
+    DATABASE_URL: str = "postgresql+asyncpg://ktm2000_user:ktm2000_pass@localhost:5432/ktm2000_dev"
     ENV: str = "dev"
 
     SECRET_KEY: str = "ktm2000-dev-secret-change-me"

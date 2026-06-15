@@ -9,7 +9,7 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-ktm2000_pass}
       POSTGRES_DB: ${POSTGRES_DB:-ktm2000_dev}
     ports:
-      - "${DEV_POSTGRES_PORT:-5202}:5432"
+      - "${DEV_POSTGRES_PORT:-5432}:5432"
     volumes:
       - ${POSTGRES_DATA_PATH:-../../data/postgres-dev}:/var/lib/postgresql/data
     healthcheck:
