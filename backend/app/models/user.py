@@ -37,6 +37,11 @@ class User(Base):
     role: Mapped[UserRole] = mapped_column(Enum(UserRole, name="user_role"), nullable=False)
     section_id: Mapped[int | None] = mapped_column(ForeignKey("sections.id"), nullable=True)
     is_active: Mapped[bool] = mapped_column(nullable=False, default=True, server_default=text("true"))
+    hrms_access_level: Mapped[str] = mapped_column(String(50), nullable=False, default="no_access", server_default=text("'no_access'"))
+    tab_number: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    hrms_employee_id: Mapped[int | None] = mapped_column(BigInteger, unique=True, nullable=True)
+    position: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    department: Mapped[str | None] = mapped_column(String(255), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=text("now()")
     )
