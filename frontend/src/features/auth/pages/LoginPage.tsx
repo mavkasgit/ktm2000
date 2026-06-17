@@ -1,15 +1,17 @@
-import { useState, type FormEvent } from "react"
+import { useState, useEffect, useRef, type FormEvent } from "react"
 import { Navigate } from "react-router-dom"
 import { Factory, Loader2, Eye, EyeOff } from "lucide-react"
 import { useAuth } from "../hooks/useAuth"
 import { getErrorMessage } from "@/shared/api/client"
+import { verifyOTPProfileApi, setupPasswordWithOTPApi } from "../api"
+
 
 /**
  * Страница входа в систему KTM-2000.
  * Современная светлая тема, центрированная карточка.
  */
 export function LoginPage() {
-  const { login, loginWithOTP, isAuthenticated, isLoading: authLoading } = useAuth()
+  const { login, loginWithOTP, loginWithToken, isAuthenticated, isLoading: authLoading } = useAuth()
 
   const [loginMethod, setLoginMethod] = useState<"password" | "otp">("password")
   const [username, setUsername] = useState("")
@@ -19,6 +21,30 @@ export function LoginPage() {
   const [error, setError] = useState("")
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [shake, setShake] = useState(false)
+
+  // Новые состояния для двухэтапного входа по OTP и активации профиля
+  const [otpStep, setOtpStep] = useState<"code" | "setup-password">("code")
+  const [otpUserInfo, setOtpUserInfo] = useState<{ username: string; full_name: string } | null>(null)
+  const [newPassword, setNewPassword] = useState("")
+  const [confirmPassword, setConfirmPassword] = useState("")
+
+  const resetOTPStates = () => {
+    setOtpStep("code")
+    setOtpUserInfo(null)
+    setNewPassword("")
+    setConfirmPassword("")
+  }
+
+  const otpInputRef = useRef<HTMLInputElement>(null)
+
+  useEffect(() => {
+    if (loginMethod === "otp" && otpStep === "code") {
+      const timer = setTimeout(() => {
+        otpInputRef.current?.focus()
+      }, 50)
+      return () => clearTimeout(timer)
+    }
+  }, [loginMethod, otpStep])
 
   // Если идет проверка авторизации
   if (authLoading) {
@@ -42,10 +68,33 @@ export function LoginPage() {
       if (loginMethod === "password") {
         await login(username, password)
       } else {
-        if (!otpToken || otpToken.length !== 6) {
-          throw new Error("Код входа должен состоять из 6 цифр")
+        if (otpStep === "code") {
+          if (!otpToken || otpToken.length !== 6) {
+            throw new Error("Код входа должен состоять из 6 цифр")
+          }
+          const profile = await verifyOTPProfileApi(otpToken)
+          if (profile.is_password_set) {
+            // Если пароль уже задан — логинимся по OTP сразу
+            await loginWithOTP(otpToken)
+          } else {
+            // Иначе — открываем форму создания пароля
+            setOtpUserInfo(profile)
+            setOtpStep("setup-password")
+          }
+        } else {
+          // Шаг установки пароля
+          if (!newPassword) {
+            throw new Error("Пароль обязателен")
+          }
+          if (newPassword !== confirmPassword) {
+            throw new Error("Пароли не совпадают")
+          }
+          if (newPassword.length < 4) {
+            throw new Error("Пароль должен быть не менее 4 символов")
+          }
+          const { access_token } = await setupPasswordWithOTPApi(otpToken, newPassword)
+          await loginWithToken(access_token)
         }
-        await loginWithOTP(otpToken)
       }
     } catch (err) {
       const msg = getErrorMessage(err)
@@ -86,7 +135,7 @@ export function LoginPage() {
           <div className="mb-6 flex rounded-lg bg-slate-100 p-1">
             <button
               type="button"
-              onClick={() => { setLoginMethod("password"); setError(""); }}
+              onClick={() => { setLoginMethod("password"); setError(""); resetOTPStates(); }}
               className={`flex-1 rounded-md py-2 text-center text-xs font-medium transition-all duration-200 ${
                 loginMethod === "password"
                   ? "bg-white text-slate-900 shadow-sm"
@@ -97,7 +146,7 @@ export function LoginPage() {
             </button>
             <button
               type="button"
-              onClick={() => { setLoginMethod("otp"); setError(""); }}
+              onClick={() => { setLoginMethod("otp"); setError(""); resetOTPStates(); }}
               className={`flex-1 rounded-md py-2 text-center text-xs font-medium transition-all duration-200 ${
                 loginMethod === "otp"
                   ? "bg-white text-slate-900 shadow-sm"
@@ -154,7 +203,7 @@ export function LoginPage() {
                   </div>
                 </div>
               </>
-            ) : (
+            ) : otpStep === "code" ? (
               /* OTP Token */
               <div className="space-y-2">
                 <label htmlFor="login-otp" className="block text-sm font-medium text-slate-700 text-center">
@@ -162,6 +211,7 @@ export function LoginPage() {
                 </label>
                 <input
                   id="login-otp"
+                  ref={otpInputRef}
                   type="text"
                   maxLength={6}
                   placeholder="••••••"
@@ -170,6 +220,41 @@ export function LoginPage() {
                   onChange={(e) => setOtpToken(e.target.value.replace(/\D/g, ""))}
                   className="block w-full text-center tracking-[0.5em] text-xl font-bold rounded-lg border border-slate-300 bg-white px-4 py-2.5 shadow-sm outline-none transition-all duration-200 hover:border-slate-400 focus:border-blue-600 focus:ring-4 focus:ring-blue-600/10"
                 />
+              </div>
+            ) : (
+              /* Установка пароля (Активация профиля) */
+              <div className="space-y-4">
+                <div className="rounded-lg bg-blue-50/50 p-3 text-center border border-blue-100">
+                  <p className="text-xs text-blue-600 font-medium uppercase tracking-wider">Активация профиля</p>
+                  <p className="text-sm font-semibold text-slate-900 mt-1">{otpUserInfo?.full_name}</p>
+                  <p className="text-xs text-slate-500 mt-0.5">Логин: @{otpUserInfo?.username}</p>
+                </div>
+                <div className="space-y-2">
+                  <label htmlFor="setup-password" className="block text-sm font-medium text-slate-700">
+                    Придумайте пароль
+                  </label>
+                  <input
+                    id="setup-password"
+                    type="password"
+                    required
+                    value={newPassword}
+                    onChange={(e) => setNewPassword(e.target.value)}
+                    className="block w-full rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm text-slate-900 shadow-sm outline-none transition-all duration-200 hover:border-slate-400 focus:border-blue-600 focus:ring-4 focus:ring-blue-600/10"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <label htmlFor="confirm-password" className="block text-sm font-medium text-slate-700">
+                    Подтвердите пароль
+                  </label>
+                  <input
+                    id="confirm-password"
+                    type="password"
+                    required
+                    value={confirmPassword}
+                    onChange={(e) => setConfirmPassword(e.target.value)}
+                    className="block w-full rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm text-slate-900 shadow-sm outline-none transition-all duration-200 hover:border-slate-400 focus:border-blue-600 focus:ring-4 focus:ring-blue-600/10"
+                  />
+                </div>
               </div>
             )}
 
@@ -187,8 +272,25 @@ export function LoginPage() {
               className="flex w-full items-center justify-center gap-2 rounded-lg bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white shadow-md shadow-blue-600/10 transition-all duration-200 hover:bg-blue-700 hover:shadow-lg focus:outline-none focus:ring-2 focus:ring-blue-500/50 focus:ring-offset-2 focus:ring-offset-white disabled:cursor-not-allowed disabled:opacity-60"
             >
               {isSubmitting && <Loader2 className="h-4 w-4 animate-spin" />}
-              {isSubmitting ? "Вход..." : "Войти"}
+              {isSubmitting
+                ? "Обработка..."
+                : loginMethod === "password"
+                ? "Войти"
+                : otpStep === "code"
+                ? "Продолжить"
+                : "Сохранить пароль и войти"}
             </button>
+
+            {/* Ссылка возврата на первый шаг для OTP */}
+            {loginMethod === "otp" && otpStep === "setup-password" && (
+              <button
+                type="button"
+                onClick={resetOTPStates}
+                className="mt-2 w-full text-center text-xs text-slate-500 hover:text-slate-800 transition-colors"
+              >
+                Вернуться к вводу кода
+              </button>
+            )}
           </form>
         </div>
 

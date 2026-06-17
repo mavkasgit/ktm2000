@@ -1,8 +1,8 @@
 import { useEffect, useState, useMemo } from "react"
-import { Users, Plus, Shield, MapPin, CheckCircle2, XCircle, Search, Edit2, Key, Power, Loader2, ArrowLeft, Ticket } from "lucide-react"
+import { Users, Plus, Shield, MapPin, CheckCircle2, XCircle, Search, Edit2, Key, Power, Loader2, ArrowLeft, Ticket, Link } from "lucide-react"
 import { useNavigate } from "react-router-dom"
 import { useAuth } from "@/features/auth/hooks/useAuth"
-import { listUsers, createUser, updateUser, resetPassword, type CreateUserInput, type UpdateUserInput } from "../api"
+import { listUsers, createUser, updateUser, resetPassword, listHrmsEmployees, type CreateUserInput, type UpdateUserInput, type HrmsEmployee } from "../api"
 import { listSections, type Section } from "@/shared/api/sections"
 import type { User, UserRole } from "@/features/auth/api"
 import { generateOTPApi } from "@/features/auth/api"
@@ -78,6 +78,12 @@ export function UsersPage() {
   const [sectionIds, setSectionIds] = useState<number[]>([])
   const [isActive, setIsActive] = useState(true)
   const [submitting, setSubmitting] = useState(false)
+  const [hrmsAccessLevel, setHrmsAccessLevel] = useState<string>("no_access")
+  
+  // Дополнительные состояния для привязки к сотрудникам HRMS
+  const [hrmsEmployeeId, setHrmsEmployeeId] = useState("")
+  const [employees, setEmployees] = useState<HrmsEmployee[]>([])
+  const [linkEmployee, setLinkEmployee] = useState(false)
 
   // Состояние диалога сброса пароля
   const [resetDialogOpen, setResetDialogOpen] = useState(false)
@@ -130,15 +136,20 @@ export function UsersPage() {
     setLoading(true)
     setError("")
     try {
-      const [usersData, sectionsData] = await Promise.all([listUsers(), listSections()])
+      const [usersData, sectionsData, employeesData] = await Promise.all([
+        listUsers(),
+        listSections(),
+        listHrmsEmployees(),
+      ])
       setUsers(usersData)
       setSections(sectionsData)
+      setEmployees(employeesData)
     } catch (err) {
       setError(err instanceof Error ? err.message : "Не удалось загрузить данные")
       toast({
         variant: "destructive",
         title: "Ошибка загрузки",
-        description: "Не удалось загрузить пользователей или участки.",
+        description: "Не удалось загрузить пользователей, участки или сотрудников.",
       })
     } finally {
       setLoading(false)
@@ -179,6 +190,9 @@ export function UsersPage() {
     setRole("viewer")
     setSectionIds([])
     setIsActive(true)
+    setHrmsEmployeeId("none")
+    setLinkEmployee(false)
+    setHrmsAccessLevel("no_access")
     setDialogOpen(true)
   }
 
@@ -192,6 +206,9 @@ export function UsersPage() {
     setRole(user.role)
     setSectionIds(user.section_ids || (user.section_id ? [user.section_id] : []))
     setIsActive(user.is_active)
+    setHrmsEmployeeId(user.hrms_employee_id?.toString() || "none")
+    setLinkEmployee(!!user.hrms_employee_id)
+    setHrmsAccessLevel(user.hrms_access_level || "no_access")
     setDialogOpen(true)
   }
 
@@ -207,17 +224,16 @@ export function UsersPage() {
 
     try {
       if (dialogMode === "create") {
-        if (!password) {
-          throw new Error("Пароль обязателен для нового пользователя")
-        }
         const payload: CreateUserInput = {
           username: username.trim(),
           email: email.trim(),
-          password,
+          password: password || undefined,
           full_name: fullName.trim(),
           role,
           section_id: ["section_manager", "operator"].includes(role) && sectionIds.length > 0 ? sectionIds[0] : null,
           section_ids: ["section_manager", "operator"].includes(role) ? sectionIds : [],
+          hrms_employee_id: linkEmployee && hrmsEmployeeId !== "none" ? Number(hrmsEmployeeId) : null,
+          hrms_access_level: hrmsAccessLevel,
         }
         await createUser(payload)
         toast({
@@ -233,6 +249,8 @@ export function UsersPage() {
           section_id: ["section_manager", "operator"].includes(role) && sectionIds.length > 0 ? sectionIds[0] : null,
           section_ids: ["section_manager", "operator"].includes(role) ? sectionIds : [],
           is_active: selectedUser.id === currentUser?.id ? undefined : isActive, // Запрет деактивации самого себя
+          hrms_employee_id: linkEmployee && hrmsEmployeeId !== "none" ? Number(hrmsEmployeeId) : null,
+          hrms_access_level: hrmsAccessLevel,
         }
         await updateUser(selectedUser.id, payload)
         toast({
@@ -273,6 +291,30 @@ export function UsersPage() {
       toast({
         variant: "destructive",
         title: "Ошибка смены пароля",
+        description: detail,
+      })
+    } finally {
+      setResetSubmitting(false)
+    }
+  }
+
+  const handleClearPassword = async () => {
+    if (!resettingUser) return
+    setResetSubmitting(true)
+
+    try {
+      await resetPassword(resettingUser.id, "")
+      toast({
+        variant: "success",
+        title: "Пароль очищен",
+        description: `Пароль пользователя ${resettingUser.username} успешно очищен. Профиль переведен в статус активации.`,
+      })
+      setResetDialogOpen(false)
+    } catch (err: any) {
+      const detail = err?.response?.data?.detail || err.message || "Не удалось очистить пароль"
+      toast({
+        variant: "destructive",
+        title: "Ошибка очистки пароля",
         description: detail,
       })
     } finally {
@@ -398,6 +440,12 @@ export function UsersPage() {
                               Это вы
                             </Badge>
                           )}
+                          {userItem.hrms_employee_id && (
+                            <Badge variant="outline" className="ml-2 text-[10px] py-0.5 px-1.5 bg-emerald-500/10 text-emerald-600 border-emerald-500/20 font-medium rounded-md">
+                              <Link className="h-3 w-3 mr-0.5 inline" />
+                              HRMS
+                            </Badge>
+                          )}
                         </div>
                         <div className="text-xs text-muted-foreground mt-0.5 flex flex-wrap items-center gap-x-2">
                           <span>Логин: <strong className="text-foreground">{userItem.username}</strong></span>
@@ -421,6 +469,23 @@ export function UsersPage() {
                           <Shield className="h-3.5 w-3.5 mr-1" />
                           {ROLE_LABELS[userItem.role]}
                         </Badge>
+                        <div className="mt-1">
+                          <Badge variant="outline" className={`text-[10px] py-0.5 px-2 font-medium rounded-md ${
+                            userItem.hrms_access_level === "admin"
+                              ? "bg-red-500/10 text-red-500 border-red-500/20"
+                              : userItem.hrms_access_level === "viewer"
+                              ? "bg-blue-500/10 text-blue-500 border-blue-500/20"
+                              : "bg-slate-500/10 text-slate-500 border-slate-500/20"
+                          }`}>
+                            HRMS: {
+                              userItem.hrms_access_level === "admin"
+                                ? "Полный доступ"
+                                : userItem.hrms_access_level === "viewer"
+                                ? "Только просмотр"
+                                : "Нет доступа"
+                            }
+                          </Badge>
+                        </div>
                       </td>
                       <td className="px-6 py-4 text-muted-foreground">
                         {userItem.section_ids && userItem.section_ids.length > 0 ? (
@@ -545,6 +610,63 @@ export function UsersPage() {
           </DialogHeader>
 
           <form onSubmit={handleSaveUser} className="space-y-4 pt-2">
+            {/* Опция привязки к сотруднику */}
+            <div className="flex items-center gap-2 pt-1">
+              <input
+                type="checkbox"
+                id="link-employee-chk"
+                checked={linkEmployee}
+                onChange={(e) => {
+                  setLinkEmployee(e.target.checked)
+                  if (!e.target.checked) {
+                    setHrmsEmployeeId("none")
+                  }
+                }}
+                className="h-4 w-4 rounded border-gray-300 text-violet-600 focus:ring-violet-500"
+              />
+              <label htmlFor="link-employee-chk" className="text-sm font-medium text-foreground cursor-pointer select-none">
+                Связать с сотрудником из HRMS
+              </label>
+            </div>
+
+            {/* Выбор сотрудника */}
+            {linkEmployee && (
+              <div className="space-y-1.5">
+                <label className="text-sm font-medium">Выберите сотрудника</label>
+                <Select
+                  value={hrmsEmployeeId}
+                  onValueChange={(val) => {
+                    setHrmsEmployeeId(val)
+                    if (val !== "none") {
+                      const emp = employees.find((e) => e.id.toString() === val)
+                      if (emp) {
+                        setFullName(emp.name)
+                        // Автозаполнение
+                        if (!username) {
+                          setUsername(`emp_${val}`)
+                        }
+                        if (!email) {
+                          setEmail(`emp_${val}@ktm2000.local`)
+                        }
+                      }
+                    }
+                  }}
+                >
+                  <SelectTrigger className="w-full bg-card">
+                    <SelectValue placeholder="Сотрудник не выбран" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="none">Выберите сотрудника...</SelectItem>
+                    {employees.map((e) => (
+                      <SelectItem key={e.id} value={e.id.toString()}>
+                        {e.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
+
             {/* ФИО */}
             <div className="space-y-1.5">
               <label htmlFor="user-name" className="text-sm font-medium">ФИО сотрудника</label>
@@ -554,6 +676,7 @@ export function UsersPage() {
                 required
                 value={fullName}
                 onChange={(e) => setFullName(e.target.value)}
+                disabled={linkEmployee && tabNumber !== "none"}
               />
             </div>
 
@@ -588,11 +711,12 @@ export function UsersPage() {
                 <Input
                   id="user-password"
                   type="password"
-                  required
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
-                  minLength={4}
                 />
+                <p className="text-xs text-muted-foreground mt-1">
+                  Оставьте пустым, чтобы пользователь создал пароль самостоятельно при первом входе по коду
+                </p>
               </div>
             )}
 
@@ -618,6 +742,24 @@ export function UsersPage() {
                       {label}
                     </SelectItem>
                   ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            {/* Доступ к HRMS */}
+            <div className="space-y-1.5">
+              <label className="text-sm font-medium">Доступ к HRMS</label>
+              <Select
+                value={hrmsAccessLevel}
+                onValueChange={(v) => setHrmsAccessLevel(v)}
+              >
+                <SelectTrigger className="w-full bg-card">
+                  <SelectValue placeholder="Выберите уровень доступа" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="no_access">Нет доступа</SelectItem>
+                  <SelectItem value="viewer">Только просмотр</SelectItem>
+                  <SelectItem value="admin">Полный доступ</SelectItem>
                 </SelectContent>
               </Select>
             </div>
@@ -721,11 +863,20 @@ export function UsersPage() {
               />
             </div>
 
-            <DialogFooter className="pt-2 flex gap-2">
-              <Button type="button" variant="outline" onClick={() => setResetDialogOpen(false)}>
+            <DialogFooter className="pt-2 flex flex-col gap-2 sm:flex-row sm:justify-end">
+              <Button type="button" variant="outline" onClick={() => setResetDialogOpen(false)} className="w-full sm:w-auto">
                 Отмена
               </Button>
-              <Button type="submit" disabled={resetSubmitting} className="bg-violet-600 hover:bg-violet-500">
+              <Button
+                type="button"
+                variant="destructive"
+                onClick={handleClearPassword}
+                disabled={resetSubmitting}
+                className="w-full sm:w-auto"
+              >
+                Очистить пароль
+              </Button>
+              <Button type="submit" disabled={resetSubmitting} className="bg-violet-600 hover:bg-violet-500 w-full sm:w-auto">
                 {resetSubmitting && <Loader2 className="h-4 w-4 mr-1.5 animate-spin" />}
                 Сбросить пароль
               </Button>

@@ -9,6 +9,9 @@ export interface CreateUserInput {
   role: UserRole
   section_id: number | null
   section_ids?: number[]
+  tab_number?: string | null
+  hrms_employee_id?: number | null
+  hrms_access_level?: string
 }
 
 export interface UpdateUserInput {
@@ -18,7 +21,25 @@ export interface UpdateUserInput {
   section_id?: number | null
   section_ids?: number[]
   is_active?: boolean
+  tab_number?: string | null
+  hrms_employee_id?: number | null
+  hrms_access_level?: string
 }
+
+export interface HrmsEmployee {
+  id: number
+  name: string
+  tab_number: string | null
+  position?: string
+  department?: string
+}
+
+/** Получить список сотрудников из HRMS */
+export async function listHrmsEmployees(): Promise<HrmsEmployee[]> {
+  const { data } = await apiClient.get<HrmsEmployee[]>("/users/employees")
+  return data
+}
+
 
 /** Получить список всех пользователей */
 export async function listUsers(): Promise<User[]> {

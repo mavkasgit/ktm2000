@@ -19,6 +19,9 @@ export interface User {
   section_id: number | null
   section_ids: number[]
   is_active: boolean
+  tab_number?: string | null
+  hrms_employee_id?: number | null
+  hrms_access_level?: string
   active_login_token?: ActiveToken | null
 }
 
@@ -64,3 +67,25 @@ export async function generateOTPApi(input: OTPGenerateInput): Promise<OTPGenera
   const { data } = await apiClient.post<OTPGenerateResponse>("/auth/otp/generate", input)
   return data
 }
+
+export interface OTPVerifyProfileResponse {
+  username: string
+  full_name: string
+  is_password_set: boolean
+}
+
+export async function verifyOTPProfileApi(token: string): Promise<OTPVerifyProfileResponse> {
+  const { data } = await apiClient.get<OTPVerifyProfileResponse>("/auth/otp/verify-profile", {
+    params: { token },
+  })
+  return data
+}
+
+export async function setupPasswordWithOTPApi(token: string, password: string): Promise<TokenResponse> {
+  const { data } = await apiClient.post<TokenResponse>("/auth/otp/setup-password", {
+    token,
+    password,
+  })
+  return data
+}
+
