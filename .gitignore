@@ -89,9 +89,7 @@ htmlcov/
 .qoder/
 .agents/
 
-# Docs (temporary)
-docs/*
-!docs/excel-import-route-passport.md
+
 
 # Backend data
 backend/data/
