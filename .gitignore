@@ -101,3 +101,6 @@ worktrees/
 
 # CodeGraph
 .codegraph/
+
+# AI tools data
+brain/
