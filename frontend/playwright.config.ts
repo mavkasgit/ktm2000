@@ -11,7 +11,7 @@ export default defineConfig({
   workers: 1,
   reporter: [["html", { outputFolder: "playwright-report" }], ["list"]],
   use: {
-    baseURL: `http://localhost:${PORT}`,
+    baseURL: `http://localhost:8082`,
     trace: "on-first-retry",
     screenshot: "only-on-failure",
     video: "retain-on-failure",
@@ -22,18 +22,18 @@ export default defineConfig({
       use: { ...devices["Desktop Chrome"] },
     },
   ],
-  webServer: [
-    {
-      command: `cd ../backend && poetry run uvicorn app.main:app --host 0.0.0.0 --port ${BACKEND_PORT}`,
-      url: `http://localhost:${BACKEND_PORT}/api/health`,
-      reuseExistingServer: true,
-      timeout: 30_000,
-    },
-    {
-      command: "npm run dev",
-      url: `http://localhost:${PORT}`,
-      reuseExistingServer: true,
-      timeout: 30_000,
-    },
-  ],
+  // webServer: [
+  //   {
+  //     command: `cd ../backend && poetry run uvicorn app.main:app --host 0.0.0.0 --port ${BACKEND_PORT}`,
+  //     url: `http://localhost:${BACKEND_PORT}/api/health`,
+  //     reuseExistingServer: true,
+  //     timeout: 30_000,
+  //   },
+  //   {
+  //     command: "npm run dev",
+  //     url: `http://localhost:${PORT}`,
+  //     reuseExistingServer: true,
+  //     timeout: 30_000,
+  //   },
+  // ],
 });

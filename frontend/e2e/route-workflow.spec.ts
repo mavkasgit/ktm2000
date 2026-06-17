@@ -11,7 +11,9 @@ import { test, expect } from "./fixtures";
  * 7. Verify tasks are created
  */
 
-const BACKEND_URL = "http://localhost:8010";
+const BACKEND_URL = process.env.E2E_API_URL 
+  ? process.env.E2E_API_URL.replace(/\/api$/, '') 
+  : "http://localhost:8082";
 
 // --- API helpers ---
 
@@ -83,7 +85,10 @@ test.describe("Route workflow E2E", () => {
   let testPlanId: number;
   let templateId: number;
 
-  test.beforeEach(async ({ page }) => {
+  test.beforeEach(async ({ page, loginAsAdmin }) => {
+    // Login as admin first
+    await loginAsAdmin();
+
     // Seed reference data via API before each test
     const seedResult = await apiSeedData();
     expect(seedResult).toBeDefined();

@@ -2,7 +2,9 @@ import { test, expect } from "./fixtures";
 import fs from "fs";
 import path from "path";
 
-const BACKEND_URL = "http://localhost:8010";
+const BACKEND_URL = process.env.E2E_API_URL 
+  ? process.env.E2E_API_URL.replace(/\/api$/, '') 
+  : "http://localhost:8082";
 
 // --- API Helpers ---
 
