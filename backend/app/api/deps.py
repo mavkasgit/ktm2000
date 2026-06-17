@@ -92,6 +92,18 @@ async def get_current_user(
         )
 
     token = auth_header[7:]
+
+    # Bypass for testing, internal communication, and dev tools (matching HRMS)
+    if token == "admin":
+        user = await db.scalar(select(User).where(User.username == "admin"))
+        if user:
+            return user
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Admin user not found in database",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
     try:
         payload = decode_access_token(token)
     except TokenError:

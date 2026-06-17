@@ -1,9 +1,11 @@
 from datetime import datetime
 from typing import Optional
+import httpx
+import logging
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, ConfigDict, EmailStr
-from sqlalchemy import select
+from sqlalchemy import select, or_
 from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -15,6 +17,7 @@ from app.models.section import Section
 
 router = APIRouter(prefix="/users", tags=["users"])
 
+logger = logging.getLogger(__name__)
 
 # ─── Pydantic schemas ────────────────────────────────────────────────
 
@@ -38,6 +41,9 @@ class UserOut(BaseModel):
     section_id: int | None
     section_ids: list[int] = []
     is_active: bool
+    tab_number: str | None = None
+    hrms_employee_id: int | None = None
+    hrms_access_level: str = "no_access"
     created_at: datetime
     active_login_token: Optional[ActiveTokenOut] = None
 
@@ -45,11 +51,14 @@ class UserOut(BaseModel):
 class UserCreate(BaseModel):
     username: str
     email: EmailStr
-    password: str
+    password: str | None = None
     full_name: str
     role: UserRole
     section_id: int | None = None
     section_ids: list[int] | None = None
+    tab_number: str | None = None
+    hrms_employee_id: int | None = None
+    hrms_access_level: str = "no_access"
 
 
 class UserUpdate(BaseModel):
@@ -59,10 +68,13 @@ class UserUpdate(BaseModel):
     section_id: int | None = None
     section_ids: list[int] | None = None
     is_active: bool | None = None
+    tab_number: str | None = None
+    hrms_employee_id: int | None = None
+    hrms_access_level: str | None = None
 
 
 class PasswordReset(BaseModel):
-    new_password: str
+    new_password: str | None = None
 
 
 # ─── Endpoints ────────────────────────────────────────────────────────
@@ -79,6 +91,41 @@ async def list_users(
     return [UserOut.model_validate(u) for u in users]
 
 
+@router.get("/employees")
+async def list_employees(
+    _current_user: User = Depends(require_role([UserRole.admin])),
+) -> list[dict]:
+    """
+    Получить список активных сотрудников из HRMS.
+    Запрос выполняется с использованием общего ключа JWT или специального токена.
+    """
+    try:
+        # Мы используем Authorization: Bearer admin для аутентификации на HRMS
+        headers = {"Authorization": "Bearer admin"}
+        params = {"status": "active", "per_page": 1000}
+        
+        # Сначала пробуем внутренний Docker URL (для продакшна)
+        url = "http://hrms-backend-prod:8000/api/employees"
+        
+        async with httpx.AsyncClient(timeout=2.0) as client:
+            try:
+                response = await client.get(url, headers=headers, params=params)
+                response.raise_for_status()
+                data = response.json()
+                return data.get("items", [])
+            except (httpx.ConnectError, httpx.ConnectTimeout, httpx.HTTPStatusError) as e:
+                logger.info(f"Failed to connect to HRMS via Docker network ({e}), falling back to localhost...")
+                # Если Docker URL недоступен, пробуем localhost (для разработки на локальной машине)
+                url_dev = "http://localhost:8000/api/employees"
+                response = await client.get(url_dev, headers=headers, params=params)
+                response.raise_for_status()
+                data = response.json()
+                return data.get("items", [])
+    except Exception as e:
+        logger.error(f"Failed to fetch employees from HRMS: {e}")
+        return []
+
+
 @router.post("", response_model=UserOut, status_code=status.HTTP_201_CREATED)
 async def create_user(
     payload: UserCreate,
@@ -86,21 +133,40 @@ async def create_user(
     _current_user: User = Depends(require_role([UserRole.admin])),
 ) -> UserOut:
     """Создать нового пользователя (только для admin)."""
-    # Check for duplicate username
-    existing_username = await db.scalar(select(User).where(User.username == payload.username))
-    if existing_username is not None:
+    # 1. Если передан hrms_employee_id или tab_number, проверяем, существует ли уже такой сотрудник в системе
+    existing_user = None
+    if payload.hrms_employee_id:
+        result = await db.execute(select(User).where(User.hrms_employee_id == payload.hrms_employee_id))
+        existing_user = result.scalars().first()
+    elif payload.tab_number:
+        result = await db.execute(select(User).where(User.tab_number == payload.tab_number))
+        existing_user = result.scalars().first()
+
+    if existing_user and existing_user.role != UserRole.operator:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail=f"User with username '{payload.username}' already exists",
+            detail=f"Сотрудник уже связан с активным пользователем '{existing_user.username}' с ролью '{existing_user.role.value if hasattr(existing_user.role, 'value') else str(existing_user.role)}'",
         )
 
-    # Check for duplicate email
+    # 2. Проверка уникальности логина
+    existing_username = await db.scalar(select(User).where(User.username == payload.username))
+    if existing_username is not None:
+        # Если логин занят другим пользователем (не тем, кого мы мержим)
+        if not existing_user or existing_username.id != existing_user.id:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"User with username '{payload.username}' already exists",
+            )
+
+    # 3. Проверка уникальности email
     existing_email = await db.scalar(select(User).where(User.email == payload.email))
     if existing_email is not None:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=f"User with email '{payload.email}' already exists",
-        )
+        # Если email занят другим пользователем (не тем, кого мы мержим)
+        if not existing_user or existing_email.id != existing_user.id:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"User with email '{payload.email}' already exists",
+            )
 
     section_ids = []
     if payload.section_ids is not None:
@@ -113,13 +179,41 @@ async def create_user(
         sections_res = await db.execute(select(Section).where(Section.id.in_(section_ids)))
         sections_list = list(sections_res.scalars().all())
 
+    if existing_user:
+        # Слияние/продвижение: обновляем существующего synced operator пользователя
+        existing_user.username = payload.username
+        existing_user.email = payload.email
+        existing_user.password_hash = get_password_hash(payload.password) if payload.password else ""
+        existing_user.full_name = payload.full_name
+        existing_user.role = payload.role
+        existing_user.is_active = True
+        existing_user.section_id = section_ids[0] if section_ids else None
+        existing_user.hrms_access_level = payload.hrms_access_level
+        if payload.hrms_employee_id is not None:
+            existing_user.hrms_employee_id = payload.hrms_employee_id
+        if payload.tab_number is not None:
+            existing_user.tab_number = payload.tab_number
+        
+        if sections_list:
+            existing_user.sections = sections_list
+        else:
+            existing_user.sections = []
+
+        await db.commit()
+        await db.refresh(existing_user)
+        return UserOut.model_validate(existing_user)
+
+    # Создание полностью новой записи
     user = User(
         username=payload.username,
         email=payload.email,
-        password_hash=get_password_hash(payload.password),
+        password_hash=get_password_hash(payload.password) if payload.password else "",
         full_name=payload.full_name,
         role=payload.role,
         section_id=section_ids[0] if section_ids else None,
+        tab_number=payload.tab_number,
+        hrms_employee_id=payload.hrms_employee_id,
+        hrms_access_level=payload.hrms_access_level,
         is_active=True,
     )
     if sections_list:
@@ -169,12 +263,35 @@ async def update_user(
             )
         user.username = payload.username
 
+    # Изменение табельного номера
+    if "tab_number" in payload.model_fields_set:
+        if payload.tab_number is None or payload.tab_number == "" or payload.tab_number == "none":
+            user.tab_number = None
+        else:
+            user.tab_number = payload.tab_number
+
+    # Изменение ID сотрудника HRMS
+    if "hrms_employee_id" in payload.model_fields_set:
+        if payload.hrms_employee_id is None or payload.hrms_employee_id == 0:
+            user.hrms_employee_id = None
+        elif payload.hrms_employee_id != user.hrms_employee_id:
+            # Проверяем на дубликат hrms_employee_id
+            dup = await db.scalar(select(User).where(User.hrms_employee_id == payload.hrms_employee_id))
+            if dup is not None and dup.id != user.id:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=f"Сотрудник с ID '{payload.hrms_employee_id}' уже привязан к другому пользователю",
+                )
+            user.hrms_employee_id = payload.hrms_employee_id
+
     if payload.full_name is not None:
         user.full_name = payload.full_name
     if payload.role is not None:
         user.role = payload.role
     if payload.is_active is not None:
         user.is_active = payload.is_active
+    if payload.hrms_access_level is not None:
+        user.hrms_access_level = payload.hrms_access_level
 
     # Асинхронно подгружаем отношение sections для предотвращения MissingGreenlet
     await db.refresh(user, attribute_names=["sections"])
@@ -212,5 +329,5 @@ async def reset_password(
             detail="User not found",
         )
 
-    user.password_hash = get_password_hash(payload.new_password)
+    user.password_hash = get_password_hash(payload.new_password) if payload.new_password else ""
     await db.commit()

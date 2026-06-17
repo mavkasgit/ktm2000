@@ -15,3 +15,15 @@ class OTPGenerateResponse(BaseModel):
 
 class OTPLoginRequest(BaseModel):
     token: str = Field(..., description="6-значный цифровой код входа")
+
+
+class OTPVerifyProfileResponse(BaseModel):
+    username: str = Field(..., description="Имя пользователя")
+    full_name: str = Field(..., description="ФИО пользователя")
+    is_password_set: bool = Field(..., description="Установлен ли пароль у пользователя")
+
+
+class OTPSetupPasswordRequest(BaseModel):
+    token: str = Field(..., description="6-значный цифровой код входа")
+    password: str = Field(..., description="Новый пароль пользователя")
+

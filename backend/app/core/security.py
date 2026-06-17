@@ -13,26 +13,50 @@ class TokenError(Exception):
 
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
-    return pwd_context.verify(plain_password, hashed_password)
+    if not hashed_password or not hashed_password.strip():
+        return False
+    try:
+        return pwd_context.verify(plain_password, hashed_password)
+    except Exception:
+        return False
 
 
 def get_password_hash(password: str) -> str:
     return pwd_context.hash(password)
 
 
-def create_access_token(subject: str, expires_delta: timedelta | None = None) -> str:
-    payload = {"sub": subject}
+def create_access_token(
+    subject: str,
+    role: str | None = None,
+    full_name: str | None = None,
+    hrms_access_level: str | None = None,
+    expires_delta: timedelta | None = None,
+) -> str:
+    payload = {
+        "sub": subject,
+        "username": subject,
+    }
+    if role is not None:
+        payload["role"] = role
+    if full_name is not None:
+        payload["full_name"] = full_name
+    if hrms_access_level is not None:
+        payload["hrms_access_level"] = hrms_access_level
+
     if expires_delta is not None:
         if expires_delta.total_seconds() != -1:
             payload["exp"] = datetime.now(UTC) + expires_delta
     else:
         payload["exp"] = datetime.now(UTC) + timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
-    return jwt.encode(payload, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
+    
+    secret_key = settings.JWT_SECRET_KEY or settings.SECRET_KEY
+    return jwt.encode(payload, secret_key, algorithm=settings.ALGORITHM)
 
 
 def decode_access_token(token: str) -> dict:
     try:
-        return jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
+        secret_key = settings.JWT_SECRET_KEY or settings.SECRET_KEY
+        return jwt.decode(token, secret_key, algorithms=[settings.ALGORITHM])
     except JWTError as exc:
         raise TokenError("Invalid token") from exc
 

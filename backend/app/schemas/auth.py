@@ -24,3 +24,4 @@ class MeResponse(BaseModel):
     section_id: int | None
     section_ids: list[int] = []
     is_active: bool
+    hrms_access_level: str = "no_access"

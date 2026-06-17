@@ -12,6 +12,8 @@ class Settings(BaseSettings):
     ENV: str = "dev"
 
     SECRET_KEY: str = "ktm2000-dev-secret-change-me"
+    INTEGRATION_TOKEN: str = "ktm2000-integration-token-default"
+    JWT_SECRET_KEY: str | None = None
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 1440
     ALGORITHM: str = "HS256"
     DEV_BYPASS_AUTH: bool = False

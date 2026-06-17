@@ -4,7 +4,7 @@ from jose import jwt
 from sqlalchemy import select
 
 from app.core.config import settings
-from app.core.security import get_password_hash
+from app.core.security import get_password_hash, decode_access_token
 from app.models.user import User, UserRole
 from app.models.user_login_token import UserLoginToken
 
@@ -110,7 +110,7 @@ async def test_otp_generation_and_login_flow(session, client) -> None:
     retrieved_jwt = login_body["access_token"]
 
     # Раскодируем токен и проверим время жизни (должно быть около 1 часа / 3600 сек)
-    payload = jwt.decode(retrieved_jwt, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
+    payload = decode_access_token(retrieved_jwt)
     assert payload["sub"] == operator_user.username
     exp_time = datetime.fromtimestamp(payload["exp"], UTC)
     now_time = datetime.now(UTC)
@@ -140,7 +140,7 @@ async def test_otp_generation_and_login_flow(session, client) -> None:
     inf_jwt = response_login_inf.json()["access_token"]
 
     # Проверяем, что в токене НЕТ поля 'exp'
-    payload_inf = jwt.decode(inf_jwt, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
+    payload_inf = decode_access_token(inf_jwt)
     assert "exp" not in payload_inf
     assert payload_inf["sub"] == operator_user.username
 
@@ -157,3 +157,118 @@ async def test_otp_generation_and_login_flow(session, client) -> None:
         json={"token": "999999"}
     )
     assert response_invalid.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_otp_verify_and_setup_password(session, client) -> None:
+    # 1. Создаем пользователя без пароля (password_hash = "")
+    admin_user = User(
+        username="admin_setup",
+        email="admin_setup@example.com",
+        password_hash=get_password_hash("pass"),
+        full_name="Admin Setup",
+        role=UserRole.admin,
+        is_active=True,
+    )
+    new_user = User(
+        username="new_user_setup",
+        email="new_user_setup@example.com",
+        password_hash="",  # Без пароля
+        full_name="New User Setup",
+        role=UserRole.operator,
+        is_active=True,
+    )
+    session.add(admin_user)
+    session.add(new_user)
+    await session.commit()
+
+    # Токен админа для генерации OTP
+    from app.core.security import create_access_token
+    admin_jwt = create_access_token(subject=admin_user.username)
+
+    # 2. Генерируем OTP для нового пользователя
+    response_otp = await client.post(
+        "/api/auth/otp/generate",
+        json={
+            "user_id": new_user.id,
+            "session_duration_seconds": 28800,
+        },
+        headers={"Authorization": f"Bearer {admin_jwt}"}
+    )
+    assert response_otp.status_code == 200
+    otp_code = response_otp.json()["token"]
+
+    # 3. Верифицируем токен
+    response_verify = await client.get(
+        f"/api/auth/otp/verify-profile?token={otp_code}"
+    )
+    assert response_verify.status_code == 200
+    verify_data = response_verify.json()
+    assert verify_data["username"] == "new_user_setup"
+    assert verify_data["full_name"] == "New User Setup"
+    assert verify_data["is_password_set"] is False
+
+    # 4. Попытка установить короткий пароль
+    response_short = await client.post(
+        "/api/auth/otp/setup-password",
+        json={"token": otp_code, "password": "123"}
+    )
+    assert response_short.status_code == 400
+    assert "не менее 4 символов" in response_short.json()["detail"]
+
+    # 5. Устанавливаем корректный пароль
+    response_setup = await client.post(
+        "/api/auth/otp/setup-password",
+        json={"token": otp_code, "password": "securepassword"}
+    )
+    assert response_setup.status_code == 200
+    setup_data = response_setup.json()
+    assert "access_token" in setup_data
+    setup_jwt = setup_data["access_token"]
+
+    # Проверяем расшифровку JWT
+    payload = decode_access_token(setup_jwt)
+    assert payload["sub"] == "new_user_setup"
+
+    # 6. Проверяем, что OTP-код погашен
+    tokens_in_db = (await session.execute(
+        select(UserLoginToken).where(UserLoginToken.user_id == new_user.id)
+    )).scalars().all()
+    assert len(tokens_in_db) == 1
+    assert tokens_in_db[0].is_used is True
+
+    # 7. Попытка повторно установить пароль по тому же коду
+    response_setup_again = await client.post(
+        "/api/auth/otp/setup-password",
+        json={"token": otp_code, "password": "anotherpassword"}
+    )
+    assert response_setup_again.status_code == 400
+
+    # 8. Пробуем войти под новым пользователем обычным входом с новым паролем
+    response_login = await client.post(
+        "/api/auth/login",
+        json={"username": "new_user_setup", "password": "securepassword"}
+    )
+    assert response_login.status_code == 200
+    assert "access_token" in response_login.json()
+
+    # 9. Админ очищает пароль пользователя (ставит пустую строку)
+    response_clear = await client.post(
+        f"/api/users/{new_user.id}/reset-password",
+        json={"new_password": ""},
+        headers={"Authorization": f"Bearer {admin_jwt}"}
+    )
+    assert response_clear.status_code == 204
+
+    # 10. Проверяем, что теперь обычный логин НЕ РАБОТАЕТ
+    response_login_fail = await client.post(
+        "/api/auth/login",
+        json={"username": "new_user_setup", "password": "securepassword"}
+    )
+    assert response_login_fail.status_code == 401
+
+    # 11. Проверяем в базе данных, что пароль пустой
+    await session.refresh(new_user)
+    assert new_user.password_hash == ""
+
+

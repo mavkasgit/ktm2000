@@ -6,10 +6,16 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
 from app.core.database import get_db
-from app.core.security import create_access_token
+from app.core.security import create_access_token, get_password_hash
 from app.models.user import User, UserRole
 from app.models.user_login_token import UserLoginToken
-from app.schemas.otp import OTPGenerateRequest, OTPGenerateResponse, OTPLoginRequest
+from app.schemas.otp import (
+    OTPGenerateRequest,
+    OTPGenerateResponse,
+    OTPLoginRequest,
+    OTPVerifyProfileResponse,
+    OTPSetupPasswordRequest,
+)
 from app.schemas.auth import TokenResponse
 
 router = APIRouter(prefix="/auth/otp", tags=["otp"])
@@ -143,3 +149,116 @@ async def login_with_otp(
 
     token = create_access_token(subject=user.username, expires_delta=expires_delta)
     return TokenResponse(access_token=token)
+
+
+@router.get("/verify-profile", response_model=OTPVerifyProfileResponse)
+async def verify_profile(
+    token: str,
+    db: AsyncSession = Depends(get_db)
+) -> OTPVerifyProfileResponse:
+    """Проверить временный код и вернуть данные профиля пользователя."""
+    now_time = datetime.now(UTC)
+    
+    # 1. Ищем неиспользованный и неистекший токен в БД
+    login_token = await db.scalar(
+        select(UserLoginToken).where(
+            and_(
+                UserLoginToken.token == token,
+                UserLoginToken.is_used == False,
+                UserLoginToken.expires_at > now_time
+            )
+        )
+    )
+
+    if not login_token:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Неверный или истекший код входа"
+        )
+
+    # 2. Находим пользователя
+    user = await db.get(User, login_token.user_id)
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Пользователь не найден"
+        )
+    if not user.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Пользователь заблокирован"
+        )
+
+    is_password_set = bool(user.password_hash and user.password_hash.strip())
+    return OTPVerifyProfileResponse(
+        username=user.username,
+        full_name=user.full_name,
+        is_password_set=is_password_set
+    )
+
+
+@router.post("/setup-password", response_model=TokenResponse)
+async def setup_password(
+    payload: OTPSetupPasswordRequest,
+    db: AsyncSession = Depends(get_db)
+) -> TokenResponse:
+    """Установить пароль по одноразовому коду и авторизовать пользователя."""
+    now_time = datetime.now(UTC)
+
+    # Валидация пароля на длину на бэкенде
+    if len(payload.password) < 4:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Пароль должен содержать не менее 4 символов"
+        )
+
+    # 1. Ищем неиспользованный и неистекший токен в БД
+    login_token = await db.scalar(
+        select(UserLoginToken).where(
+            and_(
+                UserLoginToken.token == payload.token,
+                UserLoginToken.is_used == False,
+                UserLoginToken.expires_at > now_time
+            )
+        )
+    )
+
+    if not login_token:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Неверный или истекший код входа"
+        )
+
+    # 2. Находим пользователя
+    user = await db.get(User, login_token.user_id)
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Пользователь не найден"
+        )
+    if not user.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Пользователь заблокирован"
+        )
+
+    # 3. Хэшируем и сохраняем новый пароль
+    user.password_hash = get_password_hash(payload.password)
+
+    # 4. Помечаем токен как использованный
+    login_token.is_used = True
+    await db.commit()
+
+    # 5. Генерируем JWT-токен (наследуем session_duration_seconds)
+    expires_delta = None
+    if login_token.session_duration_seconds is not None:
+        expires_delta = timedelta(seconds=login_token.session_duration_seconds)
+
+    token = create_access_token(
+        subject=user.username,
+        role=user.role.value if hasattr(user.role, "value") else str(user.role),
+        full_name=user.full_name,
+        expires_delta=expires_delta
+    )
+    return TokenResponse(access_token=token)
+
