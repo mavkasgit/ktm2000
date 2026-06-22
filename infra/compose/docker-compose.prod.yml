@@ -95,5 +95,4 @@ services:
     restart: unless-stopped
 
 networks:
-  shared_gateway:
-    external: true
+  shared_gateway: {}
