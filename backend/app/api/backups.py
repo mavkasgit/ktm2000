@@ -8,6 +8,7 @@ import tempfile
 import threading
 import uuid
 import zipfile
+import logging
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Callable, Dict, List, Optional
@@ -17,10 +18,12 @@ from fastapi import APIRouter, Body, Depends, Form, HTTPException, UploadFile, F
 from fastapi.responses import FileResponse
 from openpyxl import Workbook
 from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncSession
+from pydantic import BaseModel
 
 from app.core.config import settings
-from app.core.database import get_db, engine
+from app.core.database import engine
+
+logger = logging.getLogger("app.backups")
 
 router = APIRouter(prefix="/backups", tags=["backups"])
 
@@ -30,11 +33,20 @@ BACKUPS_DIR.mkdir(parents=True, exist_ok=True)
 BACKUP_DUMP_NAME = "database.dump"
 BACKUP_MANIFEST_NAME = "manifest.json"
 BACKUP_TABLE_EXPORTS_DIR = "exports/tables"
-BACKUP_TABLE_WORKBOOK_NAME = "ktm2000_tables.xlsx"
-BACKUP_STORAGE_DIRS = {
-    "imports": "IMPORT_STORAGE_DIR",
-    "products": "PRODUCT_PHOTO_DIR",
+
+# Динамический маппинг папок хранения для HRMS и KTM-2000
+_STORAGE_MAPPING = {
+    "ORDERS_PATH": "orders",
+    "STAFFING_PATH": "staffing",
+    "TEMPLATES_PATH": "templates",
+    "PERSONAL_FILES_PATH": "personal",
+    "IMPORT_STORAGE_DIR": "imports",
+    "PRODUCT_PHOTO_DIR": "products",
 }
+BACKUP_STORAGE_DIRS = {
+    val: key for key, val in _STORAGE_MAPPING.items() if hasattr(settings, key)
+}
+
 BACKUP_JOBS: dict[str, dict] = {}
 BACKUP_JOBS_LOCK = threading.Lock()
 
@@ -43,6 +55,12 @@ def _get_db_name() -> str:
     """Извлекает имя БД из DATABASE_URL."""
     url = settings.DATABASE_URL.replace("postgresql+asyncpg://", "postgresql://")
     return url.split("/")[-1]
+
+
+def _get_project_name() -> str:
+    """Определяет имя проекта на основе имени БД."""
+    db_name = _get_db_name()
+    return db_name.split("_")[0]
 
 
 def _get_db_connection(db_name: str | None = None) -> tuple[List[str], Dict[str, str]]:
@@ -74,43 +92,46 @@ def _docker_container_available() -> bool:
 
 
 def _run_postgres_cmd_docker(cmd: List[str], db_name: str | None = None) -> subprocess.CompletedProcess:
-    """Выполняет PostgreSQL-команду через docker exec внутрь контейнера БД."""
+    """Fallback: выполняет PostgreSQL-команду через docker exec внутрь контейнера БД."""
     if not _docker_container_available():
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=f"PostgreSQL client tools недоступны, а контейнер {settings.POSTGRES_CONTAINER_NAME} не запущен.",
         )
 
-    parsed = urlparse(settings.DATABASE_URL.replace("postgresql+asyncpg://", "postgresql://"))
-    user = unquote(parsed.username or "")
-    password = unquote(parsed.password or "")
-    database = db_name or parsed.path.lstrip("/")
+    connection_args, env = _get_db_connection(db_name)
+    
+    # Для выполнения внутри контейнера переопределяем хост на localhost и порт на 5432
+    docker_connection_args = list(connection_args)
+    try:
+        host_idx = docker_connection_args.index("-h")
+        docker_connection_args[host_idx + 1] = "localhost"
+    except ValueError:
+        pass
+    try:
+        port_idx = docker_connection_args.index("-p")
+        docker_connection_args[port_idx + 1] = "5432"
+    except ValueError:
+        pass
+
+    password = env.get("PGPASSWORD", "")
 
     docker_base = ["docker", "exec", "-i"]
     if password:
         docker_base.extend(["-e", f"PGPASSWORD={password}"])
     docker_base.append(settings.POSTGRES_CONTAINER_NAME)
 
-    # Inside the container, PostgreSQL listens on localhost:5432
-    # Strip any -h/-p/--host/--port flags from the original command
-    args = list(cmd[1:])
-    for flag in ["-h", "-p", "--host", "--port"]:
-        while flag in args:
-            idx = args.index(flag)
-            args.pop(idx)
-            if idx < len(args) and not args[idx].startswith("-"):
-                args.pop(idx)
-
     tool = cmd[0]
 
     if tool == "pg_dump":
+        args = list(cmd[1:])
         filepath = None
         if "-f" in args:
             idx = args.index("-f")
             filepath = args[idx + 1]
-            args.pop(idx)
-            args.pop(idx)
-        docker_cmd = docker_base + ["pg_dump"] + args + ["-U", user, "-d", database]
+            args.pop(idx)      # remove -f
+            args.pop(idx)      # remove filepath
+        docker_cmd = docker_base + ["pg_dump"] + args + docker_connection_args
         result = subprocess.run(docker_cmd, capture_output=True, text=False, timeout=300)
         if result.returncode == 0 and filepath:
             Path(filepath).write_bytes(result.stdout)
@@ -122,11 +143,12 @@ def _run_postgres_cmd_docker(cmd: List[str], db_name: str | None = None) -> subp
         )
 
     if tool == "pg_restore":
+        args = list(cmd[1:])
         filepath = None
         if args and not args[-1].startswith("-"):
             filepath = args[-1]
             args = args[:-1]
-        docker_cmd = docker_base + ["pg_restore"] + args + ["-U", user, "-d", database]
+        docker_cmd = docker_base + ["pg_restore"] + args + docker_connection_args
         if filepath:
             file_bytes = Path(filepath).read_bytes()
             result = subprocess.run(docker_cmd, input=file_bytes, capture_output=True, text=False, timeout=300)
@@ -139,8 +161,8 @@ def _run_postgres_cmd_docker(cmd: List[str], db_name: str | None = None) -> subp
             stderr=result.stderr.decode("utf-8", errors="replace") if result.stderr else "",
         )
 
-    # psql and others
-    docker_cmd = docker_base + [tool] + args + ["-U", user, "-d", database]
+    # psql и прочие
+    docker_cmd = docker_base + [tool] + cmd[1:] + docker_connection_args
     result = subprocess.run(docker_cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=300)
     return result
 
@@ -150,42 +172,34 @@ def _running_inside_docker() -> bool:
     return Path("/.dockerenv").exists()
 
 
-def _run_postgres_cmd_local(cmd: List[str], db_name: str | None = None) -> subprocess.CompletedProcess:
-    """Выполняет PostgreSQL-команду через локальные CLI-утилиты (psql/pg_dump/pg_restore) с подключением по TCP."""
-    parsed = urlparse(settings.DATABASE_URL.replace("postgresql+asyncpg://", "postgresql://"))
-    user = unquote(parsed.username or "")
-    password = unquote(parsed.password or "")
-    host = parsed.hostname or "localhost"
-    port = str(parsed.port or 5432)
-    database = db_name or parsed.path.lstrip("/")
-
-    env = os.environ.copy()
-    env["PGCLIENTENCODING"] = "UTF8"
-    if password:
-        env["PGPASSWORD"] = password
-
-    full_cmd = cmd + ["-h", host, "-p", port, "-U", user, "-d", database]
-    try:
-        return subprocess.run(full_cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", env=env, check=False, timeout=300)
-    except subprocess.TimeoutExpired:
-        raise HTTPException(
-            status_code=status.HTTP_504_GATEWAY_TIMEOUT,
-            detail=f"Команда {cmd[0]} превысила время ожидания (5 минут).",
-        )
-
-
 def _run_postgres_cmd(cmd: List[str], db_name: str | None = None) -> subprocess.CompletedProcess:
-    """Выполняет pg_dump/pg_restore/psql.
-    Внутри Docker-контейнера использует локальные CLI с TCP-подключением.
-    На хост-машине сначала пробует локальные CLI, если недоступны — fallback через Docker exec.
-    """
+    """Выполняет pg_dump/pg_restore/psql локально или через Docker fallback."""
     if _running_inside_docker():
-        return _run_postgres_cmd_local(cmd, db_name)
+        parsed = urlparse(settings.DATABASE_URL.replace("postgresql+asyncpg://", "postgresql://"))
+        user = unquote(parsed.username or "")
+        password = unquote(parsed.password or "")
+        host = parsed.hostname or "localhost"
+        port = str(parsed.port or 5432)
+        database = db_name or parsed.path.lstrip("/")
+
+        env = os.environ.copy()
+        env["PGCLIENTENCODING"] = "UTF8"
+        if password:
+            env["PGPASSWORD"] = password
+
+        full_cmd = cmd + ["-h", host, "-p", port, "-U", user, "-d", database]
+        try:
+            return subprocess.run(full_cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", env=env, check=False, timeout=300)
+        except subprocess.TimeoutExpired:
+            raise HTTPException(
+                status_code=status.HTTP_504_GATEWAY_TIMEOUT,
+                detail=f"Команда {cmd[0]} превысила время ожидания (5 минут).",
+            )
 
     connection_args, env = _get_db_connection(db_name)
     full_cmd = [cmd[0], *connection_args, *cmd[1:]]
     try:
-        return subprocess.run(
+        result = subprocess.run(
             full_cmd,
             capture_output=True,
             text=True,
@@ -195,12 +209,13 @@ def _run_postgres_cmd(cmd: List[str], db_name: str | None = None) -> subprocess.
             timeout=300,
             env=env,
         )
+        return result
     except FileNotFoundError:
         return _run_postgres_cmd_docker(cmd, db_name)
     except subprocess.TimeoutExpired:
         raise HTTPException(
             status_code=status.HTTP_504_GATEWAY_TIMEOUT,
-            detail=f"Команда {cmd[0]} превысила время ожидания (5 минут).",
+            detail="Команда превысила время ожидания (5 минут).",
         )
 
 
@@ -211,6 +226,7 @@ def _get_all_tables(db_name: str | None = None) -> List[str]:
         "-c", "SELECT tablename FROM pg_tables WHERE schemaname='public' AND tablename NOT LIKE 'pg_%' AND tablename NOT LIKE 'sql_%' ORDER BY tablename;"
     ], db_name)
     if result.returncode != 0:
+        logger.warning("Failed to get table list: %s", result.stderr)
         return []
     tables = [line.strip() for line in result.stdout.strip().split("\n") if line.strip()]
     return tables
@@ -221,7 +237,7 @@ def _get_current_preview(db_name: str | None = None) -> Dict:
     tables = _get_all_tables(db_name)
     stats: Dict[str, int] = {}
     for table in tables:
-        count_result = _run_postgres_cmd(["psql", "-t", "-A", "-c", f'SELECT COUNT(*) FROM "{table}";'], db_name)
+        count_result = _run_postgres_cmd(["psql", "-t", "-A", "-c", f"SELECT COUNT(*) FROM \"{table}\";"], db_name)
         try:
             stats[table] = int(count_result.stdout.strip())
         except (ValueError, TypeError):
@@ -416,14 +432,16 @@ def _write_table_exports_to_zip(
 
     workbook_stream = io.BytesIO()
     workbook.save(workbook_stream)
-    zip_file.writestr(BACKUP_TABLE_WORKBOOK_NAME, workbook_stream.getvalue())
+    
+    workbook_name = f"{_get_project_name()}_tables.xlsx"
+    zip_file.writestr(workbook_name, workbook_stream.getvalue())
 
     readme = (
         "Этот каталог содержит табличный экспорт для просмотра без восстановления БД.\n"
-        "../ktm2000_tables.xlsx — все таблицы в одном Excel-файле, по листу на таблицу.\n"
+        f"../{workbook_name} — все таблицы в одном Excel-файле, по листу на таблицу.\n"
         "tables/*.csv — отдельный CSV-файл на каждую таблицу в UTF-8 with BOM для Excel.\n"
         "Основной источник для восстановления системы: database.dump.\n"
-        "Файлы приложения лежат в data/imports, data/products.\n"
+        "Файлы приложения лежат в data/..."
     )
     zip_file.writestr("exports/README.txt", readme)
     return exports
@@ -471,7 +489,7 @@ def _extract_storage_dirs_from_archive(zip_path: Path, target_root: Path) -> Non
                 for prefix, name in allowed_prefixes.items():
                     if normalized.startswith(prefix):
                         storage_name = name
-                        relative_name = normalized[len(prefix):]
+                        relative_name = normalized[len(prefix) :]
                         break
                 if storage_name is None or not relative_name:
                     continue
@@ -516,7 +534,7 @@ def _replace_storage_dirs(extracted_root: Path) -> None:
 
 
 def _preview_dump_file(dump_path: Path, source_db: str | None = None) -> Dict:
-    preview_db = f"ktm2000_preview_{uuid.uuid4().hex[:8]}"
+    preview_db = f"{_get_project_name()}_preview_{uuid.uuid4().hex[:8]}"
     try:
         create_result = _run_postgres_cmd(["psql", "-c", f'CREATE DATABASE "{preview_db}";'], "postgres")
         if create_result.returncode != 0:
@@ -535,7 +553,7 @@ def _preview_dump_file(dump_path: Path, source_db: str | None = None) -> Dict:
         tables = _get_all_tables(preview_db)
         stats: Dict[str, int] = {}
         for table in tables:
-            count_result = _run_postgres_cmd(["psql", "-t", "-A", "-c", f'SELECT COUNT(*) FROM "{table}";'], preview_db)
+            count_result = _run_postgres_cmd(["psql", "-t", "-A", "-c", f"SELECT COUNT(*) FROM \"{table}\";"], preview_db)
             try:
                 stats[table] = int(count_result.stdout.strip())
             except (ValueError, TypeError):
@@ -559,6 +577,7 @@ def _restore_dump_file(dump_path: Path, db_name: str) -> None:
         "psql", "-c",
         f"SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '{safe_db_name}' AND pid <> pg_backend_pid();"
     ], "postgres")
+    logger.info("Terminated active connections: %s", term_result.stderr)
 
     reset_result = _run_postgres_cmd([
         "psql",
@@ -680,7 +699,7 @@ def _set_job_progress(job_id: str, progress: int, stage: str, message: str, **ex
         })
 
 
-def _create_backup_archive(job_id: str | None = None) -> Dict:
+def _create_backup_archive(job_id: str | None = None, backup_type: str = "manual") -> Dict:
     def report(progress: int, stage: str, message: str, **extra) -> None:
         if job_id:
             _set_job_progress(job_id, progress, stage, message, **extra)
@@ -706,6 +725,7 @@ def _create_backup_archive(job_id: str | None = None) -> Dict:
         meta["filename"] = filename
         meta["format"] = "archive-v2"
         meta["comment"] = ""
+        meta["backup_type"] = backup_type
         meta["storage"] = _storage_summary()
 
         with zipfile.ZipFile(filepath, "w", compression=zipfile.ZIP_DEFLATED) as zip_file:
@@ -724,7 +744,7 @@ def _create_backup_archive(job_id: str | None = None) -> Dict:
             meta["table_exports"] = {
                 "format": "csv+xlsx",
                 "path": BACKUP_TABLE_EXPORTS_DIR,
-                "workbook_path": BACKUP_TABLE_WORKBOOK_NAME,
+                "workbook_path": f"{_get_project_name()}_tables.xlsx",
                 "tables": table_exports,
             }
 
@@ -753,6 +773,7 @@ def _run_backup_job(job_id: str) -> None:
         result = _create_backup_archive(job_id)
         _set_job_progress(job_id, 100, "completed", "Бэкап готов", status="completed", result=result)
     except Exception as exc:
+        logger.exception("Backup job failed: %s", job_id)
         detail = exc.detail if isinstance(exc, HTTPException) else str(exc)
         _set_job_progress(job_id, 100, "failed", "Ошибка создания бэкапа", status="failed", error=detail)
 
@@ -810,11 +831,60 @@ async def get_backup_job(job_id: str) -> Dict:
         return dict(job)
 
 
+def _read_config_json() -> Dict:
+    config_path = BACKUPS_DIR / "config.json"
+    default_config = {"auto_enabled": False, "time_of_day": "23:00"}
+    if not config_path.exists():
+        return default_config
+    try:
+        data = json.loads(config_path.read_text(encoding="utf-8"))
+        return {
+            "auto_enabled": bool(data.get("auto_enabled", False)),
+            "time_of_day": str(data.get("time_of_day", "23:00"))
+        }
+    except Exception:
+        return default_config
+
+
+def _write_config_json(config: Dict) -> None:
+    config_path = BACKUPS_DIR / "config.json"
+    config_path.write_text(json.dumps(config, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
 @router.get("/config")
 async def get_backup_config() -> Dict:
-    """Получить текущее имя базы данных для подтверждения восстановления."""
+    """Получить текущие настройки автоматического бэкапа и имя БД."""
     _validate_admin()
-    return {"db_name": _get_db_name()}
+    config = _read_config_json()
+    return {
+        "db_name": _get_db_name(),
+        "auto_enabled": config["auto_enabled"],
+        "time_of_day": config["time_of_day"]
+    }
+
+
+class BackupConfigUpdate(BaseModel):
+    auto_enabled: bool
+    time_of_day: str  # В формате "HH:MM"
+
+
+@router.patch("/config")
+async def update_backup_config(payload: BackupConfigUpdate) -> Dict:
+    """Обновить настройки автоматического бэкапа."""
+    _validate_admin()
+    parts = payload.time_of_day.split(":")
+    if len(parts) != 2 or not all(p.isdigit() for p in parts) or not (0 <= int(parts[0]) <= 23) or not (0 <= int(parts[1]) <= 59):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Время должно быть в формате HH:MM (от 00:00 до 23:59)",
+        )
+    
+    config = {
+        "auto_enabled": payload.auto_enabled,
+        "time_of_day": payload.time_of_day
+    }
+    _write_config_json(config)
+    return config
 
 
 @router.get("")
@@ -830,6 +900,7 @@ async def list_backups() -> List[Dict]:
             "size": f.stat().st_size,
             "created_at": datetime.fromtimestamp(f.stat().st_mtime).isoformat(),
             "comment": meta.get("comment", "") if meta else "",
+            "backup_type": (meta or {}).get("backup_type") or "manual",
             "format": (meta or {}).get("format") or ("archive-v2" if _is_archive_backup(f) else "database-dump"),
         })
     return backups
@@ -842,9 +913,14 @@ async def download_backup(filename: str) -> FileResponse:
     filepath = BACKUPS_DIR / filename
     if not filepath.exists() or not filepath.is_file():
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Бэкап не найден")
+
+    meta = _read_backup_meta(filename)
+    comment = (meta or {}).get("comment", "").strip()
+    download_name = f"[{comment}] {filename}" if comment else filename
+
     return FileResponse(
         path=str(filepath),
-        filename=filename,
+        filename=download_name,
         media_type="application/octet-stream",
     )
 
@@ -906,7 +982,6 @@ async def delete_older_than(body: Dict) -> Dict:
 
     cutoff = datetime.now() - timedelta(days=days)
     deleted = []
-    not_found = []
 
     for f in _iter_backup_files():
         mtime = datetime.fromtimestamp(f.stat().st_mtime)
@@ -926,6 +1001,7 @@ async def preview_backup(filename: str) -> Dict:
     if not filepath.exists():
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Бэкап не найден")
 
+    # Пытаемся получить из JSON-кэша
     meta = _read_backup_meta(filename)
     if meta and "tables" in meta:
         return {
@@ -1033,6 +1109,7 @@ async def restore_backup(filename: str, body: Dict) -> Dict:
         _run_alembic_upgrade()
 
     migrate_result = _run_postgres_cmd(["psql", "-c", "SELECT 1"], db_name)
+    logger.info("DB ready check: %s", migrate_result.stdout)
 
     return {"status": "restored", "db_name": db_name, "filename": filename}
 

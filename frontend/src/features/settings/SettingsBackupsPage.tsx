@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState } from "react"
-import { Download, RotateCcw, Eye, Database, Upload, AlertTriangle, Loader2, CheckCircle2, Trash2, X } from "lucide-react"
+import { useEffect, useRef, useState, useMemo } from "react"
+import { Download, RotateCcw, Eye, Database, Upload, AlertTriangle, Loader2, CheckCircle2, Trash2, X, Clock, Save } from "lucide-react"
 import { Button } from "@/shared/ui/Button"
 import { Input } from "@/shared/ui/Input"
 import { cn } from "@/shared/utils/cn"
@@ -24,6 +24,7 @@ import {
 import {
   useBackups,
   useBackupConfig,
+  useUpdateBackupConfig,
   useBackupJob,
   useCurrentPreview,
   usePreviewBackup,
@@ -83,6 +84,7 @@ export function BackupsPage() {
   const isReadOnly = !canEditSettings
   const { data: backups, isLoading, refetch: refetchBackups } = useBackups()
   const { data: config } = useBackupConfig()
+  const updateConfig = useUpdateBackupConfig()
   const dbName = config?.db_name || "unknown"
   const startBackupJob = useStartBackupJob()
   const [activeBackupJobId, setActiveBackupJobId] = useState<string | null>(null)
@@ -97,6 +99,42 @@ export function BackupsPage() {
   const deleteBackup = useDeleteBackup()
   const bulkDelete = useBulkDeleteBackups()
   const deleteOlderThan = useDeleteBackupsOlderThan()
+
+  const [autoEnabled, setAutoEnabled] = useState(false)
+  const [timeOfDay, setTimeOfDay] = useState("23:00")
+  const [isSavingConfig, setIsSavingConfig] = useState(false)
+  const [configModalOpen, setConfigModalOpen] = useState(false)
+
+  const isValidTime = useMemo(() => {
+    return /^([01]\d|2[0-3]):[0-5]\d$/.test(timeOfDay)
+  }, [timeOfDay])
+
+  useEffect(() => {
+    if (config) {
+      setAutoEnabled(config.auto_enabled)
+      setTimeOfDay(config.time_of_day || "23:00")
+    }
+  }, [config, configModalOpen])
+
+  const handleSaveConfig = async () => {
+    if (!isValidTime) return
+    setIsSavingConfig(true)
+    try {
+      await updateConfig.mutateAsync({
+        auto_enabled: autoEnabled,
+        time_of_day: timeOfDay,
+      })
+      setConfigModalOpen(false)
+      toast({
+        title: "Настройки сохранены",
+        description: "Параметры автоматического резервного копирования успешно обновлены.",
+      })
+    } catch (e: any) {
+      toast({ variant: "destructive", title: "Ошибка сохранения настроек", description: getErrorMessage(e) })
+    } finally {
+      setIsSavingConfig(false)
+    }
+  }
 
   const [previewData, setPreviewData] = useState<BackupPreview | null>(null)
   const [previewOpen, setPreviewOpen] = useState(false)
@@ -377,6 +415,18 @@ export function BackupsPage() {
             e.target.value = ""
           }}
         />
+
+        <div className="h-5 w-px bg-border mx-1 hidden md:block" />
+
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => setConfigModalOpen(true)}
+          className="gap-1.5 cursor-pointer"
+        >
+          <Clock className="h-4 w-4" />
+          Автоматическое резервное копирование: {config?.auto_enabled ? "Включено" : "Выключено"}
+        </Button>
       </div>
 
       {activeBackupJob && (
@@ -460,6 +510,7 @@ export function BackupsPage() {
               )}
               <th className="text-left px-3 py-2 font-medium">Имя файла</th>
               <th className="text-left px-3 py-2 font-medium">База данных</th>
+              <th className="text-left px-3 py-2 font-medium">Тип</th>
               <th className="text-left px-3 py-2 font-medium">Размер</th>
               <th className="text-left px-3 py-2 font-medium">Дата создания</th>
               <th className="text-left px-3 py-2 font-medium">Комментарий</th>
@@ -469,13 +520,13 @@ export function BackupsPage() {
           <tbody>
             {isLoading ? (
               <tr>
-                <td colSpan={isReadOnly ? 6 : 7} className="px-3 py-4 text-center text-muted-foreground text-xs">
+                <td colSpan={isReadOnly ? 7 : 8} className="px-3 py-4 text-center text-muted-foreground text-xs">
                   Загрузка...
                 </td>
               </tr>
             ) : !backups || backups.length === 0 ? (
               <tr>
-                <td colSpan={isReadOnly ? 6 : 7} className="px-3 py-4 text-center text-muted-foreground text-xs">
+                <td colSpan={isReadOnly ? 7 : 8} className="px-3 py-4 text-center text-muted-foreground text-xs">
                   Нет бэкапов. {isReadOnly ? "" : "Нажмите \"Создать бэкап\""}
                 </td>
               </tr>
@@ -494,6 +545,12 @@ export function BackupsPage() {
                   )}
                   <td className="px-3 py-2 font-mono text-xs">{b.filename}</td>
                   <td className="px-3 py-2">{b.db_name}</td>
+                  <td className="px-3 py-2">
+                    {b.backup_type === "monthly" && <span className="bg-indigo-100 text-indigo-800 text-[10px] font-semibold px-2.5 py-0.5 rounded-full">Ежемесячный</span>}
+                    {b.backup_type === "weekly" && <span className="bg-emerald-100 text-emerald-800 text-[10px] font-semibold px-2.5 py-0.5 rounded-full">Еженедельный</span>}
+                    {b.backup_type === "daily" && <span className="bg-amber-100 text-amber-800 text-[10px] font-semibold px-2.5 py-0.5 rounded-full">Ежедневный</span>}
+                    {(!b.backup_type || b.backup_type === "manual") && <span className="bg-purple-100 text-purple-800 text-[10px] font-semibold px-2.5 py-0.5 rounded-full">Вручную</span>}
+                  </td>
                   <td className="px-3 py-2">{formatBytes(b.size)}</td>
                   <td className="px-3 py-2">{formatDate(b.created_at)}</td>
                   <td className="px-3 py-2">
@@ -886,6 +943,62 @@ export function BackupsPage() {
               onClick={confirmOlderThanDelete}
             >
               Удалить
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Config Dialog */}
+      <Dialog open={configModalOpen} onOpenChange={setConfigModalOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Clock className="h-5 w-5" />
+              Автоматическое резервное копирование
+            </DialogTitle>
+            <DialogDescription>
+              Настройка ежедневного резервного копирования базы данных и загруженных файлов.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-2">
+            <div className="flex items-center justify-between">
+              <label htmlFor="auto-enabled-chk" className="text-sm font-medium cursor-pointer">
+                Включить автобэкап
+              </label>
+              <input
+                id="auto-enabled-chk"
+                type="checkbox"
+                checked={autoEnabled}
+                onChange={(e) => setAutoEnabled(e.target.checked)}
+                className="h-4 w-4"
+              />
+            </div>
+            {autoEnabled && (
+              <div className="space-y-2">
+                <label className="text-sm text-muted-foreground font-medium">Время запуска (по часовому поясу сервера)</label>
+                <div className="flex gap-2 items-center">
+                  <Input
+                    type="text"
+                    placeholder="23:00"
+                    value={timeOfDay}
+                    onChange={(e) => setTimeOfDay(e.target.value)}
+                    className={cn(!isValidTime && "border-red-500/50")}
+                  />
+                </div>
+                {!isValidTime && (
+                  <p className="text-xs text-red-500 font-medium">Неверный формат времени. Используйте HH:MM</p>
+                )}
+              </div>
+            )}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setConfigModalOpen(false)}>Отмена</Button>
+            <Button
+              onClick={handleSaveConfig}
+              disabled={isSavingConfig || (autoEnabled && !isValidTime)}
+            >
+              {isSavingConfig ? <Loader2 className="h-4 w-4 animate-spin mr-1" /> : <Save className="h-4 w-4 mr-1" />}
+              Сохранить
             </Button>
           </DialogFooter>
         </DialogContent>
