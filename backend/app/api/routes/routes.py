@@ -127,33 +127,28 @@ async def get_route(route_id: int, db: AsyncSession = Depends(get_db)) -> RouteD
     if route is None:
         raise HTTPException(status_code=404, detail="Route not found")
 
-    # Use raw SQL to bypass ORM caching
-    from sqlalchemy import text
-    steps_result = await db.execute(text("""
-        SELECT rs.id, rs.route_id, rs.sequence, rs.section_id, rs.operation_code,
-               rs.operation_name, rs.norm_time_minutes, rs.is_final,
-               s.code as section_code, s.name as section_name
-        FROM route_steps rs
-        LEFT JOIN sections s ON rs.section_id = s.id
-        WHERE rs.route_id = :route_id
-        ORDER BY rs.sequence
-    """), {"route_id": route_id})
-
     steps = []
-    for step in route.steps:
-        section = await db.get(Section, step.section_id)
+    sorted_stages = sorted(route.stages, key=lambda s: s.sequence)
+    for stage in sorted_stages:
+        section = await db.get(Section, stage.section_id)
+        op_code = None
+        op_name = ""
+        if stage.operations:
+            sorted_ops = sorted(stage.operations, key=lambda o: o.sequence)
+            op_code = sorted_ops[0].operation_code
+            op_name = sorted_ops[0].operation_name
+
         steps.append(StepOut(
-            id=step.id,
-            route_id=step.route_id,
-            sequence=step.sequence,
-            section_id=step.section_id,
+            id=stage.id,
+            route_id=stage.route_id,
+            sequence=stage.sequence,
+            section_id=stage.section_id,
             section_code=section.code if section else None,
             section_name=section.name if section else None,
-            operation_code=step.operation_code,
-            operation_name=step.operation_name,
-            norm_time_minutes=step.norm_time_minutes,
-            is_final=step.is_final,
-
+            operation_code=op_code,
+            operation_name=op_name,
+            norm_time_minutes=stage.norm_time_minutes,
+            is_final=stage.is_final,
         ))
 
     rules_result = await db.execute(
