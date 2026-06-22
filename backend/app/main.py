@@ -27,16 +27,34 @@ from app.api.routes.spg import router as spg_router
 from app.api.routes.demo import router as demo_router
 from app.api.backups import router as backups_router
 from app.transfers.api import router as transfers_router
+from contextlib import asynccontextmanager
+import asyncio
 from app.api.routes.audit_logs import router as audit_logs_router
 from app.api.routes.users import router as users_router
 from app.api.routes.integration import router as integration_router
 from app.core.config import settings
 from app.core.database import async_session
 
+backup_scheduler_task = None
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    global backup_scheduler_task
+    from app.services.backup_scheduler import start_backup_scheduler
+    backup_scheduler_task = asyncio.create_task(start_backup_scheduler())
+    yield
+    if backup_scheduler_task:
+        backup_scheduler_task.cancel()
+        try:
+            await backup_scheduler_task
+        except asyncio.CancelledError:
+            pass
+
 app = FastAPI(
     title="KTM-2000",
     description="Manufacturing planning and execution control system",
     version="0.1.0",
+    lifespan=lifespan,
 )
 
 app.add_middleware(

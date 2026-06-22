@@ -1,8 +1,13 @@
 import { apiClient } from "@/shared/api/client";
 import type { BackupInfo, BackupJob, BackupPreview, BackupRestoreRequest } from "./types";
 
-export async function fetchBackupConfig(): Promise<{ db_name: string }> {
-  const { data } = await apiClient.get<{ db_name: string }>("/backups/config");
+export async function fetchBackupConfig(): Promise<{ db_name: string; auto_enabled: boolean; time_of_day: string }> {
+  const { data } = await apiClient.get<{ db_name: string; auto_enabled: boolean; time_of_day: string }>("/backups/config");
+  return data;
+}
+
+export async function updateBackupConfig(payload: { auto_enabled: boolean; time_of_day: string }): Promise<{ auto_enabled: boolean; time_of_day: string }> {
+  const { data } = await apiClient.patch<{ auto_enabled: boolean; time_of_day: string }>("/backups/config", payload);
   return data;
 }
 

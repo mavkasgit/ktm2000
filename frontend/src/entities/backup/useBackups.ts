@@ -9,6 +9,16 @@ export function useBackupConfig() {
   });
 }
 
+export function useUpdateBackupConfig() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: api.updateBackupConfig,
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.backups.config() });
+    },
+  });
+}
+
 export function useBackups() {
   return useQuery({
     queryKey: queryKeys.backups.all(),
