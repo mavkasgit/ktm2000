@@ -153,3 +153,38 @@ async def test_update_user_duplicate_hrms_employee_id_rejected(auth_client, sess
     )
     assert response.status_code == 409
     assert "уже привязан к другому пользователю" in response.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_create_and_update_user_without_email(auth_client, session) -> None:
+    # 1. Создаем пользователя без указания email
+    response = await auth_client.post(
+        "/api/users",
+        json={
+            "username": "no_email_user",
+            "password": "password123",
+            "full_name": "No Email User",
+            "role": "operator",
+        },
+    )
+    assert response.status_code == 201
+    data = response.json()
+    assert data["email"] is None
+    assert data["username"] == "no_email_user"
+
+    # 2. Обновляем email до None/null
+    user_id = data["id"]
+    response = await auth_client.patch(
+        f"/api/users/{user_id}",
+        json={"email": None},
+    )
+    assert response.status_code == 200
+    assert response.json()["email"] is None
+
+    # 3. Обновляем email на валидное значение
+    response = await auth_client.patch(
+        f"/api/users/{user_id}",
+        json={"email": "new_email@example.com"},
+    )
+    assert response.status_code == 200
+    assert response.json()["email"] == "new_email@example.com"

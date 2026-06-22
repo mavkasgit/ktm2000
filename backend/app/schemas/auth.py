@@ -18,7 +18,7 @@ class MeResponse(BaseModel):
 
     id: int
     username: str
-    email: str
+    email: str | None = None
     full_name: str
     role: UserRole
     section_id: int | None
