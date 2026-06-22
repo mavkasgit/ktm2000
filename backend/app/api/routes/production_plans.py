@@ -1579,9 +1579,8 @@ async def reset_all_plans(
             plan_positions, import_batches, import_files,
             production_plans,
             route_selection_rules, route_rule_profiles, production_routes,
-            route_steps, section_operations, route_matching_rules, route_rule_conditions, route_signature_rules,
-            import_templates,
-            sections
+            route_stages, route_operations, route_matching_rules, route_rule_conditions,
+            import_templates
         CASCADE
     """))
 
