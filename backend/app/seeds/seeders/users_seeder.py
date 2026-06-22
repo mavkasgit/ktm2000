@@ -37,6 +37,10 @@ async def seed_users(db: AsyncSession) -> dict[int, User]:
         await db.flush()
         system_user = await db.scalar(select(User).where(User.email == "system@local"))
 
+    # Сбрасываем сиквенс в любом случае, так как id=1 занят вручную
+    await db.execute(text("SELECT setval(pg_get_serial_sequence('users', 'id'), 100, false)"))
+    await db.flush()
+
     result[system_user.id] = system_user
 
     # Находим первый активный участок для привязки менеджера и оператора

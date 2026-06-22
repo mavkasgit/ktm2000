@@ -676,7 +676,7 @@ export function UsersPage() {
                 required
                 value={fullName}
                 onChange={(e) => setFullName(e.target.value)}
-                disabled={linkEmployee && tabNumber !== "none"}
+                disabled={linkEmployee && hrmsEmployeeId !== "none"}
               />
             </div>
 

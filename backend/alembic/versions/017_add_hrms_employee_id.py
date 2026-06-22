@@ -80,9 +80,9 @@ def upgrade() -> None:
     
     # ВНИМАНИЕ: Эти изменения с пользователями уже применены в БД продакшна вручную.
     # Чтобы избежать ошибок "column/constraint already exists", комментируем их.
-    # op.add_column('users', sa.Column('hrms_employee_id', sa.BigInteger(), nullable=True))
-    # op.drop_constraint('users_tab_number_key', 'users', type_='unique')
-    # op.create_unique_constraint(None, 'users', ['hrms_employee_id'])
+    op.add_column('users', sa.Column('hrms_employee_id', sa.BigInteger(), nullable=True))
+    op.drop_constraint('users_tab_number_key', 'users', type_='unique')
+    op.create_unique_constraint(None, 'users', ['hrms_employee_id'])
     # ### end Alembic commands ###
 
 

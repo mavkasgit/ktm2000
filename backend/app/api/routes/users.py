@@ -35,7 +35,7 @@ class UserOut(BaseModel):
 
     id: int
     username: str
-    email: str
+    email: str | None = None
     full_name: str
     role: UserRole
     section_id: int | None
@@ -50,7 +50,7 @@ class UserOut(BaseModel):
 
 class UserCreate(BaseModel):
     username: str
-    email: EmailStr
+    email: EmailStr | None = None
     password: str | None = None
     full_name: str
     role: UserRole
@@ -63,6 +63,7 @@ class UserCreate(BaseModel):
 
 class UserUpdate(BaseModel):
     username: str | None = None
+    email: EmailStr | None = None
     full_name: str | None = None
     role: UserRole | None = None
     section_id: int | None = None
@@ -91,6 +92,9 @@ async def list_users(
     return [UserOut.model_validate(u) for u in users]
 
 
+from app.core.config import settings
+
+
 @router.get("/employees")
 async def list_employees(
     _current_user: User = Depends(require_role([UserRole.admin])),
@@ -104,23 +108,30 @@ async def list_employees(
         headers = {"Authorization": "Bearer admin"}
         params = {"status": "active", "per_page": 1000}
         
-        # Сначала пробуем внутренний Docker URL (для продакшна)
-        url = "http://hrms-backend-prod:8000/api/employees"
-        
-        async with httpx.AsyncClient(timeout=2.0) as client:
-            try:
-                response = await client.get(url, headers=headers, params=params)
-                response.raise_for_status()
-                data = response.json()
-                return data.get("items", [])
-            except (httpx.ConnectError, httpx.ConnectTimeout, httpx.HTTPStatusError) as e:
-                logger.info(f"Failed to connect to HRMS via Docker network ({e}), falling back to localhost...")
-                # Если Docker URL недоступен, пробуем localhost (для разработки на локальной машине)
-                url_dev = "http://localhost:8000/api/employees"
-                response = await client.get(url_dev, headers=headers, params=params)
-                response.raise_for_status()
-                data = response.json()
-                return data.get("items", [])
+        # Определяем порядок URL на основе окружения
+        if settings.ENV == "dev":
+            urls = [
+                "http://localhost:8000/api/employees",
+                "http://hrms-backend-prod:8000/api/employees"
+            ]
+        else:
+            urls = [
+                "http://hrms-backend-prod:8000/api/employees",
+                "http://localhost:8000/api/employees"
+            ]
+            
+        async with httpx.AsyncClient(timeout=1.0) as client:
+            for url in urls:
+                try:
+                    response = await client.get(url, headers=headers, params=params)
+                    response.raise_for_status()
+                    data = response.json()
+                    return data.get("items", [])
+                except (httpx.ConnectError, httpx.ConnectTimeout, httpx.HTTPStatusError) as e:
+                    logger.info(f"Failed to connect to HRMS via {url} ({e}), trying next...")
+            
+            # Если оба варианта не сработали
+            return []
     except Exception as e:
         logger.error(f"Failed to fetch employees from HRMS: {e}")
         return []
@@ -159,14 +170,15 @@ async def create_user(
             )
 
     # 3. Проверка уникальности email
-    existing_email = await db.scalar(select(User).where(User.email == payload.email))
-    if existing_email is not None:
-        # Если email занят другим пользователем (не тем, кого мы мержим)
-        if not existing_user or existing_email.id != existing_user.id:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail=f"User with email '{payload.email}' already exists",
-            )
+    if payload.email:
+        existing_email = await db.scalar(select(User).where(User.email == payload.email))
+        if existing_email is not None:
+            # Если email занят другим пользователем (не тем, кого мы мержим)
+            if not existing_user or existing_email.id != existing_user.id:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=f"User with email '{payload.email}' already exists",
+                )
 
     section_ids = []
     if payload.section_ids is not None:
@@ -262,6 +274,18 @@ async def update_user(
                 detail=f"User with username '{payload.username}' already exists",
             )
         user.username = payload.username
+
+    if "email" in payload.model_fields_set:
+        if payload.email is None or payload.email == "" or payload.email == "none":
+            user.email = None
+        elif payload.email != user.email:
+            dup = await db.scalar(select(User).where(User.email == payload.email))
+            if dup is not None and dup.id != user.id:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=f"User with email '{payload.email}' already exists",
+                )
+            user.email = payload.email
 
     # Изменение табельного номера
     if "tab_number" in payload.model_fields_set:
