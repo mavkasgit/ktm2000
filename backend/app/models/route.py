@@ -1,3 +1,4 @@
+from datetime import datetime
 from sqlalchemy import (
     BigInteger,
     Boolean,
@@ -116,7 +117,7 @@ class RouteMatchingRule(Base):
     id: Mapped[int] = mapped_column(BigInteger, Identity(always=True), primary_key=True)
     route_id: Mapped[int] = mapped_column(ForeignKey("production_routes.id"), nullable=False)
     priority: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
-    created_at: Mapped[None] = mapped_column(DateTime, server_default=func.now())
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, server_default=func.now())
 
     route: Mapped["ProductionRoute"] = relationship("ProductionRoute", back_populates="rules")
     conditions: Mapped[list["RouteRuleCondition"]] = relationship("RouteRuleCondition", back_populates="rule", lazy="selectin")
@@ -146,7 +147,7 @@ class RouteSelectionRule(Base):
     conditions: Mapped[list] = mapped_column(JSONB, nullable=False, server_default=text("'[]'::jsonb"), default=list)
     actions: Mapped[list] = mapped_column(JSONB, nullable=False, server_default=text("'[]'::jsonb"), default=list)
     phase: Mapped[str] = mapped_column(String(20), nullable=False, server_default=text("'route_select'"), default="route_select")
-    created_at: Mapped[None] = mapped_column(DateTime, server_default=func.now())
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, server_default=func.now())
 
     profile: Mapped["RouteRuleProfile | None"] = relationship("RouteRuleProfile", back_populates="rules")
 
@@ -164,7 +165,7 @@ class RouteRuleProfile(Base):
     import_template_id: Mapped[int | None] = mapped_column(ForeignKey("import_templates.id"), nullable=True)
     excel_column_passport: Mapped[list] = mapped_column(JSONB, nullable=False, server_default=text("'[]'::jsonb"), default=list)
     excel_passport_meta: Mapped[dict] = mapped_column(JSONB, nullable=False, server_default=text("'{}'::jsonb"), default=dict)
-    created_at: Mapped[None] = mapped_column(DateTime, server_default=func.now())
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, server_default=func.now())
 
     rules: Mapped[list["RouteSelectionRule"]] = relationship("RouteSelectionRule", back_populates="profile", lazy="selectin")
     import_template: Mapped["ImportTemplate | None"] = relationship("ImportTemplate")
