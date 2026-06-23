@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Search, Image, X, Grid, List, Plus, Filter, FileUp, ArrowUp, ArrowDown, ArrowUpDown, Check, CheckCheck } from "lucide-react";
+import { Search, Image, X, Grid, List, Plus, Filter, FileUp, Check, CheckCheck } from "lucide-react";
 import * as API from "@/shared/api/products";
 import { Button } from "@/shared/ui/Button";
 import { Input } from "@/shared/ui/Input";
@@ -14,6 +14,7 @@ import { CatalogCard } from "../components/CatalogCard";
 import { getPhotoUrl } from "../components/getPhotoUrl";
 import type { Product, CreateProductInput, PatchProductInput, CatalogPreview } from "@/shared/api/products";
 import { usePermission } from "@/features/auth/hooks/usePermission";
+import { SortableFilterHeader } from "@/shared/ui/SortableFilterHeader";
 
 type ViewMode = "grid" | "table";
 type DialogMode = "create" | "edit";
@@ -44,6 +45,17 @@ export function RawMaterialsPage() {
   const [qtyFrom, setQtyFrom] = useState("");
   const [qtyTo, setQtyTo] = useState("");
   const [sortConfigs, setSortConfigs] = useState<SortConfig[]>([]);
+  const [filters, setFilters] = useState<Record<SortField, Set<string>>>({
+    sku: new Set(),
+    name: new Set(),
+    length_mm: new Set(),
+    quantity_per_hanger: new Set(),
+    id: new Set(),
+    is_paired_profile: new Set(),
+    skip_shot_blast: new Set(),
+    aliases: new Set(),
+    is_laminated: new Set(),
+  });
   const [groupByAliases, setGroupByAliases] = useState(false);
 
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -225,17 +237,22 @@ export function RawMaterialsPage() {
     });
   };
 
-  const SortIcon = ({ field }: { field: SortField }) => {
-    const config = sortConfigs.find((c) => c.field === field);
-    const sortIndex = sortConfigs.findIndex((c) => c.field === field) + 1;
-    if (!config) return <ArrowUpDown className="h-3 w-3 ml-1 opacity-40" />;
-    return (
-      <span className="flex items-center ml-1">
-        <span className="text-xs text-muted-foreground mt-0.5">{sortIndex}</span>
-        {config.order === "asc" ? <ArrowUp className="h-3 w-3 ml-0.5" /> : <ArrowDown className="h-3 w-3 ml-0.5" />}
-      </span>
-    );
-  };
+  const uniqueValues = useMemo(() => {
+    return {
+      sku: [...new Set(items.map((p) => p.sku))].sort(),
+      quantity_per_hanger: [...new Set(items.map((p) => p.quantity_per_hanger !== null && p.quantity_per_hanger !== undefined ? String(p.quantity_per_hanger) : "—"))]
+        .sort((a, b) => {
+          if (a === "—") return 1;
+          if (b === "—") return -1;
+          return Number(a) - Number(b);
+        }),
+      length_mm: [...new Set(items.flatMap((p) => getProductLengths(p).map(String)))]
+        .sort((a, b) => Number(a) - Number(b)),
+      is_paired_profile: ["Да", "Нет"],
+      skip_shot_blast: ["Да", "Нет"],
+      is_laminated: ["Да", "Нет"],
+    };
+  }, [items]);
 
   const sortedItems = useMemo(() => {
     let filtered = items;
@@ -254,6 +271,40 @@ export function RawMaterialsPage() {
     }
     if (qtyFrom) filtered = filtered.filter((p) => (p.quantity_per_hanger ?? 0) >= parseFloat(qtyFrom));
     if (qtyTo) filtered = filtered.filter((p) => (p.quantity_per_hanger ?? 0) <= parseFloat(qtyTo));
+
+    if (filters.sku.size > 0) {
+      filtered = filtered.filter((p) => filters.sku.has(p.sku));
+    }
+    if (filters.quantity_per_hanger.size > 0) {
+      filtered = filtered.filter((p) => {
+        const val = p.quantity_per_hanger !== null && p.quantity_per_hanger !== undefined ? String(p.quantity_per_hanger) : "—";
+        return filters.quantity_per_hanger.has(val);
+      });
+    }
+    if (filters.length_mm.size > 0) {
+      filtered = filtered.filter((p) => {
+        const lengths = getProductLengths(p);
+        return lengths.some((len) => filters.length_mm.has(String(len)));
+      });
+    }
+    if (filters.is_paired_profile.size > 0) {
+      filtered = filtered.filter((p) => {
+        const val = p.is_paired_profile ? "Да" : "Нет";
+        return filters.is_paired_profile.has(val);
+      });
+    }
+    if (filters.skip_shot_blast.size > 0) {
+      filtered = filtered.filter((p) => {
+        const val = p.skip_shot_blast ? "Да" : "Нет";
+        return filters.skip_shot_blast.has(val);
+      });
+    }
+    if (filters.is_laminated.size > 0) {
+      filtered = filtered.filter((p) => {
+        const val = p.is_laminated ? "Да" : "Нет";
+        return filters.is_laminated.has(val);
+      });
+    }
 
     if (!groupByAliases) {
       if (sortConfigs.length === 0) return filtered;
@@ -303,19 +354,8 @@ export function RawMaterialsPage() {
     return [...applySort(withAliases), ...applySort(withoutAliases)];
   }, [items, sortConfigs, lengthFrom, lengthTo, qtyFrom, qtyTo, groupByAliases]);
 
-  const SortHeader = ({ field, children }: { field: SortField; children: React.ReactNode }) => (
-    <th
-      className="px-4 py-3 text-left font-medium cursor-pointer select-none hover:bg-muted/50 transition-colors"
-      onClick={() => handleSort(field)}
-    >
-      <div className="flex items-center">
-        {children}
-        <SortIcon field={field} />
-      </div>
-    </th>
-  );
-
-  const activeFiltersCount = [lengthFrom, lengthTo, qtyFrom, qtyTo].filter(Boolean).length;
+  const activeFiltersCount = [lengthFrom, lengthTo, qtyFrom, qtyTo].filter(Boolean).length +
+    Object.values(filters).reduce((acc, set) => acc + set.size, 0);
 
   return (
     <section className="space-y-4">
@@ -352,7 +392,25 @@ export function RawMaterialsPage() {
             </button>
           )}
         </div>
-        <Button variant="outline" size="sm" onClick={() => { setSearch(""); setLengthFrom(""); setLengthTo(""); setQtyFrom(""); setQtyTo(""); setSortConfigs([]); }}>
+        <Button variant="outline" size="sm" onClick={() => {
+          setSearch("");
+          setLengthFrom("");
+          setLengthTo("");
+          setQtyFrom("");
+          setQtyTo("");
+          setSortConfigs([]);
+          setFilters({
+            sku: new Set(),
+            name: new Set(),
+            length_mm: new Set(),
+            quantity_per_hanger: new Set(),
+            id: new Set(),
+            is_paired_profile: new Set(),
+            skip_shot_blast: new Set(),
+            aliases: new Set(),
+            is_laminated: new Set(),
+          });
+        }}>
           Очистить
         </Button>
         <Button variant={filtersOpen ? "default" : "outline"} size="sm" onClick={() => setFiltersOpen(!filtersOpen)} className="relative">
@@ -408,12 +466,73 @@ export function RawMaterialsPage() {
             <thead className="bg-muted">
               <tr>
                 <th className="px-4 py-3 text-left font-medium w-16">Фото</th>
-                <SortHeader field="sku">Артикул</SortHeader>
-                <SortHeader field="quantity_per_hanger">Кол-во на подвесе</SortHeader>
-                <SortHeader field="length_mm">Длина</SortHeader>
-                <SortHeader field="is_paired_profile">Парный</SortHeader>
-                <SortHeader field="skip_shot_blast">Дробеструй</SortHeader>
-                <SortHeader field="is_laminated">Ламинируется</SortHeader>
+                <th className="px-4 py-3 text-left font-medium w-48">
+                  <SortableFilterHeader
+                    field="sku"
+                    label="Артикул"
+                    currentSorts={sortConfigs}
+                    onSortChange={handleSort}
+                    values={uniqueValues.sku}
+                    selectedValues={filters.sku}
+                    onFilterChange={(field, selected) => setFilters(prev => ({ ...prev, [field]: selected }))}
+                  />
+                </th>
+                <th className="px-4 py-3 text-left font-medium w-48">
+                  <SortableFilterHeader
+                    field="quantity_per_hanger"
+                    label="Кол-во на подвесе"
+                    currentSorts={sortConfigs}
+                    onSortChange={handleSort}
+                    values={uniqueValues.quantity_per_hanger}
+                    selectedValues={filters.quantity_per_hanger}
+                    onFilterChange={(field, selected) => setFilters(prev => ({ ...prev, [field]: selected }))}
+                  />
+                </th>
+                <th className="px-4 py-3 text-left font-medium w-40">
+                  <SortableFilterHeader
+                    field="length_mm"
+                    label="Длина"
+                    currentSorts={sortConfigs}
+                    onSortChange={handleSort}
+                    values={uniqueValues.length_mm}
+                    selectedValues={filters.length_mm}
+                    onFilterChange={(field, selected) => setFilters(prev => ({ ...prev, [field]: selected }))}
+                    valueLabel={(v) => v + " мм"}
+                  />
+                </th>
+                <th className="px-4 py-3 text-left font-medium w-36">
+                  <SortableFilterHeader
+                    field="is_paired_profile"
+                    label="Парный"
+                    currentSorts={sortConfigs}
+                    onSortChange={handleSort}
+                    values={uniqueValues.is_paired_profile}
+                    selectedValues={filters.is_paired_profile}
+                    onFilterChange={(field, selected) => setFilters(prev => ({ ...prev, [field]: selected }))}
+                  />
+                </th>
+                <th className="px-4 py-3 text-left font-medium w-36">
+                  <SortableFilterHeader
+                    field="skip_shot_blast"
+                    label="Дробеструй"
+                    currentSorts={sortConfigs}
+                    onSortChange={handleSort}
+                    values={uniqueValues.skip_shot_blast}
+                    selectedValues={filters.skip_shot_blast}
+                    onFilterChange={(field, selected) => setFilters(prev => ({ ...prev, [field]: selected }))}
+                  />
+                </th>
+                <th className="px-4 py-3 text-left font-medium w-40">
+                  <SortableFilterHeader
+                    field="is_laminated"
+                    label="Ламинируется"
+                    currentSorts={sortConfigs}
+                    onSortChange={handleSort}
+                    values={uniqueValues.is_laminated}
+                    selectedValues={filters.is_laminated}
+                    onFilterChange={(field, selected) => setFilters(prev => ({ ...prev, [field]: selected }))}
+                  />
+                </th>
               </tr>
             </thead>
             <tbody className="divide-y">
