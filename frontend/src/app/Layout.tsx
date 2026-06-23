@@ -26,6 +26,7 @@ const NAV_ACCESS: Record<string, UserRole[]> = {
   "/spg": ["admin", "planner", "section_manager", "operator", "viewer", "transporter"],
   "/audit-logs": ["admin", "planner", "section_manager", "operator", "viewer", "transporter"],
   "/settings": ["admin", "planner", "section_manager", "operator", "viewer", "transporter"],
+  "/settings/dev": ["admin"],
 }
 
 const navItems = [
