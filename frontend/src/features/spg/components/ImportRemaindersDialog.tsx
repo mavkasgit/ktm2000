@@ -11,6 +11,12 @@ import {
   Button,
   Input,
   Badge,
+  SpgSelect,
+  Select,
+  SelectTrigger,
+  SelectValue,
+  SelectContent,
+  SelectItem,
 } from "@/shared/ui";
 import {
   importRemaindersExcel,
@@ -18,6 +24,7 @@ import {
   getSpgImportOperations,
   type SpgSheetPreviewResponse,
   type SheetPreviewItem,
+  type SpgOut,
 } from "@/shared/api/spg";
 import { getExcelSheetNames } from "@/shared/api/imports";
 import { queryKeys } from "@/shared/api/queryKeys";
@@ -28,6 +35,8 @@ interface ImportRemaindersDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   spgId: number;
+  spgs?: SpgOut[];
+  selectedSpgIds?: number[];
   onSaved: () => void;
 }
 
@@ -35,13 +44,20 @@ export function ImportRemaindersDialog({
   open,
   onOpenChange,
   spgId,
+  spgs,
+  selectedSpgIds,
   onSaved,
 }: ImportRemaindersDialogProps) {
   const queryClient = useQueryClient();
+  const [currentSpgId, setCurrentSpgId] = useState(spgId);
+
+  useEffect(() => {
+    setCurrentSpgId(spgId);
+  }, [spgId, open]);
   
   const { data: operations } = useQuery({
-    queryKey: ["spg", spgId, "import-operations"],
-    queryFn: () => getSpgImportOperations(spgId),
+    queryKey: ["spg", currentSpgId, "import-operations"],
+    queryFn: () => getSpgImportOperations(currentSpgId),
     enabled: open,
   });
   
@@ -75,7 +91,7 @@ export function ImportRemaindersDialog({
     setPreviewLoading(true);
     setError(null);
     try {
-      const data = await previewSpgRemaindersExcel(spgId, file, {
+      const data = await previewSpgRemaindersExcel(currentSpgId, file, {
         sheet_index: selectedSheet,
         row_selection: rowSelection || undefined,
       });
@@ -110,7 +126,7 @@ export function ImportRemaindersDialog({
 
   const downloadTemplate = async () => {
     try {
-      const response = await apiClient.get(`/spg/${spgId}/remainders/import/template`, {
+      const response = await apiClient.get(`/spg/${currentSpgId}/remainders/import/template`, {
         responseType: "blob",
       });
       const url = window.URL.createObjectURL(new Blob([response.data]));
@@ -128,7 +144,7 @@ export function ImportRemaindersDialog({
 
   const importMutation = useMutation({
     mutationFn: (skipInvalid: boolean) =>
-      importRemaindersExcel(spgId, file as File, {
+      importRemaindersExcel(currentSpgId, file as File, {
         sheet_index: selectedSheet,
         row_selection: rowSelection || undefined,
         skip_invalid: skipInvalid,
@@ -140,9 +156,9 @@ export function ImportRemaindersDialog({
           imported_count: response.imported_count,
           errors: response.errors,
         });
-        void queryClient.invalidateQueries({ queryKey: queryKeys.spg.remainders(spgId) });
-        void queryClient.invalidateQueries({ queryKey: queryKeys.spg.snapshot(spgId) });
-        void queryClient.invalidateQueries({ queryKey: queryKeys.spg.remainderHistory(spgId) });
+        void queryClient.invalidateQueries({ queryKey: queryKeys.spg.remainders(currentSpgId) });
+        void queryClient.invalidateQueries({ queryKey: queryKeys.spg.snapshot(currentSpgId) });
+        void queryClient.invalidateQueries({ queryKey: queryKeys.spg.remainderHistory(currentSpgId) });
         onSaved();
         setStep("result");
       } else {
@@ -245,6 +261,25 @@ export function ImportRemaindersDialog({
                 Загрузите Excel-файл для пакетного импорта остатков. 
                 Система автоматически распознает артикулы, количества и выполненные операции.
               </p>
+
+              {spgs && spgs.length > 1 && (!selectedSpgIds || selectedSpgIds.length !== 1) && (
+                <div className="space-y-1">
+                  <label className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider block">
+                    Группа ГХП для импорта остатков:
+                  </label>
+                  <SpgSelect
+                    spgs={spgs}
+                    value={currentSpgId}
+                    onValueChange={(val) => {
+                      if (val !== null) {
+                        setCurrentSpgId(val);
+                      }
+                    }}
+                    placeholder="Выберите ГХП"
+                    className="w-full h-10 text-sm font-normal bg-background border rounded-md px-3"
+                  />
+                </div>
+              )}
 
               {/* Excel table preview example */}
               <div className="space-y-2">
@@ -407,14 +442,18 @@ export function ImportRemaindersDialog({
                       />
                     </div>
 
-                    <select
+                    <Select
                       value={filterStatus}
-                      onChange={(e) => setFilterStatus(e.target.value as "all" | "invalid")}
-                      className="h-7 text-xs rounded-md border border-input bg-background px-2 py-1 font-medium"
+                      onValueChange={(value) => setFilterStatus(value as "all" | "invalid")}
                     >
-                      <option value="all">Все строки</option>
-                      <option value="invalid">Только ошибки</option>
-                    </select>
+                      <SelectTrigger className="h-7 text-xs w-[120px] font-medium bg-background">
+                        <SelectValue placeholder="Все строки" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="all">Все строки</SelectItem>
+                        <SelectItem value="invalid">Только ошибки</SelectItem>
+                      </SelectContent>
+                    </Select>
 
                     <Button
                       variant={showRawRows ? "default" : "outline"}

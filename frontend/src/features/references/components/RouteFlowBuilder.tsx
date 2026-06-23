@@ -43,6 +43,13 @@ import { toast } from "@/shared/ui/use-toast";
 import { apiClient, getErrorMessage } from "@/shared/api/client";
 import { renderIcon } from "@/shared/ui/EntityDialog";
 import { RouteFlowNode, type RouteFlowNodeData } from "./RouteFlowNode";
+import {
+  Select,
+  SelectTrigger,
+  SelectValue,
+  SelectContent,
+  SelectItem,
+} from "@/shared/ui";
 
 type PortId = "right" | "left";
 type RouteNode = Node<RouteFlowNodeData>;
@@ -979,23 +986,28 @@ export function RouteFlowBuilder({ open, onOpenChange, route, onSave, readOnly =
               <div className="space-y-4">
                 <div>
                   <label className="text-sm font-medium">Операция</label>
-                  <select
-                    className="h-9 w-full rounded-md border border-input bg-background px-2 text-sm mt-1 disabled:opacity-60 disabled:cursor-not-allowed"
-                    value={(selectedNode.data as RouteFlowNodeData).operation_code || ""}
-                    onChange={(e) => {
-                      const op = OPERATIONS.find((o) => o.value === e.target.value);
+                  <Select
+                    value={(selectedNode.data as RouteFlowNodeData).operation_code || "none"}
+                    onValueChange={(val) => {
+                      const finalVal = val === "none" ? null : val;
+                      const op = OPERATIONS.find((o) => o.value === finalVal);
                       updateNodeData(selectedNode.id, {
-                        operation_code: e.target.value || null,
+                        operation_code: finalVal,
                         operation_name: op?.label || "",
                       });
                     }}
                     disabled={readOnly}
                   >
-                    <option value="">Выберите операцию</option>
-                    {OPERATIONS.map((op) => (
-                      <option key={op.value} value={op.value}>{op.label}</option>
-                    ))}
-                  </select>
+                    <SelectTrigger className="h-9 w-full bg-background mt-1">
+                      <SelectValue placeholder="Выберите операцию" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="none">Выберите операцию</SelectItem>
+                      {OPERATIONS.map((op) => (
+                        <SelectItem key={op.value} value={op.value}>{op.label}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
                 </div>
 
                 <div>

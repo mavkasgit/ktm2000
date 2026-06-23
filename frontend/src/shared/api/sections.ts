@@ -140,6 +140,8 @@ export type SectionWithOperations = {
     is_significant: boolean;
     group_code: string | null;
     group_name: string | null;
+    icon?: string | null;
+    icon_color?: string | null;
   }>;
 };
 

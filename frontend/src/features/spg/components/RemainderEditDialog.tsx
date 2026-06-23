@@ -1,6 +1,6 @@
 import { useEffect, useState, useMemo } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { ArrowDownUp, History as HistoryIcon, Pencil, Plus, Trash2, Check, X, Search, Upload, Loader2 } from "lucide-react";
+import { ArrowDownUp, History as HistoryIcon, Pencil, Plus, Trash2, Check, X, Search, Upload, Loader2, ChevronDown, ChevronRight } from "lucide-react";
 import { IconAlertTriangle } from "@tabler/icons-react";
 
 import {
@@ -11,6 +11,8 @@ import {
   Button,
   Input,
   Badge,
+  renderIcon,
+  SectionSelect,
 } from "@/shared/ui";
 import type {
   SpgOut,
@@ -39,6 +41,8 @@ interface RemainderEditDialogProps {
   sections: SpgOut["sections"];
   editingRemainder: SpgRemainder | null;
   onSaved: () => void;
+  defaultSectionId?: number | null;
+  spgs: SpgOut[];
 }
 
 export function RemainderEditDialog({
@@ -48,6 +52,8 @@ export function RemainderEditDialog({
   sections,
   editingRemainder,
   onSaved,
+  defaultSectionId,
+  spgs,
 }: RemainderEditDialogProps) {
   const queryClient = useQueryClient();
   const [products, setProducts] = useState<Product[]>([]);
@@ -61,6 +67,19 @@ export function RemainderEditDialog({
   const [sectionsWithOps, setSectionsWithOps] = useState<SectionWithOperations[]>([]);
   const [completedOperationKeys, setCompletedOperationKeys] = useState<string[]>([]);
   const [loadingStages, setLoadingStages] = useState(false);
+
+  const sectionsForSelect = useMemo(() => {
+    return sectionsWithOps.map((s) => ({
+      id: s.id,
+      code: s.code,
+      name: s.name,
+      description: "",
+      is_active: true,
+      kind: s.kind as any,
+      icon: s.icon,
+      icon_color: s.icon_color,
+    }));
+  }, [sectionsWithOps]);
 
   const flatOperations = useMemo(() => {
     const flatOps: any[] = [];
@@ -91,13 +110,13 @@ export function RemainderEditDialog({
         setProductSearch(editingRemainder.product_sku);
       } else {
         setSelectedProductId(null);
-        setSelectedSectionId(sections[0]?.section_id ?? null);
+        setSelectedSectionId(defaultSectionId ?? sections[0]?.section_id ?? null);
         setQuantity("");
         setProductSearch("");
       }
       setError(null);
     }
-  }, [open, editingRemainder, sections]);
+  }, [open, editingRemainder, sections, defaultSectionId]);
 
   useEffect(() => {
     if (open) {
@@ -143,20 +162,22 @@ export function RemainderEditDialog({
 
   const saveMutation = useMutation({
     mutationFn: async (input: { kind: "create" | "update"; payload: ManualRemainderCreateInput | ManualRemainderUpdateInput }) => {
+      const actualSpgId = spgs.find(s => s.sections.some(sec => sec.section_id === input.payload.section_id))?.id || spgId;
       if (input.kind === "create") {
-        await createManualRemainder(spgId, input.payload as ManualRemainderCreateInput);
+        await createManualRemainder(actualSpgId, input.payload as ManualRemainderCreateInput);
       } else {
         await updateManualRemainder(
-          spgId,
+          actualSpgId,
           (editingRemainder as SpgRemainder).id,
           input.payload as ManualRemainderUpdateInput,
         );
       }
     },
-    onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: queryKeys.spg.snapshot(spgId) });
-      void queryClient.invalidateQueries({ queryKey: queryKeys.spg.remainders(spgId) });
-      void queryClient.invalidateQueries({ queryKey: queryKeys.spg.remainderHistory(spgId) });
+    onSuccess: (_, variables) => {
+      const actualSpgId = spgs.find(s => s.sections.some(sec => sec.section_id === variables.payload.section_id))?.id || spgId;
+      void queryClient.invalidateQueries({ queryKey: queryKeys.spg.snapshot(actualSpgId) });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.spg.remainders(actualSpgId) });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.spg.remainderHistory(actualSpgId) });
       onSaved();
       onOpenChange(false);
     },
@@ -204,7 +225,9 @@ export function RemainderEditDialog({
       };
       saveMutation.mutate({ kind: "create", payload });
     }
-  };  return (
+  };
+
+  return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-[760px]">
         <DialogHeader>
@@ -260,17 +283,14 @@ export function RemainderEditDialog({
           {/* Section select */}
           <div className="space-y-1">
             <label className="text-sm font-medium">Участок</label>
-            <select
-              className="w-full rounded-md border px-3 py-2 text-sm bg-background"
-              value={selectedSectionId ?? ""}
-              onChange={(e) => setSelectedSectionId(Number(e.target.value))}
-            >
-              {sectionsWithOps.map((s) => (
-                <option key={s.id} value={s.id}>
-                  {s.code} — {s.name}
-                </option>
-              ))}
-            </select>
+            <SectionSelect
+              sections={sectionsForSelect}
+              value={selectedSectionId}
+              onValueChange={setSelectedSectionId}
+              placeholder="Выберите участок"
+              className="w-full h-10 text-sm font-normal bg-background border rounded-md px-3"
+              hideCode={true}
+            />
           </div>
 
           {/* Completed stages checkboxes */}
@@ -295,6 +315,11 @@ export function RemainderEditDialog({
                         <span className="font-semibold text-[10px] text-primary bg-primary/10 px-1.5 py-0.5 rounded uppercase font-mono">
                           {sec.code}
                         </span>
+                        {sec.icon && (
+                          <span style={{ color: sec.icon_color || undefined }} className="shrink-0">
+                            {renderIcon(sec.icon, "h-3.5 w-3.5")}
+                          </span>
+                        )}
                         <span className="font-medium text-xs text-foreground truncate">{sec.name}</span>
                       </div>
                       <div className="space-y-1">
@@ -304,7 +329,7 @@ export function RemainderEditDialog({
                           return (
                             <label
                               key={uniqueKey}
-                              className="flex items-start gap-2 text-xs hover:bg-accent/40 p-1 rounded cursor-pointer min-w-0"
+                              className="flex items-start gap-2 text-xs hover:bg-accent/40 p-1 rounded cursor-pointer min-w-0 animate-fade-in"
                             >
                               <input
                                 type="checkbox"
@@ -316,8 +341,15 @@ export function RemainderEditDialog({
                                     setCompletedOperationKeys((prev) => prev.filter((k) => k !== uniqueKey));
                                   }
                                 }}
-                                className="rounded border-gray-300 text-primary focus:ring-primary h-3.5 w-3.5 mt-0.5"
+                                className="rounded border-gray-300 text-primary focus:ring-primary h-3.5 w-3.5 mt-0.5 shrink-0"
                               />
+                              {op.icon ? (
+                                <span style={{ color: op.icon_color || undefined }} className="shrink-0 mt-0.5">
+                                  {renderIcon(op.icon, "h-3.5 w-3.5")}
+                                </span>
+                              ) : op.icon_color ? (
+                                <span className="inline-block size-3.5 shrink-0 rounded-full bg-current mt-0.5" style={{ color: op.icon_color }} />
+                              ) : null}
                               <span className="text-foreground text-xs leading-normal min-w-0 break-words">
                                 {op.operation_name}
                               </span>
@@ -352,18 +384,24 @@ export function RemainderEditDialog({
 
 interface RemaindersListPanelProps {
   spgId: number;
+  spgs: SpgOut[];
+  selectedSpgIds: number[];
   sections: SpgOut["sections"];
   remainders: SpgRemainder[];
   isLoading: boolean;
   onRefresh: () => void;
+  searchQuery: string;
 }
 
 export function RemaindersListPanel({
   spgId,
+  spgs,
+  selectedSpgIds,
   sections,
   remainders,
   isLoading,
   onRefresh,
+  searchQuery,
 }: RemaindersListPanelProps) {
   const queryClient = useQueryClient();
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -372,14 +410,13 @@ export function RemaindersListPanel({
   const [historyRemainderId, setHistoryRemainderId] = useState<number | null>(null);
   const [importDialogOpen, setImportDialogOpen] = useState(false);
 
+  // Состояние сворачивания
+  const [isExpanded, setIsExpanded] = useState(true);
+
   // Состояния для inline-редактирования
   const [inlineEditingId, setInlineEditingId] = useState<number | null>(null);
   const [inlineEditingQuantity, setInlineEditingQuantity] = useState("");
   const [inlineEditingError, setInlineEditingError] = useState<string | null>(null);
-
-  // Состояния для фильтрации
-  const [searchQuery, setSearchQuery] = useState("");
-  const [sectionFilter, setSectionFilter] = useState<string>("");
 
   const handleAdd = () => {
     setEditing(null);
@@ -393,15 +430,18 @@ export function RemaindersListPanel({
   };
 
   const inlineSaveMutation = useMutation({
-    mutationFn: (input: { remainder: SpgRemainder; quantity: number }) =>
-      updateManualRemainder(spgId, input.remainder.id, {
+    mutationFn: (input: { remainder: SpgRemainder; quantity: number }) => {
+      const actualSpgId = spgs.find(s => s.sections.some(sec => sec.section_id === input.remainder.section_id))?.id || spgId;
+      return updateManualRemainder(actualSpgId, input.remainder.id, {
         quantity: input.quantity,
         section_id: input.remainder.section_id,
-      }),
-    onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: queryKeys.spg.remainders(spgId) });
-      void queryClient.invalidateQueries({ queryKey: queryKeys.spg.snapshot(spgId) });
-      void queryClient.invalidateQueries({ queryKey: queryKeys.spg.remainderHistory(spgId) });
+      });
+    },
+    onSuccess: (_, variables) => {
+      const actualSpgId = spgs.find(s => s.sections.some(sec => sec.section_id === variables.remainder.section_id))?.id || spgId;
+      void queryClient.invalidateQueries({ queryKey: queryKeys.spg.remainders(actualSpgId) });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.spg.snapshot(actualSpgId) });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.spg.remainderHistory(actualSpgId) });
       setInlineEditingId(null);
       setInlineEditingQuantity("");
       onRefresh();
@@ -431,11 +471,15 @@ export function RemaindersListPanel({
   };
 
   const deleteMutation = useMutation({
-    mutationFn: (r: SpgRemainder) => deleteManualRemainder(spgId, r.id),
-    onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: queryKeys.spg.remainders(spgId) });
-      void queryClient.invalidateQueries({ queryKey: queryKeys.spg.snapshot(spgId) });
-      void queryClient.invalidateQueries({ queryKey: queryKeys.spg.remainderHistory(spgId) });
+    mutationFn: (r: SpgRemainder) => {
+      const actualSpgId = spgs.find(s => s.sections.some(sec => sec.section_id === r.section_id))?.id || spgId;
+      return deleteManualRemainder(actualSpgId, r.id);
+    },
+    onSuccess: (_, variables) => {
+      const actualSpgId = spgs.find(s => s.sections.some(sec => sec.section_id === variables.section_id))?.id || spgId;
+      void queryClient.invalidateQueries({ queryKey: queryKeys.spg.remainders(actualSpgId) });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.spg.snapshot(actualSpgId) });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.spg.remainderHistory(actualSpgId) });
       onRefresh();
     },
   });
@@ -451,17 +495,26 @@ export function RemaindersListPanel({
       !searchQuery.trim() ||
       r.product_sku.toLowerCase().includes(searchQuery.toLowerCase()) ||
       r.product_name.toLowerCase().includes(searchQuery.toLowerCase());
-    const matchesSection =
-      sectionFilter === "" || r.section_id === Number(sectionFilter);
-    return matchesSearch && matchesSection;
+    return matchesSearch;
   });
 
   return (
     <div className="space-y-3">
-      <div className="flex items-center justify-between">
-        <h3 className="text-sm font-semibold">
-          Остатки ({filteredRemainders.length} из {remainders.length})
-        </h3>
+      <div className="flex items-center justify-between border-b pb-2">
+        <button
+          type="button"
+          onClick={() => setIsExpanded(!isExpanded)}
+          className="flex items-center gap-2 hover:opacity-80 transition-opacity focus:outline-none"
+        >
+          {isExpanded ? (
+            <ChevronDown className="h-4 w-4 text-muted-foreground" />
+          ) : (
+            <ChevronRight className="h-4 w-4 text-muted-foreground" />
+          )}
+          <h3 className="text-sm font-semibold">
+            Наличие на участках ({filteredRemainders.length} из {remainders.length})
+          </h3>
+        </button>
         <div className="flex items-center gap-2">
           <Button size="sm" variant="outline" onClick={() => setImportDialogOpen(true)}>
             <Upload className="h-3.5 w-3.5 mr-1" />
@@ -473,176 +526,155 @@ export function RemaindersListPanel({
           </Button>
           <Button size="sm" onClick={handleAdd}>
             <Plus className="h-3.5 w-3.5 mr-1" />
-            Добавить остаток
+            Добавить запись
           </Button>
         </div>
       </div>
 
-      {/* Панель поиска и фильтрации */}
-      <div className="flex flex-col sm:flex-row items-center gap-2 bg-muted/10 p-2 rounded-lg border">
-        <div className="relative w-full sm:flex-1">
-          <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
-          <Input
-            placeholder="Поиск по артикулу или названию..."
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            className="w-full bg-background pl-9 h-9"
-          />
-        </div>
-        <select
-          className="w-full sm:w-[200px] rounded-md border border-input px-3 py-2 text-sm bg-background h-9 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-          value={sectionFilter}
-          onChange={(e) => setSectionFilter(e.target.value)}
-        >
-          <option value="">Все участки</option>
-          {sections.map((s) => (
-            <option key={s.section_id} value={s.section_id}>
-              {s.section_code} — {s.section_name}
-            </option>
-          ))}
-        </select>
-      </div>
-
-      {isLoading ? (
-        <p className="text-sm text-muted-foreground">Загрузка...</p>
-      ) : remainders.length === 0 ? (
-        <p className="text-sm text-muted-foreground">Остатков нет</p>
-      ) : (
-        <div className="overflow-x-auto border rounded-lg">
-          {filteredRemainders.length === 0 ? (
-            <div className="p-8 text-center text-sm text-muted-foreground">
-              Нет остатков, соответствующих критериям поиска
-            </div>
+      {isExpanded && (
+        <>
+          {isLoading ? (
+            <p className="text-sm text-muted-foreground">Загрузка...</p>
+          ) : remainders.length === 0 ? (
+            <p className="text-sm text-muted-foreground">Записей о наличии нет</p>
           ) : (
-            <table className="w-full text-sm">
-              <thead className="bg-muted/50 border-b">
-                <tr>
-                  <th className="p-2 text-left font-medium">Артикул</th>
-                  <th className="p-2 text-left font-medium">Участок</th>
-                  <th className="p-2 text-right font-medium">Кол-во</th>
-                  <th className="p-2 text-center font-medium">Источник</th>
-                  <th className="p-2 text-center font-medium">Действия</th>
-                </tr>
-              </thead>
-              <tbody>
-                {filteredRemainders.map((r) => {
-                  const isNegative = r.remainder_quantity < 0;
-                  return (
-                    <tr key={r.id} className="border-b hover:bg-muted/30">
-                      <td className="p-2">
-                        <div className="font-medium">{r.product_sku}</div>
-                        <div className="text-xs text-muted-foreground truncate max-w-[180px]">
-                          {r.product_name}
-                        </div>
-                      </td>
-                      <td className="p-2">
-                        <div className="text-xs font-medium">{r.section_code}</div>
-                        <div className="text-xs text-muted-foreground">{r.section_name}</div>
-                      </td>
-                      <td className="p-2 text-right">
-                        {inlineEditingId === r.id ? (
-                          <div className="flex flex-col items-end gap-1">
-                            <Input
-                              type="number"
-                              className="h-8 w-24 text-right p-1"
-                              min="0"
-                              step="any"
-                              value={inlineEditingQuantity}
-                              onChange={(e) => setInlineEditingQuantity(e.target.value)}
-                              disabled={inlineSaveMutation.isPending}
-                              autoFocus
-                            />
-                            {inlineEditingError && (
-                              <div className="text-[10px] text-destructive max-w-[120px] text-right leading-tight">
-                                {inlineEditingError}
+            <div className="overflow-x-auto border rounded-lg">
+              {filteredRemainders.length === 0 ? (
+                <div className="p-8 text-center text-sm text-muted-foreground">
+                  Ничего не найдено по выбранным фильтрам
+                </div>
+              ) : (
+                <table className="w-full text-sm">
+                  <thead className="bg-muted/50 border-b">
+                    <tr>
+                      <th className="p-2 text-left font-medium">Артикул</th>
+                      <th className="p-2 text-left font-medium">Участок</th>
+                      <th className="p-2 text-right font-medium">Кол-во</th>
+                      <th className="p-2 text-center font-medium">Источник</th>
+                      <th className="p-2 text-center font-medium">Действия</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {filteredRemainders.map((r) => {
+                      const isNegative = r.remainder_quantity < 0;
+                      return (
+                        <tr key={r.id} className="border-b hover:bg-muted/30">
+                          <td className="p-2">
+                            <div className="font-medium">{r.product_sku}</div>
+                            <div className="text-xs text-muted-foreground truncate max-w-[180px]">
+                              {r.product_name}
+                            </div>
+                          </td>
+                          <td className="p-2">
+                            <div className="text-xs font-medium">{r.section_code}</div>
+                            <div className="text-xs text-muted-foreground">{r.section_name}</div>
+                          </td>
+                          <td className="p-2 text-right">
+                            {inlineEditingId === r.id ? (
+                              <div className="flex flex-col items-end gap-1">
+                                <Input
+                                  type="number"
+                                  className="h-8 w-24 text-right p-1"
+                                  min="0"
+                                  step="any"
+                                  value={inlineEditingQuantity}
+                                  onChange={(e) => setInlineEditingQuantity(e.target.value)}
+                                  disabled={inlineSaveMutation.isPending}
+                                  autoFocus
+                                />
+                                {inlineEditingError && (
+                                  <div className="text-[10px] text-destructive max-w-[120px] text-right leading-tight">
+                                    {inlineEditingError}
+                                  </div>
+                                )}
+                              </div>
+                            ) : (
+                              <>
+                                <span className={`font-semibold ${isNegative ? "text-amber-700" : ""}`}>
+                                  {r.remainder_quantity}
+                                </span>
+                                {isNegative && (
+                                  <span
+                                    title="Остаток ушёл в минус — зафиксируйте ручной операцией"
+                                    className="inline-block"
+                                  >
+                                    <Badge
+                                      variant="destructive"
+                                      className="ml-2 text-[10px] inline-flex items-center gap-1"
+                                    >
+                                      <IconAlertTriangle size={12} />
+                                      Отрицательный
+                                    </Badge>
+                                  </span>
+                                )}
+                              </>
+                            )}
+                          </td>
+                          <td className="p-2 text-center">
+                            <Badge variant={r.source === "manual" ? "default" : "secondary"} className="text-xs">
+                              {r.source === "manual" ? "Ручной" : "Задача"}
+                            </Badge>
+                          </td>
+                          <td className="p-2 text-center">
+                            {inlineEditingId === r.id ? (
+                              <div className="flex items-center justify-center gap-1">
+                                <button
+                                  type="button"
+                                  onClick={() => handleInlineSave(r)}
+                                  disabled={inlineSaveMutation.isPending}
+                                  className="p-1 rounded hover:bg-emerald-100 text-emerald-600 dark:hover:bg-emerald-950/30"
+                                  title="Сохранить"
+                                >
+                                  <Check className="h-4 w-4" />
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={handleInlineCancel}
+                                  disabled={inlineSaveMutation.isPending}
+                                  className="p-1 rounded hover:bg-rose-100 text-rose-600 dark:hover:bg-rose-950/30"
+                                  title="Отменить"
+                                >
+                                  <X className="h-4 w-4" />
+                                </button>
+                              </div>
+                            ) : (
+                              <div className="flex items-center justify-center gap-1">
+                                <button
+                                  type="button"
+                                  onClick={() => setHistoryRemainderId(r.id)}
+                                  className="p-1 rounded hover:bg-accent text-blue-600"
+                                  title="История"
+                                >
+                                  <HistoryIcon className="h-3.5 w-3.5" />
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => handleEdit(r)}
+                                  className="p-1 rounded hover:bg-accent"
+                                  title="Редактировать"
+                                >
+                                  <Pencil className="h-3.5 w-3.5" />
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => handleDelete(r)}
+                                  className="p-1 rounded hover:bg-destructive/10 text-destructive"
+                                  title="Удалить"
+                                >
+                                  <Trash2 className="h-3.5 w-3.5" />
+                                </button>
                               </div>
                             )}
-                          </div>
-                        ) : (
-                          <>
-                            <span className={`font-semibold ${isNegative ? "text-amber-700" : ""}`}>
-                              {r.remainder_quantity}
-                            </span>
-                            {isNegative && (
-                              <span
-                                title="Остаток ушёл в минус — зафиксируйте ручной операцией"
-                                className="inline-block"
-                              >
-                                <Badge
-                                  variant="destructive"
-                                  className="ml-2 text-[10px] inline-flex items-center gap-1"
-                                >
-                                  <IconAlertTriangle size={12} />
-                                  Отрицательный
-                                </Badge>
-                              </span>
-                            )}
-                          </>
-                        )}
-                      </td>
-                      <td className="p-2 text-center">
-                        <Badge variant={r.source === "manual" ? "default" : "secondary"} className="text-xs">
-                          {r.source === "manual" ? "Ручной" : "Задача"}
-                        </Badge>
-                      </td>
-                      <td className="p-2 text-center">
-                        {inlineEditingId === r.id ? (
-                          <div className="flex items-center justify-center gap-1">
-                            <button
-                              type="button"
-                              onClick={() => handleInlineSave(r)}
-                              disabled={inlineSaveMutation.isPending}
-                              className="p-1 rounded hover:bg-emerald-100 text-emerald-600 dark:hover:bg-emerald-950/30"
-                              title="Сохранить"
-                            >
-                              <Check className="h-4 w-4" />
-                            </button>
-                            <button
-                              type="button"
-                              onClick={handleInlineCancel}
-                              disabled={inlineSaveMutation.isPending}
-                              className="p-1 rounded hover:bg-rose-100 text-rose-600 dark:hover:bg-rose-950/30"
-                              title="Отменить"
-                            >
-                              <X className="h-4 w-4" />
-                            </button>
-                          </div>
-                        ) : (
-                          <div className="flex items-center justify-center gap-1">
-                            <button
-                              type="button"
-                              onClick={() => setHistoryRemainderId(r.id)}
-                              className="p-1 rounded hover:bg-accent text-blue-600"
-                              title="История"
-                            >
-                              <HistoryIcon className="h-3.5 w-3.5" />
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => handleEdit(r)}
-                              className="p-1 rounded hover:bg-accent"
-                              title="Редактировать"
-                            >
-                              <Pencil className="h-3.5 w-3.5" />
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => handleDelete(r)}
-                              className="p-1 rounded hover:bg-destructive/10 text-destructive"
-                              title="Удалить"
-                            >
-                              <Trash2 className="h-3.5 w-3.5" />
-                            </button>
-                          </div>
-                        )}
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              )}
+            </div>
           )}
-        </div>
+        </>
       )}
 
       <RemainderEditDialog
@@ -652,6 +684,8 @@ export function RemaindersListPanel({
         sections={sections}
         editingRemainder={editing}
         onSaved={onRefresh}
+        defaultSectionId={null}
+        spgs={spgs}
       />
 
       <ManualOperationDialog
@@ -660,6 +694,7 @@ export function RemaindersListPanel({
         spgId={spgId}
         sections={sections}
         onSaved={onRefresh}
+        spgs={spgs}
       />
 
       <RemainderHistoryDrawer
@@ -667,7 +702,11 @@ export function RemaindersListPanel({
         onOpenChange={(open) => {
           if (!open) setHistoryRemainderId(null);
         }}
-        spgId={spgId}
+        spgId={
+          historyRemainderId !== null
+            ? spgs.find(s => s.sections.some(sec => sec.section_id === remainders.find(r => r.id === historyRemainderId)?.section_id))?.id || spgId
+            : spgId
+        }
         remainderId={historyRemainderId}
       />
 
@@ -675,6 +714,8 @@ export function RemaindersListPanel({
         open={importDialogOpen}
         onOpenChange={setImportDialogOpen}
         spgId={spgId}
+        spgs={spgs}
+        selectedSpgIds={selectedSpgIds}
         onSaved={onRefresh}
       />
     </div>

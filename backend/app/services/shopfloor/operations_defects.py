@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from decimal import Decimal
 
-from sqlalchemy import select
+from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.defect import Defect, DefectDecision, DefectDecisionType, DefectItem, DefectStatus, DefectType
@@ -225,7 +225,6 @@ async def defect_decide(
         # Deduct from SpgRemainder if associated
         if defect.spg_remainder_id is not None:
             from app.models.spg_remainder import SpgRemainder
-            from sqlalchemy import func
             remainder = await db.get(SpgRemainder, defect.spg_remainder_id)
             if remainder:
                 remainder.remainder_quantity -= quantity
@@ -250,6 +249,28 @@ async def defect_decide(
         defect.status = DefectStatus.rework_task_created
     elif decision_type == DefectDecisionType.accept_with_deviation:
         defect.status = DefectStatus.accepted_with_deviation
+        if task:
+            actor_name = await _get_user_snapshot_name(db, actor_id)
+            movement = Movement(
+                product_id=task.product_id,
+                task_id=task.id,
+                section_plan_line_id=task.section_plan_line_id,
+                from_section_id=task.section_id,
+                to_section_id=task.section_id,
+                movement_type=MovementType.complete,
+                quantity=quantity,
+                reason=reason,
+                comment=comment,
+                created_by=actor_id,
+                created_by_user_name=actor_name,
+                performed_at=func.now(),
+                accounted_at=func.now(),
+                source_ref=f"defect:{defect.id}",
+                idempotency_key=f"{idempotency_key}:complete" if idempotency_key else None,
+            )
+            db.add(movement)
+    elif decision_type == DefectDecisionType.hold:
+        defect.status = DefectStatus.hold
     else:
         defect.status = DefectStatus.decision_required
 

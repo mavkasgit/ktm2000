@@ -10,6 +10,7 @@ export type SectionSelectProps = {
   className?: string;
   emptyLabel?: string;
   disabled?: boolean;
+  hideCode?: boolean;
 };
 
 export function SectionSelect({
@@ -20,6 +21,7 @@ export function SectionSelect({
   className,
   emptyLabel,
   disabled = false,
+  hideCode = false,
 }: SectionSelectProps) {
   const activeSections = useMemo(() => sections.filter((s) => s.is_active), [sections]);
 
@@ -37,7 +39,9 @@ export function SectionSelect({
             >
               {renderIcon(selectedSection.icon, "h-3 w-3")}
             </span>
-            <span className="truncate">{selectedSection.code} · {selectedSection.name}</span>
+            <span className="truncate">
+              {hideCode ? selectedSection.name : `${selectedSection.code} · ${selectedSection.name}`}
+            </span>
           </div>
         ) : (
           <SelectValue placeholder={placeholder} />
@@ -62,7 +66,9 @@ export function SectionSelect({
                     {renderIcon(section.icon, "h-3 w-3")}
                   </span>
                 )}
-                <span className="truncate">{section.code} · {section.name}</span>
+                <span className="truncate">
+                  {hideCode ? section.name : `${section.code} · ${section.name}`}
+                </span>
               </div>
             </SelectItem>
           );

@@ -1,31 +1,22 @@
-import { useState } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Loader2 } from "lucide-react";
+import { useState, useMemo } from "react";
+import { useQuery, useQueries, useQueryClient } from "@tanstack/react-query";
+import { Loader2, Search } from "lucide-react";
 
 import {
   getSpgList,
-  getSpgSnapshot,
   listSpgRemainders,
-  type SpgOut,
-  type SpgSnapshotResponse,
   type SpgRemainder,
 } from "@/shared/api/spg";
 import { SpgSelector } from "../components/SpgSelector";
-import { SpgSnapshotTable } from "../components/SpgSnapshotTable";
 import { RemaindersListPanel } from "../components/RemainderEditDialog";
-import { ProductRemaindersDialog } from "../components/ProductRemaindersDialog";
-import { ManualOperationDialog } from "../components/ManualOperationDialog";
 import { DefectsListPanel } from "../components/DefectsListPanel";
 import { getSpgDefects, type DefectOut } from "@/shared/api/defects";
 import { queryKeys } from "@/shared/api/queryKeys";
-
-type Tab = "snapshot" | "remainders" | "defects";
+import { Input } from "@/shared/ui";
 
 export function SpgSnapshotPage() {
-  const [selectedId, setSelectedId] = useState<number | null>(null);
-  const [tab, setTab] = useState<Tab>("snapshot");
-  const [productRemaindersFor, setProductRemaindersFor] = useState<number | null>(null);
-  const [manualOpProductId, setManualOpProductId] = useState<number | null>(null);
+  const [selectedSpgIds, setSelectedSpgIds] = useState<number[]>([]);
+  const [searchQuery, setSearchQuery] = useState("");
   const queryClient = useQueryClient();
 
   const { data: spgs = [], isLoading: loadingList } = useQuery({
@@ -33,48 +24,105 @@ export function SpgSnapshotPage() {
     queryFn: getSpgList,
   });
 
-  const effectiveSpgId = selectedId ?? spgs[0]?.id ?? null;
+  const targetSpgIds = useMemo(() => {
+    return selectedSpgIds.length > 0 ? selectedSpgIds : spgs.map((s) => s.id);
+  }, [selectedSpgIds, spgs]);
 
-  const { data: snapshot = null, isLoading: loadingSnapshot } = useQuery({
-    queryKey: effectiveSpgId ? queryKeys.spg.snapshot(effectiveSpgId) : ["spg-snapshot", "none"],
-    queryFn: () => getSpgSnapshot(effectiveSpgId as number),
-    enabled: effectiveSpgId !== null,
+  const remaindersQueries = useQueries({
+    queries: targetSpgIds.map((id) => ({
+      queryKey: queryKeys.spg.remainders(id),
+      queryFn: () => listSpgRemainders(id),
+      enabled: spgs.length > 0,
+    })),
   });
 
-  const { data: remainders = [], isLoading: loadingRemainders } = useQuery({
-    queryKey: effectiveSpgId ? queryKeys.spg.remainders(effectiveSpgId) : ["spg-remainders", "none"],
-    queryFn: () => listSpgRemainders(effectiveSpgId as number),
-    enabled: effectiveSpgId !== null,
+  const defectsQueries = useQueries({
+    queries: targetSpgIds.map((id) => ({
+      queryKey: queryKeys.spg.defects(id),
+      queryFn: () => getSpgDefects(id),
+      enabled: spgs.length > 0,
+    })),
   });
 
-  const { data: defects = [], isLoading: loadingDefects } = useQuery({
-    queryKey: effectiveSpgId ? queryKeys.spg.defects(effectiveSpgId) : ["spg-defects", "none"],
-    queryFn: () => getSpgDefects(effectiveSpgId as number),
-    enabled: effectiveSpgId !== null,
-  });
+  const remainders = useMemo(() => {
+    return remaindersQueries.flatMap((q) => q.data ?? []);
+  }, [remaindersQueries]);
+
+  const defects = useMemo(() => {
+    return defectsQueries.flatMap((q) => q.data ?? []);
+  }, [defectsQueries]);
+
+  const loadingRemainders = remaindersQueries.some((q) => q.isLoading);
+  const loadingDefects = defectsQueries.some((q) => q.isLoading);
 
   const handleRefresh = () => {
-    if (effectiveSpgId === null) return;
-    void queryClient.invalidateQueries({ queryKey: queryKeys.spg.snapshot(effectiveSpgId) });
-    void queryClient.invalidateQueries({ queryKey: queryKeys.spg.remainders(effectiveSpgId) });
-    void queryClient.invalidateQueries({ queryKey: queryKeys.spg.defects(effectiveSpgId) });
+    targetSpgIds.forEach((id) => {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.spg.remainders(id) });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.spg.defects(id) });
+    });
   };
 
   const refreshAll = () => {
-    if (effectiveSpgId === null) return;
-    void queryClient.invalidateQueries({ queryKey: queryKeys.spg.snapshot(effectiveSpgId) });
-    void queryClient.invalidateQueries({ queryKey: queryKeys.spg.remainders(effectiveSpgId) });
-    void queryClient.invalidateQueries({ queryKey: queryKeys.spg.defects(effectiveSpgId) });
+    targetSpgIds.forEach((id) => {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.spg.remainders(id) });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.spg.defects(id) });
+    });
   };
 
-  const selectedSpg: SpgOut | undefined = spgs.find((s) => s.id === effectiveSpgId);
+  const handleToggleSpg = (id: number) => {
+    setSelectedSpgIds((prev) => {
+      if (prev.includes(id)) {
+        return prev.filter((x) => x !== id);
+      } else {
+        return [...prev, id];
+      }
+    });
+    setSearchQuery("");
+  };
+
+  const handleClearSpg = () => {
+    setSelectedSpgIds([]);
+    setSearchQuery("");
+  };
+
+  const combinedSections = useMemo(() => {
+    const selectedSpgs = selectedSpgIds.length > 0
+      ? spgs.filter((s) => selectedSpgIds.includes(s.id))
+      : spgs;
+    return selectedSpgs.flatMap((s) => s.sections);
+  }, [spgs, selectedSpgIds]);
+
+  const headerTitle = useMemo(() => {
+    if (selectedSpgIds.length === 1) {
+      const spg = spgs.find((s) => s.id === selectedSpgIds[0]);
+      return spg ? spg.name : "Группа ГХП";
+    }
+    if (selectedSpgIds.length > 1) {
+      return `Выбрано групп: ${selectedSpgIds.length}`;
+    }
+    return "Все группы ГХП";
+  }, [spgs, selectedSpgIds]);
+
+  const headerDescription = useMemo(() => {
+    if (selectedSpgIds.length === 1) {
+      const spg = spgs.find((s) => s.id === selectedSpgIds[0]);
+      return spg?.description || null;
+    }
+    if (selectedSpgIds.length > 1) {
+      return spgs
+        .filter((s) => selectedSpgIds.includes(s.id))
+        .map((s) => s.name)
+        .join(", ");
+    }
+    return "Отображаются данные по всем участкам завода";
+  }, [spgs, selectedSpgIds]);
 
   return (
     <div className="space-y-6 p-4">
       <div>
         <h1 className="text-2xl font-bold">Группы хранения и производства</h1>
         <p className="text-sm text-muted-foreground mt-1">
-          Срез данных по остаткам, завершению и текущему состоянию
+          Наличие запасов на участках и зарегистрированный брак
         </p>
       </div>
 
@@ -84,129 +132,79 @@ export function SpgSnapshotPage() {
           Загрузка групп...
         </div>
       ) : (
-        <SpgSelector spgs={spgs} selectedId={effectiveSpgId} onSelect={setSelectedId} />
+        <SpgSelector
+          spgs={spgs}
+          selectedIds={selectedSpgIds}
+          onToggle={handleToggleSpg}
+          onSelect={(id) => setSelectedSpgIds([id])}
+          onClear={handleClearSpg}
+        />
       )}
 
-      {selectedSpg && (
-        <div className="flex items-center justify-between">
+      {spgs.length > 0 && (
+        <div className="flex items-center justify-between border-b pb-4">
           <div>
-            <h2 className="text-lg font-semibold">{selectedSpg.name}</h2>
-            {selectedSpg.description && (
-              <p className="text-sm text-muted-foreground">{selectedSpg.description}</p>
+            <h2 className="text-lg font-semibold">{headerTitle}</h2>
+            {headerDescription && (
+              <p className="text-sm text-muted-foreground">{headerDescription}</p>
             )}
           </div>
           <button
             type="button"
             onClick={handleRefresh}
-            disabled={loadingSnapshot}
+            disabled={loadingRemainders || loadingDefects}
             className="rounded-md border border-border px-3 py-1.5 text-sm hover:bg-accent disabled:opacity-50"
           >
-            {loadingSnapshot ? "Обновление..." : "Обновить"}
+            {loadingRemainders || loadingDefects ? "Обновление..." : "Обновить"}
           </button>
         </div>
       )}
 
-      {/* Tabs */}
-      {effectiveSpgId !== null && (
-        <div className="flex gap-1 border-b">
-          <button
-            type="button"
-            onClick={() => setTab("snapshot")}
-            className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
-              tab === "snapshot"
-                ? "border-primary text-primary"
-                : "border-transparent text-muted-foreground hover:text-foreground"
-            }`}
-          >
-            Срез данных
-          </button>
-          <button
-            type="button"
-            onClick={() => setTab("remainders")}
-            className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
-              tab === "remainders"
-                ? "border-primary text-primary"
-                : "border-transparent text-muted-foreground hover:text-foreground"
-            }`}
-          >
-            Остатки
-          </button>
-          <button
-            type="button"
-            onClick={() => setTab("defects")}
-            className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
-              tab === "defects"
-                ? "border-primary text-primary"
-                : "border-transparent text-muted-foreground hover:text-foreground"
-            }`}
-          >
-            Брак (дефекты)
-          </button>
-        </div>
-      )}
-
-      {/* Tab content */}
-      {tab === "snapshot" && (
-        loadingSnapshot ? (
-          <div className="flex items-center gap-2 py-12 text-muted-foreground justify-center">
-            <Loader2 className="h-5 w-5 animate-spin" />
-            Загрузка данных...
+      {/* Global Filters Panel */}
+      {spgs.length > 0 && (
+        <div className="bg-muted/10 p-4 rounded-xl border">
+          <div className="relative w-full">
+            <Search className="absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
+            <Input
+              placeholder="Глобальный поиск по артикулу или названию..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="w-full bg-background pl-10 h-10"
+            />
           </div>
-        ) : snapshot ? (
-          <SpgSnapshotTable
-            snapshot={snapshot as SpgSnapshotResponse}
-            onShowProductRemainders={setProductRemaindersFor}
-          />
-        ) : null
+        </div>
       )}
 
-      {tab === "remainders" && selectedSpg && effectiveSpgId !== null && (
-        <RemaindersListPanel
-          spgId={effectiveSpgId}
-          sections={selectedSpg.sections}
-          remainders={remainders as SpgRemainder[]}
-          isLoading={loadingRemainders}
-          onRefresh={refreshAll}
-        />
-      )}
+      {/* Panels */}
+      {spgs.length > 0 && (
+        <div className="space-y-8">
+          <div className="bg-background rounded-xl border p-6 shadow-sm">
+            <RemaindersListPanel
+              spgId={selectedSpgIds.length === 1 ? selectedSpgIds[0] : (spgs[0]?.id || 0)}
+              spgs={spgs}
+              selectedSpgIds={selectedSpgIds}
+              sections={combinedSections}
+              remainders={remainders as SpgRemainder[]}
+              isLoading={loadingRemainders}
+              onRefresh={refreshAll}
+              searchQuery={searchQuery}
+            />
+          </div>
 
-      {tab === "defects" && selectedSpg && effectiveSpgId !== null && (
-        <DefectsListPanel
-          spgId={effectiveSpgId}
-          sections={selectedSpg.sections}
-          remainders={remainders as SpgRemainder[]}
-          defects={defects as DefectOut[]}
-          isLoading={loadingDefects}
-          onRefresh={refreshAll}
-        />
-      )}
-
-      {/* Drill-down dialog from snapshot table */}
-      {effectiveSpgId !== null && selectedSpg && (
-        <ProductRemaindersDialog
-          open={productRemaindersFor !== null}
-          onOpenChange={(o) => {
-            if (!o) setProductRemaindersFor(null);
-          }}
-          spgId={effectiveSpgId}
-          productId={productRemaindersFor}
-          snapshot={snapshot as SpgSnapshotResponse | null}
-          onManualOperation={(pid) => setManualOpProductId(pid)}
-        />
-      )}
-
-      {/* Manual stock operation launched from product drill-down */}
-      {effectiveSpgId !== null && selectedSpg && (
-        <ManualOperationDialog
-          open={manualOpProductId !== null}
-          onOpenChange={(o) => {
-            if (!o) setManualOpProductId(null);
-          }}
-          spgId={effectiveSpgId}
-          sections={selectedSpg.sections}
-          defaultProductId={manualOpProductId}
-          onSaved={refreshAll}
-        />
+          <div className="bg-background rounded-xl border p-6 shadow-sm">
+            <DefectsListPanel
+              spgId={selectedSpgIds.length === 1 ? selectedSpgIds[0] : (spgs[0]?.id || 0)}
+              spgs={spgs}
+              selectedSpgIds={selectedSpgIds}
+              sections={combinedSections}
+              remainders={remainders as SpgRemainder[]}
+              defects={defects as DefectOut[]}
+              isLoading={loadingDefects}
+              onRefresh={refreshAll}
+              searchQuery={searchQuery}
+            />
+          </div>
+        </div>
       )}
     </div>
   );

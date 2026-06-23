@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useMemo } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Search, Loader2 } from "lucide-react";
 
@@ -10,6 +10,12 @@ import {
   Button,
   Input,
   Badge,
+  SectionSelect,
+  Select,
+  SelectTrigger,
+  SelectValue,
+  SelectContent,
+  SelectItem,
 } from "@/shared/ui";
 import type { SpgOut, SpgRemainder } from "@/shared/api/spg";
 import type { Product, ProductRouteStageOut } from "@/shared/api/products";
@@ -25,6 +31,8 @@ interface CreateDefectDialogProps {
   sections: SpgOut["sections"];
   remainders: SpgRemainder[];
   onSaved: () => void;
+  defaultSectionId?: number | null;
+  spgs?: SpgOut[];
 }
 
 export function CreateDefectDialog({
@@ -34,8 +42,23 @@ export function CreateDefectDialog({
   sections,
   remainders,
   onSaved,
+  defaultSectionId,
+  spgs,
 }: CreateDefectDialogProps) {
   const queryClient = useQueryClient();
+
+  const sectionsForSelect = useMemo(() => {
+    return sections.map((s) => ({
+      id: s.section_id,
+      code: s.section_code,
+      name: s.section_name,
+      description: "",
+      is_active: true,
+      kind: "production" as any,
+      icon: null,
+      icon_color: null,
+    }));
+  }, [sections]);
   const [products, setProducts] = useState<Product[]>([]);
   const [productSearch, setProductSearch] = useState("");
   const [selectedProductId, setSelectedProductId] = useState<number | null>(null);
@@ -65,7 +88,7 @@ export function CreateDefectDialog({
       getDefectTypes().then((types) => setDefectTypes(types)).catch(() => {});
       
       setSelectedProductId(null);
-      setSelectedSectionId(sections[0]?.section_id ?? null);
+      setSelectedSectionId(defaultSectionId ?? sections[0]?.section_id ?? null);
       setRouteStages([]);
       setSelectedStageId(null);
       setDefectTypeCode("");
@@ -74,7 +97,7 @@ export function CreateDefectDialog({
       setComment("");
       setError(null);
     }
-  }, [open, sections]);
+  }, [open, sections, defaultSectionId]);
 
   // Load product route stages when product changes
   useEffect(() => {
@@ -128,9 +151,10 @@ export function CreateDefectDialog({
         comment: comment || null,
       }),
     onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: queryKeys.spg.defects(spgId) });
-      void queryClient.invalidateQueries({ queryKey: queryKeys.spg.snapshot(spgId) });
-      void queryClient.invalidateQueries({ queryKey: queryKeys.spg.remainders(spgId) });
+      const actualSpgId = spgs?.find(s => s.sections.some(sec => sec.section_id === selectedSectionId))?.id || spgId;
+      void queryClient.invalidateQueries({ queryKey: queryKeys.spg.defects(actualSpgId) });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.spg.snapshot(actualSpgId) });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.spg.remainders(actualSpgId) });
       onSaved();
       onOpenChange(false);
     },
@@ -238,17 +262,14 @@ export function CreateDefectDialog({
           {/* Section Selector */}
           <div className="space-y-1">
             <label className="text-sm font-medium">Участок ГХП</label>
-            <select
-              className="w-full rounded-md border px-3 py-2 text-sm bg-background"
-              value={selectedSectionId ?? ""}
-              onChange={(e) => setSelectedSectionId(Number(e.target.value))}
-            >
-              {sections.map((s) => (
-                <option key={s.section_id} value={s.section_id}>
-                  {s.section_code} — {s.section_name}
-                </option>
-              ))}
-            </select>
+            <SectionSelect
+              sections={sectionsForSelect}
+              value={selectedSectionId}
+              onValueChange={setSelectedSectionId}
+              placeholder="Выберите участок"
+              className="w-full h-10 text-sm font-normal bg-background border rounded-md px-3"
+              hideCode={true}
+            />
           </div>
 
           {/* Route Stage Selector */}
@@ -265,20 +286,24 @@ export function CreateDefectDialog({
                   Технологический маршрут для данного продукта не найден
                 </div>
               ) : (
-                <select
-                  className="w-full rounded-md border px-3 py-2 text-sm bg-background"
-                  value={selectedStageId ?? ""}
-                  onChange={(e) => setSelectedStageId(Number(e.target.value))}
+                <Select
+                  value={selectedStageId ? String(selectedStageId) : ""}
+                  onValueChange={(val) => setSelectedStageId(val ? Number(val) : null)}
                 >
-                  {routeStages.map((st) => {
-                    const opName = st.operations?.[0]?.operation_name || st.section_name;
-                    return (
-                      <option key={st.id} value={st.id}>
-                        Шаг {st.sequence}: {st.section_code} — {opName}
-                      </option>
-                    );
-                  })}
-                </select>
+                  <SelectTrigger className="w-full h-10 text-sm bg-background">
+                    <SelectValue placeholder="Выберите технологическую операцию" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {routeStages.map((st) => {
+                      const opName = st.operations?.[0]?.operation_name || st.section_name;
+                      return (
+                        <SelectItem key={st.id} value={String(st.id)}>
+                          Шаг {st.sequence}: {st.section_code} — {opName}
+                        </SelectItem>
+                      );
+                    })}
+                  </SelectContent>
+                </Select>
               )}
             </div>
           )}
@@ -287,18 +312,22 @@ export function CreateDefectDialog({
           {selectedProductId && (
             <div className="space-y-1">
               <label className="text-sm font-medium">Списать из партии остатка (опционально)</label>
-              <select
-                className="w-full rounded-md border px-3 py-2 text-sm bg-background"
-                value={selectedRemainderId ?? ""}
-                onChange={(e) => setSelectedRemainderId(e.target.value ? Number(e.target.value) : null)}
+              <Select
+                value={selectedRemainderId ? String(selectedRemainderId) : "none"}
+                onValueChange={(val) => setSelectedRemainderId(val === "none" ? null : Number(val))}
               >
-                <option value="">Без привязки к партии остатка</option>
-                {availableRemainders.map((r) => (
-                  <option key={r.id} value={r.id}>
-                    Партия #{r.id} ({r.remainder_quantity} шт.) от {new Date(r.created_at).toLocaleDateString()}
-                  </option>
-                ))}
-              </select>
+                <SelectTrigger className="w-full h-10 text-sm bg-background">
+                  <SelectValue placeholder="Без привязки к партии остатка" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="none">Без привязки к партии остатка</SelectItem>
+                  {availableRemainders.map((r) => (
+                    <SelectItem key={r.id} value={String(r.id)}>
+                      Партия #{r.id} ({r.remainder_quantity} шт.) от {new Date(r.created_at).toLocaleDateString()}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
               {availableRemainders.length === 0 && (
                 <p className="text-[11px] text-muted-foreground">
                   На данном участке нет свободных остатков этого продукта для списания.
@@ -323,18 +352,22 @@ export function CreateDefectDialog({
           {/* Defect Type (Reason) */}
           <div className="space-y-1">
             <label className="text-sm font-medium">Причина брака (дефект)</label>
-            <select
-              className="w-full rounded-md border px-3 py-2 text-sm bg-background"
-              value={defectTypeCode}
-              onChange={(e) => setDefectTypeCode(e.target.value)}
+            <Select
+              value={defectTypeCode || "none"}
+              onValueChange={(val) => setDefectTypeCode(val === "none" ? "" : val)}
             >
-              <option value="">Выберите причину брака...</option>
-              {defectTypes.map((dt) => (
-                <option key={dt.id} value={dt.code}>
-                  {dt.category ? `[${dt.category}] ` : ""}{dt.name}
-                </option>
-              ))}
-            </select>
+              <SelectTrigger className="w-full h-10 text-sm bg-background">
+                <SelectValue placeholder="Выберите причину брака..." />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="none">Выберите причину брака...</SelectItem>
+                {defectTypes.map((dt) => (
+                  <SelectItem key={dt.id} value={dt.code}>
+                    {dt.category ? `[${dt.category}] ` : ""}{dt.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </div>
 
           {/* Comment */}

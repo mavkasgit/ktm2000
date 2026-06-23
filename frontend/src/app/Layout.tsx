@@ -21,7 +21,7 @@ const NAV_ACCESS: Record<string, UserRole[]> = {
   "/references": ["admin", "planner", "section_manager", "operator", "viewer", "transporter"],
   "/planning": ["admin", "planner"],
   "/execution": ["admin", "planner", "section_manager"],
-  "/shopfloor-tasks": ["admin", "planner", "section_manager", "operator", "viewer", "transporter"],
+  "/section-tasks": ["admin", "planner", "section_manager", "operator", "viewer", "transporter"],
   "/transfers": ["admin", "planner", "section_manager", "operator", "transporter"],
   "/spg": ["admin", "planner", "section_manager", "operator", "viewer", "transporter"],
   "/audit-logs": ["admin", "planner", "section_manager", "operator", "viewer", "transporter"],
@@ -33,7 +33,7 @@ const navItems = [
   { to: "/references", label: "Справочники", icon: Boxes },
   { to: "/planning", label: "План", icon: ClipboardList },
   { to: "/execution", label: "Контроль выполнения", icon: Factory },
-  { to: "/shopfloor-tasks", label: "Участки", icon: Wrench },
+  { to: "/section-tasks", label: "Участки", icon: Wrench },
   { to: "/transfers", label: "Передачи", icon: ArrowRightLeft },
   { to: "/spg", label: "ГХП", icon: Layers },
   { to: "/audit-logs", label: "Журнал действий", icon: History },
@@ -46,10 +46,10 @@ export function Layout() {
   const sidebarRef = useRef<HTMLDivElement>(null)
   const { user, logout } = useAuth()
   const isSingleWindowShopfloor =
-    location.pathname.startsWith("/shopfloor-tasks") &&
+    location.pathname.startsWith("/section-tasks") &&
     new URLSearchParams(location.search).get("singleWindow") === "1"
   const isBulkMode =
-    location.pathname.startsWith("/shopfloor-tasks") &&
+    location.pathname.startsWith("/section-tasks") &&
     new URLSearchParams(location.search).get("bulk") === "1"
   const hideSidebar = isSingleWindowShopfloor || isBulkMode
 
