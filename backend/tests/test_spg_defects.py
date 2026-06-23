@@ -399,3 +399,48 @@ async def test_manual_defect_scrap_exceeding_remainder_quantity(client, session)
     assert remainder.remainder_quantity == Decimal("-5")
     assert remainder.consumed_at is not None
 
+
+@pytest.mark.asyncio
+async def test_manual_defect_hold_decision(client, session):
+    await _make_admin(session, "defect-hold@test.local")
+    product = await _make_product(session, "FG-HOLD-TEST")
+    await _setup_route_with_stages(session)
+    
+    spg = StorageProductionGroup(code="WIP4", name="WIP SPG 4")
+    session.add(spg)
+    await session.flush()
+
+    drill_sec = await session.scalar(select(Section).where(Section.code == "DRILL"))
+    stage = await session.scalar(select(RouteStage).limit(1))
+
+    # 1. Register defect
+    resp = await client.post(
+        "/api/shopfloor/defects",
+        json={
+            "product_id": product.id,
+            "section_id": drill_sec.id,
+            "route_stage_id": stage.id,
+            "quantity": 8,
+            "reason": "defect_for_hold",
+            "comment": "will be frozen"
+        }
+    )
+    assert resp.status_code == 200, resp.text
+    defect_id = resp.json()["defect_id"]
+
+    # 2. Decide hold
+    dec_resp = await client.post(
+        f"/api/shopfloor/defects/{defect_id}/decisions",
+        json={
+            "decision_type": DefectDecisionType.hold.value,
+            "quantity": 8,
+            "comment": "Put on hold"
+        }
+    )
+    assert dec_resp.status_code == 200, dec_resp.text
+
+    # 3. Verify defect status is hold
+    defect = await session.scalar(select(Defect).where(Defect.id == defect_id))
+    assert defect is not None
+    assert defect.status == DefectStatus.hold
+

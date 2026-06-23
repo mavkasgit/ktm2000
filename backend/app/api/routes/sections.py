@@ -392,6 +392,8 @@ class SectionOperationOut(BaseModel):
     is_significant: bool
     group_code: str | None = None
     group_name: str | None = None
+    icon: str | None = None
+    icon_color: str | None = None
 
 
 class SectionWithOperationsOut(BaseModel):
@@ -448,6 +450,8 @@ async def list_sections_with_operations(
                     operation_code=s.code,
                     operation_name=s.name,
                     is_significant=True,
+                    icon=s.icon,
+                    icon_color=s.icon_color,
                 )
             ]
 
@@ -467,6 +471,8 @@ async def list_sections_with_operations(
                         is_significant=op.is_significant,
                         group_code=op.group_code,
                         group_name=op.group_name,
+                        icon=op.icon,
+                        icon_color=op.icon_color,
                     )
                     for op in filtered_ops
                 ]

@@ -1,9 +1,9 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useMemo } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 
 import { ArrowDown, ArrowUp, Loader2 } from "lucide-react";
 
-import { Button, Dialog, DialogContent, DialogHeader, DialogTitle, Input, Badge } from "@/shared/ui";
+import { Button, Dialog, DialogContent, DialogHeader, DialogTitle, Input, Badge, SectionSelect } from "@/shared/ui";
 import { listProducts, getProduct, type Product } from "@/shared/api/products";
 import {
   performManualStockOperation,
@@ -11,6 +11,7 @@ import {
   type ManualOperationType,
   type ManualOperationInput,
   type SpgAvailability,
+  type SpgOut,
 } from "@/shared/api/spg";
 import { spgI18n } from "@/shared/i18n/spg";
 import { queryKeys } from "@/shared/api/queryKeys";
@@ -30,6 +31,7 @@ interface ManualOperationDialogProps {
   defaultSectionId?: number | null;
   defaultType?: ManualOperationType;
   onSaved: () => void;
+  spgs?: SpgOut[];
 }
 
 const TYPE_LABELS: Record<ManualOperationType, string> = {
@@ -46,8 +48,23 @@ export function ManualOperationDialog({
   defaultSectionId = null,
   defaultType = "in",
   onSaved,
+  spgs,
 }: ManualOperationDialogProps) {
   const queryClient = useQueryClient();
+
+  const sectionsForSelect = useMemo(() => {
+    return sections.map((s) => ({
+      id: s.section_id,
+      code: s.section_code,
+      name: s.section_name,
+      description: "",
+      is_active: true,
+      kind: "production" as any,
+      icon: null,
+      icon_color: null,
+    }));
+  }, [sections]);
+
   const [products, setProducts] = useState<Product[]>([]);
   const [productSearch, setProductSearch] = useState("");
   const [selectedProductId, setSelectedProductId] = useState<number | null>(null);
@@ -123,7 +140,8 @@ export function ManualOperationDialog({
     }
     let cancelled = false;
     setAvailabilityLoading(true);
-    getSpgAvailability(spgId, selectedProductId, sectionId)
+    const actualSpgId = spgs?.find(s => s.sections.some(sec => sec.section_id === sectionId))?.id || spgId;
+    getSpgAvailability(actualSpgId, selectedProductId, sectionId)
       .then((data) => {
         if (!cancelled) setAvailability(data);
       })
@@ -136,7 +154,7 @@ export function ManualOperationDialog({
     return () => {
       cancelled = true;
     };
-  }, [open, spgId, selectedProductId, sectionId]);
+  }, [open, spgId, selectedProductId, sectionId, spgs]);
 
   const filteredProducts = productSearch.trim()
     ? products.filter(
@@ -148,14 +166,16 @@ export function ManualOperationDialog({
 
   const saveMutation = useMutation({
     mutationFn: async (payload: ManualOperationInput) => {
-      await performManualStockOperation(spgId, payload);
+      const actualSpgId = spgs?.find(s => s.sections.some(sec => sec.section_id === payload.section_id))?.id || spgId;
+      await performManualStockOperation(actualSpgId, payload);
     },
-    onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: queryKeys.spg.snapshot(spgId) });
-      void queryClient.invalidateQueries({ queryKey: queryKeys.spg.remainders(spgId) });
-      void queryClient.invalidateQueries({ queryKey: queryKeys.spg.defects(spgId) });
-      void queryClient.invalidateQueries({ queryKey: queryKeys.spg.remainderHistory(spgId) });
-      void queryClient.invalidateQueries({ queryKey: queryKeys.spg.manualOperations(spgId) });
+    onSuccess: (_, variables) => {
+      const actualSpgId = spgs?.find(s => s.sections.some(sec => sec.section_id === variables.section_id))?.id || spgId;
+      void queryClient.invalidateQueries({ queryKey: queryKeys.spg.snapshot(actualSpgId) });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.spg.remainders(actualSpgId) });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.spg.defects(actualSpgId) });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.spg.remainderHistory(actualSpgId) });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.spg.manualOperations(actualSpgId) });
       onSaved();
       onOpenChange(false);
     },
@@ -287,17 +307,14 @@ export function ManualOperationDialog({
           {/* Section */}
           <div className="space-y-1">
             <label className="text-sm font-medium">Участок</label>
-            <select
-              className="w-full rounded-md border px-3 py-2 text-sm bg-background"
-              value={sectionId ?? ""}
-              onChange={(e) => setSectionId(Number(e.target.value))}
-            >
-              {sections.map((s) => (
-                <option key={s.section_id} value={s.section_id}>
-                  {s.section_code} — {s.section_name}
-                </option>
-              ))}
-            </select>
+            <SectionSelect
+              sections={sectionsForSelect}
+              value={sectionId}
+              onValueChange={setSectionId}
+              placeholder="Выберите участок"
+              className="w-full h-10 text-sm font-normal bg-background border rounded-md px-3"
+              hideCode={true}
+            />
           </div>
 
           {/* Quantity */}

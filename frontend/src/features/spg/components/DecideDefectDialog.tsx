@@ -8,6 +8,11 @@ import {
   DialogTitle,
   Button,
   Input,
+  Select,
+  SelectTrigger,
+  SelectValue,
+  SelectContent,
+  SelectItem,
 } from "@/shared/ui";
 import type { DefectOut } from "@/shared/api/defects";
 import { defectDecide } from "@/shared/api/defects";
@@ -113,15 +118,22 @@ export function DecideDefectDialog({
           {/* Decision Type */}
           <div className="space-y-1">
             <label className="text-sm font-medium">Решение</label>
-            <select
-              className="w-full rounded-md border px-3 py-2 text-sm bg-background"
+            <Select
               value={decisionType}
-              onChange={(e) => setDecisionType(e.target.value)}
+              onValueChange={setDecisionType}
             >
-              <option value="scrap">Списание (Scrap) — вычесть из остатков</option>
-              <option value="accept_with_deviation">Принять с отклонением (Accept with Deviation)</option>
-              <option value="quality_hold">Заморозить качество (Quality Hold)</option>
-            </select>
+              <SelectTrigger className="w-full h-10 text-sm bg-background">
+                <SelectValue placeholder="Выберите решение" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="scrap">Списать брак</SelectItem>
+                <SelectItem value="accept_with_deviation">Одобрить брак как годный</SelectItem>
+                {defect?.task_id && (
+                  <SelectItem value="rework_current">Направить на переделку</SelectItem>
+                )}
+                <SelectItem value="hold">Временное хранение</SelectItem>
+              </SelectContent>
+            </Select>
           </div>
 
           {/* Quantity */}

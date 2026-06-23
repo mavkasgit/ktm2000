@@ -216,7 +216,7 @@ export function SectionsTasksPage() {
         return;
       }
       if (sectionId !== activeLockedSection.id) setSectionId(activeLockedSection.id);
-      const expectedPath = `/shopfloor-tasks/${activeLockedSection.id}`;
+      const expectedPath = `/section-tasks/${activeLockedSection.id}`;
       // Accept URLs with singleWindow=1 and optionally bulk=1
       const sp = new URLSearchParams(location.search);
       const hasSingleWindow = sp.get("singleWindow") === "1";
@@ -239,7 +239,7 @@ export function SectionsTasksPage() {
     const first = sections.find((s) => s.is_active) || sections[0];
     if (!first) return;
     setSectionId(first.id);
-    navigate(`/shopfloor-tasks/${first.id}`, { replace: true });
+    navigate(`/section-tasks/${first.id}`, { replace: true });
   }, [sections, params.sectionId, navigate, sectionId, isSingleWindow, lockedSectionId, location.pathname, location.search]);
 
   const boardParams = useMemo(
@@ -310,7 +310,7 @@ export function SectionsTasksPage() {
           }
           lastEscapeAtRef.current = 0;
           activatedSingleWindowRef.current = false;
-          navigate(sectionId ? `/shopfloor-tasks/${sectionId}` : "/shopfloor-tasks");
+          navigate(sectionId ? `/section-tasks/${sectionId}` : "/section-tasks");
         } else {
           lastEscapeAtRef.current = now;
           toast({
@@ -748,7 +748,7 @@ export function SectionsTasksPage() {
               disabled={!canToggleSingleWindow}
               onClick={() => {
                 if (!sectionId) return;
-                navigate(`/shopfloor-tasks/${sectionId}?singleWindow=1`);
+                navigate(`/section-tasks/${sectionId}?singleWindow=1`);
               }}
             >
               Включить режим одного окна
@@ -772,7 +772,7 @@ export function SectionsTasksPage() {
                     selectedSectionId={sectionId}
                     onSelect={(nextId) => {
                       setSectionId(nextId);
-                      navigate(`/shopfloor-tasks/${nextId}?singleWindow=1`);
+                      navigate(`/section-tasks/${nextId}?singleWindow=1`);
                     }}
                     variant="popover"
                     headerContent={
@@ -821,7 +821,7 @@ export function SectionsTasksPage() {
                   <button
                     type="button"
                     className="rounded-md border border-slate-700 bg-white/80 px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wide text-slate-800 hover:bg-white"
-                    onClick={() => navigate(sectionId ? `/shopfloor-tasks/${sectionId}` : "/shopfloor-tasks")}
+                    onClick={() => navigate(sectionId ? `/section-tasks/${sectionId}` : "/section-tasks")}
                   >
                     Выйти из режима одного окна
                   </button>
@@ -836,13 +836,13 @@ export function SectionsTasksPage() {
             <div className="font-semibold">Режим одного окна недоступен</div>
             <div className="mt-1">
               {!isRequestedSectionIdValid
-                ? "Не задан корректный участок в URL. Откройте /shopfloor-tasks/<id>?singleWindow=1."
+                ? "Не задан корректный участок в URL. Откройте /section-tasks/<id>?singleWindow=1."
                 : "Участок не найден или недоступен. Доступ к другим участкам в этом режиме заблокирован."}
             </div>
             <button
               type="button"
               className="mt-3 rounded-md border border-amber-700 px-3 py-1.5 text-xs font-medium hover:bg-amber-100"
-              onClick={() => navigate("/shopfloor-tasks")}
+              onClick={() => navigate("/section-tasks")}
             >
               Выйти из режима одного окна
             </button>
@@ -856,7 +856,7 @@ export function SectionsTasksPage() {
             selectedSectionId={sectionId}
             onSelect={(nextId) => {
               setSectionId(nextId);
-              navigate(`/shopfloor-tasks/${nextId}`);
+              navigate(`/section-tasks/${nextId}`);
             }}
           />
         )}

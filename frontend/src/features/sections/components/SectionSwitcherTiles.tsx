@@ -85,7 +85,6 @@ export function SectionSwitcherTiles({
                 {section.icon ? renderIcon(section.icon, "h-4 w-4") : <span className="h-2 w-2 rounded-full bg-current" />}
               </span>
               <div className="min-w-0">
-                <div className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">{section.code}</div>
                 <div className="truncate text-sm font-semibold">{section.name}</div>
               </div>
             </div>

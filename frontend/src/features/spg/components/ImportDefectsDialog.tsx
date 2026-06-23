@@ -8,14 +8,18 @@ import {
   DialogHeader,
   DialogTitle,
   Button,
+  SpgSelect,
 } from "@/shared/ui";
 import { importDefectsExcel } from "@/shared/api/defects";
 import { queryKeys } from "@/shared/api/queryKeys";
+import type { SpgOut } from "@/shared/api/spg";
 
 interface ImportDefectsDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   spgId: number;
+  spgs?: SpgOut[];
+  selectedSpgIds?: number[];
   onSaved: () => void;
 }
 
@@ -23,9 +27,16 @@ export function ImportDefectsDialog({
   open,
   onOpenChange,
   spgId,
+  spgs,
+  selectedSpgIds,
   onSaved,
 }: ImportDefectsDialogProps) {
   const queryClient = useQueryClient();
+  const [currentSpgId, setCurrentSpgId] = useState(spgId);
+
+  useState(() => {
+    setCurrentSpgId(spgId);
+  });
   const [file, setFile] = useState<File | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<{ imported_count: number; errors: string[] } | null>(null);
@@ -40,15 +51,15 @@ export function ImportDefectsDialog({
   };
 
   const importMutation = useMutation({
-    mutationFn: () => importDefectsExcel(spgId, file as File),
+    mutationFn: () => importDefectsExcel(currentSpgId, file as File),
     onSuccess: (response) => {
       if (response.success) {
         setResult({
           imported_count: response.imported_count,
           errors: response.errors,
         });
-        void queryClient.invalidateQueries({ queryKey: queryKeys.spg.defects(spgId) });
-        void queryClient.invalidateQueries({ queryKey: queryKeys.spg.snapshot(spgId) });
+        void queryClient.invalidateQueries({ queryKey: queryKeys.spg.defects(currentSpgId) });
+        void queryClient.invalidateQueries({ queryKey: queryKeys.spg.snapshot(currentSpgId) });
         onSaved();
       } else {
         setError("Не удалось импортировать данные.");
@@ -94,6 +105,25 @@ export function ImportDefectsDialog({
                 <strong className="text-foreground">Участок</strong> (код или название участка, привязанного к текущей ГХП).
                 Опционально можно добавить колонки: <strong className="text-foreground">Тип брака</strong> и <strong className="text-foreground">Комментарий</strong>.
               </p>
+
+              {spgs && spgs.length > 1 && (!selectedSpgIds || selectedSpgIds.length !== 1) && (
+                <div className="space-y-1">
+                  <label className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider block">
+                    Группа ГХП для импорта брака:
+                  </label>
+                  <SpgSelect
+                    spgs={spgs}
+                    value={currentSpgId}
+                    onValueChange={(val) => {
+                      if (val !== null) {
+                        setCurrentSpgId(val);
+                      }
+                    }}
+                    placeholder="Выберите ГХП"
+                    className="w-full h-10 text-sm font-normal bg-background border rounded-md px-3"
+                  />
+                </div>
+              )}
 
               {/* Upload Dropzone */}
               <div
