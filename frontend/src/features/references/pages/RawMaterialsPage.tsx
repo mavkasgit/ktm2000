@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Search, Image, X, Grid, List, Plus, Filter, FileUp, ArrowUp, ArrowDown, ArrowUpDown } from "lucide-react";
+import { Search, Image, X, Grid, List, Plus, Filter, FileUp, ArrowUp, ArrowDown, ArrowUpDown, Check, CheckCheck } from "lucide-react";
 import * as API from "@/shared/api/products";
 import { Button } from "@/shared/ui/Button";
 import { Input } from "@/shared/ui/Input";
@@ -430,7 +430,23 @@ export function RawMaterialsPage() {
                   </td>
                   <td className="px-4 py-2">
                     <div className="flex flex-col gap-1">
-                      <span className="font-medium">{product.sku}</span>
+                      <div className="flex items-center gap-1.5">
+                        <span className="font-medium">{product.sku}</span>
+                        {product.has_standard_techcard && (
+                          <span title="Есть стандартная техкарта">
+                            <Check
+                              className="h-3.5 w-3.5 text-emerald-600 flex-shrink-0"
+                            />
+                          </span>
+                        )}
+                        {product.has_paired_techcard && (
+                          <span title="Есть парная техкарта">
+                            <CheckCheck
+                              className="h-3.5 w-3.5 text-violet-600 flex-shrink-0"
+                            />
+                          </span>
+                        )}
+                      </div>
                       {product.aliases?.length > 0 && (
                         <div className="flex flex-wrap gap-1">
                           {product.aliases.map((alias, i) => (

@@ -19,6 +19,11 @@ from app.models.internal_plan import SectionPlanLine
 from app.models.route import ProductionRoute, RouteRuleProfile, RouteStage, RouteOperation, SectionOperation
 from app.models.section import Section
 from app.services.route_selection import select_route_for_payload
+from app.models.transfer import Transfer
+from app.models.movement import Movement
+from app.models.defect import Defect
+from app.models.rework_task import ReworkTask
+from app.models.spg_remainder import SpgRemainder
 
 router = APIRouter(prefix="/products", tags=["products"])
 
@@ -114,6 +119,8 @@ class ProductOut(BaseModel):
     lengths_mm: List[float]
     processing_flags: List[ProcessingFlagInfo]
     is_laminated: bool
+    has_standard_techcard: bool = False
+    has_paired_techcard: bool = False
 
 
 VALID_SORT_FIELDS = {"sku", "name", "length_mm", "quantity_per_hanger", "id"}
@@ -143,7 +150,7 @@ async def _sync_processing_flags(db: AsyncSession, product_id: int, codes: list[
         db.add(ProductProcessingFlag(product_id=product_id, flag_id=fid))
 
 
-def _to_product_out(product: Product) -> ProductOut:
+def _to_product_out(product: Product, has_std: bool = False, has_paired: bool = False) -> ProductOut:
     lengths = sorted([l.length_mm for l in product.lengths]) if product.lengths else []
     flags = [
         ProcessingFlagInfo(code=f.code, name=f.name, section_scope=f.section_scope)
@@ -175,6 +182,8 @@ def _to_product_out(product: Product) -> ProductOut:
         lengths_mm=lengths,
         processing_flags=flags,
         is_laminated=product.is_laminated,
+        has_standard_techcard=has_std,
+        has_paired_techcard=has_paired,
     )
 
 
@@ -279,7 +288,36 @@ async def list_products(
         stmt = stmt.order_by(order_clause)
     stmt = stmt.limit(limit).offset(offset)
     items = (await db.execute(stmt)).scalars().unique().all()
-    return [_to_product_out(i) for i in items]
+
+    # Query active standard techcard product IDs (direct reference)
+    std_direct_stmt = select(Techcard.product_id).where(
+        Techcard.is_active == True,
+        Techcard.processing_type == "standart_processing",
+        Techcard.product_id.is_not(None)
+    )
+    std_direct_ids = set((await db.execute(std_direct_stmt)).scalars().all())
+
+    # Query active standard techcard component IDs (from lines)
+    std_line_stmt = select(TechcardLine.component_product_id).join(
+        Techcard, Techcard.id == TechcardLine.techcard_id
+    ).where(
+        Techcard.is_active == True,
+        Techcard.processing_type == "standart_processing"
+    )
+    std_line_ids = set((await db.execute(std_line_stmt)).scalars().all())
+
+    has_std_ids = std_direct_ids | std_line_ids
+
+    # Query active paired techcard component IDs (from lines)
+    paired_line_stmt = select(TechcardLine.component_product_id).join(
+        Techcard, Techcard.id == TechcardLine.techcard_id
+    ).where(
+        Techcard.is_active == True,
+        Techcard.processing_type == "paired_processing"
+    )
+    has_paired_ids = set((await db.execute(paired_line_stmt)).scalars().all())
+
+    return [_to_product_out(i, i.id in has_std_ids, i.id in has_paired_ids) for i in items]
 
 
 @router.get("/search/suggestions", response_model=list[str])
@@ -306,6 +344,7 @@ class AliasSuggestion(BaseModel):
     id: int
     sku: str
     name: str
+    is_paired_profile: bool
 
 
 @router.get("/search/products", response_model=list[AliasSuggestion])
@@ -318,7 +357,7 @@ async def search_products(
     limit: int = Query(20, ge=1, le=100),
 ) -> list[AliasSuggestion]:
     """Search products by SKU/name with prefix prioritization."""
-    stmt = select(Product.id, Product.sku, Product.name)
+    stmt = select(Product.id, Product.sku, Product.name, Product.is_paired_profile)
 
     if paired_only:
         stmt = stmt.where(Product.is_paired_profile == True)
@@ -349,7 +388,7 @@ async def search_products(
 
     stmt = stmt.limit(limit)
     rows = (await db.execute(stmt)).all()
-    return [AliasSuggestion(id=r.id, sku=r.sku, name=r.name) for r in rows]
+    return [AliasSuggestion(id=r.id, sku=r.sku, name=r.name, is_paired_profile=r.is_paired_profile) for r in rows]
 
 
 @router.post("", response_model=ProductOut, status_code=status.HTTP_201_CREATED)
@@ -390,6 +429,31 @@ async def list_processing_flags(db: AsyncSession = Depends(get_db)) -> list[Proc
     return [ProcessingFlagOut(code=f.code, name=f.name, section_scope=f.section_scope) for f in items]
 
 
+async def _check_product_techcards(db: AsyncSession, product_id: int) -> tuple[bool, bool]:
+    has_std = await db.scalar(
+        select(Techcard.id).where(
+            Techcard.is_active == True,
+            Techcard.processing_type == "standart_processing",
+            or_(
+                Techcard.product_id == product_id,
+                Techcard.id.in_(
+                    select(TechcardLine.techcard_id).where(TechcardLine.component_product_id == product_id)
+                )
+            )
+        ).limit(1)
+    ) is not None
+
+    has_paired = await db.scalar(
+        select(TechcardLine.id).join(Techcard, Techcard.id == TechcardLine.techcard_id).where(
+            Techcard.is_active == True,
+            Techcard.processing_type == "paired_processing",
+            TechcardLine.component_product_id == product_id
+        ).limit(1)
+    ) is not None
+
+    return has_std, has_paired
+
+
 @router.get("/{product_id}", response_model=ProductOut)
 async def get_product(product_id: int, db: AsyncSession = Depends(get_db)) -> ProductOut:
     stmt = select(Product).options(
@@ -399,7 +463,8 @@ async def get_product(product_id: int, db: AsyncSession = Depends(get_db)) -> Pr
     item = (await db.execute(stmt)).scalar_one_or_none()
     if item is None:
         raise HTTPException(status_code=404, detail="Product not found")
-    return _to_product_out(item)
+    has_std, has_paired = await _check_product_techcards(db, product_id)
+    return _to_product_out(item, has_std, has_paired)
 
 
 @router.patch("/{product_id}", response_model=ProductOut)
@@ -434,7 +499,8 @@ async def patch_product(
         await db.flush()
 
     await db.refresh(item, attribute_names=["lengths", "processing_flags"])
-    return _to_product_out(item)
+    has_std, has_paired = await _check_product_techcards(db, product_id)
+    return _to_product_out(item, has_std, has_paired)
 
 
 @router.delete("/{product_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -444,14 +510,6 @@ async def delete_product(product_id: int, db: AsyncSession = Depends(get_db)):
         raise HTTPException(status_code=404, detail="Product not found")
 
     relations: list[str] = []
-
-    tc_ref = await db.scalar(select(func.count()).select_from(Techcard).where(Techcard.product_id == product_id))
-    if tc_ref:
-        relations.append("техкарты")
-
-    tc_count = await db.scalar(select(func.count()).select_from(TechcardLine).where(TechcardLine.component_product_id == product_id))
-    if tc_count:
-        relations.append("техкарты (сырьё)")
 
     pp_count = await db.scalar(select(func.count()).select_from(PlanPosition).where(PlanPosition.product_id == product_id))
     if pp_count:
@@ -465,8 +523,46 @@ async def delete_product(product_id: int, db: AsyncSession = Depends(get_db)):
     if spl_count:
         relations.append("линии плана участков")
 
+    transfer_count = await db.scalar(select(func.count()).select_from(Transfer).where(Transfer.product_id == product_id))
+    if transfer_count:
+        relations.append("передачи")
+
+    movement_count = await db.scalar(select(func.count()).select_from(Movement).where(Movement.product_id == product_id))
+    if movement_count:
+        relations.append("движения по складу")
+
+    defect_count = await db.scalar(select(func.count()).select_from(Defect).where(Defect.product_id == product_id))
+    if defect_count:
+        relations.append("дефекты")
+
+    rework_count = await db.scalar(select(func.count()).select_from(ReworkTask).where(ReworkTask.product_id == product_id))
+    if rework_count:
+        relations.append("задачи доработки")
+
     if relations:
         raise HTTPException(status_code=409, detail=f"Нельзя удалить: используется в ({', '.join(relations)})")
+
+    # Cascade delete techcards referencing this product
+    tc_ids_to_delete = set()
+    
+    # 1. Standard techcards for this product
+    std_tcs = (await db.execute(select(Techcard.id).where(Techcard.product_id == product_id))).scalars().all()
+    for tc_id in std_tcs:
+        tc_ids_to_delete.add(tc_id)
+        
+    # 2. Techcards where this product is a component
+    comp_tcs = (await db.execute(select(TechcardLine.techcard_id).where(TechcardLine.component_product_id == product_id))).scalars().all()
+    for tc_id in comp_tcs:
+        tc_ids_to_delete.add(tc_id)
+
+    if tc_ids_to_delete:
+        # Delete all lines for these techcards
+        await db.execute(delete(TechcardLine).where(TechcardLine.techcard_id.in_(list(tc_ids_to_delete))))
+        # Delete the techcards themselves
+        await db.execute(delete(Techcard).where(Techcard.id.in_(list(tc_ids_to_delete))))
+
+    # Delete spg remainders for this product
+    await db.execute(delete(SpgRemainder).where(SpgRemainder.product_id == product_id))
 
     # Remove this product from other products' aliases
     all_products = (await db.execute(select(Product))).scalars().all()
