@@ -36,6 +36,8 @@ export type Product = {
   lengths_mm: number[];
   processing_flags: ProcessingFlag[];
   is_laminated: boolean;
+  has_standard_techcard?: boolean;
+  has_paired_techcard?: boolean;
 };
 
 export type CreateProductInput = {
@@ -167,6 +169,7 @@ export type AliasSuggestion = {
   id: number;
   sku: string;
   name: string;
+  is_paired_profile: boolean;
 };
 
 export async function searchProductsForAlias(

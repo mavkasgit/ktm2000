@@ -1,10 +1,11 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
-import { Plus, Trash2 } from "lucide-react";
+import { Plus, Trash2, ArrowUp, ArrowDown, ArrowUpDown, Search, X } from "lucide-react";
 import * as API from "shared/api";
 import * as UI from "shared/ui";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/shared/ui/Dialog";
 import { AlertDialog, AlertDialogContent, AlertDialogHeader, AlertDialogTitle, AlertDialogDescription, AlertDialogFooter, AlertDialogCancel, AlertDialogAction } from "@/shared/ui/AlertDialog";
 import { ProductSearchMulti } from "../components/ProductSearchMulti";
+import { SortableFilterHeader } from "@/shared/ui/SortableFilterHeader";
 import { toast } from "@/shared/ui/use-toast";
 import { getErrorMessage } from "@/shared/api/client";
 import { usePermission } from "@/features/auth/hooks/usePermission";
@@ -24,10 +25,17 @@ export function TechcardsPage() {
   const [techcards, setTechcards] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
   const [status, setStatus] = useState("");
-
-  // Visibility toggles
-  const [showOneToOne, setShowOneToOne] = useState(false);
-
+  const [pageSearch, setPageSearch] = useState("");
+  const [pairedSorts, setPairedSorts] = useState<Array<{ field: "sku" | "quantity"; order: "asc" | "desc" }>>([]);
+  const [standardSorts, setStandardSorts] = useState<Array<{ field: "sku" | "quantity"; order: "asc" | "desc" }>>([]);
+  const [pairedFilters, setPairedFilters] = useState<Record<"sku" | "quantity", Set<string>>>({
+    sku: new Set(),
+    quantity: new Set(),
+  });
+  const [standardFilters, setStandardFilters] = useState<Record<"sku" | "quantity", Set<string>>>({
+    sku: new Set(),
+    quantity: new Set(),
+  });
   // Bulk dialog
   const [bulkDialogOpen, setBulkDialogOpen] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
@@ -54,9 +62,141 @@ export function TechcardsPage() {
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<{ type: "techcard"; id: number } | null>(null);
 
+  const resolvePairSkus = useCallback((detail: any): { skuA: string; skuB: string } => {
+    const lines = detail?.techcard_lines ?? detail?.lines ?? [];
+    const skus = lines.map((l: any) => {
+      const product = rawItems.find((p) => Number(p.id) === Number(l.component_product_id));
+      return product?.sku ?? String(l.component_product_id);
+    });
+    return { skuA: skus[0] ?? "—", skuB: skus[1] ?? "—" };
+  }, [rawItems]);
+
+  // Unique values for filtering
+  const pairedUniqueValues = useMemo(() => {
+    const items = techcards.filter((t: any) => t.product_id === null && t.processing_type === "paired_processing");
+    return {
+      sku: [...new Set(items.map((card) => {
+        const { skuA, skuB } = resolvePairSkus(card);
+        return `${skuA} + ${skuB}`;
+      }))].sort(),
+      quantity: [...new Set(items.map((card) => {
+        const qtyA = card.quantity_a_per_item ?? 1;
+        const qtyB = card.quantity_b_per_item ?? 1;
+        return `${card.quantity_total ?? "—"} шт. (${qtyA}/${qtyB} на подвес)`;
+      }))].sort(),
+    };
+  }, [techcards, resolvePairSkus]);
+
+  const standardUniqueValues = useMemo(() => {
+    const items = techcards.filter((t: any) => t.product_id !== null);
+    return {
+      sku: [...new Set(items.map((card) => {
+        const product = rawItems.find((p) => Number(p.id) === card.product_id);
+        return product?.sku ?? String(card.product_id);
+      }))].sort(),
+      quantity: [...new Set(items.map((card) => {
+        return String(card.quantity_total ?? "—");
+      }))].sort((a, b) => Number(a) - Number(b)),
+    };
+  }, [techcards, rawItems]);
+
   // Derived data
-  const pairedTechcards = useMemo(() => techcards.filter((t: any) => t.product_id === null && t.processing_type === "paired_processing"), [techcards]);
-  const oneToOneTechcards = useMemo(() => techcards.filter((t: any) => t.product_id !== null), [techcards]);
+  const pairedTechcards = useMemo(() => {
+    let filtered = techcards.filter((t: any) => t.product_id === null && t.processing_type === "paired_processing");
+    const q = pageSearch.trim().toLowerCase();
+    if (q) {
+      filtered = filtered.filter((card) => {
+        const { skuA, skuB } = resolvePairSkus(card);
+        return skuA.toLowerCase().includes(q) || skuB.toLowerCase().includes(q);
+      });
+    }
+    if (pairedFilters.sku.size > 0) {
+      filtered = filtered.filter((card) => {
+        const { skuA, skuB } = resolvePairSkus(card);
+        return pairedFilters.sku.has(`${skuA} + ${skuB}`);
+      });
+    }
+    if (pairedFilters.quantity.size > 0) {
+      filtered = filtered.filter((card) => {
+        const qtyA = card.quantity_a_per_item ?? 1;
+        const qtyB = card.quantity_b_per_item ?? 1;
+        const label = `${card.quantity_total ?? "—"} шт. (${qtyA}/${qtyB} на подвес)`;
+        return pairedFilters.quantity.has(label);
+      });
+    }
+    const activeSort = pairedSorts[0];
+    if (activeSort) {
+      const { field, order } = activeSort;
+      return [...filtered].sort((a, b) => {
+        let aVal = "";
+        let bVal = "";
+        if (field === "sku") {
+          const { skuA: a1, skuB: a2 } = resolvePairSkus(a);
+          const { skuA: b1, skuB: b2 } = resolvePairSkus(b);
+          aVal = `${a1} + ${a2}`;
+          bVal = `${b1} + ${b2}`;
+        } else {
+          aVal = String(a.quantity_total ?? 0);
+          bVal = String(b.quantity_total ?? 0);
+        }
+        if (field === "quantity") {
+          const aNum = Number(aVal);
+          const bNum = Number(bVal);
+          return order === "asc" ? aNum - bNum : bNum - aNum;
+        }
+        return order === "asc" ? aVal.localeCompare(bVal) : bVal.localeCompare(aVal);
+      });
+    }
+    return filtered;
+  }, [techcards, pageSearch, pairedFilters, pairedSorts, resolvePairSkus]);
+
+  const oneToOneTechcards = useMemo(() => {
+    let filtered = techcards.filter((t: any) => t.product_id !== null);
+    const q = pageSearch.trim().toLowerCase();
+    if (q) {
+      filtered = filtered.filter((card) => {
+        const product = rawItems.find((p) => Number(p.id) === card.product_id);
+        return String(product?.sku ?? "").toLowerCase().includes(q);
+      });
+    }
+    if (standardFilters.sku.size > 0) {
+      filtered = filtered.filter((card) => {
+        const product = rawItems.find((p) => Number(p.id) === card.product_id);
+        const label = product?.sku ?? String(card.product_id);
+        return standardFilters.sku.has(label);
+      });
+    }
+    if (standardFilters.quantity.size > 0) {
+      filtered = filtered.filter((card) => {
+        const label = String(card.quantity_total ?? "—");
+        return standardFilters.quantity.has(label);
+      });
+    }
+    const activeSort = standardSorts[0];
+    if (activeSort) {
+      const { field, order } = activeSort;
+      return [...filtered].sort((a, b) => {
+        let aVal = "";
+        let bVal = "";
+        if (field === "sku") {
+          const pA = rawItems.find((p) => Number(p.id) === a.product_id);
+          const pB = rawItems.find((p) => Number(p.id) === b.product_id);
+          aVal = pA?.sku ?? "";
+          bVal = pB?.sku ?? "";
+        } else {
+          aVal = String(a.quantity_total ?? 0);
+          bVal = String(b.quantity_total ?? 0);
+        }
+        if (field === "quantity") {
+          const aNum = Number(aVal);
+          const bNum = Number(bVal);
+          return order === "asc" ? aNum - bNum : bNum - aNum;
+        }
+        return order === "asc" ? aVal.localeCompare(bVal) : bVal.localeCompare(aVal);
+      });
+    }
+    return filtered;
+  }, [techcards, pageSearch, standardFilters, standardSorts, rawItems]);
 
   const techcardByProductId = useMemo(() => {
     const map = new Map<number, any>();
@@ -151,10 +291,22 @@ export function TechcardsPage() {
   const handleDelete = async () => {
     if (!deleteTarget) return;
     try {
-      const isPaired = viewDetail?.product_id === null;
-      const detail = isPaired ? `парная (${resolvePairSkus(viewDetail).skuA}+${resolvePairSkus(viewDetail).skuB})` : `стандартная (артикул: ${rawItems.find((p) => Number(p.id) === viewDetail?.product_id)?.sku ?? "—"}`;
+      const targetCard = techcards.find((t: any) => t.id === deleteTarget.id);
+      let detail = "";
+      if (targetCard) {
+        const isPaired = targetCard.product_id === null;
+        if (isPaired) {
+          const { skuA, skuB } = resolvePairSkus(targetCard);
+          detail = `парная (${skuA}+${skuB})`;
+        } else {
+          const product = rawItems.find((p) => Number(p.id) === targetCard.product_id);
+          detail = `стандартная, артикул: ${product?.sku ?? "—"}`;
+        }
+      } else {
+        detail = `ID ${deleteTarget.id}`;
+      }
       await api.deleteTechcard(deleteTarget.id);
-      toast({ title: "Удалено", description: `Техкарта #${deleteTarget.id} (${detail}, версия: ${viewDetail?.version ?? "—"}) успешно удалена`, variant: "success" });
+      toast({ title: "Удалено", description: `Техкарта #${deleteTarget.id} (${detail}, версия: ${targetCard?.version ?? "—"}) успешно удалена`, variant: "success" });
       setViewTechcardId(null);
       setViewDetail(null);
       await loadData();
@@ -234,13 +386,6 @@ export function TechcardsPage() {
       toast({ title: "Ошибка создания парной техкарты", description: `Артикулы должны быть разными (выбран один: ${productA.sku})`, variant: "destructive" });
       return;
     }
-    if (!productA.is_paired_profile || !productB.is_paired_profile) {
-      const nonPair = [];
-      if (!productA.is_paired_profile) nonPair.push(productA.sku);
-      if (!productB.is_paired_profile) nonPair.push(productB.sku);
-      toast({ title: "Непарные профили", description: `Следующие артикулы не являются парными профилями: ${nonPair.join(", ")}`, variant: "destructive" });
-      return;
-    }
     const qtyA = parseInt(quantityAPerItem) || 1;
     const qtyB = parseInt(quantityBPerItem) || 1;
     const calcTotal = differentQuantities ? qtyA + qtyB : (parseInt(quantityPerItem) || 1) * 2;
@@ -250,6 +395,13 @@ export function TechcardsPage() {
     }
     setLoading(true);
     try {
+      if (!productA.is_paired_profile) {
+        await api.patchProduct(Number(productA.id), { is_paired_profile: true });
+      }
+      if (!productB.is_paired_profile) {
+        await api.patchProduct(Number(productB.id), { is_paired_profile: true });
+      }
+
       const card = await api.createTechcard({
         product_id: null,
         version: "A",
@@ -271,13 +423,22 @@ export function TechcardsPage() {
     }
   };
 
-  const resolvePairSkus = (detail: any): { skuA: string; skuB: string } => {
-    const lines = detail?.techcard_lines ?? detail?.lines ?? [];
-    const skus = lines.map((l: any) => {
-      const product = rawItems.find((p) => Number(p.id) === Number(l.component_product_id));
-      return product?.sku ?? String(l.component_product_id);
+  const handlePairedSort = (field: "sku" | "quantity") => {
+    setPairedSorts((prev) => {
+      const active = prev[0];
+      if (!active || active.field !== field) return [{ field, order: "asc" }];
+      if (active.order === "asc") return [{ field, order: "desc" }];
+      return [];
     });
-    return { skuA: skus[0] ?? "—", skuB: skus[1] ?? "—" };
+  };
+
+  const handleStandardSort = (field: "sku" | "quantity") => {
+    setStandardSorts((prev) => {
+      const active = prev[0];
+      if (!active || active.field !== field) return [{ field, order: "asc" }];
+      if (active.order === "asc") return [{ field, order: "desc" }];
+      return [];
+    });
   };
 
   return (
@@ -297,21 +458,59 @@ export function TechcardsPage() {
               </Button>
             </>
           )}
-          <Button size="sm" variant="outline" onClick={() => setShowOneToOne(!showOneToOne)}>
-            {showOneToOne ? "Скрыть стандартные" : "Показать стандартные"}
-          </Button>
         </div>
+      </div>
+
+      <div className="flex flex-col sm:flex-row gap-2">
+        <div className="relative w-52">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+          <Input placeholder="Поиск по артикулу" value={pageSearch} onChange={(e: any) => setPageSearch(e.target.value)} className="pl-9" />
+          {pageSearch && (
+            <button onClick={() => setPageSearch("")} className="absolute right-3 top-1/2 -translate-y-1/2">
+              <X className="h-4 w-4 text-muted-foreground" />
+            </button>
+          )}
+        </div>
+        <Button variant="outline" size="sm" onClick={() => {
+          setPageSearch("");
+          setPairedSorts([]);
+          setStandardSorts([]);
+          setPairedFilters({ sku: new Set(), quantity: new Set() });
+          setStandardFilters({ sku: new Set(), quantity: new Set() });
+        }}>
+          Очистить
+        </Button>
       </div>
 
       {/* Paired techcards table */}
       <div>
         <h3 className="text-sm font-medium text-muted-foreground mb-2">Парные техкарты</h3>
-        <div style={{ border: "1px solid #e5e7eb", borderRadius: 6, overflow: "auto", maxHeight: 400 }}>
-          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+        <div style={{ border: "1px solid #e5e7eb", borderRadius: 6, overflow: "auto", maxHeight: 400, width: "fit-content" }}>
+          <table style={{ borderCollapse: "collapse", fontSize: 13 }}>
             <thead>
               <tr style={{ background: "#f9fafb", position: "sticky", top: 0 }}>
-                <th style={{ textAlign: "left", padding: 8 }}>Парный артикул</th>
-                <th style={{ textAlign: "left", padding: 8 }}>Кол-во</th>
+                <th style={{ textAlign: "left", padding: 8, width: 300, minWidth: 300 }}>
+                  <SortableFilterHeader
+                    field="sku"
+                    label="Парный артикул"
+                    currentSorts={pairedSorts}
+                    onSortChange={handlePairedSort}
+                    values={pairedUniqueValues.sku}
+                    selectedValues={pairedFilters.sku}
+                    onFilterChange={(field, selected) => setPairedFilters(prev => ({ ...prev, [field]: selected }))}
+                  />
+                </th>
+                <th style={{ textAlign: "left", padding: 8, width: 250, minWidth: 250 }}>
+                  <SortableFilterHeader
+                    field="quantity"
+                    label="Кол-во"
+                    currentSorts={pairedSorts}
+                    onSortChange={handlePairedSort}
+                    values={pairedUniqueValues.quantity}
+                    selectedValues={pairedFilters.quantity}
+                    onFilterChange={(field, selected) => setPairedFilters(prev => ({ ...prev, [field]: selected }))}
+                  />
+                </th>
                 {!isReadOnly && <th style={{ textAlign: "left", padding: 8, width: 80 }}></th>}
               </tr>
             </thead>
@@ -342,44 +541,62 @@ export function TechcardsPage() {
         </div>
       </div>
 
-      {/* Standard techcards table (hidden by default) */}
-      {showOneToOne && (
-        <div>
-          <h3 className="text-sm font-medium text-muted-foreground mb-2">Стандартные техкарты</h3>
-          <div style={{ border: "1px solid #e5e7eb", borderRadius: 6, overflow: "auto", maxHeight: 400 }}>
-            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
-              <thead>
-                <tr style={{ background: "#f9fafb", position: "sticky", top: 0 }}>
-                  <th style={{ textAlign: "left", padding: 8 }}>Артикул</th>
-                  <th style={{ textAlign: "left", padding: 8 }}>Кол-во</th>
-                  {!isReadOnly && <th style={{ textAlign: "left", padding: 8, width: 80 }}></th>}
-                </tr>
-              </thead>
-              <tbody>
-                {oneToOneTechcards.map((card: any) => {
-                  const product = rawItems.find((p) => Number(p.id) === card.product_id);
-                  return (
-                     <tr key={card.id} className="cursor-pointer hover:bg-muted/50" onClick={() => openView(card.id)}>
-                      <td style={{ padding: 8, fontWeight: 600, borderTop: "1px solid #f3f4f6" }}>{product?.sku ?? card.product_id}</td>
-                      <td style={{ padding: 8, borderTop: "1px solid #f3f4f6" }}>{card.quantity_total ?? "—"}</td>
-                      {!isReadOnly && (
-                        <td style={{ padding: 8, borderTop: "1px solid #f3f4f6" }}>
-                          <button type="button" onClick={(e) => { e.stopPropagation(); confirmDelete({ type: "techcard", id: card.id }); }} className="text-destructive hover:text-destructive/80">
-                            <Trash2 className="h-4 w-4" />
-                          </button>
-                        </td>
-                      )}
-                    </tr>
-                  );
-                })}
-                {oneToOneTechcards.length === 0 && (
-                  <tr><td colSpan={isReadOnly ? 2 : 3} style={{ padding: 16, textAlign: "center", color: "#9ca3af" }}>Нет стандартных техкарт</td></tr>
-                )}
-              </tbody>
-            </table>
-          </div>
+      {/* Standard techcards table */}
+      <div>
+        <h3 className="text-sm font-medium text-muted-foreground mb-2">Стандартные техкарты</h3>
+        <div style={{ border: "1px solid #e5e7eb", borderRadius: 6, overflow: "auto", maxHeight: 400, width: "fit-content" }}>
+          <table style={{ borderCollapse: "collapse", fontSize: 13 }}>
+            <thead>
+              <tr style={{ background: "#f9fafb", position: "sticky", top: 0 }}>
+                <th style={{ textAlign: "left", padding: 8, width: 300, minWidth: 300 }}>
+                  <SortableFilterHeader
+                    field="sku"
+                    label="Артикул"
+                    currentSorts={standardSorts}
+                    onSortChange={handleStandardSort}
+                    values={standardUniqueValues.sku}
+                    selectedValues={standardFilters.sku}
+                    onFilterChange={(field, selected) => setStandardFilters(prev => ({ ...prev, [field]: selected }))}
+                  />
+                </th>
+                <th style={{ textAlign: "left", padding: 8, width: 250, minWidth: 250 }}>
+                  <SortableFilterHeader
+                    field="quantity"
+                    label="Кол-во"
+                    currentSorts={standardSorts}
+                    onSortChange={handleStandardSort}
+                    values={standardUniqueValues.quantity}
+                    selectedValues={standardFilters.quantity}
+                    onFilterChange={(field, selected) => setStandardFilters(prev => ({ ...prev, [field]: selected }))}
+                  />
+                </th>
+                {!isReadOnly && <th style={{ textAlign: "left", padding: 8, width: 80 }}></th>}
+              </tr>
+            </thead>
+            <tbody>
+              {oneToOneTechcards.map((card: any) => {
+                const product = rawItems.find((p) => Number(p.id) === card.product_id);
+                return (
+                   <tr key={card.id} className="cursor-pointer hover:bg-muted/50" onClick={() => openView(card.id)}>
+                    <td style={{ padding: 8, fontWeight: 600, borderTop: "1px solid #f3f4f6" }}>{product?.sku ?? card.product_id}</td>
+                    <td style={{ padding: 8, borderTop: "1px solid #f3f4f6" }}>{card.quantity_total ?? "—"}</td>
+                    {!isReadOnly && (
+                      <td style={{ padding: 8, borderTop: "1px solid #f3f4f6" }}>
+                        <button type="button" onClick={(e) => { e.stopPropagation(); confirmDelete({ type: "techcard", id: card.id }); }} className="text-destructive hover:text-destructive/80">
+                          <Trash2 className="h-4 w-4" />
+                        </button>
+                      </td>
+                    )}
+                  </tr>
+                );
+              })}
+              {oneToOneTechcards.length === 0 && (
+                <tr><td colSpan={isReadOnly ? 2 : 3} style={{ padding: 16, textAlign: "center", color: "#9ca3af" }}>Нет стандартных техкарт</td></tr>
+              )}
+            </tbody>
+          </table>
         </div>
-      )}
+      </div>
 
       {status ? <div className="text-sm text-muted-foreground">{status}</div> : null}
 
@@ -403,7 +620,7 @@ export function TechcardsPage() {
                 </thead>
                 <tbody className="divide-y">
                   {rows
-                    .filter((p) => p.is_paired_profile !== true)
+                    .filter((p) => p.is_paired_profile !== true && !techcardByProductId.has(Number(p.id)))
                     .sort((a, b) => {
                       const aHas = techcardByProductId.has(Number(a.id)) ? 1 : 0;
                       const bHas = techcardByProductId.has(Number(b.id)) ? 1 : 0;
@@ -441,13 +658,22 @@ export function TechcardsPage() {
             <DialogTitle>Создание парной техкарты</DialogTitle>
           </DialogHeader>
           <div className="space-y-3">
-            <div className="flex items-center gap-3">
-              <div className="w-48">
+            <div className="flex items-start gap-3">
+              <div className="w-48 min-h-[58px]">
                 {skuA ? (
-                  <div className="flex items-center justify-between px-3 py-2 rounded-md border bg-secondary text-secondary-foreground">
-                    <span className="text-sm font-medium">{skuA}</span>
-                    <button type="button" onClick={() => setSkuA("")} className="text-xs text-muted-foreground hover:text-foreground cursor-pointer">Изменить</button>
-                  </div>
+                  <>
+                    <div className="flex items-center justify-between px-3 py-2 rounded-md border bg-secondary text-secondary-foreground">
+                      <span className="text-sm font-medium">{skuA}</span>
+                      <button type="button" onClick={() => setSkuA("")} className="text-xs text-muted-foreground hover:text-foreground cursor-pointer">Изменить</button>
+                    </div>
+                    {(() => {
+                      const p = rawItems.find((item) => String(item.sku).toLowerCase() === skuA.trim().toLowerCase());
+                      if (p && !p.is_paired_profile) {
+                        return <div className="text-[11px] text-amber-600 font-medium mt-1">Непарный (станет парным)</div>;
+                      }
+                      return null;
+                    })()}
+                  </>
                 ) : (
                   <ProductSearchMulti values={[]} onChange={(v) => { if (v[0]) setSkuA(v[0]); }} excludeValues={skuB ? [skuB] : []} placeholder="Поиск по артикулу" />
                 )}
@@ -460,13 +686,22 @@ export function TechcardsPage() {
                 ) : <div className="h-10" />}
               </div>
             </div>
-            <div className="flex items-center gap-3">
-              <div className="w-48">
+            <div className="flex items-start gap-3">
+              <div className="w-48 min-h-[58px]">
                 {skuB ? (
-                  <div className="flex items-center justify-between px-3 py-2 rounded-md border bg-secondary text-secondary-foreground">
-                    <span className="text-sm font-medium">{skuB}</span>
-                    <button type="button" onClick={() => setSkuB("")} className="text-xs text-muted-foreground hover:text-foreground cursor-pointer">Изменить</button>
-                  </div>
+                  <>
+                    <div className="flex items-center justify-between px-3 py-2 rounded-md border bg-secondary text-secondary-foreground">
+                      <span className="text-sm font-medium">{skuB}</span>
+                      <button type="button" onClick={() => setSkuB("")} className="text-xs text-muted-foreground hover:text-foreground cursor-pointer">Изменить</button>
+                    </div>
+                    {(() => {
+                      const p = rawItems.find((item) => String(item.sku).toLowerCase() === skuB.trim().toLowerCase());
+                      if (p && !p.is_paired_profile) {
+                        return <div className="text-[11px] text-amber-600 font-medium mt-1">Непарный (станет парным)</div>;
+                      }
+                      return null;
+                    })()}
+                  </>
                 ) : (
                   <ProductSearchMulti values={[]} onChange={(v) => { if (v[0]) setSkuB(v[0]); }} excludeValues={skuA ? [skuA] : []} placeholder="Поиск по артикулу" />
                 )}
@@ -610,7 +845,18 @@ export function TechcardsPage() {
         <AlertDialogContent className="max-w-sm">
           <AlertDialogHeader>
             <AlertDialogTitle>
-              {`Удалить техкарту #${deleteTarget?.id}?`}
+              {(() => {
+                if (!deleteTarget) return "Удалить техкарту?";
+                const targetCard = techcards.find((t: any) => t.id === deleteTarget.id);
+                if (!targetCard) return `Удалить техкарту #${deleteTarget.id}?`;
+                if (targetCard.product_id === null) {
+                  const { skuA, skuB } = resolvePairSkus(targetCard);
+                  return `Удалить парную техкарту ${skuA} + ${skuB}?`;
+                } else {
+                  const product = rawItems.find((p) => Number(p.id) === targetCard.product_id);
+                  return `Удалить техкарту ${product?.sku ?? `ID ${targetCard.product_id}`}?`;
+                }
+              })()}
             </AlertDialogTitle>
             <AlertDialogDescription>Это действие нельзя отменить.</AlertDialogDescription>
           </AlertDialogHeader>

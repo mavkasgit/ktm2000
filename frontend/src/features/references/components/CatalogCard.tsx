@@ -1,5 +1,5 @@
 import React from "react";
-import { Image } from "lucide-react";
+import { Image, Check, CheckCheck } from "lucide-react";
 import { Card, CardContent } from "@/shared/ui/Card";
 import { Badge } from "@/shared/ui/Badge";
 import { getPhotoUrl } from "./getPhotoUrl";
@@ -38,8 +38,24 @@ export function CatalogCard({
             )}
           </div>
           <div className="flex-1 min-w-0">
-            <div className="flex items-start justify-between">
-              <h3 className="font-medium truncate text-sm">{product.sku}</h3>
+            <div className="flex items-center gap-1.5 justify-between">
+              <div className="flex items-center gap-1.5 min-w-0">
+                <h3 className="font-medium truncate text-sm">{product.sku}</h3>
+                {product.has_standard_techcard && (
+                  <span title="Есть стандартная техкарта">
+                    <Check
+                      className="h-3.5 w-3.5 text-emerald-600 flex-shrink-0"
+                    />
+                  </span>
+                )}
+                {product.has_paired_techcard && (
+                  <span title="Есть парная техкарта">
+                    <CheckCheck
+                      className="h-3.5 w-3.5 text-violet-600 flex-shrink-0"
+                    />
+                  </span>
+                )}
+              </div>
             </div>
             <div className="flex gap-1 mt-2 flex-wrap">
               <Badge variant="outline" className="text-xs">{TYPE_LABELS[product.type]}</Badge>
