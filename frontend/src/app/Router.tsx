@@ -11,6 +11,7 @@ import { SpgSnapshotPage } from "../features/spg/pages/SpgSnapshotPage"
 import { TransfersPage } from "../features/transfers/pages/TransfersPage"
 import { SettingsPage } from "../features/settings/SettingsPage"
 import { BackupsPage } from "../features/settings/SettingsBackupsPage"
+import { DevSettingsPage } from "../features/settings/DevSettingsPage"
 import { LoginPage } from "../features/auth/pages/LoginPage"
 import { ProtectedRoute } from "../features/auth/components/ProtectedRoute"
 import { UsersPage } from "../features/admin"
@@ -57,6 +58,10 @@ export const router = createBrowserRouter([
       {
         path: "settings/users",
         element: <ProtectedRoute allowedRoles={["admin"]}><UsersPage /></ProtectedRoute>,
+      },
+      {
+        path: "settings/dev",
+        element: <ProtectedRoute allowedRoles={["admin"]}><DevSettingsPage /></ProtectedRoute>,
       },
       { path: "dev", element: <DevPage /> },
     ],
