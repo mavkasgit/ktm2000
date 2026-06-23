@@ -307,3 +307,82 @@ async def test_force_seed_is_forbidden_in_production(client, session, monkeypatc
 
     assert response.status_code == 403
     assert response.json()["detail"] == "force=true is not allowed in production"
+
+
+@pytest.mark.asyncio
+async def test_cleanup_endpoints(client, session) -> None:
+    # Восстанавливаем системного пользователя, чтобы логи аудита (FK user_id) работали
+    user_res = await client.post("/api/routes-seed/reseed-system-user")
+    assert user_res.status_code == 200
+
+    # 1. Заполняем секции по умолчанию
+    await _seed_default_sections(session)
+    
+    # Добавим одну операцию участка для проверки
+    from app.models.route import SectionOperation
+    section = await session.scalar(select(Section).where(Section.code == "WH"))
+    op = SectionOperation(section_id=section.id, operation_code="OP_TEST", operation_name="Test Op")
+    session.add(op)
+    await session.commit()
+
+    # 2. Проверяем cleanup-stats
+    stats_response = await client.get("/api/routes-seed/cleanup-stats")
+    assert stats_response.status_code == 200
+    stats_data = stats_response.json()
+    assert "stats" in stats_data
+    assert stats_data["stats"]["sections"] == 11
+    assert stats_data["stats"]["section_operations"] == 1
+
+    # 3. Вызываем cleanup с неправильной таблицей для проверки валидации
+    bad_cleanup = await client.post("/api/routes-seed/cleanup", json={"tables": ["users", "invalid_table_name"]})
+    assert bad_cleanup.status_code == 400
+
+    # 4. Выполняем очистку только операций участков
+    cleanup_response = await client.post("/api/routes-seed/cleanup", json={"tables": ["section_operations"]})
+    assert cleanup_response.status_code == 204
+
+    # 5. Проверяем, что операции удалены, а секции остались на месте
+    stats_response = await client.get("/api/routes-seed/cleanup-stats")
+    assert stats_response.json()["stats"]["section_operations"] == 0
+    assert stats_response.json()["stats"]["sections"] == 11
+
+    # 6. Очищаем секции
+    cleanup_sections = await client.post("/api/routes-seed/cleanup", json={"tables": ["sections"]})
+    assert cleanup_sections.status_code == 204
+
+    stats_response = await client.get("/api/routes-seed/cleanup-stats")
+    assert stats_response.json()["stats"]["sections"] == 0
+
+    # 7. Проверяем очистку import_templates с внешним ключом в route_rule_profiles
+    from app.models.import_template import ImportTemplate
+    from app.models.route import RouteRuleProfile
+
+    template = ImportTemplate(name="Test Template")
+    session.add(template)
+    await session.flush()
+
+    profile = RouteRuleProfile(
+        code="TEST_CODE",
+        name="Test Profile",
+        import_template_id=template.id,
+    )
+    session.add(profile)
+    await session.commit()
+
+    # Проверяем, что статистика показывает их наличие
+    stats_response = await client.get("/api/routes-seed/cleanup-stats")
+    assert stats_response.json()["stats"]["import_templates"] == 1
+    assert stats_response.json()["stats"]["route_rule_profiles"] == 1
+
+    # Запускаем очистку только шаблонов импорта
+    cleanup_templates = await client.post("/api/routes-seed/cleanup", json={"tables": ["import_templates"]})
+    assert cleanup_templates.status_code == 204
+
+    # Проверяем, что шаблон удален, а профиль остался, но его FK сброшен в NULL
+    stats_response = await client.get("/api/routes-seed/cleanup-stats")
+    assert stats_response.json()["stats"]["import_templates"] == 0
+    assert stats_response.json()["stats"]["route_rule_profiles"] == 1
+
+    # Обновляем объект из БД
+    await session.refresh(profile)
+    assert profile.import_template_id is None

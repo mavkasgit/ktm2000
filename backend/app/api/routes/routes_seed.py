@@ -5,15 +5,19 @@ import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import WRITER_ROLES, require_role
+from app.api.deps import WRITER_ROLES, require_role, get_current_user
+from app.models.user import User
 from app.core.config import settings
 from app.core.database import get_db
 from app.seeds.run_seed import run_full_seed
 from app.seeds.seeders.users_seeder import seed_users
 from app.seeds.seeders.demo_production_seeder import seed_demo_production
 from app.seeds.seeders.cleanup_seeder import clear_generated_production_data
+from app.services.audit_log_service import log_action
+from app.models.audit_log import AuditAction
 
 logger = logging.getLogger(__name__)
 
@@ -155,5 +159,138 @@ async def clear_demo_production_endpoint(
         return ClearSummary(cleanup=stats)
     except Exception as e:
         logger.exception("Clear production data failed")
+        await db.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+class CleanupStatsResponse(BaseModel):
+    stats: dict[str, int]
+
+
+class CleanupRequest(BaseModel):
+    tables: list[str]
+
+
+@router.get("/cleanup-stats", response_model=CleanupStatsResponse)
+async def cleanup_stats_endpoint(
+    db: AsyncSession = Depends(get_db),
+) -> CleanupStatsResponse:
+    """Подсчитать количество записей во всех таблицах, доступных для очистки."""
+    tables = [
+        "defects", "defect_decisions", "defect_items", "transfer_discrepancy_defect_items",
+        "rework_tasks", "transfers", "transfer_discrepancies", "movements", "spg_remainders",
+        "work_tasks", "section_plan_lines", "internal_plans", "release_batch_positions", "release_batches",
+        "plan_change_items", "plan_change_sets", "plan_positions", "import_batches", "production_plans",
+        "import_files", "production_routes", "route_stages", "route_operations", "route_rule_profiles",
+        "route_selection_rules", "route_matching_rules", "route_rule_conditions", "import_templates",
+        "sections", "section_operations"
+    ]
+    stats = {}
+    for table in tables:
+        try:
+            res = await db.execute(text(f"SELECT COUNT(*) FROM {table}"))
+            stats[table] = res.scalar() or 0
+        except Exception as e:
+            logger.warning(f"Failed to get row count for table {table}: {e}")
+            stats[table] = 0
+    return CleanupStatsResponse(stats=stats)
+
+
+@router.post("/cleanup", status_code=status.HTTP_204_NO_CONTENT, dependencies=[Depends(require_role(list(WRITER_ROLES)))])
+async def cleanup_endpoint(
+    payload: CleanupRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> None:
+    """Выборочно удалить таблицы базы данных с использованием TRUNCATE CASCADE."""
+    if not payload.tables:
+        return
+
+    # Защита: разрешены только определенные системные таблицы для предотвращения SQL-инъекций
+    allowed_tables = {
+        "defects", "defect_decisions", "defect_items", "transfer_discrepancy_defect_items",
+        "rework_tasks", "transfers", "transfer_discrepancies", "movements", "spg_remainders",
+        "work_tasks", "section_plan_lines", "internal_plans", "release_batch_positions", "release_batches",
+        "plan_change_items", "plan_change_sets", "plan_positions", "import_batches", "production_plans",
+        "import_files", "production_routes", "route_stages", "route_operations", "route_rule_profiles",
+        "route_selection_rules", "route_matching_rules", "route_rule_conditions", "import_templates",
+        "sections", "section_operations"
+    }
+
+    invalid_tables = [t for t in payload.tables if t not in allowed_tables]
+    if invalid_tables:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Недопустимые таблицы для очистки: {', '.join(invalid_tables)}"
+        )
+
+    try:
+        # Порядок удаления снизу вверх для соблюдения ограничений внешних ключей
+        ordered_tables = [
+            "transfer_discrepancy_defect_items",
+            "defect_decisions",
+            "defect_items",
+            "rework_tasks",
+            "defects",
+            "transfer_discrepancies",
+            "transfers",
+            "movements",
+            "spg_remainders",
+            "work_tasks",
+            "section_plan_lines",
+            "internal_plans",
+            "release_batch_positions",
+            "release_batches",
+            "plan_change_items",
+            "plan_change_sets",
+            "plan_positions",
+            "import_batches",
+            "production_plans",
+            "import_files",
+            "route_rule_conditions",
+            "route_matching_rules",
+            "route_operations",
+            "route_stages",
+            "route_selection_rules",
+            "route_rule_profiles",
+            "production_routes",
+            "import_templates",
+            "section_operations",
+            "sections"
+        ]
+
+        if "sections" in payload.tables:
+            # Разрываем связи с пользователями перед удалением участков
+            await db.execute(text("UPDATE users SET section_id = NULL"))
+            try:
+                await db.execute(text("DELETE FROM user_sections"))
+            except Exception:
+                pass
+
+        if "import_templates" in payload.tables:
+            await db.execute(text("UPDATE route_rule_profiles SET import_template_id = NULL"))
+            await db.execute(text("UPDATE import_batches SET template_id = NULL"))
+
+        if "route_rule_profiles" in payload.tables:
+            await db.execute(text("UPDATE import_batches SET rule_profile_id = NULL"))
+
+        deleted_tables = []
+        for table in ordered_tables:
+            if table in payload.tables:
+                await db.execute(text(f"DELETE FROM {table}"))
+                deleted_tables.append(table)
+        
+        # Запись лога аудита
+        await log_action(
+            db,
+            status="success",
+            title="Выборочная очистка данных",
+            message=f"Успешно удалены таблицы: {', '.join(deleted_tables)}.",
+            user=current_user,
+            action=AuditAction.DELETE,
+        )
+        await db.commit()
+    except Exception as e:
+        logger.exception("Selective cleanup failed")
         await db.rollback()
         raise HTTPException(status_code=500, detail=str(e))

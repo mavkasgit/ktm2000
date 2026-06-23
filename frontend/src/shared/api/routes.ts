@@ -203,6 +203,19 @@ export async function clearDemoProduction() {
   return data;
 }
 
+export type CleanupStats = {
+  stats: Record<string, number>;
+};
+
+export async function getCleanupStats() {
+  const { data } = await apiClient.get<CleanupStats>("/routes-seed/cleanup-stats");
+  return data;
+}
+
+export async function executeCleanup(tables: string[]) {
+  await apiClient.post("/routes-seed/cleanup", { tables });
+}
+
 export async function reorderRoutes(ids: number[]) {
   await apiClient.post("/routes/reorder", { ids });
 }
