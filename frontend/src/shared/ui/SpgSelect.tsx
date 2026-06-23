@@ -17,6 +17,7 @@ export type SpgSelectProps = {
   placeholder?: string;
   className?: string;
   emptyLabel?: string;
+  showCode?: boolean;
 };
 
 export function SpgSelect({
@@ -26,6 +27,7 @@ export function SpgSelect({
   placeholder = "ГХП",
   className,
   emptyLabel,
+  showCode = false,
 }: SpgSelectProps) {
   const activeSpgs = useMemo(() => spgs.filter((s) => s.is_active), [spgs]);
 
@@ -43,7 +45,9 @@ export function SpgSelect({
             >
               {renderIcon(selectedSpg.icon, "h-3 w-3")}
             </span>
-            <span className="truncate">{selectedSpg.code} · {selectedSpg.name}</span>
+            <span className="truncate">
+              {showCode ? `${selectedSpg.code} · ${selectedSpg.name}` : selectedSpg.name}
+            </span>
           </div>
         ) : (
           <SelectValue placeholder={placeholder} />
@@ -68,7 +72,9 @@ export function SpgSelect({
                     {renderIcon(spg.icon, "h-3 w-3")}
                   </span>
                 )}
-                <span className="truncate">{spg.code} · {spg.name}</span>
+                <span className="truncate">
+                  {showCode ? `${spg.code} · ${spg.name}` : spg.name}
+                </span>
               </div>
             </SelectItem>
           );
