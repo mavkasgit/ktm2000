@@ -775,3 +775,72 @@ async def test_shopfloor_single_window_lock_enforced(client, session) -> None:
         headers=lock_second,
     )
     assert accept_ok.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_defect_accept_with_deviation_flow(client, session) -> None:
+    from app.models.defect import DefectDecisionType
+    from app.models.movement import Movement, MovementType
+
+    user = await _make_user(session, "quality_accept_dev@test.local")
+    _, plan, pos = await _make_product_route_plan(session, "FG-SF-ACCEPT-DEV")
+    headers = _auth_headers(user)
+
+    await _release_plan_position(client, plan.id, pos.id)
+
+    tasks = (
+        await session.execute(
+            select(WorkTask)
+            .join(SectionPlanLine, WorkTask.section_plan_line_id == SectionPlanLine.id)
+            .where(SectionPlanLine.plan_position_id == pos.id)
+            .order_by(SectionPlanLine.sequence)
+        )
+    ).scalars().all()
+    first_task = tasks[0]
+
+    issue_res = await client.post(
+        f"/api/shopfloor/tasks/{first_task.id}/issue",
+        json={"quantity": "100"},
+        headers=headers,
+    )
+    assert issue_res.status_code == 200
+
+    complete_res = await client.post(
+        f"/api/shopfloor/tasks/{first_task.id}/complete",
+        json={"good_quantity": "80", "defect_quantity": "20", "defect_reason": "production_defect"},
+        headers=headers,
+    )
+    assert complete_res.status_code == 200
+    defect_id = complete_res.json()["defect_id"]
+    assert defect_id is not None
+
+    await session.refresh(first_task)
+    assert first_task.cached_completed_quantity == Decimal("80")
+    assert first_task.cached_rejected_quantity == Decimal("20")
+
+    dec_res = await client.post(
+        f"/api/shopfloor/defects/{defect_id}/decisions",
+        json={
+            "decision_type": DefectDecisionType.accept_with_deviation.value,
+            "quantity": "20",
+            "comment": "Accepting as good with deviation"
+        },
+        headers=headers,
+    )
+    assert dec_res.status_code == 200, dec_res.text
+
+    await session.refresh(first_task)
+    assert first_task.cached_completed_quantity == Decimal("100")
+    assert first_task.cached_rejected_quantity == Decimal("0")
+
+    movements = (
+        await session.execute(
+            select(Movement)
+            .where(Movement.task_id == first_task.id, Movement.movement_type == MovementType.complete)
+            .order_by(Movement.id)
+        )
+    ).scalars().all()
+    assert len(movements) == 2
+    assert movements[0].quantity == Decimal("80")
+    assert movements[1].quantity == Decimal("20")
+    assert movements[1].source_ref == f"defect:{defect_id}"
