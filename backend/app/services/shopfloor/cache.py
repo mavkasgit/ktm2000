@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.internal_plan import SectionPlanLine
 from app.models.movement import Movement, MovementType
 from app.models.work_task import WorkTask, WorkTaskStatus
+from app.models.defect import Defect, DefectDecision, DefectDecisionType
 
 from .common import _get_task, _to_decimal
 
@@ -85,11 +86,35 @@ async def _refresh_task_cache(db: AsyncSession, task_id: int, visited: set[int] 
     task = await _get_task(db, task_id)
     sums = await _task_movement_sums(db, task_id)
 
+    # Решения по дефектам этой задачи, чтобы вычесть одобренные/вторично списанные детали
+    decisions_query = (
+        select(
+            DefectDecision.decision_type,
+            func.coalesce(func.sum(DefectDecision.quantity), 0)
+        )
+        .join(Defect, Defect.id == DefectDecision.defect_id)
+        .where(Defect.task_id == task_id)
+        .group_by(DefectDecision.decision_type)
+    )
+    decision_rows = (await db.execute(decisions_query)).all()
+    decisions = {r[0]: _to_decimal(r[1] or 0) for r in decision_rows}
+
+    scrap_decisions = decisions.get(DefectDecisionType.scrap, Decimal("0"))
+    accept_deviation_decisions = decisions.get(DefectDecisionType.accept_with_deviation, Decimal("0"))
+
     issued = sums.get(MovementType.issue_to_work.value, Decimal("0"))
     completed = sums.get(MovementType.complete.value, Decimal("0"))
     transferred = sums.get(MovementType.transfer_send.value, Decimal("0"))
     received = sums.get(MovementType.transfer_receive.value, Decimal("0"))
-    rejected = sums.get(MovementType.reject.value, Decimal("0")) + sums.get(MovementType.scrap.value, Decimal("0"))
+
+    rejected = (
+        sums.get(MovementType.reject.value, Decimal("0"))
+        + sums.get(MovementType.scrap.value, Decimal("0"))
+        - scrap_decisions
+        - accept_deviation_decisions
+    )
+    if rejected < 0:
+        rejected = Decimal("0")
     returned = sums.get(MovementType.return_to_previous.value, Decimal("0"))
     in_work = issued - completed - rejected - returned
     if in_work < 0:
