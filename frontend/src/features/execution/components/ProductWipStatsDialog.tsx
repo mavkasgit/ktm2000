@@ -102,13 +102,13 @@ export function ProductWipStatsDialog({ sku, open, onOpenChange }: ProductWipSta
                   <table className="w-full text-sm">
                     <thead className="bg-muted/50 border-b">
                       <tr>
-                        <th className="text-left p-3 font-medium text-muted-foreground">Код и наименование ГХП</th>
+                        <th className="text-left p-3 font-medium text-muted-foreground">ГХП (выполненные операции)</th>
                         <th className="text-right p-3 font-medium text-muted-foreground w-[150px]">Остаток (шт.)</th>
                       </tr>
                     </thead>
                     <tbody>
                       {data.remainders.map((rem) => (
-                        <tr key={rem.spg_id} className="border-b last:border-0 hover:bg-muted/20">
+                        <tr key={`${rem.spg_id}-${rem.completed_ops}`} className="border-b last:border-0 hover:bg-muted/20">
                           <td className="p-3 flex items-center gap-3">
                             {rem.spg_icon && rem.spg_icon_color ? (
                               <div
@@ -125,8 +125,8 @@ export function ProductWipStatsDialog({ sku, open, onOpenChange }: ProductWipSta
                               </div>
                             )}
                             <div>
-                              <div className="font-medium">{rem.spg_code}</div>
-                              <div className="text-xs text-muted-foreground">{rem.spg_name}</div>
+                              <div className="font-medium">{rem.spg_name}</div>
+                              <div className="text-xs text-muted-foreground">{rem.completed_ops}</div>
                             </div>
                           </td>
                           <td className="p-3 text-right font-mono font-semibold text-emerald-600 dark:text-emerald-400">
@@ -156,7 +156,7 @@ export function ProductWipStatsDialog({ sku, open, onOpenChange }: ProductWipSta
                   <table className="w-full text-sm">
                     <thead className="bg-muted/50 border-b">
                       <tr>
-                        <th className="text-left p-3 font-medium text-muted-foreground">Участок</th>
+                        <th className="text-left p-3 font-medium text-muted-foreground">Операция (участок)</th>
                         <th className="text-center p-3 font-medium text-muted-foreground w-[100px]">Задач в работе</th>
                         <th className="text-right p-3 font-medium text-muted-foreground w-[110px]">Запланировано</th>
                         <th className="text-right p-3 font-medium text-muted-foreground w-[100px]">Сделано</th>
@@ -165,7 +165,7 @@ export function ProductWipStatsDialog({ sku, open, onOpenChange }: ProductWipSta
                     </thead>
                     <tbody>
                       {data.in_work.map((task) => (
-                        <tr key={task.section_id} className="border-b last:border-0 hover:bg-muted/20">
+                        <tr key={`${task.section_id}-${task.operation_name}`} className="border-b last:border-0 hover:bg-muted/20">
                           <td className="p-3 flex items-center gap-3">
                             {task.section_icon && task.section_icon_color ? (
                               <div
@@ -182,7 +182,7 @@ export function ProductWipStatsDialog({ sku, open, onOpenChange }: ProductWipSta
                               </div>
                             )}
                             <div>
-                              <div className="font-medium">{task.section_code}</div>
+                              <div className="font-medium">{task.operation_name}</div>
                               <div className="text-xs text-muted-foreground">{task.section_name}</div>
                             </div>
                           </td>

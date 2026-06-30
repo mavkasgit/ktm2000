@@ -106,7 +106,11 @@ async def create_release_batch(
     return await get_release_batch_summary(db, batch.id)
 
 
-async def release_batch(db: AsyncSession, release_batch_id: int) -> dict:
+async def release_batch(
+    db: AsyncSession,
+    release_batch_id: int,
+    remainder_allocation: dict[int, Decimal] | None = None,
+) -> dict:
     batch = await db.get(ReleaseBatch, release_batch_id)
     if batch is None:
         raise ValueError("Release batch not found")
@@ -159,19 +163,46 @@ async def release_batch(db: AsyncSession, release_batch_id: int) -> dict:
 
         # ── MRP: find and reserve compatible remainders ───────────────────────
         release_quantity = batch_position.release_quantity
-        reserved_remainders = await _find_and_reserve_compatible_remainders(
-            db,
-            product_id=effective_product_id,
-            position_id=position.id,
-            route_steps=steps,
-        )
-        # Build lookup: max completed sequence for each reserved remainder
-        # remainder → max sequence from completed_stages_json
-        remainder_max_seq: list[tuple[SpgRemainder, int]] = []
-        for rem in reserved_remainders:
-            stages_json = rem.completed_stages_json or []
-            max_seq = max((s.get("sequence", 0) for s in stages_json), default=0)
-            remainder_max_seq.append((rem, max_seq))
+        remainder_max_seq: list[tuple[SpgRemainder, int, Decimal]] = []
+
+        if remainder_allocation is not None:
+            # Manual allocation: reserve only specified remainders with requested quantities
+            reserved_remainders = []
+            for rem_id, qty in remainder_allocation.items():
+                if qty <= 0:
+                    continue
+                rem = await db.get(SpgRemainder, rem_id)
+                if rem is None:
+                    raise ValueError(f"Remainder #{rem_id} not found")
+                if rem.product_id != effective_product_id:
+                    raise ValueError(f"Remainder #{rem_id} product mismatch")
+                if rem.consumed_at is not None:
+                    raise ValueError(f"Remainder #{rem_id} already consumed")
+                if rem.reserved_for_plan_position_id is not None and rem.reserved_for_plan_position_id != position.id:
+                    raise ValueError(f"Remainder #{rem_id} is reserved for another position")
+                if qty > rem.remainder_quantity:
+                    raise ValueError(f"Remainder #{rem_id} has insufficient quantity (available: {rem.remainder_quantity}, requested: {qty})")
+
+                rem.reserved_for_plan_position_id = position.id
+                reserved_remainders.append(rem)
+
+            for rem in reserved_remainders:
+                stages_json = rem.completed_stages_json or []
+                max_seq = max((s.get("sequence", 0) for s in stages_json), default=0)
+                allocated_qty = remainder_allocation[rem.id]
+                remainder_max_seq.append((rem, max_seq, allocated_qty))
+        else:
+            # Default auto-allocation
+            reserved_remainders = await _find_and_reserve_compatible_remainders(
+                db,
+                product_id=effective_product_id,
+                position_id=position.id,
+                route_steps=steps,
+            )
+            for rem in reserved_remainders:
+                stages_json = rem.completed_stages_json or []
+                max_seq = max((s.get("sequence", 0) for s in stages_json), default=0)
+                remainder_max_seq.append((rem, max_seq, rem.remainder_quantity))
 
         # ── Create SectionPlanLines + WorkTasks ───────────────────────────────
         seen_keys: set[tuple[str, int]] = set()
@@ -191,8 +222,8 @@ async def release_batch(db: AsyncSession, release_batch_id: int) -> dict:
             step_seq = step["sequence"]
             # planned_quantity = release_quantity - sum of remainders that cover this step
             covered_qty = sum(
-                rem.remainder_quantity
-                for rem, max_seq in remainder_max_seq
+                allocated_qty
+                for rem, max_seq, allocated_qty in remainder_max_seq
                 if max_seq >= step_seq
             )
             planned_qty = max(Decimal("0"), release_quantity - covered_qty)
@@ -201,6 +232,9 @@ async def release_batch(db: AsyncSession, release_batch_id: int) -> dict:
                 first_nonzero_index = len(step_planned_quantities) - 1
 
         line_index = 0
+        created_tasks: list[WorkTask] = []
+        tasks_by_seq: dict[int, WorkTask] = {}
+
         for idx, (step, planned_qty) in enumerate(step_planned_quantities):
             stage_id = step.get("route_stage_id")
             if stage_id is None:
@@ -226,6 +260,13 @@ async def release_batch(db: AsyncSession, release_batch_id: int) -> dict:
             elif first_nonzero_index is not None and idx == first_nonzero_index:
                 # First stage that actually needs work: ready
                 task_status = WorkTaskStatus.ready
+                # Check if we need to transfer remainder from the previous completed task
+                if idx > 0 and created_tasks:
+                    prev_task = created_tasks[-1]
+                    from app.services.shopfloor.common import sections_share_spg
+                    share_spg = await sections_share_spg(db, prev_task.section_id, step["section_id"])
+                    if not share_spg:
+                        task_status = WorkTaskStatus.waiting_previous
             else:
                 task_status = WorkTaskStatus.waiting_previous
 
@@ -241,12 +282,75 @@ async def release_batch(db: AsyncSession, release_batch_id: int) -> dict:
             db.add(task)
             await db.flush()
 
+            if task_status == WorkTaskStatus.completed:
+                from app.services.shopfloor.common import _get_user_snapshot_name
+                from app.services.shopfloor.cache import _refresh_task_cache, _refresh_section_plan_line_cache
+                from app.models.movement import Movement, MovementType
+                actor_id = batch.released_by or batch.created_by or 1
+                actor_name = await _get_user_snapshot_name(db, actor_id)
+                movement = Movement(
+                    product_id=task.product_id,
+                    task_id=task.id,
+                    section_plan_line_id=task.section_plan_line_id,
+                    from_section_id=task.section_id,
+                    to_section_id=task.section_id,
+                    movement_type=MovementType.complete,
+                    quantity=batch_position.release_quantity,
+                    source_ref="auto_release_remainder",
+                    comment="Автозавершение при покрытии остатками ГХП",
+                    created_by=actor_id,
+                    created_by_user_name=actor_name,
+                    performed_at=datetime.now(UTC),
+                    accounted_at=datetime.now(UTC),
+                )
+                db.add(movement)
+                await db.flush()
+                await _refresh_task_cache(db, task.id)
+                await _refresh_section_plan_line_cache(db, task.section_plan_line_id)
+
             if task_status == WorkTaskStatus.ready:
                 actor_id = batch.released_by or batch.created_by or 1
-                from app.services.shopfloor.operations_tasks import auto_consume_available_remainders
-                await auto_consume_available_remainders(db, task, actor_id=actor_id)
+                if remainder_allocation is not None:
+                    # Manually consume specified remainders for this stage
+                    for rem, max_seq, allocated_qty in remainder_max_seq:
+                        next_stages_in_route = [s["sequence"] for s in steps if s["sequence"] > max_seq]
+                        if next_stages_in_route and next_stages_in_route[0] == step["sequence"]:
+                            from app.services.shopfloor.operations_tasks import consume_remainder
+                            await consume_remainder(
+                                db,
+                                remainder_id=rem.id,
+                                task_id=task.id,
+                                quantity=allocated_qty,
+                                actor_id=actor_id,
+                                comment=f"Manually allocated remainder {rem.id} on launch",
+                            )
+                else:
+                    from app.services.shopfloor.operations_tasks import auto_consume_available_remainders
+                    await auto_consume_available_remainders(db, task, actor_id=actor_id)
+            
+            tasks_by_seq[step["sequence"]] = task
+            created_tasks.append(task)
             tasks_created += 1
             line_index += 1
+
+        # Send transfers for each reserved remainder if GHP differs between source and target stages
+        for rem, max_seq, allocated_qty in remainder_max_seq:
+            task_A = tasks_by_seq.get(max_seq)
+            task_B = tasks_by_seq.get(max_seq + 1)
+            if task_A and task_B:
+                from app.services.shopfloor.common import sections_share_spg
+                share_spg = await sections_share_spg(db, task_A.section_id, task_B.section_id)
+                if not share_spg:
+                    qty_to_transfer = min(allocated_qty, batch_position.release_quantity)
+                    from app.transfers.services import transfer_send
+                    await transfer_send(
+                        db,
+                        from_task_id=task_A.id,
+                        to_task_id=task_B.id,
+                        quantity=qty_to_transfer,
+                        actor_id=batch.released_by or batch.created_by or 1,
+                        comment="Автоматический трансфер остатка ГХП при запуске позиции",
+                    )
 
         released_total = await _released_quantity(db, position)
         new_status = PlanPositionStatus.released if released_total >= position.quantity else PlanPositionStatus.approved
@@ -598,9 +702,6 @@ async def _find_and_reserve_compatible_remainders(
     compatible: list[SpgRemainder] = []
     for rem in free_remainders:
         stages_json: list[dict] = rem.completed_stages_json or []
-        if not stages_json:
-            # No completed stages recorded → cannot determine compatibility
-            continue
 
         # All stages in the remainder must exactly match the start of the route
         is_prefix = True

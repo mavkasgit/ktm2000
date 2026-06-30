@@ -49,9 +49,9 @@ export const queryKeys = {
   },
   transfers: {
     ready: (spgId: number | null) => ["transfers-ready", spgId] as const,
+    readyAll: () => ["transfers-ready", "all"] as const,
     history: (spgId: number | null) => ["transfers-history", spgId] as const,
-    readyAll: () => ["transfers-ready"] as const,
-    historyAll: () => ["transfers-history"] as const,
+    historyAll: () => ["transfers-history", "all"] as const,
   },
   plan: {
     allPositions: () => ["all-plan-positions"] as const,

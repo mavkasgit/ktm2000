@@ -18,7 +18,7 @@ import {
   DuplicateConflict,
 } from "../lib/plan-labels"
 
-export function PositionRow({ pos, onApprove, onDelete, selected, routes, onAssignRoute, onOpenDetail, duplicateConflict, onJumpToPosition, onSelect }: {
+export function PositionRow({ pos, onApprove, onDelete, selected, routes, onAssignRoute, onOpenDetail, duplicateConflict, onJumpToPosition, onSelect, onSkuClick }: {
   pos: PlanPositionOut;
   onApprove: (id: number, planId?: number, force?: boolean) => Promise<void>;
   onDelete: (id: number, planId?: number) => void;
@@ -29,6 +29,7 @@ export function PositionRow({ pos, onApprove, onDelete, selected, routes, onAssi
   duplicateConflict?: DuplicateConflict;
   onJumpToPosition?: (id: number) => void;
   onSelect?: (id: number) => void;
+  onSkuClick?: (sku: string) => void;
 }) {
   const hasErrors = pos.errors && pos.errors.length > 0
   const hasWarnings = pos.warnings && pos.warnings.length > 0
@@ -220,7 +221,19 @@ export function PositionRow({ pos, onApprove, onDelete, selected, routes, onAssi
         <span className="text-muted-foreground">#{pos.id}</span>
       </div>
       <div className="p-2 text-sm font-medium">{rowNum}</div>
-      <div className="p-2 text-sm">{pos.source_sku}</div>
+      <div className="p-2 text-sm">
+        <button
+          type="button"
+          className="font-mono text-left text-blue-700 hover:underline focus:outline-none"
+          onClick={(e) => {
+            e.stopPropagation()
+            onSkuClick?.(pos.source_sku)
+          }}
+          title="Показать сводную информацию по артикулу"
+        >
+          {pos.source_sku}
+        </button>
+      </div>
       <div className="p-2 text-sm whitespace-nowrap">
         {qtyAdjusted ? (
           <span>

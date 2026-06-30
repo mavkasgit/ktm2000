@@ -14,10 +14,13 @@ import {
   softDeletePositionsExecutionBatch,
   manualPassPositionsExecutionBatch,
   getPositionHistory,
+  getRemaindersPreview,
   type ProductionPlanningRow,
   type StatusHistoryEntry,
   type ProductionPlanningRowDetail,
+  type RemainderAllocationItem,
 } from "@/shared/api/productionPlans";
+import { RemainderAllocationDialog } from "../components/RemainderAllocationDialog";
 import { listSections } from "@/shared/api/sections";
 import { useTableQueryEngine, SortConfig, ColumnSortDef } from "@/shared/hooks/useTableQueryEngine";
 import { nextMultiSortConfigs } from "@/shared/lib/multiSort";
@@ -144,6 +147,19 @@ export function ExecutionPage() {
     targetRouteStepId: "",
     comment: "",
   });
+  const [remainderDialog, setRemainderDialog] = useState<{
+    open: boolean;
+    positionId: number | null;
+    sku: string;
+    name: string;
+    quantity: number;
+  }>({
+    open: false,
+    positionId: null,
+    sku: "",
+    name: "",
+    quantity: 0,
+  });
   const [manualPassBulkDialog, setManualPassBulkDialog] = useState<{
     open: boolean;
     targetRouteStepId: string;
@@ -163,7 +179,8 @@ export function ExecutionPage() {
   });
 
   const takeToWorkMutation = useMutation({
-    mutationFn: takeToWork,
+    mutationFn: ({ positionIds, remainderAllocation }: { positionIds: number[]; remainderAllocation?: RemainderAllocationItem[] }) =>
+      takeToWork(positionIds, remainderAllocation),
     onSuccess: (data) => {
       const results = data.results.map<BulkActionResultItem<number>>((result) => ({
         id: result.position_id,
@@ -186,6 +203,8 @@ export function ExecutionPage() {
       invalidateAll();
       bulkSelection.clear();
       setSelectionOrder([]);
+      setRemainderDialog((prev) => ({ ...prev, open: false }));
+      setLaunchDialog({ open: false, mode: "single", positionIds: [] });
     },
     onError: (err) => toast({ title: "Ошибка запуска", description: getErrorMessage(err), variant: "destructive" }),
   });
@@ -286,13 +305,28 @@ export function ExecutionPage() {
     }
   }, []);
 
-  const handleSingleLaunch = useCallback((row: ProductionPlanningRow) => {
+  const handleSingleLaunch = useCallback(async (row: ProductionPlanningRow) => {
     const reason = getLaunchBlockReason(row);
     if (reason) {
       toast({ title: "Невозможно запустить", description: reason, variant: "destructive" });
       return;
     }
-    takeToWorkMutation.mutate([row.plan_position_id]);
+    try {
+      const preview = await getRemaindersPreview(row.plan_position_id);
+      if (preview.available_remainders.length > 0) {
+        setRemainderDialog({
+          open: true,
+          positionId: row.plan_position_id,
+          sku: row.source_sku,
+          name: row.source_name || "",
+          quantity: row.quantity,
+        });
+      } else {
+        takeToWorkMutation.mutate({ positionIds: [row.plan_position_id] });
+      }
+    } catch (e) {
+      toast({ title: "Ошибка загрузки остатков", description: getErrorMessage(e), variant: "destructive" });
+    }
   }, [takeToWorkMutation]);
 
   const handleManualPass = useCallback((row: ProductionPlanningRow) => {
@@ -309,7 +343,7 @@ export function ExecutionPage() {
   }, []);
 
   const confirmLaunch = useCallback(() => {
-    takeToWorkMutation.mutate(launchDialog.positionIds);
+    takeToWorkMutation.mutate({ positionIds: launchDialog.positionIds });
     setLaunchDialog({ open: false, mode: "single", positionIds: [] });
   }, [launchDialog.positionIds, takeToWorkMutation]);
 
@@ -955,6 +989,23 @@ export function ExecutionPage() {
         onHistoryDialogChange={setHistoryDialogOpen}
         historyLoading={historyLoading}
         historyEntries={historyEntries}
+      />
+
+      <RemainderAllocationDialog
+        open={remainderDialog.open}
+        onOpenChange={(open) => setRemainderDialog((prev) => ({ ...prev, open }))}
+        positionId={remainderDialog.positionId}
+        positionSku={remainderDialog.sku}
+        positionName={remainderDialog.name}
+        releaseQuantity={remainderDialog.quantity}
+        pending={takeToWorkMutation.isPending}
+        onConfirm={(allocation) => {
+          setRemainderDialog((prev) => ({ ...prev, open: false }));
+          takeToWorkMutation.mutate({
+            positionIds: [remainderDialog.positionId!],
+            remainderAllocation: allocation,
+          });
+        }}
       />
 
       <ProductWipStatsDialog
