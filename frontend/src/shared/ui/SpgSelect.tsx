@@ -1,4 +1,5 @@
 import { useMemo } from "react";
+import { Layers } from "lucide-react";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue, renderIcon } from "@/shared/ui";
 
 export type SpgSelectItem = {
@@ -54,7 +55,15 @@ export function SpgSelect({
     <Select value={selectValue} onValueChange={handleValueChange}>
       <SelectTrigger className={className ?? "h-6 text-xs"}>
         {isAllSelected && allLabel ? (
-          <span className="truncate">{allLabel}</span>
+          <div className="flex items-center gap-1.5">
+            <span
+              className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded"
+              style={{ backgroundColor: "#3B82F620", color: "#3B82F6" }}
+            >
+              <Layers className="h-3 w-3" />
+            </span>
+            <span className="truncate">{allLabel}</span>
+          </div>
         ) : selectedSpg && selectedSpg.icon ? (
           <div className="flex items-center gap-1.5">
             <span
@@ -74,7 +83,15 @@ export function SpgSelect({
       <SelectContent>
         {allLabel && (
           <SelectItem value="__all__">
-            <span className="font-medium">{allLabel}</span>
+            <div className="flex items-center gap-1.5">
+              <span
+                className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded"
+                style={{ backgroundColor: "#3B82F620", color: "#3B82F6" }}
+              >
+                <Layers className="h-3 w-3" />
+              </span>
+              <span className="font-medium">{allLabel}</span>
+            </div>
           </SelectItem>
         )}
         {emptyLabel && (

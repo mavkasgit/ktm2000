@@ -378,7 +378,7 @@ async def transfer_receive(
         to_task.status = WorkTaskStatus.ready
         await db.flush()
 
-    if accepted_quantity > 0:
+    if accepted_quantity > 0 and to_task.status != WorkTaskStatus.completed:
         # Calculate how much to auto-issue based on what is already issued to task
         # to avoid double-issuing if the task was completed before transfer.
         total_received = to_task.cached_received_quantity + accepted_quantity

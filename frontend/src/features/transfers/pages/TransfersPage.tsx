@@ -224,7 +224,7 @@ function ReadyTransferRow({
 export function TransfersPage() {
   const queryClient = useQueryClient();
   const [spgId, setSpgId] = useState<number | null>(null);
-  const [showAllSpgs, setShowAllSpgs] = useState(false);
+  const [showAllSpgs, setShowAllSpgs] = useState(true);
   const [editTransferRecord, setEditTransferRecord] = useState<IncomingTransfer | null>(null);
 
   // Bulk Operations State

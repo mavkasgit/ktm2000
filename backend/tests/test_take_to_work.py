@@ -490,11 +490,12 @@ async def test_take_to_work_auto_transfer_remainders(client, session) -> None:
     """Take to work with compatible remainder on a different SPG.
     
     Checks that the task covered by remainder is completed,
-    the next task is waiting_previous, and an automatic transfer is sent.
+    the next task is waiting_previous, and NO automatic transfer is created.
+    The operator must manually transfer via the transfers page.
     """
     from app.models.spg import StorageProductionGroup, SpgSection
     from app.models.spg_remainder import SpgRemainder
-    from app.models.transfer import Transfer, TransferStatus
+    from app.models.transfer import Transfer
     
     user = await _make_user(session, "ttw-remainder@test.local")
     product, plan, pos = await _make_product_route_plan(session, "FG-TTW-REM")
@@ -544,7 +545,7 @@ async def test_take_to_work_auto_transfer_remainders(client, session) -> None:
         product_id=product.id,
         spg_id=spg_prep.id,
         route_stage_id=stages[2].id,
-        remainder_quantity=Decimal("150"), # covers the whole pos.quantity (100)
+        remainder_quantity=Decimal("150"),
         original_issued=Decimal("150"),
         completed_stages_json=completed_stages_1,
         created_by=user.id,
@@ -596,36 +597,25 @@ async def test_take_to_work_auto_transfer_remainders(client, session) -> None:
     assert tasks[0].status == WorkTaskStatus.completed  # Issue
     assert tasks[1].status == WorkTaskStatus.completed  # Drill
     assert tasks[2].status == WorkTaskStatus.completed  # Shot
-    assert tasks[3].status == WorkTaskStatus.waiting_previous  # Anod (waiting transfer from Shot!)
+    assert tasks[3].status == WorkTaskStatus.waiting_previous  # Anod (waiting for manual transfer)
     assert tasks[4].status == WorkTaskStatus.waiting_previous  # WIP
     assert tasks[5].status == WorkTaskStatus.waiting_previous  # Final
     
-    # Check that transfer 1 (Shot -> Anod) was automatically sent
-    transfer1 = await session.scalar(
-        select(Transfer).where(
-            Transfer.from_task_id == tasks[2].id,
-            Transfer.to_task_id == tasks[3].id
+    # No automatic transfers should be created — operator transfers manually
+    task_ids = [t.id for t in tasks]
+    transfers = (
+        await session.execute(
+            select(Transfer).where(
+                (Transfer.from_task_id.in_(task_ids)) | (Transfer.to_task_id.in_(task_ids))
+            )
         )
-    )
-    assert transfer1 is not None
-    assert transfer1.status == TransferStatus.sent
-    assert transfer1.sent_quantity == Decimal("100")
-
-    # Check that transfer 2 (Issue -> Drill) was automatically sent
-    transfer2 = await session.scalar(
-        select(Transfer).where(
-            Transfer.from_task_id == tasks[0].id,
-            Transfer.to_task_id == tasks[1].id
-        )
-    )
-    assert transfer2 is not None
-    assert transfer2.status == TransferStatus.sent
-    assert transfer2.sent_quantity == Decimal("100")
+    ).scalars().all()
+    assert len(transfers) == 0
 
 
 @pytest.mark.asyncio
 async def test_take_to_work_restore_remainders_on_cancel_and_delete(client, session) -> None:
-    """Take to work, accept transfer (consuming remainder), then delete plan batch.
+    """Take to work, manually send and accept transfer (consuming remainder), then delete plan batch.
     
     Checks that the remainder quantity is restored and reservation is cleared.
     """
@@ -633,7 +623,7 @@ async def test_take_to_work_restore_remainders_on_cancel_and_delete(client, sess
     from app.models.spg_remainder import SpgRemainder
     from app.models.transfer import Transfer, TransferStatus
     from app.models.imports import ImportBatch, ImportBatchMode, ImportFile
-    from app.transfers.services import transfer_receive
+    from app.transfers.services import transfer_receive, transfer_send
     
     user = await _make_user(session, "ttw-del-rem@test.local")
     product, plan, pos = await _make_product_route_plan(session, "FG-TTW-DEL-REM")
@@ -732,7 +722,18 @@ async def test_take_to_work_restore_remainders_on_cancel_and_delete(client, sess
         )
     ).scalars().all()
     
-    # Check that transfer was automatically sent
+    # No automatic transfers — operator must transfer manually
+    # Manually send transfer from Shot -> Anod to set up the test state
+    await transfer_send(
+        session,
+        from_task_id=tasks[2].id,
+        to_task_id=tasks[3].id,
+        quantity=Decimal("100"),
+        actor_id=user.id,
+    )
+    await session.flush()
+    
+    # Check that transfer was created
     transfer = await session.scalar(
         select(Transfer).where(
             Transfer.from_task_id == tasks[2].id,
@@ -788,11 +789,12 @@ async def test_take_to_work_partial_auto_transfer(client, session) -> None:
     """Take to work a position with partial remainder coverage.
     
     Checks that the task is active (planned_qty > 0) but still has a complete movement
-    created for the covered quantity, and an automatic transfer is sent for that quantity.
+    created for the covered quantity, and NO automatic transfer is created.
+    The operator must transfer manually via the transfers page.
     """
     from app.models.spg import StorageProductionGroup, SpgSection
     from app.models.spg_remainder import SpgRemainder
-    from app.models.transfer import Transfer, TransferStatus
+    from app.models.transfer import Transfer
     
     user = await _make_user(session, "ttw-part-rem@test.local")
     product, plan, pos = await _make_product_route_plan(session, "FG-TTW-PART-REM")
@@ -876,19 +878,19 @@ async def test_take_to_work_partial_auto_transfer(client, session) -> None:
     assert tasks[0].status == WorkTaskStatus.ready
     # Task 3 (Shot) should be waiting_previous (it waits for Drill)
     assert tasks[2].status == WorkTaskStatus.waiting_previous
-    # Task 4 (Anod) should be waiting_previous (it waits for transfer of 60 pcs remainder)
+    # Task 4 (Anod) should be waiting_previous (it waits for manual transfer)
     assert tasks[3].status == WorkTaskStatus.waiting_previous
     
-    # Check that transfer was automatically sent for 60 pcs
-    transfer = await session.scalar(
-        select(Transfer).where(
-            Transfer.from_task_id == tasks[2].id,
-            Transfer.to_task_id == tasks[3].id
+    # No automatic transfers should be created
+    task_ids = [t.id for t in tasks]
+    transfers = (
+        await session.execute(
+            select(Transfer).where(
+                (Transfer.from_task_id.in_(task_ids)) | (Transfer.to_task_id.in_(task_ids))
+            )
         )
-    )
-    assert transfer is not None
-    assert transfer.status == TransferStatus.sent
-    assert transfer.sent_quantity == Decimal("60")
+    ).scalars().all()
+    assert len(transfers) == 0
 
 
 async def test_take_to_work_remainders_preview(client, session):

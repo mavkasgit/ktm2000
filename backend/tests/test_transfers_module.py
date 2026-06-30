@@ -521,6 +521,105 @@ async def test_work_task_becomes_completed_before_transfer(client, session) -> N
     )
 
 
+@pytest.mark.asyncio
+async def test_transfer_receive_skips_issue_when_target_already_completed(client, session) -> None:
+    """Regression: transferring into a task that was auto-completed by
+    remainder coverage must NOT call issue_to_work (which would fail
+    because the task is already completed).
+
+    Scenario:
+      1. Release a 6-step position.
+      2. Manually complete the first task.
+      3. Transfer the full quantity to the second task — target is waiting_previous.
+      4. Complete the second task manually (issue + complete).
+      5. Now manually set the third task to `completed` (simulating remainder auto-complete).
+      6. Transfer from the second (completed) task to the third (completed) task.
+         → must succeed without calling issue_to_work on the target.
+    """
+    user = await _make_user(session, "xfer-skip-issue@test.local")
+    headers = _auth_headers(user)
+    ctx = await _make_six_section_fixture(session, sku="FG-XF-SKIP", planned_qty=Decimal("100"))
+    await _release_via_take_to_work(client, ctx["position"].id)
+    tasks = await _tasks_by_sequence(session, ctx["position"].id)
+    first_task = tasks[0]
+    second_task = tasks[1]
+    third_task = tasks[2]
+
+    # 1. Issue + complete the first task
+    await client.post(
+        f"/api/shopfloor/tasks/{first_task.id}/issue",
+        json={"quantity": "100", "idempotency_key": "xf-skip:issue-1"},
+        headers=headers,
+    )
+    await client.post(
+        f"/api/shopfloor/tasks/{first_task.id}/complete",
+        json={"good_quantity": "100", "defect_quantity": "0", "idempotency_key": "xf-skip:complete-1"},
+        headers=headers,
+    )
+
+    # 2. Transfer 100 from task 1 → task 2
+    resp = await client.post(
+        "/api/transfers",
+        json={
+            "from_task_id": first_task.id,
+            "to_task_id": second_task.id,
+            "quantity": "100",
+            "idempotency_key": "xf-skip:send-1",
+        },
+        headers=headers,
+    )
+    assert resp.status_code == 200, resp.text
+
+    # 3. Issue + complete the second task
+    await client.post(
+        f"/api/shopfloor/tasks/{second_task.id}/issue",
+        json={"quantity": "100", "idempotency_key": "xf-skip:issue-2"},
+        headers=headers,
+    )
+    await client.post(
+        f"/api/shopfloor/tasks/{second_task.id}/complete",
+        json={"good_quantity": "100", "defect_quantity": "0", "idempotency_key": "xf-skip:complete-2"},
+        headers=headers,
+    )
+
+    # 4. Simulate third task being auto-completed by remainder coverage:
+    #    set status to completed, set cached_completed_quantity, add a complete movement.
+    from app.models.movement import Movement, MovementType
+    from app.services.shopfloor.cache import _refresh_task_cache
+
+    third_task.status = WorkTaskStatus.completed
+    third_movement = Movement(
+        product_id=third_task.product_id,
+        task_id=third_task.id,
+        section_plan_line_id=third_task.section_plan_line_id,
+        from_section_id=third_task.section_id,
+        to_section_id=third_task.section_id,
+        movement_type=MovementType.complete,
+        quantity=Decimal("100"),
+        source_ref="auto_release_remainder",
+        created_by=user.id,
+        created_by_user_name=user.full_name,
+    )
+    session.add(third_movement)
+    await session.flush()
+    await _refresh_task_cache(db=session, task_id=third_task.id)
+
+    # 5. Transfer from second task → third task (both completed).
+    #    Before the fix, this would fail with
+    #    "Task must be ready/in_progress/partially_completed".
+    resp2 = await client.post(
+        "/api/transfers",
+        json={
+            "from_task_id": second_task.id,
+            "to_task_id": third_task.id,
+            "quantity": "100",
+            "idempotency_key": "xf-skip:send-2",
+        },
+        headers=headers,
+    )
+    assert resp2.status_code == 200, resp2.text
+
+
 # ─── Backward-compat: old /shopfloor/transfers still works ───────────────────
 
 
