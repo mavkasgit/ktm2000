@@ -1,7 +1,9 @@
-import { useEffect, useState } from "react";
-import { Dialog, DialogContent, DialogHeader, DialogTitle, Badge, renderIcon } from "@/shared/ui";
+import { useEffect, useState, useMemo } from "react";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, Badge, renderIcon, SortableFilterHeader } from "@/shared/ui";
 import { getProductWipStats, ProductWipStats } from "@/shared/api/productionPlans";
 import { Loader2, Layers, Package, ClipboardList, AlertCircle } from "lucide-react";
+import type { SortConfig } from "@/shared/hooks/useTableQueryEngine";
+import { nextMultiSortConfigs } from "@/shared/lib/multiSort";
 
 interface ProductWipStatsDialogProps {
   sku: string | null;
@@ -9,10 +11,85 @@ interface ProductWipStatsDialogProps {
   onOpenChange: (open: boolean) => void;
 }
 
+type WipRemainderSortField = "name" | "qty";
+
 export function ProductWipStatsDialog({ sku, open, onOpenChange }: ProductWipStatsDialogProps) {
   const [data, setData] = useState<ProductWipStats | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  const [sortConfigs, setSortConfigs] = useState<SortConfig<WipRemainderSortField>[]>([
+    { field: "qty", order: "desc" }
+  ]);
+  const [columnFilters, setColumnFilters] = useState<Partial<Record<WipRemainderSortField, Set<string>>>>({});
+
+  const handleSortChange = (field: WipRemainderSortField) => {
+    setSortConfigs((prev) => nextMultiSortConfigs(prev, field));
+  };
+
+  const handleFilterChange = (field: WipRemainderSortField, selected: Set<string>) => {
+    setColumnFilters((prev) => ({
+      ...prev,
+      [field]: selected,
+    }));
+  };
+
+  const uniqueValues = useMemo(() => {
+    if (!data) return { name: [], qty: [] };
+    return {
+      name: Array.from(new Set(data.remainders.map((r) => r.spg_name))).sort(),
+      qty: Array.from(new Set(data.remainders.map((r) => String(r.quantity)))).sort((a, b) => Number(a) - Number(b)),
+    };
+  }, [data]);
+
+  const filteredRemainders = useMemo(() => {
+    if (!data) return [];
+    return data.remainders.filter((rem) => {
+      const nameFilter = columnFilters["name"];
+      if (nameFilter && nameFilter.size > 0) {
+        if (!nameFilter.has(rem.spg_name)) return false;
+      }
+      const qtyFilter = columnFilters["qty"];
+      if (qtyFilter && qtyFilter.size > 0) {
+        if (!qtyFilter.has(String(rem.quantity))) return false;
+      }
+      return true;
+    });
+  }, [data, columnFilters]);
+
+  const sortedRemainders = useMemo(() => {
+    const list = [...filteredRemainders];
+    if (sortConfigs.length === 0) return list;
+
+    list.sort((a, b) => {
+      for (const sort of sortConfigs) {
+        let valA: any;
+        let valB: any;
+        
+        if (sort.field === "qty") {
+          valA = a.quantity;
+          valB = b.quantity;
+        } else if (sort.field === "name") {
+          valA = a.spg_name;
+          valB = b.spg_name;
+        }
+        
+        if (valA !== valB) {
+          if (typeof valA === "number" && typeof valB === "number") {
+            return sort.order === "asc" ? valA - valB : valB - valA;
+          }
+          const strA = String(valA);
+          const strB = String(valB);
+          return sort.order === "asc"
+            ? strA.localeCompare(strB, "ru")
+            : strB.localeCompare(strA, "ru");
+        }
+      }
+      return 0;
+    });
+    
+    return list;
+  }, [filteredRemainders, sortConfigs]);
 
   useEffect(() => {
     const currentSku = sku;
@@ -21,6 +98,9 @@ export function ProductWipStatsDialog({ sku, open, onOpenChange }: ProductWipSta
       setError(null);
       return;
     }
+
+    setSortConfigs([{ field: "qty", order: "desc" }]);
+    setColumnFilters({});
 
     let isMounted = true;
     async function loadStats() {
@@ -52,7 +132,7 @@ export function ProductWipStatsDialog({ sku, open, onOpenChange }: ProductWipSta
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-[760px] max-h-[85vh] overflow-y-auto flex flex-col gap-6">
+      <DialogContent className="max-w-[95vw] lg:max-w-[1400px] max-h-[90vh] overflow-y-auto flex flex-col gap-6">
         <DialogHeader>
           <DialogTitle className="flex flex-col gap-1.5 text-left">
             <div className="flex items-center gap-2 text-xl font-bold">
@@ -85,51 +165,99 @@ export function ProductWipStatsDialog({ sku, open, onOpenChange }: ProductWipSta
         )}
 
         {!isLoading && !error && data && (
-          <div className="flex flex-col gap-6">
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 items-start">
             {/* Склады подготовки */}
             <div className="space-y-3">
-              <h3 className="text-base font-semibold flex items-center gap-2 border-b pb-2">
+              <h3 className="text-sm font-semibold flex items-center gap-2 border-b pb-2">
                 <Package className="h-4 w-4 text-emerald-600" />
                 <span>Остатки на складах подготовки (ГХП)</span>
               </h3>
               
               {data.remainders.length === 0 ? (
-                <div className="text-sm text-muted-foreground py-2 text-center bg-muted/20 rounded-md border border-dashed">
+                <div className="text-xs text-muted-foreground py-2 text-center bg-muted/20 rounded-md border border-dashed">
                   Нет активных остатков на складах подготовки для данного артикула.
                 </div>
               ) : (
                 <div className="border rounded-md overflow-hidden bg-card">
-                  <table className="w-full text-sm">
+                  <table className="w-full text-xs">
                     <thead className="bg-muted/50 border-b">
                       <tr>
-                        <th className="text-left p-3 font-medium text-muted-foreground">ГХП (выполненные операции)</th>
-                        <th className="text-right p-3 font-medium text-muted-foreground w-[150px]">Остаток (шт.)</th>
+                        <th className="px-3 py-2 font-medium text-muted-foreground text-left">
+                          <SortableFilterHeader
+                            field="name"
+                            label="ГХП (выполненные операции)"
+                            currentSorts={sortConfigs}
+                            onSortChange={handleSortChange}
+                            values={uniqueValues.name}
+                            selectedValues={columnFilters["name"] ?? new Set()}
+                            onFilterChange={handleFilterChange}
+                          />
+                        </th>
+                        <th className="px-3 py-2 font-medium text-muted-foreground w-[180px] text-right">
+                          <SortableFilterHeader
+                            field="qty"
+                            label="Остаток (шт.)"
+                            currentSorts={sortConfigs}
+                            onSortChange={handleSortChange}
+                            values={uniqueValues.qty}
+                            selectedValues={columnFilters["qty"] ?? new Set()}
+                            onFilterChange={handleFilterChange}
+                          />
+                        </th>
                       </tr>
                     </thead>
                     <tbody>
-                      {data.remainders.map((rem) => (
+                      {sortedRemainders.map((rem) => (
                         <tr key={`${rem.spg_id}-${rem.completed_ops}`} className="border-b last:border-0 hover:bg-muted/20">
-                          <td className="p-3 flex items-center gap-3">
-                            {rem.spg_icon && rem.spg_icon_color ? (
-                              <div
-                                className="flex h-8 w-8 shrink-0 items-center justify-center rounded"
-                                style={{ backgroundColor: rem.spg_icon_color + "20" }}
-                              >
-                                <span style={{ color: rem.spg_icon_color }}>
-                                  {renderIcon(rem.spg_icon, "h-4 w-4")}
-                                </span>
+                          <td className="px-3 py-2">
+                            <div className="flex items-center gap-3">
+                              {rem.spg_icon && rem.spg_icon_color ? (
+                                <div
+                                  className="flex h-8 w-8 shrink-0 items-center justify-center rounded"
+                                  style={{ backgroundColor: rem.spg_icon_color + "20" }}
+                                >
+                                  <span style={{ color: rem.spg_icon_color }}>
+                                    {renderIcon(rem.spg_icon, "h-4 w-4")}
+                                  </span>
+                                </div>
+                              ) : (
+                                <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded bg-emerald-100 text-emerald-800">
+                                  <Package className="h-4 w-4" />
+                                </div>
+                              )}
+                              <div>
+                                <div className="font-medium text-xs">{rem.spg_name}</div>
+                                <div className="flex flex-wrap items-center gap-1 mt-0.5">
+                                  {rem.stages_with_icons && rem.stages_with_icons.length === 0 ? (
+                                    <span className="text-[10px] text-muted-foreground">Без обработки</span>
+                                  ) : rem.stages_with_icons ? (
+                                    rem.stages_with_icons.map((s, idx) => (
+                                      <span key={idx} className="flex items-center gap-1">
+                                        {idx > 0 && <span className="text-muted-foreground/40 text-[10px]">›</span>}
+                                        <span
+                                          className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] font-medium"
+                                          style={s.op_icon_color ? {
+                                            backgroundColor: s.op_icon_color + "18",
+                                            color: s.op_icon_color,
+                                          } : {}}
+                                        >
+                                          {s.op_icon && s.op_icon_color && (
+                                            <span style={{ color: s.op_icon_color }}>
+                                              {renderIcon(s.op_icon, "h-3 w-3")}
+                                            </span>
+                                          )}
+                                          {s.operation_name || s.operation_code}
+                                        </span>
+                                      </span>
+                                    ))
+                                  ) : (
+                                    <span className="text-[10px] text-muted-foreground">{rem.completed_ops}</span>
+                                  )}
+                                </div>
                               </div>
-                            ) : (
-                              <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded bg-emerald-100 text-emerald-800">
-                                <Package className="h-4 w-4" />
-                              </div>
-                            )}
-                            <div>
-                              <div className="font-medium">{rem.spg_name}</div>
-                              <div className="text-xs text-muted-foreground">{rem.completed_ops}</div>
                             </div>
                           </td>
-                          <td className="p-3 text-right font-mono font-semibold text-emerald-600 dark:text-emerald-400">
+                          <td className="px-3 py-2 text-right font-mono font-semibold text-emerald-600 dark:text-emerald-400">
                             {rem.quantity.toLocaleString("ru-RU")}
                           </td>
                         </tr>
@@ -142,31 +270,31 @@ export function ProductWipStatsDialog({ sku, open, onOpenChange }: ProductWipSta
 
             {/* Активные задачи на участках */}
             <div className="space-y-3">
-              <h3 className="text-base font-semibold flex items-center gap-2 border-b pb-2">
+              <h3 className="text-sm font-semibold flex items-center gap-2 border-b pb-2">
                 <ClipboardList className="h-4 w-4 text-blue-600" />
                 <span>В реальной работе на производственных участках</span>
               </h3>
 
               {data.in_work.length === 0 ? (
-                <div className="text-sm text-muted-foreground py-2 text-center bg-muted/20 rounded-md border border-dashed">
+                <div className="text-xs text-muted-foreground py-2 text-center bg-muted/20 rounded-md border border-dashed">
                   Нет активных задач в работе (ready / in_progress) на участках.
                 </div>
               ) : (
                 <div className="border rounded-md overflow-hidden bg-card">
-                  <table className="w-full text-sm">
+                  <table className="w-full text-xs">
                     <thead className="bg-muted/50 border-b">
                       <tr>
-                        <th className="text-left p-3 font-medium text-muted-foreground">Операция (участок)</th>
-                        <th className="text-center p-3 font-medium text-muted-foreground w-[100px]">Задач в работе</th>
-                        <th className="text-right p-3 font-medium text-muted-foreground w-[110px]">Запланировано</th>
-                        <th className="text-right p-3 font-medium text-muted-foreground w-[100px]">Сделано</th>
-                        <th className="text-right p-3 font-medium text-muted-foreground w-[100px]">В работе</th>
+                        <th className="text-left px-3 py-2 font-medium text-muted-foreground">Операция (участок)</th>
+                        <th className="text-center px-3 py-2 font-medium text-muted-foreground w-[80px]">Задач в работе</th>
+                        <th className="text-right px-3 py-2 font-medium text-muted-foreground w-[80px]">План</th>
+                        <th className="text-right px-3 py-2 font-medium text-muted-foreground w-[80px]">В работе</th>
+                        <th className="text-right px-3 py-2 font-medium text-muted-foreground w-[80px]">Завершено</th>
                       </tr>
                     </thead>
                     <tbody>
                       {data.in_work.map((task) => (
                         <tr key={`${task.section_id}-${task.operation_name}`} className="border-b last:border-0 hover:bg-muted/20">
-                          <td className="p-3 flex items-center gap-3">
+                          <td className="px-3 py-2 flex items-center gap-3">
                             {task.section_icon && task.section_icon_color ? (
                               <div
                                 className="flex h-8 w-8 shrink-0 items-center justify-center rounded"
@@ -182,23 +310,23 @@ export function ProductWipStatsDialog({ sku, open, onOpenChange }: ProductWipSta
                               </div>
                             )}
                             <div>
-                              <div className="font-medium">{task.operation_name}</div>
-                              <div className="text-xs text-muted-foreground">{task.section_name}</div>
+                              <div className="font-medium text-xs">{task.operation_name}</div>
+                              <div className="text-[10px] text-muted-foreground">{task.section_name}</div>
                             </div>
                           </td>
-                          <td className="p-3 text-center">
-                            <Badge variant="secondary" className="font-mono">
+                          <td className="px-3 py-2 text-center">
+                            <Badge variant="secondary" className="font-mono text-xs">
                               {task.active_tasks_count}
                             </Badge>
                           </td>
-                          <td className="p-3 text-right font-mono text-muted-foreground">
+                          <td className="px-3 py-2 text-right font-mono text-muted-foreground">
                             {task.planned_qty.toLocaleString("ru-RU")}
                           </td>
-                          <td className="p-3 text-right font-mono text-emerald-600 dark:text-emerald-400">
-                            {task.completed_qty.toLocaleString("ru-RU")}
-                          </td>
-                          <td className="p-3 text-right font-mono font-semibold text-blue-600 dark:text-blue-400">
+                          <td className="px-3 py-2 text-right font-mono font-semibold text-blue-600 dark:text-blue-400">
                             {task.in_work_qty.toLocaleString("ru-RU")}
+                          </td>
+                          <td className="px-3 py-2 text-right font-mono text-emerald-600 dark:text-emerald-400">
+                            {task.completed_qty.toLocaleString("ru-RU")}
                           </td>
                         </tr>
                       ))}
