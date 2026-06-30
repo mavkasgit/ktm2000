@@ -47,6 +47,33 @@ from app.services.shopfloor.common import (
 )
 
 
+async def _get_task_transferable(db: AsyncSession, task: WorkTask) -> Decimal:
+    from sqlalchemy import func
+    remainders_qty = Decimal("0")
+    has_auto_complete = await db.scalar(
+        select(func.count(Movement.id)).where(
+            Movement.task_id == task.id,
+            Movement.movement_type == MovementType.complete,
+            Movement.source_ref == "auto_release_remainder"
+        )
+    ) > 0
+    if not has_auto_complete:
+        from app.models.spg_remainder import SpgRemainder
+        from app.models.internal_plan import SectionPlanLine
+        line = await db.get(SectionPlanLine, task.section_plan_line_id)
+        if line:
+            remainders = (await db.execute(
+                select(SpgRemainder).where(SpgRemainder.reserved_for_plan_position_id == line.plan_position_id)
+            )).scalars().all()
+            for rem in remainders:
+                stages_json = rem.completed_stages_json or []
+                max_seq = max((s.get("sequence", 0) for s in stages_json), default=0)
+                if max_seq == line.sequence:
+                    remainders_qty += rem.remainder_quantity
+
+    return task.cached_completed_quantity + remainders_qty - task.cached_transferred_quantity
+
+
 async def transfer_send(
     db: AsyncSession,
     *,
@@ -158,7 +185,7 @@ async def transfer_send(
     quantity = _to_decimal(quantity)
     _ensure_positive(quantity, "quantity")
     if not post_factum:
-        transferable = from_task.cached_completed_quantity - from_task.cached_transferred_quantity
+        transferable = await _get_task_transferable(db, from_task)
         if quantity > transferable:
             raise ValueError("Transfer quantity exceeds transferable amount")
 
@@ -493,7 +520,7 @@ async def correct_transfer(
     to_task = await _get_task(db, transfer.to_task_id)
     
     # 1. Validate source limit
-    transferable = from_task.cached_completed_quantity - from_task.cached_transferred_quantity + old_quantity
+    transferable = await _get_task_transferable(db, from_task) + old_quantity
     if new_quantity > transferable:
         raise ValueError(
             f"Corrected quantity exceeds transferable amount of source task. "

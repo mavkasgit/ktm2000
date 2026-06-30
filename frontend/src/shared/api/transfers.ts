@@ -41,6 +41,7 @@ export type ReadyToTransferTask = {
   next_step_sequence: number | null;
   next_step_is_final: boolean | null;
   is_final: boolean;
+  completion_comment: string | null;
 };
 
 export type ReadyToTransferResponse = {
