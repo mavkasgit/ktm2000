@@ -62,6 +62,31 @@ async def apply_change_set(db: AsyncSession, change_set_id: int, *, skip_invalid
         await db.execute(select(PlanChangeItem).where(PlanChangeItem.change_set_id == change_set_id).order_by(PlanChangeItem.id))
     ).scalars().all()
 
+    # Кэши для устранения N+1 запросов при массовой валидации позиций
+    route_resolve_cache = {}
+    select_route_cache = {}
+    route_stages_cache = {}
+    sections_cache = {}
+    existing_fingerprints = set()
+    existing_row_hashes = set()
+
+    # Загружаем существующие fingerprints и row_hashes одним запросом
+    existing_pos_data = (
+        await db.execute(
+            select(PlanPosition.source_fingerprint, PlanPosition.source_row_hash)
+            .where(
+                PlanPosition.production_plan_id == change_set.production_plan_id,
+                PlanPosition.status != PlanPositionStatus.cancelled,
+                PlanPosition.deleted_at.is_(None),
+            )
+        )
+    ).all()
+    for fp, rh in existing_pos_data:
+        if fp:
+            existing_fingerprints.add(fp)
+        if rh:
+            existing_row_hashes.add(rh)
+
     created = 0
     updated = 0
     ignored = 0
@@ -122,7 +147,16 @@ async def apply_change_set(db: AsyncSession, change_set_id: int, *, skip_invalid
                     position.route_assigned_at = _datetime_from_after(after, "route_assigned_at")
                     position.route_manual_confirmed_at = _datetime_from_after(after, "route_manual_confirmed_at")
 
-                    validation_errors = await validate_plan_position(db, position)
+                    validation_errors = await validate_plan_position(
+                        db, position,
+                        route_resolve_cache=route_resolve_cache,
+                        select_route_cache=select_route_cache,
+                        route_stages_cache=route_stages_cache,
+                        sections_cache=sections_cache,
+                        existing_fingerprints=existing_fingerprints,
+                        existing_row_hashes=existing_row_hashes,
+                    )
+
                     position.validation_errors = validation_errors
                     position.validation_status = (
                         PlanPositionValidationStatus.invalid if validation_errors else PlanPositionValidationStatus.valid

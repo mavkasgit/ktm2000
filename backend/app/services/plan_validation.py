@@ -93,7 +93,17 @@ async def _find_paired_techcard(db: AsyncSession, component_skus: list[str]) -> 
     return None
 
 
-async def validate_plan_position(db: AsyncSession, position: PlanPosition) -> list[str]:
+async def validate_plan_position(
+    db: AsyncSession,
+    position: PlanPosition,
+    *,
+    route_resolve_cache: dict | None = None,
+    select_route_cache: dict | None = None,
+    route_stages_cache: dict | None = None,
+    sections_cache: dict | None = None,
+    existing_fingerprints: set[str] | None = None,
+    existing_row_hashes: set[str] | None = None,
+) -> list[str]:
     errors: list[str] = []
     is_paired_profile = bool((position.source_payload or {}).get("paired_profile"))
     if position.product_id is None and not is_paired_profile:
@@ -126,13 +136,30 @@ async def validate_plan_position(db: AsyncSession, position: PlanPosition) -> li
                 errors.append("active_techcard_has_no_lines")
 
     product = await db.get(Product, position.product_id) if position.product_id else None
-    route_info = await resolve_position_route(db, position)
+    
+    if route_resolve_cache is not None:
+        from app.services.route_matcher import make_position_route_cache_key
+        cache_key = make_position_route_cache_key(position)
+        if cache_key in route_resolve_cache:
+            route_info = route_resolve_cache[cache_key]
+        else:
+            route_info = await resolve_position_route(db, position)
+            route_resolve_cache[cache_key] = route_info
+    else:
+        route_info = await resolve_position_route(db, position)
+
     if route_info.route_id is None:
         errors.append(route_info.error or "route_not_found")
     else:
-        steps = (
-            await db.execute(select(RouteStage).where(RouteStage.route_id == route_info.route_id).order_by(RouteStage.sequence))
-        ).scalars().all()
+        if route_stages_cache is not None and route_info.route_id in route_stages_cache:
+            steps = route_stages_cache[route_info.route_id]
+        else:
+            steps = (
+                await db.execute(select(RouteStage).where(RouteStage.route_id == route_info.route_id).order_by(RouteStage.sequence))
+            ).scalars().all()
+            if route_stages_cache is not None:
+                route_stages_cache[route_info.route_id] = steps
+
         if not steps:
             errors.append("active_route_has_no_steps")
         previous = 0
@@ -141,41 +168,66 @@ async def validate_plan_position(db: AsyncSession, position: PlanPosition) -> li
                 errors.append("route_sequence_invalid")
                 break
             previous = step.sequence
-            section = await db.get(Section, step.section_id)
+            
+            if sections_cache is not None and step.section_id in sections_cache:
+                section = sections_cache[step.section_id]
+            else:
+                section = await db.get(Section, step.section_id)
+                if sections_cache is not None and section is not None:
+                    sections_cache[step.section_id] = section
+
             if section is None or not section.is_active:
                 errors.append("route_contains_inactive_section")
                 break
 
-    duplicate_stmt = None
-    if position.source_fingerprint:
-        duplicate_stmt = (
-            select(PlanPosition)
-            .where(
-                PlanPosition.production_plan_id == position.production_plan_id,
-                PlanPosition.source_fingerprint == position.source_fingerprint,
-                PlanPosition.status != PlanPositionStatus.cancelled,
+    # Проверка дубликатов
+    is_duplicate = False
+    if existing_fingerprints is not None and position.source_fingerprint:
+        if position.source_fingerprint in existing_fingerprints:
+            is_duplicate = True
+    elif existing_row_hashes is not None and position.source_row_hash:
+        if position.source_row_hash in existing_row_hashes:
+            is_duplicate = True
+    else:
+        duplicate_stmt = None
+        if position.source_fingerprint:
+            duplicate_stmt = (
+                select(PlanPosition)
+                .where(
+                    PlanPosition.production_plan_id == position.production_plan_id,
+                    PlanPosition.source_fingerprint == position.source_fingerprint,
+                    PlanPosition.status != PlanPositionStatus.cancelled,
+                )
             )
-        )
-    elif position.source_row_hash:
-        duplicate_stmt = (
-            select(PlanPosition)
-            .where(
-                PlanPosition.production_plan_id == position.production_plan_id,
-                PlanPosition.source_row_hash == position.source_row_hash,
-                PlanPosition.status != PlanPositionStatus.cancelled,
+        elif position.source_row_hash:
+            duplicate_stmt = (
+                select(PlanPosition)
+                .where(
+                    PlanPosition.production_plan_id == position.production_plan_id,
+                    PlanPosition.source_row_hash == position.source_row_hash,
+                    PlanPosition.status != PlanPositionStatus.cancelled,
+                )
             )
-        )
 
-    if duplicate_stmt is not None:
-        if position.id is not None:
-            duplicate_stmt = duplicate_stmt.where(PlanPosition.id != position.id)
-        duplicate = await db.scalar(duplicate_stmt)
-        if duplicate is not None:
-            errors.append("duplicate_sku_due_date")
+        if duplicate_stmt is not None:
+            if position.id is not None:
+                duplicate_stmt = duplicate_stmt.where(PlanPosition.id != position.id)
+            duplicate = await db.scalar(duplicate_stmt)
+            if duplicate is not None:
+                is_duplicate = True
+
+    if is_duplicate:
+        errors.append("duplicate_sku_due_date")
 
     from app.services.route_validation import validate_route_match
 
-    route_errors = await validate_route_match(db, position)
+    route_errors = await validate_route_match(
+        db, position,
+        route_resolve_cache=route_resolve_cache,
+        select_route_cache=select_route_cache,
+        route_stages_cache=route_stages_cache,
+        sections_cache=sections_cache,
+    )
     errors.extend(route_errors)
 
     return errors

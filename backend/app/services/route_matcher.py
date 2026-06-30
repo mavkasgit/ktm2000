@@ -78,6 +78,31 @@ def _compat_source_from_origin(origin: str | None, route_id: int | None) -> str:
     return "legacy"
 
 
+def make_position_route_cache_key(position: PlanPosition) -> tuple:
+    """Generate a cache key for route resolution based on position fields that affect it."""
+    payload_key = None
+    if position.source_payload:
+        def make_hashable(val):
+            if isinstance(val, dict):
+                return tuple((k, make_hashable(v)) for k, v in sorted(val.items()))
+            elif isinstance(val, list):
+                return tuple(make_hashable(v) for v in val)
+            return val
+        payload_key = make_hashable(position.source_payload)
+
+    return (
+        position.route_id,
+        position.route_origin,
+        position.route_match_quality,
+        position.route_match_reason,
+        position.route_profile_id,
+        position.product_id,
+        position.import_batch_id,
+        position.source_sku,
+        payload_key,
+    )
+
+
 async def resolve_position_route(
     db: AsyncSession,
     position: PlanPosition,

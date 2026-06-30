@@ -223,3 +223,17 @@ export async function getProductRouteStages(productId: number): Promise<ProductR
   const { data } = await apiClient.get<ProductRouteStageOut[]>(`/products/${productId}/route-stages`);
   return data;
 }
+
+export type LastCompletedOperation = {
+  section_id: number | null;
+  section_code: string | null;
+  section_name: string | null;
+  operation_code: string | null;
+  operation_name: string | null;
+  sequence: number | null;
+};
+
+export async function getProductLastCompletedOperation(productId: number): Promise<LastCompletedOperation> {
+  const { data } = await apiClient.get<LastCompletedOperation>(`/products/${productId}/last-completed-operation`);
+  return data;
+}
