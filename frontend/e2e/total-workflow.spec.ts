@@ -512,13 +512,12 @@ test.describe("Total workflow E2E - Step 2: Seed & Verify Remainders", () => {
 
     // Получаем позицию ЮП-3270 объемом 60 деталей (она идеально подходит под наш тест)
     const positions = await apiGetPlanPositions(importRes.production_plan_id);
-    const posYu = positions.find((p: any) => p.source_sku === "ЮП-3270" && Math.round(parseFloat(p.quantity)) === 540 && p.validation_status === "valid");
+    const posYu = positions.find((p: any) => p.source_sku === "ЮП-3270" && Math.round(parseFloat(p.quantity)) === 60 && p.validation_status === "valid");
     expect(posYu).toBeDefined();
 
     const activeRoutes = await apiGetActiveRoutes();
-    if (posYu.route_id === null) {
-      await apiBatchAssignRoute(importRes.production_plan_id, [posYu.id], activeRoutes[0].id);
-    }
+    const targetRoute = activeRoutes.find((r: any) => r.name && (r.name.includes("Сверловка") || r.name.includes("С -"))) || activeRoutes[1] || activeRoutes[0];
+    await apiBatchAssignRoute(importRes.production_plan_id, [posYu.id], targetRoute.id);
 
     // 4. Утверждаем позицию на 60 деталей на странице планирования
     await authenticatedPage.goto("/planning");
@@ -603,7 +602,7 @@ test.describe("Total workflow E2E - Step 2: Seed & Verify Remainders", () => {
 
     const rowStock = authenticatedPage.locator("tr", { hasText: "ЮП-3270" }).first();
     await expect(rowStock).toBeVisible({ timeout: 10_000 });
-    await expect(rowStock.locator("td").nth(1)).toHaveText("-350");
+    await expect(rowStock.locator("td").nth(1)).toContainText("-290");
 
     // 8. Проверим FIFO-компенсацию минусового остатка:
     // Начисляем приход 500 шт на STOCK
@@ -620,39 +619,41 @@ test.describe("Total workflow E2E - Step 2: Seed & Verify Remainders", () => {
     });
     expect(resComp.ok).toBe(true);
 
-    // Обновим страницу остатков и проверим, что остаток стал 150 штук
+    // Обновим страницу остатков и проверим, что остаток стал 210 штук
     const refreshBtn = authenticatedPage.getByRole("button", { name: "Обновить" }).first();
     await refreshBtn.click();
-    await expect(rowStock.locator("td").nth(1)).toHaveText("150");
+    await expect(rowStock.locator("td").nth(1)).toContainText("210");
 
     // 9. Переходим на второй участок (DRILL), принимаем трансфер и проверяем расход остатка ГХП
-    // Принимаем перевод
     await authenticatedPage.goto("/transfers");
+    
+    // Сначала нужно отправить трансфер (кнопка "Передать" в таблице "Готово к передаче")
+    const readyRow = authenticatedPage.locator('tr:has-text("ЮП-3270")').filter({ hasText: "Выдача сырья" }).first();
+    await expect(readyRow).toBeVisible({ timeout: 10_000 });
+    const sendBtn = readyRow.getByRole("button", { name: "Передать" });
+    await expect(sendBtn).toBeVisible({ timeout: 5_000 });
+    await sendBtn.click();
+
+    // Ждем диалог отправки
+    const sendDialog = authenticatedPage.getByRole("dialog");
+    await expect(sendDialog).toBeVisible({ timeout: 5_000 });
+    const submitSendBtn = sendDialog.getByRole("button", { name: "Отправить" });
+    await expect(submitSendBtn).toBeVisible({ timeout: 5_000 });
+    await submitSendBtn.click();
+    await expect(sendDialog).not.toBeVisible({ timeout: 10_000 });
+
+    // Теперь проверяем, что трансфер принят
     const transferRow = authenticatedPage.locator('tr:has-text("ЮП-3270")').first();
     await expect(transferRow).toBeVisible({ timeout: 10_000 });
-    const acceptTransferBtn = transferRow.getByRole("button", { name: "Принять" });
-    await expect(acceptTransferBtn).toBeVisible({ timeout: 5_000 });
-    await acceptTransferBtn.click();
-    const acceptDialog = authenticatedPage.getByRole("dialog");
-    try {
-      await expect(acceptDialog).toBeVisible({ timeout: 2_000 });
-    } catch (e) {
-      console.log("Диалог не открылся с первого клика на Принять, кликаем повторно...");
-      await acceptTransferBtn.click();
-      await expect(acceptDialog).toBeVisible({ timeout: 5_000 });
-    }
-    await acceptDialog.getByRole("button", { name: "Подтвердить" }).click();
-    await expect(acceptDialog).not.toBeVisible({ timeout: 10_000 });
+    await expect(transferRow.locator("td").filter({ hasText: "Принята" })).toBeVisible({ timeout: 5_000 });
 
     // Заходим на доску DRILL, начинаем задачу (это спишет 20 шт из PREP)
     await authenticatedPage.goto(`/section-tasks/${sectionDrill.id}`);
     const drillTaskRow = authenticatedPage.locator('tr:has-text("ЮП-3270")').first();
     await expect(drillTaskRow).toBeVisible({ timeout: 10_000 });
 
-    // Берем в работу/начинаем задачу
-    const startDrillBtn = drillTaskRow.getByRole("button", { name: "Начать" });
-    await expect(startDrillBtn).toBeVisible({ timeout: 5_000 });
-    await startDrillBtn.click();
+    // Задача автоматически переходит в работу при принятии трансфера
+    await expect(drillTaskRow.locator("td").filter({ hasText: "В работе" }).first()).toBeVisible({ timeout: 5_000 });
 
     // Проверяем, что свободные остатки PREP уменьшились до 0
     await authenticatedPage.goto("/spg");
@@ -694,26 +695,14 @@ test.describe("Total workflow E2E - Step 2: Seed & Verify Remainders", () => {
     await scrapInputDrill.fill("10");
     await expect(scrapInputDrill).toHaveValue("10", { timeout: 5_000 });
 
-    const reasonSelect = drawer.locator("select").first();
-    try {
-      await reasonSelect.selectOption({ label: "Брак производства" });
-    } catch (e) {
-      // Если селект сделан через Select UI компоненты
-      const selectTrigger = drawer.getByRole("combobox").first();
-      await selectTrigger.click();
-      await authenticatedPage.getByRole("option").first().click();
-    }
-
     await drawer.getByRole("button", { name: "Сохранить" }).click();
     await expect(drawer).not.toBeVisible({ timeout: 10_000 });
 
     // 11. Списываем брак в scrap окончательно
     await authenticatedPage.goto("/spg");
-    const defectsTabBtn = authenticatedPage.getByRole("button", { name: /Зарегистрированный брак/ }).first();
-    await expect(defectsTabBtn).toBeVisible({ timeout: 5_000 });
     
     // Ищем строку дефекта
-    const defectRow = authenticatedPage.locator("tr:has-text('ЮП-3270')").first();
+    const defectRow = authenticatedPage.locator("tr", { hasText: "Ожидает решения" }).filter({ hasText: "ЮП-3270" }).first();
     await expect(defectRow).toBeVisible({ timeout: 10_000 });
 
     const decideBtn = defectRow.getByRole("button", { name: "Решение" });

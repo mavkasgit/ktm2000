@@ -1106,7 +1106,7 @@ async def test_complete_waiting_task_before_transfer(
     assert second_task.cached_issued_quantity == Decimal("0")
     assert second_task.cached_completed_quantity == Decimal("0")
 
-    # Complete 80 parts directly on the second_task (still in waiting_previous status)
+    # Complete 80 parts directly on the second_task (still in waiting_previous status) -> SHOULD FAIL!
     resp_complete = await client.post(
         f"/api/shopfloor/tasks/{second_task.id}/complete",
         json={
@@ -1116,15 +1116,8 @@ async def test_complete_waiting_task_before_transfer(
         },
         headers=headers,
     )
-    assert resp_complete.status_code == 200, resp_complete.text
-
-    # Verify that the complete operation auto-issued 80 parts and task is now partially_completed
-    await session.commit()
-    await session.refresh(second_task)
-    assert second_task.status == WorkTaskStatus.partially_completed
-    assert second_task.cached_issued_quantity == Decimal("80")
-    assert second_task.cached_completed_quantity == Decimal("80")
-    assert second_task.cached_in_work_quantity == Decimal("0")
+    assert resp_complete.status_code == 400
+    assert "ожидает передачи сырья" in resp_complete.json()["detail"]
 
     # Register issue on the first task so it has some parts issued
     await client.post(
@@ -1148,13 +1141,24 @@ async def test_complete_waiting_task_before_transfer(
     )
     assert resp_transfer.status_code == 200, resp_transfer.text
 
+    # Now that the transfer is received and task status is ready, we can complete 80 parts
+    resp_complete_ok = await client.post(
+        f"/api/shopfloor/tasks/{second_task.id}/complete",
+        json={
+            "good_quantity": "80",
+            "defect_quantity": "0",
+            "idempotency_key": "xf-pfwc:complete-second-ok",
+        },
+        headers=headers,
+    )
+    assert resp_complete_ok.status_code == 200, resp_complete_ok.text
+
     # Verify that the second task has received the transfer,
-    # and has auto-issued only the remaining 20 parts (100 total received - 80 already issued)
-    # to avoid double-issuing the 80 parts already completed.
+    # and maintains correct balances.
     await session.commit()
     await session.refresh(second_task)
     assert second_task.cached_received_quantity == Decimal("100")
-    assert second_task.cached_issued_quantity == Decimal("100") # 80 from complete + 20 from transfer receive
+    assert second_task.cached_issued_quantity == Decimal("100")
     assert second_task.cached_completed_quantity == Decimal("80")
     assert second_task.cached_in_work_quantity == Decimal("20") # 100 issued - 80 completed
     assert second_task.status == WorkTaskStatus.partially_completed

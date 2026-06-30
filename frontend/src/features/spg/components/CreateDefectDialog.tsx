@@ -134,9 +134,9 @@ export function CreateDefectDialog({
       )
     : products.slice(0, 30);
 
-  // Filter remainders for the selected product and section
+  // Filter remainders for the selected product and section (or if remainder is generic for SPG)
   const availableRemainders = remainders.filter(
-    (r) => r.product_id === selectedProductId && r.section_id === selectedSectionId
+    (r) => r.product_id === selectedProductId && (!r.section_id || r.section_id === selectedSectionId)
   );
 
   const saveMutation = useMutation({

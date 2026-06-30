@@ -310,7 +310,7 @@ class CompletedStageIn(BaseModel):
 
 class ManualRemainderCreate(BaseModel):
     product_id: int
-    section_id: int
+    section_id: int | None = None
     quantity: Decimal
     completed_stages: list[CompletedStageIn] = []
 
@@ -386,9 +386,9 @@ async def list_spg_remainders(spg_id: int, db: AsyncSession = Depends(get_db)) -
             spg_id=r.spg_id,
             spg_code=spg_code,
             spg_name=spg_name,
-            section_id=sec_id if sec_id is not None else (first_section.id if first_section else None),
-            section_code=sec_code if sec_code is not None else (first_section.code if first_section else None),
-            section_name=sec_name if sec_name is not None else (first_section.name if first_section else None),
+            section_id=sec_id if sec_id is not None else (first_section.id if first_section and r.route_stage_id is not None else None),
+            section_code=sec_code if sec_code is not None else (first_section.code if first_section and r.route_stage_id is not None else None),
+            section_name=sec_name if sec_name is not None else (first_section.name if first_section and r.route_stage_id is not None else None),
             remainder_quantity=float(r.remainder_quantity),
             original_issued=float(r.original_issued),
             completed_stages=r.completed_stages_json,
@@ -411,15 +411,21 @@ async def create_manual_remainder(
     if spg is None:
         raise HTTPException(status_code=404, detail="SPG not found")
 
-    section = await db.get(Section, payload.section_id)
-    if section is None:
-        raise HTTPException(status_code=404, detail="Section not found")
+    section = None
+    if payload.section_id is not None:
+        section = await db.get(Section, payload.section_id)
+        if section is None:
+            raise HTTPException(status_code=404, detail="Section not found")
 
     # Находим целевую SPG для этого участка
-    spg_section = await db.scalar(
-        select(SpgSection).where(SpgSection.section_id == payload.section_id).limit(1)
-    )
-    target_spg_id = spg_section.spg_id if spg_section else spg_id
+    if payload.section_id is not None:
+        spg_section = await db.scalar(
+            select(SpgSection).where(SpgSection.section_id == payload.section_id).limit(1)
+        )
+        target_spg_id = spg_section.spg_id if spg_section else spg_id
+    else:
+        target_spg_id = spg_id
+
     target_spg = await db.get(StorageProductionGroup, target_spg_id) if target_spg_id != spg_id else spg
 
     product = await db.get(Product, payload.product_id)
@@ -460,9 +466,9 @@ async def create_manual_remainder(
         spg_id=target_spg.id,
         spg_code=target_spg.code,
         spg_name=target_spg.name,
-        section_id=section.id,
-        section_code=section.code,
-        section_name=section.name,
+        section_id=section.id if section else None,
+        section_code=section.code if section else None,
+        section_name=section.name if section else None,
         remainder_quantity=float(remainder.remainder_quantity),
         original_issued=float(remainder.original_issued),
         completed_stages=remainder.completed_stages_json,
@@ -757,6 +763,15 @@ async def manual_stock_operation(
     )
     db.add(movement)
     await db.flush()
+
+    from app.services.shopfloor.operations_tasks import compensate_spg_remainders
+    await compensate_spg_remainders(db, spg_id, payload.product_id)
+    await db.flush()
+
+    if affected_remainder_id is not None:
+        remainder_obj = await db.get(SpgRemainder, affected_remainder_id)
+        if remainder_obj is not None:
+            new_qty = float(remainder_obj.remainder_quantity)
 
     return ManualOperationOut(
         movement_id=movement.id,
