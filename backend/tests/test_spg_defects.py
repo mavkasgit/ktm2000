@@ -105,6 +105,122 @@ async def test_get_product_route_stages(client, session):
 
 
 @pytest.mark.asyncio
+async def test_get_product_last_completed_operation(client, session):
+    from app.models.work_task import WorkTask, WorkTaskStatus
+    from app.models.movement import Movement, MovementType
+    from app.models.internal_plan import SectionPlanLine, InternalPlan
+    from app.models.production_plan import (
+        ProductionPlan,
+        PlanPosition,
+        PlanSourceType,
+        PlanPositionStatus,
+        PlanPositionValidationStatus,
+    )
+    from app.models.route import SectionOperation
+    from datetime import datetime, date
+
+    admin = await _make_admin(session)
+    product = await _make_product(session, "FG-LAST-OP-TEST")
+    route = await _setup_route_with_stages(session)
+    
+    # 1. No operations completed yet
+    resp = await client.get(f"/api/products/{product.id}/last-completed-operation")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["section_id"] is None
+    assert data["operation_code"] is None
+
+    # 2. Complete an operation
+    sec_drill = await session.scalar(select(Section).where(Section.code == "DRILL"))
+    stage1 = await session.scalar(select(RouteStage).where(RouteStage.route_id == route.id, RouteStage.sequence == 1))
+
+    plan = ProductionPlan(plan_no="PLAN-TEST-OP", name="Test Plan", period_start=date(2026, 6, 1), period_end=date(2026, 6, 30))
+    session.add(plan)
+    await session.flush()
+
+    int_plan = InternalPlan(production_plan_id=plan.id)
+    session.add(int_plan)
+    await session.flush()
+
+    pos = PlanPosition(
+        production_plan_id=plan.id,
+        product_id=product.id,
+        source_type=PlanSourceType.manual,
+        source_sku=product.sku,
+        source_name=product.name,
+        quantity=Decimal("100"),
+        source_payload={},
+        status=PlanPositionStatus.approved,
+        validation_status=PlanPositionValidationStatus.valid,
+        validation_errors=[],
+        period_start=plan.period_start,
+        period_end=plan.period_end,
+        has_pack_ops=False,
+    )
+    session.add(pos)
+    await session.flush()
+
+    line = SectionPlanLine(
+        internal_plan_id=int_plan.id,
+        plan_position_id=pos.id,
+        section_id=sec_drill.id,
+        product_id=product.id,
+        route_id=route.id,
+        route_stage_id=stage1.id,
+        sequence=1,
+        planned_quantity=Decimal("100"),
+    )
+    session.add(line)
+    await session.flush()
+
+    task = WorkTask(
+        section_plan_line_id=line.id,
+        section_id=sec_drill.id,
+        product_id=product.id,
+        route_stage_id=stage1.id,
+        planned_quantity=Decimal("100"),
+        status=WorkTaskStatus.completed,
+        selected_operation_code="DRILL_OP",
+    )
+    session.add(task)
+    await session.flush()
+
+    # SectionOperation справочник
+    sec_op = SectionOperation(
+        section_id=sec_drill.id,
+        operation_code="DRILL_OP",
+        operation_name="Сверление отверстий",
+        is_significant=True,
+    )
+    session.add(sec_op)
+    await session.flush()
+
+    # Movement
+    movement = Movement(
+        product_id=product.id,
+        task_id=task.id,
+        section_plan_line_id=line.id,
+        from_section_id=sec_drill.id,
+        to_section_id=sec_drill.id,
+        movement_type=MovementType.complete,
+        quantity=Decimal("100"),
+        created_by=admin.id,
+        performed_at=datetime.now(),
+    )
+    session.add(movement)
+    await session.flush()
+    await session.commit()
+
+    resp = await client.get(f"/api/products/{product.id}/last-completed-operation")
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    assert data["section_id"] == sec_drill.id
+    assert data["section_code"] == "DRILL"
+    assert data["operation_code"] == "DRILL_OP"
+    assert data["operation_name"] == "Сверление отверстий"
+
+
+@pytest.mark.asyncio
 async def test_import_remainders_excel(client, session):
     await _make_admin(session)
     product = await _make_product(session, "FG-IMPORT-TEST")

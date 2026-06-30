@@ -13,6 +13,14 @@ import {
   Badge,
   renderIcon,
   SectionSelect,
+  AlertDialog,
+  AlertDialogContent,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogCancel,
+  AlertDialogAction,
 } from "@/shared/ui";
 import type {
   SpgOut,
@@ -25,8 +33,8 @@ import {
   updateManualRemainder,
   deleteManualRemainder,
 } from "@/shared/api/spg";
-import type { Product } from "@/shared/api/products";
-import { listProducts } from "@/shared/api/products";
+import type { Product, LastCompletedOperation } from "@/shared/api/products";
+import { listProducts, getProductLastCompletedOperation } from "@/shared/api/products";
 import { listSectionsWithOperations } from "@/shared/api/sections";
 import type { SectionWithOperations } from "@/shared/api/sections";
 import { ManualOperationDialog } from "./ManualOperationDialog";
@@ -67,6 +75,7 @@ export function RemainderEditDialog({
   const [sectionsWithOps, setSectionsWithOps] = useState<SectionWithOperations[]>([]);
   const [completedOperationKeys, setCompletedOperationKeys] = useState<string[]>([]);
   const [loadingStages, setLoadingStages] = useState(false);
+  const [lastCompletedOp, setLastCompletedOp] = useState<LastCompletedOperation | null>(null);
 
   const sectionsForSelect = useMemo(() => {
     return sectionsWithOps.map((s) => ({
@@ -152,6 +161,58 @@ export function RemainderEditDialog({
     }
   }, [open, editingRemainder]);
 
+  useEffect(() => {
+    if (!open || selectedProductId == null || editingRemainder != null) {
+      setLastCompletedOp(null);
+      return;
+    }
+
+    getProductLastCompletedOperation(selectedProductId)
+      .then((data) => {
+        setLastCompletedOp(data);
+        if (data.section_id) {
+          setSelectedSectionId(data.section_id);
+        } else {
+          setSelectedSectionId(defaultSectionId ?? sections[0]?.section_id ?? null);
+        }
+      })
+      .catch(() => {
+        setLastCompletedOp(null);
+      });
+  }, [selectedProductId, open, editingRemainder, defaultSectionId, sections]);
+
+  useEffect(() => {
+    if (!open || editingRemainder != null || flatOperations.length === 0) return;
+
+    if (lastCompletedOp && lastCompletedOp.section_id) {
+      const targetOpIndex = flatOperations.findIndex(
+        (op) =>
+          op.sectionId === lastCompletedOp.section_id &&
+          (op.operationCode === lastCompletedOp.operation_code || op.operationName === lastCompletedOp.operation_name)
+      );
+      if (targetOpIndex !== -1) {
+        const keysToSelect = flatOperations
+          .slice(0, targetOpIndex + 1)
+          .map((op) => op.uniqueKey);
+        setCompletedOperationKeys(keysToSelect);
+      } else {
+        const sectionOps = flatOperations.filter((op) => op.sectionId === lastCompletedOp.section_id);
+        if (sectionOps.length > 0) {
+          const lastSecOp = sectionOps[sectionOps.length - 1];
+          const idx = flatOperations.findIndex((op) => op.uniqueKey === lastSecOp.uniqueKey);
+          if (idx !== -1) {
+            const keysToSelect = flatOperations
+              .slice(0, idx + 1)
+              .map((op) => op.uniqueKey);
+            setCompletedOperationKeys(keysToSelect);
+          }
+        }
+      }
+    } else {
+      setCompletedOperationKeys([]);
+    }
+  }, [lastCompletedOp, flatOperations, open, editingRemainder]);
+
   const filteredProducts = productSearch.trim()
     ? products.filter(
         (p) =>
@@ -188,6 +249,34 @@ export function RemainderEditDialog({
       setError((msg as string | undefined) || "Ошибка сохранения");
     },
   });
+
+  const deleteMutation = useMutation({
+    mutationFn: async () => {
+      if (!editingRemainder) return;
+      const actualSpgId = spgs.find(s => s.sections.some(sec => sec.section_id === editingRemainder.section_id))?.id || spgId;
+      await deleteManualRemainder(actualSpgId, editingRemainder.id);
+    },
+    onSuccess: () => {
+      const actualSpgId = editingRemainder ? spgs.find(s => s.sections.some(sec => sec.section_id === editingRemainder.section_id))?.id || spgId : spgId;
+      void queryClient.invalidateQueries({ queryKey: queryKeys.spg.snapshot(actualSpgId) });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.spg.remainders(actualSpgId) });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.spg.remainderHistory(actualSpgId) });
+      onSaved();
+      onOpenChange(false);
+    },
+    onError: (e: unknown) => {
+      const msg = e && typeof e === "object" && "response" in e
+        ? (e as { response?: { data?: { detail?: string } } }).response?.data?.detail
+        : undefined;
+      setError((msg as string | undefined) || "Ошибка удаления");
+    },
+  });
+
+  const handleDelete = () => {
+    if (window.confirm("Вы действительно хотите удалить этот остаток?")) {
+      deleteMutation.mutate();
+    }
+  };
 
   const handleSave = () => {
     if (!selectedProductId || !selectedSectionId || !quantity) {
@@ -237,47 +326,62 @@ export function RemainderEditDialog({
         </DialogHeader>
 
         <div className="space-y-4 py-2">
-          {/* Product search */}
-          <div className="space-y-1">
-            <label className="text-sm font-medium">Артикул / Продукт</label>
-            {editingRemainder ? (
-              <div className="text-sm font-semibold">
-                {editingRemainder.product_sku} — {editingRemainder.product_name}
-              </div>
-            ) : (
-              <>
-                <Input
-                  placeholder="Поиск по артикулу или названию..."
-                  value={productSearch}
-                  onChange={(e) => {
-                    setProductSearch(e.target.value);
-                    setSelectedProductId(null);
-                  }}
-                />
-                {selectedProductId && (
-                  <Badge variant="secondary" className="mt-1">
-                    Выбран: {products.find((p) => p.id === selectedProductId)?.sku}
-                  </Badge>
-                )}
-                {!selectedProductId && filteredProducts.length > 0 && (
-                  <div className="max-h-[150px] overflow-auto border rounded-md mt-1">
-                    {filteredProducts.map((p) => (
-                      <button
-                        key={p.id}
-                        type="button"
-                        className="w-full text-left px-3 py-1.5 text-sm hover:bg-accent truncate"
-                        onClick={() => {
-                          setSelectedProductId(p.id);
-                          setProductSearch(p.sku);
-                        }}
-                      >
-                        <span className="font-medium">{p.sku}</span> — {p.name}
-                      </button>
-                    ))}
-                  </div>
-                )}
-              </>
-            )}
+          {/* Product search & Quantity */}
+          <div className="grid grid-cols-3 gap-4">
+            <div className="col-span-2 space-y-1">
+              <label className="text-sm font-medium">Артикул / Продукт</label>
+              {editingRemainder ? (
+                <div className="text-sm font-semibold h-10 flex items-center">
+                  {editingRemainder.product_sku} — {editingRemainder.product_name}
+                </div>
+              ) : (
+                <div className="relative">
+                  <Input
+                    placeholder="Поиск по артикулу или названию..."
+                    value={productSearch}
+                    onChange={(e) => {
+                      setProductSearch(e.target.value);
+                      setSelectedProductId(null);
+                    }}
+                  />
+                  {selectedProductId && (
+                    <Badge variant="secondary" className="mt-1">
+                      Выбран: {products.find((p) => p.id === selectedProductId)?.sku}
+                    </Badge>
+                  )}
+                  {!selectedProductId && filteredProducts.length > 0 && (
+                    <div className="absolute z-10 w-full max-h-[150px] overflow-auto border bg-popover text-popover-foreground rounded-md mt-1 shadow-md">
+                      {filteredProducts.map((p) => (
+                        <button
+                          key={p.id}
+                          type="button"
+                          className="w-full text-left px-3 py-1.5 text-sm hover:bg-accent truncate"
+                          onClick={() => {
+                            setSelectedProductId(p.id);
+                            setProductSearch(p.sku);
+                          }}
+                        >
+                          <span className="font-medium">{p.sku}</span> — {p.name}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+
+            <div className="col-span-1 space-y-1">
+              <label className="text-sm font-medium">Количество</label>
+              <Input
+                type="number"
+                placeholder="0"
+                value={quantity}
+                onChange={(e) => setQuantity(e.target.value)}
+                min="0"
+                step="any"
+                className="w-full"
+              />
+            </div>
           </div>
 
           {/* Section select */}
@@ -366,12 +470,22 @@ export function RemainderEditDialog({
 
           {error && <div className="text-sm text-destructive">{error}</div>}
 
-          <div className="flex justify-end gap-2 pt-2">
-            <Button variant="outline" onClick={() => onOpenChange(false)}>
+          <div className="flex justify-end gap-2 pt-2 w-full">
+            {editingRemainder && (
+              <Button
+                variant="destructive"
+                onClick={handleDelete}
+                disabled={deleteMutation.isPending || saveMutation.isPending}
+                className="mr-auto"
+              >
+                {deleteMutation.isPending ? "Удаление..." : "Удалить"}
+              </Button>
+            )}
+            <Button variant="outline" onClick={() => onOpenChange(false)} disabled={saveMutation.isPending || deleteMutation.isPending}>
               Отмена
             </Button>
-            <Button onClick={handleSave} disabled={saveMutation.isPending}>
-              {saveMutation.isPending ? "Сохранение..." : editingRemainder ? "Обновить" : "Добавить"}
+            <Button onClick={handleSave} disabled={saveMutation.isPending || deleteMutation.isPending}>
+              {saveMutation.isPending ? "Сохранение..." : editingRemainder ? "Сохранить" : "Добавить"}
             </Button>
           </div>
         </div>
@@ -409,14 +523,11 @@ export function RemaindersListPanel({
   const [manualOpOpen, setManualOpOpen] = useState(false);
   const [historyRemainderId, setHistoryRemainderId] = useState<number | null>(null);
   const [importDialogOpen, setImportDialogOpen] = useState(false);
+  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
+  const [remainderToDelete, setRemainderToDelete] = useState<SpgRemainder | null>(null);
 
   // Состояние сворачивания
   const [isExpanded, setIsExpanded] = useState(true);
-
-  // Состояния для inline-редактирования
-  const [inlineEditingId, setInlineEditingId] = useState<number | null>(null);
-  const [inlineEditingQuantity, setInlineEditingQuantity] = useState("");
-  const [inlineEditingError, setInlineEditingError] = useState<string | null>(null);
 
   const handleAdd = () => {
     setEditing(null);
@@ -424,50 +535,8 @@ export function RemaindersListPanel({
   };
 
   const handleEdit = (r: SpgRemainder) => {
-    setInlineEditingId(r.id);
-    setInlineEditingQuantity(String(r.remainder_quantity));
-    setInlineEditingError(null);
-  };
-
-  const inlineSaveMutation = useMutation({
-    mutationFn: (input: { remainder: SpgRemainder; quantity: number }) => {
-      const actualSpgId = spgs.find(s => s.sections.some(sec => sec.section_id === input.remainder.section_id))?.id || spgId;
-      return updateManualRemainder(actualSpgId, input.remainder.id, {
-        quantity: input.quantity,
-        section_id: input.remainder.section_id,
-      });
-    },
-    onSuccess: (_, variables) => {
-      const actualSpgId = spgs.find(s => s.sections.some(sec => sec.section_id === variables.remainder.section_id))?.id || spgId;
-      void queryClient.invalidateQueries({ queryKey: queryKeys.spg.remainders(actualSpgId) });
-      void queryClient.invalidateQueries({ queryKey: queryKeys.spg.snapshot(actualSpgId) });
-      void queryClient.invalidateQueries({ queryKey: queryKeys.spg.remainderHistory(actualSpgId) });
-      setInlineEditingId(null);
-      setInlineEditingQuantity("");
-      onRefresh();
-    },
-    onError: (e: unknown) => {
-      const msg = e && typeof e === "object" && "response" in e
-        ? (e as { response?: { data?: { detail?: string } } }).response?.data?.detail
-        : undefined;
-      setInlineEditingError((msg as string | undefined) || "Ошибка сохранения");
-    },
-  });
-
-  const handleInlineSave = (r: SpgRemainder) => {
-    const qty = parseFloat(inlineEditingQuantity);
-    if (isNaN(qty) || qty <= 0) {
-      setInlineEditingError("Должно быть > 0");
-      return;
-    }
-    setInlineEditingError(null);
-    inlineSaveMutation.mutate({ remainder: r, quantity: qty });
-  };
-
-  const handleInlineCancel = () => {
-    setInlineEditingId(null);
-    setInlineEditingQuantity("");
-    setInlineEditingError(null);
+    setEditing(r);
+    setDialogOpen(true);
   };
 
   const deleteMutation = useMutation({
@@ -485,8 +554,15 @@ export function RemaindersListPanel({
   });
 
   const handleDelete = (r: SpgRemainder) => {
-    if (!confirm(`Удалить остаток ${r.product_sku} (${r.remainder_quantity} шт.)?`)) return;
-    deleteMutation.mutate(r);
+    setRemainderToDelete(r);
+    setDeleteConfirmOpen(true);
+  };
+
+  const handleConfirmDelete = () => {
+    if (remainderToDelete) {
+      deleteMutation.mutate(remainderToDelete);
+      setRemainderToDelete(null);
+    }
   };
 
   // Применение фильтрации и поиска перед маппингом
@@ -547,9 +623,10 @@ export function RemaindersListPanel({
                 <table className="w-full text-sm">
                   <thead className="bg-muted/50 border-b">
                     <tr>
-                      <th className="p-2 text-left font-medium">Артикул</th>
-                      <th className="p-2 text-left font-medium">Участок</th>
-                      <th className="p-2 text-right font-medium">Кол-во</th>
+                      <th className="p-2 pr-0 text-left font-medium w-[130px]">Артикул</th>
+                      <th className="p-2 pl-0 text-left font-medium w-[70px]">Кол-во</th>
+                      <th className="p-2 text-left font-medium">Пройденные операции</th>
+                      <th className="p-2 text-left font-medium">Текущий участок</th>
                       <th className="p-2 text-center font-medium">Источник</th>
                       <th className="p-2 text-center font-medium">Действия</th>
                     </tr>
@@ -559,112 +636,83 @@ export function RemaindersListPanel({
                       const isNegative = r.remainder_quantity < 0;
                       return (
                         <tr key={r.id} className="border-b hover:bg-muted/30">
-                          <td className="p-2">
+                          {/* 1. Артикул */}
+                          <td className="p-2 pr-0">
                             <div className="font-medium">{r.product_sku}</div>
-                            <div className="text-xs text-muted-foreground truncate max-w-[180px]">
+                            <div className="text-xs text-muted-foreground truncate max-w-[120px]" title={r.product_name}>
                               {r.product_name}
                             </div>
                           </td>
-                          <td className="p-2">
-                            <div className="text-xs font-medium">{r.section_code}</div>
-                            <div className="text-xs text-muted-foreground">{r.section_name}</div>
-                          </td>
-                          <td className="p-2 text-right">
-                            {inlineEditingId === r.id ? (
-                              <div className="flex flex-col items-end gap-1">
-                                <Input
-                                  type="number"
-                                  className="h-8 w-24 text-right p-1"
-                                  min="0"
-                                  step="any"
-                                  value={inlineEditingQuantity}
-                                  onChange={(e) => setInlineEditingQuantity(e.target.value)}
-                                  disabled={inlineSaveMutation.isPending}
-                                  autoFocus
-                                />
-                                {inlineEditingError && (
-                                  <div className="text-[10px] text-destructive max-w-[120px] text-right leading-tight">
-                                    {inlineEditingError}
-                                  </div>
-                                )}
-                              </div>
-                            ) : (
-                              <>
-                                <span className={`font-semibold ${isNegative ? "text-amber-700" : ""}`}>
-                                  {r.remainder_quantity}
-                                </span>
-                                {isNegative && (
-                                  <span
-                                    title="Остаток ушёл в минус — зафиксируйте ручной операцией"
-                                    className="inline-block"
-                                  >
-                                    <Badge
-                                      variant="destructive"
-                                      className="ml-2 text-[10px] inline-flex items-center gap-1"
-                                    >
-                                      <IconAlertTriangle size={12} />
-                                      Отрицательный
-                                    </Badge>
-                                  </span>
-                                )}
-                              </>
+                          {/* 2.  Кол-во */}
+                          <td className="p-2 pl-0 text-left">
+                            <span className={`font-semibold ${isNegative ? "text-amber-700" : ""}`}>
+                              {r.remainder_quantity}
+                            </span>
+                            {isNegative && (
+                              <span
+                                title="Остаток ушёл в минус — зафиксируйте ручной операцией"
+                                className="inline-block"
+                              >
+                                <Badge
+                                  variant="destructive"
+                                  className="ml-2 text-[10px] inline-flex items-center gap-1"
+                                >
+                                  <IconAlertTriangle size={12} />
+                                  Отрицательный
+                                </Badge>
+                              </span>
                             )}
                           </td>
+                          {/* 3. Пройденные операции */}
+                          <td className="p-2">
+                            <div className="text-xs text-muted-foreground max-w-[250px] truncate" title={
+                              r.completed_stages && r.completed_stages.length > 0
+                                ? [...r.completed_stages].reverse().map((cs: any) => cs.operation_name || cs.operation_code).join(", ")
+                                : "Нет пройденных операций"
+                            }>
+                              {r.completed_stages && r.completed_stages.length > 0
+                                ? [...r.completed_stages].reverse().map((cs: any) => cs.operation_name || cs.operation_code).join(", ")
+                                : "—"}
+                            </div>
+                          </td>
+                          {/* 4. Текущий участок */}
+                          <td className="p-2">
+                            <div className="text-xs font-medium text-foreground">{r.section_name}</div>
+                          </td>
+                          {/* 5. Источник */}
                           <td className="p-2 text-center">
                             <Badge variant={r.source === "manual" ? "default" : "secondary"} className="text-xs">
                               {r.source === "manual" ? "Ручной" : "Задача"}
                             </Badge>
                           </td>
+                          {/* 6. Действия */}
                           <td className="p-2 text-center">
-                            {inlineEditingId === r.id ? (
-                              <div className="flex items-center justify-center gap-1">
-                                <button
-                                  type="button"
-                                  onClick={() => handleInlineSave(r)}
-                                  disabled={inlineSaveMutation.isPending}
-                                  className="p-1 rounded hover:bg-emerald-100 text-emerald-600 dark:hover:bg-emerald-950/30"
-                                  title="Сохранить"
-                                >
-                                  <Check className="h-4 w-4" />
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={handleInlineCancel}
-                                  disabled={inlineSaveMutation.isPending}
-                                  className="p-1 rounded hover:bg-rose-100 text-rose-600 dark:hover:bg-rose-950/30"
-                                  title="Отменить"
-                                >
-                                  <X className="h-4 w-4" />
-                                </button>
-                              </div>
-                            ) : (
-                              <div className="flex items-center justify-center gap-1">
-                                <button
-                                  type="button"
-                                  onClick={() => setHistoryRemainderId(r.id)}
-                                  className="p-1 rounded hover:bg-accent text-blue-600"
-                                  title="История"
-                                >
-                                  <HistoryIcon className="h-3.5 w-3.5" />
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() => handleEdit(r)}
-                                  className="p-1 rounded hover:bg-accent"
-                                  title="Редактировать"
-                                >
-                                  <Pencil className="h-3.5 w-3.5" />
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() => handleDelete(r)}
-                                  className="p-1 rounded hover:bg-destructive/10 text-destructive"
-                                  title="Удалить"
-                                >
-                                  <Trash2 className="h-3.5 w-3.5" />
-                                </button>
-                              </div>
-                            )}
+                            <div className="flex items-center justify-center gap-1">
+                              <button
+                                type="button"
+                                onClick={() => setHistoryRemainderId(r.id)}
+                                className="p-1 rounded hover:bg-accent text-blue-600"
+                                title="История"
+                              >
+                                <HistoryIcon className="h-3.5 w-3.5" />
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleEdit(r)}
+                                className="p-1 rounded hover:bg-accent"
+                                title="Редактировать"
+                              >
+                                <Pencil className="h-3.5 w-3.5" />
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleDelete(r)}
+                                className="p-1 rounded hover:bg-destructive/10 text-destructive"
+                                title="Удалить"
+                              >
+                                <Trash2 className="h-3.5 w-3.5" />
+                              </button>
+                            </div>
                           </td>
                         </tr>
                       );
@@ -718,6 +766,62 @@ export function RemaindersListPanel({
         selectedSpgIds={selectedSpgIds}
         onSaved={onRefresh}
       />
+
+      <AlertDialog open={deleteConfirmOpen} onOpenChange={setDeleteConfirmOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Подтверждение удаления остатка</AlertDialogTitle>
+            <AlertDialogDescription asChild>
+              {remainderToDelete && (
+                <div className="space-y-3 mt-2 text-foreground text-left">
+                  <p>Вы действительно хотите удалить этот остаток?</p>
+                  <div className="bg-muted/40 p-3 rounded-md border text-sm space-y-1.5 font-normal">
+                    <div>
+                      <span className="font-semibold text-muted-foreground mr-1">Продукт:</span>
+                      <span className="font-medium text-foreground">{remainderToDelete.product_sku}</span>
+                      {remainderToDelete.product_name && ` — ${remainderToDelete.product_name}`}
+                    </div>
+                    <div>
+                      <span className="font-semibold text-muted-foreground mr-1">Участок:</span>
+                      <span className="font-medium text-foreground">{remainderToDelete.section_name}</span>
+                    </div>
+                    <div>
+                      <span className="font-semibold text-muted-foreground mr-1">Количество:</span>
+                      <span className="font-bold text-foreground">{remainderToDelete.remainder_quantity} шт.</span>
+                    </div>
+                    <div>
+                      <span className="font-semibold text-muted-foreground mr-1">Завершенные этапы:</span>
+                      <span className="font-medium text-foreground text-xs">
+                        {remainderToDelete.completed_stages && remainderToDelete.completed_stages.length > 0
+                          ? remainderToDelete.completed_stages.map((cs: any) => cs.operation_name || cs.operation_code).join(", ")
+                          : "Нет"}
+                      </span>
+                    </div>
+                    <div>
+                      <span className="font-semibold text-muted-foreground mr-1">Источник:</span>
+                      <Badge variant={remainderToDelete.source === "manual" ? "default" : "secondary"} className="text-[10px] h-4 py-0 ml-1">
+                        {remainderToDelete.source === "manual" ? "Вручную" : "Из задачи"}
+                      </Badge>
+                    </div>
+                  </div>
+                  <p className="text-xs text-destructive font-medium border-l-2 border-destructive pl-2">
+                    Внимание: Данное действие безвозвратно удалит запись о наличии. Это количество больше не будет автоматически списываться при выполнении задач на этом участке.
+                  </p>
+                </div>
+              )}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Отмена</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={handleConfirmDelete}
+              className="bg-destructive hover:bg-destructive/90 text-destructive-foreground"
+            >
+              Удалить
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

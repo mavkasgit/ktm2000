@@ -136,7 +136,58 @@ async def list_spgs(db: AsyncSession = Depends(get_db)) -> list[SpgOut]:
             select(StorageProductionGroup).order_by(StorageProductionGroup.sort_order, StorageProductionGroup.id)
         )
     ).scalars().all()
-    return [await _build_spg_out(db, item) for item in items]
+    if not items:
+        return []
+
+    spg_ids = [item.id for item in items]
+    bindings = (
+        await db.execute(
+            select(SpgSection)
+            .where(SpgSection.spg_id.in_(spg_ids))
+            .order_by(SpgSection.sort_order)
+        )
+    ).scalars().all()
+
+    section_ids = {b.section_id for b in bindings}
+    sec_map = {}
+    if section_ids:
+        sections = (
+            await db.execute(select(Section).where(Section.id.in_(list(section_ids))))
+        ).scalars().all()
+        sec_map = {s.id: s for s in sections}
+
+    bindings_by_spg: dict[int, list[SpgSection]] = {}
+    for b in bindings:
+        bindings_by_spg.setdefault(b.spg_id, []).append(b)
+
+    result = []
+    for item in items:
+        spg_bindings = bindings_by_spg.get(item.id, [])
+        sections_out = []
+        for b in spg_bindings:
+            sec = sec_map.get(b.section_id)
+            if sec:
+                sections_out.append(SpgSectionOut(
+                    section_id=sec.id,
+                    section_code=sec.code,
+                    section_name=sec.name,
+                    sort_order=b.sort_order,
+                ))
+        result.append(
+            SpgOut(
+                id=item.id,
+                code=item.code,
+                name=item.name,
+                description=item.description,
+                sort_order=item.sort_order,
+                is_active=item.is_active,
+                icon=item.icon,
+                icon_color=item.icon_color,
+                sections=sections_out,
+            )
+        )
+    return result
+
 
 
 @router.get("/{spg_id}", response_model=SpgOut)
