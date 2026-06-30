@@ -166,7 +166,10 @@ async def release_batch(
         remainder_max_seq: list[tuple[SpgRemainder, int, Decimal]] = []
 
         if remainder_allocation is not None:
-            # Manual allocation: reserve only specified remainders with requested quantities
+            # Manual allocation: reserve only specified remainders with requested quantities.
+            # If qty < rem.remainder_quantity, split the remainder into two:
+            #   - new reserved record (qty) tied to this position
+            #   - original record reduced by qty, stays free for other positions
             reserved_remainders = []
             for rem_id, qty in remainder_allocation.items():
                 if qty <= 0:
@@ -183,14 +186,40 @@ async def release_batch(
                 if qty > rem.remainder_quantity:
                     raise ValueError(f"Remainder #{rem_id} has insufficient quantity (available: {rem.remainder_quantity}, requested: {qty})")
 
-                rem.reserved_for_plan_position_id = position.id
-                reserved_remainders.append(rem)
+                if qty < rem.remainder_quantity:
+                    # Partial allocation: split the remainder
+                    leftover = rem.remainder_quantity - qty
+                    rem.remainder_quantity = leftover
+                    # Clear any existing reservation on the source (it stays free)
+                    rem.reserved_for_plan_position_id = None
 
-            for rem in reserved_remainders:
-                stages_json = rem.completed_stages_json or []
+                    child = SpgRemainder(
+                        product_id=rem.product_id,
+                        spg_id=rem.spg_id,
+                        route_stage_id=rem.route_stage_id,
+                        section_plan_line_id=rem.section_plan_line_id,
+                        origin_task_id=rem.origin_task_id,
+                        remainder_quantity=qty,
+                        original_issued=qty,
+                        completed_stages_json=rem.completed_stages_json,
+                        source=rem.source,
+                        created_by=rem.created_by,
+                        created_by_user_name=rem.created_by_user_name,
+                        reserved_for_plan_position_id=position.id,
+                    )
+                    db.add(child)
+                    await db.flush()
+                    reserved_remainders.append((child, qty))
+                else:
+                    # Full allocation: reserve the whole remainder
+                    rem.reserved_for_plan_position_id = position.id
+                    reserved_remainders.append((rem, qty))
+
+            for res_rem, allocated_qty in reserved_remainders:
+                stages_json = res_rem.completed_stages_json or []
                 max_seq = max((s.get("sequence", 0) for s in stages_json), default=0)
-                allocated_qty = remainder_allocation[rem.id]
-                remainder_max_seq.append((rem, max_seq, allocated_qty))
+                remainder_max_seq.append((res_rem, max_seq, allocated_qty))
+
         else:
             # Default auto-allocation
             reserved_remainders = await _find_and_reserve_compatible_remainders(
@@ -332,25 +361,6 @@ async def release_batch(
             created_tasks.append(task)
             tasks_created += 1
             line_index += 1
-
-        # Send transfers for each reserved remainder if GHP differs between source and target stages
-        for rem, max_seq, allocated_qty in remainder_max_seq:
-            task_A = tasks_by_seq.get(max_seq)
-            task_B = tasks_by_seq.get(max_seq + 1)
-            if task_A and task_B:
-                from app.services.shopfloor.common import sections_share_spg
-                share_spg = await sections_share_spg(db, task_A.section_id, task_B.section_id)
-                if not share_spg:
-                    qty_to_transfer = min(allocated_qty, batch_position.release_quantity)
-                    from app.transfers.services import transfer_send
-                    await transfer_send(
-                        db,
-                        from_task_id=task_A.id,
-                        to_task_id=task_B.id,
-                        quantity=qty_to_transfer,
-                        actor_id=batch.released_by or batch.created_by or 1,
-                        comment="Автоматический трансфер остатка ГХП при запуске позиции",
-                    )
 
         released_total = await _released_quantity(db, position)
         new_status = PlanPositionStatus.released if released_total >= position.quantity else PlanPositionStatus.approved
@@ -665,25 +675,30 @@ async def _find_and_reserve_compatible_remainders(
     A remainder is considered *compatible* when its ``completed_stages_json``
     is a **prefix** of the new route steps sequence.  That is, every stage
     recorded in the remainder must match the beginning of the new route
-    (same sequence number AND same section_id).
+    (same sequence number, same section_id AND operation_code within allowed ops).
 
     Compatible remainders are reserved by setting
     ``reserved_for_plan_position_id = position_id`` and returned FIFO.
 
     Edge cases handled:
-    - Remainder with empty completed_stages_json → not compatible (no progress).
+    - Remainder with empty completed_stages_json → compatible (raw/warehouse stock).
     - Route with no steps → returns [].
     - Remainder already consumed or reserved → skipped.
     """
     if not route_steps:
         return []
 
-    # Build route prefix lookup: sequence → section_id
-    route_seq_to_section: dict[int, int] = {
-        step["sequence"]: step["section_id"]
-        for step in route_steps
-        if step.get("route_stage_id") is not None
-    }
+    # Build route prefix lookups: sequence → section_id and sequence → allowed op_codes
+    route_seq_to_section: dict[int, int] = {}
+    route_seq_to_op_codes: dict[int, set[str | None]] = {}
+    for step in route_steps:
+        if step.get("route_stage_id") is None:
+            continue
+        seq = step["sequence"]
+        route_seq_to_section[seq] = step["section_id"]
+        # "operations" list is stored in the route snapshot step
+        ops = step.get("operations") or []
+        route_seq_to_op_codes[seq] = {op.get("operation_code") for op in ops} if ops else set()
 
     # Load free remainders for this product, FIFO order
     free_remainders: list[SpgRemainder] = (
@@ -703,16 +718,24 @@ async def _find_and_reserve_compatible_remainders(
     for rem in free_remainders:
         stages_json: list[dict] = rem.completed_stages_json or []
 
-        # All stages in the remainder must exactly match the start of the route
+        # Empty completed_stages_json = raw warehouse stock → compatible with all routes
         is_prefix = True
         for stage_entry in stages_json:
             seq = stage_entry.get("sequence")
             section_id = stage_entry.get("section_id")
+            op_code = stage_entry.get("operation_code")
             if seq is None or section_id is None:
                 is_prefix = False
                 break
+            # Check section match
             expected_section = route_seq_to_section.get(seq)
             if expected_section is None or expected_section != section_id:
+                is_prefix = False
+                break
+            # Check operation_code match: if the route stage has operations defined,
+            # the remainder's operation_code must be one of them.
+            allowed_ops = route_seq_to_op_codes.get(seq, set())
+            if allowed_ops and op_code not in allowed_ops:
                 is_prefix = False
                 break
 
@@ -724,3 +747,4 @@ async def _find_and_reserve_compatible_remainders(
         compatible.append(rem)
 
     return compatible
+
