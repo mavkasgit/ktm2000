@@ -110,7 +110,12 @@ export function FileRow({ file, activePlan, onDelete }: { file: PlanFileInfo; ac
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>Отмена</AlertDialogCancel>
-            <AlertDialogAction onClick={() => onDelete(file.batch_id)}>Удалить</AlertDialogAction>
+            <AlertDialogAction 
+              onClick={() => onDelete(file.batch_id)} 
+              className="bg-red-600 hover:bg-red-700 text-white"
+            >
+              Удалить
+            </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>

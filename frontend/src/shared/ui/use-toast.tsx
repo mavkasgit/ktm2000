@@ -7,6 +7,7 @@ export interface ToastData {
   variant: ToastVariant;
   title: string;
   description?: string;
+  open?: boolean;
 }
 
 type ToastAction =
@@ -32,16 +33,23 @@ const addToRemoveQueue = (toastId: string) => {
 const reducer = (state: ToastState, action: ToastAction): ToastState => {
   switch (action.type) {
     case "ADD_TOAST":
-      return { ...state, toasts: [action.toast, ...state.toasts].slice(0, 3) };
+      return {
+        ...state,
+        toasts: [{ ...action.toast, open: true }, ...state.toasts].slice(0, 3),
+      };
     case "DISMISS_TOAST": {
       const { toastId } = action;
       if (toastId) {
         addToRemoveQueue(toastId);
+      } else {
+        state.toasts.forEach((t) => {
+          addToRemoveQueue(t.id);
+        });
       }
       return {
         ...state,
         toasts: state.toasts.map((t) =>
-          t.id === toastId || toastId === undefined ? { ...t, id: t.id } : t
+          t.id === toastId || toastId === undefined ? { ...t, open: false } : t
         ),
       };
     }

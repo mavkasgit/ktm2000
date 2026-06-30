@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react"
 import { AlertTriangle, Route } from "lucide-react"
-import { useQuery } from "@tanstack/react-query"
+import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { Button, AlertDialog, AlertDialogContent, AlertDialogHeader, AlertDialogTitle, AlertDialogDescription, AlertDialogFooter, AlertDialogAction, AlertDialogCancel, Combobox } from "@/shared/ui"
 import { cn } from "@/shared/utils/cn"
 import { PlanPositionOut } from "@/shared/api/productionPlans"
@@ -67,27 +67,54 @@ export function PositionRow({ pos, onApprove, onDelete, selected, routes, onAssi
     pos.validation_status === 'valid' &&
     pos.route_id !== null
 
+  const queryClient = useQueryClient()
   const [approveDialogOpen, setApproveDialogOpen] = useState(false)
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
   const [approving, setApproving] = useState(false)
+  const [shouldRunRouteCheck, setShouldRunRouteCheck] = useState(false)
 
-  // Route-check runs eagerly for all positions with an assigned route
+  // Route-check runs lazily on-demand or when the dialog is open
   const { data: routeCheckData, isLoading: routeCheckLoading, error: routeCheckError } = useQuery({
     queryKey: queryKeys.plan.routeCheck(pos.production_plan_id as number, pos.id),
     queryFn: () => routeCheck(pos.production_plan_id!, pos.id),
-    enabled: pos.route_id !== null && pos.validation_status === "valid",
+    enabled: (shouldRunRouteCheck || approveDialogOpen) && pos.route_id !== null && pos.validation_status === "valid",
     staleTime: 60_000,
   })
 
-  const routeCheckRisky = routeCheckData !== undefined && (
-    !routeCheckData.match || (routeCheckData.issues && routeCheckData.issues.length > 0)
-  )
-
-  const handleApproveClick = (e: React.MouseEvent) => {
+  const handleApproveClick = async (e: React.MouseEvent) => {
     e.stopPropagation()
-    if (isRiskyForApprove(pos, duplicateConflict) || routeCheckRisky) {
+    
+    // Если позиция уже имеет риски (дубликаты, ошибки валидации и т.д.),
+    // сразу открываем диалог и запускаем детальную проверку маршрута.
+    if (isRiskyForApprove(pos, duplicateConflict)) {
+      setShouldRunRouteCheck(true)
       setApproveDialogOpen(true)
-    } else {
-      onApprove(pos.id, pos.production_plan_id)
+      return
+    }
+
+    setApproving(true)
+    try {
+      // Выполняем проверку маршрута на лету перед утверждением
+      const data = await queryClient.fetchQuery({
+        queryKey: queryKeys.plan.routeCheck(pos.production_plan_id as number, pos.id),
+        queryFn: () => routeCheck(pos.production_plan_id!, pos.id),
+        staleTime: 60_000,
+      })
+      
+      const isRouteRisky = !data.match || (data.issues && data.issues.length > 0)
+      if (isRouteRisky) {
+        setShouldRunRouteCheck(true)
+        setApproveDialogOpen(true)
+      } else {
+        await onApprove(pos.id, pos.production_plan_id)
+      }
+    } catch (err) {
+      console.error("Ошибка при проверке маршрута:", err)
+      // В случае ошибки бэкенда всё равно показываем диалог, чтобы пользователь мог подтвердить принудительно
+      setShouldRunRouteCheck(true)
+      setApproveDialogOpen(true)
+    } finally {
+      setApproving(false)
     }
   }
 
@@ -103,7 +130,13 @@ export function PositionRow({ pos, onApprove, onDelete, selected, routes, onAssi
 
   const handleDeleteClick = (e: React.MouseEvent) => {
     e.stopPropagation()
+    setDeleteDialogOpen(true)
+  }
+
+  const handleConfirmDelete = (e: React.MouseEvent) => {
+    e.stopPropagation()
     onDelete(pos.id, pos.production_plan_id)
+    setDeleteDialogOpen(false)
   }
 
   const detailedReasons = useMemo(() => {
@@ -146,7 +179,7 @@ export function PositionRow({ pos, onApprove, onDelete, selected, routes, onAssi
       if (qualityDetail) parts.push(`причина: ${qualityDetail}`)
       if (pos.route_origin === "manual_confirmed") parts.push("подтверждён вручную")
       riskFactors.push(parts.join(" • "))
-    } else if (pos.route_match_reason) {
+    } else if (pos.route_match_reason && pos.route_match_reason !== "selection_rules" && pos.route_match_reason !== "wildcard_rule") {
       const reasonDetail = translateLabel(pos.route_match_reason, routeErrorLabels)
       riskFactors.push(`Причина сопоставления: ${reasonDetail}`)
     }
@@ -370,6 +403,33 @@ export function PositionRow({ pos, onApprove, onDelete, selected, routes, onAssi
           <AlertDialogCancel disabled={approving}>Отмена</AlertDialogCancel>
           <AlertDialogAction onClick={handleConfirmApprove} disabled={approving}>
             {approving ? "Утверждение..." : "Утвердить всё равно"}
+          </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
+
+    <AlertDialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
+      <AlertDialogContent onClick={(e) => e.stopPropagation()}>
+        <AlertDialogHeader>
+          <AlertDialogTitle className="flex items-center gap-2">
+            <AlertTriangle className="h-5 w-5 text-red-500" />
+            Удаление позиции плана
+          </AlertDialogTitle>
+          <AlertDialogDescription className="text-left">
+            Вы уверены, что хотите удалить позицию плана #{pos.id} ({pos.source_sku || "Без SKU"})?
+            <span className="block mt-1">Это действие нельзя отменить.</span>
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel onClick={(e) => {
+            e.stopPropagation()
+            setDeleteDialogOpen(false)
+          }}>Отмена</AlertDialogCancel>
+          <AlertDialogAction 
+            onClick={handleConfirmDelete} 
+            className="bg-red-600 hover:bg-red-700 text-white"
+          >
+            Удалить
           </AlertDialogAction>
         </AlertDialogFooter>
       </AlertDialogContent>
