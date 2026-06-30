@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react"
 import { FileSpreadsheet, Plus, Upload, ListChecks } from "lucide-react"
 import { ImportWizard } from "../ImportWizard"
+import { ProductWipStatsDialog } from "@/features/execution/components/ProductWipStatsDialog"
 import { Button, Select, SelectContent, SelectItem, SelectTrigger, SelectValue, AlertDialog, AlertDialogContent, AlertDialogHeader, AlertDialogTitle, AlertDialogDescription, AlertDialogFooter, AlertDialogAction, AlertDialogCancel, SortableFilterHeader, FiltersPanel, type FiltersPanelField, Badge } from "@/shared/ui"
 import { buildActiveFilterSummary } from "@/shared/ui/buildActiveFilterSummary"
 import { useTableQueryEngine, SortConfig, ColumnSortDef } from "@/shared/hooks/useTableQueryEngine"
@@ -45,6 +46,7 @@ export function PlanPage() {
   const [bulkResultsOpen, setBulkResultsOpen] = useState(false)
   const [detailPosition, setDetailPosition] = useState<PlanPositionOut | null>(null)
   const [detailOpen, setDetailOpen] = useState(false)
+  const [wipStatsSku, setWipStatsSku] = useState<string | null>(null)
   const tableScrollRef = useRef<HTMLDivElement>(null)
 
   const openDetail = (pos: PlanPositionOut) => {
@@ -871,6 +873,7 @@ export function PlanPage() {
                         duplicateConflict={duplicateConflictsByPosition.get(p.id)}
                         onJumpToPosition={jumpToPosition}
                         onSelect={bulkMode ? toggleSelect : undefined}
+                        onSkuClick={setWipStatsSku}
                       />
                     ))}
                     {processedRows.length === 0 && !posLoading && (
@@ -940,6 +943,14 @@ export function PlanPage() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      <ProductWipStatsDialog
+        sku={wipStatsSku}
+        open={wipStatsSku !== null}
+        onOpenChange={(open) => {
+          if (!open) setWipStatsSku(null)
+        }}
+      />
     </>
   )
 }

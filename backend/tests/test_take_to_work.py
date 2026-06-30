@@ -483,3 +483,563 @@ async def test_restore_batch_invalid_status_and_not_found(client, session) -> No
     assert "already active" in results[0]["reason"]
     assert "draft" in results[1]["reason"]
     assert "not found" in results[2]["reason"].lower()
+
+
+@pytest.mark.asyncio
+async def test_take_to_work_auto_transfer_remainders(client, session) -> None:
+    """Take to work with compatible remainder on a different SPG.
+    
+    Checks that the task covered by remainder is completed,
+    the next task is waiting_previous, and an automatic transfer is sent.
+    """
+    from app.models.spg import StorageProductionGroup, SpgSection
+    from app.models.spg_remainder import SpgRemainder
+    from app.models.transfer import Transfer, TransferStatus
+    
+    user = await _make_user(session, "ttw-remainder@test.local")
+    product, plan, pos = await _make_product_route_plan(session, "FG-TTW-REM")
+    
+    # Resolve sections from route
+    stages = (await session.execute(
+        select(RouteStage).where(RouteStage.route_id == pos.route_id).order_by(RouteStage.sequence)
+    )).scalars().all()
+    assert len(stages) == 6
+    
+    # Let's bind stage 0 (Issue) to SPG_STOCK, stage 1 (Drill) to SPG_PREP, stage 3 (Anod) to SPG_ANOD
+    spg_stock = StorageProductionGroup(code="SPG-STOCK", name="Stock GHP", is_active=True)
+    spg_prep = StorageProductionGroup(code="SPG-PREP", name="Prep GHP", is_active=True)
+    spg_anod = StorageProductionGroup(code="SPG-ANOD", name="Anod GHP", is_active=True)
+    session.add_all([spg_stock, spg_prep, spg_anod])
+    await session.flush()
+    
+    session.add(SpgSection(spg_id=spg_stock.id, section_id=stages[0].section_id, sort_order=0))
+    session.add(SpgSection(spg_id=spg_prep.id, section_id=stages[1].section_id, sort_order=0))
+    session.add(SpgSection(spg_id=spg_prep.id, section_id=stages[2].section_id, sort_order=10))
+    session.add(SpgSection(spg_id=spg_anod.id, section_id=stages[3].section_id, sort_order=0))
+    await session.flush()
+    
+    # Create a compatible remainder that has completed stages up to sequence 3 (Shot)
+    completed_stages_1 = [
+        {
+            "sequence": stages[0].sequence,
+            "section_id": stages[0].section_id,
+            "operation_code": "ISSUE_RAW",
+            "operation_name": "ISSUE_RAW",
+        },
+        {
+            "sequence": stages[1].sequence,
+            "section_id": stages[1].section_id,
+            "operation_code": "DRILL",
+            "operation_name": "DRILL",
+        },
+        {
+            "sequence": stages[2].sequence,
+            "section_id": stages[2].section_id,
+            "operation_code": "SHOT",
+            "operation_name": "SHOT",
+        }
+    ]
+    
+    rem1 = SpgRemainder(
+        product_id=product.id,
+        spg_id=spg_prep.id,
+        route_stage_id=stages[2].id,
+        remainder_quantity=Decimal("150"), # covers the whole pos.quantity (100)
+        original_issued=Decimal("150"),
+        completed_stages_json=completed_stages_1,
+        created_by=user.id,
+        created_by_user_name=user.full_name,
+    )
+
+    # Create another compatible remainder that has completed stages up to sequence 1 (Issue)
+    completed_stages_2 = [
+        {
+            "sequence": stages[0].sequence,
+            "section_id": stages[0].section_id,
+            "operation_code": "ISSUE_RAW",
+            "operation_name": "ISSUE_RAW",
+        }
+    ]
+    rem2 = SpgRemainder(
+        product_id=product.id,
+        spg_id=spg_stock.id,
+        route_stage_id=stages[0].id,
+        remainder_quantity=Decimal("200"),
+        original_issued=Decimal("200"),
+        completed_stages_json=completed_stages_2,
+        created_by=user.id,
+        created_by_user_name=user.full_name,
+    )
+    session.add_all([rem1, rem2])
+    await session.commit()
+    
+    headers = _auth_headers(user)
+    res = await client.post(
+        "/api/production-planning/rows/take-to-work",
+        json={"position_ids": [pos.id]},
+        headers=headers,
+    )
+    assert res.status_code == 200
+    
+    # Verify tasks and statuses
+    tasks = (
+        await session.execute(
+            select(WorkTask)
+            .join(SectionPlanLine, WorkTask.section_plan_line_id == SectionPlanLine.id)
+            .where(SectionPlanLine.plan_position_id == pos.id)
+            .order_by(SectionPlanLine.sequence)
+        )
+    ).scalars().all()
+    
+    # 6 stages, first 3 covered by remainders (planned_qty = 0)
+    assert len(tasks) == 6
+    assert tasks[0].status == WorkTaskStatus.completed  # Issue
+    assert tasks[1].status == WorkTaskStatus.completed  # Drill
+    assert tasks[2].status == WorkTaskStatus.completed  # Shot
+    assert tasks[3].status == WorkTaskStatus.waiting_previous  # Anod (waiting transfer from Shot!)
+    assert tasks[4].status == WorkTaskStatus.waiting_previous  # WIP
+    assert tasks[5].status == WorkTaskStatus.waiting_previous  # Final
+    
+    # Check that transfer 1 (Shot -> Anod) was automatically sent
+    transfer1 = await session.scalar(
+        select(Transfer).where(
+            Transfer.from_task_id == tasks[2].id,
+            Transfer.to_task_id == tasks[3].id
+        )
+    )
+    assert transfer1 is not None
+    assert transfer1.status == TransferStatus.sent
+    assert transfer1.sent_quantity == Decimal("100")
+
+    # Check that transfer 2 (Issue -> Drill) was automatically sent
+    transfer2 = await session.scalar(
+        select(Transfer).where(
+            Transfer.from_task_id == tasks[0].id,
+            Transfer.to_task_id == tasks[1].id
+        )
+    )
+    assert transfer2 is not None
+    assert transfer2.status == TransferStatus.sent
+    assert transfer2.sent_quantity == Decimal("100")
+
+
+@pytest.mark.asyncio
+async def test_take_to_work_restore_remainders_on_cancel_and_delete(client, session) -> None:
+    """Take to work, accept transfer (consuming remainder), then delete plan batch.
+    
+    Checks that the remainder quantity is restored and reservation is cleared.
+    """
+    from app.models.spg import StorageProductionGroup, SpgSection
+    from app.models.spg_remainder import SpgRemainder
+    from app.models.transfer import Transfer, TransferStatus
+    from app.models.imports import ImportBatch, ImportBatchMode, ImportFile
+    from app.transfers.services import transfer_receive
+    
+    user = await _make_user(session, "ttw-del-rem@test.local")
+    product, plan, pos = await _make_product_route_plan(session, "FG-TTW-DEL-REM")
+    
+    # Create ImportFile and ImportBatch
+    file = ImportFile(
+        original_filename="test.xlsx",
+        file_extension="xlsx",
+        detected_format="excel",
+        file_sha256="some-sha256-hash",
+        size_bytes=1024,
+    )
+    session.add(file)
+    await session.flush()
+
+    batch = ImportBatch(
+        source_file_id=file.id,
+        production_plan_id=plan.id,
+        mode=ImportBatchMode.create_plan,
+        sheet_name="Sheet1",
+        header_row_number=1,
+        total_rows=1,
+        parsed_rows=1,
+        summary={},
+    )
+    session.add(batch)
+    await session.flush()
+    pos.import_batch_id = batch.id
+    await session.flush()
+    
+    # Resolve sections from route
+    stages = (await session.execute(
+        select(RouteStage).where(RouteStage.route_id == pos.route_id).order_by(RouteStage.sequence)
+    )).scalars().all()
+    assert len(stages) == 6
+    
+    spg_prep = StorageProductionGroup(code="SPG-DEL-PREP", name="Prep GHP", is_active=True)
+    spg_anod = StorageProductionGroup(code="SPG-DEL-ANOD", name="Anod GHP", is_active=True)
+    session.add_all([spg_prep, spg_anod])
+    await session.flush()
+    
+    session.add(SpgSection(spg_id=spg_prep.id, section_id=stages[1].section_id, sort_order=0))
+    session.add(SpgSection(spg_id=spg_prep.id, section_id=stages[2].section_id, sort_order=10))
+    session.add(SpgSection(spg_id=spg_anod.id, section_id=stages[3].section_id, sort_order=0))
+    await session.flush()
+    
+    completed_stages = [
+        {
+            "sequence": stages[0].sequence,
+            "section_id": stages[0].section_id,
+            "operation_code": "ISSUE_RAW",
+            "operation_name": "ISSUE_RAW",
+        },
+        {
+            "sequence": stages[1].sequence,
+            "section_id": stages[1].section_id,
+            "operation_code": "DRILL",
+            "operation_name": "DRILL",
+        },
+        {
+            "sequence": stages[2].sequence,
+            "section_id": stages[2].section_id,
+            "operation_code": "SHOT",
+            "operation_name": "SHOT",
+        }
+    ]
+    
+    rem = SpgRemainder(
+        product_id=product.id,
+        spg_id=spg_prep.id,
+        route_stage_id=stages[2].id,
+        remainder_quantity=Decimal("150"),
+        original_issued=Decimal("150"),
+        completed_stages_json=completed_stages,
+        created_by=user.id,
+        created_by_user_name=user.full_name,
+    )
+    session.add(rem)
+    await session.commit()
+    
+    headers = _auth_headers(user)
+    res = await client.post(
+        "/api/production-planning/rows/take-to-work",
+        json={"position_ids": [pos.id]},
+        headers=headers,
+    )
+    assert res.status_code == 200
+    
+    # Get tasks
+    tasks = (
+        await session.execute(
+            select(WorkTask)
+            .join(SectionPlanLine, WorkTask.section_plan_line_id == SectionPlanLine.id)
+            .where(SectionPlanLine.plan_position_id == pos.id)
+            .order_by(SectionPlanLine.sequence)
+        )
+    ).scalars().all()
+    
+    # Check that transfer was automatically sent
+    transfer = await session.scalar(
+        select(Transfer).where(
+            Transfer.from_task_id == tasks[2].id,
+            Transfer.to_task_id == tasks[3].id
+        )
+    )
+    assert transfer is not None
+    
+    # First accept the transfer -> this flips tasks[3] status from waiting_previous to ready
+    await transfer_receive(
+        session,
+        transfer_id=transfer.id,
+        accepted_quantity=Decimal("100"),
+        rejected_quantity=Decimal("0"),
+        actor_id=user.id,
+    )
+    await session.commit()
+
+    # Now that the task status is 'ready', consume the remainder under tasks[3] (Anod)
+    from app.services.shopfloor.operations_tasks import consume_remainder
+    await consume_remainder(
+        session,
+        task_id=tasks[3].id,
+        remainder_id=rem.id,
+        quantity=Decimal("150"),
+        actor_id=user.id,
+    )
+    await session.commit()
+    
+    # Verify remainder was consumed
+    await session.refresh(rem)
+    assert rem.remainder_quantity == Decimal("0")
+    assert rem.consumed_at is not None
+    assert rem.consumed_by_task_id == tasks[3].id
+    
+    # Now let's delete the import batch
+    res_del = await client.delete(
+        f"/api/production-plans/{plan.id}/batches/{batch.id}",
+        headers=headers,
+    )
+    assert res_del.status_code == 200
+    
+    # Verify remainder was restored back to 150 and consumed_at cleared
+    await session.refresh(rem)
+    assert rem.remainder_quantity == Decimal("150")
+    assert rem.consumed_at is None
+    assert rem.consumed_by_task_id is None
+    assert rem.reserved_for_plan_position_id is None
+
+
+@pytest.mark.asyncio
+async def test_take_to_work_partial_auto_transfer(client, session) -> None:
+    """Take to work a position with partial remainder coverage.
+    
+    Checks that the task is active (planned_qty > 0) but still has a complete movement
+    created for the covered quantity, and an automatic transfer is sent for that quantity.
+    """
+    from app.models.spg import StorageProductionGroup, SpgSection
+    from app.models.spg_remainder import SpgRemainder
+    from app.models.transfer import Transfer, TransferStatus
+    
+    user = await _make_user(session, "ttw-part-rem@test.local")
+    product, plan, pos = await _make_product_route_plan(session, "FG-TTW-PART-REM")
+    
+    # Resolve sections from route
+    stages = (await session.execute(
+        select(RouteStage).where(RouteStage.route_id == pos.route_id).order_by(RouteStage.sequence)
+    )).scalars().all()
+    assert len(stages) == 6
+    
+    spg_prep = StorageProductionGroup(code="SPG-PART-PREP", name="Prep GHP", is_active=True)
+    spg_anod = StorageProductionGroup(code="SPG-PART-ANOD", name="Anod GHP", is_active=True)
+    session.add_all([spg_prep, spg_anod])
+    await session.flush()
+    
+    session.add(SpgSection(spg_id=spg_prep.id, section_id=stages[1].section_id, sort_order=0))
+    session.add(SpgSection(spg_id=spg_prep.id, section_id=stages[2].section_id, sort_order=10))
+    session.add(SpgSection(spg_id=spg_anod.id, section_id=stages[3].section_id, sort_order=0))
+    await session.flush()
+    
+    completed_stages = [
+        {
+            "sequence": stages[0].sequence,
+            "section_id": stages[0].section_id,
+            "operation_code": "ISSUE_RAW",
+            "operation_name": "ISSUE_RAW",
+        },
+        {
+            "sequence": stages[1].sequence,
+            "section_id": stages[1].section_id,
+            "operation_code": "DRILL",
+            "operation_name": "DRILL",
+        },
+        {
+            "sequence": stages[2].sequence,
+            "section_id": stages[2].section_id,
+            "operation_code": "SHOT",
+            "operation_name": "SHOT",
+        }
+    ]
+    
+    # Create remainder covering 60 pcs of 100 pcs total quantity
+    rem = SpgRemainder(
+        product_id=product.id,
+        spg_id=spg_prep.id,
+        route_stage_id=stages[2].id,
+        remainder_quantity=Decimal("60"),
+        original_issued=Decimal("60"),
+        completed_stages_json=completed_stages,
+        created_by=user.id,
+        created_by_user_name=user.full_name,
+    )
+    session.add(rem)
+    await session.commit()
+    
+    headers = _auth_headers(user)
+    res = await client.post(
+        "/api/production-planning/rows/take-to-work",
+        json={"position_ids": [pos.id]},
+        headers=headers,
+    )
+    assert res.status_code == 200
+    
+    # Verify tasks and statuses
+    tasks = (
+        await session.execute(
+            select(WorkTask)
+            .join(SectionPlanLine, WorkTask.section_plan_line_id == SectionPlanLine.id)
+            .where(SectionPlanLine.plan_position_id == pos.id)
+            .order_by(SectionPlanLine.sequence)
+        )
+    ).scalars().all()
+    
+    assert len(tasks) == 6
+    # First 3 stages are partially covered (planned_qty = 100 - 60 = 40)
+    assert tasks[0].planned_quantity == Decimal("40")
+    assert tasks[1].planned_quantity == Decimal("40")
+    assert tasks[2].planned_quantity == Decimal("40")
+    
+    # Task 1 (Issue) should be ready (it is the first stage that needs work)
+    assert tasks[0].status == WorkTaskStatus.ready
+    # Task 3 (Shot) should be waiting_previous (it waits for Drill)
+    assert tasks[2].status == WorkTaskStatus.waiting_previous
+    # Task 4 (Anod) should be waiting_previous (it waits for transfer of 60 pcs remainder)
+    assert tasks[3].status == WorkTaskStatus.waiting_previous
+    
+    # Check that transfer was automatically sent for 60 pcs
+    transfer = await session.scalar(
+        select(Transfer).where(
+            Transfer.from_task_id == tasks[2].id,
+            Transfer.to_task_id == tasks[3].id
+        )
+    )
+    assert transfer is not None
+    assert transfer.status == TransferStatus.sent
+    assert transfer.sent_quantity == Decimal("60")
+
+
+async def test_take_to_work_remainders_preview(client, session):
+    """Test get_remainders_preview endpoint."""
+    from app.models.spg import StorageProductionGroup, SpgSection
+    from app.models.spg_remainder import SpgRemainder
+    
+    user = await _make_user(session, "preview-rem@test.local")
+    product, plan, pos = await _make_product_route_plan(session, "FG-PREVIEW-REM")
+    
+    stages = (await session.execute(
+        select(RouteStage).where(RouteStage.route_id == pos.route_id).order_by(RouteStage.sequence)
+    )).scalars().all()
+    
+    spg_prep = StorageProductionGroup(code="SPG-PREV-PREP", name="Prev Prep GHP", is_active=True)
+    session.add(spg_prep)
+    await session.flush()
+    
+    session.add(SpgSection(spg_id=spg_prep.id, section_id=stages[0].section_id, sort_order=0))
+    session.add(SpgSection(spg_id=spg_prep.id, section_id=stages[1].section_id, sort_order=10))
+    await session.flush()
+    
+    completed_stages = [
+        {
+            "sequence": stages[0].sequence,
+            "section_id": stages[0].section_id,
+            "operation_code": "ISSUE_RAW",
+            "operation_name": "ISSUE_RAW",
+        }
+    ]
+    
+    rem = SpgRemainder(
+        product_id=product.id,
+        spg_id=spg_prep.id,
+        route_stage_id=stages[0].id,
+        remainder_quantity=Decimal("30"),
+        original_issued=Decimal("30"),
+        completed_stages_json=completed_stages,
+        created_by=user.id,
+        created_by_user_name=user.full_name,
+    )
+    session.add(rem)
+    await session.commit()
+    
+    headers = _auth_headers(user)
+    res = await client.get(
+        f"/api/production-planning/rows/{pos.id}/remainders-preview",
+        headers=headers,
+    )
+    assert res.status_code == 200
+    data = res.json()
+    assert data["position_id"] == pos.id
+    assert data["release_quantity"] == 100.0
+    assert len(data["available_remainders"]) == 1
+    assert data["available_remainders"][0]["id"] == rem.id
+    assert data["available_remainders"][0]["remainder_quantity"] == 30.0
+    assert len(data["default_allocation"]) == 1
+    assert data["default_allocation"][0]["remainder_id"] == rem.id
+    assert data["default_allocation"][0]["allocated_quantity"] == 30.0
+
+
+async def test_take_to_work_manual_remainder_allocation(client, session):
+    """Test take-to-work with manual remainder allocation."""
+    from app.models.spg import StorageProductionGroup, SpgSection
+    from app.models.spg_remainder import SpgRemainder
+    
+    user = await _make_user(session, "manual-rem@test.local")
+    product, plan, pos = await _make_product_route_plan(session, "FG-MANUAL-REM")
+    
+    stages = (await session.execute(
+        select(RouteStage).where(RouteStage.route_id == pos.route_id).order_by(RouteStage.sequence)
+    )).scalars().all()
+    
+    spg_prep = StorageProductionGroup(code="SPG-MAN-PREP", name="Man Prep GHP", is_active=True)
+    session.add(spg_prep)
+    await session.flush()
+    
+    session.add(SpgSection(spg_id=spg_prep.id, section_id=stages[0].section_id, sort_order=0))
+    session.add(SpgSection(spg_id=spg_prep.id, section_id=stages[1].section_id, sort_order=10))
+    await session.flush()
+    
+    completed_stages = [
+        {
+            "sequence": stages[0].sequence,
+            "section_id": stages[0].section_id,
+            "operation_code": "ISSUE_RAW",
+            "operation_name": "ISSUE_RAW",
+        }
+    ]
+    
+    rem1 = SpgRemainder(
+        product_id=product.id,
+        spg_id=spg_prep.id,
+        route_stage_id=stages[0].id,
+        remainder_quantity=Decimal("50"),
+        original_issued=Decimal("50"),
+        completed_stages_json=completed_stages,
+        created_by=user.id,
+        created_by_user_name=user.full_name,
+    )
+    rem2 = SpgRemainder(
+        product_id=product.id,
+        spg_id=spg_prep.id,
+        route_stage_id=stages[0].id,
+        remainder_quantity=Decimal("60"),
+        original_issued=Decimal("60"),
+        completed_stages_json=completed_stages,
+        created_by=user.id,
+        created_by_user_name=user.full_name,
+    )
+    session.add_all([rem1, rem2])
+    await session.commit()
+    
+    # We allocate 40 from rem1 and 60 from rem2 (total 100) manually.
+    # This covers the first stage (quantity 100) completely.
+    # First stage becomes 'completed', second stage becomes 'ready'.
+    # The allocated quantities are consumed immediately.
+    headers = _auth_headers(user)
+    res = await client.post(
+        "/api/production-planning/rows/take-to-work",
+        json={
+            "position_ids": [pos.id],
+            "remainder_allocation": [
+                {"remainder_id": rem1.id, "quantity": 40},
+                {"remainder_id": rem2.id, "quantity": 60},
+            ]
+        },
+        headers=headers,
+    )
+    assert res.status_code == 200
+    
+    # Reload remainders and check remaining quantities
+    r1 = await session.get(SpgRemainder, rem1.id)
+    r2 = await session.get(SpgRemainder, rem2.id)
+    assert r1.remainder_quantity == Decimal("10") # 50 - 40
+    assert r2.remainder_quantity == Decimal("0") # 60 - 60
+    assert r2.consumed_at is not None
+    
+    # Reload created tasks and check planned quantities
+    tasks = (
+        await session.execute(
+            select(WorkTask)
+            .join(SectionPlanLine, WorkTask.section_plan_line_id == SectionPlanLine.id)
+            .where(SectionPlanLine.plan_position_id == pos.id)
+            .order_by(SectionPlanLine.sequence)
+        )
+    ).scalars().all()
+    assert len(tasks) == 6
+    assert tasks[0].planned_quantity == Decimal("0")
+    assert tasks[0].status == WorkTaskStatus.completed
+    assert tasks[1].planned_quantity == Decimal("100")
+    assert tasks[1].status == WorkTaskStatus.in_progress
+
+

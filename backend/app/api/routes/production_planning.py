@@ -31,9 +31,16 @@ router = APIRouter(prefix="/production-planning", tags=["execution-control"])
 MANUAL_ROUTE_PASS_PREFIX = "manual_route_pass:"
 
 
+class RemainderAllocationItem(BaseModel):
+    remainder_id: int
+    quantity: Decimal
+
+
 class TakeToWorkRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     position_ids: list[int]
+    remainder_allocation: list[RemainderAllocationItem] | None = None
+
 
 
 class StatusActionIn(BaseModel):
@@ -769,6 +776,151 @@ async def _do_manual_pass(
     )
 
 
+@router.get("/rows/{position_id}/remainders-preview", dependencies=[Depends(require_role(list(WRITER_ROLES)))])
+async def get_remainders_preview(
+    position_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    """Preview available compatible remainders for a plan position and get default FIFO allocation."""
+    pos = await db.get(PlanPosition, position_id)
+    if pos is None:
+        raise HTTPException(status_code=404, detail="Plan position not found")
+
+    product = None
+    if pos.product_id is not None:
+        product = await db.get(Product, pos.product_id)
+
+    route_info = await resolve_position_route(db, pos)
+    if route_info.route_id is None:
+        return {
+            "position_id": position_id,
+            "product_sku": product.sku if product else None,
+            "product_name": product.name if product else None,
+            "release_quantity": float(pos.quantity),
+            "route_steps": [],
+            "available_remainders": [],
+            "default_allocation": [],
+        }
+
+
+    rows = (
+        await db.execute(
+            select(RouteStage, Section)
+            .where(RouteStage.route_id == route_info.route_id)
+            .join(Section, RouteStage.section_id == Section.id)
+            .where(Section.is_active == True)
+            .order_by(RouteStage.sequence)
+        )
+    ).all()
+
+    route_steps = []
+    route_seq_to_section = {}
+    for stage, section in rows:
+        op_name = ", ".join(op.operation_name for op in stage.operations) if stage.operations else "Операция"
+        route_steps.append({
+            "sequence": stage.sequence,
+            "section_id": stage.section_id,
+            "section_name": section.name,
+            "section_code": section.code,
+            "operation_name": op_name,
+        })
+        route_seq_to_section[stage.sequence] = stage.section_id
+
+    effective_product_id = pos.product_id
+
+    if effective_product_id is None:
+        from app.services.plan_generation import _find_paired_techcard, _paired_component_skus
+        paired_techcard = await _find_paired_techcard(db, _paired_component_skus(pos))
+        if paired_techcard is not None:
+            from app.models.techcard import TechcardLine
+            first_component = await db.scalar(
+                select(TechcardLine.component_product_id)
+                .where(TechcardLine.techcard_id == paired_techcard.id)
+                .limit(1)
+            )
+            effective_product_id = first_component
+
+    available_remainders = []
+    if effective_product_id is not None:
+        from sqlalchemy import or_
+        free_remainders = (
+            await db.execute(
+                select(SpgRemainder, Product.sku, Product.name, StorageProductionGroup.name)
+                .join(Product, SpgRemainder.product_id == Product.id)
+                .join(StorageProductionGroup, SpgRemainder.spg_id == StorageProductionGroup.id)
+                .where(
+                    SpgRemainder.product_id == effective_product_id,
+                    SpgRemainder.remainder_quantity > 0,
+                    SpgRemainder.consumed_at.is_(None),
+                    or_(
+                        SpgRemainder.reserved_for_plan_position_id.is_(None),
+                        SpgRemainder.reserved_for_plan_position_id == position_id,
+                    )
+                )
+                .order_by(SpgRemainder.created_at)
+            )
+        ).all()
+
+        for rem, prod_sku, prod_name, spg_name in free_remainders:
+            stages_json = rem.completed_stages_json or []
+
+            is_prefix = True
+            for stage_entry in stages_json:
+                seq = stage_entry.get("sequence")
+                section_id = stage_entry.get("section_id")
+                if seq is None or section_id is None:
+                    is_prefix = False
+                    break
+                expected_section = route_seq_to_section.get(seq)
+                if expected_section is None or expected_section != section_id:
+                    is_prefix = False
+                    break
+
+            if not is_prefix:
+                continue
+
+            max_seq = max((s.get("sequence", 0) for s in stages_json), default=0)
+            max_completed_stage_name = ""
+            for s in stages_json:
+                if s.get("sequence") == max_seq:
+                    max_completed_stage_name = s.get("operation_name") or s.get("operation_code") or ""
+
+            available_remainders.append({
+                "id": rem.id,
+                "remainder_quantity": float(rem.remainder_quantity),
+                "original_issued": float(rem.original_issued),
+                "created_at": rem.created_at.isoformat() if rem.created_at else None,
+                "created_by_user_name": rem.created_by_user_name,
+                "completed_stages_json": stages_json,
+                "max_completed_seq": max_seq,
+                "max_completed_stage_name": max_completed_stage_name,
+                "spg_name": spg_name,
+            })
+
+    default_allocation = []
+    remaining_to_cover = pos.quantity
+    for rem_info in available_remainders:
+        if remaining_to_cover <= 0:
+            break
+        qty_to_use = min(Decimal(str(rem_info["remainder_quantity"])), remaining_to_cover)
+        default_allocation.append({
+            "remainder_id": rem_info["id"],
+            "allocated_quantity": float(qty_to_use),
+        })
+        remaining_to_cover -= qty_to_use
+
+    return {
+        "position_id": position_id,
+        "product_sku": product.sku if product else None,
+        "product_name": product.name if product else None,
+        "release_quantity": float(pos.quantity),
+        "route_steps": route_steps,
+        "available_remainders": available_remainders,
+        "default_allocation": default_allocation,
+    }
+
+
 @router.post("/rows/take-to-work", response_model=TakeToWorkResponse, dependencies=[Depends(require_role(list(WRITER_ROLES)))])
 async def take_rows_to_work(
     payload: TakeToWorkRequest,
@@ -778,9 +930,17 @@ async def take_rows_to_work(
     """Launch plan positions into production: create work tasks for all route stages."""
     results: list[TakeToWorkResult] = []
 
+    allocation_dict = None
+    if payload.remainder_allocation:
+        allocation_dict = {item.remainder_id: item.quantity for item in payload.remainder_allocation}
+
     for position_id in payload.position_ids:
         try:
-            result = await _process_position_take_to_work(db, position_id)
+            result = await _process_position_take_to_work(
+                db,
+                position_id,
+                remainder_allocation=allocation_dict if len(payload.position_ids) == 1 else None,
+            )
             results.append(result)
         except Exception as exc:
             import logging
@@ -793,6 +953,7 @@ async def take_rows_to_work(
             ))
 
     return TakeToWorkResponse(results=results)
+
 
 
 @router.post("/rows/{position_id}/cancel", dependencies=[Depends(require_role(list(WRITER_ROLES)))])
@@ -1254,6 +1415,7 @@ async def _process_position_restore(
 async def _process_position_take_to_work(
     db: AsyncSession,
     position_id: int,
+    remainder_allocation: dict[int, Decimal] | None = None,
 ) -> TakeToWorkResult:
     """Process a single position: validate and release into production."""
     # Check position exists
@@ -1353,7 +1515,7 @@ async def _process_position_take_to_work(
             production_plan_id=pos.production_plan_id,
             positions=[{"plan_position_id": position_id, "release_quantity": str(pos.quantity)}],
         )
-        release_summary = await release_batch(db, batch_summary["id"])
+        release_summary = await release_batch(db, batch_summary["id"], remainder_allocation=remainder_allocation)
 
         return TakeToWorkResult(
             position_id=position_id,
@@ -1383,6 +1545,7 @@ class ProductWipRemainderOut(BaseModel):
     spg_id: int
     spg_code: str
     spg_name: str
+    completed_ops: str
     spg_icon: str | None = None
     spg_icon_color: str | None = None
     quantity: float
@@ -1391,6 +1554,7 @@ class ProductWipTaskOut(BaseModel):
     section_id: int
     section_code: str
     section_name: str
+    operation_name: str
     section_icon: str | None = None
     section_icon_color: str | None = None
     planned_qty: float
@@ -1421,76 +1585,110 @@ async def get_product_wip_stats(
 
     # 2. Поиск остатков на СПГ (ГХП)
     rem_q = (
-        select(
-            SpgRemainder.spg_id,
-            StorageProductionGroup.code.label("spg_code"),
-            StorageProductionGroup.name.label("spg_name"),
-            StorageProductionGroup.icon.label("spg_icon"),
-            StorageProductionGroup.icon_color.label("spg_icon_color"),
-            func.sum(SpgRemainder.remainder_quantity).label("total_qty")
-        )
+        select(SpgRemainder, StorageProductionGroup)
         .join(StorageProductionGroup, SpgRemainder.spg_id == StorageProductionGroup.id)
         .where(SpgRemainder.product_id == product.id)
         .where(SpgRemainder.consumed_at.is_(None))
-        .group_by(
-            SpgRemainder.spg_id,
-            StorageProductionGroup.code,
-            StorageProductionGroup.name,
-            StorageProductionGroup.icon,
-            StorageProductionGroup.icon_color
-        )
     )
     rem_rows = (await db.execute(rem_q)).all()
+
+    # Группируем остатки по ГХП и пройденным операциям в Python-коде
+    rem_grouped: dict[tuple[int, str], dict] = {}
+    for rem, spg in rem_rows:
+        stages = rem.completed_stages_json or []
+        if not stages:
+            ops_str = "Без обработки"
+        else:
+            ops_str = ", ".join(s.get("operation_name") or s.get("operation_code") or "" for s in stages)
+
+        key = (spg.id, ops_str)
+        if key not in rem_grouped:
+            rem_grouped[key] = {
+                "spg_id": spg.id,
+                "spg_code": spg.code,
+                "spg_name": spg.name,
+                "spg_icon": spg.icon,
+                "spg_icon_color": spg.icon_color,
+                "completed_ops": ops_str,
+                "quantity": 0.0,
+            }
+        rem_grouped[key]["quantity"] += float(rem.remainder_quantity or 0)
+
     remainders = [
         ProductWipRemainderOut(
-            spg_id=r.spg_id,
-            spg_code=r.spg_code,
-            spg_name=r.spg_name,
-            spg_icon=r.spg_icon,
-            spg_icon_color=r.spg_icon_color,
-            quantity=float(r.total_qty or 0)
+            spg_id=val["spg_id"],
+            spg_code=val["spg_code"],
+            spg_name=val["spg_name"],
+            completed_ops=val["completed_ops"],
+            spg_icon=val["spg_icon"],
+            spg_icon_color=val["spg_icon_color"],
+            quantity=val["quantity"],
         )
-        for r in rem_rows if float(r.total_qty or 0) != 0.0
+        for val in rem_grouped.values()
+        if val["quantity"] != 0.0
     ]
 
-    # 3. Поиск активных задач в работе (ready, in_progress) по всем секциям
+    # 3. Поиск активных задач в работе (ready, in_progress)
+    from sqlalchemy.orm import selectinload
+
     work_q = (
-        select(
-            WorkTask.section_id,
-            Section.code.label("section_code"),
-            Section.name.label("section_name"),
-            Section.icon.label("section_icon"),
-            Section.icon_color.label("section_icon_color"),
-            func.sum(WorkTask.planned_quantity).label("planned_qty"),
-            func.sum(WorkTask.cached_completed_quantity).label("completed_qty"),
-            func.sum(WorkTask.cached_in_work_quantity).label("in_work_qty"),
-            func.count(WorkTask.id).label("active_tasks_count")
-        )
+        select(WorkTask, Section, RouteStage)
         .join(Section, WorkTask.section_id == Section.id)
+        .join(RouteStage, WorkTask.route_stage_id == RouteStage.id)
+        .options(selectinload(RouteStage.operations))
         .where(WorkTask.product_id == product.id)
         .where(WorkTask.status.in_([WorkTaskStatus.ready, WorkTaskStatus.in_progress]))
-        .group_by(
-            WorkTask.section_id,
-            Section.code,
-            Section.name,
-            Section.icon,
-            Section.icon_color
-        )
     )
     work_rows = (await db.execute(work_q)).all()
+
+    # Группируем задачи по секциям и операциям в Python-коде
+    grouped: dict[tuple[int, str], dict] = {}
+    for wt, sec, stage in work_rows:
+        op_name = "Неизвестная операция"
+        if wt.selected_operation_code and stage.operations:
+            for op in stage.operations:
+                if op.operation_code == wt.selected_operation_code:
+                    op_name = op.operation_name
+                    break
+            else:
+                op_name = stage.operations[0].operation_name
+        elif stage.operations:
+            op_name = stage.operations[0].operation_name
+
+        key = (sec.id, op_name)
+        if key not in grouped:
+            grouped[key] = {
+                "section_id": sec.id,
+                "section_code": sec.code,
+                "section_name": sec.name,
+                "section_icon": sec.icon,
+                "section_icon_color": sec.icon_color,
+                "operation_name": op_name,
+                "planned_qty": 0.0,
+                "completed_qty": 0.0,
+                "in_work_qty": 0.0,
+                "active_tasks_count": 0,
+            }
+
+        grouped[key]["planned_qty"] += float(wt.planned_quantity or 0)
+        grouped[key]["completed_qty"] += float(wt.cached_completed_quantity or 0)
+        grouped[key]["in_work_qty"] += float(wt.cached_in_work_quantity or 0)
+        grouped[key]["active_tasks_count"] += 1
+
     in_work = [
         ProductWipTaskOut(
-            section_id=w.section_id,
-            section_code=w.section_code,
-            section_name=w.section_name,
-            section_icon=w.section_icon,
-            section_icon_color=w.section_icon_color,
-            planned_qty=float(w.planned_qty or 0),
-            completed_qty=float(w.completed_qty or 0),
-            in_work_qty=float(w.in_work_qty or 0),
-            active_tasks_count=w.active_tasks_count
+            section_id=val["section_id"],
+            section_code=val["section_code"],
+            section_name=val["section_name"],
+            operation_name=val["operation_name"],
+            section_icon=val["section_icon"],
+            section_icon_color=val["section_icon_color"],
+            planned_qty=val["planned_qty"],
+            completed_qty=val["completed_qty"],
+            in_work_qty=val["in_work_qty"],
+            active_tasks_count=val["active_tasks_count"],
         )
-        for w in work_rows
+        for val in grouped.values()
     ]
 
     return ProductWipStatsOut(

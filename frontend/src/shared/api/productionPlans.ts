@@ -557,12 +557,68 @@ export type ManualPassResponse = {
   skipped_stages: number;
 };
 
-export async function takeToWork(positionIds: number[]) {
+export type RemainderAllocationItem = {
+  remainder_id: number;
+  quantity: number;
+};
+
+export async function takeToWork(positionIds: number[], remainderAllocation?: RemainderAllocationItem[]) {
   const { data } = await apiClient.post<TakeToWorkResponse>("/production-planning/rows/take-to-work", {
     position_ids: positionIds,
+    remainder_allocation: remainderAllocation,
   });
   return data;
 }
+
+export type CompletedStage = {
+  section_id: number;
+  operation_code: string;
+  operation_name: string;
+  sequence: number;
+};
+
+export type AvailableRemainder = {
+  id: number;
+  remainder_quantity: number;
+  original_issued: number;
+  created_at: string | null;
+  created_by_user_name: string | null;
+  completed_stages_json: CompletedStage[];
+  max_completed_seq: number;
+  max_completed_stage_name: string;
+  spg_name: string;
+};
+
+export type PreviewRouteStep = {
+  sequence: number;
+  section_id: number;
+  section_name: string;
+  section_code: string;
+  operation_name: string;
+};
+
+export type DefaultAllocationItem = {
+  remainder_id: number;
+  allocated_quantity: number;
+};
+
+export type RemaindersPreviewResponse = {
+  position_id: number;
+  product_sku: string | null;
+  product_name: string | null;
+  release_quantity: number;
+  route_steps: PreviewRouteStep[];
+  available_remainders: AvailableRemainder[];
+  default_allocation: DefaultAllocationItem[];
+};
+
+export async function getRemaindersPreview(positionId: number): Promise<RemaindersPreviewResponse> {
+  const { data } = await apiClient.get<RemaindersPreviewResponse>(
+    `/production-planning/rows/${positionId}/remainders-preview`
+  );
+  return data;
+}
+
 
 export async function manualPassToStage(positionId: number, payload: ManualPassInput) {
   const { data } = await apiClient.post<ManualPassResponse>(`/production-planning/rows/${positionId}/manual-pass`, payload);
@@ -732,6 +788,7 @@ export type ProductWipRemainder = {
   spg_id: number;
   spg_code: string;
   spg_name: string;
+  completed_ops: string;
   spg_icon: string | null;
   spg_icon_color: string | null;
   quantity: number;
@@ -741,6 +798,7 @@ export type ProductWipTask = {
   section_id: number;
   section_code: string;
   section_name: string;
+  operation_name: string;
   section_icon: string | null;
   section_icon_color: string | null;
   planned_qty: number;
