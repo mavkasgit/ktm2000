@@ -13,6 +13,7 @@ import {
   type DailyStatsRow,
   type SectionBoardTask,
   type TaskGroup,
+  type ShortageStrategy,
 } from "@/shared/api/shopfloor";
 import { queryKeys } from "@/shared/api/queryKeys";
 import { DateRangePicker, renderIcon, toast, Button, type DateRangeValue } from "@/shared/ui";
@@ -125,6 +126,7 @@ export function SectionsTasksPage() {
   const [performedDate, setPerformedDate] = useState("");
   const [performedShift, setPerformedShift] = useState<"1" | "2">("1");
   const [actionComment, setActionComment] = useState("");
+  const [shortageStrategy, setShortageStrategy] = useState<ShortageStrategy>("negative_remainder");
   const [planModalOpen, setPlanModalOpen] = useState(false);
 
   // Bulk mode state
@@ -344,6 +346,7 @@ export function SectionsTasksPage() {
 
   const closeActionDrawer = useCallback(() => {
     setActionDialog({ open: false, type: "complete", task: null, tasks: null });
+    setShortageStrategy("negative_remainder");
   }, []);
 
   const groupCompleteMutation = useMutation({
@@ -543,6 +546,7 @@ export function SectionsTasksPage() {
               executor_user_id: executorUserId,
               performed_at: effectivePerformedAt,
               accounted_at: effectiveAccountedAt,
+              shortage_strategy: shortageStrategy,
             });
           }
 
@@ -563,6 +567,7 @@ export function SectionsTasksPage() {
           executor_user_id: executorUserId,
           performed_at: effectivePerformedAt,
           accounted_at: effectiveAccountedAt,
+          shortage_strategy: shortageStrategy,
         },
       });
     }
@@ -576,6 +581,7 @@ export function SectionsTasksPage() {
     groupCompleteMutation,
     actionComment,
     defectQty,
+    shortageStrategy,
   ]);
 
   const finishBulk = useCallback((
@@ -967,6 +973,8 @@ export function SectionsTasksPage() {
         setPerformedShift={setPerformedShift}
         actionComment={actionComment}
         setActionComment={setActionComment}
+        shortageStrategy={shortageStrategy}
+        setShortageStrategy={setShortageStrategy}
         pending={pendingMutation}
         conflictHint={conflictHint}
         onSubmit={submitAction}

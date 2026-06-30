@@ -171,6 +171,8 @@ export type PrepareTaskResponse = {
   idempotent_replay?: boolean;
 };
 
+export type ShortageStrategy = "fail" | "partial" | "negative_remainder";
+
 export type CompleteTaskInput = {
   good_quantity: number | string;
   defect_quantity: number | string;
@@ -180,6 +182,7 @@ export type CompleteTaskInput = {
   executor_user_id?: number;
   performed_at?: string;
   accounted_at?: string;
+  shortage_strategy?: ShortageStrategy;
 };
 
 export type AcceptTransferInput = {
@@ -493,6 +496,7 @@ export type BulkCompleteEntry = {
   executor_user_id?: number | null;
   performed_at?: string | null;
   accounted_at?: string | null;
+  shortage_strategy?: ShortageStrategy;
 };
 
 export async function bulkCompleteTasks(

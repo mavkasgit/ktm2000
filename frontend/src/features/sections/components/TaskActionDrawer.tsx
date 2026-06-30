@@ -2,7 +2,7 @@ import type { Dispatch, SetStateAction } from "react";
 import { AlertTriangle } from "lucide-react";
 import { cn } from "@/shared/utils/cn";
 
-import type { SectionBoardTask } from "@/shared/api/shopfloor";
+import type { SectionBoardTask, ShortageStrategy } from "@/shared/api/shopfloor";
 import {
   Badge,
   Button,
@@ -53,6 +53,8 @@ type TaskActionDrawerProps = {
   setPerformedShift: Dispatch<SetStateAction<"1" | "2">>;
   actionComment: string;
   setActionComment: Dispatch<SetStateAction<string>>;
+  shortageStrategy: ShortageStrategy;
+  setShortageStrategy: Dispatch<SetStateAction<ShortageStrategy>>;
   pending: boolean;
   conflictHint: string | null;
   onSubmit: () => void;
@@ -73,6 +75,8 @@ export function TaskActionDrawer({
   setPerformedShift,
   actionComment,
   setActionComment,
+  shortageStrategy,
+  setShortageStrategy,
   pending,
   conflictHint,
   onSubmit,
@@ -82,6 +86,10 @@ export function TaskActionDrawer({
   const maxQty = isGroup
     ? tasks.reduce((sum, t) => sum + Math.max(0, Math.round(parseFloat(t.cache.in_work_quantity) || 0)), 0)
     : inWorkQuantity(task);
+
+  const available = isGroup
+    ? tasks.reduce((sum, t) => sum + Math.max(0, Math.round(parseFloat(t.cache.available_quantity) || 0)), 0)
+    : (task ? Math.round(parseFloat(task.cache.available_quantity) || 0) : 0);
 
   const plannedQty = isGroup
     ? tasks.reduce((sum, t) => sum + Math.max(0, Math.round(parseFloat(t.planned_quantity) || 0)), 0)
@@ -98,6 +106,9 @@ export function TaskActionDrawer({
   const qtyNum = toNumber(actionQty);
   const defectNum = toNumber(defectQty);
   const outOfRange = qtyNum > 0 && maxQty > 0 && qtyNum + defectNum > maxQty;
+
+  const factTotal = qtyNum + defectNum;
+  const hasShortage = factTotal > maxQty + available;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -226,6 +237,59 @@ export function TaskActionDrawer({
               </div>
             </div>
           </div>
+
+          {hasShortage && (
+            <div className="rounded-lg border border-amber-300 bg-amber-50/50 p-4 space-y-3">
+              <div className="text-sm font-medium text-amber-800 flex items-center gap-2">
+                <AlertTriangle className="h-4 w-4 shrink-0" />
+                <span>Нехватка материалов</span>
+              </div>
+              <p className="text-xs text-amber-700">
+                Фактический объем ({factTotal}) превышает доступный лимит ({maxQty + available}). Выберите действие при нехватке:
+              </p>
+              <div className="grid grid-cols-1 gap-2 pt-1">
+                <button
+                  type="button"
+                  onClick={() => setShortageStrategy("negative_remainder")}
+                  className={cn(
+                    "flex flex-col text-left p-3 rounded-lg border text-xs font-medium transition-all hover:bg-muted/50",
+                    shortageStrategy === "negative_remainder"
+                      ? "bg-background border-amber-500 shadow-sm ring-1 ring-amber-500"
+                      : "bg-background/50 border-slate-200"
+                  )}
+                >
+                  <span className="font-semibold text-slate-800">Зачислить минус на участок</span>
+                  <span className="text-muted-foreground text-[10px] mt-0.5">Взять в работу полностью, записав разницу (-{factTotal - (maxQty + available)} шт) в дефицит участка.</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setShortageStrategy("partial")}
+                  className={cn(
+                    "flex flex-col text-left p-3 rounded-lg border text-xs font-medium transition-all hover:bg-muted/50",
+                    shortageStrategy === "partial"
+                      ? "bg-background border-amber-500 shadow-sm ring-1 ring-amber-500"
+                      : "bg-background/50 border-slate-200"
+                  )}
+                >
+                  <span className="font-semibold text-slate-800">Частичное принятие</span>
+                  <span className="text-muted-foreground text-[10px] mt-0.5">Взять в работу и завершить только доступные детали ({maxQty + available} шт).</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setShortageStrategy("fail")}
+                  className={cn(
+                    "flex flex-col text-left p-3 rounded-lg border text-xs font-medium transition-all hover:bg-muted/50",
+                    shortageStrategy === "fail"
+                      ? "bg-background border-amber-500 shadow-sm ring-1 ring-amber-500"
+                      : "bg-background/50 border-slate-200"
+                  )}
+                >
+                  <span className="font-semibold text-slate-800">Отмена операции</span>
+                  <span className="text-muted-foreground text-[10px] mt-0.5">Заблокировать операцию и выдать ошибку о нехватке материалов.</span>
+                </button>
+              </div>
+            </div>
+          )}
 
           <div>
             <label className="text-sm font-medium">Комментарий</label>

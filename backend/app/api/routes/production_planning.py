@@ -24,7 +24,7 @@ from app.models.spg_remainder import SpgRemainder
 from app.services.production_planning_rows import get_production_planning_row_detail, list_production_planning_rows
 from app.services.production_plan_service import _refresh_plan_status, restore_plan_position, soft_delete_cancelled_position
 from app.services.plan_generation import create_release_batch, release_batch
-from app.services.route_matcher import resolve_position_route
+from app.services.route_matcher import resolve_position_route, make_position_route_cache_key
 from app.services.shopfloor_service import complete_task, final_release, issue_to_work, transfer_receive, transfer_send
 
 router = APIRouter(prefix="/production-planning", tags=["execution-control"])
@@ -314,8 +314,14 @@ async def get_production_planning_overview(
 
     # Resolve routes for all positions
     position_route_map: dict[int, tuple[int | None, str | None, str | None]] = {}
+    route_resolve_cache: dict[tuple, object] = {}
     for pos in positions:
-        route_info = await resolve_position_route(db, pos)
+        cache_key = make_position_route_cache_key(pos)
+        if cache_key in route_resolve_cache:
+            route_info = route_resolve_cache[cache_key]
+        else:
+            route_info = await resolve_position_route(db, pos)
+            route_resolve_cache[cache_key] = route_info
         position_route_map[pos.id] = (route_info.route_id, route_info.route_name, route_info.source)
 
     # Collect all section IDs from resolved routes
@@ -657,31 +663,39 @@ async def _do_manual_pass(
             operation_key = f"{source_ref}:step:{stage.sequence}"
 
             try:
-                await issue_to_work(
-                    db,
-                    task_id=task.id,
-                    quantity=quantity,
-                    actor_id=current_user.id,
-                    comment=manual_comment,
-                    source_ref=source_ref,
-                    idempotency_key=f"{operation_key}:issue",
-                    executor_user_id=current_user.id,
-                    performed_at=now,
-                    accounted_at=now,
-                )
-                await complete_task(
-                    db,
-                    task_id=task.id,
-                    good_quantity=quantity,
-                    defect_quantity=Decimal("0"),
-                    actor_id=current_user.id,
-                    comment=manual_comment,
-                    source_ref=source_ref,
-                    idempotency_key=f"{operation_key}:complete",
-                    executor_user_id=current_user.id,
-                    performed_at=now,
-                    accounted_at=now,
-                )
+                await db.refresh(task)
+                issued_qty = Decimal(str(task.cached_issued_quantity or 0))
+                to_issue = quantity - issued_qty
+                if to_issue > 0:
+                    await issue_to_work(
+                        db,
+                        task_id=task.id,
+                        quantity=to_issue,
+                        actor_id=current_user.id,
+                        comment=manual_comment,
+                        source_ref=source_ref,
+                        idempotency_key=f"{operation_key}:issue",
+                        executor_user_id=current_user.id,
+                        performed_at=now,
+                        accounted_at=now,
+                    )
+                
+                completed_qty = Decimal(str(task.cached_completed_quantity or 0)) + Decimal(str(task.cached_rejected_quantity or 0))
+                to_complete = quantity - completed_qty
+                if to_complete > 0:
+                    await complete_task(
+                        db,
+                        task_id=task.id,
+                        good_quantity=to_complete,
+                        defect_quantity=Decimal("0"),
+                        actor_id=current_user.id,
+                        comment=manual_comment,
+                        source_ref=source_ref,
+                        idempotency_key=f"{operation_key}:complete",
+                        executor_user_id=current_user.id,
+                        performed_at=now,
+                        accounted_at=now,
+                    )
                 if next_task is not None:
                     from app.services.shopfloor.common import sections_share_spg
                     if not await sections_share_spg(db, task.section_id, next_task.section_id):

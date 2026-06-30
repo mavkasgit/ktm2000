@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from decimal import Decimal
+from typing import Literal
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -29,6 +30,7 @@ async def issue_to_work(
     performed_at: datetime | None = None,
     accounted_at: datetime | None = None,
     transfer_id: int | None = None,
+    shortage_strategy: Literal["fail", "partial", "negative_remainder"] = "negative_remainder",
 ) -> dict:
     quantity = _to_decimal(quantity)
     _ensure_positive(quantity, "quantity")
@@ -43,12 +45,66 @@ async def issue_to_work(
         raise ValueError("Task must be ready/in_progress/partially_completed")
 
     task = await _refresh_task_cache(db, task.id)
-    # Allow over-plan issuing: no longer restrict by cached_available_quantity
+    available = task.cached_available_quantity
+
+    shortage = Decimal("0")
+    if quantity > available:
+        if shortage_strategy == "fail":
+            raise ValueError(f"Недостаточно доступного количества на участке (доступно: {available}, запрошено: {quantity})")
+        elif shortage_strategy == "partial":
+            quantity = available
+            if quantity <= 0:
+                raise ValueError("Доступное количество равно 0. Нечего брать в работу.")
+        elif shortage_strategy == "negative_remainder":
+            shortage = quantity - available
 
     now = datetime.now(UTC)
     eff_executor = executor_user_id or actor_id
     actor_name = await _get_user_snapshot_name(db, actor_id)
     executor_name = await _get_user_snapshot_name(db, eff_executor)
+
+    if shortage > 0:
+        from app.models.spg import SpgSection
+        spg_section = await db.scalar(
+            select(SpgSection).where(SpgSection.section_id == task.section_id)
+        )
+        if spg_section is not None:
+            spg_id = spg_section.spg_id
+            line = await db.get(SectionPlanLine, task.section_plan_line_id)
+            completed_stages = []
+            if line is not None:
+                from app.models.route import RouteStage
+                stages = (await db.execute(
+                    select(RouteStage)
+                    .where(RouteStage.route_id == line.route_id)
+                    .where(RouteStage.sequence < line.sequence)
+                    .order_by(RouteStage.sequence)
+                )).scalars().all()
+                for s in stages:
+                    completed_stages.append({
+                        "section_id": s.section_id,
+                        "operation_code": s.operations[0].operation_code if s.operations else None,
+                        "operation_name": ", ".join(op.operation_name for op in s.operations) if s.operations else "",
+                        "sequence": s.sequence,
+                    })
+
+            neg_remainder = SpgRemainder(
+                product_id=task.product_id,
+                spg_id=spg_id,
+                route_stage_id=task.route_stage_id,
+                section_plan_line_id=task.section_plan_line_id,
+                origin_task_id=task.id,
+                remainder_quantity=-shortage,
+                original_issued=-shortage,
+                completed_stages_json=completed_stages,
+                source="issue_shortage",
+                created_by=actor_id,
+                created_by_user_name=actor_name,
+                created_at=performed_at or now,
+            )
+            db.add(neg_remainder)
+            await db.flush()
+            await compensate_spg_remainders(db, spg_id, task.product_id)
 
     movement = Movement(
         product_id=task.product_id,
@@ -92,6 +148,7 @@ async def complete_task(
     executor_user_id: int | None = None,
     performed_at: datetime | None = None,
     accounted_at: datetime | None = None,
+    shortage_strategy: Literal["fail", "partial", "negative_remainder"] = "negative_remainder",
 ) -> dict:
     """Complete (good + defect) quantity on a SectionTask.
 
@@ -155,6 +212,7 @@ async def complete_task(
                 executor_user_id=executor_user_id,
                 performed_at=performed_at,
                 accounted_at=accounted_at,
+                shortage_strategy=shortage_strategy,
             )
             await db.refresh(task)
             in_work = task.cached_issued_quantity - task.cached_completed_quantity - task.cached_rejected_quantity
@@ -394,6 +452,8 @@ async def final_release(
             created_at=performed_at or datetime.now(UTC),
         )
         db.add(remainder)
+        await db.flush()
+        await compensate_spg_remainders(db, spg_id, task.product_id)
 
     await _refresh_task_cache(db, task.id)
     await _refresh_section_plan_line_cache(db, task.section_plan_line_id)
@@ -570,6 +630,8 @@ async def return_remainder_to_stock(
         created_at=eff_performed,
     )
     db.add(remainder)
+    await db.flush()
+    await compensate_spg_remainders(db, spg_id, task.product_id)
 
     # Create return movement
     movement = Movement(
@@ -798,6 +860,62 @@ async def trigger_auto_consume_for_spg_tasks(db: AsyncSession, spg_id: int, prod
 
     for task in tasks:
         await auto_consume_available_remainders(db, task, actor_id=actor_id)
+
+
+async def compensate_spg_remainders(db: AsyncSession, spg_id: int, product_id: int) -> None:
+    """Find positive and negative remainders for this SPG and product, and compensate them FIFO."""
+    remainders = (
+        await db.execute(
+            select(SpgRemainder)
+            .where(
+                SpgRemainder.spg_id == spg_id,
+                SpgRemainder.product_id == product_id,
+                SpgRemainder.consumed_at.is_(None),
+            )
+            .order_by(SpgRemainder.created_at.asc(), SpgRemainder.id.asc())
+        )
+    ).scalars().all()
+
+    positives = [r for r in remainders if r.remainder_quantity > 0]
+    negatives = [r for r in remainders if r.remainder_quantity < 0]
+
+    if not positives or not negatives:
+        return
+
+    now = datetime.now(UTC)
+
+    p_idx = 0
+    n_idx = 0
+
+    while p_idx < len(positives) and n_idx < len(negatives):
+        pos = positives[p_idx]
+        neg = negatives[n_idx]
+
+        pos_qty = pos.remainder_quantity
+        neg_qty = -neg.remainder_quantity
+
+        if pos_qty == 0:
+            p_idx += 1
+            continue
+        if neg_qty == 0:
+            n_idx += 1
+            continue
+
+        compensated = min(pos_qty, neg_qty)
+
+        pos.remainder_quantity -= compensated
+        neg.remainder_quantity += compensated
+
+        if pos.remainder_quantity == 0:
+            pos.consumed_at = now
+            p_idx += 1
+
+        if neg.remainder_quantity == 0:
+            neg.consumed_at = now
+            n_idx += 1
+
+    await db.flush()
+
 
 
 
