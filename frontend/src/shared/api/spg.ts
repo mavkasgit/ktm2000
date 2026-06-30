@@ -131,6 +131,7 @@ export type SpgRemainder = {
 export type ManualRemainderCreateInput = {
   product_id: number;
   section_id?: number | null;
+  spg_id?: number | null;
   quantity: number;
   completed_stages?: Array<{
     section_id: number;
@@ -143,6 +144,7 @@ export type ManualRemainderCreateInput = {
 export type ManualRemainderUpdateInput = {
   quantity?: number;
   section_id?: number | null;
+  spg_id?: number | null;
   completed_stages?: Array<{
     section_id: number;
     operation_code?: string | null;
@@ -383,6 +385,9 @@ export type SheetPreviewItem = {
   raw_values: string[];
   product_id: number | null;
   product_name: string | null;
+  target_spg_id?: number;
+  target_spg_name?: string;
+  target_spg_code?: string;
 };
 
 export type SpgSheetPreviewResponse = {

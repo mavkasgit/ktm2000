@@ -18,6 +18,9 @@ export type SpgSelectProps = {
   className?: string;
   emptyLabel?: string;
   showCode?: boolean;
+  allLabel?: string;
+  isAllSelected?: boolean;
+  onAllSelect?: () => void;
 };
 
 export function SpgSelect({
@@ -28,16 +31,31 @@ export function SpgSelect({
   className,
   emptyLabel,
   showCode = false,
+  allLabel,
+  isAllSelected = false,
+  onAllSelect,
 }: SpgSelectProps) {
   const activeSpgs = useMemo(() => spgs.filter((s) => s.is_active), [spgs]);
 
   const selectedSpg = activeSpgs.find((s) => s.id === value);
   const iconColor = selectedSpg?.icon_color || "#3B82F6";
 
+  const handleValueChange = (v: string) => {
+    if (v === "__all__") {
+      onAllSelect?.();
+      return;
+    }
+    onValueChange(v === "empty" ? null : Number(v));
+  };
+
+  const selectValue = isAllSelected ? "__all__" : value ? String(value) : "empty";
+
   return (
-    <Select value={value ? String(value) : "empty"} onValueChange={(v) => onValueChange(v === "empty" ? null : Number(v))}>
+    <Select value={selectValue} onValueChange={handleValueChange}>
       <SelectTrigger className={className ?? "h-6 text-xs"}>
-        {selectedSpg && selectedSpg.icon ? (
+        {isAllSelected && allLabel ? (
+          <span className="truncate">{allLabel}</span>
+        ) : selectedSpg && selectedSpg.icon ? (
           <div className="flex items-center gap-1.5">
             <span
               className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded"
@@ -54,6 +72,11 @@ export function SpgSelect({
         )}
       </SelectTrigger>
       <SelectContent>
+        {allLabel && (
+          <SelectItem value="__all__">
+            <span className="font-medium">{allLabel}</span>
+          </SelectItem>
+        )}
         {emptyLabel && (
           <SelectItem value="empty">
             <span className="text-muted-foreground">{emptyLabel}</span>

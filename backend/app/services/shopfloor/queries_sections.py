@@ -73,6 +73,7 @@ async def get_section_board(
     ).where(
         WorkTask.section_id == section_id,
         (PlanPosition.deleted_at.is_(None)) | (PlanPosition.id.is_(None)),
+        WorkTask.planned_quantity > 0,
     )
 
     if status:

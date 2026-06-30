@@ -311,6 +311,7 @@ class CompletedStageIn(BaseModel):
 class ManualRemainderCreate(BaseModel):
     product_id: int
     section_id: int | None = None
+    spg_id: int | None = None
     quantity: Decimal
     completed_stages: list[CompletedStageIn] = []
 
@@ -318,6 +319,7 @@ class ManualRemainderCreate(BaseModel):
 class ManualRemainderUpdate(BaseModel):
     quantity: Decimal | None = None
     section_id: int | None = None
+    spg_id: int | None = None
     completed_stages: list[CompletedStageIn] | None = None
 
 
@@ -418,13 +420,13 @@ async def create_manual_remainder(
             raise HTTPException(status_code=404, detail="Section not found")
 
     # Находим целевую SPG для этого участка
-    if payload.section_id is not None:
+    target_spg_id = payload.spg_id or spg_id
+    if payload.section_id is not None and payload.spg_id is None:
         spg_section = await db.scalar(
             select(SpgSection).where(SpgSection.section_id == payload.section_id).limit(1)
         )
-        target_spg_id = spg_section.spg_id if spg_section else spg_id
-    else:
-        target_spg_id = spg_id
+        if spg_section:
+            target_spg_id = spg_section.spg_id
 
     target_spg = await db.get(StorageProductionGroup, target_spg_id) if target_spg_id != spg_id else spg
 
@@ -495,7 +497,10 @@ async def update_manual_remainder(
         remainder.remainder_quantity = payload.quantity
 
     target_spg_id = remainder.spg_id
-    if payload.section_id is not None:
+    if payload.spg_id is not None:
+        target_spg_id = payload.spg_id
+        remainder.spg_id = target_spg_id
+    elif payload.section_id is not None:
         section = await db.get(Section, payload.section_id)
         if section is None:
             raise HTTPException(status_code=404, detail="Section not found")
@@ -1112,6 +1117,58 @@ async def _resolve_completed_stages_for_product_excel(
     product: Product,
     raw_ops_data: list[tuple[str, str]],
 ) -> list[dict]:
+    # Extract all text values from cell values and headers to build route selection payload
+    all_text_values = []
+    for header, cell_val in raw_ops_data:
+        cell_val_str = str(cell_val).strip() if cell_val is not None else ""
+        if not cell_val_str or cell_val_str.lower() == "none" or cell_val_str == "—":
+            continue
+        all_text_values.append(cell_val_str.lower())
+        all_text_values.append(header.strip().lower())
+
+    has_drill = any("сверл" in val for val in all_text_values)
+    has_window = any("окн" in val for val in all_text_values)
+    has_comb = any("греб" in val for val in all_text_values)
+    has_saw = any("резка" in val or "пиле" in val or "saw" in val for val in all_text_values)
+    has_stretch = any("стрейч" in val or "stretch" in val for val in all_text_values)
+    has_spunbond = any("спанбонд" in val or "spunbond" in val for val in all_text_values)
+
+    anod_colors_mapping = {
+        "серебр": "серебро",
+        "золот": "золото",
+        "бронз": "бронза",
+        "чёрн": "чёрный",
+        "черн": "чёрный",
+        "шампань": "шампань",
+        "мед": "медь",
+        "титан": "титан",
+    }
+
+    color_val = None
+    for val in all_text_values:
+        for k, v in anod_colors_mapping.items():
+            if k in val:
+                color_val = v
+                break
+        if color_val:
+            break
+
+    payload = {}
+    if has_drill:
+        payload["operation"] = "Сверловка"
+    elif has_window:
+        payload["operation"] = "Окно"
+    elif has_comb:
+        payload["operation"] = "Гребенка"
+
+    if color_val:
+        payload["color"] = color_val
+
+    if has_stretch or has_saw:
+        payload["output_kind"] = "ГП"
+    elif has_spunbond:
+        payload["output_kind"] = "П/ф"
+
     # 1. Fetch route stages for this product (same logic as GET /products/{product_id}/route-stages)
     profiles = (
         await db.execute(
@@ -1123,13 +1180,13 @@ async def _resolve_completed_stages_for_product_excel(
 
     matched_route = None
     for profile in profiles:
-        selection = await select_route_for_payload(db, {}, product, profile_id=profile.id)
+        selection = await select_route_for_payload(db, payload, product, profile_id=profile.id)
         if selection.route is not None:
             matched_route = selection.route
             break
 
     if not matched_route:
-        selection = await select_route_for_payload(db, {}, product)
+        selection = await select_route_for_payload(db, payload, product)
         if selection.route is not None:
             matched_route = selection.route
 
@@ -1196,12 +1253,19 @@ async def _resolve_completed_stages_for_product_excel(
         if not section:
             continue
         
-        has_specific_ops = any(op.operation_code is not None for op in stage.operations)
+        # Combine stage-specific operations and all available operations for this section
         ops_list = []
-        if has_specific_ops:
-            ops_list = [op for op in stage.operations if op.operation_code is not None]
-        else:
-            ops_list = section_ops_dict.get(stage.section_id) or []
+        seen_op_codes = set()
+        for op in stage.operations:
+            if op.operation_code:
+                ops_list.append(op)
+                seen_op_codes.add(op.operation_code)
+                
+        section_ops = section_ops_dict.get(stage.section_id) or []
+        for op in section_ops:
+            if op.operation_code not in seen_op_codes:
+                ops_list.append(op)
+                seen_op_codes.add(op.operation_code)
 
         for op in ops_list:
             route_ops.append({
@@ -1236,6 +1300,9 @@ async def _resolve_completed_stages_for_product_excel(
         })
         completed_section_ids.add(st.section_id)
 
+    def normalize_text(text: str) -> str:
+        return text.strip().lower().replace("ё", "е")
+
     # 3. Match Excel headers and cells
     for header, cell_val in raw_ops_data:
         header_lower = header.strip().lower()
@@ -1245,12 +1312,13 @@ async def _resolve_completed_stages_for_product_excel(
             continue
             
         # Check if the header matches any route operation or section
+        header_norm = normalize_text(header_lower)
         matched_by_header = [
             ro for ro in route_ops
-            if header_lower == ro["op_name_lower"]
-            or header_lower == ro["op_code_lower"]
-            or header_lower == ro["section_name_lower"]
-            or header_lower == ro["section_code_lower"]
+            if header_norm == normalize_text(ro["op_name_lower"])
+            or header_norm == normalize_text(ro["op_code_lower"])
+            or header_norm == normalize_text(ro["section_name_lower"])
+            or header_norm == normalize_text(ro["section_code_lower"])
         ]
         
         if matched_by_header:
@@ -1266,11 +1334,16 @@ async def _resolve_completed_stages_for_product_excel(
                 tokens = [cell_val_str.strip().lower()]
                 
             for token in tokens:
+                token_norm = normalize_text(token)
                 for ro in route_ops:
-                    if (token in ro["op_name_lower"]
-                        or (ro["op_code_lower"] and token in ro["op_code_lower"])
-                        or token in ro["section_name_lower"]
-                        or token in ro["section_code_lower"]):
+                    op_name_norm = normalize_text(ro["op_name_lower"])
+                    op_code_norm = normalize_text(ro["op_code_lower"])
+                    sec_name_norm = normalize_text(ro["section_name_lower"])
+                    sec_code_norm = normalize_text(ro["section_code_lower"])
+                    if (token_norm in op_name_norm
+                        or (op_code_norm and token_norm in op_code_norm)
+                        or token_norm in sec_name_norm
+                        or token_norm in sec_code_norm):
                         add_completed_op(ro)
 
     return sorted(completed, key=lambda x: x["sequence"])
@@ -1475,6 +1548,137 @@ async def get_spg_import_operations(
     return unique_ops
 
 
+async def _determine_target_spg_for_remainder(
+    db: AsyncSession,
+    product: Product,
+    completed_stages: list[dict],
+    default_spg_id: int,
+) -> tuple[int, str, str]:
+    """Determines target SPG for remainder based on next route stage.
+    Returns (spg_id, spg_name, spg_code).
+    """
+    from app.models.route import RouteStage, RouteRuleProfile, ProductionRoute
+    from app.models.spg import SpgSection, StorageProductionGroup
+    from app.services.route_selection import select_route_for_payload
+    
+    # 1. We need to find the route stages of the matched route for this product
+    payload = {}
+    completed_names = [s["operation_name"].lower() for s in completed_stages]
+    has_drill = any("сверл" in n for n in completed_names)
+    has_window = any("окн" in n for n in completed_names)
+    has_comb = any("греб" in n for n in completed_names)
+    has_saw = any("резка" in n or "пиле" in n for n in completed_names)
+    has_stretch = any("стрейч" in n for n in completed_names)
+    has_spunbond = any("спанбонд" in n for n in completed_names)
+    
+    if has_drill:
+        payload["operation"] = "Сверловка"
+    elif has_window:
+        payload["operation"] = "Окно"
+    elif has_comb:
+        payload["operation"] = "Гребенка"
+        
+    # Anod color mapping
+    anod_colors_mapping = {
+        "серебр": "серебро",
+        "золот": "золото",
+        "бронз": "бронза",
+        "чёрн": "чёрный",
+        "черн": "чёрный",
+        "шампань": "шампань",
+        "мед": "медь",
+        "титан": "титан",
+    }
+    color_val = None
+    for n in completed_names:
+        for k, v in anod_colors_mapping.items():
+            if k in n:
+                color_val = v
+                break
+        if color_val:
+            break
+            
+    if color_val:
+        payload["color"] = color_val
+        
+    if has_stretch or has_saw:
+        payload["output_kind"] = "ГП"
+    elif has_spunbond:
+        payload["output_kind"] = "П/ф"
+        
+    # Find profile & route
+    profiles = (
+        await db.execute(
+            select(RouteRuleProfile)
+            .where(RouteRuleProfile.is_active == True)
+            .order_by(RouteRuleProfile.priority.desc(), RouteRuleProfile.id.asc())
+        )
+    ).scalars().all()
+
+    matched_route = None
+    for profile in profiles:
+        selection = await select_route_for_payload(db, payload, product, profile_id=profile.id)
+        if selection.route is not None:
+            matched_route = selection.route
+            break
+
+    if not matched_route:
+        selection = await select_route_for_payload(db, payload, product)
+        if selection.route is not None:
+            matched_route = selection.route
+            
+    if not matched_route:
+        spg = await db.get(StorageProductionGroup, default_spg_id)
+        return default_spg_id, spg.name if spg else "По умолчанию", spg.code if spg else "DEFAULT"
+
+    # 2. Load stages for route
+    stages = (
+        await db.execute(
+            select(RouteStage)
+            .where(RouteStage.route_id == matched_route.id)
+            .order_by(RouteStage.sequence)
+        )
+    ).scalars().all()
+    
+    if not stages:
+        spg = await db.get(StorageProductionGroup, default_spg_id)
+        return default_spg_id, spg.name if spg else "По умолчанию", spg.code if spg else "DEFAULT"
+        
+    # Find LAST completed stage — the material is physically stored at the SPG
+    # that owns this stage's section, not yet moved to the next one.
+    completed_sequences = [s.get("sequence", 0) for s in completed_stages]
+    max_seq = max(completed_sequences) if completed_sequences else 0
+    
+    if max_seq == 0:
+        # No operations completed — falls back to default SPG (usually stock/WH)
+        spg = await db.get(StorageProductionGroup, default_spg_id)
+        return default_spg_id, spg.name if spg else "По умолчанию", spg.code if spg else "DEFAULT"
+    
+    # Find the route stage matching the last completed sequence
+    last_completed_stage = next(
+        (st for st in stages if st.sequence == max_seq), None
+    )
+    if last_completed_stage is None:
+        # Fallback: closest stage not exceeding max_seq
+        candidates = [st for st in stages if st.sequence <= max_seq]
+        last_completed_stage = candidates[-1] if candidates else stages[0]
+
+    # 3. Find SPG for the last completed stage's section
+    spg_id = await db.scalar(
+        select(SpgSection.spg_id)
+        .where(SpgSection.section_id == last_completed_stage.section_id)
+        .limit(1)
+    )
+    
+    if spg_id is not None:
+        spg = await db.get(StorageProductionGroup, spg_id)
+        if spg:
+            return spg.id, spg.name, spg.code
+            
+    spg = await db.get(StorageProductionGroup, default_spg_id)
+    return default_spg_id, spg.name if spg else "По умолчанию", spg.code if spg else "DEFAULT"
+
+
 async def _parse_and_validate_remainders_excel(
     db: AsyncSession,
     content: bytes,
@@ -1585,6 +1789,10 @@ async def _parse_and_validate_remainders_excel(
         if product and raw_ops_data:
             completed_stages = await _resolve_completed_stages_for_product_excel(db, product, raw_ops_data)
 
+        target_spg_id, target_spg_name, target_spg_code = await _determine_target_spg_for_remainder(
+            db, product, completed_stages, spg_id
+        ) if product else (spg_id, "По умолчанию", "DEFAULT")
+
         raw_values = [str(cell) if cell is not None else "" for cell in row]
 
         status = "invalid" if row_errors else "pending"
@@ -1606,6 +1814,9 @@ async def _parse_and_validate_remainders_excel(
             "raw_values": raw_values,
             "product_id": product.id if product else None,
             "product_name": product.name if product else None,
+            "target_spg_id": target_spg_id,
+            "target_spg_name": target_spg_name,
+            "target_spg_code": target_spg_code,
         })
 
     summary = {
@@ -1683,7 +1894,7 @@ async def import_remainders_excel(
 
         remainder = SpgRemainder(
             product_id=item["product_id"],
-            spg_id=spg_id,
+            spg_id=item.get("target_spg_id", spg_id),
             route_stage_id=None,
             section_plan_line_id=None,
             origin_task_id=None,

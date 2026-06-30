@@ -77,11 +77,11 @@ function MultiProgressBar({
           style={{ width: `${issuedPct}%` }}
           title={`В работе: ${fmtNum(issued)} шт.`}
         />
-        {/* Доступный задел (фиолетовый) */}
+        {/* Доступные остатки (фиолетовый) */}
         <div
           className="h-full bg-purple-500 transition-all border-l border-background/20"
           style={{ width: `${availablePct}%` }}
-          title={`Доступный задел: ${fmtNum(available)} шт.`}
+          title={`Доступные остатки: ${fmtNum(available)} шт.`}
         />
       </div>
       <div className="flex justify-between text-[10px] text-muted-foreground">
