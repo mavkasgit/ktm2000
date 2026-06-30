@@ -13,6 +13,7 @@ import {
   Badge,
   renderIcon,
   SectionSelect,
+  SpgSelect,
   AlertDialog,
   AlertDialogContent,
   AlertDialogHeader,
@@ -68,6 +69,7 @@ export function RemainderEditDialog({
   const [productSearch, setProductSearch] = useState("");
   const [selectedProductId, setSelectedProductId] = useState<number | null>(null);
   const [quantity, setQuantity] = useState("");
+  const [selectedSpgId, setSelectedSpgId] = useState<number>(spgId);
   const [error, setError] = useState<string | null>(null);
 
   // Completed stages states
@@ -115,14 +117,16 @@ export function RemainderEditDialog({
         setSelectedProductId(editingRemainder.product_id);
         setQuantity(String(editingRemainder.remainder_quantity));
         setProductSearch(editingRemainder.product_sku);
+        setSelectedSpgId(editingRemainder.spg_id);
       } else {
         setSelectedProductId(null);
         setQuantity("");
         setProductSearch("");
+        setSelectedSpgId(spgId);
       }
       setError(null);
     }
-  }, [open, editingRemainder, sections, defaultSectionId]);
+  }, [open, editingRemainder, sections, defaultSectionId, spgId]);
 
   useEffect(() => {
     if (open) {
@@ -217,7 +221,7 @@ export function RemainderEditDialog({
     mutationFn: async (input: { kind: "create" | "update"; payload: ManualRemainderCreateInput | ManualRemainderUpdateInput }) => {
       const actualSpgId = editingRemainder?.spg_id || spgId;
       if (input.kind === "create") {
-        await createManualRemainder(actualSpgId, input.payload as ManualRemainderCreateInput);
+        await createManualRemainder(selectedSpgId, input.payload as ManualRemainderCreateInput);
       } else {
         await updateManualRemainder(
           actualSpgId,
@@ -227,10 +231,19 @@ export function RemainderEditDialog({
       }
     },
     onSuccess: () => {
-      const actualSpgId = editingRemainder?.spg_id || spgId;
-      void queryClient.invalidateQueries({ queryKey: queryKeys.spg.snapshot(actualSpgId) });
-      void queryClient.invalidateQueries({ queryKey: queryKeys.spg.remainders(actualSpgId) });
-      void queryClient.invalidateQueries({ queryKey: queryKeys.spg.remainderHistory(actualSpgId) });
+      const oldSpgId = editingRemainder?.spg_id || spgId;
+      const newSpgId = selectedSpgId;
+      
+      void queryClient.invalidateQueries({ queryKey: queryKeys.spg.snapshot(oldSpgId) });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.spg.remainders(oldSpgId) });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.spg.remainderHistory(oldSpgId) });
+
+      if (newSpgId !== oldSpgId) {
+        void queryClient.invalidateQueries({ queryKey: queryKeys.spg.snapshot(newSpgId) });
+        void queryClient.invalidateQueries({ queryKey: queryKeys.spg.remainders(newSpgId) });
+        void queryClient.invalidateQueries({ queryKey: queryKeys.spg.remainderHistory(newSpgId) });
+      }
+
       onSaved();
       onOpenChange(false);
     },
@@ -294,6 +307,7 @@ export function RemainderEditDialog({
       const payload: ManualRemainderUpdateInput = {
         quantity: qty,
         completed_stages,
+        spg_id: selectedSpgId,
       };
       saveMutation.mutate({ kind: "update", payload });
     } else {
@@ -301,6 +315,7 @@ export function RemainderEditDialog({
         product_id: selectedProductId as number,
         quantity: qty,
         completed_stages,
+        spg_id: selectedSpgId,
       };
       saveMutation.mutate({ kind: "create", payload });
     }
@@ -317,7 +332,7 @@ export function RemainderEditDialog({
 
         <div className="space-y-4 py-2">
           {/* Product search & Quantity */}
-          <div className="grid grid-cols-3 gap-4">
+          <div className="grid grid-cols-4 gap-4">
             <div className="col-span-2 space-y-1">
               <label className="text-sm font-medium">Артикул / Продукт</label>
               {editingRemainder ? (
@@ -371,6 +386,24 @@ export function RemainderEditDialog({
                 step="any"
                 className="w-full"
               />
+            </div>
+
+            <div className="col-span-1 space-y-1">
+              <label className="text-sm font-medium">ГХП (Хранение)</label>
+              {spgs && spgs.length > 0 ? (
+                <SpgSelect
+                  spgs={spgs}
+                  value={selectedSpgId}
+                  onValueChange={(val) => {
+                    if (val !== null) {
+                      setSelectedSpgId(val);
+                    }
+                  }}
+                  className="w-full h-10"
+                />
+              ) : (
+                <div className="text-xs text-muted-foreground pt-3">Нет списка ГХП</div>
+              )}
             </div>
           </div>
 
@@ -544,6 +577,37 @@ export function RemaindersListPanel({
     }
   };
 
+  const [selectedIds, setSelectedIds] = useState<number[]>([]);
+  const [bulkDeleteConfirmOpen, setBulkDeleteConfirmOpen] = useState(false);
+
+  useEffect(() => {
+    setSelectedIds([]);
+  }, [spgId, remainders]);
+
+  const bulkDeleteMutation = useMutation({
+    mutationFn: async () => {
+      for (const id of selectedIds) {
+        const r = remainders.find((item) => item.id === id);
+        if (r) {
+          const actualSpgId = r.spg_id || spgId;
+          await deleteManualRemainder(actualSpgId, id);
+        }
+      }
+    },
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.spg.remainders(spgId) });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.spg.snapshot(spgId) });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.spg.remainderHistory(spgId) });
+      setSelectedIds([]);
+      onRefresh();
+      setBulkDeleteConfirmOpen(false);
+    },
+  });
+
+  const handleConfirmBulkDelete = () => {
+    bulkDeleteMutation.mutate();
+  };
+
   // Применение фильтрации и поиска перед маппингом
   const filteredRemainders = remainders.filter((r) => {
     const matchesSearch =
@@ -571,6 +635,17 @@ export function RemaindersListPanel({
           </h3>
         </button>
         <div className="flex items-center gap-2">
+          {selectedIds.length > 0 && (
+            <Button
+              size="sm"
+              variant="destructive"
+              onClick={() => setBulkDeleteConfirmOpen(true)}
+              disabled={bulkDeleteMutation.isPending}
+            >
+              <Trash2 className="h-3.5 w-3.5 mr-1" />
+              Удалить выбранные ({selectedIds.length})
+            </Button>
+          )}
           <Button size="sm" variant="outline" onClick={() => setImportDialogOpen(true)}>
             <Upload className="h-3.5 w-3.5 mr-1" />
             Импорт Excel
@@ -602,6 +677,23 @@ export function RemaindersListPanel({
                 <table className="w-full text-sm">
                   <thead className="bg-muted/50 border-b">
                      <tr>
+                      <th className="p-2 w-[40px] text-center">
+                        <input
+                          type="checkbox"
+                          className="rounded border-gray-300 text-primary focus:ring-primary h-4 w-4 cursor-pointer"
+                          checked={
+                            filteredRemainders.length > 0 &&
+                            filteredRemainders.every((r) => selectedIds.includes(r.id))
+                          }
+                          onChange={(e) => {
+                            if (e.target.checked) {
+                              setSelectedIds(filteredRemainders.map((r) => r.id));
+                            } else {
+                              setSelectedIds([]);
+                            }
+                          }}
+                        />
+                      </th>
                       <th className="p-2 pr-0 text-left font-medium w-[130px]">Артикул</th>
                       <th className="p-2 pl-0 text-left font-medium w-[70px]">Кол-во</th>
                       <th className="p-2 text-left font-medium">Пройденные операции</th>
@@ -615,6 +707,20 @@ export function RemaindersListPanel({
                       const isNegative = r.remainder_quantity < 0;
                       return (
                         <tr key={r.id} className="border-b hover:bg-muted/30">
+                          <td className="p-2 text-center w-[40px]">
+                            <input
+                              type="checkbox"
+                              className="rounded border-gray-300 text-primary focus:ring-primary h-4 w-4 cursor-pointer"
+                              checked={selectedIds.includes(r.id)}
+                              onChange={(e) => {
+                                if (e.target.checked) {
+                                  setSelectedIds((prev) => [...prev, r.id]);
+                                } else {
+                                  setSelectedIds((prev) => prev.filter((id) => id !== r.id));
+                                }
+                              }}
+                            />
+                          </td>
                           {/* 1. Артикул */}
                           <td className="p-2 pr-0">
                             <div className="font-medium">{r.product_sku}</div>
@@ -797,6 +903,28 @@ export function RemaindersListPanel({
               className="bg-destructive hover:bg-destructive/90 text-destructive-foreground"
             >
               Удалить
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog open={bulkDeleteConfirmOpen} onOpenChange={setBulkDeleteConfirmOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Подтверждение группового удаления</AlertDialogTitle>
+            <AlertDialogDescription>
+              Вы действительно хотите удалить выбранные остатки в количестве {selectedIds.length} шт.?
+              Данное действие безвозвратно удалит выбранные записи о наличии.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Отмена</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={handleConfirmBulkDelete}
+              className="bg-destructive hover:bg-destructive/90 text-destructive-foreground"
+              disabled={bulkDeleteMutation.isPending}
+            >
+              {bulkDeleteMutation.isPending ? "Удаление..." : "Удалить выбранные"}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

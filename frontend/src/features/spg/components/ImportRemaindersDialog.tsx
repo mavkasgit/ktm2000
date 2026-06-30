@@ -11,7 +11,6 @@ import {
   Button,
   Input,
   Badge,
-  SpgSelect,
   Select,
   SelectTrigger,
   SelectValue,
@@ -471,6 +470,7 @@ export function ImportRemaindersDialog({
                         <th className="p-2.5 w-64">Наименование изделия</th>
                         <th className="p-2.5 w-24">Количество</th>
                         <th className="p-2.5">Пройденные операции</th>
+                        <th className="p-2.5 w-44">Целевая ГХП</th>
                         <th className="p-2.5 w-72">Ошибки валидации</th>
                       </tr>
                     </thead>
@@ -514,13 +514,22 @@ export function ImportRemaindersDialog({
                                   <span className="text-muted-foreground">—</span>
                                 )}
                               </td>
+                              <td className="p-2.5">
+                                {item.target_spg_name ? (
+                                  <Badge variant="outline" className="bg-emerald-50/50 text-emerald-700 border-emerald-200 dark:bg-emerald-950/20 dark:text-emerald-400 dark:border-emerald-900/50 font-semibold px-2 py-0.5 rounded text-[10px] whitespace-nowrap">
+                                    {item.target_spg_name}
+                                  </Badge>
+                                ) : (
+                                  <span className="text-muted-foreground">—</span>
+                                )}
+                              </td>
                               <td className="p-2.5 text-destructive font-medium leading-relaxed whitespace-pre-line">
                                 {item.errors.join(", ") || "—"}
                               </td>
                             </tr>
                             {isExpanded && hasRaw && (
                               <tr className="bg-muted/20 border-b">
-                                <td colSpan={7} className="p-2 pl-10 text-[10px] font-mono text-muted-foreground">
+                                <td colSpan={8} className="p-2 pl-10 text-[10px] font-mono text-muted-foreground">
                                   <div className="flex flex-wrap gap-1 items-center">
                                     <span className="font-bold uppercase tracking-wider text-muted-foreground/60 mr-2">Сырые ячейки:</span>
                                     {item.raw_values.map((val, cellIdx) => (
@@ -584,22 +593,6 @@ export function ImportRemaindersDialog({
 
           {step === "preview" && (
             <>
-              {spgs && spgs.length > 1 && (!selectedSpgIds || selectedSpgIds.length !== 1) && (
-                <div className="flex items-center gap-2 mr-auto">
-                  <span className="text-xs font-semibold text-muted-foreground whitespace-nowrap">Импортировать в:</span>
-                  <SpgSelect
-                    spgs={spgs}
-                    value={currentSpgId}
-                    onValueChange={(val) => {
-                      if (val !== null) {
-                        setCurrentSpgId(val);
-                      }
-                    }}
-                    placeholder="Выберите ГХП"
-                    className="w-48 h-8 text-xs font-normal bg-background border rounded-md px-2"
-                  />
-                </div>
-              )}
               <Button
                 variant="outline"
                 onClick={() => {
