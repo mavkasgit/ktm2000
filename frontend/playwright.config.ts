@@ -11,7 +11,7 @@ export default defineConfig({
   workers: 1,
   reporter: [["html", { outputFolder: "playwright-report" }], ["list"]],
   use: {
-    baseURL: `http://localhost:8082`,
+    baseURL: process.env.PLAYWRIGHT_TEST_BASE_URL || `http://localhost:5180`,
     trace: "on-first-retry",
     screenshot: "only-on-failure",
     video: "retain-on-failure",
