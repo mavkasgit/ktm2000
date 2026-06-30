@@ -486,6 +486,25 @@ async def _make_change_items(
     # Cache for already created/found routes by route_name -> route_id
     route_cache: dict[str, int] = {}
 
+    # Локальные кэши для устранения N+1 запросов при сопоставлении маршрутов и техкарт
+    paired_techcard_cache = {}        # tuple(component_skus) -> Techcard
+    active_techcard_by_sku_cache = {}  # source_sku -> tuple(Techcard, Product)
+    techcard_by_product_id_cache = {}  # product.id -> Techcard
+    select_route_cache = {}           # tuple_key -> RouteSelectionResult
+    route_stages_cache = {}           # route.id -> list[RouteStage]
+    sections_by_id_cache = {}         # section_id -> Section
+    sections_by_code_cache = {}       # section_code -> Section
+    techcard_lines_cache = {}         # techcard.id -> list[tuple[TechcardLine, Product]]
+    built_route_cache = {}            # (profile.id, make_hashable(payload)) -> built_route
+    existing_route_by_name_cache = {} # built_route.name -> ProductionRoute
+
+    def make_hashable(val):
+        if isinstance(val, dict):
+            return tuple((k, make_hashable(v)) for k, v in sorted(val.items()))
+        elif isinstance(val, list):
+            return tuple(make_hashable(v) for v in val)
+        return val
+
     # Track fingerprints within this import to detect intra-import duplicates.
     # Use row hashes (not just first row number) so real duplicates are detected
     # and repeated references to the same source row are ignored.
@@ -506,24 +525,37 @@ async def _make_change_items(
                 components = row.payload.get("components") or []
                 component_skus = [c.get("sku", "") for c in components if c.get("sku")]
                 if component_skus:
-                    techcard = await _find_paired_techcard(db, component_skus)
+                    component_skus_key = tuple(sorted(component_skus))
+                    if component_skus_key in paired_techcard_cache:
+                        techcard = paired_techcard_cache[component_skus_key]
+                    else:
+                        techcard = await _find_paired_techcard(db, component_skus)
+                        paired_techcard_cache[component_skus_key] = techcard
                 else:
-                    techcard, matched_product = await _find_active_techcard_by_sku(db, row.source_sku)
-                    if techcard is not None and matched_product is not None:
-                        product = matched_product
+                    if row.source_sku in active_techcard_by_sku_cache:
+                        techcard, product = active_techcard_by_sku_cache[row.source_sku]
+                    else:
+                        techcard, matched_product = await _find_active_techcard_by_sku(db, row.source_sku)
+                        if matched_product is not None:
+                            product = matched_product
+                        active_techcard_by_sku_cache[row.source_sku] = (techcard, product)
                 if techcard is not None:
                     line = await db.scalar(select(TechcardLine.id).where(TechcardLine.techcard_id == techcard.id).limit(1))
                     if line is None:
                         errors.append("active_techcard_has_no_lines")
                     else:
-                        lines = (
-                            await db.execute(
-                                select(TechcardLine, Product)
-                                .join(Product, Product.id == TechcardLine.component_product_id)
-                                .where(TechcardLine.techcard_id == techcard.id)
-                                .order_by(TechcardLine.id)
-                            )
-                        ).all()
+                        if techcard.id in techcard_lines_cache:
+                            lines = techcard_lines_cache[techcard.id]
+                        else:
+                            lines = (
+                                await db.execute(
+                                    select(TechcardLine, Product)
+                                    .join(Product, Product.id == TechcardLine.component_product_id)
+                                    .where(TechcardLine.techcard_id == techcard.id)
+                                    .order_by(TechcardLine.id)
+                                )
+                            ).all()
+                            techcard_lines_cache[techcard.id] = lines
                         resolved_inputs = []
                         for tc_line, comp_product in lines:
                             sku_key = comp_product.sku.lower()
@@ -545,10 +577,14 @@ async def _make_change_items(
                     if "paired_profile_product_unmapped" not in warnings:
                         warnings.append("paired_profile_product_unmapped")
             else:
-                techcard, matched_product = await _find_active_techcard_by_sku(db, row.source_sku)
-                if techcard is not None and matched_product is not None:
-                    product = matched_product
+                if row.source_sku in active_techcard_by_sku_cache:
+                    techcard, product = active_techcard_by_sku_cache[row.source_sku]
                 else:
+                    techcard, matched_product = await _find_active_techcard_by_sku(db, row.source_sku)
+                    if matched_product is not None:
+                        product = matched_product
+                    active_techcard_by_sku_cache[row.source_sku] = (techcard, product)
+                if techcard is None or product is None:
                     errors.append("product_not_found")
         else:
             # Use cached value to avoid triggering autoflush
@@ -559,15 +595,28 @@ async def _make_change_items(
             if row.payload.get("paired_profile"):
                 components = row.payload.get("components") or []
                 component_skus = [c.get("sku", "") for c in components if c.get("sku")]
-                techcard = await _find_paired_techcard(db, component_skus) if component_skus else None
+                component_skus_key = tuple(sorted(component_skus))
+                if component_skus_key in paired_techcard_cache:
+                    techcard = paired_techcard_cache[component_skus_key]
+                else:
+                    techcard = await _find_paired_techcard(db, component_skus) if component_skus else None
+                    paired_techcard_cache[component_skus_key] = techcard
                 if techcard is None:
+                    if product.id in techcard_by_product_id_cache:
+                        techcard = techcard_by_product_id_cache[product.id]
+                    else:
+                        techcard = await db.scalar(
+                            select(Techcard).where(Techcard.product_id == product.id, Techcard.is_active.is_(True))
+                        )
+                        techcard_by_product_id_cache[product.id] = techcard
+            else:
+                if product.id in techcard_by_product_id_cache:
+                    techcard = techcard_by_product_id_cache[product.id]
+                else:
                     techcard = await db.scalar(
                         select(Techcard).where(Techcard.product_id == product.id, Techcard.is_active.is_(True))
                     )
-            else:
-                techcard = await db.scalar(
-                    select(Techcard).where(Techcard.product_id == product.id, Techcard.is_active.is_(True))
-                )
+                    techcard_by_product_id_cache[product.id] = techcard
 
             if techcard is None:
                 errors.append("active_techcard_not_found")
@@ -577,14 +626,18 @@ async def _make_change_items(
                     errors.append("active_techcard_has_no_lines")
 
                 if techcard.processing_type == "paired_processing":
-                    lines = (
-                        await db.execute(
-                            select(TechcardLine, Product)
-                            .join(Product, Product.id == TechcardLine.component_product_id)
-                            .where(TechcardLine.techcard_id == techcard.id)
-                            .order_by(TechcardLine.id)
-                        )
-                    ).all()
+                    if techcard.id in techcard_lines_cache:
+                        lines = techcard_lines_cache[techcard.id]
+                    else:
+                        lines = (
+                            await db.execute(
+                                select(TechcardLine, Product)
+                                .join(Product, Product.id == TechcardLine.component_product_id)
+                                .where(TechcardLine.techcard_id == techcard.id)
+                                .order_by(TechcardLine.id)
+                            )
+                        ).all()
+                        techcard_lines_cache[techcard.id] = lines
                     resolved_inputs = []
                     for tc_line, comp_product in lines:
                         sku_key = comp_product.sku.lower()
@@ -605,10 +658,17 @@ async def _make_change_items(
 
         payload_has_pack_ops = bool(row.payload.get("additional_pack_operations"))
 
-        selection = await select_route_for_payload(
-            db, row.payload, product, profile_id=rule_profile_id,
-            template_column_mapping=template_column_mapping,
-        )
+        payload_key = make_hashable(row.payload)
+        route_sel_key = (payload_key, product.id if product else None, rule_profile_id, make_hashable(template_column_mapping) if template_column_mapping else None)
+        if route_sel_key in select_route_cache:
+            selection = select_route_cache[route_sel_key]
+        else:
+            selection = await select_route_for_payload(
+                db, row.payload, product, profile_id=rule_profile_id,
+                template_column_mapping=template_column_mapping,
+            )
+            select_route_cache[route_sel_key] = selection
+
         route = selection.route
         excel_condition_diagnostics = [
             diagnostic
@@ -621,14 +681,22 @@ async def _make_change_items(
             if not rule_profile_id:
                 errors.append(selection.error or "no_route_candidate")
         else:
-            stages = (
-                await db.execute(select(RouteStage).where(RouteStage.route_id == route.id).order_by(RouteStage.sequence))
-            ).scalars().all()
+            if route.id in route_stages_cache:
+                stages = route_stages_cache[route.id]
+            else:
+                stages = (
+                    await db.execute(select(RouteStage).where(RouteStage.route_id == route.id).order_by(RouteStage.sequence))
+                ).scalars().all()
+                route_stages_cache[route.id] = stages
             if not stages:
                 errors.append("active_route_has_no_steps")
             else:
                 for stage in stages:
-                    section = await db.get(Section, stage.section_id)
+                    if stage.section_id in sections_by_id_cache:
+                        section = sections_by_id_cache[stage.section_id]
+                    else:
+                        section = await db.get(Section, stage.section_id)
+                        sections_by_id_cache[stage.section_id] = section
                     if section is None or not section.is_active:
                         errors.append("route_contains_inactive_section")
                         break
@@ -652,7 +720,13 @@ async def _make_change_items(
             # Парная техкарта — берём подвесы из техкарты
             components = row.payload.get("components") or []
             component_skus = [c.get("sku", "") for c in components if c.get("sku")]
-            techcard = await _find_paired_techcard(db, component_skus) if component_skus else None
+            component_skus_key = tuple(sorted(component_skus))
+            if component_skus_key in paired_techcard_cache:
+                techcard = paired_techcard_cache[component_skus_key]
+            else:
+                techcard = await _find_paired_techcard(db, component_skus) if component_skus else None
+                paired_techcard_cache[component_skus_key] = techcard
+
 
             if techcard:
                 per_a = techcard.quantity_a_per_item
@@ -763,18 +837,33 @@ async def _make_change_items(
         # Build dynamic route steps for preview
         if rule_profile_id is not None:
             try:
-                profile = await db.get(
-                    __import__("app.models.route", fromlist=["RouteRuleProfile"]).RouteRuleProfile,
-                    rule_profile_id,
-                )
+                # Получаем профиль из кэша, если он там есть
+                profile_key = f"profile_{rule_profile_id}"
+                if profile_key in paired_techcard_cache:
+                    profile = paired_techcard_cache[profile_key]
+                else:
+                    profile = await db.get(
+                        __import__("app.models.route", fromlist=["RouteRuleProfile"]).RouteRuleProfile,
+                        rule_profile_id,
+                    )
+                    paired_techcard_cache[profile_key] = profile
+
                 if profile is not None:
                     # Include product_id in payload for preview so product-based rules work
                     preview_payload = row.payload
                     if product is not None:
                         preview_payload = {**row.payload, "product_id": product.id}
-                    built_route = await build_route_from_profile(
-                        db, profile, preview_payload, None
-                    )
+                    
+                    preview_payload_key = make_hashable(preview_payload)
+                    build_key = (rule_profile_id, preview_payload_key)
+                    if build_key in built_route_cache:
+                        built_route = built_route_cache[build_key]
+                    else:
+                        built_route = await build_route_from_profile(
+                            db, profile, preview_payload, None
+                        )
+                        built_route_cache[build_key] = built_route
+
                     if not built_route.error:
                         after_data["route_steps"] = [
                             {
@@ -804,13 +893,26 @@ async def _make_change_items(
         if rule_profile_id is not None and change_set_id != 0:
             try:
                 logger.info(f"Building dynamic route for product {product.id if product else 'None'}")
-                profile = await db.get(RouteRuleProfile, rule_profile_id)
+                profile_key = f"profile_{rule_profile_id}"
+                if profile_key in paired_techcard_cache:
+                    profile = paired_techcard_cache[profile_key]
+                else:
+                    profile = await db.get(RouteRuleProfile, rule_profile_id)
+                    paired_techcard_cache[profile_key] = profile
+
                 logger.info(f"Profile found: {profile is not None}")
                 if profile is not None:
                     payload_for_route = {**row.payload, "product_id": product.id} if product else row.payload
-                    built_route = await build_route_from_profile(
-                        db, profile, payload_for_route, None
-                    )
+                    
+                    payload_for_route_key = make_hashable(payload_for_route)
+                    build_key = (rule_profile_id, payload_for_route_key)
+                    if build_key in built_route_cache:
+                        built_route = built_route_cache[build_key]
+                    else:
+                        built_route = await build_route_from_profile(
+                            db, profile, payload_for_route, None
+                        )
+                        built_route_cache[build_key] = built_route
                     
                     # Log route building result
                     import logging
@@ -839,11 +941,15 @@ async def _make_change_items(
                             # Use cached route - steps already exist
                         else:
                             # Lookup existing ProductionRoute
-                            existing_route = await db.scalar(
-                                select(ProductionRoute).where(
-                                    ProductionRoute.name == built_route.name,
+                            if built_route.name in existing_route_by_name_cache:
+                                existing_route = existing_route_by_name_cache[built_route.name]
+                            else:
+                                existing_route = await db.scalar(
+                                    select(ProductionRoute).where(
+                                        ProductionRoute.name == built_route.name,
+                                    )
                                 )
-                            )
+                                existing_route_by_name_cache[built_route.name] = existing_route
                             
                             if existing_route is not None:
                                 # Route already exists - it should have steps
@@ -869,14 +975,19 @@ async def _make_change_items(
                                         current_section_id = None
 
                                         for step in sorted(built_route.steps, key=lambda s: s.sequence):
-                                            section = await db.scalar(
-                                                select(Section).where(Section.code == step.section_code).limit(1)
-                                            )
+                                            if step.section_code in sections_by_code_cache:
+                                                section = sections_by_code_cache[step.section_code]
+                                            else:
+                                                section = await db.scalar(
+                                                    select(Section).where(Section.code == step.section_code).limit(1)
+                                                )
+                                                sections_by_code_cache[step.section_code] = section
                                             if section is None:
                                                 import logging
                                                 logger = logging.getLogger(__name__)
                                                 logger.warning(f"Section not found for code: {step.section_code}")
                                                 continue
+
 
                                             same_group = (
                                                 section.id == current_section_id

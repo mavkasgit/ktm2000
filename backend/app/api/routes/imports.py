@@ -19,7 +19,7 @@ from app.models.product import Product
 from app.models.route import ProductionRoute, RouteRuleProfile
 from app.models.techcard import Techcard
 from app.services.plan_import_service import create_excel_import_change_set
-from app.services.route_matcher import resolve_position_route
+from app.services.route_matcher import resolve_position_route, make_position_route_cache_key
 
 router = APIRouter(prefix="/imports", tags=["imports"])
 
@@ -408,7 +408,7 @@ async def list_import_positions(batch_id: int, db: AsyncSession = Depends(get_db
 
     # Preload products for route lookup
     products_cache: dict[int, Product | None] = {}
-    route_resolve_cache: dict[int, dict] = {}
+    route_resolve_cache: dict[tuple, object] = {}
 
     result = []
     for pos in positions:
@@ -418,11 +418,12 @@ async def list_import_positions(batch_id: int, db: AsyncSession = Depends(get_db
                 products_cache[pos.product_id] = await db.get(Product, pos.product_id)
             product = products_cache[pos.product_id]
 
-        if pos.id in route_resolve_cache:
-            route_info = route_resolve_cache[pos.id]
+        cache_key = make_position_route_cache_key(pos)
+        if cache_key in route_resolve_cache:
+            route_info = route_resolve_cache[cache_key]
         else:
             route_info = await resolve_position_route(db, pos)
-            route_resolve_cache[pos.id] = route_info
+            route_resolve_cache[cache_key] = route_info
 
         product_name = product.name if product else None
 

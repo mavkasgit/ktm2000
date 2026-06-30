@@ -20,7 +20,7 @@ from app.models.route import ProductionRoute, RouteRuleProfile, RouteStage, Rout
 from app.models.section import Section
 from app.services.route_selection import select_route_for_payload
 from app.models.transfer import Transfer
-from app.models.movement import Movement
+from app.models.movement import Movement, MovementType
 from app.models.defect import Defect
 from app.models.rework_task import ReworkTask
 from app.models.spg_remainder import SpgRemainder
@@ -771,4 +771,67 @@ async def get_product_route_stages(
         ))
 
     return out_stages
+
+
+class LastCompletedOperationOut(BaseModel):
+    section_id: int | None = None
+    section_code: str | None = None
+    section_name: str | None = None
+    operation_code: str | None = None
+    operation_name: str | None = None
+    sequence: int | None = None
+
+
+@router.get("/{product_id}/last-completed-operation", response_model=LastCompletedOperationOut)
+async def get_product_last_completed_operation(
+    product_id: int,
+    db: AsyncSession = Depends(get_db),
+) -> LastCompletedOperationOut:
+    product = await db.get(Product, product_id)
+    if product is None:
+        raise HTTPException(status_code=404, detail="Product not found")
+
+    # 1. Находим последнее движение 'complete'
+    movement = await db.scalar(
+        select(Movement)
+        .where(
+            Movement.product_id == product_id,
+            Movement.movement_type == MovementType.complete,
+        )
+        .order_by(Movement.performed_at.desc(), Movement.id.desc())
+        .limit(1)
+    )
+
+    if not movement or not movement.task_id:
+        return LastCompletedOperationOut()
+
+    # 2. Находим задачу
+    task = await db.get(WorkTask, movement.task_id)
+    if not task:
+        return LastCompletedOperationOut()
+
+    # 3. Находим участок и этап маршрута
+    section = await db.get(Section, task.section_id)
+    stage = await db.get(RouteStage, task.route_stage_id)
+
+    op_name = None
+    if task.selected_operation_code:
+        op_name = await db.scalar(
+            select(SectionOperation.operation_name)
+            .where(
+                SectionOperation.section_id == task.section_id,
+                SectionOperation.operation_code == task.selected_operation_code,
+            )
+            .limit(1)
+        )
+
+    return LastCompletedOperationOut(
+        section_id=task.section_id,
+        section_code=section.code if section else None,
+        section_name=section.name if section else None,
+        operation_code=task.selected_operation_code,
+        operation_name=op_name,
+        sequence=stage.sequence if stage else None,
+    )
+
 
