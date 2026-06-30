@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { AlertCircle, Clock, CheckCircle, ShieldAlert, Plus, Search, ShieldCheck, Upload, ChevronDown, ChevronRight } from "lucide-react";
+import { AlertCircle, Clock, CheckCircle, ShieldAlert, Plus, Search, ShieldCheck, Upload, ChevronDown, ChevronRight, XCircle, RotateCcw } from "lucide-react";
 import { Button, Input, Badge, Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from "@/shared/ui";
 import type { DefectOut } from "@/shared/api/defects";
 import type { SpgOut, SpgRemainder } from "@/shared/api/spg";
@@ -61,6 +61,13 @@ export function DefectsListPanel({
 
   const getStatusBadge = (status: string) => {
     switch (status) {
+      case "open":
+        return (
+          <Badge variant="outline" className="border-sky-500 text-sky-700 bg-sky-50 dark:bg-sky-950/20 inline-flex items-center gap-1">
+            <AlertCircle className="h-3 w-3" />
+            Новый
+          </Badge>
+        );
       case "decision_required":
         return (
           <Badge variant="outline" className="border-amber-500 text-amber-700 bg-amber-50 dark:bg-amber-950/20 inline-flex items-center gap-1">
@@ -68,11 +75,32 @@ export function DefectsListPanel({
             Ожидает решения
           </Badge>
         );
-      case "resolved":
+      case "rework_task_created":
         return (
-          <Badge variant="outline" className="border-emerald-500 text-emerald-700 bg-emerald-50 dark:bg-emerald-950/20 inline-flex items-center gap-1">
+          <Badge variant="outline" className="border-indigo-500 text-indigo-700 bg-indigo-50 dark:bg-indigo-950/20 inline-flex items-center gap-1">
+            <RotateCcw className="h-3 w-3" />
+            На доработке
+          </Badge>
+        );
+      case "scrapped":
+        return (
+          <Badge variant="outline" className="border-rose-500 text-rose-700 bg-rose-50 dark:bg-rose-950/20 inline-flex items-center gap-1">
+            <XCircle className="h-3 w-3" />
+            Списано
+          </Badge>
+        );
+      case "returned":
+        return (
+          <Badge variant="outline" className="border-orange-500 text-orange-700 bg-orange-50 dark:bg-orange-950/20 inline-flex items-center gap-1">
+            <RotateCcw className="h-3 w-3" />
+            Возвращено
+          </Badge>
+        );
+      case "accepted_with_deviation":
+        return (
+          <Badge variant="outline" className="border-lime-500 text-lime-700 bg-lime-50 dark:bg-lime-950/20 inline-flex items-center gap-1">
             <ShieldCheck className="h-3 w-3" />
-            Решено
+            Принято с отклонением
           </Badge>
         );
       case "hold":
@@ -82,7 +110,22 @@ export function DefectsListPanel({
             Временное хранение
           </Badge>
         );
+      case "closed":
+        return (
+          <Badge variant="outline" className="border-emerald-500 text-emerald-700 bg-emerald-50 dark:bg-emerald-950/20 inline-flex items-center gap-1">
+            <CheckCircle className="h-3 w-3" />
+            Закрыто
+          </Badge>
+        );
       default:
+        if (status === "resolved") {
+          return (
+            <Badge variant="outline" className="border-emerald-500 text-emerald-700 bg-emerald-50 dark:bg-emerald-950/20 inline-flex items-center gap-1">
+              <ShieldCheck className="h-3 w-3" />
+              Решено
+            </Badge>
+          );
+        }
         return <Badge variant="secondary">{status}</Badge>;
     }
   };
@@ -90,7 +133,11 @@ export function DefectsListPanel({
   const getDecisionTypeName = (type: string) => {
     switch (type) {
       case "scrap":
-        return "Списание (Scrap)";
+        return "Списание";
+      case "rework_current":
+        return "На переделку";
+      case "return_previous":
+        return "Возврат на предыд. этап";
       case "accept_with_deviation":
         return "Принято с отклонением";
       case "hold":
@@ -142,9 +189,14 @@ export function DefectsListPanel({
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">Все статусы</SelectItem>
+                <SelectItem value="open">Новый</SelectItem>
                 <SelectItem value="decision_required">Ожидает решения</SelectItem>
-                <SelectItem value="resolved">Решено</SelectItem>
+                <SelectItem value="rework_task_created">На доработке</SelectItem>
+                <SelectItem value="scrapped">Списано</SelectItem>
+                <SelectItem value="returned">Возвращено</SelectItem>
+                <SelectItem value="accepted_with_deviation">Принято с отклонением</SelectItem>
                 <SelectItem value="hold">Временное хранение</SelectItem>
+                <SelectItem value="closed">Закрыто</SelectItem>
               </SelectContent>
             </Select>
           </div>

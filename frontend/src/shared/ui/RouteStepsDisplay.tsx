@@ -17,7 +17,7 @@ export type RouteStepsDisplayProps = {
 
 /**
  * Displays route steps with visual grouping for combined operations.
- * Steps with the same sequence and combined_op_group are shown together.
+ * Steps with the same sequence are shown together.
  */
 export function RouteStepsDisplay({ steps, compact = true }: RouteStepsDisplayProps) {
   const [expanded, setExpanded] = useState(false)
@@ -39,7 +39,6 @@ export function RouteStepsDisplay({ steps, compact = true }: RouteStepsDisplayPr
 
   // Count total operations
   const totalOps = steps.length
-  const totalStages = groupedSteps.length
 
   if (compact) {
     return (
@@ -53,9 +52,9 @@ export function RouteStepsDisplay({ steps, compact = true }: RouteStepsDisplayPr
           ) : (
             <ChevronRight className="h-3 w-3 text-muted-foreground" />
           )}
-          <span className="font-medium">{totalOps} ops</span>
+          <span className="font-medium">{totalOps} опер.</span>
           <span className="text-muted-foreground">
-            ({groupedSteps.map(g => g[0].section_code).join(" → ")})
+            ({groupedSteps.map(g => g[0].operation_name || g[0].section_name).join(" → ")})
           </span>
         </div>
 
@@ -63,14 +62,13 @@ export function RouteStepsDisplay({ steps, compact = true }: RouteStepsDisplayPr
           <div className="mt-2 p-2 bg-muted/30 rounded border text-[11px] font-mono">
             {groupedSteps.map((group, idx) => {
               const isCombined = group.length > 1
-              const sectionCode = group[0].section_code
               const sectionName = group[0].section_name
 
               return (
                 <div key={idx} className="mb-1 last:mb-0">
                   <div className="font-semibold text-muted-foreground">
-                    {sectionCode}
-                    {isCombined && <span className="text-orange-600 ml-1">(combined)</span>}
+                    {sectionName}
+                    {isCombined && <span className="text-orange-600 ml-1">(совмещено)</span>}
                   </div>
                   <div className="pl-2">
                     {group.map((step, opIdx) => (
@@ -78,7 +76,7 @@ export function RouteStepsDisplay({ steps, compact = true }: RouteStepsDisplayPr
                         key={opIdx}
                         className={step.is_significant ? "font-medium" : "text-muted-foreground"}
                       >
-                        {step.operation_code || step.operation_name}
+                        {step.operation_name || step.section_name}
                         {opIdx < group.length - 1 && <span className="text-muted-foreground"> / </span>}
                       </div>
                     ))}
@@ -97,7 +95,6 @@ export function RouteStepsDisplay({ steps, compact = true }: RouteStepsDisplayPr
     <div className="space-y-1">
       {groupedSteps.map((group, idx) => {
         const isCombined = group.length > 1
-        const sectionCode = group[0].section_code
         const sectionName = group[0].section_name
 
         return (
@@ -107,16 +104,16 @@ export function RouteStepsDisplay({ steps, compact = true }: RouteStepsDisplayPr
             </div>
             <div className="flex-1">
               <div className="font-medium text-sm">
-                {sectionName} ({sectionCode})
+                {sectionName}
                 {isCombined && (
-                  <span className="ml-1 text-xs text-orange-600">(combined)</span>
+                  <span className="ml-1 text-xs text-orange-600">(совмещено)</span>
                 )}
               </div>
               <div className="text-xs text-muted-foreground">
                 {group.map((step, opIdx) => (
                   <span key={opIdx}>
                     <span className={step.is_significant ? "font-medium" : ""}>
-                      {step.operation_code || step.operation_name}
+                      {step.operation_name || step.section_name}
                     </span>
                     {opIdx < group.length - 1 && <span className="mx-1">/</span>}
                   </span>
