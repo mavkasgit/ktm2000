@@ -9,6 +9,7 @@ import {
   Button,
   Input,
   Badge,
+  renderIcon,
 } from "@/shared/ui";
 import {
   getRemaindersPreview,
@@ -86,14 +87,22 @@ export function RemainderAllocationDialog({
     };
   }, [open, positionId]);
 
-  const handleResetToFifo = () => {
+  // Заполнить по убыванию операций (наиболее обработанные → наименее)
+  const handleFillDescending = () => {
     if (!data) return;
-    const initialAlloc: Record<number, string> = {};
-    data.available_remainders.forEach((rem) => {
-      const defItem = data.default_allocation.find((d) => d.remainder_id === rem.id);
-      initialAlloc[rem.id] = defItem ? String(defItem.allocated_quantity) : "0";
-    });
-    setAllocations(initialAlloc);
+    const sorted = [...data.available_remainders].sort(
+      (a, b) => b.max_completed_seq - a.max_completed_seq
+    );
+    let remaining = releaseQuantity;
+    const newAlloc: Record<number, string> = {};
+    data.available_remainders.forEach((rem) => { newAlloc[rem.id] = "0"; });
+    for (const rem of sorted) {
+      if (remaining <= 0) break;
+      const take = Math.min(rem.remainder_quantity, remaining);
+      newAlloc[rem.id] = String(take);
+      remaining -= take;
+    }
+    setAllocations(newAlloc);
   };
 
   const handleClearAll = () => {
@@ -198,7 +207,7 @@ export function RemainderAllocationDialog({
   }, [data, allocations, releaseQuantity]);
 
   const handleConfirm = () => {
-    if (hasErrors || isExceedingTotal) return;
+    if (hasErrors) return;
     const items: RemainderAllocationItem[] = [];
     Object.entries(allocations).forEach(([idStr, valStr]) => {
       const qty = parseFloat(valStr);
@@ -246,42 +255,51 @@ export function RemainderAllocationDialog({
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 items-start">
                 {/* Склады подготовки (ГХП) */}
                 <div className="space-y-3">
-                  <div className="flex items-center justify-between border-b pb-2">
+                  <div className="flex items-center border-b pb-2">
                     <h3 className="text-base font-semibold flex items-center gap-2">
                       <Package className="h-4 w-4 text-emerald-600" />
                       <span>Остатки на складах подготовки (ГХП)</span>
                     </h3>
-                    <div className="flex items-center gap-2 text-xs">
-                      <button 
-                        type="button"
-                        className="text-xs text-muted-foreground hover:text-foreground underline transition-colors"
-                        onClick={handleResetToFifo}
-                      >
-                        Сбросить (FIFO)
-                      </button>
-                      <span className="text-muted-foreground/30">|</span>
-                      <button 
-                        type="button"
-                        className="text-xs text-muted-foreground hover:text-foreground underline transition-colors"
-                        onClick={handleClearAll}
-                      >
-                        Очистить всё
-                      </button>
-                      {stockRemainder && (
-                        <>
-                          <span className="text-muted-foreground/30">|</span>
-                          <button 
-                            type="button"
-                            className="text-xs text-primary hover:text-primary/80 font-medium underline transition-colors"
-                            onClick={handleFillFromStock}
-                          >
-                            {stockRemainder.max_completed_seq === 0 ? "Добрать со склада" : "Добрать остаток"}
-                          </button>
-                        </>
-                      )}
+                  </div>
+
+                  {/* Карточка: артикул + план + все операции маршрута */}
+                  <div className="rounded-md border bg-muted/20 px-3 py-2 flex items-center justify-between gap-4">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <div className="min-w-0">
+                        <span className="font-mono font-semibold text-sm">{data.product_sku}</span>
+                        {data.product_name && data.product_name !== data.product_sku && (
+                          <span className="text-xs text-muted-foreground ml-2">{data.product_name}</span>
+                        )}
+                        {/* Все операции маршрута с иконками участков */}
+                        <div className="flex flex-wrap items-center gap-1 mt-1">
+                          {data.route_steps.map((step, idx) => (
+                            <span key={step.sequence} className="flex items-center gap-1">
+                              {idx > 0 && <ArrowRight className="h-2.5 w-2.5 text-muted-foreground/40" />}
+                              <span
+                                className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] font-medium"
+                                style={step.op_icon_color ? {
+                                  backgroundColor: step.op_icon_color + "18",
+                                  color: step.op_icon_color,
+                                } : { backgroundColor: "hsl(var(--muted))", color: "hsl(var(--muted-foreground))" }}
+                              >
+                                {step.op_icon && step.op_icon_color && (
+                                  <span style={{ color: step.op_icon_color }}>
+                                    {renderIcon(step.op_icon, "h-3 w-3")}
+                                  </span>
+                                )}
+                                {step.operation_name}
+                              </span>
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                    <div className="text-right shrink-0">
+                      <div className="text-xs text-muted-foreground">По плану</div>
+                      <div className="font-mono font-bold text-base">{fmtQty(releaseQuantity)} шт.</div>
                     </div>
                   </div>
-                  
+
                   {data.available_remainders.length === 0 ? (
                     <div className="text-sm text-muted-foreground py-6 text-center bg-muted/20 rounded-md border border-dashed">
                       Нет активных остатков на складах подготовки для данного артикула.
@@ -298,21 +316,55 @@ export function RemainderAllocationDialog({
                         <tbody>
                           {sortedRemainders.map((rem) => {
                             const err = allocationErrors[rem.id];
+                            const stagesWithIcons = (rem.stages_with_icons || rem.completed_stages_json)
+                              .slice()
+                              .sort((a: { sequence: number }, b: { sequence: number }) => a.sequence - b.sequence);
                             return (
                               <tr key={rem.id} className="border-b last:border-0 hover:bg-muted/20">
-                                <td className="p-3 flex items-center gap-3">
-                                  <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded bg-emerald-100 text-emerald-800 font-mono text-[10px] font-bold">
-                                    #{rem.id}
-                                  </div>
-                                  <div>
-                                    <div className="font-medium">{rem.spg_name}</div>
-                                    <div className="text-xs text-muted-foreground">
-                                      {rem.completed_stages_json
-                                        .slice()
-                                        .sort((a, b) => a.sequence - b.sequence)
-                                        .map((s) => s.operation_name || s.operation_code)
-                                        .join(", ")}{" "}
-                                      (после этапа {rem.max_completed_seq})
+                                <td className="p-3">
+                                  <div className="flex items-center gap-3">
+                                    {/* SPG icon */}
+                                    {rem.spg_icon && rem.spg_icon_color ? (
+                                      <div
+                                        className="flex h-8 w-8 shrink-0 items-center justify-center rounded"
+                                        style={{ backgroundColor: rem.spg_icon_color + "20" }}
+                                      >
+                                        <span style={{ color: rem.spg_icon_color }}>
+                                          {renderIcon(rem.spg_icon, "h-4 w-4")}
+                                        </span>
+                                      </div>
+                                    ) : (
+                                      <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded bg-emerald-100 text-emerald-800">
+                                        <Package className="h-4 w-4" />
+                                      </div>
+                                    )}
+                                    <div>
+                                      <div className="font-medium">{rem.spg_name}</div>
+                                      <div className="flex flex-wrap items-center gap-1 mt-0.5">
+                                        {rem.completed_stages_json.length === 0 ? (
+                                          <span className="text-xs text-muted-foreground">Без обработки (склад сырья)</span>
+                                        ) : (
+                                          stagesWithIcons.map((s: { sequence: number; op_icon?: string | null; op_icon_color?: string | null; operation_name?: string; operation_code?: string }, idx: number) => (
+                                            <span key={idx} className="flex items-center gap-1">
+                                              {idx > 0 && <ArrowRight className="h-2.5 w-2.5 text-muted-foreground/40" />}
+                                              <span
+                                                className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] font-medium"
+                                                style={s.op_icon_color ? {
+                                                  backgroundColor: s.op_icon_color + "18",
+                                                  color: s.op_icon_color,
+                                                } : {}}
+                                              >
+                                                {s.op_icon && s.op_icon_color && (
+                                                  <span style={{ color: s.op_icon_color }}>
+                                                    {renderIcon(s.op_icon, "h-3 w-3")}
+                                                  </span>
+                                                )}
+                                                {s.operation_name || s.operation_code}
+                                              </span>
+                                            </span>
+                                          ))
+                                        )}
+                                      </div>
                                     </div>
                                   </div>
                                 </td>
@@ -336,16 +388,80 @@ export function RemainderAllocationDialog({
                                       />
                                       {err && <span className="text-[10px] text-destructive">{err}</span>}
                                     </div>
-                                    <span className="font-mono font-semibold text-emerald-600 dark:text-emerald-400">
+                                    <button
+                                      type="button"
+                                      title="Нажмите чтобы подставить максимально возможное кол-во без превышения плана"
+                                      className="font-mono font-semibold text-emerald-600 dark:text-emerald-400 hover:text-emerald-500 hover:underline cursor-pointer transition-colors"
+                                      onClick={() => {
+                                        const otherAllocated = Object.entries(allocations)
+                                          .filter(([id]) => Number(id) !== rem.id)
+                                          .reduce((sum, [, v]) => sum + (parseFloat(v) || 0), 0);
+                                        const remaining = Math.max(0, releaseQuantity - otherAllocated);
+                                        const fillQty = Math.min(rem.remainder_quantity, remaining);
+                                        setAllocations((prev) => ({
+                                          ...prev,
+                                          [rem.id]: String(fillQty),
+                                        }));
+                                      }}
+                                    >
                                       / {fmtQty(rem.remainder_quantity)}
-                                    </span>
+                                    </button>
                                   </div>
                                 </td>
                               </tr>
                             );
                           })}
                         </tbody>
+                        <tfoot className="border-t bg-muted/30">
+                          <tr>
+                            <td className="px-3 py-2 text-sm font-medium text-muted-foreground">Итого</td>
+                            <td className="px-3 py-2 text-right">
+                              <div className="flex items-center justify-end gap-2 font-mono text-sm">
+                                <span className={`font-bold ${isExceedingTotal ? "text-orange-500" : totalAllocated === releaseQuantity ? "text-emerald-600 dark:text-emerald-400" : "text-amber-600"}`}>
+                                  {fmtQty(totalAllocated)}
+                                </span>
+                                <span className="text-muted-foreground/50">/</span>
+                                <span className="font-semibold text-muted-foreground">{fmtQty(releaseQuantity)} шт.</span>
+                                {isExceedingTotal && (
+                                  <span className="text-xs font-normal text-orange-500 ml-1">· +{fmtQty(totalAllocated - releaseQuantity)} излишек</span>
+                                )}
+                                {!isExceedingTotal && totalAllocated === releaseQuantity && (
+                                  <span className="text-xs font-normal text-emerald-600 dark:text-emerald-400 ml-1">· план закрыт ✓</span>
+                                )}
+                                {!isExceedingTotal && totalAllocated < releaseQuantity && totalAllocated > 0 && (
+                                  <span className="text-xs font-normal text-amber-600 ml-1">· не закрыто {fmtQty(releaseQuantity - totalAllocated)} шт.</span>
+                                )}
+                              </div>
+                            </td>
+                          </tr>
+                        </tfoot>
                       </table>
+                      {/* Кнопки действий под итогами */}
+                      <div className="flex items-center justify-end gap-2 px-3 py-2.5 border-t bg-muted/10">
+                        <Button
+                          type="button"
+                          variant="outline"
+                          onClick={handleFillDescending}
+                        >
+                          Перезаписать
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          onClick={handleClearAll}
+                        >
+                          Очистить всё
+                        </Button>
+                        {stockRemainder && (
+                          <Button
+                            type="button"
+                            variant="secondary"
+                            onClick={handleFillFromStock}
+                          >
+                            {stockRemainder.max_completed_seq === 0 ? "Добрать со склада" : "Добрать остаток"}
+                          </Button>
+                        )}
+                      </div>
                     </div>
                   )}
                 </div>
@@ -453,9 +569,9 @@ export function RemainderAllocationDialog({
                   </div>
                 </div>
                 {isExceedingTotal && (
-                  <div className="text-destructive text-xs flex items-center gap-1.5 font-medium">
+                  <div className="text-amber-600 dark:text-amber-400 text-xs flex items-center gap-1.5 font-medium bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-800 rounded px-2 py-1">
                     <AlertCircle className="h-4 w-4 shrink-0" />
-                    <span>Сумма распределения превышает объем запуска ({fmtQty(releaseQuantity)} шт.)</span>
+                    <span>Излишек {fmtQty(totalAllocated - releaseQuantity)} шт. вернётся в ГХП после выполнения задания</span>
                   </div>
                 )}
               </div>
@@ -469,7 +585,7 @@ export function RemainderAllocationDialog({
           </Button>
           <Button
             onClick={handleConfirm}
-            disabled={loading || pending || hasErrors || isExceedingTotal || !data}
+            disabled={loading || pending || hasErrors || !data}
             className="px-6"
           >
             {pending ? "Запуск..." : "Запустить в работу"}

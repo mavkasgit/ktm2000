@@ -816,16 +816,33 @@ async def get_remainders_preview(
 
     route_steps = []
     route_seq_to_section = {}
+    # mapping sequence → set of allowed operation_codes at that stage
+    route_seq_to_op_codes: dict[int, set[str | None]] = {}
+    # mapping (section_id, operation_code) → (op_icon, op_icon_color)
+    op_icon_lookup: dict[tuple[int, str], tuple[str | None, str | None]] = {}
     for stage, section in rows:
-        op_name = ", ".join(op.operation_name for op in stage.operations) if stage.operations else "Операция"
+        ops = stage.operations or []
+        op_name = ", ".join(op.operation_name for op in ops) if ops else "Операция"
+        # first op icon for the step (used in route_steps card)
+        first_op_icon = ops[0].icon if ops else None
+        first_op_icon_color = ops[0].icon_color if ops else None
         route_steps.append({
             "sequence": stage.sequence,
             "section_id": stage.section_id,
             "section_name": section.name,
             "section_code": section.code,
+            "section_icon": section.icon,
+            "section_icon_color": section.icon_color,
+            "op_icon": first_op_icon,
+            "op_icon_color": first_op_icon_color,
             "operation_name": op_name,
         })
         route_seq_to_section[stage.sequence] = stage.section_id
+        route_seq_to_op_codes[stage.sequence] = {
+            op.operation_code for op in ops
+        } if ops else set()
+        for op in ops:
+            op_icon_lookup[(section.id, op.operation_code)] = (op.icon, op.icon_color)
 
     effective_product_id = pos.product_id
 
@@ -846,7 +863,7 @@ async def get_remainders_preview(
         from sqlalchemy import or_
         free_remainders = (
             await db.execute(
-                select(SpgRemainder, Product.sku, Product.name, StorageProductionGroup.name)
+                select(SpgRemainder, Product.sku, Product.name, StorageProductionGroup.name, StorageProductionGroup.icon, StorageProductionGroup.icon_color)
                 .join(Product, SpgRemainder.product_id == Product.id)
                 .join(StorageProductionGroup, SpgRemainder.spg_id == StorageProductionGroup.id)
                 .where(
@@ -862,18 +879,27 @@ async def get_remainders_preview(
             )
         ).all()
 
-        for rem, prod_sku, prod_name, spg_name in free_remainders:
+        for rem, prod_sku, prod_name, spg_name, spg_icon, spg_icon_color in free_remainders:
             stages_json = rem.completed_stages_json or []
 
+            # Empty completed_stages_json = raw warehouse stock → compatible with all routes
             is_prefix = True
             for stage_entry in stages_json:
                 seq = stage_entry.get("sequence")
                 section_id = stage_entry.get("section_id")
+                op_code = stage_entry.get("operation_code")
                 if seq is None or section_id is None:
                     is_prefix = False
                     break
+                # Check section match
                 expected_section = route_seq_to_section.get(seq)
                 if expected_section is None or expected_section != section_id:
+                    is_prefix = False
+                    break
+                # Check operation_code match: if the route stage has operations defined,
+                # the remainder's operation_code must be one of them.
+                allowed_ops = route_seq_to_op_codes.get(seq, set())
+                if allowed_ops and op_code not in allowed_ops:
                     is_prefix = False
                     break
 
@@ -896,6 +922,17 @@ async def get_remainders_preview(
                 "max_completed_seq": max_seq,
                 "max_completed_stage_name": max_completed_stage_name,
                 "spg_name": spg_name,
+                "spg_icon": spg_icon,
+                "spg_icon_color": spg_icon_color,
+                # Enrich each stage entry with section icon data from the route lookup
+                "stages_with_icons": [
+                    {
+                        **s,
+                        "op_icon": op_icon_lookup.get((s.get("section_id"), s.get("operation_code")), (None, None))[0],
+                        "op_icon_color": op_icon_lookup.get((s.get("section_id"), s.get("operation_code")), (None, None))[1],
+                    }
+                    for s in stages_json
+                ],
             })
 
     default_allocation = []
@@ -1549,6 +1586,8 @@ class ProductWipRemainderOut(BaseModel):
     spg_icon: str | None = None
     spg_icon_color: str | None = None
     quantity: float
+    max_completed_seq: int = 0
+    stages_with_icons: list[dict] = []
 
 class ProductWipTaskOut(BaseModel):
     section_id: int
@@ -1592,6 +1631,26 @@ async def get_product_wip_stats(
     )
     rem_rows = (await db.execute(rem_q)).all()
 
+    # Build operation icon lookup by (section_id, operation_code)
+    all_op_keys: set[tuple[int, str]] = set()
+    for rem, spg in rem_rows:
+        for s in (rem.completed_stages_json or []):
+            if s.get("section_id") and s.get("operation_code"):
+                all_op_keys.add((s["section_id"], s["operation_code"]))
+
+    from app.models.route import SectionOperation
+    op_icon_map: dict[tuple[int, str], tuple[str | None, str | None]] = {}
+    if all_op_keys:
+        section_ids = list({k[0] for k in all_op_keys})
+        op_codes = list({k[1] for k in all_op_keys})
+        op_rows = (await db.execute(
+            select(SectionOperation)
+            .where(SectionOperation.section_id.in_(section_ids))
+            .where(SectionOperation.operation_code.in_(op_codes))
+        )).scalars().all()
+        for op in op_rows:
+            op_icon_map[(op.section_id, op.operation_code)] = (op.icon, op.icon_color)
+
     # Группируем остатки по ГХП и пройденным операциям в Python-коде
     rem_grouped: dict[tuple[int, str], dict] = {}
     for rem, spg in rem_rows:
@@ -1603,6 +1662,16 @@ async def get_product_wip_stats(
 
         key = (spg.id, ops_str)
         if key not in rem_grouped:
+            sorted_stages = sorted(stages, key=lambda s: s.get("sequence", 0))
+            stages_with_icons = [
+                {
+                    **s,
+                    "op_icon": op_icon_map.get((s.get("section_id"), s.get("operation_code")), (None, None))[0],
+                    "op_icon_color": op_icon_map.get((s.get("section_id"), s.get("operation_code")), (None, None))[1],
+                }
+                for s in sorted_stages
+            ]
+            max_seq = max((s.get("sequence", 0) for s in stages), default=0)
             rem_grouped[key] = {
                 "spg_id": spg.id,
                 "spg_code": spg.code,
@@ -1610,23 +1679,31 @@ async def get_product_wip_stats(
                 "spg_icon": spg.icon,
                 "spg_icon_color": spg.icon_color,
                 "completed_ops": ops_str,
+                "stages_with_icons": stages_with_icons,
+                "max_completed_seq": max_seq,
                 "quantity": 0.0,
             }
         rem_grouped[key]["quantity"] += float(rem.remainder_quantity or 0)
 
-    remainders = [
-        ProductWipRemainderOut(
-            spg_id=val["spg_id"],
-            spg_code=val["spg_code"],
-            spg_name=val["spg_name"],
-            completed_ops=val["completed_ops"],
-            spg_icon=val["spg_icon"],
-            spg_icon_color=val["spg_icon_color"],
-            quantity=val["quantity"],
-        )
-        for val in rem_grouped.values()
-        if val["quantity"] != 0.0
-    ]
+    remainders = sorted(
+        [
+            ProductWipRemainderOut(
+                spg_id=val["spg_id"],
+                spg_code=val["spg_code"],
+                spg_name=val["spg_name"],
+                completed_ops=val["completed_ops"],
+                spg_icon=val["spg_icon"],
+                spg_icon_color=val["spg_icon_color"],
+                stages_with_icons=val["stages_with_icons"],
+                max_completed_seq=val["max_completed_seq"],
+                quantity=val["quantity"],
+            )
+            for val in rem_grouped.values()
+            if val["quantity"] != 0.0
+        ],
+        key=lambda r: r.max_completed_seq,
+        reverse=True,
+    )
 
     # 3. Поиск активных задач в работе (ready, in_progress)
     from sqlalchemy.orm import selectinload
@@ -1638,6 +1715,7 @@ async def get_product_wip_stats(
         .options(selectinload(RouteStage.operations))
         .where(WorkTask.product_id == product.id)
         .where(WorkTask.status.in_([WorkTaskStatus.ready, WorkTaskStatus.in_progress]))
+        .order_by(RouteStage.sequence)
     )
     work_rows = (await db.execute(work_q)).all()
 

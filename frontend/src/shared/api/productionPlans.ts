@@ -584,9 +584,12 @@ export type AvailableRemainder = {
   created_at: string | null;
   created_by_user_name: string | null;
   completed_stages_json: CompletedStage[];
+  stages_with_icons: (CompletedStage & { op_icon: string | null; op_icon_color: string | null })[];
   max_completed_seq: number;
   max_completed_stage_name: string;
   spg_name: string;
+  spg_icon: string | null;
+  spg_icon_color: string | null;
 };
 
 export type PreviewRouteStep = {
@@ -594,6 +597,10 @@ export type PreviewRouteStep = {
   section_id: number;
   section_name: string;
   section_code: string;
+  section_icon: string | null;
+  section_icon_color: string | null;
+  op_icon: string | null;
+  op_icon_color: string | null;
   operation_name: string;
 };
 
@@ -792,6 +799,14 @@ export type ProductWipRemainder = {
   spg_icon: string | null;
   spg_icon_color: string | null;
   quantity: number;
+  max_completed_seq: number;
+  stages_with_icons: {
+    sequence: number;
+    operation_name?: string;
+    operation_code?: string;
+    op_icon: string | null;
+    op_icon_color: string | null;
+  }[];
 };
 
 export type ProductWipTask = {
