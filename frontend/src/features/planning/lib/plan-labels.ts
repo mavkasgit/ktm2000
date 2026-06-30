@@ -121,7 +121,9 @@ export function isRiskyForApprove(pos: PlanPositionOut, duplicateConflict?: Dupl
     pos.route_match_quality === "corrected" ||
     pos.route_origin === "legacy" ||
     pos.route_error !== null ||
-    pos.route_match_reason !== null ||
+    (pos.route_match_reason !== null &&
+      pos.route_match_reason !== "selection_rules" &&
+      pos.route_match_reason !== "wildcard_rule") ||
     (pos.warnings && pos.warnings.length > 0) ||
     (pos.errors && pos.errors.length > 0)
   return hasRouteProblems || Boolean(duplicateConflict && duplicateConflict.conflictIds.length > 0)

@@ -1303,7 +1303,9 @@ export function ImportWizard(props: {
         <AlertDialogFooter>
           <AlertDialogCancel onClick={() => setShowApplyConfirm(false)}>Отмена</AlertDialogCancel>
           <AlertDialogAction onClick={() => void handleApplyConfirmed(false)} disabled={loading}>
-            Загрузить с ошибками ({applyStats.uploadAll} строк)
+            {applyStats.invalid > 0
+              ? `Загрузить с ошибками (${applyStats.uploadAll} строк)`
+              : `Загрузить (${applyStats.uploadAll} строк)`}
           </AlertDialogAction>
           {applyStats.invalid > 0 && (
             <Button onClick={() => void handleApplyConfirmed(true)} disabled={loading}>
