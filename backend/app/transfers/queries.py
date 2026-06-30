@@ -227,6 +227,8 @@ async def list_ready_to_transfer(
     from_line = aliased(SectionPlanLine, name="from_line")
     next_line = aliased(SectionPlanLine, name="next_line")
 
+    from app.models.movement import Movement, MovementType
+
     query = (
         select(
             WorkTask,
@@ -237,6 +239,7 @@ async def list_ready_to_transfer(
             next_line,
             next_stage,
             next_section,
+            Movement.comment.label("completion_comment"),
         )
         .join(from_line, from_line.id == WorkTask.section_plan_line_id)
         .join(from_stage, from_stage.id == WorkTask.route_stage_id)
@@ -249,6 +252,11 @@ async def list_ready_to_transfer(
         )
         .outerjoin(next_stage, next_stage.id == next_line.route_stage_id)
         .outerjoin(next_section, next_section.id == next_line.section_id)
+        .outerjoin(
+            Movement,
+            (Movement.task_id == WorkTask.id)
+            & (Movement.movement_type == MovementType.complete)
+        )
         .where(
             WorkTask.status.notin_(
                 [WorkTaskStatus.cancelled, WorkTaskStatus.waiting_previous]
@@ -281,6 +289,7 @@ async def list_ready_to_transfer(
         next_l,
         next_stg,
         next_sec,
+        completion_comment,
     ) in rows:
         completed = _to_decimal(task.cached_completed_quantity or 0)
         transferred = _to_decimal(task.cached_transferred_quantity or 0)
@@ -332,6 +341,7 @@ async def list_ready_to_transfer(
                 "next_step_sequence": next_stg.sequence if next_stg is not None else None,
                 "next_step_is_final": bool(next_stg.is_final) if next_stg is not None else None,
                 "is_final": False,
+                "completion_comment": completion_comment,
             }
         )
 
@@ -384,7 +394,7 @@ async def get_section_transfer_history(
             )
         ).scalars().all()
         if not spg_section_ids:
-            return {"transfers": []}
+            return {"section_id": None, "spg_id": spg_id, "transfers": []}
         base_query = base_query.where(
             (Transfer.from_section_id.in_(spg_section_ids)) | (Transfer.to_section_id.in_(spg_section_ids))
         )
@@ -392,8 +402,6 @@ async def get_section_transfer_history(
         base_query = base_query.where(
             (Transfer.from_section_id == section_id) | (Transfer.to_section_id == section_id)
         )
-    else:
-        raise ValueError("Either section_id or spg_id must be provided")
 
     rows = (
         await db.execute(
@@ -450,6 +458,7 @@ async def get_section_transfer_history(
 
     return {
         "section_id": section_id,
+        "spg_id": spg_id,
         "transfers": transfers,
     }
 

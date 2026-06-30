@@ -115,6 +115,7 @@ class ReadyToTransferTaskOut(BaseModel):
     next_step_sequence: int | None = None
     next_step_is_final: bool | None = None
     is_final: bool
+    completion_comment: str | None = None
 
 
 class CorrectTransferPayload(BaseModel):
