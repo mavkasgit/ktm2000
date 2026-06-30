@@ -158,9 +158,15 @@ export function RemainderHistoryDrawer({
                 <div className="font-medium text-foreground">
                   {data.remainder.product_sku} — {data.remainder.product_name}
                 </div>
-                <div className="text-xs">
-                  Участок: {data.remainder.section_code} — {data.remainder.section_name}
-                </div>
+                {data.remainder.section_name ? (
+                  <div className="text-xs">
+                    Участок: {data.remainder.section_code} — {data.remainder.section_name}
+                  </div>
+                ) : (
+                  <div className="text-xs">
+                    ГХП: {data.remainder.spg_name}
+                  </div>
+                )}
               </div>
             )}
           </DialogHeader>

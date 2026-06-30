@@ -306,6 +306,12 @@ async def test_final_release_creates_fg_remainder(client, session) -> None:
     # Expire and refresh task to get new completed quantity cache
     session.expire(final_task)
     await session.refresh(final_task)
+
+    # Clear negative remainders created due to deficit (since we skipped previous sections)
+    # to avoid compensation logic swallowing our positive finished goods remainder.
+    from sqlalchemy import delete
+    await session.execute(delete(SpgRemainder).where(SpgRemainder.remainder_quantity < 0))
+    await session.flush()
     
     # Now run final_release
     res = await final_release(

@@ -502,13 +502,24 @@ export function SectionsTasksPage() {
       ? tasks.reduce((sum, t) => sum + toInteger(t.cache.in_work_quantity), 0)
       : toInteger(task!.cache.in_work_quantity);
 
-    if (inWork > 0 && good + defect > inWork) {
-      setConflictHint(
-        isGroup
-          ? `Сумма факта и брака больше общего объема в работе всей группы (${fmtQty(String(inWork))}).`
-          : `Сумма факта и брака больше объема в работе (${fmtQty(String(inWork))}).`
-      );
-      return;
+    const available = isGroup
+      ? tasks.reduce((sum, t) => sum + Math.max(0, Math.round(parseFloat(t.cache.available_quantity) || 0)), 0)
+      : (task ? Math.round(parseFloat(task.cache.available_quantity) || 0) : 0);
+
+    const isShortage = good + defect > inWork + available;
+    const isConflict = inWork > 0 && good + defect > inWork;
+
+    if (isConflict) {
+      if (isShortage) {
+        if (shortageStrategy === "fail") {
+          setConflictHint(
+            isGroup
+              ? `Сумма факта и брака превышает доступный объем всей группы (${fmtQty(String(inWork + available))}).`
+              : `Сумма факта и брака превышает доступный объем (${fmtQty(String(inWork + available))}).`
+          );
+          return;
+        }
+      }
     }
 
     if (isGroup) {

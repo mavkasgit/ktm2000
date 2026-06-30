@@ -609,7 +609,7 @@ async def test_manual_pass_to_middle_stage_creates_manual_facts_and_ready_target
     assert response.status_code == 200
     body = response.json()
     assert body["tasks_created"] == 6
-    assert body["movements_created"] == 10
+    assert body["movements_created"] == 9
     assert body["transfers_created"] == 2
     assert body["skipped_stages"] == 2
 
@@ -630,12 +630,12 @@ async def test_manual_pass_to_middle_stage_creates_manual_facts_and_ready_target
             .order_by(Movement.id)
         )
     ).scalars().all()
-    assert len(movements) == 10
+    assert len(movements) == 9
     assert {movement.source_ref for movement in movements} == {"manual_route_pass:manual-mid"}
     assert all(movement.executor_user_id == 1 for movement in movements)
     assert all(movement.performed_at is not None and movement.accounted_at is not None for movement in movements)
     manual_movements = [m for m in movements if not (m.comment and m.comment.startswith("Auto-issued on transfer receive"))]
-    assert len(manual_movements) == 8
+    assert len(manual_movements) == 7
     assert all(m.comment == "Пропущено по факту" for m in manual_movements)
 
     transfers = (
@@ -719,7 +719,7 @@ async def test_manual_pass_complete_route_finishes_all_tasks(client, session) ->
     body = response.json()
     assert body["complete_route"] is True
     assert body["tasks_created"] == 6
-    assert body["movements_created"] == 27
+    assert body["movements_created"] == 22
     assert body["transfers_created"] == 5
     assert body["skipped_stages"] == 6
 

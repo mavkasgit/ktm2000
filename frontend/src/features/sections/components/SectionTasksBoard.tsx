@@ -202,7 +202,7 @@ function renderTaskRow(
       key={task.id}
       className={`cursor-pointer transition-colors ${getRowStatusClass(task.status, !!isSelected, isInGroup)} ${isLastInGroup ? "border-b-2 border-blue-300" : "border-b"}`}
       onClick={() => {
-        if (bulkMode && bulkSelection) {
+        if (bulkMode && bulkSelection && task.status !== "waiting_previous") {
           bulkSelection.selectOne(task.id);
         }
       }}
@@ -241,7 +241,14 @@ function renderTaskRow(
         )}
       </td>
       <td className="p-2">
-        <Button size="sm" variant="outline" className={`${buttonBase} ${buttonDefault}`} onClick={() => handleAction("complete")} title="Завершить задачу">
+        <Button
+          size="sm"
+          variant="outline"
+          className={`${buttonBase} ${buttonDefault}`}
+          onClick={() => handleAction("complete")}
+          disabled={task.status === "waiting_previous"}
+          title={task.status === "waiting_previous" ? "Нельзя завершить задание: ожидает передачи сырья с предыдущего участка" : "Завершить задачу"}
+        >
           <span>Завершить</span>
         </Button>
       </td>
@@ -268,7 +275,7 @@ function renderMobileCard(
       key={task.id}
       className={`p-4 space-y-3 cursor-pointer transition-colors ${getMobileCardStatusClass(task.status, !!isSelected)} ${isLastInGroup ? "border-b-2 border-blue-300 mb-3" : "mb-0"}`}
       onClick={() => {
-        if (bulkMode && bulkSelection) {
+        if (bulkMode && bulkSelection && task.status !== "waiting_previous") {
           bulkSelection.selectOne(task.id);
         }
       }}
@@ -301,7 +308,14 @@ function renderMobileCard(
       ) : null}
 
       <div className="flex gap-2 pt-1">
-        <Button size="sm" variant="outline" className={`${buttonBase} ${buttonDefault}`} onClick={() => handleAction("complete")} title="Завершить задачу">
+        <Button
+          size="sm"
+          variant="outline"
+          className={`${buttonBase} ${buttonDefault}`}
+          onClick={() => handleAction("complete")}
+          disabled={task.status === "waiting_previous"}
+          title={task.status === "waiting_previous" ? "Нельзя завершить задание: ожидает передачи сырья с предыдущего участка" : "Завершить задачу"}
+        >
           <span>Завершить</span>
         </Button>
       </div>
@@ -334,7 +348,7 @@ function TableTaskGroupRow({
   const allSelected = bulkSelection?.isAllSelected(taskIds) ?? false;
   const firstTask = group.tasks[0];
   const groupHasCompletable = group.tasks.some(
-    (t) => !["completed", "cancelled", "done"].includes(t.status),
+    (t) => !["completed", "cancelled", "done", "waiting_previous"].includes(t.status),
   );
 
   return (
@@ -653,7 +667,7 @@ export function SectionTasksBoard({
         activeSummary={activeFilterSummary}
         onSelectAll={() => {
           onBulkModeChange?.(true);
-          onSelectAllVisible?.(visibleTasks.map((t) => t.id));
+          onSelectAllVisible?.(visibleTasks.filter((t) => t.status !== "waiting_previous").map((t) => t.id));
         }}
         totalRowCount={visibleTasks.length}
       />

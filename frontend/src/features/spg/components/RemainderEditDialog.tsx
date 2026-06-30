@@ -67,7 +67,6 @@ export function RemainderEditDialog({
   const [products, setProducts] = useState<Product[]>([]);
   const [productSearch, setProductSearch] = useState("");
   const [selectedProductId, setSelectedProductId] = useState<number | null>(null);
-  const [selectedSectionId, setSelectedSectionId] = useState<number | null>(null);
   const [quantity, setQuantity] = useState("");
   const [error, setError] = useState<string | null>(null);
 
@@ -114,12 +113,10 @@ export function RemainderEditDialog({
       listProducts({ limit: 200 }).then((items) => setProducts(items)).catch(() => {});
       if (editingRemainder) {
         setSelectedProductId(editingRemainder.product_id);
-        setSelectedSectionId(editingRemainder.section_id);
         setQuantity(String(editingRemainder.remainder_quantity));
         setProductSearch(editingRemainder.product_sku);
       } else {
         setSelectedProductId(null);
-        setSelectedSectionId(defaultSectionId ?? sections[0]?.section_id ?? null);
         setQuantity("");
         setProductSearch("");
       }
@@ -170,11 +167,6 @@ export function RemainderEditDialog({
     getProductLastCompletedOperation(selectedProductId)
       .then((data) => {
         setLastCompletedOp(data);
-        if (data.section_id) {
-          setSelectedSectionId(data.section_id);
-        } else {
-          setSelectedSectionId(defaultSectionId ?? sections[0]?.section_id ?? null);
-        }
       })
       .catch(() => {
         setLastCompletedOp(null);
@@ -223,7 +215,7 @@ export function RemainderEditDialog({
 
   const saveMutation = useMutation({
     mutationFn: async (input: { kind: "create" | "update"; payload: ManualRemainderCreateInput | ManualRemainderUpdateInput }) => {
-      const actualSpgId = spgs.find(s => s.sections.some(sec => sec.section_id === input.payload.section_id))?.id || spgId;
+      const actualSpgId = editingRemainder?.spg_id || spgId;
       if (input.kind === "create") {
         await createManualRemainder(actualSpgId, input.payload as ManualRemainderCreateInput);
       } else {
@@ -234,8 +226,8 @@ export function RemainderEditDialog({
         );
       }
     },
-    onSuccess: (_, variables) => {
-      const actualSpgId = spgs.find(s => s.sections.some(sec => sec.section_id === variables.payload.section_id))?.id || spgId;
+    onSuccess: () => {
+      const actualSpgId = editingRemainder?.spg_id || spgId;
       void queryClient.invalidateQueries({ queryKey: queryKeys.spg.snapshot(actualSpgId) });
       void queryClient.invalidateQueries({ queryKey: queryKeys.spg.remainders(actualSpgId) });
       void queryClient.invalidateQueries({ queryKey: queryKeys.spg.remainderHistory(actualSpgId) });
@@ -253,11 +245,11 @@ export function RemainderEditDialog({
   const deleteMutation = useMutation({
     mutationFn: async () => {
       if (!editingRemainder) return;
-      const actualSpgId = spgs.find(s => s.sections.some(sec => sec.section_id === editingRemainder.section_id))?.id || spgId;
+      const actualSpgId = editingRemainder.spg_id || spgId;
       await deleteManualRemainder(actualSpgId, editingRemainder.id);
     },
     onSuccess: () => {
-      const actualSpgId = editingRemainder ? spgs.find(s => s.sections.some(sec => sec.section_id === editingRemainder.section_id))?.id || spgId : spgId;
+      const actualSpgId = editingRemainder ? editingRemainder.spg_id || spgId : spgId;
       void queryClient.invalidateQueries({ queryKey: queryKeys.spg.snapshot(actualSpgId) });
       void queryClient.invalidateQueries({ queryKey: queryKeys.spg.remainders(actualSpgId) });
       void queryClient.invalidateQueries({ queryKey: queryKeys.spg.remainderHistory(actualSpgId) });
@@ -279,7 +271,7 @@ export function RemainderEditDialog({
   };
 
   const handleSave = () => {
-    if (!selectedProductId || !selectedSectionId || !quantity) {
+    if (!selectedProductId || !quantity) {
       setError("Заполните все поля");
       return;
     }
@@ -301,14 +293,12 @@ export function RemainderEditDialog({
     if (editingRemainder) {
       const payload: ManualRemainderUpdateInput = {
         quantity: qty,
-        section_id: selectedSectionId,
         completed_stages,
       };
       saveMutation.mutate({ kind: "update", payload });
     } else {
       const payload: ManualRemainderCreateInput = {
         product_id: selectedProductId as number,
-        section_id: selectedSectionId,
         quantity: qty,
         completed_stages,
       };
@@ -384,18 +374,7 @@ export function RemainderEditDialog({
             </div>
           </div>
 
-          {/* Section select */}
-          <div className="space-y-1">
-            <label className="text-sm font-medium">Участок</label>
-            <SectionSelect
-              sections={sectionsForSelect}
-              value={selectedSectionId}
-              onValueChange={setSelectedSectionId}
-              placeholder="Выберите участок"
-              className="w-full h-10 text-sm font-normal bg-background border rounded-md px-3"
-              hideCode={true}
-            />
-          </div>
+
 
           {/* Completed stages checkboxes */}
           <div className="space-y-2 border-t pt-2">
@@ -541,11 +520,11 @@ export function RemaindersListPanel({
 
   const deleteMutation = useMutation({
     mutationFn: (r: SpgRemainder) => {
-      const actualSpgId = spgs.find(s => s.sections.some(sec => sec.section_id === r.section_id))?.id || spgId;
+      const actualSpgId = r.spg_id || spgId;
       return deleteManualRemainder(actualSpgId, r.id);
     },
     onSuccess: (_, variables) => {
-      const actualSpgId = spgs.find(s => s.sections.some(sec => sec.section_id === variables.section_id))?.id || spgId;
+      const actualSpgId = variables.spg_id || spgId;
       void queryClient.invalidateQueries({ queryKey: queryKeys.spg.remainders(actualSpgId) });
       void queryClient.invalidateQueries({ queryKey: queryKeys.spg.snapshot(actualSpgId) });
       void queryClient.invalidateQueries({ queryKey: queryKeys.spg.remainderHistory(actualSpgId) });
@@ -588,7 +567,7 @@ export function RemaindersListPanel({
             <ChevronRight className="h-4 w-4 text-muted-foreground" />
           )}
           <h3 className="text-sm font-semibold">
-            Наличие на участках ({filteredRemainders.length} из {remainders.length})
+            Наличие на ГХП ({filteredRemainders.length} из {remainders.length})
           </h3>
         </button>
         <div className="flex items-center gap-2">
@@ -622,11 +601,11 @@ export function RemaindersListPanel({
               ) : (
                 <table className="w-full text-sm">
                   <thead className="bg-muted/50 border-b">
-                    <tr>
+                     <tr>
                       <th className="p-2 pr-0 text-left font-medium w-[130px]">Артикул</th>
                       <th className="p-2 pl-0 text-left font-medium w-[70px]">Кол-во</th>
                       <th className="p-2 text-left font-medium">Пройденные операции</th>
-                      <th className="p-2 text-left font-medium">Текущий участок</th>
+                      <th className="p-2 text-left font-medium">ГХП</th>
                       <th className="p-2 text-center font-medium">Источник</th>
                       <th className="p-2 text-center font-medium">Действия</th>
                     </tr>
@@ -675,9 +654,9 @@ export function RemaindersListPanel({
                                 : "—"}
                             </div>
                           </td>
-                          {/* 4. Текущий участок */}
+                          {/* 4. ГХП */}
                           <td className="p-2">
-                            <div className="text-xs font-medium text-foreground">{r.section_name}</div>
+                            <div className="text-xs font-medium text-foreground">{r.spg_name || "—"}</div>
                           </td>
                           {/* 5. Источник */}
                           <td className="p-2 text-center">
@@ -752,7 +731,7 @@ export function RemaindersListPanel({
         }}
         spgId={
           historyRemainderId !== null
-            ? spgs.find(s => s.sections.some(sec => sec.section_id === remainders.find(r => r.id === historyRemainderId)?.section_id))?.id || spgId
+            ? remainders.find(r => r.id === historyRemainderId)?.spg_id || spgId
             : spgId
         }
         remainderId={historyRemainderId}
@@ -782,8 +761,8 @@ export function RemaindersListPanel({
                       {remainderToDelete.product_name && ` — ${remainderToDelete.product_name}`}
                     </div>
                     <div>
-                      <span className="font-semibold text-muted-foreground mr-1">Участок:</span>
-                      <span className="font-medium text-foreground">{remainderToDelete.section_name}</span>
+                      <span className="font-semibold text-muted-foreground mr-1">ГХП:</span>
+                      <span className="font-medium text-foreground">{remainderToDelete.spg_name || "—"}</span>
                     </div>
                     <div>
                       <span className="font-semibold text-muted-foreground mr-1">Количество:</span>

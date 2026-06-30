@@ -110,9 +110,12 @@ export type SpgRemainder = {
   product_id: number;
   product_sku: string;
   product_name: string;
-  section_id: number;
-  section_code: string;
-  section_name: string;
+  spg_id: number;
+  spg_code: string;
+  spg_name: string;
+  section_id?: number | null;
+  section_code?: string | null;
+  section_name?: string | null;
   remainder_quantity: number;
   original_issued: number;
   completed_stages: Array<{
@@ -127,7 +130,7 @@ export type SpgRemainder = {
 
 export type ManualRemainderCreateInput = {
   product_id: number;
-  section_id: number;
+  section_id?: number | null;
   quantity: number;
   completed_stages?: Array<{
     section_id: number;
@@ -139,7 +142,7 @@ export type ManualRemainderCreateInput = {
 
 export type ManualRemainderUpdateInput = {
   quantity?: number;
-  section_id?: number;
+  section_id?: number | null;
   completed_stages?: Array<{
     section_id: number;
     operation_code?: string | null;
@@ -228,9 +231,12 @@ export type RemainderHistoryRemainder = {
   product_id: number;
   product_sku: string;
   product_name: string;
-  section_id: number;
-  section_code: string;
-  section_name: string;
+  spg_id: number;
+  spg_code: string;
+  spg_name: string;
+  section_id?: number | null;
+  section_code?: string | null;
+  section_name?: string | null;
   remainder_quantity: number;
   original_issued: number;
   source: string;
