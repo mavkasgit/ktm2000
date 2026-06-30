@@ -13,7 +13,7 @@ from app.models.route import RouteStage, SectionOperation
 from app.models.section import Section
 from app.models.transfer import Transfer
 from app.models.work_task import WorkTask, WorkTaskStatus
-from app.services.route_matcher import ResolvedRouteInfo, resolve_position_route
+from app.services.route_matcher import ResolvedRouteInfo, resolve_position_route, make_position_route_cache_key
 
 MANUAL_ROUTE_PASS_PREFIX = "manual_route_pass:"
 
@@ -211,10 +211,26 @@ async def list_production_planning_rows(db: AsyncSession) -> list[dict]:
             ).scalars().all()
         }
 
+    # Загружаем все необходимые RouteStage с их operations одним запросом
+    stage_ids = {r.stage_id for r in current_stage_rows}
+    if fallback_rows:
+        stage_ids |= {r.stage_id for r in fallback_rows}
+    
+    stages_by_id = {}
+    if stage_ids:
+        stages_list = (
+            await db.execute(
+                select(RouteStage)
+                .options(selectinload(RouteStage.operations))
+                .where(RouteStage.id.in_(stage_ids))
+            )
+        ).scalars().all()
+        stages_by_id = {stage.id: stage for stage in stages_list}
+
     current_stage_by_position: dict[int, dict] = {}
     
-    async def process_row(row):
-        stage = await _get_stage_with_operations(db, row.stage_id)
+    def process_row(row):
+        stage = stages_by_id.get(row.stage_id)
         op_name = _resolve_stage_operation_name(stage, operation_names_by_key) if stage else ""
         op_code = _resolve_stage_operation_code(stage) if stage else None
         return {
@@ -229,7 +245,7 @@ async def list_production_planning_rows(db: AsyncSession) -> list[dict]:
 
     for row in current_stage_rows:
         if row.plan_position_id not in current_stage_by_position:
-            current_stage_by_position[row.plan_position_id] = await process_row(row)
+            current_stage_by_position[row.plan_position_id] = process_row(row)
 
     fallback_rows_by_position: dict[int, list] = {}
     for row in fallback_rows:
@@ -247,16 +263,18 @@ async def list_production_planning_rows(db: AsyncSession) -> list[dict]:
         if chosen_row is None and rows:
             chosen_row = rows[-1]
         if chosen_row is not None:
-            current_stage_by_position[position_id] = await process_row(chosen_row)
+            current_stage_by_position[position_id] = process_row(chosen_row)
 
-    route_cache: dict[int, ResolvedRouteInfo] = {}
+
+    route_cache: dict[tuple, ResolvedRouteInfo] = {}
     route_steps_cache: dict[int, list[dict]] = {}
 
     result: list[dict] = []
     for pos in positions:
-        if pos.id not in route_cache:
+        cache_key = make_position_route_cache_key(pos)
+        if cache_key not in route_cache:
             route_info = await resolve_position_route(db, pos)
-            route_cache[pos.id] = route_info
+            route_cache[cache_key] = route_info
 
             # Cache route stages for this route
             if route_info.route_id is not None and route_info.route_id not in route_steps_cache:
@@ -279,7 +297,7 @@ async def list_production_planning_rows(db: AsyncSession) -> list[dict]:
                     for stage, section in stages
                 ]
 
-        route_info = route_cache[pos.id]
+        route_info = route_cache[cache_key]
 
         has_tasks = pos.id in has_tasks_set
         is_completed = pos.id in completed_set

@@ -37,7 +37,7 @@ from app.services.production_plan_service import (
     rollback_change_set,
     soft_delete_cancelled_position,
 )
-from app.services.route_matcher import resolve_position_route, ResolvedRouteInfo
+from app.services.route_matcher import resolve_position_route, ResolvedRouteInfo, make_position_route_cache_key
 from app.services.route_selection import select_route_for_payload
 from app.services.route_validation import validate_route_match
 from app.services.plan_validation import format_validation_error
@@ -934,21 +934,36 @@ async def section_totals(
         return SectionTotalsOut(production_plan_id=production_plan_id, totals=[])
 
     totals_by_section: dict[int, dict] = {}
+    route_resolve_cache = {}
+    route_stages_cache = {}
+
     for position in positions:
         if position.product_id is None:
             continue
-        route_info = await resolve_position_route(db, position)
+        
+        cache_key = make_position_route_cache_key(position)
+        if cache_key in route_resolve_cache:
+            route_info = route_resolve_cache[cache_key]
+        else:
+            route_info = await resolve_position_route(db, position)
+            route_resolve_cache[cache_key] = route_info
+
         if route_info.route_id is None:
             continue
 
-        stages = (
-            await db.execute(
-                select(RouteStage, Section)
-                .join(Section, RouteStage.section_id == Section.id)
-                .where(RouteStage.route_id == route_info.route_id)
-                .order_by(RouteStage.sequence)
-            )
-        ).all()
+        if route_info.route_id in route_stages_cache:
+            stages = route_stages_cache[route_info.route_id]
+        else:
+            stages = (
+                await db.execute(
+                    select(RouteStage, Section)
+                    .join(Section, RouteStage.section_id == Section.id)
+                    .where(RouteStage.route_id == route_info.route_id)
+                    .order_by(RouteStage.sequence)
+                )
+            ).all()
+            route_stages_cache[route_info.route_id] = stages
+
         for _, section in stages:
             bucket = totals_by_section.setdefault(
                 section.id,
@@ -1123,15 +1138,16 @@ async def all_plan_positions(db: AsyncSession = Depends(get_db)) -> list[PlanPos
     ).scalars().all()
     warnings_by_position = {ci.plan_position_id: ci.warnings for ci in change_items if ci.plan_position_id}
 
-    route_resolve_cache: dict[int, ResolvedRouteInfo] = {}
+    route_resolve_cache: dict[tuple, ResolvedRouteInfo] = {}
 
     result = []
     for p in positions:
-        if p.id in route_resolve_cache:
-            route_info = route_resolve_cache[p.id]
+        cache_key = make_position_route_cache_key(p)
+        if cache_key in route_resolve_cache:
+            route_info = route_resolve_cache[cache_key]
         else:
             route_info = await resolve_position_route(db, p)
-            route_resolve_cache[p.id] = route_info
+            route_resolve_cache[cache_key] = route_info
 
         result.append(
             PlanPositionOut(
@@ -1191,15 +1207,16 @@ async def cancelled_positions(db: AsyncSession = Depends(get_db)) -> list[PlanPo
     ).scalars().all()
     warnings_by_position = {ci.plan_position_id: ci.warnings for ci in change_items if ci.plan_position_id}
 
-    route_resolve_cache: dict[int, ResolvedRouteInfo] = {}
+    route_resolve_cache: dict[tuple, ResolvedRouteInfo] = {}
 
     result = []
     for p in positions:
-        if p.id in route_resolve_cache:
-            route_info = route_resolve_cache[p.id]
+        cache_key = make_position_route_cache_key(p)
+        if cache_key in route_resolve_cache:
+            route_info = route_resolve_cache[cache_key]
         else:
             route_info = await resolve_position_route(db, p)
-            route_resolve_cache[p.id] = route_info
+            route_resolve_cache[cache_key] = route_info
 
         result.append(
             PlanPositionOut(
@@ -1261,15 +1278,16 @@ async def all_positions(production_plan_id: int, db: AsyncSession = Depends(get_
     warnings_by_position = {ci.plan_position_id: ci.warnings for ci in change_items if ci.plan_position_id}
 
     # Cache resolved routes
-    route_resolve_cache: dict[int, ResolvedRouteInfo] = {}
+    route_resolve_cache: dict[tuple, ResolvedRouteInfo] = {}
 
     result = []
     for p in positions:
-        if p.id in route_resolve_cache:
-            route_info = route_resolve_cache[p.id]
+        cache_key = make_position_route_cache_key(p)
+        if cache_key in route_resolve_cache:
+            route_info = route_resolve_cache[cache_key]
         else:
             route_info = await resolve_position_route(db, p)
-            route_resolve_cache[p.id] = route_info
+            route_resolve_cache[cache_key] = route_info
 
         result.append(
             PlanPositionOut(
@@ -1572,7 +1590,7 @@ async def reset_all_plans(
     """Удалить все производственные планы, связанные данные и справочники (маршруты, правила, импорты)."""
     await db.execute(text("""
         TRUNCATE TABLE
-            defects, rework_tasks, transfers, movements,
+            defects, rework_tasks, transfers, movements, spg_remainders,
             work_tasks, section_plan_lines, internal_plans,
             release_batch_positions, release_batches,
             plan_change_items, plan_change_sets,

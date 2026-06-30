@@ -844,3 +844,106 @@ async def test_defect_accept_with_deviation_flow(client, session) -> None:
     assert movements[0].quantity == Decimal("80")
     assert movements[1].quantity == Decimal("20")
     assert movements[1].source_ref == f"defect:{defect_id}"
+
+
+@pytest.mark.asyncio
+async def test_shopfloor_issue_shortage_strategies_and_compensation(client, session) -> None:
+    from app.models.spg_remainder import SpgRemainder
+
+    user = await _make_user(session, "shortage_strats@test.local")
+    _, plan, pos = await _make_product_route_plan(session, "FG-SHORTAGE-STRATS")
+    headers = _auth_headers(user)
+
+    await _release_plan_position(client, plan.id, pos.id)
+
+    tasks = (
+        await session.execute(
+            select(WorkTask)
+            .join(SectionPlanLine, WorkTask.section_plan_line_id == SectionPlanLine.id)
+            .where(SectionPlanLine.plan_position_id == pos.id)
+            .order_by(SectionPlanLine.sequence)
+        )
+    ).scalars().all()
+    
+    first_task = tasks[0]
+
+    from app.models.spg import StorageProductionGroup, SpgSection
+    spg = StorageProductionGroup(code="TEST-STRATS-SPG", name="Test SPG", is_active=True, sort_order=1)
+    session.add(spg)
+    await session.flush()
+    session.add(SpgSection(spg_id=spg.id, section_id=first_task.section_id, sort_order=0))
+    await session.flush()
+
+    # 1. Проверяем стратегию fail при нехватке (запрос 120 деталей, доступно 100)
+    res_fail = await client.post(
+        f"/api/shopfloor/tasks/{first_task.id}/issue",
+        json={"quantity": "120", "shortage_strategy": "fail"},
+        headers=headers,
+    )
+    assert res_fail.status_code == 400
+    assert "Недостаточно доступного количества" in res_fail.json()["detail"]
+
+    # 2. Проверяем стратегию partial при нехватке (запрос 120 деталей, доступно 100 -> должно выдать ровно 100)
+    res_partial = await client.post(
+        f"/api/shopfloor/tasks/{first_task.id}/issue",
+        json={"quantity": "120", "shortage_strategy": "partial"},
+        headers=headers,
+    )
+    assert res_partial.status_code == 200
+    await session.refresh(first_task)
+    assert first_task.cached_issued_quantity == Decimal("100")
+    assert first_task.cached_available_quantity == Decimal("0")
+
+    # 3. Теперь, когда доступно 0 деталей, проверяем стратегию partial (должно вернуть ошибку)
+    res_partial_zero = await client.post(
+        f"/api/shopfloor/tasks/{first_task.id}/issue",
+        json={"quantity": "10", "shortage_strategy": "partial"},
+        headers=headers,
+    )
+    assert res_partial_zero.status_code == 400
+    assert "Доступное количество равно 0" in res_partial_zero.json()["detail"]
+
+    # 4. Проверяем стратегию negative_remainder при запросе еще 10 деталей (доступно 0)
+    res_negative = await client.post(
+        f"/api/shopfloor/tasks/{first_task.id}/issue",
+        json={"quantity": "10", "shortage_strategy": "negative_remainder"},
+        headers=headers,
+    )
+    assert res_negative.status_code == 200
+    await session.refresh(first_task)
+    assert first_task.cached_issued_quantity == Decimal("110")
+
+    # Проверяем, что в БД появился отрицательный остаток -10
+    neg_rem = await session.scalar(
+        select(SpgRemainder)
+        .where(
+            SpgRemainder.origin_task_id == first_task.id,
+            SpgRemainder.remainder_quantity < 0,
+            SpgRemainder.consumed_at.is_(None),
+        )
+    )
+    assert neg_rem is not None
+    assert neg_rem.remainder_quantity == Decimal("-10")
+
+    # 5. Проверим автокомпенсацию:
+    res_complete = await client.post(
+        f"/api/shopfloor/tasks/{first_task.id}/complete",
+        json={"good_quantity": "100"},
+        headers=headers,
+    )
+    assert res_complete.status_code == 200
+
+    # Возврат остатка на участок 10 шт
+    res_return = await client.post(
+        "/api/shopfloor/remainders/return",
+        json={"task_id": first_task.id, "quantity": "10"},
+        headers=headers,
+    )
+    assert res_return.status_code == 200
+
+    # Проверяем, что отрицательный остаток -10 и положительный остаток +10 схлопнулись!
+    await session.refresh(neg_rem)
+    assert neg_rem.consumed_at is not None
+    assert neg_rem.remainder_quantity == Decimal("0")
+
+

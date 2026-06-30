@@ -1,11 +1,19 @@
 from datetime import datetime
 from decimal import Decimal
+import enum
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Header, Query
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+
+
+class ShortageStrategy(str, enum.Enum):
+    fail = "fail"
+    partial = "partial"
+    negative_remainder = "negative_remainder"
+
 
 from app.api.deps import READER_ROLES, WRITER_ROLES, TRANSFER_WRITER_ROLES, require_role
 from app.api.deps import get_current_user
@@ -100,6 +108,7 @@ class IssuePayload(BaseModel):
     executor_user_id: int | None = None
     performed_at: datetime | None = None
     accounted_at: datetime | None = None
+    shortage_strategy: ShortageStrategy = ShortageStrategy.negative_remainder
 
 
 class CompletePayload(BaseModel):
@@ -111,6 +120,8 @@ class CompletePayload(BaseModel):
     executor_user_id: int | None = None
     performed_at: datetime | None = None
     accounted_at: datetime | None = None
+    shortage_strategy: ShortageStrategy = ShortageStrategy.negative_remainder
+
 
 
 class CreateTransferPayload(BaseModel):
@@ -275,6 +286,7 @@ async def issue_task(
             executor_user_id=payload.executor_user_id,
             performed_at=payload.performed_at,
             accounted_at=payload.accounted_at,
+            shortage_strategy=payload.shortage_strategy,
         )
 
         # Запись лога аудита
@@ -342,6 +354,7 @@ async def complete_task_endpoint(
             executor_user_id=payload.executor_user_id,
             performed_at=payload.performed_at,
             accounted_at=payload.accounted_at,
+            shortage_strategy=payload.shortage_strategy,
         )
 
         # Запись лога аудита
@@ -408,6 +421,7 @@ class BulkCompleteEntry(BaseModel):
     executor_user_id: int | None = None
     performed_at: datetime | None = None
     accounted_at: datetime | None = None
+    shortage_strategy: ShortageStrategy = ShortageStrategy.negative_remainder
 
 
 class BulkActionRequest(BaseModel):
@@ -465,6 +479,7 @@ async def bulk_complete_tasks(
                     executor_user_id=entry.executor_user_id,
                     performed_at=entry.performed_at,
                     accounted_at=entry.accounted_at,
+                    shortage_strategy=entry.shortage_strategy,
                 )
             results.append(BulkActionResultItem(id=entry.task_id, status="success"))
         except HTTPException as exc:

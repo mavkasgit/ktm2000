@@ -120,6 +120,27 @@ async def _refresh_task_cache(db: AsyncSession, task_id: int, visited: set[int] 
     if in_work < 0:
         in_work = Decimal("0")
 
+    prev_completed = Decimal("0")
+    line = await db.get(SectionPlanLine, task.section_plan_line_id)
+    if line is not None and line.sequence > 1:
+        prev_line = await db.scalar(
+            select(SectionPlanLine).where(
+                SectionPlanLine.plan_position_id == line.plan_position_id,
+                SectionPlanLine.sequence == line.sequence - 1,
+            )
+        )
+        if prev_line is not None:
+            from .common import sections_share_spg
+            if await sections_share_spg(db, prev_line.section_id, line.section_id):
+                prev_completed = await db.scalar(
+                    select(func.coalesce(func.sum(Movement.quantity), 0))
+                    .join(WorkTask, Movement.task_id == WorkTask.id)
+                    .where(
+                        WorkTask.section_plan_line_id == prev_line.id,
+                        Movement.movement_type == MovementType.complete.value
+                    )
+                ) or Decimal("0")
+
     base_available = await _initial_available_quantity(db, task)
     consumed_from_remainders = await db.scalar(
         select(func.coalesce(func.sum(Movement.quantity), 0)).where(
@@ -128,7 +149,7 @@ async def _refresh_task_cache(db: AsyncSession, task_id: int, visited: set[int] 
             Movement.source_ref.like("remainder:%"),
         )
     ) or Decimal("0")
-    available = base_available + received + consumed_from_remainders - issued
+    available = base_available + received + consumed_from_remainders + prev_completed - issued
     if available < 0:
         available = Decimal("0")
 
@@ -185,6 +206,7 @@ async def _refresh_task_cache(db: AsyncSession, task_id: int, visited: set[int] 
                     await _refresh_task_cache(db, next_task.id, visited)
                     await _refresh_section_plan_line_cache(db, next_line.id)
 
+    await db.flush()
     return task
 
 async def _refresh_section_plan_line_cache(db: AsyncSession, section_plan_line_id: int) -> None:

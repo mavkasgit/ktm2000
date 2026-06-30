@@ -4,6 +4,7 @@ from datetime import UTC, datetime
 from decimal import Decimal
 
 from sqlalchemy import func, select
+from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.techcard import Techcard, TechcardLine
@@ -48,8 +49,15 @@ async def create_release_batch(
     db.add(batch)
     await db.flush()
 
+    # Локальные кэши для устранения N+1 при выпуске позиций в работу
+    techcard_cache = {}
+    route_stages_cache = {}
+    released_qty_cache = {}
+    sections_cache = {}
+    section_operations_cache = {}
+
     for position, release_quantity in selected_positions:
-        await _validate_active_techcard(db, position)
+        await _validate_active_techcard(db, position, techcard_cache)
 
         # Position must have a persisted route_id (from import)
         if position.route_id is None:
@@ -59,20 +67,29 @@ async def create_release_batch(
         if route is None or not route.is_active:
             raise ValueError(f"Route for position {position.id} is not active")
 
-        steps = await _get_route_stages_with_sections(db, route)
-        remaining = await _remaining_quantity(db, position)
+        steps = await _get_route_stages_with_sections(
+            db, route,
+            route_stages_cache=route_stages_cache,
+            sections_cache=sections_cache
+        )
+        remaining = await _remaining_quantity(db, position, released_qty_cache)
         if release_quantity <= 0:
             raise ValueError("Release quantity must be > 0")
         if release_quantity > remaining:
             raise ValueError("Release quantity exceeds approved remaining quantity")
 
         section_ids = {section.id for _stage, section, _ops in steps}
-        operation_names_by_key = {
-            (op.section_id, op.operation_code): op.operation_name
-            for op in (
-                await db.execute(select(SectionOperation).where(SectionOperation.section_id.in_(section_ids)))
-            ).scalars().all()
-        }
+        sec_ids_key = tuple(sorted(section_ids))
+        if sec_ids_key in section_operations_cache:
+            operation_names_by_key = section_operations_cache[sec_ids_key]
+        else:
+            operation_names_by_key = {
+                (op.section_id, op.operation_code): op.operation_name
+                for op in (
+                    await db.execute(select(SectionOperation).where(SectionOperation.section_id.in_(section_ids)))
+                ).scalars().all()
+            }
+            section_operations_cache[sec_ids_key] = operation_names_by_key
 
         db.add(
             ReleaseBatchPosition(
@@ -83,6 +100,7 @@ async def create_release_batch(
                 route_snapshot=await _route_snapshot(db, route, steps, position, operation_names_by_key),
             )
         )
+
 
     await db.flush()
     return await get_release_batch_summary(db, batch.id)
@@ -322,22 +340,42 @@ async def _select_release_positions(
     return [(position, position.quantity) for position in positions]
 
 
-async def _validate_active_techcard(db: AsyncSession, position: PlanPosition) -> None:
+async def _validate_active_techcard(db: AsyncSession, position: PlanPosition, cache: dict | None = None) -> None:
+    if cache is not None and position.product_id in cache:
+        if not cache[position.product_id]:
+            raise ValueError("Активная техкарта не найдена или не содержит строк")
+        return
+
     techcard = await db.scalar(select(Techcard).where(Techcard.product_id == position.product_id, Techcard.is_active.is_(True)))
     if techcard is None:
+        if cache is not None:
+            cache[position.product_id] = False
         raise ValueError("Активная техкарта не найдена")
     line = await db.scalar(select(TechcardLine).where(TechcardLine.techcard_id == techcard.id).limit(1))
     if line is None:
+        if cache is not None:
+            cache[position.product_id] = False
         raise ValueError("Активная техкарта не содержит строк")
+    
+    if cache is not None:
+        cache[position.product_id] = True
 
 
 async def _get_route_stages_with_sections(
-    db: AsyncSession, route: ProductionRoute
+    db: AsyncSession,
+    route: ProductionRoute,
+    *,
+    route_stages_cache: dict | None = None,
+    sections_cache: dict | None = None,
 ) -> list[tuple[RouteStage, Section, list[RouteOperation]]]:
     """Return ordered list of ``(RouteStage, Section, operations)`` for a route."""
+    if route_stages_cache is not None and route.id in route_stages_cache:
+        return route_stages_cache[route.id]
+
     stages = (
         await db.execute(
             select(RouteStage)
+            .options(selectinload(RouteStage.operations))
             .where(RouteStage.route_id == route.id)
             .order_by(RouteStage.sequence)
         )
@@ -352,13 +390,24 @@ async def _get_route_stages_with_sections(
         if stage.sequence <= previous:
             raise ValueError("Route sequence is invalid")
         previous = stage.sequence
-        section = await db.get(Section, stage.section_id)
+        
+        if sections_cache is not None and stage.section_id in sections_cache:
+            section = sections_cache[stage.section_id]
+        else:
+            section = await db.get(Section, stage.section_id)
+            if sections_cache is not None and section is not None:
+                sections_cache[stage.section_id] = section
+
         if section is None or not section.is_active:
             raise ValueError("Route contains inactive section")
         result.append((stage, section, list(stage.operations)))
     for stage, _section, _ops in result:
         stage._synthetic = False  # type: ignore[attr-defined]
+    
+    if route_stages_cache is not None:
+        route_stages_cache[route.id] = result
     return result
+
 
 
 def _dynamic_route_snapshot(
@@ -473,11 +522,14 @@ async def _resolve_route_stage_operation_name(
     return " / ".join(names)
 
 
-async def _remaining_quantity(db: AsyncSession, position: PlanPosition) -> Decimal:
-    return position.quantity - await _released_quantity(db, position)
+async def _remaining_quantity(db: AsyncSession, position: PlanPosition, cache: dict | None = None) -> Decimal:
+    return position.quantity - await _released_quantity(db, position, cache)
 
 
-async def _released_quantity(db: AsyncSession, position: PlanPosition) -> Decimal:
+async def _released_quantity(db: AsyncSession, position: PlanPosition, cache: dict | None = None) -> Decimal:
+    if cache is not None and position.id in cache:
+        return cache[position.id]
+
     value = await db.scalar(
         select(func.coalesce(func.sum(ReleaseBatchPosition.release_quantity), 0))
         .join(ReleaseBatch, ReleaseBatch.id == ReleaseBatchPosition.release_batch_id)
@@ -486,7 +538,11 @@ async def _released_quantity(db: AsyncSession, position: PlanPosition) -> Decima
             ReleaseBatch.status != ReleaseBatchStatus.cancelled,
         )
     )
-    return Decimal(str(value or 0))
+    res = Decimal(str(value or 0))
+    if cache is not None:
+        cache[position.id] = res
+    return res
+
 
 
 def _make_batch_no() -> str:
