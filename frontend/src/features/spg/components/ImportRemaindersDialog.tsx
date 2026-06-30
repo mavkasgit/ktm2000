@@ -80,11 +80,11 @@ export function ImportRemaindersDialog({
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Load preview when sheet or row selection changes
+  // Load preview when sheet, row selection or target SPG changes
   useEffect(() => {
     if (step !== "preview" || !file) return;
     loadPreview();
-  }, [step, selectedSheet, rowSelection]);
+  }, [step, selectedSheet, rowSelection, currentSpgId]);
 
   const loadPreview = async () => {
     if (!file) return;
@@ -262,24 +262,7 @@ export function ImportRemaindersDialog({
                 Система автоматически распознает артикулы, количества и выполненные операции.
               </p>
 
-              {spgs && spgs.length > 1 && (!selectedSpgIds || selectedSpgIds.length !== 1) && (
-                <div className="space-y-1">
-                  <label className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider block">
-                    Группа ГХП для импорта остатков:
-                  </label>
-                  <SpgSelect
-                    spgs={spgs}
-                    value={currentSpgId}
-                    onValueChange={(val) => {
-                      if (val !== null) {
-                        setCurrentSpgId(val);
-                      }
-                    }}
-                    placeholder="Выберите ГХП"
-                    className="w-full h-10 text-sm font-normal bg-background border rounded-md px-3"
-                  />
-                </div>
-              )}
+
 
               {/* Excel table preview example */}
               <div className="space-y-2">
@@ -601,6 +584,22 @@ export function ImportRemaindersDialog({
 
           {step === "preview" && (
             <>
+              {spgs && spgs.length > 1 && (!selectedSpgIds || selectedSpgIds.length !== 1) && (
+                <div className="flex items-center gap-2 mr-auto">
+                  <span className="text-xs font-semibold text-muted-foreground whitespace-nowrap">Импортировать в:</span>
+                  <SpgSelect
+                    spgs={spgs}
+                    value={currentSpgId}
+                    onValueChange={(val) => {
+                      if (val !== null) {
+                        setCurrentSpgId(val);
+                      }
+                    }}
+                    placeholder="Выберите ГХП"
+                    className="w-48 h-8 text-xs font-normal bg-background border rounded-md px-2"
+                  />
+                </div>
+              )}
               <Button
                 variant="outline"
                 onClick={() => {
