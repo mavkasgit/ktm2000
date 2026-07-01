@@ -14,7 +14,6 @@ import {
   softDeletePositionsExecutionBatch,
   manualPassPositionsExecutionBatch,
   getPositionHistory,
-  getRemaindersPreview,
   type ProductionPlanningRow,
   type StatusHistoryEntry,
   type ProductionPlanningRowDetail,
@@ -305,29 +304,20 @@ export function ExecutionPage() {
     }
   }, []);
 
-  const handleSingleLaunch = useCallback(async (row: ProductionPlanningRow) => {
+  const handleSingleLaunch = useCallback((row: ProductionPlanningRow) => {
     const reason = getLaunchBlockReason(row);
     if (reason) {
       toast({ title: "Невозможно запустить", description: reason, variant: "destructive" });
       return;
     }
-    try {
-      const preview = await getRemaindersPreview(row.plan_position_id);
-      if (preview.available_remainders.length > 0) {
-        setRemainderDialog({
-          open: true,
-          positionId: row.plan_position_id,
-          sku: row.source_sku,
-          name: row.source_name || "",
-          quantity: row.quantity,
-        });
-      } else {
-        takeToWorkMutation.mutate({ positionIds: [row.plan_position_id] });
-      }
-    } catch (e) {
-      toast({ title: "Ошибка загрузки остатков", description: getErrorMessage(e), variant: "destructive" });
-    }
-  }, [takeToWorkMutation]);
+    setRemainderDialog({
+      open: true,
+      positionId: row.plan_position_id,
+      sku: row.source_sku,
+      name: row.source_name || "",
+      quantity: row.quantity,
+    });
+  }, []);
 
   const handleManualPass = useCallback((row: ProductionPlanningRow) => {
     if (!row.route_id || !["approved", "released"].includes(row.position_status)) {

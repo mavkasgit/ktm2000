@@ -301,8 +301,9 @@ export function RemainderAllocationDialog({
                   </div>
 
                   {data.available_remainders.length === 0 ? (
-                    <div className="text-sm text-muted-foreground py-6 text-center bg-muted/20 rounded-md border border-dashed">
+                    <div className="text-sm py-4 px-3 text-center bg-destructive/10 text-destructive rounded-md border border-destructive/20">
                       Нет активных остатков на складах подготовки для данного артикула.
+                      Взять в работу невозможно — закройте окно и пополните остатки.
                     </div>
                   ) : (
                     <div className="border rounded-md overflow-hidden bg-card">
@@ -585,7 +586,7 @@ export function RemainderAllocationDialog({
           </Button>
           <Button
             onClick={handleConfirm}
-            disabled={loading || pending || hasErrors || !data}
+            disabled={loading || pending || hasErrors || !data || data.available_remainders.length === 0}
             className="px-6"
           >
             {pending ? "Запуск..." : "Запустить в работу"}
