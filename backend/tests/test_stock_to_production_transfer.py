@@ -1,0 +1,233 @@
+"""Tests for stock-to-production auto-transfer and no-WorkTask-on-stock semantics.
+
+When a route contains storage sections (raw_stock / wip_stock), they are
+storage slots inside a GHP — not actual work steps.  ``take-to-work`` must
+NOT create a WorkTask on them; instead, raw material flows from storage
+to the production step via SpgRemainder + Transfer.
+"""
+from __future__ import annotations
+
+from decimal import Decimal
+
+import pytest
+from sqlalchemy import select
+
+from app.core.security import create_access_token
+from app.models.product import Product, ProductType
+from app.models.section import Section
+from app.models.spg import SpgSection, StorageProductionGroup
+from app.models.user import User, UserRole
+from app.models.work_task import WorkTask
+
+
+# ─── helpers ─────────────────────────────────────────────────────────────────
+
+
+async def _make_user(session, email: str = "raw@local") -> User:
+    user = User(
+        email=email,
+        password_hash="x",
+        full_name="Raw Tester",
+        role=UserRole.operator,
+        is_active=True,
+    )
+    session.add(user)
+    await session.flush()
+    return user
+
+
+def _auth_headers(user: User) -> dict[str, str]:
+    token = create_access_token(subject=user.email)
+    return {"Authorization": f"Bearer {token}"}
+
+
+async def _make_raw_stock_to_production_fixture(
+    session,
+    *,
+    sku: str,
+    qty: Decimal,
+    same_ghp: bool = False,
+) -> dict:
+    """raw_stock + production в разных ГХП (или одной, если same_ghp=True)."""
+    from datetime import date
+    from app.models.route import ProductionRoute, RouteStage, RouteOperation
+    from app.models.techcard import Techcard, TechcardLine
+    from app.models.production_plan import (
+        PlanPosition,
+        PlanPositionStatus,
+        PlanPositionValidationStatus,
+        PlanSourceType,
+        ProductionPlan,
+        ProductionPlanStatus,
+    )
+
+    raw_sec = Section(code=f"{sku}-RAW", name="RAW", kind="raw_stock", is_active=True, sort_order=0)
+    prod_sec = Section(code=f"{sku}-PROD", name="PROD", kind="production", is_active=True, sort_order=1)
+    session.add_all([raw_sec, prod_sec])
+    await session.flush()
+
+    if same_ghp:
+        spg = StorageProductionGroup(code=f"{sku}-SPG", name="One", is_active=True, sort_order=0)
+        session.add(spg)
+        await session.flush()
+        session.add_all([
+            SpgSection(spg_id=spg.id, section_id=raw_sec.id, sort_order=0),
+            SpgSection(spg_id=spg.id, section_id=prod_sec.id, sort_order=1),
+        ])
+        spgs = [spg]
+    else:
+        spg_a = StorageProductionGroup(code=f"{sku}-A", name="A", is_active=True, sort_order=0)
+        spg_b = StorageProductionGroup(code=f"{sku}-B", name="B", is_active=True, sort_order=1)
+        session.add_all([spg_a, spg_b])
+        await session.flush()
+        session.add_all([
+            SpgSection(spg_id=spg_a.id, section_id=raw_sec.id, sort_order=0),
+            SpgSection(spg_id=spg_b.id, section_id=prod_sec.id, sort_order=0),
+        ])
+        spgs = [spg_a, spg_b]
+
+    product = Product(sku=sku, name=sku, type=ProductType.finished_good, unit="pcs", is_active=True)
+    session.add(product)
+    await session.flush()
+
+    route = ProductionRoute(name=f"Route {sku}", is_active=True)
+    session.add(route)
+    await session.flush()
+    for idx, (sec, code) in enumerate([(raw_sec, "ISSUE_RAW"), (prod_sec, "PROD")], start=1):
+        st = RouteStage(route_id=route.id, sequence=idx, section_id=sec.id, is_final=(idx == 2))
+        session.add(st)
+        await session.flush()
+        session.add(RouteOperation(route_stage_id=st.id, sequence=1, operation_code=code, operation_name=code))
+
+    tech = Techcard(product_id=product.id, version="v1", is_active=True)
+    session.add(tech)
+    await session.flush()
+    session.add(TechcardLine(techcard_id=tech.id, component_product_id=product.id, quantity=Decimal("1"), unit="pcs"))
+
+    plan = ProductionPlan(
+        plan_no=f"P-{sku}", name="p", status=ProductionPlanStatus.approved,
+        period_start=date(2026, 5, 1), period_end=date(2026, 5, 31),
+    )
+    session.add(plan)
+    await session.flush()
+
+    pos = PlanPosition(
+        production_plan_id=plan.id, product_id=product.id,
+        source_type=PlanSourceType.manual, source_sku=product.sku, source_name=product.name,
+        quantity=qty, source_payload={}, status=PlanPositionStatus.approved,
+        validation_status=PlanPositionValidationStatus.valid, validation_errors=[],
+        period_start=plan.period_start, period_end=plan.period_end,
+        has_pack_ops=False, route_id=route.id, route_assigned_at=None,
+    )
+    session.add(pos)
+    await session.commit()
+    return {
+        "product": product,
+        "plan": plan,
+        "position": pos,
+        "sections": [raw_sec, prod_sec],
+        "spgs": spgs,
+        "same_ghp": same_ghp,
+    }
+
+
+async def _release_via_take_to_work(client, position_id: int) -> None:
+    resp = await client.post("/api/production-planning/rows/take-to-work", json={"position_ids": [position_id]})
+    assert resp.status_code == 200, resp.text
+
+
+# ─── tests ──────────────────────────────────────────────────────────────────
+
+
+async def test_take_to_work_does_not_create_task_on_raw_stock(client, session) -> None:
+    """WorkTask создаётся только на production-секции, даже если
+    в маршруте есть raw_stock (склад)."""
+    user = await _make_user(session)
+    fx = await _make_raw_stock_to_production_fixture(session, sku="RAWTST", qty=Decimal("5"))
+    await _release_via_take_to_work(client, fx["position"].id)
+
+    tasks = (await session.execute(select(WorkTask))).scalars().all()
+    assert len(tasks) == 1, f"Ожидался 1 WorkTask (только на production), получили {len(tasks)}"
+    assert tasks[0].section_id == fx["sections"][1].id
+
+
+async def test_issue_to_work_creates_cross_ghp_transfer_from_stock(client, session) -> None:
+    """При выдаче в работу на production-участке, если сырьё на raw_stock
+    в другой ГХП, должен создаться Transfer."""
+    from datetime import UTC, datetime
+    from app.models.spg_remainder import SpgRemainder
+    from app.models.transfer import Transfer
+
+    user = await _make_user(session)
+    fx = await _make_raw_stock_to_production_fixture(session, sku="RAW2PROD", qty=Decimal("5"))
+    raw_sec, prod_sec = fx["sections"][0], fx["sections"][1]
+    spg_a = fx["spgs"][0]
+
+    rem = SpgRemainder(
+        spg_id=spg_a.id,
+        product_id=fx["product"].id,
+        remainder_quantity=Decimal("5"),
+        original_issued=Decimal("5"),
+        created_at=datetime.now(UTC),
+    )
+    session.add(rem)
+    await session.commit()
+
+    await _release_via_take_to_work(client, fx["position"].id)
+
+    prod_task = (await session.execute(select(WorkTask))).scalars().first()
+
+    resp = await client.post(
+        f"/api/shopfloor/tasks/{prod_task.id}/issue",
+        json={"quantity": "5", "idempotency_key": "k-raw2prod"},
+    )
+    assert resp.status_code == 200, resp.text
+
+    transfers = (await session.execute(select(Transfer))).scalars().all()
+    assert len(transfers) == 1
+    t = transfers[0]
+    assert t.to_task_id == prod_task.id
+    assert t.from_section_id == raw_sec.id
+    assert t.to_section_id == prod_sec.id
+    assert t.is_post_factum is True
+
+
+async def test_issue_to_work_no_transfer_within_same_ghp(client, session) -> None:
+    """Если raw_stock и production в одной ГХП, Transfer не создаётся
+    (auto_consume сработает)."""
+    from app.models.transfer import Transfer
+
+    user = await _make_user(session)
+    fx = await _make_raw_stock_to_production_fixture(session, sku="SAMEGHP", qty=Decimal("3"), same_ghp=True)
+    await _release_via_take_to_work(client, fx["position"].id)
+
+    prod_task = (await session.execute(select(WorkTask))).scalars().first()
+
+    resp = await client.post(
+        f"/api/shopfloor/tasks/{prod_task.id}/issue",
+        json={"quantity": "3", "idempotency_key": "k-sameghp"},
+    )
+    assert resp.status_code == 200, resp.text
+
+    transfers = (await session.execute(select(Transfer))).scalars().all()
+    assert transfers == [], "Внутри одной ГХП Transfer создаваться не должен (auto_consume)"
+
+
+async def test_issue_to_work_no_transfer_without_remainder(client, session) -> None:
+    """Если на raw_stock нет SpgRemainder — Transfer не создаётся."""
+    from app.models.transfer import Transfer
+
+    user = await _make_user(session)
+    fx = await _make_raw_stock_to_production_fixture(session, sku="NOREM", qty=Decimal("3"))
+    await _release_via_take_to_work(client, fx["position"].id)
+
+    prod_task = (await session.execute(select(WorkTask))).scalars().first()
+
+    resp = await client.post(
+        f"/api/shopfloor/tasks/{prod_task.id}/issue",
+        json={"quantity": "3", "idempotency_key": "k-norem"},
+    )
+    assert resp.status_code == 200, resp.text
+
+    transfers = (await session.execute(select(Transfer))).scalars().all()
+    assert transfers == [], "Без остатков на складе Transfer создаваться не должен"

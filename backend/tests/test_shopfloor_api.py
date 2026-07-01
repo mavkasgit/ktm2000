@@ -142,7 +142,7 @@ async def test_shopfloor_happy_path_with_discrepancy_link(client, session) -> No
             .order_by(SectionPlanLine.sequence)
         )
     ).scalars().all()
-    assert len(tasks) == 6
+    assert len(tasks) == 3
     first_task, second_task = tasks[0], tasks[1]
 
     issue_res = await client.post(

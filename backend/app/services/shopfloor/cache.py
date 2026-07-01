@@ -43,6 +43,18 @@ async def _initial_available_quantity(db: AsyncSession, task: WorkTask) -> Decim
     if line.sequence == 1:
         return task.planned_quantity
 
+    preceding_has_task = await db.scalar(
+        select(func.count(WorkTask.id))
+        .join(SectionPlanLine, WorkTask.section_plan_line_id == SectionPlanLine.id)
+        .where(
+            SectionPlanLine.plan_position_id == line.plan_position_id,
+            SectionPlanLine.sequence < line.sequence,
+            WorkTask.status.notin_([WorkTaskStatus.cancelled])
+        )
+    ) > 0
+    if not preceding_has_task:
+        return task.planned_quantity
+
     # Find previous stage plan line
     prev_line = await db.scalar(
         select(SectionPlanLine).where(

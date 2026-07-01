@@ -283,19 +283,22 @@ async def release_batch(
             db.add(line)
             await db.flush()
 
+            # Склады (raw_stock, wip_stock, finished_stock) — это
+            # хранилища остатков в ГХП, а не реальные шаги маршрута.
+            # WorkTask на них не создаём; сырьё перетекает через
+            # Transfer / auto_consume.
+            from app.models.section import Section as _Section
+            sec_meta = await db.get(_Section, step["section_id"])
+            if sec_meta is not None and sec_meta.kind != "production":
+                # SectionPlanLine нужен (привязка к маршруту), WorkTask — нет
+                continue
+
             if planned_qty <= 0:
                 # Stage fully covered by remainders: auto-complete so chain continues
                 task_status = WorkTaskStatus.completed
-            elif first_nonzero_index is not None and idx == first_nonzero_index:
+            elif not any(t.status != WorkTaskStatus.completed for t in created_tasks):
                 # First stage that actually needs work: ready
                 task_status = WorkTaskStatus.ready
-                # Check if we need to transfer remainder from the previous completed task
-                if idx > 0 and created_tasks:
-                    prev_task = created_tasks[-1]
-                    from app.services.shopfloor.common import sections_share_spg
-                    share_spg = await sections_share_spg(db, prev_task.section_id, step["section_id"])
-                    if not share_spg:
-                        task_status = WorkTaskStatus.waiting_previous
             else:
                 task_status = WorkTaskStatus.waiting_previous
 
