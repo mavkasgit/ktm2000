@@ -551,7 +551,6 @@ async def prepare_section_task(
     await auto_consume_available_remainders(db, task, actor_id=actor_id)
     await _refresh_task_cache(db, task.id)
     await _refresh_section_plan_line_cache(db, task.section_plan_line_id)
-
     return {"task_id": task.id, "status": task.status.value}
 
 
