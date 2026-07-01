@@ -98,7 +98,7 @@ async def _make_two_ghp_fixture(session, *, sku: str, qty: Decimal) -> dict:
     pos = PlanPosition(
         production_plan_id=plan.id, product_id=product.id,
         source_type=PlanSourceType.manual, source_sku=product.sku, source_name=product.name,
-        quantity=qty, source_payload={}, status=PlanPositionStatus.approved,
+        quantity=qty, source_payload={}, status=PlanPositionStatus.released,
         validation_status=PlanPositionValidationStatus.valid, validation_errors=[],
         period_start=plan.period_start, period_end=plan.period_end,
         has_pack_ops=False, route_id=route.id, route_assigned_at=None,

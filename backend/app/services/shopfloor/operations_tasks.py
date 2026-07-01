@@ -13,7 +13,6 @@ from app.models.movement import Movement, MovementType
 from app.models.production_plan import PlanPosition, PlanPositionStatus
 from app.models.spg_remainder import SpgRemainder
 from app.models.work_task import WorkTask, WorkTaskStatus
-from app.transfers.services import auto_create_transfer_after_complete, auto_create_transfer_for_prepare
 
 from .cache import _refresh_section_plan_line_cache, _refresh_task_cache
 from .common import _check_idempotency, _ensure_positive, _get_route_stage, _get_task, _get_user_snapshot_name, _to_decimal
@@ -358,19 +357,6 @@ async def complete_task(
                 # Consume any other compatible remainders
                 await auto_consume_available_remainders(db, next_task, actor_id=actor_id)
 
-    # Авто-перемещение cross-GHP на следующий шаг маршрута.
-    # Внутри одной ГХП перемещение не нужно (auto_consume уже
-    # связал остатки); на финальном шаге перемещать некуда —
-    # хелпер сам всё это отфильтрует.
-    await auto_create_transfer_after_complete(
-        db,
-        from_task=task,
-        good_quantity=good_quantity,
-        actor_id=actor_id,
-        idempotency_key=idempotency_key,
-        comment="Авто-перемещение после завершения",
-    )
-
     return {"task_id": task.id, "movement_ids": movement_ids, "defect_id": defect_id, "status": task.status.value}
 
 async def final_release(
@@ -565,15 +551,6 @@ async def prepare_section_task(
     await auto_consume_available_remainders(db, task, actor_id=actor_id)
     await _refresh_task_cache(db, task.id)
     await _refresh_section_plan_line_cache(db, task.section_plan_line_id)
-
-    # Авто-перемещение cross-GHP с предыдущего шага (если предыдущий
-    # шаг уже завершён и секции в разных ГХП).
-    await auto_create_transfer_for_prepare(
-        db,
-        to_task=task,
-        actor_id=actor_id,
-        idempotency_key=idempotency_key,
-    )
 
     return {"task_id": task.id, "status": task.status.value}
 
