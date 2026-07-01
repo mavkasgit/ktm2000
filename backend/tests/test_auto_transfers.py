@@ -153,4 +153,113 @@ async def test_complete_creates_cross_ghp_transfer(client, session) -> None:
     assert t.status == TransferStatus.sent
 
 
-# Tests will be added in subsequent steps.
+async def test_complete_no_transfer_within_same_ghp(client, session) -> None:
+    """Когда секции в ОДНОЙ ГХП, transfer_send не должен вызываться."""
+    from app.models.route import ProductionRoute, RouteStage, RouteOperation
+    from app.models.techcard import Techcard, TechcardLine
+    from app.models.production_plan import (
+        PlanPosition, PlanPositionStatus, PlanPositionValidationStatus,
+        PlanSourceType, ProductionPlan, ProductionPlanStatus,
+    )
+    from datetime import date
+
+    user = await _make_user(session)
+    sec1 = Section(code="SAM-1", name="S1", kind="production", is_active=True, sort_order=0)
+    sec2 = Section(code="SAM-2", name="S2", kind="production", is_active=True, sort_order=1)
+    session.add_all([sec1, sec2])
+    await session.flush()
+    spg = StorageProductionGroup(code="SAM-SPG", name="One", is_active=True, sort_order=0)
+    session.add(spg)
+    await session.flush()
+    session.add_all([
+        SpgSection(spg_id=spg.id, section_id=sec1.id, sort_order=0),
+        SpgSection(spg_id=spg.id, section_id=sec2.id, sort_order=0),
+    ])
+    product = Product(sku="SAM", name="SAM", type=ProductType.finished_good, unit="pcs", is_active=True)
+    session.add(product)
+    await session.flush()
+    route = ProductionRoute(name="r", is_active=True)
+    session.add(route)
+    await session.flush()
+    for idx, (sec, code) in enumerate([(sec1, "A"), (sec2, "B")], start=1):
+        st = RouteStage(route_id=route.id, sequence=idx, section_id=sec.id, is_final=(idx == 2))
+        session.add(st)
+        await session.flush()
+        session.add(RouteOperation(route_stage_id=st.id, sequence=1, operation_code=code, operation_name=code))
+    tech = Techcard(product_id=product.id, version="v1", is_active=True)
+    session.add(tech)
+    await session.flush()
+    session.add(TechcardLine(techcard_id=tech.id, component_product_id=product.id, quantity=Decimal("1"), unit="pcs"))
+    plan = ProductionPlan(plan_no="P-SAM", name="p", status=ProductionPlanStatus.approved,
+                          period_start=date(2026, 5, 1), period_end=date(2026, 5, 31))
+    session.add(plan)
+    await session.flush()
+    pos = PlanPosition(production_plan_id=plan.id, product_id=product.id,
+                       source_type=PlanSourceType.manual, source_sku=product.sku, source_name=product.name,
+                       quantity=Decimal("3"), source_payload={}, status=PlanPositionStatus.approved,
+                       validation_status=PlanPositionValidationStatus.valid, validation_errors=[],
+                       period_start=plan.period_start, period_end=plan.period_end,
+                       has_pack_ops=False, route_id=route.id, route_assigned_at=None)
+    session.add(pos)
+    await session.commit()
+
+    await _release_via_take_to_work(client, pos.id)
+    tasks = (await session.execute(select(WorkTask).order_by(WorkTask.id.asc()))).scalars().all()
+    await _complete_first_task(client, tasks[0].id, Decimal("3"), idempotency_key="k-same")
+
+    transfers = (await session.execute(select(Transfer))).scalars().all()
+    assert transfers == [], "Внутри одной ГХП перемещение создаваться не должно"
+
+
+async def test_complete_no_transfer_on_final_stage(client, session) -> None:
+    """Финальный шаг маршрута — перемещать некуда, Transfer не создаётся."""
+    from datetime import date
+    from app.models.route import ProductionRoute, RouteStage, RouteOperation
+    from app.models.techcard import Techcard, TechcardLine
+    from app.models.production_plan import (
+        PlanPosition, PlanPositionStatus, PlanPositionValidationStatus,
+        PlanSourceType, ProductionPlan, ProductionPlanStatus,
+    )
+
+    user = await _make_user(session)
+    sec = Section(code="FIN-1", name="F", kind="production", is_active=True, sort_order=0)
+    session.add(sec)
+    await session.flush()
+    spg = StorageProductionGroup(code="FIN-SPG", name="F", is_active=True, sort_order=0)
+    session.add(spg)
+    await session.flush()
+    session.add(SpgSection(spg_id=spg.id, section_id=sec.id, sort_order=0))
+    product = Product(sku="FIN", name="F", type=ProductType.finished_good, unit="pcs", is_active=True)
+    session.add(product)
+    await session.flush()
+    route = ProductionRoute(name="r-fin", is_active=True)
+    session.add(route)
+    await session.flush()
+    st = RouteStage(route_id=route.id, sequence=1, section_id=sec.id, is_final=True)
+    session.add(st)
+    await session.flush()
+    session.add(RouteOperation(route_stage_id=st.id, sequence=1, operation_code="X", operation_name="X"))
+    tech = Techcard(product_id=product.id, version="v1", is_active=True)
+    session.add(tech)
+    await session.flush()
+    session.add(TechcardLine(techcard_id=tech.id, component_product_id=product.id, quantity=Decimal("1"), unit="pcs"))
+    plan = ProductionPlan(plan_no="P-FIN", name="p", status=ProductionPlanStatus.approved,
+                          period_start=date(2026, 5, 1), period_end=date(2026, 5, 31))
+    session.add(plan)
+    await session.flush()
+    pos = PlanPosition(production_plan_id=plan.id, product_id=product.id,
+                       source_type=PlanSourceType.manual, source_sku=product.sku, source_name=product.name,
+                       quantity=Decimal("2"), source_payload={}, status=PlanPositionStatus.approved,
+                       validation_status=PlanPositionValidationStatus.valid, validation_errors=[],
+                       period_start=plan.period_start, period_end=plan.period_end,
+                       has_pack_ops=False, route_id=route.id, route_assigned_at=None)
+    session.add(pos)
+    await session.commit()
+
+    await _release_via_take_to_work(client, pos.id)
+    tasks = (await session.execute(select(WorkTask).order_by(WorkTask.id.asc()))).scalars().all()
+    await _complete_first_task(client, tasks[0].id, Decimal("2"), idempotency_key="k-fin")
+
+    transfers = (await session.execute(select(Transfer))).scalars().all()
+    assert transfers == [], "На финальном шаге перемещение не должно создаваться"
+
