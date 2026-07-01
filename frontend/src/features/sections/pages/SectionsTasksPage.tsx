@@ -19,6 +19,7 @@ import { queryKeys } from "@/shared/api/queryKeys";
 import { DateRangePicker, renderIcon, toast, Button, type DateRangeValue } from "@/shared/ui";
 import { useBulkSelection } from "@/shared/bulk";
 import { BulkResultsDialog, summarizeBulkResults, type BulkActionResultItem, type BulkActionSummary, type BulkRunnerProgress } from "@/shared/bulk";
+import { isProductionSection } from "@/shared/lib/sectionKinds";
 import { SectionSwitcherTiles } from "../components/SectionSwitcherTiles";
 import { SectionTasksBoard, type TaskActionDialogType, type TaskBoardViewMode } from "../components/SectionTasksBoard";
 import { TaskActionDrawer } from "../components/TaskActionDrawer";
@@ -200,6 +201,11 @@ export function SectionsTasksPage() {
   }, [isSingleWindow, sections, lockedSectionId]);
   const isSingleWindowBlocked = isSingleWindow && !lockedSection;
 
+  const selectedSectionIsStock = useMemo(
+    () => (selectedSection ? !isProductionSection(selectedSection.kind) : false),
+    [selectedSection]
+  );
+
   const requestOptions = useMemo(
     () => (isSingleWindow && lockedSectionId !== null ? { singleSectionLockId: lockedSectionId } : undefined),
     [isSingleWindow, lockedSectionId]
@@ -238,7 +244,10 @@ export function SectionsTasksPage() {
       if (sectionId !== validParam.id) setSectionId(validParam.id);
       return;
     }
-    const first = sections.find((s) => s.is_active) || sections[0];
+    const first =
+      sections.find((s) => s.is_active && isProductionSection(s.kind)) ||
+      sections.find((s) => isProductionSection(s.kind)) ||
+      sections[0];
     if (!first) return;
     setSectionId(first.id);
     navigate(`/section-tasks/${first.id}`, { replace: true });
@@ -775,7 +784,7 @@ export function SectionsTasksPage() {
       )}
 
       <section className="space-y-4">
-        {selectedSection && (
+        {selectedSection && !selectedSectionIsStock && (
           <div
             className="rounded-xl border px-4 py-3"
             style={{ borderColor: selectedSectionColor, backgroundColor: selectedSectionTint }}
@@ -784,7 +793,7 @@ export function SectionsTasksPage() {
               <div className="flex items-center gap-3 min-w-0">
                 {isSingleWindow ? (
                   <SectionSwitcherTiles
-                    sections={(sections || []).filter((s) => s.is_active)}
+                    sections={(sections || []).filter((s) => s.is_active && isProductionSection(s.kind))}
                     summary={summary?.sections || []}
                     selectedSectionId={sectionId}
                     onSelect={(nextId) => {
@@ -866,9 +875,26 @@ export function SectionsTasksPage() {
           </div>
         )}
 
+        {!isSingleWindowBlocked && selectedSectionIsStock && (
+          <div className="rounded-lg border border-slate-300 bg-slate-50 p-4 text-sm text-slate-800">
+            <div className="font-semibold">Это складской участок</div>
+            <div className="mt-1">
+              Доска задач производственного цеха для раздела «{selectedSection?.name ?? ""}» не предусмотрена.
+              Управление остатками и передачами — в разделах «Передачи» и «ГХП».
+            </div>
+            <button
+              type="button"
+              className="mt-3 rounded-md border border-slate-700 px-3 py-1.5 text-xs font-medium hover:bg-slate-100"
+              onClick={() => navigate("/section-tasks")}
+            >
+              К списку производственных участков
+            </button>
+          </div>
+        )}
+
         {!isSingleWindow && (
           <SectionSwitcherTiles
-            sections={(sections || []).filter((section) => section.is_active)}
+            sections={(sections || []).filter((section) => section.is_active && isProductionSection(section.kind))}
             summary={summary?.sections || []}
             selectedSectionId={sectionId}
             onSelect={(nextId) => {
