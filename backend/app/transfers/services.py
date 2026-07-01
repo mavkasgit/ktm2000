@@ -676,3 +676,68 @@ async def cancel_transfer(
         "status": transfer.status.value,
     }
 
+
+async def auto_create_transfer_after_complete(
+    db: AsyncSession,
+    *,
+    from_task: WorkTask,
+    good_quantity: Decimal,
+    actor_id: int,
+    idempotency_key: str | None = None,
+    comment: str | None = None,
+) -> dict | None:
+    """Create an automatic cross-GHP Transfer for the completed ``good_quantity``.
+
+    Called by ``complete_task`` after a successful completion.  No-op when:
+    * there is no next route step (final stage);
+    * the next section is in the same GHP (intra-GHP transfers are
+      forbidden by ``transfer_send`` and the inventory is already wired
+      via ``auto_consume_available_remainders``).
+
+    Uses ``post_factum=True`` because the physical handover between
+    sections has already happened on the shopfloor.
+    Returns ``None`` when the helper decides to skip; otherwise returns
+    the result of ``transfer_send``.
+    """
+    from app.models.internal_plan import SectionPlanLine
+    from app.services.shopfloor.common import sections_share_spg
+
+    from_line = await db.get(SectionPlanLine, from_task.section_plan_line_id)
+    if from_line is None:
+        return None
+
+    next_line = await db.scalar(
+        select(SectionPlanLine).where(
+            SectionPlanLine.plan_position_id == from_line.plan_position_id,
+            SectionPlanLine.sequence == from_line.sequence + 1,
+        )
+    )
+    if next_line is None:
+        return None  # финальный шаг — перемещать некуда
+
+    if good_quantity <= 0:
+        return None
+
+    if await sections_share_spg(db, from_task.section_id, next_line.section_id):
+        return None  # та же ГХП — перемещение не нужно
+
+    next_task = await db.scalar(
+        select(WorkTask).where(
+            WorkTask.section_plan_line_id == next_line.id,
+            WorkTask.status.notin_([WorkTaskStatus.completed, WorkTaskStatus.cancelled]),
+        )
+    )
+    if next_task is None:
+        return None  # нет живой задачи на следующем шаге
+
+    key = f"{idempotency_key}:auto-transfer-complete" if idempotency_key else None
+    return await transfer_send(
+        db,
+        from_task_id=from_task.id,
+        to_task_id=next_task.id,
+        quantity=good_quantity,
+        actor_id=actor_id,
+        comment=comment or "Авто-перемещение после завершения",
+        idempotency_key=key,
+        post_factum=True,
+    )
