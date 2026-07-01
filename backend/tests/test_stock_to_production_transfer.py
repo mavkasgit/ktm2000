@@ -231,3 +231,77 @@ async def test_issue_to_work_no_transfer_without_remainder(client, session) -> N
 
     transfers = (await session.execute(select(Transfer))).scalars().all()
     assert transfers == [], "Без остатков на складе Transfer создаваться не должен"
+
+
+@pytest.mark.asyncio
+async def test_manual_stock_transfer_consumes_remainder(client, session) -> None:
+    """Если передача отправляется и принимается вручную со склада сырья,
+    соответствующие SpgRemainder на складе должны уменьшаться/потребляться.
+    Также transferable_quantity в ready-to-transfer списке должна уменьшаться."""
+    from datetime import UTC, datetime
+    from app.models.spg_remainder import SpgRemainder
+    from app.models.transfer import Transfer, TransferStatus
+
+    user = await _make_user(session, "manual-xfer@test.local")
+    headers = _auth_headers(user)
+    fx = await _make_raw_stock_to_production_fixture(session, sku="MANXFER", qty=Decimal("100"))
+    raw_sec, prod_sec = fx["sections"][0], fx["sections"][1]
+    spg_a = fx["spgs"][0]
+
+    # Создаем остаток на складе 100
+    rem = SpgRemainder(
+        spg_id=spg_a.id,
+        product_id=fx["product"].id,
+        remainder_quantity=Decimal("100"),
+        original_issued=Decimal("100"),
+        created_at=datetime.now(UTC),
+    )
+    session.add(rem)
+    await session.commit()
+
+    await _release_via_take_to_work(client, fx["position"].id)
+
+    # Запрашиваем готовые к передаче. Должна быть 1 запись с transferable=100
+    resp = await client.get(f"/api/transfers/ready?section_id={raw_sec.id}", headers=headers)
+    assert resp.status_code == 200
+    items = resp.json()["items"]
+    assert len(items) == 1
+    assert items[0]["transferable_quantity"] == "100"
+    task_id = items[0]["task_id"]
+
+    # Отправляем 40 штук
+    send_resp = await client.post(
+        "/api/transfers",
+        json={
+            "from_task_id": task_id,
+            "quantity": "40",
+            "idempotency_key": "manual-xfer:send-40"
+        },
+        headers=headers,
+    )
+    assert send_resp.status_code == 200
+    transfer_id = send_resp.json()["transfer_id"]
+
+    # Запрашиваем готовые к передаче снова. Должно быть transferable = 60 (100 - 40 в транзите)
+    resp = await client.get(f"/api/transfers/ready?section_id={raw_sec.id}", headers=headers)
+    assert resp.json()["items"][0]["transferable_quantity"] == "60"
+
+    # Принимаем перевод
+    recv_resp = await client.post(
+        f"/api/transfers/{transfer_id}/accept",
+        json={
+            "accepted_quantity": "40",
+            "rejected_quantity": "0",
+            "idempotency_key": "manual-xfer:receive-40"
+        },
+        headers=headers,
+    )
+    assert recv_resp.status_code == 200
+
+    # Проверяем, что SpgRemainder на складе уменьшился до 60
+    await session.refresh(rem)
+    assert rem.remainder_quantity == Decimal("60")
+
+    # Запрашиваем готовые к передаче. Должно быть transferable = 60
+    resp = await client.get(f"/api/transfers/ready?section_id={raw_sec.id}", headers=headers)
+    assert resp.json()["items"][0]["transferable_quantity"] == "60"

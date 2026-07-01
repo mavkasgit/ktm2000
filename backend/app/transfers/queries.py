@@ -404,13 +404,13 @@ async def list_ready_to_transfer(
 
                 next_stage = await db.get(RouteStage, next_line.route_stage_id)
                 next_sec = await db.get(Section, next_line.section_id)
-                if next_stage is None or next_sec is None or bool(next_stage.is_final):
+                if next_stage is None or next_sec is None:
                     continue
 
                 next_task = await db.scalar(
                     select(WorkTask).where(
                         WorkTask.section_plan_line_id == next_line.id,
-                        WorkTask.status.in_([WorkTaskStatus.ready, WorkTaskStatus.in_progress])
+                        WorkTask.status.notin_([WorkTaskStatus.completed, WorkTaskStatus.cancelled])
                     )
                 )
                 if next_task is None:
@@ -459,7 +459,15 @@ async def list_ready_to_transfer(
                     )
                 ) or Decimal("0")
 
-                transferable = remainders_qty
+                transferred_pending = await db.scalar(
+                    select(func.coalesce(func.sum(Transfer.sent_quantity), 0))
+                    .where(
+                        Transfer.from_task_id == fake_task.id,
+                        Transfer.status == TransferStatus.sent
+                    )
+                ) or Decimal("0")
+
+                transferable = remainders_qty - transferred_pending
                 if transferable <= 0:
                     continue
 

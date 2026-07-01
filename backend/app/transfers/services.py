@@ -363,6 +363,39 @@ async def transfer_receive(
         )
         db.add(movement)
 
+        # Consume from SpgRemainder in the source SPG if the source section is a stock section
+        from app.models.section import Section
+        from_section = await db.get(Section, transfer.from_section_id)
+        if from_section and from_section.kind in {"raw_stock", "wip_stock", "finished_stock"}:
+            from app.models.spg import SpgSection
+            from_spg_id = await db.scalar(
+                select(SpgSection.spg_id).where(SpgSection.section_id == transfer.from_section_id)
+            )
+            if from_spg_id is not None:
+                from app.models.spg_remainder import SpgRemainder
+                remainders = (await db.execute(
+                    select(SpgRemainder)
+                    .where(
+                        SpgRemainder.spg_id == from_spg_id,
+                        SpgRemainder.product_id == transfer.product_id,
+                        SpgRemainder.remainder_quantity > 0,
+                        SpgRemainder.consumed_at.is_(None),
+                    )
+                    .order_by(SpgRemainder.created_at.asc(), SpgRemainder.id.asc())
+                )).scalars().all()
+                
+                qty_to_consume = accepted_quantity
+                for rem in remainders:
+                    if qty_to_consume <= 0:
+                        break
+                    consume_qty = min(qty_to_consume, rem.remainder_quantity)
+                    rem.remainder_quantity -= consume_qty
+                    if rem.remainder_quantity == 0:
+                        rem.consumed_at = datetime.now(UTC)
+                        rem.consumed_by_task_id = to_task.id
+                    qty_to_consume -= consume_qty
+                await _refresh_task_cache(db, transfer.from_task_id)
+
     discrepancy_id: int | None = None
     if rejected_quantity > 0:
         discrepancy = TransferDiscrepancy(
@@ -632,6 +665,37 @@ async def cancel_transfer(
     transfer.accepted_quantity = Decimal("0")
     if comment:
         transfer.comment = comment
+
+    # Restore SpgRemainder in the source GHP if from_section is a stock section
+    from app.models.section import Section
+    from_section = await db.get(Section, transfer.from_section_id)
+    if from_section and from_section.kind in {"raw_stock", "wip_stock", "finished_stock"}:
+        from app.models.spg import SpgSection
+        from_spg_id = await db.scalar(
+            select(SpgSection.spg_id).where(SpgSection.section_id == transfer.from_section_id)
+        )
+        if from_spg_id is not None:
+            from app.models.spg_remainder import SpgRemainder
+            consumed_rems = (await db.execute(
+                select(SpgRemainder)
+                .where(
+                    SpgRemainder.spg_id == from_spg_id,
+                    SpgRemainder.product_id == transfer.product_id,
+                    SpgRemainder.consumed_by_task_id == to_task.id,
+                )
+                .order_by(SpgRemainder.consumed_at.desc(), SpgRemainder.id.desc())
+            )).scalars().all()
+            
+            qty_to_restore = transfer.sent_quantity  # restore full sent amount
+            for rem in consumed_rems:
+                if qty_to_restore <= 0:
+                    break
+                restorable = rem.original_issued - rem.remainder_quantity
+                restore_qty = min(qty_to_restore, restorable)
+                rem.remainder_quantity += restore_qty
+                rem.consumed_at = None
+                rem.consumed_by_task_id = None
+                qty_to_restore -= restore_qty
     # Delete movements to restore balances (movements table requires quantity > 0)
     movements_res = await db.execute(
         select(Movement).where(Movement.transfer_id == transfer.id)
