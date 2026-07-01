@@ -12,6 +12,11 @@ from app.models.route import ProductionRoute, RouteStage, RouteOperation, RouteR
 from app.models.section import Section
 from app.models.defect import Defect, DefectItem, DefectStatus, DefectDecision, DefectDecisionType
 from app.models.user import User
+from app.services.shopfloor.common import build_completed_stages_json
+
+
+PREP_STOCK_CODE = "PREP_STOCK"
+WIP_STOCK_CODE = "WIP"
 
 
 async def seed_demo_production(db: AsyncSession) -> dict:
@@ -44,8 +49,23 @@ async def seed_demo_production(db: AsyncSession) -> dict:
             stats["products"] += 1
         products_by_sku[sku] = prod
 
-    # 2. Get active SPG
-    spg = await db.scalar(select(StorageProductionGroup).where(StorageProductionGroup.is_active == True).limit(1))
+    # 2. Resolve SPGs (in priority order):
+    #    - prep_stock: целевой склад для остатков прерванных задач подготовки
+    #    - wip_stock: целевой склад для остатков прерванных задач после анодирования
+    #    - fallback_spg: первый активный SPG (используется, если ни один не засеян)
+    prep_stock = await db.scalar(
+        select(StorageProductionGroup).where(StorageProductionGroup.code == PREP_STOCK_CODE)
+    )
+    wip_stock = await db.scalar(
+        select(StorageProductionGroup).where(StorageProductionGroup.code == WIP_STOCK_CODE)
+    )
+    fallback_spg = await db.scalar(
+        select(StorageProductionGroup)
+        .where(StorageProductionGroup.is_active == True)
+        .order_by(StorageProductionGroup.sort_order)
+        .limit(1)
+    )
+    spg = prep_stock or wip_stock or fallback_spg
     if not spg:
         return stats  # No SPG to seed remainders onto
 
@@ -78,10 +98,6 @@ async def seed_demo_production(db: AsyncSession) -> dict:
     if not stages:
         return stats
 
-    section_ids = [s.section_id for s in stages]
-    sections = (await db.execute(select(Section).where(Section.id.in_(section_ids)))).scalars().all()
-    sections_by_id = {s.id: s for s in sections}
-
     # 4. Get a user
     user = await db.scalar(select(User).limit(1))
     actor_id = user.id if user else 1
@@ -89,27 +105,18 @@ async def seed_demo_production(db: AsyncSession) -> dict:
 
     # 5. Create remainders
     # Remainder 1: ЮП-100-2700-BL, completed stages up to stage 2 (e.g. WH, DRILL)
+    # Не показываем незначимые (WH-выдача сырья) — оставляем только реальные операции.
     rem1_sku = "ЮП-100-2700-BL"
     rem1_prod = products_by_sku[rem1_sku]
-    
-    # Build completed stages JSON
-    completed_stages1 = []
-    for s in stages[:2]:
-        sec = sections_by_id.get(s.section_id)
-        if sec:
-            op_name = s.operations[0].operation_name if s.operations else sec.name
-            op_code = s.operations[0].operation_code if s.operations else None
-            completed_stages1.append({
-                "section_id": s.section_id,
-                "operation_code": op_code,
-                "operation_name": op_name,
-                "sequence": s.sequence,
-            })
+    completed_stages1 = await build_completed_stages_json(db, stages[:2])
 
-    # Check if remainder already exists
     rem1 = await db.scalar(
         select(SpgRemainder)
-        .where(SpgRemainder.product_id == rem1_prod.id, SpgRemainder.spg_id == spg.id, SpgRemainder.source == "manual")
+        .where(
+            SpgRemainder.product_id == rem1_prod.id,
+            SpgRemainder.spg_id == spg.id,
+            SpgRemainder.source == "manual",
+        )
         .limit(1)
     )
     if not rem1:
@@ -130,26 +137,19 @@ async def seed_demo_production(db: AsyncSession) -> dict:
         await db.flush()
         stats["remainders"] += 1
 
-    # Remainder 2: АТ-200-2700-AN, completed stages up to stage 4
+    # Remainder 2: АТ-200-2700-AN, completed stages up to stage 4 (после анодирования, до упаковки).
+    # Тоже фильтруем незначимые операции (WH-выдача, WIP-передача).
     rem2_sku = "АТ-200-2700-AN"
     rem2_prod = products_by_sku[rem2_sku]
-    
-    completed_stages2 = []
-    for s in stages[:4]:
-        sec = sections_by_id.get(s.section_id)
-        if sec:
-            op_name = s.operations[0].operation_name if s.operations else sec.name
-            op_code = s.operations[0].operation_code if s.operations else None
-            completed_stages2.append({
-                "section_id": s.section_id,
-                "operation_code": op_code,
-                "operation_name": op_name,
-                "sequence": s.sequence,
-            })
+    completed_stages2 = await build_completed_stages_json(db, stages[:4])
 
     rem2 = await db.scalar(
         select(SpgRemainder)
-        .where(SpgRemainder.product_id == rem2_prod.id, SpgRemainder.spg_id == spg.id, SpgRemainder.source == "manual")
+        .where(
+            SpgRemainder.product_id == rem2_prod.id,
+            SpgRemainder.spg_id == spg.id,
+            SpgRemainder.source == "manual",
+        )
         .limit(1)
     )
     if not rem2:
@@ -170,10 +170,19 @@ async def seed_demo_production(db: AsyncSession) -> dict:
         await db.flush()
         stats["remainders"] += 1
 
-    # 6. Create defects
-    # Defect 1: Open defect for ЮП-100-2700-BL, quantity 5, on stage 2 (DRILL)
-    drill_stage = stages[1] if len(stages) > 1 else stages[0]
-    
+    # 6. Create defects (только если остатки попали в PREP_STOCK — иначе привязка неуместна)
+    if prep_stock is None:
+        await db.flush()
+        return stats
+
+    # Defect 1: Open defect for ЮП-100-2700-BL на первой значимой стадии подготовки.
+    significant_stages = await build_completed_stages_json(db, stages)
+    first_sig_seq = significant_stages[0]["sequence"] if significant_stages else stages[0].sequence
+    drill_stage = next(
+        (s for s in stages if s.sequence == first_sig_seq),
+        stages[1] if len(stages) > 1 else stages[0],
+    )
+
     existing_def1 = await db.scalar(
         select(Defect)
         .where(Defect.product_id == rem1_prod.id, Defect.route_stage_id == drill_stage.id, Defect.spg_remainder_id == rem1.id)
@@ -204,7 +213,7 @@ async def seed_demo_production(db: AsyncSession) -> dict:
         db.add(item1)
         stats["defects"] += 1
 
-    # Defect 2: Open defect for АТ-200-2700-AN, quantity 3, on stage 4
+    # Defect 2: Open defect for АТ-200-2700-AN на стадии анодирования
     anod_stage = stages[3] if len(stages) > 3 else stages[0]
     existing_def2 = await db.scalar(
         select(Defect)

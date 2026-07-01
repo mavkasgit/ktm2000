@@ -18,6 +18,16 @@ SPGS_DATA = [
         "section_codes": ["DRILL", "PRESS", "SHOT"],
     },
     {
+        "code": "PREP_STOCK",
+        "name": "Склад подготовки",
+        "description": "Промежуточный склад между этапами подготовки и анодирования",
+        "storage_kind": "wip",
+        "sort_order": 25,
+        "icon": "PackageX",
+        "icon_color": "#7C3AED",
+        "section_codes": [],
+    },
+    {
         "code": "ANOD",
         "name": "Анодирование",
         "description": "Участок анодирования",
@@ -29,11 +39,12 @@ SPGS_DATA = [
     {
         "code": "WIP",
         "name": "Склад полуфабриката",
-        "description": "Промежуточный склад полуфабриката",
+        "description": "Промежуточный склад полуфабриката (sectionless, без привязки к секциям)",
+        "storage_kind": "wip",
         "sort_order": 40,
-        "icon": "Boxes",
-        "icon_color": "#84CC16",
-        "section_codes": ["WIP_WH"],
+        "icon": "Layers",
+        "icon_color": "#65A30D",
+        "section_codes": [],
     },
     {
         "code": "PACK",

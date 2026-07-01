@@ -4,7 +4,16 @@ from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.section import Section
-from app.models.spg import SpgSection, StorageProductionGroup
+from app.models.spg import SpgSection, SpgStorageKind, StorageProductionGroup
+
+
+def _resolve_storage_kind(value: object) -> SpgStorageKind:
+    """Convert seed value to SpgStorageKind enum, defaulting to wip."""
+    if value is None:
+        return SpgStorageKind.wip
+    if isinstance(value, SpgStorageKind):
+        return value
+    return SpgStorageKind(str(value))
 
 
 async def seed_spgs(
@@ -19,7 +28,8 @@ async def seed_spgs(
     count = 0
 
     for data in spgs_data:
-        section_codes = data["section_codes"]
+        section_codes = data.get("section_codes", []) or []
+        storage_kind = _resolve_storage_kind(data.get("storage_kind"))
 
         spg = await db.scalar(
             select(StorageProductionGroup).where(StorageProductionGroup.code == data["code"])
@@ -29,6 +39,7 @@ async def seed_spgs(
                 code=data["code"],
                 name=data["name"],
                 description=data.get("description"),
+                storage_kind=storage_kind,
                 sort_order=data.get("sort_order", 0),
                 is_active=True,
                 icon=data.get("icon"),
@@ -39,6 +50,7 @@ async def seed_spgs(
         else:
             spg.name = data["name"]
             spg.description = data.get("description")
+            spg.storage_kind = storage_kind
             spg.sort_order = data.get("sort_order", 0)
             spg.is_active = True
             spg.icon = data.get("icon")
