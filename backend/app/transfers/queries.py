@@ -361,7 +361,13 @@ async def list_ready_to_transfer(
         sec = await db.get(Section, section_id)
         sections = [sec] if sec else []
     else:
-        sections = []
+        sections = (
+            await db.execute(
+                select(Section).where(
+                    Section.kind.in_(["raw_stock", "wip_stock", "finished_stock"])
+                )
+            )
+        ).scalars().all()
 
     stock_items = []
     for sec in sections:
@@ -416,13 +422,19 @@ async def list_ready_to_transfer(
                         WorkTask.status.notin_([WorkTaskStatus.completed, WorkTaskStatus.cancelled])
                     )
                 )
+
+                planned_qty = spl.planned_quantity or Decimal("0")
+                if planned_qty <= 0:
+                    plan_pos = await db.get(PlanPosition, spl.plan_position_id)
+                    planned_qty = plan_pos.quantity if plan_pos else Decimal("0")
+
                 if fake_task is None:
                     fake_task = WorkTask(
                         section_plan_line_id=spl.id,
                         section_id=sec.id,
                         product_id=next_task.product_id,
                         route_stage_id=spl.route_stage_id,
-                        planned_quantity=spl.planned_quantity or Decimal("0"),
+                        planned_quantity=planned_qty,
                         status=WorkTaskStatus.ready,
                         due_date=spl.due_date,
                     )
@@ -447,14 +459,15 @@ async def list_ready_to_transfer(
                     )
                 ) or Decimal("0")
 
-                fake_task.cached_completed_quantity = remainders_qty + transferred
+                remaining_planned = max(Decimal("0"), planned_qty - transferred)
+                transferable = min(remainders_qty, remaining_planned)
+                if transferable <= 0:
+                    continue
+
+                fake_task.cached_completed_quantity = transferable + transferred
                 fake_task.cached_transferred_quantity = transferred
                 fake_task.cached_available_quantity = remainders_qty
                 await db.flush()
-
-                transferable = remainders_qty
-                if transferable <= 0:
-                    continue
 
                 product = await db.get(Product, fake_task.product_id)
                 product_sku = product.sku if product else ""
@@ -474,7 +487,7 @@ async def list_ready_to_transfer(
                         "operation_name": "",
                         "product_id": fake_task.product_id,
                         "product_sku": product_sku,
-                        "planned_quantity": _fmt_qty(fake_task.planned_quantity),
+                        "planned_quantity": _fmt_qty(planned_qty),
                         "completed_quantity": _fmt_qty(fake_task.cached_completed_quantity),
                         "already_transferred_quantity": _fmt_qty(transferred),
                         "transferable_quantity": _fmt_qty(transferable),
