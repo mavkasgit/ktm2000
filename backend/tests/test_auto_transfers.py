@@ -98,7 +98,7 @@ async def _make_two_ghp_fixture(session, *, sku: str, qty: Decimal) -> dict:
     pos = PlanPosition(
         production_plan_id=plan.id, product_id=product.id,
         source_type=PlanSourceType.manual, source_sku=product.sku, source_name=product.name,
-        quantity=qty, source_payload={}, status=PlanPositionStatus.released,
+        quantity=qty, source_payload={}, status=PlanPositionStatus.approved,
         validation_status=PlanPositionValidationStatus.valid, validation_errors=[],
         period_start=plan.period_start, period_end=plan.period_end,
         has_pack_ops=False, route_id=route.id, route_assigned_at=None,
@@ -111,6 +111,46 @@ async def _make_two_ghp_fixture(session, *, sku: str, qty: Decimal) -> dict:
 async def _release_via_take_to_work(client, position_id: int) -> None:
     resp = await client.post("/api/production-planning/rows/take-to-work", json={"position_ids": [position_id]})
     assert resp.status_code == 200, resp.text
+
+
+async def _complete_first_task(client, task_id: int, qty: Decimal, idempotency_key: str | None = None) -> None:
+    body = {
+        "good_quantity": str(qty),
+        "defect_quantity": "0",
+        "shortage_strategy": "negative_remainder",
+    }
+    if idempotency_key:
+        body["idempotency_key"] = idempotency_key
+    resp = await client.post(f"/api/shopfloor/tasks/{task_id}/complete", json=body)
+    assert resp.status_code == 200, resp.text
+
+
+async def test_complete_creates_cross_ghp_transfer(client, session) -> None:
+    """After completing a task on section 1, a Transfer must be created
+    pointing from section 1 to section 2 (different GHPs)."""
+    user = await _make_user(session)
+    fx = await _make_two_ghp_fixture(session, sku="AUTO-1", qty=Decimal("5"))
+    await _release_via_take_to_work(client, fx["position"].id)
+
+    # Найти задачи, созданные take-to-work
+    tasks = (await session.execute(select(WorkTask).order_by(WorkTask.id.asc()))).scalars().all()
+    assert len(tasks) == 2
+    task1, task2 = tasks[0], tasks[1]
+    assert task1.section_id == fx["sections"][0].id
+    assert task2.section_id == fx["sections"][1].id
+
+    await _complete_first_task(client, task1.id, Decimal("5"), idempotency_key="k-1")
+
+    # Должен появиться ровно один Transfer cross-GHP
+    transfers = (await session.execute(select(Transfer))).scalars().all()
+    assert len(transfers) == 1
+    t = transfers[0]
+    assert t.from_task_id == task1.id
+    assert t.to_task_id == task2.id
+    assert t.from_section_id == fx["sections"][0].id
+    assert t.to_section_id == fx["sections"][1].id
+    assert t.is_post_factum is True
+    assert t.status == TransferStatus.sent
 
 
 # Tests will be added in subsequent steps.
