@@ -845,7 +845,7 @@ async def auto_create_transfer_from_stock_to_production(
         await _refresh_task_cache(db, from_task.id)
 
     key = f"{idempotency_key}:auto-transfer-from-stock" if idempotency_key else None
-    return await transfer_send(
+    send_res = await transfer_send(
         db,
         from_task_id=from_task.id,
         to_task_id=to_task.id,
@@ -855,3 +855,15 @@ async def auto_create_transfer_from_stock_to_production(
         idempotency_key=key,
         post_factum=True,
     )
+
+    rec_key = f"{idempotency_key}:auto-transfer-from-stock:receive" if idempotency_key else None
+    await transfer_receive(
+        db,
+        transfer_id=send_res["transfer_id"],
+        accepted_quantity=transfer_qty,
+        rejected_quantity=Decimal("0"),
+        actor_id=actor_id,
+        comment="Авто-приёмка перемещения со склада",
+        idempotency_key=rec_key,
+    )
+    return send_res

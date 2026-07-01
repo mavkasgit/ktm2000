@@ -260,7 +260,8 @@ async def list_ready_to_transfer(
         .where(
             WorkTask.status.notin_(
                 [WorkTaskStatus.cancelled, WorkTaskStatus.waiting_previous]
-            )
+            ),
+            from_section.kind == "production",  # ONLY production tasks
         )
     )
 
@@ -307,8 +308,6 @@ async def list_ready_to_transfer(
 
         has_next = next_l is not None and next_stg is not None and not bool(next_stg.is_final)
         is_final_step = bool(stage.is_final)
-        # Final step tasks should never appear in "ready to transfer" — they
-        # need ``final_release`` instead.
         if is_final_step:
             continue
 
@@ -345,6 +344,153 @@ async def list_ready_to_transfer(
             }
         )
 
+    # Special logic for stock sections (raw_stock, wip_stock, finished_stock)
+    from app.models.production_plan import PlanPosition
+    from app.models.spg_remainder import SpgRemainder
+    from sqlalchemy import func
+
+    if spg_id is not None:
+        sections = (
+            await db.execute(
+                select(Section)
+                .join(SpgSection, SpgSection.section_id == Section.id)
+                .where(SpgSection.spg_id == spg_id)
+            )
+        ).scalars().all()
+    elif section_id is not None:
+        sec = await db.get(Section, section_id)
+        sections = [sec] if sec else []
+    else:
+        sections = []
+
+    stock_items = []
+    for sec in sections:
+        if sec.kind in {"raw_stock", "wip_stock", "finished_stock"}:
+            sec_spg_id = await db.scalar(
+                select(SpgSection.spg_id).where(SpgSection.section_id == sec.id)
+            )
+            if sec_spg_id is None:
+                continue
+
+            res = await db.execute(
+                select(SectionPlanLine)
+                .join(PlanPosition, PlanPosition.id == SectionPlanLine.plan_position_id)
+                .where(
+                    SectionPlanLine.section_id == sec.id,
+                    PlanPosition.status == 'released'
+                )
+            )
+            lines = res.scalars().all()
+
+            for spl in lines:
+                next_line = await db.scalar(
+                    select(SectionPlanLine).where(
+                        SectionPlanLine.plan_position_id == spl.plan_position_id,
+                        SectionPlanLine.sequence == spl.sequence + 1
+                    )
+                )
+                if next_line is None:
+                    continue
+
+                from app.services.shopfloor.common import sections_share_spg
+                if await sections_share_spg(db, spl.section_id, next_line.section_id):
+                    continue
+
+                next_stage = await db.get(RouteStage, next_line.route_stage_id)
+                next_sec = await db.get(Section, next_line.section_id)
+                if next_stage is None or next_sec is None or bool(next_stage.is_final):
+                    continue
+
+                next_task = await db.scalar(
+                    select(WorkTask).where(
+                        WorkTask.section_plan_line_id == next_line.id,
+                        WorkTask.status.notin_([WorkTaskStatus.completed, WorkTaskStatus.cancelled])
+                    )
+                )
+                if next_task is None:
+                    continue
+
+                fake_task = await db.scalar(
+                    select(WorkTask).where(
+                        WorkTask.section_plan_line_id == spl.id,
+                        WorkTask.status.notin_([WorkTaskStatus.completed, WorkTaskStatus.cancelled])
+                    )
+                )
+                if fake_task is None:
+                    fake_task = WorkTask(
+                        section_plan_line_id=spl.id,
+                        section_id=sec.id,
+                        product_id=next_task.product_id,
+                        route_stage_id=spl.route_stage_id,
+                        planned_quantity=spl.planned_quantity or Decimal("0"),
+                        status=WorkTaskStatus.ready,
+                        due_date=spl.due_date,
+                    )
+                    db.add(fake_task)
+                    await db.flush()
+
+                remainders_qty = await db.scalar(
+                    select(func.coalesce(func.sum(SpgRemainder.remainder_quantity), 0))
+                    .where(
+                        SpgRemainder.spg_id == sec_spg_id,
+                        SpgRemainder.product_id == fake_task.product_id,
+                        SpgRemainder.consumed_at.is_(None),
+                        SpgRemainder.remainder_quantity > 0,
+                    )
+                ) or Decimal("0")
+
+                transferred = await db.scalar(
+                    select(func.coalesce(func.sum(Transfer.sent_quantity), 0))
+                    .where(
+                        Transfer.from_task_id == fake_task.id,
+                        Transfer.status.notin_([TransferStatus.cancelled])
+                    )
+                ) or Decimal("0")
+
+                fake_task.cached_completed_quantity = remainders_qty + transferred
+                fake_task.cached_transferred_quantity = transferred
+                fake_task.cached_available_quantity = remainders_qty
+                await db.flush()
+
+                transferable = remainders_qty
+                if transferable <= 0:
+                    continue
+
+                product = await db.get(Product, fake_task.product_id)
+                product_sku = product.sku if product else ""
+
+                next_op_name = ", ".join(op.operation_name for op in next_stage.operations) if next_stage and next_stage.operations else None
+
+                stock_items.append(
+                    {
+                        "task_id": fake_task.id,
+                        "section_id": fake_task.section_id,
+                        "section_code": sec.code,
+                        "section_name": sec.name,
+                        "plan_position_id": spl.plan_position_id,
+                        "route_stage_id": spl.route_stage_id,
+                        "sequence": spl.sequence,
+                        "operation_code": None,
+                        "operation_name": "",
+                        "product_id": fake_task.product_id,
+                        "product_sku": product_sku,
+                        "planned_quantity": _fmt_qty(fake_task.planned_quantity),
+                        "completed_quantity": _fmt_qty(fake_task.cached_completed_quantity),
+                        "already_transferred_quantity": _fmt_qty(transferred),
+                        "transferable_quantity": _fmt_qty(transferable),
+                        "has_next_step": True,
+                        "next_section_id": next_sec.id,
+                        "next_section_code": next_sec.code,
+                        "next_section_name": next_sec.name,
+                        "next_operation_name": next_op_name,
+                        "next_step_sequence": next_stage.sequence,
+                        "next_step_is_final": bool(next_stage.is_final),
+                        "is_final": False,
+                        "completion_comment": None,
+                    }
+                )
+
+    items.extend(stock_items)
     return {"items": items, "filters": {"section_id": section_id, "spg_id": spg_id}}
 
 

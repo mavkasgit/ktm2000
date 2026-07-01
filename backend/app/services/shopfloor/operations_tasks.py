@@ -136,15 +136,16 @@ async def issue_to_work(
     await _refresh_section_plan_line_cache(db, task.section_plan_line_id)
 
     # Авто-перемещение со склада в другой ГХП (если предыдущий
-    # шаг маршрута — склад, и остатки лежат там).
-    from app.transfers.services import auto_create_transfer_from_stock_to_production
-    await auto_create_transfer_from_stock_to_production(
-        db,
-        to_task=task,
-        quantity=quantity,
-        actor_id=actor_id,
-        idempotency_key=idempotency_key,
-    )
+    # шаг маршрута — склад, и остатки лежат там) при наличии дефицита.
+    if shortage > 0:
+        from app.transfers.services import auto_create_transfer_from_stock_to_production
+        await auto_create_transfer_from_stock_to_production(
+            db,
+            to_task=task,
+            quantity=shortage,
+            actor_id=actor_id,
+            idempotency_key=idempotency_key,
+        )
 
     return {"movement_id": movement.id, "task_id": task.id, "status": task.status.value}
 

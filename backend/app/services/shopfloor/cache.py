@@ -52,8 +52,21 @@ async def _initial_available_quantity(db: AsyncSession, task: WorkTask) -> Decim
             WorkTask.status.notin_([WorkTaskStatus.cancelled])
         )
     ) > 0
+
     if not preceding_has_task:
-        return task.planned_quantity
+        if line.sequence == 1:
+            return task.planned_quantity
+        prev_line = await db.scalar(
+            select(SectionPlanLine).where(
+                SectionPlanLine.plan_position_id == line.plan_position_id,
+                SectionPlanLine.sequence == line.sequence - 1,
+            )
+        )
+        if prev_line is not None:
+            from .common import sections_share_spg
+            if await sections_share_spg(db, line.section_id, prev_line.section_id):
+                return task.planned_quantity
+        return Decimal("0")
 
     # Find previous stage plan line
     prev_line = await db.scalar(

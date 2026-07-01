@@ -868,10 +868,16 @@ async def test_shopfloor_issue_shortage_strategies_and_compensation(client, sess
     first_task = tasks[0]
 
     from app.models.spg import StorageProductionGroup, SpgSection
+    from app.models.section import Section
+    raw_section = await session.scalar(
+        select(Section)
+        .where(Section.code == "FG-SHORTAGE-STRATS-ISSUE")
+    )
     spg = StorageProductionGroup(code="TEST-STRATS-SPG", name="Test SPG", is_active=True, sort_order=1)
     session.add(spg)
     await session.flush()
-    session.add(SpgSection(spg_id=spg.id, section_id=first_task.section_id, sort_order=0))
+    session.add(SpgSection(spg_id=spg.id, section_id=raw_section.id, sort_order=0))
+    session.add(SpgSection(spg_id=spg.id, section_id=first_task.section_id, sort_order=1))
     await session.flush()
 
     # 1. Проверяем стратегию fail при нехватке (запрос 120 деталей, доступно 100)
