@@ -121,6 +121,7 @@ class CompletePayload(BaseModel):
     performed_at: datetime | None = None
     accounted_at: datetime | None = None
     shortage_strategy: ShortageStrategy = ShortageStrategy.negative_remainder
+    auto_transfer_next: bool = False
 
 
 
@@ -355,6 +356,7 @@ async def complete_task_endpoint(
             performed_at=payload.performed_at,
             accounted_at=payload.accounted_at,
             shortage_strategy=payload.shortage_strategy,
+            auto_transfer_next=payload.auto_transfer_next,
         )
 
         # Запись лога аудита
@@ -422,6 +424,7 @@ class BulkCompleteEntry(BaseModel):
     performed_at: datetime | None = None
     accounted_at: datetime | None = None
     shortage_strategy: ShortageStrategy = ShortageStrategy.negative_remainder
+    auto_transfer_next: bool = False
 
 
 class BulkActionRequest(BaseModel):
@@ -480,6 +483,7 @@ async def bulk_complete_tasks(
                     performed_at=entry.performed_at,
                     accounted_at=entry.accounted_at,
                     shortage_strategy=entry.shortage_strategy,
+                    auto_transfer_next=entry.auto_transfer_next,
                 )
             results.append(BulkActionResultItem(id=entry.task_id, status="success"))
         except HTTPException as exc:

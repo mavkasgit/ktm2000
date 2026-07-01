@@ -113,7 +113,13 @@ async def _release_via_take_to_work(client, position_id: int) -> None:
     assert resp.status_code == 200, resp.text
 
 
-async def _complete_first_task(client, task_id: int, qty: Decimal, idempotency_key: str | None = None) -> None:
+async def _complete_first_task(
+    client,
+    task_id: int,
+    qty: Decimal,
+    idempotency_key: str | None = None,
+    auto_transfer_next: bool = False,
+) -> None:
     body = {
         "good_quantity": str(qty),
         "defect_quantity": "0",
@@ -121,6 +127,8 @@ async def _complete_first_task(client, task_id: int, qty: Decimal, idempotency_k
     }
     if idempotency_key:
         body["idempotency_key"] = idempotency_key
+    if auto_transfer_next:
+        body["auto_transfer_next"] = True
     resp = await client.post(f"/api/shopfloor/tasks/{task_id}/complete", json=body)
     assert resp.status_code == 200, resp.text
 
@@ -305,4 +313,35 @@ async def test_auto_create_transfer_is_idempotent(client, session) -> None:
     assert len(transfers) == 1, f"Ожидался 1 Transfer, получили {len(transfers)}"
     assert transfers[0].from_task_id == task1.id
     assert transfers[0].to_task_id == task2.id
+
+
+async def test_complete_with_auto_transfer_next_true_creates_transfer(client, session) -> None:
+    """Флаг auto_transfer_next=true в payload complete_task создаёт Transfer автоматически."""
+    user = await _make_user(session)
+    fx = await _make_two_ghp_fixture(session, sku="FLAG-ON", qty=Decimal("3"))
+    await _release_via_take_to_work(client, fx["position"].id)
+    tasks = (await session.execute(select(WorkTask).order_by(WorkTask.id.asc()))).scalars().all()
+    task1 = tasks[0]
+
+    await _complete_first_task(client, task1.id, Decimal("3"), idempotency_key="k-flag-on", auto_transfer_next=True)
+
+    transfers = (await session.execute(select(Transfer))).scalars().all()
+    assert len(transfers) == 1
+    assert transfers[0].from_task_id == task1.id
+    assert transfers[0].to_task_id == tasks[1].id
+    assert transfers[0].is_post_factum is True
+
+
+async def test_complete_with_auto_transfer_next_false_no_transfer(client, session) -> None:
+    """Флаг auto_transfer_next=false (default) — Transfer НЕ создаётся (старое поведение)."""
+    user = await _make_user(session)
+    fx = await _make_two_ghp_fixture(session, sku="FLAG-OFF", qty=Decimal("3"))
+    await _release_via_take_to_work(client, fx["position"].id)
+    tasks = (await session.execute(select(WorkTask).order_by(WorkTask.id.asc()))).scalars().all()
+    task1 = tasks[0]
+
+    await _complete_first_task(client, task1.id, Decimal("3"), idempotency_key="k-flag-off", auto_transfer_next=False)
+
+    transfers = (await session.execute(select(Transfer))).scalars().all()
+    assert transfers == [], "Без флага auto_transfer_next перемещение создаваться не должно"
 

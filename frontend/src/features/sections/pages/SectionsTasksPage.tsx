@@ -128,6 +128,7 @@ export function SectionsTasksPage() {
   const [performedShift, setPerformedShift] = useState<"1" | "2">("1");
   const [actionComment, setActionComment] = useState("");
   const [shortageStrategy, setShortageStrategy] = useState<ShortageStrategy>("negative_remainder");
+  const [autoTransferNext, setAutoTransferNext] = useState(true);
   const [planModalOpen, setPlanModalOpen] = useState(false);
 
   // Bulk mode state
@@ -300,6 +301,7 @@ export function SectionsTasksPage() {
     setConflictHint(null);
     setActionQty("");
     setDefectQty("");
+    setAutoTransferNext(true);
   }, []);
 
   // Escape key: double-Escape exits single-window mode, single-Escape exits bulk mode.
@@ -567,6 +569,7 @@ export function SectionsTasksPage() {
               performed_at: effectivePerformedAt,
               accounted_at: effectiveAccountedAt,
               shortage_strategy: shortageStrategy,
+              auto_transfer_next: autoTransferNext,
             });
           }
 
@@ -588,6 +591,7 @@ export function SectionsTasksPage() {
           performed_at: effectivePerformedAt,
           accounted_at: effectiveAccountedAt,
           shortage_strategy: shortageStrategy,
+          auto_transfer_next: autoTransferNext,
         },
       });
     }
@@ -602,6 +606,7 @@ export function SectionsTasksPage() {
     actionComment,
     defectQty,
     shortageStrategy,
+    autoTransferNext,
   ]);
 
   const finishBulk = useCallback((
@@ -1012,6 +1017,8 @@ export function SectionsTasksPage() {
         setActionComment={setActionComment}
         shortageStrategy={shortageStrategy}
         setShortageStrategy={setShortageStrategy}
+        autoTransferNext={autoTransferNext}
+        setAutoTransferNext={setAutoTransferNext}
         pending={pendingMutation}
         conflictHint={conflictHint}
         onSubmit={submitAction}

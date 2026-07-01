@@ -183,6 +183,7 @@ export type CompleteTaskInput = {
   performed_at?: string;
   accounted_at?: string;
   shortage_strategy?: ShortageStrategy;
+  auto_transfer_next?: boolean;
 };
 
 export type AcceptTransferInput = {
@@ -497,6 +498,7 @@ export type BulkCompleteEntry = {
   performed_at?: string | null;
   accounted_at?: string | null;
   shortage_strategy?: ShortageStrategy;
+  auto_transfer_next?: boolean;
 };
 
 export async function bulkCompleteTasks(

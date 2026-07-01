@@ -151,6 +151,7 @@ async def complete_task(
     performed_at: datetime | None = None,
     accounted_at: datetime | None = None,
     shortage_strategy: Literal["fail", "partial", "negative_remainder"] = "negative_remainder",
+    auto_transfer_next: bool = False,
 ) -> dict:
     """Complete (good + defect) quantity on a SectionTask.
 
@@ -356,6 +357,17 @@ async def complete_task(
                 )
                 # Consume any other compatible remainders
                 await auto_consume_available_remainders(db, next_task, actor_id=actor_id)
+
+    if auto_transfer_next and good_quantity > 0:
+        from app.transfers.services import auto_create_transfer_after_complete
+        await auto_create_transfer_after_complete(
+            db,
+            from_task=task,
+            good_quantity=good_quantity,
+            actor_id=actor_id,
+            idempotency_key=idempotency_key,
+            comment=comment or "Авто-перемещение после завершения",
+        )
 
     return {"task_id": task.id, "movement_ids": movement_ids, "defect_id": defect_id, "status": task.status.value}
 
