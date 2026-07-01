@@ -210,12 +210,14 @@ export type ProductRouteOperationOut = {
 export type ProductRouteStageOut = {
   id: number;
   sequence: number;
-  section_id: number;
+  section_id: number | null;
   section_code: string;
   section_name: string;
   is_significant: boolean;
   requires_acceptance: boolean;
   is_final: boolean;
+  stage_kind?: "production" | "transit";
+  storage_section_id?: number | null;
   operations: ProductRouteOperationOut[];
 };
 

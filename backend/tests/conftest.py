@@ -181,6 +181,90 @@ async def _ensure_createdb_privilege(admin_url: URL) -> None:
         await engine.dispose()
 
 
+# Mirrors alembic/versions/020_storage_vs_production.py trigger functions.
+# Tests use ``Base.metadata.create_all`` to build the schema (no migration history),
+# so we must attach the same trigger-based constraints that production has.
+# PostgreSQL CHECK constraints cannot reference other tables, hence triggers.
+#
+# Implemented via raw asyncpg (no prepared statements) because the dollar-quoted
+# PL/pgSQL bodies confuse asyncpg's "multiple statements in one prepared statement"
+# detection.
+_TRIGGERS_SQL = [
+    """
+    CREATE OR REPLACE FUNCTION fn_check_section_op_transport_on_storage()
+    RETURNS TRIGGER AS $tg1$
+    DECLARE
+        sec_kind text;
+    BEGIN
+        IF NEW.operation_type = 'transport' THEN
+            SELECT kind INTO sec_kind FROM sections WHERE id = NEW.section_id;
+            IF sec_kind IS NULL OR NOT (sec_kind IN ('raw_stock', 'wip_stock', 'finished_stock')) THEN
+                RAISE EXCEPTION 'SectionOperation.operation_type=transport requires storage kind; got kind=% section_id=%', sec_kind, NEW.section_id
+                    USING ERRCODE = 'check_violation';
+            END IF;
+        END IF;
+        RETURN NEW;
+    END;
+    $tg1$ LANGUAGE plpgsql;
+    """,
+    "DROP TRIGGER IF EXISTS trg_section_op_transport_on_storage ON section_operations;",
+    """
+    CREATE TRIGGER trg_section_op_transport_on_storage
+    BEFORE INSERT OR UPDATE OF operation_type, section_id ON section_operations
+    FOR EACH ROW
+    EXECUTE FUNCTION fn_check_section_op_transport_on_storage();
+    """,
+    """
+    CREATE OR REPLACE FUNCTION fn_check_route_stage_transit_invariants()
+    RETURNS TRIGGER AS $tg2$
+    DECLARE
+        sec_kind text;
+    BEGIN
+        IF NEW.stage_kind = 'transit' THEN
+            IF NEW.section_id IS NOT NULL THEN
+                RAISE EXCEPTION 'RouteStage.stage_kind=transit requires section_id IS NULL; got section_id=%', NEW.section_id
+                    USING ERRCODE = 'check_violation';
+            END IF;
+            IF NEW.storage_section_id IS NULL THEN
+                RAISE EXCEPTION 'RouteStage.stage_kind=transit requires storage_section_id IS NOT NULL'
+                    USING ERRCODE = 'check_violation';
+            END IF;
+            SELECT kind INTO sec_kind FROM sections WHERE id = NEW.storage_section_id;
+            IF sec_kind IS NULL OR NOT (sec_kind IN ('raw_stock', 'wip_stock', 'finished_stock')) THEN
+                RAISE EXCEPTION 'RouteStage.storage_section_id must reference a storage section; got kind=% storage_section_id=%', sec_kind, NEW.storage_section_id
+                    USING ERRCODE = 'check_violation';
+            END IF;
+        END IF;
+        RETURN NEW;
+    END;
+    $tg2$ LANGUAGE plpgsql;
+    """,
+    "DROP TRIGGER IF EXISTS trg_route_stage_transit_invariants ON route_stages;",
+    """
+    CREATE TRIGGER trg_route_stage_transit_invariants
+    BEFORE INSERT OR UPDATE OF stage_kind, section_id, storage_section_id ON route_stages
+    FOR EACH ROW
+    EXECUTE FUNCTION fn_check_route_stage_transit_invariants();
+    """,
+]
+
+
+async def _install_storage_vs_production_triggers(conn) -> None:
+    import asyncpg
+
+    raw = await conn.get_raw_connection()
+    driver_conn = raw.driver_connection
+    # asyncpg's raw connection doesn't honour the SET search_path issued by
+    # SQLAlchemy — apply it explicitly so the triggers resolve tables in the
+    # per-test schema.
+    schema = (await conn.execute(text("SHOW search_path"))).scalar() or "public"
+    # Strip quoting and pick the first schema if multiple are listed
+    first_schema = schema.split(",")[0].strip().strip('"')
+    await driver_conn.execute(f'SET search_path TO "{first_schema}"')
+    for stmt in _TRIGGERS_SQL:
+        await driver_conn.execute(stmt)
+
+
 @pytest.fixture(scope="session")
 def db_mode() -> str:
     return _ensure_hybrid_mode()
@@ -248,6 +332,7 @@ async def session(engine: AsyncEngine) -> AsyncIterator[AsyncSession]:
         await conn.execute(text(f"CREATE SCHEMA {_quote_ident(schema_name)}"))
         await conn.execute(text(f"SET search_path TO {_quote_ident(schema_name)}"))
         await conn.run_sync(Base.metadata.create_all)
+        await _install_storage_vs_production_triggers(conn)
 
     async with engine.connect() as conn:
         await conn.execute(text(f"SET search_path TO {_quote_ident(schema_name)}"))

@@ -12,6 +12,11 @@ from app.models.route import ProductionRoute, RouteStage, RouteOperation, RouteR
 from app.models.section import Section
 from app.models.defect import Defect, DefectItem, DefectStatus, DefectDecision, DefectDecisionType
 from app.models.user import User
+from app.services.route_storage_classifier import (
+    STAGE_KIND_PRODUCTION,
+    is_production_stage,
+    is_transit_stage,
+)
 from app.services.shopfloor.common import build_completed_stages_json
 
 
@@ -91,12 +96,42 @@ async def seed_demo_production(db: AsyncSession) -> dict:
             select(RouteStage)
             .where(RouteStage.route_id == route.id)
             .order_by(RouteStage.sequence)
-            .options(selectinload(RouteStage.operations))
+            .options(
+                selectinload(RouteStage.operations),
+                selectinload(RouteStage.section),
+                selectinload(RouteStage.storage_section),
+            )
         )
     ).scalars().all()
 
     if not stages:
         return stats
+
+    # Build section_code -> stage map.  With the new model storage sections
+    # appear as transit stages; we still resolve them by section code so the
+    # seeder is robust to either route shape.
+    sections_in_route = {s.section_id for s in stages if s.section_id is not None}
+    sections_in_route |= {s.storage_section_id for s in stages if s.storage_section_id is not None}
+    sections_rows = (await db.execute(
+        select(Section).where(Section.id.in_(sections_in_route))
+    )).scalars().all() if sections_in_route else []
+    sections_by_id = {s.id: s for s in sections_rows}
+
+    def _code_of_stage(stage: RouteStage) -> str | None:
+        if stage.storage_section_id is not None:
+            return sections_by_id.get(stage.storage_section_id).code if stage.storage_section_id in sections_by_id else None
+        if stage.section_id is not None:
+            return sections_by_id.get(stage.section_id).code if stage.section_id in sections_by_id else None
+        return None
+
+    # Production stages only (transit stages are not work, just storage hops)
+    production_stages = [s for s in stages if is_production_stage(s)]
+
+    def _find_production_by_code(code: str) -> RouteStage | None:
+        for s in production_stages:
+            if s.section and s.section.code == code:
+                return s
+        return None
 
     # 4. Get a user
     user = await db.scalar(select(User).limit(1))
@@ -104,11 +139,21 @@ async def seed_demo_production(db: AsyncSession) -> dict:
     actor_name = user.full_name or user.username if user else "system"
 
     # 5. Create remainders
-    # Remainder 1: ЮП-100-2700-BL, completed stages up to stage 2 (e.g. WH, DRILL)
-    # Не показываем незначимые (WH-выдача сырья) — оставляем только реальные операции.
+    # Remainder 1: ЮП-100-2700-BL, completed stages through DRILL
+    # (after сверловка, before пресс).  Transit stages (WH) are filtered out
+    # by build_completed_stages_json.
     rem1_sku = "ЮП-100-2700-BL"
     rem1_prod = products_by_sku[rem1_sku]
-    completed_stages1 = await build_completed_stages_json(db, stages[:2])
+    drill_stage = _find_production_by_code("DRILL")
+    press_stage = _find_production_by_code("PRESS")
+    if drill_stage is not None and press_stage is not None:
+        # Take everything from the start up to (but not including) PRESS
+        drill_seq = drill_stage.sequence
+        stages_through_drill = [s for s in stages if s.sequence <= drill_seq]
+    else:
+        # Fallback: first two production stages
+        stages_through_drill = production_stages[:2]
+    completed_stages1 = await build_completed_stages_json(db, stages_through_drill)
 
     rem1 = await db.scalar(
         select(SpgRemainder)
@@ -137,11 +182,19 @@ async def seed_demo_production(db: AsyncSession) -> dict:
         await db.flush()
         stats["remainders"] += 1
 
-    # Remainder 2: АТ-200-2700-AN, completed stages up to stage 4 (после анодирования, до упаковки).
-    # Тоже фильтруем незначимые операции (WH-выдача, WIP-передача).
+    # Remainder 2: АТ-200-2700-AN, completed stages through SHOT
+    # (after дробеструй, before анодирование).
     rem2_sku = "АТ-200-2700-AN"
     rem2_prod = products_by_sku[rem2_sku]
-    completed_stages2 = await build_completed_stages_json(db, stages[:4])
+    shot_stage = _find_production_by_code("SHOT")
+    anod_stage = _find_production_by_code("ANOD")
+    if shot_stage is not None and anod_stage is not None:
+        shot_seq = shot_stage.sequence
+        stages_through_shot = [s for s in stages if s.sequence <= shot_seq]
+    else:
+        # Fallback: first four production stages
+        stages_through_shot = production_stages[:4]
+    completed_stages2 = await build_completed_stages_json(db, stages_through_shot)
 
     rem2 = await db.scalar(
         select(SpgRemainder)
@@ -175,75 +228,75 @@ async def seed_demo_production(db: AsyncSession) -> dict:
         await db.flush()
         return stats
 
-    # Defect 1: Open defect for ЮП-100-2700-BL на первой значимой стадии подготовки.
-    significant_stages = await build_completed_stages_json(db, stages)
-    first_sig_seq = significant_stages[0]["sequence"] if significant_stages else stages[0].sequence
-    drill_stage = next(
-        (s for s in stages if s.sequence == first_sig_seq),
-        stages[1] if len(stages) > 1 else stages[0],
-    )
-
-    existing_def1 = await db.scalar(
-        select(Defect)
-        .where(Defect.product_id == rem1_prod.id, Defect.route_stage_id == drill_stage.id, Defect.spg_remainder_id == rem1.id)
-        .limit(1)
-    )
-    if not existing_def1:
-        def1 = Defect(
-            product_id=rem1_prod.id,
-            section_id=drill_stage.section_id,
-            task_id=None,
-            route_stage_id=drill_stage.id,
-            spg_remainder_id=rem1.id,
-            status=DefectStatus.decision_required,
-            comment="Царапины после сверловки (демо)",
-            created_by=actor_id,
+    # Defect 1: Open defect for ЮП-100-2700-BL on DRILL stage.
+    if drill_stage is None:
+        drill_stage = production_stages[0] if production_stages else None
+    if drill_stage is not None:
+        existing_def1 = await db.scalar(
+            select(Defect)
+            .where(Defect.product_id == rem1_prod.id, Defect.route_stage_id == drill_stage.id, Defect.spg_remainder_id == rem1.id)
+            .limit(1)
         )
-        db.add(def1)
-        await db.flush()
+        if not existing_def1:
+            def1 = Defect(
+                product_id=rem1_prod.id,
+                section_id=drill_stage.section_id,
+                task_id=None,
+                route_stage_id=drill_stage.id,
+                spg_remainder_id=rem1.id,
+                status=DefectStatus.decision_required,
+                comment="Царапины после сверловки (демо)",
+                created_by=actor_id,
+            )
+            db.add(def1)
+            await db.flush()
 
-        item1 = DefectItem(
-            defect_id=def1.id,
-            quantity=Decimal("5.000"),
-            defect_type_code_snapshot="scratches",
-            defect_type_name_snapshot="Царапины",
-            description="Глубокие царапины на лицевой поверхности",
-            created_by=actor_id,
-        )
-        db.add(item1)
-        stats["defects"] += 1
+            item1 = DefectItem(
+                defect_id=def1.id,
+                quantity=Decimal("5.000"),
+                defect_type_code_snapshot="scratches",
+                defect_type_name_snapshot="Царапины",
+                description="Глубокие царапины на лицевой поверхности",
+                created_by=actor_id,
+            )
+            db.add(item1)
+            stats["defects"] += 1
 
-    # Defect 2: Open defect for АТ-200-2700-AN на стадии анодирования
-    anod_stage = stages[3] if len(stages) > 3 else stages[0]
-    existing_def2 = await db.scalar(
-        select(Defect)
-        .where(Defect.product_id == rem2_prod.id, Defect.route_stage_id == anod_stage.id, Defect.spg_remainder_id == rem2.id)
-        .limit(1)
-    )
-    if not existing_def2:
-        def2 = Defect(
-            product_id=rem2_prod.id,
-            section_id=anod_stage.section_id,
-            task_id=None,
-            route_stage_id=anod_stage.id,
-            spg_remainder_id=rem2.id,
-            status=DefectStatus.decision_required,
-            comment="Непрокрас краев (демо)",
-            created_by=actor_id,
+    # Defect 2: Open defect for АТ-200-2700-AN on ANOD stage.
+    if anod_stage is None and len(production_stages) > 4:
+        anod_stage = production_stages[4]
+    if anod_stage is None and production_stages:
+        anod_stage = production_stages[-1]
+    if anod_stage is not None:
+        existing_def2 = await db.scalar(
+            select(Defect)
+            .where(Defect.product_id == rem2_prod.id, Defect.route_stage_id == anod_stage.id, Defect.spg_remainder_id == rem2.id)
+            .limit(1)
         )
-        db.add(def2)
-        await db.flush()
+        if not existing_def2:
+            def2 = Defect(
+                product_id=rem2_prod.id,
+                section_id=anod_stage.section_id,
+                task_id=None,
+                route_stage_id=anod_stage.id,
+                spg_remainder_id=rem2.id,
+                status=DefectStatus.decision_required,
+                comment="Непрокрас краев (демо)",
+                created_by=actor_id,
+            )
+            db.add(def2)
+            await db.flush()
 
-        item2 = DefectItem(
-            defect_id=def2.id,
-            quantity=Decimal("3.000"),
-            defect_type_code_snapshot="paint_defect",
-            defect_type_name_snapshot="Дефект покраски",
-            description="Непрокрас анодного слоя по краям профиля",
-            created_by=actor_id,
-        )
-        db.add(item2)
-        stats["defects"] += 1
+            item2 = DefectItem(
+                defect_id=def2.id,
+                quantity=Decimal("3.000"),
+                defect_type_code_snapshot="paint_defect",
+                defect_type_name_snapshot="Дефект покраски",
+                description="Непрокрас анодного слоя по краям профиля",
+                created_by=actor_id,
+            )
+            db.add(item2)
+            stats["defects"] += 1
 
     await db.flush()
     return stats

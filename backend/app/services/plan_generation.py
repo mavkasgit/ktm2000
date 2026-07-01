@@ -572,6 +572,8 @@ async def _route_snapshot(
     position: PlanPosition | None = None,
     operation_names_by_key: dict[tuple[int, str], str] | None = None,
 ) -> dict:
+    from app.services.route_storage_classifier import is_transit_stage
+
     op_names = operation_names_by_key or {}
     snapshot_steps = []
     for stage, section, operations in steps:
@@ -580,14 +582,30 @@ async def _route_snapshot(
         operation_name = await _resolve_route_stage_operation_name(
             db, stage, operations, section, position, op_names
         )
+
+        if is_transit_stage(stage):
+            storage_section = await db.get(Section, stage.storage_section_id) if stage.storage_section_id else None
+            section_payload = {
+                "section_id": storage_section.id if storage_section else None,
+                "section_code": storage_section.code if storage_section else None,
+                "section_name": storage_section.name if storage_section else None,
+                "section_kind": storage_section.kind if storage_section else "wip_stock",
+            }
+        else:
+            section_payload = {
+                "section_id": section.id,
+                "section_code": section.code,
+                "section_name": section.name,
+                "section_kind": section.kind,
+            }
+
         snapshot_steps.append({
             "route_stage_id": stage.id,
             "route_stage_persisted": True,
             "sequence": stage.sequence,
-            "section_id": section.id,
-            "section_code": section.code,
-            "section_name": section.name,
-            "section_kind": section.kind,
+            **section_payload,
+            "stage_kind": stage.stage_kind,
+            "storage_section_id": stage.storage_section_id,
             "operation_code": operation_code,
             "operation_name": operation_name,
             "operations": [
@@ -620,11 +638,24 @@ async def _resolve_route_stage_operation_name(
     """Return display operation name for a route stage.
 
     Aggregates operation names from all operations in the stage:
-    "Анодирование / Стрейч".  Falls back to section name when no
-    operations are defined.
+    "Анодирование / Стрейч".
+
+    Для transit-этапов (storage hop) возвращает явное имя вида
+    ``"Хранение: {name}"`` через классификатор.
+
+    Для production-этапов без ``RouteOperation`` (не должно происходить
+    после миграции 020, но оставлено как defensive fallback) — возвращает
+    имя цеха, помеченное суффиксом, чтобы сразу было видно аномалию.
     """
+    from app.services.route_storage_classifier import is_transit_stage, stage_display_name
+
+    if is_transit_stage(stage):
+        storage_section = await db.get(Section, stage.storage_section_id) if stage.storage_section_id else None
+        return stage_display_name(stage, storage_section)
+
     if not operations:
-        return section.name
+        return f"{section.name} ⚠"
+
     names: list[str] = []
     for op in operations:
         if op.operation_code is not None:

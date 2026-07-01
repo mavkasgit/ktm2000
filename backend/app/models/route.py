@@ -41,6 +41,12 @@ class RouteStage(Base):
     It carries a list of :class:`RouteOperation` rows.  This makes
     "one task per section, with operations inside" a first-class
     data-model concept instead of a string-tag merge trick.
+
+    ``stage_kind='transit'`` marks a storage-only hop (warehouse transfer /
+    intermediate storage) — see :data:`STAGE_KIND_TRANSIT`.  For such
+    stages ``section_id`` is NULL and ``storage_section_id`` points to
+    the storage section.  Real ``RouteOperation`` rows are forbidden on
+    transit stages.
     """
 
     __tablename__ = "route_stages"
@@ -48,15 +54,32 @@ class RouteStage(Base):
     id: Mapped[int] = mapped_column(BigInteger, Identity(always=True), primary_key=True)
     route_id: Mapped[int] = mapped_column(ForeignKey("production_routes.id"), nullable=False)
     sequence: Mapped[int] = mapped_column(Integer, nullable=False)
-    section_id: Mapped[int] = mapped_column(ForeignKey("sections.id"), nullable=False)
+    section_id: Mapped[int | None] = mapped_column(ForeignKey("sections.id"), nullable=True)
     is_significant: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default=text("false"))
     norm_time_minutes: Mapped[int | None] = mapped_column(Integer, nullable=True)
     requires_acceptance: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default=text("true"))
     allow_parallel: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default=text("false"))
     is_final: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default=text("false"))
     sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default=text("0"))
+    stage_kind: Mapped[str] = mapped_column(
+        Enum(
+            "production",
+            "transit",
+            name="route_stage_kind",
+            create_type=False,
+            native_enum=True,
+        ),
+        nullable=False,
+        default="production",
+        server_default=text("'production'"),
+    )
+    storage_section_id: Mapped[int | None] = mapped_column(
+        ForeignKey("sections.id"), nullable=True
+    )
 
     route: Mapped["ProductionRoute"] = relationship("ProductionRoute", back_populates="stages")
+    section: Mapped["Section | None"] = relationship("Section", foreign_keys=[section_id])
+    storage_section: Mapped["Section | None"] = relationship("Section", foreign_keys=[storage_section_id])
     operations: Mapped[list["RouteOperation"]] = relationship(
         "RouteOperation",
         back_populates="stage",
@@ -68,6 +91,14 @@ class RouteStage(Base):
     __table_args__ = (
         UniqueConstraint("route_id", "sequence", name="uq_route_stages_sequence"),
     )
+
+    @property
+    def is_transit(self) -> bool:
+        return self.stage_kind == "transit"
+
+    @property
+    def effective_section_id(self) -> int | None:
+        return self.storage_section_id if self.is_transit else self.section_id
 
 
 class RouteOperation(Base):
@@ -103,6 +134,18 @@ class SectionOperation(Base):
     sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default=text("0"))
     resolver_type: Mapped[str | None] = mapped_column(String(50), nullable=True)
     resolver_config: Mapped[dict] = mapped_column(JSONB, nullable=False, server_default=text("'{}'::jsonb"), default=dict)
+    operation_type: Mapped[str] = mapped_column(
+        Enum(
+            "production",
+            "transport",
+            name="section_operation_type",
+            create_type=False,
+            native_enum=True,
+        ),
+        nullable=False,
+        default="production",
+        server_default=text("'production'"),
+    )
 
     section: Mapped["Section"] = relationship("Section")
 

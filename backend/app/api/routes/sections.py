@@ -22,6 +22,38 @@ class SectionBase(BaseModel):
     icon_color: str | None = None
 
 
+class SectionOperationOut(BaseModel):
+    id: int
+    operation_code: str | None
+    operation_name: str
+    is_significant: bool
+    group_code: str | None = None
+    group_name: str | None = None
+    icon: str | None = None
+    icon_color: str | None = None
+
+
+class SectionWithOperationsOut(BaseModel):
+    id: int
+    code: str
+    name: str
+    kind: str
+    role: str
+    has_real_operations: bool
+    icon: str | None = None
+    icon_color: str | None = None
+    operations: list[SectionOperationOut]
+
+
+class StoragePointOut(BaseModel):
+    id: int
+    code: str
+    name: str
+    kind: str
+    icon: str | None = None
+    icon_color: str | None = None
+
+
 class SectionIn(SectionBase):
     spg_id: int
 
@@ -56,6 +88,115 @@ class SectionOut(SectionBase):
 async def list_sections(db: AsyncSession = Depends(get_db)) -> list[SectionOut]:
     items = (await db.execute(select(Section).order_by(Section.sort_order, Section.id))).scalars().all()
     return [SectionOut.model_validate(i, from_attributes=True) for i in items]
+
+
+# Static path segments must be registered BEFORE the catch-all /{section_id}
+# so that "storage-points" / "all" are not parsed as integer IDs.
+@router.get("/all/operations", response_model=list[SectionWithOperationsOut])
+async def list_sections_with_operations(
+    db: AsyncSession = Depends(get_db),
+) -> list[SectionWithOperationsOut]:
+    """List all active sections with their operations.
+
+    В отличие от предыдущей версии, **не синтезирует** фейковую
+    :class:`SectionOperation` для секций без операций.  Вместо этого
+    возвращает пустой список ``operations`` и явный флаг
+    ``has_real_operations: bool`` плюс вычисляемое ``role`` (production/storage).
+    UI решает, как отображать секцию без операций (иконка склада, плейсхолдер и т.п.).
+    """
+    from app.services.route_storage_classifier import classify_section_role, is_production_section
+
+    sections = (
+        await db.execute(
+            select(Section)
+            .where(Section.is_active == True)
+            .order_by(Section.sort_order, Section.id)
+        )
+    ).scalars().all()
+
+    section_ids = [s.id for s in sections]
+    ops_by_section: dict[int, list[SectionOperation]] = {}
+    if section_ids:
+        ops = (
+            await db.execute(
+                select(SectionOperation)
+                .where(SectionOperation.section_id.in_(section_ids))
+                .order_by(SectionOperation.sort_order, SectionOperation.id)
+            )
+        ).scalars().all()
+        for op in ops:
+            ops_by_section.setdefault(op.section_id, []).append(op)
+
+    result: list[SectionWithOperationsOut] = []
+    for s in sections:
+        section_ops = ops_by_section.get(s.id, [])
+        filtered_ops = [
+            op for op in section_ops
+            if op.operation_code and not (op.operation_code.startswith("__") and op.operation_code.endswith("__"))
+        ]
+
+        has_real_ops = any(
+            op.operation_type == "production" for op in filtered_ops
+        ) if is_production_section(s) else bool(filtered_ops)
+
+        result.append(
+            SectionWithOperationsOut(
+                id=s.id,
+                code=s.code,
+                name=s.name,
+                kind=s.kind,
+                role=classify_section_role(s),
+                has_real_operations=has_real_ops,
+                icon=s.icon,
+                icon_color=s.icon_color,
+                operations=[
+                    SectionOperationOut(
+                        id=op.id or 0,
+                        operation_code=op.operation_code,
+                        operation_name=op.operation_name,
+                        is_significant=op.is_significant,
+                        group_code=op.group_code,
+                        group_name=op.group_name,
+                        icon=op.icon,
+                        icon_color=op.icon_color,
+                    )
+                    for op in filtered_ops
+                ],
+            )
+        )
+    return result
+
+
+@router.get("/storage-points", response_model=list[StoragePointOut])
+async def list_storage_points(
+    db: AsyncSession = Depends(get_db),
+) -> list[StoragePointOut]:
+    """List active storage sections (raw_stock, wip_stock, finished_stock).
+
+    Используется route editor'ом для выбора транзитного узла между
+    production-этапами.
+    """
+    from app.services.route_storage_classifier import STORAGE_KINDS
+
+    sections = (
+        await db.execute(
+            select(Section)
+            .where(Section.is_active == True)
+            .where(Section.kind.in_(list(STORAGE_KINDS)))
+            .order_by(Section.sort_order, Section.id)
+        )
+    ).scalars().all()
+    return [
+        StoragePointOut(
+            id=s.id,
+            code=s.code,
+            name=s.name,
+            kind=s.kind,
+            icon=s.icon,
+            icon_color=s.icon_color,
+        )
+        for s in sections
+    ]
 
 
 @router.get("/{section_id}", response_model=SectionOut)
@@ -384,98 +525,3 @@ async def move_operation_to_group(
 
     await db.flush()
 
-
-class SectionOperationOut(BaseModel):
-    id: int
-    operation_code: str | None
-    operation_name: str
-    is_significant: bool
-    group_code: str | None = None
-    group_name: str | None = None
-    icon: str | None = None
-    icon_color: str | None = None
-
-
-class SectionWithOperationsOut(BaseModel):
-    id: int
-    code: str
-    name: str
-    kind: str
-    icon: str | None = None
-    icon_color: str | None = None
-    operations: list[SectionOperationOut]
-
-
-@router.get("/all/operations", response_model=list[SectionWithOperationsOut])
-async def list_sections_with_operations(
-    db: AsyncSession = Depends(get_db),
-) -> list[SectionWithOperationsOut]:
-    """List all active sections with their operations, filtered and resolved."""
-    sections = (
-        await db.execute(
-            select(Section)
-            .where(Section.is_active == True)
-            .order_by(Section.sort_order, Section.id)
-        )
-    ).scalars().all()
-
-    section_ids = [s.id for s in sections]
-    ops_by_section = {}
-    if section_ids:
-        ops = (
-            await db.execute(
-                select(SectionOperation)
-                .where(SectionOperation.section_id.in_(section_ids))
-                .order_by(SectionOperation.sort_order, SectionOperation.id)
-            )
-        ).scalars().all()
-        for op in ops:
-            ops_by_section.setdefault(op.section_id, []).append(op)
-
-    result = []
-    for s in sections:
-        section_ops = ops_by_section.get(s.id, [])
-        # Исключаем служебные плейсхолдеры групп, например __xxx__
-        filtered_ops = [
-            op for op in section_ops
-            if op.operation_code and not (op.operation_code.startswith("__") and op.operation_code.endswith("__"))
-        ]
-
-        # Если операций нет, делаем одну виртуальную
-        if not filtered_ops:
-            filtered_ops = [
-                SectionOperation(
-                    id=0,
-                    section_id=s.id,
-                    operation_code=s.code,
-                    operation_name=s.name,
-                    is_significant=True,
-                    icon=s.icon,
-                    icon_color=s.icon_color,
-                )
-            ]
-
-        result.append(
-            SectionWithOperationsOut(
-                id=s.id,
-                code=s.code,
-                name=s.name,
-                kind=s.kind,
-                icon=s.icon,
-                icon_color=s.icon_color,
-                operations=[
-                    SectionOperationOut(
-                        id=op.id or 0,
-                        operation_code=op.operation_code,
-                        operation_name=op.operation_name,
-                        is_significant=op.is_significant,
-                        group_code=op.group_code,
-                        group_name=op.group_name,
-                        icon=op.icon,
-                        icon_color=op.icon_color,
-                    )
-                    for op in filtered_ops
-                ]
-            )
-        )
-    return result

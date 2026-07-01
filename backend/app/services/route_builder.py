@@ -34,10 +34,12 @@ from app.services.route_selection import (
 class BuiltRouteStep:
     """Один шаг динамически собранного маршрута."""
     sequence: int
-    section_id: int
-    section_code: str
-    section_name: str
+    section_id: int | None
+    section_code: str | None
+    section_name: str | None
     section_kind: str
+    stage_kind: str = "production"
+    storage_section_id: int | None = None
     group_code: str | None = None
     group_name: str | None = None
     operation_code: str | None = None
@@ -136,8 +138,30 @@ async def build_route_from_profile(
     steps: list[BuiltRouteStep] = []
     sequence = 0
 
+    from app.services.route_storage_classifier import is_storage_section, infer_stage_kind
+
     for section_code in filtered_section_codes:
         section = sections_by_code[section_code]
+
+        # Если секция — склад (storage), то это transit-этап.
+        # У него не может быть реальных операций, только маркер прохода.
+        if is_storage_section(section):
+            sequence += 1
+            steps.append(BuiltRouteStep(
+                sequence=sequence,
+                section_id=None,
+                section_code=section.code,
+                section_name=section.name,
+                section_kind=section.kind,
+                stage_kind="transit",
+                storage_section_id=section.id,
+                operation_code=None,
+                operation_name=f"Хранение: {section.name}",
+                is_significant=False,
+                is_final=(section_code == "SENT"),
+            ))
+            continue
+
         # Найти все группы для этого участка
         section_groups: dict[str | None, list[SectionOperation]] = {}
         for (sid, gcode), ops in ops_by_section_group.items():
@@ -158,6 +182,7 @@ async def build_route_from_profile(
                 section_code=section.code,
                 section_name=section.name,
                 section_kind=section.kind,
+                stage_kind=infer_stage_kind(section=section),
                 group_code=first_op.group_code,
                 group_name=first_op.group_name,
                 operation_code=first_op.operation_code,
@@ -205,6 +230,7 @@ async def build_route_from_profile(
                         section_code=section.code,
                         section_name=section.name,
                         section_kind=section.kind,
+                        stage_kind=infer_stage_kind(section=section),
                         group_code=group_code,
                         group_name=group_name,
                         operation_code=op.operation_code,

@@ -9,6 +9,11 @@ from app.models.route import ProductionRoute, RouteRuleProfile, RouteStage, Rout
 from app.models.section import Section
 from app.models.transfer import Transfer
 from app.models.work_task import WorkTask
+from app.services.route_storage_classifier import (
+    is_storage_section,
+    STAGE_KIND_PRODUCTION,
+    STAGE_KIND_TRANSIT,
+)
 
 # Operations that affect plan grouping (technological)
 SIGNIFICANT_OPS = {
@@ -171,28 +176,47 @@ async def seed_routes(
         stage_seq = 1
         for group in groups:
             primary_step_def, primary_section, primary_is_sig = group[0]
-            stage = RouteStage(
-                route_id=route.id,
-                sequence=stage_seq,
-                section_id=primary_section.id,
-                is_significant=primary_is_sig,
-                norm_time_minutes=primary_step_def.get("norm_time_minutes"),
-                requires_acceptance=True,
-                allow_parallel=False,
-                is_final=any(bool(s[0].get("is_final", False)) for s in group),
-            )
-            db.add(stage)
-            await db.flush()
 
-            for op_idx, (step_def, _, _) in enumerate(group, start=1):
-                op = RouteOperation(
-                    route_stage_id=stage.id,
-                    sequence=op_idx,
-                    operation_code=step_def["operation_code"],
-                    operation_name=step_def["operation_name"],
+            if is_storage_section(primary_section):
+                # Транзитный узел между production-этапами.  Не имеет реальных
+                # операций и не требует приёмки.
+                stage = RouteStage(
+                    route_id=route.id,
+                    sequence=stage_seq,
+                    section_id=None,
+                    stage_kind=STAGE_KIND_TRANSIT,
+                    storage_section_id=primary_section.id,
+                    norm_time_minutes=None,
+                    requires_acceptance=False,
+                    allow_parallel=False,
+                    is_final=False,  # transit cannot be final
                 )
-                db.add(op)
-            
+                db.add(stage)
+                await db.flush()
+            else:
+                stage = RouteStage(
+                    route_id=route.id,
+                    sequence=stage_seq,
+                    section_id=primary_section.id,
+                    stage_kind=STAGE_KIND_PRODUCTION,
+                    is_significant=primary_is_sig,
+                    norm_time_minutes=primary_step_def.get("norm_time_minutes"),
+                    requires_acceptance=True,
+                    allow_parallel=False,
+                    is_final=any(bool(s[0].get("is_final", False)) for s in group),
+                )
+                db.add(stage)
+                await db.flush()
+
+                for op_idx, (step_def, _, _) in enumerate(group, start=1):
+                    op = RouteOperation(
+                        route_stage_id=stage.id,
+                        sequence=op_idx,
+                        operation_code=step_def["operation_code"],
+                        operation_name=step_def["operation_name"],
+                    )
+                    db.add(op)
+
             stage_seq += 1
 
         await db.flush()
@@ -260,25 +284,40 @@ async def seed_production_routes_from_profiles(db: AsyncSession) -> int:
                 continue
 
             sequence += 1
-            stage = RouteStage(
-                route_id=route.id,
-                sequence=sequence,
-                section_id=section.id,
-                is_significant=True,
-                is_final=(section_code == "SENT"),
-                requires_acceptance=True,
-                allow_parallel=False,
-            )
-            db.add(stage)
-            await db.flush()
+            if is_storage_section(section):
+                stage = RouteStage(
+                    route_id=route.id,
+                    sequence=sequence,
+                    section_id=None,
+                    stage_kind=STAGE_KIND_TRANSIT,
+                    storage_section_id=section.id,
+                    is_final=False,
+                    requires_acceptance=False,
+                    allow_parallel=False,
+                )
+                db.add(stage)
+                await db.flush()
+            else:
+                stage = RouteStage(
+                    route_id=route.id,
+                    sequence=sequence,
+                    section_id=section.id,
+                    stage_kind=STAGE_KIND_PRODUCTION,
+                    is_significant=True,
+                    is_final=(section_code == "SENT"),
+                    requires_acceptance=True,
+                    allow_parallel=False,
+                )
+                db.add(stage)
+                await db.flush()
 
-            op = RouteOperation(
-                route_stage_id=stage.id,
-                sequence=1,
-                operation_code=None,  # Resolved dynamically at import time
-                operation_name=section.name,
-            )
-            db.add(op)
+                op = RouteOperation(
+                    route_stage_id=stage.id,
+                    sequence=1,
+                    operation_code=None,  # Resolved dynamically at import time
+                    operation_name=section.name,
+                )
+                db.add(op)
 
         created_count += 1
 

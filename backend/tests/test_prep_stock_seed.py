@@ -11,8 +11,12 @@ from app.models.spg_remainder import SpgRemainder
 from app.seeds.spgs import SPGS_DATA
 from app.seeds.seeders.spgs_seeder import _resolve_storage_kind, seed_spgs
 from app.services.shopfloor.common import (
-    _significant_section_ids,
     build_completed_stages_json,
+)
+from app.services.route_storage_classifier import (
+    STAGE_KIND_PRODUCTION,
+    STAGE_KIND_TRANSIT,
+    is_storage_section,
 )
 
 
@@ -323,9 +327,16 @@ async def _build_route_with_sections(
 ) -> ProductionRoute:
     """Create a minimal route with the given (section_code, section_name, section_kind, is_section_significant) entries.
 
-    Each entry becomes one RouteStage with one RouteOperation. The section's significance is
-    controlled via SectionOperation.is_significant (which the helper looks at).
+    Each entry becomes one RouteStage with one RouteOperation.
+
+    Section kind drives ``stage_kind``: production sections → ``production`` stage,
+    storage sections (``raw_stock``/``wip_stock``/``finished_stock``) → ``transit``
+    stage with ``storage_section_id`` set and ``section_id`` NULL.  The
+    ``is_section_significant`` flag is now stored on ``SectionOperation.operation_type``
+    (``'production'`` or ``'transport'``).
     """
+    from app.services.route_storage_classifier import is_storage_section
+
     for code, name, kind, _sig in sections:
         exists = await session.scalar(select(Section).where(Section.code == code))
         if not exists:
@@ -353,6 +364,9 @@ async def _build_route_with_sections(
 
     for idx, (code, _name, _kind, is_sig) in enumerate(sections, start=1):
         sec = section_by_code[code]
+        op_type = (
+            "transport" if (not is_sig or is_storage_section(sec)) else "production"
+        )
         op_exists = await session.scalar(
             select(SectionOperation).where(
                 SectionOperation.section_id == sec.id,
@@ -366,6 +380,7 @@ async def _build_route_with_sections(
                     operation_code=f"OP_{code}",
                     operation_name=f"Операция {code}",
                     is_significant=is_sig,
+                    operation_type=op_type,
                 )
             )
         stage = await session.scalar(
@@ -374,22 +389,32 @@ async def _build_route_with_sections(
             )
         )
         if stage is None:
-            stage = RouteStage(
-                route_id=route.id,
-                sequence=idx,
-                section_id=sec.id,
-                is_significant=True,
-            )
+            if is_storage_section(sec):
+                stage = RouteStage(
+                    route_id=route.id,
+                    sequence=idx,
+                    section_id=None,
+                    stage_kind=STAGE_KIND_TRANSIT,
+                    storage_section_id=sec.id,
+                )
+            else:
+                stage = RouteStage(
+                    route_id=route.id,
+                    sequence=idx,
+                    section_id=sec.id,
+                    stage_kind=STAGE_KIND_PRODUCTION,
+                )
             session.add(stage)
             await session.flush()
-            session.add(
-                RouteOperation(
-                    route_stage_id=stage.id,
-                    sequence=1,
-                    operation_code=f"OP_{code}",
-                    operation_name=f"Операция {code}",
+            if not is_storage_section(sec):
+                session.add(
+                    RouteOperation(
+                        route_stage_id=stage.id,
+                        sequence=1,
+                        operation_code=f"OP_{code}",
+                        operation_name=f"Операция {code}",
+                    )
                 )
-            )
     await session.commit()
 
     stages = (
@@ -404,18 +429,21 @@ async def _build_route_with_sections(
 
 @pytest.mark.asyncio
 async def test_significant_section_ids_filters_pass_through_sections(session):
-    """_significant_section_ids должен вернуть только секции со значимыми операциями."""
-    _route, _stages = await _build_route_with_sections(
-        session,
-        route_code="R-SIG-1",
-        sections=[
-            ("WH", "Склад сырья", "raw_stock", False),
-            ("DRILL", "Сверловка", "production", True),
-            ("WIP_WH", "Склад пф", "wip_stock", False),
-            ("PACK", "Упаковка", "production", True),
-            ("FG_WH", "Склад ГП", "finished_stock", False),
-        ],
-    )
+    """``is_storage_section`` correctly identifies storage sections so they can be
+    treated as transit by the new ``stage_kind`` model."""
+    sections = [
+        ("WH", "Склад сырья", "raw_stock"),
+        ("DRILL", "Сверловка", "production"),
+        ("WIP_WH", "Склад пф", "wip_stock"),
+        ("PACK", "Упаковка", "production"),
+        ("FG_WH", "Склад ГП", "finished_stock"),
+    ]
+    for code, name, kind in sections:
+        section = await session.scalar(select(Section).where(Section.code == code))
+        if section is None:
+            section = Section(code=code, name=name, kind=kind, is_active=True, sort_order=0)
+            session.add(section)
+    await session.flush()
 
     wh = await session.scalar(select(Section).where(Section.code == "WH"))
     drill = await session.scalar(select(Section).where(Section.code == "DRILL"))
@@ -423,10 +451,12 @@ async def test_significant_section_ids_filters_pass_through_sections(session):
     pack = await session.scalar(select(Section).where(Section.code == "PACK"))
     fg = await session.scalar(select(Section).where(Section.code == "FG_WH"))
 
-    significant = await _significant_section_ids(
-        session, [wh.id, drill.id, wip.id, pack.id, fg.id]
-    )
-    assert significant == {drill.id, pack.id}
+    # Production sections are NOT storage, storage sections ARE storage.
+    assert is_storage_section(wh) is True
+    assert is_storage_section(drill) is False
+    assert is_storage_section(wip) is True
+    assert is_storage_section(pack) is False
+    assert is_storage_section(fg) is True
 
 
 @pytest.mark.asyncio

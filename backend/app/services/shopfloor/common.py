@@ -8,7 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.defect import Defect
-from app.models.route import RouteStage, SectionOperation
+from app.models.route import RouteStage
 from app.models.transfer import Transfer
 from app.models.user import User
 from app.models.work_task import WorkTask
@@ -89,87 +89,40 @@ async def sections_share_spg(db: AsyncSession, section_id_1: int, section_id_2: 
     return spg_1 == spg_2
 
 
-async def _significant_section_ids(
-    db: AsyncSession,
-    section_ids: Iterable[int],
-) -> set[int]:
-    """Return the subset of section_ids that are «significant» (i.e. real production work).
-
-    Two rules, in priority order:
-
-    1. If a section has at least one :class:`SectionOperation` row, it is significant iff
-       any of those operations carries ``is_significant=True``. This is the canonical
-       production-data path (WH→ISSUE_RAW, WIP_WH→MOVE_TO_WIP, FG_WH/SHIPMENT/SENT are
-       therefore filtered out; DRILL/PRESS/SHOT/ANOD/PACK are kept).
-
-    2. If a section has no :class:`SectionOperation` rows at all (legacy data, or
-       tests that build ad-hoc sections), fall back to ``Section.kind``:
-       ``production`` sections are kept, ``raw_stock``/``wip_stock``/``finished_stock``
-       sections are filtered out. This keeps the helper robust without forcing every
-       fixture to declare SectionOperation rows.
-    """
-    ids = {int(s) for s in section_ids}
-    if not ids:
-        return set()
-
-    sig_ops_rows = (
-        await db.execute(
-            select(SectionOperation.section_id)
-            .where(SectionOperation.section_id.in_(ids))
-            .where(SectionOperation.is_significant.is_(True))
-            .distinct()
-        )
-    ).scalars().all()
-    with_sig_ops = {int(r) for r in sig_ops_rows}
-
-    sections_with_any_op = {
-        int(r) for r in (
-            await db.execute(
-                select(SectionOperation.section_id)
-                .where(SectionOperation.section_id.in_(ids))
-                .distinct()
-            )
-        ).scalars().all()
-    }
-
-    # Sections without ANY SectionOperation fall back to kind-based classification
-    no_ops_ids = ids - sections_with_any_op
-    fallback_keep: set[int] = set()
-    if no_ops_ids:
-        from app.models.section import Section
-        rows = (
-            await db.execute(
-                select(Section.id, Section.kind).where(Section.id.in_(no_ops_ids))
-            )
-        ).all()
-        for sec_id, kind in rows:
-            if kind == "production":
-                fallback_keep.add(int(sec_id))
-
-    return with_sig_ops | fallback_keep
-
-
 async def build_completed_stages_json(
     db: AsyncSession,
     stages: Iterable[RouteStage],
 ) -> list[dict]:
-    """Build ``completed_stages_json`` payload, skipping non-significant (pass-through) stages.
+    """Build ``completed_stages_json`` payload, skipping transit (pass-through) stages.
 
-    For each input stage we emit a dict ``{section_id, operation_code, operation_name, sequence}``
-    iff the stage's section is classified as «significant» (see
-    :func:`_significant_section_ids`). Pass-through sections (warehouse issue, WIP
-    transfers, FG warehouse, shipment, sent) are dropped so the snapshot focuses on
-    real production work.
+    For each ``production`` stage we emit a dict ``{section_id, operation_code,
+    operation_name, sequence}``.  Transit stages (``stage_kind='transit'`` — i.e.
+    warehouse hops) are dropped so the snapshot focuses on real production work.
+
+    Decision is made by :mod:`app.services.route_storage_classifier`, which is the
+    single source of truth for «это цех или склад» across the codebase.
     """
+    from sqlalchemy.orm import selectinload
+
+    from app.services.route_storage_classifier import classify_stages, is_transit_stage
+
     stage_list = list(stages)
     if not stage_list:
         return []
-    significant = await _significant_section_ids(
-        db, [s.section_id for s in stage_list]
-    )
+    production_stages, _transit = await classify_stages(db, stage_list)
+    # Ensure operations relationship is loaded for production stages we will serialise
+    prod_ids = [s.id for s in production_stages if s.id is not None]
+    if prod_ids:
+        loaded = (await db.execute(
+            select(RouteStage)
+            .options(selectinload(RouteStage.operations))
+            .where(RouteStage.id.in_(prod_ids))
+        )).scalars().all()
+        loaded_by_id = {s.id: s for s in loaded}
+        production_stages = [loaded_by_id.get(s.id, s) for s in production_stages]
     result: list[dict] = []
-    for s in stage_list:
-        if s.section_id not in significant:
+    for s in production_stages:
+        if is_transit_stage(s):
             continue
         result.append({
             "section_id": s.section_id,

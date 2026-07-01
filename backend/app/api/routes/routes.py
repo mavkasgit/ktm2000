@@ -37,6 +37,8 @@ class StepCreate(BaseModel):
     requires_acceptance: bool = True
     allow_parallel: bool = False
     is_final: bool = False
+    stage_kind: str = "production"
+    storage_section_id: int | None = None
 
 
 
@@ -49,6 +51,8 @@ class StepUpdate(BaseModel):
     requires_acceptance: bool = True
     allow_parallel: bool = False
     is_final: bool = False
+    stage_kind: str = "production"
+    storage_section_id: int | None = None
 
 
 
@@ -63,13 +67,15 @@ class StepOut(BaseModel):
     id: int
     route_id: int
     sequence: int
-    section_id: int
+    section_id: int | None
     section_code: str | None = None
     section_name: str | None = None
     operation_code: str | None = None
     operation_name: str
     norm_time_minutes: int | None = None
     is_final: bool
+    stage_kind: str = "production"
+    storage_section_id: int | None = None
 
 
     model_config = {"from_attributes": True}
@@ -130,13 +136,18 @@ async def get_route(route_id: int, db: AsyncSession = Depends(get_db)) -> RouteD
     steps = []
     sorted_stages = sorted(route.stages, key=lambda s: s.sequence)
     for stage in sorted_stages:
-        section = await db.get(Section, stage.section_id)
+        if stage.stage_kind == "transit":
+            section = await db.get(Section, stage.storage_section_id) if stage.storage_section_id else None
+        else:
+            section = await db.get(Section, stage.section_id) if stage.section_id else None
         op_code = None
         op_name = ""
         if stage.operations:
             sorted_ops = sorted(stage.operations, key=lambda o: o.sequence)
             op_code = sorted_ops[0].operation_code
             op_name = sorted_ops[0].operation_name
+        if stage.stage_kind == "transit" and section is not None:
+            op_name = f"Транзит через {section.name}"
 
         steps.append(StepOut(
             id=stage.id,
@@ -149,6 +160,8 @@ async def get_route(route_id: int, db: AsyncSession = Depends(get_db)) -> RouteD
             operation_name=op_name,
             norm_time_minutes=stage.norm_time_minutes,
             is_final=stage.is_final,
+            stage_kind=stage.stage_kind,
+            storage_section_id=stage.storage_section_id,
         ))
 
     rules_result = await db.execute(
@@ -315,31 +328,67 @@ async def delete_route(
 
 @router.post("/{route_id}/steps", response_model=StepOut, status_code=status.HTTP_201_CREATED)
 async def create_route_step(route_id: int, payload: StepCreate, db: AsyncSession = Depends(get_db)) -> StepOut:
+    from app.services.route_storage_classifier import is_storage_section
+
     route = await db.get(ProductionRoute, route_id)
     if route is None:
         raise HTTPException(status_code=404, detail="Route not found")
-    section = await db.get(Section, payload.section_id)
-    if section is None:
-        raise HTTPException(status_code=404, detail="Section not found")
-    if not section.is_active:
-        raise HTTPException(status_code=400, detail="Inactive section cannot be used in route")
     if payload.sequence <= 0:
         raise HTTPException(status_code=400, detail="Sequence must be > 0")
 
-    # Validate operation_code: NULL allowed (operation from source_payload),
-    # or must exist in section_operations
-    if payload.operation_code:
-        op_exists = await db.scalar(
-            select(SectionOperation.id).where(
-                SectionOperation.section_id == payload.section_id,
-                SectionOperation.operation_code == payload.operation_code,
-            )
-        )
-        if not op_exists:
+    stage_kind = payload.stage_kind or "production"
+    if stage_kind not in ("production", "transit"):
+        raise HTTPException(status_code=400, detail=f"Unknown stage_kind '{stage_kind}'")
+
+    section: Section | None = None
+    storage_section: Section | None = None
+
+    if stage_kind == "transit":
+        sid = payload.storage_section_id or payload.section_id
+        if sid is None:
             raise HTTPException(
                 status_code=400,
-                detail=f"Operation '{payload.operation_code}' is not registered for section {payload.section_id}",
+                detail="Transit stage requires storage_section_id (or section_id pointing to a storage section)",
             )
+        storage_section = await db.get(Section, sid)
+        if storage_section is None:
+            raise HTTPException(status_code=404, detail=f"Storage section {sid} not found")
+        if not storage_section.is_active:
+            raise HTTPException(status_code=400, detail="Inactive storage section cannot be used in route")
+        if not is_storage_section(storage_section):
+            raise HTTPException(
+                status_code=400,
+                detail=f"Section {sid} (kind={storage_section.kind}) is not a storage section",
+            )
+        if payload.is_final:
+            raise HTTPException(status_code=400, detail="Transit stage cannot be marked as final")
+    else:
+        section = await db.get(Section, payload.section_id)
+        if section is None:
+            raise HTTPException(status_code=404, detail="Section not found")
+        if not section.is_active:
+            raise HTTPException(status_code=400, detail="Inactive section cannot be used in route")
+        if is_storage_section(section):
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Section {section.id} ({section.code}) is a storage section. "
+                    "To add it as a transit hop set stage_kind='transit'."
+                ),
+            )
+
+        if payload.operation_code:
+            op_exists = await db.scalar(
+                select(SectionOperation.id).where(
+                    SectionOperation.section_id == payload.section_id,
+                    SectionOperation.operation_code == payload.operation_code,
+                )
+            )
+            if not op_exists:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Operation '{payload.operation_code}' is not registered for section {payload.section_id}",
+                )
 
     if payload.is_final:
         final_exists = await db.scalar(
@@ -351,7 +400,9 @@ async def create_route_step(route_id: int, payload: StepCreate, db: AsyncSession
     stage = RouteStage(
         route_id=route_id,
         sequence=payload.sequence,
-        section_id=payload.section_id,
+        section_id=section.id if section else None,
+        stage_kind=stage_kind,
+        storage_section_id=storage_section.id if storage_section else None,
         norm_time_minutes=payload.norm_time_minutes,
         requires_acceptance=payload.requires_acceptance,
         allow_parallel=payload.allow_parallel,
@@ -359,75 +410,116 @@ async def create_route_step(route_id: int, payload: StepCreate, db: AsyncSession
     )
     db.add(stage)
     await db.flush()
-    
-    op = RouteOperation(
-        route_stage_id=stage.id,
-        sequence=1,
-        operation_code=payload.operation_code,
-        operation_name=payload.operation_name,
-    )
-    db.add(op)
-    await db.flush()
+
+    op = None
+    if stage_kind == "production":
+        op = RouteOperation(
+            route_stage_id=stage.id,
+            sequence=1,
+            operation_code=payload.operation_code,
+            operation_name=payload.operation_name,
+        )
+        db.add(op)
+        await db.flush()
     await db.refresh(stage)
 
-    section = await db.get(Section, stage.section_id)
+    if stage_kind == "transit":
+        section_for_response = storage_section
+    else:
+        section_for_response = section
     return StepOut(
         id=stage.id,
         route_id=stage.route_id,
         sequence=stage.sequence,
         section_id=stage.section_id,
-        section_code=section.code if section else None,
-        section_name=section.name if section else None,
-        operation_code=op.operation_code,
-        operation_name=op.operation_name,
+        section_code=section_for_response.code if section_for_response else None,
+        section_name=section_for_response.name if section_for_response else None,
+        operation_code=op.operation_code if op else None,
+        operation_name=op.operation_name if op else f"Транзит через {storage_section.name if storage_section else ''}",
         norm_time_minutes=stage.norm_time_minutes,
         is_final=stage.is_final,
-
+        stage_kind=stage.stage_kind,
+        storage_section_id=stage.storage_section_id,
     )
 
 
 @router.put("/{route_id}/steps", response_model=list[StepOut])
 async def replace_route_steps(route_id: int, payload: list[StepUpdate], db: AsyncSession = Depends(get_db)) -> list[StepOut]:
+    from app.services.route_storage_classifier import is_storage_section
+
     route = await db.get(ProductionRoute, route_id)
     if route is None:
         raise HTTPException(status_code=404, detail="Route not found")
 
-    # Delete existing stages
     existing_stages = (await db.execute(select(RouteStage).where(RouteStage.route_id == route_id))).scalars().all()
     for stage in existing_stages:
         await db.delete(stage)
     await db.flush()
 
-    # Create new stages & operations
     result = []
     for item in payload:
         if item.sequence <= 0:
             raise HTTPException(status_code=400, detail="Sequence must be > 0")
-        section = await db.get(Section, item.section_id)
-        if section is None:
-            raise HTTPException(status_code=404, detail=f"Section {item.section_id} not found")
-        if not section.is_active:
-            raise HTTPException(status_code=400, detail=f"Inactive section {item.section_id}")
+        stage_kind = item.stage_kind or "production"
+        if stage_kind not in ("production", "transit"):
+            raise HTTPException(status_code=400, detail=f"Unknown stage_kind '{stage_kind}'")
 
-        # Validate operation_code: NULL allowed (operation from source_payload),
-        # or must exist in section_operations
-        if item.operation_code:
-            op_exists = await db.scalar(
-                select(SectionOperation.id).where(
-                    SectionOperation.section_id == item.section_id,
-                    SectionOperation.operation_code == item.operation_code,
-                )
-            )
-            if not op_exists:
+        section: Section | None = None
+        storage_section: Section | None = None
+
+        if stage_kind == "transit":
+            sid = item.storage_section_id or item.section_id
+            if sid is None:
                 raise HTTPException(
                     status_code=400,
-                    detail=f"Operation '{item.operation_code}' is not registered for section {item.section_id}",
+                    detail="Transit stage requires storage_section_id (or section_id pointing to a storage section)",
                 )
+            storage_section = await db.get(Section, sid)
+            if storage_section is None:
+                raise HTTPException(status_code=404, detail=f"Storage section {sid} not found")
+            if not storage_section.is_active:
+                raise HTTPException(status_code=400, detail="Inactive storage section cannot be used in route")
+            if not is_storage_section(storage_section):
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Section {sid} (kind={storage_section.kind}) is not a storage section",
+                )
+            if item.is_final:
+                raise HTTPException(status_code=400, detail="Transit stage cannot be marked as final")
+        else:
+            section = await db.get(Section, item.section_id)
+            if section is None:
+                raise HTTPException(status_code=404, detail=f"Section {item.section_id} not found")
+            if not section.is_active:
+                raise HTTPException(status_code=400, detail=f"Inactive section {item.section_id}")
+            if is_storage_section(section):
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"Section {section.id} ({section.code}) is a storage section. "
+                        "To add it as a transit hop set stage_kind='transit'."
+                    ),
+                )
+
+            if item.operation_code:
+                op_exists = await db.scalar(
+                    select(SectionOperation.id).where(
+                        SectionOperation.section_id == item.section_id,
+                        SectionOperation.operation_code == item.operation_code,
+                    )
+                )
+                if not op_exists:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Operation '{item.operation_code}' is not registered for section {item.section_id}",
+                    )
 
         stage = RouteStage(
             route_id=route_id,
             sequence=item.sequence,
-            section_id=item.section_id,
+            section_id=section.id if section else None,
+            stage_kind=stage_kind,
+            storage_section_id=storage_section.id if storage_section else None,
             norm_time_minutes=item.norm_time_minutes,
             requires_acceptance=item.requires_acceptance,
             allow_parallel=item.allow_parallel,
@@ -436,28 +528,34 @@ async def replace_route_steps(route_id: int, payload: list[StepUpdate], db: Asyn
         db.add(stage)
         await db.flush()
 
-        op = RouteOperation(
-            route_stage_id=stage.id,
-            sequence=1,
-            operation_code=item.operation_code,
-            operation_name=item.operation_name,
-        )
-        db.add(op)
-        await db.flush()
+        op = None
+        if stage_kind == "production":
+            op = RouteOperation(
+                route_stage_id=stage.id,
+                sequence=1,
+                operation_code=item.operation_code,
+                operation_name=item.operation_name,
+            )
+            db.add(op)
+            await db.flush()
         await db.refresh(stage)
 
-        section = await db.get(Section, stage.section_id)
+        if stage_kind == "transit":
+            section_for_response = storage_section
+        else:
+            section_for_response = section
         result.append(StepOut(
             id=stage.id,
             route_id=stage.route_id,
             sequence=stage.sequence,
             section_id=stage.section_id,
-            section_code=section.code if section else None,
-            section_name=section.name if section else None,
-            operation_code=op.operation_code,
-            operation_name=op.operation_name,
+            section_code=section_for_response.code if section_for_response else None,
+            section_name=section_for_response.name if section_for_response else None,
+            operation_code=op.operation_code if op else None,
+            operation_name=op.operation_name if op else f"Транзит через {storage_section.name if storage_section else ''}",
             norm_time_minutes=stage.norm_time_minutes,
             is_final=stage.is_final,
-    
+            stage_kind=stage.stage_kind,
+            storage_section_id=stage.storage_section_id,
         ))
     return result
