@@ -741,3 +741,117 @@ async def auto_create_transfer_after_complete(
         idempotency_key=key,
         post_factum=True,
     )
+
+
+async def auto_create_transfer_from_stock_to_production(
+    db: AsyncSession,
+    *,
+    to_task: WorkTask,
+    quantity: Decimal,
+    actor_id: int,
+    idempotency_key: str | None = None,
+) -> dict | None:
+    """Auto-create a cross-GHP Transfer from a stock section to a production
+    WorkTask, when the production task is being taken to work and the raw
+    material lives in a different SPG.
+
+    Used by ``issue_to_work`` after a successful issue.  No-op when:
+    * there is no previous route step (sequence <= 1);
+    * the previous section is NOT a stock section (i.e. it's another
+      production step — handled by ``auto_transfer_next`` after complete);
+    * the previous section is in the same SPG (handled by
+      ``auto_consume_available_remainders``);
+    * no compatible ``SpgRemainder`` exists on the source side.
+
+    When firing, a synthetic ``WorkTask`` on the stock section is created
+    (status=released) so that ``transfer_send`` can reference it.  The
+    task is intentionally minimal — it never shows up in production
+    boards (those filter by ``kind == "production"``) and only acts as
+    a holder for outgoing cross-GHP transfers.
+    """
+    from app.models.internal_plan import SectionPlanLine
+    from app.models.section import Section
+    from app.models.spg import SpgSection
+    from app.models.spg_remainder import SpgRemainder
+    from app.models.work_task import WorkTaskStatus
+    from app.services.shopfloor.common import sections_share_spg
+
+    quantity = _to_decimal(quantity)
+    if quantity <= 0:
+        return None
+
+    to_line = await db.get(SectionPlanLine, to_task.section_plan_line_id)
+    if to_line is None or to_line.sequence <= 1:
+        return None
+
+    prev_line = await db.scalar(
+        select(SectionPlanLine).where(
+            SectionPlanLine.plan_position_id == to_line.plan_position_id,
+            SectionPlanLine.sequence == to_line.sequence - 1,
+        )
+    )
+    if prev_line is None:
+        return None
+
+    prev_section = await db.get(Section, prev_line.section_id)
+    if prev_section is None or prev_section.kind not in {"raw_stock", "wip_stock"}:
+        return None  # предыдущий шаг — production, не склад
+
+    if await sections_share_spg(db, prev_line.section_id, to_line.section_id):
+        return None  # та же ГХП — auto_consume сработает
+
+    # Ищем SpgRemainder на складе с нужным продуктом (FIFO)
+    prev_spg_id = await db.scalar(
+        select(SpgSection.spg_id).where(SpgSection.section_id == prev_line.section_id)
+    )
+    if prev_spg_id is None:
+        return None
+
+    candidate = await db.scalar(
+        select(SpgRemainder)
+        .where(
+            SpgRemainder.spg_id == prev_spg_id,
+            SpgRemainder.product_id == to_task.product_id,
+            SpgRemainder.remainder_quantity > 0,
+            SpgRemainder.consumed_at.is_(None),
+        )
+        .order_by(SpgRemainder.created_at.asc(), SpgRemainder.id.asc())
+        .limit(1)
+    )
+    if candidate is None or candidate.remainder_quantity <= 0:
+        return None
+
+    transfer_qty = min(quantity, candidate.remainder_quantity)
+
+    # Создаём/находим «фиктивный» WorkTask на складе
+    from_task = await db.scalar(
+        select(WorkTask).where(
+            WorkTask.section_plan_line_id == prev_line.id,
+            WorkTask.status.notin_([WorkTaskStatus.completed, WorkTaskStatus.cancelled]),
+        )
+    )
+    if from_task is None:
+        from_task = WorkTask(
+            section_plan_line_id=prev_line.id,
+            section_id=prev_line.section_id,
+            product_id=to_task.product_id,
+            route_stage_id=prev_line.route_stage_id,
+            planned_quantity=transfer_qty,
+            status=WorkTaskStatus.ready,
+            due_date=prev_line.due_date,
+        )
+        db.add(from_task)
+        await db.flush()
+        await _refresh_task_cache(db, from_task.id)
+
+    key = f"{idempotency_key}:auto-transfer-from-stock" if idempotency_key else None
+    return await transfer_send(
+        db,
+        from_task_id=from_task.id,
+        to_task_id=to_task.id,
+        quantity=transfer_qty,
+        actor_id=actor_id,
+        comment="Авто-перемещение со склада при выдаче в работу",
+        idempotency_key=key,
+        post_factum=True,
+    )

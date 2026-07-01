@@ -134,6 +134,18 @@ async def issue_to_work(
     await db.flush()
     await _refresh_task_cache(db, task.id)
     await _refresh_section_plan_line_cache(db, task.section_plan_line_id)
+
+    # Авто-перемещение со склада в другой ГХП (если предыдущий
+    # шаг маршрута — склад, и остатки лежат там).
+    from app.transfers.services import auto_create_transfer_from_stock_to_production
+    await auto_create_transfer_from_stock_to_production(
+        db,
+        to_task=task,
+        quantity=quantity,
+        actor_id=actor_id,
+        idempotency_key=idempotency_key,
+    )
+
     return {"movement_id": movement.id, "task_id": task.id, "status": task.status.value}
 
 async def complete_task(
@@ -533,6 +545,18 @@ async def prepare_section_task(
     )
     if line is None:
         raise ValueError("No route step found for this section in the plan position")
+
+    # Склады (raw_stock, wip_stock, finished_stock) — это хранилища
+    # остатков в ГХП, а не реальные шаги маршрута. WorkTask на них
+    # не создаём; остатки перетекают через Transfer / auto_consume.
+    from app.models.section import Section as _Section
+    sec_meta = await db.get(_Section, line.section_id)
+    if sec_meta is not None and sec_meta.kind != "production":
+        return {
+            "task_id": None,
+            "status": "skipped_storage_section",
+            "section_kind": sec_meta.kind,
+        }
 
     # Check for existing open task
     existing_task = await db.scalar(
