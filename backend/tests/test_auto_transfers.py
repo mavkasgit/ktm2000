@@ -263,3 +263,30 @@ async def test_complete_no_transfer_on_final_stage(client, session) -> None:
     transfers = (await session.execute(select(Transfer))).scalars().all()
     assert transfers == [], "На финальном шаге перемещение не должно создаваться"
 
+
+async def test_complete_auto_transfer_is_idempotent(client, session) -> None:
+    """Повторный complete с тем же idempotency_key не должен дублировать Transfer."""
+    user = await _make_user(session)
+    fx = await _make_two_ghp_fixture(session, sku="IDEM", qty=Decimal("4"))
+    await _release_via_take_to_work(client, fx["position"].id)
+    tasks = (await session.execute(select(WorkTask).order_by(WorkTask.id.asc()))).scalars().all()
+    task1 = tasks[0]
+
+    await _complete_first_task(client, task1.id, Decimal("4"), idempotency_key="k-idem-1")
+
+    # Повторный complete (например, из-за сетевого ретрая). В реальной
+    # системе complete_task сначала идемпотентно вернёт прежний результат,
+    # но даже если он попытается вызвать auto-transfer — transfer_send
+    # по тому же ключу вернёт idempotent_replay и НЕ создаст дубль.
+    # Симулируем это повторным вызовом transfer_send через прямой хелпер.
+    from app.transfers.services import auto_create_transfer_after_complete
+    result = await auto_create_transfer_after_complete(
+        session, from_task=task1, good_quantity=Decimal("4"),
+        actor_id=user.id, idempotency_key="k-idem-1",
+    )
+    assert result is not None
+    assert result.get("idempotent_replay") is True, "Повторный вызов должен вернуть idempotent_replay"
+
+    transfers = (await session.execute(select(Transfer))).scalars().all()
+    assert len(transfers) == 1, f"Ожидался 1 Transfer, получили {len(transfers)}"
+
