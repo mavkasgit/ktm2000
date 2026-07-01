@@ -42,9 +42,26 @@ async def issue_to_work(
 
     task = await _get_task(db, task_id)
     if task.status not in {WorkTaskStatus.ready, WorkTaskStatus.in_progress, WorkTaskStatus.partially_completed}:
+        is_first_active = False
         if task.status == WorkTaskStatus.waiting_previous:
-            raise ValueError("Нельзя выдать в работу задание, ожидающее передачи сырья с предыдущего участка")
-        raise ValueError("Task must be ready/in_progress/partially_completed")
+            line = await db.get(SectionPlanLine, task.section_plan_line_id)
+            if line is not None:
+                preceding_has_task = await db.scalar(
+                    select(func.count(WorkTask.id))
+                    .join(SectionPlanLine, WorkTask.section_plan_line_id == SectionPlanLine.id)
+                    .where(
+                        SectionPlanLine.plan_position_id == line.plan_position_id,
+                        SectionPlanLine.sequence < line.sequence,
+                        WorkTask.status.notin_([WorkTaskStatus.cancelled])
+                    )
+                ) > 0
+                if not preceding_has_task:
+                    is_first_active = True
+
+        if not is_first_active:
+            if task.status == WorkTaskStatus.waiting_previous:
+                raise ValueError("Нельзя выдать в работу задание, ожидающее передачи сырья с предыдущего участка")
+            raise ValueError("Task must be ready/in_progress/partially_completed")
 
     task = await _refresh_task_cache(db, task.id)
     available = task.cached_available_quantity

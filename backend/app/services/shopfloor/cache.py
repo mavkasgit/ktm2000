@@ -212,8 +212,22 @@ async def _refresh_task_cache(db: AsyncSession, task_id: int, visited: set[int] 
         task.status = WorkTaskStatus.partially_completed
     elif issued > 0:
         task.status = WorkTaskStatus.in_progress
-    elif available > 0 and task.status == WorkTaskStatus.waiting_previous:
+    elif available > 0:
         task.status = WorkTaskStatus.ready
+    else:
+        preceding_exists = False
+        if line is not None:
+            preceding_exists = await db.scalar(
+                select(func.count(SectionPlanLine.id))
+                .where(
+                    SectionPlanLine.plan_position_id == line.plan_position_id,
+                    SectionPlanLine.sequence < line.sequence,
+                )
+            ) > 0
+        if preceding_exists:
+            task.status = WorkTaskStatus.waiting_previous
+        else:
+            task.status = WorkTaskStatus.ready
 
     # Cascade refresh to the next task if it is in the same GHP
     line = await db.get(SectionPlanLine, task.section_plan_line_id)
