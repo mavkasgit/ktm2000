@@ -482,10 +482,9 @@ async def test_transfers_cancellation_and_validation(client, session) -> None:
 
 
 @pytest.mark.asyncio
-async def test_work_task_becomes_completed_before_transfer(client, session) -> None:
-    """A SectionTask becomes `completed` once the section has worked off
-    everything that was available to it — the transfer to the next SPG
-    is a SEPARATE process and does NOT gate this status anymore.
+async def test_work_task_requires_transfer_to_become_completed(client, session) -> None:
+    """A SectionTask becomes `completed` only after the completed quantity
+    has been transferred to the next step.
     """
     user = await _make_user(session, "xfer-status@test.local")
     headers = _auth_headers(user)
@@ -508,23 +507,36 @@ async def test_work_task_becomes_completed_before_transfer(client, session) -> N
     )
     assert complete.status_code == 200
 
-    # Refresh from DB and verify status is already `completed` even though
-    # no transfer has been sent.
+    # Refresh from DB and verify status is partially_completed because no transfer has been sent.
     refreshed = (
         await session.execute(
             select(WorkTask).where(WorkTask.id == first_task.id)
         )
     ).scalar_one()
-    assert refreshed.status == WorkTaskStatus.completed
+    assert refreshed.status == WorkTaskStatus.partially_completed
     assert refreshed.cached_completed_quantity == Decimal("100")
-    # The transferable quantity is still 100 — that's the whole point of
-    # decoupling: the task is closed, but the operator can still
-    # transfer the remainder to the next SPG.
     assert refreshed.cached_transferred_quantity == Decimal("0")
-    assert (
-        refreshed.cached_completed_quantity - refreshed.cached_transferred_quantity
-        == Decimal("100")
+
+    # Send transfer
+    xfer = await client.post(
+        "/api/transfers",
+        json={
+            "from_task_id": first_task.id,
+            "quantity": "100",
+            "idempotency_key": "xf-stat:transfer"
+        },
+        headers=headers,
     )
+    assert xfer.status_code == 200
+
+    # Refresh from DB and verify status is now completed
+    refreshed2 = (
+        await session.execute(
+            select(WorkTask).where(WorkTask.id == first_task.id)
+        )
+    ).scalar_one()
+    assert refreshed2.status == WorkTaskStatus.completed
+    assert refreshed2.cached_transferred_quantity == Decimal("100")
 
 
 @pytest.mark.asyncio

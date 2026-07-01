@@ -191,16 +191,22 @@ async def _refresh_task_cache(db: AsyncSession, task_id: int, visited: set[int] 
     task.cached_available_quantity = available
     task.cached_remaining_quantity = remaining
 
-    # Task is "completed" when the section has worked off everything that was
-    # available to it (planned initial + what was received via transfers).
-    # The transfer to the next SPG is a SEPARATE process and does NOT gate
-    # this status anymore — a WorkTask can be `completed` while still
-    # holding transferable quantity (cached_completed - cached_transferred > 0).
-    #
-    # `final_release` is still consulted: on a final route step, the route
-    # terminates with a final_release movement instead of a transfer, so
-    # once the final step's quantity is final-released, the task is closed.
-    if completed + rejected >= task.planned_quantity:
+    from app.models.route import RouteStage
+    stage = await db.get(RouteStage, task.route_stage_id) if task.route_stage_id else None
+    is_final = stage.is_final if stage else False
+
+    is_fully_transferred = False
+    if is_final:
+        final_released = await db.scalar(
+            select(func.coalesce(func.sum(Movement.quantity), 0)).where(
+                Movement.task_id == task.id, Movement.movement_type == MovementType.final_release
+            )
+        ) or Decimal("0")
+        is_fully_transferred = final_released >= completed
+    else:
+        is_fully_transferred = transferred >= completed
+
+    if completed + rejected >= task.planned_quantity and is_fully_transferred:
         task.status = WorkTaskStatus.completed
     elif completed + rejected > 0:
         task.status = WorkTaskStatus.partially_completed
