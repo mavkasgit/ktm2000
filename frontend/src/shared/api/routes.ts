@@ -172,8 +172,10 @@ export type SeedSummary = {
   section_operations: number;
 };
 
-export async function seedRoutes() {
-  const { data } = await apiClient.post<SeedSummary>("/routes-seed");
+export async function seedRoutes(force: boolean = false) {
+  const { data } = await apiClient.post<SeedSummary>("/routes-seed", null, {
+    params: { force },
+  });
   return data;
 }
 

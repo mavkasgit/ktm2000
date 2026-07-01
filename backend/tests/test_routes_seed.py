@@ -34,6 +34,7 @@ DEFAULT_SECTIONS = [
     {"code": "DRILL", "name": "Сверловка", "sort_order": 20, "kind": "production"},
     {"code": "PRESS", "name": "Пресс", "sort_order": 30, "kind": "production"},
     {"code": "SHOT", "name": "Дробеструй", "sort_order": 40, "kind": "production"},
+    {"code": "PREP_STOCK", "name": "Склад подготовки", "sort_order": 45, "kind": "wip_stock"},
     {"code": "ANOD", "name": "Анодирование", "sort_order": 50, "kind": "production"},
     {"code": "WIP_WH", "name": "Склад полуфабриката", "sort_order": 60, "kind": "wip_stock"},
     {"code": "SAW", "name": "Пила", "sort_order": 70, "kind": "production"},
@@ -112,7 +113,7 @@ async def test_seed_routes_creates_characteristic_routes(client, session) -> Non
     response = await client.post("/api/routes-seed")
     assert response.status_code == 201
     data = response.json()
-    assert data == {"import_templates": 1, "route_rule_profiles": 1, "routes": 2, "selection_rules": 12, "sections": 11, "section_operations": 20}
+    assert data == {"import_templates": 1, "route_rule_profiles": 1, "routes": 2, "selection_rules": 12, "sections": 12, "section_operations": 21}
     first_rules_count = len((await session.execute(select(RouteSelectionRule))).scalars().all())
     assert first_rules_count == 12
 
@@ -240,7 +241,7 @@ async def test_force_seed_clears_generated_production_data(client, session) -> N
 
     force_response = await client.post("/api/routes-seed?force=true")
     assert force_response.status_code == 201
-    assert force_response.json() == {"import_templates": 1, "route_rule_profiles": 1, "routes": 0, "selection_rules": 19, "sections": 11, "section_operations": 20}
+    assert force_response.json() == {"import_templates": 1, "route_rule_profiles": 1, "routes": 0, "selection_rules": 19, "sections": 12, "section_operations": 21}
 
     for model in (
         ReleaseBatchPosition,
@@ -330,7 +331,7 @@ async def test_cleanup_endpoints(client, session) -> None:
     assert stats_response.status_code == 200
     stats_data = stats_response.json()
     assert "stats" in stats_data
-    assert stats_data["stats"]["sections"] == 11
+    assert stats_data["stats"]["sections"] == 12
     assert stats_data["stats"]["section_operations"] == 1
 
     # 3. Вызываем cleanup с неправильной таблицей для проверки валидации
@@ -344,7 +345,7 @@ async def test_cleanup_endpoints(client, session) -> None:
     # 5. Проверяем, что операции удалены, а секции остались на месте
     stats_response = await client.get("/api/routes-seed/cleanup-stats")
     assert stats_response.json()["stats"]["section_operations"] == 0
-    assert stats_response.json()["stats"]["sections"] == 11
+    assert stats_response.json()["stats"]["sections"] == 12
 
     # 6. Очищаем секции
     cleanup_sections = await client.post("/api/routes-seed/cleanup", json={"tables": ["sections"]})

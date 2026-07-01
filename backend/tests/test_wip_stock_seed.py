@@ -47,73 +47,23 @@ async def _seed_default_sections(session) -> dict[str, Section]:
     return sections
 
 
-def test_wip_present_in_spgs_data():
-    """WIP должен быть в списке SPGS_DATA."""
+def test_wip_not_in_spgs_data():
+    """WIP как отдельный SPG удалён — слит с ANOD как wip-секция WIP_WH."""
     codes = {item["code"] for item in SPGS_DATA}
-    assert "WIP" in codes
+    assert "WIP" not in codes
 
 
-def test_wip_has_empty_section_codes():
-    """WIP — складской объект, не привязан к секциям (sectionless)."""
-    wip = next(item for item in SPGS_DATA if item["code"] == "WIP")
-    assert wip["section_codes"] == []
-    assert wip["sort_order"] == 40
-
-
-def test_wip_has_storage_kind_wip():
-    """WIP имеет явный storage_kind=wip."""
-    wip = next(item for item in SPGS_DATA if item["code"] == "WIP")
-    assert wip.get("storage_kind") == "wip"
+def test_anod_has_wip_wh_and_storage_kind_wip():
+    """ANOD содержит секции ANOD + WIP_WH и имеет storage_kind=wip."""
+    anod = next(item for item in SPGS_DATA if item["code"] == "ANOD")
+    assert anod["section_codes"] == ["ANOD", "WIP_WH"]
+    assert anod.get("storage_kind") == "wip"
 
 
 @pytest.mark.asyncio
-async def test_seed_spgs_creates_wip_without_section_bindings(session):
-    """После seed_spgs WIP существует, активен, не привязан к секциям."""
-    sections_map = await _seed_default_sections(session)
-    await seed_spgs(session, SPGS_DATA, sections_map)
-    await session.commit()
-
-    wip = await session.scalar(
-        select(StorageProductionGroup).where(StorageProductionGroup.code == "WIP")
-    )
-    assert wip is not None
-    assert wip.is_active is True
-    assert wip.storage_kind == SpgStorageKind.wip
-    assert wip.sort_order == 40
-
-    bindings = (
-        await session.execute(select(SpgSection).where(SpgSection.spg_id == wip.id))
-    ).scalars().all()
-    assert bindings == []
-
-
-@pytest.mark.asyncio
-async def test_seed_spgs_is_idempotent_for_wip(session):
-    """Повторный запуск seed_spgs не дублирует WIP и сохраняет настройки."""
-    sections_map = await _seed_default_sections(session)
-    await seed_spgs(session, SPGS_DATA, sections_map)
-    await session.commit()
-    await seed_spgs(session, SPGS_DATA, sections_map)
-    await session.commit()
-
-    all_wip = (
-        await session.execute(
-            select(StorageProductionGroup).where(StorageProductionGroup.code == "WIP")
-        )
-    ).scalars().all()
-    assert len(all_wip) == 1
-
-    only = all_wip[0]
-    assert only.is_active is True
-    assert only.storage_kind == SpgStorageKind.wip
-    assert only.sort_order == 40
-    assert only.icon == "Layers"
-
-
-@pytest.mark.asyncio
-async def test_wip_does_not_steal_wip_wh_section_from_other_spgs(session):
-    """WIP SPG не должен быть привязан к WIP_WH (и секция WIP_WH не должна
-    оказаться привязанной к другому ГХП после пересева)."""
+async def test_wip_wh_is_bound_only_to_anod(session):
+    """WIP_WH секция должна быть привязана только к ANOD (как склад
+    полуфабриката после анодирования)."""
     sections_map = await _seed_default_sections(session)
     await seed_spgs(session, SPGS_DATA, sections_map)
     await session.commit()
@@ -122,7 +72,14 @@ async def test_wip_does_not_steal_wip_wh_section_from_other_spgs(session):
     bindings = (
         await session.execute(select(SpgSection).where(SpgSection.section_id == wip_wh.id))
     ).scalars().all()
-    assert bindings == [], "WIP_WH секция не должна быть привязана ни к какому ГХП после пересева"
+    assert len(bindings) == 1, (
+        "WIP_WH должна быть привязана ровно к одному SPG "
+        f"(получили {len(bindings)})"
+    )
+    spg = await session.get(StorageProductionGroup, bindings[0].spg_id)
+    assert spg.code == "ANOD", (
+        f"WIP_WH должна быть привязана к ANOD, а не к {spg.code}"
+    )
 
 
 @pytest.mark.asyncio
@@ -140,9 +97,8 @@ async def test_wip_wh_section_still_exists_after_seed(session):
 
 
 @pytest.mark.asyncio
-async def test_other_spgs_keep_their_sections_after_wip_decoupling(session):
-    """PREP, ANOD, PACK, FG и STOCK не должны потерять свои секции после того,
-    как WIP стал sectionless."""
+async def test_other_spgs_keep_their_sections_after_seed(session):
+    """STOCK, PREP, ANOD, PACK и FG должны сохранять свои секции после пересева."""
     sections_map = await _seed_default_sections(session)
     await seed_spgs(session, SPGS_DATA, sections_map)
     await session.commit()
@@ -150,7 +106,7 @@ async def test_other_spgs_keep_their_sections_after_wip_decoupling(session):
     expectations: list[tuple[str, list[str]]] = [
         ("STOCK", ["WH"]),
         ("PREP", ["DRILL", "PRESS", "SHOT"]),
-        ("ANOD", ["ANOD"]),
+        ("ANOD", ["ANOD", "WIP_WH"]),
         ("PACK", ["SAW", "PACK"]),
         ("FG", ["FG_WH", "SHIPMENT", "SENT"]),
     ]
@@ -171,8 +127,24 @@ async def test_other_spgs_keep_their_sections_after_wip_decoupling(session):
 
 
 @pytest.mark.asyncio
+async def test_anod_storage_kind_persists_to_db(session):
+    """ANOD должен сохранить storage_kind=wip после seed_spgs (через БД)."""
+    sections_map = await _seed_default_sections(session)
+    await seed_spgs(session, SPGS_DATA, sections_map)
+    await session.commit()
+
+    anod = await session.scalar(
+        select(StorageProductionGroup).where(StorageProductionGroup.code == "ANOD")
+    )
+    assert anod is not None
+    assert anod.storage_kind == SpgStorageKind.wip
+    assert anod.is_active is True
+    assert anod.sort_order == 30
+
+
+@pytest.mark.asyncio
 async def test_wip_can_hold_manual_remainder_in_db(session):
-    """WIP может хранить SpgRemainder с пройденными этапами (прямая запись)."""
+    """ANOD (через wip-секцию WIP_WH) может хранить SpgRemainder с пройденными этапами (прямая запись)."""
     from app.models.user import User, UserRole
 
     product = Product(
@@ -196,14 +168,19 @@ async def test_wip_can_hold_manual_remainder_in_db(session):
     await seed_spgs(session, SPGS_DATA, sections_map)
     await session.commit()
 
-    wip = await session.scalar(
-        select(StorageProductionGroup).where(StorageProductionGroup.code == "WIP")
+    # Находим ANOD через JOIN по секции WIP_WH (как в demo_production_seeder).
+    anod = await session.scalar(
+        select(StorageProductionGroup)
+        .join(SpgSection, SpgSection.spg_id == StorageProductionGroup.id)
+        .join(Section, SpgSection.section_id == Section.id)
+        .where(Section.code == "WIP_WH")
     )
-    assert wip is not None
+    assert anod is not None
+    assert anod.code == "ANOD"
 
     rem = SpgRemainder(
         product_id=product.id,
-        spg_id=wip.id,
+        spg_id=anod.id,
         remainder_quantity=Decimal("33.000"),
         original_issued=Decimal("40.000"),
         completed_stages_json=[
@@ -222,7 +199,7 @@ async def test_wip_can_hold_manual_remainder_in_db(session):
     await session.commit()
 
     found = await session.scalar(
-        select(SpgRemainder).where(SpgRemainder.spg_id == wip.id)
+        select(SpgRemainder).where(SpgRemainder.spg_id == anod.id)
     )
     assert found is not None
     assert found.product_id == product.id
@@ -233,7 +210,7 @@ async def test_wip_can_hold_manual_remainder_in_db(session):
 
 @pytest.mark.asyncio
 async def test_wip_manual_remainder_via_api(client, session):
-    """WIP доступен через API ручного ввода остатков (как обычный SPG)."""
+    """ANOD (через wip-секцию WIP_WH) доступен через API ручного ввода остатков."""
     product = Product(
         sku="WIP-MANUAL-1",
         name="Manual WIP Remainder",
@@ -247,13 +224,18 @@ async def test_wip_manual_remainder_via_api(client, session):
     await seed_spgs(session, SPGS_DATA, sections_map)
     await session.commit()
 
-    wip = await session.scalar(
-        select(StorageProductionGroup).where(StorageProductionGroup.code == "WIP")
+    # Находим ANOD через JOIN по секции WIP_WH.
+    anod = await session.scalar(
+        select(StorageProductionGroup)
+        .join(SpgSection, SpgSection.spg_id == StorageProductionGroup.id)
+        .join(Section, SpgSection.section_id == Section.id)
+        .where(Section.code == "WIP_WH")
     )
-    assert wip is not None
+    assert anod is not None
+    assert anod.code == "ANOD"
 
     resp = await client.post(
-        f"/api/spg/{wip.id}/remainders",
+        f"/api/spg/{anod.id}/remainders",
         json={
             "product_id": product.id,
             "quantity": 17.5,
@@ -262,19 +244,19 @@ async def test_wip_manual_remainder_via_api(client, session):
     )
     assert resp.status_code == 201, resp.text
     body = resp.json()
-    assert body["spg_code"] == "WIP"
+    assert body["spg_code"] == "ANOD"
     assert float(body["remainder_quantity"]) == 17.5
 
     rem = await session.scalar(
         select(SpgRemainder).where(SpgRemainder.id == body["id"])
     )
     assert rem is not None
-    assert rem.spg_id == wip.id
+    assert rem.spg_id == anod.id
 
 
 @pytest.mark.asyncio
-async def test_list_spgs_includes_wip_with_empty_sections(client, session):
-    """GET /api/spg возвращает WIP с пустым списком секций."""
+async def test_list_spgs_includes_anod_with_wip_wh_and_excludes_wip(client, session):
+    """GET /api/spg возвращает ANOD с секцией WIP_WH, и WIP как SPG отсутствует в списке."""
     sections_map = await _seed_default_sections(session)
     await seed_spgs(session, SPGS_DATA, sections_map)
     await session.commit()
@@ -282,6 +264,14 @@ async def test_list_spgs_includes_wip_with_empty_sections(client, session):
     resp = await client.get("/api/spg")
     assert resp.status_code == 200
     data = resp.json()
-    wip = next(item for item in data if item["code"] == "WIP")
-    assert wip["sections"] == []
-    assert wip["is_active"] is True
+
+    codes = {item["code"] for item in data}
+    assert "WIP" not in codes, "WIP как SPG должен быть удалён из списка"
+    assert "ANOD" in codes, "ANOD должен присутствовать"
+
+    anod = next(item for item in data if item["code"] == "ANOD")
+    section_codes = {sec["section_code"] for sec in anod["sections"]}
+    assert section_codes == {"ANOD", "WIP_WH"}, (
+        f"ANOD должен быть привязан к ANOD + WIP_WH, получили {section_codes}"
+    )
+    assert anod["is_active"] is True

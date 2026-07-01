@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { AlertCircle, Clock, CheckCircle, ShieldAlert, Plus, Search, ShieldCheck, Upload, ChevronDown, ChevronRight, XCircle, RotateCcw } from "lucide-react";
 import { Button, Input, Badge, Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from "@/shared/ui";
 import type { DefectOut } from "@/shared/api/defects";
@@ -12,6 +12,7 @@ interface DefectsListPanelProps {
   spgs: SpgOut[];
   selectedSpgIds: number[];
   sections: SpgOut["sections"];
+  sectionIds?: number[];
   remainders: SpgRemainder[];
   defects: DefectOut[];
   isLoading: boolean;
@@ -24,12 +25,17 @@ export function DefectsListPanel({
   spgs,
   selectedSpgIds,
   sections,
+  sectionIds,
   remainders,
   defects,
   isLoading,
   onRefresh,
   searchQuery,
 }: DefectsListPanelProps) {
+  const activeSections = useMemo(() => {
+    if (!sectionIds) return sections;
+    return sections.filter((s) => sectionIds.includes(s.section_id));
+  }, [sections, sectionIds]);
   const [createOpen, setCreateOpen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
   const [decideOpen, setDecideOpen] = useState(false);
@@ -46,18 +52,24 @@ export function DefectsListPanel({
     setDecideOpen(true);
   };
 
-  const filteredDefects = defects.filter((d) => {
-    const matchesSearch =
-      !searchQuery.trim() ||
-      d.product_sku.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      d.product_name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      (d.comment && d.comment.toLowerCase().includes(searchQuery.toLowerCase())) ||
-      (d.created_by_user_name && d.created_by_user_name.toLowerCase().includes(searchQuery.toLowerCase()));
+  const filteredDefects = useMemo(() => {
+    return defects.filter((d) => {
+      if (sectionIds && sectionIds.length > 0) {
+        if (!d.section_id || !sectionIds.includes(d.section_id)) return false;
+      }
 
-    const matchesStatus = statusFilter === "" || d.status === statusFilter;
+      const matchesSearch =
+        !searchQuery.trim() ||
+        d.product_sku.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        d.product_name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        (d.comment && d.comment.toLowerCase().includes(searchQuery.toLowerCase())) ||
+        (d.created_by_user_name && d.created_by_user_name.toLowerCase().includes(searchQuery.toLowerCase()));
 
-    return matchesSearch && matchesStatus;
-  });
+      const matchesStatus = statusFilter === "" || d.status === statusFilter;
+
+      return matchesSearch && matchesStatus;
+    });
+  }, [defects, searchQuery, statusFilter, sectionIds]);
 
   const getStatusBadge = (status: string) => {
     switch (status) {
@@ -337,7 +349,7 @@ export function DefectsListPanel({
         onOpenChange={setCreateOpen}
         spgId={spgId}
         spgs={spgs}
-        sections={sections}
+        sections={activeSections}
         remainders={remainders}
         onSaved={onRefresh}
         defaultSectionId={null}

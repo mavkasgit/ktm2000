@@ -6,7 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.models.product import Product, ProductType
-from app.models.spg import StorageProductionGroup
+from app.models.spg import SpgSection, StorageProductionGroup
 from app.models.spg_remainder import SpgRemainder
 from app.models.route import ProductionRoute, RouteStage, RouteOperation, RouteRuleProfile
 from app.models.section import Section
@@ -20,8 +20,8 @@ from app.services.route_storage_classifier import (
 from app.services.shopfloor.common import build_completed_stages_json
 
 
-PREP_STOCK_CODE = "PREP_STOCK"
-WIP_STOCK_CODE = "WIP"
+PREP_STOCK_SECTION_CODE = "PREP_STOCK"
+WIP_STOCK_SECTION_CODE = "WIP_WH"
 
 
 async def seed_demo_production(db: AsyncSession) -> dict:
@@ -55,14 +55,20 @@ async def seed_demo_production(db: AsyncSession) -> dict:
         products_by_sku[sku] = prod
 
     # 2. Resolve SPGs (in priority order):
-    #    - prep_stock: целевой склад для остатков прерванных задач подготовки
-    #    - wip_stock: целевой склад для остатков прерванных задач после анодирования
+    #    - prep_stock: SPG, содержащий секцию PREP_STOCK (целевой склад для остатков подготовки)
+    #    - wip_stock: ГХП полуфабриката после анодирования
     #    - fallback_spg: первый активный SPG (используется, если ни один не засеян)
     prep_stock = await db.scalar(
-        select(StorageProductionGroup).where(StorageProductionGroup.code == PREP_STOCK_CODE)
+        select(StorageProductionGroup)
+        .join(SpgSection, SpgSection.spg_id == StorageProductionGroup.id)
+        .join(Section, SpgSection.section_id == Section.id)
+        .where(Section.code == PREP_STOCK_SECTION_CODE)
     )
     wip_stock = await db.scalar(
-        select(StorageProductionGroup).where(StorageProductionGroup.code == WIP_STOCK_CODE)
+        select(StorageProductionGroup)
+        .join(SpgSection, SpgSection.spg_id == StorageProductionGroup.id)
+        .join(Section, SpgSection.section_id == Section.id)
+        .where(Section.code == WIP_STOCK_SECTION_CODE)
     )
     fallback_spg = await db.scalar(
         select(StorageProductionGroup)
@@ -223,7 +229,7 @@ async def seed_demo_production(db: AsyncSession) -> dict:
         await db.flush()
         stats["remainders"] += 1
 
-    # 6. Create defects (только если остатки попали в PREP_STOCK — иначе привязка неуместна)
+    # 6. Create defects (только если остатки попали в PREP — иначе привязка неуместна)
     if prep_stock is None:
         await db.flush()
         return stats

@@ -11,6 +11,7 @@ SECTIONS_DATA = [
     {"code": "DRILL", "name": "Сверловка", "sort_order": 20, "kind": "production", "icon": "Drill", "icon_color": "#3B82F6"},
     {"code": "PRESS", "name": "Пресс", "sort_order": 30, "kind": "production", "icon": "Anvil", "icon_color": "#EF4444"},
     {"code": "SHOT", "name": "Дробеструй", "sort_order": 40, "kind": "production", "icon": "SprayCan", "icon_color": "#6B7280"},
+    {"code": "PREP_STOCK", "name": "Склад подготовки", "sort_order": 45, "kind": "wip_stock", "icon": "PackageX", "icon_color": "#7C3AED"},
     {"code": "ANOD", "name": "Анодирование", "sort_order": 50, "kind": "production", "icon": "FlaskConical", "icon_color": "#06B6D4"},
     {"code": "WIP_WH", "name": "Склад полуфабриката", "sort_order": 60, "kind": "wip_stock", "icon": "Boxes", "icon_color": "#84CC16"},
     {"code": "SAW", "name": "Пила", "sort_order": 70, "kind": "production", "icon": "Fan", "icon_color": "#F97316"},
@@ -39,6 +40,9 @@ SECTION_OPS: dict[str, list[tuple[str | None, str | None, int, str | None, str, 
     ],
     "SHOT": [
         ("SHOT", "Дробеструй", 10, "SHOT", "Дробеструй", True, "SprayCan", "#6B7280", None, {}, "production"),
+    ],
+    "PREP_STOCK": [
+        ("PREP_STOCK", "Передача на склад подготовки", 10, "MOVE_TO_PREP_STOCK", "Передача на склад подготовки", False, "Truck", "#7C3AED", None, {}, "transport"),
     ],
     "ANOD": [
         ("ANOD", "Анодирование", 10, "ANOD_01", "Серебро", True, None, "#C0C0C0", None, {}, "production"),

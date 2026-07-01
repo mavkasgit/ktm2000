@@ -516,6 +516,7 @@ interface RemaindersListPanelProps {
   spgs: SpgOut[];
   selectedSpgIds: number[];
   sections: SpgOut["sections"];
+  sectionIds?: number[];
   remainders: SpgRemainder[];
   isLoading: boolean;
   onRefresh: () => void;
@@ -527,12 +528,17 @@ export function RemaindersListPanel({
   spgs,
   selectedSpgIds,
   sections,
+  sectionIds,
   remainders,
   isLoading,
   onRefresh,
   searchQuery,
 }: RemaindersListPanelProps) {
   const queryClient = useQueryClient();
+  const activeSections = useMemo(() => {
+    if (!sectionIds) return sections;
+    return sections.filter((s) => sectionIds.includes(s.section_id));
+  }, [sections, sectionIds]);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editing, setEditing] = useState<SpgRemainder | null>(null);
   const [manualOpOpen, setManualOpOpen] = useState(false);
@@ -675,6 +681,10 @@ export function RemaindersListPanel({
   // Применение фильтрации и поиска перед маппингом
   const filteredRemainders = useMemo(() => {
     return remainders.filter((r) => {
+      if (sectionIds && sectionIds.length > 0) {
+        if (!r.section_id || !sectionIds.includes(r.section_id)) return false;
+      }
+
       const matchesSearch =
         !searchQuery.trim() ||
         r.product_sku.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -717,7 +727,7 @@ export function RemaindersListPanel({
 
       return true;
     });
-  }, [remainders, searchQuery, columnFilters]);
+  }, [remainders, searchQuery, columnFilters, sectionIds]);
 
   const getCompletedStagesKey = (r: SpgRemainder) => {
     return (r.completed_stages || [])
@@ -1174,7 +1184,7 @@ export function RemaindersListPanel({
         open={dialogOpen}
         onOpenChange={setDialogOpen}
         spgId={spgId}
-        sections={sections}
+        sections={activeSections}
         editingRemainder={editing}
         onSaved={onRefresh}
         defaultSectionId={null}
@@ -1185,7 +1195,7 @@ export function RemaindersListPanel({
         open={manualOpOpen}
         onOpenChange={setManualOpOpen}
         spgId={spgId}
-        sections={sections}
+        sections={activeSections}
         onSaved={onRefresh}
         spgs={spgs}
       />
