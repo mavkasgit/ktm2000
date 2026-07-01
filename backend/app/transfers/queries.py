@@ -410,7 +410,7 @@ async def list_ready_to_transfer(
                 next_task = await db.scalar(
                     select(WorkTask).where(
                         WorkTask.section_plan_line_id == next_line.id,
-                        WorkTask.status.notin_([WorkTaskStatus.completed, WorkTaskStatus.cancelled])
+                        WorkTask.status.in_([WorkTaskStatus.ready, WorkTaskStatus.in_progress])
                     )
                 )
                 if next_task is None:
