@@ -1,23 +1,28 @@
+from __future__ import annotations
+
 from decimal import Decimal
 
 import pytest
 from sqlalchemy import select
 
 from app.models.product import Product, ProductType
-from app.models.route import ProductionRoute, RouteOperation, RouteStage, SectionOperation
+from app.models.route import (
+    ProductionRoute,
+    RouteOperation,
+    RouteStage,
+    SectionOperation,
+)
 from app.models.section import Section
 from app.models.spg import SpgSection, SpgStorageKind, StorageProductionGroup
 from app.models.spg_remainder import SpgRemainder
 from app.seeds.spgs import SPGS_DATA
 from app.seeds.seeders.spgs_seeder import _resolve_storage_kind, seed_spgs
-from app.services.shopfloor.common import (
-    build_completed_stages_json,
-)
 from app.services.route_storage_classifier import (
     STAGE_KIND_PRODUCTION,
     STAGE_KIND_TRANSIT,
     is_storage_section,
 )
+from app.services.shopfloor.common import build_completed_stages_json
 
 
 DEFAULT_SECTIONS = [
@@ -25,6 +30,7 @@ DEFAULT_SECTIONS = [
     {"code": "DRILL", "name": "Сверловка", "sort_order": 20, "kind": "production"},
     {"code": "PRESS", "name": "Пресс", "sort_order": 30, "kind": "production"},
     {"code": "SHOT", "name": "Дробеструй", "sort_order": 40, "kind": "production"},
+    {"code": "PREP_STOCK", "name": "Склад подготовки", "sort_order": 45, "kind": "wip_stock"},
     {"code": "ANOD", "name": "Анодирование", "sort_order": 50, "kind": "production"},
     {"code": "WIP_WH", "name": "Склад полуфабриката", "sort_order": 60, "kind": "wip_stock"},
     {"code": "SAW", "name": "Пила", "sort_order": 70, "kind": "production"},
@@ -53,22 +59,33 @@ async def _seed_default_sections(session) -> dict[str, Section]:
     return sections
 
 
-def test_prep_stock_present_in_spgs_data():
-    """PREP_STOCK должен быть в списке SPGS_DATA как отдельная ГХП."""
+def test_prep_present_in_spgs_data():
+    """PREP должен быть в списке SPGS_DATA."""
     codes = {item["code"] for item in SPGS_DATA}
-    assert "PREP_STOCK" in codes
+    assert "PREP" in codes
 
 
-def test_prep_stock_has_empty_section_codes():
-    """PREP_STOCK — складской объект, не привязан к секциям."""
-    prep = next(item for item in SPGS_DATA if item["code"] == "PREP_STOCK")
-    assert prep["section_codes"] == []
-    # Сортировка должна быть между PREP и ANOD
-    assert prep["sort_order"] > 20 and prep["sort_order"] < 30
+def test_prep_stock_section_in_default_sections():
+    """PREP_STOCK — wip-секция (kind=wip_stock), не SPG."""
+    sec = next(item for item in DEFAULT_SECTIONS if item["code"] == "PREP_STOCK")
+    assert sec["kind"] == "wip_stock"
 
 
-def test_prep_stock_has_storage_kind_wip():
-    prep = next(item for item in SPGS_DATA if item["code"] == "PREP_STOCK")
+def test_prep_stock_not_in_spgs_data():
+    """PREP_STOCK как SPG удалён — теперь это секция внутри PREP."""
+    codes = {item["code"] for item in SPGS_DATA}
+    assert "PREP_STOCK" not in codes
+
+
+def test_prep_has_all_prep_sections():
+    """PREP содержит 3 production + 1 storage секцию."""
+    prep = next(item for item in SPGS_DATA if item["code"] == "PREP")
+    assert prep["section_codes"] == ["DRILL", "PRESS", "SHOT", "PREP_STOCK"]
+
+
+def test_prep_has_storage_kind_wip():
+    """PREP имеет storage_kind=wip (включая складскую секцию PREP_STOCK)."""
+    prep = next(item for item in SPGS_DATA if item["code"] == "PREP")
     assert prep.get("storage_kind") == "wip"
 
 
@@ -80,8 +97,9 @@ def test_resolve_storage_kind_defaults_to_wip():
 
 
 @pytest.mark.asyncio
-async def test_seed_spgs_creates_prep_stock_without_section_bindings(session):
-    """После seed_spgs PREP_STOCK существует, активен, не привязан к секциям."""
+async def test_seed_spgs_creates_prep_with_all_sections_and_storage(session):
+    """После seed_spgs PREP существует, привязан к 4 секциям (3 production + 1 storage),
+    storage_kind=wip."""
     sections_map = await _seed_default_sections(session)
 
     count = await seed_spgs(session, SPGS_DATA, sections_map)
@@ -89,24 +107,25 @@ async def test_seed_spgs_creates_prep_stock_without_section_bindings(session):
 
     assert count == len(SPGS_DATA)
 
-    prep_stock = await session.scalar(
-        select(StorageProductionGroup).where(StorageProductionGroup.code == "PREP_STOCK")
+    prep = await session.scalar(
+        select(StorageProductionGroup).where(StorageProductionGroup.code == "PREP")
     )
-    assert prep_stock is not None
-    assert prep_stock.is_active is True
-    assert prep_stock.storage_kind == SpgStorageKind.wip
-    assert prep_stock.sort_order == 25
+    assert prep is not None
+    assert prep.is_active is True
+    assert prep.storage_kind == SpgStorageKind.wip
+    assert prep.sort_order == 20
 
-    # Без привязки к секциям
     bindings = (
-        await session.execute(select(SpgSection).where(SpgSection.spg_id == prep_stock.id))
+        await session.execute(select(SpgSection).where(SpgSection.spg_id == prep.id))
     ).scalars().all()
-    assert bindings == []
+    assert len(bindings) == 4
+    bound_section_codes = {sections_map[code].id for code in ("DRILL", "PRESS", "SHOT", "PREP_STOCK")}
+    assert {b.section_id for b in bindings} == bound_section_codes
 
 
 @pytest.mark.asyncio
-async def test_seed_spgs_is_idempotent_for_prep_stock(session):
-    """Повторный запуск seed_spgs не дублирует PREP_STOCK и сохраняет настройки."""
+async def test_seed_spgs_is_idempotent_for_prep(session):
+    """Повторный запуск seed_spgs не дублирует PREP и сохраняет настройки."""
     sections_map = await _seed_default_sections(session)
 
     await seed_spgs(session, SPGS_DATA, sections_map)
@@ -116,7 +135,7 @@ async def test_seed_spgs_is_idempotent_for_prep_stock(session):
 
     all_prep = (
         await session.execute(
-            select(StorageProductionGroup).where(StorageProductionGroup.code == "PREP_STOCK")
+            select(StorageProductionGroup).where(StorageProductionGroup.code == "PREP")
         )
     ).scalars().all()
     assert len(all_prep) == 1
@@ -124,24 +143,29 @@ async def test_seed_spgs_is_idempotent_for_prep_stock(session):
     only = all_prep[0]
     assert only.is_active is True
     assert only.storage_kind == SpgStorageKind.wip
-    assert only.sort_order == 25
+    assert only.sort_order == 20
+
+    bindings = (
+        await session.execute(select(SpgSection).where(SpgSection.spg_id == only.id))
+    ).scalars().all()
+    assert len(bindings) == 4
 
 
 @pytest.mark.asyncio
-async def test_prep_stock_does_not_steal_sections_from_other_spgs(session):
-    """PREP_STOCK не должен влиять на привязку секций к другим ГХП."""
+async def test_prep_binds_only_prep_sections(session):
+    """PREP не должен привязывать секции других ГХП (ANOD, FG, и т.д.)."""
     sections_map = await _seed_default_sections(session)
     await seed_spgs(session, SPGS_DATA, sections_map)
     await session.commit()
 
-    # DRILL должен остаться привязан к PREP (а не к PREP_STOCK)
-    drill = sections_map["DRILL"]
-    bindings = (
-        await session.execute(select(SpgSection).where(SpgSection.section_id == drill.id))
-    ).scalars().all()
-    assert len(bindings) == 1
-    drill_spg = await session.get(StorageProductionGroup, bindings[0].spg_id)
-    assert drill_spg.code == "PREP"
+    for code in ("DRILL", "PRESS", "SHOT", "PREP_STOCK"):
+        sec = sections_map[code]
+        bindings = (
+            await session.execute(select(SpgSection).where(SpgSection.section_id == sec.id))
+        ).scalars().all()
+        assert len(bindings) == 1
+        bound_spg = await session.get(StorageProductionGroup, bindings[0].spg_id)
+        assert bound_spg.code == "PREP"
 
 
 @pytest.mark.asyncio
@@ -173,8 +197,8 @@ async def test_prep_stock_section_codes_missing_key_is_treated_as_empty(session)
 
 
 @pytest.mark.asyncio
-async def test_prep_stock_can_hold_manual_remainder_in_db(session):
-    """PREP_STOCK может хранить SpgRemainder с пройденными этапами (прямая запись)."""
+async def test_prep_can_hold_manual_remainder_in_db(session):
+    """PREP (с PREP_STOCK секцией) может хранить SpgRemainder с пройденными этапами (прямая запись)."""
     from app.models.user import User, UserRole
 
     product = Product(
@@ -198,14 +222,14 @@ async def test_prep_stock_can_hold_manual_remainder_in_db(session):
     await seed_spgs(session, SPGS_DATA, sections_map)
     await session.commit()
 
-    prep_stock = await session.scalar(
-        select(StorageProductionGroup).where(StorageProductionGroup.code == "PREP_STOCK")
+    prep = await session.scalar(
+        select(StorageProductionGroup).where(StorageProductionGroup.code == "PREP")
     )
-    assert prep_stock is not None
+    assert prep is not None
 
     rem = SpgRemainder(
         product_id=product.id,
-        spg_id=prep_stock.id,
+        spg_id=prep.id,
         remainder_quantity=Decimal("42.000"),
         original_issued=Decimal("50.000"),
         completed_stages_json=[
@@ -224,7 +248,7 @@ async def test_prep_stock_can_hold_manual_remainder_in_db(session):
     await session.commit()
 
     found = await session.scalar(
-        select(SpgRemainder).where(SpgRemainder.spg_id == prep_stock.id)
+        select(SpgRemainder).where(SpgRemainder.spg_id == prep.id)
     )
     assert found is not None
     assert found.product_id == product.id
@@ -234,8 +258,8 @@ async def test_prep_stock_can_hold_manual_remainder_in_db(session):
 
 
 @pytest.mark.asyncio
-async def test_prep_stock_manual_remainder_via_api(client, session):
-    """PREP_STOCK доступен через API ручного ввода остатков (как обычный SPG)."""
+async def test_prep_manual_remainder_via_api(client, session):
+    """PREP доступен через API ручного ввода остатков (как обычный SPG)."""
     product = Product(
         sku="PREP-MANUAL-1",
         name="Manual Prep Remainder",
@@ -249,13 +273,13 @@ async def test_prep_stock_manual_remainder_via_api(client, session):
     await seed_spgs(session, SPGS_DATA, sections_map)
     await session.commit()
 
-    prep_stock = await session.scalar(
-        select(StorageProductionGroup).where(StorageProductionGroup.code == "PREP_STOCK")
+    prep = await session.scalar(
+        select(StorageProductionGroup).where(StorageProductionGroup.code == "PREP")
     )
-    assert prep_stock is not None
+    assert prep is not None
 
     resp = await client.post(
-        f"/api/spg/{prep_stock.id}/remainders",
+        f"/api/spg/{prep.id}/remainders",
         json={
             "product_id": product.id,
             "quantity": 12.5,
@@ -264,26 +288,20 @@ async def test_prep_stock_manual_remainder_via_api(client, session):
     )
     assert resp.status_code == 201, resp.text
     body = resp.json()
-    assert body["spg_code"] == "PREP_STOCK"
+    assert body["spg_code"] == "PREP"
     assert float(body["remainder_quantity"]) == 12.5
 
     rem = await session.scalar(
         select(SpgRemainder).where(SpgRemainder.id == body["id"])
     )
     assert rem is not None
-    assert rem.spg_id == prep_stock.id
+    assert rem.spg_id == prep.id
 
 
 @pytest.mark.asyncio
-async def test_demo_production_seeder_prefers_prep_stock(session, monkeypatch):
-    """Демо-сидер должен искать PREP_STOCK первым и класть остатки туда."""
+async def test_demo_production_seeder_finds_prep_via_section(session, monkeypatch):
+    """Демо-сидер должен находить PREP через секцию PREP_STOCK и класть остатки туда."""
     from app.seeds.seeders import demo_production_seeder
-
-    captured: dict = {}
-
-    real_scalar = demo_production_seeder.AsyncSession if False else None  # placeholder
-
-    # Создаём только PREP_STOCK и проверяем, что demo_production_seeder его находит
     from app.models.user import User, UserRole
 
     actor = User(
@@ -303,17 +321,26 @@ async def test_demo_production_seeder_prefers_prep_stock(session, monkeypatch):
 
     # Вызываем сидер; в отсутствие route он вернётся рано, но не упадёт
     stats = await demo_production_seeder.seed_demo_production(session)
-    # Если нет route → stats пустой, сидер вернётся рано
-    # Это допустимо: цель — убедиться, что сидер не падает на PREP_STOCK
     assert isinstance(stats, dict)
     assert "remainders" in stats
 
-    # PREP_STOCK точно создан
-    prep_stock = await session.scalar(
-        select(StorageProductionGroup).where(StorageProductionGroup.code == "PREP_STOCK")
+    # PREP точно создан и содержит PREP_STOCK
+    prep = await session.scalar(
+        select(StorageProductionGroup).where(StorageProductionGroup.code == "PREP")
     )
-    assert prep_stock is not None
-    assert prep_stock.is_active is True
+    assert prep is not None
+    assert prep.is_active is True
+    assert prep.storage_kind == SpgStorageKind.wip
+    prep_stock_sec = sections_map["PREP_STOCK"]
+    bindings = (
+        await session.execute(
+            select(SpgSection).where(
+                SpgSection.spg_id == prep.id,
+                SpgSection.section_id == prep_stock_sec.id,
+            )
+        )
+    ).scalars().all()
+    assert len(bindings) == 1
 
 
 # --- tests for build_completed_stages_json -------------------------------
@@ -563,17 +590,17 @@ async def test_demo_production_seeder_omits_non_significant_stages(session, monk
     await session.commit()
 
     assert stats["remainders"] >= 1
-    prep_stock = await session.scalar(
-        select(StorageProductionGroup).where(StorageProductionGroup.code == "PREP_STOCK")
+    prep = await session.scalar(
+        select(StorageProductionGroup).where(StorageProductionGroup.code == "PREP")
     )
-    assert prep_stock is not None
+    assert prep is not None
 
     remainders = (
         await session.execute(
-            select(SpgRemainder).where(SpgRemainder.spg_id == prep_stock.id)
+            select(SpgRemainder).where(SpgRemainder.spg_id == prep.id)
         )
     ).scalars().all()
-    assert remainders, "Демо-сидер должен был положить остатки в PREP_STOCK"
+    assert remainders, "Демо-сидер должен был положить остатки в PREP"
 
     # В каждом remainder completed_stages_json не должен содержать WH (issue raw)
     wh = await session.scalar(select(Section).where(Section.code == "WH"))
