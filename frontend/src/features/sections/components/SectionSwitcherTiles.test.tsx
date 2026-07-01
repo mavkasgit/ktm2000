@@ -24,9 +24,9 @@ describe("SectionSwitcherTiles", () => {
       makeSection({ id: 3, code: "WIP", name: "Полуфабрикаты", kind: "wip_stock" }),
     ];
     const summary: SectionSummary[] = [
-      { section_id: 1, completed_count: 0, in_progress_count: 0, waiting_count: 0, incoming_transfers_count: 0, sort_order: 0 },
-      { section_id: 2, completed_count: 0, in_progress_count: 0, waiting_count: 0, incoming_transfers_count: 0, sort_order: 1 },
-      { section_id: 3, completed_count: 0, in_progress_count: 0, waiting_count: 0, incoming_transfers_count: 0, sort_order: 2 },
+      { section_id: 1, section_code: "WH", section_name: "Склад сырья", kind: "raw_stock", sort_order: 0, icon: null, icon_color: null, total_tasks: 0, completed_count: 0, in_progress_count: 0, waiting_count: 0, incoming_transfers_count: 0 },
+      { section_id: 2, section_code: "DRILL", section_name: "Сверление", kind: "production", sort_order: 1, icon: null, icon_color: null, total_tasks: 0, completed_count: 0, in_progress_count: 0, waiting_count: 0, incoming_transfers_count: 0 },
+      { section_id: 3, section_code: "WIP", section_name: "Полуфабрикаты", kind: "wip_stock", sort_order: 2, icon: null, icon_color: null, total_tasks: 0, completed_count: 0, in_progress_count: 0, waiting_count: 0, incoming_transfers_count: 0 },
     ];
 
     const html = renderToStaticMarkup(
