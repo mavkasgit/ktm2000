@@ -1,5 +1,5 @@
-import React, { useCallback, useEffect, useState } from "react";
-import { Plus, ArrowUp, ArrowDown, GripVertical, Settings, X, Pencil, Trash2, Move, Layers, ChevronRight } from "lucide-react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
+import { Plus, ArrowUp, ArrowDown, Settings, X, Pencil, Trash2, Move, Layers, ChevronRight, Warehouse, Factory } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 import * as API from "shared/api";
 import { usePermission } from "@/features/auth/hooks/usePermission";
@@ -30,6 +30,15 @@ type Section = {
   sort_order?: number;
   spg_links?: { id: number; code: string; name: string }[];
   operations_count?: number;
+};
+
+type Group = {
+  spgId: number | "no-spg";
+  spgName: string;
+  spgIcon: string | null;
+  spgIconColor: string | null;
+  stocks: Section[];
+  productions: Section[];
 };
 
 const KIND_LABELS: Record<string, string> = {
@@ -147,7 +156,6 @@ export function SectionsPage() {
   const [dialogMode, setDialogMode] = useState<"add" | "edit">("add");
   const [editingItem, setEditingItem] = useState<Section | null>(null);
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
-  const [draggedIndex, setDraggedIndex] = useState<number | null>(null);
   const [spgs, setSpgs] = useState<SpgAPI.SpgOut[]>([]);
   const [spgDialogOpen, setSpgDialogOpen] = useState(false);
   const [spgDialogMode, setSpgDialogMode] = useState<"add" | "edit">("add");
@@ -460,16 +468,6 @@ export function SectionsPage() {
     }
   }, [moveOpDialog, opGroups, invalidateRelatedCaches]);
 
-  const moveItem = useCallback((fromIndex: number, toIndex: number) => {
-    setItems((prev) => {
-      if (toIndex < 0 || toIndex >= prev.length) return prev;
-      const next = [...prev];
-      const [moved] = next.splice(fromIndex, 1);
-      next.splice(toIndex, 0, moved);
-      return next;
-    });
-  }, []);
-
   const load = useCallback(async () => {
     setLoading(true);
     setError("");
@@ -504,37 +502,6 @@ export function SectionsPage() {
       await load();
     }
   }, [items, load, invalidateRelatedCaches]);
-
-  const moveItemUp = useCallback(async (index: number) => {
-    moveItem(index, index - 1);
-    setTimeout(() => commitReorder(), 0);
-  }, [moveItem, commitReorder]);
-
-  const moveItemDown = useCallback(async (index: number) => {
-    moveItem(index, index + 1);
-    setTimeout(() => commitReorder(), 0);
-  }, [moveItem, commitReorder]);
-
-  const handleDragStart = useCallback((index: number) => {
-    setDraggedIndex(index);
-  }, []);
-
-  const handleDragOver = useCallback((e: React.DragEvent, index: number) => {
-    e.preventDefault();
-    if (draggedIndex === null || draggedIndex === index) return;
-    moveItem(draggedIndex, index);
-    setDraggedIndex(index);
-  }, [draggedIndex, moveItem]);
-
-  const handleDrop = useCallback((e: React.DragEvent) => {
-    e.preventDefault();
-    setDraggedIndex(null);
-    void commitReorder();
-  }, [commitReorder]);
-
-  const handleDragEnd = useCallback(() => {
-    setDraggedIndex(null);
-  }, []);
 
   const loadSpgs = useCallback(async () => {
     try {
@@ -721,10 +688,382 @@ export function SectionsPage() {
       }
     : { kind: "production", spg_id: null };
 
+  const groups = React.useMemo<Group[]>(() => {
+    const groupsMap: Record<string | number, Group> = {};
+
+    spgs.forEach((spg) => {
+      groupsMap[spg.id] = {
+        spgId: spg.id,
+        spgName: spg.name,
+        spgIcon: spg.icon,
+        spgIconColor: spg.icon_color,
+        stocks: [],
+        productions: [],
+      };
+    });
+
+    groupsMap["no-spg"] = {
+      spgId: "no-spg",
+      spgName: "Без ГХП",
+      spgIcon: null,
+      spgIconColor: null,
+      stocks: [],
+      productions: [],
+    };
+
+    items.forEach((item) => {
+      const isStock = ["raw_stock", "wip_stock", "finished_stock"].includes(item.kind || "");
+      
+      if (item.spg_links && item.spg_links.length > 0) {
+        item.spg_links.forEach((link) => {
+          const group = groupsMap[link.id];
+          if (group) {
+            if (isStock) {
+              group.stocks.push(item);
+            } else {
+              group.productions.push(item);
+            }
+          } else {
+            if (isStock) {
+              groupsMap["no-spg"].stocks.push(item);
+            } else {
+              groupsMap["no-spg"].productions.push(item);
+            }
+          }
+        });
+      } else {
+        if (isStock) {
+          groupsMap["no-spg"].stocks.push(item);
+        } else {
+          groupsMap["no-spg"].productions.push(item);
+        }
+      }
+    });
+
+    Object.values(groupsMap).forEach((group) => {
+      group.stocks.sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0));
+      group.productions.sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0));
+    });
+
+    const sortedSpgs = [...spgs].sort((a, b) => a.sort_order - b.sort_order);
+    const result: Group[] = [];
+
+    sortedSpgs.forEach((spg) => {
+      const group = groupsMap[spg.id];
+      if (group && (group.stocks.length > 0 || group.productions.length > 0)) {
+        result.push(group);
+      }
+    });
+
+    const noSpgGroup = groupsMap["no-spg"];
+    if (noSpgGroup.stocks.length > 0 || noSpgGroup.productions.length > 0) {
+      result.push(noSpgGroup);
+    }
+
+    return result;
+  }, [items, spgs]);
+
+  const jumpToSpg = (spgId: number | "no-spg") => {
+    const el = document.getElementById(`spg-block-${spgId}`);
+    if (el) {
+      el.scrollIntoView({ behavior: "smooth" });
+      if (el instanceof HTMLDetailsElement) {
+        el.open = true;
+      } else {
+        const detailsEl = el.querySelector("details");
+        if (detailsEl instanceof HTMLDetailsElement) {
+          detailsEl.open = true;
+        }
+      }
+    }
+  };
+
+  const moveSectionInSubsection = useCallback(async (sectionId: number, direction: "up" | "down", group: Group, isStock: boolean) => {
+    const subsection = isStock ? group.stocks : group.productions;
+    const index = subsection.findIndex(s => s.id === sectionId);
+    if (index === -1) return;
+    const targetIndex = direction === "up" ? index - 1 : index + 1;
+    if (targetIndex < 0 || targetIndex >= subsection.length) return;
+
+    const currentItem = subsection[index];
+    const targetItem = subsection[targetIndex];
+
+    setItems((prev) => {
+      const next = [...prev];
+      const idxCurrent = next.findIndex(item => item.id === currentItem.id);
+      const idxTarget = next.findIndex(item => item.id === targetItem.id);
+      if (idxCurrent !== -1 && idxTarget !== -1) {
+        const temp = next[idxCurrent];
+        next[idxCurrent] = next[idxTarget];
+        next[idxTarget] = temp;
+      }
+      return next;
+    });
+
+    setTimeout(() => {
+      void commitReorder();
+    }, 0);
+  }, [commitReorder]);
+
+  const renderSectionTable = (sectionList: Section[], group: Group, isStock: boolean) => {
+    if (sectionList.length === 0) {
+      return null;
+    }
+
+    return (
+      <div className="overflow-x-auto mb-2 border rounded-lg">
+        <Table className="w-full table-auto">
+          <thead>
+            <tr className="bg-muted/30 border-b">
+              <th className="py-1.5 px-2 text-left text-xs font-semibold whitespace-nowrap" style={{ width: "35px", minWidth: "35px" }}>⇅</th>
+              <th className="py-1.5 px-2 text-left text-xs font-semibold whitespace-nowrap" style={{ width: "45px", minWidth: "45px" }}>Иконка</th>
+              <th className="py-1.5 px-2 text-left text-xs font-semibold whitespace-nowrap" style={{ minWidth: "144px", maxWidth: "280px", width: "30%" }}>Название</th>
+              <th className="py-1.5 px-2 text-left text-xs font-semibold whitespace-nowrap" style={{ width: "72px", minWidth: "72px" }}>Код</th>
+              <th className="py-1.5 px-2 text-left text-xs font-semibold whitespace-nowrap" style={{ minWidth: "112px", maxWidth: "240px", width: "25%" }}>ГХП</th>
+              <th className="py-1.5 px-2 text-left text-xs font-semibold whitespace-nowrap" style={{ width: "104px", minWidth: "104px" }}>Тип</th>
+              <th className="py-1.5 px-2 text-left text-xs font-semibold whitespace-nowrap" style={{ minWidth: "96px", maxWidth: "280px", width: "25%" }}>Описание</th>
+              {!isStock && (
+                <th className="py-1.5 px-2 text-center text-xs font-semibold whitespace-nowrap" style={{ width: "96px", minWidth: "96px" }}>Операции</th>
+              )}
+            </tr>
+          </thead>
+          <tbody>
+            {sectionList.map((item, idx) => (
+              <React.Fragment key={String(item.id ?? `${item.code}-${idx}`)}>
+                <tr
+                  className="transition-colors border-b hover:bg-muted/20"
+                  style={item.icon_color ? { backgroundColor: item.icon_color + "18" } : undefined}
+                >
+                  <td className="py-1.5 px-2 text-xs">
+                    <div className="flex items-center gap-0.5">
+                      {!isReadOnly && (
+                        <>
+                          <button
+                            type="button"
+                            className="p-0.5 rounded hover:bg-accent text-muted-foreground hover:text-foreground disabled:opacity-30 disabled:cursor-default"
+                            disabled={idx === 0}
+                            onClick={(e) => { e.stopPropagation(); moveSectionInSubsection(Number(item.id), "up", group, isStock); }}
+                            title="Переместить вверх"
+                          >
+                            <ArrowUp className="h-3.5 w-3.5" />
+                          </button>
+                          <button
+                            type="button"
+                            className="p-0.5 rounded hover:bg-accent text-muted-foreground hover:text-foreground disabled:opacity-30 disabled:cursor-default"
+                            disabled={idx === sectionList.length - 1}
+                            onClick={(e) => { e.stopPropagation(); moveSectionInSubsection(Number(item.id), "down", group, isStock); }}
+                            title="Переместить вниз"
+                          >
+                            <ArrowDown className="h-3.5 w-3.5" />
+                          </button>
+                        </>
+                      )}
+                    </div>
+                  </td>
+                  <td className="py-1.5 px-2 text-xs cursor-pointer" onClick={() => openEdit(item)}>
+                    {item.icon ? (
+                      <span style={{ color: item.icon_color || undefined }}>
+                        {renderIcon(item.icon, "h-5 w-5")}
+                      </span>
+                    ) : (
+                      <span className="text-muted-foreground text-xs">—</span>
+                    )}
+                  </td>
+                  <td className="py-1.5 px-2 text-xs whitespace-nowrap cursor-pointer" style={{ minWidth: "144px", maxWidth: "280px", width: "30%" }} onClick={() => openEdit(item)}>{item.name}</td>
+                  <td className="py-1.5 px-2 text-xs whitespace-nowrap cursor-pointer" style={{ width: "72px", minWidth: "72px" }} onClick={() => openEdit(item)}>{item.code}</td>
+                  <td className="py-1.5 px-2 text-xs truncate cursor-pointer" style={{ minWidth: "112px", maxWidth: "240px", width: "25%" }} title={item.spg_links?.map(g => g.name).join(", ") || "—"} onClick={() => openEdit(item)}>
+                    {item.spg_links?.map(g => g.name).join(", ") || "—"}
+                  </td>
+                  <td className="py-1.5 px-2 text-xs truncate cursor-pointer" style={{ width: "104px", minWidth: "104px" }} title={KIND_LABELS[item.kind ?? "production"] ?? item.kind ?? "-"} onClick={() => openEdit(item)}>{KIND_LABELS[item.kind ?? "production"] ?? item.kind ?? "-"}</td>
+                  <td className="py-1.5 px-2 text-xs truncate cursor-pointer" style={{ minWidth: "96px", maxWidth: "280px", width: "25%" }} title={item.description ?? "-"} onClick={() => openEdit(item)}>{item.description ?? "-"}</td>
+                  {!isStock && (
+                    <td className="py-1.5 px-2 text-xs text-center">
+                      <button
+                        type="button"
+                        onClick={() => toggleSectionOps(Number(item.id), item.name)}
+                        className={`inline-flex items-center gap-1.5 px-2 py-1 rounded-md text-sm border transition-colors ${
+                          expandedSectionId === Number(item.id)
+                            ? "bg-primary/10 border-primary/30 text-primary"
+                            : "bg-muted/50 border-border text-foreground hover:bg-muted hover:border-primary/30"
+                        }`}
+                        title={expandedSectionId === Number(item.id) ? "Скрыть операции" : "Показать операции"}
+                      >
+                        <span className="text-muted-foreground text-[10px]">Опер.</span>
+                        <span className="tabular-nums font-medium">{opsCountById[Number(item.id)] ?? "—"}</span>
+                        <ChevronRight
+                          className={`h-3.5 w-3.5 transition-transform ${expandedSectionId === Number(item.id) ? "rotate-90" : ""}`}
+                        />
+                      </button>
+                    </td>
+                  )}
+                </tr>
+                {expandedSectionId === Number(item.id) && (
+                  <tr key={`ops-${item.id}`}>
+                    <td colSpan={isStock ? 7 : 8} className="p-0 border-b bg-muted/10">
+                      <div className="max-w-2xl">
+                        <div className="bg-muted/30 border-l-4 border-blue-400 p-2 m-1 rounded">
+                          <div className="flex items-center gap-2 mb-2">
+                            <Settings className="h-3.5 w-3.5 text-blue-600" />
+                            <span className="font-semibold text-xs">Операции участка &laquo;{expandedSectionName}&raquo;</span>
+                            <span className="text-[10px] text-muted-foreground">Отмеченные операции показываются в плане</span>
+                          </div>
+
+                          <div className="flex items-center gap-2 mb-2">
+                            {!isReadOnly && (
+                              <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => openAddGroup(Number(item.id))}>
+                                <Plus className="h-3 w-3 mr-1" />
+                                Добавить группу
+                              </Button>
+                            )}
+                          </div>
+
+                          {opsLoading ? (
+                            <span className="text-[10px] text-muted-foreground">Загрузка...</span>
+                          ) : opGroups.length === 0 ? (
+                            <span className="text-[10px] text-muted-foreground">Нет групп операций. Создайте первую группу.</span>
+                          ) : (
+                            <div className="space-y-2">
+                              {opGroups.map((groupOp) => (
+                                <div key={groupOp.group_code ?? "__none__"} className="border rounded-lg bg-card">
+                                  <div className="flex items-center justify-between px-2 py-1.5 border-b bg-muted/20">
+                                    <div className="flex items-center gap-2">
+                                      <span className="font-semibold text-xs">{groupOp.group_name || "Без группы"}</span>
+                                      {groupOp.group_code && (
+                                        <span className="font-mono text-[10px] text-muted-foreground">({groupOp.group_code})</span>
+                                      )}
+                                      <span className="text-[10px] text-muted-foreground">{groupOp.operations.length} опер.</span>
+                                    </div>
+                                    <div className="flex items-center gap-0.5">
+                                      {groupOp.group_code && !isReadOnly && (
+                                        <button
+                                          type="button"
+                                          onClick={() => openEditGroup(Number(item.id), groupOp)}
+                                          className="p-1 rounded hover:bg-accent text-muted-foreground hover:text-foreground"
+                                          title="Редактировать группу"
+                                        >
+                                          <Pencil className="h-3 w-3" />
+                                        </button>
+                                      )}
+                                      {!isReadOnly && (
+                                        <Button size="sm" variant="ghost" className="h-6 px-1.5 text-[10px]" onClick={() => openAddOp(Number(item.id), groupOp.group_code)}>
+                                          <Plus className="h-3 w-3 mr-0.5" />
+                                          Добавить операцию
+                                        </Button>
+                                      )}
+                                      {groupOp.group_code && !isReadOnly && (
+                                        <button
+                                          type="button"
+                                          onClick={() => setDeleteGroupDialog({ sectionId: Number(item.id), groupCode: groupOp.group_code!, groupName: groupOp.group_name || groupOp.group_code! })}
+                                          className="p-1 rounded hover:bg-destructive/20 text-muted-foreground hover:text-destructive"
+                                          title="Удалить группу"
+                                        >
+                                          <Trash2 className="h-3 w-3" />
+                                        </button>
+                                      )}
+                                    </div>
+                                  </div>
+
+                                  <div className="flex items-center gap-1 flex-wrap p-1.5">
+                                    {groupOp.operations.length === 0 ? (
+                                      <span className="text-[10px] text-muted-foreground px-2">Нет операций</span>
+                                    ) : (
+                                      groupOp.operations
+                                        .filter((op) => !op.operation_code.startsWith("__"))
+                                        .map((op) => (
+                                          <div
+                                            key={op.id}
+                                            className="flex items-center gap-1 px-1.5 h-6 rounded border bg-card hover:bg-accent/50 transition-colors text-xs group/op cursor-pointer"
+                                            onClick={() => openEditOp(Number(item.id), op)}
+                                          >
+                                            <input
+                                              type="checkbox"
+                                              checked={op.is_significant}
+                                              onChange={() => toggleOpSignificant(Number(item.id), op.id, op.is_significant)}
+                                              disabled={isReadOnly}
+                                              className="rounded border-gray-300 cursor-pointer h-3 w-3"
+                                            />
+                                            {op.icon ? (
+                                              <span style={{ color: op.icon_color || undefined }} className="shrink-0">
+                                                {renderIcon(op.icon, "h-3 w-3")}
+                                              </span>
+                                            ) : op.icon_color ? (
+                                              <span className="inline-block size-3 shrink-0 rounded-full bg-current" style={{ color: op.icon_color }} />
+                                            ) : null}
+                                            <span className="font-mono text-[10px] text-muted-foreground">{op.operation_code}</span>
+                                            <span className="text-[10px]">{op.operation_name}</span>
+                                            {op.is_significant && <Badge variant="secondary" className="text-[10px] bg-green-100 text-green-700 shrink-0">★</Badge>}
+                                            {!isReadOnly && (
+                                              <div className="flex items-center gap-0.5 opacity-0 group-hover/op:opacity-100 transition-opacity">
+                                                {opGroups.length > 1 && (
+                                                  <button
+                                                    type="button"
+                                                    onClick={(e) => { e.stopPropagation(); openMoveOp(Number(item.id), op); }}
+                                                    className="p-0.5 rounded hover:bg-accent text-muted-foreground hover:text-foreground"
+                                                    title="Переместить в другую группу"
+                                                  >
+                                                    <Move className="h-2.5 w-2.5" />
+                                                  </button>
+                                                )}
+                                                <button
+                                                  type="button"
+                                                  onClick={(e) => { e.stopPropagation(); deleteOp(Number(item.id), op.id, op.operation_name); }}
+                                                  className="p-0.5 rounded hover:bg-destructive/20 text-muted-foreground hover:text-destructive"
+                                                  title="Удалить"
+                                                >
+                                                  <X className="h-2.5 w-2.5" />
+                                                </button>
+                                              </div>
+                                            )}
+                                          </div>
+                                        ))
+                                    )}
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    </td>
+                  </tr>
+                )}
+              </React.Fragment>
+            ))}
+          </tbody>
+        </Table>
+      </div>
+    );
+  };
+
+  const getSpgCounters = (spgId: number | "no-spg") => {
+    const group = groups.find(g => g.spgId === spgId);
+    return {
+      stocks: group?.stocks.length ?? 0,
+      productions: group?.productions.length ?? 0,
+    };
+  };
+
+  const visibleSpgCount = useMemo(
+    () => spgs.filter((s) => {
+      const c = getSpgCounters(s.id);
+      return c.stocks > 0 || c.productions > 0;
+    }).length,
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [spgs, groups]
+  );
+
+  const noSpgVisible = useMemo(() => {
+    const c = getSpgCounters("no-spg");
+    return c.stocks > 0 || c.productions > 0;
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [groups]);
+
+  const navBadgeCount = visibleSpgCount + (noSpgVisible ? 1 : 0);
+
   return (
     <section style={{ display: "grid", gap: 12 }}>
       <div className="flex items-center justify-between">
-        <h2 className="text-lg font-semibold">Участки</h2>
+        <h2 className="text-lg font-semibold">ГХП — Группа хранения и производства</h2>
         <div className="flex items-center gap-2">
           {!isReadOnly && (
             <>
@@ -795,299 +1134,159 @@ export function SectionsPage() {
       {error ? <div role="alert">{error}</div> : null}
       {loading ? <div>Загрузка...</div> : null}
 
-      <div className="grid gap-3 items-start" style={{ gridTemplateColumns: "minmax(0, 1fr) 260px" }}>
-        <div className="overflow-x-auto pr-5">
-          <Table className="w-full table-auto">
-            <thead>
-              <tr>
-                <th className="py-3 px-2 text-left text-sm font-medium whitespace-nowrap" style={{ width: "44px", minWidth: "44px" }}>⇅</th>
-                <th className="py-3 px-3 text-left text-sm font-medium whitespace-nowrap" style={{ width: "56px", minWidth: "56px" }}>Иконка</th>
-                <th className="py-3 px-3 text-left text-sm font-medium whitespace-nowrap" style={{ minWidth: "180px", maxWidth: "350px", width: "30%" }}>Название</th>
-                <th className="py-3 px-3 text-left text-sm font-medium whitespace-nowrap" style={{ width: "90px", minWidth: "90px" }}>Код</th>
-                <th className="py-3 px-3 text-left text-sm font-medium whitespace-nowrap" style={{ minWidth: "140px", maxWidth: "300px", width: "25%" }}>ГХП</th>
-                <th className="py-3 px-3 text-left text-sm font-medium whitespace-nowrap" style={{ width: "130px", minWidth: "130px" }}>Тип</th>
-                <th className="py-3 px-3 text-left text-sm font-medium whitespace-nowrap" style={{ minWidth: "120px", maxWidth: "350px", width: "25%" }}>Описание</th>
-                <th className="py-3 px-3 text-center text-sm font-medium whitespace-nowrap" style={{ width: "120px", minWidth: "120px" }}>Операции</th>
-              </tr>
-            </thead>
-          <tbody>
-            {items.map((item, i) => (
-              <React.Fragment key={String(item.id ?? `${item.code}-${i}`)}>
-              <tr
-                className="transition-colors"
-                draggable={!isReadOnly}
-                onDragStart={(e) => {
-                  if (isReadOnly) return;
-                  (e.currentTarget as HTMLTableRowElement).style.opacity = "0.4";
-                  handleDragStart(i);
-                }}
-                onDragOver={(e) => handleDragOver(e, i)}
-                onDrop={(e) => {
-                  (e.currentTarget as HTMLTableRowElement).style.opacity = "1";
-                  handleDrop(e);
-                }}
-                onDragEnd={(e) => {
-                  (e.currentTarget as HTMLTableRowElement).style.opacity = "1";
-                  handleDragEnd();
-                }}
-                style={item.icon_color ? { backgroundColor: item.icon_color + "18" } : undefined}
-                onMouseEnter={(e) => {
-                  if (item.icon_color) (e.currentTarget as HTMLTableRowElement).style.backgroundColor = item.icon_color + "40"
-                }}
-                onMouseLeave={(e) => {
-                  if (item.icon_color) (e.currentTarget as HTMLTableRowElement).style.backgroundColor = item.icon_color + "18"
-                }}
+      <div className="grid gap-3 items-start" style={{ gridTemplateColumns: "minmax(0, 7fr) minmax(0, 3fr)" }}>
+        <div className="space-y-4 pr-5">
+          {groups.map((group) => {
+            const totalStocks = group.stocks.length;
+            const totalProds = group.productions.length;
+            
+            return (
+              <div 
+                key={group.spgId} 
+                id={`spg-block-${group.spgId}`} 
+                className="scroll-mt-4"
               >
-                <td className="py-3 px-2 text-sm">
-                  <div className="flex items-center gap-0.5">
-                    {!isReadOnly && (
-                      <>
-                        <span className="cursor-grab active:cursor-grabbing text-muted-foreground hover:text-foreground">
-                          <GripVertical className="h-4 w-4" />
-                        </span>
-                        <button
-                          type="button"
-                          className="p-0.5 rounded hover:bg-accent text-muted-foreground hover:text-foreground disabled:opacity-30 disabled:cursor-default"
-                          disabled={i === 0}
-                          onClick={(e) => { e.stopPropagation(); moveItemUp(i); }}
-                          title="Переместить вверх"
-                        >
-                          <ArrowUp className="h-3.5 w-3.5" />
-                        </button>
-                        <button
-                          type="button"
-                          className="p-0.5 rounded hover:bg-accent text-muted-foreground hover:text-foreground disabled:opacity-30 disabled:cursor-default"
-                          disabled={i === items.length - 1}
-                          onClick={(e) => { e.stopPropagation(); moveItemDown(i); }}
-                          title="Переместить вниз"
-                        >
-                          <ArrowDown className="h-3.5 w-3.5" />
-                        </button>
-                      </>
+                <details
+                  open
+                  className="border rounded-xl bg-card overflow-hidden shadow-sm transition-all"
+                >
+                  <summary className="cursor-pointer select-none px-3 py-2 flex items-center gap-2 bg-muted/30 hover:bg-muted/50 border-b transition-colors font-medium">
+                    {group.spgIcon ? (
+                      <span style={{ color: group.spgIconColor || undefined }}>
+                        {renderIcon(group.spgIcon, "h-4 w-4")}
+                      </span>
+                    ) : group.spgIconColor ? (
+                      <span className="inline-block size-4 rounded-full bg-current" style={{ color: group.spgIconColor }} />
+                    ) : (
+                      <Layers className="h-4 w-4 text-muted-foreground" />
+                    )}
+                    <span className="text-sm font-semibold flex-1 text-foreground">{group.spgName}</span>
+                    <div className="flex items-center gap-1.5">
+                      <Badge variant="secondary" className="text-[10px] bg-blue-50 text-blue-700 dark:bg-blue-950/30 border border-blue-200">
+                        Склады: {totalStocks}
+                      </Badge>
+                      <Badge variant="secondary" className="text-[10px] bg-indigo-50 text-indigo-700 dark:bg-indigo-950/30 border border-indigo-200">
+                        Производство: {totalProds}
+                      </Badge>
+                    </div>
+                  </summary>
+                  <div className="p-2 space-y-2 bg-card">
+                    {group.productions.length > 0 && (
+                      <div>
+                        <h4 className="text-xs font-medium text-muted-foreground mb-1.5 flex items-center gap-2">
+                          <Factory className="h-3.5 w-3.5" />
+                          <span>Производственные участки</span>
+                          <Badge variant="outline" className="text-[10px] py-0 px-1.5">{totalProds}</Badge>
+                        </h4>
+                        {renderSectionTable(group.productions, group, false)}
+                      </div>
+                    )}
+
+                    {group.stocks.length > 0 && (
+                      <div>
+                        <h4 className="text-xs font-medium text-muted-foreground mb-1.5 flex items-center gap-2">
+                          <Warehouse className="h-3.5 w-3.5" />
+                          <span>Склады</span>
+                          <Badge variant="outline" className="text-[10px] py-0 px-1.5">{totalStocks}</Badge>
+                        </h4>
+                        {renderSectionTable(group.stocks, group, true)}
+                      </div>
                     )}
                   </div>
-                </td>
-                <td className="py-3 px-4 text-sm cursor-pointer" onClick={() => openEdit(item)}>
-                  {item.icon ? (
-                    <span style={{ color: item.icon_color || undefined }}>
-                      {renderIcon(item.icon, "h-6 w-6")}
-                    </span>
-                  ) : (
-                    <span className="text-muted-foreground text-sm">—</span>
-                  )}
-                </td>
-                <td className="py-3 px-4 text-sm whitespace-nowrap cursor-pointer" style={{ minWidth: "180px", maxWidth: "350px", width: "30%" }} onClick={() => openEdit(item)}>{item.name}</td>
-                <td className="py-3 px-4 text-sm whitespace-nowrap cursor-pointer" style={{ width: "90px", minWidth: "90px" }} onClick={() => openEdit(item)}>{item.code}</td>
-                <td className="py-3 px-4 text-sm truncate cursor-pointer" style={{ minWidth: "140px", maxWidth: "300px", width: "25%" }} title={item.spg_links?.map(g => g.name).join(", ") || "—"} onClick={() => openEdit(item)}>
-                  {item.spg_links?.map(g => g.name).join(", ") || "—"}
-                </td>
-                <td className="py-3 px-4 text-sm truncate cursor-pointer" style={{ width: "130px", minWidth: "130px" }} title={KIND_LABELS[item.kind ?? "production"] ?? item.kind ?? "-"} onClick={() => openEdit(item)}>{KIND_LABELS[item.kind ?? "production"] ?? item.kind ?? "-"}</td>
-                <td className="py-3 px-4 text-sm truncate cursor-pointer" style={{ minWidth: "120px", maxWidth: "350px", width: "25%" }} title={item.description ?? "-"} onClick={() => openEdit(item)}>{item.description ?? "-"}</td>
-                <td className="py-3 px-2 text-sm text-center">
-                  <button
-                    type="button"
-                    onClick={() => toggleSectionOps(Number(item.id), item.name)}
-                    className={`inline-flex items-center gap-1.5 px-2 py-1 rounded-md text-sm border transition-colors ${
-                      expandedSectionId === Number(item.id)
-                        ? "bg-primary/10 border-primary/30 text-primary"
-                        : "bg-muted/50 border-border text-foreground hover:bg-muted hover:border-primary/30"
-                    }`}
-                    title={expandedSectionId === Number(item.id) ? "Скрыть операции" : "Показать операции"}
-                  >
-                    <span className="text-muted-foreground text-xs">Опер.</span>
-                    <span className="tabular-nums font-medium">{opsCountById[Number(item.id)] ?? "—"}</span>
-                    <ChevronRight
-                      className={`h-3.5 w-3.5 transition-transform ${expandedSectionId === Number(item.id) ? "rotate-90" : ""}`}
-                    />
-                  </button>
-                </td>
-              </tr>
-              {expandedSectionId === Number(item.id) && (
-                <tr key={`ops-${item.id}`}>
-                  <td colSpan={8} className="p-0">
-                    <div className="max-w-2xl">
-                    <div className="bg-muted/30 border-l-4 border-blue-400 p-4 m-2 rounded">
-                      <div className="flex items-center gap-2 mb-3">
-                        <Settings className="h-4 w-4 text-blue-600" />
-                        <span className="font-semibold text-sm">Операции участка &laquo;{expandedSectionName}&raquo;</span>
-                        <span className="text-xs text-muted-foreground">Отмеченные операции показываются в плане</span>
-                      </div>
-
-                      <div className="flex items-center gap-2 mb-3">
-                        {!isReadOnly && (
-                          <Button size="sm" variant="outline" className="h-8" onClick={() => openAddGroup(Number(item.id))}>
-                            <Plus className="h-3 w-3 mr-1" />
-                            Добавить группу
-                          </Button>
-                        )}
-                      </div>
-
-                      {opsLoading ? (
-                        <span className="text-xs text-muted-foreground">Загрузка...</span>
-                      ) : opGroups.length === 0 ? (
-                        <span className="text-xs text-muted-foreground">Нет групп операций. Создайте первую группу.</span>
-                      ) : (
-                        <div className="space-y-3">
-                          {opGroups.map((group) => (
-                            <div key={group.group_code ?? "__none__"} className="border rounded-lg bg-card">
-                              {/* Group header */}
-                              <div className="flex items-center justify-between px-3 py-2 border-b bg-muted/20">
-                                <div className="flex items-center gap-2">
-                                  <span className="font-semibold text-sm">{group.group_name || "Без группы"}</span>
-                                  {group.group_code && (
-                                    <span className="font-mono text-xs text-muted-foreground">({group.group_code})</span>
-                                  )}
-                                  <span className="text-xs text-muted-foreground">{group.operations.length} опер.</span>
-                                </div>
-                                <div className="flex items-center gap-1">
-                                  {group.group_code && !isReadOnly && (
-                                    <button
-                                      type="button"
-                                      onClick={() => openEditGroup(Number(item.id), group)}
-                                      className="p-1.5 rounded hover:bg-accent text-muted-foreground hover:text-foreground"
-                                      title="Редактировать группу"
-                                    >
-                                      <Pencil className="h-3.5 w-3.5" />
-                                    </button>
-                                  )}
-                                  {!isReadOnly && (
-                                    <Button size="sm" variant="ghost" className="h-7 px-2 text-xs" onClick={() => openAddOp(Number(item.id), group.group_code)}>
-                                      <Plus className="h-3 w-3 mr-0.5" />
-                                      Добавить операцию
-                                    </Button>
-                                  )}
-                                  {group.group_code && !isReadOnly && (
-                                    <button
-                                      type="button"
-                                      onClick={() => setDeleteGroupDialog({ sectionId: Number(item.id), groupCode: group.group_code!, groupName: group.group_name || group.group_code! })}
-                                      className="p-1.5 rounded hover:bg-destructive/20 text-muted-foreground hover:text-destructive"
-                                      title="Удалить группу"
-                                    >
-                                      <Trash2 className="h-3.5 w-3.5" />
-                                    </button>
-                                  )}
-                                </div>
-                              </div>
-
-                              {/* Operations in group */}
-                              <div className="flex items-center gap-1.5 flex-wrap p-2">
-                                {group.operations.length === 0 ? (
-                                  <span className="text-xs text-muted-foreground px-2">Нет операций</span>
-                                ) : (
-                                  group.operations
-                                    .filter((op) => !op.operation_code.startsWith("__"))
-                                    .map((op) => (
-                                      <div
-                                        key={op.id}
-                                        className="flex items-center gap-1 px-2 h-8 rounded border bg-card hover:bg-accent/50 transition-colors text-sm group/op cursor-pointer"
-                                        onClick={() => openEditOp(Number(item.id), op)}
-                                      >
-                                        <input
-                                          type="checkbox"
-                                          checked={op.is_significant}
-                                          onChange={() => toggleOpSignificant(Number(item.id), op.id, op.is_significant)}
-                                          disabled={isReadOnly}
-                                          className="rounded border-gray-300 cursor-pointer h-3.5 w-3.5"
-                                        />
-                                        {op.icon ? (
-                                          <span style={{ color: op.icon_color || undefined }} className="shrink-0">
-                                            {renderIcon(op.icon, "h-3.5 w-3.5")}
-                                          </span>
-                                        ) : op.icon_color ? (
-                                          <span className="inline-block size-3.5 shrink-0 rounded-full bg-current" style={{ color: op.icon_color }} />
-                                        ) : null}
-                                        <span className="font-mono text-xs text-muted-foreground">{op.operation_code}</span>
-                                        <span className="text-xs">{op.operation_name}</span>
-                                        {op.is_significant && <Badge variant="secondary" className="text-xs bg-green-100 text-green-700 shrink-0">★</Badge>}
-                                        {!isReadOnly && (
-                                          <div className="flex items-center gap-0.5 opacity-0 group-hover/op:opacity-100 transition-opacity">
-                                            {opGroups.length > 1 && (
-                                              <button
-                                                type="button"
-                                                onClick={(e) => { e.stopPropagation(); openMoveOp(Number(item.id), op); }}
-                                                className="p-0.5 rounded hover:bg-accent text-muted-foreground hover:text-foreground"
-                                                title="Переместить в другую группу"
-                                              >
-                                                <Move className="h-3 w-3" />
-                                              </button>
-                                            )}
-                                            <button
-                                              type="button"
-                                              onClick={(e) => { e.stopPropagation(); deleteOp(Number(item.id), op.id, op.operation_name); }}
-                                              className="p-0.5 rounded hover:bg-destructive/20 text-muted-foreground hover:text-destructive"
-                                              title="Удалить"
-                                            >
-                                              <X className="h-3 w-3" />
-                                            </button>
-                                          </div>
-                                        )}
-                                      </div>
-                                    ))
-                                )}
-                              </div>
-                            </div>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                    </div>
-                  </td>
-                </tr>
-              )}
-              </React.Fragment>
-            ))}
-          </tbody>
-        </Table>
+                </details>
+              </div>
+            );
+          })}
         </div>
 
-        <details open className="border rounded-lg bg-card overflow-hidden self-start sticky top-2">
-          <summary className="cursor-pointer select-none px-3 py-2 flex items-center gap-2 text-sm font-medium hover:bg-accent/40 transition-colors">
+        <details open className="border rounded-lg bg-card overflow-hidden self-start sticky top-2 shadow-sm">
+          <summary className="cursor-pointer select-none px-3 py-2 flex items-center gap-2 text-sm font-medium hover:bg-accent/40 transition-colors border-b">
             <Layers className="h-4 w-4 text-muted-foreground" />
-            <span className="flex-1">ГХП</span>
-            <Badge variant="secondary" className="text-xs">{spgs.length}</Badge>
+            <span className="flex-1">Навигация по ГХП</span>
+            <Badge variant="secondary" className="text-xs">{navBadgeCount}</Badge>
           </summary>
-          <div className="border-t">
-            <Table className="w-full">
+          <div className="max-h-[400px] overflow-y-auto">
+            <table className="w-full text-sm">
               <thead>
-                <tr>
-                  <th className="py-1.5 px-2 text-left text-xs font-medium w-8"></th>
-                  <th className="py-1.5 px-2 text-left text-xs font-medium">Название</th>
-                  <th className="py-1.5 px-2 text-right text-xs font-medium w-10">Уч.</th>
+                <tr className="bg-muted/20 border-b text-xs text-muted-foreground">
+                  <th className="py-1 px-2 text-left font-medium w-8"></th>
+                  <th className="py-1 px-2 text-left font-medium">Название</th>
+                  <th className="py-1 px-2 text-right font-medium w-24">Участки</th>
+                  <th className="py-1 px-2 text-center font-medium w-10"></th>
                 </tr>
               </thead>
               <tbody>
                 {spgs.length === 0 ? (
                   <tr>
-                    <td colSpan={3} className="py-2 px-2 text-xs text-muted-foreground">
+                    <td colSpan={4} className="py-3 px-2 text-xs text-center text-muted-foreground">
                       Нет ГХП
                     </td>
                   </tr>
                 ) : (
-                  spgs.map((spg) => (
-                    <tr
-                      key={spg.id}
-                      onClick={() => openEditSpg(spg)}
-                      className="cursor-pointer transition-colors hover:bg-accent/40"
-                      style={spg.icon_color ? { backgroundColor: spg.icon_color + "0C" } : undefined}
-                    >
-                      <td className="py-1.5 px-2">
-                        {spg.icon ? (
-                          <span style={{ color: spg.icon_color || undefined }}>
-                            {renderIcon(spg.icon, "h-4 w-4")}
-                          </span>
-                        ) : spg.icon_color ? (
-                          <span className="inline-block size-4 rounded-full bg-current" style={{ color: spg.icon_color }} />
-                        ) : null}
-                      </td>
-                      <td className="py-1.5 px-2 text-sm truncate" title={spg.name}>{spg.name}</td>
-                      <td className="py-1.5 px-2 text-xs text-muted-foreground text-right tabular-nums">
-                        {spg.sections?.length ?? 0}
-                      </td>
-                    </tr>
-                  ))
+                  spgs.map((spg) => {
+                    const counters = getSpgCounters(spg.id);
+                    if (counters.stocks === 0 && counters.productions === 0) return null;
+                    return (
+                      <tr
+                        key={spg.id}
+                        className="border-b transition-colors hover:bg-accent/40 cursor-pointer"
+                        onClick={() => jumpToSpg(spg.id)}
+                        style={spg.icon_color ? { backgroundColor: spg.icon_color + "07" } : undefined}
+                      >
+                        <td className="py-1.5 px-2">
+                          {spg.icon ? (
+                            <span style={{ color: spg.icon_color || undefined }}>
+                              {renderIcon(spg.icon, "h-4 w-4")}
+                            </span>
+                          ) : spg.icon_color ? (
+                            <span className="inline-block size-3.5 rounded-full bg-current" style={{ color: spg.icon_color }} />
+                          ) : (
+                            <Layers className="h-4 w-4 text-muted-foreground" />
+                          )}
+                        </td>
+                        <td className="py-1.5 px-2 text-sm truncate font-medium" title={spg.name}>{spg.name}</td>
+                        <td className="py-1.5 px-2 text-[10px] text-muted-foreground text-right tabular-nums whitespace-nowrap">
+                          С:{counters.stocks} · П:{counters.productions}
+                        </td>
+                        <td className="py-1.5 px-2 text-center" onClick={(e) => e.stopPropagation()}>
+                          {!isReadOnly && (
+                            <button
+                              type="button"
+                              onClick={() => openEditSpg(spg)}
+                              className="p-1 rounded hover:bg-accent text-muted-foreground hover:text-foreground"
+                              title="Редактировать ГХП"
+                            >
+                              <Pencil className="h-3 w-3" />
+                            </button>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })
                 )}
+                {(() => {
+                  const noSpgCounters = getSpgCounters("no-spg");
+                  if (noSpgCounters.stocks > 0 || noSpgCounters.productions > 0) {
+                    return (
+                      <tr
+                        className="border-b transition-colors hover:bg-accent/40 cursor-pointer"
+                        onClick={() => jumpToSpg("no-spg")}
+                      >
+                        <td className="py-1.5 px-2">
+                          <Layers className="h-4 w-4 text-muted-foreground" />
+                        </td>
+                        <td className="py-1.5 px-2 text-sm truncate font-medium text-muted-foreground">Без ГХП</td>
+                        <td className="py-1.5 px-2 text-[10px] text-muted-foreground text-right tabular-nums whitespace-nowrap">
+                          С:{noSpgCounters.stocks} · П:{noSpgCounters.productions}
+                        </td>
+                        <td className="py-1.5 px-2 text-center"></td>
+                      </tr>
+                    );
+                  }
+                  return null;
+                })()}
               </tbody>
-            </Table>
+            </table>
           </div>
         </details>
       </div>

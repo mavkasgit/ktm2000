@@ -3,7 +3,7 @@ import { NavLink, Outlet } from "react-router-dom"
 const tabs = [
   { to: "/references/raw-materials", label: "Сырьё" },
   { to: "/references/techcards", label: "Техкарты" },
-  { to: "/references/sections", label: "Участки" },
+  { to: "/references/spg", label: "ГХП" },
   { to: "/references/routes", label: "Маршруты" },
   { to: "/references/products", label: "Продукты" },
 ]

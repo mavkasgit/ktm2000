@@ -33,7 +33,7 @@ export const router = createBrowserRouter([
           { index: true, element: <Navigate to="/references/raw-materials" replace /> },
           { path: "raw-materials", element: <RawMaterialsPage /> },
           { path: "products", element: <FinishedGoodsPage /> },
-          { path: "sections", element: <SectionsPage /> },
+          { path: "spg", element: <SectionsPage /> },
           { path: "techcards", element: <TechcardsPage /> },
           { path: "routes", element: <RoutesPage /> },
         ],
