@@ -42,3 +42,5 @@ export { VirtualizedTableBody } from "./VirtualizedTableBody";
 export type { VirtualizedTableBodyProps } from "./VirtualizedTableBody";
 export { RouteStepsDisplay } from "./RouteStepsDisplay";
 export type { RouteStepsDisplayProps } from "./RouteStepsDisplay";
+export { PositionSkuCell } from "./PositionSkuCell";
+export type { PositionSkuCellProps } from "./PositionSkuCell";

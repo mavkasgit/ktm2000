@@ -87,6 +87,33 @@ def _is_manual_route_pass(value: str | None) -> bool:
     return bool(value and value.startswith(MANUAL_ROUTE_PASS_PREFIX))
 
 
+async def _resolve_effective_product_id(
+    db: AsyncSession, position: PlanPosition
+) -> int | None:
+    """Резолвит effective_product_id для позиции плана.
+
+    Возвращает position.product_id, если он задан. Иначе пытается найти
+    парный техкарту и взять первый компонент из неё (как в release_batch).
+    Возвращает None, если продукт не резолвится.
+    """
+    if position.product_id is not None:
+        return position.product_id
+    try:
+        from app.services.plan_generation import _find_paired_techcard, _paired_component_skus
+    except ImportError:
+        return None
+    paired_techcard = await _find_paired_techcard(db, _paired_component_skus(position))
+    if paired_techcard is None:
+        return None
+    from app.models.techcard import TechcardLine
+    first_component = await db.scalar(
+        select(TechcardLine.component_product_id)
+        .where(TechcardLine.techcard_id == paired_techcard.id)
+        .limit(1)
+    )
+    return first_component
+
+
 async def list_production_planning_rows(db: AsyncSession) -> list[dict]:
     positions = (
         await db.execute(
@@ -268,11 +295,21 @@ async def list_production_planning_rows(db: AsyncSession) -> list[dict]:
 
     route_cache: dict[tuple, ResolvedRouteInfo] = {}
     route_steps_cache: dict[int, list[dict]] = {}
+    route_remainder_steps_cache: dict[int, list[dict]] = {}
 
-    result: list[dict] = []
+    # Сначала резолвим effective_product_id для каждой позиции и считаем
+    # доступные остатки — одним батчем, без N+1.
+    position_remainder_steps: dict[int, list[dict]] = {}
+    position_effective_product_id: dict[int, int | None] = {}
+    for pos in positions:
+        position_effective_product_id[pos.id] = await _resolve_effective_product_id(db, pos)
+
+    # Вычислить route_remainder_steps для каждого уникального route_id.
     for pos in positions:
         cache_key = make_position_route_cache_key(pos)
-        if cache_key not in route_cache:
+        if cache_key in route_cache:
+            route_info = route_cache[cache_key]
+        else:
             route_info = await resolve_position_route(db, pos)
             route_cache[cache_key] = route_info
 
@@ -281,6 +318,7 @@ async def list_production_planning_rows(db: AsyncSession) -> list[dict]:
                 stages = (
                     await db.execute(
                         select(RouteStage, Section)
+                        .options(selectinload(RouteStage.operations))
                         .join(Section, RouteStage.section_id == Section.id)
                         .where(RouteStage.route_id == route_info.route_id)
                         .where(Section.is_active == True)
@@ -296,8 +334,38 @@ async def list_production_planning_rows(db: AsyncSession) -> list[dict]:
                     }
                     for stage, section in stages
                 ]
+                route_remainder_steps_cache[route_info.route_id] = [
+                    {
+                        "sequence": stage.sequence,
+                        "section_id": section.id,
+                        "operation_codes": {op.operation_code for op in (stage.operations or [])},
+                    }
+                    for stage, section in stages
+                ]
 
-        route_info = route_cache[cache_key]
+    # Считаем доступные остатки по позициям.
+    for pos in positions:
+        route_info = route_cache[make_position_route_cache_key(pos)]
+        remainder_steps = (
+            route_remainder_steps_cache.get(route_info.route_id)
+            if route_info.route_id is not None
+            else None
+        )
+        if remainder_steps:
+            from app.services.position_remainders import compute_available_remainder_quantity
+            available = await compute_available_remainder_quantity(
+                db,
+                effective_product_id=position_effective_product_id.get(pos.id),
+                route_steps=remainder_steps,
+                position_id=pos.id,
+            )
+        else:
+            available = 0.0
+        position_remainder_steps[pos.id] = available
+
+    result: list[dict] = []
+    for pos in positions:
+        route_info = route_cache[make_position_route_cache_key(pos)]
 
         has_tasks = pos.id in has_tasks_set
         is_completed = pos.id in completed_set
@@ -337,6 +405,7 @@ async def list_production_planning_rows(db: AsyncSession) -> list[dict]:
                 "current_stage_section_name": raw_stage_info.get("current_stage_section_name"),
                 "current_stage_task_status": raw_stage_info.get("current_stage_task_status"),
                 "route_steps": route_steps,
+                "available_remainder_quantity": round(position_remainder_steps.get(pos.id, 0.0), 3),
             }
         )
 
@@ -782,6 +851,27 @@ async def get_production_planning_row_detail(db: AsyncSession, position_id: int)
                 ),
             }
 
+    # Подсчёт доступных остатков ГХП по тем же правилам prefix-match,
+    # что и в list_production_planning_rows.
+    available_remainder_quantity: float = 0.0
+    if route_info.route_id is not None and stages:
+        route_remainder_steps: list[dict] = [
+            {
+                "sequence": stage.sequence,
+                "section_id": section.id,
+                "operation_codes": {op.operation_code for op in (stage.operations or [])},
+            }
+            for stage, section in stages
+        ]
+        effective_product_id = await _resolve_effective_product_id(db, pos)
+        from app.services.position_remainders import compute_available_remainder_quantity
+        available_remainder_quantity = await compute_available_remainder_quantity(
+            db,
+            effective_product_id=effective_product_id,
+            route_steps=route_remainder_steps,
+            position_id=pos.id,
+        )
+
     return {
         "plan_position_id": pos.id,
         "production_plan_id": pos.production_plan_id,
@@ -813,6 +903,7 @@ async def get_production_planning_row_detail(db: AsyncSession, position_id: int)
         "current_stage_section_code": current_stage_info.get("current_stage_section_code") if current_stage_info else None,
         "current_stage_section_name": current_stage_info.get("current_stage_section_name") if current_stage_info else None,
         "current_stage_task_status": current_stage_info.get("current_stage_task_status") if current_stage_info else None,
+        "available_remainder_quantity": round(available_remainder_quantity, 3),
         "raw_excel_row": (pos.source_payload or {}).get("raw_excel_row"),
         "payload": pos.source_payload,
     }

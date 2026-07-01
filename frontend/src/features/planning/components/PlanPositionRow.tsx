@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react"
 import { AlertTriangle, Route } from "lucide-react"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
-import { Button, AlertDialog, AlertDialogContent, AlertDialogHeader, AlertDialogTitle, AlertDialogDescription, AlertDialogFooter, AlertDialogAction, AlertDialogCancel, Combobox } from "@/shared/ui"
+import { Button, AlertDialog, AlertDialogContent, AlertDialogHeader, AlertDialogTitle, AlertDialogDescription, AlertDialogFooter, AlertDialogAction, AlertDialogCancel, Combobox, PositionSkuCell } from "@/shared/ui"
 import { cn } from "@/shared/utils/cn"
 import { PlanPositionOut } from "@/shared/api/productionPlans"
 import { ProductionRoute } from "@/shared/api/routes"
@@ -206,7 +206,7 @@ export function PositionRow({ pos, onApprove, onDelete, selected, routes, onAssi
     <>
     <div
       id={`plan-position-${pos.id}`}
-      className={`grid items-start border-b ${hasErrors || hasDuplicateConflict ? "bg-red-50" : hasWarnings ? "bg-amber-50" : ""} ${selected ? "bg-blue-100 ring-1 ring-blue-300" : ""} cursor-pointer hover:bg-accent hover:ring-1 hover:ring-ring/20 transition-colors`}
+      className={`grid items-center border-b ${hasErrors || hasDuplicateConflict ? "bg-red-50" : hasWarnings ? "bg-amber-50" : ""} ${selected ? "bg-blue-100 ring-1 ring-blue-300" : ""} cursor-pointer hover:bg-accent hover:ring-1 hover:ring-ring/20 transition-colors`}
       style={{ gridTemplateColumns: PLAN_POSITIONS_GRID }}
       onClick={(e) => {
         if (onSelect) {
@@ -222,17 +222,11 @@ export function PositionRow({ pos, onApprove, onDelete, selected, routes, onAssi
       </div>
       <div className="p-2 text-sm font-medium">{rowNum}</div>
       <div className="p-2 text-sm">
-        <button
-          type="button"
-          className="font-mono text-left text-blue-700 hover:underline focus:outline-none"
-          onClick={(e) => {
-            e.stopPropagation()
-            onSkuClick?.(pos.source_sku)
-          }}
-          title="Показать сводную информацию по артикулу"
-        >
-          {pos.source_sku}
-        </button>
+        <PositionSkuCell
+          sku={pos.source_sku}
+          availableQuantity={pos.available_remainder_quantity}
+          onClick={onSkuClick}
+        />
       </div>
       <div className="p-2 text-sm whitespace-nowrap">
         {qtyAdjusted ? (

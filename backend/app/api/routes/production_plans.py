@@ -1067,6 +1067,7 @@ class PlanPositionOut(BaseModel):
     route_error: str | None = None
     raw_excel_row: dict | None = None
     payload: dict | None = None
+    available_remainder_quantity: float | None = None
 
 
 def _source_row_numbers_from_position(position: PlanPosition) -> list[int] | None:
@@ -1084,6 +1085,76 @@ def _source_row_numbers_from_position(position: PlanPosition) -> list[int] | Non
     if position.source_row_number is not None:
         return [position.source_row_number]
     return None
+
+
+async def _compute_available_remainder_for_positions(
+    db: AsyncSession,
+    positions: list[PlanPosition],
+    route_info_by_id: dict[int, ResolvedRouteInfo],
+) -> dict[int, float]:
+    """Считает available_remainder_quantity для списка позиций плана.
+
+    Для каждой позиции: резолвит effective_product_id, загружает route_remainder_steps
+    (один раз на route_id), вызывает compute_available_remainder_quantity.
+    Возвращает dict {position_id: available_remainder_quantity}.
+    """
+    from sqlalchemy.orm import selectinload
+
+    from app.services.position_remainders import compute_available_remainder_quantity
+    from app.services.production_planning_rows import _resolve_effective_product_id
+
+    if not positions:
+        return {}
+
+    # Резолвим effective_product_id для каждой позиции (включая paired_techcard).
+    effective_product_by_id: dict[int, int | None] = {}
+    for p in positions:
+        effective_product_by_id[p.id] = await _resolve_effective_product_id(db, p)
+
+    # Собираем уникальные route_id'ы.
+    unique_route_ids = {
+        info.route_id
+        for info in route_info_by_id.values()
+        if info.route_id is not None
+    }
+    route_remainder_steps_by_route_id: dict[int, list[dict]] = {}
+    if unique_route_ids:
+        rows = (
+            await db.execute(
+                select(RouteStage, Section)
+                .options(selectinload(RouteStage.operations))
+                .join(Section, RouteStage.section_id == Section.id)
+                .where(RouteStage.route_id.in_(unique_route_ids))
+                .where(Section.is_active == True)
+                .order_by(RouteStage.route_id, RouteStage.sequence)
+            )
+        ).all()
+        for stage, section in rows:
+            route_remainder_steps_by_route_id.setdefault(stage.route_id, []).append(
+                {
+                    "sequence": stage.sequence,
+                    "section_id": section.id,
+                    "operation_codes": {op.operation_code for op in (stage.operations or [])},
+                }
+            )
+
+    result: dict[int, float] = {}
+    for p in positions:
+        info = route_info_by_id.get(p.id)
+        if info is None or info.route_id is None:
+            result[p.id] = 0.0
+            continue
+        steps = route_remainder_steps_by_route_id.get(info.route_id) or []
+        if not steps:
+            result[p.id] = 0.0
+            continue
+        result[p.id] = await compute_available_remainder_quantity(
+            db,
+            effective_product_id=effective_product_by_id.get(p.id),
+            route_steps=steps,
+            position_id=p.id,
+        )
+    return result
 
 
 @router.get("/all-files", response_model=list[PlanFileInfo])
@@ -1139,8 +1210,8 @@ async def all_plan_positions(db: AsyncSession = Depends(get_db)) -> list[PlanPos
     warnings_by_position = {ci.plan_position_id: ci.warnings for ci in change_items if ci.plan_position_id}
 
     route_resolve_cache: dict[tuple, ResolvedRouteInfo] = {}
+    route_info_by_id: dict[int, ResolvedRouteInfo] = {}
 
-    result = []
     for p in positions:
         cache_key = make_position_route_cache_key(p)
         if cache_key in route_resolve_cache:
@@ -1148,7 +1219,15 @@ async def all_plan_positions(db: AsyncSession = Depends(get_db)) -> list[PlanPos
         else:
             route_info = await resolve_position_route(db, p)
             route_resolve_cache[cache_key] = route_info
+        route_info_by_id[p.id] = route_info
 
+    available_remainder_by_id = await _compute_available_remainder_for_positions(
+        db, positions, route_info_by_id
+    )
+
+    result = []
+    for p in positions:
+        route_info = route_info_by_id[p.id]
         result.append(
             PlanPositionOut(
                 id=p.id,
@@ -1178,6 +1257,7 @@ async def all_plan_positions(db: AsyncSession = Depends(get_db)) -> list[PlanPos
                 route_error=route_info.error,
                 raw_excel_row=(p.source_payload or {}).get("raw_excel_row"),
                 payload=p.source_payload,
+                available_remainder_quantity=round(available_remainder_by_id.get(p.id, 0.0), 3),
             )
         )
 
@@ -1208,8 +1288,8 @@ async def cancelled_positions(db: AsyncSession = Depends(get_db)) -> list[PlanPo
     warnings_by_position = {ci.plan_position_id: ci.warnings for ci in change_items if ci.plan_position_id}
 
     route_resolve_cache: dict[tuple, ResolvedRouteInfo] = {}
+    route_info_by_id: dict[int, ResolvedRouteInfo] = {}
 
-    result = []
     for p in positions:
         cache_key = make_position_route_cache_key(p)
         if cache_key in route_resolve_cache:
@@ -1217,7 +1297,15 @@ async def cancelled_positions(db: AsyncSession = Depends(get_db)) -> list[PlanPo
         else:
             route_info = await resolve_position_route(db, p)
             route_resolve_cache[cache_key] = route_info
+        route_info_by_id[p.id] = route_info
 
+    available_remainder_by_id = await _compute_available_remainder_for_positions(
+        db, positions, route_info_by_id
+    )
+
+    result = []
+    for p in positions:
+        route_info = route_info_by_id[p.id]
         result.append(
             PlanPositionOut(
                 id=p.id,
@@ -1247,6 +1335,7 @@ async def cancelled_positions(db: AsyncSession = Depends(get_db)) -> list[PlanPo
                 route_error=route_info.error,
                 raw_excel_row=(p.source_payload or {}).get("raw_excel_row"),
                 payload=p.source_payload,
+                available_remainder_quantity=round(available_remainder_by_id.get(p.id, 0.0), 3),
             )
         )
 
@@ -1279,8 +1368,8 @@ async def all_positions(production_plan_id: int, db: AsyncSession = Depends(get_
 
     # Cache resolved routes
     route_resolve_cache: dict[tuple, ResolvedRouteInfo] = {}
+    route_info_by_id: dict[int, ResolvedRouteInfo] = {}
 
-    result = []
     for p in positions:
         cache_key = make_position_route_cache_key(p)
         if cache_key in route_resolve_cache:
@@ -1288,7 +1377,15 @@ async def all_positions(production_plan_id: int, db: AsyncSession = Depends(get_
         else:
             route_info = await resolve_position_route(db, p)
             route_resolve_cache[cache_key] = route_info
+        route_info_by_id[p.id] = route_info
 
+    available_remainder_by_id = await _compute_available_remainder_for_positions(
+        db, positions, route_info_by_id
+    )
+
+    result = []
+    for p in positions:
+        route_info = route_info_by_id[p.id]
         result.append(
             PlanPositionOut(
                 id=p.id,
@@ -1318,6 +1415,7 @@ async def all_positions(production_plan_id: int, db: AsyncSession = Depends(get_
                 route_error=route_info.error,
                 raw_excel_row=(p.source_payload or {}).get("raw_excel_row"),
                 payload=p.source_payload,
+                available_remainder_quantity=round(available_remainder_by_id.get(p.id, 0.0), 3),
             )
         )
 

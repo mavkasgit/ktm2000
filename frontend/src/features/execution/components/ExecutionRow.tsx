@@ -1,7 +1,8 @@
 import { ProductionPlanningRow } from "@/shared/api/productionPlans";
-import { Badge, Button } from "@/shared/ui";
+import { Badge, Button, PositionSkuCell } from "@/shared/ui";
+import { fmtQty } from "@/shared/utils/fmtQty";
 import { ArrowRight, History, RotateCcw, Trash2, XCircle } from "lucide-react";
-import { positionStatusLabels, positionStatusColor, routeMetaLabel, fmtQty, planPreviewUrl, getLaunchBlockReason } from "./execution-utils";
+import { positionStatusLabels, positionStatusColor, routeMetaLabel, planPreviewUrl, getLaunchBlockReason } from "./execution-utils";
 import { StepIndicator } from "../components/StepIndicator";
 import type { ExecutionColumnId, ExecutionTableColumn } from "./execution-table-columns";
 import { TABLE_ROW_STYLES } from "@/shared/lib/tableRowStyles";
@@ -91,17 +92,11 @@ export function ExecutionRow({
         );
       case "sku":
         return (
-          <button
-            type="button"
-            className="font-mono text-left text-blue-700 hover:underline focus:outline-none"
-            onClick={(e) => {
-              e.stopPropagation();
-              onSkuClick(row.source_sku);
-            }}
-            title="Показать сводную информацию по артикулу"
-          >
-            {row.source_sku}
-          </button>
+          <PositionSkuCell
+            sku={row.source_sku}
+            availableQuantity={row.available_remainder_quantity}
+            onClick={onSkuClick}
+          />
         );
       case "name":
         return (

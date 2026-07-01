@@ -181,6 +181,7 @@ class PlanningRowOut(BaseModel):
     current_stage_section_name: str | None = None
     current_stage_task_status: str | None = None
     route_steps: list[dict] | None = None
+    available_remainder_quantity: float | None = None
 
 
 class PlanningRouteSnapshotStepOut(BaseModel):
@@ -280,6 +281,7 @@ class PlanningRowDetailOut(BaseModel):
     stages: list[PlanningStageOut]
     raw_excel_row: dict | None = None
     payload: dict | None = None
+    available_remainder_quantity: float | None = None
 
 
 @router.get("/rows", response_model=list[PlanningRowOut])

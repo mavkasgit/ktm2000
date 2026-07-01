@@ -17,7 +17,7 @@ import {
   type RemainderAllocationItem,
 } from "@/shared/api/productionPlans";
 import { Loader2, Layers, Package, ClipboardList, AlertCircle, ArrowRight } from "lucide-react";
-import { fmtQty } from "./execution-utils";
+import { fmtQty } from "@/shared/utils/fmtQty";
 
 interface RemainderAllocationDialogProps {
   open: boolean;

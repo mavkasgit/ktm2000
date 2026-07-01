@@ -1210,3 +1210,188 @@ async def test_get_product_wip_stats(client, session):
     # 5. Запрос по несуществующему SKU
     response_404 = await client.get("/api/production-planning/product-wip-stats/NON-EXISTENT-SKU")
     assert response_404.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# available_remainder_quantity — индикатор остатков в списке/детальной карточке
+# ---------------------------------------------------------------------------
+
+
+async def _make_spg(session, code: str, name: str) -> "StorageProductionGroup":
+    from app.models.spg import StorageProductionGroup
+    spg = StorageProductionGroup(code=code, name=name, is_active=True)
+    session.add(spg)
+    await session.flush()
+    return spg
+
+
+@pytest.mark.asyncio
+async def test_rows_list_contains_available_remainder_quantity(client, session) -> None:
+    from app.models.spg import StorageProductionGroup
+    from app.models.spg_remainder import SpgRemainder
+
+    product, route = await _make_product_with_route(session, "FG-REMAINDER-1")
+    spg = await _make_spg(session, "REMAINDER-1", "Remainder 1")
+    # Совместимый остаток (без выполненных стадий — сырьё со склада)
+    remainder = SpgRemainder(
+        spg_id=spg.id,
+        product_id=product.id,
+        remainder_quantity=Decimal("12.5"),
+        original_issued=Decimal("12.5"),
+    )
+    session.add(remainder)
+    await session.flush()
+    plan = await _make_plan(session, "REMAINDER-LIST")
+    position = await _make_position(
+        session,
+        plan_id=plan.id,
+        sku=product.sku,
+        name=product.name,
+        quantity=Decimal("100"),
+        product_id=product.id,
+    )
+    position.route_id = route.id
+    await session.commit()
+
+    response = await client.get("/api/production-planning/rows")
+    assert response.status_code == 200
+    rows = response.json()
+    row = next((r for r in rows if r["plan_position_id"] == position.id), None)
+    assert row is not None
+    assert row["available_remainder_quantity"] == 12.5
+
+
+@pytest.mark.asyncio
+async def test_rows_list_incompatible_remainder_returns_zero(client, session) -> None:
+    from app.models.spg import StorageProductionGroup
+    from app.models.spg_remainder import SpgRemainder
+
+    # Позиция с product_A, но остаток — от product_B
+    product_a, route = await _make_product_with_route(session, "FG-INCOMPAT-A")
+    product_b = Product(
+        sku="FG-INCOMPAT-B",
+        name="Other product",
+        type=ProductType.finished_good,
+        unit="pcs",
+    )
+    session.add(product_b)
+    await session.flush()
+    spg = await _make_spg(session, "INCOMPAT-SPG", "Incompat SPG")
+    other_rem = SpgRemainder(
+        spg_id=spg.id,
+        product_id=product_b.id,  # не та позиция
+        remainder_quantity=Decimal("99"),
+        original_issued=Decimal("99"),
+    )
+    session.add(other_rem)
+    await session.flush()
+    plan = await _make_plan(session, "INCOMPAT-LIST")
+    position = await _make_position(
+        session,
+        plan_id=plan.id,
+        sku=product_a.sku,
+        name=product_a.name,
+        quantity=Decimal("50"),
+        product_id=product_a.id,
+    )
+    position.route_id = route.id
+    await session.commit()
+
+    response = await client.get("/api/production-planning/rows")
+    assert response.status_code == 200
+    rows = response.json()
+    row = next((r for r in rows if r["plan_position_id"] == position.id), None)
+    assert row is not None
+    assert row["available_remainder_quantity"] == 0
+
+
+@pytest.mark.asyncio
+async def test_rows_list_position_without_route_returns_null(client, session) -> None:
+    plan = await _make_plan(session, "NO-ROUTE")
+    position = await _make_position(
+        session,
+        plan_id=plan.id,
+        sku="FG-NO-ROUTE",
+        name="No Route",
+        quantity=Decimal("1"),
+    )
+    # route_id не задан
+    await session.commit()
+
+    response = await client.get("/api/production-planning/rows")
+    assert response.status_code == 200
+    rows = response.json()
+    row = next((r for r in rows if r["plan_position_id"] == position.id), None)
+    assert row is not None
+    # Поле либо отсутствует, либо None — не должно быть ошибки
+    assert row.get("available_remainder_quantity") in (None, 0, 0.0)
+
+
+@pytest.mark.asyncio
+async def test_rows_detail_contains_available_remainder_quantity(client, session) -> None:
+    from app.models.spg import StorageProductionGroup
+    from app.models.spg_remainder import SpgRemainder
+
+    product, route = await _make_product_with_route(session, "FG-DETAIL-REM")
+    spg = await _make_spg(session, "DETAIL-REM-SPG", "Detail Remainder SPG")
+    detail_rem = SpgRemainder(
+        spg_id=spg.id,
+        product_id=product.id,
+        remainder_quantity=Decimal("7.25"),
+        original_issued=Decimal("7.25"),
+    )
+    session.add(detail_rem)
+    await session.flush()
+    plan = await _make_plan(session, "DETAIL-REM")
+    position = await _make_position(
+        session,
+        plan_id=plan.id,
+        sku=product.sku,
+        name=product.name,
+        quantity=Decimal("20"),
+        product_id=product.id,
+    )
+    position.route_id = route.id
+    await session.commit()
+
+    response = await client.get(f"/api/production-planning/rows/{position.id}")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["available_remainder_quantity"] == 7.25
+
+
+@pytest.mark.asyncio
+async def test_plan_positions_list_contains_available_remainder_quantity(client, session) -> None:
+    from app.models.spg import StorageProductionGroup
+    from app.models.spg_remainder import SpgRemainder
+
+    product, route = await _make_product_with_route(session, "FG-PLAN-REM")
+    spg = await _make_spg(session, "PLAN-REM-SPG", "Plan Remainder SPG")
+    plan_rem = SpgRemainder(
+        spg_id=spg.id,
+        product_id=product.id,
+        remainder_quantity=Decimal("33"),
+        original_issued=Decimal("33"),
+    )
+    session.add(plan_rem)
+    await session.flush()
+    plan = await _make_plan(session, "PLAN-REM")
+    position = await _make_position(
+        session,
+        plan_id=plan.id,
+        sku=product.sku,
+        name=product.name,
+        quantity=Decimal("100"),
+        product_id=product.id,
+        status=PlanPositionStatus.valid,
+    )
+    position.route_id = route.id
+    await session.commit()
+
+    response = await client.get(f"/api/production-plans/{plan.id}/all-positions")
+    assert response.status_code == 200
+    positions_out = response.json()
+    pos_out = next((p for p in positions_out if p["id"] == position.id), None)
+    assert pos_out is not None
+    assert pos_out["available_remainder_quantity"] == 33.0
+

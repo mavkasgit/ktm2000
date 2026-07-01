@@ -3,7 +3,8 @@ import { ListChecks } from "lucide-react";
 import { ProductionPlanningRow } from "@/shared/api/productionPlans";
 import { Button, FiltersPanel, VirtualizedTableBody, SortableFilterHeader, type FiltersPanelField } from "@/shared/ui";
 import { SortConfig } from "@/shared/hooks/useTableQueryEngine";
-import { ExecutionSortField, positionStatusLabels, fmtQty } from "./execution-utils";
+import { ExecutionSortField, positionStatusLabels } from "./execution-utils";
+import { fmtQty } from "@/shared/utils/fmtQty";
 import { ExecutionRow } from "./ExecutionRow";
 import { getExecutionTableColumns } from "./execution-table-columns";
 import {

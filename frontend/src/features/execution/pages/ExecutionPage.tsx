@@ -43,7 +43,6 @@ import { ProductWipStatsDialog } from "../components/ProductWipStatsDialog";
 import {
   ExecutionSortField,
   positionStatusLabels,
-  fmtQty,
   getLaunchBlockReason,
   getCancelBlockReason,
   getRestoreBlockReason,
@@ -51,6 +50,7 @@ import {
   getManualPassBlockReason,
   getCellValue,
 } from "../components/execution-utils";
+import { fmtQty } from "@/shared/utils/fmtQty";
 
 export function ExecutionPage() {
   const [selectedPositionId, setSelectedPositionId] = useState<number | null>(null);

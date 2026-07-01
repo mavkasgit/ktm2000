@@ -1,4 +1,5 @@
 import type { ProductionPlanningRow } from "@/shared/api/productionPlans";
+import { fmtQty } from "@/shared/utils/fmtQty";
 
 export const positionStatusLabels: Record<string, string> = {
   draft: "Черновик",
@@ -56,13 +57,6 @@ export function routeMetaLabel(route: RouteMetaLike): string {
     return "не найден";
   }
   return "—";
-}
-
-export function fmtQty(value: number): string {
-  if (Number.isInteger(value)) {
-    return String(value);
-  }
-  return value.toFixed(3).replace(/\.?0+$/, "");
 }
 
 export function planPreviewUrl(planId: number): string {

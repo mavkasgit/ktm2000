@@ -145,6 +145,7 @@ export type PlanPositionOut = {
   route_error: string | null;
   raw_excel_row: Record<string, unknown> | null;
   payload?: Record<string, unknown> | null;
+  available_remainder_quantity?: number | null;
 };
 
 export async function planFiles(planId: number) {
@@ -342,6 +343,7 @@ export type ProductionPlanningRow = {
     section_icon_color: string | null;
     sequence: number;
   }[];
+  available_remainder_quantity?: number | null;
 };
 
 export type ProductionPlanningRouteSnapshotStep = {
@@ -438,6 +440,7 @@ export type ProductionPlanningRowDetail = {
   stages: ProductionPlanningStage[];
   raw_excel_row: Record<string, unknown> | null;
   payload?: Record<string, unknown> | null;
+  available_remainder_quantity?: number | null;
 };
 
 export async function listProductionPlanningRows() {
