@@ -15,7 +15,7 @@ from app.models.movement import Movement
 from app.models.production_plan import PlanPosition, PlanPositionStatus, ProductionPlan, ProductionPlanStatus
 from app.models.transfer import Transfer
 from app.models.work_task import WorkTask, WorkTaskStatus
-from app.models.route import ProductionRoute, RouteStage
+from app.models.route import ProductionRoute, RouteStage, SectionOperation
 from app.models.section import Section
 from app.models.user import User
 from app.models.product import Product
@@ -818,14 +818,36 @@ async def get_remainders_preview(
     route_seq_to_section = {}
     # mapping sequence → set of allowed operation_codes at that stage
     route_seq_to_op_codes: dict[int, set[str | None]] = {}
-    # mapping (section_id, operation_code) → (op_icon, op_icon_color)
+    # mapping (section_id, operation_code) → (op_icon, op_icon_color) from SectionOperation
     op_icon_lookup: dict[tuple[int, str], tuple[str | None, str | None]] = {}
+    op_keys: set[tuple[int, str]] = set()
+    stage_entries: list[tuple[RouteStage, Section, list]] = []
     for stage, section in rows:
-        ops = stage.operations or []
+        ops = list(stage.operations or [])
+        stage_entries.append((stage, section, ops))
+        for op in ops:
+            if op.operation_code is not None:
+                op_keys.add((section.id, op.operation_code))
+
+    if op_keys:
+        section_ids = list({sid for sid, _ in op_keys})
+        op_codes = list({code for _, code in op_keys})
+        op_rows = (await db.execute(
+            select(SectionOperation)
+            .where(SectionOperation.section_id.in_(section_ids))
+            .where(SectionOperation.operation_code.in_(op_codes))
+        )).scalars().all()
+        for op in op_rows:
+            op_icon_lookup[(op.section_id, op.operation_code)] = (op.icon, op.icon_color)
+
+    for stage, section, ops in stage_entries:
         op_name = ", ".join(op.operation_name for op in ops) if ops else "Операция"
-        # first op icon for the step (used in route_steps card)
-        first_op_icon = ops[0].icon if ops else None
-        first_op_icon_color = ops[0].icon_color if ops else None
+        if ops and ops[0].operation_code is not None:
+            first_op_icon, first_op_icon_color = op_icon_lookup.get(
+                (section.id, ops[0].operation_code), (None, None)
+            )
+        else:
+            first_op_icon, first_op_icon_color = None, None
         route_steps.append({
             "sequence": stage.sequence,
             "section_id": stage.section_id,
@@ -841,8 +863,6 @@ async def get_remainders_preview(
         route_seq_to_op_codes[stage.sequence] = {
             op.operation_code for op in ops
         } if ops else set()
-        for op in ops:
-            op_icon_lookup[(section.id, op.operation_code)] = (op.icon, op.icon_color)
 
     effective_product_id = pos.product_id
 
@@ -1638,7 +1658,6 @@ async def get_product_wip_stats(
             if s.get("section_id") and s.get("operation_code"):
                 all_op_keys.add((s["section_id"], s["operation_code"]))
 
-    from app.models.route import SectionOperation
     op_icon_map: dict[tuple[int, str], tuple[str | None, str | None]] = {}
     if all_op_keys:
         section_ids = list({k[0] for k in all_op_keys})
