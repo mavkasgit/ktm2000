@@ -459,12 +459,11 @@ async def list_ready_to_transfer(
                     )
                 ) or Decimal("0")
 
-                remaining_planned = max(Decimal("0"), planned_qty - transferred)
-                transferable = min(remainders_qty, remaining_planned)
+                transferable = remainders_qty
                 if transferable <= 0:
                     continue
 
-                fake_task.cached_completed_quantity = transferable + transferred
+                fake_task.cached_completed_quantity = remainders_qty + transferred
                 fake_task.cached_transferred_quantity = transferred
                 fake_task.cached_available_quantity = remainders_qty
                 await db.flush()

@@ -48,6 +48,11 @@ from app.services.shopfloor.common import (
 
 
 async def _get_task_transferable(db: AsyncSession, task: WorkTask) -> Decimal:
+    from app.models.section import Section
+    sec = await db.get(Section, task.section_id)
+    if sec and sec.kind in {"raw_stock", "wip_stock", "finished_stock"}:
+        return task.cached_available_quantity
+
     from sqlalchemy import func
     remainders_qty = Decimal("0")
     has_auto_complete = await db.scalar(

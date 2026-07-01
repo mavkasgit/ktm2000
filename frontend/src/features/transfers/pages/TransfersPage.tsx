@@ -109,11 +109,11 @@ function ReadyTransferRow({
   invalidateShopfloorCaches,
   invalidateTransfersCaches,
 }: ReadyTransferRowProps) {
-  const [quantity, setQuantity] = useState(task.transferable_quantity);
+  const [quantity, setQuantity] = useState(task.planned_quantity);
 
   useEffect(() => {
-    setQuantity(task.transferable_quantity);
-  }, [task.transferable_quantity]);
+    setQuantity(task.planned_quantity);
+  }, [task.planned_quantity]);
 
   const mutation = useMutation({
     mutationFn: () =>
