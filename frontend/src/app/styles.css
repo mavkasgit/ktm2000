@@ -86,7 +86,7 @@
   }
 
   .sidebar {
-    @apply fixed inset-y-0 left-0 z-50 flex flex-col -translate-x-full border-r bg-card transition-transform duration-300 md:static md:z-auto md:h-screen md:w-64 md:translate-x-0 md:shrink-0;
+    @apply fixed inset-y-0 left-0 z-50 flex flex-col -translate-x-full border-r bg-card transition-transform duration-300 md:sticky md:top-0 md:z-auto md:h-screen md:w-64 md:translate-x-0 md:shrink-0 md:self-start md:overflow-y-auto;
   }
 
   .sidebar--mobile-open {

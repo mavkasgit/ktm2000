@@ -28,6 +28,7 @@ function SeedDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (v: b
   const { routes, profiles, selectionRules, templates, sections } = useCurrentData()
   const preview = useQuery({ queryKey: queryKeys.routes.seedPreview(), queryFn: () => seedPreview() })
   const [seeding, setSeeding] = useState(false)
+  const [confirmOpen, setConfirmOpen] = useState(false)
   const queryClient = useQueryClient()
 
   const loading = routes.isLoading || profiles.isLoading || selectionRules.isLoading || templates.isLoading || sections.isLoading || preview.isLoading
@@ -43,7 +44,7 @@ function SeedDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (v: b
   const handleSeed = async () => {
     setSeeding(true)
     try {
-      const summary = await seedRoutes()
+      const summary = await seedRoutes(true)
       queryClient.invalidateQueries()
       toast({
         title: "Справочники загружены",
@@ -59,7 +60,16 @@ function SeedDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (v: b
       toast({ variant: "destructive", title: "Ошибка", description: e instanceof Error ? e.message : "Не удалось загрузить справочники" })
     } finally {
       setSeeding(false)
+      setConfirmOpen(false)
     }
+  }
+
+  const onLoadClick = () => {
+    setConfirmOpen(true)
+  }
+
+  const onConfirm = () => {
+    void handleSeed()
   }
 
   const hasData = currentRoutes > 0 || currentProfiles > 0 || currentRules > 0 || currentTemplates > 0 || currentSections > 0
@@ -70,7 +80,7 @@ function SeedDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (v: b
         <DialogHeader>
           <DialogTitle>Загрузка справочников</DialogTitle>
           <DialogDescription>
-            Сравнение текущих данных с типовыми. Сеed обновит или создаст недостающие записи.
+            Сравнение текущих данных с типовыми. Загрузка <b>перезапишет</b> все справочники и <b>удалит</b> сгенерированные производственные данные.
           </DialogDescription>
         </DialogHeader>
 
@@ -121,12 +131,41 @@ function SeedDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (v: b
 
         <DialogFooter className="flex-col-reverse sm:flex-row gap-2">
           <Button variant="outline" onClick={() => onOpenChange(false)}>Закрыть</Button>
-          <Button onClick={handleSeed} disabled={seeding || loading}>
+          <Button onClick={onLoadClick} disabled={seeding || loading}>
             {seeding ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : <Download className="h-4 w-4 mr-1" />}
             {seeding ? "Загрузка..." : "Загрузить"}
           </Button>
         </DialogFooter>
       </DialogContent>
+
+      <AlertDialog open={confirmOpen} onOpenChange={setConfirmOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle className="text-red-600">Перезаписать справочники?</AlertDialogTitle>
+            <AlertDialogDescription className="space-y-2">
+              <p>
+                Будут <b>удалены</b> все сгенерированные производственные данные: задачи, передачи, движения,
+                остатки ГХП, внутренние планы, батчи запуска, импорты, дефекты, брак.
+              </p>
+              <p>
+                Затем <b>перезаписаны</b> справочники: участки, операции, ГХП, маршруты, профили правил, правила выбора.
+              </p>
+              <p>Действие необратимо.</p>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={seeding}>Отмена</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={onConfirm}
+              disabled={seeding}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+            >
+              {seeding ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : null}
+              Перезаписать
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </Dialog>
   )
 }
