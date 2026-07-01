@@ -22,6 +22,7 @@ import {
   AlertDialogFooter,
   AlertDialogCancel,
   AlertDialogAction,
+  SortableFilterHeader,
 } from "@/shared/ui";
 import type {
   SpgOut,
@@ -42,6 +43,8 @@ import { ManualOperationDialog } from "./ManualOperationDialog";
 import { RemainderHistoryDrawer } from "./RemainderHistoryDrawer";
 import { ImportRemaindersDialog } from "./ImportRemaindersDialog";
 import { queryKeys } from "@/shared/api/queryKeys";
+import type { SortConfig } from "@/shared/hooks/useTableQueryEngine";
+import { nextMultiSortConfigs } from "@/shared/lib/multiSort";
 
 interface RemainderEditDialogProps {
   open: boolean;
@@ -540,6 +543,19 @@ export function RemaindersListPanel({
 
   // Состояние сворачивания
   const [isExpanded, setIsExpanded] = useState(true);
+  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
+
+  const toggleGroup = (key: string) => {
+    setExpandedGroups((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) {
+        next.delete(key);
+      } else {
+        next.add(key);
+      }
+      return next;
+    });
+  };
 
   const handleAdd = () => {
     setEditing(null);
@@ -580,8 +596,27 @@ export function RemaindersListPanel({
   const [selectedIds, setSelectedIds] = useState<number[]>([]);
   const [bulkDeleteConfirmOpen, setBulkDeleteConfirmOpen] = useState(false);
 
+  type RemainderSortField = "sku" | "qty" | "stages" | "spg" | "source";
+  const [sortConfigs, setSortConfigs] = useState<SortConfig<RemainderSortField>[]>([
+    { field: "qty", order: "desc" }
+  ]);
+  const [columnFilters, setColumnFilters] = useState<Partial<Record<RemainderSortField, Set<string>>>>({});
+
+  const handleSortChange = (field: RemainderSortField) => {
+    setSortConfigs((prev) => nextMultiSortConfigs(prev, field));
+  };
+
+  const handleFilterChange = (field: RemainderSortField, selected: Set<string>) => {
+    setColumnFilters((prev) => ({
+      ...prev,
+      [field]: selected,
+    }));
+  };
+
   useEffect(() => {
     setSelectedIds([]);
+    setSortConfigs([{ field: "qty", order: "desc" }]);
+    setColumnFilters({});
   }, [spgId, remainders]);
 
   const bulkDeleteMutation = useMutation({
@@ -608,14 +643,162 @@ export function RemaindersListPanel({
     bulkDeleteMutation.mutate();
   };
 
+  const uniqueValues = useMemo(() => {
+    const skus = new Set<string>();
+    const qtys = new Set<string>();
+    const ops = new Set<string>();
+    const spgsCol = new Set<string>();
+    const sources = new Set<string>();
+
+    remainders.forEach((r) => {
+      if (r.product_sku) skus.add(r.product_sku);
+      qtys.add(String(r.remainder_quantity));
+      if (r.spg_name) spgsCol.add(r.spg_name);
+      else spgsCol.add("Склад");
+      sources.add(r.source === "manual" ? "Ручной" : "Задача");
+
+      (r.completed_stages || []).forEach((cs) => {
+        const name = cs.operation_name || cs.operation_code;
+        if (name) ops.add(name);
+      });
+    });
+
+    return {
+      sku: Array.from(skus).sort(),
+      qty: Array.from(qtys).sort((a, b) => Number(a) - Number(b)),
+      stages: Array.from(ops).sort(),
+      spg: Array.from(spgsCol).sort(),
+      source: Array.from(sources).sort(),
+    };
+  }, [remainders]);
+
   // Применение фильтрации и поиска перед маппингом
-  const filteredRemainders = remainders.filter((r) => {
-    const matchesSearch =
-      !searchQuery.trim() ||
-      r.product_sku.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      r.product_name.toLowerCase().includes(searchQuery.toLowerCase());
-    return matchesSearch;
-  });
+  const filteredRemainders = useMemo(() => {
+    return remainders.filter((r) => {
+      const matchesSearch =
+        !searchQuery.trim() ||
+        r.product_sku.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        r.product_name.toLowerCase().includes(searchQuery.toLowerCase());
+      if (!matchesSearch) return false;
+
+      // Фильтр по sku (Артикул)
+      const skuFilter = columnFilters["sku"];
+      if (skuFilter && skuFilter.size > 0) {
+        if (!skuFilter.has(r.product_sku)) return false;
+      }
+
+      // Фильтр по qty (Количество)
+      const qtyFilter = columnFilters["qty"];
+      if (qtyFilter && qtyFilter.size > 0) {
+        if (!qtyFilter.has(String(r.remainder_quantity))) return false;
+      }
+
+      // Фильтр по stages (Пройденные операции)
+      const stagesFilter = columnFilters["stages"];
+      if (stagesFilter && stagesFilter.size > 0) {
+        const hasMatchingOp = (r.completed_stages || []).some((cs) =>
+          stagesFilter.has(cs.operation_name || cs.operation_code || "")
+        );
+        if (!hasMatchingOp) return false;
+      }
+
+      // Фильтр по spg (ГХП)
+      const spgFilter = columnFilters["spg"];
+      if (spgFilter && spgFilter.size > 0) {
+        if (!spgFilter.has(r.spg_name || "Склад")) return false;
+      }
+
+      // Фильтр по source (Источник)
+      const sourceFilter = columnFilters["source"];
+      if (sourceFilter && sourceFilter.size > 0) {
+        const displaySource = r.source === "manual" ? "Ручной" : "Задача";
+        if (!sourceFilter.has(displaySource)) return false;
+      }
+
+      return true;
+    });
+  }, [remainders, searchQuery, columnFilters]);
+
+  const getCompletedStagesKey = (r: SpgRemainder) => {
+    return (r.completed_stages || [])
+      .map((cs) => cs.operation_code || cs.operation_name)
+      .join(",");
+  };
+
+  const groupedRemainders = useMemo(() => {
+    // 1. Группируем отфильтрованные остатки
+    const groupsMap: Record<string, {
+      key: string;
+      product_sku: string;
+      product_name: string;
+      spg_name: string;
+      completed_stages: SpgRemainder["completed_stages"];
+      source: string;
+      total_quantity: number;
+      items: SpgRemainder[];
+    }> = {};
+
+    filteredRemainders.forEach((r) => {
+      const key = `${r.product_sku}|${getCompletedStagesKey(r)}|${r.spg_name || ""}`;
+      if (!groupsMap[key]) {
+        groupsMap[key] = {
+          key,
+          product_sku: r.product_sku,
+          product_name: r.product_name,
+          spg_name: r.spg_name || "Склад",
+          completed_stages: r.completed_stages || [],
+          source: r.source,
+          total_quantity: 0,
+          items: [],
+        };
+      }
+      groupsMap[key].total_quantity += r.remainder_quantity;
+      groupsMap[key].items.push(r);
+    });
+
+    const groupsList = Object.values(groupsMap);
+
+    // 2. Сортируем группы
+    if (sortConfigs.length === 0) return groupsList;
+
+    groupsList.sort((a, b) => {
+      for (const sort of sortConfigs) {
+        let valA: any;
+        let valB: any;
+
+        if (sort.field === "sku") {
+          valA = a.product_sku;
+          valB = b.product_sku;
+        } else if (sort.field === "qty") {
+          valA = a.total_quantity;
+          valB = b.total_quantity;
+        } else if (sort.field === "stages") {
+          valA = a.completed_stages?.length || 0;
+          valB = b.completed_stages?.length || 0;
+        } else if (sort.field === "spg") {
+          valA = a.spg_name;
+          valB = b.spg_name;
+        } else if (sort.field === "source") {
+          valA = a.source;
+          valB = b.source;
+        }
+
+        if (valA !== valB) {
+          if (typeof valA === "number" && typeof valB === "number") {
+            return sort.order === "asc" ? valA - valB : valB - valA;
+          }
+          const strA = String(valA);
+          const strB = String(valB);
+          return sort.order === "asc"
+            ? strA.localeCompare(strB, "ru")
+            : strB.localeCompare(strA, "ru");
+        }
+      }
+      return 0;
+    });
+
+    return groupsList;
+  }, [filteredRemainders, sortConfigs]);
 
   return (
     <div className="space-y-3">
@@ -675,7 +858,7 @@ export function RemaindersListPanel({
                 </div>
               ) : (
                 <table className="w-full text-sm">
-                  <thead className="bg-muted/50 border-b">
+                  <thead className="bg-muted/50 border-b text-xs">
                      <tr>
                       <th className="p-2 w-[40px] text-center">
                         <input
@@ -694,113 +877,290 @@ export function RemaindersListPanel({
                           }}
                         />
                       </th>
-                      <th className="p-2 pr-0 text-left font-medium w-[130px]">Артикул</th>
-                      <th className="p-2 pl-0 text-left font-medium w-[70px]">Кол-во</th>
-                      <th className="p-2 text-left font-medium">Пройденные операции</th>
-                      <th className="p-2 text-left font-medium">ГХП</th>
-                      <th className="p-2 text-center font-medium">Источник</th>
-                      <th className="p-2 text-center font-medium">Действия</th>
+                      <th className="p-2 pr-0 text-left font-medium w-[150px]">
+                        <SortableFilterHeader
+                          field="sku"
+                          label="Артикул"
+                          currentSorts={sortConfigs}
+                          onSortChange={handleSortChange}
+                          values={uniqueValues.sku}
+                          selectedValues={columnFilters["sku"] ?? new Set()}
+                          onFilterChange={handleFilterChange}
+                        />
+                      </th>
+                      <th className="p-2 pl-0 text-left font-medium w-[110px]">
+                        <SortableFilterHeader
+                          field="qty"
+                          label="Кол-во"
+                          currentSorts={sortConfigs}
+                          onSortChange={handleSortChange}
+                          values={uniqueValues.qty}
+                          selectedValues={columnFilters["qty"] ?? new Set()}
+                          onFilterChange={handleFilterChange}
+                        />
+                      </th>
+                      <th className="p-2 text-left font-medium">
+                        <SortableFilterHeader
+                          field="stages"
+                          label="Пройденные операции"
+                          currentSorts={sortConfigs}
+                          onSortChange={handleSortChange}
+                          values={uniqueValues.stages}
+                          selectedValues={columnFilters["stages"] ?? new Set()}
+                          onFilterChange={handleFilterChange}
+                        />
+                      </th>
+                      <th className="p-2 text-left font-medium w-[120px]">
+                        <SortableFilterHeader
+                          field="spg"
+                          label="ГХП"
+                          currentSorts={sortConfigs}
+                          onSortChange={handleSortChange}
+                          values={uniqueValues.spg}
+                          selectedValues={columnFilters["spg"] ?? new Set()}
+                          onFilterChange={handleFilterChange}
+                        />
+                      </th>
+                      <th className="p-2 text-center font-medium w-[120px]">
+                        <SortableFilterHeader
+                          field="source"
+                          label="Источник"
+                          currentSorts={sortConfigs}
+                          onSortChange={handleSortChange}
+                          values={uniqueValues.source}
+                          selectedValues={columnFilters["source"] ?? new Set()}
+                          onFilterChange={handleFilterChange}
+                        />
+                      </th>
+                      <th className="p-2 text-center font-medium w-[100px]">Действия</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {filteredRemainders.map((r) => {
-                      const isNegative = r.remainder_quantity < 0;
-                      return (
-                        <tr key={r.id} className="border-b hover:bg-muted/30">
-                          <td className="p-2 text-center w-[40px]">
+                    {groupedRemainders.flatMap((group) => {
+                      const isGroupExpanded = expandedGroups.has(group.key);
+                      const hasMultiple = group.items.length > 1;
+
+                      // Если в группе всего 1 элемент, рендерим его как обычную плоскую строку
+                      if (!hasMultiple) {
+                        const r = group.items[0];
+                        const isNegative = r.remainder_quantity < 0;
+                        return (
+                          <tr key={r.id} className="border-b hover:bg-muted/30">
+                            <td className="p-2 text-center w-[40px]">
+                              <input
+                                type="checkbox"
+                                className="rounded border-gray-300 text-primary focus:ring-primary h-4 w-4 cursor-pointer"
+                                checked={selectedIds.includes(r.id)}
+                                onChange={(e) => {
+                                  if (e.target.checked) {
+                                    setSelectedIds((prev) => [...prev, r.id]);
+                                  } else {
+                                    setSelectedIds((prev) => prev.filter((id) => id !== r.id));
+                                  }
+                                }}
+                              />
+                            </td>
+                            {/* 1. Артикул */}
+                            <td className="p-2 pr-0">
+                              <div className="font-medium">{r.product_sku}</div>
+                            </td>
+                            {/* 2. Кол-во */}
+                            <td className="p-2 pl-0 text-left">
+                              <span className={`font-semibold ${isNegative ? "text-amber-700" : ""}`}>
+                                {r.remainder_quantity}
+                              </span>
+                              {isNegative && (
+                                <span
+                                  title="Остаток ушёл в минус — зафиксируйте ручной операцией"
+                                  className="inline-block"
+                                >
+                                  <Badge
+                                    variant="destructive"
+                                    className="ml-2 text-[10px] inline-flex items-center gap-1"
+                                  >
+                                    <IconAlertTriangle size={12} />
+                                    Отрицательный
+                                  </Badge>
+                                </span>
+                              )}
+                            </td>
+                            {/* 3. Пройденные операции */}
+                            <td className="p-2">
+                              <div className="text-xs text-muted-foreground max-w-[250px] truncate" title={
+                                r.completed_stages && r.completed_stages.length > 0
+                                  ? [...r.completed_stages].reverse().map((cs: any) => cs.operation_name || cs.operation_code).join(", ")
+                                  : "Нет пройденных операций"
+                              }>
+                                {r.completed_stages && r.completed_stages.length > 0
+                                  ? [...r.completed_stages].reverse().map((cs: any) => cs.operation_name || cs.operation_code).join(", ")
+                                  : "—"}
+                              </div>
+                            </td>
+                            {/* 4. ГХП */}
+                            <td className="p-2">
+                              <div className="text-xs font-medium text-foreground">{r.spg_name || "—"}</div>
+                            </td>
+                            {/* 5. Источник */}
+                            <td className="p-2 text-center">
+                              <Badge variant={r.source === "manual" ? "default" : "secondary"} className="text-xs">
+                                {r.source === "manual" ? "Ручной" : "Задача"}
+                              </Badge>
+                            </td>
+                            {/* 6. Действия */}
+                            <td className="p-2 text-center">
+                              <div className="flex items-center justify-center gap-1">
+                                <button
+                                  type="button"
+                                  onClick={() => setHistoryRemainderId(r.id)}
+                                  className="p-1 rounded hover:bg-accent text-blue-600"
+                                  title="История"
+                                >
+                                  <HistoryIcon className="h-3.5 w-3.5" />
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => handleEdit(r)}
+                                  className="p-1 rounded hover:bg-accent"
+                                  title="Редактировать"
+                                >
+                                  <Pencil className="h-3.5 w-3.5" />
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => handleDelete(r)}
+                                  className="p-1 rounded hover:bg-destructive/10 text-destructive"
+                                  title="Удалить"
+                                >
+                                  <Trash2 className="h-3.5 w-3.5" />
+                                </button>
+                              </div>
+                            </td>
+                          </tr>
+                        );
+                      }
+
+                      // Если в группе больше 1 элемента, рендерим заголовок группы и раскрывающиеся дочерние элементы
+                      const rows = [];
+                      const allGroupChecked = group.items.every((item) => selectedIds.includes(item.id));
+                      const someGroupChecked = group.items.some((item) => selectedIds.includes(item.id)) && !allGroupChecked;
+
+                      rows.push(
+                        <tr key={group.key} className="border-b bg-muted/20 hover:bg-muted/40 font-semibold cursor-pointer" onClick={() => toggleGroup(group.key)}>
+                          <td className="p-2 text-center w-[40px]" onClick={(e) => e.stopPropagation()}>
                             <input
                               type="checkbox"
                               className="rounded border-gray-300 text-primary focus:ring-primary h-4 w-4 cursor-pointer"
-                              checked={selectedIds.includes(r.id)}
+                              ref={(el) => {
+                                if (el) el.indeterminate = someGroupChecked;
+                              }}
+                              checked={allGroupChecked}
                               onChange={(e) => {
                                 if (e.target.checked) {
-                                  setSelectedIds((prev) => [...prev, r.id]);
+                                  setSelectedIds((prev) => [...new Set([...prev, ...group.items.map((item) => item.id)])]);
                                 } else {
-                                  setSelectedIds((prev) => prev.filter((id) => id !== r.id));
+                                  setSelectedIds((prev) => prev.filter((id) => !group.items.some((item) => item.id === id)));
                                 }
                               }}
                             />
                           </td>
-                          {/* 1. Артикул */}
                           <td className="p-2 pr-0">
-                            <div className="font-medium">{r.product_sku}</div>
-                            <div className="text-xs text-muted-foreground truncate max-w-[120px]" title={r.product_name}>
-                              {r.product_name}
+                            <div className="flex items-center gap-2">
+                              {isGroupExpanded ? <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground" /> : <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" />}
+                              <div>
+                                <span>{group.product_sku}</span>
+                                <Badge variant="outline" className="ml-2 font-normal text-[10px] bg-background">{group.items.length} зап.</Badge>
+                              </div>
                             </div>
+
                           </td>
-                          {/* 2.  Кол-во */}
                           <td className="p-2 pl-0 text-left">
-                            <span className={`font-semibold ${isNegative ? "text-amber-700" : ""}`}>
-                              {r.remainder_quantity}
-                            </span>
-                            {isNegative && (
-                              <span
-                                title="Остаток ушёл в минус — зафиксируйте ручной операцией"
-                                className="inline-block"
-                              >
-                                <Badge
-                                  variant="destructive"
-                                  className="ml-2 text-[10px] inline-flex items-center gap-1"
-                                >
-                                  <IconAlertTriangle size={12} />
-                                  Отрицательный
-                                </Badge>
-                              </span>
-                            )}
+                            <span className="text-primary font-bold">{group.total_quantity}</span>
                           </td>
-                          {/* 3. Пройденные операции */}
-                          <td className="p-2">
-                            <div className="text-xs text-muted-foreground max-w-[250px] truncate" title={
-                              r.completed_stages && r.completed_stages.length > 0
-                                ? [...r.completed_stages].reverse().map((cs: any) => cs.operation_name || cs.operation_code).join(", ")
+                          <td className="p-2 text-xs text-muted-foreground font-normal">
+                            <div className="max-w-[250px] truncate" title={
+                              group.completed_stages && group.completed_stages.length > 0
+                                ? [...group.completed_stages].reverse().map((cs: any) => cs.operation_name || cs.operation_code).join(", ")
                                 : "Нет пройденных операций"
                             }>
-                              {r.completed_stages && r.completed_stages.length > 0
-                                ? [...r.completed_stages].reverse().map((cs: any) => cs.operation_name || cs.operation_code).join(", ")
+                              {group.completed_stages && group.completed_stages.length > 0
+                                ? [...group.completed_stages].reverse().map((cs: any) => cs.operation_name || cs.operation_code).join(", ")
                                 : "—"}
                             </div>
                           </td>
-                          {/* 4. ГХП */}
-                          <td className="p-2">
-                            <div className="text-xs font-medium text-foreground">{r.spg_name || "—"}</div>
-                          </td>
-                          {/* 5. Источник */}
-                          <td className="p-2 text-center">
-                            <Badge variant={r.source === "manual" ? "default" : "secondary"} className="text-xs">
-                              {r.source === "manual" ? "Ручной" : "Задача"}
-                            </Badge>
-                          </td>
-                          {/* 6. Действия */}
-                          <td className="p-2 text-center">
-                            <div className="flex items-center justify-center gap-1">
-                              <button
-                                type="button"
-                                onClick={() => setHistoryRemainderId(r.id)}
-                                className="p-1 rounded hover:bg-accent text-blue-600"
-                                title="История"
-                              >
-                                <HistoryIcon className="h-3.5 w-3.5" />
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => handleEdit(r)}
-                                className="p-1 rounded hover:bg-accent"
-                                title="Редактировать"
-                              >
-                                <Pencil className="h-3.5 w-3.5" />
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => handleDelete(r)}
-                                className="p-1 rounded hover:bg-destructive/10 text-destructive"
-                                title="Удалить"
-                              >
-                                <Trash2 className="h-3.5 w-3.5" />
-                              </button>
-                            </div>
-                          </td>
+                          <td className="p-2 text-xs font-medium text-foreground">{group.spg_name}</td>
+                          <td className="p-2 text-center text-xs text-muted-foreground font-normal">—</td>
+                          <td className="p-2 text-center text-xs text-muted-foreground font-normal">—</td>
                         </tr>
                       );
+
+                      if (isGroupExpanded) {
+                        group.items.forEach((r) => {
+                          const isNegative = r.remainder_quantity < 0;
+                          rows.push(
+                            <tr key={r.id} className="border-b bg-muted/5 hover:bg-muted/15 text-xs text-muted-foreground">
+                              <td className="p-2 text-center w-[40px]">
+                                <input
+                                  type="checkbox"
+                                  className="rounded border-gray-300 text-primary focus:ring-primary h-4 w-4 cursor-pointer"
+                                  checked={selectedIds.includes(r.id)}
+                                  onChange={(e) => {
+                                    if (e.target.checked) {
+                                      setSelectedIds((prev) => [...prev, r.id]);
+                                    } else {
+                                      setSelectedIds((prev) => prev.filter((id) => id !== r.id));
+                                    }
+                                  }}
+                                />
+                              </td>
+                              <td className="p-2 pr-0 pl-8 font-normal">
+                                <span>Запись #{r.id}</span>
+                              </td>
+                              <td className="p-2 pl-0 text-left font-mono">
+                                <span className={isNegative ? "text-amber-700 animate-pulse font-semibold" : "text-foreground font-medium"}>
+                                  {r.remainder_quantity}
+                                </span>
+                              </td>
+                              <td className="p-2">—</td>
+                              <td className="p-2">—</td>
+                              <td className="p-2 text-center">
+                                <Badge variant={r.source === "manual" ? "default" : "secondary"} className="text-[10px] px-1 py-0 h-4">
+                                  {r.source === "manual" ? "Ручной" : "Задача"}
+                                </Badge>
+                              </td>
+                              <td className="p-2 text-center">
+                                <div className="flex items-center justify-center gap-1">
+                                  <button
+                                    type="button"
+                                    onClick={() => setHistoryRemainderId(r.id)}
+                                    className="p-1 rounded hover:bg-accent text-blue-600"
+                                    title="История"
+                                  >
+                                    <HistoryIcon className="h-3 w-3" />
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleEdit(r)}
+                                    className="p-1 rounded hover:bg-accent"
+                                    title="Редактировать"
+                                  >
+                                    <Pencil className="h-3 w-3" />
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleDelete(r)}
+                                    className="p-1 rounded hover:bg-destructive/10 text-destructive"
+                                    title="Удалить"
+                                  >
+                                    <Trash2 className="h-3 w-3" />
+                                  </button>
+                                </div>
+                              </td>
+                            </tr>
+                          );
+                        });
+                      }
+
+                      return rows;
                     })}
                   </tbody>
                 </table>
