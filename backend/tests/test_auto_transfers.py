@@ -98,7 +98,7 @@ async def _make_two_ghp_fixture(session, *, sku: str, qty: Decimal) -> dict:
     pos = PlanPosition(
         production_plan_id=plan.id, product_id=product.id,
         source_type=PlanSourceType.manual, source_sku=product.sku, source_name=product.name,
-        quantity=qty, source_payload={}, status=PlanPositionStatus.released,
+        quantity=qty, source_payload={}, status=PlanPositionStatus.approved,
         validation_status=PlanPositionValidationStatus.valid, validation_errors=[],
         period_start=plan.period_start, period_end=plan.period_end,
         has_pack_ops=False, route_id=route.id, route_assigned_at=None,
@@ -125,9 +125,11 @@ async def _complete_first_task(client, task_id: int, qty: Decimal, idempotency_k
     assert resp.status_code == 200, resp.text
 
 
-async def test_complete_creates_cross_ghp_transfer(client, session) -> None:
-    """After completing a task on section 1, a Transfer must be created
-    pointing from section 1 to section 2 (different GHPs)."""
+async def test_auto_create_transfer_creates_cross_ghp(client, session) -> None:
+    """Helper ``auto_create_transfer_after_complete`` must create a Transfer
+    pointing from task on section 1 to task on section 2 (different GHPs)."""
+    from app.transfers.services import auto_create_transfer_after_complete
+
     user = await _make_user(session)
     fx = await _make_two_ghp_fixture(session, sku="AUTO-1", qty=Decimal("5"))
     await _release_via_take_to_work(client, fx["position"].id)
@@ -139,7 +141,14 @@ async def test_complete_creates_cross_ghp_transfer(client, session) -> None:
     assert task1.section_id == fx["sections"][0].id
     assert task2.section_id == fx["sections"][1].id
 
-    await _complete_first_task(client, task1.id, Decimal("5"), idempotency_key="k-1")
+    # Прямой вызов библиотечного хелпера (после revert complete_task
+    # больше не интегрирован с auto-transfer, тестируем сам хелпер).
+    result = await auto_create_transfer_after_complete(
+        session, from_task=task1, good_quantity=Decimal("5"),
+        actor_id=user.id, idempotency_key="k-direct",
+    )
+    assert result is not None
+    assert result.get("idempotent_replay") is not True
 
     # Должен появиться ровно один Transfer cross-GHP
     transfers = (await session.execute(select(Transfer))).scalars().all()
@@ -264,29 +273,36 @@ async def test_complete_no_transfer_on_final_stage(client, session) -> None:
     assert transfers == [], "На финальном шаге перемещение не должно создаваться"
 
 
-async def test_complete_auto_transfer_is_idempotent(client, session) -> None:
-    """Повторный complete с тем же idempotency_key не должен дублировать Transfer."""
+async def test_auto_create_transfer_is_idempotent(client, session) -> None:
+    """Повторный вызов хелпера с тем же idempotency_key не должен дублировать Transfer."""
+    from app.transfers.services import auto_create_transfer_after_complete
+
     user = await _make_user(session)
     fx = await _make_two_ghp_fixture(session, sku="IDEM", qty=Decimal("4"))
     await _release_via_take_to_work(client, fx["position"].id)
     tasks = (await session.execute(select(WorkTask).order_by(WorkTask.id.asc()))).scalars().all()
-    task1 = tasks[0]
+    assert len(tasks) == 2
+    task1, task2 = tasks[0], tasks[1]
 
-    await _complete_first_task(client, task1.id, Decimal("4"), idempotency_key="k-idem-1")
-
-    # Повторный complete (например, из-за сетевого ретрая). В реальной
-    # системе complete_task сначала идемпотентно вернёт прежний результат,
-    # но даже если он попытается вызвать auto-transfer — transfer_send
-    # по тому же ключу вернёт idempotent_replay и НЕ создаст дубль.
-    # Симулируем это повторным вызовом transfer_send через прямой хелпер.
-    from app.transfers.services import auto_create_transfer_after_complete
-    result = await auto_create_transfer_after_complete(
+    # Первый вызов хелпера — должен создать Transfer
+    first = await auto_create_transfer_after_complete(
         session, from_task=task1, good_quantity=Decimal("4"),
         actor_id=user.id, idempotency_key="k-idem-1",
     )
-    assert result is not None
-    assert result.get("idempotent_replay") is True, "Повторный вызов должен вернуть idempotent_replay"
+    assert first is not None
+    assert first.get("idempotent_replay") is not True
+
+    # Повторный вызов с тем же idempotency_key — должен вернуть idempotent_replay
+    # и НЕ создать дубль (симулирует сетевой ретрай).
+    second = await auto_create_transfer_after_complete(
+        session, from_task=task1, good_quantity=Decimal("4"),
+        actor_id=user.id, idempotency_key="k-idem-1",
+    )
+    assert second is not None
+    assert second.get("idempotent_replay") is True, "Повторный вызов должен вернуть idempotent_replay"
 
     transfers = (await session.execute(select(Transfer))).scalars().all()
     assert len(transfers) == 1, f"Ожидался 1 Transfer, получили {len(transfers)}"
+    assert transfers[0].from_task_id == task1.id
+    assert transfers[0].to_task_id == task2.id
 
