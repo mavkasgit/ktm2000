@@ -438,6 +438,7 @@ async def list_ready_to_transfer(
                     .where(
                         SpgRemainder.spg_id == sec_spg_id,
                         SpgRemainder.product_id == fake_task.product_id,
+                        SpgRemainder.reserved_for_plan_position_id == spl.plan_position_id,
                         SpgRemainder.consumed_at.is_(None),
                         SpgRemainder.remainder_quantity > 0,
                     )
