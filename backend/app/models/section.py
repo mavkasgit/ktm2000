@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import BigInteger, DateTime, Identity, Integer, String, text
+from sqlalchemy import BigInteger, DateTime, Enum, Identity, Integer, String, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base
@@ -20,6 +20,16 @@ class Section(Base):
     )
     is_active: Mapped[bool] = mapped_column(nullable=False, default=True, server_default=text("true"))
     kind: Mapped[str] = mapped_column(String(20), nullable=False, default="production", server_default=text("'production'"))
+    # LocationType — новый домен Stock Ledger (Этап 1). Пока дублирует kind,
+    # на Этапе 7 kind удаляется. См. PLAN_stock_ledger.md, AGENTS.md.
+    # create_type не выставляем — тесты используют Base.metadata.create_all,
+    # тип создаётся SQLAlchemy с checkfirst=True. Миграция создаёт тип явно.
+    type: Mapped[str | None] = mapped_column(
+        Enum("raw_stock", "wip_stock", "finished_stock", "production", "laser",
+             "welding", "painting", "assembly", "scrap", "quarantine", "transit",
+             name="location_type"),
+        nullable=True,
+    )
     icon: Mapped[str | None] = mapped_column(String(50), nullable=True)
     icon_color: Mapped[str | None] = mapped_column(String(7), nullable=True)
     created_at: Mapped[datetime] = mapped_column(

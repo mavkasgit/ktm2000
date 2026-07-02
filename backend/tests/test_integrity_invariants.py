@@ -200,6 +200,126 @@ _INVARIANT_QUERIES: list[tuple[str, str]] = [
 ]
 
 
+# ─── Stock Ledger invariants (v2, draft — active after Этап 1) ──────────────
+# Эти инварианты проверяют целостность нового домена StockTransaction /
+# StockBalance / WorkTask.completed_qty. Пока таблиц `stock_transactions`
+# и `stock_balances` не существует (Этап 0), хелпер
+# `assert_no_stock_ledger_invariants_violations` молча пропускает проверки.
+# После создания таблиц на Этапе 1 инварианты включаются автоматически.
+
+_STOCK_LEDGER_INVARIANT_QUERIES: list[tuple[str, str]] = [
+    (
+        "S1_stock_balance_equals_sum_of_transactions",
+        """
+        SELECT sb.product_id, sb.location_id, sb.quality_state,
+               sb.balance_qty
+                 - COALESCE(SUM(CASE WHEN st.to_location_id   = sb.location_id
+                                          AND st.to_quality_state   = sb.quality_state
+                                     THEN st.quantity END), 0)
+                 + COALESCE(SUM(CASE WHEN st.from_location_id = sb.location_id
+                                          AND st.from_quality_state = sb.quality_state
+                                     THEN st.quantity END), 0)
+                 AS diff
+        FROM stock_balances sb
+        LEFT JOIN stock_transactions st
+          ON st.product_id = sb.product_id
+         AND (st.to_location_id = sb.location_id OR st.from_location_id = sb.location_id)
+        GROUP BY sb.product_id, sb.location_id, sb.quality_state, sb.balance_qty
+        HAVING sb.balance_qty
+                 != COALESCE(SUM(CASE WHEN st.to_location_id   = sb.location_id
+                                           AND st.to_quality_state   = sb.quality_state
+                                      THEN st.quantity END), 0)
+                  - COALESCE(SUM(CASE WHEN st.from_location_id = sb.location_id
+                                           AND st.from_quality_state = sb.quality_state
+                                      THEN st.quantity END), 0)
+        """,
+    ),
+    (
+        "S2_no_orphan_stock_transaction_task",
+        """
+        SELECT st.id AS tx_id, st.task_id
+        FROM stock_transactions st
+        LEFT JOIN work_tasks wt ON wt.id = st.task_id
+        WHERE st.task_id IS NOT NULL AND wt.id IS NULL
+        """,
+    ),
+    (
+        "S3_no_orphan_stock_transaction_transfer",
+        """
+        SELECT st.id AS tx_id, st.transfer_id
+        FROM stock_transactions st
+        LEFT JOIN transfers t ON t.id = st.transfer_id
+        WHERE st.transfer_id IS NOT NULL AND t.id IS NULL
+        """,
+    ),
+    (
+        "S4_no_orphan_stock_transaction_location",
+        """
+        SELECT st.id AS tx_id, st.from_location_id, st.to_location_id
+        FROM stock_transactions st
+        WHERE st.from_location_id IS NOT NULL AND NOT EXISTS (
+                  SELECT 1 FROM sections s WHERE s.id = st.from_location_id)
+           OR st.to_location_id   IS NOT NULL AND NOT EXISTS (
+                  SELECT 1 FROM sections s WHERE s.id = st.to_location_id)
+        """,
+    ),
+    # S5_worktask_completed_qty_equals_transaction_sums — отключён до Этапа 4
+    # (поля work_tasks.completed_qty / scrap_qty появятся только там).
+    # После Этапа 4 добавить проверку:
+    #   wt.completed_qty == SUM(st.quantity WHERE reason=COMPLETE AND quality=GOOD)
+    #   wt.scrap_qty     == SUM(st.quantity WHERE reason=SCRAP)
+    (
+        "S6_transfer_balance_matches_transaction_sums",
+        """
+        SELECT t.id AS transfer_id, t.status, t.sent_quantity,
+               COALESCE(s.qty, 0) AS actual_send,
+               COALESCE(r.qty, 0) AS actual_receive
+        FROM transfers t
+        LEFT JOIN (
+            SELECT transfer_id, SUM(quantity) AS qty
+            FROM stock_transactions WHERE reason = 'TRANSFER_SEND'
+            GROUP BY transfer_id
+        ) s ON s.transfer_id = t.id
+        LEFT JOIN (
+            SELECT transfer_id, SUM(quantity) AS qty
+            FROM stock_transactions WHERE reason = 'TRANSFER_RECEIVE'
+            GROUP BY transfer_id
+        ) r ON r.transfer_id = t.id
+        WHERE t.status NOT IN ('cancelled', 'rejected')
+          AND (t.sent_quantity != COALESCE(s.qty, 0)
+            OR t.sent_quantity != COALESCE(r.qty, 0))
+        """,
+    ),
+]
+
+
+async def _stock_ledger_tables_exist(session: AsyncSession) -> bool:
+    """True если таблицы нового домена уже созданы миграцией Этапа 1."""
+    result = await session.execute(text(
+        "SELECT to_regclass('public.stock_transactions') IS NOT NULL "
+        "AND to_regclass('public.stock_balances') IS NOT NULL AS exists"
+    ))
+    return bool(result.scalar())
+
+
+async def assert_no_stock_ledger_invariants_violations(
+    session: AsyncSession,
+    *,
+    context: str | None = None,
+) -> None:
+    """Запускает новые stock-ledger инварианты. No-op пока таблицы не
+    созданы (Этап 0). После Этапа 1 — обязательная проверка в e2e-тестах.
+    """
+    if not await _stock_ledger_tables_exist(session):
+        return
+    prefix = f"[{context}] " if context else ""
+    for name, sql in _STOCK_LEDGER_INVARIANT_QUERIES:
+        result = await session.execute(text(sql))
+        rows = [dict(row._mapping) for row in result]
+        if rows:
+            raise AssertionError(prefix + _format_violations(name, rows).lstrip())
+
+
 def _format_violations(name: str, rows: Iterable[dict]) -> str:
     rows = list(rows)
     if not rows:
@@ -227,6 +347,8 @@ async def assert_no_invariants_violations(
         rows = [dict(row._mapping) for row in result]
         if rows:
             raise AssertionError(prefix + _format_violations(name, rows).lstrip())
+    # Новые stock-ledger инварианты (no-op пока таблицы не созданы на Этапе 1)
+    await assert_no_stock_ledger_invariants_violations(session, context=context)
 
 
 # ─── fixtures ───────────────────────────────────────────────────────────────
