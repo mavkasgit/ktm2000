@@ -1356,3 +1356,124 @@ async def test_complete_waiting_task_before_transfer(
     assert second_task.status == WorkTaskStatus.partially_completed
 
 
+@pytest.mark.asyncio
+async def test_over_plan_transfer_expands_to_task_planned_quantity(client, session) -> None:
+    """When allow_over_plan=True and quantity > planned, the destination task's
+    planned_quantity is expanded so operators can complete the full received amount.
+    SectionPlanLine.planned_quantity must remain unchanged."""
+    user = await _make_user(session, "xfer-overplan@test.local")
+    headers = _auth_headers(user)
+    ctx = await _make_six_section_fixture(
+        session, sku="FG-XF-OVERPLAN", planned_qty=Decimal("100")
+    )
+    await _release_via_take_to_work(client, ctx["position"].id)
+    tasks = await _tasks_by_sequence(session, ctx["position"].id)
+    first_task = tasks[0]
+    second_task = tasks[1]
+
+    # Issue and complete 100 (plan), then transfer 150 — simulating
+    # an operator discovering extra material at the workstation.
+    await client.post(
+        f"/api/shopfloor/tasks/{first_task.id}/issue",
+        json={"quantity": "100", "idempotency_key": "xf-op:issue"},
+        headers=headers,
+    )
+    await client.post(
+        f"/api/shopfloor/tasks/{first_task.id}/complete",
+        json={"good_quantity": "100", "defect_quantity": "0", "idempotency_key": "xf-op:complete"},
+        headers=headers,
+    )
+
+    # Without allow_over_plan=True this would raise 400
+    send = await client.post(
+        "/api/transfers",
+        json={
+            "from_task_id": first_task.id,
+            "to_task_id": second_task.id,
+            "quantity": "150",
+            "allow_over_plan": True,
+            "idempotency_key": "xf-op:send",
+        },
+        headers=headers,
+    )
+    assert send.status_code == 200, send.text
+    assert send.json()["status"] == "accepted"
+
+    await session.commit()
+    await session.refresh(second_task)
+
+    # to_task.planned_quantity must be expanded to 150 so operators can
+    # issue and complete all received material.
+    assert second_task.planned_quantity == Decimal("150"), (
+        f"Expected planned_quantity=150, got {second_task.planned_quantity}"
+    )
+    assert second_task.cached_received_quantity == Decimal("150")
+    assert second_task.status == WorkTaskStatus.ready
+
+    # SectionPlanLine.planned_quantity must NOT be changed.
+    to_line = await session.get(SectionPlanLine, second_task.section_plan_line_id)
+    assert to_line.planned_quantity == Decimal("100"), (
+        f"SectionPlanLine.planned_quantity must stay 100, got {to_line.planned_quantity}"
+    )
+
+    # Operators can now issue and complete the full 150 units.
+    issue2 = await client.post(
+        f"/api/shopfloor/tasks/{second_task.id}/issue",
+        json={"quantity": "150", "idempotency_key": "xf-op:issue2"},
+        headers=headers,
+    )
+    assert issue2.status_code == 200, issue2.text
+
+    complete2 = await client.post(
+        f"/api/shopfloor/tasks/{second_task.id}/complete",
+        json={"good_quantity": "150", "defect_quantity": "0", "idempotency_key": "xf-op:complete2"},
+        headers=headers,
+    )
+    assert complete2.status_code == 200, complete2.text
+
+    await session.commit()
+    await session.refresh(second_task)
+    assert second_task.cached_completed_quantity == Decimal("150")
+    # A mid-route task transitions to WorkTaskStatus.completed only after it
+    # forwards its completed material to the next stage (transferred >= completed).
+    # At this point nothing has been forwarded yet, so the status is partially_completed.
+    assert second_task.status == WorkTaskStatus.partially_completed
+
+
+@pytest.mark.asyncio
+async def test_over_plan_transfer_without_flag_is_blocked(client, session) -> None:
+    """Without allow_over_plan=True, transferring more than transferable raises 400."""
+    user = await _make_user(session, "xfer-overplan-block@test.local")
+    headers = _auth_headers(user)
+    ctx = await _make_six_section_fixture(
+        session, sku="FG-XF-OVERPLAN-BLK", planned_qty=Decimal("100")
+    )
+    await _release_via_take_to_work(client, ctx["position"].id)
+    tasks = await _tasks_by_sequence(session, ctx["position"].id)
+    first_task = tasks[0]
+    second_task = tasks[1]
+
+    await client.post(
+        f"/api/shopfloor/tasks/{first_task.id}/issue",
+        json={"quantity": "100", "idempotency_key": "xf-opb:issue"},
+        headers=headers,
+    )
+    await client.post(
+        f"/api/shopfloor/tasks/{first_task.id}/complete",
+        json={"good_quantity": "100", "defect_quantity": "0", "idempotency_key": "xf-opb:complete"},
+        headers=headers,
+    )
+
+    # Default allow_over_plan=False — must be rejected
+    send = await client.post(
+        "/api/transfers",
+        json={
+            "from_task_id": first_task.id,
+            "to_task_id": second_task.id,
+            "quantity": "150",
+            "idempotency_key": "xf-opb:send",
+        },
+        headers=headers,
+    )
+    assert send.status_code == 400, send.text
+    assert "exceeds" in send.json()["detail"].lower()

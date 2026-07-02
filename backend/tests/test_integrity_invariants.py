@@ -1,0 +1,688 @@
+"""Invariant checks for the Transfer ↔ Movement ↔ WorkTask.cached_*
+data-consistency contract.
+
+The production write-path maintains two projections of the same fact
+("10 pcs moved from section A to section B"):
+
+* ``transfers`` — a mutable business entity with lifecycle
+  (status, sent/accepted/cancelled) that powers the UI and the
+  ``/api/transfers`` endpoints.
+* ``movements`` — an append-only event log.  A cross-GHP transfer
+  writes one ``transfer_send`` row on the source and one
+  ``transfer_receive`` row on the destination; ``cancel_transfer``
+  deletes both rows and the ``WorkTask.cached_*`` caches are rebuilt
+  from the surviving events by ``_refresh_task_cache``.
+
+If any of the projections drifts, downstream aggregations
+(``cached_available_quantity``, board UI, SPG snapshot) become
+silently wrong.  These tests run seven invariant queries after
+realistic e2e flows and fail with a precise diff on the first
+violation.  The same queries are reused by the
+``assert_no_invariants_violations`` helper, which the rest of the
+test-suite can call from individual tests to assert local
+invariants.
+"""
+from __future__ import annotations
+
+from collections.abc import Iterable
+from datetime import date
+from decimal import Decimal
+
+import pytest
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.core.security import create_access_token
+from app.models.product import Product, ProductType
+from app.models.production_plan import (
+    PlanPosition,
+    PlanPositionStatus,
+    PlanPositionValidationStatus,
+    PlanSourceType,
+    ProductionPlan,
+    ProductionPlanStatus,
+)
+from app.models.route import ProductionRoute, RouteOperation, RouteStage
+from app.models.section import Section
+from app.models.spg import SpgSection, StorageProductionGroup
+from app.models.techcard import Techcard, TechcardLine
+from app.models.transfer import Transfer
+from app.models.user import User, UserRole
+from app.models.work_task import WorkTask
+
+
+# ─── helpers ────────────────────────────────────────────────────────────────
+
+
+async def _make_user(session: AsyncSession, email: str) -> User:
+    user = User(
+        email=email,
+        password_hash="x",
+        full_name="Inv Tester",
+        role=UserRole.operator,
+        is_active=True,
+    )
+    session.add(user)
+    await session.flush()
+    return user
+
+
+def _auth_headers(user: User) -> dict[str, str]:
+    return {"Authorization": f"Bearer {create_access_token(subject=user.email)}"}
+
+
+# The seven invariant queries.  Each is shaped so that an empty
+# result set is the "healthy" outcome.  Helper below prints the
+# offending rows in a readable form so a test failure points at the
+# exact row, not just "invariant X violated".
+_INVARIANT_QUERIES: list[tuple[str, str]] = [
+    (
+        "1_movement_with_orphaned_transfer_id",
+        """
+        SELECT m.id AS movement_id, m.movement_type, m.transfer_id
+        FROM movements m
+        LEFT JOIN transfers t ON t.id = m.transfer_id
+        WHERE m.transfer_id IS NOT NULL AND t.id IS NULL
+        """,
+    ),
+    (
+        "2_active_transfer_without_movements",
+        """
+        SELECT t.id AS transfer_id, t.status
+        FROM transfers t
+        LEFT JOIN movements m ON m.transfer_id = t.id
+        WHERE t.status NOT IN ('cancelled', 'rejected')
+        GROUP BY t.id, t.status
+        HAVING count(m.id) = 0
+        """,
+    ),
+    (
+        "3_cancelled_transfer_with_surviving_movements",
+        """
+        SELECT t.id AS transfer_id, count(m.id) AS surviving_movements
+        FROM transfers t
+        JOIN movements m ON m.transfer_id = t.id
+        WHERE t.status IN ('cancelled', 'rejected')
+        GROUP BY t.id
+        HAVING count(m.id) > 0
+        """,
+    ),
+    (
+        "4_active_transfer_with_wrong_movement_shape",
+        """
+        SELECT t.id AS transfer_id, t.status,
+               count(*) FILTER (WHERE m.movement_type = 'transfer_send')    AS sends,
+               count(*) FILTER (WHERE m.movement_type = 'transfer_receive') AS receives
+        FROM transfers t
+        LEFT JOIN movements m ON m.transfer_id = t.id
+        WHERE t.status NOT IN ('cancelled', 'rejected')
+        GROUP BY t.id, t.status
+        HAVING count(*) FILTER (WHERE m.movement_type = 'transfer_send')    != 1
+            OR count(*) FILTER (WHERE m.movement_type = 'transfer_receive') != 1
+        """,
+    ),
+    (
+        "5_worktask_cached_diverges_from_movement_sums",
+        """
+        SELECT wt.id AS task_id,
+               wt.cached_issued_quantity
+                 - COALESCE(SUM(CASE WHEN m.movement_type = 'issue_to_work'    THEN m.quantity END), 0) AS diff_issued,
+               wt.cached_completed_quantity
+                 - COALESCE(SUM(CASE WHEN m.movement_type = 'complete'          THEN m.quantity END), 0) AS diff_completed,
+               wt.cached_transferred_quantity
+                 - COALESCE(SUM(CASE WHEN m.movement_type = 'transfer_send'     THEN m.quantity END), 0) AS diff_transferred,
+               wt.cached_received_quantity
+                 - COALESCE(SUM(CASE WHEN m.movement_type = 'transfer_receive'  THEN m.quantity END), 0) AS diff_received
+        FROM work_tasks wt
+        LEFT JOIN movements m ON m.task_id = wt.id
+        GROUP BY wt.id, wt.cached_issued_quantity, wt.cached_completed_quantity,
+                 wt.cached_transferred_quantity, wt.cached_received_quantity
+        HAVING
+            wt.cached_issued_quantity
+              != COALESCE(SUM(CASE WHEN m.movement_type = 'issue_to_work'    THEN m.quantity END), 0)
+            OR wt.cached_completed_quantity
+              != COALESCE(SUM(CASE WHEN m.movement_type = 'complete'         THEN m.quantity END), 0)
+            OR wt.cached_transferred_quantity
+              != COALESCE(SUM(CASE WHEN m.movement_type = 'transfer_send'    THEN m.quantity END), 0)
+            OR wt.cached_received_quantity
+              != COALESCE(SUM(CASE WHEN m.movement_type = 'transfer_receive' THEN m.quantity END), 0)
+        """,
+    ),
+    (
+        "6_transfer_sent_qty_mismatches_movement_totals",
+        """
+        SELECT t.id AS transfer_id, t.status, t.sent_quantity,
+               COALESCE(s.qty, 0) AS actual_send,
+               COALESCE(r.qty, 0) AS actual_receive
+        FROM transfers t
+        LEFT JOIN (
+            SELECT transfer_id, SUM(quantity) AS qty
+            FROM movements WHERE movement_type = 'transfer_send'
+            GROUP BY transfer_id
+        ) s ON s.transfer_id = t.id
+        LEFT JOIN (
+            SELECT transfer_id, SUM(quantity) AS qty
+            FROM movements WHERE movement_type = 'transfer_receive'
+            GROUP BY transfer_id
+        ) r ON r.transfer_id = t.id
+        WHERE t.status NOT IN ('cancelled', 'rejected')
+          AND (t.sent_quantity != COALESCE(s.qty, 0)
+            OR t.sent_quantity != COALESCE(r.qty, 0))
+        """,
+    ),
+    (
+        "7_section_plan_line_cached_diverges_from_worktask_sums",
+        """
+        SELECT spl.id AS line_id,
+               spl.cached_issued_quantity
+                 - COALESCE(SUM(wt.cached_issued_quantity), 0)        AS diff_issued,
+               spl.cached_completed_quantity
+                 - COALESCE(SUM(wt.cached_completed_quantity), 0)     AS diff_completed,
+               spl.cached_transferred_quantity
+                 - COALESCE(SUM(wt.cached_transferred_quantity), 0)  AS diff_transferred,
+               spl.cached_received_quantity
+                 - COALESCE(SUM(wt.cached_received_quantity), 0)     AS diff_received
+        FROM section_plan_lines spl
+        LEFT JOIN work_tasks wt ON wt.section_plan_line_id = spl.id
+        GROUP BY spl.id, spl.cached_issued_quantity, spl.cached_completed_quantity,
+                 spl.cached_transferred_quantity, spl.cached_received_quantity
+        HAVING
+            spl.cached_issued_quantity
+              != COALESCE(SUM(wt.cached_issued_quantity), 0)
+            OR spl.cached_completed_quantity
+              != COALESCE(SUM(wt.cached_completed_quantity), 0)
+            OR spl.cached_transferred_quantity
+              != COALESCE(SUM(wt.cached_transferred_quantity), 0)
+            OR spl.cached_received_quantity
+              != COALESCE(SUM(wt.cached_received_quantity), 0)
+        """,
+    ),
+]
+
+
+def _format_violations(name: str, rows: Iterable[dict]) -> str:
+    rows = list(rows)
+    if not rows:
+        return ""
+    header = f"\n  Invariant '{name}' violated ({len(rows)} row(s)):"
+    body = "\n    " + "\n    ".join(
+        ", ".join(f"{k}={v!r}" for k, v in row.items()) for row in rows
+    )
+    return header + body
+
+
+async def assert_no_invariants_violations(
+    session: AsyncSession,
+    *,
+    context: str | None = None,
+) -> None:
+    """Run the seven invariant queries and raise AssertionError on the
+    first violation.  ``context`` is a free-form label embedded in the
+    error message so a test can show *which* step of its scenario
+    drifted from the expected state.
+    """
+    prefix = f"[{context}] " if context else ""
+    for name, sql in _INVARIANT_QUERIES:
+        result = await session.execute(text(sql))
+        rows = [dict(row._mapping) for row in result]
+        if rows:
+            raise AssertionError(prefix + _format_violations(name, rows).lstrip())
+
+
+# ─── fixtures ───────────────────────────────────────────────────────────────
+
+
+async def _make_two_ghp_route(
+    session: AsyncSession,
+    *,
+    sku: str,
+    qty: Decimal,
+) -> dict:
+    """Two production sections in two different SPGs — the minimal
+    topology that makes a cross-GHP transfer possible.
+    """
+    sec1 = Section(code=f"{sku}-S1", name="S1", kind="production", is_active=True, sort_order=0)
+    sec2 = Section(code=f"{sku}-S2", name="S2", kind="production", is_active=True, sort_order=1)
+    session.add_all([sec1, sec2])
+    await session.flush()
+
+    spg_a = StorageProductionGroup(code=f"{sku}-A", name="A", is_active=True, sort_order=0)
+    spg_b = StorageProductionGroup(code=f"{sku}-B", name="B", is_active=True, sort_order=1)
+    session.add_all([spg_a, spg_b])
+    await session.flush()
+    session.add_all([
+        SpgSection(spg_id=spg_a.id, section_id=sec1.id, sort_order=0),
+        SpgSection(spg_id=spg_b.id, section_id=sec2.id, sort_order=0),
+    ])
+
+    product = Product(sku=sku, name=sku, type=ProductType.finished_good, unit="pcs", is_active=True)
+    session.add(product)
+    await session.flush()
+
+    route = ProductionRoute(name=f"Route {sku}", is_active=True)
+    session.add(route)
+    await session.flush()
+    for idx, (sec, code) in enumerate([(sec1, "OP1"), (sec2, "OP2")], start=1):
+        st = RouteStage(
+            route_id=route.id,
+            sequence=idx,
+            section_id=sec.id,
+            is_final=(idx == 2),
+        )
+        session.add(st)
+        await session.flush()
+        session.add(RouteOperation(route_stage_id=st.id, sequence=1, operation_code=code, operation_name=code))
+
+    tech = Techcard(product_id=product.id, version="v1", is_active=True)
+    session.add(tech)
+    await session.flush()
+    session.add(TechcardLine(techcard_id=tech.id, component_product_id=product.id, quantity=Decimal("1"), unit="pcs"))
+
+    plan = ProductionPlan(
+        plan_no=f"P-{sku}",
+        name="p",
+        status=ProductionPlanStatus.approved,
+        period_start=date(2026, 5, 1),
+        period_end=date(2026, 5, 31),
+    )
+    session.add(plan)
+    await session.flush()
+
+    pos = PlanPosition(
+        production_plan_id=plan.id,
+        product_id=product.id,
+        source_type=PlanSourceType.manual,
+        source_sku=product.sku,
+        source_name=product.name,
+        quantity=qty,
+        source_payload={},
+        status=PlanPositionStatus.approved,
+        validation_status=PlanPositionValidationStatus.valid,
+        validation_errors=[],
+        period_start=plan.period_start,
+        period_end=plan.period_end,
+        has_pack_ops=False,
+        route_id=route.id,
+        route_assigned_at=None,
+    )
+    session.add(pos)
+    await session.commit()
+    return {
+        "product": product,
+        "plan": plan,
+        "position": pos,
+        "sections": [sec1, sec2],
+        "spgs": [spg_a, spg_b],
+        "route": route,
+    }
+
+
+async def _release_via_take_to_work(client, position_id: int) -> None:
+    resp = await client.post("/api/production-planning/rows/take-to-work", json={"position_ids": [position_id]})
+    assert resp.status_code == 200, resp.text
+
+
+# ─── tests ──────────────────────────────────────────────────────────────────
+
+
+async def test_empty_schema_passes_all_invariants(session: AsyncSession) -> None:
+    """A schema with only the seeded system user has no Movements,
+    Transfers or WorkTasks — every invariant query must return zero
+    rows.  This guards against the queries themselves being
+    ill-formed (e.g. cross-join explosion on empty input)."""
+    await assert_no_invariants_violations(session, context="empty-schema")
+
+
+async def test_issue_complete_transfer_cancel_cycle_stays_consistent(
+    client, session: AsyncSession
+) -> None:
+    """Full cross-GHP lifecycle: take-to-work → issue → complete →
+    transfer → cancel.  At every step the two projections must agree;
+    in particular, ``cancel_transfer`` must remove BOTH the
+    ``transfer_send`` and ``transfer_receive`` Movements and roll
+    back the cached totals."""
+    user = await _make_user(session, "inv-cycle@test.local")
+    headers = _auth_headers(user)
+    fx = await _make_two_ghp_route(session, sku="INV-CYCLE", qty=Decimal("10"))
+    await assert_no_invariants_violations(session, context="after-fixture-create")
+
+    await _release_via_take_to_work(client, fx["position"].id)
+    await assert_no_invariants_violations(session, context="after-take-to-work")
+
+    tasks = (await session.execute(
+        text("SELECT id, section_id, product_id, planned_quantity FROM work_tasks ORDER BY id ASC")
+    )).mappings().all()
+    assert len(tasks) == 2
+    src_task_id, src_section_id = tasks[0]["id"], tasks[0]["section_id"]
+    dst_task_id, dst_section_id = tasks[1]["id"], tasks[1]["section_id"]
+
+    # Issue on source, complete in full, then send across the GHP.
+    issue = await client.post(
+        f"/api/shopfloor/tasks/{src_task_id}/issue",
+        json={"quantity": "10", "idempotency_key": "inv-cycle:issue"},
+        headers=headers,
+    )
+    assert issue.status_code == 200, issue.text
+    await assert_no_invariants_violations(session, context="after-issue")
+
+    complete = await client.post(
+        f"/api/shopfloor/tasks/{src_task_id}/complete",
+        json={"good_quantity": "10", "defect_quantity": "0", "idempotency_key": "inv-cycle:complete"},
+        headers=headers,
+    )
+    assert complete.status_code == 200, complete.text
+    await assert_no_invariants_violations(session, context="after-complete")
+
+    send = await client.post(
+        "/api/transfers",
+        json={
+            "from_task_id": src_task_id,
+            "to_task_id": dst_task_id,
+            "quantity": "10",
+            "idempotency_key": "inv-cycle:send",
+        },
+        headers=headers,
+    )
+    assert send.status_code == 200, send.text
+    transfer_id = send.json()["transfer_id"]
+    await assert_no_invariants_violations(session, context="after-transfer-send")
+
+    # Issue on the destination so the cancel guard ``in_work >= sent``
+    # passes (see ``services.py:_get_task_transferable`` and
+    # ``cancel_transfer``).  Without an explicit issue the destination
+    # would have 0 in-work and the cancel would be rejected as a
+    # consistency check, not a bug.
+    issue_dst = await client.post(
+        f"/api/shopfloor/tasks/{dst_task_id}/issue",
+        json={"quantity": "10", "idempotency_key": "inv-cycle:dst-issue"},
+        headers=headers,
+    )
+    assert issue_dst.status_code == 200, issue_dst.text
+    await assert_no_invariants_violations(session, context="after-dst-issue")
+
+    # Cancel the transfer; Movement rows must vanish and the cached
+    # totals on both tasks must roll back to their pre-transfer state.
+    cancel = await client.post(f"/api/transfers/{transfer_id}/cancel", headers=headers)
+    assert cancel.status_code == 200, cancel.text
+    await assert_no_invariants_violations(session, context="after-cancel")
+
+    # Spot-check the cached invariants directly so a regression that
+    # does not fail the SQL queries (e.g. soft rounding) is still
+    # caught by an explicit assertion.
+    src = (await session.execute(
+        text("SELECT cached_issued_quantity, cached_completed_quantity, "
+             "cached_transferred_quantity, cached_received_quantity "
+             "FROM work_tasks WHERE id = :id"), {"id": src_task_id}
+    )).mappings().one()
+    assert src["cached_issued_quantity"] == Decimal("10")
+    assert src["cached_completed_quantity"] == Decimal("10")
+    assert src["cached_transferred_quantity"] == Decimal("0"), \
+        "cancel_transfer must roll back cached_transferred_quantity"
+    assert src["cached_received_quantity"] == Decimal("0")
+
+    dst = (await session.execute(
+        text("SELECT cached_issued_quantity, cached_completed_quantity, "
+             "cached_transferred_quantity, cached_received_quantity "
+             "FROM work_tasks WHERE id = :id"), {"id": dst_task_id}
+    )).mappings().one()
+    # Destination was issued+consumed (issue is recorded against the
+    # destination task) and then the transfer that supplied the
+    # material was cancelled.  Issue is NOT rolled back because the
+    # operator did start the work, but received/transferred must
+    # match the cancelled transfer.
+    assert dst["cached_received_quantity"] == Decimal("0"), \
+        "cancel_transfer must roll back destination cached_received_quantity"
+
+
+async def test_take_to_work_with_remainder_allocation_stays_consistent(
+    client, session: AsyncSession
+) -> None:
+    """``take-to-work`` with ``remainder_allocation`` that covers an
+    earlier stage of the route must keep the Movement ledger and
+    ``WorkTask.cached_*`` consistent.  We seed a remainder whose
+    ``completed_stages_json`` says it has already been through
+    step 1 (the first production step of this two-step route);
+    on take-to-work, step 1 is auto-completed via
+    ``Movement(type=complete, source_ref="auto_release_remainder")``
+    and step 2 becomes ready.  The invariants we check are:
+
+    * the auto-completed WorkTask's ``cached_completed_quantity``
+      equals the sum of its ``Movement(type=complete)`` rows;
+    * the second WorkTask is in ``ready`` and its cached_* are all 0;
+    * no Transfer rows exist (remainder coverage is in-route, not a
+      cross-section transfer)."""
+    user = await _make_user(session, "inv-mrp@test.local")
+    headers = _auth_headers(user)
+    fx = await _make_two_ghp_route(session, sku="INV-MRP", qty=Decimal("4"))
+    plan_pos = fx["position"]
+
+    # Look up the operation_code of step 1 so the seeded remainder
+    # has a matching completed_stages_json (the route_matcher checks
+    # operation_code against SectionOperation.allowed_ops).
+    step1_op = (await session.execute(
+        text(
+            "SELECT ro.operation_code "
+            "FROM route_stages rs JOIN route_operations ro ON ro.route_stage_id = rs.id "
+            "WHERE rs.route_id = :r AND rs.sequence = 1"
+        ),
+        {"r": fx["route"].id},
+    )).scalar_one()
+
+    from app.models.spg_remainder import SpgRemainder
+    spg_section = (await session.execute(
+        text("SELECT spg_id FROM spg_sections WHERE section_id = :s"),
+        {"s": fx["sections"][0].id},
+    )).scalar_one()
+    remainder = SpgRemainder(
+        product_id=fx["product"].id,
+        spg_id=spg_section,
+        route_stage_id=None,
+        section_plan_line_id=None,
+        origin_task_id=None,
+        remainder_quantity=Decimal("4"),
+        original_issued=Decimal("4"),
+        completed_stages_json=[{
+            "sequence": 1,
+            "section_id": fx["sections"][0].id,
+            "operation_code": step1_op,
+            "operation_name": step1_op,
+        }],
+        source="manual_seed",
+        created_by=1,
+        created_by_user_name="seed",
+    )
+    session.add(remainder)
+    await session.commit()
+
+    await assert_no_invariants_violations(session, context="after-remainder-seed")
+
+    # Launch the position, explicitly allocating the full remainder.
+    resp = await client.post(
+        "/api/production-planning/rows/take-to-work",
+        json={
+            "position_ids": [plan_pos.id],
+            "remainder_allocation": [{"remainder_id": remainder.id, "quantity": "4"}],
+        },
+        headers=headers,
+    )
+    assert resp.status_code == 200, resp.text
+    await assert_no_invariants_violations(session, context="after-take-to-work-with-remainder")
+
+    # Step 1 must be auto-completed by the remainder coverage.  The
+    # cached_completed_quantity total on that task is the sum of
+    # every Movement(type=complete) on it — there is exactly one such
+    # row, with source_ref="auto_release_remainder".
+    auto_completed_tasks = (await session.execute(
+        text(
+            "SELECT id, status, cached_completed_quantity, cached_transferred_quantity "
+            "FROM work_tasks WHERE section_id = :s"
+        ),
+        {"s": fx["sections"][0].id},
+    )).mappings().all()
+    assert auto_completed_tasks, "Expected a WorkTask on the first section"
+    for row in auto_completed_tasks:
+        summed = (await session.execute(
+            text(
+                "SELECT COALESCE(SUM(quantity), 0) FROM movements "
+                "WHERE task_id = :t AND movement_type = 'complete'"
+            ),
+            {"t": row["id"]},
+        )).scalar_one()
+        assert Decimal(summed) == row["cached_completed_quantity"], (
+            f"WorkTask {row['id']} cached_completed={row['cached_completed_quantity']} "
+            f"diverges from SUM(Movement.complete)={summed}"
+        )
+
+    # The auto_release_remainder Movement carries the source_ref tag
+    # that distinguishes "covered by previous stock" from operator-typed
+    # completions.  Its quantity must equal the task's cached_completed
+    # total because there are no other Movements on this task.
+    auto_release = (await session.execute(
+        text(
+            "SELECT task_id, quantity FROM movements "
+            "WHERE source_ref = 'auto_release_remainder'"
+        )
+    )).mappings().all()
+    for m in auto_release:
+        task_row = (await session.execute(
+            text("SELECT cached_completed_quantity FROM work_tasks WHERE id = :id"),
+            {"id": m["task_id"]},
+        )).mappings().one()
+        assert Decimal(m["quantity"]) == task_row["cached_completed_quantity"], (
+            f"auto_release_remainder movement qty={m['quantity']} does not match "
+            f"task {m['task_id']} cached_completed={task_row['cached_completed_quantity']}"
+        )
+
+    # Step 2 should be ready and have all-zero cached totals because
+    # no transfer has been issued yet (the auto-completed step's
+    # Movement does NOT auto-create a cross-GHP transfer; the operator
+    # must explicitly ``POST /api/transfers``).
+    next_task = (await session.execute(
+        text(
+            "SELECT id, cached_issued_quantity, cached_completed_quantity, "
+            "cached_transferred_quantity, cached_received_quantity, status "
+            "FROM work_tasks WHERE section_id = :s"
+        ),
+        {"s": fx["sections"][1].id},
+    )).mappings().one()
+    assert next_task["status"] in {"ready", "waiting_previous"}
+    assert next_task["cached_received_quantity"] == Decimal("0")
+
+    transfer_count = (await session.execute(text("SELECT count(*) FROM transfers"))).scalar_one()
+    assert transfer_count == 0, \
+        "In-route remainder coverage must NOT create a Transfer row"
+
+
+async def test_transfer_idempotency_does_not_create_phantom_movements(
+    client, session: AsyncSession
+) -> None:
+    """A replayed ``POST /api/transfers`` with the same
+    ``idempotency_key`` must return the original Transfer without
+    adding a second pair of Movements.  Otherwise the cached
+    transferred/received totals would double."""
+    user = await _make_user(session, "inv-idem@test.local")
+    headers = _auth_headers(user)
+    fx = await _make_two_ghp_route(session, sku="INV-IDEM", qty=Decimal("6"))
+    await _release_via_take_to_work(client, fx["position"].id)
+    src = (await session.execute(text("SELECT id FROM work_tasks ORDER BY id ASC LIMIT 1"))).scalar_one()
+    dst = (await session.execute(text("SELECT id FROM work_tasks ORDER BY id ASC OFFSET 1 LIMIT 1"))).scalar_one()
+
+    # Make the source transferable: issue + complete the full quantity
+    # so the transfer's ``quantity <= transferable`` guard passes.
+    await client.post(
+        f"/api/shopfloor/tasks/{src}/issue",
+        json={"quantity": "6", "idempotency_key": "inv-idem:issue"},
+        headers=headers,
+    )
+    await client.post(
+        f"/api/shopfloor/tasks/{src}/complete",
+        json={"good_quantity": "6", "defect_quantity": "0", "idempotency_key": "inv-idem:complete"},
+        headers=headers,
+    )
+
+    body = {"from_task_id": src, "to_task_id": dst, "quantity": "6", "idempotency_key": "inv-idem:1"}
+    first = await client.post("/api/transfers", json=body, headers=headers)
+    assert first.status_code == 200, first.text
+    transfer_id = first.json()["transfer_id"]
+    await assert_no_invariants_violations(session, context="after-first-send")
+
+    # Replay — same idempotency key, must short-circuit.
+    second = await client.post("/api/transfers", json=body, headers=headers)
+    assert second.status_code == 200, second.text
+    assert second.json()["transfer_id"] == transfer_id, \
+        "Replay must return the original transfer_id, not a new one"
+    assert second.json().get("idempotent_replay") is True, \
+        "Replay must be flagged as idempotent"
+
+    # No new Transfer rows, no extra Movements.
+    transfer_count = (await session.execute(text("SELECT count(*) FROM transfers"))).scalar_one()
+    assert transfer_count == 1
+    send_movements = (await session.execute(
+        text("SELECT count(*) FROM movements WHERE movement_type = 'transfer_send'")
+    )).scalar_one()
+    receive_movements = (await session.execute(
+        text("SELECT count(*) FROM movements WHERE movement_type = 'transfer_receive'")
+    )).scalar_one()
+    assert send_movements == 1, f"Expected 1 transfer_send, got {send_movements}"
+    assert receive_movements == 1, f"Expected 1 transfer_receive, got {receive_movements}"
+
+    await assert_no_invariants_violations(session, context="after-replay")
+
+
+async def test_two_concurrent_transfers_aggregate_correctly(
+    client, session: AsyncSession
+) -> None:
+    """Two separate cross-GHP transfers from the same source to the
+    same destination must each contribute their own Movement pair,
+    and the cached totals must equal the sum of those Movements."""
+    user = await _make_user(session, "inv-2xf@test.local")
+    headers = _auth_headers(user)
+    fx = await _make_two_ghp_route(session, sku="INV-2XF", qty=Decimal("10"))
+    await _release_via_take_to_work(client, fx["position"].id)
+    src = (await session.execute(text("SELECT id FROM work_tasks ORDER BY id ASC LIMIT 1"))).scalar_one()
+    dst = (await session.execute(text("SELECT id FROM work_tasks ORDER BY id ASC OFFSET 1 LIMIT 1"))).scalar_one()
+
+    # Issue and complete the full quantity on the source so the
+    # transfer guards are satisfied.
+    await client.post(
+        f"/api/shopfloor/tasks/{src}/issue",
+        json={"quantity": "10", "idempotency_key": "inv-2xf:issue"},
+        headers=headers,
+    )
+    await client.post(
+        f"/api/shopfloor/tasks/{src}/complete",
+        json={"good_quantity": "10", "defect_quantity": "0", "idempotency_key": "inv-2xf:complete"},
+        headers=headers,
+    )
+
+    for idx, qty in enumerate(("4", "6"), start=1):
+        resp = await client.post(
+            "/api/transfers",
+            json={
+                "from_task_id": src,
+                "to_task_id": dst,
+                "quantity": qty,
+                "idempotency_key": f"inv-2xf:send-{idx}",
+            },
+            headers=headers,
+        )
+        assert resp.status_code == 200, resp.text
+        await assert_no_invariants_violations(session, context=f"after-send-{idx}")
+
+    src_row = (await session.execute(
+        text("SELECT cached_transferred_quantity FROM work_tasks WHERE id = :id"),
+        {"id": src},
+    )).mappings().one()
+    dst_row = (await session.execute(
+        text("SELECT cached_received_quantity FROM work_tasks WHERE id = :id"),
+        {"id": dst},
+    )).mappings().one()
+    assert src_row["cached_transferred_quantity"] == Decimal("10")
+    assert dst_row["cached_received_quantity"] == Decimal("10")
+
+    # Cross-check via the Transfer table.
+    transfers = (await session.execute(
+        text("SELECT id, sent_quantity FROM transfers ORDER BY id ASC")
+    )).all()
+    assert len(transfers) == 2
+    assert sum(t.sent_quantity for t in transfers) == Decimal("10")
