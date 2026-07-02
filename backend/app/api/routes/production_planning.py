@@ -1608,7 +1608,7 @@ class ProductWipTaskOut(BaseModel):
     section_icon_color: str | None = None
     planned_qty: float
     completed_qty: float
-    in_work_qty: float
+    issued_qty: float
     active_tasks_count: int
 
 class ProductWipStatsOut(BaseModel):
@@ -1753,13 +1753,13 @@ async def get_product_wip_stats(
                 "operation_name": op_name,
                 "planned_qty": 0.0,
                 "completed_qty": 0.0,
-                "in_work_qty": 0.0,
+                "issued_qty": 0.0,
                 "active_tasks_count": 0,
             }
 
         grouped[key]["planned_qty"] += float(wt.planned_quantity or 0)
         grouped[key]["completed_qty"] += float(wt.cached_completed_quantity or 0)
-        grouped[key]["in_work_qty"] += float(wt.cached_in_work_quantity or 0)
+        grouped[key]["issued_qty"] += float(wt.cached_issued_quantity or 0)
         grouped[key]["active_tasks_count"] += 1
 
     in_work = [
@@ -1772,7 +1772,7 @@ async def get_product_wip_stats(
             section_icon_color=val["section_icon_color"],
             planned_qty=val["planned_qty"],
             completed_qty=val["completed_qty"],
-            in_work_qty=val["in_work_qty"],
+            issued_qty=val["issued_qty"],
             active_tasks_count=val["active_tasks_count"],
         )
         for val in grouped.values()

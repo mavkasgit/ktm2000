@@ -31,7 +31,6 @@ function makeTask(overrides: MakeTaskOverrides): MockTask {
     cache: {
       available_quantity: overrides.cache?.available_quantity ?? "100",
       issued_quantity: overrides.cache?.issued_quantity ?? "0",
-      in_work_quantity: overrides.cache?.in_work_quantity ?? "0",
       completed_quantity: overrides.cache?.completed_quantity ?? "0",
       transferred_quantity: overrides.cache?.transferred_quantity ?? "0",
       rejected_quantity: overrides.cache?.rejected_quantity ?? "0",
@@ -78,7 +77,6 @@ describe("initGroup defaults", () => {
       cache: {
         issued_quantity: "100",
         completed_quantity: "60",
-        in_work_quantity: "40",
         transferred_quantity: "10",
         rejected_quantity: "5",
         remaining_quantity: "25",
@@ -88,7 +86,8 @@ describe("initGroup defaults", () => {
 
     expect(group.totalIssued).toBe(100);
     expect(group.totalCompleted).toBe(60);
-    expect(group.totalInWork).toBe(40);
+    // in_work = issued - completed - rejected = 100 - 60 - 5 = 35
+    expect(group.totalInWork).toBe(35);
     expect(group.totalTransferred).toBe(10);
     expect(group.totalRejected).toBe(5);
     expect(group.totalRemaining).toBe(25);

@@ -473,11 +473,11 @@ async def test_spg_route_full_lifecycle_with_mixed_remainders(client, session) -
     wip_items = (await client.get(f"/api/spg/{spg_wip.id}/remainders")).json()
     assert len(wip_items) == 0
 
-    # Verify that shot_task cache shows it has all 75 units in work (70 from drill_task complete + 5 from auto-consumed remainder)
+    # Verify that shot_task cache shows it has all 75 units issued (70 from drill_task complete + 5 from auto-consumed remainder)
     await session.refresh(shot_task)
     from app.services.shopfloor.cache import _refresh_task_cache
     await _refresh_task_cache(session, shot_task.id)
-    assert shot_task.cached_in_work_quantity == Decimal("75")
+    assert shot_task.cached_issued_quantity == Decimal("75")
 
     # DRILL to SHOT is within the same SPG (spg_wip), no manual transfer needed.
     # Under the hood, completing DRILL auto-issued 70 good units to SHOT,
@@ -497,10 +497,10 @@ async def test_spg_route_full_lifecycle_with_mixed_remainders(client, session) -
     wip_items = (await client.get(f"/api/spg/{spg_wip.id}/remainders")).json()
     assert len(wip_items) == 0
 
-    # Verify that anod_task cache shows it has 65 units in work (60 from shot_task complete + 5 from auto-consumed remainder)
+    # Verify that anod_task cache shows it has 65 units issued (60 from shot_task complete + 5 from auto-consumed remainder)
     await session.refresh(anod_task)
     await _refresh_task_cache(session, anod_task.id)
-    assert anod_task.cached_in_work_quantity == Decimal("65")
+    assert anod_task.cached_issued_quantity == Decimal("65")
 
     # SHOT to ANOD is within the same SPG (spg_wip), no manual transfer needed.
     # Completing SHOT auto-issued 60 good units to ANOD, and also auto-consumed 5 units of shot_return_id.

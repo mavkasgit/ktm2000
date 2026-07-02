@@ -176,11 +176,12 @@ async def complete_task(
 ) -> dict:
     """Complete (good + defect) quantity on a SectionTask.
 
-    The completion is bounded by `cached_in_work_quantity` — i.e. by what
-    the section has issued into work, which itself is bounded by what was
-    available in the SPG (`cached_available_quantity`, the sum of the
-    initial planned amount for the first stage and any quantity received
-    via transfers from the previous SPG).
+    The completion is bounded by `cached_issued_quantity - cached_completed_quantity - cached_rejected_quantity`
+    — i.e. by what the section has issued but not yet completed or rejected.
+    That in turn is bounded by what was available in the SPG
+    (`cached_available_quantity`, the sum of the initial planned amount
+    for the first stage and any quantity received via transfers from the
+    previous SPG).
 
     Transfer of the completed quantity to the next SPG is a SEPARATE
     process handled by the transfers module; this function does NOT
@@ -218,7 +219,7 @@ async def complete_task(
 
     in_work = task.cached_issued_quantity - task.cached_completed_quantity - task.cached_rejected_quantity
     if total > in_work:
-        raise ValueError("Complete quantity exceeds quantity in work")
+        raise ValueError("Complete quantity exceeds issued quantity")
 
     now = datetime.now(UTC)
     eff_performed = performed_at or now

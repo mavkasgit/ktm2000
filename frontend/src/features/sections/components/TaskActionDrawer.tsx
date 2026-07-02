@@ -35,7 +35,11 @@ function normalizeIntegerInput(value: string): string {
 
 function inWorkQuantity(task: SectionBoardTask | null): number {
   if (!task) return 0;
-  return toNumber(task.cache.in_work_quantity);
+  // in_work = issued - completed - rejected (cached_in_work_quantity removed; compute inline)
+  return Math.max(
+    0,
+    toNumber(task.cache.issued_quantity) - toNumber(task.cache.completed_quantity) - toNumber(task.cache.rejected_quantity),
+  );
 }
 
 type TaskActionDrawerProps = {
@@ -88,7 +92,17 @@ export function TaskActionDrawer({
   const isGroup = !!tasks && tasks.length > 0;
 
   const maxQty = isGroup
-    ? tasks.reduce((sum, t) => sum + Math.max(0, Math.round(parseFloat(t.cache.in_work_quantity) || 0)), 0)
+    ? tasks.reduce(
+        (sum, t) =>
+          sum +
+          Math.max(
+            0,
+            Math.round(parseFloat(t.cache.issued_quantity) || 0) -
+              Math.round(parseFloat(t.cache.completed_quantity) || 0) -
+              Math.round(parseFloat(t.cache.rejected_quantity) || 0),
+          ),
+        0,
+      )
     : inWorkQuantity(task);
 
   const available = isGroup

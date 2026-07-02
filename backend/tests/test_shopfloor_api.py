@@ -269,7 +269,7 @@ async def test_shopfloor_second_stage_available_not_inflated_by_plan(client, ses
     )
     assert board_res.status_code == 200
     row = next(item for item in board_res.json()["tasks"] if item["id"] == second_task.id)
-    assert Decimal(row["cache"]["in_work_quantity"]) == Decimal("25")
+    assert Decimal(row["cache"]["issued_quantity"]) == Decimal("25")
 
     # Over-issue on second stage should be allowed (26 > available 25)
     over_issue = await client.post(

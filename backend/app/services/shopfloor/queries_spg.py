@@ -23,7 +23,7 @@ async def get_spg_snapshot(
     """Return aggregated snapshot for a Storage Production Group.
 
     For every product that has work_tasks in any of the SPG's sections:
-      - per-section quantities (planned, completed, in_work, available)
+      - per-section quantities (planned, completed, issued, available)
       - warehouse remainders
       - overall completion %
     """
@@ -75,7 +75,6 @@ async def get_spg_snapshot(
             WorkTask.section_id,
             func.sum(WorkTask.planned_quantity).label("planned"),
             func.sum(WorkTask.cached_completed_quantity).label("completed"),
-            func.sum(WorkTask.cached_in_work_quantity).label("in_work"),
             func.sum(WorkTask.cached_available_quantity).label("available"),
             func.sum(WorkTask.cached_issued_quantity).label("issued"),
             func.sum(WorkTask.cached_transferred_quantity).label("transferred"),
@@ -174,7 +173,6 @@ async def get_spg_snapshot(
         task_lookup[(r.product_id, r.section_id)] = {
             "planned": float(r.planned or 0),
             "completed": float(r.completed or 0),
-            "in_work": float(r.in_work or 0),
             "available": float(r.available or 0),
             "issued": float(r.issued or 0),
             "transferred": float(r.transferred or 0),
@@ -189,7 +187,6 @@ async def get_spg_snapshot(
     rows = []
     totals_planned = 0.0
     totals_completed = 0.0
-    totals_in_work = 0.0
     totals_remainders = 0.0
     totals_issued = 0.0
 
@@ -201,7 +198,6 @@ async def get_spg_snapshot(
         per_section: dict[str, dict] = {}
         planned_total = 0.0
         completed_total = 0.0
-        in_work_total = 0.0
         remainder_total = rem_lookup.get(pid, 0.0)
         issued_total = 0.0
         max_location_value = -1.0
@@ -218,17 +214,16 @@ async def get_spg_snapshot(
                 per_section[scode] = {**t, "remainder": rem}
                 planned_total += t["planned"]
                 completed_total += t["completed"]
-                in_work_total += t["in_work"]
                 issued_total += t["issued"]
 
-                # Current section = where most material is (in_work + available)
-                location_val = t["in_work"] + t["available"]
+                # Current section = where most material is (issued + available)
+                location_val = t["issued"] + t["available"]
                 if location_val > max_location_value:
                     max_location_value = location_val
                     current_section_code = scode
             elif rem != 0:
                 per_section[scode] = {
-                    "planned": 0, "completed": 0, "in_work": 0, "available": 0,
+                    "planned": 0, "completed": 0, "available": 0,
                     "issued": 0, "transferred": 0, "received": 0, "remainder": rem,
                 }
 
@@ -240,7 +235,6 @@ async def get_spg_snapshot(
             "product_name": product.name,
             "planned_total": planned_total,
             "completed_total": completed_total,
-            "in_work_total": in_work_total,
             "issued_total": issued_total,
             "remainder_total": remainder_total,
             "spg_available": remainder_total,
@@ -252,7 +246,6 @@ async def get_spg_snapshot(
 
         totals_planned += planned_total
         totals_completed += completed_total
-        totals_in_work += in_work_total
         totals_remainders += remainder_total
         totals_issued += issued_total
 
@@ -268,7 +261,6 @@ async def get_spg_snapshot(
         "totals": {
             "planned": totals_planned,
             "completed": totals_completed,
-            "in_work": totals_in_work,
             "issued": totals_issued,
             "remainders": totals_remainders,
             "spg_available": totals_remainders,

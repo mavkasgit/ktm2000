@@ -30,16 +30,22 @@ function sumCacheField(tasks: SectionBoardTask[], field: keyof SectionBoardTask[
   return total;
 }
 
+// in_work = issued - completed - rejected (cached_in_work_quantity removed; compute inline)
+function sumInWork(tasks: SectionBoardTask[]): number {
+  return Math.max(0, sumCacheField(tasks, "issued_quantity") - sumCacheField(tasks, "completed_quantity") - sumCacheField(tasks, "rejected_quantity"));
+}
+
 export function getGroupAggregates(group: TaskGroup) {
   const tasks = group.tasks;
+  const inWork = sumInWork(tasks);
   return {
     plannedQty: sumCacheField(tasks, "completed_quantity") > 0
       ? sumCacheField(tasks, "completed_quantity")
-      : sumCacheField(tasks, "in_work_quantity") > 0
-        ? sumCacheField(tasks, "in_work_quantity")
+      : inWork > 0
+        ? inWork
         : parseFloat(tasks[0].planned_quantity) || 0,
     issuedQty: sumCacheField(tasks, "issued_quantity"),
-    inWorkQty: sumCacheField(tasks, "in_work_quantity"),
+    inWorkQty: inWork,
     completedQty: sumCacheField(tasks, "completed_quantity"),
     rejectedQty: sumCacheField(tasks, "rejected_quantity"),
     transferredQty: sumCacheField(tasks, "transferred_quantity"),

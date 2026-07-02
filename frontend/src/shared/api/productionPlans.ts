@@ -821,7 +821,7 @@ export type ProductWipTask = {
   section_icon_color: string | null;
   planned_qty: number;
   completed_qty: number;
-  in_work_qty: number;
+  issued_qty: number;
   active_tasks_count: number;
 };
 

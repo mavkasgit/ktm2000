@@ -90,6 +90,14 @@ function fmtQty(value: string): string {
   return String(Math.round(n));
 }
 
+// in_work = issued - completed - rejected (cached_in_work_quantity removed; compute inline)
+function inWorkOf(task: SectionBoardTask): number {
+  const issued = parseFloat(task.cache.issued_quantity) || 0;
+  const completed = parseFloat(task.cache.completed_quantity) || 0;
+  const rejected = parseFloat(task.cache.rejected_quantity) || 0;
+  return Math.max(0, issued - completed - rejected);
+}
+
 function isTaskVisible(task: SectionBoardTask, mode: TaskBoardViewMode): boolean {
   if (mode.active && ["ready", "in_progress", "partially_completed", "in_work", "partially"].includes(task.status)) return true;
   if (mode.waiting && (task.status === "waiting_previous" || task.status === "pending" || task.status === "blocked")) return true;
@@ -156,7 +164,7 @@ function getTaskCellValue(task: SectionBoardTask, field: TaskSortField): string 
     case "status": return task.status;
     case "plannedQty": return String(parseFloat(task.planned_quantity) || 0);
     case "issuedQty": return String(parseFloat(task.cache.issued_quantity) || 0);
-    case "inWorkQty": return String(parseFloat(task.cache.in_work_quantity) || 0);
+    case "inWorkQty": return String(inWorkOf(task));
     case "completedQty": return String(parseFloat(task.cache.completed_quantity) || 0);
     case "transferredQty": return String(parseFloat(task.cache.transferred_quantity) || 0);
     case "rejectedQty": return String(parseFloat(task.cache.rejected_quantity) || 0);
@@ -220,7 +228,7 @@ function renderTaskRow(
       </td>
       <td className="p-2">{fmtQty(task.planned_quantity)}</td>
       <td className="p-2">{fmtQty(task.cache.issued_quantity)}</td>
-      <td className="p-2">{fmtQty(task.cache.in_work_quantity)}</td>
+      <td className="p-2">{fmtQty(String(inWorkOf(task)))}</td>
       <td className="p-2">{fmtQty(task.cache.completed_quantity)}</td>
       <td className="p-2">{fmtQty(task.cache.rejected_quantity)}</td>
       <td className="p-2">{fmtQty(task.cache.transferred_quantity)}</td>
@@ -294,7 +302,7 @@ function renderMobileCard(
         <div><span className="text-muted-foreground">План:</span> {fmtQty(task.planned_quantity)}</div>
         <div><span className="text-muted-foreground">Операция:</span> {task.operation_names && task.operation_names.length > 1 ? task.operation_names.join(" + ") : (task.operation_name || "—")}</div>
         <div><span className="text-muted-foreground">Выдано:</span> {fmtQty(task.cache.issued_quantity)}</div>
-        <div><span className="text-muted-foreground">В работе:</span> {fmtQty(task.cache.in_work_quantity)}</div>
+        <div><span className="text-muted-foreground">В работе:</span> {fmtQty(String(inWorkOf(task)))}</div>
         <div><span className="text-muted-foreground">Годные:</span> {fmtQty(task.cache.completed_quantity)}</div>
         <div><span className="text-muted-foreground">Брак:</span> {fmtQty(task.cache.rejected_quantity)}</div>
         <div><span className="text-muted-foreground">Передано:</span> {fmtQty(task.cache.transferred_quantity)}</div>
@@ -382,7 +390,7 @@ function TableTaskGroupRow({
       </td>
       <td className="p-2 text-slate-700">{fmtQty(String(group.totalQtyPlan))}</td>
       <td className="p-2 text-slate-700">{fmtQty(String(group.tasks.reduce((s, t) => s + parseFloat(t.cache.issued_quantity), 0)))}</td>
-      <td className="p-2 text-slate-700">{fmtQty(String(group.tasks.reduce((s, t) => s + parseFloat(t.cache.in_work_quantity), 0)))}</td>
+      <td className="p-2 text-slate-700">{fmtQty(String(group.tasks.reduce((s, t) => s + inWorkOf(t), 0)))}</td>
       <td className="p-2 text-slate-700">{fmtQty(String(group.totalQtyDone))}</td>
       <td className="p-2 text-slate-700">{fmtQty(String(group.tasks.reduce((s, t) => s + parseFloat(t.cache.rejected_quantity), 0)))}</td>
       <td className="p-2 text-slate-700">{fmtQty(String(group.tasks.reduce((s, t) => s + parseFloat(t.cache.transferred_quantity), 0)))}</td>
@@ -499,7 +507,7 @@ export function SectionTasksBoard({
     { field: "status", getSortValue: (t) => t.status },
     { field: "plannedQty", getSortValue: (t) => parseFloat(t.planned_quantity) || 0 },
     { field: "issuedQty", getSortValue: (t) => parseFloat(t.cache.issued_quantity) || 0 },
-    { field: "inWorkQty", getSortValue: (t) => parseFloat(t.cache.in_work_quantity) || 0 },
+    { field: "inWorkQty", getSortValue: (t) => inWorkOf(t) },
     { field: "completedQty", getSortValue: (t) => parseFloat(t.cache.completed_quantity) || 0 },
     { field: "transferredQty", getSortValue: (t) => parseFloat(t.cache.transferred_quantity) || 0 },
     { field: "rejectedQty", getSortValue: (t) => parseFloat(t.cache.rejected_quantity) || 0 },
@@ -526,7 +534,7 @@ export function SectionTasksBoard({
     status: [...new Set(visibleTasks.map((t) => t.status))],
     plannedQty: [...new Set(visibleTasks.map((t) => String(parseFloat(t.planned_quantity) || 0)))],
     issuedQty: [...new Set(visibleTasks.map((t) => String(parseFloat(t.cache.issued_quantity) || 0)))],
-    inWorkQty: [...new Set(visibleTasks.map((t) => String(parseFloat(t.cache.in_work_quantity) || 0)))],
+    inWorkQty: [...new Set(visibleTasks.map((t) => String(inWorkOf(t))))],
     completedQty: [...new Set(visibleTasks.map((t) => String(parseFloat(t.cache.completed_quantity) || 0)))],
     transferredQty: [...new Set(visibleTasks.map((t) => String(parseFloat(t.cache.transferred_quantity) || 0)))],
     rejectedQty: [...new Set(visibleTasks.map((t) => String(parseFloat(t.cache.rejected_quantity) || 0)))],

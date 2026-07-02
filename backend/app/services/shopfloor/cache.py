@@ -121,10 +121,6 @@ async def _refresh_task_cache(db: AsyncSession, task_id: int, visited: set[int] 
     )
     if rejected < 0:
         rejected = Decimal("0")
-    returned = sums.get(MovementType.return_to_previous.value, Decimal("0"))
-    in_work = issued - completed - rejected - returned
-    if in_work < 0:
-        in_work = Decimal("0")
 
     # NOTE: there is intentionally NO `prev_completed` auto-cascade. Material
     # movement between sections is now always an explicit transfer operation
@@ -154,7 +150,6 @@ async def _refresh_task_cache(db: AsyncSession, task_id: int, visited: set[int] 
     task.cached_transferred_quantity = transferred
     task.cached_received_quantity = received
     task.cached_rejected_quantity = rejected
-    task.cached_in_work_quantity = in_work
     task.cached_available_quantity = available
     task.cached_remaining_quantity = remaining
 

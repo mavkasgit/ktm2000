@@ -1175,8 +1175,8 @@ async def test_get_product_wip_stats(client, session):
         route_stage_id=stage.id,
         planned_quantity=Decimal("100"),
         status=WorkTaskStatus.in_progress,
+        cached_issued_quantity=Decimal("100"),
         cached_completed_quantity=Decimal("20"),
-        cached_in_work_quantity=Decimal("80"),
     )
     session.add(task)
     await session.commit()
@@ -1204,7 +1204,7 @@ async def test_get_product_wip_stats(client, session):
     assert work["section_id"] == section_id
     assert work["planned_qty"] == 100.0
     assert work["completed_qty"] == 20.0
-    assert work["in_work_qty"] == 80.0
+    assert work["issued_qty"] == 100.0
     assert work["active_tasks_count"] == 1
 
     # 5. Запрос по несуществующему SKU

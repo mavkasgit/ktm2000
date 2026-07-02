@@ -128,7 +128,7 @@ export function SectionsTasksPage() {
   const [performedShift, setPerformedShift] = useState<"1" | "2">("1");
   const [actionComment, setActionComment] = useState("");
   const [shortageStrategy, setShortageStrategy] = useState<ShortageStrategy>("negative_remainder");
-  const [autoTransferNext, setAutoTransferNext] = useState(true);
+  const [autoTransferNext, setAutoTransferNext] = useState(false);
   const [planModalOpen, setPlanModalOpen] = useState(false);
 
   // Bulk mode state
@@ -509,9 +509,11 @@ export function SectionsTasksPage() {
       return;
     }
 
+    const calcInWork = (t: SectionBoardTask) =>
+      Math.max(0, toInteger(t.cache.issued_quantity) - toInteger(t.cache.completed_quantity) - toInteger(t.cache.rejected_quantity));
     const inWork = isGroup
-      ? tasks.reduce((sum, t) => sum + toInteger(t.cache.in_work_quantity), 0)
-      : toInteger(task!.cache.in_work_quantity);
+      ? tasks.reduce((sum, t) => sum + calcInWork(t), 0)
+      : calcInWork(task!);
 
     const available = isGroup
       ? tasks.reduce((sum, t) => sum + Math.max(0, Math.round(parseFloat(t.cache.available_quantity) || 0)), 0)
@@ -548,7 +550,7 @@ export function SectionsTasksPage() {
           const capacity = Math.max(0, toInteger(t.planned_quantity));
 
           // good: минимум из остатка, planned_quantity и in_work (если in_work>0)
-          const tInWork = toInteger(t.cache.in_work_quantity);
+          const tInWork = calcInWork(t);
           const goodCapacity = tInWork > 0 ? Math.min(capacity, tInWork) : capacity;
           const goodQty = Math.min(remainingGood, goodCapacity);
           remainingGood -= goodQty;

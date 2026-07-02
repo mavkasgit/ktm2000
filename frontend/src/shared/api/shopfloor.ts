@@ -50,7 +50,6 @@ export type SectionBoardTask = {
   cache: {
     available_quantity: string;
     issued_quantity: string;
-    in_work_quantity: string;
     completed_quantity: string;
     transferred_quantity: string;
     received_quantity: string;

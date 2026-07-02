@@ -33,7 +33,6 @@ export type SpgSnapshotSection = {
 export type SpgSnapshotPerSection = {
   planned: number;
   completed: number;
-  in_work: number;
   available: number;
   issued: number;
   transferred: number;
@@ -47,7 +46,6 @@ export type SpgSnapshotRow = {
   product_name: string;
   planned_total: number;
   completed_total: number;
-  in_work_total: number;
   issued_total: number;
   remainder_total: number;
   spg_available: number;
@@ -60,7 +58,6 @@ export type SpgSnapshotRow = {
 export type SpgSnapshotTotals = {
   planned: number;
   completed: number;
-  in_work: number;
   issued: number;
   remainders: number;
   spg_available: number;
@@ -263,7 +260,6 @@ export type RemainderHistoryOrigin = {
   planned_quantity: number;
   issued_quantity: number;
   completed_quantity: number;
-  in_work_quantity: number;
   transferred_quantity: number;
   section_id: number;
   operation_code: string | null;

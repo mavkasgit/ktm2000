@@ -35,7 +35,6 @@ export type MockTask = {
   cache: {
     available_quantity: string;
     issued_quantity: string;
-    in_work_quantity: string;
     completed_quantity: string;
     transferred_quantity: string;
     rejected_quantity: string;
@@ -76,11 +75,12 @@ export function initGroup(tasks: MockTask[]): BulkOpGroup {
 
   const totalPlan = sumTasks(tasks, (t) => toInteger(t.planned_quantity));
   const totalIssued = sumTasks(tasks, (t) => toInteger(t.cache.issued_quantity));
-  const totalInWork = sumTasks(tasks, (t) => toInteger(t.cache.in_work_quantity));
   const totalCompleted = sumTasks(tasks, (t) => toInteger(t.cache.completed_quantity));
   const totalTransferred = sumTasks(tasks, (t) => toInteger(t.cache.transferred_quantity));
   const totalRejected = sumTasks(tasks, (t) => toInteger(t.cache.rejected_quantity));
   const totalRemaining = sumTasks(tasks, (t) => toInteger(t.cache.remaining_quantity));
+  // in_work = issued - completed - rejected (cached_in_work_quantity removed; compute inline)
+  const totalInWork = Math.max(0, totalIssued - totalCompleted - totalRejected);
 
   // Дефолт для «+ Добавить» = 0 (пользователь сам вводит)
   const defaultAddQty = "0";

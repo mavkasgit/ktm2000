@@ -368,7 +368,7 @@ async def test_transfers_correction_and_validation(client, session) -> None:
     # Auto-issue на приёмке передачи убран: оператор явно берёт в работу.
     # Получено сидит в received, в работе — 0, статус должен быть ready.
     assert ref_second.cached_received_quantity == Decimal("50")
-    assert ref_second.cached_in_work_quantity == Decimal("0")
+    assert ref_second.cached_issued_quantity == Decimal("0")
     assert ref_second.status == WorkTaskStatus.ready
 
     # 2. Correct quantity: 50 -> 70 (valid)
@@ -385,7 +385,7 @@ async def test_transfers_correction_and_validation(client, session) -> None:
     ref_second = await session.get(WorkTask, second_task.id)
     assert ref_first.cached_transferred_quantity == Decimal("70")
     assert ref_second.cached_received_quantity == Decimal("70")
-    assert ref_second.cached_in_work_quantity == Decimal("0")
+    assert ref_second.cached_issued_quantity == Decimal("0")
 
     # 3. Correct quantity exceeds source limit (completed is 100, we try to set to 120)
     correct_fail = await client.put(
@@ -433,7 +433,7 @@ async def test_transfers_cancellation_and_validation(client, session) -> None:
          receiving side; after cancel the transfer is gone and the
          balance is restored on the source.
 
-    Tech debt: cancel currently uses the aggregate ``cached_in_work_quantity``
+    Tech debt: cancel currently uses the aggregate ``cached_issued_quantity``
     on the destination, so it works per-destination, not per-transfer.
     A second pending transfer to the same task would block cancellation
     of the first one if the aggregate in_work drops below the first
@@ -495,7 +495,9 @@ async def test_transfers_cancellation_and_validation(client, session) -> None:
     ref_first = await session.get(WorkTask, first_task.id)
     ref_second = await session.get(WorkTask, second_task.id)
     assert ref_first.cached_transferred_quantity == Decimal("40")
-    assert ref_second.cached_in_work_quantity == Decimal("25")
+    assert ref_second.cached_issued_quantity == Decimal("40")
+    assert ref_second.cached_completed_quantity == Decimal("15")
+    assert ref_second.cached_issued_quantity - ref_second.cached_completed_quantity == Decimal("25")
 
     # ── Case 2: cancel works when nothing was consumed from this transfer ──
     # Under the new explicit-transfer model, transfer_send auto-accepts:
@@ -861,7 +863,7 @@ async def test_same_spg_auto_avail_and_status(client, session) -> None:
     await session.commit()
     await session.refresh(second_task)
     assert second_task.status == WorkTaskStatus.waiting_previous
-    assert second_task.cached_in_work_quantity == Decimal("0")
+    assert second_task.cached_issued_quantity == Decimal("0")
     assert second_task.cached_received_quantity == Decimal("0")
     assert second_task.cached_available_quantity == Decimal("0")
 
@@ -896,7 +898,7 @@ async def test_same_spg_auto_avail_and_status(client, session) -> None:
     await session.refresh(second_task)
     assert second_task.status == WorkTaskStatus.ready
     assert second_task.cached_received_quantity == Decimal("10")
-    assert second_task.cached_in_work_quantity == Decimal("0")
+    assert second_task.cached_issued_quantity == Decimal("0")
 
 
 # ─── post-factum transfers ───────────────────────────────────────────────────
@@ -1061,11 +1063,10 @@ async def test_post_factum_does_not_break_db_constraints(
     assert second_task.cached_received_quantity >= 0
     # Auto-issue on accept убран: в работе 0, статус — ready.
     assert second_task.cached_issued_quantity == Decimal("0")
-    assert second_task.cached_in_work_quantity == Decimal("0")
     assert second_task.cached_completed_quantity == Decimal("0")
     assert second_task.status == WorkTaskStatus.ready
     # All cached_* quantities stay non-negative on the post-factum path.
-    assert second_task.cached_in_work_quantity >= 0
+    assert second_task.cached_issued_quantity >= 0
     assert second_task.cached_available_quantity >= 0
     assert second_task.cached_remaining_quantity >= 0
 
@@ -1350,7 +1351,8 @@ async def test_complete_waiting_task_before_transfer(
     assert second_task.cached_received_quantity == Decimal("100")
     assert second_task.cached_issued_quantity == Decimal("100")
     assert second_task.cached_completed_quantity == Decimal("80")
-    assert second_task.cached_in_work_quantity == Decimal("20") # 100 issued - 80 completed
+    # 100 issued - 80 completed = 20 still at operator
+    assert second_task.cached_issued_quantity - second_task.cached_completed_quantity == Decimal("20")
     assert second_task.status == WorkTaskStatus.partially_completed
 
 

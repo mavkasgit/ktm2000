@@ -994,7 +994,6 @@ async def get_remainder_history(
                 "planned_quantity": float(task.planned_quantity),
                 "issued_quantity": float(task.cached_issued_quantity),
                 "completed_quantity": float(task.cached_completed_quantity),
-                "in_work_quantity": float(task.cached_in_work_quantity),
                 "transferred_quantity": float(task.cached_transferred_quantity),
                 "section_id": task.section_id,
                 "operation_code": op_code,

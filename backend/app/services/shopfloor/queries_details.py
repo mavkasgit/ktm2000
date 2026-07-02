@@ -35,7 +35,6 @@ async def get_task_details(db: AsyncSession, task_id: int) -> dict:
         "cache": {
             "available_quantity": str(available),
             "issued_quantity": str(task.cached_issued_quantity),
-            "in_work_quantity": str(task.cached_in_work_quantity),
             "completed_quantity": str(task.cached_completed_quantity),
             "transferred_quantity": str(task.cached_transferred_quantity),
             "received_quantity": str(task.cached_received_quantity),

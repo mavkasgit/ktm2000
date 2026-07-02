@@ -19,7 +19,6 @@ function SectionCell({ data }: { data: SpgSnapshotPerSection | undefined }) {
   const hasActivity =
     data.planned > 0 ||
     data.completed > 0 ||
-    data.in_work > 0 ||
     data.remainder !== 0 ||
     data.issued !== 0;
   if (!hasActivity) return <td className="p-2 text-center text-muted-foreground">—</td>;
@@ -28,9 +27,6 @@ function SectionCell({ data }: { data: SpgSnapshotPerSection | undefined }) {
     <td className="p-2 text-center text-xs">
       {data.completed > 0 && (
         <div className="font-semibold text-emerald-700">{fmtNum(data.completed)}</div>
-      )}
-      {data.in_work > 0 && (
-        <div className="text-blue-600">{fmtNum(data.in_work)} в работе</div>
       )}
       {data.available > 0 && (
         <div className="text-amber-600">{fmtNum(data.available)} дост.</div>
@@ -238,25 +234,21 @@ export function SpgSnapshotTable({ snapshot, onShowProductRemainders }: SpgSnaps
                   const d = row.per_section[code];
                   if (d) {
                     acc.completed += d.completed;
-                    acc.in_work += d.in_work;
                     acc.remainder += d.remainder;
                   }
                   return acc;
                 },
-                { completed: 0, in_work: 0, remainder: 0 },
+                { completed: 0, remainder: 0 },
               );
               return (
                 <td key={code} className="p-2 text-center text-xs">
                   {sectionTotals.completed > 0 && (
                     <div className="text-emerald-700">{fmtNum(sectionTotals.completed)}</div>
                   )}
-                  {sectionTotals.in_work > 0 && (
-                    <div className="text-blue-600">{fmtNum(sectionTotals.in_work)}</div>
-                  )}
                   {sectionTotals.remainder > 0 && (
                     <div className="text-purple-600">{fmtNum(sectionTotals.remainder)}</div>
                   )}
-                  {sectionTotals.completed === 0 && sectionTotals.in_work === 0 && sectionTotals.remainder === 0 && "—"}
+                  {sectionTotals.completed === 0 && sectionTotals.remainder === 0 && "—"}
                 </td>
               );
             })}

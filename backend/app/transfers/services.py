@@ -534,10 +534,11 @@ async def cancel_transfer(
     to_task = await _get_task(db, transfer.to_task_id)
 
     # Validate target in-work quantity before cancellation
-    if to_task.cached_in_work_quantity < transfer.sent_quantity:
+    in_work = to_task.cached_issued_quantity - to_task.cached_completed_quantity - to_task.cached_rejected_quantity
+    if in_work < transfer.sent_quantity:
         raise ValueError(
             f"Target task has already completed or rejected parts. "
-            f"Cannot cancel transfer as target task only has {to_task.cached_in_work_quantity} in work"
+            f"Cannot cancel transfer as target task only has {in_work} in work"
         )
 
     # Update Transfer

@@ -248,7 +248,6 @@ export function RemainderHistoryDrawer({
                     <div>Запланировано: <span className="text-foreground">{fmtNum(data.origin.planned_quantity)}</span></div>
                     <div>Выдано: <span className="text-foreground">{fmtNum(data.origin.issued_quantity)}</span></div>
                     <div>Выполнено: <span className="text-foreground">{fmtNum(data.origin.completed_quantity)}</span></div>
-                    <div>В работе: <span className="text-foreground">{fmtNum(data.origin.in_work_quantity)}</span></div>
                   </div>
                 </div>
               )}

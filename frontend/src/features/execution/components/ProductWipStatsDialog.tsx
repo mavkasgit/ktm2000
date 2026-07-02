@@ -287,7 +287,7 @@ export function ProductWipStatsDialog({ sku, open, onOpenChange }: ProductWipSta
                         <th className="text-left px-3 py-2 font-medium text-muted-foreground">Операция (участок)</th>
                         <th className="text-center px-3 py-2 font-medium text-muted-foreground w-[80px]">Задач в работе</th>
                         <th className="text-right px-3 py-2 font-medium text-muted-foreground w-[80px]">План</th>
-                        <th className="text-right px-3 py-2 font-medium text-muted-foreground w-[80px]">В работе</th>
+                        <th className="text-right px-3 py-2 font-medium text-muted-foreground w-[80px]">Выдано</th>
                         <th className="text-right px-3 py-2 font-medium text-muted-foreground w-[80px]">Завершено</th>
                       </tr>
                     </thead>
@@ -323,7 +323,7 @@ export function ProductWipStatsDialog({ sku, open, onOpenChange }: ProductWipSta
                             {task.planned_qty.toLocaleString("ru-RU")}
                           </td>
                           <td className="px-3 py-2 text-right font-mono font-semibold text-blue-600 dark:text-blue-400">
-                            {task.in_work_qty.toLocaleString("ru-RU")}
+                            {task.issued_qty.toLocaleString("ru-RU")}
                           </td>
                           <td className="px-3 py-2 text-right font-mono text-emerald-600 dark:text-emerald-400">
                             {task.completed_qty.toLocaleString("ru-RU")}
