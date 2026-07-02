@@ -228,6 +228,37 @@ async def complete_task(
     actor_name = await _get_user_snapshot_name(db, actor_id)
     executor_name = await _get_user_snapshot_name(db, eff_executor)
 
+    # Lazy auto-issue: under the 2-step model the operator doesn't have to
+    # click «Issue to work» separately. If the material is received but
+    # not yet issued, issue it now before completing. Only triggers when
+    # nothing has been issued yet (issued == 0) — partial-issue flows
+    # (already issued < completed) still get a clean error.
+    if total > in_work and task.cached_issued_quantity == 0 and task.cached_received_quantity > 0:
+        to_issue = total
+        issue_movement = Movement(
+            product_id=task.product_id,
+            task_id=task.id,
+            section_plan_line_id=task.section_plan_line_id,
+            from_section_id=task.section_id,
+            to_section_id=task.section_id,
+            movement_type=MovementType.issue_to_work,
+            quantity=to_issue,
+            source_ref=source_ref or "auto_issue_on_complete",
+            comment=comment,
+            created_by=actor_id,
+            idempotency_key=f"{idempotency_key}:auto-issue" if idempotency_key else None,
+            executor_user_id=eff_executor,
+            created_by_user_name=actor_name,
+            executor_user_name=executor_name,
+            performed_at=eff_performed,
+            accounted_at=eff_accounted,
+        )
+        db.add(issue_movement)
+        task = await _refresh_task_cache(db, task.id)
+        in_work = task.cached_issued_quantity - task.cached_completed_quantity - task.cached_rejected_quantity
+    if total > in_work:
+        raise ValueError("Complete quantity exceeds issued quantity")
+
     movement_ids: list[int] = []
     defect_id: int | None = None
     if good_quantity > 0:
