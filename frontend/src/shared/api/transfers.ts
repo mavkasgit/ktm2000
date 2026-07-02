@@ -95,6 +95,7 @@ export type CreateTransferInput = {
   performed_at?: string;
   accounted_at?: string;
   post_factum?: boolean;
+  allow_over_plan?: boolean;
   physical_handover_at?: string;
 };
 

@@ -139,6 +139,7 @@ function ReadyTransferRow({
         quantity,
         comment: undefined,
         idempotency_key: idempotencyKey,
+        allow_over_plan: overLimit || isOverPlan,
       }),
     onSuccess: () => {
       toast({
@@ -163,6 +164,7 @@ function ReadyTransferRow({
   const maxQty = parseFloat(task.transferable_quantity);
   const qtyNum = parseFloat(quantity || "0");
   const overLimit = qtyNum > maxQty;
+  const isOverPlan = qtyNum > parseFloat(task.planned_quantity);
 
   return (
     <TableRow
@@ -219,13 +221,14 @@ function ReadyTransferRow({
               min="0"
               value={quantity}
               className={`w-20 h-8 text-right px-2 ${
-                overLimit ? "border-destructive focus-visible:ring-destructive" : ""
+                overLimit ? "border-amber-400 focus-visible:ring-amber-400" : ""
               }`}
+              title={overLimit ? `Превышает доступное (${fmtQty(task.transferable_quantity)} шт.)` : undefined}
               onChange={(e) => setQuantity(e.target.value)}
             />
             <Button
               size="sm"
-              disabled={!task.has_next_step || isSubmitting || mutation.isPending || overLimit || qtyNum <= 0}
+              disabled={!task.has_next_step || isSubmitting || mutation.isPending || qtyNum <= 0}
               onClick={() => {
                 if (submittingRef.current || isSubmitting || mutation.isPending) return;
                 if (!tryAcquire()) return;
