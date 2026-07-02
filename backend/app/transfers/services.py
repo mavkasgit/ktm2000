@@ -2,11 +2,14 @@
 
 Under the explicit-transfer model, ``transfer_send`` is the single
 write path: it creates the ``Transfer`` row, the ``transfer_send``
-Movement, AND the ``transfer_receive`` Movement (auto-accept), and
-flips the destination ``WorkTask`` from ``waiting_previous`` to
-``ready``. There is no separate accept step on the UI side; the
-material is considered moved as soon as the operator confirms
-``Send`` on ``/transfers``.
+Movement, the ``transfer_receive`` Movement on the destination task
+(auto-accept), AND a paired ``issue_to_work`` Movement on the
+destination task (auto-issue on receive). The destination ``WorkTask``
+flips from ``waiting_previous`` to ``ready`` and is immediately
+considered issued — the operator can complete it without a separate
+«Взять в работу» click. The explicit ``issue_to_work`` API still
+exists for the first route stage and for the production-planning
+«ручной сквозной проход» flow.
 
 The shared cache (``app.services.shopfloor.cache``) and helpers
 (``app.services.shopfloor.common``) are reused as-is: the
@@ -105,10 +108,20 @@ async def transfer_send(
     step, a new ``WorkTask`` with status ``waiting_previous`` is
     auto-created.
 
-    A ``Transfer(status=sent)`` row and a ``Movement(type=transfer_send)``
-    ledger row are written.  Idempotency is keyed on the
-    ``idempotency_key`` of the Transfer itself; the send-side movement
-    uses a ``:send`` suffix.
+    A ``Transfer(status=sent)`` row, a ``Movement(type=transfer_send)``
+    ledger row, a ``Movement(type=transfer_receive)`` row on the
+    destination task AND a paired ``Movement(type=issue_to_work)`` row
+    on the destination task are all written atomically. The auto-issue
+    collapses the historical «receive → issue to work» two-step into a
+    single operator action: as soon as the material is on the receiving
+    section, it is considered issued and ready to be completed. The
+    explicit ``issue_to_work`` API still exists for the first route
+    stage (where there is no incoming transfer) and for the
+    production-planning «ручной сквозной проход» flow.
+
+    Idempotency is keyed on the ``idempotency_key`` of the Transfer
+    itself; the send-side, receive-side and auto-issue movements use
+    ``:send`` / ``:receive`` / ``:auto-issue`` suffixes respectively.
 
     When ``post_factum=True``, the cross-GHP ``quantity <= transferable``
     guard is skipped: the receiving section may have already started
@@ -274,6 +287,35 @@ async def transfer_send(
         is_post_factum=post_factum,
     )
     db.add(receive_movement)
+
+    # Auto-issue on receive: collapse the historical «receive → issue to
+    # work» two-step into one. As soon as the material is on the
+    # receiving section it is considered issued, so the operator can
+    # immediately complete it without a separate «Взять в работу» click.
+    # The issue movement shares the same performed/accounted timestamps
+    # as the transfer (physical handover time) and uses a distinct
+    # idempotency suffix so concurrent retries of the transfer are safe.
+    issue_movement = Movement(
+        product_id=transfer.product_id,
+        task_id=to_task.id,
+        section_plan_line_id=to_task.section_plan_line_id,
+        transfer_id=transfer.id,
+        from_section_id=transfer.to_section_id,
+        to_section_id=transfer.to_section_id,
+        movement_type=MovementType.issue_to_work,
+        quantity=quantity,
+        source_ref=source_ref or "auto_issue_on_transfer",
+        comment=comment,
+        created_by=actor_id,
+        idempotency_key=f"{idempotency_key}:auto-issue" if idempotency_key else None,
+        executor_user_id=eff_executor,
+        created_by_user_name=actor_name,
+        executor_user_name=executor_name,
+        performed_at=eff_performed,
+        accounted_at=eff_accounted,
+        is_post_factum=post_factum,
+    )
+    db.add(issue_movement)
 
     # If the source section is a stock section, consume the matching
     # SpgRemainder FIFO. This used to live in the legacy
@@ -469,13 +511,25 @@ async def correct_transfer(
             f"Available to transfer: {transferable}"
         )
 
-    # 2. Validate target limit
+    # 2. Validate target limit. With auto-issue on receive, the
+    # destination's ``cached_available_quantity`` is 0 by design (received
+    # is fully issued on the same transaction). The right guard for a
+    # reduce is therefore the in-work balance: how much of the
+    # previously-issued quantity has not yet been completed or
+    # rejected. If the operator already completed or rejected more
+    # than the new sent quantity, reducing the transfer would create
+    # a phantom drain.
     diff = new_quantity - old_quantity
     if diff < 0:
-        if to_task.cached_available_quantity + diff < 0:
+        in_work = (
+            to_task.cached_issued_quantity
+            - to_task.cached_completed_quantity
+            - to_task.cached_rejected_quantity
+        )
+        if in_work + diff < 0:
             raise ValueError(
-                f"Target task has already consumed or issued parts. "
-                f"Cannot reduce transfer by {abs(diff)} as target task only has {to_task.cached_available_quantity} available stock"
+                f"Target task has already completed or rejected parts. "
+                f"Cannot reduce transfer by {abs(diff)} as target task only has {in_work} in work"
             )
 
     # 3. Update Transfer
@@ -660,61 +714,109 @@ async def auto_create_transfer_after_complete(
     idempotency_key: str | None = None,
     comment: str | None = None,
 ) -> dict | None:
-    """Create an automatic cross-GHP Transfer for the completed ``good_quantity``.
+    """Create automatic cross-GHP Transfers for the completed ``good_quantity``.
 
-    Called by ``complete_task`` after a successful completion.  No-op when:
-    * there is no next route step (final stage);
-    * the next section is in the same GHP (intra-GHP transfers are
-      forbidden by ``transfer_send`` and the inventory is already wired
-      via ``auto_consume_available_remainders``).
+    Walks the route forward from the completed task's SectionPlanLine.
+    For each cross-GHP boundary a ``transfer_send`` with
+    ``post_factum=True`` is emitted.  When a transit stage sits between
+    two production stages in different GHPs, a chain of transfers is
+    created (production → transit → next production).
 
-    Uses ``post_factum=True`` because the physical handover between
-    sections has already happened on the shopfloor.
-    Returns ``None`` when the helper decides to skip; otherwise returns
-    the result of ``transfer_send``.
+    Returns the result of the **first** ``transfer_send`` (or ``None``
+    when the helper decides to skip).
     """
     from app.models.internal_plan import SectionPlanLine
+    from app.models.route import RouteStage
     from app.services.shopfloor.common import sections_share_spg
 
     from_line = await db.get(SectionPlanLine, from_task.section_plan_line_id)
     if from_line is None:
         return None
 
-    next_line = await db.scalar(
-        select(SectionPlanLine).where(
-            SectionPlanLine.plan_position_id == from_line.plan_position_id,
-            SectionPlanLine.sequence == from_line.sequence + 1,
-        )
-    )
-    if next_line is None:
-        return None  # финальный шаг — перемещать некуда
-
     if good_quantity <= 0:
         return None
 
-    if await sections_share_spg(db, from_task.section_id, next_line.section_id):
-        return None  # та же ГХП — перемещение не нужно
+    first_result = None
+    current_task = from_task
 
-    next_task = await db.scalar(
-        select(WorkTask).where(
-            WorkTask.section_plan_line_id == next_line.id,
-            WorkTask.status.notin_([WorkTaskStatus.completed, WorkTaskStatus.cancelled]),
+    while True:
+        current_line = await db.get(SectionPlanLine, current_task.section_plan_line_id)
+        if current_line is None:
+            break
+
+        next_line = await db.scalar(
+            select(SectionPlanLine).where(
+                SectionPlanLine.plan_position_id == current_line.plan_position_id,
+                SectionPlanLine.sequence == current_line.sequence + 1,
+            )
         )
-    )
-    if next_task is None:
-        return None  # нет живой задачи на следующем шаге
+        if next_line is None:
+            break
 
-    key = f"{idempotency_key}:auto-transfer-complete" if idempotency_key else None
-    return await transfer_send(
-        db,
-        from_task_id=from_task.id,
-        to_task_id=next_task.id,
-        quantity=good_quantity,
-        actor_id=actor_id,
-        comment=comment or "Авто-перемещение после завершения",
-        idempotency_key=key,
-        post_factum=True,
-    )
+        current_stage = await db.get(RouteStage, current_line.route_stage_id)
+        if current_stage is None:
+            break
+
+        current_section_id = (
+            current_stage.storage_section_id
+            if current_stage.is_transit
+            else current_line.section_id
+        )
+
+        if await sections_share_spg(db, current_section_id, next_line.section_id):
+            break
+
+        next_stage = await db.get(RouteStage, next_line.route_stage_id)
+        if next_stage is None:
+            break
+
+        next_task = await db.scalar(
+            select(WorkTask).where(
+                WorkTask.section_plan_line_id == next_line.id,
+                WorkTask.status.notin_([WorkTaskStatus.completed, WorkTaskStatus.cancelled]),
+            )
+        )
+        if next_task is None and not next_stage.is_transit:
+            break
+
+        step_idx = next_line.sequence - from_line.sequence
+        key = (
+            f"{idempotency_key}:auto-transfer-complete:{step_idx}"
+            if idempotency_key
+            else None
+        )
+
+        result = await transfer_send(
+            db,
+            from_task_id=current_task.id,
+            to_task_id=next_task.id if next_task else None,
+            quantity=good_quantity,
+            actor_id=actor_id,
+            comment=comment or "Авто-перемещение после завершения",
+            idempotency_key=key,
+            post_factum=True,
+        )
+
+        if first_result is None:
+            first_result = result
+
+        if not next_stage.is_transit:
+            break
+
+        if next_task is not None:
+            current_task = next_task
+        else:
+            created_task = await db.scalar(
+                select(WorkTask).where(
+                    WorkTask.section_plan_line_id == next_line.id,
+                    WorkTask.status.notin_([WorkTaskStatus.completed, WorkTaskStatus.cancelled]),
+                )
+            )
+            if created_task is None:
+                break
+            current_task = created_task
+
+    return first_result
 
 
 # NOTE: auto_create_transfer_from_stock_to_production был удалён.

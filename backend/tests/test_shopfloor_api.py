@@ -252,16 +252,9 @@ async def test_shopfloor_second_stage_available_not_inflated_by_plan(client, ses
         headers=headers,
     )
     assert send_res.status_code == 200
-    # Under the explicit-transfer model, transfer_send auto-accepts:
-    # no separate /accept call is needed.
+    # Under the explicit-transfer model, transfer_send auto-accepts
+    # AND auto-issues: no separate /accept or /issue call is needed.
     assert send_res.json()["status"] == "accepted"
-
-    # Оператор явно берёт в работу.
-    await client.post(
-        f"/api/shopfloor/tasks/{second_task.id}/issue",
-        json={"quantity": "25"},
-        headers=headers,
-    )
 
     board_res = await client.get(
         f"/api/shopfloor/sections/{second_task.section_id}/board",
