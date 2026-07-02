@@ -48,11 +48,7 @@ from app.services.shopfloor_service import (
     rework_create,
 )
 from app.transfers.queries import get_section_incoming_transfers, get_transfer_details
-from app.transfers.services import (
-    resolve_transfer_discrepancy_link,
-    transfer_receive,
-    transfer_send,
-)
+from app.transfers.services import transfer_send
 from app.services.shopfloor_service import (
     get_rework_details,
     list_entity_comments,
@@ -136,23 +132,6 @@ class CreateTransferPayload(BaseModel):
     accounted_at: datetime | None = None
     post_factum: bool = False
     physical_handover_at: datetime | None = None
-
-
-class AcceptTransferPayload(BaseModel):
-    accepted_quantity: Decimal = Decimal("0")
-    rejected_quantity: Decimal = Decimal("0")
-    reason: str | None = None
-    comment: str | None = None
-    idempotency_key: str | None = None
-    executor_user_id: int | None = None
-    performed_at: datetime | None = None
-    accounted_at: datetime | None = None
-
-
-class ResolveDiscrepancyPayload(BaseModel):
-    defect_item_id: int
-    quantity: Decimal
-    comment: str | None = None
 
 
 class FinalReleasePayload(BaseModel):
@@ -650,55 +629,6 @@ async def create_transfer(
             accounted_at=payload.accounted_at,
             post_factum=payload.post_factum,
             physical_handover_at=payload.physical_handover_at,
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-
-@router.post("/transfers/{transfer_id}/accept", dependencies=[Depends(require_role(list(TRANSFER_WRITER_ROLES)))])
-async def accept_transfer(
-    transfer_id: int,
-    payload: AcceptTransferPayload,
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-    locked_section_id: int | None = Depends(get_single_window_locked_section_id),
-) -> dict:
-    await _ensure_transfer_target_lock(db, transfer_id, locked_section_id, current_user)
-    try:
-        return await transfer_receive(
-            db,
-            transfer_id=transfer_id,
-            accepted_quantity=payload.accepted_quantity,
-            rejected_quantity=payload.rejected_quantity,
-            actor_id=current_user.id,
-            reason=payload.reason,
-            comment=payload.comment,
-            idempotency_key=payload.idempotency_key,
-            executor_user_id=payload.executor_user_id,
-            performed_at=payload.performed_at,
-            accounted_at=payload.accounted_at,
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-
-@router.post("/transfers/{transfer_id}/discrepancies/{discrepancy_id}/resolve-link")
-async def resolve_discrepancy(
-    transfer_id: int,
-    discrepancy_id: int,
-    payload: ResolveDiscrepancyPayload,
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-) -> dict:
-    try:
-        return await resolve_transfer_discrepancy_link(
-            db,
-            transfer_id=transfer_id,
-            discrepancy_id=discrepancy_id,
-            defect_item_id=payload.defect_item_id,
-            quantity=payload.quantity,
-            actor_id=current_user.id,
-            comment=payload.comment,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

@@ -32,10 +32,20 @@ async def _task_movement_sums(db: AsyncSession, task_id: int) -> dict[str, Decim
 async def _initial_available_quantity(db: AsyncSession, task: WorkTask) -> Decimal:
     """Base availability before incoming transfers.
 
-    For the first route stage, task can start from planned quantity.
-    For subsequent stages, if the previous stage is in the same SPG/GHP,
-    availability comes from the completed quantity of the previous stage's task.
-    Otherwise, availability comes only from received transfers.
+    Material movement between sections, even within the same SPG/GHP,
+    is now an explicit transfer operation — there is no automatic
+    cascade from a completed task to the next one.
+
+    Base availability rules:
+      * First route stage (sequence == 1): planned_quantity.
+      * First production stage after a stock section (no preceding
+        production WorkTask): planned_quantity. The take-to-work
+        step is the only moment we expose the planned amount
+        without a transfer, so the launched position has something
+        to display; the operator still has to issue an explicit
+        transfer to actually move material.
+      * Any subsequent production stage: 0 — availability grows
+        only via received transfers.
     """
     line = await db.get(SectionPlanLine, task.section_plan_line_id)
     if line is None:
@@ -43,32 +53,9 @@ async def _initial_available_quantity(db: AsyncSession, task: WorkTask) -> Decim
     if line.sequence == 1:
         return task.planned_quantity
 
-    preceding_has_task = await db.scalar(
-        select(func.count(WorkTask.id))
-        .join(SectionPlanLine, WorkTask.section_plan_line_id == SectionPlanLine.id)
-        .where(
-            SectionPlanLine.plan_position_id == line.plan_position_id,
-            SectionPlanLine.sequence < line.sequence,
-            WorkTask.status.notin_([WorkTaskStatus.cancelled])
-        )
-    ) > 0
-
-    if not preceding_has_task:
-        if line.sequence == 1:
-            return task.planned_quantity
-        prev_line = await db.scalar(
-            select(SectionPlanLine).where(
-                SectionPlanLine.plan_position_id == line.plan_position_id,
-                SectionPlanLine.sequence == line.sequence - 1,
-            )
-        )
-        if prev_line is not None:
-            from .common import sections_share_spg
-            if await sections_share_spg(db, line.section_id, prev_line.section_id):
-                return task.planned_quantity
-        return Decimal("0")
-
-    # Find previous stage plan line
+    # Find the immediately preceding plan line. If it is not a
+    # production section (or has no WorkTask), this stage is the
+    # first production task in the chain — surface planned quantity.
     prev_line = await db.scalar(
         select(SectionPlanLine).where(
             SectionPlanLine.plan_position_id == line.plan_position_id,
@@ -76,18 +63,12 @@ async def _initial_available_quantity(db: AsyncSession, task: WorkTask) -> Decim
         )
     )
     if prev_line is not None:
-        from .common import sections_share_spg
-        if await sections_share_spg(db, line.section_id, prev_line.section_id):
-            # Find the previous task
-            prev_task = await db.scalar(
-                select(WorkTask).where(
-                    WorkTask.section_plan_line_id == prev_line.id,
-                    WorkTask.status.notin_([WorkTaskStatus.cancelled]),
-                )
-            )
-            if prev_task is not None:
-                return prev_task.cached_completed_quantity
-
+        from app.models.section import Section as _Section
+        prev_sec = await db.get(_Section, prev_line.section_id)
+        if prev_sec is not None and prev_sec.kind != "production":
+            return task.planned_quantity
+        # Previous stage is production: there is a preceding WorkTask.
+        # Without a transfer, nothing cascades — return 0.
     return Decimal("0")
 
 def _compute_available_from_balances(
@@ -145,26 +126,12 @@ async def _refresh_task_cache(db: AsyncSession, task_id: int, visited: set[int] 
     if in_work < 0:
         in_work = Decimal("0")
 
+    # NOTE: there is intentionally NO `prev_completed` auto-cascade. Material
+    # movement between sections is now always an explicit transfer operation
+    # (see transfers/services.py). The receiving task's `available` grows
+    # only via `received` (transfer_receive movements on THIS task).
     prev_completed = Decimal("0")
     line = await db.get(SectionPlanLine, task.section_plan_line_id)
-    if line is not None and line.sequence > 1:
-        prev_line = await db.scalar(
-            select(SectionPlanLine).where(
-                SectionPlanLine.plan_position_id == line.plan_position_id,
-                SectionPlanLine.sequence == line.sequence - 1,
-            )
-        )
-        if prev_line is not None:
-            from .common import sections_share_spg
-            if await sections_share_spg(db, prev_line.section_id, line.section_id):
-                prev_completed = await db.scalar(
-                    select(func.coalesce(func.sum(Movement.quantity), 0))
-                    .join(WorkTask, Movement.task_id == WorkTask.id)
-                    .where(
-                        WorkTask.section_plan_line_id == prev_line.id,
-                        Movement.movement_type == MovementType.complete.value
-                    )
-                ) or Decimal("0")
 
     base_available = await _initial_available_quantity(db, task)
     consumed_from_remainders = await db.scalar(

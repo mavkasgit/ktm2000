@@ -10,8 +10,15 @@ SectionTask.  It is a SEPARATE process from SectionTask completion:
     process) explicitly creates a ``Transfer`` that moves quantity to
     the next route step, which is handled here.
 
+Under the explicit-transfer model, ``transfer_send`` is the single write
+path: it creates the ``Transfer`` row, both ledger Movements
+(``transfer_send`` + ``transfer_receive``) and flips the destination
+``WorkTask`` to ``ready``. There is no separate manual accept step.
+
 Public surface:
-  * ``services`` — write operations (send, receive, resolve discrepancy)
+  * ``services`` — write operations (``transfer_send``; ``transfer_receive``
+    and ``resolve_transfer_discrepancy_link`` are kept as legacy no-ops
+    for the few call sites that haven't migrated)
   * ``queries``  — read operations (details, incoming, ready-to-transfer)
   * ``schemas``  — Pydantic DTOs for the FastAPI router
   * ``api``      — FastAPI router mounted under ``/transfers``
@@ -28,6 +35,8 @@ from app.transfers.queries import (
     list_ready_to_transfer,
 )
 from app.transfers.services import (
+    cancel_transfer,
+    correct_transfer,
     resolve_transfer_discrepancy_link,
     transfer_receive,
     transfer_send,
@@ -36,6 +45,8 @@ from app.transfers.services import (
 __all__ = [
     "transfer_send",
     "transfer_receive",
+    "cancel_transfer",
+    "correct_transfer",
     "resolve_transfer_discrepancy_link",
     "get_transfer_details",
     "get_section_incoming_transfers",

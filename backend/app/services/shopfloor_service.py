@@ -32,8 +32,8 @@ from app.transfers.queries import (
     list_ready_to_transfer,
 )
 from app.transfers.services import (
-    resolve_transfer_discrepancy_link,
-    transfer_receive,
+    cancel_transfer,
+    correct_transfer,
     transfer_send,
 )
 
@@ -41,8 +41,10 @@ __all__ = [
     "_refresh_task_cache",
     "_refresh_section_plan_line_cache",
     "add_defect_item",
+    "cancel_transfer",
     "complete_task",
     "consume_remainder",
+    "correct_transfer",
     "create_attachment",
     "create_comment",
     "create_defect",
@@ -67,7 +69,6 @@ __all__ = [
     "prepare_section_task",
     "return_remainder_to_stock",
     "rework_create",
-    "transfer_receive",
     "transfer_send",
 ]
 

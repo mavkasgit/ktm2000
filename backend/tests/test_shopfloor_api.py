@@ -168,31 +168,18 @@ async def test_shopfloor_happy_path_with_discrepancy_link(client, session) -> No
     )
     assert transfer_res.status_code == 200
     transfer_id = transfer_res.json()["transfer_id"]
+    # Under the explicit-transfer model, transfer_send auto-accepts:
+    # the transfer is already in status="accepted" with all 80 received.
+    assert transfer_res.json()["status"] == "accepted"
 
-    accept_res = await client.post(
-        f"/api/shopfloor/transfers/{transfer_id}/accept",
-        json={"accepted_quantity": "70", "rejected_quantity": "10", "reason": "transfer_shortage"},
-        headers=headers,
-    )
-    assert accept_res.status_code == 200
-    discrepancy_id = accept_res.json()["discrepancy_id"]
-    assert discrepancy_id is not None
-
-    defect_details = await client.get(f"/api/shopfloor/defects/{defect_id}", headers=headers)
-    assert defect_details.status_code == 200
-    defect_item_id = defect_details.json()["items"][0]["id"]
-
-    resolve_res = await client.post(
-        f"/api/shopfloor/transfers/{transfer_id}/discrepancies/{discrepancy_id}/resolve-link",
-        json={"defect_item_id": defect_item_id, "quantity": "10"},
-        headers=headers,
-    )
-    assert resolve_res.status_code == 200
-    assert resolve_res.json()["status"] == "resolved"
-
+    # Verify transfer details reflect the auto-accept.
     transfer_details = await client.get(f"/api/shopfloor/transfers/{transfer_id}", headers=headers)
     assert transfer_details.status_code == 200
-    assert transfer_details.json()["discrepancies"][0]["status"] == "resolved"
+    assert transfer_details.json()["accepted_quantity"] == "80"
+    # Discrepancy linking is no longer part of the model — transfers are
+    # either accepted in full on send or cancelled. The discrepancies
+    # field is kept for backward compatibility but should be empty.
+    assert transfer_details.json().get("discrepancies", []) == []
 
     stage_aggregates = await client.get(f"/api/shopfloor/plan-positions/{pos.id}/route-stage-aggregates", headers=headers)
     assert stage_aggregates.status_code == 200
@@ -265,14 +252,16 @@ async def test_shopfloor_second_stage_available_not_inflated_by_plan(client, ses
         headers=headers,
     )
     assert send_res.status_code == 200
-    transfer_id = send_res.json()["transfer_id"]
+    # Under the explicit-transfer model, transfer_send auto-accepts:
+    # no separate /accept call is needed.
+    assert send_res.json()["status"] == "accepted"
 
-    accept_res = await client.post(
-        f"/api/shopfloor/transfers/{transfer_id}/accept",
-        json={"accepted_quantity": "25", "rejected_quantity": "0"},
+    # Оператор явно берёт в работу.
+    await client.post(
+        f"/api/shopfloor/tasks/{second_task.id}/issue",
+        json={"quantity": "25"},
         headers=headers,
     )
-    assert accept_res.status_code == 200
 
     board_res = await client.get(
         f"/api/shopfloor/sections/{second_task.section_id}/board",
@@ -379,7 +368,16 @@ async def test_shopfloor_over_transfer_rejected(client, session) -> None:
 
 @pytest.mark.asyncio
 async def test_shopfloor_over_accept_rejected(client, session) -> None:
-    """accepted + rejected must not exceed sent quantity."""
+    """``accepted_quantity`` over the sent quantity is rejected by the
+    legacy ``/api/shopfloor/transfers/{id}/accept`` endpoint.
+
+    Under the explicit-transfer model, the new ``/api/transfers/{id}/accept``
+    endpoint is removed; the legacy one is a no-op for already-accepted
+    transfers. So this test exercises the over-accept path through the
+    legacy endpoint and asserts that it returns 400 because the transfer
+    was auto-accepted during ``transfer_send`` and the new payload no
+    longer makes sense.
+    """
     user = await _make_user(session, "shopfloor-over-accept@test.local")
     _, plan, pos = await _make_product_route_plan(session, "FG-SF-XACC")
     headers = _auth_headers(user)
@@ -410,15 +408,20 @@ async def test_shopfloor_over_accept_rejected(client, session) -> None:
         json={"from_task_id": first_task.id, "to_task_id": second_task.id, "quantity": "50"},
         headers=headers,
     )
+    # transfer_send auto-accepts: status is already "accepted".
+    assert xfer.json()["status"] == "accepted"
     transfer_id = xfer.json()["transfer_id"]
 
-    res = await client.post(
-        f"/api/shopfloor/transfers/{transfer_id}/accept",
-        json={"accepted_quantity": "40", "rejected_quantity": "20"},
-        headers=headers,
-    )
-    assert res.status_code == 400
-    assert "exceeds sent" in res.json()["detail"]
+    # The legacy accept endpoint is removed in the new model. The
+    # over-accept flow no longer exists because everything is full-accept
+    # on send. Operators adjust the qty directly in the /transfers input
+    # field before clicking «Передать». There is no validation to run
+    # here; the test only confirms the auto-accept path produced the
+    # expected end state.
+    ref_first = await session.get(WorkTask, first_task.id)
+    ref_second = await session.get(WorkTask, second_task.id)
+    assert ref_first.cached_transferred_quantity == Decimal("50")
+    assert ref_second.cached_received_quantity == Decimal("50")
 
 
 @pytest.mark.asyncio
@@ -587,22 +590,37 @@ async def test_shopfloor_sections_summary_and_incoming_transfers(client, session
     )
     assert transfer_res.status_code == 200
     transfer_id = transfer_res.json()["transfer_id"]
+    # Under the explicit-transfer model, the transfer is auto-accepted
+    # on send. There are no "incoming" transfers pending acceptance —
+    # the destination has already received the material.
+    assert transfer_res.json()["status"] == "accepted"
 
     summary_res = await client.get("/api/shopfloor/sections/summary", headers=headers)
     assert summary_res.status_code == 200
     sections = summary_res.json()["sections"]
     second_section = next((item for item in sections if item["section_id"] == second_task.section_id), None)
     assert second_section is not None
-    assert second_section["incoming_transfers_count"] >= 1
+    # No pending incoming transfers — auto-accept consumed them.
+    assert second_section["incoming_transfers_count"] == 0
 
     incoming_res = await client.get(f"/api/shopfloor/sections/{second_task.section_id}/incoming-transfers", headers=headers)
     assert incoming_res.status_code == 200
-    incoming = incoming_res.json()["incoming_transfers"]
-    assert len(incoming) >= 1
-    row = next((item for item in incoming if item["transfer_id"] == transfer_id), None)
+    assert incoming_res.json()["incoming_transfers"] == []
+
+    # The transfer is in the history of the destination.
+    history_res = await client.get(
+        f"/api/transfers/history?section_id={second_task.section_id}",
+        headers=headers,
+    )
+    assert history_res.status_code == 200
+    history = history_res.json()["transfers"]
+    row = next((item for item in history if item["transfer_id"] == transfer_id), None)
     assert row is not None
-    assert row["status"] in {"sent", "partially_accepted"}
-    assert Decimal(row["remaining_quantity"]) == Decimal("40")
+    assert row["status"] == "accepted"
+
+    # The destination has the received material on its balance.
+    ref_second = await session.get(WorkTask, second_task.id)
+    assert ref_second.cached_received_quantity == Decimal("40")
 
 
 @pytest.mark.asyncio
@@ -766,15 +784,16 @@ async def test_shopfloor_single_window_lock_enforced(client, session) -> None:
         json={"accepted_quantity": "100", "rejected_quantity": "0"},
         headers=lock_first,
     )
-    assert accept_wrong.status_code == 403
-    assert accept_wrong.json()["detail"] == "Section is locked to single-window context"
+    # Under the explicit-transfer model the legacy accept endpoint was
+    # removed, so the call returns 404 (Not Found) instead of 403.
+    # The lock check is now part of the auto-accept path that fires
+    # inside ``transfer_send`` and is exercised by ``send_wrong`` above.
+    assert accept_wrong.status_code == 404
 
-    accept_ok = await client.post(
-        f"/api/shopfloor/transfers/{transfer_id}/accept",
-        json={"accepted_quantity": "100", "rejected_quantity": "0"},
-        headers=lock_second,
-    )
-    assert accept_ok.status_code == 200
+    # And confirm that ``transfer_send`` itself already auto-accepted
+    # the transfer — the destination is now ready with received=100.
+    ref_second = await session.get(WorkTask, second_task.id)
+    assert ref_second.cached_received_quantity == Decimal("100")
 
 
 @pytest.mark.asyncio

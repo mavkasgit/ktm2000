@@ -25,7 +25,7 @@ from app.services.production_planning_rows import get_production_planning_row_de
 from app.services.production_plan_service import _refresh_plan_status, restore_plan_position, soft_delete_cancelled_position
 from app.services.plan_generation import create_release_batch, release_batch
 from app.services.route_matcher import resolve_position_route, make_position_route_cache_key
-from app.services.shopfloor_service import complete_task, final_release, issue_to_work, transfer_receive, transfer_send
+from app.services.shopfloor_service import complete_task, final_release, issue_to_work, transfer_send
 
 router = APIRouter(prefix="/production-planning", tags=["execution-control"])
 MANUAL_ROUTE_PASS_PREFIX = "manual_route_pass:"
@@ -708,7 +708,9 @@ async def _do_manual_pass(
                 if next_task is not None:
                     from app.services.shopfloor.common import sections_share_spg
                     if not await sections_share_spg(db, task.section_id, next_task.section_id):
-                        transfer_result = await transfer_send(
+                        # transfer_send auto-accepts under the new explicit-transfer
+                        # model — no separate transfer_receive call is required.
+                        await transfer_send(
                             db,
                             from_task_id=task.id,
                             to_task_id=next_task.id,
@@ -717,20 +719,6 @@ async def _do_manual_pass(
                             comment=manual_comment,
                             source_ref=source_ref,
                             idempotency_key=f"{operation_key}:transfer",
-                            executor_user_id=current_user.id,
-                            performed_at=now,
-                            accounted_at=now,
-                        )
-                        await transfer_receive(
-                            db,
-                            transfer_id=int(transfer_result["transfer_id"]),
-                            accepted_quantity=quantity,
-                            rejected_quantity=Decimal("0"),
-                            actor_id=current_user.id,
-                            reason="manual_route_pass",
-                            comment=manual_comment,
-                            source_ref=source_ref,
-                            idempotency_key=f"{operation_key}:receive",
                             executor_user_id=current_user.id,
                             performed_at=now,
                             accounted_at=now,

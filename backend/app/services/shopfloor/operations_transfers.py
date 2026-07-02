@@ -10,6 +10,8 @@ New code MUST import from ``app.transfers.services`` directly.
 """
 
 from app.transfers.services import (
+    cancel_transfer,
+    correct_transfer,
     resolve_transfer_discrepancy_link,
     transfer_receive,
     transfer_send,
@@ -18,5 +20,7 @@ from app.transfers.services import (
 __all__ = [
     "transfer_send",
     "transfer_receive",
+    "cancel_transfer",
+    "correct_transfer",
     "resolve_transfer_discrepancy_link",
 ]

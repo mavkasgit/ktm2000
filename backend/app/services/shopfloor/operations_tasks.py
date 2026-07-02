@@ -152,17 +152,8 @@ async def issue_to_work(
     await _refresh_task_cache(db, task.id)
     await _refresh_section_plan_line_cache(db, task.section_plan_line_id)
 
-    # Авто-перемещение со склада в другой ГХП (если предыдущий
-    # шаг маршрута — склад, и остатки лежат там) при наличии дефицита.
-    if shortage > 0:
-        from app.transfers.services import auto_create_transfer_from_stock_to_production
-        await auto_create_transfer_from_stock_to_production(
-            db,
-            to_task=task,
-            quantity=shortage,
-            actor_id=actor_id,
-            idempotency_key=idempotency_key,
-        )
+    # NOTE: Авто-перемещение со склада при выдаче в работу убрано.
+    # Все перемещения между секциями/складами — явные операции оператора.
 
     return {"movement_id": movement.id, "task_id": task.id, "status": task.status.value}
 
@@ -227,32 +218,7 @@ async def complete_task(
 
     in_work = task.cached_issued_quantity - task.cached_completed_quantity - task.cached_rejected_quantity
     if total > in_work:
-        # Auto-issue the missing quantity for tasks that are still in 'ready'
-        # or 'waiting_previous' state with nothing issued yet. This makes the bulk-complete workflow
-        # work even when the take-to-work auto-consume did not produce any
-        # SPG remainders (e.g. raw stock was never received into SPG).
-        if task.status in {WorkTaskStatus.ready, WorkTaskStatus.in_progress, WorkTaskStatus.partially_completed}:
-            short = total - in_work
-            auto_issue_key = (
-                f"{idempotency_key}:auto-issue" if idempotency_key else None
-            )
-            await issue_to_work(
-                db,
-                task_id=task.id,
-                quantity=short,
-                actor_id=actor_id,
-                comment="Auto-issue from complete (no in-work)",
-                source_ref=source_ref,
-                idempotency_key=auto_issue_key,
-                executor_user_id=executor_user_id,
-                performed_at=performed_at,
-                accounted_at=accounted_at,
-                shortage_strategy=shortage_strategy,
-            )
-            await db.refresh(task)
-            in_work = task.cached_issued_quantity - task.cached_completed_quantity - task.cached_rejected_quantity
-        if total > in_work:
-            raise ValueError("Complete quantity exceeds quantity in work")
+        raise ValueError("Complete quantity exceeds quantity in work")
 
     now = datetime.now(UTC)
     eff_performed = performed_at or now
@@ -337,56 +303,6 @@ async def complete_task(
 
     await _refresh_task_cache(db, task.id)
     await _refresh_section_plan_line_cache(db, task.section_plan_line_id)
-
-    # Cascade auto-issue to next task if it is in the same GHP
-    line = await db.get(SectionPlanLine, task.section_plan_line_id)
-    if line is not None and good_quantity > 0:
-        next_line = await db.scalar(
-            select(SectionPlanLine).where(
-                SectionPlanLine.plan_position_id == line.plan_position_id,
-                SectionPlanLine.sequence == line.sequence + 1,
-            )
-        )
-        if next_line is not None:
-            from app.services.shopfloor.common import sections_share_spg
-            if await sections_share_spg(db, line.section_id, next_line.section_id):
-                # Find or auto-create target task
-                next_task = await db.scalar(
-                    select(WorkTask).where(
-                        WorkTask.section_plan_line_id == next_line.id,
-                        WorkTask.status.notin_([WorkTaskStatus.completed, WorkTaskStatus.cancelled]),
-                    )
-                )
-                if not next_task:
-                    next_task = WorkTask(
-                        section_plan_line_id=next_line.id,
-                        section_id=next_line.section_id,
-                        product_id=next_line.product_id,
-                        route_stage_id=next_line.route_stage_id,
-                        planned_quantity=line.planned_quantity,
-                        status=WorkTaskStatus.ready,
-                        due_date=next_line.due_date,
-                    )
-                    db.add(next_task)
-                    await db.flush()
-
-                if next_task.status == WorkTaskStatus.waiting_previous:
-                    next_task.status = WorkTaskStatus.ready
-                    await db.flush()
-
-                # Auto-issue the completed quantity to work for next task
-                await issue_to_work(
-                    db,
-                    task_id=next_task.id,
-                    quantity=good_quantity,
-                    actor_id=actor_id,
-                    comment=f"Auto-issued from previous task {task.id} inside same GHP",
-                    executor_user_id=executor_user_id,
-                    performed_at=performed_at,
-                    accounted_at=accounted_at,
-                )
-                # Consume any other compatible remainders
-                await auto_consume_available_remainders(db, next_task, actor_id=actor_id)
 
     if auto_transfer_next and good_quantity > 0:
         from app.transfers.services import auto_create_transfer_after_complete

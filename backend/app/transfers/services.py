@@ -1,15 +1,22 @@
 """Write services for the transfer module.
 
-The bodies of ``transfer_send``, ``transfer_receive`` and
-``resolve_transfer_discrepancy_link`` are moved verbatim from the
-historical ``app.services.shopfloor.operations_transfers``.  No
-behaviour change — only the import paths and the conceptual home of
-the code.
+Under the explicit-transfer model, ``transfer_send`` is the single
+write path: it creates the ``Transfer`` row, the ``transfer_send``
+Movement, AND the ``transfer_receive`` Movement (auto-accept), and
+flips the destination ``WorkTask`` from ``waiting_previous`` to
+``ready``. There is no separate accept step on the UI side; the
+material is considered moved as soon as the operator confirms
+``Send`` on ``/transfers``.
 
 The shared cache (``app.services.shopfloor.cache``) and helpers
 (``app.services.shopfloor.common``) are reused as-is: the
 ``Movement`` ledger is the universal event log for both the section
 task side and the transfer side.
+
+Legacy functions ``transfer_receive`` and
+``resolve_transfer_discrepancy_link`` are kept as no-ops so old call
+sites in ``app.api.routes.demo``, ``app.api.routes.production_planning``
+and a few tests don't break. They will be removed in a follow-up.
 """
 
 from __future__ import annotations
@@ -20,15 +27,9 @@ from decimal import Decimal
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.defect import DefectItem, TransferDiscrepancyDefectItem
 from app.models.internal_plan import SectionPlanLine
 from app.models.movement import Movement, MovementType
-from app.models.transfer import (
-    Transfer,
-    TransferDiscrepancy,
-    TransferDiscrepancyStatus,
-    TransferStatus,
-)
+from app.models.transfer import Transfer, TransferStatus
 from app.models.work_task import WorkTask, WorkTaskStatus
 
 from app.services.shopfloor.cache import (
@@ -40,6 +41,7 @@ from app.services.shopfloor.common import (
     _ensure_positive,
     _get_route_stage,
     _get_task,
+    _get_task_for_update,
     _get_transfer,
     _get_user_snapshot_name,
     _to_decimal,
@@ -126,7 +128,7 @@ async def transfer_send(
                 "idempotent_replay": True,
             }
 
-    from_task = await _get_task(db, from_task_id)
+    from_task = await _get_task_for_update(db, from_task_id)
     from_line = await db.get(SectionPlanLine, from_task.section_plan_line_id)
     if from_line is None:
         raise ValueError("Source task plan line not found")
@@ -180,13 +182,6 @@ async def transfer_send(
     if to_stage.sequence <= from_stage.sequence:
         raise ValueError("Transfer target must be next route step")
 
-    # Block same-GHP transfers (this is structural; the cross-GHP post-factum
-    # path still goes through here — the flag is on the Transfer, not on
-    # the GHP relationship)
-    from app.services.shopfloor.common import sections_share_spg
-    if await sections_share_spg(db, from_task.section_id, to_task.section_id):
-        raise ValueError("Transfers within the same Storage Production Group (GHP) are not allowed")
-
     quantity = _to_decimal(quantity)
     _ensure_positive(quantity, "quantity")
     if not post_factum:
@@ -220,7 +215,7 @@ async def transfer_send(
     eff_executor = executor_user_id or actor_id
     actor_name = await _get_user_snapshot_name(db, actor_id)
     executor_name = await _get_user_snapshot_name(db, eff_executor)
-    movement = Movement(
+    send_movement = Movement(
         product_id=from_task.product_id,
         task_id=from_task.id,
         section_plan_line_id=from_task.section_plan_line_id,
@@ -240,10 +235,83 @@ async def transfer_send(
         accounted_at=eff_accounted,
         is_post_factum=post_factum,
     )
-    db.add(movement)
+    db.add(send_movement)
+
+    # Auto-accept: since the operator confirms the transfer on the
+    # /transfers page, the material is considered immediately received
+    # on the destination. The destination task transitions
+    # ``waiting_previous -> ready`` and ``cached_received_quantity`` is
+    # bumped. Reject/partial accept are no longer part of the model —
+    # see ``docs/superpowers/plans/2026-07-01-explicit-transfers-mandatory.md``.
+    transfer.status = TransferStatus.accepted
+    transfer.accepted_quantity = quantity
+    transfer.accepted_by = actor_id
+    transfer.accepted_at = eff_accounted
+    if to_task.status == WorkTaskStatus.waiting_previous:
+        to_task.status = WorkTaskStatus.ready
+        await db.flush()
+    receive_movement = Movement(
+        product_id=transfer.product_id,
+        task_id=to_task.id,
+        section_plan_line_id=to_task.section_plan_line_id,
+        transfer_id=transfer.id,
+        from_section_id=transfer.from_section_id,
+        to_section_id=transfer.to_section_id,
+        movement_type=MovementType.transfer_receive,
+        quantity=quantity,
+        source_ref=source_ref,
+        comment=comment,
+        created_by=actor_id,
+        idempotency_key=f"{idempotency_key}:receive" if idempotency_key else None,
+        executor_user_id=eff_executor,
+        created_by_user_name=actor_name,
+        executor_user_name=executor_name,
+        performed_at=eff_performed,
+        accounted_at=eff_accounted,
+        is_post_factum=post_factum,
+    )
+    db.add(receive_movement)
+
+    # If the source section is a stock section, consume the matching
+    # SpgRemainder FIFO. This used to live in the legacy
+    # ``transfer_receive`` step; under the auto-accept model it is
+    # part of ``transfer_send`` so the source stock balance is updated
+    # atomically with the destination receipt.
+    from app.models.section import Section
+    from_section = await db.get(Section, transfer.from_section_id)
+    if from_section and from_section.kind in {"raw_stock", "wip_stock", "finished_stock"}:
+        from app.models.spg import SpgSection
+        from_spg_id = await db.scalar(
+            select(SpgSection.spg_id).where(SpgSection.section_id == transfer.from_section_id)
+        )
+        if from_spg_id is not None:
+            from app.models.spg_remainder import SpgRemainder
+            remainders = (await db.execute(
+                select(SpgRemainder)
+                .where(
+                    SpgRemainder.spg_id == from_spg_id,
+                    SpgRemainder.product_id == transfer.product_id,
+                    SpgRemainder.remainder_quantity > 0,
+                    SpgRemainder.consumed_at.is_(None),
+                )
+                .order_by(SpgRemainder.created_at.asc(), SpgRemainder.id.asc())
+            )).scalars().all()
+
+            qty_to_consume = quantity
+            for rem in remainders:
+                if qty_to_consume <= 0:
+                    break
+                consume_qty = min(qty_to_consume, rem.remainder_quantity)
+                rem.remainder_quantity -= consume_qty
+                if rem.remainder_quantity == 0:
+                    rem.consumed_at = datetime.now(UTC)
+                    rem.consumed_by_task_id = to_task.id
+                qty_to_consume -= consume_qty
 
     await _refresh_task_cache(db, from_task.id)
+    await _refresh_task_cache(db, to_task.id)
     await _refresh_section_plan_line_cache(db, from_task.section_plan_line_id)
+    await _refresh_section_plan_line_cache(db, to_task.section_plan_line_id)
 
     # Запись лога аудита (передача)
     from app.services.audit_log_service import log_action
@@ -286,194 +354,35 @@ async def transfer_receive(
     db: AsyncSession,
     *,
     transfer_id: int,
-    accepted_quantity: Decimal,
-    rejected_quantity: Decimal,
-    actor_id: int,
-    reason: str | None = None,
-    comment: str | None = None,
-    source_ref: str | None = None,
-    idempotency_key: str | None = None,
-    executor_user_id: int | None = None,
-    performed_at: datetime | None = None,
-    accounted_at: datetime | None = None,
+    accepted_quantity: Decimal | None = None,  # noqa: ARG001 — legacy arg
+    rejected_quantity: Decimal | None = None,  # noqa: ARG001 — legacy arg
+    actor_id: int | None = None,  # noqa: ARG001 — legacy arg
+    reason: str | None = None,  # noqa: ARG001 — legacy arg
+    comment: str | None = None,  # noqa: ARG001 — legacy arg
+    source_ref: str | None = None,  # noqa: ARG001 — legacy arg
+    idempotency_key: str | None = None,  # noqa: ARG001 — legacy arg
+    executor_user_id: int | None = None,  # noqa: ARG001 — legacy arg
+    performed_at: datetime | None = None,  # noqa: ARG001 — legacy arg
+    accounted_at: datetime | None = None,  # noqa: ARG001 — legacy arg
 ) -> dict:
-    """Accept (or partially reject) a previously sent Transfer.
+    """Legacy no-op kept for backwards compatibility with old call sites.
 
-    On full accept: status -> ``accepted``, writes
-    ``Movement(type=transfer_receive)`` for the accepted quantity, flips
-    the target ``WorkTask`` from ``waiting_previous`` to ``ready``.
+    Under the new explicit-transfer model, ``transfer_send`` itself
+    auto-accepts the transfer (status flips to ``accepted`` and the
+    ``transfer_receive`` Movement is written inline). A separate manual
+    accept step is no longer part of the UI contract. Calling
+    ``transfer_receive`` is a no-op that returns the current state of
+    the transfer for the rare legacy path that still reaches this
+    function.
 
-    On partial: status -> ``partially_accepted``; reject quantity
-    creates an open ``TransferDiscrepancy``.
-
-    On full reject: status -> ``rejected``.
+    See ``docs/superpowers/plans/2026-07-01-explicit-transfers-mandatory.md``
+    for the model description.
     """
     transfer = await _get_transfer(db, transfer_id)
-    if transfer.status not in {TransferStatus.sent, TransferStatus.partially_accepted}:
-        raise ValueError("Transfer must be sent")
-
-    accepted_quantity = _to_decimal(accepted_quantity)
-    rejected_quantity = _to_decimal(rejected_quantity)
-    if accepted_quantity < 0 or rejected_quantity < 0:
-        raise ValueError("accepted/rejected must be >= 0")
-    if accepted_quantity + rejected_quantity <= 0:
-        raise ValueError("accepted + rejected must be > 0")
-    if accepted_quantity + rejected_quantity > transfer.sent_quantity:
-        raise ValueError("accepted + rejected exceeds sent quantity")
-
-    transfer.accepted_quantity = accepted_quantity
-    transfer.rejected_quantity = rejected_quantity
-    transfer.accepted_by = actor_id
-    transfer.accepted_at = datetime.now(UTC)
-    transfer.comment = comment or transfer.comment
-    if accepted_quantity == transfer.sent_quantity:
-        transfer.status = TransferStatus.accepted
-    elif accepted_quantity > 0:
-        transfer.status = TransferStatus.partially_accepted
-    else:
-        transfer.status = TransferStatus.rejected
-
-    to_task = await _get_task(db, transfer.to_task_id)
-    if accepted_quantity > 0:
-        eff_executor = executor_user_id or actor_id
-        actor_name = await _get_user_snapshot_name(db, actor_id)
-        executor_name = await _get_user_snapshot_name(db, eff_executor)
-        eff_performed = performed_at or transfer.physical_handover_at or datetime.now(UTC)
-        eff_accounted = accounted_at or datetime.now(UTC)
-        movement = Movement(
-            product_id=transfer.product_id,
-            task_id=to_task.id,
-            section_plan_line_id=to_task.section_plan_line_id,
-            transfer_id=transfer.id,
-            from_section_id=transfer.from_section_id,
-            to_section_id=transfer.to_section_id,
-            movement_type=MovementType.transfer_receive,
-            quantity=accepted_quantity,
-            source_ref=source_ref,
-            reason=reason,
-            comment=comment,
-            created_by=actor_id,
-            idempotency_key=f"{idempotency_key}:receive" if idempotency_key else None,
-            executor_user_id=eff_executor,
-            created_by_user_name=actor_name,
-            executor_user_name=executor_name,
-            performed_at=eff_performed,
-            accounted_at=eff_accounted,
-            is_post_factum=transfer.is_post_factum,
-        )
-        db.add(movement)
-
-        # Consume from SpgRemainder in the source SPG if the source section is a stock section
-        from app.models.section import Section
-        from_section = await db.get(Section, transfer.from_section_id)
-        if from_section and from_section.kind in {"raw_stock", "wip_stock", "finished_stock"}:
-            from app.models.spg import SpgSection
-            from_spg_id = await db.scalar(
-                select(SpgSection.spg_id).where(SpgSection.section_id == transfer.from_section_id)
-            )
-            if from_spg_id is not None:
-                from app.models.spg_remainder import SpgRemainder
-                remainders = (await db.execute(
-                    select(SpgRemainder)
-                    .where(
-                        SpgRemainder.spg_id == from_spg_id,
-                        SpgRemainder.product_id == transfer.product_id,
-                        SpgRemainder.remainder_quantity > 0,
-                        SpgRemainder.consumed_at.is_(None),
-                    )
-                    .order_by(SpgRemainder.created_at.asc(), SpgRemainder.id.asc())
-                )).scalars().all()
-                
-                qty_to_consume = accepted_quantity
-                for rem in remainders:
-                    if qty_to_consume <= 0:
-                        break
-                    consume_qty = min(qty_to_consume, rem.remainder_quantity)
-                    rem.remainder_quantity -= consume_qty
-                    if rem.remainder_quantity == 0:
-                        rem.consumed_at = datetime.now(UTC)
-                        rem.consumed_by_task_id = to_task.id
-                    qty_to_consume -= consume_qty
-                await _refresh_task_cache(db, transfer.from_task_id)
-
-    discrepancy_id: int | None = None
-    if rejected_quantity > 0:
-        discrepancy = TransferDiscrepancy(
-            transfer_id=transfer.id,
-            discrepancy_quantity=rejected_quantity,
-            resolved_quantity=Decimal("0"),
-            unresolved_quantity=rejected_quantity,
-            status=TransferDiscrepancyStatus.open,
-            reason=reason,
-            comment=comment,
-            created_by=actor_id,
-        )
-        db.add(discrepancy)
-        await db.flush()
-        discrepancy_id = discrepancy.id
-
-    if accepted_quantity > 0 and to_task.status == WorkTaskStatus.waiting_previous:
-        to_task.status = WorkTaskStatus.ready
-        await db.flush()
-
-    if accepted_quantity > 0 and to_task.status != WorkTaskStatus.completed:
-        # Calculate how much to auto-issue based on what is already issued to task
-        # to avoid double-issuing if the task was completed before transfer.
-        total_received = to_task.cached_received_quantity + accepted_quantity
-        total_issued = to_task.cached_issued_quantity
-        to_issue = total_received - total_issued
-        if to_issue > 0:
-            from app.services.shopfloor.operations_tasks import issue_to_work, auto_consume_available_remainders
-            await issue_to_work(
-                db,
-                task_id=to_task.id,
-                quantity=to_issue,
-                actor_id=actor_id,
-                comment=f"Auto-issued on transfer receive {transfer.id}",
-                source_ref=source_ref,
-                executor_user_id=executor_user_id,
-                performed_at=performed_at,
-                accounted_at=accounted_at,
-                transfer_id=transfer.id,
-            )
-            await auto_consume_available_remainders(db, to_task, actor_id=actor_id)
-
-    await _refresh_task_cache(db, to_task.id)
-    await _refresh_section_plan_line_cache(db, to_task.section_plan_line_id)
-
-    # Запись лога аудита (прием передачи)
-    from app.services.audit_log_service import log_action
-    from app.models.audit_log import AuditAction, AuditEntityType
-    from app.models.section import Section
-    from app.models.product import Product
-    
-    from_section = await db.get(Section, transfer.from_section_id)
-    to_section = await db.get(Section, transfer.to_section_id)
-    product = await db.get(Product, transfer.product_id)
-    
-    await log_action(
-        db,
-        status="success",
-        title="Прием передачи",
-        message=f"Передача #{transfer.transfer_no} принята участком \"{to_section.name if to_section else ''}\" (арт. {product.sku if product else ''}). Принято: {accepted_quantity} шт., отклонено: {rejected_quantity} шт.",
-        user_id=actor_id,
-        section_id=transfer.to_section_id,
-        section_name=to_section.name if to_section else None,
-        section_code=to_section.code if to_section else None,
-        task_ids=[transfer.from_task_id, transfer.to_task_id],
-        product_sku=product.sku if product else None,
-        qty_text=f"принято: {accepted_quantity}, отклон: {rejected_quantity}",
-        comment=comment,
-        action=AuditAction.RECEIVE,
-        entity_type=AuditEntityType.TRANSFER,
-        entity_id=transfer.id,
-        changes={"before": {"status": "sent"}, "after": {"status": transfer.status.value, "accepted_quantity": str(accepted_quantity), "rejected_quantity": str(rejected_quantity)}},
-    )
-
     return {
         "transfer_id": transfer.id,
         "status": transfer.status.value,
-        "discrepancy_id": discrepancy_id,
+        "discrepancy_id": None,
     }
 
 
@@ -481,53 +390,24 @@ async def resolve_transfer_discrepancy_link(
     db: AsyncSession,
     *,
     transfer_id: int,
-    discrepancy_id: int,
-    defect_item_id: int,
-    quantity: Decimal,
-    actor_id: int,
-    comment: str | None = None,
+    discrepancy_id: int,  # noqa: ARG001 — legacy arg
+    defect_item_id: int,  # noqa: ARG001 — legacy arg
+    quantity: Decimal,  # noqa: ARG001 — legacy arg
+    actor_id: int,  # noqa: ARG001 — legacy arg
+    comment: str | None = None,  # noqa: ARG001 — legacy arg
 ) -> dict:
-    """Resolve a transfer discrepancy by linking it to an existing DefectItem.
+    """Legacy no-op kept for backwards compatibility with old call sites.
 
-    No ``Movement`` is written here — the link simply records that the
-    discrepancy is accounted for by the same defect that explains the
-    reject on the receiving side.
+    Discrepancy linking is no longer part of the model — transfers are
+    either accepted in full on send or cancelled. Calling this function
+    returns a ``resolved``-looking result with zero quantities. New code
+    must not call it.
     """
-    transfer = await _get_transfer(db, transfer_id)
-    discrepancy = await db.get(TransferDiscrepancy, discrepancy_id)
-    if discrepancy is None or discrepancy.transfer_id != transfer.id:
-        raise ValueError("Transfer discrepancy not found")
-    defect_item = await db.get(DefectItem, defect_item_id)
-    if defect_item is None:
-        raise ValueError("Defect item not found")
-
-    quantity = _to_decimal(quantity)
-    _ensure_positive(quantity, "quantity")
-    if quantity > discrepancy.unresolved_quantity:
-        raise ValueError("Resolve quantity exceeds unresolved discrepancy")
-
-    link = TransferDiscrepancyDefectItem(
-        transfer_discrepancy_id=discrepancy.id,
-        defect_item_id=defect_item.id,
-        quantity=quantity,
-        comment=comment,
-        created_by=actor_id,
-    )
-    db.add(link)
-
-    discrepancy.resolved_quantity = discrepancy.resolved_quantity + quantity
-    discrepancy.unresolved_quantity = discrepancy.unresolved_quantity - quantity
-    if discrepancy.unresolved_quantity == 0:
-        discrepancy.status = TransferDiscrepancyStatus.resolved
-        discrepancy.resolved_at = datetime.now(UTC)
-    else:
-        discrepancy.status = TransferDiscrepancyStatus.partially_resolved
-
     return {
-        "discrepancy_id": discrepancy.id,
-        "status": discrepancy.status.value,
-        "resolved_quantity": str(discrepancy.resolved_quantity),
-        "unresolved_quantity": str(discrepancy.unresolved_quantity),
+        "discrepancy_id": None,
+        "status": "resolved",
+        "resolved_quantity": "0",
+        "unresolved_quantity": "0",
     }
 
 
@@ -812,127 +692,8 @@ async def auto_create_transfer_after_complete(
     )
 
 
-async def auto_create_transfer_from_stock_to_production(
-    db: AsyncSession,
-    *,
-    to_task: WorkTask,
-    quantity: Decimal,
-    actor_id: int,
-    idempotency_key: str | None = None,
-) -> dict | None:
-    """Auto-create a cross-GHP Transfer from a stock section to a production
-    WorkTask, when the production task is being taken to work and the raw
-    material lives in a different SPG.
-
-    Used by ``issue_to_work`` after a successful issue.  No-op when:
-    * there is no previous route step (sequence <= 1);
-    * the previous section is NOT a stock section (i.e. it's another
-      production step — handled by ``auto_transfer_next`` after complete);
-    * the previous section is in the same SPG (handled by
-      ``auto_consume_available_remainders``);
-    * no compatible ``SpgRemainder`` exists on the source side.
-
-    When firing, a synthetic ``WorkTask`` on the stock section is created
-    (status=released) so that ``transfer_send`` can reference it.  The
-    task is intentionally minimal — it never shows up in production
-    boards (those filter by ``kind == "production"``) and only acts as
-    a holder for outgoing cross-GHP transfers.
-    """
-    from app.models.internal_plan import SectionPlanLine
-    from app.models.section import Section
-    from app.models.spg import SpgSection
-    from app.models.spg_remainder import SpgRemainder
-    from app.models.work_task import WorkTaskStatus
-    from app.services.shopfloor.common import sections_share_spg
-
-    quantity = _to_decimal(quantity)
-    if quantity <= 0:
-        return None
-
-    to_line = await db.get(SectionPlanLine, to_task.section_plan_line_id)
-    if to_line is None or to_line.sequence <= 1:
-        return None
-
-    prev_line = await db.scalar(
-        select(SectionPlanLine).where(
-            SectionPlanLine.plan_position_id == to_line.plan_position_id,
-            SectionPlanLine.sequence == to_line.sequence - 1,
-        )
-    )
-    if prev_line is None:
-        return None
-
-    prev_section = await db.get(Section, prev_line.section_id)
-    if prev_section is None or prev_section.kind not in {"raw_stock", "wip_stock"}:
-        return None  # предыдущий шаг — production, не склад
-
-    if await sections_share_spg(db, prev_line.section_id, to_line.section_id):
-        return None  # та же ГХП — auto_consume сработает
-
-    # Ищем SpgRemainder на складе с нужным продуктом (FIFO)
-    prev_spg_id = await db.scalar(
-        select(SpgSection.spg_id).where(SpgSection.section_id == prev_line.section_id)
-    )
-    if prev_spg_id is None:
-        return None
-
-    candidate = await db.scalar(
-        select(SpgRemainder)
-        .where(
-            SpgRemainder.spg_id == prev_spg_id,
-            SpgRemainder.product_id == to_task.product_id,
-            SpgRemainder.remainder_quantity > 0,
-            SpgRemainder.consumed_at.is_(None),
-        )
-        .order_by(SpgRemainder.created_at.asc(), SpgRemainder.id.asc())
-        .limit(1)
-    )
-    if candidate is None or candidate.remainder_quantity <= 0:
-        return None
-
-    transfer_qty = min(quantity, candidate.remainder_quantity)
-
-    # Создаём/находим «фиктивный» WorkTask на складе
-    from_task = await db.scalar(
-        select(WorkTask).where(
-            WorkTask.section_plan_line_id == prev_line.id,
-            WorkTask.status.notin_([WorkTaskStatus.completed, WorkTaskStatus.cancelled]),
-        )
-    )
-    if from_task is None:
-        from_task = WorkTask(
-            section_plan_line_id=prev_line.id,
-            section_id=prev_line.section_id,
-            product_id=to_task.product_id,
-            route_stage_id=prev_line.route_stage_id,
-            planned_quantity=transfer_qty,
-            status=WorkTaskStatus.ready,
-            due_date=prev_line.due_date,
-        )
-        db.add(from_task)
-        await db.flush()
-        await _refresh_task_cache(db, from_task.id)
-
-    key = f"{idempotency_key}:auto-transfer-from-stock" if idempotency_key else None
-    send_res = await transfer_send(
-        db,
-        from_task_id=from_task.id,
-        to_task_id=to_task.id,
-        quantity=transfer_qty,
-        actor_id=actor_id,
-        comment="Авто-перемещение со склада при выдаче в работу",
-        idempotency_key=key,
-        post_factum=True,
-    )
-
-    rec_key = f"{idempotency_key}:auto-transfer-from-stock:receive" if idempotency_key else None
-    await transfer_receive(
-        db,
-        transfer_id=send_res["transfer_id"],
-        accepted_quantity=transfer_qty,
-        rejected_quantity=Decimal("0"),
-        actor_id=actor_id,
-        comment="Авто-приёмка перемещения со склада",
-        idempotency_key=rec_key,
-    )
-    return send_res
+# NOTE: auto_create_transfer_from_stock_to_production был удалён.
+# Под новой моделью (Send = auto-accept, никаких auto-flows на issue) —
+# оператор сам явно отправляет передачу со склада через /transfers.
+# Если хелпер понадобится снова — он делал send+receive, что теперь
+# сводится к одному transfer_send (он сам auto-accept'ит).

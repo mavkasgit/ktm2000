@@ -2,12 +2,18 @@
 
 Mounted at ``/transfers``.  Provides:
 
-  * ``POST /transfers``                          — send a transfer
-  * ``POST /transfers/{id}/accept``              — accept (or reject) a transfer
-  * ``POST /transfers/{id}/discrepancies/{d}/resolve-link``  — link a discrepancy to a DefectItem
-  * ``GET  /transfers/{id}``                     — transfer details (with discrepancies)
+  * ``POST /transfers``                          — send a transfer (auto-accepts)
+  * ``GET  /transfers/{id}``                     — transfer details
   * ``GET  /transfers/ready``                    — list of SectionTasks ready to transfer
   * ``GET  /transfers/sections/{id}/incoming``   — incoming open transfers for a section
+  * ``PUT  /transfers/{id}``                     — correct an accepted transfer
+  * ``POST /transfers/{id}/cancel``               — cancel an accepted transfer
+
+Under the explicit-transfer model, ``POST /transfers`` is the single
+write path. The auto-accept (receive) is part of the service itself,
+so the destination task transitions to ``ready`` and the receive
+Movement is written by the time the API returns. There is no separate
+``/transfers/{id}/accept`` endpoint anymore.
 
 Compatibility: the legacy ``/shopfloor/transfers`` endpoints are kept
 working as thin proxies in ``app.api.routes.shopfloor`` so the
@@ -16,17 +22,16 @@ existing UI keeps functioning during the migration.
 
 from __future__ import annotations
 
-from decimal import Decimal
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Header, Query
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import READER_ROLES, WRITER_ROLES, TRANSFER_WRITER_ROLES, require_role
+from app.api.deps import READER_ROLES, TRANSFER_WRITER_ROLES, require_role
 from app.api.deps import get_current_user
 from app.core.database import get_db
-from app.models.transfer import Transfer, TransferStatus
+from app.models.transfer import Transfer
 from app.models.user import User, UserRole
 from app.models.work_task import WorkTask
 
@@ -37,14 +42,10 @@ from app.transfers.queries import (
     get_section_transfer_history,
 )
 from app.transfers.schemas import (
-    AcceptTransferPayload,
     CreateTransferPayload,
-    ResolveDiscrepancyPayload,
     CorrectTransferPayload,
 )
 from app.transfers.services import (
-    resolve_transfer_discrepancy_link,
-    transfer_receive,
     transfer_send,
     correct_transfer,
     cancel_transfer,
@@ -100,11 +101,15 @@ async def create_transfer(
     represent multiple route operations merged via
     ``combined_op_group`` at plan-generation time, but no further
     splitting happens at transfer time.
+
+    Under the explicit-transfer model, ``transfer_send`` itself
+    auto-accepts: by the time this endpoint returns, the destination
+    task has transitioned to ``ready`` and the receive Movement is
+    written. There is no separate accept step.
     """
     await _ensure_task_lock(db, payload.from_task_id, locked_section_id, current_user)
     try:
-        # 1. Send transfer (status 'sent' and create movements/record)
-        send_res = await transfer_send(
+        return await transfer_send(
             db,
             from_task_id=payload.from_task_id,
             to_task_id=payload.to_task_id,
@@ -118,31 +123,6 @@ async def create_transfer(
             post_factum=payload.post_factum,
             physical_handover_at=payload.physical_handover_at,
         )
-        if send_res.get("idempotent_replay"):
-            return send_res
-
-        # 2. Auto-accept immediately (status 'accepted' and create receive movement)
-        rec_idempotency = f"{payload.idempotency_key}:auto_receive" if payload.idempotency_key else None
-
-        receive_res = await transfer_receive(
-            db,
-            transfer_id=send_res["transfer_id"],
-            accepted_quantity=payload.quantity,
-            rejected_quantity=Decimal("0"),
-            actor_id=current_user.id,
-            comment=payload.comment,
-            idempotency_key=rec_idempotency,
-            executor_user_id=payload.executor_user_id,
-            performed_at=payload.performed_at,
-            accounted_at=payload.accounted_at,
-        )
-
-        return {
-            "transfer_id": send_res["transfer_id"],
-            "transfer_no": send_res["transfer_no"],
-            "status": receive_res["status"],
-            "to_task_id": send_res["to_task_id"],
-        }
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -179,66 +159,6 @@ async def incoming_transfers(
     if locked_section_id is not None and section_id != locked_section_id:
         raise HTTPException(status_code=403, detail=LOCKED_SECTION_ERROR)
     return await get_section_incoming_transfers(db, section_id=section_id)
-
-
-@router.post("/{transfer_id}/accept", dependencies=[Depends(require_role(list(TRANSFER_WRITER_ROLES)))])
-async def accept_transfer(
-    transfer_id: int,
-    payload: AcceptTransferPayload,
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-    locked_section_id: int | None = Depends(get_single_window_locked_section_id),
-) -> dict:
-    await _ensure_transfer_target_lock(db, transfer_id, locked_section_id, current_user)
-    # Compatibility: if already accepted, just return success
-    transfer = await db.get(Transfer, transfer_id)
-    if transfer is not None and transfer.status == TransferStatus.accepted:
-        return {
-            "transfer_id": transfer.id,
-            "status": transfer.status.value,
-            "discrepancy_id": None,
-        }
-    try:
-        return await transfer_receive(
-            db,
-            transfer_id=transfer_id,
-            accepted_quantity=payload.accepted_quantity,
-            rejected_quantity=payload.rejected_quantity,
-            actor_id=current_user.id,
-            reason=payload.reason,
-            comment=payload.comment,
-            idempotency_key=payload.idempotency_key,
-            executor_user_id=payload.executor_user_id,
-            performed_at=payload.performed_at,
-            accounted_at=payload.accounted_at,
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-
-@router.post(
-    "/{transfer_id}/discrepancies/{discrepancy_id}/resolve-link",
-    dependencies=[Depends(require_role(list(TRANSFER_WRITER_ROLES)))],
-)
-async def resolve_discrepancy(
-    transfer_id: int,
-    discrepancy_id: int,
-    payload: ResolveDiscrepancyPayload,
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-) -> dict:
-    try:
-        return await resolve_transfer_discrepancy_link(
-            db,
-            transfer_id=transfer_id,
-            discrepancy_id=discrepancy_id,
-            defect_item_id=payload.defect_item_id,
-            quantity=payload.quantity,
-            actor_id=current_user.id,
-            comment=payload.comment,
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.get(

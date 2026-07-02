@@ -314,18 +314,12 @@ async def test_new_transfers_send_and_accept_via_new_endpoints(client, session) 
     )
     assert send.status_code == 200, send.text
     send_body = send.json()
+    # Under the explicit-transfer model, transfer_send auto-accepts:
+    # the response already reports status="accepted".
     assert send_body["status"] == "accepted"
     transfer_id = send_body["transfer_id"]
 
-    # ACCEPT endpoint handles compatibility with already accepted transfers
-    accept = await client.post(
-        f"/api/transfers/{transfer_id}/accept",
-        json={"accepted_quantity": "100", "rejected_quantity": "0", "idempotency_key": "xf-new:accept"},
-        headers=headers,
-    )
-    assert accept.status_code == 200, accept.text
-    assert accept.json()["status"] == "accepted"
-
+    # No separate /transfers/{id}/accept call — accept was part of send.
     # Verify GET /transfers/{id} returns accepted
     details = await client.get(f"/api/transfers/{transfer_id}", headers=headers)
     assert details.status_code == 200
@@ -371,7 +365,11 @@ async def test_transfers_correction_and_validation(client, session) -> None:
     ref_first = await session.get(WorkTask, first_task.id)
     ref_second = await session.get(WorkTask, second_task.id)
     assert ref_first.cached_transferred_quantity == Decimal("50")
-    assert ref_second.cached_in_work_quantity == Decimal("50")
+    # Auto-issue на приёмке передачи убран: оператор явно берёт в работу.
+    # Получено сидит в received, в работе — 0, статус должен быть ready.
+    assert ref_second.cached_received_quantity == Decimal("50")
+    assert ref_second.cached_in_work_quantity == Decimal("0")
+    assert ref_second.status == WorkTaskStatus.ready
 
     # 2. Correct quantity: 50 -> 70 (valid)
     correct = await client.put(
@@ -386,7 +384,8 @@ async def test_transfers_correction_and_validation(client, session) -> None:
     ref_first = await session.get(WorkTask, first_task.id)
     ref_second = await session.get(WorkTask, second_task.id)
     assert ref_first.cached_transferred_quantity == Decimal("70")
-    assert ref_second.cached_in_work_quantity == Decimal("70")
+    assert ref_second.cached_received_quantity == Decimal("70")
+    assert ref_second.cached_in_work_quantity == Decimal("0")
 
     # 3. Correct quantity exceeds source limit (completed is 100, we try to set to 120)
     correct_fail = await client.put(
@@ -397,10 +396,25 @@ async def test_transfers_correction_and_validation(client, session) -> None:
     assert correct_fail.status_code == 400
     assert "exceeds" in correct_fail.json()["detail"]
 
-    # 4. Try to reduce transfer from 70 to 50 (takes 20 parts away, but all 70 are in work)
+    # 4. With auto-issue on accept gone, no material is in work yet on the
+    # destination. Reducing transfer 70 -> 50 should now succeed freely.
+    correct_ok = await client.put(
+        f"/api/transfers/{transfer_id}",
+        json={"quantity": 50, "comment": "Reduced (no work yet)"},
+        headers=headers,
+    )
+    assert correct_ok.status_code == 200
+
+    # Now operator explicitly issues 50 to work, then attempt to reduce further
+    # to 30 should fail with "already consumed".
+    await client.post(
+        f"/api/shopfloor/tasks/{second_task.id}/issue",
+        json={"quantity": "50", "idempotency_key": "xf-corr:sec-issue"},
+        headers=headers,
+    )
     correct_fail2 = await client.put(
         f"/api/transfers/{transfer_id}",
-        json={"quantity": 50},
+        json={"quantity": 30},
         headers=headers,
     )
     assert correct_fail2.status_code == 400
@@ -409,7 +423,24 @@ async def test_transfers_correction_and_validation(client, session) -> None:
 
 @pytest.mark.asyncio
 async def test_transfers_cancellation_and_validation(client, session) -> None:
-    """Test cancelling transfers and validate limits."""
+    """Test cancelling transfers and validate limits.
+
+    Two cases:
+      1. Cannot cancel a transfer after the receiving task has already
+         consumed (completed or rejected) some of its quantity — the
+         material is no longer available to take back.
+      2. Can cancel a transfer that is still fully unconsumed on the
+         receiving side; after cancel the transfer is gone and the
+         balance is restored on the source.
+
+    Tech debt: cancel currently uses the aggregate ``cached_in_work_quantity``
+    on the destination, so it works per-destination, not per-transfer.
+    A second pending transfer to the same task would block cancellation
+    of the first one if the aggregate in_work drops below the first
+    transfer's sent quantity. A per-transfer ledger (or a
+    ``TransferInWork`` link table) is needed for true per-transfer
+    cancel. See handover doc for context.
+    """
     user = await _make_user(session, "xfer-cancel@test.local")
     headers = _auth_headers(user)
     ctx = await _make_six_section_fixture(session, sku="FG-XF-CANCEL", planned_qty=Decimal("100"))
@@ -429,7 +460,7 @@ async def test_transfers_cancellation_and_validation(client, session) -> None:
         headers=headers,
     )
 
-    # 1. Create transfer 1 (40 parts)
+    # ── Case 1: cannot cancel after consumption ──────────────────────────
     send = await client.post(
         "/api/transfers",
         json={"from_task_id": first_task.id, "to_task_id": second_task.id, "quantity": "40", "idempotency_key": "xf-cnl:send-1"},
@@ -437,6 +468,13 @@ async def test_transfers_cancellation_and_validation(client, session) -> None:
     )
     assert send.status_code == 200
     transfer_id_1 = send.json()["transfer_id"]
+
+    # Auto-issue on accept убран: оператор должен явно взять в работу.
+    await client.post(
+        f"/api/shopfloor/tasks/{second_task.id}/issue",
+        json={"quantity": "40", "idempotency_key": "xf-cnl:sec-issue"},
+        headers=headers,
+    )
 
     # Complete 15 parts on target (25 remains in work from transfer 1)
     await client.post(
@@ -453,29 +491,45 @@ async def test_transfers_cancellation_and_validation(client, session) -> None:
     assert cancel_fail.status_code == 400
     assert "already completed" in cancel_fail.json()["detail"].lower()
 
-    # 2. Create transfer 2 (50 parts)
+    # Source still shows the full transfer; destination still holds the remainder.
+    ref_first = await session.get(WorkTask, first_task.id)
+    ref_second = await session.get(WorkTask, second_task.id)
+    assert ref_first.cached_transferred_quantity == Decimal("40")
+    assert ref_second.cached_in_work_quantity == Decimal("25")
+
+    # ── Case 2: cancel works when nothing was consumed from this transfer ──
+    # Under the new explicit-transfer model, transfer_send auto-accepts:
+    # the transfer is already in status=accepted and the destination task
+    # has cached_received_quantity += 30. Then we issue 30 to in_work
+    # and the cancel guard `in_work >= sent` passes.
     send2 = await client.post(
         "/api/transfers",
-        json={"from_task_id": first_task.id, "to_task_id": second_task.id, "quantity": "50", "idempotency_key": "xf-cnl:send-2"},
+        json={"from_task_id": first_task.id, "to_task_id": second_task.id, "quantity": "30", "idempotency_key": "xf-cnl:send-2"},
         headers=headers,
     )
     assert send2.status_code == 200
     transfer_id_2 = send2.json()["transfer_id"]
+    # Auto-accept already happened inside transfer_send.
+    assert send2.json()["status"] == TransferStatus.accepted.value
 
-    # Cancel transfer 2 should succeed (the 50 parts are fully in work since 25 + 50 = 75 >= 50)
-    cancel = await client.post(
+    issue2 = await client.post(
+        f"/api/shopfloor/tasks/{second_task.id}/issue",
+        json={"quantity": "30", "idempotency_key": "xf-cnl:sec-issue-2"},
+        headers=headers,
+    )
+    assert issue2.status_code == 200
+
+    cancel_ok = await client.post(
         f"/api/transfers/{transfer_id_2}/cancel",
         headers=headers,
     )
-    assert cancel.status_code == 200
-    assert cancel.json()["status"] == "cancelled"
+    assert cancel_ok.status_code == 200
+    assert cancel_ok.json()["status"] == TransferStatus.cancelled.value
 
-    await session.commit()
+    # Movements for the cancelled transfer are removed, so source's
+    # cached_transferred_quantity drops back to 40 (only transfer 1 remains).
     ref_first = await session.get(WorkTask, first_task.id)
-    ref_second = await session.get(WorkTask, second_task.id)
-    # Only transfer 1 (40 parts) should remain active
     assert ref_first.cached_transferred_quantity == Decimal("40")
-    assert ref_second.cached_in_work_quantity == Decimal("25") # 40 received - 15 completed = 25 in work
 
 
 # ─── Decoupled "completed" status ────────────────────────────────────────────
@@ -673,15 +727,11 @@ async def test_legacy_shopfloor_transfers_endpoint_still_works(client, session) 
         headers=headers,
     )
     assert send.status_code == 200
-    transfer_id = send.json()["transfer_id"]
-
-    accept = await client.post(
-        f"/api/shopfloor/transfers/{transfer_id}/accept",
-        json={"accepted_quantity": "100", "rejected_quantity": "0", "idempotency_key": "xf-leg:accept"},
-        headers=headers,
-    )
-    assert accept.status_code == 200
-    assert accept.json()["status"] == "accepted"
+    send_body = send.json()
+    # The legacy POST /api/shopfloor/transfers also auto-accepts under
+    # the new explicit-transfer model.
+    assert send_body["status"] == "accepted"
+    transfer_id = send_body["transfer_id"]
 
     # The legacy "incoming-transfers" endpoint still works.
     incoming = await client.get(
@@ -760,9 +810,9 @@ async def test_transfers_history_generic_endpoints(client, session) -> None:
 
 @pytest.mark.asyncio
 async def test_same_spg_auto_avail_and_status(client, session) -> None:
-    """Test that tasks in the same GHP automatically receive availability
-    on completion of the previous task, without manual transfers, and that
-    manual transfers between them are blocked.
+    """Test that tasks in the same GHP do NOT auto-receive availability
+    on completion of the previous task — operator must explicitly send and
+    accept a transfer (which is now allowed even within the same GHP).
     """
     user = await _make_user(session, "xfer-same-spg@test.local")
     headers = _auth_headers(user)
@@ -785,6 +835,9 @@ async def test_same_spg_auto_avail_and_status(client, session) -> None:
     # Verify initial state
     assert first_task.status == WorkTaskStatus.ready
     assert first_task.cached_available_quantity == Decimal("100")
+    # second_task: при наличии предыдущего таска в той же ГХП _refresh_task_cache
+    # использует prev_completed для расчёта available. Здесь же prev_completed=0,
+    # поэтому second_task остаётся в waiting_previous.
     assert second_task.status == WorkTaskStatus.waiting_previous
     assert second_task.cached_available_quantity == Decimal("0")
 
@@ -803,23 +856,29 @@ async def test_same_spg_auto_avail_and_status(client, session) -> None:
     )
     assert complete.status_code == 200
 
-    # Refresh second task from db and verify automatic ready status and availability
+    # Каскадный auto-issue убран: second_task остаётся waiting_previous,
+    # материал НЕ появляется в работе.
     await session.commit()
     await session.refresh(second_task)
-    assert second_task.status == WorkTaskStatus.in_progress
-    assert second_task.cached_in_work_quantity == Decimal("60")
+    assert second_task.status == WorkTaskStatus.waiting_previous
+    assert second_task.cached_in_work_quantity == Decimal("0")
+    assert second_task.cached_received_quantity == Decimal("0")
+    assert second_task.cached_available_quantity == Decimal("0")
 
-    # Verify that first task is NOT listed in ready_to_transfer (since next is same GHP)
+    # First task (DRILL) is listed in ready_to_transfer (we still surface
+    # it as "готово к передаче", чтобы оператор сделал явную передачу
+    # внутри ГХП). Запрашиваем по section_id первого production-участка.
     resp = await client.get(
-        f"/api/transfers/ready?section_id={ctx['sections'][0].id}",
+        f"/api/transfers/ready?section_id={ctx['sections'][1].id}",
         headers=headers,
     )
     assert resp.status_code == 200
     items = resp.json()["items"]
     ours = [i for i in items if i["task_id"] == first_task.id]
-    assert len(ours) == 0
+    assert len(ours) == 1
+    assert ours[0]["transferable_quantity"] == "60"
 
-    # Verify that manual transfer between them is rejected
+    # Manual transfer внутри одной ГХП теперь разрешена — раньше было 400.
     send_manual = await client.post(
         "/api/transfers",
         json={
@@ -830,8 +889,14 @@ async def test_same_spg_auto_avail_and_status(client, session) -> None:
         },
         headers=headers,
     )
-    assert send_manual.status_code == 400
-    assert "not allowed" in send_manual.json()["detail"]
+    assert send_manual.status_code == 200, send_manual.text
+
+    # После приёмки: second_task -> ready, материал в received (НЕ в работе).
+    await session.commit()
+    await session.refresh(second_task)
+    assert second_task.status == WorkTaskStatus.ready
+    assert second_task.cached_received_quantity == Decimal("10")
+    assert second_task.cached_in_work_quantity == Decimal("0")
 
 
 # ─── post-factum transfers ───────────────────────────────────────────────────
@@ -916,17 +981,17 @@ async def test_post_factum_send_succeeds_when_sender_under_completed(
         sent_dt = sent_dt.replace(tzinfo=timezone.utc)
     assert abs((from_dt - sent_dt).total_seconds()) < 1
 
-    # The post-factum transfer produces three ledger rows:
-    # transfer_send (sender side), transfer_receive (receiver side),
-    # and the auto-issue_to_work on receive.
+    # The post-factum transfer produces only two ledger rows:
+    # transfer_send (sender side) and transfer_receive (receiver side).
+    # Auto-issue on accept убран: оператор явно берёт в работу.
     movements = (
         await session.execute(
             select(Movement).where(Movement.transfer_id == transfer_id)
         )
     ).scalars().all()
-    assert len(movements) == 3
+    assert len(movements) == 2
     types = {m.movement_type for m in movements}
-    assert types == {MovementType.transfer_send, MovementType.transfer_receive, MovementType.issue_to_work}
+    assert types == {MovementType.transfer_send, MovementType.transfer_receive}
     for m in movements:
         assert m.performed_at is not None
         assert m.accounted_at is not None
@@ -940,7 +1005,6 @@ async def test_post_factum_send_succeeds_when_sender_under_completed(
             if perf.tzinfo is None:
                 perf = perf.replace(tzinfo=timezone.utc)
             assert perf < now
-        # issue_to_work: is_post_factum is False (it's a separate op)
 
 
 @pytest.mark.asyncio
@@ -970,9 +1034,9 @@ async def test_post_factum_does_not_break_db_constraints(
     )
     await session.commit()
 
-    # Post-factum send 50.  The auto-accept will:
+    # Post-factum send 50.  The accept will:
     #   1. flip second_task from waiting_previous -> ready
-    #   2. call issue_to_work(50) -> movement, status -> in_progress
+    #   2. NO auto-issue — оператор явно берёт в работу
     resp = await client.post(
         "/api/transfers",
         json={
@@ -995,9 +1059,11 @@ async def test_post_factum_does_not_break_db_constraints(
     assert first_task.cached_transferred_quantity >= 0
     assert second_task.cached_received_quantity == Decimal("50")
     assert second_task.cached_received_quantity >= 0
-    # The auto-accept issues the received quantity to work.
-    assert second_task.cached_issued_quantity == Decimal("50")
+    # Auto-issue on accept убран: в работе 0, статус — ready.
+    assert second_task.cached_issued_quantity == Decimal("0")
+    assert second_task.cached_in_work_quantity == Decimal("0")
     assert second_task.cached_completed_quantity == Decimal("0")
+    assert second_task.status == WorkTaskStatus.ready
     # All cached_* quantities stay non-negative on the post-factum path.
     assert second_task.cached_in_work_quantity >= 0
     assert second_task.cached_available_quantity >= 0
@@ -1116,16 +1182,16 @@ async def test_post_factum_idempotency(
     assert r2.json()["transfer_id"] == tid_1
 
     # No duplicate Movements.  The post-factum send+receive pair
-    # produces three ledger rows: transfer_send, transfer_receive, and
-    # the auto-issue_to_work on receive (always 3 for a fresh send).
+    # produces two ledger rows: transfer_send and transfer_receive
+    # (auto-issue on accept убран).
     await session.commit()
     n_movements = (
         await session.execute(
             select(Movement).where(Movement.transfer_id == tid_1)
         )
     ).scalars().all()
-    assert len(n_movements) == 3
-    # Replay again: still 3 movements (no duplicates on the second replay either)
+    assert len(n_movements) == 2
+    # Replay again: still 2 movements (no duplicates on the second replay either)
     r3 = await client.post(
         "/api/transfers",
         json={
@@ -1145,7 +1211,7 @@ async def test_post_factum_idempotency(
             select(Movement).where(Movement.transfer_id == tid_1)
         )
     ).scalars().all()
-    assert len(n_movements2) == 3
+    assert len(n_movements2) == 2
 
 
 @pytest.mark.asyncio
@@ -1257,6 +1323,13 @@ async def test_complete_waiting_task_before_transfer(
         headers=headers,
     )
     assert resp_transfer.status_code == 200, resp_transfer.text
+
+    # Auto-issue on accept убран: оператор явно берёт в работу после приёмки.
+    await client.post(
+        f"/api/shopfloor/tasks/{second_task.id}/issue",
+        json={"quantity": "100", "idempotency_key": "xf-pfwc:issue-second"},
+        headers=headers,
+    )
 
     # Now that the transfer is received and task status is ready, we can complete 80 parts
     resp_complete_ok = await client.post(

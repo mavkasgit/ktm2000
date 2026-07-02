@@ -26,6 +26,41 @@ async def _get_task(db: AsyncSession, task_id: int) -> WorkTask:
         raise ValueError("Task not found")
     return task
 
+
+async def _get_task_for_update(db: AsyncSession, task_id: int) -> WorkTask:
+    """Load a WorkTask with a row-level lock (SELECT ... FOR UPDATE).
+
+    Use this in write paths that need to serialise concurrent mutations
+    of the same task (e.g. concurrent transfer_send calls would otherwise
+    each see the same stale ``cached_transferred_quantity`` and both pass
+    the ``quantity <= transferable`` guard).
+    """
+    task = (
+        await db.scalar(
+            select(WorkTask).where(WorkTask.id == task_id).with_for_update()
+        )
+    )
+    if task is None:
+        raise ValueError("Task not found")
+    return task
+
+async def _get_transfer_for_update(db: AsyncSession, transfer_id: int) -> Transfer:
+    """Load a Transfer with a row-level lock (SELECT ... FOR UPDATE).
+
+    Serialises concurrent accept/correct/cancel on the same transfer so
+    that ``accepted + rejected <= sent`` cannot be violated by parallel
+    writes.
+    """
+    transfer = (
+        await db.scalar(
+            select(Transfer).where(Transfer.id == transfer_id).with_for_update()
+        )
+    )
+    if transfer is None:
+        raise ValueError("Transfer not found")
+    return transfer
+
+
 async def _get_transfer(db: AsyncSession, transfer_id: int) -> Transfer:
     transfer = await db.get(Transfer, transfer_id)
     if transfer is None:

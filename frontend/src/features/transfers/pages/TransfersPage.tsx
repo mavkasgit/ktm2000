@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useMemo } from "react";
+import { useState, useCallback, useEffect, useMemo, useRef } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Send, Inbox, RefreshCw, AlertCircle, ChevronRight } from "lucide-react";
 
@@ -70,12 +70,6 @@ function conflictHintFromTransferError(message: string): string | null {
   if (n.includes("следующим этапом маршрута")) {
     return "Передавать можно только на следующий этап маршрута.";
   }
-  if (n.includes("должна быть отправлена")) {
-    return "Передача уже обработана. Обновите список входящих.";
-  }
-  if (n.includes("сумма принятого и отклонённого")) {
-    return "Сумма принятого и отклонённого превышает отправленное количество.";
-  }
   if (n.includes("превышает доступный к передаче объём исходной задачи")) {
     return "Скорректированное количество превышает доступный к передаче объём исходной задачи.";
   }
@@ -92,11 +86,29 @@ function makeIdempotencyKey(prefix: string): string {
   return `${prefix}-${Date.now()}-${Math.floor(Math.random() * 1_000_000)}`;
 }
 
+type StatusBadgeVariant = "default" | "destructive" | "outline" | "secondary";
+
+function statusBadgeLabel(status: string): string {
+  // Under the explicit-transfer model, transfer_send auto-accepts the
+  // transfer inline. By the time the operator sees the history list,
+  // every transfer is either "Принята" or "Аннулирована".
+  if (status === "cancelled") return "Аннулирована";
+  return "Принята";
+}
+
+function statusBadgeVariant(status: string): StatusBadgeVariant {
+  if (status === "cancelled") return "destructive";
+  return "outline";
+}
+
 interface ReadyTransferRowProps {
   task: ReadyToTransferTask;
   bulkMode: boolean;
   isSelected: boolean;
   onSelect: () => void;
+  isSubmitting: boolean;
+  tryAcquire: () => boolean;
+  release: () => void;
   invalidateShopfloorCaches: (fromSectionId: number | null, toSectionId: number | null) => void;
   invalidateTransfersCaches: () => void;
 }
@@ -106,23 +118,27 @@ function ReadyTransferRow({
   bulkMode,
   isSelected,
   onSelect,
+  isSubmitting,
+  tryAcquire,
+  release,
   invalidateShopfloorCaches,
   invalidateTransfersCaches,
 }: ReadyTransferRowProps) {
   const [quantity, setQuantity] = useState(task.planned_quantity);
+  const submittingRef = useRef(false);
 
   useEffect(() => {
     setQuantity(task.planned_quantity);
   }, [task.planned_quantity]);
 
   const mutation = useMutation({
-    mutationFn: () =>
+    mutationFn: (idempotencyKey: string) =>
       createTransfer({
         from_task_id: task.task_id,
         to_task_id: undefined,
         quantity,
         comment: undefined,
-        idempotency_key: makeIdempotencyKey(`transfer-send-${task.task_id}`),
+        idempotency_key: idempotencyKey,
       }),
     onSuccess: () => {
       toast({
@@ -209,10 +225,21 @@ function ReadyTransferRow({
             />
             <Button
               size="sm"
-              disabled={!task.has_next_step || mutation.isPending || overLimit || qtyNum <= 0}
-              onClick={() => mutation.mutate()}
+              disabled={!task.has_next_step || isSubmitting || mutation.isPending || overLimit || qtyNum <= 0}
+              onClick={() => {
+                if (submittingRef.current || isSubmitting || mutation.isPending) return;
+                if (!tryAcquire()) return;
+                submittingRef.current = true;
+                const key = makeIdempotencyKey(`transfer-send-${task.task_id}`);
+                mutation.mutate(key, {
+                  onSettled: () => {
+                    submittingRef.current = false;
+                    release();
+                  },
+                });
+              }}
             >
-              {mutation.isPending ? "Отправка..." : "Передать"}
+              {mutation.isPending || isSubmitting ? "Отправка..." : "Передать"}
             </Button>
           </div>
         </TableCell>
@@ -226,6 +253,26 @@ export function TransfersPage() {
   const [spgId, setSpgId] = useState<number | null>(null);
   const [showAllSpgs, setShowAllSpgs] = useState(true);
   const [editTransferRecord, setEditTransferRecord] = useState<IncomingTransfer | null>(null);
+
+  const inFlightRef = useRef<Set<number>>(new Set());
+  const [inFlightVersion, setInFlightVersion] = useState(0);
+  const tryAcquireTransferLock = useCallback((taskId: number): boolean => {
+    if (inFlightRef.current.has(taskId)) return false;
+    inFlightRef.current.add(taskId);
+    setInFlightVersion((v) => v + 1);
+    return true;
+  }, []);
+  const releaseTransferLock = useCallback((taskId: number): void => {
+    if (!inFlightRef.current.has(taskId)) return;
+    inFlightRef.current.delete(taskId);
+    setInFlightVersion((v) => v + 1);
+  }, []);
+  const isTransferInFlight = useCallback(
+    (taskId: number): boolean => inFlightRef.current.has(taskId),
+    // inFlightVersion нужен в deps, чтобы после release строка перерендерилась и disabled обновился
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [inFlightVersion],
+  );
 
   // Bulk Operations State
   const [bulkMode, setBulkMode] = useState(false);
@@ -539,6 +586,9 @@ export function TransfersPage() {
                       bulkMode={bulkMode}
                       isSelected={bulkSelection.isSelected(t.task_id)}
                       onSelect={() => bulkSelection.selectOne(t.task_id)}
+                      isSubmitting={isTransferInFlight(t.task_id)}
+                      tryAcquire={() => tryAcquireTransferLock(t.task_id)}
+                      release={() => releaseTransferLock(t.task_id)}
                       invalidateShopfloorCaches={invalidateShopfloorCaches}
                       invalidateTransfersCaches={invalidateTransfersCaches}
                     />
@@ -583,6 +633,13 @@ export function TransfersPage() {
                       : new Set(spgs?.find((s) => s.id === activeSpgId)?.sections.map((sec) => sec.section_id) ?? []);
                     const isIncoming = sectionIdsInSpg.has(t.to_section_id);
                     const isCancelled = t.status === "cancelled";
+                    const statusBadge = (() => {
+                      if (isCancelled) return { label: "Аннулирована", variant: "destructive" as const };
+                      if (t.status === "sent") return { label: "Отправлена", variant: "outline" as const };
+                      if (t.status === "partially_accepted")
+                        return { label: "Частично принята", variant: "outline" as const };
+                      return { label: "Принята", variant: "outline" as const };
+                    })();
                     return (
                       <TableRow
                         key={t.transfer_id}
@@ -611,8 +668,8 @@ export function TransfersPage() {
                               <Badge variant={isIncoming ? "default" : "secondary"} className="text-[10px] py-0 px-1.5 h-4">
                                 {isIncoming ? "Входящая" : "Исходящая"}
                               </Badge>
-                              <Badge variant={isCancelled ? "destructive" : "outline"}>
-                                {isCancelled ? "Аннулирована" : "Принята"}
+                              <Badge variant={statusBadge.variant}>
+                                {statusBadge.label}
                               </Badge>
                             </div>
                             {t.is_post_factum && (
@@ -719,29 +776,17 @@ function EditTransferDialog({
   const hasChanged = qtyNum !== oldQty || comment !== (transfer.comment || "");
 
   const mutation = useMutation({
-    mutationFn: () => {
-      if (qtyNum === 0) {
-        return cancelTransfer(transfer.transfer_id);
-      }
-      return correctTransfer(transfer.transfer_id, {
+    mutationFn: () =>
+      correctTransfer(transfer.transfer_id, {
         quantity,
         comment: comment || undefined,
-      });
-    },
+      }),
     onSuccess: () => {
-      if (qtyNum === 0) {
-        toast({
-          variant: "success",
-          title: "Передача отменена",
-          description: `Передача ${transfer.transfer_no} успешно аннулирована`,
-        });
-      } else {
-        toast({
-          variant: "success",
-          title: "Количество изменено",
-          description: `Передача ${transfer.transfer_no} успешно скорректирована`,
-        });
-      }
+      toast({
+        variant: "success",
+        title: "Количество изменено",
+        description: `Передача ${transfer.transfer_no} успешно скорректирована`,
+      });
       onSuccess();
     },
     onError: (err: unknown) => {
@@ -760,7 +805,7 @@ function EditTransferDialog({
           <DialogDescription>
             {isCancelled
               ? "Просмотр информации об аннулированной передаче."
-              : "Изменение объема деталей или аннулирование передачи."}
+              : "Корректировка объема деталей или аннулирование передачи."}
           </DialogDescription>
         </DialogHeader>
         <div className="space-y-3">
@@ -779,8 +824,8 @@ function EditTransferDialog({
               <Badge variant={isIncoming ? "default" : "secondary"} className="text-[10px] py-0 px-1.5 h-4">
                 {isIncoming ? "Входящая" : "Исходящая"}
               </Badge>
-              <Badge variant={isCancelled ? "destructive" : "outline"}>
-                {isCancelled ? "Аннулирована" : "Принята"}
+              <Badge variant={statusBadgeVariant(transfer.status)}>
+                {statusBadgeLabel(transfer.status)}
               </Badge>
             </div>
           </div>
@@ -821,7 +866,7 @@ function EditTransferDialog({
                 <Input
                   type="number"
                   step="1"
-                  min="0"
+                  min="1"
                   value={quantity}
                   disabled={isCancelled}
                   onChange={(e) => {
@@ -829,12 +874,6 @@ function EditTransferDialog({
                     setError(null);
                   }}
                 />
-                {qtyNum === 0 && !isCancelled && (
-                  <div className="mt-1.5 text-xs text-amber-600 flex items-center gap-1 bg-amber-50 p-2 rounded border border-amber-200">
-                    <AlertCircle className="h-3.5 w-3.5 flex-shrink-0" />
-                    <span>Установка количества в 0 приведет к аннулированию передачи.</span>
-                  </div>
-                )}
               </div>
 
               <div>
@@ -855,7 +894,7 @@ function EditTransferDialog({
 
               <div className="flex justify-between items-center pt-2 gap-2">
                 <div>
-                  {!isCancelled && !isIncoming && (
+                  {!isCancelled && (
                     <Button
                       variant="destructive"
                       onClick={() => setShowCancelConfirm(true)}
@@ -871,7 +910,7 @@ function EditTransferDialog({
                   {!isCancelled && (
                     <Button
                       onClick={() => mutation.mutate()}
-                      disabled={mutation.isPending || qtyNum < 0 || !hasChanged}
+                      disabled={mutation.isPending || qtyNum <= 0 || !hasChanged}
                     >
                       {mutation.isPending ? "Сохранение..." : "Сохранить"}
                     </Button>

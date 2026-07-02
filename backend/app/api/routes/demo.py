@@ -35,7 +35,7 @@ from app.models.work_task import WorkTask
 from app.services.plan_generation import create_release_batch, release_batch
 from app.services.plan_import_service import create_excel_import_change_set
 from app.services.production_plan_service import apply_change_set, approve_plan_position
-from app.services.shopfloor_service import complete_task, issue_to_work, transfer_receive, transfer_send
+from app.services.shopfloor_service import complete_task, issue_to_work, transfer_send
 
 router = APIRouter(prefix="/demo", tags=["demo"])
 
@@ -508,27 +508,18 @@ async def run_full_route_test(
         if idx < len(task_rows) - 1:
             next_task = task_rows[idx + 1][0]
             try:
-                transfer_result = await transfer_send(
+                # transfer_send auto-accepts under the new explicit-transfer
+                # model — the destination task transitions to ``ready`` and
+                # the receive Movement is written inline. No separate
+                # transfer_receive call is required.
+                await transfer_send(
                     db,
                     from_task_id=task.id,
                     to_task_id=next_task.id,
                     quantity=good_qty,
                     actor_id=current_user.id,
-                    comment=f"demo send {run_id}",
-                    idempotency_key=f"{movement_key}:send",
-                    executor_user_id=current_user.id,
-                    performed_at=performed_at,
-                    accounted_at=accounted_at,
-                )
-                await transfer_receive(
-                    db,
-                    transfer_id=int(transfer_result["transfer_id"]),
-                    accepted_quantity=good_qty,
-                    rejected_quantity=Decimal("0"),
-                    actor_id=current_user.id,
-                    reason="demo_accept",
-                    comment=f"demo accept {run_id}",
-                    idempotency_key=f"{movement_key}:receive",
+                    comment=f"demo send+accept {run_id}",
+                    idempotency_key=movement_key,
                     executor_user_id=current_user.id,
                     performed_at=performed_at,
                     accounted_at=accounted_at,

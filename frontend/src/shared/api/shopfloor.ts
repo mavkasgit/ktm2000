@@ -186,17 +186,6 @@ export type CompleteTaskInput = {
   auto_transfer_next?: boolean;
 };
 
-export type AcceptTransferInput = {
-  accepted_quantity: number | string;
-  rejected_quantity: number | string;
-  reason?: string;
-  comment?: string;
-  idempotency_key?: string;
-  executor_user_id?: number;
-  performed_at?: string;
-  accounted_at?: string;
-};
-
 export async function getSectionBoard(
   sectionId: number,
   params?: { date_from?: string; date_to?: string; status?: string },
@@ -263,19 +252,6 @@ export async function completeTask(
 ): Promise<{ task_id: number; movement_ids: number[]; defect_id: number | null; status: string; idempotent_replay?: boolean }> {
   const { data } = await apiClient.post(
     `/shopfloor/tasks/${taskId}/complete`,
-    payload,
-    makeRequestConfig(options)
-  );
-  return data;
-}
-
-export async function acceptTransfer(
-  transferId: number,
-  payload: AcceptTransferInput,
-  options?: ShopfloorRequestOptions
-): Promise<{ transfer_id: number; status: string; discrepancy_id: number | null }> {
-  const { data } = await apiClient.post(
-    `/shopfloor/transfers/${transferId}/accept`,
     payload,
     makeRequestConfig(options)
   );

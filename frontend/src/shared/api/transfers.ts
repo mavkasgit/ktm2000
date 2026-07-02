@@ -98,34 +98,22 @@ export type CreateTransferInput = {
   physical_handover_at?: string;
 };
 
-export type AcceptTransferInput = {
-  accepted_quantity: number | string;
-  rejected_quantity: number | string;
-  reason?: string;
-  comment?: string;
-  idempotency_key?: string;
-  executor_user_id?: number;
-  performed_at?: string;
-  accounted_at?: string;
-};
-
 export type CreateTransferResponse = {
   transfer_id: number;
   transfer_no: string;
+  // Under the explicit-transfer model, transfer_send auto-accepts:
+  // the response status is always "accepted" (the transfer is already
+  // received on the destination by the time the API returns).
   status: string;
   to_task_id: number;
   idempotent_replay?: boolean;
 };
 
-export type AcceptTransferResponse = {
-  transfer_id: number;
-  status: string;
-  discrepancy_id: number | null;
-};
-
 // ---------------------------------------------------------------------------
-// API — new /transfers endpoints. Old /shopfloor/transfers endpoints still
-// work but are deprecated for new code.
+// API — /transfers endpoints. Under the explicit-transfer model there is
+// no separate /accept step: transfer_send auto-accepts the transfer
+// inline. Operators either confirm the transfer on the /transfers page
+// or correct/cancel it after the fact.
 // ---------------------------------------------------------------------------
 
 export async function listReadyToTransfer(
@@ -160,19 +148,6 @@ export async function createTransfer(
 ): Promise<CreateTransferResponse> {
   const { data } = await apiClient.post<CreateTransferResponse>(
     "/transfers",
-    payload,
-    makeRequestConfig(options),
-  );
-  return data;
-}
-
-export async function acceptTransfer(
-  transferId: number,
-  payload: AcceptTransferInput,
-  options?: ShopfloorRequestOptions,
-): Promise<AcceptTransferResponse> {
-  const { data } = await apiClient.post<AcceptTransferResponse>(
-    `/transfers/${transferId}/accept`,
     payload,
     makeRequestConfig(options),
   );

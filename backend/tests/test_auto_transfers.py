@@ -113,6 +113,17 @@ async def _release_via_take_to_work(client, position_id: int) -> None:
     assert resp.status_code == 200, resp.text
 
 
+async def _issue_first_task(client, task_id: int, qty: Decimal, idempotency_key: str | None = None) -> None:
+    body = {
+        "quantity": str(qty),
+        "comment": "test issue",
+    }
+    if idempotency_key:
+        body["idempotency_key"] = idempotency_key
+    resp = await client.post(f"/api/shopfloor/tasks/{task_id}/issue", json=body)
+    assert resp.status_code == 200, resp.text
+
+
 async def _complete_first_task(
     client,
     task_id: int,
@@ -120,6 +131,10 @@ async def _complete_first_task(
     idempotency_key: str | None = None,
     auto_transfer_next: bool = False,
 ) -> None:
+    # Auto-issue is no longer done inside complete_task — operator must
+    # explicitly issue the material into work before completing.
+    issue_key = f"{idempotency_key}:issue" if idempotency_key else None
+    await _issue_first_task(client, task_id, qty, idempotency_key=issue_key)
     body = {
         "good_quantity": str(qty),
         "defect_quantity": "0",
@@ -167,7 +182,10 @@ async def test_auto_create_transfer_creates_cross_ghp(client, session) -> None:
     assert t.from_section_id == fx["sections"][0].id
     assert t.to_section_id == fx["sections"][1].id
     assert t.is_post_factum is True
-    assert t.status == TransferStatus.sent
+    # Under the new explicit-transfer model, transfer_send auto-accepts:
+    # the transfer is immediately marked ``accepted`` and the destination
+    # task transitions to ``ready``.
+    assert t.status == TransferStatus.accepted
 
 
 async def test_complete_no_transfer_within_same_ghp(client, session) -> None:
