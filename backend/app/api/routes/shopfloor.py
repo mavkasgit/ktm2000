@@ -41,7 +41,6 @@ from app.services.shopfloor_service import (
     get_sections_summary,
     get_task_details,
     get_warehouse_remainders,
-    issue_to_work,
     link_attachment,
     prepare_section_task,
     return_remainder_to_stock,
@@ -93,18 +92,6 @@ async def _ensure_transfer_target_lock(db: AsyncSession, transfer_id: int, locke
 
 class PatchOperationPayload(BaseModel):
     operation_code: str
-
-
-class IssuePayload(BaseModel):
-    quantity: Decimal
-    comment: str | None = None
-    reason: str | None = None
-    source_ref: str | None = None
-    idempotency_key: str | None = None
-    executor_user_id: int | None = None
-    performed_at: datetime | None = None
-    accounted_at: datetime | None = None
-    shortage_strategy: ShortageStrategy = ShortageStrategy.negative_remainder
 
 
 class CompletePayload(BaseModel):
@@ -243,73 +230,6 @@ class LinkAttachmentPayload(BaseModel):
     entity_type: EntityType
     entity_id: int
     caption: str | None = None
-
-
-@router.post("/tasks/{task_id}/issue", dependencies=[Depends(require_role(list(WRITER_ROLES)))])
-async def issue_task(
-    task_id: int,
-    payload: IssuePayload,
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-    locked_section_id: int | None = Depends(get_single_window_locked_section_id),
-) -> dict:
-    await _ensure_task_lock(db, task_id, locked_section_id)
-    try:
-        res = await issue_to_work(
-            db,
-            task_id=task_id,
-            quantity=payload.quantity,
-            actor_id=current_user.id,
-            comment=payload.comment,
-            source_ref=payload.source_ref,
-            idempotency_key=payload.idempotency_key,
-            executor_user_id=payload.executor_user_id,
-            performed_at=payload.performed_at,
-            accounted_at=payload.accounted_at,
-            shortage_strategy=payload.shortage_strategy,
-        )
-
-        # Запись лога аудита
-        task = await db.get(WorkTask, task_id)
-        if task:
-            from app.models.section import Section
-            from app.models.product import Product
-            from app.models.route import RouteStage
-            section = await db.get(Section, task.section_id)
-            product = await db.get(Product, task.product_id)
-            route_stage = await db.get(RouteStage, task.route_stage_id)
-            op_name = ", ".join(op.operation_name for op in route_stage.operations) if (route_stage and route_stage.operations) else "Операция"
-            
-            section_info = f"на участке \"{section.name}\" ({section.code})" if section else ""
-            task_info = f"для операции \"{op_name}\" (арт. {product.sku})" if product else ""
-            message = f"Задание #{task_id} {task_info} успешно выдано в работу {section_info}. Количество: {payload.quantity} шт."
-            if payload.comment:
-                message += f" (комментарий: \"{payload.comment}\")"
-            
-            from app.models.audit_log import AuditAction, AuditEntityType
-            await log_action(
-                db,
-                status="success",
-                title="Задание взято в работу",
-                message=message,
-                user=current_user,
-                section_id=task.section_id,
-                section_name=section.name if section else None,
-                section_code=section.code if section else None,
-                task_ids=[task_id],
-                product_sku=product.sku if product else None,
-                operation_name=op_name,
-                qty_text=f"выдано: {payload.quantity}",
-                comment=payload.comment,
-                action=AuditAction.UPDATE,
-                entity_type=AuditEntityType.WORK_TASK,
-                entity_id=task_id,
-                changes={"before": {"status": "pending"}, "after": {"status": "in_progress", "qty": str(payload.quantity)}},
-            )
-
-        return res
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.post("/tasks/{task_id}/complete", dependencies=[Depends(require_role(list(WRITER_ROLES)))])

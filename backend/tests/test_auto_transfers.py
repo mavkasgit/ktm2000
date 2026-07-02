@@ -19,6 +19,8 @@ from app.models.spg import SpgSection, StorageProductionGroup
 from app.models.transfer import Transfer, TransferStatus
 from app.models.user import User, UserRole
 from app.models.work_task import WorkTask, WorkTaskStatus
+from app.models.movement import Movement, MovementType
+from app.services.shopfloor.cache import _refresh_task_cache
 
 
 async def _make_user(session, email: str = "auto@local") -> User:
@@ -113,28 +115,33 @@ async def _release_via_take_to_work(client, position_id: int) -> None:
     assert resp.status_code == 200, resp.text
 
 
-async def _issue_first_task(client, task_id: int, qty: Decimal, idempotency_key: str | None = None) -> None:
-    body = {
-        "quantity": str(qty),
-        "comment": "test issue",
-    }
-    if idempotency_key:
-        body["idempotency_key"] = idempotency_key
-    resp = await client.post(f"/api/shopfloor/tasks/{task_id}/issue", json=body)
-    assert resp.status_code == 200, resp.text
+async def _issue_first_task(session, user, task_id, qty: Decimal, idempotency_key: str | None = None) -> None:
+    task = await session.get(WorkTask, task_id)
+    m = Movement(
+        product_id=task.product_id, task_id=task.id,
+        section_plan_line_id=task.section_plan_line_id,
+        from_section_id=task.section_id, to_section_id=task.section_id,
+        movement_type=MovementType.issue_to_work, quantity=qty, created_by=user.id,
+    )
+    session.add(m)
+    await session.flush()
+    await _refresh_task_cache(session, task_id)
+    from app.services.shopfloor.cache import _refresh_section_plan_line_cache
+    await _refresh_section_plan_line_cache(session, task.section_plan_line_id)
+    await session.flush()
 
 
 async def _complete_first_task(
+    session,
+    user,
     client,
     task_id: int,
     qty: Decimal,
     idempotency_key: str | None = None,
     auto_transfer_next: bool = False,
 ) -> None:
-    # Auto-issue is no longer done inside complete_task — operator must
-    # explicitly issue the material into work before completing.
     issue_key = f"{idempotency_key}:issue" if idempotency_key else None
-    await _issue_first_task(client, task_id, qty, idempotency_key=issue_key)
+    await _issue_first_task(session, user, task_id, qty, idempotency_key=issue_key)
     body = {
         "good_quantity": str(qty),
         "defect_quantity": "0",
@@ -240,7 +247,7 @@ async def test_complete_no_transfer_within_same_ghp(client, session) -> None:
 
     await _release_via_take_to_work(client, pos.id)
     tasks = (await session.execute(select(WorkTask).order_by(WorkTask.id.asc()))).scalars().all()
-    await _complete_first_task(client, tasks[0].id, Decimal("3"), idempotency_key="k-same")
+    await _complete_first_task(session, user, client, tasks[0].id, Decimal("3"), idempotency_key="k-same")
 
     transfers = (await session.execute(select(Transfer))).scalars().all()
     assert transfers == [], "Внутри одной ГХП перемещение создаваться не должно"
@@ -293,7 +300,7 @@ async def test_complete_no_transfer_on_final_stage(client, session) -> None:
 
     await _release_via_take_to_work(client, pos.id)
     tasks = (await session.execute(select(WorkTask).order_by(WorkTask.id.asc()))).scalars().all()
-    await _complete_first_task(client, tasks[0].id, Decimal("2"), idempotency_key="k-fin")
+    await _complete_first_task(session, user, client, tasks[0].id, Decimal("2"), idempotency_key="k-fin")
 
     transfers = (await session.execute(select(Transfer))).scalars().all()
     assert transfers == [], "На финальном шаге перемещение не должно создаваться"
@@ -341,7 +348,7 @@ async def test_complete_with_auto_transfer_next_true_creates_transfer(client, se
     tasks = (await session.execute(select(WorkTask).order_by(WorkTask.id.asc()))).scalars().all()
     task1 = tasks[0]
 
-    await _complete_first_task(client, task1.id, Decimal("3"), idempotency_key="k-flag-on", auto_transfer_next=True)
+    await _complete_first_task(session, user, client, task1.id, Decimal("3"), idempotency_key="k-flag-on", auto_transfer_next=True)
 
     transfers = (await session.execute(select(Transfer))).scalars().all()
     assert len(transfers) == 1
@@ -358,7 +365,7 @@ async def test_complete_with_auto_transfer_next_false_no_transfer(client, sessio
     tasks = (await session.execute(select(WorkTask).order_by(WorkTask.id.asc()))).scalars().all()
     task1 = tasks[0]
 
-    await _complete_first_task(client, task1.id, Decimal("3"), idempotency_key="k-flag-off", auto_transfer_next=False)
+    await _complete_first_task(session, user, client, task1.id, Decimal("3"), idempotency_key="k-flag-off", auto_transfer_next=False)
 
     transfers = (await session.execute(select(Transfer))).scalars().all()
     assert transfers == [], "Без флага auto_transfer_next перемещение создаваться не должно"

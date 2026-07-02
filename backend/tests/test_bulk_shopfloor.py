@@ -183,15 +183,20 @@ async def test_bulk_complete_marks_tasks_done(client, session) -> None:
     headers = _auth_headers(user)
 
     # Issue the quantity first so completion has data to work with.
-    issue_res = await client.post(
-        f"/api/shopfloor/tasks/{tasks[0].id}/issue",
-        json={
-            "quantity": "10",
-            "idempotency_key": f"pre-complete-{tasks[0].id}",
-        },
-        headers=headers,
+    from app.models.movement import Movement, MovementType
+    from app.services.shopfloor.cache import _refresh_task_cache
+    m = Movement(
+        product_id=tasks[0].product_id, task_id=tasks[0].id,
+        section_plan_line_id=tasks[0].section_plan_line_id,
+        from_section_id=tasks[0].section_id, to_section_id=tasks[0].section_id,
+        movement_type=MovementType.issue_to_work, quantity=Decimal("10"), created_by=user.id,
     )
-    assert issue_res.status_code == 200
+    session.add(m)
+    await session.flush()
+    await _refresh_task_cache(session, tasks[0].id)
+    from app.services.shopfloor.cache import _refresh_section_plan_line_cache
+    await _refresh_section_plan_line_cache(session, tasks[0].section_plan_line_id)
+    await session.flush()
 
     complete_res = await client.post(
         "/api/shopfloor/tasks/bulk-complete",
@@ -225,14 +230,20 @@ async def test_bulk_complete_isolates_unknown_task(client, session) -> None:
     headers = _auth_headers(user)
 
     # Issue some quantity to make completion possible.
-    await client.post(
-        f"/api/shopfloor/tasks/{tasks[0].id}/issue",
-        json={
-            "quantity": "5",
-            "idempotency_key": f"pre-bad-{tasks[0].id}",
-        },
-        headers=headers,
+    from app.models.movement import Movement, MovementType
+    from app.services.shopfloor.cache import _refresh_task_cache
+    m = Movement(
+        product_id=tasks[0].product_id, task_id=tasks[0].id,
+        section_plan_line_id=tasks[0].section_plan_line_id,
+        from_section_id=tasks[0].section_id, to_section_id=tasks[0].section_id,
+        movement_type=MovementType.issue_to_work, quantity=Decimal("5"), created_by=user.id,
     )
+    session.add(m)
+    await session.flush()
+    await _refresh_task_cache(session, tasks[0].id)
+    from app.services.shopfloor.cache import _refresh_section_plan_line_cache
+    await _refresh_section_plan_line_cache(session, tasks[0].section_plan_line_id)
+    await session.flush()
 
     response = await client.post(
         "/api/shopfloor/tasks/bulk-complete",
@@ -278,15 +289,21 @@ async def test_bulk_complete_respects_section_lock(client, session) -> None:
     }
 
     # Issue some quantity for both tasks first.
+    from app.models.movement import Movement, MovementType
+    from app.services.shopfloor.cache import _refresh_task_cache
     for task in (tasks[0], other_tasks[0]):
-        await client.post(
-            f"/api/shopfloor/tasks/{task.id}/issue",
-            json={
-                "quantity": "1",
-                "idempotency_key": f"pre-lock-{task.id}",
-            },
-            headers=headers,
+        m = Movement(
+            product_id=task.product_id, task_id=task.id,
+            section_plan_line_id=task.section_plan_line_id,
+            from_section_id=task.section_id, to_section_id=task.section_id,
+            movement_type=MovementType.issue_to_work, quantity=Decimal("1"), created_by=user.id,
         )
+        session.add(m)
+        await session.flush()
+        await _refresh_task_cache(session, task.id)
+        from app.services.shopfloor.cache import _refresh_section_plan_line_cache
+        await _refresh_section_plan_line_cache(session, task.section_plan_line_id)
+        await session.flush()
 
     response = await client.post(
         "/api/shopfloor/tasks/bulk-complete",

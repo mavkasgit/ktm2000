@@ -216,6 +216,7 @@ async def _get_tasks_by_sequence(session, position_id: int) -> list[WorkTask]:
 
 
 async def _issue_mixed(
+    session,
     client,
     headers: dict[str, str],
     task_id: int,
@@ -241,15 +242,20 @@ async def _issue_mixed(
         assert resp.status_code == 200, resp.text
 
     if direct_qty > 0:
-        resp = await client.post(
-            f"/api/shopfloor/tasks/{task_id}/issue",
-            json={
-                "quantity": str(direct_qty),
-                "idempotency_key": f"{run_id}:stage{stage}:issue",
-            },
-            headers=headers,
+        from app.models.movement import Movement, MovementType
+        from app.services.shopfloor.cache import _refresh_task_cache
+        task = await session.get(WorkTask, task_id)
+        m = Movement(
+            product_id=task.product_id, task_id=task.id,
+            section_plan_line_id=task.section_plan_line_id,
+            from_section_id=task.section_id, to_section_id=task.section_id,
+            movement_type=MovementType.issue_to_work, quantity=direct_qty, created_by=1,
         )
-        assert resp.status_code == 200, resp.text
+        session.add(m)
+        await session.flush()
+        await _refresh_task_cache(session, task_id)
+        from app.services.shopfloor.cache import _refresh_section_plan_line_cache
+        await _refresh_section_plan_line_cache(session, task.section_plan_line_id)
 
 
 async def _complete_with_return(
@@ -433,7 +439,7 @@ async def test_spg_route_full_lifecycle_with_mixed_remainders(client, session) -
     # ── 4. Step 1 (RAW) — 30 from SPG (auto-consumed, already in work 50) + 50 direct, complete 80+5 ─────────
     # We only issue 50 units directly, because 50 was already auto-issued from remainder!
     await _issue_mixed(
-        client, headers, raw_task.id,
+        session, client, headers, raw_task.id,
         direct_qty=Decimal("50"), run_id="spg-e2e", stage="1",
     )
     await _complete_with_return(

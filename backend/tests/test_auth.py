@@ -313,8 +313,25 @@ async def test_transporter_can_manage_transfers_globally_but_not_shopfloor_tasks
         headers={"Authorization": f"Bearer {admin_token}"},
     )
 
-    await admin_client.post(f"/api/shopfloor/tasks/{first_task.id}/issue", json={"quantity": "100"})
-    await admin_client.post(f"/api/shopfloor/tasks/{first_task.id}/complete", json={"good_quantity": "100", "defect_quantity": "0"})
+    from app.models.movement import Movement, MovementType
+    from app.services.shopfloor.cache import _refresh_task_cache
+    from decimal import Decimal
+    m = Movement(
+        product_id=first_task.product_id, task_id=first_task.id,
+        section_plan_line_id=first_task.section_plan_line_id,
+        from_section_id=first_task.section_id, to_section_id=first_task.section_id,
+        movement_type=MovementType.issue_to_work, quantity=Decimal("100"), created_by=admin_user.id,
+    )
+    session.add(m)
+    await session.flush()
+    await _refresh_task_cache(session, first_task.id)
+    from app.services.shopfloor.cache import _refresh_section_plan_line_cache
+    await _refresh_section_plan_line_cache(session, first_task.section_plan_line_id)
+
+    await admin_client.post(
+        f"/api/shopfloor/tasks/{first_task.id}/complete",
+        json={"good_quantity": "100", "defect_quantity": "0"},
+    )
 
     # Клиент транспортировщика
     token = create_access_token(subject=transporter.username)
@@ -337,12 +354,3 @@ async def test_transporter_can_manage_transfers_globally_but_not_shopfloor_tasks
     assert response.status_code == 200
     body = response.json()
     assert body["status"] == "accepted"
-
-    # Производственная операция (должна дать 403)
-    response_issue = await t_client.post(
-        f"/api/shopfloor/tasks/{second_task.id}/issue",
-        json={
-            "quantity": 50
-        }
-    )
-    assert response_issue.status_code == 403

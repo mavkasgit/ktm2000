@@ -755,10 +755,18 @@ async def test_manual_pass_rejects_position_with_existing_nonmanual_facts(client
 
     launch = await client.post("/api/production-planning/rows/take-to-work", json={"position_ids": [position.id]})
     assert launch.status_code == 200
+    from app.models.movement import Movement as PPMovement, MovementType as PPMT
+    from app.services.shopfloor.cache import _refresh_task_cache as pp_rtc
     first_task = (await _tasks_for_position(session, position.id))[0]
-
-    issue = await client.post(f"/api/shopfloor/tasks/{first_task.id}/issue", json={"quantity": "5"})
-    assert issue.status_code == 200
+    m = PPMovement(
+        product_id=first_task.product_id, task_id=first_task.id,
+        section_plan_line_id=first_task.section_plan_line_id,
+        from_section_id=first_task.section_id, to_section_id=first_task.section_id,
+        movement_type=PPMT.issue_to_work, quantity=Decimal("5"), created_by=1,
+    )
+    session.add(m)
+    await session.flush()
+    await pp_rtc(session, first_task.id)
 
     response = await client.post(
         f"/api/production-planning/rows/{position.id}/manual-pass",

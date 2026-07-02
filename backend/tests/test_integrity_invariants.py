@@ -357,12 +357,21 @@ async def test_issue_complete_transfer_cancel_cycle_stays_consistent(
     dst_task_id, dst_section_id = tasks[1]["id"], tasks[1]["section_id"]
 
     # Issue on source, complete in full, then send across the GHP.
-    issue = await client.post(
-        f"/api/shopfloor/tasks/{src_task_id}/issue",
-        json={"quantity": "10", "idempotency_key": "inv-cycle:issue"},
-        headers=headers,
+    from app.models.movement import Movement as InvMovement, MovementType as InvMT
+    from app.services.shopfloor.cache import _refresh_task_cache as inv_rtc
+    from app.services.shopfloor.cache import _refresh_section_plan_line_cache as inv_rslc
+    src_task = await session.get(WorkTask, src_task_id)
+    m = InvMovement(
+        product_id=src_task.product_id, task_id=src_task.id,
+        section_plan_line_id=src_task.section_plan_line_id,
+        from_section_id=src_task.section_id, to_section_id=src_task.section_id,
+        movement_type=InvMT.issue_to_work, quantity=Decimal("10"), created_by=user.id,
     )
-    assert issue.status_code == 200, issue.text
+    session.add(m)
+    await session.flush()
+    await inv_rtc(session, src_task_id)
+    await inv_rslc(session, src_task.section_plan_line_id)
+    await session.flush()
     await assert_no_invariants_violations(session, context="after-issue")
 
     complete = await client.post(
@@ -387,18 +396,19 @@ async def test_issue_complete_transfer_cancel_cycle_stays_consistent(
     transfer_id = send.json()["transfer_id"]
     await assert_no_invariants_violations(session, context="after-transfer-send")
 
-    # Issue on the destination so the cancel guard ``in_work >= sent``
-    # passes (see ``services.py:_get_task_transferable`` and
-    # ``cancel_transfer``).  Without an explicit issue the destination
-    # would have 0 in-work and the cancel would be rejected as a
-    # consistency check, not a bug.
-    issue_dst = await client.post(
-        f"/api/shopfloor/tasks/{dst_task_id}/issue",
-        json={"quantity": "10", "idempotency_key": "inv-cycle:dst-issue"},
-        headers=headers,
+    # Auto-issue on receive: ``transfer_send`` writes a paired
+    # ``issue_to_work`` Movement on the destination, so the destination
+    # is already in ``ready`` with ``cached_issued_quantity == 10``.
+    # The cancel guard ``in_work >= sent`` (see ``cancel_transfer``)
+    # therefore passes without an explicit operator action.
+    await session.refresh(await session.get(WorkTask, dst_task_id))
+    dst_now = await session.get(WorkTask, dst_task_id)
+    assert dst_now.cached_received_quantity == Decimal("10")
+    assert dst_now.cached_issued_quantity == Decimal("10"), (
+        "auto-issue-on-receive must bring cached_issued_quantity in line "
+        "with cached_received_quantity"
     )
-    assert issue_dst.status_code == 200, issue_dst.text
-    await assert_no_invariants_violations(session, context="after-dst-issue")
+    await assert_no_invariants_violations(session, context="after-auto-issue")
 
     # Cancel the transfer; Movement rows must vanish and the cached
     # totals on both tasks must roll back to their pre-transfer state.
@@ -589,11 +599,20 @@ async def test_transfer_idempotency_does_not_create_phantom_movements(
 
     # Make the source transferable: issue + complete the full quantity
     # so the transfer's ``quantity <= transferable`` guard passes.
-    await client.post(
-        f"/api/shopfloor/tasks/{src}/issue",
-        json={"quantity": "6", "idempotency_key": "inv-idem:issue"},
-        headers=headers,
+    from app.models.movement import Movement as InvMovement2, MovementType as InvMT2
+    from app.services.shopfloor.cache import _refresh_task_cache as inv_rtc2
+    from app.services.shopfloor.cache import _refresh_section_plan_line_cache as inv_rslc2
+    src_task = await session.get(WorkTask, src)
+    m = InvMovement2(
+        product_id=src_task.product_id, task_id=src_task.id,
+        section_plan_line_id=src_task.section_plan_line_id,
+        from_section_id=src_task.section_id, to_section_id=src_task.section_id,
+        movement_type=InvMT2.issue_to_work, quantity=Decimal("6"), created_by=user.id,
     )
+    session.add(m)
+    await session.flush()
+    await inv_rtc2(session, src)
+    await inv_rslc2(session, src_task.section_plan_line_id)
     await client.post(
         f"/api/shopfloor/tasks/{src}/complete",
         json={"good_quantity": "6", "defect_quantity": "0", "idempotency_key": "inv-idem:complete"},
@@ -644,11 +663,20 @@ async def test_two_concurrent_transfers_aggregate_correctly(
 
     # Issue and complete the full quantity on the source so the
     # transfer guards are satisfied.
-    await client.post(
-        f"/api/shopfloor/tasks/{src}/issue",
-        json={"quantity": "10", "idempotency_key": "inv-2xf:issue"},
-        headers=headers,
+    from app.models.movement import Movement as InvMovement3, MovementType as InvMT3
+    from app.services.shopfloor.cache import _refresh_task_cache as inv_rtc3
+    from app.services.shopfloor.cache import _refresh_section_plan_line_cache as inv_rslc3
+    src_task = await session.get(WorkTask, src)
+    m = InvMovement3(
+        product_id=src_task.product_id, task_id=src_task.id,
+        section_plan_line_id=src_task.section_plan_line_id,
+        from_section_id=src_task.section_id, to_section_id=src_task.section_id,
+        movement_type=InvMT3.issue_to_work, quantity=Decimal("10"), created_by=user.id,
     )
+    session.add(m)
+    await session.flush()
+    await inv_rtc3(session, src)
+    await inv_rslc3(session, src_task.section_plan_line_id)
     await client.post(
         f"/api/shopfloor/tasks/{src}/complete",
         json={"good_quantity": "10", "defect_quantity": "0", "idempotency_key": "inv-2xf:complete"},

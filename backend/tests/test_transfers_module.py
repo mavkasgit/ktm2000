@@ -34,6 +34,8 @@ from app.models.techcard import Techcard, TechcardLine
 from app.models.transfer import Transfer, TransferStatus
 from app.models.user import User, UserRole
 from app.models.work_task import WorkTask, WorkTaskStatus
+from app.models.movement import Movement, MovementType
+from app.services.shopfloor.cache import _refresh_task_cache
 
 
 # ─── helpers ─────────────────────────────────────────────────────────────────
@@ -200,6 +202,21 @@ async def _tasks_by_sequence(session, position_id: int) -> list[WorkTask]:
     ).scalars().all()
 
 
+async def _issue_via_db(session, task, qty: Decimal, user) -> None:
+    m = Movement(
+        product_id=task.product_id, task_id=task.id,
+        section_plan_line_id=task.section_plan_line_id,
+        from_section_id=task.section_id, to_section_id=task.section_id,
+        movement_type=MovementType.issue_to_work, quantity=qty, created_by=user.id,
+    )
+    session.add(m)
+    await session.flush()
+    await _refresh_task_cache(session, task.id)
+    from app.services.shopfloor.cache import _refresh_section_plan_line_cache
+    await _refresh_section_plan_line_cache(session, task.section_plan_line_id)
+    await session.flush()
+
+
 # ─── list_ready_to_transfer ──────────────────────────────────────────────────
 
 
@@ -237,12 +254,7 @@ async def test_list_ready_to_transfer_after_completion_only(client, session) -> 
     first_task = next(t for t in tasks if t.section_id == first_section.id)
 
     # Issue and complete the full plan quantity
-    issue = await client.post(
-        f"/api/shopfloor/tasks/{first_task.id}/issue",
-        json={"quantity": "100", "idempotency_key": "xf-ready:issue"},
-        headers=headers,
-    )
-    assert issue.status_code == 200
+    await _issue_via_db(session, first_task, Decimal("100"), user)
     complete = await client.post(
         f"/api/shopfloor/tasks/{first_task.id}/complete",
         json={"good_quantity": "100", "defect_quantity": "0", "idempotency_key": "xf-ready:complete"},
@@ -295,11 +307,7 @@ async def test_new_transfers_send_and_accept_via_new_endpoints(client, session) 
     first_task = tasks[0]
     second_task = tasks[1]
 
-    await client.post(
-        f"/api/shopfloor/tasks/{first_task.id}/issue",
-        json={"quantity": "100", "idempotency_key": "xf-new:issue"},
-        headers=headers,
-    )
+    await _issue_via_db(session, first_task, Decimal("100"), user)
     await client.post(
         f"/api/shopfloor/tasks/{first_task.id}/complete",
         json={"good_quantity": "100", "defect_quantity": "0", "idempotency_key": "xf-new:complete"},
@@ -340,11 +348,7 @@ async def test_transfers_correction_and_validation(client, session) -> None:
     first_task = tasks[0]
     second_task = tasks[1]
 
-    await client.post(
-        f"/api/shopfloor/tasks/{first_task.id}/issue",
-        json={"quantity": "100", "idempotency_key": "xf-corr:issue"},
-        headers=headers,
-    )
+    await _issue_via_db(session, first_task, Decimal("100"), user)
     await client.post(
         f"/api/shopfloor/tasks/{first_task.id}/complete",
         json={"good_quantity": "100", "defect_quantity": "0", "idempotency_key": "xf-corr:complete"},
@@ -365,11 +369,13 @@ async def test_transfers_correction_and_validation(client, session) -> None:
     ref_first = await session.get(WorkTask, first_task.id)
     ref_second = await session.get(WorkTask, second_task.id)
     assert ref_first.cached_transferred_quantity == Decimal("50")
-    # Auto-issue на приёмке передачи убран: оператор явно берёт в работу.
-    # Получено сидит в received, в работе — 0, статус должен быть ready.
+    # Auto-issue on receive: ``transfer_send`` writes a paired
+    # ``issue_to_work`` Movement on the destination, so received and
+    # issued stay in sync. Status flips to ``in_progress`` because the
+    # material is now actually in work.
     assert ref_second.cached_received_quantity == Decimal("50")
-    assert ref_second.cached_issued_quantity == Decimal("0")
-    assert ref_second.status == WorkTaskStatus.ready
+    assert ref_second.cached_issued_quantity == Decimal("50")
+    assert ref_second.status == WorkTaskStatus.in_progress
 
     # 2. Correct quantity: 50 -> 70 (valid)
     correct = await client.put(
@@ -385,7 +391,7 @@ async def test_transfers_correction_and_validation(client, session) -> None:
     ref_second = await session.get(WorkTask, second_task.id)
     assert ref_first.cached_transferred_quantity == Decimal("70")
     assert ref_second.cached_received_quantity == Decimal("70")
-    assert ref_second.cached_issued_quantity == Decimal("0")
+    assert ref_second.cached_issued_quantity == Decimal("70")
 
     # 3. Correct quantity exceeds source limit (completed is 100, we try to set to 120)
     correct_fail = await client.put(
@@ -396,29 +402,42 @@ async def test_transfers_correction_and_validation(client, session) -> None:
     assert correct_fail.status_code == 400
     assert "exceeds" in correct_fail.json()["detail"]
 
-    # 4. With auto-issue on accept gone, no material is in work yet on the
-    # destination. Reducing transfer 70 -> 50 should now succeed freely.
+    # 4. Reducing 70 -> 50 succeeds. With auto-issue on receive the
+    # destination already has 70 in work, but reducing the transfer by
+    # 20 still leaves 50 in work (and the issue_to_work Movement is
+    # rewritten to 50 by the correction), so the in-work guard passes.
     correct_ok = await client.put(
         f"/api/transfers/{transfer_id}",
-        json={"quantity": 50, "comment": "Reduced (no work yet)"},
+        json={"quantity": 50, "comment": "Reduced"},
         headers=headers,
     )
     assert correct_ok.status_code == 200
+    await session.commit()
+    ref_second = await session.get(WorkTask, second_task.id)
+    assert ref_second.cached_issued_quantity == Decimal("50")
+    assert ref_second.cached_received_quantity == Decimal("50")
 
-    # Now operator explicitly issues 50 to work, then attempt to reduce further
-    # to 30 should fail with "already consumed".
+    # 5. If the operator has already completed 20 of the 50 received, the
+    # in-work is 30. Reducing to 40 (diff = -10) would still leave
+    # in_work = 20, so it passes. Reducing to 20 (diff = -30) would
+    # leave in_work = 0; we also allow that. But reducing to 10
+    # (diff = -40) would leave in_work = -10 → must be rejected.
     await client.post(
-        f"/api/shopfloor/tasks/{second_task.id}/issue",
-        json={"quantity": "50", "idempotency_key": "xf-corr:sec-issue"},
+        f"/api/shopfloor/tasks/{second_task.id}/complete",
+        json={
+            "good_quantity": "20",
+            "defect_quantity": "0",
+            "idempotency_key": "xf-corr:sec-complete",
+        },
         headers=headers,
     )
     correct_fail2 = await client.put(
         f"/api/transfers/{transfer_id}",
-        json={"quantity": 30},
+        json={"quantity": 10},
         headers=headers,
     )
     assert correct_fail2.status_code == 400
-    assert "already consumed" in correct_fail2.json()["detail"]
+    assert "already completed" in correct_fail2.json()["detail"].lower()
 
 
 @pytest.mark.asyncio
@@ -449,11 +468,7 @@ async def test_transfers_cancellation_and_validation(client, session) -> None:
     first_task = tasks[0]
     second_task = tasks[1]
 
-    await client.post(
-        f"/api/shopfloor/tasks/{first_task.id}/issue",
-        json={"quantity": "100", "idempotency_key": "xf-cnl:issue"},
-        headers=headers,
-    )
+    await _issue_via_db(session, first_task, Decimal("100"), user)
     await client.post(
         f"/api/shopfloor/tasks/{first_task.id}/complete",
         json={"good_quantity": "100", "defect_quantity": "0", "idempotency_key": "xf-cnl:complete"},
@@ -469,13 +484,7 @@ async def test_transfers_cancellation_and_validation(client, session) -> None:
     assert send.status_code == 200
     transfer_id_1 = send.json()["transfer_id"]
 
-    # Auto-issue on accept убран: оператор должен явно взять в работу.
-    await client.post(
-        f"/api/shopfloor/tasks/{second_task.id}/issue",
-        json={"quantity": "40", "idempotency_key": "xf-cnl:sec-issue"},
-        headers=headers,
-    )
-
+    # Auto-issue on receive: 40 is now in work on the destination.
     # Complete 15 parts on target (25 remains in work from transfer 1)
     await client.post(
         f"/api/shopfloor/tasks/{second_task.id}/complete",
@@ -500,10 +509,11 @@ async def test_transfers_cancellation_and_validation(client, session) -> None:
     assert ref_second.cached_issued_quantity - ref_second.cached_completed_quantity == Decimal("25")
 
     # ── Case 2: cancel works when nothing was consumed from this transfer ──
-    # Under the new explicit-transfer model, transfer_send auto-accepts:
-    # the transfer is already in status=accepted and the destination task
-    # has cached_received_quantity += 30. Then we issue 30 to in_work
-    # and the cancel guard `in_work >= sent` passes.
+    # Under the explicit-transfer model, transfer_send auto-accepts AND
+    # auto-issues on the destination. The transfer is in status=accepted
+    # and the destination task has cached_received_quantity += 30 with a
+    # matching issue_to_work Movement, so the cancel guard
+    # `in_work >= sent` passes without any extra operator action.
     send2 = await client.post(
         "/api/transfers",
         json={"from_task_id": first_task.id, "to_task_id": second_task.id, "quantity": "30", "idempotency_key": "xf-cnl:send-2"},
@@ -513,13 +523,6 @@ async def test_transfers_cancellation_and_validation(client, session) -> None:
     transfer_id_2 = send2.json()["transfer_id"]
     # Auto-accept already happened inside transfer_send.
     assert send2.json()["status"] == TransferStatus.accepted.value
-
-    issue2 = await client.post(
-        f"/api/shopfloor/tasks/{second_task.id}/issue",
-        json={"quantity": "30", "idempotency_key": "xf-cnl:sec-issue-2"},
-        headers=headers,
-    )
-    assert issue2.status_code == 200
 
     cancel_ok = await client.post(
         f"/api/transfers/{transfer_id_2}/cancel",
@@ -550,12 +553,7 @@ async def test_work_task_requires_transfer_to_become_completed(client, session) 
     first_task = tasks[0]
 
     # Issue and complete the full plan quantity — NO transfer yet
-    issue = await client.post(
-        f"/api/shopfloor/tasks/{first_task.id}/issue",
-        json={"quantity": "100", "idempotency_key": "xf-stat:issue"},
-        headers=headers,
-    )
-    assert issue.status_code == 200
+    await _issue_via_db(session, first_task, Decimal("100"), user)
     complete = await client.post(
         f"/api/shopfloor/tasks/{first_task.id}/complete",
         json={"good_quantity": "100", "defect_quantity": "0", "idempotency_key": "xf-stat:complete"},
@@ -620,11 +618,7 @@ async def test_transfer_receive_skips_issue_when_target_already_completed(client
     third_task = tasks[2]
 
     # 1. Issue + complete the first task
-    await client.post(
-        f"/api/shopfloor/tasks/{first_task.id}/issue",
-        json={"quantity": "100", "idempotency_key": "xf-skip:issue-1"},
-        headers=headers,
-    )
+    await _issue_via_db(session, first_task, Decimal("100"), user)
     await client.post(
         f"/api/shopfloor/tasks/{first_task.id}/complete",
         json={"good_quantity": "100", "defect_quantity": "0", "idempotency_key": "xf-skip:complete-1"},
@@ -645,11 +639,7 @@ async def test_transfer_receive_skips_issue_when_target_already_completed(client
     assert resp.status_code == 200, resp.text
 
     # 3. Issue + complete the second task
-    await client.post(
-        f"/api/shopfloor/tasks/{second_task.id}/issue",
-        json={"quantity": "100", "idempotency_key": "xf-skip:issue-2"},
-        headers=headers,
-    )
+    await _issue_via_db(session, second_task, Decimal("100"), user)
     await client.post(
         f"/api/shopfloor/tasks/{second_task.id}/complete",
         json={"good_quantity": "100", "defect_quantity": "0", "idempotency_key": "xf-skip:complete-2"},
@@ -711,11 +701,7 @@ async def test_legacy_shopfloor_transfers_endpoint_still_works(client, session) 
     first_task = tasks[0]
     second_task = tasks[1]
 
-    await client.post(
-        f"/api/shopfloor/tasks/{first_task.id}/issue",
-        json={"quantity": "100", "idempotency_key": "xf-leg:issue"},
-        headers=headers,
-    )
+    await _issue_via_db(session, first_task, Decimal("100"), user)
     await client.post(
         f"/api/shopfloor/tasks/{first_task.id}/complete",
         json={"good_quantity": "100", "defect_quantity": "0", "idempotency_key": "xf-leg:complete"},
@@ -768,11 +754,7 @@ async def test_transfers_history_generic_endpoints(client, session) -> None:
     first_task = tasks[0]
     second_task = tasks[1]
 
-    await client.post(
-        f"/api/shopfloor/tasks/{first_task.id}/issue",
-        json={"quantity": "100", "idempotency_key": "xf-hist:issue"},
-        headers=headers,
-    )
+    await _issue_via_db(session, first_task, Decimal("100"), user)
     await client.post(
         f"/api/shopfloor/tasks/{first_task.id}/complete",
         json={"good_quantity": "100", "defect_quantity": "0", "idempotency_key": "xf-leg:complete"},
@@ -844,12 +826,7 @@ async def test_same_spg_auto_avail_and_status(client, session) -> None:
     assert second_task.cached_available_quantity == Decimal("0")
 
     # Issue and complete quantity on first task
-    issue = await client.post(
-        f"/api/shopfloor/tasks/{first_task.id}/issue",
-        json={"quantity": "60", "idempotency_key": "same-spg:issue"},
-        headers=headers,
-    )
-    assert issue.status_code == 200
+    await _issue_via_db(session, first_task, Decimal("60"), user)
 
     complete = await client.post(
         f"/api/shopfloor/tasks/{first_task.id}/complete",
@@ -893,12 +870,13 @@ async def test_same_spg_auto_avail_and_status(client, session) -> None:
     )
     assert send_manual.status_code == 200, send_manual.text
 
-    # После приёмки: second_task -> ready, материал в received (НЕ в работе).
+    # После приёмки: second_task → in_progress (auto-issue на receive).
+    # Материал получен и сразу выдан в работу.
     await session.commit()
     await session.refresh(second_task)
-    assert second_task.status == WorkTaskStatus.ready
+    assert second_task.status == WorkTaskStatus.in_progress
     assert second_task.cached_received_quantity == Decimal("10")
-    assert second_task.cached_issued_quantity == Decimal("0")
+    assert second_task.cached_issued_quantity == Decimal("10")
 
 
 # ─── post-factum transfers ───────────────────────────────────────────────────
@@ -927,11 +905,7 @@ async def test_post_factum_send_succeeds_when_sender_under_completed(
     second_task = tasks[1]
 
     # Sender: issue 100, complete 0.  transferable = 0.
-    await client.post(
-        f"/api/shopfloor/tasks/{first_task.id}/issue",
-        json={"quantity": "100", "idempotency_key": "xf-pf:issue-first"},
-        headers=headers,
-    )
+    await _issue_via_db(session, first_task, Decimal("100"), user)
     await session.commit()
 
     # Plain send should be REJECTED: transferable on sender is 0, but
@@ -983,17 +957,22 @@ async def test_post_factum_send_succeeds_when_sender_under_completed(
         sent_dt = sent_dt.replace(tzinfo=timezone.utc)
     assert abs((from_dt - sent_dt).total_seconds()) < 1
 
-    # The post-factum transfer produces only two ledger rows:
-    # transfer_send (sender side) and transfer_receive (receiver side).
-    # Auto-issue on accept убран: оператор явно берёт в работу.
+    # The post-factum transfer produces three ledger rows:
+    # transfer_send (sender side), transfer_receive (receiver side) and
+    # an auto-issue paired on the destination task. Auto-issue-on-receive
+    # collapses the historical receive → issue two-step into one.
     movements = (
         await session.execute(
             select(Movement).where(Movement.transfer_id == transfer_id)
         )
     ).scalars().all()
-    assert len(movements) == 2
+    assert len(movements) == 3
     types = {m.movement_type for m in movements}
-    assert types == {MovementType.transfer_send, MovementType.transfer_receive}
+    assert types == {
+        MovementType.transfer_send,
+        MovementType.transfer_receive,
+        MovementType.issue_to_work,
+    }
     for m in movements:
         assert m.performed_at is not None
         assert m.accounted_at is not None
@@ -1029,11 +1008,7 @@ async def test_post_factum_does_not_break_db_constraints(
     second_task = tasks[1]
 
     # Sender: issue 50, complete 0.  Receiver stays in waiting_previous.
-    await client.post(
-        f"/api/shopfloor/tasks/{first_task.id}/issue",
-        json={"quantity": "50", "idempotency_key": "xf-pfc:issue-f"},
-        headers=headers,
-    )
+    await _issue_via_db(session, first_task, Decimal("50"), user)
     await session.commit()
 
     # Post-factum send 50.  The accept will:
@@ -1061,10 +1036,10 @@ async def test_post_factum_does_not_break_db_constraints(
     assert first_task.cached_transferred_quantity >= 0
     assert second_task.cached_received_quantity == Decimal("50")
     assert second_task.cached_received_quantity >= 0
-    # Auto-issue on accept убран: в работе 0, статус — ready.
-    assert second_task.cached_issued_quantity == Decimal("0")
+    # Auto-issue on receive: 50 received, 50 issued, статус → in_progress.
+    assert second_task.cached_issued_quantity == Decimal("50")
     assert second_task.cached_completed_quantity == Decimal("0")
-    assert second_task.status == WorkTaskStatus.ready
+    assert second_task.status == WorkTaskStatus.in_progress
     # All cached_* quantities stay non-negative on the post-factum path.
     assert second_task.cached_issued_quantity >= 0
     assert second_task.cached_available_quantity >= 0
@@ -1089,11 +1064,7 @@ async def test_post_factum_default_off_blocks_over_transfer(
     second_task = tasks[1]
 
     # No completion on sender.
-    await client.post(
-        f"/api/shopfloor/tasks/{first_task.id}/issue",
-        json={"quantity": "100", "idempotency_key": "xf-pfo:issue"},
-        headers=headers,
-    )
+    await _issue_via_db(session, first_task, Decimal("100"), user)
 
     # Plain send: should fail.
     resp = await client.post(
@@ -1144,11 +1115,7 @@ async def test_post_factum_idempotency(
     first_task = tasks[0]
     second_task = tasks[1]
 
-    await client.post(
-        f"/api/shopfloor/tasks/{first_task.id}/issue",
-        json={"quantity": "100", "idempotency_key": "xf-pfi:issue"},
-        headers=headers,
-    )
+    await _issue_via_db(session, first_task, Decimal("100"), user)
     await session.commit()
 
     # First call: 200
@@ -1182,17 +1149,17 @@ async def test_post_factum_idempotency(
     assert r2.json().get("idempotent_replay") is True
     assert r2.json()["transfer_id"] == tid_1
 
-    # No duplicate Movements.  The post-factum send+receive pair
-    # produces two ledger rows: transfer_send and transfer_receive
-    # (auto-issue on accept убран).
+    # No duplicate Movements.  The post-factum send+receive+auto-issue
+    # triple produces three ledger rows: transfer_send, transfer_receive
+    # and issue_to_work (auto-issue on receive).
     await session.commit()
     n_movements = (
         await session.execute(
             select(Movement).where(Movement.transfer_id == tid_1)
         )
     ).scalars().all()
-    assert len(n_movements) == 2
-    # Replay again: still 2 movements (no duplicates on the second replay either)
+    assert len(n_movements) == 3
+    # Replay again: still 3 movements (no duplicates on the second replay either)
     r3 = await client.post(
         "/api/transfers",
         json={
@@ -1212,7 +1179,7 @@ async def test_post_factum_idempotency(
             select(Movement).where(Movement.transfer_id == tid_1)
         )
     ).scalars().all()
-    assert len(n_movements2) == 2
+    assert len(n_movements2) == 3
 
 
 @pytest.mark.asyncio
@@ -1233,11 +1200,7 @@ async def test_post_factum_appears_in_history(
     second_task = tasks[1]
     from_section = ctx["sections"][1]
 
-    await client.post(
-        f"/api/shopfloor/tasks/{first_task.id}/issue",
-        json={"quantity": "100", "idempotency_key": "xf-pfh:issue"},
-        headers=headers,
-    )
+    await _issue_via_db(session, first_task, Decimal("100"), user)
     await session.commit()
 
     await client.post(
@@ -1304,11 +1267,7 @@ async def test_complete_waiting_task_before_transfer(
     assert "ожидает передачи сырья" in resp_complete.json()["detail"]
 
     # Register issue on the first task so it has some parts issued
-    await client.post(
-        f"/api/shopfloor/tasks/{first_task.id}/issue",
-        json={"quantity": "100", "idempotency_key": "xf-pfwc:issue-first"},
-        headers=headers,
-    )
+    await _issue_via_db(session, first_task, Decimal("100"), user)
     await session.commit()
 
     # Now register a post-factum transfer of 100 parts from first to second task
@@ -1325,14 +1284,11 @@ async def test_complete_waiting_task_before_transfer(
     )
     assert resp_transfer.status_code == 200, resp_transfer.text
 
-    # Auto-issue on accept убран: оператор явно берёт в работу после приёмки.
-    await client.post(
-        f"/api/shopfloor/tasks/{second_task.id}/issue",
-        json={"quantity": "100", "idempotency_key": "xf-pfwc:issue-second"},
-        headers=headers,
-    )
+    # Auto-issue on receive: 100 immediately becomes in_work on the
+    # destination, so we can complete right away without an explicit
+    # «Взять в работу» call.
 
-    # Now that the transfer is received and task status is ready, we can complete 80 parts
+    # Now that the transfer is received and task is in_progress, we can complete 80 parts
     resp_complete_ok = await client.post(
         f"/api/shopfloor/tasks/{second_task.id}/complete",
         json={
@@ -1373,11 +1329,7 @@ async def test_over_plan_transfer_expands_to_task_planned_quantity(client, sessi
 
     # Issue and complete 100 (plan), then transfer 150 — simulating
     # an operator discovering extra material at the workstation.
-    await client.post(
-        f"/api/shopfloor/tasks/{first_task.id}/issue",
-        json={"quantity": "100", "idempotency_key": "xf-op:issue"},
-        headers=headers,
-    )
+    await _issue_via_db(session, first_task, Decimal("100"), user)
     await client.post(
         f"/api/shopfloor/tasks/{first_task.id}/complete",
         json={"good_quantity": "100", "defect_quantity": "0", "idempotency_key": "xf-op:complete"},
@@ -1403,12 +1355,14 @@ async def test_over_plan_transfer_expands_to_task_planned_quantity(client, sessi
     await session.refresh(second_task)
 
     # to_task.planned_quantity must be expanded to 150 so operators can
-    # issue and complete all received material.
+    # complete all received material. With auto-issue-on-receive the
+    # task is immediately in_progress.
     assert second_task.planned_quantity == Decimal("150"), (
         f"Expected planned_quantity=150, got {second_task.planned_quantity}"
     )
     assert second_task.cached_received_quantity == Decimal("150")
-    assert second_task.status == WorkTaskStatus.ready
+    assert second_task.cached_issued_quantity == Decimal("150")
+    assert second_task.status == WorkTaskStatus.in_progress
 
     # SectionPlanLine.planned_quantity must NOT be changed.
     to_line = await session.get(SectionPlanLine, second_task.section_plan_line_id)
@@ -1417,12 +1371,7 @@ async def test_over_plan_transfer_expands_to_task_planned_quantity(client, sessi
     )
 
     # Operators can now issue and complete the full 150 units.
-    issue2 = await client.post(
-        f"/api/shopfloor/tasks/{second_task.id}/issue",
-        json={"quantity": "150", "idempotency_key": "xf-op:issue2"},
-        headers=headers,
-    )
-    assert issue2.status_code == 200, issue2.text
+    await _issue_via_db(session, second_task, Decimal("150"), user)
 
     complete2 = await client.post(
         f"/api/shopfloor/tasks/{second_task.id}/complete",
@@ -1453,11 +1402,7 @@ async def test_over_plan_transfer_without_flag_is_blocked(client, session) -> No
     first_task = tasks[0]
     second_task = tasks[1]
 
-    await client.post(
-        f"/api/shopfloor/tasks/{first_task.id}/issue",
-        json={"quantity": "100", "idempotency_key": "xf-opb:issue"},
-        headers=headers,
-    )
+    await _issue_via_db(session, first_task, Decimal("100"), user)
     await client.post(
         f"/api/shopfloor/tasks/{first_task.id}/complete",
         json={"good_quantity": "100", "defect_quantity": "0", "idempotency_key": "xf-opb:complete"},
@@ -1477,3 +1422,113 @@ async def test_over_plan_transfer_without_flag_is_blocked(client, session) -> No
     )
     assert send.status_code == 400, send.text
     assert "exceeds" in send.json()["detail"].lower()
+
+
+@pytest.mark.asyncio
+async def test_transfer_send_auto_issues_on_destination_task(
+    client, session
+) -> None:
+    """``transfer_send`` must write a paired ``issue_to_work`` Movement on
+    the destination task so the operator can complete the task without a
+    separate «Взять в работу» click. The receive-then-issue two-step is
+    collapsed into a single transaction.
+    """
+    from app.models.movement import Movement, MovementType
+
+    user = await _make_user(session, "xfer-autoissue@test.local")
+    headers = _auth_headers(user)
+    ctx = await _make_six_section_fixture(
+        session, sku="FG-XF-AUTOISSUE", planned_qty=Decimal("100")
+    )
+    await _release_via_take_to_work(client, ctx["position"].id)
+    tasks = await _tasks_by_sequence(session, ctx["position"].id)
+    first_task = tasks[0]
+    second_task = tasks[1]
+
+    # Source: issue 100, complete 100. Destination stays in waiting_previous.
+    await _issue_via_db(session, first_task, Decimal("100"), user)
+    complete_res = await client.post(
+        f"/api/shopfloor/tasks/{first_task.id}/complete",
+        json={
+            "good_quantity": "100",
+            "defect_quantity": "0",
+            "idempotency_key": "xf-ai:complete",
+        },
+        headers=headers,
+    )
+    assert complete_res.status_code == 200, complete_res.text
+    await session.commit()
+
+    # Sanity: destination is in waiting_previous, no issued/received yet.
+    await session.refresh(second_task)
+    assert second_task.status == WorkTaskStatus.waiting_previous
+    assert second_task.cached_received_quantity == Decimal("0")
+    assert second_task.cached_issued_quantity == Decimal("0")
+
+    # Send 60 units across the GHP.
+    send = await client.post(
+        "/api/transfers",
+        json={
+            "from_task_id": first_task.id,
+            "to_task_id": second_task.id,
+            "quantity": "60",
+            "idempotency_key": "xf-ai:send",
+        },
+        headers=headers,
+    )
+    assert send.status_code == 200, send.text
+    transfer_id = send.json()["transfer_id"]
+    await session.commit()
+
+    # Exactly 3 ledger rows: send, receive, auto-issue.
+    movements = (
+        await session.execute(
+            select(Movement).where(Movement.transfer_id == transfer_id)
+        )
+    ).scalars().all()
+    assert len(movements) == 3
+    types = {m.movement_type for m in movements}
+    assert types == {
+        MovementType.transfer_send,
+        MovementType.transfer_receive,
+        MovementType.issue_to_work,
+    }
+
+    # Destination cache is now ready and immediately issuable: in_work == 60.
+    await session.refresh(second_task)
+    assert second_task.cached_received_quantity == Decimal("60")
+    assert second_task.cached_issued_quantity == Decimal("60"), (
+        "auto-issue on receive must keep cached_issued in sync with cached_received"
+    )
+    in_work = (
+        second_task.cached_issued_quantity
+        - second_task.cached_completed_quantity
+        - second_task.cached_rejected_quantity
+    )
+    assert in_work == Decimal("60")
+
+    # The auto-issue row is tagged with the source_ref prefix and the
+    # ":auto-issue" idempotency suffix so concurrent retries stay safe.
+    auto_issue = next(
+        m for m in movements if m.movement_type == MovementType.issue_to_work
+    )
+    assert auto_issue.idempotency_key == "xf-ai:send:auto-issue"
+    assert auto_issue.source_ref in ("auto_issue_on_transfer", None) or \
+        auto_issue.source_ref.endswith("auto_issue_on_transfer") or \
+        auto_issue.source_ref == "auto_issue_on_transfer"
+
+    # Crucially: the operator can complete the task right now, no
+    # separate «Взять в работу» call needed.
+    complete_dst = await client.post(
+        f"/api/shopfloor/tasks/{second_task.id}/complete",
+        json={
+            "good_quantity": "60",
+            "defect_quantity": "0",
+            "idempotency_key": "xf-ai:complete-dst",
+        },
+        headers=headers,
+    )
+    assert complete_dst.status_code == 200, complete_dst.text
+    await session.commit()
+    await session.refresh(second_task)
+    assert second_task.cached_completed_quantity == Decimal("60")

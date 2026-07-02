@@ -289,12 +289,17 @@ async def test_final_release_creates_fg_remainder(client, session) -> None:
     
     # We must mark final_task as completed so it can be final-released
     # First issue to work, then complete
-    resp_issue = await client.post(
-        f"/api/shopfloor/tasks/{final_task.id}/issue",
-        json={"quantity": "100", "idempotency_key": "final:issue"},
-        headers=headers,
+    m = Movement(
+        product_id=final_task.product_id, task_id=final_task.id,
+        section_plan_line_id=final_task.section_plan_line_id,
+        from_section_id=final_task.section_id, to_section_id=final_task.section_id,
+        movement_type=MovementType.issue_to_work, quantity=Decimal("100"), created_by=user.id,
     )
-    assert resp_issue.status_code == 200, resp_issue.text
+    session.add(m)
+    await session.flush()
+    await _refresh_task_cache(session, final_task.id)
+    from app.services.shopfloor.cache import _refresh_section_plan_line_cache
+    await _refresh_section_plan_line_cache(session, final_task.section_plan_line_id)
  
     resp_complete = await client.post(
         f"/api/shopfloor/tasks/{final_task.id}/complete",

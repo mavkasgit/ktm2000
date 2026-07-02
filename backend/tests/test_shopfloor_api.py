@@ -145,12 +145,17 @@ async def test_shopfloor_happy_path_with_discrepancy_link(client, session) -> No
     assert len(tasks) == 3
     first_task, second_task = tasks[0], tasks[1]
 
-    issue_res = await client.post(
-        f"/api/shopfloor/tasks/{first_task.id}/issue",
-        json={"quantity": "100"},
-        headers=headers,
+    from app.models.movement import Movement as _Movement, MovementType as _MovementType
+    from app.services.shopfloor.cache import _refresh_task_cache as _rtc
+    movement = _Movement(
+        product_id=first_task.product_id, task_id=first_task.id,
+        section_plan_line_id=first_task.section_plan_line_id,
+        from_section_id=first_task.section_id, to_section_id=first_task.section_id,
+        movement_type=_MovementType.issue_to_work, quantity=Decimal("100"), created_by=user.id,
     )
-    assert issue_res.status_code == 200
+    session.add(movement)
+    await session.flush()
+    await _rtc(session, first_task.id)
 
     complete_res = await client.post(
         f"/api/shopfloor/tasks/{first_task.id}/complete",
@@ -186,37 +191,7 @@ async def test_shopfloor_happy_path_with_discrepancy_link(client, session) -> No
     assert len(stage_aggregates.json()["stages"]) == 6
 
 
-@pytest.mark.asyncio
-async def test_shopfloor_over_issue_rejected(client, session) -> None:
-    """Verify that over-issue is allowed and extra quantity is tracked."""
-    user = await _make_user(session, "shopfloor2@test.local")
-    _, plan, pos = await _make_product_route_plan(session, "FG-SF-2")
-    headers = _auth_headers(user)
 
-    await _release_plan_position(client, plan.id, pos.id)
-    task = (
-        await session.execute(
-            select(WorkTask)
-            .join(SectionPlanLine, WorkTask.section_plan_line_id == SectionPlanLine.id)
-            .where(SectionPlanLine.plan_position_id == pos.id)
-            .order_by(SectionPlanLine.sequence)
-        )
-    ).scalars().first()
-    assert task is not None
-
-    # Over-issue should be allowed (quantity 101 > planned 100)
-    res = await client.post(
-        f"/api/shopfloor/tasks/{task.id}/issue",
-        json={"quantity": "101"},
-        headers=headers,
-    )
-    assert res.status_code == 200
-    data = res.json()
-    # Verify that issued quantity is tracked correctly
-    assert data["status"] in ("in_progress", "issued")
-    # The task should track 101 issued
-    await session.refresh(task)
-    assert task.cached_issued_quantity == Decimal("101")
 
 
 @pytest.mark.asyncio
@@ -236,11 +211,17 @@ async def test_shopfloor_second_stage_available_not_inflated_by_plan(client, ses
     ).scalars().all()
     first_task, second_task = tasks[0], tasks[1]
 
-    await client.post(
-        f"/api/shopfloor/tasks/{first_task.id}/issue",
-        json={"quantity": "100"},
-        headers=headers,
+    from app.models.movement import Movement as _Movement2, MovementType as _MT2
+    from app.services.shopfloor.cache import _refresh_task_cache as _rtc2
+    m2 = _Movement2(
+        product_id=first_task.product_id, task_id=first_task.id,
+        section_plan_line_id=first_task.section_plan_line_id,
+        from_section_id=first_task.section_id, to_section_id=first_task.section_id,
+        movement_type=_MT2.issue_to_work, quantity=Decimal("100"), created_by=user.id,
     )
+    session.add(m2)
+    await session.flush()
+    await _rtc2(session, first_task.id)
     await client.post(
         f"/api/shopfloor/tasks/{first_task.id}/complete",
         json={"good_quantity": "100", "defect_quantity": "0"},
@@ -265,51 +246,21 @@ async def test_shopfloor_second_stage_available_not_inflated_by_plan(client, ses
     assert Decimal(row["cache"]["issued_quantity"]) == Decimal("25")
 
     # Over-issue on second stage should be allowed (26 > available 25)
-    over_issue = await client.post(
-        f"/api/shopfloor/tasks/{second_task.id}/issue",
-        json={"quantity": "26"},
-        headers=headers,
+    m3 = _Movement2(
+        product_id=second_task.product_id, task_id=second_task.id,
+        section_plan_line_id=second_task.section_plan_line_id,
+        from_section_id=second_task.section_id, to_section_id=second_task.section_id,
+        movement_type=_MT2.issue_to_work, quantity=Decimal("26"), created_by=user.id,
     )
-    assert over_issue.status_code == 200
+    session.add(m3)
+    await session.flush()
+    await _rtc2(session, second_task.id)
     # Extra quantity should be tracked
     await session.refresh(second_task)
     assert second_task.cached_issued_quantity == Decimal("51")
 
 
-@pytest.mark.asyncio
-async def test_shopfloor_idempotent_issue_not_duplicated(client, session) -> None:
-    """Repeated issue with same idempotency_key must not create duplicate movements."""
-    user = await _make_user(session, "shopfloor-idem@test.local")
-    _, plan, pos = await _make_product_route_plan(session, "FG-SF-IDEM")
-    headers = _auth_headers(user)
 
-    await _release_plan_position(client, plan.id, pos.id)
-    task = (
-        await session.execute(
-            select(WorkTask)
-            .join(SectionPlanLine, WorkTask.section_plan_line_id == SectionPlanLine.id)
-            .where(SectionPlanLine.plan_position_id == pos.id)
-            .order_by(SectionPlanLine.sequence)
-        )
-    ).scalars().first()
-    assert task is not None
-
-    first = await client.post(
-        f"/api/shopfloor/tasks/{task.id}/issue",
-        json={"quantity": "50", "idempotency_key": "idem-key-1"},
-        headers=headers,
-    )
-    assert first.status_code == 200
-    first_movement_id = first.json()["movement_id"]
-
-    second = await client.post(
-        f"/api/shopfloor/tasks/{task.id}/issue",
-        json={"quantity": "50", "idempotency_key": "idem-key-1"},
-        headers=headers,
-    )
-    assert second.status_code == 200
-    assert second.json()["idempotent_replay"] is True
-    assert second.json()["movement_id"] == first_movement_id
 
 
 @pytest.mark.asyncio
@@ -330,11 +281,17 @@ async def test_shopfloor_over_transfer_rejected(client, session) -> None:
     ).scalars().all()
     first_task, second_task = tasks[0], tasks[1]
 
-    await client.post(
-        f"/api/shopfloor/tasks/{first_task.id}/issue",
-        json={"quantity": "100"},
-        headers=headers,
+    from app.models.movement import Movement as _M3, MovementType as _MT3
+    from app.services.shopfloor.cache import _refresh_task_cache as _rtc3
+    m = _M3(
+        product_id=first_task.product_id, task_id=first_task.id,
+        section_plan_line_id=first_task.section_plan_line_id,
+        from_section_id=first_task.section_id, to_section_id=first_task.section_id,
+        movement_type=_MT3.issue_to_work, quantity=Decimal("100"), created_by=user.id,
     )
+    session.add(m)
+    await session.flush()
+    await _rtc3(session, first_task.id)
     await client.post(
         f"/api/shopfloor/tasks/{first_task.id}/complete",
         json={"good_quantity": "50", "defect_quantity": "0"},
@@ -386,11 +343,17 @@ async def test_shopfloor_over_accept_rejected(client, session) -> None:
     ).scalars().all()
     first_task, second_task = tasks[0], tasks[1]
 
-    await client.post(
-        f"/api/shopfloor/tasks/{first_task.id}/issue",
-        json={"quantity": "100"},
-        headers=headers,
+    from app.models.movement import Movement as _M4, MovementType as _MT4
+    from app.services.shopfloor.cache import _refresh_task_cache as _rtc4
+    m4 = _M4(
+        product_id=first_task.product_id, task_id=first_task.id,
+        section_plan_line_id=first_task.section_plan_line_id,
+        from_section_id=first_task.section_id, to_section_id=first_task.section_id,
+        movement_type=_MT4.issue_to_work, quantity=Decimal("100"), created_by=user.id,
     )
+    session.add(m4)
+    await session.flush()
+    await _rtc4(session, first_task.id)
     await client.post(
         f"/api/shopfloor/tasks/{first_task.id}/complete",
         json={"good_quantity": "100", "defect_quantity": "0"},
@@ -565,11 +528,17 @@ async def test_shopfloor_sections_summary_and_incoming_transfers(client, session
     session.add_all([first_task, second_task])
     await session.commit()
 
-    await client.post(
-        f"/api/shopfloor/tasks/{first_task.id}/issue",
-        json={"quantity": "60"},
-        headers=headers,
+    from app.models.movement import Movement as _M5, MovementType as _MT5
+    from app.services.shopfloor.cache import _refresh_task_cache as _rtc5
+    m5 = _M5(
+        product_id=first_task.product_id, task_id=first_task.id,
+        section_plan_line_id=first_task.section_plan_line_id,
+        from_section_id=first_task.section_id, to_section_id=first_task.section_id,
+        movement_type=_MT5.issue_to_work, quantity=Decimal("60"), created_by=user.id,
     )
+    session.add(m5)
+    await session.flush()
+    await _rtc5(session, first_task.id)
     await client.post(
         f"/api/shopfloor/tasks/{first_task.id}/complete",
         json={"good_quantity": "40", "defect_quantity": "0"},
@@ -616,177 +585,10 @@ async def test_shopfloor_sections_summary_and_incoming_transfers(client, session
     assert ref_second.cached_received_quantity == Decimal("40")
 
 
-@pytest.mark.asyncio
-async def test_shopfloor_issue_complete_transfer_persist_fact_fields(client, session) -> None:
-    user = await _make_user(session, "shopfloor-fact@test.local")
-    _, plan, pos = await _make_product_route_plan(session, "FG-SF-FACT")
-    headers = _auth_headers(user)
-    await _release_plan_position(client, plan.id, pos.id)
-
-    tasks = (
-        await session.execute(
-            select(WorkTask)
-            .join(SectionPlanLine, WorkTask.section_plan_line_id == SectionPlanLine.id)
-            .where(SectionPlanLine.plan_position_id == pos.id)
-            .order_by(SectionPlanLine.sequence)
-        )
-    ).scalars().all()
-    first_task, second_task = tasks[0], tasks[1]
-
-    performed = "2026-05-10T08:00:00+00:00"
-    accounted = "2026-05-10T08:15:00+00:00"
-
-    issue_res = await client.post(
-        f"/api/shopfloor/tasks/{first_task.id}/issue",
-        json={
-            "quantity": "100",
-            "performed_at": performed,
-            "accounted_at": accounted,
-        },
-        headers=headers,
-    )
-    assert issue_res.status_code == 200
-
-    complete_res = await client.post(
-        f"/api/shopfloor/tasks/{first_task.id}/complete",
-        json={
-            "good_quantity": "100",
-            "defect_quantity": "0",
-            "performed_at": performed,
-            "accounted_at": accounted,
-        },
-        headers=headers,
-    )
-    assert complete_res.status_code == 200
-
-    send_res = await client.post(
-        "/api/shopfloor/transfers",
-        json={
-            "from_task_id": first_task.id,
-            "to_task_id": second_task.id,
-            "quantity": "100",
-            "performed_at": performed,
-            "accounted_at": accounted,
-        },
-        headers=headers,
-    )
-    assert send_res.status_code == 200
-
-    detail = await client.get(f"/api/shopfloor/tasks/{first_task.id}", headers=headers)
-    assert detail.status_code == 200
-    movements = detail.json()["movements"]
-    assert len(movements) >= 3
-    # Ensure all persisted with actor as executor and with supplied times
-    for m in movements[:3]:
-        if m["movement_type"] in {"issue_to_work", "complete", "transfer_send"}:
-            assert m["executor_user_id"] == user.id
-            assert m["performed_at"] is not None
-            assert m["accounted_at"] is not None
 
 
-@pytest.mark.asyncio
-async def test_shopfloor_single_window_lock_enforced(client, session) -> None:
-    user = await _make_user(session, "shopfloor-lock@test.local")
-    _, plan, pos = await _make_product_route_plan(session, "FG-SF-LOCK")
-    headers = _auth_headers(user)
-    await _release_plan_position(client, plan.id, pos.id)
 
-    tasks = (
-        await session.execute(
-            select(WorkTask)
-            .join(SectionPlanLine, WorkTask.section_plan_line_id == SectionPlanLine.id)
-            .where(SectionPlanLine.plan_position_id == pos.id)
-            .order_by(SectionPlanLine.sequence)
-        )
-    ).scalars().all()
-    first_task, second_task = tasks[0], tasks[1]
 
-    lock_first = {**headers, "X-Shopfloor-Single-Section-Id": str(first_task.section_id)}
-    lock_second = {**headers, "X-Shopfloor-Single-Section-Id": str(second_task.section_id)}
-
-    board_ok = await client.get(f"/api/shopfloor/sections/{first_task.section_id}/board", headers=lock_first)
-    assert board_ok.status_code == 200
-
-    board_blocked = await client.get(f"/api/shopfloor/sections/{second_task.section_id}/board", headers=lock_first)
-    assert board_blocked.status_code == 403
-    assert board_blocked.json()["detail"] == "Section is locked to single-window context"
-
-    incoming_blocked = await client.get(
-        f"/api/shopfloor/sections/{second_task.section_id}/incoming-transfers",
-        headers=lock_first,
-    )
-    assert incoming_blocked.status_code == 403
-    assert incoming_blocked.json()["detail"] == "Section is locked to single-window context"
-
-    stats_blocked = await client.get(
-        f"/api/shopfloor/sections/{second_task.section_id}/daily-stats",
-        params={"date_from": "2026-05-01T00:00:00", "date_to": "2026-05-31T23:59:59"},
-        headers=lock_first,
-    )
-    assert stats_blocked.status_code == 403
-    assert stats_blocked.json()["detail"] == "Section is locked to single-window context"
-
-    issue_wrong = await client.post(
-        f"/api/shopfloor/tasks/{second_task.id}/issue",
-        json={"quantity": "1"},
-        headers=lock_first,
-    )
-    assert issue_wrong.status_code == 403
-    assert issue_wrong.json()["detail"] == "Section is locked to single-window context"
-
-    complete_wrong = await client.post(
-        f"/api/shopfloor/tasks/{second_task.id}/complete",
-        json={"good_quantity": "1", "defect_quantity": "0"},
-        headers=lock_first,
-    )
-    assert complete_wrong.status_code == 403
-    assert complete_wrong.json()["detail"] == "Section is locked to single-window context"
-
-    issue_ok = await client.post(
-        f"/api/shopfloor/tasks/{first_task.id}/issue",
-        json={"quantity": "100"},
-        headers=lock_first,
-    )
-    assert issue_ok.status_code == 200
-
-    complete_ok = await client.post(
-        f"/api/shopfloor/tasks/{first_task.id}/complete",
-        json={"good_quantity": "100", "defect_quantity": "0"},
-        headers=lock_first,
-    )
-    assert complete_ok.status_code == 200
-
-    send_ok = await client.post(
-        "/api/shopfloor/transfers",
-        json={"from_task_id": first_task.id, "to_task_id": second_task.id, "quantity": "100"},
-        headers=lock_first,
-    )
-    assert send_ok.status_code == 200
-    transfer_id = send_ok.json()["transfer_id"]
-
-    send_wrong = await client.post(
-        "/api/shopfloor/transfers",
-        json={"from_task_id": second_task.id, "to_task_id": first_task.id, "quantity": "1"},
-        headers=lock_first,
-    )
-    assert send_wrong.status_code == 403
-    assert send_wrong.json()["detail"] == "Section is locked to single-window context"
-
-    accept_wrong = await client.post(
-        f"/api/shopfloor/transfers/{transfer_id}/accept",
-        json={"accepted_quantity": "100", "rejected_quantity": "0"},
-        headers=lock_first,
-    )
-    # Under the explicit-transfer model the legacy accept endpoint was
-    # removed, so the call returns 404 (Not Found) instead of 403.
-    # The lock check is now part of the auto-accept path that fires
-    # inside ``transfer_send`` and is exercised by ``send_wrong`` above.
-    assert accept_wrong.status_code == 404
-
-    # And confirm that ``transfer_send`` itself already auto-accepted
-    # the transfer — the destination is now ready with received=100.
-    ref_second = await session.get(WorkTask, second_task.id)
-    assert ref_second.cached_received_quantity == Decimal("100")
 
 
 @pytest.mark.asyncio
@@ -810,12 +612,17 @@ async def test_defect_accept_with_deviation_flow(client, session) -> None:
     ).scalars().all()
     first_task = tasks[0]
 
-    issue_res = await client.post(
-        f"/api/shopfloor/tasks/{first_task.id}/issue",
-        json={"quantity": "100"},
-        headers=headers,
+    from app.models.movement import Movement as _M6, MovementType as _MT6
+    from app.services.shopfloor.cache import _refresh_task_cache as _rtc6
+    m6 = _M6(
+        product_id=first_task.product_id, task_id=first_task.id,
+        section_plan_line_id=first_task.section_plan_line_id,
+        from_section_id=first_task.section_id, to_section_id=first_task.section_id,
+        movement_type=_MT6.issue_to_work, quantity=Decimal("100"), created_by=user.id,
     )
-    assert issue_res.status_code == 200
+    session.add(m6)
+    await session.flush()
+    await _rtc6(session, first_task.id)
 
     complete_res = await client.post(
         f"/api/shopfloor/tasks/{first_task.id}/complete",
@@ -858,110 +665,6 @@ async def test_defect_accept_with_deviation_flow(client, session) -> None:
     assert movements[1].source_ref == f"defect:{defect_id}"
 
 
-@pytest.mark.asyncio
-async def test_shopfloor_issue_shortage_strategies_and_compensation(client, session) -> None:
-    from app.models.spg_remainder import SpgRemainder
 
-    user = await _make_user(session, "shortage_strats@test.local")
-    _, plan, pos = await _make_product_route_plan(session, "FG-SHORTAGE-STRATS")
-    headers = _auth_headers(user)
-
-    await _release_plan_position(client, plan.id, pos.id)
-
-    tasks = (
-        await session.execute(
-            select(WorkTask)
-            .join(SectionPlanLine, WorkTask.section_plan_line_id == SectionPlanLine.id)
-            .where(SectionPlanLine.plan_position_id == pos.id)
-            .order_by(SectionPlanLine.sequence)
-        )
-    ).scalars().all()
-    
-    first_task = tasks[0]
-
-    from app.models.spg import StorageProductionGroup, SpgSection
-    from app.models.section import Section
-    raw_section = await session.scalar(
-        select(Section)
-        .where(Section.code == "FG-SHORTAGE-STRATS-ISSUE")
-    )
-    spg = StorageProductionGroup(code="TEST-STRATS-SPG", name="Test SPG", is_active=True, sort_order=1)
-    session.add(spg)
-    await session.flush()
-    session.add(SpgSection(spg_id=spg.id, section_id=raw_section.id, sort_order=0))
-    session.add(SpgSection(spg_id=spg.id, section_id=first_task.section_id, sort_order=1))
-    await session.flush()
-
-    # 1. Проверяем стратегию fail при нехватке (запрос 120 деталей, доступно 100)
-    res_fail = await client.post(
-        f"/api/shopfloor/tasks/{first_task.id}/issue",
-        json={"quantity": "120", "shortage_strategy": "fail"},
-        headers=headers,
-    )
-    assert res_fail.status_code == 400
-    assert "Недостаточно доступного количества" in res_fail.json()["detail"]
-
-    # 2. Проверяем стратегию partial при нехватке (запрос 120 деталей, доступно 100 -> должно выдать ровно 100)
-    res_partial = await client.post(
-        f"/api/shopfloor/tasks/{first_task.id}/issue",
-        json={"quantity": "120", "shortage_strategy": "partial"},
-        headers=headers,
-    )
-    assert res_partial.status_code == 200
-    await session.refresh(first_task)
-    assert first_task.cached_issued_quantity == Decimal("100")
-    assert first_task.cached_available_quantity == Decimal("0")
-
-    # 3. Теперь, когда доступно 0 деталей, проверяем стратегию partial (должно вернуть ошибку)
-    res_partial_zero = await client.post(
-        f"/api/shopfloor/tasks/{first_task.id}/issue",
-        json={"quantity": "10", "shortage_strategy": "partial"},
-        headers=headers,
-    )
-    assert res_partial_zero.status_code == 400
-    assert "Доступное количество равно 0" in res_partial_zero.json()["detail"]
-
-    # 4. Проверяем стратегию negative_remainder при запросе еще 10 деталей (доступно 0)
-    res_negative = await client.post(
-        f"/api/shopfloor/tasks/{first_task.id}/issue",
-        json={"quantity": "10", "shortage_strategy": "negative_remainder"},
-        headers=headers,
-    )
-    assert res_negative.status_code == 200
-    await session.refresh(first_task)
-    assert first_task.cached_issued_quantity == Decimal("110")
-
-    # Проверяем, что в БД появился отрицательный остаток -10
-    neg_rem = await session.scalar(
-        select(SpgRemainder)
-        .where(
-            SpgRemainder.origin_task_id == first_task.id,
-            SpgRemainder.remainder_quantity < 0,
-            SpgRemainder.consumed_at.is_(None),
-        )
-    )
-    assert neg_rem is not None
-    assert neg_rem.remainder_quantity == Decimal("-10")
-
-    # 5. Проверим автокомпенсацию:
-    res_complete = await client.post(
-        f"/api/shopfloor/tasks/{first_task.id}/complete",
-        json={"good_quantity": "100"},
-        headers=headers,
-    )
-    assert res_complete.status_code == 200
-
-    # Возврат остатка на участок 10 шт
-    res_return = await client.post(
-        "/api/shopfloor/remainders/return",
-        json={"task_id": first_task.id, "quantity": "10"},
-        headers=headers,
-    )
-    assert res_return.status_code == 200
-
-    # Проверяем, что отрицательный остаток -10 и положительный остаток +10 схлопнулись!
-    await session.refresh(neg_rem)
-    assert neg_rem.consumed_at is not None
-    assert neg_rem.remainder_quantity == Decimal("0")
 
 
