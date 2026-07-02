@@ -567,3 +567,288 @@ async def test_auto_transfer_chain_through_single_transit(client, session) -> No
     assert t2.is_post_factum is True
     assert t2.status == TransferStatus.accepted
 
+
+async def test_auto_transfer_chain_through_double_transit(client, session) -> None:
+    """Маршрут production_1 → transit_1(WIP) → transit_2(WIP) → production_2,
+    все в РАЗНЫХ ГХП. При завершении production_1 должно создаться 3 передачи."""
+    from app.transfers.services import auto_create_transfer_after_complete
+    from app.models.internal_plan import InternalPlan, SectionPlanLine
+    from app.models.route import ProductionRoute, RouteStage, RouteOperation
+    from app.models.techcard import Techcard, TechcardLine
+    from app.models.production_plan import (
+        PlanPosition,
+        PlanPositionStatus,
+        PlanPositionValidationStatus,
+        PlanSourceType,
+        ProductionPlan,
+        ProductionPlanStatus,
+    )
+    from datetime import date
+
+    sku = "DBL-TRANSIT"
+    qty = Decimal("7")
+
+    sec_prod1 = Section(code=f"{sku}-P1", name="Prod1", kind="production", is_active=True, sort_order=0)
+    sec_tr1 = Section(code=f"{sku}-TR1", name="Transit1", kind="wip_stock", is_active=True, sort_order=1)
+    sec_tr2 = Section(code=f"{sku}-TR2", name="Transit2", kind="wip_stock", is_active=True, sort_order=2)
+    sec_prod2 = Section(code=f"{sku}-P2", name="Prod2", kind="production", is_active=True, sort_order=3)
+    session.add_all([sec_prod1, sec_tr1, sec_tr2, sec_prod2])
+    await session.flush()
+
+    spg_a = StorageProductionGroup(code=f"{sku}-A", name="A", is_active=True, sort_order=0)
+    spg_b = StorageProductionGroup(code=f"{sku}-B", name="B", is_active=True, sort_order=1)
+    spg_c = StorageProductionGroup(code=f"{sku}-C", name="C", is_active=True, sort_order=2)
+    spg_d = StorageProductionGroup(code=f"{sku}-D", name="D", is_active=True, sort_order=3)
+    session.add_all([spg_a, spg_b, spg_c, spg_d])
+    await session.flush()
+    session.add_all([
+        SpgSection(spg_id=spg_a.id, section_id=sec_prod1.id, sort_order=0),
+        SpgSection(spg_id=spg_b.id, section_id=sec_tr1.id, sort_order=0),
+        SpgSection(spg_id=spg_c.id, section_id=sec_tr2.id, sort_order=0),
+        SpgSection(spg_id=spg_d.id, section_id=sec_prod2.id, sort_order=0),
+    ])
+
+    product = Product(sku=sku, name=sku, type=ProductType.finished_good, unit="pcs", is_active=True)
+    session.add(product)
+    await session.flush()
+
+    route = ProductionRoute(name=f"Route {sku}", is_active=True)
+    session.add(route)
+    await session.flush()
+
+    st1 = RouteStage(route_id=route.id, sequence=1, section_id=sec_prod1.id, is_final=False, stage_kind="production")
+    session.add(st1)
+    await session.flush()
+    session.add(RouteOperation(route_stage_id=st1.id, sequence=1, operation_code="OP1", operation_name="OP1"))
+
+    st_tr1 = RouteStage(route_id=route.id, sequence=2, section_id=None, storage_section_id=sec_tr1.id, is_final=False, stage_kind="transit")
+    session.add(st_tr1)
+    await session.flush()
+
+    st_tr2 = RouteStage(route_id=route.id, sequence=3, section_id=None, storage_section_id=sec_tr2.id, is_final=False, stage_kind="transit")
+    session.add(st_tr2)
+    await session.flush()
+
+    st2 = RouteStage(route_id=route.id, sequence=4, section_id=sec_prod2.id, is_final=True, stage_kind="production")
+    session.add(st2)
+    await session.flush()
+    session.add(RouteOperation(route_stage_id=st2.id, sequence=1, operation_code="OP2", operation_name="OP2"))
+
+    tech = Techcard(product_id=product.id, version="v1", is_active=True)
+    session.add(tech)
+    await session.flush()
+    session.add(TechcardLine(techcard_id=tech.id, component_product_id=product.id, quantity=Decimal("1"), unit="pcs"))
+
+    plan = ProductionPlan(plan_no=f"P-{sku}", name="p", status=ProductionPlanStatus.approved,
+                          period_start=date(2026, 5, 1), period_end=date(2026, 5, 31))
+    session.add(plan)
+    await session.flush()
+
+    pos = PlanPosition(production_plan_id=plan.id, product_id=product.id,
+                       source_type=PlanSourceType.manual, source_sku=product.sku, source_name=product.name,
+                       quantity=qty, source_payload={}, status=PlanPositionStatus.approved,
+                       validation_status=PlanPositionValidationStatus.valid, validation_errors=[],
+                       period_start=plan.period_start, period_end=plan.period_end,
+                       has_pack_ops=False, route_id=route.id, route_assigned_at=None)
+    session.add(pos)
+    await session.flush()
+
+    ip = InternalPlan(production_plan_id=plan.id, release_batch_id=None)
+    session.add(ip)
+    await session.flush()
+
+    line1 = SectionPlanLine(internal_plan_id=ip.id, plan_position_id=pos.id,
+                            section_id=sec_prod1.id, product_id=product.id,
+                            route_id=route.id, route_stage_id=st1.id,
+                            sequence=1, planned_quantity=qty)
+    line_tr1 = SectionPlanLine(internal_plan_id=ip.id, plan_position_id=pos.id,
+                               section_id=sec_tr1.id, product_id=product.id,
+                               route_id=route.id, route_stage_id=st_tr1.id,
+                               sequence=2, planned_quantity=qty)
+    line_tr2 = SectionPlanLine(internal_plan_id=ip.id, plan_position_id=pos.id,
+                               section_id=sec_tr2.id, product_id=product.id,
+                               route_id=route.id, route_stage_id=st_tr2.id,
+                               sequence=3, planned_quantity=qty)
+    line2 = SectionPlanLine(internal_plan_id=ip.id, plan_position_id=pos.id,
+                            section_id=sec_prod2.id, product_id=product.id,
+                            route_id=route.id, route_stage_id=st2.id,
+                            sequence=4, planned_quantity=qty)
+    session.add_all([line1, line_tr1, line_tr2, line2])
+    await session.flush()
+
+    task1 = WorkTask(section_plan_line_id=line1.id, section_id=sec_prod1.id,
+                     product_id=product.id, route_stage_id=st1.id,
+                     planned_quantity=qty, status=WorkTaskStatus.ready)
+    session.add(task1)
+    await session.flush()
+
+    task2 = WorkTask(section_plan_line_id=line2.id, section_id=sec_prod2.id,
+                     product_id=product.id, route_stage_id=st2.id,
+                     planned_quantity=qty, status=WorkTaskStatus.waiting_previous)
+    session.add(task2)
+    await session.flush()
+
+    await session.commit()
+
+    user = await _make_user(session)
+
+    result = await auto_create_transfer_after_complete(
+        session, from_task=task1, good_quantity=qty,
+        actor_id=user.id, idempotency_key="k-dbl-transit",
+    )
+    assert result is not None
+
+    transfers = (await session.execute(select(Transfer))).scalars().all()
+    assert len(transfers) == 3, f"Ожидалось 3 Transfer (chain через 2 transit), получили {len(transfers)}"
+
+    t1 = transfers[0]
+    assert t1.from_task_id == task1.id
+    assert t1.from_section_id == sec_prod1.id
+    assert t1.to_section_id == sec_tr1.id
+    assert t1.is_post_factum is True
+    assert t1.status == TransferStatus.accepted
+
+    t2 = transfers[1]
+    assert t2.from_section_id == sec_tr1.id
+    assert t2.to_section_id == sec_tr2.id
+    assert t2.is_post_factum is True
+    assert t2.status == TransferStatus.accepted
+
+    t3 = transfers[2]
+    assert t3.to_task_id == task2.id
+    assert t3.from_section_id == sec_tr2.id
+    assert t3.to_section_id == sec_prod2.id
+    assert t3.is_post_factum is True
+    assert t3.status == TransferStatus.accepted
+
+
+async def test_auto_transfer_no_chain_when_next_production_same_ghp(client, session) -> None:
+    """Маршрут production_1 → transit(WIP) → production_2.
+    transit и production_2 в ОДНОЙ ГХП (один SPG).
+    После завершения production_1 должна создаться 1 передача (prod1 → transit),
+    цепочка ДОЛЖНА остановиться, т.к. sections_share_spg(transit, prod2) = True."""
+    from app.transfers.services import auto_create_transfer_after_complete
+    from app.models.internal_plan import InternalPlan, SectionPlanLine
+    from app.models.route import ProductionRoute, RouteStage, RouteOperation
+    from app.models.techcard import Techcard, TechcardLine
+    from app.models.production_plan import (
+        PlanPosition,
+        PlanPositionStatus,
+        PlanPositionValidationStatus,
+        PlanSourceType,
+        ProductionPlan,
+        ProductionPlanStatus,
+    )
+    from datetime import date
+
+    sku = "SAME-GHP"
+    qty = Decimal("6")
+
+    sec_prod1 = Section(code=f"{sku}-P1", name="Prod1", kind="production", is_active=True, sort_order=0)
+    sec_transit = Section(code=f"{sku}-TR", name="Transit", kind="wip_stock", is_active=True, sort_order=1)
+    sec_prod2 = Section(code=f"{sku}-P2", name="Prod2", kind="production", is_active=True, sort_order=2)
+    session.add_all([sec_prod1, sec_transit, sec_prod2])
+    await session.flush()
+
+    spg_a = StorageProductionGroup(code=f"{sku}-A", name="A", is_active=True, sort_order=0)
+    spg_shared = StorageProductionGroup(code=f"{sku}-SH", name="Shared", is_active=True, sort_order=1)
+    session.add_all([spg_a, spg_shared])
+    await session.flush()
+    session.add_all([
+        SpgSection(spg_id=spg_a.id, section_id=sec_prod1.id, sort_order=0),
+        SpgSection(spg_id=spg_shared.id, section_id=sec_transit.id, sort_order=0),
+        SpgSection(spg_id=spg_shared.id, section_id=sec_prod2.id, sort_order=1),
+    ])
+
+    product = Product(sku=sku, name=sku, type=ProductType.finished_good, unit="pcs", is_active=True)
+    session.add(product)
+    await session.flush()
+
+    route = ProductionRoute(name=f"Route {sku}", is_active=True)
+    session.add(route)
+    await session.flush()
+
+    st1 = RouteStage(route_id=route.id, sequence=1, section_id=sec_prod1.id, is_final=False, stage_kind="production")
+    session.add(st1)
+    await session.flush()
+    session.add(RouteOperation(route_stage_id=st1.id, sequence=1, operation_code="OP1", operation_name="OP1"))
+
+    st_transit = RouteStage(route_id=route.id, sequence=2, section_id=None, storage_section_id=sec_transit.id, is_final=False, stage_kind="transit")
+    session.add(st_transit)
+    await session.flush()
+
+    st2 = RouteStage(route_id=route.id, sequence=3, section_id=sec_prod2.id, is_final=True, stage_kind="production")
+    session.add(st2)
+    await session.flush()
+    session.add(RouteOperation(route_stage_id=st2.id, sequence=1, operation_code="OP2", operation_name="OP2"))
+
+    tech = Techcard(product_id=product.id, version="v1", is_active=True)
+    session.add(tech)
+    await session.flush()
+    session.add(TechcardLine(techcard_id=tech.id, component_product_id=product.id, quantity=Decimal("1"), unit="pcs"))
+
+    plan = ProductionPlan(plan_no=f"P-{sku}", name="p", status=ProductionPlanStatus.approved,
+                          period_start=date(2026, 5, 1), period_end=date(2026, 5, 31))
+    session.add(plan)
+    await session.flush()
+
+    pos = PlanPosition(production_plan_id=plan.id, product_id=product.id,
+                       source_type=PlanSourceType.manual, source_sku=product.sku, source_name=product.name,
+                       quantity=qty, source_payload={}, status=PlanPositionStatus.approved,
+                       validation_status=PlanPositionValidationStatus.valid, validation_errors=[],
+                       period_start=plan.period_start, period_end=plan.period_end,
+                       has_pack_ops=False, route_id=route.id, route_assigned_at=None)
+    session.add(pos)
+    await session.flush()
+
+    ip = InternalPlan(production_plan_id=plan.id, release_batch_id=None)
+    session.add(ip)
+    await session.flush()
+
+    line1 = SectionPlanLine(internal_plan_id=ip.id, plan_position_id=pos.id,
+                            section_id=sec_prod1.id, product_id=product.id,
+                            route_id=route.id, route_stage_id=st1.id,
+                            sequence=1, planned_quantity=qty)
+    line_transit = SectionPlanLine(internal_plan_id=ip.id, plan_position_id=pos.id,
+                                   section_id=sec_transit.id, product_id=product.id,
+                                   route_id=route.id, route_stage_id=st_transit.id,
+                                   sequence=2, planned_quantity=qty)
+    line2 = SectionPlanLine(internal_plan_id=ip.id, plan_position_id=pos.id,
+                            section_id=sec_prod2.id, product_id=product.id,
+                            route_id=route.id, route_stage_id=st2.id,
+                            sequence=3, planned_quantity=qty)
+    session.add_all([line1, line_transit, line2])
+    await session.flush()
+
+    task1 = WorkTask(section_plan_line_id=line1.id, section_id=sec_prod1.id,
+                     product_id=product.id, route_stage_id=st1.id,
+                     planned_quantity=qty, status=WorkTaskStatus.ready)
+    session.add(task1)
+    await session.flush()
+
+    task2 = WorkTask(section_plan_line_id=line2.id, section_id=sec_prod2.id,
+                     product_id=product.id, route_stage_id=st2.id,
+                     planned_quantity=qty, status=WorkTaskStatus.waiting_previous)
+    session.add(task2)
+    await session.flush()
+
+    await session.commit()
+
+    user = await _make_user(session)
+
+    result = await auto_create_transfer_after_complete(
+        session, from_task=task1, good_quantity=qty,
+        actor_id=user.id, idempotency_key="k-same-ghp",
+    )
+    assert result is not None
+
+    transfers = (await session.execute(select(Transfer))).scalars().all()
+    assert len(transfers) == 1, f"Ожидалась 1 Transfer (transit и prod2 в одной ГХП), получили {len(transfers)}"
+
+    t = transfers[0]
+    assert t.from_task_id == task1.id
+    assert t.from_section_id == sec_prod1.id
+    assert t.to_section_id == sec_transit.id
+    assert t.is_post_factum is True
+    assert t.status == TransferStatus.accepted
+
