@@ -175,7 +175,16 @@ async def _refresh_task_cache(db: AsyncSession, task_id: int, visited: set[int] 
     elif issued > 0:
         task.status = WorkTaskStatus.in_progress
     elif available > 0:
-        task.status = WorkTaskStatus.ready
+        # ``available`` for the first effective task in a SPG comes from
+        # the plan; for downstream tasks it must come from ``received``.
+        # If neither side has material yet, show the task as waiting
+        # for the upstream transfer rather than as ready-to-work — this
+        # matches operator intuition and makes ``issue_to_work`` reject
+        # with a clear message via the existing ``is_first_active`` guard.
+        if base_available == 0 and received == 0:
+            task.status = WorkTaskStatus.waiting_previous
+        else:
+            task.status = WorkTaskStatus.ready
     else:
         preceding_exists = False
         if line is not None:
