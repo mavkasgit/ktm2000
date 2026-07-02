@@ -85,6 +85,11 @@ await assert_no_invariants_violations(session, context="after-cancel")
 
 ## Рефакторинг Stock Ledger (в ветке `refactor/stock-ledger`)
 
+> **Старт новой сессии**: сначала выполни «Старт-протокол для новой сессии»
+> в [`PLAN_stock_ledger.md`](file:///c:/Users/user/VibeCoding/ktm2000/PLAN_stock_ledger.md)
+> (раздел в самом начале файла) — там пошаговая инструкция: контекст →
+> исследование через субагентов → выполнение текущей фазы. Не пропускай.
+
 Подробный план: [`PLAN_stock_ledger.md`](file:///c:/Users/user/VibeCoding/ktm2000/PLAN_stock_ledger.md). Ниже — короткий глоссарий и принципы, обязательные для любого кода в этой ветке.
 
 ### Архитектурные принципы
