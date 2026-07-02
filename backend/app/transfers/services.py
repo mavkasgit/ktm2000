@@ -51,6 +51,25 @@ from app.services.shopfloor.common import (
     _transfer_no,
 )
 
+# ─── Stock Ledger double-write (Этап 2) ──────────────────────────────────────
+# Параллельная запись в новый append-only ledger. Пока Movement остаётся
+# источником правды для cached_* проекций, StockTransaction дублирует факт
+# перемещения для сверки (инвариант S6) и будущего перехода (Этап 7).
+#
+# Геометрия: одна проводка ``from=from_section → to=to_section`` с reason
+# ``TRANSFER_SEND``. Это классическая ledger-геометрия — одна транзакция с
+# обоими концами двигает баланс обеих локаций ровно на qty (S1 тривиально
+# сходится: ``SUM(in) − SUM(out)`` per location). От split-геометрии
+# («только исход / только приход») отказались: она неестественна для
+# материального склада и была навязана лишь формой старого инварианта S6.
+# S6 переписан на ``SUM(active) − SUM(compensations) == sent_quantity``,
+# что работает и на честной геометрии, и устойчиво к будущему partial-cancel.
+# См. PLAN_stock_ledger.md → Этап 2.
+from app.stock.models import Reason, StockTransaction
+from app.stock.services import StockCommand, StockCommandService
+
+_stock_command_service = StockCommandService()
+
 
 async def _get_task_transferable(db: AsyncSession, task: WorkTask) -> Decimal:
     from app.models.section import Section
@@ -82,6 +101,165 @@ async def _get_task_transferable(db: AsyncSession, task: WorkTask) -> Decimal:
                     remainders_qty += rem.remainder_quantity
 
     return task.cached_completed_quantity + remainders_qty - task.cached_transferred_quantity
+
+
+async def _record_transfer_send_stock_tx(
+    db: AsyncSession,
+    *,
+    transfer: Transfer,
+    from_task: WorkTask,
+    to_task: WorkTask,
+    quantity: Decimal,
+    actor_id: int,
+    executor_user_id: int | None,
+    actor_name: str | None,
+    executor_name: str | None,
+    source_ref: str | None,
+    comment: str | None,
+    idempotency_key: str | None,
+    performed_at: datetime | None,
+    accounted_at: datetime | None,
+    is_post_factum: bool,
+) -> None:
+    """Двойная запись отправки transfer в Stock Ledger.
+
+    Создаёт **одну** ``StockTransaction`` с честной ledger-геометрией:
+    ``from=from_section → to=to_section``, reason ``TRANSFER_SEND``,
+    ``task_id=from_task`` (источник инициирует перемещение). Одна
+    проводка с обоими концами двигает баланс обеих локаций ровно на
+    ``quantity`` — S1 (``balance = SUM(in) − SUM(out)`` per location)
+    сходится тривиально, без двойного счёта.
+
+    ``to_task`` пока не используется явно в StockTransaction (только
+    ``from_task``), но сохранён в сигнатуре для будущей привязки
+    приёмной стороны (partial-accept, расхождения) на Этапах 5/7.
+
+    Идемпотентность по суффиксу ``:stock-send``. Вызывается в рамках
+    той же транзакции, что и Movement-запись, поэтому при откате
+    откатычатся оба слоя.
+    """
+    await _stock_command_service.record(
+        db,
+        StockCommand(
+            product_id=transfer.product_id,
+            quantity=quantity,
+            reason=Reason.transfer_send,
+            from_location_id=transfer.from_section_id,
+            to_location_id=transfer.to_section_id,
+            task_id=from_task.id,
+            transfer_id=transfer.id,
+            section_plan_line_id=from_task.section_plan_line_id,
+            created_by=actor_id,
+            executor_user_id=executor_user_id,
+            created_by_user_name=actor_name,
+            executor_user_name=executor_name,
+            source_ref=source_ref,
+            comment=comment,
+            idempotency_key=f"{idempotency_key}:stock-send" if idempotency_key else None,
+            performed_at=performed_at,
+            accounted_at=accounted_at,
+            is_post_factum=is_post_factum,
+        ),
+    )
+
+
+async def _compensate_transfer_stock_tx(
+    db: AsyncSession,
+    *,
+    transfer: Transfer,
+    actor_id: int,
+    comment: str | None,
+) -> None:
+    """Компенсация всех активных StockTransaction transfer'а (append-only).
+
+    Для каждой непогашенной транзакции (``compensates_tx_id IS NULL``) с
+    reason ``TRANSFER_SEND`` / ``TRANSFER_RECEIVE`` создаётся встречная
+    запись с перевёрнутыми локациями и ``compensates_tx_id`` → исходная.
+    Суммарный баланс по transfer возвращается к нулю, что согласуется с
+    удалением Movement-записей в ``cancel_transfer`` (инвариант S6 для
+    cancelled transfer'ов исключён, S1 баланс сходится).
+
+    Идемпотентность: если补偿 уже была записана (повторный cancel — no-op
+    по status guard в ``cancel_transfer``), дубликаты не создаются благодаря
+    суффиксу ``:stock-cancel``.
+    """
+    res = await db.execute(
+        select(StockTransaction)
+        .where(
+            StockTransaction.transfer_id == transfer.id,
+            StockTransaction.compensates_tx_id.is_(None),
+            StockTransaction.reason.in_(
+                [Reason.transfer_send, Reason.transfer_receive]
+            ),
+        )
+        .order_by(StockTransaction.id.asc())
+    )
+    originals = res.scalars().all()
+    for orig in originals:
+        # Переворот локаций: исходящая сторона становится входящей.
+        comp_from = orig.to_location_id  # была приёмной → теперь источник
+        comp_to = orig.from_location_id  # была источником → теперь приёмная
+        await _stock_command_service.record(
+            db,
+            StockCommand(
+                product_id=orig.product_id,
+                quantity=orig.quantity,
+                reason=orig.reason,
+                from_location_id=comp_from,
+                to_location_id=comp_to,
+                task_id=orig.task_id,
+                transfer_id=transfer.id,
+                section_plan_line_id=orig.section_plan_line_id,
+                compensates_tx_id=orig.id,
+                created_by=actor_id,
+                comment=f"cancel transfer #{transfer.transfer_no}: {comment or ''}".strip(),
+                # Безусловный ключ: protects даже если у исходной tx не было
+                # idempotency_key (auto-transfers могут не иметь своего).
+                # Status-guard в cancel_transfer короткозамыкает повторный
+                # cancel, но при будущих partial-cancel это убережёт от дублей.
+                idempotency_key=f"transfer-cancel:{transfer.id}:tx:{orig.id}",
+                is_post_factum=orig.is_post_factum,
+            ),
+        )
+
+
+async def _resync_transfer_stock_tx_quantity(
+    db: AsyncSession,
+    *,
+    transfer: Transfer,
+    new_quantity: Decimal,
+) -> None:
+    """Синхронизация quantity активных StockTransaction transfer'а.
+
+    ``correct_transfer`` меняет ``sent_quantity`` у Transfer и quantity у
+    существующих Movement-записей in-place (mutable-модель movement). Чтобы
+    инвариант S6 (``SUM(TRANSFER_SEND qty) == sent_quantity`` для активных
+    transfer'ов) продолжал выполняться, активные StockTransaction
+    (непогашенные, без ``compensates_tx_id``) также обновляются in-place,
+    после чего баланс пересчитывается через ``refresh_balance``.
+
+    Это контролируемое mutable-исключение из append-only принципа — оно
+    касается только коррекции количества, но не отмены (cancel идёт через
+    компенсации). См. PLAN_stock_ledger.md → принцип 4 и комментарии в
+    ``correct_transfer``.
+    """
+    res = await db.execute(
+        select(StockTransaction)
+        .where(
+            StockTransaction.transfer_id == transfer.id,
+            StockTransaction.compensates_tx_id.is_(None),
+            StockTransaction.reason.in_(
+                [Reason.transfer_send, Reason.transfer_receive]
+            ),
+        )
+    )
+    originals = res.scalars().all()
+    for orig in originals:
+        orig.quantity = new_quantity
+    await db.flush()
+    # Пересчёт затронутых балансов: для каждой tx — её from и to локации.
+    for orig in originals:
+        await _stock_command_service._projection_manager.refresh_balance(db, orig)
 
 
 async def transfer_send(
@@ -317,6 +495,29 @@ async def transfer_send(
     )
     db.add(issue_movement)
 
+    # ─── Stock Ledger double-write (Этап 2.1) ────────────────────────────
+    # Параллельная запись в append-only ledger. Movement остаётся
+    # источником правы для cached_* проекций; StockTransaction — для
+    # будущей миграции и сверки (инварианты S1/S6). Откат транзакции
+    # откатывает оба слоя атомарно.
+    await _record_transfer_send_stock_tx(
+        db,
+        transfer=transfer,
+        from_task=from_task,
+        to_task=to_task,
+        quantity=quantity,
+        actor_id=actor_id,
+        executor_user_id=eff_executor,
+        actor_name=actor_name,
+        executor_name=executor_name,
+        source_ref=source_ref,
+        comment=comment,
+        idempotency_key=idempotency_key,
+        performed_at=eff_performed,
+        accounted_at=eff_accounted,
+        is_post_factum=post_factum,
+    )
+
     # If the source section is a stock section, consume the matching
     # SpgRemainder FIFO. This used to live in the legacy
     # ``transfer_receive`` step; under the auto-accept model it is
@@ -550,6 +751,16 @@ async def correct_transfer(
 
     await db.flush()
 
+    # ─── Stock Ledger quantity resync (Этап 2.2) ────────────────────────
+    # correct_transfer меняет sent_quantity in-place (mutable, как и для
+    # Movement). Активные StockTransaction синхронизируются тем же
+    # образом, иначе инвариант S6 (SUM(qty)==sent_quantity) упадёт.
+    # Контролируемое исключение из append-only; cancel идёт через
+    # компенсации, а не через этот путь.
+    await _resync_transfer_stock_tx_quantity(
+        db, transfer=transfer, new_quantity=new_quantity
+    )
+
     # 5. Refresh cache
     await _refresh_task_cache(db, from_task.id)
     await _refresh_task_cache(db, to_task.id)
@@ -664,6 +875,14 @@ async def cancel_transfer(
         await db.delete(m)
 
     await db.flush()
+
+    # ─── Stock Ledger compensation (Этап 2.2) ───────────────────────────
+    # Append-only: вместо удаления StockTransaction создаём встречные
+    # компенсационные записи с перевёрнутыми локациями и compensates_tx_id.
+    # S6 для cancelled transfer'ов исключён, S1 (баланс) сходится к нулю.
+    await _compensate_transfer_stock_tx(
+        db, transfer=transfer, actor_id=actor_id, comment=comment
+    )
     # Refresh cache
     await _refresh_task_cache(db, from_task.id)
     await _refresh_task_cache(db, to_task.id)

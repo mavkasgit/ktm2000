@@ -272,22 +272,17 @@ _STOCK_LEDGER_INVARIANT_QUERIES: list[tuple[str, str]] = [
         "S6_transfer_balance_matches_transaction_sums",
         """
         SELECT t.id AS transfer_id, t.status, t.sent_quantity,
-               COALESCE(s.qty, 0) AS actual_send,
-               COALESCE(r.qty, 0) AS actual_receive
+               COALESCE(s.net_send, 0) AS actual_send
         FROM transfers t
         LEFT JOIN (
-            SELECT transfer_id, SUM(quantity) AS qty
+            SELECT transfer_id,
+                   SUM(CASE WHEN compensates_tx_id IS NULL THEN quantity
+                             ELSE -quantity END) AS net_send
             FROM stock_transactions WHERE reason = 'TRANSFER_SEND'
             GROUP BY transfer_id
         ) s ON s.transfer_id = t.id
-        LEFT JOIN (
-            SELECT transfer_id, SUM(quantity) AS qty
-            FROM stock_transactions WHERE reason = 'TRANSFER_RECEIVE'
-            GROUP BY transfer_id
-        ) r ON r.transfer_id = t.id
         WHERE t.status NOT IN ('cancelled', 'rejected')
-          AND (t.sent_quantity != COALESCE(s.qty, 0)
-            OR t.sent_quantity != COALESCE(r.qty, 0))
+          AND t.sent_quantity != COALESCE(s.net_send, 0)
         """,
     ),
 ]
