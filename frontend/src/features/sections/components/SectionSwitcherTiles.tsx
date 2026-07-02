@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { AlertCircle, Search } from "lucide-react";
+import { Search } from "lucide-react";
 
 import type { Section } from "@/shared/api/sections";
 import type { SectionSummary } from "@/shared/api/shopfloor";
@@ -16,10 +16,8 @@ type SectionSwitcherTilesProps = {
 
 function totals(summary: SectionSummary | undefined) {
   return {
-    completed: summary?.completed_count ?? 0,
     inProgress: summary?.in_progress_count ?? 0,
     waiting: summary?.waiting_count ?? 0,
-    incoming: summary?.incoming_transfers_count ?? 0,
   };
 }
 
@@ -95,24 +93,13 @@ export function SectionSwitcherTiles({
         </div>
         {variant === "popover" ? (
           <div className="mt-2 grid grid-cols-2 gap-1">
-            <Badge variant={stats.incoming > 0 ? "destructive" : "secondary"} className="text-[11px] justify-center">
-              {stats.incoming > 0 ? <>Вх: {stats.incoming}</> : <>Вх: 0</>}
-            </Badge>
             <Badge variant="secondary" className="text-[11px] justify-center">ОЖ: {stats.waiting}</Badge>
             <Badge variant="secondary" className="text-[11px] justify-center">ВР: {stats.inProgress}</Badge>
-            <Badge variant="secondary" className="text-[11px] justify-center">Г: {stats.completed}</Badge>
           </div>
         ) : (
           <div className="mt-2 flex flex-wrap gap-1">
-            {stats.incoming > 0 && (
-              <Badge variant="destructive" className="text-[11px]">
-                <AlertCircle className="mr-1 h-3 w-3" />
-                Вх: {stats.incoming}
-              </Badge>
-            )}
             <Badge variant="secondary" className="text-[11px]">ОЖ: {stats.waiting}</Badge>
             <Badge variant="secondary" className="text-[11px]">ВР: {stats.inProgress}</Badge>
-            <Badge variant="secondary" className="text-[11px]">Г: {stats.completed}</Badge>
           </div>
         )}
       </button>
