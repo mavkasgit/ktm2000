@@ -206,7 +206,7 @@ export function PositionRow({ pos, onApprove, onDelete, selected, routes, onAssi
     <>
     <div
       id={`plan-position-${pos.id}`}
-      className={`grid items-center border-b ${hasErrors || hasDuplicateConflict ? "bg-red-50" : hasWarnings ? "bg-amber-50" : ""} ${selected ? "bg-blue-100 ring-1 ring-blue-300" : ""} cursor-pointer hover:bg-accent hover:ring-1 hover:ring-ring/20 transition-colors`}
+      className={`grid items-start border-b ${hasErrors || hasDuplicateConflict ? "bg-red-50" : hasWarnings ? "bg-amber-50" : ""} ${selected ? "bg-blue-100 ring-1 ring-blue-300" : ""} cursor-pointer hover:bg-accent hover:ring-1 hover:ring-ring/20 transition-colors`}
       style={{ gridTemplateColumns: PLAN_POSITIONS_GRID }}
       onClick={(e) => {
         if (onSelect) {

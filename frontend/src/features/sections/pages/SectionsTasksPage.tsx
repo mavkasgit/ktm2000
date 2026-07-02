@@ -26,6 +26,7 @@ import { TaskActionDrawer } from "../components/TaskActionDrawer";
 import { BulkOperationsPanel } from "../components/BulkOperationsPanel";
 import { PlanModal } from "../components/PlanModal";
 import { PRESET_PROFILES, type GroupingProfile } from "../lib/groupingProfiles";
+import { isTaskCompletable, getNonCompletableTasks } from "../lib/taskStatus";
 import { createAuditLog, getAuditLogs, type AuditLogEntry } from "@/shared/api/auditLogs";
 
 type MeResponse = {
@@ -536,6 +537,31 @@ export function SectionsTasksPage() {
     }
 
     if (isGroup) {
+      // Фильтруем задачи, которые нельзя завершить (статус «Не передано»,
+      // ожидают передачи, уже завершены). По ним показываем toast и
+      // распределяем ввод только по completable-задачам.
+      const completableTasks = tasks.filter(isTaskCompletable);
+      const skipped = getNonCompletableTasks(tasks);
+
+      if (completableTasks.length === 0) {
+        toast({
+          title: "Нет задач для завершения",
+          description: "Все выбранные задания имеют статус, не допускающий завершение (например, «Не передано»).",
+          variant: "destructive",
+        });
+        return;
+      }
+
+      if (skipped.length > 0) {
+        const skus = Array.from(new Set(skipped.map((t) => t.product_sku))).slice(0, 3).join(", ");
+        const more = skipped.length > 3 ? ` и ещё ${skipped.length - 3}` : "";
+        toast({
+          title: "Пропущены недоступные задания",
+          description: `${skipped.length} шт. не будут завершены. Примеры: ${skus}${more}.`,
+          variant: "default",
+        });
+      }
+
       const entries: Parameters<typeof bulkCompleteTasks>[0] = [];
 
       // Заполняем задачи по порядку, пока не израсходуем good/defect.
@@ -545,8 +571,8 @@ export function SectionsTasksPage() {
         let remainingGood = good;
         let remainingDefect = defect;
 
-        for (let i = 0; i < tasks.length; i++) {
-          const t = tasks[i];
+        for (let i = 0; i < completableTasks.length; i++) {
+          const t = completableTasks[i];
           const capacity = Math.max(0, toInteger(t.planned_quantity));
 
           // good: минимум из остатка, planned_quantity и in_work (если in_work>0)
@@ -579,8 +605,28 @@ export function SectionsTasksPage() {
         }
       }
 
-      groupCompleteMutation.mutate({ entries, tasks: tasks });
+      if (entries.length === 0) {
+        toast({
+          title: "Нет задач для завершения",
+          description: "Доступные задания не вмещают указанное количество.",
+          variant: "destructive",
+        });
+        return;
+      }
+
+      groupCompleteMutation.mutate({ entries, tasks: completableTasks });
     } else {
+      if (!isTaskCompletable(task!)) {
+        const reason = task!.status === "ready"
+          ? "сырьё с предыдущего участка ещё не передано"
+          : "задание имеет статус, не допускающий завершение";
+        toast({
+          title: "Нельзя завершить задание",
+          description: reason,
+          variant: "destructive",
+        });
+        return;
+      }
       completeMutation.mutate({
         taskId: task!.id,
         task: task!,

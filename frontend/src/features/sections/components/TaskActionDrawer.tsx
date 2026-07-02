@@ -15,6 +15,10 @@ import {
   DialogTitle,
   Input,
 } from "@/shared/ui";
+import {
+  getReadyStatusLabel,
+  isTaskCompletable,
+} from "../lib/taskStatus";
 
 function fmtQty(value: string): string {
   const n = parseFloat(value);
@@ -167,6 +171,43 @@ export function TaskActionDrawer({
               </div>
             </div>
           )}
+
+          {isGroup && tasks && tasks.some((t) => !isTaskCompletable(t)) && (() => {
+            const notTransferred = tasks.filter(
+              (t) => t.status === "ready" && getReadyStatusLabel(t) === "Не передано",
+            );
+            const other = tasks.filter(
+              (t) => !isTaskCompletable(t) && !(t.status === "ready" && getReadyStatusLabel(t) === "Не передано"),
+            );
+            const total = notTransferred.length + other.length;
+            return (
+              <div className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-800">
+                <div className="flex items-start gap-2">
+                  <AlertTriangle className="h-4 w-4 mt-0.5 shrink-0" />
+                  <div className="flex-1">
+                    <div className="font-medium">
+                      {total} из {tasks.length} задач будут пропущены
+                    </div>
+                    {notTransferred.length > 0 && (
+                      <div className="mt-1 text-xs">
+                        <span className="font-semibold">«Не передано» ({notTransferred.length}):</span>{" "}
+                        {Array.from(new Set(notTransferred.map((t) => t.product_sku)))
+                          .slice(0, 5)
+                          .join(", ")}
+                        {notTransferred.length > 5 ? "…" : ""} — сырьё с предыдущего участка ещё не поступило.
+                      </div>
+                    )}
+                    {other.length > 0 && (
+                      <div className="mt-1 text-xs">
+                        <span className="font-semibold">Прочие ({other.length}):</span>{" "}
+                        ожидают сырья или уже завершены.
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            );
+          })()}
 
           <div className="flex flex-row flex-wrap items-end gap-3">
             <div className="flex flex-col gap-1.5">

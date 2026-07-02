@@ -1,8 +1,13 @@
 import { useState, useMemo, useCallback, useEffect } from "react";
-import { Check } from "lucide-react";
+import { AlertTriangle, Check } from "lucide-react";
 import { Button, Input, toast, Checkbox, DatePicker } from "@/shared/ui";
 import { cn } from "@/shared/utils/cn";
 import type { SectionBoardTask } from "@/shared/api/shopfloor";
+import {
+  getReadyStatusLabel,
+  getStatusLabel,
+  isTaskCompletable,
+} from "../lib/taskStatus";
 
 const QTY_INPUT_CLASSES = "h-7 text-xs [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none";
 
@@ -177,12 +182,15 @@ function groupTasks(tasks: SectionBoardTask[]): BulkOpGroup[] {
   return Array.from(map.values()).map((groupTasks) => initGroup(groupTasks));
 }
 
-function StatusDot({ status }: { status: string }) {
+function StatusDot({ task }: { task: SectionBoardTask }) {
+  const status = task.status;
   let colorClass = "bg-slate-300";
   if (["in_progress", "in_work"].includes(status)) {
     colorClass = "bg-amber-500 animate-pulse";
   } else if (["ready", "partially_completed", "partially"].includes(status)) {
-    colorClass = "bg-blue-500";
+    colorClass = status === "ready" && getReadyStatusLabel(task) === "Не передано"
+      ? "bg-slate-400"
+      : "bg-blue-500";
   } else if (["completed", "done"].includes(status)) {
     colorClass = "bg-emerald-500";
   } else if (status === "blocked") {
@@ -191,7 +199,7 @@ function StatusDot({ status }: { status: string }) {
     colorClass = "bg-yellow-400";
   }
   return (
-    <span className={`inline-block h-2.5 w-2.5 rounded-full ${colorClass}`} title={status} />
+    <span className={`inline-block h-2.5 w-2.5 rounded-full ${colorClass}`} title={getStatusLabel(task)} />
   );
 }
 
@@ -301,6 +309,7 @@ export function BulkOperationsPanel({
 
   const doConfirm = () => {
     const completeEntries: { taskId: number; goodQty: string; defectQty: string }[] = [];
+    const skippedTasks: SectionBoardTask[] = [];
 
     for (const group of groups) {
       const totalAdd = toInteger(group.addQty);
@@ -312,8 +321,25 @@ export function BulkOperationsPanel({
         const defectQty = group.taskDefectQty[task.id] || 0;
         if (addQty <= 0 && defectQty <= 0) continue;
 
+        if (!isTaskCompletable(task)) {
+          skippedTasks.push(task);
+          continue;
+        }
+
         completeEntries.push({ taskId: task.id, goodQty: String(addQty), defectQty: String(defectQty) });
       }
+    }
+
+    if (completeEntries.length === 0 && skippedTasks.length === 0) return;
+
+    if (skippedTasks.length > 0) {
+      const skus = Array.from(new Set(skippedTasks.map((t) => t.product_sku))).slice(0, 3).join(", ");
+      const more = skippedTasks.length > 3 ? ` и ещё ${skippedTasks.length - 3}` : "";
+      toast({
+        title: "Пропущены недоступные задания",
+        description: `${skippedTasks.length} шт. не будут завершены (статус: «Не передано» / «Ожидает» / уже завершены). Примеры: ${skus}${more}.`,
+        variant: "default",
+      });
     }
 
     if (completeEntries.length > 0) {
@@ -352,8 +378,53 @@ export function BulkOperationsPanel({
       .join("+");
   };
 
+  const skippedTasks = useMemo(
+    () => tasks.filter((t) => !isTaskCompletable(t)),
+    [tasks],
+  );
+  const skippedByReason = useMemo(() => {
+    const notTransferred: SectionBoardTask[] = [];
+    const other: SectionBoardTask[] = [];
+    for (const t of skippedTasks) {
+      if (t.status === "ready" && getReadyStatusLabel(t) === "Не передано") {
+        notTransferred.push(t);
+      } else {
+        other.push(t);
+      }
+    }
+    return { notTransferred, other };
+  }, [skippedTasks]);
+
   return (
     <div className="rounded-lg border bg-card inline-block">
+      {skippedTasks.length > 0 && (
+        <div className="border-b border-amber-200 bg-amber-50 px-4 py-2 text-xs text-amber-800 flex items-start gap-2">
+          <AlertTriangle className="h-4 w-4 mt-0.5 shrink-0" />
+          <div className="flex-1">
+            <div className="font-medium">
+              Будет пропущено: {skippedTasks.length} задач (нельзя завершить)
+            </div>
+            {skippedByReason.notTransferred.length > 0 && (
+              <div className="mt-1">
+                <span className="font-semibold">«Не передано» ({skippedByReason.notTransferred.length}):</span>{" "}
+                {Array.from(new Set(skippedByReason.notTransferred.map((t) => t.product_sku)))
+                  .slice(0, 5)
+                  .join(", ")}
+                {skippedByReason.notTransferred.length > 5 ? "…" : ""} — сырьё с предыдущего участка ещё не поступило.
+              </div>
+            )}
+            {skippedByReason.other.length > 0 && (
+              <div className="mt-1">
+                <span className="font-semibold">Прочие ({skippedByReason.other.length}):</span>{" "}
+                {Array.from(new Set(skippedByReason.other.map((t) => t.product_sku)))
+                  .slice(0, 5)
+                  .join(", ")}
+                {skippedByReason.other.length > 5 ? "…" : ""} — ожидают сырья или уже завершены.
+              </div>
+            )}
+          </div>
+        </div>
+      )}
       <div className="overflow-auto">
         <table className="text-sm">
           <thead className="sticky top-0 bg-background border-b z-20">
@@ -405,10 +476,10 @@ export function BulkOperationsPanel({
                       {(() => {
                         const uniqueStatuses = Array.from(new Set(group.tasks.map((t) => t.status)));
                         if (uniqueStatuses.length === 1) {
-                          return <StatusDot status={uniqueStatuses[0]} />;
+                          return <StatusDot task={group.tasks[0]} />;
                         }
                         return group.tasks.map((task) => (
-                          <StatusDot key={task.id} status={task.status} />
+                          <StatusDot key={task.id} task={task} />
                         ));
                       })()}
                     </div>
@@ -537,7 +608,21 @@ export function BulkOperationsPanel({
             <Button
               size="sm"
               onClick={doConfirm}
-              disabled={pending || !groups.some((g) => toInteger(g.addQty) > 0 || toInteger(g.defectQty) > 0)}
+              disabled={
+                pending
+                || !groups.some(
+                  (g) => g.tasks.some((t) => isTaskCompletable(t))
+                    && (toInteger(g.addQty) > 0 || toInteger(g.defectQty) > 0),
+                )
+              }
+              title={
+                groups.every(
+                  (g) => !g.tasks.some((t) => isTaskCompletable(t))
+                    || (toInteger(g.addQty) <= 0 && toInteger(g.defectQty) <= 0),
+                )
+                  ? "Все выбранные задачи имеют статус, не допускающий завершение (например, «Не передано»)"
+                  : undefined
+              }
             >
               Подтвердить
             </Button>

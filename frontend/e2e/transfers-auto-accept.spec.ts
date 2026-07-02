@@ -380,8 +380,7 @@ test.describe("Explicit transfer — 2-step ritual (Send + Issue)", () => {
       timeout: 5_000,
     });
 
-    // 7. Достаём токен админа из cookies, чтобы дёрнуть /issue через API
-    //    (UI-кнопки «Выдать в работу» пока нет, ритуал 2-step завязан на API).
+    // 7. Достаём токен админа из cookies для API-запросов
     const cookies = await authenticatedPage.context().cookies();
     const accessCookie = cookies.find((c) => c.name === "access_token");
     const token = accessCookie?.value ?? "";
@@ -390,7 +389,8 @@ test.describe("Explicit transfer — 2-step ritual (Send + Issue)", () => {
     const secondSection = sections.filter((s) => s.kind === "production")[1];
     expect(secondSection).toBeDefined();
 
-    // 9. Достаём board второго участка — там должна быть наша задача в ready
+    // 8. Достаём board второго участка — там должна быть наша задача в in_progress
+    //    (auto-issue после transfer_send)
     const boardRes = await fetch(
       `${BACKEND_URL}/api/shopfloor/sections/${secondSection!.id}/board`,
       { headers: { Authorization: `Bearer ${token}` } },
@@ -405,29 +405,10 @@ test.describe("Explicit transfer — 2-step ritual (Send + Issue)", () => {
       (t) => t.product_sku === "ЮП-2083" && t.cache.received_quantity !== "0",
     );
     expect(destinationTask).toBeDefined();
-    expect(destinationTask!.status).toBe("ready");
-    expect(parseFloat(destinationTask!.cache.received_quantity)).toBeGreaterThanOrEqual(10);
+    // After transfer_send, auto-issue puts the task into in_progress directly
+    expect(destinationTask!.status).toBe("in_progress");
+    expect(destinationTask!.cache.in_work_quantity).toBe("10");
 
-    // 10. ISSUE — оператор явно выдаёт в работу на destination
-    const issueRes = await request.post(`${BACKEND_URL}/api/shopfloor/tasks/${destinationTask!.id}/issue`, {
-      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-      data: { quantity: "10", idempotency_key: "e2e-2step:issue" },
-    });
-    expect(issueRes.status()).toBe(200);
-    const issueBody = await issueRes.json();
-    expect(issueBody.status).toBe("in_progress");
-
-    // 11. Финальная проверка: задача в работе, in_work = 10
-    const finalBoard = await fetch(
-      `${BACKEND_URL}/api/shopfloor/sections/${secondSection!.id}/board`,
-      { headers: { Authorization: `Bearer ${token}` } },
-    );
-    const final = (await finalBoard.json()) as {
-      tasks: Array<{ id: number; status: string; cache: { in_work_quantity: string } }>;
-    };
-    const finalTask = final.tasks.find((t) => t.id === destinationTask!.id);
-    expect(finalTask).toBeDefined();
-    expect(finalTask!.status).toBe("in_progress");
-    expect(finalTask!.cache.in_work_quantity).toBe("10");
+    // Тест завершён: после transfer_send задача уже in_progress с in_work=10
   });
 });

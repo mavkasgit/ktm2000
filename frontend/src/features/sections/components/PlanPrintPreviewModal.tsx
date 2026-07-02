@@ -1,18 +1,20 @@
 /**
  * components/PlanPrintPreviewModal.tsx
  * ======================================
- * Модальное окно настройки параметров печати плана с живым превью.
+ * Финальный шаг печати плана: превью + кнопка «Печать».
+ *
+ * Все настройки (фильтры колонок, подвесы, мин/макс количество, заголовок,
+ * таблицы) задаются в PlanModal и передаются пропом `settings`.
+ * Здесь ничего не настраивается — только предпросмотр и печать.
  *
  * Использует Radix Dialog (через portal в body) — как в hrms PrintPreviewDialog.
  * При печати CSS @media print скрывает всё кроме .print-preview-sheet,
  * что автоматически убирает браузерные колонтитулы.
- *
- * Настройки сохраняются в localStorage
  */
 
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import * as RadixDialog from "@radix-ui/react-dialog";
-import type { SectionBoardTask, RouteHistoryOp } from "@/shared/api/shopfloor";
+import type { SectionBoardTask } from "@/shared/api/shopfloor";
 import type { GroupingProfile } from "../lib/groupingProfiles";
 import { groupTasksByProfile } from "../lib/groupTasksByProfile";
 import {
@@ -22,10 +24,18 @@ import {
 } from "./PlanHangerDisplay";
 
 // ---------------------------------------------------------------------------
-// Типы
+// Типы (реэкспорт из PlanModal для удобства импорта)
 // ---------------------------------------------------------------------------
 
 export type TableMode = "before" | "after" | "both";
+
+export type PrintColumn =
+  | "productSku"
+  | "operationName"
+  | "qtyPlan"
+  | "qtyRemaining"
+  | "qtyTransferred"
+  | "qtyBalance";
 
 export interface PrintSettings {
   tableMode: TableMode;
@@ -35,14 +45,6 @@ export interface PrintSettings {
   minQty: number | null;
   maxQty: number | null;
 }
-
-export type PrintColumn =
-  | "productSku"
-  | "operationName"
-  | "qtyPlan"
-  | "qtyRemaining"
-  | "qtyTransferred"
-  | "qtyBalance";
 
 export const ALL_PRINT_COLUMNS: PrintColumn[] = [
   "productSku",
@@ -62,72 +64,6 @@ export const PRINT_COLUMN_LABELS: Record<PrintColumn, string> = {
   qtyBalance: "Остаток",
 };
 
-const DEFAULT_SETTINGS: PrintSettings = {
-  tableMode: "both",
-  columns: ALL_PRINT_COLUMNS,
-  title: "",
-  showQtyPerHanger: false,
-  minQty: null,
-  maxQty: null,
-};
-
-function loadSettings(sectionId: number): PrintSettings {
-  try {
-    const raw = localStorage.getItem(`plan-print-settings-${sectionId}`);
-    if (raw) {
-      const parsed = JSON.parse(raw) as PrintSettings;
-      if (parsed.tableMode && Array.isArray(parsed.columns)) {
-        return parsed;
-      }
-    }
-  } catch {}
-  return { ...DEFAULT_SETTINGS };
-}
-
-function saveSettings(sectionId: number, settings: PrintSettings) {
-  try {
-    localStorage.setItem(
-      `plan-print-settings-${sectionId}`,
-      JSON.stringify(settings),
-    );
-  } catch {}
-}
-
-// ---------------------------------------------------------------------------
-// ToggleButton
-// ---------------------------------------------------------------------------
-
-interface ToggleButtonProps {
-  label: string;
-  active: boolean;
-  onClick: () => void;
-  size?: "sm" | "md";
-}
-
-function ToggleButton({
-  label,
-  active,
-  onClick,
-  size = "sm",
-}: ToggleButtonProps) {
-  const sizeClasses =
-    size === "sm" ? "px-2 py-1 text-[10px]" : "px-3 py-1.5 text-xs";
-
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={`${sizeClasses} font-medium rounded-md border transition-colors ${
-        active
-          ? "bg-blue-600 text-white border-blue-600"
-          : "bg-white text-gray-700 border-gray-300 hover:bg-gray-50"
-      }`}
-    >
-      {label}
-    </button>
-  );
-}
-
 // ---------------------------------------------------------------------------
 // PrintPreviewTable
 // ---------------------------------------------------------------------------
@@ -137,6 +73,7 @@ interface PrintPreviewTableProps {
   tasks: SectionBoardTask[];
   profile: GroupingProfile;
   settings: PrintSettings;
+  hiddenGroupKeys: Set<string>;
 }
 
 function PrintPreviewTable({
@@ -144,6 +81,7 @@ function PrintPreviewTable({
   tasks,
   profile,
   settings,
+  hiddenGroupKeys,
 }: PrintPreviewTableProps) {
   const allGroups = useMemo(
     () => groupTasksByProfile(tasks, profile),
@@ -159,8 +97,9 @@ function PrintPreviewTable({
         if (settings.maxQty !== null && g.totalQtyPlan > settings.maxQty)
           return false;
         return true;
-      });
-  }, [allGroups, settings.minQty, settings.maxQty]);
+      })
+      .filter((g) => !hiddenGroupKeys.has(g.key));
+  }, [allGroups, settings.minQty, settings.maxQty, hiddenGroupKeys]);
 
   if (groups.length === 0) return null;
 
@@ -168,7 +107,7 @@ function PrintPreviewTable({
   const showHanger = settings.showQtyPerHanger;
 
   const getOpNames = (task: SectionBoardTask) => {
-    const ops: RouteHistoryOp[] = profile.criteria.includes("routeHistoryAfter")
+    const ops = profile.criteria.includes("routeHistoryAfter")
       ? (task.route_history_after ?? [])
       : (task.route_history ?? []).filter((op) => op.is_significant);
     const unique = new Set<string>();
@@ -255,6 +194,8 @@ interface PlanPrintPreviewModalProps {
   afterProfile: GroupingProfile;
   singleProfile: GroupingProfile | null;
   showSingleTable: boolean;
+  settings: PrintSettings;
+  hiddenGroupKeys: Set<string>;
 }
 
 export function PlanPrintPreviewModal({
@@ -268,27 +209,14 @@ export function PlanPrintPreviewModal({
   afterProfile,
   singleProfile,
   showSingleTable,
+  settings,
+  hiddenGroupKeys,
 }: PlanPrintPreviewModalProps) {
-  const [settings, setSettings] = useState<PrintSettings>(() =>
-    loadSettings(sectionId),
-  );
-  const previewRef = useRef<HTMLDivElement>(null);
-  const [pages, setPages] = useState<ReactNode[]>([]);
+  const contentRef = useRef<HTMLDivElement>(null);
 
   const title =
     settings.title ||
     `План: ${sectionName} от ${new Date().toLocaleDateString("ru-RU")}`;
-
-  function toggleColumn(col: PrintColumn) {
-    setSettings((prev) => {
-      const exists = prev.columns.includes(col);
-      const next = exists
-        ? prev.columns.filter((c) => c !== col)
-        : [...prev.columns, col];
-      if (next.length === 0) return prev;
-      return { ...prev, columns: next };
-    });
-  }
 
   function handlePrint() {
     window.print();
@@ -298,11 +226,6 @@ export function PlanPrintPreviewModal({
     settings.tableMode === "before" || settings.tableMode === "both";
   const showAfter =
     settings.tableMode === "after" || settings.tableMode === "both";
-
-  // Auto-save settings on change
-  useEffect(() => {
-    saveSettings(sectionId, settings);
-  }, [sectionId, settings]);
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -323,132 +246,37 @@ export function PlanPrintPreviewModal({
     return blocks;
   }, [showSingleTable, singleProfile, showBefore, showAfter, beforeProfile, afterProfile]);
 
-  // Split content into A4 pages based on actual measured height
-  const [renderedPages, setRenderedPages] = useState<ReactNode[]>([]);
-  const [isMeasured, setIsMeasured] = useState(false);
+  // Split content into A4 pages based on actual measured height.
+  // Контент всегда рендерится напрямую (без скрытого measurement-контейнера),
+  // а пагинация применяется через CSS @media print (page-break-inside: avoid
+  // на строках + .print-page { page-break-after: always }).
+  // Здесь только измеряем, чтобы показать номера страниц «1/N» в шапке.
+  const [pageCount, setPageCount] = useState(1);
 
-  // If no blocks, show empty state immediately without waiting for effect
-  useEffect(() => {
-    if (contentBlocks.length === 0) {
-      setRenderedPages([
-        <div key="empty" className="print-page bg-white relative">
-          <div className="text-center mb-4">
-            <div className="text-sm font-bold uppercase tracking-wide">{title}</div>
-            <div className="text-[10px] text-muted-foreground mt-0.5">
-              Сформировано: {new Date().toLocaleString("ru-RU")} · 1/1
-            </div>
-          </div>
-          <p className="text-center text-muted-foreground py-8 text-sm">Нет данных для печати</p>
-        </div>,
-      ]);
-      setIsMeasured(true);
+  useLayoutEffect(() => {
+    const el = contentRef.current;
+    if (!el || contentBlocks.length === 0) {
+      setPageCount(1);
+      return;
     }
-  }, [contentBlocks.length, title]);
-
-  useEffect(() => {
-    if (!previewRef.current) return;
-    if (contentBlocks.length === 0) return; // handled by separate useEffect
-
     const A4_CONTENT_PX = 990; // ~277mm at 96dpi, minus header/footer
-
-    const measure = () => {
-      const contentEl = previewRef.current?.querySelector(".print-content-measure");
-      if (!contentEl) return;
-
-      const contentHeight = contentEl.scrollHeight;
-      const totalPages = Math.max(1, Math.ceil(contentHeight / A4_CONTENT_PX));
-
-      // Get all table blocks
-      const blocks = contentEl.querySelectorAll(".print-table-block");
-
-      // If fits on one page
-      if (contentHeight <= A4_CONTENT_PX) {
-        setRenderedPages([
-          <div key="single" className="print-page bg-white relative">
-            <div className="text-center mb-4">
-              <div className="text-sm font-bold uppercase tracking-wide">{title}</div>
-              <div className="text-[10px] text-muted-foreground mt-0.5 flex items-center justify-center gap-2">
-                <span>Сформировано: {new Date().toLocaleString("ru-RU")}</span>
-                <span className="text-blue-600 font-medium">· 1/1</span>
-              </div>
-            </div>
-            {contentBlocks.map((block, idx) => (
-              <PrintPreviewTable key={idx} title={block.title} tasks={tasks} profile={block.profile} settings={settings} />
-            ))}
-          </div>,
-        ]);
-        setIsMeasured(true);
-        return;
-      }
-
-      // Split into multiple pages
-      const pages: ReactNode[] = [];
-      let currentPageContent: ReactNode[] = [];
-      let currentPageHeight = 0;
-      let pageNum = 1;
-
-      blocks.forEach((blockEl) => {
-        const blockHeight = blockEl.scrollHeight;
-        const blockIdx = Array.from(blocks).indexOf(blockEl);
-        const block = contentBlocks[blockIdx];
-
-        if (currentPageHeight + blockHeight > A4_CONTENT_PX && currentPageContent.length > 0) {
-          pages.push(
-            <div key={pageNum} className="print-page bg-white relative">
-              <div className="text-center mb-4">
-                <div className="text-sm font-bold uppercase tracking-wide">{title}</div>
-                <div className="text-[10px] text-muted-foreground mt-0.5 flex items-center justify-center gap-2">
-                  <span>Сформировано: {new Date().toLocaleString("ru-RU")}</span>
-                  <span className="text-blue-600 font-medium">· {pageNum}/{totalPages}</span>
-                </div>
-              </div>
-              {currentPageContent}
-            </div>,
-          );
-          pageNum++;
-          currentPageContent = [
-            <PrintPreviewTable key={blockIdx} title={block.title} tasks={tasks} profile={block.profile} settings={settings} />,
-          ];
-          currentPageHeight = blockHeight;
-        } else {
-          currentPageContent.push(
-            <PrintPreviewTable key={blockIdx} title={block.title} tasks={tasks} profile={block.profile} settings={settings} />,
-          );
-          currentPageHeight += blockHeight;
-        }
-      });
-
-      if (currentPageContent.length > 0) {
-        pages.push(
-          <div key={pageNum} className="print-page bg-white relative">
-            <div className="text-center mb-4">
-              <div className="text-sm font-bold uppercase tracking-wide">{title}</div>
-              <div className="text-[10px] text-muted-foreground mt-0.5 flex items-center justify-center gap-2">
-                <span>Сформировано: {new Date().toLocaleString("ru-RU")}</span>
-                <span className="text-blue-600 font-medium">· {pageNum}/{totalPages}</span>
-              </div>
-            </div>
-            {currentPageContent}
-          </div>,
-        );
-      }
-
-      setRenderedPages(pages);
-      setIsMeasured(true);
-    };
-
-    // Wait for render then measure
+    // total height = single page (header + content) — измеряем после рендера
     requestAnimationFrame(() => {
-      requestAnimationFrame(measure);
+      const h = el.scrollHeight;
+      // header height ≈ 50px, so available = A4_CONTENT_PX
+      const total = Math.max(1, Math.ceil(h / A4_CONTENT_PX));
+      setPageCount(total);
     });
   }, [settings, tasks, contentBlocks, title]);
+
+  const hasContent = contentBlocks.length > 0;
 
 
   return (
     <RadixDialog.Root open onOpenChange={() => onClose()}>
       <RadixDialog.Portal>
         <RadixDialog.Overlay className="fixed inset-0 z-[60] bg-black/50" />
-        <RadixDialog.Content className="print-preview-sheet fixed left-[50%] top-[50%] z-[60] w-[1600px] max-h-[90vh] translate-x-[-50%] translate-y-[-50%] bg-white shadow-lg rounded-lg overflow-hidden flex flex-col p-0">
+        <RadixDialog.Content id="print-preview-sheet" className="print-preview-sheet fixed left-[50%] top-[50%] z-[60] w-[90vw] max-w-[1200px] max-h-[90vh] translate-x-[-50%] translate-y-[-50%] bg-white shadow-lg rounded-lg overflow-hidden flex flex-col p-0">
           {/* Print styles — как в hrms */}
           <style>{`
             @page { size: A4 portrait; margin: 0; }
@@ -457,26 +285,40 @@ export function PlanPrintPreviewModal({
                 margin: 0 !important; padding: 0 !important; background: white !important;
                 height: auto !important; min-height: auto !important; overflow: visible !important;
               }
-              body * { visibility: hidden; }
-              .print-preview-sheet, .print-preview-sheet * { visibility: visible; }
-              body > *:not(.print-preview-sheet):not([data-radix-focus-guard]) { display: none !important; }
-              [data-radix-dialog-overlay], [role="presentation"] { display: none !important; visibility: hidden !important; }
-              [data-state="open"] > div, .print-preview-sheet, [role="dialog"] {
-                position: static !important; left: auto !important; top: auto !important;
-                right: auto !important; bottom: auto !important; transform: none !important;
-                max-width: none !important; max-height: none !important; min-height: auto !important;
-                width: 100% !important; height: auto !important; overflow: visible !important;
-                background: white !important; padding: 0 !important; margin: 0 !important;
-                border: none !important; border-radius: 0 !important; box-shadow: none !important;
-                outline: none !important;
+              /* Сначала скрываем всё */
+              body * { visibility: hidden !important; }
+              /* Потом показываем только наш print-preview-sheet и всё внутри */
+              #print-preview-sheet, #print-preview-sheet * { visibility: visible !important; }
+              /* Прячем всё, что НЕ print-preview-sheet и НЕ focus-guard (overlay, остальной UI) */
+              body > *:not(#print-preview-sheet):not([data-radix-focus-guard]) {
+                display: none !important;
+              }
+              /* Растягиваем print-preview-sheet на всю страницу, начиная с (0,0) */
+              #print-preview-sheet {
+                position: absolute !important;
+                left: 0 !important;
+                top: 0 !important;
+                right: 0 !important;
+                bottom: auto !important;
+                transform: none !important;
+                width: 100% !important;
+                max-width: none !important;
+                height: auto !important;
+                max-height: none !important;
+                min-height: auto !important;
+                margin: 0 !important;
+                padding: 0 !important;
+                background: white !important;
+                border: none !important;
+                border-radius: 0 !important;
+                box-shadow: none !important;
+                overflow: visible !important;
+                display: block !important;
               }
               .no-print { display: none !important; }
-              .print-preview-sheet button, .print-preview-sheet [role="button"] { display: none !important; }
-              .print-page { page-break-after: always; position: relative; padding: 10mm 15mm; box-sizing: border-box; }
+              #print-preview-sheet button, #print-preview-sheet [role="button"] { display: none !important; }
+              .print-page { page-break-after: always; position: relative; padding: 10mm 15mm; box-sizing: border-box; min-height: 297mm; }
               .print-page:last-child { page-break-after: auto; }
-              @media print {
-                .print-page { min-height: 297mm; }
-              }
               .print-lines { font-size: 14px; line-height: 1.5; word-break: break-word; overflow-wrap: anywhere; }
               .print-lines > div { border-bottom: 0.5px solid #ccc; padding-bottom: 1px; margin-bottom: 1px; page-break-inside: avoid; }
               .print-header { margin-bottom: 4px; text-align: center; }
@@ -484,7 +326,7 @@ export function PlanPrintPreviewModal({
             }
           `}</style>
 
-          {/* Header */}
+          {/* Header — финальный шаг: превью + кнопка Печать */}
           <div className="flex items-center justify-between p-4 border-b no-print">
             <div>
               <h2 className="text-lg font-semibold">Печать плана</h2>
@@ -497,6 +339,7 @@ export function PlanPrintPreviewModal({
               >
                 Печать
               </button>
+              <kbd className="hidden sm:inline-block text-[10px] text-muted-foreground border rounded px-1.5 py-0.5 font-mono">ESC</kbd>
               <RadixDialog.Close
                 className="text-muted-foreground hover:text-foreground text-2xl leading-none"
                 aria-label="Закрыть"
@@ -506,174 +349,39 @@ export function PlanPrintPreviewModal({
             </div>
           </div>
 
-          {/* Content: settings (left) + preview (right) */}
-          <div className="flex flex-1 overflow-hidden">
-            {/* Left panel: settings */}
-            <div className="w-72 shrink-0 border-r overflow-auto p-4 space-y-4 no-print">
-              {/* Заголовок */}
-              <div className="space-y-1.5">
-                <label className="text-xs font-medium">Заголовок</label>
-                <input
-                  type="text"
-                  value={title}
-                  onChange={(e) =>
-                    setSettings((prev) => ({ ...prev, title: e.target.value }))
-                  }
-                  className="w-full rounded-md border px-2.5 py-1.5 text-xs"
-                />
-              </div>
-
-              {/* Таблицы */}
-              <div className="space-y-1.5">
-                <label className="text-xs font-medium">Таблица</label>
-                <div className="flex gap-1.5 flex-wrap">
-                  {[
-                    {
-                      key: "before" as TableMode,
-                      label: "План выдачи",
-                      disabled: !hasBefore,
-                    },
-                    {
-                      key: "after" as TableMode,
-                      label: "План сдачи",
-                      disabled: !hasAfter,
-                    },
-                    {
-                      key: "both" as TableMode,
-                      label: "Оба плана",
-                      disabled: !hasBefore || !hasAfter,
-                    },
-                  ].map((mode) => (
-                    <button
-                      key={mode.key}
-                      type="button"
-                      disabled={mode.disabled}
-                      onClick={() =>
-                        setSettings((prev) => ({
-                          ...prev,
-                          tableMode: mode.key,
-                        }))
-                      }
-                      className={`px-2.5 py-1 text-[11px] font-medium rounded-md border transition-colors ${
-                        mode.disabled
-                          ? "opacity-40 cursor-not-allowed bg-gray-100 text-gray-400 border-gray-200"
-                          : settings.tableMode === mode.key
-                            ? "bg-blue-600 text-white border-blue-600"
-                            : "bg-white text-gray-700 border-gray-300 hover:bg-gray-50"
-                      }`}
-                    >
-                      {mode.label}
-                    </button>
-                  ))}
+          {/* Preview — контент рендерится напрямую, без скрытого measurement */}
+          <div className="flex-1 overflow-auto bg-white">
+            <div
+              ref={contentRef}
+              className="mx-auto"
+              style={{ width: "210mm", padding: "10mm 15mm" }}
+            >
+              <div className="print-page bg-white relative">
+                <div className="text-center mb-4">
+                  <div className="text-sm font-bold uppercase tracking-wide">{title}</div>
+                  <div className="text-[10px] text-muted-foreground mt-0.5 flex items-center justify-center gap-2">
+                    <span>Сформировано: {new Date().toLocaleString("ru-RU")}</span>
+                    {hasContent && (
+                      <span className="text-blue-600 font-medium">· 1/{pageCount}</span>
+                    )}
+                  </div>
                 </div>
-              </div>
-
-              {/* Колонки */}
-              <div className="space-y-1.5">
-                <label className="text-xs font-medium">Колонки</label>
-                <div className="flex gap-1.5 flex-wrap">
-                  {ALL_PRINT_COLUMNS.map((col) => (
-                    <ToggleButton
-                      key={col}
-                      label={PRINT_COLUMN_LABELS[col]}
-                      active={settings.columns.includes(col)}
-                      onClick={() => toggleColumn(col)}
+                {hasContent ? (
+                  contentBlocks.map((block, idx) => (
+                    <PrintPreviewTable
+                      key={idx}
+                      title={block.title}
+                      tasks={tasks}
+                      profile={block.profile}
+                      settings={settings}
+                      hiddenGroupKeys={hiddenGroupKeys}
                     />
-                  ))}
-                </div>
-              </div>
-
-              {/* Подвесы */}
-              <div className="space-y-1.5">
-                <ToggleButton
-                  label="Подвесы"
-                  active={settings.showQtyPerHanger}
-                  onClick={() =>
-                    setSettings((prev) => ({
-                      ...prev,
-                      showQtyPerHanger: !prev.showQtyPerHanger,
-                    }))
-                  }
-                  size="md"
-                />
-              </div>
-
-              {/* Фильтр по количеству */}
-              <div className="space-y-1.5">
-                <label className="text-xs font-medium">
-                  Фильтр по количеству
-                </label>
-                <div className="flex gap-1.5">
-                  <input
-                    type="number"
-                    min={0}
-                    value={settings.minQty ?? ""}
-                    onChange={(e) =>
-                      setSettings((prev) => ({
-                        ...prev,
-                        minQty:
-                          e.target.value === "" ? null : Number(e.target.value),
-                      }))
-                    }
-                    className="w-20 rounded-md border px-2 py-1.5 text-xs"
-                    placeholder="от"
-                  />
-                  <span className="self-center text-xs text-muted-foreground">
-                    —
-                  </span>
-                  <input
-                    type="number"
-                    min={0}
-                    value={settings.maxQty ?? ""}
-                    onChange={(e) =>
-                      setSettings((prev) => ({
-                        ...prev,
-                        maxQty:
-                          e.target.value === "" ? null : Number(e.target.value),
-                      }))
-                    }
-                    className="w-20 rounded-md border px-2 py-1.5 text-xs"
-                    placeholder="до"
-                  />
-                </div>
-              </div>
-            </div>
-
-            {/* Right panel: live preview */}
-            <div className="flex-1 overflow-auto bg-white">
-              <div
-                ref={previewRef}
-                className="mx-auto"
-                style={{ width: "210mm", padding: "10mm 15mm" }}
-              >
-                {/* Hidden measurement container */}
-                <div className="absolute opacity-0 pointer-events-none overflow-hidden" style={{ width: "210mm", padding: "10mm 15mm" }}>
-                  <div className="print-content-measure">
-                    {contentBlocks.map((block) => (
-                      <div key={block.title} className="print-table-block">
-                        <PrintPreviewTable title={block.title} tasks={tasks} profile={block.profile} settings={settings} />
-                      </div>
-                    ))}
-                  </div>
-                </div>
-
-                {/* Show content directly while measuring */}
-                {!isMeasured && contentBlocks.length > 0 && (
-                  <div className="print-page bg-white relative">
-                    <div className="text-center mb-4">
-                      <div className="text-sm font-bold uppercase tracking-wide">{title}</div>
-                      <div className="text-[10px] text-muted-foreground mt-0.5">
-                        Сформировано: {new Date().toLocaleString("ru-RU")}
-                      </div>
-                    </div>
-                    {contentBlocks.map((block, idx) => (
-                      <PrintPreviewTable key={idx} title={block.title} tasks={tasks} profile={block.profile} settings={settings} />
-                    ))}
-                  </div>
+                  ))
+                ) : (
+                  <p className="text-center text-muted-foreground py-8 text-sm">
+                    Нет данных для печати
+                  </p>
                 )}
-
-                {/* Rendered pages after measurement */}
-                {isMeasured && renderedPages}
               </div>
             </div>
           </div>

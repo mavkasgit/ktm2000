@@ -64,3 +64,19 @@ npm run dev
 4. **Коммиты:** Используйте осмысленные conventional commit сообщения на русском языке (например, `feat: добавить валидацию...`, `fix: исправить ошибку...`).
 5. **Сохранение документации:** Сохраняйте существующие docstring-комментарии в коде, если они не мешают изменениям.
 6. **Кликабельные ссылки:** При ответе пользователю всегда давайте кликабельные markdown-ссылки на изменяемые или важные файлы, используя протокол `file://` (например, `[main.py](file:///c:/Users/user/VibeCoding/ktm2000/backend/app/main.py)`).
+
+### Целостность данных Transfer ↔ Movement
+
+В системе два слоя хранят один и тот же факт перемещения:
+- `transfers` — бизнес-сущность с жизненным циклом (`status`, `cancel`, `correct`)
+- `movements` — append-only ledger; `transfer_send` + `transfer_receive` пишутся атомарно в [`transfer_send`](file:///c:/Users/user/VibeCoding/ktm2000/backend/app/transfers/services.py)
+- `WorkTask.cached_*` пересчитывается из `SUM(Movement)` в [`_refresh_task_cache`](file:///c:/Users/user/VibeCoding/ktm2000/backend/app/services/shopfloor/cache.py)
+
+Чтобы ловить рассинхрон этих проекций, в [`tests/test_integrity_invariants.py`](file:///c:/Users/user/VibeCoding/ktm2000/backend/tests/test_integrity_invariants.py) есть хелпер:
+
+```python
+from tests.test_integrity_invariants import assert_no_invariants_violations
+await assert_no_invariants_violations(session, context="after-cancel")
+```
+
+Он выполняет 7 SQL-проверок (movement↔transfer, transfer↔movement, cancel-чистота, cached↔SUM, transfer↔sum, line↔task). Вызывайте его в своих e2e-тестах в ключевых точках (после take-to-work, issue, complete, transfer, cancel) — это поймает регрессию, если кто-то забудет обновить один из слоёв при рефакторинге.

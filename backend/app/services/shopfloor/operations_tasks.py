@@ -228,11 +228,16 @@ async def complete_task(
     actor_name = await _get_user_snapshot_name(db, actor_id)
     executor_name = await _get_user_snapshot_name(db, eff_executor)
 
-    # Lazy auto-issue: under the 2-step model the operator doesn't have to
-    # click «Issue to work» separately. If the material is received but
-    # not yet issued, issue it now before completing. Only triggers when
-    # nothing has been issued yet (issued == 0) — partial-issue flows
-    # (already issued < completed) still get a clean error.
+    # Auto-issue safety net: under the current model, ``transfer_send``
+    # already writes a paired ``issue_to_work`` Movement on the receiving
+    # task, so a freshly received task has ``cached_issued_quantity ==
+    # cached_received_quantity`` and the operator can complete without
+    # any extra step. This branch is kept only as a backstop for legacy
+    # data (e.g. tasks created before the auto-issue change, or rows
+    # where someone manually deleted the issue movement). It only fires
+    # when nothing has been issued yet (``issued == 0``) AND material
+    # has been received — partial-issue flows (``issued < completed``)
+    # still get a clean error so the operator is forced to reconcile.
     if total > in_work and task.cached_issued_quantity == 0 and task.cached_received_quantity > 0:
         to_issue = total
         issue_movement = Movement(

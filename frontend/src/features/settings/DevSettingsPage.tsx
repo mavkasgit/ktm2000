@@ -4,7 +4,6 @@ import { useState } from "react"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { Button } from "@/shared/ui/Button"
 import { Checkbox } from "@/shared/ui/Checkbox"
-import { Input } from "@/shared/ui/Input"
 import { AlertDialog, AlertDialogContent, AlertDialogHeader, AlertDialogTitle, AlertDialogDescription, AlertDialogFooter, AlertDialogAction, AlertDialogCancel } from "@/shared/ui"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/shared/ui/Dialog"
 import { toast } from "@/shared/ui"
@@ -297,7 +296,6 @@ function CleanupDatabaseDialog({ open, onOpenChange }: { open: boolean; onOpenCh
   });
 
   const [userSelected, setUserSelected] = useState<Set<string>>(new Set());
-  const [confirmText, setConfirmText] = useState("");
   const [isCleaning, setIsCleaning] = useState(false);
 
   // Вычисляем итоговые выбранные (с учетом каскадных зависимостей)
@@ -342,7 +340,7 @@ function CleanupDatabaseDialog({ open, onOpenChange }: { open: boolean; onOpenCh
   };
 
   const handleCleanup = async () => {
-    if (confirmText !== "ОЧИСТИТЬ" || effectiveSelected.size === 0) return;
+    if (effectiveSelected.size === 0) return;
     setIsCleaning(true);
     try {
       await executeCleanup(Array.from(effectiveSelected));
@@ -353,7 +351,6 @@ function CleanupDatabaseDialog({ open, onOpenChange }: { open: boolean; onOpenCh
       });
       queryClient.invalidateQueries();
       onOpenChange(false);
-      setConfirmText("");
       setUserSelected(new Set());
     } catch (e) {
       toast({
@@ -583,14 +580,8 @@ function CleanupDatabaseDialog({ open, onOpenChange }: { open: boolean; onOpenCh
               </p>
             </div>
             {effectiveSelected.size > 0 && (
-              <div className="flex items-center gap-2">
-                <span className="text-xs text-amber-800 whitespace-nowrap">Для подтверждения введите:</span>
-                <Input
-                  placeholder="ОЧИСТИТЬ"
-                  value={confirmText}
-                  onChange={e => setConfirmText(e.target.value)}
-                  className="w-32 h-8 text-xs font-bold tracking-wider placeholder:font-normal placeholder:tracking-normal bg-white"
-                />
+              <div className="flex items-center gap-2 text-xs text-amber-800">
+                <span>Действие необратимо — будут удалены все записи выбранных таблиц.</span>
               </div>
             )}
           </div>
@@ -602,7 +593,7 @@ function CleanupDatabaseDialog({ open, onOpenChange }: { open: boolean; onOpenCh
             <Button
               variant="destructive"
               onClick={handleCleanup}
-              disabled={isCleaning || isLoading || effectiveSelected.size === 0 || confirmText !== "ОЧИСТИТЬ"}
+              disabled={isCleaning || isLoading || effectiveSelected.size === 0}
             >
               {isCleaning ? (
                 <>

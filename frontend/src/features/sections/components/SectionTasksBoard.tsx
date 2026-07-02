@@ -15,6 +15,13 @@ import { useTableQueryEngine, SortConfig, ColumnSortDef } from "@/shared/hooks/u
 import { nextMultiSortConfigs } from "@/shared/lib/multiSort";
 import { groupTasksByProfile, groupStatus, sortGroupsByPriority } from "../lib/groupTasksByProfile";
 import type { GroupingProfile } from "../lib/groupingProfiles";
+import {
+  getReadyStatusLabel,
+  getStatusLabel,
+  getStatusColor,
+  isTaskCompletable,
+  getCompletionDisabledReason,
+} from "../lib/taskStatus";
 import { TABLE_ROW_STYLES } from "@/shared/lib/tableRowStyles";
 
 // ---------------------------------------------------------------------------
@@ -54,35 +61,6 @@ type TaskSortField =
   | "rejectedQty"
   | "remainingQty"
   | "status";
-
-const taskStatusLabels: Record<string, string> = {
-  waiting_previous: "Ожидает",
-  ready: "К выдаче",
-  in_progress: "В работе",
-  partially_completed: "Частично",
-  completed: "Завершен",
-  cancelled: "Отменен",
-  // Новые статусы
-  pending: "Ожидает",
-  in_work: "В работе",
-  done: "Завершен",
-  partially: "Частично",
-  blocked: "Блокировка",
-};
-
-const taskStatusColor: Record<string, string> = {
-  waiting_previous: "bg-gray-100 text-gray-600",
-  ready: "bg-blue-100 text-blue-700",
-  in_progress: "bg-amber-100 text-amber-700",
-  partially_completed: "bg-orange-100 text-orange-700",
-  completed: "bg-emerald-100 text-emerald-700",
-  cancelled: "bg-red-100 text-red-600",
-  pending: "bg-gray-100 text-gray-600",
-  in_work: "bg-amber-100 text-amber-700",
-  done: "bg-emerald-100 text-emerald-700",
-  partially: "bg-orange-100 text-orange-700",
-  blocked: "bg-red-100 text-red-600",
-};
 
 function fmtQty(value: string): string {
   const n = parseFloat(value);
@@ -161,7 +139,7 @@ function getTaskCellValue(task: SectionBoardTask, field: TaskSortField): string 
   switch (field) {
     case "sequence": return String(task.sequence);
     case "productSku": return task.product_sku;
-    case "status": return task.status;
+    case "status": return getStatusLabel(task);
     case "plannedQty": return String(parseFloat(task.planned_quantity) || 0);
     case "issuedQty": return String(parseFloat(task.cache.issued_quantity) || 0);
     case "inWorkQty": return String(inWorkOf(task));
@@ -172,12 +150,15 @@ function getTaskCellValue(task: SectionBoardTask, field: TaskSortField): string 
   }
 }
 
-function StatusDot({ status }: { status: string }) {
+function StatusDot({ task }: { task: SectionBoardTask }) {
+  const status = task.status;
   let colorClass = "bg-slate-300";
   if (["in_progress", "in_work"].includes(status)) {
     colorClass = "bg-amber-500 animate-pulse";
   } else if (["ready", "partially_completed", "partially"].includes(status)) {
-    colorClass = "bg-blue-500";
+    colorClass = status === "ready" && getReadyStatusLabel(task) === "Не передано"
+      ? "bg-slate-400"
+      : "bg-blue-500";
   } else if (["completed", "done"].includes(status)) {
     colorClass = "bg-emerald-500";
   } else if (status === "blocked") {
@@ -186,7 +167,7 @@ function StatusDot({ status }: { status: string }) {
     colorClass = "bg-yellow-400";
   }
   return (
-    <span className={`inline-block h-2.5 w-2.5 rounded-full ${colorClass}`} title={taskStatusLabels[status] || status} />
+    <span className={`inline-block h-2.5 w-2.5 rounded-full ${colorClass}`} title={getStatusLabel(task)} />
   );
 }
 
@@ -216,7 +197,7 @@ function renderTaskRow(
       }}
     >
       <td className="p-2 text-center">
-        <StatusDot status={task.status} />
+        <StatusDot task={task} />
       </td>
       <td className="p-2 font-medium">{task.product_sku}</td>
       <td className="p-2">
@@ -234,8 +215,8 @@ function renderTaskRow(
       <td className="p-2">{fmtQty(task.cache.transferred_quantity)}</td>
       <td className="p-2">{fmtQty(task.cache.remaining_quantity)}</td>
       <td className="p-2">
-        <Badge variant="secondary" className={taskStatusColor[task.status] || ""}>
-          {taskStatusLabels[task.status] || task.status}
+        <Badge variant="secondary" className={getStatusColor(task)}>
+          {getStatusLabel(task)}
         </Badge>
       </td>
       <td className="p-2">
@@ -254,8 +235,8 @@ function renderTaskRow(
           variant="outline"
           className={`${buttonBase} ${buttonDefault}`}
           onClick={() => handleAction("complete")}
-          disabled={task.status === "waiting_previous"}
-          title={task.status === "waiting_previous" ? "Нельзя завершить задание: ожидает передачи сырья с предыдущего участка" : "Завершить задачу"}
+          disabled={!isTaskCompletable(task)}
+          title={getCompletionDisabledReason(task) ?? "Завершить задачу"}
         >
           <span>Завершить</span>
         </Button>
@@ -290,11 +271,11 @@ function renderMobileCard(
     >
       <div className="flex items-center justify-between gap-2">
         <div className="flex items-center gap-2 font-semibold">
-          <StatusDot status={task.status} />
+          <StatusDot task={task} />
           <span className="text-sm font-medium">{task.product_sku}</span>
         </div>
-        <Badge variant="secondary" className={taskStatusColor[task.status] || ""}>
-          {taskStatusLabels[task.status] || task.status}
+        <Badge variant="secondary" className={getStatusColor(task)}>
+          {getStatusLabel(task)}
         </Badge>
       </div>
 
@@ -321,8 +302,8 @@ function renderMobileCard(
           variant="outline"
           className={`${buttonBase} ${buttonDefault}`}
           onClick={() => handleAction("complete")}
-          disabled={task.status === "waiting_previous"}
-          title={task.status === "waiting_previous" ? "Нельзя завершить задание: ожидает передачи сырья с предыдущего участка" : "Завершить задачу"}
+          disabled={!isTaskCompletable(task)}
+          title={getCompletionDisabledReason(task) ?? "Завершить задачу"}
         >
           <span>Завершить</span>
         </Button>
@@ -355,9 +336,7 @@ function TableTaskGroupRow({
   const taskIds = group.tasks.map((t) => t.id);
   const allSelected = bulkSelection?.isAllSelected(taskIds) ?? false;
   const firstTask = group.tasks[0];
-  const groupHasCompletable = group.tasks.some(
-    (t) => !["completed", "cancelled", "done", "waiting_previous"].includes(t.status),
-  );
+  const groupHasCompletable = group.tasks.some(isTaskCompletable);
 
   return (
     <tr
@@ -531,7 +510,7 @@ export function SectionTasksBoard({
   const uniqueValues = useMemo(() => ({
     sequence: [...new Set(visibleTasks.map((t) => String(t.sequence)))],
     productSku: [...new Set(visibleTasks.map((t) => t.product_sku))],
-    status: [...new Set(visibleTasks.map((t) => t.status))],
+    status: [...new Set(visibleTasks.map((t) => getStatusLabel(t)))],
     plannedQty: [...new Set(visibleTasks.map((t) => String(parseFloat(t.planned_quantity) || 0)))],
     issuedQty: [...new Set(visibleTasks.map((t) => String(parseFloat(t.cache.issued_quantity) || 0)))],
     inWorkQty: [...new Set(visibleTasks.map((t) => String(inWorkOf(t))))],
@@ -603,7 +582,7 @@ export function SectionTasksBoard({
     });
   }, []);
 
-  const statusLabel = (status: string) => taskStatusLabels[status] || status;
+  const statusLabel = (label: string) => label;
 
   const modeCounts = useMemo(() => ({
     active: tasks.filter((t) => ["ready", "in_progress", "partially_completed", "in_work", "partially"].includes(t.status)).length,
@@ -913,9 +892,7 @@ export function SectionTasksBoard({
                         &times;{group.tasks.length}
                       </Badge>
                       {onCompleteGroup && (() => {
-                        const groupHasCompletable = group.tasks.some(
-                          (t) => !["completed", "cancelled", "done"].includes(t.status),
-                        );
+                        const groupHasCompletable = group.tasks.some(isTaskCompletable);
                         return (
                           <Button
                             size="sm"

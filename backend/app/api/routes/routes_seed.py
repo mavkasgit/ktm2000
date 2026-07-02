@@ -202,7 +202,7 @@ async def cleanup_endpoint(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> None:
-    """Выборочно удалить таблицы базы данных с использованием TRUNCATE CASCADE."""
+    """Выборочно удалить таблицы базы данных в порядке, удовлетворяющем ограничениям внешних ключей."""
     if not payload.tables:
         return
 
@@ -225,16 +225,19 @@ async def cleanup_endpoint(
         )
 
     try:
-        # Порядок удаления снизу вверх для соблюдения ограничений внешних ключей
+        # Порядок удаления снизу вверх для соблюдения ограничений внешних ключей.
+        # Важен для NOT NULL FK (например, transfers.from_task_id / to_task_id
+        # -> work_tasks.id) — обнулить их нельзя, значит transfers должны быть
+        # удалены ДО work_tasks.
         ordered_tables = [
             "transfer_discrepancy_defect_items",
-            "defect_decisions",
             "defect_items",
+            "defect_decisions",
             "rework_tasks",
-            "defects",
             "transfer_discrepancies",
-            "transfers",
             "movements",
+            "transfers",
+            "defects",
             "spg_remainders",
             "work_tasks",
             "section_plan_lines",
@@ -259,6 +262,69 @@ async def cleanup_endpoint(
             "sections"
         ]
 
+        # Карта nullable FK-колонок: target_table -> [(ref_table, fk_col), ...].
+        # Перед удалением target_table обнуляем nullable FK во всех остальных
+        # cleanup-таблицах, которые на неё ссылаются. Это покрывает выборочную
+        # очистку, когда пользователь выбрал target, но не выбрал ссылающуюся
+        # таблицу (или наоборот). NOT NULL FK нельзя обнулить — для них порядок
+        # удаления в ordered_tables гарантирует, что child удаляется раньше
+        # parent. FK с ondelete="SET NULL" в схеме (defects.spg_remainder_id,
+        # defects.route_stage_id, spg_remainders.reserved_for_plan_position_id)
+        # обнуляются Postgres'ом автоматически и здесь не перечислены.
+        NULLABLE_FK_REFS: dict[str, list[tuple[str, str]]] = {
+            "transfers": [
+                ("movements", "transfer_id"),
+            ],
+            "movements": [
+                ("defects", "movement_id"),
+            ],
+            "work_tasks": [
+                ("defects", "task_id"),
+                ("movements", "task_id"),
+                ("spg_remainders", "consumed_by_task_id"),
+                ("spg_remainders", "origin_task_id"),
+            ],
+            "section_plan_lines": [
+                ("movements", "section_plan_line_id"),
+                ("spg_remainders", "section_plan_line_id"),
+            ],
+            "release_batches": [
+                ("internal_plans", "release_batch_id"),
+            ],
+            "plan_positions": [
+                ("plan_change_items", "plan_position_id"),
+            ],
+            "import_batches": [
+                ("plan_change_sets", "import_batch_id"),
+                ("plan_positions", "import_batch_id"),
+            ],
+            "route_stages": [
+                ("internal_plans", "route_stage_id"),
+                ("spg_remainders", "route_stage_id"),
+            ],
+            "route_rule_profiles": [
+                ("import_batches", "rule_profile_id"),
+                ("plan_positions", "route_profile_id"),
+                ("route_selection_rules", "profile_id"),
+            ],
+            "production_routes": [
+                ("plan_positions", "route_id"),
+            ],
+            "import_templates": [
+                ("import_batches", "template_id"),
+                ("route_rule_profiles", "import_template_id"),
+                ("production_routes", "import_template_id"),
+            ],
+            "sections": [
+                ("defects", "responsible_section_id"),
+                ("defect_decisions", "target_section_id"),
+                ("movements", "from_section_id"),
+                ("movements", "to_section_id"),
+                ("route_stages", "section_id"),
+                ("route_stages", "storage_section_id"),
+            ],
+        }
+
         if "sections" in payload.tables:
             # Разрываем связи с пользователями перед удалением участков
             await db.execute(text("UPDATE users SET section_id = NULL"))
@@ -267,18 +333,21 @@ async def cleanup_endpoint(
             except Exception:
                 pass
 
-        if "import_templates" in payload.tables:
-            await db.execute(text("UPDATE route_rule_profiles SET import_template_id = NULL"))
-            await db.execute(text("UPDATE import_batches SET template_id = NULL"))
-
-        if "route_rule_profiles" in payload.tables:
-            await db.execute(text("UPDATE import_batches SET rule_profile_id = NULL"))
-
-        deleted_tables = []
+        deleted_tables: list[str] = []
         for table in ordered_tables:
-            if table in payload.tables:
-                await db.execute(text(f"DELETE FROM {table}"))
-                deleted_tables.append(table)
+            if table not in payload.tables:
+                continue
+            # Перед удалением обнуляем nullable FK из других cleanup-таблиц,
+            # ссылающиеся на эту. Покрывает выборочную очистку.
+            for ref_table, fk_col in NULLABLE_FK_REFS.get(table, []):
+                await db.execute(
+                    text(
+                        f"UPDATE {ref_table} SET {fk_col} = NULL "
+                        f"WHERE {fk_col} IS NOT NULL"
+                    )
+                )
+            await db.execute(text(f"DELETE FROM {table}"))
+            deleted_tables.append(table)
         
         # Запись лога аудита
         await log_action(

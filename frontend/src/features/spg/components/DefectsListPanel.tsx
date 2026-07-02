@@ -36,6 +36,17 @@ export function DefectsListPanel({
     if (!sectionIds) return sections;
     return sections.filter((s) => sectionIds.includes(s.section_id));
   }, [sections, sectionIds]);
+
+  const spgNameBySectionId = useMemo(() => {
+    const map = new Map<number, { spgId: number; spgName: string }>();
+    spgs.forEach((spg) => {
+      spg.sections.forEach((sec) => {
+        map.set(sec.section_id, { spgId: spg.id, spgName: spg.name });
+      });
+    });
+    return map;
+  }, [spgs]);
+
   const [createOpen, setCreateOpen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
   const [decideOpen, setDecideOpen] = useState(false);
@@ -46,6 +57,8 @@ export function DefectsListPanel({
 
   // Filters
   const [statusFilter, setStatusFilter] = useState("");
+
+  const isMultiContext = spgs.length > 1;
 
   const handleDecideClick = (defect: DefectOut) => {
     setSelectedDefect(defect);
@@ -217,7 +230,9 @@ export function DefectsListPanel({
             <p className="text-sm text-muted-foreground py-4 text-center">Загрузка дефектов...</p>
           ) : defects.length === 0 ? (
             <div className="text-center py-8 text-sm text-muted-foreground border rounded-lg border-dashed">
-              Бракованной продукции в этой ГХП не зарегистрировано.
+              {isMultiContext
+                ? "Бракованной продукции в выбранных ГХП не зарегистрировано."
+                : "Бракованной продукции в этой ГХП не зарегистрировано."}
             </div>
           ) : (
             <div className="overflow-x-auto border rounded-lg">
@@ -233,6 +248,7 @@ export function DefectsListPanel({
                       <th className="p-2 text-left font-medium">Продукт</th>
                       <th className="p-2 text-right font-medium">Кол-во</th>
                       <th className="p-2 text-left font-medium">Причина</th>
+                      <th className="p-2 text-left font-medium">ГХП</th>
                       <th className="p-2 text-left font-medium">Участок / Операция</th>
                       <th className="p-2 text-center font-medium">Источник</th>
                       <th className="p-2 text-center font-medium">Статус</th>
@@ -283,6 +299,11 @@ export function DefectsListPanel({
                                 "{d.comment}"
                               </p>
                             )}
+                          </td>
+                          <td className="p-2 text-xs">
+                            <div className="font-medium text-foreground">
+                              {spgNameBySectionId.get(d.section_id)?.spgName ?? "—"}
+                            </div>
                           </td>
                           <td className="p-2 text-xs">
                             <div className="font-medium">{d.section_code}</div>
