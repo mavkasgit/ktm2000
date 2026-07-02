@@ -121,6 +121,7 @@ async def create_transfer(
             performed_at=payload.performed_at,
             accounted_at=payload.accounted_at,
             post_factum=payload.post_factum,
+            allow_over_plan=payload.allow_over_plan,
             physical_handover_at=payload.physical_handover_at,
         )
     except ValueError as exc:

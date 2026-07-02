@@ -95,6 +95,7 @@ async def transfer_send(
     performed_at: datetime | None = None,
     accounted_at: datetime | None = None,
     post_factum: bool = False,
+    allow_over_plan: bool = False,
     physical_handover_at: datetime | None = None,
 ) -> dict:
     """Send ``quantity`` from a completed SectionTask to the next route step.
@@ -162,7 +163,9 @@ async def transfer_send(
                 section_id=next_line.section_id,
                 product_id=next_line.product_id,
                 route_stage_id=next_line.route_stage_id,
-                planned_quantity=from_line.planned_quantity,
+                # If more than planned is being transferred, expand the task's plan
+                # so the receiving section can issue and complete the full quantity.
+                planned_quantity=max(from_line.planned_quantity, quantity),
                 status=WorkTaskStatus.waiting_previous,
                 due_date=next_line.due_date,
             )
@@ -184,7 +187,7 @@ async def transfer_send(
 
     quantity = _to_decimal(quantity)
     _ensure_positive(quantity, "quantity")
-    if not post_factum:
+    if not post_factum and not allow_over_plan:
         transferable = await _get_task_transferable(db, from_task)
         if quantity > transferable:
             raise ValueError("Transfer quantity exceeds transferable amount")
@@ -285,6 +288,7 @@ async def transfer_send(
             select(SpgSection.spg_id).where(SpgSection.section_id == transfer.from_section_id)
         )
         if from_spg_id is not None:
+            from sqlalchemy import case
             from app.models.spg_remainder import SpgRemainder
             remainders = (await db.execute(
                 select(SpgRemainder)
@@ -293,8 +297,17 @@ async def transfer_send(
                     SpgRemainder.product_id == transfer.product_id,
                     SpgRemainder.remainder_quantity > 0,
                     SpgRemainder.consumed_at.is_(None),
+                    (SpgRemainder.reserved_for_plan_position_id == from_line.plan_position_id)
+                    | SpgRemainder.reserved_for_plan_position_id.is_(None),
                 )
-                .order_by(SpgRemainder.created_at.asc(), SpgRemainder.id.asc())
+                .order_by(
+                    case(
+                        (SpgRemainder.reserved_for_plan_position_id == from_line.plan_position_id, 0),
+                        else_=1,
+                    ),
+                    SpgRemainder.created_at.asc(),
+                    SpgRemainder.id.asc(),
+                )
             )).scalars().all()
 
             qty_to_consume = quantity
@@ -309,9 +322,20 @@ async def transfer_send(
                 qty_to_consume -= consume_qty
 
     await _refresh_task_cache(db, from_task.id)
-    await _refresh_task_cache(db, to_task.id)
+    refreshed_to_task = await _refresh_task_cache(db, to_task.id)
     await _refresh_section_plan_line_cache(db, from_task.section_plan_line_id)
     await _refresh_section_plan_line_cache(db, to_task.section_plan_line_id)
+
+    # If cumulative received quantity now exceeds the task's planned quantity
+    # (i.e., over-plan material was transferred), expand planned_quantity so
+    # operators can issue and complete the full received amount at this stage.
+    # SectionPlanLine.planned_quantity is intentionally NOT changed — the plan
+    # itself stays the same; only the task-level target is adjusted.
+    if refreshed_to_task.cached_received_quantity > refreshed_to_task.planned_quantity:
+        refreshed_to_task.planned_quantity = refreshed_to_task.cached_received_quantity
+        await db.flush()
+        await _refresh_task_cache(db, refreshed_to_task.id)
+        await _refresh_section_plan_line_cache(db, refreshed_to_task.section_plan_line_id)
 
     # Запись лога аудита (передача)
     from app.services.audit_log_service import log_action

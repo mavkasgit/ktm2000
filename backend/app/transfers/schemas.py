@@ -24,6 +24,7 @@ class CreateTransferPayload(BaseModel):
     performed_at: datetime | None = None
     accounted_at: datetime | None = None
     post_factum: bool = False
+    allow_over_plan: bool = False
     physical_handover_at: datetime | None = None
 
 
