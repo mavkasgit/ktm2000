@@ -14,7 +14,6 @@ from app.models.route import (
 )
 from app.models.section import Section
 from app.models.spg import SpgSection, SpgStorageKind, StorageProductionGroup
-from app.models.spg_remainder import SpgRemainder
 from app.seeds.spgs import SPGS_DATA
 from app.seeds.seeders.spgs_seeder import _resolve_storage_kind, seed_spgs
 from app.services.route_storage_classifier import (

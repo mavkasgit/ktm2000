@@ -14,7 +14,6 @@ from app.models.product import Product
 from app.models.release_batch import ReleaseBatch, ReleaseBatchPosition, ReleaseBatchStatus, ReleaseBatchType
 from app.models.route import ProductionRoute, RouteOperation, RouteStage, SectionOperation
 from app.models.section import Section
-from app.models.spg_remainder import SpgRemainder
 from app.models.work_task import WorkTask, WorkTaskStatus
 from app.services.plan_validation import _find_paired_techcard, _paired_component_skus
 from app.services.production_plan_service import refresh_plan_status
@@ -161,77 +160,11 @@ async def release_batch(
 
         steps = sorted(batch_position.route_snapshot.get("steps", []), key=lambda step: step["sequence"])
 
-        # ── MRP: find and reserve compatible remainders ───────────────────────
+        # ── MRP remainder allocation removed (SpgRemainder deleted) ───────────
+        # Все остатки теперь управляются через StockBalance.
+        # remainder_allocation игнорируется — нет legacy-таблицы для резервации.
         release_quantity = batch_position.release_quantity
-        remainder_max_seq: list[tuple[SpgRemainder, int, Decimal]] = []
-
-        if remainder_allocation is not None:
-            # Manual allocation: reserve only specified remainders with requested quantities.
-            # If qty < rem.remainder_quantity, split the remainder into two:
-            #   - new reserved record (qty) tied to this position
-            #   - original record reduced by qty, stays free for other positions
-            reserved_remainders = []
-            for rem_id, qty in remainder_allocation.items():
-                if qty <= 0:
-                    continue
-                rem = await db.get(SpgRemainder, rem_id)
-                if rem is None:
-                    raise ValueError(f"Remainder #{rem_id} not found")
-                if rem.product_id != effective_product_id:
-                    raise ValueError(f"Remainder #{rem_id} product mismatch")
-                if rem.consumed_at is not None:
-                    raise ValueError(f"Remainder #{rem_id} already consumed")
-                if rem.reserved_for_plan_position_id is not None and rem.reserved_for_plan_position_id != position.id:
-                    raise ValueError(f"Remainder #{rem_id} is reserved for another position")
-                if qty > rem.remainder_quantity:
-                    raise ValueError(f"Remainder #{rem_id} has insufficient quantity (available: {rem.remainder_quantity}, requested: {qty})")
-
-                if qty < rem.remainder_quantity:
-                    # Partial allocation: split the remainder
-                    leftover = rem.remainder_quantity - qty
-                    rem.remainder_quantity = leftover
-                    # Clear any existing reservation on the source (it stays free)
-                    rem.reserved_for_plan_position_id = None
-
-                    child = SpgRemainder(
-                        product_id=rem.product_id,
-                        spg_id=rem.spg_id,
-                        route_stage_id=rem.route_stage_id,
-                        section_plan_line_id=rem.section_plan_line_id,
-                        origin_task_id=rem.origin_task_id,
-                        remainder_quantity=qty,
-                        original_issued=qty,
-                        completed_stages_json=rem.completed_stages_json,
-                        source=rem.source,
-                        created_by=rem.created_by,
-                        created_by_user_name=rem.created_by_user_name,
-                        reserved_for_plan_position_id=position.id,
-                    )
-                    db.add(child)
-                    await db.flush()
-                    reserved_remainders.append((child, qty))
-                else:
-                    # Full allocation: reserve the whole remainder
-                    rem.reserved_for_plan_position_id = position.id
-                    reserved_remainders.append((rem, qty))
-
-            for res_rem, allocated_qty in reserved_remainders:
-                stages_json = res_rem.completed_stages_json or []
-                max_seq = max((s.get("sequence", 0) for s in stages_json), default=0)
-                remainder_max_seq.append((res_rem, max_seq, allocated_qty))
-
-        else:
-            # Default auto-allocation
-            reserved_remainders = await _find_and_reserve_compatible_remainders(
-                db,
-                product_id=effective_product_id,
-                position_id=position.id,
-                route_steps=steps,
-            )
-            for rem in reserved_remainders:
-                stages_json = rem.completed_stages_json or []
-                max_seq = max((s.get("sequence", 0) for s in stages_json), default=0)
-                remainder_max_seq.append((rem, max_seq, rem.remainder_quantity))
+        remainder_max_seq: list[tuple[int, int, Decimal]] = []
 
         # ── Create SectionPlanLines + WorkTasks ───────────────────────────────
         seen_keys: set[tuple[str, int]] = set()
@@ -679,82 +612,10 @@ async def _find_and_reserve_compatible_remainders(
     product_id: int,
     position_id: int,
     route_steps: list[dict],
-) -> list[SpgRemainder]:
-    """Find free SPG remainders compatible with the given route, reserve them.
+) -> list:
+    """Stub: SpgRemainder удалена, резервация остатков не выполняется.
 
-    A remainder is considered *compatible* when its ``completed_stages_json``
-    is a **prefix** of the new route steps sequence.  That is, every stage
-    recorded in the remainder must match the beginning of the new route
-    (same sequence number, same section_id AND operation_code within allowed ops).
-
-    Compatible remainders are reserved by setting
-    ``reserved_for_plan_position_id = position_id`` and returned FIFO.
-
-    Edge cases handled:
-    - Remainder with empty completed_stages_json → compatible (raw/warehouse stock).
-    - Route with no steps → returns [].
-    - Remainder already consumed or reserved → skipped.
+    Returns empty list — MRP remainder reservation was removed in Stage 7.
     """
-    if not route_steps:
-        return []
-
-    # Build route prefix lookups: sequence → section_id and sequence → allowed op_codes
-    route_seq_to_section: dict[int, int] = {}
-    route_seq_to_op_codes: dict[int, set[str | None]] = {}
-    for step in route_steps:
-        if step.get("route_stage_id") is None:
-            continue
-        seq = step["sequence"]
-        route_seq_to_section[seq] = step["section_id"]
-        # "operations" list is stored in the route snapshot step
-        ops = step.get("operations") or []
-        route_seq_to_op_codes[seq] = {op.get("operation_code") for op in ops} if ops else set()
-
-    # Load free remainders for this product, FIFO order
-    free_remainders: list[SpgRemainder] = (
-        await db.execute(
-            select(SpgRemainder)
-            .where(
-                SpgRemainder.product_id == product_id,
-                SpgRemainder.remainder_quantity > 0,
-                SpgRemainder.consumed_at.is_(None),
-                SpgRemainder.reserved_for_plan_position_id.is_(None),
-            )
-            .order_by(SpgRemainder.created_at)
-        )
-    ).scalars().all()
-
-    compatible: list[SpgRemainder] = []
-    for rem in free_remainders:
-        stages_json: list[dict] = rem.completed_stages_json or []
-
-        # Empty completed_stages_json = raw warehouse stock → compatible with all routes
-        is_prefix = True
-        for stage_entry in stages_json:
-            seq = stage_entry.get("sequence")
-            section_id = stage_entry.get("section_id")
-            op_code = stage_entry.get("operation_code")
-            if seq is None or section_id is None:
-                is_prefix = False
-                break
-            # Check section match
-            expected_section = route_seq_to_section.get(seq)
-            if expected_section is None or expected_section != section_id:
-                is_prefix = False
-                break
-            # Check operation_code match: if the route stage has operations defined,
-            # the remainder's operation_code must be one of them.
-            allowed_ops = route_seq_to_op_codes.get(seq, set())
-            if allowed_ops and op_code not in allowed_ops:
-                is_prefix = False
-                break
-
-        if not is_prefix:
-            continue
-
-        # Reserve the remainder
-        rem.reserved_for_plan_position_id = position_id
-        compatible.append(rem)
-
-    return compatible
+    return []
 

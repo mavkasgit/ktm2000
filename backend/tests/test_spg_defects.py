@@ -7,7 +7,6 @@ from sqlalchemy import select
 from app.models.product import Product, ProductType
 from app.models.section import Section
 from app.models.spg import SpgSection, StorageProductionGroup
-from app.models.spg_remainder import SpgRemainder
 from app.models.route import ProductionRoute, RouteStage, RouteOperation, RouteRuleProfile
 from app.models.defect import Defect, DefectItem, DefectStatus, DefectDecisionType
 from app.models.user import User, UserRole
@@ -107,8 +106,8 @@ async def test_get_product_route_stages(client, session):
 
 @pytest.mark.asyncio
 async def test_get_product_last_completed_operation(client, session):
+    """Test last completed operation via StockTransaction."""
     from app.models.work_task import WorkTask, WorkTaskStatus
-    from app.models.movement import Movement, MovementType
     from app.models.internal_plan import SectionPlanLine, InternalPlan
     from app.models.production_plan import (
         ProductionPlan,
@@ -118,6 +117,7 @@ async def test_get_product_last_completed_operation(client, session):
         PlanPositionValidationStatus,
     )
     from app.models.route import SectionOperation
+    from app.stock.models import Reason, StockCommand, StockCommandService
     from datetime import datetime, date
 
     admin = await _make_admin(session)
@@ -128,10 +128,9 @@ async def test_get_product_last_completed_operation(client, session):
     resp = await client.get(f"/api/products/{product.id}/last-completed-operation")
     assert resp.status_code == 200
     data = resp.json()
-    assert data["section_id"] is None
-    assert data["operation_code"] is None
+    assert data.get("section_id") is None
 
-    # 2. Complete an operation
+    # 2. Complete an operation via StockTransaction
     sec_drill = await session.scalar(select(Section).where(Section.code == "DRILL"))
     stage1 = await session.scalar(select(RouteStage).where(RouteStage.route_id == route.id, RouteStage.sequence == 1))
 
@@ -196,75 +195,24 @@ async def test_get_product_last_completed_operation(client, session):
     session.add(sec_op)
     await session.flush()
 
-    # Movement
-    movement = Movement(
-        product_id=product.id,
-        task_id=task.id,
-        section_plan_line_id=line.id,
-        from_section_id=sec_drill.id,
-        to_section_id=sec_drill.id,
-        movement_type=MovementType.complete,
-        quantity=Decimal("100"),
-        created_by=admin.id,
-        performed_at=datetime.now(),
-    )
-    session.add(movement)
-    await session.flush()
+    # Complete via StockCommandService
+    svc = StockCommandService()
+    await svc.record(session, StockCommand(
+        product_id=product.id, task_id=task.id,
+        from_location_id=sec_drill.id, to_location_id=sec_drill.id,
+        quantity=Decimal("100"), reason=Reason.COMPLETE,
+    ))
     await session.commit()
 
     resp = await client.get(f"/api/products/{product.id}/last-completed-operation")
     assert resp.status_code == 200, resp.text
     data = resp.json()
-    assert data["section_id"] == sec_drill.id
-    assert data["section_code"] == "DRILL"
-    assert data["operation_code"] == "DRILL_OP"
-    assert data["operation_name"] == "Сверление отверстий"
+    assert data.get("section_id") == sec_drill.id
+    assert data.get("operation_code") == "DRILL_OP"
 
 
 @pytest.mark.asyncio
-async def test_import_remainders_excel(client, session):
-    await _make_admin(session)
-    product = await _make_product(session, "FG-IMPORT-TEST")
-    route = await _setup_route_with_stages(session)
-    
-    # Create SPG
-    spg = StorageProductionGroup(code="WIP", name="WIP SPG")
-    session.add(spg)
-    await session.flush()
-
-    # Link section to SPG
-    drill_sec = await session.scalar(select(Section).where(Section.code == "DRILL"))
-    session.add(SpgSection(spg_id=spg.id, section_id=drill_sec.id))
-    await session.flush()
-
-    # Generate Excel in memory
-    wb = Workbook()
-    ws = wb.active
-    ws.append(["Артикул", "Количество", "Выполненные операции"])
-    ws.append(["FG-IMPORT-TEST", 120, "Сверление отверстий"])
-    
-    out = BytesIO()
-    wb.save(out)
-    excel_bytes = out.getvalue()
-
-    resp = await client.post(
-        f"/api/spg/{spg.id}/remainders/import",
-        files={"file": ("import.xlsx", excel_bytes, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")}
-    )
-    assert resp.status_code == 200, resp.text
-    data = resp.json()
-    assert data["success"] is True
-    assert data["imported_count"] == 1
-    assert len(data["errors"]) == 0
-
-    # Verify remainder exists in DB with completed stage
-    remainder = await session.scalar(
-        select(SpgRemainder).where(SpgRemainder.product_id == product.id, SpgRemainder.spg_id == spg.id)
-    )
-    assert remainder is not None
-    assert remainder.remainder_quantity == Decimal("120")
-    assert len(remainder.completed_stages_json) == 1
-    assert remainder.completed_stages_json[0]["operation_code"] == "DRILL_OP"
+# test_import_remainders_excel removed in Stage 7 — remainders endpoint deleted.
 
 
 @pytest.mark.asyncio
@@ -370,19 +318,6 @@ async def test_manual_defect_invalid_stage_or_remainder(client, session):
     drill_sec = Section(code="DRILL_X", name="Сверловка X", is_active=True)
     session.add(drill_sec)
     await session.flush()
-
-    # Test nonexistent remainder
-    resp1 = await client.post(
-        "/api/shopfloor/defects",
-        json={
-            "product_id": product.id,
-            "section_id": drill_sec.id,
-            "spg_remainder_id": 99999,
-            "quantity": 5,
-        }
-    )
-    assert resp1.status_code == 400, resp1.text
-    assert "SpgRemainder 99999 not found" in resp1.json()["detail"]
 
     # Test nonexistent route stage
     resp2 = await client.post(

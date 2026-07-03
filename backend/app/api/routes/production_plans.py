@@ -313,10 +313,7 @@ async def delete_import_batch(
 
         if section_plan_lines:
             from app.models.defect import Defect, DefectDecision, DefectItem, TransferDiscrepancyDefectItem
-            from app.models.movement import Movement, MovementType
             from app.models.transfer import Transfer, TransferDiscrepancy
-            from app.models.spg_remainder import SpgRemainder
-            from sqlalchemy import update
 
             # Find all work task IDs for these section plan lines
             task_ids = (
@@ -326,52 +323,8 @@ async def delete_import_batch(
             ).scalars().all()
 
             if task_ids:
-                # 1. Восстанавливаем остатки ГХП, которые были потреблены нашими задачами
-                # Находим движения списания остатков (issue_to_work), связанные с нашими задачами
-                issue_movements = (
-                    await db.execute(
-                        select(Movement)
-                        .where(
-                            Movement.task_id.in_(task_ids),
-                            Movement.movement_type == MovementType.issue_to_work,
-                            Movement.source_ref.like("remainder:%")
-                        )
-                    )
-                ).scalars().all()
-
-                for mv in issue_movements:
-                    try:
-                        rem_id = int(mv.source_ref.split(":")[1])
-                        remainder = await db.get(SpgRemainder, rem_id)
-                        if remainder:
-                            # Возвращаем количество
-                            remainder.remainder_quantity = Decimal(str(remainder.remainder_quantity)) + Decimal(str(mv.quantity))
-                            # Сбрасываем потребление, если оно связано с нашей задачей
-                            if remainder.consumed_by_task_id == mv.task_id:
-                                remainder.consumed_by_task_id = None
-                                remainder.consumed_at = None
-                    except (ValueError, IndexError):
-                        pass
-
-                # Дополнительно сбрасываем consumed_by_task_id во всех SpgRemainder, которые
-                # ссылаются на наши задачи (на случай, если движения почему-то не нашлись)
-                await db.execute(
-                    update(SpgRemainder)
-                    .where(SpgRemainder.consumed_by_task_id.in_(task_ids))
-                    .values(consumed_by_task_id=None, consumed_at=None)
-                )
-
-                # Сбрасываем резервы остатков для удаляемых позиций плана
-                await db.execute(
-                    update(SpgRemainder)
-                    .where(SpgRemainder.reserved_for_plan_position_id.in_(positions))
-                    .values(reserved_for_plan_position_id=None)
-                )
-
-                # 2. Удаляем SpgRemainder, которые были созданы нашими задачами
-                await db.execute(
-                    delete(SpgRemainder).where(SpgRemainder.origin_task_id.in_(task_ids))
-                )
+                # SpgRemainder/Movement cleanup removed — tables no longer exist.
+                # Defects with movement_id/spg_remainder_id FK were cleaned up on migration.
 
                 # Find affected transfers
                 affected_transfer_ids = (
@@ -381,52 +334,6 @@ async def delete_import_batch(
                         )
                     )
                 ).scalars().all() or []
-
-                # Find all movements for these tasks/section_plan_lines/transfers
-                affected_movement_ids = (
-                    await db.execute(
-                        select(Movement.id).where(
-                            (Movement.task_id.in_(task_ids)) |
-                            (Movement.section_plan_line_id.in_(section_plan_lines)) |
-                            (Movement.transfer_id.in_(affected_transfer_ids))
-                        )
-                    )
-                ).scalars().all() if affected_transfer_ids else (
-                    await db.execute(
-                        select(Movement.id).where(
-                            (Movement.task_id.in_(task_ids)) |
-                            (Movement.section_plan_line_id.in_(section_plan_lines))
-                        )
-                    )
-                ).scalars().all()
-
-                if affected_movement_ids:
-                    # Delete defect decisions for defects linked to these movements
-                    defect_ids = (
-                        await db.execute(
-                            select(Defect.id).where(Defect.movement_id.in_(affected_movement_ids))
-                        )
-                    ).scalars().all()
-
-                    if defect_ids:
-                        # Delete defect items for these defects
-                        await db.execute(
-                            delete(DefectItem).where(DefectItem.defect_id.in_(defect_ids))
-                        )
-                        # Delete defect decisions for these defects
-                        await db.execute(
-                            delete(DefectDecision).where(DefectDecision.defect_id.in_(defect_ids))
-                        )
-                        # Delete the defects themselves
-                        await db.execute(
-                            delete(Defect).where(Defect.id.in_(defect_ids))
-                        )
-
-                # Delete movements
-                if affected_movement_ids:
-                    await db.execute(
-                        delete(Movement).where(Movement.id.in_(affected_movement_ids))
-                    )
 
                 # Handle transfers
                 if affected_transfer_ids:

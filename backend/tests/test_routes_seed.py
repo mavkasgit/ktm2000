@@ -7,7 +7,6 @@ from sqlalchemy import func, select
 from app.core.config import settings
 from app.models.defect import Defect
 from app.models.internal_plan import InternalPlan, SectionPlanLine
-from app.models.movement import Movement
 from app.models.product import Product, ProductType
 from app.models.production_plan import (
     PlanPosition,

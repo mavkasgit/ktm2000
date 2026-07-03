@@ -302,7 +302,7 @@ async def test_delete_product_blockers_and_spg_remainder_cascade(client, session
     from app.models.movement import Movement
     from app.models.transfer import Transfer
     from app.models.rework_task import ReworkTask
-    from app.models.spg_remainder import SpgRemainder
+    # SpgRemainder removed in Stage 7
     from app.models.work_task import WorkTask
     from app.models.section import Section
     from app.models.spg import StorageProductionGroup

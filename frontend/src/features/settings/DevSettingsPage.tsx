@@ -199,7 +199,6 @@ const TABLES_LIST: TableDefinition[] = [
   { id: "section_plan_lines", name: "Строки планов участков", description: "Позиции внутрицеховых планов по сменам", group: "operational" },
   { id: "work_tasks", name: "Рабочие задачи", description: "Задачи исполнителей на участках по выпуску продукции", group: "operational" },
   { id: "rework_tasks", name: "Задачи на доработку", description: "Задачи на исправление брака на участках", group: "operational" },
-  { id: "movements", name: "Перемещения деталей", description: "Движение деталей по технологическим операциям", group: "operational" },
   { id: "transfers", name: "Накладные перемещений", description: "Передачи партий между участками/складами", group: "operational" },
   { id: "transfer_discrepancies", name: "Расхождения передач", description: "Акты несоответствия количества при приемке", group: "operational" },
   { id: "release_batches", name: "Партии выпуска", description: "Сформированные партии готовой продукции", group: "operational" },
@@ -208,7 +207,6 @@ const TABLES_LIST: TableDefinition[] = [
   { id: "defect_items", name: "Позиции брака", description: "Детализация брака по деталям и количествам", group: "operational" },
   { id: "defect_decisions", name: "Решения по браку", description: "Принятые решения: утилизация, доработка и др.", group: "operational" },
   { id: "transfer_discrepancy_defect_items", name: "Брак при передаче", description: "Связи брака с расхождениями передач", group: "operational" },
-  { id: "spg_remainders", name: "Остатки ГХП", description: "Остатки готовой и полуготовой продукции на складах", group: "operational" },
   { id: "import_batches", name: "Партии импорта", description: "Журнал импорта планов из внешних файлов", group: "operational" },
   { id: "import_files", name: "Файлы импорта", description: "Архив загруженных Excel-файлов", group: "operational" },
 ];
@@ -220,9 +218,7 @@ const TABLE_DEPENDENCIES: Record<string, string[]> = {
     "internal_plans",
     "section_plan_lines",
     "work_tasks",
-    "movements",
     "transfers",
-    "spg_remainders",
     "defects",
   ],
   production_routes: [
@@ -253,7 +249,7 @@ const TABLE_DEPENDENCIES: Record<string, string[]> = {
   plan_change_sets: ["plan_change_items"],
   internal_plans: ["section_plan_lines", "work_tasks"],
   section_plan_lines: ["work_tasks"],
-  work_tasks: ["rework_tasks", "movements", "defects"],
+  work_tasks: ["rework_tasks", "defects"],
   defects: [
     "defect_items",
     "defect_decisions",
@@ -263,7 +259,6 @@ const TABLE_DEPENDENCIES: Record<string, string[]> = {
   transfers: ["transfer_discrepancies", "transfer_discrepancy_defect_items"],
   transfer_discrepancies: ["transfer_discrepancy_defect_items"],
   release_batches: ["release_batch_positions", "transfers"],
-  spg_remainders: ["defects"],
   import_files: ["import_batches"],
 };
 

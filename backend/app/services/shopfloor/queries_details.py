@@ -7,7 +7,6 @@ from app.models.attachment import Attachment, AttachmentLink
 from app.models.defect import DefectDecision, DefectItem
 from app.models.entity_comment import EntityComment, EntityType
 from app.models.internal_plan import SectionPlanLine
-from app.models.movement import Movement
 from app.models.rework_task import ReworkTask
 from app.models.route import RouteStage
 from app.models.section import Section
@@ -18,11 +17,9 @@ from .common import _get_defect, _get_task, _to_decimal
 async def get_task_details(db: AsyncSession, task_id: int) -> dict:
     task = await _get_task(db, task_id)
     stage = await db.get(RouteStage, task.route_stage_id)
-    movements = (
-        await db.execute(select(Movement).where(Movement.task_id == task.id).order_by(Movement.created_at, Movement.id))
-    ).scalars().all()
     is_first_stage = bool(stage and stage.sequence == 1)
 
+    from app.stock.models import StockTransaction
     from app.stock.services import StockProjectionManager
     pm = StockProjectionManager()
     cache = await pm.get_task_cache(db, task.id)
@@ -33,6 +30,15 @@ async def get_task_details(db: AsyncSession, task_id: int) -> dict:
         issued_quantity=cache["issued_quantity"],
         is_first_stage=is_first_stage,
     )
+
+    txs = (
+        await db.execute(
+            select(StockTransaction)
+            .where(StockTransaction.task_id == task.id)
+            .order_by(StockTransaction.created_at, StockTransaction.id)
+        )
+    ).scalars().all()
+
     return {
         "id": task.id,
         "status": task.status.value,
@@ -53,23 +59,17 @@ async def get_task_details(db: AsyncSession, task_id: int) -> dict:
             "operation_name": ", ".join(op.operation_name for op in stage.operations) if stage and stage.operations else None,
             "is_final": stage.is_final if stage else None,
         },
-        "movements": [
+        "stock_transactions": [
             {
-                "id": m.id,
-                "movement_type": m.movement_type.value,
-                "quantity": str(m.quantity),
-                "from_section_id": m.from_section_id,
-                "to_section_id": m.to_section_id,
-                "transfer_id": m.transfer_id,
-                "reason": m.reason,
-                "comment": m.comment,
-                "created_by": m.created_by,
-                "executor_user_id": m.executor_user_id,
-                "performed_at": m.performed_at.isoformat() if m.performed_at else None,
-                "accounted_at": m.accounted_at.isoformat() if m.accounted_at else None,
-                "created_at": m.created_at.isoformat(),
+                "id": tx.id,
+                "reason": tx.reason.value,
+                "quantity": str(tx.quantity),
+                "from_location_id": tx.from_location_id,
+                "to_location_id": tx.to_location_id,
+                "transfer_id": tx.transfer_id,
+                "created_at": tx.created_at.isoformat(),
             }
-            for m in movements
+            for tx in txs
         ],
     }
 

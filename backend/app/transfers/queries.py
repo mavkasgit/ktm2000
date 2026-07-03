@@ -227,7 +227,19 @@ async def list_ready_to_transfer(
     from_line = aliased(SectionPlanLine, name="from_line")
     next_line = aliased(SectionPlanLine, name="next_line")
 
-    from app.models.movement import Movement, MovementType
+    from app.stock.models import Reason, StockTransaction
+
+    # Subquery: get the latest complete StockTransaction comment per task
+    latest_complete = (
+        select(
+            StockTransaction.task_id,
+            StockTransaction.id.label("st_id"),
+        )
+        .where(StockTransaction.reason == Reason.COMPLETE)
+        .distinct(StockTransaction.task_id)
+        .order_by(StockTransaction.task_id, StockTransaction.id.desc())
+        .subquery()
+    )
 
     query = (
         select(
@@ -239,7 +251,7 @@ async def list_ready_to_transfer(
             next_line,
             next_stage,
             next_section,
-            Movement.comment.label("completion_comment"),
+            StockTransaction.id.label("completion_tx_id"),
         )
         .join(from_line, from_line.id == WorkTask.section_plan_line_id)
         .join(from_stage, from_stage.id == WorkTask.route_stage_id)
@@ -253,9 +265,12 @@ async def list_ready_to_transfer(
         .outerjoin(next_stage, next_stage.id == next_line.route_stage_id)
         .outerjoin(next_section, next_section.id == next_line.section_id)
         .outerjoin(
-            Movement,
-            (Movement.task_id == WorkTask.id)
-            & (Movement.movement_type == MovementType.complete)
+            latest_complete,
+            latest_complete.c.task_id == WorkTask.id,
+        )
+        .outerjoin(
+            StockTransaction,
+            StockTransaction.id == latest_complete.c.st_id,
         )
         .where(
             WorkTask.status.notin_(
@@ -345,7 +360,7 @@ async def list_ready_to_transfer(
 
     # Special logic for stock sections (raw_stock, wip_stock, finished_stock)
     from app.models.production_plan import PlanPosition
-    from app.models.spg_remainder import SpgRemainder
+    from app.stock.models import QualityState, StockBalance
     from sqlalchemy import func
 
     if spg_id is not None:
@@ -441,13 +456,12 @@ async def list_ready_to_transfer(
                     await db.flush()
 
                 remainders_qty = await db.scalar(
-                    select(func.coalesce(func.sum(SpgRemainder.remainder_quantity), 0))
+                    select(func.coalesce(func.sum(StockBalance.quantity), 0))
                     .where(
-                        SpgRemainder.spg_id == sec_spg_id,
-                        SpgRemainder.product_id == fake_task.product_id,
-                        SpgRemainder.reserved_for_plan_position_id == spl.plan_position_id,
-                        SpgRemainder.consumed_at.is_(None),
-                        SpgRemainder.remainder_quantity > 0,
+                        StockBalance.location_id == sec.id,
+                        StockBalance.product_id == fake_task.product_id,
+                        StockBalance.quantity > 0,
+                        StockBalance.quality_state == QualityState.GOOD,
                     )
                 ) or Decimal("0")
 

@@ -20,10 +20,8 @@ from app.models.route import ProductionRoute, RouteRuleProfile, RouteStage, Rout
 from app.models.section import Section
 from app.services.route_selection import select_route_for_payload
 from app.models.transfer import Transfer
-from app.models.movement import Movement, MovementType
 from app.models.defect import Defect
 from app.models.rework_task import ReworkTask
-from app.models.spg_remainder import SpgRemainder
 
 router = APIRouter(prefix="/products", tags=["products"])
 
@@ -527,10 +525,6 @@ async def delete_product(product_id: int, db: AsyncSession = Depends(get_db)):
     if transfer_count:
         relations.append("передачи")
 
-    movement_count = await db.scalar(select(func.count()).select_from(Movement).where(Movement.product_id == product_id))
-    if movement_count:
-        relations.append("движения по складу")
-
     defect_count = await db.scalar(select(func.count()).select_from(Defect).where(Defect.product_id == product_id))
     if defect_count:
         relations.append("дефекты")
@@ -560,9 +554,6 @@ async def delete_product(product_id: int, db: AsyncSession = Depends(get_db)):
         await db.execute(delete(TechcardLine).where(TechcardLine.techcard_id.in_(list(tc_ids_to_delete))))
         # Delete the techcards themselves
         await db.execute(delete(Techcard).where(Techcard.id.in_(list(tc_ids_to_delete))))
-
-    # Delete spg remainders for this product
-    await db.execute(delete(SpgRemainder).where(SpgRemainder.product_id == product_id))
 
     # Remove this product from other products' aliases
     all_products = (await db.execute(select(Product))).scalars().all()
@@ -791,22 +782,23 @@ async def get_product_last_completed_operation(
     if product is None:
         raise HTTPException(status_code=404, detail="Product not found")
 
-    # 1. Находим последнее движение 'complete'
-    movement = await db.scalar(
-        select(Movement)
+    # 1. Находим последнюю complete-транзакцию
+    from app.stock.models import Reason, StockTransaction
+    tx = await db.scalar(
+        select(StockTransaction)
         .where(
-            Movement.product_id == product_id,
-            Movement.movement_type == MovementType.complete,
+            StockTransaction.product_id == product_id,
+            StockTransaction.reason == Reason.COMPLETE,
         )
-        .order_by(Movement.performed_at.desc(), Movement.id.desc())
+        .order_by(StockTransaction.created_at.desc(), StockTransaction.id.desc())
         .limit(1)
     )
 
-    if not movement or not movement.task_id:
+    if not tx or not tx.task_id:
         return LastCompletedOperationOut()
 
     # 2. Находим задачу
-    task = await db.get(WorkTask, movement.task_id)
+    task = await db.get(WorkTask, tx.task_id)
     if not task:
         return LastCompletedOperationOut()
 

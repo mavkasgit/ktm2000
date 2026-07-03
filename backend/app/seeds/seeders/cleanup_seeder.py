@@ -6,12 +6,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.defect import Defect, DefectDecision, DefectItem, TransferDiscrepancyDefectItem
 from app.models.imports import ImportBatch, ImportFile
 from app.models.internal_plan import InternalPlan, SectionPlanLine
-from app.models.movement import Movement
 from app.models.production_plan import PlanChangeItem, PlanChangeSet, PlanPosition, ProductionPlan
 from app.models.release_batch import ReleaseBatch, ReleaseBatchPosition
 from app.models.rework_task import ReworkTask
 from app.models.transfer import Transfer, TransferDiscrepancy
-from app.models.spg_remainder import SpgRemainder
 from app.models.work_task import WorkTask
 
 
@@ -29,10 +27,8 @@ async def clear_generated_production_data(db: AsyncSession) -> dict[str, int]:
     await execute_delete(ReworkTask, "rework_tasks")
     await execute_delete(Defect, "defects")
 
-    await execute_delete(Movement, "movements")
     await execute_delete(TransferDiscrepancy, "transfer_discrepancies")
     await execute_delete(Transfer, "transfers")
-    await execute_delete(SpgRemainder, "spg_remainders")
 
     await execute_delete(WorkTask, "work_tasks")
     await execute_delete(SectionPlanLine, "section_plan_lines")

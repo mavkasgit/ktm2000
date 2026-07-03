@@ -19,7 +19,6 @@ from app.models.section import Section
 from app.models.user import User
 from app.models.product import Product
 from app.models.spg import StorageProductionGroup
-from app.models.spg_remainder import SpgRemainder
 from app.services.production_planning_rows import get_production_planning_row_detail, list_production_planning_rows
 from app.services.production_plan_service import _refresh_plan_status, restore_plan_position, soft_delete_cancelled_position
 from app.services.plan_generation import create_release_batch, release_batch
@@ -912,79 +911,39 @@ async def get_remainders_preview(
 
     available_remainders = []
     if effective_product_id is not None:
-        from sqlalchemy import or_
-        free_remainders = (
-            await db.execute(
-                select(SpgRemainder, Product.sku, Product.name, StorageProductionGroup.name, StorageProductionGroup.icon, StorageProductionGroup.icon_color)
-                .join(Product, SpgRemainder.product_id == Product.id)
-                .join(StorageProductionGroup, SpgRemainder.spg_id == StorageProductionGroup.id)
-                .where(
-                    SpgRemainder.product_id == effective_product_id,
-                    SpgRemainder.remainder_quantity > 0,
-                    SpgRemainder.consumed_at.is_(None),
-                    or_(
-                        SpgRemainder.reserved_for_plan_position_id.is_(None),
-                        SpgRemainder.reserved_for_plan_position_id == position_id,
-                    )
-                )
-                .order_by(SpgRemainder.created_at)
+        from app.stock.models import QualityState, StockBalance
+        balances = (await db.execute(
+            select(StockBalance)
+            .where(
+                StockBalance.product_id == effective_product_id,
+                StockBalance.quantity > 0,
+                StockBalance.quality_state == QualityState.GOOD,
             )
-        ).all()
+            .order_by(StockBalance.created_at)
+        )).scalars().all()
 
-        for rem, prod_sku, prod_name, spg_name, spg_icon, spg_icon_color in free_remainders:
-            stages_json = rem.completed_stages_json or []
-
-            # Empty completed_stages_json = raw warehouse stock → compatible with all routes
-            is_prefix = True
-            for stage_entry in stages_json:
-                seq = stage_entry.get("sequence")
-                section_id = stage_entry.get("section_id")
-                op_code = stage_entry.get("operation_code")
-                if seq is None or section_id is None:
-                    is_prefix = False
-                    break
-                # Check section match
-                expected_section = route_seq_to_section.get(seq)
-                if expected_section is None or expected_section != section_id:
-                    is_prefix = False
-                    break
-                # Check operation_code match: if the route stage has operations defined,
-                # the remainder's operation_code must be one of them.
-                allowed_ops = route_seq_to_op_codes.get(seq, set())
-                if allowed_ops and op_code not in allowed_ops:
-                    is_prefix = False
-                    break
-
-            if not is_prefix:
-                continue
-
-            max_seq = max((s.get("sequence", 0) for s in stages_json), default=0)
-            max_completed_stage_name = ""
-            for s in stages_json:
-                if s.get("sequence") == max_seq:
-                    max_completed_stage_name = s.get("operation_name") or s.get("operation_code") or ""
+        for b in balances:
+            section = await db.get(Section, b.location_id)
+            section_name = section.name if section else ""
+            section_code = section.code if section else ""
+            spg_section = await db.scalar(
+                select(SpgSection).where(SpgSection.section_id == b.location_id).limit(1)
+            )
+            spg = await db.get(StorageProductionGroup, spg_section.spg_id) if spg_section else None
 
             available_remainders.append({
-                "id": rem.id,
-                "remainder_quantity": float(rem.remainder_quantity),
-                "original_issued": float(rem.original_issued),
-                "created_at": rem.created_at.isoformat() if rem.created_at else None,
-                "created_by_user_name": rem.created_by_user_name,
-                "completed_stages_json": stages_json,
-                "max_completed_seq": max_seq,
-                "max_completed_stage_name": max_completed_stage_name,
-                "spg_name": spg_name,
-                "spg_icon": spg_icon,
-                "spg_icon_color": spg_icon_color,
-                # Enrich each stage entry with section icon data from the route lookup
-                "stages_with_icons": [
-                    {
-                        **s,
-                        "op_icon": op_icon_lookup.get((s.get("section_id"), s.get("operation_code")), (None, None))[0],
-                        "op_icon_color": op_icon_lookup.get((s.get("section_id"), s.get("operation_code")), (None, None))[1],
-                    }
-                    for s in stages_json
-                ],
+                "id": b.id,
+                "remainder_quantity": float(b.quantity),
+                "original_issued": float(b.quantity),
+                "created_at": b.created_at.isoformat() if b.created_at else None,
+                "created_by_user_name": None,
+                "completed_stages_json": [],
+                "max_completed_seq": 0,
+                "max_completed_stage_name": "",
+                "spg_name": spg.name if spg else "",
+                "spg_icon": spg.icon if spg else None,
+                "spg_icon_color": spg.icon_color if spg else None,
+                "stages_with_icons": [],
             })
 
     default_allocation = []
@@ -1059,16 +1018,6 @@ async def cancel_position(
 
     if pos.status not in {PlanPositionStatus.approved, PlanPositionStatus.released}:
         raise HTTPException(status_code=400, detail=f"Нельзя отменить позицию со статусом '{pos.status.value}'")
-
-    # Release SPG remainder reservations for this position
-    from app.models.spg_remainder import SpgRemainder
-    reserved_remainders = (
-        await db.execute(
-            select(SpgRemainder).where(SpgRemainder.reserved_for_plan_position_id == position_id)
-        )
-    ).scalars().all()
-    for rem in reserved_remainders:
-        rem.reserved_for_plan_position_id = None
 
     from_status = pos.status.value
     pos.status = PlanPositionStatus.cancelled
@@ -1409,16 +1358,6 @@ async def _process_position_cancel(
             reason=f"Нельзя отменить позицию со статусом '{pos.status.value}'",
         )
 
-    # Release SPG remainder reservations for this position
-    from app.models.spg_remainder import SpgRemainder
-    reserved_remainders = (
-        await db.execute(
-            select(SpgRemainder).where(SpgRemainder.reserved_for_plan_position_id == position_id)
-        )
-    ).scalars().all()
-    for rem in reserved_remainders:
-        rem.reserved_for_plan_position_id = None
-
     from_status = pos.status.value
     pos.status = PlanPositionStatus.cancelled
 
@@ -1674,67 +1613,47 @@ async def get_product_wip_stats(
     if not product:
         raise HTTPException(status_code=404, detail="Product not found")
 
-    # 2. Поиск остатков на СПГ (ГХП)
-    rem_q = (
-        select(SpgRemainder, StorageProductionGroup)
-        .join(StorageProductionGroup, SpgRemainder.spg_id == StorageProductionGroup.id)
-        .where(SpgRemainder.product_id == product.id)
-        .where(SpgRemainder.consumed_at.is_(None))
-    )
-    rem_rows = (await db.execute(rem_q)).all()
+    # 2. Поиск остатков на складах через StockBalance
+    from app.stock.models import QualityState, StockBalance
+    balances = (await db.execute(
+        select(StockBalance, Section)
+        .join(Section, Section.id == StockBalance.location_id)
+        .where(
+            StockBalance.product_id == product.id,
+            StockBalance.quantity > 0,
+            StockBalance.quality_state == QualityState.GOOD,
+        )
+        .order_by(StockBalance.created_at)
+    )).all()
 
-    # Build operation icon lookup by (section_id, operation_code)
-    all_op_keys: set[tuple[int, str]] = set()
-    for rem, spg in rem_rows:
-        for s in (rem.completed_stages_json or []):
-            if s.get("section_id") and s.get("operation_code"):
-                all_op_keys.add((s["section_id"], s["operation_code"]))
-
-    op_icon_map: dict[tuple[int, str], tuple[str | None, str | None]] = {}
-    if all_op_keys:
-        section_ids = list({k[0] for k in all_op_keys})
-        op_codes = list({k[1] for k in all_op_keys})
-        op_rows = (await db.execute(
-            select(SectionOperation)
-            .where(SectionOperation.section_id.in_(section_ids))
-            .where(SectionOperation.operation_code.in_(op_codes))
-        )).scalars().all()
-        for op in op_rows:
-            op_icon_map[(op.section_id, op.operation_code)] = (op.icon, op.icon_color)
-
-    # Группируем остатки по ГХП и пройденным операциям в Python-коде
+    # Group by location/SPG
     rem_grouped: dict[tuple[int, str], dict] = {}
-    for rem, spg in rem_rows:
-        stages = rem.completed_stages_json or []
-        if not stages:
-            ops_str = "Без обработки"
-        else:
-            ops_str = ", ".join(s.get("operation_name") or s.get("operation_code") or "" for s in stages)
+    for bal, section in balances:
+        spg_section = await db.scalar(
+            select(SpgSection).where(SpgSection.section_id == bal.location_id).limit(1)
+        )
+        spg = await db.get(StorageProductionGroup, spg_section.spg_id) if spg_section else None
+        spg_id = spg.id if spg else 0
+        spg_code = spg.code if spg else ""
+        spg_name = spg.name if spg else section.name
+        spg_icon = spg.icon if spg else section.icon
+        spg_icon_color = spg.icon_color if spg else section.icon_color
 
-        key = (spg.id, ops_str)
+        ops_str = section.name or "Склад"
+        key = (spg_id, ops_str)
         if key not in rem_grouped:
-            sorted_stages = sorted(stages, key=lambda s: s.get("sequence", 0))
-            stages_with_icons = [
-                {
-                    **s,
-                    "op_icon": op_icon_map.get((s.get("section_id"), s.get("operation_code")), (None, None))[0],
-                    "op_icon_color": op_icon_map.get((s.get("section_id"), s.get("operation_code")), (None, None))[1],
-                }
-                for s in sorted_stages
-            ]
-            max_seq = max((s.get("sequence", 0) for s in stages), default=0)
             rem_grouped[key] = {
-                "spg_id": spg.id,
-                "spg_code": spg.code,
-                "spg_name": spg.name,
-                "spg_icon": spg.icon,
-                "spg_icon_color": spg.icon_color,
+                "spg_id": spg_id,
+                "spg_code": spg_code,
+                "spg_name": spg_name,
+                "spg_icon": spg_icon,
+                "spg_icon_color": spg_icon_color,
                 "completed_ops": ops_str,
-                "stages_with_icons": stages_with_icons,
-                "max_completed_seq": max_seq,
+                "stages_with_icons": [],
+                "max_completed_seq": 0,
                 "quantity": 0.0,
             }
-        rem_grouped[key]["quantity"] += float(rem.remainder_quantity or 0)
+        rem_grouped[key]["quantity"] += float(bal.quantity or 0)
 
     remainders = sorted(
         [

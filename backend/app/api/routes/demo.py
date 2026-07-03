@@ -18,7 +18,6 @@ from app.api.deps import get_current_user
 from app.core.database import get_db
 from app.models.internal_plan import SectionPlanLine
 from app.models.imports import ImportBatchMode
-from app.models.movement import Movement, MovementType
 from app.models.product import Product
 from app.models.production_plan import (
     PlanChangeAction,

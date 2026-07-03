@@ -157,7 +157,7 @@ async def test_manual_stock_transfer_consumes_remainder(client, session) -> None
     соответствующие SpgRemainder на складе должны уменьшаться/потребляться.
     Также transferable_quantity в ready-to-transfer списке должна уменьшаться."""
     from datetime import UTC, datetime
-    from app.models.spg_remainder import SpgRemainder
+    # SpgRemainder removed in Stage 7
     from app.models.transfer import Transfer, TransferStatus
 
     user = await _make_user(session, "manual-xfer@test.local")

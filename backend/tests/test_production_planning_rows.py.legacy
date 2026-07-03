@@ -1112,7 +1112,7 @@ async def test_rows_list_marks_completed_if_final_task_completed(client, session
 
 async def test_get_product_wip_stats(client, session):
     from app.models.spg import StorageProductionGroup
-    from app.models.spg_remainder import SpgRemainder
+    # SpgRemainder removed in Stage 7
 
     # 1. Создаем продукт с маршрутом
     sku = "TEST-WIP-SKU-1"
@@ -1132,7 +1132,7 @@ async def test_get_product_wip_stats(client, session):
     session.add(spg)
     await session.flush()
 
-    remainder = SpgRemainder(
+#     remainder = SpgRemainder(
         spg_id=spg.id,
         product_id=product.id,
         remainder_quantity=Decimal("15.5"),
@@ -1236,12 +1236,12 @@ async def _make_spg(session, code: str, name: str) -> "StorageProductionGroup":
 @pytest.mark.asyncio
 async def test_rows_list_contains_available_remainder_quantity(client, session) -> None:
     from app.models.spg import StorageProductionGroup
-    from app.models.spg_remainder import SpgRemainder
+    # SpgRemainder removed in Stage 7
 
     product, route = await _make_product_with_route(session, "FG-REMAINDER-1")
     spg = await _make_spg(session, "REMAINDER-1", "Remainder 1")
     # Совместимый остаток (без выполненных стадий — сырьё со склада)
-    remainder = SpgRemainder(
+#     remainder = SpgRemainder(
         spg_id=spg.id,
         product_id=product.id,
         remainder_quantity=Decimal("12.5"),
@@ -1272,7 +1272,7 @@ async def test_rows_list_contains_available_remainder_quantity(client, session) 
 @pytest.mark.asyncio
 async def test_rows_list_incompatible_remainder_returns_zero(client, session) -> None:
     from app.models.spg import StorageProductionGroup
-    from app.models.spg_remainder import SpgRemainder
+    # SpgRemainder removed in Stage 7
 
     # Позиция с product_A, но остаток — от product_B
     product_a, route = await _make_product_with_route(session, "FG-INCOMPAT-A")
@@ -1285,7 +1285,7 @@ async def test_rows_list_incompatible_remainder_returns_zero(client, session) ->
     session.add(product_b)
     await session.flush()
     spg = await _make_spg(session, "INCOMPAT-SPG", "Incompat SPG")
-    other_rem = SpgRemainder(
+#     other_rem = SpgRemainder(
         spg_id=spg.id,
         product_id=product_b.id,  # не та позиция
         remainder_quantity=Decimal("99"),
@@ -1338,11 +1338,11 @@ async def test_rows_list_position_without_route_returns_null(client, session) ->
 @pytest.mark.asyncio
 async def test_rows_detail_contains_available_remainder_quantity(client, session) -> None:
     from app.models.spg import StorageProductionGroup
-    from app.models.spg_remainder import SpgRemainder
+    # SpgRemainder removed in Stage 7
 
     product, route = await _make_product_with_route(session, "FG-DETAIL-REM")
     spg = await _make_spg(session, "DETAIL-REM-SPG", "Detail Remainder SPG")
-    detail_rem = SpgRemainder(
+#     detail_rem = SpgRemainder(
         spg_id=spg.id,
         product_id=product.id,
         remainder_quantity=Decimal("7.25"),
@@ -1371,11 +1371,11 @@ async def test_rows_detail_contains_available_remainder_quantity(client, session
 @pytest.mark.asyncio
 async def test_plan_positions_list_contains_available_remainder_quantity(client, session) -> None:
     from app.models.spg import StorageProductionGroup
-    from app.models.spg_remainder import SpgRemainder
+    # SpgRemainder removed in Stage 7
 
     product, route = await _make_product_with_route(session, "FG-PLAN-REM")
     spg = await _make_spg(session, "PLAN-REM-SPG", "Plan Remainder SPG")
-    plan_rem = SpgRemainder(
+#     plan_rem = SpgRemainder(
         spg_id=spg.id,
         product_id=product.id,
         remainder_quantity=Decimal("33"),

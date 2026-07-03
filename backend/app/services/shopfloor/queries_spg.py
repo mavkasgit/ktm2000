@@ -8,12 +8,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.product import Product
 from app.models.spg import SpgSection, StorageProductionGroup
 from app.models.section import Section
-from app.models.spg_remainder import SpgRemainder
 from app.models.work_task import WorkTask, WorkTaskStatus
 from app.models.internal_plan import SectionPlanLine
 from app.models.production_plan import PlanPosition, PlanPositionStatus
 from app.models.route import RouteStage
-from app.stock.models import Reason, StockTransaction
+from app.stock.models import QualityState, Reason, StockBalance, StockTransaction
 
 
 async def get_spg_snapshot(
@@ -124,62 +123,24 @@ async def get_spg_snapshot(
             for (pid, sid), vals in agg.items()
         ]
 
-    # Aggregate spg_remainders per product_id for this SPG
+    # Aggregate StockBalance per product_id for this SPG's sections
     rem_agg_q = (
         select(
-            SpgRemainder.product_id,
-            func.sum(SpgRemainder.remainder_quantity).label("remainder_total"),
+            StockBalance.product_id,
+            func.sum(StockBalance.quantity).label("remainder_total"),
         )
         .where(
-            SpgRemainder.spg_id == spg_id,
-            SpgRemainder.consumed_at.is_(None),
+            StockBalance.location_id.in_(section_ids),
+            StockBalance.quantity > 0,
+            StockBalance.quality_state == QualityState.GOOD,
         )
-        .group_by(SpgRemainder.product_id)
+        .group_by(StockBalance.product_id)
     )
     rem_rows = (await db.execute(rem_agg_q)).all()
 
-    # Aggregate negative remainders across all sections in this SPG
-    neg_agg_q = (
-        select(
-            func.coalesce(
-                func.sum(func.least(SpgRemainder.remainder_quantity, 0)),
-                0,
-            ).label("neg_total"),
-            func.coalesce(
-                func.sum(
-                    func.cast(SpgRemainder.remainder_quantity < 0, Integer)
-                ),
-                0,
-            ).label("neg_count"),
-        )
-        .where(
-            SpgRemainder.spg_id == spg_id,
-            SpgRemainder.consumed_at.is_(None),
-        )
-    )
-    neg_row = (await db.execute(neg_agg_q)).one()
-    neg_total = float(neg_row.neg_total or 0)
-    neg_count = int(neg_row.neg_count or 0)
-
-    # Per-product negative remainder count
-    neg_count_per_product_q = (
-        select(
-            SpgRemainder.product_id,
-            func.coalesce(
-                func.sum(func.cast(SpgRemainder.remainder_quantity < 0, Integer)),
-                0,
-            ).label("neg_count"),
-        )
-        .where(
-            SpgRemainder.spg_id == spg_id,
-            SpgRemainder.consumed_at.is_(None),
-        )
-        .group_by(SpgRemainder.product_id)
-    )
-    neg_count_per_product_rows = (await db.execute(neg_count_per_product_q)).all()
-    neg_count_per_product = {
-        r.product_id: int(r.neg_count or 0) for r in neg_count_per_product_rows
-    }
+    neg_total = 0.0
+    neg_count = 0
+    neg_count_per_product: dict[int, int] = {}
 
     # Collect all product_ids
     product_ids = {r.product_id for r in task_rows} | {r.product_id for r in rem_rows}

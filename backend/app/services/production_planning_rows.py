@@ -7,12 +7,12 @@ from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.internal_plan import SectionPlanLine
-from app.models.movement import Movement, MovementType
 from app.models.production_plan import PlanPosition, PlanPositionStatus
 from app.models.route import RouteStage, SectionOperation
 from app.models.section import Section
 from app.models.transfer import Transfer
 from app.models.work_task import WorkTask, WorkTaskStatus
+from app.stock.models import Reason, StockTransaction
 from app.services.route_matcher import ResolvedRouteInfo, resolve_position_route, make_position_route_cache_key
 
 MANUAL_ROUTE_PASS_PREFIX = "manual_route_pass:"
@@ -540,38 +540,32 @@ async def get_production_planning_row_detail(db: AsyncSession, position_id: int)
             )
 
         flow_by_stage: dict[int, dict] = {}
-        movement_rows = (
+        task_ids_in_pos = [t.id for t in task_in_pos]
+        task_id_to_spl = {t.id: t.section_plan_line_id for t in task_in_pos}
+        tx_rows = (
             await db.execute(
                 select(
-                    SectionPlanLine.route_stage_id.label("route_stage_id"),
-                    Movement.id.label("movement_id"),
-                    Movement.task_id.label("task_id"),
-                    Movement.transfer_id.label("transfer_id"),
-                    Movement.movement_type.label("movement_type"),
-                    Movement.quantity.label("quantity"),
-                    Movement.source_ref.label("source_ref"),
-                    Movement.performed_at.label("performed_at"),
-                    Movement.accounted_at.label("accounted_at"),
-                    Movement.created_at.label("created_at"),
+                    StockTransaction,
                 )
-                .join(SectionPlanLine, SectionPlanLine.id == Movement.section_plan_line_id)
-                .where(SectionPlanLine.plan_position_id == pos.id)
-                .order_by(Movement.created_at, Movement.id)
+                .where(StockTransaction.task_id.in_(task_ids_in_pos))
+                .order_by(StockTransaction.created_at, StockTransaction.id)
             )
-        ).all()
+        ).scalars().all()
 
-        for row in movement_rows:
-            stage_id = row.route_stage_id
-            movement_type = row.movement_type
-            movement_type_value = movement_type.value if hasattr(movement_type, "value") else str(movement_type)
-            quantity = _to_float(row.quantity)
-            is_manual_route_pass = _is_manual_route_pass(row.source_ref)
-            event_sort_dt = row.performed_at or row.accounted_at or row.created_at
-            event_at_iso = _event_at_iso(
-                performed_at=row.performed_at,
-                accounted_at=row.accounted_at,
-                created_at=row.created_at,
-            )
+        for tx in tx_rows:
+            # Get stage_id from the task's section_plan_line_id
+            spl_id = task_id_to_spl.get(tx.task_id)
+            if spl_id is None:
+                continue
+            stage_id = spl_to_stage.get(spl_id)
+            if stage_id is None:
+                continue
+
+            reason_val = tx.reason.value if hasattr(tx.reason, "value") else str(tx.reason)
+            quantity = _to_float(tx.quantity)
+            event_sort_dt = tx.created_at
+            event_at_iso = tx.created_at.isoformat() if tx.created_at else None
+
             entry = flow_by_stage.setdefault(
                 stage_id,
                 {
@@ -593,7 +587,7 @@ async def get_production_planning_row_detail(db: AsyncSession, position_id: int)
                 },
             )
 
-            if movement_type_value == MovementType.issue_to_work.value:
+            if reason_val == Reason.ISSUE_TO_WORK.value:
                 entry["issued_qty"] += quantity
                 if entry["issued_last_dt"] is None or (event_sort_dt and event_sort_dt >= entry["issued_last_dt"]):
                     entry["issued_last_dt"] = event_sort_dt
@@ -601,17 +595,17 @@ async def get_production_planning_row_detail(db: AsyncSession, position_id: int)
                 entry["flow_events"].append(
                     {
                         "step": "issue",
-                        "label": "Ручной пропуск: выдано" if is_manual_route_pass else "Выдано в работу",
+                        "label": "Выдано в работу",
                         "quantity": round(quantity, 3),
                         "event_at": event_at_iso,
-                        "task_id": row.task_id,
-                        "transfer_id": row.transfer_id,
-                        "manual_route_pass": is_manual_route_pass,
+                        "task_id": tx.task_id,
+                        "transfer_id": tx.transfer_id,
+                        "manual_route_pass": False,
                         "_sort_dt": event_sort_dt,
-                        "_sort_id": row.movement_id,
+                        "_sort_id": tx.id,
                     }
                 )
-            elif movement_type_value == MovementType.complete.value:
+            elif reason_val == Reason.COMPLETE.value:
                 entry["accounted_good_qty"] += quantity
                 entry["accounted_total_qty"] += quantity
                 if entry["accounted_last_dt"] is None or (event_sort_dt and event_sort_dt >= entry["accounted_last_dt"]):
@@ -620,17 +614,17 @@ async def get_production_planning_row_detail(db: AsyncSession, position_id: int)
                 entry["flow_events"].append(
                     {
                         "step": "account",
-                        "label": "Ручной пропуск: выполнено" if is_manual_route_pass else "Учтено (годное)",
+                        "label": "Учтено (годное)",
                         "quantity": round(quantity, 3),
                         "event_at": event_at_iso,
-                        "task_id": row.task_id,
-                        "transfer_id": row.transfer_id,
-                        "manual_route_pass": is_manual_route_pass,
+                        "task_id": tx.task_id,
+                        "transfer_id": tx.transfer_id,
+                        "manual_route_pass": False,
                         "_sort_dt": event_sort_dt,
-                        "_sort_id": row.movement_id,
+                        "_sort_id": tx.id,
                     }
                 )
-            elif movement_type_value == MovementType.reject.value:
+            elif reason_val == Reason.SCRAP.value:
                 entry["accounted_reject_qty"] += quantity
                 entry["accounted_total_qty"] += quantity
                 if entry["accounted_last_dt"] is None or (event_sort_dt and event_sort_dt >= entry["accounted_last_dt"]):
@@ -639,17 +633,17 @@ async def get_production_planning_row_detail(db: AsyncSession, position_id: int)
                 entry["flow_events"].append(
                     {
                         "step": "account",
-                        "label": "Ручной пропуск: брак" if is_manual_route_pass else "Учтено (брак)",
+                        "label": "Учтено (брак)",
                         "quantity": round(quantity, 3),
                         "event_at": event_at_iso,
-                        "task_id": row.task_id,
-                        "transfer_id": row.transfer_id,
-                        "manual_route_pass": is_manual_route_pass,
+                        "task_id": tx.task_id,
+                        "transfer_id": tx.transfer_id,
+                        "manual_route_pass": False,
                         "_sort_dt": event_sort_dt,
-                        "_sort_id": row.movement_id,
+                        "_sort_id": tx.id,
                     }
                 )
-            elif movement_type_value == MovementType.transfer_send.value:
+            elif reason_val == Reason.TRANSFER_SEND.value:
                 entry["sent_qty"] += quantity
                 if entry["sent_last_dt"] is None or (event_sort_dt and event_sort_dt >= entry["sent_last_dt"]):
                     entry["sent_last_dt"] = event_sort_dt
@@ -657,14 +651,14 @@ async def get_production_planning_row_detail(db: AsyncSession, position_id: int)
                 entry["flow_events"].append(
                     {
                         "step": "send",
-                        "label": "Ручной пропуск: передано" if is_manual_route_pass else "Передано",
+                        "label": "Передано",
                         "quantity": round(quantity, 3),
                         "event_at": event_at_iso,
-                        "task_id": row.task_id,
-                        "transfer_id": row.transfer_id,
-                        "manual_route_pass": is_manual_route_pass,
+                        "task_id": tx.task_id,
+                        "transfer_id": tx.transfer_id,
+                        "manual_route_pass": False,
                         "_sort_dt": event_sort_dt,
-                        "_sort_id": row.movement_id,
+                        "_sort_id": tx.id,
                     }
                 )
 

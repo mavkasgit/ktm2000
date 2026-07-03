@@ -8,7 +8,6 @@ from sqlalchemy import select
 from app.models.product import Product, ProductType
 from app.models.section import Section
 from app.models.spg import SpgSection, SpgStorageKind, StorageProductionGroup
-from app.models.spg_remainder import SpgRemainder
 from app.seeds.spgs import SPGS_DATA
 from app.seeds.seeders.spgs_seeder import seed_spgs
 from app.models.user import User, UserRole

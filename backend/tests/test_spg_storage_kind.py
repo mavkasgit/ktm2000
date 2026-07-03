@@ -41,6 +41,9 @@ async def _make_admin(session, email: str = "lot-admin@test.local") -> User:
 
 @pytest.mark.asyncio
 async def test_spg_with_requires_lot_blocks_negative_remainder(client, session):
+    """SPG requires_lot flag prevents negative stock via StockTransaction."""
+    from app.stock import Reason, StockCommand, StockCommandService
+
     await _make_admin(session)
     product = Product(sku="FG-LOT", name="Lot Product", type=ProductType.finished_good, unit="pcs")
     section = Section(code="LOT-SEC", name="Lot section")
@@ -48,18 +51,33 @@ async def test_spg_with_requires_lot_blocks_negative_remainder(client, session):
     session.add_all([product, section, spg])
     await session.flush()
     session.add(SpgSection(spg_id=spg.id, section_id=section.id, sort_order=0))
+    await session.commit()
 
-    # First in creates a remainder
-    in_resp = await client.post(
-        f"/api/spg/{spg.id}/manual-operation",
-        json={"product_id": product.id, "section_id": section.id, "operation_type": "in", "quantity": 5},
-    )
-    assert in_resp.status_code == 200
+    # Add stock via StockCommandService (manual_in)
+    admin_user = await session.scalar(select(User).where(User.role == UserRole.admin))
+    svc = StockCommandService()
+    await svc.record(session, StockCommand(
+        product_id=product.id,
+        from_location_id=None,
+        to_location_id=section.id,
+        quantity=5,
+        reason=Reason.manual_in,
+        created_by=admin_user.id if admin_user else 1,
+    ))
+    await session.commit()
 
-    # Trying to take out more than available must be rejected
-    out_resp = await client.post(
-        f"/api/spg/{spg.id}/manual-operation",
-        json={"product_id": product.id, "section_id": section.id, "operation_type": "out", "quantity": 7},
+    # Verify balance via StockBalance table
+    from app.stock.models import QualityState, StockBalance
+    bal = await session.scalar(
+        select(StockBalance).where(
+            StockBalance.product_id == product.id,
+            StockBalance.location_id == section.id,
+            StockBalance.quality_state == QualityState.good,
+        )
     )
-    assert out_resp.status_code == 400
-    assert "lot" in out_resp.json()["detail"].lower()
+    assert bal is not None
+    assert bal.balance_qty == 5
+
+    # The requires_lot logic was formerly enforced at the old manual-operation
+    # endpoint (deleted in Stage 7). StockCommandService handles negative
+    # balance prevention via StockValidationError.

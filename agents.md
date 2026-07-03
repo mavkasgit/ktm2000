@@ -65,48 +65,36 @@ npm run dev
 5. **Сохранение документации:** Сохраняйте существующие docstring-комментарии в коде, если они не мешают изменениям.
 6. **Кликабельные ссылки:** При ответе пользователю всегда давайте кликабельные markdown-ссылки на изменяемые или важные файлы, используя протокол `file://` (например, `[main.py](file:///c:/Users/user/VibeCoding/ktm2000/backend/app/main.py)`).
 
-### Целостность данных Transfer ↔ Movement
+### Целостность данных Transfer ↔ StockTransaction
 
-В системе два слоя хранят один и тот же факт перемещения:
-- `transfers` — бизнес-сущность с жизненным циклом (`status`, `cancel`, `correct`)
-- `movements` — append-only ledger; `transfer_send` + `transfer_receive` пишутся атомарно в [`transfer_send`](file:///c:/Users/user/VibeCoding/ktm2000/backend/app/transfers/services.py)
-- `WorkTask.cached_*` пересчитывается из `SUM(Movement)` в [`_refresh_task_cache`](file:///c:/Users/user/VibeCoding/ktm2000/backend/app/services/shopfloor/cache.py)
+Transfer создаёт 2 StockTransaction (`TRANSFER_SEND` + `TRANSFER_RECEIVE`) через `StockCommandService.record()`. Компенсации (cancel/correct) пишут компенсационные транзакции с `compensates_tx_id`.
 
-Чтобы ловить рассинхрон этих проекций, в [`tests/test_integrity_invariants.py`](file:///c:/Users/user/VibeCoding/ktm2000/backend/tests/test_integrity_invariants.py) есть хелпер:
+Для проверки целостности в [`tests/test_integrity_invariants.py`](file:///c:/Users/user/VibeCoding/ktm2000/backend/tests/test_integrity_invariants.py) есть хелпер:
 
 ```python
 from tests.test_integrity_invariants import assert_no_invariants_violations
 await assert_no_invariants_violations(session, context="after-cancel")
 ```
 
-Он выполняет 7 SQL-проверок (movement↔transfer, transfer↔movement, cancel-чистота, cached↔SUM, transfer↔sum, line↔task). Вызывайте его в своих e2e-тестах в ключевых точках (после take-to-work, issue, complete, transfer, cancel) — это поймает регрессию, если кто-то забудет обновить один из слоёв при рефакторинге.
+Он выполняет 6 SQL-проверок (S1-S6) над StockTransaction/StockBalance: баланс = SUM(транзакций), нет orphan-транзакций, transfer.sent_qty = SUM(TRANSFER_SEND).
 
 ---
 
-## Рефакторинг Stock Ledger (в ветке `refactor/stock-ledger`)
+## Рефакторинг Stock Ledger (ЗАВЕРШЁН)
 
-> **Старт новой сессии**: сначала выполни «Старт-протокол для новой сессии»
-> в [`PLAN_stock_ledger.md`](file:///c:/Users/user/VibeCoding/ktm2000/PLAN_stock_ledger.md)
-> (раздел в самом начале файла) — там пошаговая инструкция: контекст →
-> исследование через субагентов → выполнение текущей фазы. Не пропускай.
+Рефакторинг в ветке `refactor/stock-ledger` полностью выполнен (Этапы 0-7).
+Все legacy модели (SpgRemainder, Movement) и таблицы удалены.
+Единый источник правды — `StockTransaction`.
 
-Подробный план: [`PLAN_stock_ledger.md`](file:///c:/Users/user/VibeCoding/ktm2000/PLAN_stock_ledger.md). Ниже — короткий глоссарий и принципы, обязательные для любого кода в этой ветке.
+Подробный план: [`PLAN_stock_ledger.md`](file:///c:/Users/user/VibeCoding/ktm2000/PLAN_stock_ledger.md) (исторический документ).
 
-### Архитектурные принципы
-
-1. **Ядро хранит факты, UI управляет политиками.** `StockTransaction`, `WorkTask`, `StockBalance` фиксируют произошедшее. Автопотребление, перевыполнение, переделка, автозакрытие — отдельные явные команды, инициируемые пользователем/настройкой, наблюдаемые в UI (чекбокс + журнал). Не прятать спорную механику внутрь домена.
-2. **Баланс = projection из StockTransaction.** Никаких мутабельных остатков (SpgRemainder удаляется на Этапе 7).
-3. **Append-only ledger.** Отмена = компенсационная транзакция, не `delete`.
-4. **Transfer остаётся бизнес-обёрткой** над парой StockTransaction (TRANSFER_SEND + TRANSFER_RECEIVE).
-5. **API v2**: `/api/v2/stock/*` рядом со старым `/api/spg/*`. Никаких `if legacy`, флагов, костылей.
-
-### Целевой домен (после Этапа 7)
+### Текущий домен
 
 | Сущность | Таблица | Назначение |
 |---|---|---|
 | `Location` | `sections` (расшир.) | Где находится материал; `type: LocationType` enum (RAW_STOCK/WIP_STOCK/FINISHED_STOCK/LASER/WELDING/PAINTING/ASSEMBLY/SCRAP/QUARANTINE/TRANSIT) |
-| `StockTransaction` | `stock_transactions` (new) | Единый append-only ledger: `from_location_id`, `to_location_id`, `quantity`, `reason`, `from_quality_state`, `to_quality_state` (для переходов GOOD→SCRAP/REWORK), `task_id`, `transfer_id` |
-| `StockBalance` | `stock_balances` (new) | Материализованный кэш баланса по `(product, location, quality_state)` |
+| `StockTransaction` | `stock_transactions` | Единый append-only ledger: `from_location_id`, `to_location_id`, `quantity`, `reason`, `from_quality_state`, `to_quality_state`, `task_id`, `transfer_id` |
+| `StockBalance` | `stock_balances` | Материализованный кэш баланса по `(product, location, quality_state)` |
 | `WorkTask` | `work_tasks` | Мутабельный агрегат: `planned_qty`, `completed_qty`, `scrap_qty` хранятся (не projection). `cached_*` удалены |
 | `Transfer` | `transfers` | Бизнес-lifecycle, создаёт 2 StockTransaction, cancel/correct = компенсации |
 | `Defect` | `defects` | Бизнес-запись-обоснование, `stock_transaction_id` FK. Не источник правды |
@@ -115,16 +103,10 @@ await assert_no_invariants_violations(session, context="after-cancel")
 - `Reason`: `ISSUE_TO_WORK | COMPLETE | TRANSFER_SEND | TRANSFER_RECEIVE | RETURN_TO_STOCK | RETURN_TO_PREVIOUS | FINAL_RELEASE | SCRAP | REWORK | ADJUSTMENT_IN | ADJUSTMENT_OUT | MANUAL_IN | MANUAL_OUT`
 - `QualityState`: `GOOD | SCRAP | REWORK | QUARANTINE`
 
-### Запреты в ветке `refactor/stock-ledger`
+### Архитектурные принципы
 
-- НЕ добавлять новые вызовы `compensate_spg_remainders`, `trigger_auto_consume_for_spg_tasks`, `auto_consume_available_remainders`, `consume_remainder`, `restore_remainder` — эти функции помечены в deprecated и будут удалены на Этапе 7.
-- НЕ добавлять новые мутабельные остатки (по аналогии с `SpgRemainder`).
-- НЕ прятать автопотребление/перевыполнение/переделку внутрь сервисов — только как явный параметр команды (`issue_to_work(auto_consume=True/False)`) с UI-чейндж-логом.
-- НЕ ломать `/api/spg/*` и `/api/v1/*` до Этапа 7 — миграция идёт через `/api/v2/stock/*`.
-
-### Состояние миграции
-
-Смотрите раздел «9. Прогресс» в [`PLAN_stock_ledger.md`](file:///c:/Users/user/VibeCoding/ktm2000/PLAN_stock_ledger.md). На каждой фазе:
-- двойная запись (Movement + StockTransaction) — пока оба источника живы;
-- расширенные инвариант-тесты ловят рассинхрон: `stock_balance = SUM(stock_transactions)`, `worktask.completed_qty = SUM(stock_transactions WHERE reason=COMPLETE AND task_id=X)`;
-- baseline-гейт: ~4000 существующих тестов не должны падать на этапах 0-3.
+1. **Ядро хранит факты, UI управляет политиками.** `StockTransaction`, `WorkTask`, `StockBalance` фиксируют произошедшее. Автопотребление, перевыполнение, переделка, автозакрытие — отдельные явные команды.
+2. **Баланс = projection из StockTransaction.** Никаких мутабельных остатков.
+3. **Append-only ledger.** Отмена = компенсационная транзакция, не `delete`.
+4. **Transfer остаётся бизнес-обёрткой** над парой StockTransaction (TRANSFER_SEND + TRANSFER_RECEIVE).
+5. **API v2**: `/api/v2/stock/*` рядом со старым `/api/spg/*`.

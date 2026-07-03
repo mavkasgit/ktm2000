@@ -3,7 +3,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.defect import Defect
 from app.models.internal_plan import SectionPlanLine
-from app.models.movement import Movement
 from app.models.rework_task import ReworkTask
 from app.models.route import ProductionRoute, RouteRuleProfile, RouteStage, RouteOperation, SectionOperation
 from app.models.section import Section
@@ -100,14 +99,7 @@ async def seed_routes(
                     )
 
                 if task_ids and force:
-                    # Delete in FK dependency order before deleting work_tasks.
-                    # movements references both work_tasks AND transfers, so delete it first.
-                    await db.execute(
-                        Movement.__table__.delete().where(
-                            Movement.task_id.in_(task_ids)
-                        )
-                    )
-                    # Delete transfer-related data
+                    # Movements table deleted in Stage 7. Delete transfer-related data.
                     await db.execute(
                         Transfer.__table__.delete().where(
                             Transfer.from_task_id.in_(task_ids) | Transfer.to_task_id.in_(task_ids)

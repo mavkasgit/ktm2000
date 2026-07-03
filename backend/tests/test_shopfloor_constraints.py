@@ -5,15 +5,6 @@ from sqlalchemy import text
 
 
 @pytest.mark.asyncio
-async def test_movement_quantity_positive_constraint_exists(client, session) -> None:
-    """DB-level constraint: ck_movements_quantity_positive."""
-    result = (await session.execute(text(
-        "SELECT conname FROM pg_constraint WHERE conname = 'ck_movements_quantity_positive'"
-    ))).scalar()
-    assert result == "ck_movements_quantity_positive"
-
-
-@pytest.mark.asyncio
 async def test_defect_items_qty_positive_constraint_exists(client, session) -> None:
     """DB-level constraint: ck_defect_items_qty_positive."""
     result = (await session.execute(text(

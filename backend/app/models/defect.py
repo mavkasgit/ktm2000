@@ -52,8 +52,6 @@ class Defect(Base):
     section_id: Mapped[int] = mapped_column(ForeignKey("sections.id"), nullable=False)
     task_id: Mapped[int | None] = mapped_column(ForeignKey("work_tasks.id"), nullable=True)
     route_stage_id: Mapped[int | None] = mapped_column(ForeignKey("route_stages.id", ondelete="SET NULL"), nullable=True)
-    spg_remainder_id: Mapped[int | None] = mapped_column(ForeignKey("spg_remainders.id", ondelete="SET NULL"), nullable=True)
-    movement_id: Mapped[int | None] = mapped_column(ForeignKey("movements.id"), nullable=True)
     stock_transaction_id: Mapped[int | None] = mapped_column(
         sa.BigInteger, sa.ForeignKey("stock_transactions.id"), nullable=True
     )

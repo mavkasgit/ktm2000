@@ -11,13 +11,12 @@ from sqlalchemy.orm import aliased
 
 from app.models.internal_plan import SectionPlanLine
 from app.models.production_plan import PlanPosition
-from app.models.movement import Movement, MovementType
 from app.models.product import Product
 from app.models.route import RouteStage, SectionOperation
 from app.models.section import Section
 from app.models.transfer import Transfer, TransferStatus
-from app.models.spg_remainder import SpgRemainder
 from app.models.work_task import WorkTask, WorkTaskStatus
+from app.stock.models import QualityState, Reason, StockBalance, StockTransaction
 
 from .cache import _compute_available_from_balances
 from .common import _to_decimal
@@ -515,37 +514,33 @@ async def get_section_daily_stats(
     date_from: datetime,
     date_to: datetime,
 ) -> dict:
-    """Return daily statistics for a section, aggregated by performed_at date."""
+    """Return daily statistics for a section, aggregated by created_at date."""
     from sqlalchemy import cast, Date as SQLADate
 
-    # Aggregate by date and movement type
+    # Aggregate by date and reason type from StockTransaction
     rows = (
         await db.execute(
             select(
-                cast(Movement.performed_at, SQLADate).label("stat_date"),
-                Movement.movement_type,
-                func.count(Movement.id).label("op_count"),
-                func.coalesce(func.sum(Movement.quantity), 0).label("total_qty"),
-                func.avg(
-                    func.extract("epoch", Movement.accounted_at) - func.extract("epoch", Movement.performed_at)
-                ).label("avg_delay_seconds"),
+                cast(StockTransaction.created_at, SQLADate).label("stat_date"),
+                StockTransaction.reason,
+                func.count(StockTransaction.id).label("op_count"),
+                func.coalesce(func.sum(StockTransaction.quantity), 0).label("total_qty"),
             )
             .where(
-                Movement.to_section_id == section_id,
-                Movement.performed_at.isnot(None),
-                Movement.performed_at >= date_from,
-                Movement.performed_at <= date_to,
+                StockTransaction.to_location_id == section_id,
+                StockTransaction.created_at >= date_from,
+                StockTransaction.created_at <= date_to,
             )
             .group_by(
-                cast(Movement.performed_at, SQLADate),
-                Movement.movement_type,
+                cast(StockTransaction.created_at, SQLADate),
+                StockTransaction.reason,
             )
-            .order_by(cast(Movement.performed_at, SQLADate))
+            .order_by(cast(StockTransaction.created_at, SQLADate))
         )
     ).all()
 
     daily_map: dict[str, dict] = {}
-    for stat_date, mv_type, op_count, total_qty, avg_delay in rows:
+    for stat_date, reason, op_count, total_qty in rows:
         day_key = str(stat_date)
         if day_key not in daily_map:
             daily_map[day_key] = {
@@ -556,16 +551,13 @@ async def get_section_daily_stats(
                 "avg_accounting_delay_seconds": "0",
             }
 
-        type_key = mv_type.value if hasattr(mv_type, "value") else str(mv_type)
+        reason_val = reason.value if hasattr(reason, "value") else str(reason)
         daily_map[day_key]["op_count"] += op_count
 
-        if type_key == MovementType.complete.value:
+        if reason_val == Reason.COMPLETE.value:
             daily_map[day_key]["good_quantity"] = str(_to_decimal(total_qty))
-        elif type_key in (MovementType.reject.value, MovementType.scrap.value):
+        elif reason_val in (Reason.SCRAP.value,):
             daily_map[day_key]["rejected_quantity"] = str(_to_decimal(total_qty))
-
-        if avg_delay is not None:
-            daily_map[day_key]["avg_accounting_delay_seconds"] = str(round(float(avg_delay), 1))
 
     return {"section_id": section_id, "daily_stats": list(daily_map.values())}
 
@@ -606,80 +598,43 @@ async def get_warehouse_remainders(
     section_id: int | None = None,
     plan_position_id: int | None = None,
 ) -> dict:
-    """Return active warehouse remainders (not fully consumed) from SPG.
+    """Return available stock balances for a section (legacy API stub).
 
-    If ``plan_position_id`` is given, filters to show only:
-    - remainders not reserved for any position (available for everyone), OR
-    - remainders reserved specifically for this plan position.
-    Remainders reserved for *other* positions are excluded.
+    Now backed by StockBalance instead of SpgRemainder.
     """
-    from app.models.spg import StorageProductionGroup, SpgSection
+    from app.stock.models import QualityState, StockBalance
 
     query = select(
-        SpgRemainder,
+        StockBalance,
         Product.sku,
         Product.name,
-        StorageProductionGroup.id.label("spg_id"),
-        StorageProductionGroup.code.label("spg_code"),
-        StorageProductionGroup.name.label("spg_name"),
-        RouteStage,
     ).join(
-        Product, SpgRemainder.product_id == Product.id,
-    ).join(
-        StorageProductionGroup, SpgRemainder.spg_id == StorageProductionGroup.id,
-    ).join(
-        RouteStage, SpgRemainder.route_stage_id == RouteStage.id,
+        Product, StockBalance.product_id == Product.id,
     ).where(
-        SpgRemainder.consumed_at.is_(None),
-        SpgRemainder.remainder_quantity > 0,
+        StockBalance.quantity > 0,
+        StockBalance.quality_state == QualityState.GOOD,
     )
 
     if section_id is not None:
-        spg_id = await db.scalar(
-            select(SpgSection.spg_id).where(SpgSection.section_id == section_id)
-        )
-        if spg_id is not None:
-            query = query.where(SpgRemainder.spg_id == spg_id)
-        else:
-            return {"remainders": []}
+        query = query.where(StockBalance.location_id == section_id)
 
-    if plan_position_id is not None:
-        # Show only: unreserved OR reserved for this exact position
-        from sqlalchemy import or_
-        query = query.where(
-            or_(
-                SpgRemainder.reserved_for_plan_position_id.is_(None),
-                SpgRemainder.reserved_for_plan_position_id == plan_position_id,
-            )
-        )
-
-    query = query.order_by(SpgRemainder.created_at.desc())
+    query = query.order_by(StockBalance.created_at.desc())
 
     rows = (await db.execute(query)).all()
 
     remainders = []
-    for remainder, product_sku, product_name, spg_id, spg_code, spg_name, stage in rows:
-        op_code = stage.operations[0].operation_code if stage.operations else None
-        op_name = ", ".join(op.operation_name for op in stage.operations) if stage.operations else ""
+    for bal, prod_sku, prod_name in rows:
+        section = await db.get(Section, bal.location_id)
         remainders.append({
-            "id": remainder.id,
-            "product_id": remainder.product_id,
-            "product_sku": product_sku,
-            "product_name": product_name,
-            "spg_id": spg_id,
-            "spg_code": spg_code,
-            "spg_name": spg_name,
-            "route_step_id": remainder.route_stage_id,
-            "route_step_sequence": stage.sequence,
-            "operation_code": op_code,
-            "operation_name": op_name,
-            "section_plan_line_id": remainder.section_plan_line_id,
-            "origin_task_id": remainder.origin_task_id,
-            "remainder_quantity": str(remainder.remainder_quantity),
-            "original_issued": str(remainder.original_issued),
-            "completed_stages": remainder.completed_stages_json,
-            "created_at": remainder.created_at.isoformat() if remainder.created_at else None,
-            "reserved_for_plan_position_id": remainder.reserved_for_plan_position_id,
+            "id": bal.id,
+            "product_id": bal.product_id,
+            "product_sku": prod_sku,
+            "product_name": prod_name,
+            "remainder_quantity": str(bal.quantity),
+            "section_id": bal.location_id,
+            "section_code": section.code if section else "",
+            "section_name": section.name if section else "",
+            "created_at": bal.created_at.isoformat() if bal.created_at else None,
         })
 
     return {"remainders": remainders}

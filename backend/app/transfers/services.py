@@ -79,33 +79,9 @@ async def _get_task_transferable(db: AsyncSession, task: WorkTask) -> Decimal:
         cache = await pm.get_task_cache(db, task.id)
         return cache["available_quantity"]
 
-    from sqlalchemy import func
-    from app.models.movement import Movement, MovementType
-    remainders_qty = Decimal("0")
-    has_auto_complete = await db.scalar(
-        select(func.count(Movement.id)).where(
-            Movement.task_id == task.id,
-            Movement.movement_type == MovementType.complete,
-            Movement.source_ref == "auto_release_remainder"
-        )
-    ) > 0
-    if not has_auto_complete:
-        from app.models.spg_remainder import SpgRemainder
-        from app.models.internal_plan import SectionPlanLine
-        line = await db.get(SectionPlanLine, task.section_plan_line_id)
-        if line:
-            remainders = (await db.execute(
-                select(SpgRemainder).where(SpgRemainder.reserved_for_plan_position_id == line.plan_position_id)
-            )).scalars().all()
-            for rem in remainders:
-                stages_json = rem.completed_stages_json or []
-                max_seq = max((s.get("sequence", 0) for s in stages_json), default=0)
-                if max_seq == line.sequence:
-                    remainders_qty += rem.remainder_quantity
-
     pm = StockProjectionManager()
     cache = await pm.get_task_cache(db, task.id)
-    return cache["completed_quantity"] + remainders_qty - cache["transferred_quantity"]
+    return cache["completed_quantity"] + cache["received_quantity"] - cache["transferred_quantity"]
 
 
 async def _record_transfer_send_stock_tx(
@@ -464,51 +440,8 @@ async def transfer_send(
         ),
     )
 
-    # If the source section is a stock section, consume the matching
-    # SpgRemainder FIFO. This used to live in the legacy
-    # ``transfer_receive`` step; under the auto-accept model it is
-    # part of ``transfer_send`` so the source stock balance is updated
-    # atomically with the destination receipt.
-    from app.models.section import Section
-    from_section = await db.get(Section, transfer.from_section_id)
-    if from_section and from_section.kind in {"raw_stock", "wip_stock", "finished_stock"}:
-        from app.models.spg import SpgSection
-        from_spg_id = await db.scalar(
-            select(SpgSection.spg_id).where(SpgSection.section_id == transfer.from_section_id)
-        )
-        if from_spg_id is not None:
-            from sqlalchemy import case
-            from app.models.spg_remainder import SpgRemainder
-            remainders = (await db.execute(
-                select(SpgRemainder)
-                .where(
-                    SpgRemainder.spg_id == from_spg_id,
-                    SpgRemainder.product_id == transfer.product_id,
-                    SpgRemainder.remainder_quantity > 0,
-                    SpgRemainder.consumed_at.is_(None),
-                    (SpgRemainder.reserved_for_plan_position_id == from_line.plan_position_id)
-                    | SpgRemainder.reserved_for_plan_position_id.is_(None),
-                )
-                .order_by(
-                    case(
-                        (SpgRemainder.reserved_for_plan_position_id == from_line.plan_position_id, 0),
-                        else_=1,
-                    ),
-                    SpgRemainder.created_at.asc(),
-                    SpgRemainder.id.asc(),
-                )
-            )).scalars().all()
-
-            qty_to_consume = quantity
-            for rem in remainders:
-                if qty_to_consume <= 0:
-                    break
-                consume_qty = min(qty_to_consume, rem.remainder_quantity)
-                rem.remainder_quantity -= consume_qty
-                if rem.remainder_quantity == 0:
-                    rem.consumed_at = datetime.now(UTC)
-                    rem.consumed_by_task_id = to_task.id
-                qty_to_consume -= consume_qty
+    # Stock section FIFO consumption was removed — SpgRemainder table no longer exists.
+    # Stock balance is updated atomically via StockCommandService.record() above.
 
     # Auto-issue on receive: no more cached_* columns (Этап 4).
     # StockTransaction ledger is the source of truth for issued quantity.
@@ -793,37 +726,7 @@ async def cancel_transfer(
     if comment:
         transfer.comment = comment
 
-    # Restore SpgRemainder in the source GHP if from_section is a stock section
-    from app.models.section import Section
-    from_section = await db.get(Section, transfer.from_section_id)
-    if from_section and from_section.kind in {"raw_stock", "wip_stock", "finished_stock"}:
-        from app.models.spg import SpgSection
-        from_spg_id = await db.scalar(
-            select(SpgSection.spg_id).where(SpgSection.section_id == transfer.from_section_id)
-        )
-        if from_spg_id is not None:
-            from app.models.spg_remainder import SpgRemainder
-            consumed_rems = (await db.execute(
-                select(SpgRemainder)
-                .where(
-                    SpgRemainder.spg_id == from_spg_id,
-                    SpgRemainder.product_id == transfer.product_id,
-                    SpgRemainder.consumed_by_task_id == to_task.id,
-                )
-                .order_by(SpgRemainder.consumed_at.desc(), SpgRemainder.id.desc())
-            )).scalars().all()
-            
-            qty_to_restore = transfer.sent_quantity  # restore full sent amount
-            for rem in consumed_rems:
-                if qty_to_restore <= 0:
-                    break
-                restorable = rem.original_issued - rem.remainder_quantity
-                restore_qty = min(qty_to_restore, restorable)
-                rem.remainder_quantity += restore_qty
-                rem.consumed_at = None
-                rem.consumed_by_task_id = None
-                qty_to_restore -= restore_qty
-    # Movement-строки не удаляются — их больше нет (Этап 2).
+    # SpgRemainder restoration removed — table no longer exists.
     await db.flush()
 
     # ─── StockTransaction compensation (append-only) ─────────────────────

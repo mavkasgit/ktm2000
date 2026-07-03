@@ -19,7 +19,6 @@ async def create_defect(
     product_id: int | None = None,
     section_id: int | None = None,
     route_stage_id: int | None = None,
-    spg_remainder_id: int | None = None,
     quantity: Decimal,
     actor_id: int,
     reason: str | None = None,
@@ -39,18 +38,9 @@ async def create_defect(
         prod_id = task.product_id
         sect_id = task.section_id
     else:
-        if spg_remainder_id is not None:
-            from app.models.spg_remainder import SpgRemainder
-            remainder = await db.get(SpgRemainder, spg_remainder_id)
-            if not remainder:
-                raise ValueError(f"SpgRemainder {spg_remainder_id} not found")
-            prod_id = remainder.product_id
-            if route_stage_id is None:
-                route_stage_id = remainder.route_stage_id
-        else:
-            if product_id is None:
-                raise ValueError("product_id is required for manual defect registration")
-            prod_id = product_id
+        if product_id is None:
+            raise ValueError("product_id is required for manual defect registration")
+        prod_id = product_id
 
         if route_stage_id is not None:
             from app.models.route import RouteStage
@@ -68,7 +58,6 @@ async def create_defect(
         section_id=sect_id,
         task_id=task_id,
         route_stage_id=route_stage_id,
-        spg_remainder_id=spg_remainder_id,
         status=DefectStatus.decision_required,
         comment=comment,
         created_by=actor_id,

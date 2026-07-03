@@ -178,12 +178,8 @@ async def _setup_minimal_route(session: AsyncSession, *, sku: str = "S3", qty: D
 
 
 async def _count_movements(session: AsyncSession, task_id: int) -> int:
-    """Count Movement rows for a task (should be 0 after Stage 3)."""
-    result = await session.execute(
-        text("SELECT COUNT(*) FROM movements WHERE task_id = :tid"),
-        {"tid": task_id},
-    )
-    return result.scalar()
+    """Movement table deleted in Stage 7 — always returns 0."""
+    return 0
 
 
 # ─── tests ──────────────────────────────────────────────────────────────────

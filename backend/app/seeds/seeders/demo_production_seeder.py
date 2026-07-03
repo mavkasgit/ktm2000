@@ -7,7 +7,6 @@ from sqlalchemy.orm import selectinload
 
 from app.models.product import Product, ProductType
 from app.models.spg import SpgSection, StorageProductionGroup
-from app.models.spg_remainder import SpgRemainder
 from app.models.route import ProductionRoute, RouteStage, RouteOperation, RouteRuleProfile
 from app.models.section import Section
 from app.models.defect import Defect, DefectItem, DefectStatus, DefectDecision, DefectDecisionType
@@ -161,32 +160,8 @@ async def seed_demo_production(db: AsyncSession) -> dict:
         stages_through_drill = production_stages[:2]
     completed_stages1 = await build_completed_stages_json(db, stages_through_drill)
 
-    rem1 = await db.scalar(
-        select(SpgRemainder)
-        .where(
-            SpgRemainder.product_id == rem1_prod.id,
-            SpgRemainder.spg_id == spg.id,
-            SpgRemainder.source == "manual",
-        )
-        .limit(1)
-    )
-    if not rem1:
-        rem1 = SpgRemainder(
-            product_id=rem1_prod.id,
-            spg_id=spg.id,
-            route_stage_id=None,
-            section_plan_line_id=None,
-            origin_task_id=None,
-            remainder_quantity=Decimal("150.000"),
-            original_issued=Decimal("150.000"),
-            completed_stages_json=completed_stages1,
-            source="manual",
-            created_by=actor_id,
-            created_by_user_name=actor_name,
-        )
-        db.add(rem1)
-        await db.flush()
-        stats["remainders"] += 1
+    # SpgRemainder creation removed — table no longer exists.
+    # Use StockCommandService.MANUAL_IN for demo stock creation.
 
     # Remainder 2: АТ-200-2700-AN, completed stages through SHOT
     # (after дробеструй, before анодирование).
@@ -202,32 +177,7 @@ async def seed_demo_production(db: AsyncSession) -> dict:
         stages_through_shot = production_stages[:4]
     completed_stages2 = await build_completed_stages_json(db, stages_through_shot)
 
-    rem2 = await db.scalar(
-        select(SpgRemainder)
-        .where(
-            SpgRemainder.product_id == rem2_prod.id,
-            SpgRemainder.spg_id == spg.id,
-            SpgRemainder.source == "manual",
-        )
-        .limit(1)
-    )
-    if not rem2:
-        rem2 = SpgRemainder(
-            product_id=rem2_prod.id,
-            spg_id=spg.id,
-            route_stage_id=None,
-            section_plan_line_id=None,
-            origin_task_id=None,
-            remainder_quantity=Decimal("80.000"),
-            original_issued=Decimal("80.000"),
-            completed_stages_json=completed_stages2,
-            source="manual",
-            created_by=actor_id,
-            created_by_user_name=actor_name,
-        )
-        db.add(rem2)
-        await db.flush()
-        stats["remainders"] += 1
+    # SpgRemainder creation removed — table no longer exists.
 
     # 6. Create defects (только если остатки попали в PREP — иначе привязка неуместна)
     if prep_stock is None:
