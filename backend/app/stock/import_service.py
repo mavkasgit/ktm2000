@@ -8,6 +8,7 @@
 """
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 from io import BytesIO
@@ -41,6 +42,14 @@ class RemainderItem:
     status: Literal["valid", "invalid"]
     errors: list[str]
     raw_values: list[str]
+    # NEW: колонка «Выполненные операции» (сырая строка из Excel)
+    completed_operations_raw: str | None = None
+    # NEW: резолвнутые пройденные этапы (поднабор ops_dict)
+    completed_stages: list[dict] | None = None
+    # NEW: имя целевой секции из Excel
+    target_section_name: str | None = None
+    # NEW: ID целевой секции (None если не найдена или не указана)
+    target_section_id: int | None = None
 
 
 @dataclass
@@ -74,6 +83,14 @@ _QTY_ALIASES = frozenset({
     "кол-во, шт", "кол-во шт", "кол-во шт.", "кол-во,шт",
 })
 _COMMENT_ALIASES = frozenset({"comment", "комментарий", "примечание"})
+_COMPLETED_OPS_ALIASES = frozenset({
+    "выполненные операции", "операции", "completed_operations",
+    "пройденные операции", "этапы",
+})
+_TARGET_SECTION_ALIASES = frozenset({
+    "целевая секция", "секция", "target_section",
+    "целевой участок", "участок",
+})
 
 
 def _norm_hdr(value: str) -> str:
@@ -81,11 +98,18 @@ def _norm_hdr(value: str) -> str:
     return " ".join(str(value).lower().replace("\xa0", " ").strip().split())
 
 
-def _find_cols(headers: list[str]) -> tuple[int, int, int]:
-    """Find column indices for SKU, quantity, comment by header name matching."""
+def _find_cols(headers: list[str]) -> tuple[int, int, int, int | None, int | None]:
+    """Find column indices for SKU, quantity, comment, completed_ops, target_section.
+
+    Returns (sku_idx, qty_idx, comment_idx, completed_ops_idx, target_section_idx).
+    ``sku_idx``, ``qty_idx``, ``comment_idx`` default to 0, 1, 2 if not found.
+    ``completed_ops_idx``, ``target_section_idx`` default to ``None`` if not found.
+    """
     sku_idx: int = 0
     qty_idx: int = 1
     comment_idx: int = 2
+    completed_ops_idx: int | None = None
+    target_section_idx: int | None = None
     normed = [_norm_hdr(h) for h in headers]
     for i, h in enumerate(normed):
         if h in _SKU_ALIASES:
@@ -94,7 +118,11 @@ def _find_cols(headers: list[str]) -> tuple[int, int, int]:
             qty_idx = i
         elif h in _COMMENT_ALIASES:
             comment_idx = i
-    return sku_idx, qty_idx, comment_idx
+        elif h in _COMPLETED_OPS_ALIASES:
+            completed_ops_idx = i
+        elif h in _TARGET_SECTION_ALIASES:
+            target_section_idx = i
+    return sku_idx, qty_idx, comment_idx, completed_ops_idx, target_section_idx
 
 
 def _parse_qty(value: object) -> Decimal | None:
@@ -176,7 +204,7 @@ async def parse_remainders_excel(
         header_row_idx = 0  # fallback: first row is header
 
     headers = [_cell_txt(c) for c in rows[header_row_idx]]
-    sku_idx, qty_idx, comment_idx = _find_cols(headers)
+    sku_idx, qty_idx, comment_idx, completed_ops_idx, target_section_idx = _find_cols(headers)
 
     # --- Determine which rows to process -------------------------------------
     selected_rows: set[int] | None = None
@@ -206,6 +234,16 @@ async def parse_remainders_excel(
         sku_raw = _cell_txt(row[sku_idx] if sku_idx < len(row) else None)
         qty_val = row[qty_idx] if qty_idx < len(row) else None
         comment_raw = _cell_txt(row[comment_idx] if comment_idx < len(row) else None)
+        completed_ops_raw = (
+            _cell_txt(row[completed_ops_idx])
+            if completed_ops_idx is not None and completed_ops_idx < len(row)
+            else None
+        ) or None
+        target_section_name = (
+            _cell_txt(row[target_section_idx])
+            if target_section_idx is not None and target_section_idx < len(row)
+            else None
+        ) or None
 
         sku = sku_raw.strip() if sku_raw else ""
         comment = comment_raw if comment_raw else None
@@ -231,6 +269,10 @@ async def parse_remainders_excel(
             status="invalid" if errors else "valid",
             errors=errors,
             raw_values=raw,
+            completed_operations_raw=completed_ops_raw,
+            completed_stages=[],
+            target_section_name=target_section_name,
+            target_section_id=None,
         )
 
         if errors:
@@ -275,6 +317,122 @@ async def _lookup_products(db: AsyncSession, items: list[RemainderItem]) -> None
             item.errors.append(f"SKU '{item.sku}' not found in database")
 
 
+# ─── Operations & Section resolvers ──────────────────────────────────────────
+
+
+async def resolve_operations_dictionary(db: AsyncSession) -> list[dict]:
+    """Return the dictionary of significant production operations.
+
+    Returns a list of dicts in ``RouteStepsDisplay`` format:
+    ``[{sequence, section_code, section_name, operation_code, operation_name, is_significant}]``
+    Only ``is_significant=True AND operation_type='production'`` are included.
+    Ordered by ``section.sort_order, section.id, section_operation.sort_order, section_operation.id``.
+    """
+    stmt = (
+        select(SectionOperation, Section)
+        .join(Section, Section.id == SectionOperation.section_id)
+        .where(
+            SectionOperation.is_significant.is_(True),
+            SectionOperation.operation_type == "production",
+        )
+        .order_by(Section.sort_order, Section.id, SectionOperation.sort_order, SectionOperation.id)
+    )
+    result = await db.execute(stmt)
+    return [
+        {
+            "sequence": so.sort_order,
+            "section_code": section.code,
+            "section_name": section.name,
+            "operation_code": so.operation_code,
+            "operation_name": so.operation_name,
+            "is_significant": so.is_significant,
+        }
+        for so, section in result.all()
+    ]
+
+
+async def resolve_completed_stages(
+    db: AsyncSession,
+    raw_ops_str: str | None,
+    ops_dict: list[dict],
+    errors: list[str] | None = None,
+) -> list[dict]:
+    """Parse ``raw_ops_str`` and match against ``ops_dict``.
+
+    Splits by ``,`` / ``;`` / ``|``, trims, lowercases, and exact-matches against
+    ``operation_name`` (normalised). Returns a subset of ``ops_dict`` preserving
+    original order (``sequence`` from dictionary, not re-calculated).
+
+    Edge cases:
+    - Empty/``—`` input → empty list, no error.
+    - Duplicate operation name in input → single match (dedup).
+    - Operation not found in dictionary → optional warning appended to ``errors``,
+      item is **not** invalidated.
+    """
+    if not raw_ops_str or raw_ops_str.strip() in ("", "—", "-"):
+        return []
+
+    parts = [p.strip().lower() for p in re.split(r"[,;|]+", raw_ops_str) if p.strip()]
+    if not parts:
+        return []
+
+    matched: list[dict] = []
+    seen_names: set[str] = set()
+
+    for raw_name in parts:
+        found = False
+        for op in ops_dict:
+            op_norm = op["operation_name"].strip().lower()
+            if raw_name == op_norm and op_norm not in seen_names:
+                matched.append(op)
+                seen_names.add(op_norm)
+                found = True
+                break
+        if not found and errors is not None:
+            errors.append(f"Операция '{raw_name}' не найдена в справочнике")
+
+    return matched
+
+
+async def resolve_target_section(
+    db: AsyncSession,
+    name: str | None,
+    item_errors: list[str] | None = None,
+) -> tuple[int | None, str | None]:
+    """Resolve a section name to ``(section_id, section_name)``.
+
+    Match is case-insensitive, trimmed.  ``production``-type sections are rejected
+    (remainders cannot be imported there).  Allowed types:
+    ``raw_stock, wip_stock, finished_stock, scrap, quarantine``.
+
+    Returns ``(None, None)`` if not found or type is ``production``, with
+    a warning appended to ``item_errors`` (if provided).
+    """
+    if not name or name.strip() in ("", "—", "-"):
+        return (None, None)
+
+    norm_name = name.strip()
+    result = await db.execute(
+        select(Section).where(Section.name.ilike(norm_name))
+    )
+    section = result.scalar_one_or_none()
+
+    if section is None:
+        if item_errors is not None:
+            item_errors.append(f"Секция '{norm_name}' не найдена")
+        return (None, None)
+
+    if section.type == "production":
+        if item_errors is not None:
+            item_errors.append(
+                f"Секция '{norm_name}' имеет тип production, "
+                f"нельзя использовать как цель импорта"
+            )
+        return (None, None)
+
+    return (section.id, section.name)
+
+
 async def apply_remainders_import(
     db: AsyncSession,
     location_id: int,
@@ -283,6 +441,7 @@ async def apply_remainders_import(
     user: User | None = None,
     clear_existing: bool = False,
     skip_invalid: bool = True,
+    target_section_overrides: dict[int, int] | None = None,
 ) -> ImportResult:
     """Apply remainders import: create ``StockTransaction`` records.
 
@@ -291,7 +450,12 @@ async def apply_remainders_import(
     2. Looks up products by SKU (``_lookup_products``).
     3. If ``clear_existing=True``, zeros out current balances for
        ``(location_id, quality_state)`` with ``ADJUSTMENT_OUT``.
+       **Cannot** be combined with ``target_section_overrides``.
     4. Creates ``MANUAL_IN`` transactions for each valid row.
+       Uses per-row ``to_location_id`` from ``target_section_overrides``
+       or ``item.target_section_id`` (fallback to ``location_id``).
+       If ``item.completed_stages`` is non-empty, appends operation names
+       to the transaction comment.
     5. Commits the database session.
 
     Args:
@@ -304,6 +468,9 @@ async def apply_remainders_import(
             ``(location, quality_state)`` before importing.
         skip_invalid: If ``True``, skip invalid rows and continue with valid
             ones; if ``False``, abort on any invalid row.
+        target_section_overrides: Optional dict mapping ``source_row_number``
+            to ``section_id`` for per-row target override.  Takes precedence
+            over ``item.target_section_id``.
 
     Returns:
         ``ImportResult`` with success status, counts, errors, and transaction ids.
@@ -336,6 +503,15 @@ async def apply_remainders_import(
             success=False,
             imported_count=0,
             errors=errors,
+            transaction_ids=[],
+        )
+
+    # --- Check clear_existing + per-row override incompatibility ------------
+    if clear_existing and target_section_overrides is not None:
+        return ImportResult(
+            success=False,
+            imported_count=0,
+            errors=["clear_existing не поддерживается при per-row target sections"],
             transaction_ids=[],
         )
 
@@ -372,13 +548,31 @@ async def apply_remainders_import(
     # --- Import valid items --------------------------------------------------
     imported_count = 0
     for item in valid_items:
+        # Determine per-row to_location_id
+        to_loc: int = location_id
+        if target_section_overrides:
+            to_loc = target_section_overrides.get(
+                item.source_row_number, to_loc
+            )
+        if to_loc == location_id:
+            to_loc = item.target_section_id or location_id
+
+        # Build comment with completed operations
+        final_comment: str | None = item.comment
+        if item.completed_stages:
+            ops_names = ", ".join(
+                s["operation_name"] for s in item.completed_stages
+            )
+            sep = " | " if final_comment else ""
+            final_comment = f"{final_comment or ''}{sep}операции: {ops_names}"
+
         cmd = StockCommand(
             product_id=item.product_id,  # type: ignore[arg-type]
-            to_location_id=location_id,
+            to_location_id=to_loc,
             quantity=Decimal(str(item.quantity)),
             reason=Reason.MANUAL_IN,
             quality_state=quality_state,
-            comment=item.comment or "Импорт остатков из Excel",
+            comment=final_comment or "Импорт остатков из Excel",
             source_ref="import_remainders_excel",
             created_by=user.id if user else 1,
             created_by_user_name=(
@@ -407,7 +601,8 @@ async def generate_remainders_template_for_location(
 ) -> bytes:
     """Generate an Excel template (.xlsx) for remainders import.
 
-    The template has three columns: ``SKU / Артикул | Количество | Комментарий``
+    The template has five columns:
+    ``SKU / Артикул | Количество | Целевая секция | Выполненные операции | Комментарий``
     with example rows.
 
     Args:
@@ -426,11 +621,14 @@ async def generate_remainders_template_for_location(
     if location is None:
         raise ValueError(f"Location with id={location_id} not found")
 
-    # Получаем все значимые операции в системе по порядку участков и операций
+    # Получаем все значимые производственные операции
     ops_query = (
         select(SectionOperation)
         .join(Section, Section.id == SectionOperation.section_id)
-        .where(SectionOperation.is_significant == True)
+        .where(
+            SectionOperation.is_significant == True,
+            SectionOperation.operation_type == "production",
+        )
         .order_by(Section.sort_order, Section.id, SectionOperation.sort_order, SectionOperation.id)
     )
     ops = (await db.execute(ops_query)).scalars().all()
@@ -446,20 +644,41 @@ async def generate_remainders_template_for_location(
     if not op_names:
         op_names = ["Дробеструй", "Сверловка"]
 
+    # Получаем доступные целевые секции (складские типы)
+    sections_query = (
+        select(Section)
+        .where(
+            Section.type.in_([
+                "raw_stock", "wip_stock", "finished_stock",
+                "scrap", "quarantine",
+            ]),
+            Section.is_active == True,
+        )
+        .order_by(Section.sort_order, Section.name)
+    )
+    sections = (await db.execute(sections_query)).scalars().all()
+    section_names = [s.name for s in sections]
+
     wb = Workbook()
     ws = wb.active
     ws.title = "Импорт остатков"
 
-    # Первая строка: Справочник доступных операций
-    ws.append([f"Доступные операции: {', '.join(op_names)}"])
+    # Первая строка: Справочник доступных операций и секций
+    hint_parts = [f"Доступные операции: {', '.join(op_names)}"]
+    if section_names:
+        hint_parts.append(f"Доступные секции: {', '.join(section_names)}")
+    ws.append(["\n".join(hint_parts)])
 
-    ws.append(["SKU / Артикул", "Количество", "Комментарий"])
-    ws.append(["Пример-001", 100, op_names[0] if op_names else ""])
-    ws.append(["Пример-002", 50, ""])
+    # Пять колонок: SKU / Артикул | Количество | Целевая секция | Выполненные операции | Комментарий
+    ws.append(["SKU / Артикул", "Количество", "Целевая секция", "Выполненные операции", "Комментарий"])
+    ws.append(["Пример-001", 100, section_names[0] if section_names else "", op_names[0] if op_names else "", ""])
+    ws.append(["Пример-002", 50, "", "", ""])
 
     ws.column_dimensions["A"].width = 25
     ws.column_dimensions["B"].width = 15
-    ws.column_dimensions["C"].width = 30
+    ws.column_dimensions["C"].width = 25
+    ws.column_dimensions["D"].width = 30
+    ws.column_dimensions["E"].width = 30
 
     buf = BytesIO()
     wb.save(buf)

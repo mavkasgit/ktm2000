@@ -22,6 +22,7 @@ Endpoints:
 """
 from __future__ import annotations
 
+import json
 from typing import Optional
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
@@ -48,6 +49,9 @@ from app.stock.import_service import (
     apply_remainders_import,
     generate_remainders_template_for_location,
     parse_remainders_excel,
+    resolve_completed_stages,
+    resolve_operations_dictionary,
+    resolve_target_section,
 )
 from app.stock.import_service import _lookup_products as _lookup_remainder_products
 from fastapi.responses import StreamingResponse
@@ -323,6 +327,18 @@ async def download_remainders_template(
     )
 
 
+@router.get("/import/remainders/operations", dependencies=[Depends(require_role(list(READER_ROLES)))])
+async def get_remainder_import_operations(
+    db: AsyncSession = Depends(get_db),
+) -> list[dict]:
+    """Справочник значимых производственных операций для UI импорта остатков.
+
+    Возвращает список в формате ``RouteStepsDisplay``:
+    ``[{sequence, section_code, section_name, operation_code, operation_name, is_significant}]``.
+    """
+    return await resolve_operations_dictionary(db)
+
+
 @router.post(
     "/import/remainders/preview",
     dependencies=[Depends(require_role(list(WRITER_ROLES)))],
@@ -331,6 +347,7 @@ async def preview_remainders_excel(
     file: UploadFile = File(...),
     location_id: int = Form(...),
     quality_state: QualityState = Form(QualityState.GOOD),
+    target_section_overrides: str | None = Form(None),
     sheet_index: int = Form(0),
     row_selection: str | None = Form(None),
     db: AsyncSession = Depends(get_db),
@@ -340,6 +357,8 @@ async def preview_remainders_excel(
     * ``location_id`` проверяется на существование.
     * ``quality_state`` пока не влияет на preview, но передаётся для
       единообразия с POST /import/remainders.
+    * ``target_section_overrides`` — опциональный JSON ``{"row_num": sec_id, ...}``
+      для UI-оверрайда целевой секции.
     """
     # Validate location
     location = await db.get(Section, location_id)
@@ -357,6 +376,19 @@ async def preview_remainders_excel(
 
     # Enrich items with product info
     await _lookup_remainder_products(db, items)
+
+    # Resolve completed stages and target sections
+    ops_dict = await resolve_operations_dictionary(db)
+    for item in items:
+        if item.completed_operations_raw:
+            item.completed_stages = await resolve_completed_stages(
+                db, item.completed_operations_raw, ops_dict, item.errors,
+            )
+        if item.target_section_name:
+            sec_id, _ = await resolve_target_section(
+                db, item.target_section_name, item.errors,
+            )
+            item.target_section_id = sec_id
 
     # Recalculate summary after product enrichment
     valid_count = sum(1 for it in items if it.status == "valid")
@@ -386,6 +418,7 @@ async def import_remainders_excel(
     file: UploadFile = File(...),
     location_id: int = Form(...),
     quality_state: QualityState = Form(QualityState.GOOD),
+    target_section_overrides: str | None = Form(None),
     sheet_index: int = Form(0),
     row_selection: str | None = Form(None),
     skip_invalid: bool = Form(True),
@@ -398,6 +431,8 @@ async def import_remainders_excel(
     Параметры:
     * ``location_id`` — целевая секция (склад / участок).
     * ``quality_state`` — состояние качества (по умолч. GOOD).
+    * ``target_section_overrides`` — опциональный JSON ``{"row_num": sec_id, ...}``
+      для per-row оверрайда целевой секции.
     * ``file`` — .xlsx файл с колонками SKU | Количество | Комментарий.
     * ``sheet_index`` — индекс листа (0=первый).
     * ``row_selection`` — опциональный фильтр строк, ``"2-10,12"``.
@@ -406,6 +441,25 @@ async def import_remainders_excel(
     * ``clear_existing`` — обнулить текущие остатки по
       ``(location_id, quality_state)`` перед импортом.
     """
+    # Parse target_section_overrides JSON (if provided)
+    parsed_overrides: dict[int, int] | None = None
+    if target_section_overrides is not None:
+        try:
+            raw = json.loads(target_section_overrides)
+            parsed_overrides = {int(k): int(v) for k, v in raw.items()}
+        except (ValueError, TypeError) as exc:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Invalid target_section_overrides JSON: {exc}",
+            )
+
+    # clear_existing + target_section_overrides is forbidden
+    if clear_existing and target_section_overrides is not None:
+        raise HTTPException(
+            status_code=422,
+            detail="clear_existing не поддерживается при per-row target sections",
+        )
+
     # Validate location
     location = await db.get(Section, location_id)
     if location is None:
@@ -419,6 +473,19 @@ async def import_remainders_excel(
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc))
+
+    # Resolve completed stages and target sections before import
+    ops_dict = await resolve_operations_dictionary(db)
+    for item in items:
+        if item.completed_operations_raw:
+            item.completed_stages = await resolve_completed_stages(
+                db, item.completed_operations_raw, ops_dict, item.errors,
+            )
+        if item.target_section_name:
+            sec_id, _ = await resolve_target_section(
+                db, item.target_section_name, item.errors,
+            )
+            item.target_section_id = sec_id
 
     # If nothing to import
     if not items:
@@ -437,6 +504,7 @@ async def import_remainders_excel(
         user=user,
         clear_existing=clear_existing,
         skip_invalid=skip_invalid,
+        target_section_overrides=parsed_overrides,
     )
 
     return {

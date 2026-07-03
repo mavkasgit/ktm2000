@@ -22,9 +22,11 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Product, ProductType, Section
+from app.models.route import SectionOperation
 from app.models.user import User, UserRole
 from app.stock.models import QualityState, Reason, StockBalance, StockTransaction
 from app.stock.services import StockCommand, StockCommandService
+from tests.test_integrity_invariants import assert_no_invariants_violations
 
 pytestmark = pytest.mark.asyncio
 
@@ -63,8 +65,8 @@ async def _make_location(session: AsyncSession, code: str = "STOCK-IMP") -> Sect
 
 
 def _make_excel(
-    rows: list[tuple[str | None, object, str | None]],
-    headers: tuple[str, str, str] = ("SKU", "Количество", "Комментарий"),
+    rows: list[tuple],
+    headers: tuple[str, ...] = ("SKU", "Количество", "Комментарий"),
 ) -> BytesIO:
     """Create an .xlsx file in memory with the given header and data rows."""
     wb = Workbook()
@@ -99,6 +101,50 @@ async def _make_stock_balance(
     )
     await svc.record(session, cmd)
     await session.commit()
+
+
+async def _make_section_operation(
+    session: AsyncSession,
+    section: Section,
+    operation_name: str = "Прессование",
+    operation_code: str | None = None,
+    is_significant: bool = True,
+    operation_type: str = "production",
+    sort_order: int = 0,
+) -> SectionOperation:
+    """Create a SectionOperation linked to the given section."""
+    if operation_code is None:
+        operation_code = operation_name.upper().replace(" ", "_")[:20]
+    op = SectionOperation(
+        section_id=section.id,
+        operation_code=operation_code,
+        operation_name=operation_name,
+        is_significant=is_significant,
+        operation_type=operation_type,
+        sort_order=sort_order,
+    )
+    session.add(op)
+    await session.flush()
+    return op
+
+
+async def _make_warehouse_section(
+    session: AsyncSession,
+    code: str = "WH-IMP",
+    name: str | None = None,
+    type: str = "wip_stock",
+) -> Section:
+    """Create a warehouse-type Section for import target testing."""
+    section = Section(
+        code=code,
+        name=name or code,
+        type=type,
+        is_active=True,
+        sort_order=0,
+    )
+    session.add(section)
+    await session.flush()
+    return section
 
 
 # ─── Tests: Preview ────────────────────────────────────────────────────────────
@@ -518,3 +564,268 @@ async def test_download_remainders_template_includes_operations(
     # Должно быть хотя бы одно имя операции (из БД или fallback)
     # Fallback: ["Дробеструй", "Сверловка"]
     assert "Дробеструй" in first_cell or "Сверловка" in first_cell
+
+
+# ─── Tests: Preview with completed stages & target section ──────────────────
+
+
+async def test_preview_returns_completed_stages(
+    client: AsyncClient,
+    session: AsyncSession,
+) -> None:
+    """Preview возвращает completed_stages для строк с выполненными операциями,
+    с дедупликацией повторяющихся имён операций (R2, edge-case)."""
+    await _make_product(session, "CS-001")
+    location = await _make_location(session, "CS-LOC")
+    section = Section(
+        code="PRESS", name="Прессовый участок", type="production",
+        is_active=True, sort_order=0,
+    )
+    session.add(section)
+    await session.flush()
+    await _make_section_operation(session, section, "Прессование", sort_order=10)
+    await session.commit()
+
+    excel_buf = _make_excel(
+        [("CS-001", 100, "PRESS", "Прессование, Прессование, Прессование", "коммент")],
+        headers=("SKU", "Количество", "Целевая секция", "Выполненные операции", "Комментарий"),
+    )
+    resp = await client.post(
+        "/api/v2/stock/import/remainders/preview",
+        files={"file": ("test.xlsx", excel_buf, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+        data={"location_id": str(location.id), "sheet_index": "0"},
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert len(body["items"]) == 1
+    item = body["items"][0]
+    # dedup: "Прессование, Прессование, Прессование" → 1 элемент
+    assert len(item["completed_stages"]) == 1
+    stage = item["completed_stages"][0]
+    assert stage["operation_name"] == "Прессование"
+    assert stage["section_code"] == "PRESS"
+    assert stage["is_significant"] is True
+    assert stage["sequence"] == 10
+
+
+async def test_preview_target_section_name_resolved(
+    client: AsyncClient,
+    session: AsyncSession,
+) -> None:
+    """Preview резолвит имя целевой секции в ID (R3)."""
+    await _make_product(session, "TSR-001")
+    location = await _make_location(session, "TSR-LOC")
+    target_sec = await _make_warehouse_section(
+        session, "WIP-A", "Цех WIP-A", type="wip_stock",
+    )
+    await session.commit()
+
+    excel_buf = _make_excel(
+        [("TSR-001", 100, "Цех WIP-A", "", "")],
+        headers=("SKU", "Количество", "Целевая секция", "Выполненные операции", "Комментарий"),
+    )
+    resp = await client.post(
+        "/api/v2/stock/import/remainders/preview",
+        files={"file": ("test.xlsx", excel_buf, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+        data={"location_id": str(location.id), "sheet_index": "0"},
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert len(body["items"]) == 1
+    item = body["items"][0]
+    assert item["target_section_id"] == target_sec.id
+    assert item["target_section_name"] == "Цех WIP-A"
+    assert item["errors"] == []
+    assert item["status"] == "valid"
+
+
+async def test_preview_target_section_unknown_warns_but_not_fails(
+    client: AsyncClient,
+    session: AsyncSession,
+) -> None:
+    """Неизвестная целевая секция → warning, но статус valid (R3)."""
+    await _make_product(session, "UNK-SEC")
+    location = await _make_location(session, "UNK-SEC-LOC")
+    await session.commit()
+
+    excel_buf = _make_excel(
+        [("UNK-SEC", 100, "Несуществующая секция", "", "")],
+        headers=("SKU", "Количество", "Целевая секция", "Выполненные операции", "Комментарий"),
+    )
+    resp = await client.post(
+        "/api/v2/stock/import/remainders/preview",
+        files={"file": ("test.xlsx", excel_buf, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+        data={"location_id": str(location.id), "sheet_index": "0"},
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert len(body["items"]) == 1
+    item = body["items"][0]
+    assert item["target_section_id"] is None
+    assert item["target_section_name"] == "Несуществующая секция"
+    assert any("не найдена" in e for e in item["errors"])
+    assert item["status"] == "valid"
+
+
+async def test_preview_target_section_production_type_rejected(
+    client: AsyncClient,
+    session: AsyncSession,
+) -> None:
+    """production-секция как target → warning, не invalid (R4)."""
+    await _make_product(session, "PROD-TGT")
+    location = await _make_location(session, "PROD-TGT-LOC")
+    prod_sec = Section(
+        code="PROD-SEC", name="Производственный участок", type="production",
+        is_active=True, sort_order=0,
+    )
+    session.add(prod_sec)
+    await session.commit()
+
+    excel_buf = _make_excel(
+        [("PROD-TGT", 100, "Производственный участок", "", "")],
+        headers=("SKU", "Количество", "Целевая секция", "Выполненные операции", "Комментарий"),
+    )
+    resp = await client.post(
+        "/api/v2/stock/import/remainders/preview",
+        files={"file": ("test.xlsx", excel_buf, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+        data={"location_id": str(location.id), "sheet_index": "0"},
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert len(body["items"]) == 1
+    item = body["items"][0]
+    assert item["target_section_id"] is None
+    assert any("production" in e.lower() for e in item["errors"])
+
+
+# ─── Tests: Import with per-row target section ──────────────────────────────
+
+
+async def test_import_per_row_target_creates_distinct_balances(
+    client: AsyncClient,
+    session: AsyncSession,
+) -> None:
+    """Per-row target section → разные балансы на разных секциях + integrity (R5)."""
+    product = await _make_product(session, "PER-ROW")
+    # S1 = raw_stock (используется как default location формы)
+    s1 = await _make_warehouse_section(
+        session, "DEFAULT", "Default Stock", type="raw_stock",
+    )
+    # S2 = wip_stock (целевая секция для второй строки)
+    s2 = await _make_warehouse_section(
+        session, "WIP-B", "WIP-B", type="wip_stock",
+    )
+    await session.commit()
+
+    excel_buf = _make_excel(
+        [
+            ("PER-ROW", 50, "", "", "row1"),
+            ("PER-ROW", 30, "WIP-B", "", "row2"),
+        ],
+        headers=("SKU", "Количество", "Целевая секция", "Выполненные операции", "Комментарий"),
+    )
+    resp = await client.post(
+        "/api/v2/stock/import/remainders",
+        files={"file": ("test.xlsx", excel_buf, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+        data={
+            "location_id": str(s1.id),
+            "skip_invalid": "true",
+            "clear_existing": "false",
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["success"] is True
+    assert body["imported_count"] == 2
+
+    # Проверяем транзакции
+    txs = (await session.execute(select(StockTransaction))).scalars().all()
+    assert len(txs) == 2
+    for tx in txs:
+        assert tx.reason == Reason.MANUAL_IN
+        assert tx.from_location_id is None
+
+    # Разные to_location_id
+    to_locs = {tx.to_location_id for tx in txs}
+    assert to_locs == {s1.id, s2.id}
+
+    # Проверяем балансы
+    bals = (await session.execute(select(StockBalance))).scalars().all()
+    assert len(bals) == 2
+    bal_by_loc = {b.location_id: float(b.balance_qty) for b in bals}
+    assert bal_by_loc[s1.id] == 50.0
+    assert bal_by_loc[s2.id] == 30.0
+
+    # Integrity invariants (S1-S6)
+    await assert_no_invariants_violations(session, context="after-per-row-target")
+
+
+async def test_import_clear_existing_with_target_section_override_returns_422(
+    client: AsyncClient,
+    session: AsyncSession,
+) -> None:
+    """clear_existing=True + target_section_overrides → 422 (R6)."""
+    location = await _make_location(session, "CLR-OVR-LOC")
+    await session.commit()
+
+    excel_buf = _make_excel(
+        [("SOME-SKU", 10, "", "", "")],
+        headers=("SKU", "Количество", "Целевая секция", "Выполненные операции", "Комментарий"),
+    )
+    resp = await client.post(
+        "/api/v2/stock/import/remainders",
+        files={"file": ("test.xlsx", excel_buf, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+        data={
+            "location_id": str(location.id),
+            "clear_existing": "true",
+            "target_section_overrides": '{"2": "999"}',
+        },
+    )
+    assert resp.status_code == 422, resp.text
+    detail = resp.json().get("detail", "")
+    assert "clear_existing" in detail.lower()
+
+
+async def test_operations_endpoint_returns_production_significant(
+    client: AsyncClient,
+    session: AsyncSession,
+) -> None:
+    """GET /import/remainders/operations возвращает только is_significant + production (R7)."""
+    # Секция production для Op1, Op2
+    prod_sec = Section(
+        code="OPS-PROD", name="Производство", type="production",
+        is_active=True, sort_order=0,
+    )
+    # Секция storage (wip_stock) для Op3 с operation_type='transport'
+    storage_sec = Section(
+        code="OPS-STOR", name="Склад", type="wip_stock",
+        is_active=True, sort_order=1,
+    )
+    session.add_all([prod_sec, storage_sec])
+    await session.flush()
+
+    # Op1: is_significant=True, production → ДОЛЖЕН быть в ответе
+    await _make_section_operation(
+        session, prod_sec, "Токарная", operation_code="TURN", sort_order=1,
+    )
+    # Op2: is_significant=False, production → НЕ должен быть в ответе
+    await _make_section_operation(
+        session, prod_sec, "Фрезерная", operation_code="MILL",
+        is_significant=False, sort_order=2,
+    )
+    # Op3: is_significant=True, transport → НЕ должен быть в ответе
+    await _make_section_operation(
+        session, storage_sec, "Перемещение", operation_code="MOVE",
+        is_significant=True, operation_type="transport", sort_order=3,
+    )
+    await session.commit()
+
+    resp = await client.get("/api/v2/stock/import/remainders/operations")
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    assert isinstance(data, list)
+    assert len(data) == 1
+    op = data[0]
+    assert op["operation_name"] == "Токарная"
+    assert op["section_code"] == "OPS-PROD"
+    assert op["is_significant"] is True
