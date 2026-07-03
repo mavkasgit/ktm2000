@@ -22,10 +22,11 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Product, Section
+from app.models.work_task import WorkTask
 from app.stock.models import (
     QualityState,
     Reason,
@@ -216,10 +217,48 @@ class StockProjectionManager:
         return len(agg)
 
     async def refresh_task_projection(self, session: AsyncSession, tx: StockTransaction) -> None:
-        """Этап 4: WorkTask.completed_qty / scrap_qty из ledger.
-        Пока no-op — WorkTask.mutation живёт в старом cache.py.
+        """Обновление WorkTask.cached_* из StockTransaction ledger.
+
+        На Этапе 2: для ``transfer_send`` / ``transfer_receive``
+        пересчитывает ``cached_transferred_quantity`` /
+        ``cached_received_quantity`` из SUM StockTransaction
+        (оригиналы +Q, компенсации −Q).
         """
-        return None
+        if tx.reason not in (Reason.transfer_send, Reason.transfer_receive):
+            return
+        if tx.task_id is None:
+            return
+        from sqlalchemy import case, func
+
+        # Net quantity: оригинала +quantity, компенсации −quantity
+        _net = func.sum(
+            case(
+                (StockTransaction.compensates_tx_id.is_(None), StockTransaction.quantity),
+                else_=-StockTransaction.quantity,
+            )
+        )
+        transferred = await session.scalar(
+            select(func.coalesce(_net, 0))
+            .where(
+                StockTransaction.task_id == tx.task_id,
+                StockTransaction.reason == Reason.transfer_send,
+            )
+        ) or 0
+        received = await session.scalar(
+            select(func.coalesce(_net, 0))
+            .where(
+                StockTransaction.task_id == tx.task_id,
+                StockTransaction.reason == Reason.transfer_receive,
+            )
+        ) or 0
+        await session.execute(
+            update(WorkTask)
+            .where(WorkTask.id == tx.task_id)
+            .values(
+                cached_transferred_quantity=transferred,
+                cached_received_quantity=received,
+            )
+        )
 
     async def refresh_spl_projection(self, session: AsyncSession, tx: StockTransaction) -> None:
         """Этап 4: SectionPlanLine cache из ledger. Пока no-op."""

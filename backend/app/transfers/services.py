@@ -1,20 +1,28 @@
 """Write services for the transfer module.
 
 Under the explicit-transfer model, ``transfer_send`` is the single
-write path: it creates the ``Transfer`` row, the ``transfer_send``
-Movement, the ``transfer_receive`` Movement on the destination task
-(auto-accept), AND a paired ``issue_to_work`` Movement on the
-destination task (auto-issue on receive). The destination ``WorkTask``
-flips from ``waiting_previous`` to ``ready`` and is immediately
-considered issued — the operator can complete it without a separate
-«Взять в работу» click. The explicit ``issue_to_work`` API still
-exists for the first route stage and for the production-planning
-«ручной сквозной проход» flow.
+write path: it creates the ``Transfer`` row and two
+``StockTransaction`` entries (``TRANSFER_SEND`` on the source task,
+``TRANSFER_RECEIVE`` on the destination task) via
+``StockCommandService.record()``. No ``Movement`` rows are created —
+``StockTransaction`` is the single source of truth.
 
-The shared cache (``app.services.shopfloor.cache``) and helpers
-(``app.services.shopfloor.common``) are reused as-is: the
-``Movement`` ledger is the universal event log for both the section
-task side and the transfer side.
+The destination ``WorkTask`` flips from ``waiting_previous`` to
+``ready`` and is immediately considered issued — the operator can
+complete it without a separate «Взять в работу» click. The explicit
+``issue_to_work`` API still exists for the first route stage and for
+the production-planning «ручной сквозной проход» flow.
+
+``StockProjectionManager.refresh_task_projection`` updates
+``WorkTask.cached_transferred_quantity`` and
+``cached_received_quantity`` from ``StockTransaction`` ledger. The
+shared cache (``app.services.shopfloor.cache``) continues to refresh
+non-transfer ``cached_*`` columns from the ``Movement`` table for
+legacy operations until Этап 3.
+
+Cancel creates compensating ``StockTransaction`` rows (append-only).
+Correct updates quantity in-place on active ``StockTransaction`` rows
+(controlled mutable exception — see ``_resync_transfer_stock_tx_quantity``).
 
 Legacy functions ``transfer_receive`` and
 ``resolve_transfer_discrepancy_link`` are kept as no-ops so old call
@@ -31,7 +39,6 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.internal_plan import SectionPlanLine
-from app.models.movement import Movement, MovementType
 from app.models.transfer import Transfer, TransferStatus
 from app.models.work_task import WorkTask, WorkTaskStatus
 
@@ -51,20 +58,12 @@ from app.services.shopfloor.common import (
     _transfer_no,
 )
 
-# ─── Stock Ledger double-write (Этап 2) ──────────────────────────────────────
-# Параллельная запись в новый append-only ledger. Пока Movement остаётся
-# источником правды для cached_* проекций, StockTransaction дублирует факт
-# перемещения для сверки (инвариант S6) и будущего перехода (Этап 7).
-#
-# Геометрия: одна проводка ``from=from_section → to=to_section`` с reason
-# ``TRANSFER_SEND``. Это классическая ledger-геометрия — одна транзакция с
-# обоими концами двигает баланс обеих локаций ровно на qty (S1 тривиально
-# сходится: ``SUM(in) − SUM(out)`` per location). От split-геометрии
-# («только исход / только приход») отказались: она неестественна для
-# материального склада и была навязана лишь формой старого инварианта S6.
-# S6 переписан на ``SUM(active) − SUM(compensations) == sent_quantity``,
-# что работает и на честной геометрии, и устойчиво к будущему partial-cancel.
-# См. PLAN_stock_ledger.md → Этап 2.
+# ─── Ledger helpers (Этап 2) ─────────────────────────────────────────────────
+# Transfer пишет две StockTransaction (TRANSFER_SEND + TRANSFER_RECEIVE) через
+# StockCommandService.record(). Обе проводки имеют геометрию
+# ``from=from_section → to=to_section``: каждая двигает баланс обеих локаций
+# на quantity. Отмена — компенсационные транзакции (append-only).
+# Коррекция — in-place изменение quantity активных транзакций.
 from app.stock.models import Reason, StockTransaction
 from app.stock.services import StockCommand, StockCommandService
 
@@ -78,6 +77,7 @@ async def _get_task_transferable(db: AsyncSession, task: WorkTask) -> Decimal:
         return task.cached_available_quantity
 
     from sqlalchemy import func
+    from app.models.movement import Movement, MovementType
     remainders_qty = Decimal("0")
     has_auto_complete = await db.scalar(
         select(func.count(Movement.id)).where(
@@ -120,25 +120,18 @@ async def _record_transfer_send_stock_tx(
     performed_at: datetime | None,
     accounted_at: datetime | None,
     is_post_factum: bool,
-) -> None:
-    """Двойная запись отправки transfer в Stock Ledger.
+) -> StockTransaction:
+    """Запись TRANSFER_SEND в StockTransaction ledger.
 
-    Создаёт **одну** ``StockTransaction`` с честной ledger-геометрией:
+    Создаёт ``StockTransaction`` с геометрией
     ``from=from_section → to=to_section``, reason ``TRANSFER_SEND``,
-    ``task_id=from_task`` (источник инициирует перемещение). Одна
-    проводка с обоими концами двигает баланс обеих локаций ровно на
-    ``quantity`` — S1 (``balance = SUM(in) − SUM(out)`` per location)
-    сходится тривиально, без двойного счёта.
+    ``task_id=from_task``. Одна проводка с обоими концами двигает
+    баланс обеих локаций на ``quantity``.
 
-    ``to_task`` пока не используется явно в StockTransaction (только
-    ``from_task``), но сохранён в сигнатуре для будущей привязки
-    приёмной стороны (partial-accept, расхождения) на Этапах 5/7.
-
-    Идемпотентность по суффиксу ``:stock-send``. Вызывается в рамках
-    той же транзакции, что и Movement-запись, поэтому при откате
-    откатычатся оба слоя.
+    Идемпотентность по суффиксу ``:stock-send``. Возвращает созданную
+    транзакцию (или существующую при идемпотентном повторе).
     """
-    await _stock_command_service.record(
+    return await _stock_command_service.record(
         db,
         StockCommand(
             product_id=transfer.product_id,
@@ -175,13 +168,12 @@ async def _compensate_transfer_stock_tx(
     Для каждой непогашенной транзакции (``compensates_tx_id IS NULL``) с
     reason ``TRANSFER_SEND`` / ``TRANSFER_RECEIVE`` создаётся встречная
     запись с перевёрнутыми локациями и ``compensates_tx_id`` → исходная.
-    Суммарный баланс по transfer возвращается к нулю, что согласуется с
-    удалением Movement-записей в ``cancel_transfer`` (инвариант S6 для
+    Суммарный баланс по transfer возвращается к нулю (инвариант S6 для
     cancelled transfer'ов исключён, S1 баланс сходится).
 
-    Идемпотентность: если补偿 уже была записана (повторный cancel — no-op
-    по status guard в ``cancel_transfer``), дубликаты не создаются благодаря
-    суффиксу ``:stock-cancel``.
+    Идемпотентность: если компенсация уже была записана (повторный
+    cancel — no-op по status guard в ``cancel_transfer``), дубликаты не
+    создаются благодаря суффиксу ``:stock-cancel``.
     """
     res = await db.execute(
         select(StockTransaction)
@@ -232,16 +224,12 @@ async def _resync_transfer_stock_tx_quantity(
     """Синхронизация quantity активных StockTransaction transfer'а.
 
     ``correct_transfer`` меняет ``sent_quantity`` у Transfer и quantity у
-    существующих Movement-записей in-place (mutable-модель movement). Чтобы
-    инвариант S6 (``SUM(TRANSFER_SEND qty) == sent_quantity`` для активных
-    transfer'ов) продолжал выполняться, активные StockTransaction
-    (непогашенные, без ``compensates_tx_id``) также обновляются in-place,
-    после чего баланс пересчитывается через ``refresh_balance``.
+    активных StockTransaction (непогашенных, без ``compensates_tx_id``)
+    in-place. После чего баланс пересчитывается через ``refresh_balance``.
 
     Это контролируемое mutable-исключение из append-only принципа — оно
     касается только коррекции количества, но не отмены (cancel идёт через
-    компенсации). См. PLAN_stock_ledger.md → принцип 4 и комментарии в
-    ``correct_transfer``.
+    компенсации). См. PLAN_stock_ledger.md → принцип 4.
     """
     res = await db.execute(
         select(StockTransaction)
@@ -286,29 +274,29 @@ async def transfer_send(
     step, a new ``WorkTask`` with status ``waiting_previous`` is
     auto-created.
 
-    A ``Transfer(status=sent)`` row, a ``Movement(type=transfer_send)``
-    ledger row, a ``Movement(type=transfer_receive)`` row on the
-    destination task AND a paired ``Movement(type=issue_to_work)`` row
-    on the destination task are all written atomically. The auto-issue
-    collapses the historical «receive → issue to work» two-step into a
-    single operator action: as soon as the material is on the receiving
-    section, it is considered issued and ready to be completed. The
-    explicit ``issue_to_work`` API still exists for the first route
-    stage (where there is no incoming transfer) and for the
+    Two ``StockTransaction`` rows (``TRANSFER_SEND`` on the source,
+    ``TRANSFER_RECEIVE`` on the destination) are written via
+    ``StockCommandService.record()`` — the single source of truth for
+    the ledger.  The auto-accept collapses the historical
+    «receive → issue to work» two-step into a single operator action:
+    as soon as the material is on the receiving section, it is
+    considered issued and ready to be completed.  The explicit
+    ``issue_to_work`` API still exists for the first route stage
+    (where there is no incoming transfer) and for the
     production-planning «ручной сквозной проход» flow.
 
     Idempotency is keyed on the ``idempotency_key`` of the Transfer
-    itself; the send-side, receive-side and auto-issue movements use
-    ``:send`` / ``:receive`` / ``:auto-issue`` suffixes respectively.
+    itself; the send-side and receive-side StockTransaction entries use
+    ``:stock-send`` / ``:stock-receive`` suffixes respectively.
 
     When ``post_factum=True``, the cross-GHP ``quantity <= transferable``
     guard is skipped: the receiving section may have already started
     working on the parts, and the formal transfer is being recorded
-    after the physical handover.  The Transfer and resulting Movement
-    rows are tagged with ``is_post_factum=True`` for audit/history; the
-    ``performed_at`` is taken from ``physical_handover_at`` (or
-    ``performed_at``) so the ledger reflects when the work physically
-    moved between sections.
+    after the physical handover.  The Transfer and resulting
+    StockTransaction rows are tagged with ``is_post_factum=True`` for
+    audit/history; the ``performed_at`` is taken from
+    ``physical_handover_at`` (or ``performed_at``) so the ledger
+    reflects when the work physically moved between sections.
     """
     if idempotency_key:
         existing = await _check_idempotency(db, idempotency_key=idempotency_key, entity_type=Transfer)
@@ -409,34 +397,13 @@ async def transfer_send(
     eff_executor = executor_user_id or actor_id
     actor_name = await _get_user_snapshot_name(db, actor_id)
     executor_name = await _get_user_snapshot_name(db, eff_executor)
-    send_movement = Movement(
-        product_id=from_task.product_id,
-        task_id=from_task.id,
-        section_plan_line_id=from_task.section_plan_line_id,
-        transfer_id=transfer.id,
-        from_section_id=from_task.section_id,
-        to_section_id=to_task.section_id,
-        movement_type=MovementType.transfer_send,
-        quantity=quantity,
-        source_ref=source_ref,
-        comment=comment,
-        created_by=actor_id,
-        idempotency_key=f"{idempotency_key}:send" if idempotency_key else None,
-        executor_user_id=eff_executor,
-        created_by_user_name=actor_name,
-        executor_user_name=executor_name,
-        performed_at=eff_performed,
-        accounted_at=eff_accounted,
-        is_post_factum=post_factum,
-    )
-    db.add(send_movement)
 
     # Auto-accept: since the operator confirms the transfer on the
     # /transfers page, the material is considered immediately received
     # on the destination. The destination task transitions
-    # ``waiting_previous -> ready`` and ``cached_received_quantity`` is
-    # bumped. Reject/partial accept are no longer part of the model —
-    # see ``docs/superpowers/plans/2026-07-01-explicit-transfers-mandatory.md``.
+    # ``waiting_previous -> ready``. Reject/partial accept are no longer
+    # part of the model — see
+    # ``docs/superpowers/plans/2026-07-01-explicit-transfers-mandatory.md``.
     transfer.status = TransferStatus.accepted
     transfer.accepted_quantity = quantity
     transfer.accepted_by = actor_id
@@ -444,63 +411,13 @@ async def transfer_send(
     if to_task.status == WorkTaskStatus.waiting_previous:
         to_task.status = WorkTaskStatus.ready
         await db.flush()
-    receive_movement = Movement(
-        product_id=transfer.product_id,
-        task_id=to_task.id,
-        section_plan_line_id=to_task.section_plan_line_id,
-        transfer_id=transfer.id,
-        from_section_id=transfer.from_section_id,
-        to_section_id=transfer.to_section_id,
-        movement_type=MovementType.transfer_receive,
-        quantity=quantity,
-        source_ref=source_ref,
-        comment=comment,
-        created_by=actor_id,
-        idempotency_key=f"{idempotency_key}:receive" if idempotency_key else None,
-        executor_user_id=eff_executor,
-        created_by_user_name=actor_name,
-        executor_user_name=executor_name,
-        performed_at=eff_performed,
-        accounted_at=eff_accounted,
-        is_post_factum=post_factum,
-    )
-    db.add(receive_movement)
 
-    # Auto-issue on receive: collapse the historical «receive → issue to
-    # work» two-step into one. As soon as the material is on the
-    # receiving section it is considered issued, so the operator can
-    # immediately complete it without a separate «Взять в работу» click.
-    # The issue movement shares the same performed/accounted timestamps
-    # as the transfer (physical handover time) and uses a distinct
-    # idempotency suffix so concurrent retries of the transfer are safe.
-    issue_movement = Movement(
-        product_id=transfer.product_id,
-        task_id=to_task.id,
-        section_plan_line_id=to_task.section_plan_line_id,
-        transfer_id=transfer.id,
-        from_section_id=transfer.to_section_id,
-        to_section_id=transfer.to_section_id,
-        movement_type=MovementType.issue_to_work,
-        quantity=quantity,
-        source_ref=source_ref or "auto_issue_on_transfer",
-        comment=comment,
-        created_by=actor_id,
-        idempotency_key=f"{idempotency_key}:auto-issue" if idempotency_key else None,
-        executor_user_id=eff_executor,
-        created_by_user_name=actor_name,
-        executor_user_name=executor_name,
-        performed_at=eff_performed,
-        accounted_at=eff_accounted,
-        is_post_factum=post_factum,
-    )
-    db.add(issue_movement)
-
-    # ─── Stock Ledger double-write (Этап 2.1) ────────────────────────────
-    # Параллельная запись в append-only ledger. Movement остаётся
-    # источником правы для cached_* проекций; StockTransaction — для
-    # будущей миграции и сверки (инварианты S1/S6). Откат транзакции
-    # откатывает оба слоя атомарно.
-    await _record_transfer_send_stock_tx(
+    # ─── StockTransaction ledger (Этап 2) ─────────────────────────────────
+    # Пишем две транзакции — TRANSFER_SEND (на исходной задаче) и
+    # TRANSFER_RECEIVE (на приёмной). StockCommandService.record()
+    # вызывает StockProjectionManager, который обновляет баланс и
+    # cached_transferred_quantity / cached_received_quantity.
+    send_tx = await _record_transfer_send_stock_tx(
         db,
         transfer=transfer,
         from_task=from_task,
@@ -516,6 +433,30 @@ async def transfer_send(
         performed_at=eff_performed,
         accounted_at=eff_accounted,
         is_post_factum=post_factum,
+    )
+    # TRANSFER_RECEIVE на приёмную задачу
+    receive_tx = await _stock_command_service.record(
+        db,
+        StockCommand(
+            product_id=transfer.product_id,
+            quantity=quantity,
+            reason=Reason.transfer_receive,
+            from_location_id=transfer.from_section_id,
+            to_location_id=transfer.to_section_id,
+            task_id=to_task.id,
+            transfer_id=transfer.id,
+            section_plan_line_id=to_task.section_plan_line_id,
+            created_by=actor_id,
+            executor_user_id=eff_executor,
+            created_by_user_name=actor_name,
+            executor_user_name=executor_name,
+            source_ref=source_ref,
+            comment=comment,
+            idempotency_key=f"{idempotency_key}:stock-receive" if idempotency_key else None,
+            performed_at=eff_performed,
+            accounted_at=eff_accounted,
+            is_post_factum=post_factum,
+        ),
     )
 
     # If the source section is a stock section, consume the matching
@@ -564,10 +505,27 @@ async def transfer_send(
                     rem.consumed_by_task_id = to_task.id
                 qty_to_consume -= consume_qty
 
+    # _refresh_task_cache обновляет cached_* из Movement для не-transfer
+    # операций (issued, completed). Для transfer-кэша Movement-строк нет
+    # (они удалены на Этапе 2), поэтому _refresh_task_cache сбросит
+    # cached_transferred/received в 0 — перезаписываем из StockTransaction.
     await _refresh_task_cache(db, from_task.id)
     refreshed_to_task = await _refresh_task_cache(db, to_task.id)
+    # Re-apply transfer-specific projections (были сброшены _refresh_task_cache)
+    await _stock_command_service._projection_manager.refresh_task_projection(db, send_tx)
+    await _stock_command_service._projection_manager.refresh_task_projection(db, receive_tx)
+
     await _refresh_section_plan_line_cache(db, from_task.section_plan_line_id)
     await _refresh_section_plan_line_cache(db, to_task.section_plan_line_id)
+
+    # Auto-issue on receive (business policy): increment
+    # cached_issued_quantity on destination task so the cancel guard
+    # (in_work >= sent) passes. Previously done via issue_to_work Movement;
+    # now explicit in the service (after _refresh_task_cache which would
+    # overwrite from Movement).
+    to_task.cached_issued_quantity = (to_task.cached_issued_quantity or Decimal("0")) + quantity
+    to_task.cached_in_work_quantity = (to_task.cached_in_work_quantity or Decimal("0")) + quantity
+    await db.flush()
 
     # If cumulative received quantity now exceeds the task's planned quantity
     # (i.e., over-plan material was transferred), expand planned_quantity so
@@ -579,6 +537,8 @@ async def transfer_send(
         await db.flush()
         await _refresh_task_cache(db, refreshed_to_task.id)
         await _refresh_section_plan_line_cache(db, refreshed_to_task.section_plan_line_id)
+        # Re-apply transfer projection again after cache refresh
+        await _stock_command_service._projection_manager.refresh_task_projection(db, receive_tx)
 
     # Запись лога аудита (передача)
     from app.services.audit_log_service import log_action
@@ -739,31 +699,32 @@ async def correct_transfer(
     if comment:
         transfer.comment = comment
 
-    # 4. Update Movements
-    movements_res = await db.execute(
-        select(Movement).where(Movement.transfer_id == transfer.id)
-    )
-    movements = movements_res.scalars().all()
-    for m in movements:
-        m.quantity = new_quantity
-        if comment:
-            m.comment = comment
-
+    # Movement-строк больше нет (Этап 2) — quantity синхронизируется
+    # только в StockTransaction ниже.
     await db.flush()
 
-    # ─── Stock Ledger quantity resync (Этап 2.2) ────────────────────────
-    # correct_transfer меняет sent_quantity in-place (mutable, как и для
-    # Movement). Активные StockTransaction синхронизируются тем же
-    # образом, иначе инвариант S6 (SUM(qty)==sent_quantity) упадёт.
+    # ─── StockTransaction quantity resync (in-place, controlled) ────────
+    # Активные StockTransaction синхронизируются in-place с новым quantity.
     # Контролируемое исключение из append-only; cancel идёт через
     # компенсации, а не через этот путь.
     await _resync_transfer_stock_tx_quantity(
         db, transfer=transfer, new_quantity=new_quantity
     )
 
-    # 5. Refresh cache
+    # 5. Refresh cache (non-transfer columns)
     await _refresh_task_cache(db, from_task.id)
     await _refresh_task_cache(db, to_task.id)
+    # Re-apply transfer projections (_refresh_task_cache не знает о StockTransaction)
+    active_txs = (await db.execute(
+        select(StockTransaction)
+        .where(
+            StockTransaction.transfer_id == transfer.id,
+            StockTransaction.compensates_tx_id.is_(None),
+        )
+        .limit(1)
+    )).scalars().all()
+    for atx in active_txs:
+        await _stock_command_service._projection_manager.refresh_task_projection(db, atx)
     await _refresh_section_plan_line_cache(db, from_task.section_plan_line_id)
     await _refresh_section_plan_line_cache(db, to_task.section_plan_line_id)
 
@@ -866,26 +827,30 @@ async def cancel_transfer(
                 rem.consumed_at = None
                 rem.consumed_by_task_id = None
                 qty_to_restore -= restore_qty
-    # Delete movements to restore balances (movements table requires quantity > 0)
-    movements_res = await db.execute(
-        select(Movement).where(Movement.transfer_id == transfer.id)
-    )
-    movements = movements_res.scalars().all()
-    for m in movements:
-        await db.delete(m)
-
+    # Movement-строки не удаляются — их больше нет (Этап 2).
     await db.flush()
 
-    # ─── Stock Ledger compensation (Этап 2.2) ───────────────────────────
-    # Append-only: вместо удаления StockTransaction создаём встречные
-    # компенсационные записи с перевёрнутыми локациями и compensates_tx_id.
-    # S6 для cancelled transfer'ов исключён, S1 (баланс) сходится к нулю.
+    # ─── StockTransaction compensation (append-only) ─────────────────────
+    # Создаём встречные компенсационные записи с перевёрнутыми локациями
+    # и compensates_tx_id → исходная. Баланс возвращается к нулю.
+    # Компенсация вызывает stock_changed → refresh_task_projection (net = 0).
     await _compensate_transfer_stock_tx(
         db, transfer=transfer, actor_id=actor_id, comment=comment
     )
-    # Refresh cache
+    # Refresh non-transfer cache
     await _refresh_task_cache(db, from_task.id)
     await _refresh_task_cache(db, to_task.id)
+    # Re-apply transfer projections (net = 0 после компенсации)
+    comp_txs = (await db.execute(
+        select(StockTransaction)
+        .where(
+            StockTransaction.transfer_id == transfer.id,
+            StockTransaction.reason.in_([Reason.transfer_send, Reason.transfer_receive]),
+        )
+        .limit(2)
+    )).scalars().all()
+    for ctx in comp_txs:
+        await _stock_command_service._projection_manager.refresh_task_projection(db, ctx)
     await _refresh_section_plan_line_cache(db, from_task.section_plan_line_id)
     await _refresh_section_plan_line_cache(db, to_task.section_plan_line_id)
 
