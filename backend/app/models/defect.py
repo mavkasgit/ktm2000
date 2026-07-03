@@ -16,7 +16,6 @@ class DefectStatus(str, enum.Enum):
     scrapped = "scrapped"
     returned = "returned"
     accepted_with_deviation = "accepted_with_deviation"
-    hold = "hold"
     closed = "closed"
 
 
@@ -24,7 +23,6 @@ class DefectDecisionType(str, enum.Enum):
     scrap = "scrap"
     rework_current = "rework_current"
     return_previous = "return_previous"
-    hold = "hold"
     accept_with_deviation = "accept_with_deviation"
 
 

@@ -11,7 +11,6 @@ class SpgStorageKind(str, enum.Enum):
     raw = "raw"
     wip = "wip"
     finished = "finished"
-    quarantine = "quarantine"
 
 
 class StorageProductionGroup(Base):

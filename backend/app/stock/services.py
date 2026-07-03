@@ -521,7 +521,6 @@ class StockCommandService:
             Reason.COMPLETE,
             Reason.SCRAP,
             Reason.REWORK,
-            Reason.QUARANTINE,
             Reason.FINAL_RELEASE,
             Reason.ISSUE_TO_WORK,
         }

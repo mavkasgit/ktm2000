@@ -1,7 +1,7 @@
 """Модели домена Stock Ledger.
 
 Локации — это секции (``Section``) с единым классификатором ``Section.type``
-(String(20), 6 значений: ``production | raw_stock | wip_stock | finished_stock | scrap | quarantine``).
+(String(20), 5 значений: ``production | raw_stock | wip_stock | finished_stock | scrap``).
 Отдельной таблицы Location нет: станки и склады — это Section, различаются по ``type``.
 Поле ``kind`` и enum ``LocationType`` удалены в эпике section-cleanup (миграция 027).
 
@@ -58,7 +58,6 @@ class Reason(str, enum.Enum):
     FINAL_RELEASE = "final_release"  # WIP_STOCK → FINISHED_STOCK
     SCRAP = "scrap"  # any → SCRAP, quality_state=SCRAP
     REWORK = "rework"  # any → REWORK location, quality_state=REWORK
-    QUARANTINE = "quarantine"  # any → QUARANTINE location, quality_state=QUARANTINE (hold decision)
     ADJUSTMENT_IN = "adjustment_in"  # manual stock count correction (+)
     ADJUSTMENT_OUT = "adjustment_out"  # manual stock count correction (-)
     MANUAL_IN = "manual_in"  # external supply → stock
@@ -77,7 +76,6 @@ class QualityState(str, enum.Enum):
     GOOD = "good"
     SCRAP = "scrap"
     REWORK = "rework"
-    QUARANTINE = "quarantine"
 
 
 class StockTransaction(Base):

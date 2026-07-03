@@ -314,39 +314,6 @@ async def defect_decide(
             defect.stock_transaction_id = tx.id
         defect.status = DefectStatus.accepted_with_deviation
 
-    elif decision_type == DefectDecisionType.hold:
-        from_sec_id = task.section_id if task else defect.section_id
-        # Find or auto-create quarantine location
-        quarantine_loc = await db.scalar(
-            select(_Section.id).where(_Section.type == "quarantine").limit(1)
-        )
-        if quarantine_loc is None:
-            quar_sec = _Section(
-                code="QUARANTINE", name="Quarantine",
-                type="quarantine", is_active=True, sort_order=999,
-            )
-            db.add(quar_sec)
-            await db.flush()
-            quarantine_loc = quar_sec.id
-        to_sec_id = quarantine_loc
-
-        tx = await svc.record(db, StockCommand(
-            product_id=task.product_id if task else defect.product_id,
-            from_location_id=from_sec_id,
-            to_location_id=to_sec_id,
-            quantity=quantity,
-            reason=Reason.QUARANTINE,
-            quality_state=QualityState.GOOD,
-            to_quality_state=QualityState.QUARANTINE,
-            task_id=task.id if task else None,
-            source_ref=f"defect:{defect.id}:decision:hold",
-            idempotency_key=f"{idempotency_key}:hold" if idempotency_key else None,
-            comment=comment,
-            created_by=actor_id,
-        ))
-        defect.stock_transaction_id = tx.id
-        defect.status = DefectStatus.hold
-
     else:
         defect.status = DefectStatus.decision_required
 

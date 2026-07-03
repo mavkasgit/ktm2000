@@ -29,7 +29,7 @@ STAGE_KIND_TRANSIT = "transit"
 OPERATION_TYPE_PRODUCTION = "production"
 OPERATION_TYPE_TRANSPORT = "transport"
 
-STORAGE_TYPES = frozenset({"raw_stock", "wip_stock", "finished_stock", "scrap", "quarantine"})
+STORAGE_TYPES = frozenset({"raw_stock", "wip_stock", "finished_stock", "scrap"})
 
 
 def is_storage_section(section: Section | None) -> bool:
