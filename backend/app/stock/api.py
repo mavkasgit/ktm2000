@@ -29,7 +29,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import READER_ROLES, require_role
+from app.api.deps import READER_ROLES, WRITER_ROLES, require_role
 from app.core.database import get_db
 from app.models.product import Product
 from app.models.section import Section
@@ -40,6 +40,7 @@ from app.stock.models import (
     StockBalance,
     StockTransaction,
 )
+from app.stock.services import StockCommand, StockCommandService
 
 router = APIRouter(prefix="/v2/stock", tags=["stock-ledger"])
 
@@ -87,6 +88,28 @@ class StockTransactionOut(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+class StockAdjustmentIn(BaseModel):
+    """Payload для ручной корректировки остатков (POST /v2/stock/adjustment).
+
+    ``reason`` определяет направление движения:
+    * ``adjustment_in`` / ``manual_in`` — приход на ``location_id`` (to_location)
+    * ``adjustment_out`` / ``manual_out`` — расход с ``location_id`` (from_location)
+    """
+    product_id: int
+    location_id: int
+    quantity: float = Field(gt=0)
+    reason: Reason
+    quality_state: QualityState = QualityState.good
+    comment: str | None = None
+
+
+class StockAdjustmentOut(BaseModel):
+    id: int
+    reason: Reason
+    quantity: str
+    created_at: str | None = None
 
 
 # ─── Balance ──────────────────────────────────────────────────────────────────
@@ -200,3 +223,58 @@ async def list_transactions(
     stmt = stmt.order_by(StockTransaction.id.desc()).limit(limit).offset(offset)
     result = await db.execute(stmt)
     return [StockTransactionOut.model_validate(t) for t in result.scalars().all()]
+
+
+# ─── Adjustment (write) ───────────────────────────────────────────────────────
+
+
+_ADJUSTMENT_REASONS = {Reason.adjustment_in, Reason.adjustment_out, Reason.manual_in, Reason.manual_out}
+
+
+@router.post("/adjustment", response_model=StockAdjustmentOut, status_code=201)
+async def create_adjustment(
+    payload: StockAdjustmentIn,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_role(list(WRITER_ROLES))),
+) -> StockAdjustmentOut:
+    """Ручная корректировка остатков (write API).
+
+    Создаёт ``StockTransaction`` через ``StockCommandService.record()``
+    с автоматическим определением ``from_/to_location_id`` по направлению
+    ``reason``.
+    """
+    if payload.reason not in _ADJUSTMENT_REASONS:
+        from fastapi import HTTPException
+        raise HTTPException(
+            status_code=422,
+            detail=f"reason must be one of {[r.value for r in _ADJUSTMENT_REASONS]}, got {payload.reason.value}",
+        )
+
+    if payload.reason in (Reason.adjustment_in, Reason.manual_in):
+        from_location_id = None
+        to_location_id = payload.location_id
+    else:
+        from_location_id = payload.location_id
+        to_location_id = None
+
+    cmd = StockCommand(
+        product_id=payload.product_id,
+        quantity=payload.quantity,
+        reason=payload.reason,
+        from_location_id=from_location_id,
+        to_location_id=to_location_id,
+        quality_state=payload.quality_state,
+        comment=payload.comment,
+        created_by=user.id,
+        created_by_user_name=user.full_name or user.username,
+    )
+    service = StockCommandService()
+    tx = await service.record(db, cmd)
+    await db.commit()
+
+    return StockAdjustmentOut(
+        id=tx.id,
+        reason=tx.reason,
+        quantity=str(tx.quantity),
+        created_at=tx.created_at.isoformat() if tx.created_at else None,
+    )

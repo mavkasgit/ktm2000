@@ -12,6 +12,7 @@ import {
 } from "@/shared/ui";
 import { getProductStockBalances } from "@/shared/api/stock";
 import type { StockBalanceEntry } from "@/shared/api/stock";
+import { listProducts } from "@/shared/api/products";
 import { Loader2, Layers, Package, AlertCircle } from "lucide-react";
 
 interface RemainderAllocationDialogProps {
@@ -53,7 +54,10 @@ export function RemainderAllocationDialog({
       setLoading(true);
       setError(null);
       try {
-        const allBalances = await getProductStockBalances(0);
+        // Lookup product by SKU to get product_id for balance query
+        const products = await listProducts({ q: positionSku, limit: 1 });
+        const productId = products.length > 0 ? products[0].id : 0;
+        const allBalances = await getProductStockBalances(productId);
         if (isMounted) {
           setBalances(allBalances.filter((b) => b.balance_qty !== "0"));
         }
@@ -72,7 +76,7 @@ export function RemainderAllocationDialog({
     return () => {
       isMounted = false;
     };
-  }, [open]);
+  }, [open, positionSku]);
 
   const totalAvailable = useMemo(() => {
     return balances.reduce((sum, b) => sum + parseFloat(b.balance_qty), 0);

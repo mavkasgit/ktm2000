@@ -90,6 +90,27 @@ export async function getProductStockBalances(productId: number, qualityState?: 
   return data;
 }
 
+export type StockAdjustmentPayload = {
+  product_id: number;
+  location_id: number;
+  quantity: number;
+  reason: "manual_in" | "manual_out" | "adjustment_in" | "adjustment_out";
+  quality_state?: QualityState;
+  comment?: string;
+};
+
+export type StockAdjustmentResponse = {
+  id: number;
+  reason: StockReason;
+  quantity: string;
+  created_at: string | null;
+};
+
+export async function postStockAdjustment(payload: StockAdjustmentPayload): Promise<StockAdjustmentResponse> {
+  const { data } = await apiClient.post<StockAdjustmentResponse>("/api/v2/stock/adjustment", payload);
+  return data;
+}
+
 export async function getStockTransactions(params?: StockTransactionsParams): Promise<StockTransactionEntry[]> {
   const search = new URLSearchParams();
   if (params?.product_id !== undefined) search.set("product_id", String(params.product_id));

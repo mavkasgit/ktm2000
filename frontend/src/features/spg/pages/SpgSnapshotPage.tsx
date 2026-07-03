@@ -9,13 +9,19 @@ import { getStockBalances } from "@/shared/api/stock";
 import type { StockBalanceEntry } from "@/shared/api/stock";
 import { SpgSelector } from "../components/SpgSelector";
 import { DefectsListPanel } from "../components/DefectsListPanel";
+import { StockAdjustmentDialog } from "../components/StockAdjustmentDialog";
+import { ProductStockBalanceDialog } from "../components/ProductStockBalanceDialog";
+import { StockTransactionsHistoryDrawer } from "../components/StockTransactionsHistoryDrawer";
 import { getSpgDefects } from "@/shared/api/defects";
 import { queryKeys } from "@/shared/api/queryKeys";
-import { Input } from "@/shared/ui";
+import { Input, Button } from "@/shared/ui";
 
 export function SpgSnapshotPage() {
   const [selectedSpgIds, setSelectedSpgIds] = useState<number[]>([]);
   const [searchQuery, setSearchQuery] = useState("");
+  const [isAdjustmentDialogOpen, setIsAdjustmentDialogOpen] = useState(false);
+  const [selectedProductId, setSelectedProductId] = useState<number | null>(null);
+  const [historyProductId, setHistoryProductId] = useState<number | null>(null);
   const queryClient = useQueryClient();
 
   const { data: spgs = [], isLoading: loadingList } = useQuery({
@@ -111,6 +117,14 @@ export function SpgSnapshotPage() {
     );
   }, [stockBalances, searchQuery]);
 
+  const handleSelectProduct = (productId: number) => {
+    setSelectedProductId(productId);
+  };
+
+  const handleShowHistory = (productId: number) => {
+    setHistoryProductId(productId);
+  };
+
   return (
     <div className="space-y-6 p-4">
       <div>
@@ -143,14 +157,23 @@ export function SpgSnapshotPage() {
               <p className="text-sm text-muted-foreground">{headerDescription}</p>
             )}
           </div>
-          <button
-            type="button"
-            onClick={handleRefresh}
-            disabled={loadingBalances || loadingDefects}
-            className="rounded-md border border-border px-3 py-1.5 text-sm hover:bg-accent disabled:opacity-50"
-          >
-            {loadingBalances || loadingDefects ? "Обновление..." : "Обновить"}
-          </button>
+          <div className="flex items-center gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setIsAdjustmentDialogOpen(true)}
+            >
+              Ручная операция
+            </Button>
+            <button
+              type="button"
+              onClick={handleRefresh}
+              disabled={loadingBalances || loadingDefects}
+              className="rounded-md border border-border px-3 py-1.5 text-sm hover:bg-accent disabled:opacity-50"
+            >
+              {loadingBalances || loadingDefects ? "Обновление..." : "Обновить"}
+            </button>
+          </div>
         </div>
       )}
 
@@ -174,6 +197,8 @@ export function SpgSnapshotPage() {
             balances={filteredBalances}
             isLoading={loadingBalances}
             searchQuery={searchQuery}
+            onSelectProduct={handleSelectProduct}
+            onShowHistory={handleShowHistory}
           />
           <DefectsListPanel
             spgId={targetSpgIds[0] ?? 0}
@@ -187,6 +212,30 @@ export function SpgSnapshotPage() {
           />
         </div>
       )}
+
+      <StockAdjustmentDialog
+        open={isAdjustmentDialogOpen}
+        onOpenChange={setIsAdjustmentDialogOpen}
+      />
+
+      {selectedProductId !== null && (
+        <ProductStockBalanceDialog
+          productId={selectedProductId}
+          open={selectedProductId !== null}
+          onOpenChange={(open) => {
+            if (!open) setSelectedProductId(null);
+          }}
+          onShowHistory={handleShowHistory}
+        />
+      )}
+
+      <StockTransactionsHistoryDrawer
+        productId={historyProductId ?? undefined}
+        open={historyProductId !== null}
+        onOpenChange={(open) => {
+          if (!open) setHistoryProductId(null);
+        }}
+      />
     </div>
   );
 }
@@ -195,9 +244,11 @@ interface StockBalancesPanelProps {
   balances: StockBalanceEntry[];
   isLoading: boolean;
   searchQuery: string;
+  onSelectProduct: (productId: number) => void;
+  onShowHistory: (productId: number) => void;
 }
 
-function StockBalancesPanel({ balances, isLoading, searchQuery }: StockBalancesPanelProps) {
+function StockBalancesPanel({ balances, isLoading, searchQuery, onSelectProduct, onShowHistory }: StockBalancesPanelProps) {
   const [isExpanded, setIsExpanded] = useState(true);
 
   const filteredBalances = useMemo(() => {
@@ -250,13 +301,21 @@ function StockBalancesPanel({ balances, isLoading, searchQuery }: StockBalancesP
                       <th className="p-2 text-left font-medium">Участок</th>
                       <th className="p-2 text-left font-medium">Статус качества</th>
                       <th className="p-2 text-right font-medium">Остаток</th>
+                      <th className="p-2 text-center font-medium">Действия</th>
                     </tr>
                   </thead>
                   <tbody>
                     {filteredBalances.map((b) => (
                       <tr key={b.id} className="border-b hover:bg-muted/30">
                         <td className="p-2">
-                          <div className="font-medium">#{b.product_id}</div>
+                          <button
+                            type="button"
+                            className="font-medium hover:text-primary transition-colors cursor-pointer"
+                            onClick={() => onSelectProduct(b.product_id)}
+                            title="Показать детальные остатки"
+                          >
+                            #{b.product_id}
+                          </button>
                         </td>
                         <td className="p-2 text-xs">
                           {b.location_name || `#${b.location_id}`}
@@ -268,6 +327,15 @@ function StockBalancesPanel({ balances, isLoading, searchQuery }: StockBalancesP
                         </td>
                         <td className="p-2 text-right font-semibold font-mono">
                           {b.balance_qty}
+                        </td>
+                        <td className="p-2 text-center">
+                          <button
+                            type="button"
+                            className="text-xs text-muted-foreground hover:text-primary cursor-pointer"
+                            onClick={() => onShowHistory(b.product_id)}
+                          >
+                            История
+                          </button>
                         </td>
                       </tr>
                     ))}
