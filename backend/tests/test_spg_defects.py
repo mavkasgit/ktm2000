@@ -11,6 +11,7 @@ from app.models.spg_remainder import SpgRemainder
 from app.models.route import ProductionRoute, RouteStage, RouteOperation, RouteRuleProfile
 from app.models.defect import Defect, DefectItem, DefectStatus, DefectDecisionType
 from app.models.user import User, UserRole
+from app.stock import Reason, StockTransaction
 
 
 async def _make_admin(session, email: str = "admin-def@test.local") -> User:
@@ -272,25 +273,8 @@ async def test_manual_defect_registration_and_scrap_decision(client, session):
     product = await _make_product(session, "FG-DEFECT-TEST")
     route = await _setup_route_with_stages(session)
     
-    # Create SPG
-    spg = StorageProductionGroup(code="WIP2", name="WIP SPG 2")
-    session.add(spg)
-    await session.flush()
-
     drill_sec = await session.scalar(select(Section).where(Section.code == "DRILL"))
     stage = await session.scalar(select(RouteStage).where(RouteStage.route_id == route.id).limit(1))
-
-    # Create remainder
-    remainder = SpgRemainder(
-        product_id=product.id,
-        spg_id=spg.id,
-        remainder_quantity=Decimal("50.000"),
-        original_issued=Decimal("50.000"),
-        completed_stages_json=[],
-        source="manual",
-    )
-    session.add(remainder)
-    await session.flush()
 
     # Register defect manually
     resp = await client.post(
@@ -299,10 +283,9 @@ async def test_manual_defect_registration_and_scrap_decision(client, session):
             "product_id": product.id,
             "section_id": drill_sec.id,
             "route_stage_id": stage.id,
-            "spg_remainder_id": remainder.id,
             "quantity": 10,
             "reason": "Царапины",
-            "comment": "Вручную обнаружено на СПГ"
+            "comment": "Вручную обнаружено"
         }
     )
     assert resp.status_code == 200, resp.text
@@ -312,7 +295,6 @@ async def test_manual_defect_registration_and_scrap_decision(client, session):
     defect = await session.scalar(select(Defect).where(Defect.id == defect_id))
     assert defect is not None
     assert defect.task_id is None
-    assert defect.spg_remainder_id == remainder.id
     assert defect.route_stage_id == stage.id
 
     # Decide scrap decision on this defect
@@ -321,29 +303,23 @@ async def test_manual_defect_registration_and_scrap_decision(client, session):
         json={
             "decision_type": DefectDecisionType.scrap.value,
             "quantity": 10,
-            "comment": "Списание брака на СПГ"
+            "comment": "Списание брака"
         }
     )
     assert dec_resp.status_code == 200, dec_resp.text
+    data = dec_resp.json()
+    assert data["defect_status"] == DefectStatus.scrapped.value
 
-    # Verify remainder quantity has been decreased
-    await session.refresh(remainder)
-    assert remainder.remainder_quantity == Decimal("40")
-    assert remainder.consumed_at is None
+    # Verify defect has stock_transaction_id set
+    await session.refresh(defect)
+    assert defect.stock_transaction_id is not None
+    assert defect.status == DefectStatus.scrapped
 
-    # Decide scrap for remaining 40 to verify consumed_at is set
-    dec_resp2 = await client.post(
-        f"/api/shopfloor/defects/{defect_id}/decisions",
-        json={
-            "decision_type": DefectDecisionType.scrap.value,
-            "quantity": 40,
-            "comment": "Списание всего остатка"
-        }
-    )
-    assert dec_resp2.status_code == 200, dec_resp2.text
-    await session.refresh(remainder)
-    assert remainder.remainder_quantity == Decimal("0")
-    assert remainder.consumed_at is not None
+    # Verify StockTransaction(SCRAP) was created
+    from app.stock.models import StockTransaction
+    tx = await session.get(StockTransaction, defect.stock_transaction_id)
+    assert tx is not None
+    assert tx.reason == Reason.scrap
 
 
 @pytest.mark.asyncio
@@ -459,41 +435,25 @@ async def test_import_remainders_excel_edge_cases(client, session):
 
 
 @pytest.mark.asyncio
-async def test_manual_defect_scrap_exceeding_remainder_quantity(client, session):
+async def test_manual_defect_scrap_exceeding_quantity(client, session):
+    """Scrap decision создаёт StockTransaction(SCRAP) независимо от количества."""
     await _make_admin(session, "defect-exceed-scrap@test.local")
     product = await _make_product(session, "FG-EXCEED-TEST")
     await _setup_route_with_stages(session)
-    
-    spg = StorageProductionGroup(code="WIP3", name="WIP SPG 3")
-    session.add(spg)
-    await session.flush()
 
     drill_sec = await session.scalar(select(Section).where(Section.code == "DRILL"))
     stage = await session.scalar(select(RouteStage).limit(1))
 
-    # Create remainder with quantity 15
-    remainder = SpgRemainder(
-        product_id=product.id,
-        spg_id=spg.id,
-        remainder_quantity=Decimal("15.000"),
-        original_issued=Decimal("15.000"),
-        completed_stages_json=[],
-        source="manual",
-    )
-    session.add(remainder)
-    await session.flush()
-
-    # Register defect with quantity 20 (which is larger than 15)
+    # Register defect
     resp = await client.post(
         "/api/shopfloor/defects",
         json={
             "product_id": product.id,
             "section_id": drill_sec.id,
             "route_stage_id": stage.id,
-            "spg_remainder_id": remainder.id,
             "quantity": 20,
             "reason": "scratches",
-            "comment": "manual defect larger than remainder"
+            "comment": "manual defect"
         }
     )
     assert resp.status_code == 200, resp.text
@@ -505,15 +465,24 @@ async def test_manual_defect_scrap_exceeding_remainder_quantity(client, session)
         json={
             "decision_type": DefectDecisionType.scrap.value,
             "quantity": 20,
-            "comment": "Списание брака больше остатка"
+            "comment": "Списание брака"
         }
     )
     assert dec_resp.status_code == 200, dec_resp.text
+    data = dec_resp.json()
+    assert data["defect_status"] == DefectStatus.scrapped.value
 
-    # Verify remainder quantity has gone negative (-5) and consumed_at was set
-    await session.refresh(remainder)
-    assert remainder.remainder_quantity == Decimal("-5")
-    assert remainder.consumed_at is not None
+    # Verify defect has stock_transaction_id set
+    defect = await session.scalar(select(Defect).where(Defect.id == defect_id))
+    assert defect is not None
+    assert defect.stock_transaction_id is not None
+    assert defect.status == DefectStatus.scrapped
+
+    # Verify StockTransaction(SCRAP) was created
+    tx = await session.get(StockTransaction, defect.stock_transaction_id)
+    assert tx is not None
+    assert tx.reason == Reason.scrap
+    assert tx.quantity == Decimal("20")
 
 
 @pytest.mark.asyncio
@@ -555,8 +524,16 @@ async def test_manual_defect_hold_decision(client, session):
     )
     assert dec_resp.status_code == 200, dec_resp.text
 
-    # 3. Verify defect status is hold
+    # 3. Verify defect status is hold and stock_transaction_id is set
     defect = await session.scalar(select(Defect).where(Defect.id == defect_id))
     assert defect is not None
     assert defect.status == DefectStatus.hold
+    assert defect.stock_transaction_id is not None
+
+    # Verify StockTransaction(QUARANTINE) was created
+    tx = await session.get(StockTransaction, defect.stock_transaction_id)
+    assert tx is not None
+    assert tx.reason == Reason.quarantine
+    assert tx.to_quality_state == "quarantine"
+    assert tx.quantity == Decimal("8")
 

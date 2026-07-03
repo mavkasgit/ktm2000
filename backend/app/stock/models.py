@@ -80,6 +80,7 @@ class Reason(str, enum.Enum):
     final_release = "final_release"  # WIP_STOCK → FINISHED_STOCK
     scrap = "scrap"  # any → SCRAP, quality_state=SCRAP
     rework = "rework"  # any → REWORK location, quality_state=REWORK
+    quarantine = "quarantine"  # any → QUARANTINE location, quality_state=QUARANTINE (hold decision)
     adjustment_in = "adjustment_in"  # manual stock count correction (+)
     adjustment_out = "adjustment_out"  # manual stock count correction (-)
     manual_in = "manual_in"  # external supply → stock

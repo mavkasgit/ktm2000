@@ -521,6 +521,7 @@ class StockCommandService:
             Reason.complete,
             Reason.scrap,
             Reason.rework,
+            Reason.quarantine,
             Reason.final_release,
             Reason.issue_to_work,
         }

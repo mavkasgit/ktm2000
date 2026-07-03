@@ -6,11 +6,11 @@ from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.defect import Defect, DefectDecision, DefectDecisionType, DefectItem, DefectStatus, DefectType
-from app.models.movement import Movement, MovementType
 from app.models.rework_task import ReworkTask, ReworkTaskStatus
+from app.stock import QualityState, Reason, StockCommand, StockCommandService
 
 from .cache import _refresh_section_plan_line_cache
-from .common import _check_idempotency, _ensure_positive, _get_defect, _get_task, _get_user_snapshot_name, _to_decimal
+from .common import _check_idempotency, _ensure_positive, _get_defect, _get_task, _to_decimal
 
 async def create_defect(
     db: AsyncSession,
@@ -169,7 +169,6 @@ async def defect_decide(
     if idempotency_key:
         existing = await _check_idempotency(db, idempotency_key=idempotency_key, entity_type=DefectDecision)
         if existing is not None:
-            # Find associated rework task if decision type was rework
             rework = await db.scalar(
                 select(ReworkTask).where(ReworkTask.defect_id == defect.id).order_by(ReworkTask.id)
             )
@@ -197,41 +196,43 @@ async def defect_decide(
     db.add(decision)
     await db.flush()
 
+    svc = StockCommandService()
     rework_task_id: int | None = None
-    if decision_type == DefectDecisionType.scrap:
-        actor_name = await _get_user_snapshot_name(db, actor_id)
-        
-        prod_id = task.product_id if task else defect.product_id
-        t_id = task.id if task else None
-        spl_id = task.section_plan_line_id if task else None
-        from_sec_id = task.section_id if task else defect.section_id
-        to_sec_id = task.section_id if task else defect.section_id
+    from app.models.section import Section as _Section
 
-        movement = Movement(
-            product_id=prod_id,
-            task_id=t_id,
-            section_plan_line_id=spl_id,
-            from_section_id=from_sec_id,
-            to_section_id=to_sec_id,
-            movement_type=MovementType.scrap,
+    if decision_type == DefectDecisionType.scrap:
+        from_sec_id = task.section_id if task else defect.section_id
+        # Find or auto-create scrap location
+        scrap_loc = await db.scalar(
+            select(_Section.id).where(_Section.type == "scrap").limit(1)
+        )
+        if scrap_loc is None:
+            scrap_sec = _Section(
+                code="SCRAP", name="Scrap", kind="storage",
+                type="scrap", is_active=True, sort_order=999,
+            )
+            db.add(scrap_sec)
+            await db.flush()
+            scrap_loc = scrap_sec.id
+        to_sec_id = scrap_loc
+
+        tx = await svc.record(db, StockCommand(
+            product_id=task.product_id if task else defect.product_id,
+            from_location_id=from_sec_id,
+            to_location_id=to_sec_id,
             quantity=quantity,
-            reason=reason,
+            reason=Reason.scrap,
+            quality_state=QualityState.good,
+            to_quality_state=QualityState.scrap,
+            task_id=task.id if task else None,
+            source_ref=f"defect:{defect.id}:decision:scrap",
+            idempotency_key=idempotency_key,
             comment=comment,
             created_by=actor_id,
-            created_by_user_name=actor_name,
-        )
-        db.add(movement)
-
-        # Deduct from SpgRemainder if associated
-        if defect.spg_remainder_id is not None:
-            from app.models.spg_remainder import SpgRemainder
-            remainder = await db.get(SpgRemainder, defect.spg_remainder_id)
-            if remainder:
-                remainder.remainder_quantity -= quantity
-                if remainder.remainder_quantity <= 0:
-                    remainder.consumed_at = func.now()
-
+        ))
+        defect.stock_transaction_id = tx.id
         defect.status = DefectStatus.scrapped
+
     elif decision_type in {DefectDecisionType.rework_current, DefectDecisionType.return_previous}:
         assert task is not None
         rework = ReworkTask(
@@ -246,48 +247,131 @@ async def defect_decide(
         db.add(rework)
         await db.flush()
         rework_task_id = rework.id
-        defect.status = DefectStatus.rework_task_created
-    elif decision_type == DefectDecisionType.accept_with_deviation:
-        defect.status = DefectStatus.accepted_with_deviation
-        if task:
-            actor_name = await _get_user_snapshot_name(db, actor_id)
-            movement = Movement(
+
+        if decision_type == DefectDecisionType.rework_current:
+            to_loc = target_section_id or task.section_id
+            # DB constraint prevents same from/to — use None for same-location
+            if to_loc == task.section_id:
+                to_loc = None
+            tx = await svc.record(db, StockCommand(
                 product_id=task.product_id,
-                task_id=task.id,
-                section_plan_line_id=task.section_plan_line_id,
-                from_section_id=task.section_id,
-                to_section_id=task.section_id,
-                movement_type=MovementType.complete,
+                from_location_id=task.section_id,
+                to_location_id=to_loc,
                 quantity=quantity,
-                reason=reason,
+                reason=Reason.rework,
+                quality_state=QualityState.good,
+                to_quality_state=QualityState.rework,
+                task_id=task.id,
+                source_ref=f"defect:{defect.id}:decision:rework",
+                idempotency_key=f"{idempotency_key}:rework" if idempotency_key else None,
                 comment=comment,
                 created_by=actor_id,
-                created_by_user_name=actor_name,
-                performed_at=func.now(),
-                accounted_at=func.now(),
-                source_ref=f"defect:{defect.id}",
+            ))
+            defect.stock_transaction_id = tx.id
+        else:
+            # return_to_previous: find previous route stage section
+            to_loc = target_section_id
+            if to_loc is None and task.route_stage_id is not None:
+                from app.models.route import RouteStage
+                prev_stage = await db.scalar(
+                    select(RouteStage).where(
+                        RouteStage.route_id == (
+                            select(RouteStage.route_id).where(RouteStage.id == task.route_stage_id)
+                        ).scalar_subquery(),
+                        RouteStage.sequence < (
+                            select(RouteStage.sequence).where(RouteStage.id == task.route_stage_id)
+                        ).scalar_subquery(),
+                    ).order_by(RouteStage.sequence.desc()).limit(1)
+                )
+                if prev_stage is not None:
+                    to_loc = prev_stage.section_id
+            if to_loc is None:
+                to_loc = task.section_id
+            # DB constraint prevents same from/to
+            if to_loc == task.section_id:
+                to_loc = None
+
+            tx = await svc.record(db, StockCommand(
+                product_id=task.product_id,
+                from_location_id=task.section_id,
+                to_location_id=to_loc,
+                quantity=quantity,
+                reason=Reason.return_to_previous,
+                task_id=task.id,
+                source_ref=f"defect:{defect.id}:decision:return_previous",
+                idempotency_key=f"{idempotency_key}:return" if idempotency_key else None,
+                comment=comment,
+                created_by=actor_id,
+            ))
+            defect.stock_transaction_id = tx.id
+
+        defect.status = DefectStatus.rework_task_created
+
+    elif decision_type == DefectDecisionType.accept_with_deviation:
+        if task:
+            tx = await svc.record(db, StockCommand(
+                product_id=task.product_id,
+                from_location_id=None,
+                to_location_id=task.section_id,
+                quantity=quantity,
+                reason=Reason.complete,
+                quality_state=QualityState.good,
+                task_id=task.id,
+                source_ref=f"defect:{defect.id}:decision:accept_deviation",
                 idempotency_key=f"{idempotency_key}:complete" if idempotency_key else None,
-            )
-            db.add(movement)
+                comment=comment,
+                created_by=actor_id,
+            ))
+            defect.stock_transaction_id = tx.id
+        defect.status = DefectStatus.accepted_with_deviation
+
     elif decision_type == DefectDecisionType.hold:
+        from_sec_id = task.section_id if task else defect.section_id
+        # Find or auto-create quarantine location
+        quarantine_loc = await db.scalar(
+            select(_Section.id).where(_Section.type == "quarantine").limit(1)
+        )
+        if quarantine_loc is None:
+            quar_sec = _Section(
+                code="QUARANTINE", name="Quarantine", kind="storage",
+                type="quarantine", is_active=True, sort_order=999,
+            )
+            db.add(quar_sec)
+            await db.flush()
+            quarantine_loc = quar_sec.id
+        to_sec_id = quarantine_loc
+
+        tx = await svc.record(db, StockCommand(
+            product_id=task.product_id if task else defect.product_id,
+            from_location_id=from_sec_id,
+            to_location_id=to_sec_id,
+            quantity=quantity,
+            reason=Reason.quarantine,
+            quality_state=QualityState.good,
+            to_quality_state=QualityState.quarantine,
+            task_id=task.id if task else None,
+            source_ref=f"defect:{defect.id}:decision:hold",
+            idempotency_key=f"{idempotency_key}:hold" if idempotency_key else None,
+            comment=comment,
+            created_by=actor_id,
+        ))
+        defect.stock_transaction_id = tx.id
         defect.status = DefectStatus.hold
+
     else:
         defect.status = DefectStatus.decision_required
 
     if task:
-        # Cache проекций обновляется автоматически через StockProjectionManager
-        # при записи StockTransaction. _refresh_task_cache удалён на Этапе 3.
         await _refresh_section_plan_line_cache(db, task.section_plan_line_id)
 
-    # Запись лога аудита (решение по браку)
     from app.services.audit_log_service import log_action
     from app.models.audit_log import AuditAction, AuditEntityType
     from app.models.section import Section
     from app.models.product import Product
-    
+
     section = await db.get(Section, defect.section_id)
     product = await db.get(Product, defect.product_id)
-    
+
     await log_action(
         db,
         status="success",

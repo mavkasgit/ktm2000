@@ -314,6 +314,7 @@ async def complete_task(
             product_id=task.product_id,
             section_id=task.section_id,
             task_id=task.id,
+            stock_transaction_id=tx_scrap.id,
             status=DefectStatus.decision_required,
             comment=comment,
             created_by=actor_id,

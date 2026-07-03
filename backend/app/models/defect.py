@@ -2,6 +2,7 @@ import enum
 from datetime import datetime
 from decimal import Decimal
 
+import sqlalchemy as sa
 from sqlalchemy import BigInteger, Boolean, CheckConstraint, DateTime, Enum, ForeignKey, Identity, Numeric, String, Text, func, text
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -53,6 +54,9 @@ class Defect(Base):
     route_stage_id: Mapped[int | None] = mapped_column(ForeignKey("route_stages.id", ondelete="SET NULL"), nullable=True)
     spg_remainder_id: Mapped[int | None] = mapped_column(ForeignKey("spg_remainders.id", ondelete="SET NULL"), nullable=True)
     movement_id: Mapped[int | None] = mapped_column(ForeignKey("movements.id"), nullable=True)
+    stock_transaction_id: Mapped[int | None] = mapped_column(
+        sa.BigInteger, sa.ForeignKey("stock_transactions.id"), nullable=True
+    )
     status: Mapped[DefectStatus] = mapped_column(
         Enum(DefectStatus, name="defect_status"),
         nullable=False,
