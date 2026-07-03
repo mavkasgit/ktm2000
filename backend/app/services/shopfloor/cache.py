@@ -6,70 +6,10 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.internal_plan import SectionPlanLine
-from app.models.movement import Movement, MovementType
-from app.models.work_task import WorkTask, WorkTaskStatus
-from app.models.defect import Defect, DefectDecision, DefectDecisionType
+from app.models.work_task import WorkTask
 
-from .common import _get_task, _to_decimal
+from .common import _to_decimal
 
-async def _task_movement_sums(db: AsyncSession, task_id: int) -> dict[str, Decimal]:
-    rows = (
-        await db.execute(
-            select(
-                Movement.movement_type,
-                func.coalesce(func.sum(Movement.quantity), 0).label("qty"),
-            )
-            .where(Movement.task_id == task_id)
-            .group_by(Movement.movement_type)
-        )
-    ).all()
-    sums: dict[str, Decimal] = {}
-    for movement_type, qty in rows:
-        key = movement_type.value if hasattr(movement_type, "value") else str(movement_type)
-        sums[key] = _to_decimal(qty or 0)
-    return sums
-
-async def _initial_available_quantity(db: AsyncSession, task: WorkTask) -> Decimal:
-    """Base availability before incoming transfers.
-
-    Material movement between sections, even within the same SPG/GHP,
-    is now an explicit transfer operation — there is no automatic
-    cascade from a completed task to the next one.
-
-    Base availability rules:
-      * First route stage (sequence == 1): planned_quantity.
-      * First production stage after a stock section (no preceding
-        production WorkTask): planned_quantity. The take-to-work
-        step is the only moment we expose the planned amount
-        without a transfer, so the launched position has something
-        to display; the operator still has to issue an explicit
-        transfer to actually move material.
-      * Any subsequent production stage: 0 — availability grows
-        only via received transfers.
-    """
-    line = await db.get(SectionPlanLine, task.section_plan_line_id)
-    if line is None:
-        return Decimal("0")
-    if line.sequence == 1:
-        return task.planned_quantity
-
-    # Find the immediately preceding plan line. If it is not a
-    # production section (or has no WorkTask), this stage is the
-    # first production task in the chain — surface planned quantity.
-    prev_line = await db.scalar(
-        select(SectionPlanLine).where(
-            SectionPlanLine.plan_position_id == line.plan_position_id,
-            SectionPlanLine.sequence == line.sequence - 1,
-        )
-    )
-    if prev_line is not None:
-        from app.models.section import Section as _Section
-        prev_sec = await db.get(_Section, prev_line.section_id)
-        if prev_sec is not None and prev_sec.kind != "production":
-            return task.planned_quantity
-        # Previous stage is production: there is a preceding WorkTask.
-        # Without a transfer, nothing cascades — return 0.
-    return Decimal("0")
 
 def _compute_available_from_balances(
     *,
@@ -78,154 +18,19 @@ def _compute_available_from_balances(
     issued_quantity: Decimal,
     is_first_stage: bool,
 ) -> Decimal:
+    """Compute available quantity from cached balances (pure, no DB)."""
     base_available = planned_quantity if is_first_stage else Decimal("0")
     available = base_available + received_quantity - issued_quantity
     return available if available > 0 else Decimal("0")
 
-async def _refresh_task_cache(db: AsyncSession, task_id: int, visited: set[int] | None = None) -> WorkTask:
-    if visited is None:
-        visited = set()
-    if task_id in visited:
-        return await _get_task(db, task_id)
-    visited.add(task_id)
-
-    task = await _get_task(db, task_id)
-    sums = await _task_movement_sums(db, task_id)
-
-    # Решения по дефектам этой задачи, чтобы вычесть одобренные/вторично списанные детали
-    decisions_query = (
-        select(
-            DefectDecision.decision_type,
-            func.coalesce(func.sum(DefectDecision.quantity), 0)
-        )
-        .join(Defect, Defect.id == DefectDecision.defect_id)
-        .where(Defect.task_id == task_id)
-        .group_by(DefectDecision.decision_type)
-    )
-    decision_rows = (await db.execute(decisions_query)).all()
-    decisions = {r[0]: _to_decimal(r[1] or 0) for r in decision_rows}
-
-    scrap_decisions = decisions.get(DefectDecisionType.scrap, Decimal("0"))
-    accept_deviation_decisions = decisions.get(DefectDecisionType.accept_with_deviation, Decimal("0"))
-
-    issued = sums.get(MovementType.issue_to_work.value, Decimal("0"))
-    completed = sums.get(MovementType.complete.value, Decimal("0"))
-    transferred = sums.get(MovementType.transfer_send.value, Decimal("0"))
-    received = sums.get(MovementType.transfer_receive.value, Decimal("0"))
-
-    rejected = (
-        sums.get(MovementType.reject.value, Decimal("0"))
-        + sums.get(MovementType.scrap.value, Decimal("0"))
-        - scrap_decisions
-        - accept_deviation_decisions
-    )
-    if rejected < 0:
-        rejected = Decimal("0")
-
-    # NOTE: there is intentionally NO `prev_completed` auto-cascade. Material
-    # movement between sections is now always an explicit transfer operation
-    # (see transfers/services.py). The receiving task's `available` grows
-    # only via `received` (transfer_receive movements on THIS task).
-    prev_completed = Decimal("0")
-    line = await db.get(SectionPlanLine, task.section_plan_line_id)
-
-    base_available = await _initial_available_quantity(db, task)
-    consumed_from_remainders = await db.scalar(
-        select(func.coalesce(func.sum(Movement.quantity), 0)).where(
-            Movement.task_id == task_id,
-            Movement.movement_type == MovementType.issue_to_work,
-            Movement.source_ref.like("remainder:%"),
-        )
-    ) or Decimal("0")
-    available = base_available + received + consumed_from_remainders + prev_completed - issued
-    if available < 0:
-        available = Decimal("0")
-
-    remaining = task.planned_quantity - transferred
-    if remaining < 0:
-        remaining = Decimal("0")
-
-    task.cached_issued_quantity = issued
-    task.cached_completed_quantity = completed
-    task.cached_transferred_quantity = transferred
-    task.cached_received_quantity = received
-    task.cached_rejected_quantity = rejected
-    task.cached_available_quantity = available
-    task.cached_remaining_quantity = remaining
-
-    from app.models.route import RouteStage
-    stage = await db.get(RouteStage, task.route_stage_id) if task.route_stage_id else None
-    is_final = stage.is_final if stage else False
-
-    is_fully_transferred = False
-    if is_final:
-        final_released = await db.scalar(
-            select(func.coalesce(func.sum(Movement.quantity), 0)).where(
-                Movement.task_id == task.id, Movement.movement_type == MovementType.final_release
-            )
-        ) or Decimal("0")
-        is_fully_transferred = final_released >= completed
-    else:
-        is_fully_transferred = transferred >= completed
-
-    if completed + rejected >= task.planned_quantity and is_fully_transferred:
-        task.status = WorkTaskStatus.completed
-    elif completed + rejected > 0:
-        task.status = WorkTaskStatus.partially_completed
-    elif issued > 0:
-        task.status = WorkTaskStatus.in_progress
-    elif available > 0:
-        # ``available`` for the first effective task in a SPG comes from
-        # the plan; for downstream tasks it must come from ``received``.
-        # If neither side has material yet, show the task as waiting
-        # for the upstream transfer rather than as ready-to-work — this
-        # matches operator intuition and makes ``issue_to_work`` reject
-        # with a clear message via the existing ``is_first_active`` guard.
-        if base_available == 0 and received == 0:
-            task.status = WorkTaskStatus.waiting_previous
-        else:
-            task.status = WorkTaskStatus.ready
-    else:
-        preceding_exists = False
-        if line is not None:
-            preceding_exists = await db.scalar(
-                select(func.count(SectionPlanLine.id))
-                .where(
-                    SectionPlanLine.plan_position_id == line.plan_position_id,
-                    SectionPlanLine.sequence < line.sequence,
-                )
-            ) > 0
-        if preceding_exists:
-            task.status = WorkTaskStatus.waiting_previous
-        else:
-            task.status = WorkTaskStatus.ready
-
-    # Cascade refresh to the next task if it is in the same GHP
-    line = await db.get(SectionPlanLine, task.section_plan_line_id)
-    if line is not None:
-        next_line = await db.scalar(
-            select(SectionPlanLine).where(
-                SectionPlanLine.plan_position_id == line.plan_position_id,
-                SectionPlanLine.sequence == line.sequence + 1,
-            )
-        )
-        if next_line is not None:
-            from .common import sections_share_spg
-            if await sections_share_spg(db, line.section_id, next_line.section_id):
-                next_task = await db.scalar(
-                    select(WorkTask).where(
-                        WorkTask.section_plan_line_id == next_line.id,
-                        WorkTask.status.notin_([WorkTaskStatus.cancelled]),
-                    )
-                )
-                if next_task is not None:
-                    await _refresh_task_cache(db, next_task.id, visited)
-                    await _refresh_section_plan_line_cache(db, next_line.id)
-
-    await db.flush()
-    return task
 
 async def _refresh_section_plan_line_cache(db: AsyncSession, section_plan_line_id: int) -> None:
+    """Refresh SectionPlanLine cached aggregates from WorkTask cached_* columns.
+
+    Cached values are maintained by StockProjectionManager.refresh_task_projection
+    (which reads from StockTransaction ledger). This function simply aggregates
+    those per-task values up to the plan-line level.
+    """
     line = await db.get(SectionPlanLine, section_plan_line_id)
     if line is None:
         return
@@ -251,4 +56,3 @@ async def _refresh_section_plan_line_cache(db: AsyncSession, section_plan_line_i
     line.cached_received_quantity = _to_decimal(sums[4] or 0)
     line.cached_rejected_quantity = _to_decimal(sums[5] or 0)
     line.cached_remaining_quantity = _to_decimal(sums[6] or 0)
-

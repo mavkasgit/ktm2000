@@ -44,7 +44,6 @@ from app.models.work_task import WorkTask, WorkTaskStatus
 
 from app.services.shopfloor.cache import (
     _refresh_section_plan_line_cache,
-    _refresh_task_cache,
 )
 from app.services.shopfloor.common import (
     _check_idempotency,
@@ -350,7 +349,7 @@ async def transfer_send(
             )
             db.add(to_task)
             await db.flush()
-            await _refresh_task_cache(db, to_task.id)
+            # Cache refreshed automatically via StockProjectionManager
 
     if from_task.product_id != to_task.product_id:
         raise ValueError("Transfer tasks must have same product")
@@ -505,40 +504,24 @@ async def transfer_send(
                     rem.consumed_by_task_id = to_task.id
                 qty_to_consume -= consume_qty
 
-    # _refresh_task_cache обновляет cached_* из Movement для не-transfer
-    # операций (issued, completed). Для transfer-кэша Movement-строк нет
-    # (они удалены на Этапе 2), поэтому _refresh_task_cache сбросит
-    # cached_transferred/received в 0 — перезаписываем из StockTransaction.
-    await _refresh_task_cache(db, from_task.id)
-    refreshed_to_task = await _refresh_task_cache(db, to_task.id)
-    # Re-apply transfer-specific projections (были сброшены _refresh_task_cache)
-    await _stock_command_service._projection_manager.refresh_task_projection(db, send_tx)
-    await _stock_command_service._projection_manager.refresh_task_projection(db, receive_tx)
-
-    await _refresh_section_plan_line_cache(db, from_task.section_plan_line_id)
-    await _refresh_section_plan_line_cache(db, to_task.section_plan_line_id)
-
-    # Auto-issue on receive (business policy): increment
-    # cached_issued_quantity on destination task so the cancel guard
-    # (in_work >= sent) passes. Previously done via issue_to_work Movement;
-    # now explicit in the service (after _refresh_task_cache which would
-    # overwrite from Movement).
+    # Set auto-issue on receive: increment cached_issued_quantity on
+    # destination task so operators can complete without explicit issue.
+    # This is a temporary projection carry-over until Этап 4.
     to_task.cached_issued_quantity = (to_task.cached_issued_quantity or Decimal("0")) + quantity
     to_task.cached_in_work_quantity = (to_task.cached_in_work_quantity or Decimal("0")) + quantity
     await db.flush()
 
+    await _refresh_section_plan_line_cache(db, from_task.section_plan_line_id)
+    await _refresh_section_plan_line_cache(db, to_task.section_plan_line_id)
+
     # If cumulative received quantity now exceeds the task's planned quantity
     # (i.e., over-plan material was transferred), expand planned_quantity so
     # operators can issue and complete the full received amount at this stage.
-    # SectionPlanLine.planned_quantity is intentionally NOT changed — the plan
-    # itself stays the same; only the task-level target is adjusted.
-    if refreshed_to_task.cached_received_quantity > refreshed_to_task.planned_quantity:
-        refreshed_to_task.planned_quantity = refreshed_to_task.cached_received_quantity
+    to_task_after = await db.get(WorkTask, to_task.id)
+    if to_task_after and to_task_after.cached_received_quantity > to_task_after.planned_quantity:
+        to_task_after.planned_quantity = to_task_after.cached_received_quantity
         await db.flush()
-        await _refresh_task_cache(db, refreshed_to_task.id)
-        await _refresh_section_plan_line_cache(db, refreshed_to_task.section_plan_line_id)
-        # Re-apply transfer projection again after cache refresh
-        await _stock_command_service._projection_manager.refresh_task_projection(db, receive_tx)
+        await _refresh_section_plan_line_cache(db, to_task_after.section_plan_line_id)
 
     # Запись лога аудита (передача)
     from app.services.audit_log_service import log_action
@@ -711,10 +694,7 @@ async def correct_transfer(
         db, transfer=transfer, new_quantity=new_quantity
     )
 
-    # 5. Refresh cache (non-transfer columns)
-    await _refresh_task_cache(db, from_task.id)
-    await _refresh_task_cache(db, to_task.id)
-    # Re-apply transfer projections (_refresh_task_cache не знает о StockTransaction)
+    # 5. Refresh cache (projections updated via StockTransaction)
     active_txs = (await db.execute(
         select(StockTransaction)
         .where(
@@ -837,10 +817,7 @@ async def cancel_transfer(
     await _compensate_transfer_stock_tx(
         db, transfer=transfer, actor_id=actor_id, comment=comment
     )
-    # Refresh non-transfer cache
-    await _refresh_task_cache(db, from_task.id)
-    await _refresh_task_cache(db, to_task.id)
-    # Re-apply transfer projections (net = 0 после компенсации)
+    # Refresh projections (net = 0 после компенсации — обновлено через StockTransaction)
     comp_txs = (await db.execute(
         select(StockTransaction)
         .where(

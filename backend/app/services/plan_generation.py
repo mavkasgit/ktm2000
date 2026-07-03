@@ -316,49 +316,25 @@ async def release_batch(
 
             if task_status == WorkTaskStatus.completed:
                 from app.services.shopfloor.common import _get_user_snapshot_name
-                from app.services.shopfloor.cache import _refresh_task_cache, _refresh_section_plan_line_cache
-                from app.models.movement import Movement, MovementType
+                from app.services.shopfloor.cache import _refresh_section_plan_line_cache
+                from app.stock import StockCommand, StockCommandService, Reason
                 actor_id = batch.released_by or batch.created_by or 1
                 actor_name = await _get_user_snapshot_name(db, actor_id)
-                movement = Movement(
+                svc = StockCommandService()
+                await svc.record(db, StockCommand(
                     product_id=task.product_id,
-                    task_id=task.id,
-                    section_plan_line_id=task.section_plan_line_id,
-                    from_section_id=task.section_id,
-                    to_section_id=task.section_id,
-                    movement_type=MovementType.complete,
+                    from_location_id=None,
+                    to_location_id=task.section_id,
                     quantity=batch_position.release_quantity,
+                    reason=Reason.complete,
+                    task_id=task.id,
                     source_ref="auto_release_remainder",
                     comment="Автозавершение при покрытии остатками ГХП",
                     created_by=actor_id,
-                    created_by_user_name=actor_name,
                     performed_at=datetime.now(UTC),
                     accounted_at=datetime.now(UTC),
-                )
-                db.add(movement)
-                await db.flush()
-                await _refresh_task_cache(db, task.id)
+                ))
                 await _refresh_section_plan_line_cache(db, task.section_plan_line_id)
-
-            if task_status == WorkTaskStatus.ready:
-                actor_id = batch.released_by or batch.created_by or 1
-                if remainder_allocation is not None:
-                    # Manually consume specified remainders for this stage
-                    for rem, max_seq, allocated_qty in remainder_max_seq:
-                        next_stages_in_route = [s["sequence"] for s in steps if s["sequence"] > max_seq]
-                        if next_stages_in_route and next_stages_in_route[0] == step["sequence"]:
-                            from app.services.shopfloor.operations_tasks import consume_remainder
-                            await consume_remainder(
-                                db,
-                                remainder_id=rem.id,
-                                task_id=task.id,
-                                quantity=allocated_qty,
-                                actor_id=actor_id,
-                                comment=f"Manually allocated remainder {rem.id} on launch",
-                            )
-                else:
-                    from app.services.shopfloor.operations_tasks import auto_consume_available_remainders
-                    await auto_consume_available_remainders(db, task, actor_id=actor_id)
             
             tasks_by_seq[step["sequence"]] = task
             created_tasks.append(task)

@@ -121,33 +121,9 @@ _INVARIANT_QUERIES: list[tuple[str, str]] = [
             OR count(*) FILTER (WHERE m.movement_type = 'transfer_receive') != 1
         """,
     ),
-    (
-        "5_worktask_cached_diverges_from_movement_sums",
-        """
-        SELECT wt.id AS task_id,
-               wt.cached_issued_quantity
-                 - COALESCE(SUM(CASE WHEN m.movement_type = 'issue_to_work'    THEN m.quantity END), 0) AS diff_issued,
-               wt.cached_completed_quantity
-                 - COALESCE(SUM(CASE WHEN m.movement_type = 'complete'          THEN m.quantity END), 0) AS diff_completed,
-               wt.cached_transferred_quantity
-                 - COALESCE(SUM(CASE WHEN m.movement_type = 'transfer_send'     THEN m.quantity END), 0) AS diff_transferred,
-               wt.cached_received_quantity
-                 - COALESCE(SUM(CASE WHEN m.movement_type = 'transfer_receive'  THEN m.quantity END), 0) AS diff_received
-        FROM work_tasks wt
-        LEFT JOIN movements m ON m.task_id = wt.id
-        GROUP BY wt.id, wt.cached_issued_quantity, wt.cached_completed_quantity,
-                 wt.cached_transferred_quantity, wt.cached_received_quantity
-        HAVING
-            wt.cached_issued_quantity
-              != COALESCE(SUM(CASE WHEN m.movement_type = 'issue_to_work'    THEN m.quantity END), 0)
-            OR wt.cached_completed_quantity
-              != COALESCE(SUM(CASE WHEN m.movement_type = 'complete'         THEN m.quantity END), 0)
-            OR wt.cached_transferred_quantity
-              != COALESCE(SUM(CASE WHEN m.movement_type = 'transfer_send'    THEN m.quantity END), 0)
-            OR wt.cached_received_quantity
-              != COALESCE(SUM(CASE WHEN m.movement_type = 'transfer_receive' THEN m.quantity END), 0)
-        """,
-    ),
+    # I5: Удалён на Этапе 3 — Movement больше не пишется shopfloor-операциями.
+    # WorkTask.cached_* теперь считаются из StockTransaction через
+    # StockProjectionManager.refresh_task_projection.,
     (
         "6_transfer_sent_qty_mismatches_movement_totals",
         """
@@ -537,25 +513,23 @@ async def test_take_to_work_with_remainder_allocation_stays_consistent(
     )).mappings().all()
     assert auto_completed_tasks, "Expected a WorkTask on the first section"
     for row in auto_completed_tasks:
-        summed = (await session.execute(
+        # StockTransaction-based check (Stage 3: Movement больше не пишется)
+        stock_sum = (await session.execute(
             text(
-                "SELECT COALESCE(SUM(quantity), 0) FROM movements "
-                "WHERE task_id = :t AND movement_type = 'complete'"
+                "SELECT COALESCE(SUM(quantity), 0) FROM stock_transactions "
+                "WHERE task_id = :t AND reason = 'complete'"
             ),
             {"t": row["id"]},
         )).scalar_one()
-        assert Decimal(summed) == row["cached_completed_quantity"], (
+        assert Decimal(stock_sum) == row["cached_completed_quantity"], (
             f"WorkTask {row['id']} cached_completed={row['cached_completed_quantity']} "
-            f"diverges from SUM(Movement.complete)={summed}"
+            f"diverges from SUM(StockTransaction.complete)={stock_sum}"
         )
 
-    # The auto_release_remainder Movement carries the source_ref tag
-    # that distinguishes "covered by previous stock" from operator-typed
-    # completions.  Its quantity must equal the task's cached_completed
-    # total because there are no other Movements on this task.
+    # Check auto_release_remainder via StockTransaction (source_ref tag)
     auto_release = (await session.execute(
         text(
-            "SELECT task_id, quantity FROM movements "
+            "SELECT task_id, quantity FROM stock_transactions "
             "WHERE source_ref = 'auto_release_remainder'"
         )
     )).mappings().all()
@@ -565,7 +539,7 @@ async def test_take_to_work_with_remainder_allocation_stays_consistent(
             {"id": m["task_id"]},
         )).mappings().one()
         assert Decimal(m["quantity"]) == task_row["cached_completed_quantity"], (
-            f"auto_release_remainder movement qty={m['quantity']} does not match "
+            f"auto_release_remainder tx qty={m['quantity']} does not match "
             f"task {m['task_id']} cached_completed={task_row['cached_completed_quantity']}"
         )
 

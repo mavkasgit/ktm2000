@@ -1,9 +1,7 @@
 from app.services.shopfloor import (
     _refresh_section_plan_line_cache,
-    _refresh_task_cache,
     add_defect_item,
     complete_task,
-    consume_remainder,
     create_attachment,
     create_comment,
     create_defect,
@@ -23,7 +21,6 @@ from app.services.shopfloor import (
     list_entity_attachments,
     list_entity_comments,
     prepare_section_task,
-    return_remainder_to_stock,
     rework_create,
 )
 from app.transfers.queries import (
@@ -38,12 +35,10 @@ from app.transfers.services import (
 )
 
 __all__ = [
-    "_refresh_task_cache",
     "_refresh_section_plan_line_cache",
     "add_defect_item",
     "cancel_transfer",
     "complete_task",
-    "consume_remainder",
     "correct_transfer",
     "create_attachment",
     "create_comment",
@@ -67,7 +62,6 @@ __all__ = [
     "list_entity_comments",
     "list_ready_to_transfer",
     "prepare_section_task",
-    "return_remainder_to_stock",
     "rework_create",
     "transfer_send",
 ]

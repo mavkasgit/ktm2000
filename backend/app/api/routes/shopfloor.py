@@ -27,7 +27,6 @@ from app.models.work_task import WorkTask
 from app.services.shopfloor_service import (
     add_defect_item,
     complete_task,
-    consume_remainder,
     create_attachment,
     create_comment,
     create_defect,
@@ -43,7 +42,6 @@ from app.services.shopfloor_service import (
     get_warehouse_remainders,
     link_attachment,
     prepare_section_task,
-    return_remainder_to_stock,
     rework_create,
 )
 from app.transfers.queries import get_section_incoming_transfers, get_transfer_details
@@ -887,12 +885,50 @@ async def list_warehouse_remainders(
     plan_position_id: int | None = Query(None),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
-    """List active warehouse remainders (surplus returned to stock).
+    """Read available stock from StockBalance projection.
 
-    If ``plan_position_id`` is provided, only returns remainders that are
-    either unreserved or reserved for this specific plan position.
+    Returns aggregated balances by (product, location) with quality_state=GOOD.
+    Replaces old SpgRemainder-based endpoint.
     """
-    return await get_warehouse_remainders(db, section_id=section_id, plan_position_id=plan_position_id)
+    from app.models.product import Product
+    from app.models.section import Section
+    from app.stock.models import StockBalance, QualityState
+
+    query = select(
+        StockBalance.product_id,
+        StockBalance.location_id,
+        StockBalance.balance_qty,
+        Product.sku,
+        Product.name,
+        Section.code.label("section_code"),
+        Section.name.label("section_name"),
+    ).join(
+        Product, StockBalance.product_id == Product.id,
+    ).join(
+        Section, StockBalance.location_id == Section.id,
+    ).where(
+        StockBalance.quality_state == QualityState.good,
+        StockBalance.balance_qty > 0,
+    )
+
+    if section_id is not None:
+        query = query.where(StockBalance.location_id == section_id)
+
+    rows = (await db.execute(query)).all()
+
+    remainders = []
+    for product_id, location_id, qty, sku, pname, section_code, section_name in rows:
+        remainders.append({
+            "product_id": product_id,
+            "product_sku": sku,
+            "product_name": pname,
+            "location_id": location_id,
+            "section_code": section_code,
+            "section_name": section_name,
+            "quantity": str(qty),
+        })
+
+    return {"remainders": remainders, "source": "stock_balance"}
 
 
 @router.post("/remainders/return", dependencies=[Depends(require_role(list(WRITER_ROLES)))])
@@ -902,46 +938,50 @@ async def return_remainder(
     current_user: User = Depends(get_current_user),
     locked_section_id: int | None = Depends(get_single_window_locked_section_id),
 ) -> dict:
-    """Manually return excess quantity from a task to warehouse stock."""
+    """Return excess quantity from a task to warehouse stock.
+
+    Writes StockTransaction(RETURN_TO_STOCK). Checks that quantity
+    does not exceed what is available for return on the task.
+    """
+    from app.stock import StockCommand, StockCommandService, Reason
+    from app.models.work_task import WorkTask
+
     await _ensure_task_lock(db, payload.task_id, locked_section_id)
     try:
-        return await return_remainder_to_stock(
-            db,
-            task_id=payload.task_id,
-            quantity=payload.quantity,
-            actor_id=current_user.id,
+        quantity = Decimal(str(payload.quantity))
+        if quantity <= 0:
+            raise ValueError("Quantity must be > 0")
+
+        task = await db.get(WorkTask, payload.task_id)
+        if task is None:
+            raise ValueError("Task not found")
+
+        # Available for return = issued - completed - transferred
+        available_for_return = task.cached_issued_quantity - task.cached_completed_quantity - task.cached_transferred_quantity
+        if available_for_return <= 0:
+            raise ValueError("No excess quantity available for return")
+        if quantity > available_for_return:
+            raise ValueError(f"Return quantity ({quantity}) exceeds available for return ({available_for_return})")
+
+        now = datetime.now(UTC)
+        svc = StockCommandService()
+        # return_to_stock: material removed from section (to_location=None for now)
+        tx = await svc.record(db, StockCommand(
+            product_id=task.product_id,
+            from_location_id=task.section_id,
+            to_location_id=None,
+            quantity=quantity,
+            reason=Reason.return_to_stock,
+            task_id=task.id,
             comment=payload.comment,
             idempotency_key=payload.idempotency_key,
-            executor_user_id=payload.executor_user_id,
-            performed_at=payload.performed_at,
-            accounted_at=payload.accounted_at,
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+            created_by=current_user.id,
+            executor_user_id=payload.executor_user_id or current_user.id,
+            performed_at=payload.performed_at or now,
+            accounted_at=payload.accounted_at or now,
+        ))
 
-
-@router.post("/remainders/consume", dependencies=[Depends(require_role(list(WRITER_ROLES)))])
-async def consume_remainder_endpoint(
-    payload: ConsumeRemainderPayload,
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-    locked_section_id: int | None = Depends(get_single_window_locked_section_id),
-) -> dict:
-    """Use a warehouse remainder for issuing to work on a task."""
-    await _ensure_task_lock(db, payload.task_id, locked_section_id)
-    try:
-        return await consume_remainder(
-            db,
-            remainder_id=payload.remainder_id,
-            task_id=payload.task_id,
-            quantity=payload.quantity,
-            actor_id=current_user.id,
-            comment=payload.comment,
-            idempotency_key=payload.idempotency_key,
-            executor_user_id=payload.executor_user_id,
-            performed_at=payload.performed_at,
-            accounted_at=payload.accounted_at,
-        )
+        return {"transaction_id": tx.id, "task_id": task.id}
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -954,39 +994,36 @@ async def task_spg_available(
     task_id: int,
     db: AsyncSession = Depends(get_db),
 ) -> dict:
-    """Return available remainders in the SPG for a task's product + section."""
-    from app.models.spg import SpgSection, StorageProductionGroup
-    from app.models.spg_remainder import SpgRemainder
+    """Return available stock balance for a task's product at its section location."""
+    from app.stock.models import StockBalance, QualityState
     from sqlalchemy import func
 
     task = await db.get(WorkTask, task_id)
     if task is None:
         raise HTTPException(status_code=404, detail="Task not found")
 
-    # Find SPG for this task's section
-    spg_section = await db.scalar(
-        select(SpgSection).where(SpgSection.section_id == task.section_id)
-    )
-    if spg_section is None:
-        return {"spg_available": 0, "spg_id": None, "spg_name": None, "spg_code": None}
+    # Find stock locations that feed this task's section
+    from app.services.shopfloor.operations_tasks import _get_stock_location
+    stock_loc = await _get_stock_location(db, task.section_id)
 
-    spg = await db.get(StorageProductionGroup, spg_section.spg_id)
-    if spg is None:
-        return {"spg_available": 0, "spg_id": None, "spg_name": None, "spg_code": None}
+    if stock_loc is None:
+        return {"available": 0, "location_id": None, "location_name": None}
+
+    from app.models import Section
+    location = await db.get(Section, stock_loc)
 
     available = await db.scalar(
-        select(func.coalesce(func.sum(SpgRemainder.remainder_quantity), 0))
+        select(func.coalesce(func.sum(StockBalance.balance_qty), 0))
         .where(
-            SpgRemainder.product_id == task.product_id,
-            SpgRemainder.spg_id == spg.id,
-            SpgRemainder.consumed_at.is_(None),
-            SpgRemainder.remainder_quantity > 0,
+            StockBalance.product_id == task.product_id,
+            StockBalance.location_id == stock_loc,
+            StockBalance.quality_state == QualityState.good,
         )
-    )
+    ) or 0
 
     return {
-        "spg_available": float(available or 0),
-        "spg_id": spg.id,
-        "spg_name": spg.name,
-        "spg_code": spg.code,
+        "available": float(available),
+        "location_id": stock_loc,
+        "location_name": location.name if location else None,
+        "source": "stock_balance",
     }

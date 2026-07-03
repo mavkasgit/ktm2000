@@ -175,29 +175,46 @@ async def _make_tasks_transferable(
     src = tasks[0]
     dst = tasks[1]
 
-    # Issue + complete on source via Movement (old cache path still needed)
-    from app.models.movement import Movement, MovementType
-    from app.services.shopfloor.cache import _refresh_task_cache
-
-    issue_m = Movement(
-        product_id=src.product_id, task_id=src.id,
-        section_plan_line_id=src.section_plan_line_id,
-        from_section_id=src.section_id, to_section_id=src.section_id,
-        movement_type=MovementType.issue_to_work,
-        quantity=src.planned_quantity, created_by=setup["user"].id,
-    )
-    session.add(issue_m)
-    complete_m = Movement(
-        product_id=src.product_id, task_id=src.id,
-        section_plan_line_id=src.section_plan_line_id,
-        from_section_id=src.section_id, to_section_id=src.section_id,
-        movement_type=MovementType.complete,
-        quantity=src.planned_quantity, created_by=setup["user"].id,
-        source_ref="test_seed",
-    )
-    session.add(complete_m)
+    # Create a stock section for issue_to_work from/to
+    from app.stock import StockCommand, StockCommandService, Reason
+    from app.models.section import Section
+    stock = Section(code="T2-STK", name="Stock", kind="raw_stock", type="raw_stock",
+                    is_active=True, sort_order=0)
+    session.add(stock)
     await session.flush()
-    await _refresh_task_cache(session, src.id)
+    stock_id = stock.id
+
+    svc = StockCommandService()
+    # Seed stock balance
+    await svc.record(session, StockCommand(
+        product_id=src.product_id,
+        from_location_id=None,
+        to_location_id=stock_id,
+        quantity=src.planned_quantity,
+        reason=Reason.manual_in,
+        created_by=setup["user"].id,
+    ))
+    # issue_to_work: from stock to source section
+    await svc.record(session, StockCommand(
+        product_id=src.product_id,
+        from_location_id=stock_id,
+        to_location_id=src.section_id,
+        quantity=src.planned_quantity,
+        reason=Reason.issue_to_work,
+        task_id=src.id,
+        created_by=setup["user"].id,
+    ))
+    # complete: good output appears on the source section
+    await svc.record(session, StockCommand(
+        product_id=src.product_id,
+        from_location_id=None,
+        to_location_id=src.section_id,
+        quantity=src.planned_quantity,
+        reason=Reason.complete,
+        task_id=src.id,
+        source_ref="test_seed",
+        created_by=setup["user"].id,
+    ))
     await session.flush()
 
     # Verify source is transferable
@@ -333,8 +350,9 @@ async def test_cancel_transfer_creates_compensation(session: AsyncSession, clien
     )
     await session.commit()
 
-    # После компенсации баланс = 0
-    assert (await _balance(session, from_task.product_id, from_task.section_id)) == Decimal("0")
+    # После компенсации: на секции источника остаётся issue+complete (20)
+    # минус transfer_send (5) плюс компенсация send (5) = 20
+    assert (await _balance(session, from_task.product_id, from_task.section_id)) == Decimal("20")
     assert (await _balance(session, to_task.product_id, to_task.section_id)) == Decimal("0")
 
     # Есть компенсационные записи

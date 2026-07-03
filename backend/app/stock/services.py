@@ -219,44 +219,95 @@ class StockProjectionManager:
     async def refresh_task_projection(self, session: AsyncSession, tx: StockTransaction) -> None:
         """Обновление WorkTask.cached_* из StockTransaction ledger.
 
-        На Этапе 2: для ``transfer_send`` / ``transfer_receive``
-        пересчитывает ``cached_transferred_quantity`` /
-        ``cached_received_quantity`` из SUM StockTransaction
-        (оригиналы +Q, компенсации −Q).
+        Единая точка пересчёта всех ``cached_*`` колонок WorkTask из
+        StockTransaction для данного task_id. Вызывается на каждую новую
+        транзакцию из ``StockCommandService.record()``. Идемпотентна.
         """
-        if tx.reason not in (Reason.transfer_send, Reason.transfer_receive):
-            return
         if tx.task_id is None:
             return
         from sqlalchemy import case, func
 
-        # Net quantity: оригинала +quantity, компенсации −quantity
+        task_id = tx.task_id
+
+        # Суммы по каждому reason (простая SUM, без компенсаций)
+        async def _sum_reason(reason: Reason) -> Decimal:
+            return await session.scalar(
+                select(func.coalesce(func.sum(StockTransaction.quantity), 0))
+                .where(
+                    StockTransaction.task_id == task_id,
+                    StockTransaction.reason == reason,
+                )
+            ) or Decimal("0")
+
+        # Net quantity с учётом компенсаций (только для transfer_send/receive)
         _net = func.sum(
             case(
                 (StockTransaction.compensates_tx_id.is_(None), StockTransaction.quantity),
                 else_=-StockTransaction.quantity,
             )
         )
+
+        issued = await _sum_reason(Reason.issue_to_work)
+        completed = await _sum_reason(Reason.complete)
+        scrapped = await _sum_reason(Reason.scrap)
+        returned = await _sum_reason(Reason.return_to_stock)
+        final_released = await _sum_reason(Reason.final_release)
+        rework_qty = await _sum_reason(Reason.rework)
+
         transferred = await session.scalar(
             select(func.coalesce(_net, 0))
             .where(
-                StockTransaction.task_id == tx.task_id,
+                StockTransaction.task_id == task_id,
                 StockTransaction.reason == Reason.transfer_send,
             )
-        ) or 0
+        ) or Decimal("0")
+
         received = await session.scalar(
             select(func.coalesce(_net, 0))
             .where(
-                StockTransaction.task_id == tx.task_id,
+                StockTransaction.task_id == task_id,
                 StockTransaction.reason == Reason.transfer_receive,
             )
-        ) or 0
+        ) or Decimal("0")
+
+        # Получаем задачу и план-линию для базовой доступности
+        task = await session.get(WorkTask, task_id)
+        if task is None:
+            return
+
+        # base_available: для первого этапа маршрута = planned_quantity
+        from app.models.internal_plan import SectionPlanLine
+        line = await session.get(SectionPlanLine, task.section_plan_line_id)
+        is_first_stage = (line is not None and line.sequence == 1)
+        base_available = task.planned_quantity if is_first_stage else Decimal("0")
+
+        # Комбинированные поля
+        rejected = scrapped  # упрощённо: DefectDecision учтём на Этапе 5
+        cached_in_work = issued - completed - rejected
+        if cached_in_work < Decimal("0"):
+            cached_in_work = Decimal("0")
+
+        # available = base_available + received + returned - issued
+        available = base_available + received + returned - issued
+        if available < Decimal("0"):
+            available = Decimal("0")
+
+        remaining = task.planned_quantity - transferred
+        if remaining < Decimal("0"):
+            remaining = Decimal("0")
+
         await session.execute(
             update(WorkTask)
-            .where(WorkTask.id == tx.task_id)
+            .where(WorkTask.id == task_id)
             .values(
+                cached_issued_quantity=issued,
+                cached_completed_quantity=completed,
                 cached_transferred_quantity=transferred,
                 cached_received_quantity=received,
+                cached_rejected_quantity=rejected,
+                cached_available_quantity=available,
+                cached_in_work_quantity=cached_in_work,
+                cached_remaining_quantity=remaining,
             )
         )
 
@@ -343,14 +394,25 @@ class StockCommandService:
             raise StockValidationError(
                 "at least one of from_location_id / to_location_id must be set"
             )
-        if (
-            cmd.from_location_id is not None
-            and cmd.to_location_id is not None
-            and cmd.from_location_id == cmd.to_location_id
-        ):
-            raise StockValidationError(
-                f"from_location_id and to_location_id must differ, got {cmd.from_location_id}"
-            )
+        # Some reasons are "state changes" on the same location
+        # (complete, scrap, rework) — allow same from/to for these.
+        _state_change_reasons = {
+            Reason.complete,
+            Reason.scrap,
+            Reason.rework,
+            Reason.final_release,
+            Reason.issue_to_work,
+        }
+        if cmd.reason not in _state_change_reasons:
+            if (
+                cmd.from_location_id is not None
+                and cmd.to_location_id is not None
+                and cmd.from_location_id == cmd.to_location_id
+            ):
+                raise StockValidationError(
+                    f"from_location_id and to_location_id must differ for reason={cmd.reason.value}, "
+                    f"got {cmd.from_location_id}"
+                )
         # Product existence
         prod = await session.get(Product, cmd.product_id)
         if prod is None:

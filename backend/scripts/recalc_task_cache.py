@@ -1,6 +1,5 @@
 """
-Скрипт для пересчета кэша всех существующих задач.
-Запускать после фикса инициализации cached_available_quantity.
+Скрипт для пересчета кэша всех существующих задач из StockTransaction ledger.
 
 Usage:
     cd backend
@@ -12,7 +11,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import async_session
 from app.models.work_task import WorkTask
-from app.services.shopfloor_service import _refresh_task_cache, _refresh_section_plan_line_cache
+from app.stock.services import StockProjectionManager
+from app.services.shopfloor.cache import _refresh_section_plan_line_cache
 
 
 async def main():
@@ -20,14 +20,21 @@ async def main():
         tasks = (await db.execute(select(WorkTask))).scalars().all()
         print(f"Найдено задач: {len(tasks)}")
 
+        pm = StockProjectionManager()
         updated = 0
         errors = 0
         for task in tasks:
             try:
-                await _refresh_task_cache(db, task.id)
+                # Создаём фиктивную транзакцию для вызова refresh_task_projection
+                # для каждой задачи (пересчёт всех cached_* из StockTransaction)
+                from app.stock.models import StockTransaction
+                dummy_tx = StockTransaction(task_id=task.id)
+                dummy_tx.task_id = task.id
+                await pm.refresh_task_projection(db, dummy_tx)
                 await _refresh_section_plan_line_cache(db, task.section_plan_line_id)
                 updated += 1
-                print(f"  [{task.id}] available={task.cached_available_quantity}, issued={task.cached_issued_quantity}")
+                if updated % 50 == 0:
+                    print(f"  [{task.id}] processed...")
             except Exception as e:
                 errors += 1
                 print(f"  [{task.id}] ОШИБКА: {e}")

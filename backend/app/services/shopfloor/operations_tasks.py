@@ -9,13 +9,66 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.defect import Defect, DefectItem, DefectStatus
 from app.models.internal_plan import SectionPlanLine
-from app.models.movement import Movement, MovementType
 from app.models.production_plan import PlanPosition, PlanPositionStatus
-from app.models.spg_remainder import SpgRemainder
 from app.models.work_task import WorkTask, WorkTaskStatus
+from app.stock import QualityState, Reason, StockBalance, StockCommand, StockCommandService
 
-from .cache import _refresh_section_plan_line_cache, _refresh_task_cache
 from .common import _check_idempotency, _ensure_positive, _get_route_stage, _get_task, _get_user_snapshot_name, _to_decimal
+from .cache import _refresh_section_plan_line_cache
+
+ISSUE_ALLOWED_STATUSES = {
+    WorkTaskStatus.ready,
+    WorkTaskStatus.in_progress,
+    WorkTaskStatus.partially_completed,
+}
+
+
+async def _get_stock_location(session: AsyncSession, section_id: int) -> int | None:
+    """Find the stock (RAW / WIP / FINISHED) location corresponding to a production section.
+
+    Walks up the RouteStages to find the preceding non-production section.
+    For the first production stage, returns the RAW_STOCK;
+    for subsequent stages, returns WIP_STOCK of the same SPG.
+    Returns None if no stock location is found (falls back to the section itself).
+    """
+    from app.models.route import RouteStage
+    from app.models.section import Section
+
+    # Check if the section itself is a stock location
+    sec = await session.get(Section, section_id)
+    if sec is not None and sec.kind != "production":
+        return section_id
+
+    # Find the preceding stock stage in the route
+    wt = await session.scalar(
+        select(WorkTask).where(WorkTask.section_id == section_id).limit(1)
+    )
+    if wt is None:
+        return None
+
+    line = await session.get(SectionPlanLine, wt.section_plan_line_id)
+    if line is None:
+        return None
+
+    # Find preceding non-production section
+    prev_lines = (
+        await session.execute(
+            select(SectionPlanLine)
+            .where(
+                SectionPlanLine.plan_position_id == line.plan_position_id,
+                SectionPlanLine.sequence < line.sequence,
+            )
+            .order_by(SectionPlanLine.sequence.desc())
+        )
+    ).scalars().all()
+
+    for prev in prev_lines:
+        prev_sec = await session.get(Section, prev.section_id)
+        if prev_sec is not None and prev_sec.kind != "production":
+            return prev.section_id
+
+    return None
+
 
 async def issue_to_work(
     db: AsyncSession,
@@ -30,18 +83,28 @@ async def issue_to_work(
     performed_at: datetime | None = None,
     accounted_at: datetime | None = None,
     transfer_id: int | None = None,
-    shortage_strategy: Literal["fail", "partial", "negative_remainder"] = "negative_remainder",
+    from_location_id: int | None = None,
+    shortage_strategy: Literal["fail", "partial"] = "partial",
+    auto_consume: bool = False,
 ) -> dict:
+    """Issue material to a work task.
+
+    Uses StockTransaction ledger (no Movement, no SpgRemainder).
+    Stock availability is checked via StockBalance.
+    ``auto_consume=True`` allows issuing whatever is available without hard-fail.
+    """
     quantity = _to_decimal(quantity)
     _ensure_positive(quantity, "quantity")
 
-    existing = await _check_idempotency(db, idempotency_key=idempotency_key, entity_type=Movement)
-    if existing is not None:
-        task = await _get_task(db, task_id)
-        return {"movement_id": existing.id, "task_id": task.id, "status": task.status.value, "idempotent_replay": True}
+    if idempotency_key:
+        from app.stock.models import StockTransaction
+        existing = await _check_idempotency(db, idempotency_key=idempotency_key, entity_type=StockTransaction)
+        if existing is not None:
+            task = await _get_task(db, task_id)
+            return {"transaction_id": existing.id, "task_id": task.id, "status": task.status.value, "idempotent_replay": True}
 
     task = await _get_task(db, task_id)
-    if task.status not in {WorkTaskStatus.ready, WorkTaskStatus.in_progress, WorkTaskStatus.partially_completed}:
+    if task.status not in ISSUE_ALLOWED_STATUSES:
         is_first_active = False
         if task.status == WorkTaskStatus.waiting_previous:
             line = await db.get(SectionPlanLine, task.section_plan_line_id)
@@ -63,99 +126,56 @@ async def issue_to_work(
                 raise ValueError("Нельзя выдать в работу задание, ожидающее передачи сырья с предыдущего участка")
             raise ValueError("Task must be ready/in_progress/partially_completed")
 
-    task = await _refresh_task_cache(db, task.id)
-    available = task.cached_available_quantity
+    # Determine from_location (stock) if not provided
+    from_loc = from_location_id
+    if from_loc is None:
+        from_loc = await _get_stock_location(db, task.section_id)
+    if from_loc is None:
+        from_loc = task.section_id
 
-    shortage = Decimal("0")
+    # Check availability via StockBalance
+    available = await db.scalar(
+        select(func.coalesce(func.sum(StockBalance.balance_qty), 0))
+        .where(
+            StockBalance.product_id == task.product_id,
+            StockBalance.location_id == from_loc,
+            StockBalance.quality_state == QualityState.good,
+        )
+    ) or Decimal("0")
+
     if quantity > available:
         if shortage_strategy == "fail":
-            raise ValueError(f"Недостаточно доступного количества на участке (доступно: {available}, запрошено: {quantity})")
+            raise ValueError(f"Недостаточно доступного количества (доступно: {available}, запрошено: {quantity})")
         elif shortage_strategy == "partial":
-            quantity = available
+            quantity = min(quantity, available)
             if quantity <= 0:
                 raise ValueError("Доступное количество равно 0. Нечего брать в работу.")
-        elif shortage_strategy == "negative_remainder":
-            shortage = quantity - available
+        # auto_consume: use what's available without error
 
-    now = datetime.now(UTC)
-    eff_executor = executor_user_id or actor_id
-    actor_name = await _get_user_snapshot_name(db, actor_id)
-    executor_name = await _get_user_snapshot_name(db, eff_executor)
-
-    if shortage > 0:
-        from app.models.spg import SpgSection
-        spg_section = await db.scalar(
-            select(SpgSection).where(SpgSection.section_id == task.section_id)
-        )
-        if spg_section is not None:
-            spg_id = spg_section.spg_id
-            line = await db.get(SectionPlanLine, task.section_plan_line_id)
-            completed_stages = []
-            if line is not None:
-                from app.models.route import RouteStage
-                stages = (await db.execute(
-                    select(RouteStage)
-                    .where(RouteStage.route_id == line.route_id)
-                    .where(RouteStage.sequence < line.sequence)
-                    .order_by(RouteStage.sequence)
-                )).scalars().all()
-                for s in stages:
-                    completed_stages.append({
-                        "section_id": s.section_id,
-                        "operation_code": s.operations[0].operation_code if s.operations else None,
-                        "operation_name": ", ".join(op.operation_name for op in s.operations) if s.operations else "",
-                        "sequence": s.sequence,
-                    })
-
-            neg_remainder = SpgRemainder(
-                product_id=task.product_id,
-                spg_id=spg_id,
-                route_stage_id=task.route_stage_id,
-                section_plan_line_id=task.section_plan_line_id,
-                origin_task_id=task.id,
-                remainder_quantity=-shortage,
-                original_issued=-shortage,
-                completed_stages_json=completed_stages,
-                source="issue_shortage",
-                created_by=actor_id,
-                created_by_user_name=actor_name,
-                created_at=performed_at or now,
-            )
-            db.add(neg_remainder)
-            await db.flush()
-            await compensate_spg_remainders(db, spg_id, task.product_id)
-
-    movement = Movement(
+    svc = StockCommandService()
+    tx = await svc.record(db, StockCommand(
         product_id=task.product_id,
-        task_id=task.id,
-        section_plan_line_id=task.section_plan_line_id,
-        transfer_id=transfer_id,
-        from_section_id=task.section_id,
-        to_section_id=task.section_id,
-        movement_type=MovementType.issue_to_work,
+        from_location_id=from_loc,
+        to_location_id=task.section_id,
         quantity=quantity,
+        reason=Reason.issue_to_work,
+        task_id=task.id,
+        transfer_id=transfer_id,
         source_ref=source_ref,
         idempotency_key=idempotency_key,
         comment=comment,
         created_by=actor_id,
-        executor_user_id=eff_executor,
-        created_by_user_name=actor_name,
-        executor_user_name=executor_name,
-        performed_at=performed_at or now,
-        accounted_at=accounted_at or now,
-    )
-    db.add(movement)
-    await db.flush()
+        executor_user_id=executor_user_id or actor_id,
+        performed_at=performed_at or datetime.now(UTC),
+        accounted_at=accounted_at or datetime.now(UTC),
+    ))
 
     task.status = WorkTaskStatus.in_progress
     await db.flush()
-    await _refresh_task_cache(db, task.id)
     await _refresh_section_plan_line_cache(db, task.section_plan_line_id)
 
-    # NOTE: Авто-перемещение со склада при выдаче в работу убрано.
-    # Все перемещения между секциями/складами — явные операции оператора.
+    return {"transaction_id": tx.id, "task_id": task.id, "status": task.status.value}
 
-    return {"movement_id": movement.id, "task_id": task.id, "status": task.status.value}
 
 async def complete_task(
     db: AsyncSession,
@@ -171,36 +191,30 @@ async def complete_task(
     executor_user_id: int | None = None,
     performed_at: datetime | None = None,
     accounted_at: datetime | None = None,
-    shortage_strategy: Literal["fail", "partial", "negative_remainder"] = "negative_remainder",
+    shortage_strategy: Literal["fail", "partial"] = "partial",
     auto_transfer_next: bool = False,
 ) -> dict:
     """Complete (good + defect) quantity on a SectionTask.
 
-    The completion is bounded by `cached_issued_quantity - cached_completed_quantity - cached_rejected_quantity`
-    — i.e. by what the section has issued but not yet completed or rejected.
-    That in turn is bounded by what was available in the SPG
-    (`cached_available_quantity`, the sum of the initial planned amount
-    for the first stage and any quantity received via transfers from the
-    previous SPG).
-
-    Transfer of the completed quantity to the next SPG is a SEPARATE
-    process handled by the transfers module; this function does NOT
-    initiate or depend on it.
+    Writes StockTransaction(COMPLETE) for good output and
+    StockTransaction(SCRAP) for defect. Creates Defect/DefectItem
+    for traceability. Stock cache is updated automatically via
+    StockProjectionManager.
     """
     task = await _get_task(db, task_id)
 
     if idempotency_key:
-        existing = await _check_idempotency(db, idempotency_key=idempotency_key, entity_type=Movement)
+        from app.stock.models import StockTransaction as _ST
+        existing = await _check_idempotency(db, idempotency_key=idempotency_key, entity_type=_ST)
         if existing is not None:
-            # Find associated defect from the same completion operation
             reject_movement_key = f"{idempotency_key}:reject"
-            defect = await db.scalar(
+            existing_defect = await db.scalar(
                 select(Defect).where(Defect.idempotency_key == reject_movement_key)
             )
             return {
                 "task_id": task.id,
-                "movement_ids": [existing.id],
-                "defect_id": defect.id if defect else None,
+                "transaction_ids": [existing.id],
+                "defect_id": existing_defect.id if existing_defect else None,
                 "status": task.status.value,
                 "idempotent_replay": True,
             }
@@ -225,99 +239,73 @@ async def complete_task(
     eff_performed = performed_at or now
     eff_accounted = accounted_at or now
     eff_executor = executor_user_id or actor_id
-    actor_name = await _get_user_snapshot_name(db, actor_id)
-    executor_name = await _get_user_snapshot_name(db, eff_executor)
 
-    # Auto-issue safety net: under the current model, ``transfer_send``
-    # already writes a paired ``issue_to_work`` Movement on the receiving
-    # task, so a freshly received task has ``cached_issued_quantity ==
-    # cached_received_quantity`` and the operator can complete without
-    # any extra step. This branch is kept only as a backstop for legacy
-    # data (e.g. tasks created before the auto-issue change, or rows
-    # where someone manually deleted the issue movement). It only fires
-    # when nothing has been issued yet (``issued == 0``) AND material
-    # has been received — partial-issue flows (``issued < completed``)
-    # still get a clean error so the operator is forced to reconcile.
-    if total > in_work and task.cached_issued_quantity == 0 and task.cached_received_quantity > 0:
-        to_issue = total
-        issue_movement = Movement(
-            product_id=task.product_id,
-            task_id=task.id,
-            section_plan_line_id=task.section_plan_line_id,
-            from_section_id=task.section_id,
-            to_section_id=task.section_id,
-            movement_type=MovementType.issue_to_work,
-            quantity=to_issue,
-            source_ref=source_ref or "auto_issue_on_complete",
-            comment=comment,
-            created_by=actor_id,
-            idempotency_key=f"{idempotency_key}:auto-issue" if idempotency_key else None,
-            executor_user_id=eff_executor,
-            created_by_user_name=actor_name,
-            executor_user_name=executor_name,
-            performed_at=eff_performed,
-            accounted_at=eff_accounted,
-        )
-        db.add(issue_movement)
-        task = await _refresh_task_cache(db, task.id)
-        in_work = task.cached_issued_quantity - task.cached_completed_quantity - task.cached_rejected_quantity
-    if total > in_work:
-        raise ValueError("Complete quantity exceeds issued quantity")
-
-    movement_ids: list[int] = []
+    svc = StockCommandService()
+    tx_ids: list[int] = []
     defect_id: int | None = None
+
     if good_quantity > 0:
-        good_movement = Movement(
+        # complete: good output appears on the section (from nowhere)
+        tx_good = await svc.record(db, StockCommand(
             product_id=task.product_id,
-            task_id=task.id,
-            section_plan_line_id=task.section_plan_line_id,
-            from_section_id=task.section_id,
-            to_section_id=task.section_id,
-            movement_type=MovementType.complete,
+            from_location_id=None,
+            to_location_id=task.section_id,
             quantity=good_quantity,
+            reason=Reason.complete,
+            quality_state=QualityState.good,
+            task_id=task.id,
             source_ref=source_ref,
+            idempotency_key=idempotency_key,
             comment=comment,
             created_by=actor_id,
-            idempotency_key=idempotency_key,
             executor_user_id=eff_executor,
-            created_by_user_name=actor_name,
-            executor_user_name=executor_name,
             performed_at=eff_performed,
             accounted_at=eff_accounted,
-        )
-        db.add(good_movement)
-        await db.flush()
-        movement_ids.append(good_movement.id)
+        ))
+        tx_ids.append(tx_good.id)
 
     if defect_quantity > 0:
-        reject_movement = Movement(
+        # scrap: from production section to scrap location
+        from app.models.section import Section as _Section
+        scrap_loc = await db.scalar(
+            select(_Section.id).where(_Section.type == "scrap").limit(1)
+        )
+        if scrap_loc is None:
+            scrap_sec = _Section(
+                code="SCRAP",
+                name="Scrap",
+                kind="storage",
+                type="scrap",
+                is_active=True,
+                sort_order=999,
+            )
+            db.add(scrap_sec)
+            await db.flush()
+            scrap_loc = scrap_sec.id
+
+        tx_scrap = await svc.record(db, StockCommand(
             product_id=task.product_id,
-            task_id=task.id,
-            section_plan_line_id=task.section_plan_line_id,
-            from_section_id=task.section_id,
-            to_section_id=task.section_id,
-            movement_type=MovementType.reject,
+            from_location_id=task.section_id,
+            to_location_id=scrap_loc,
             quantity=defect_quantity,
+            reason=Reason.scrap,
+            quality_state=QualityState.good,
+            to_quality_state=QualityState.scrap,
+            task_id=task.id,
             source_ref=source_ref,
-            reason=defect_reason,
+            idempotency_key=f"{idempotency_key}:reject" if idempotency_key else None,
             comment=comment,
             created_by=actor_id,
-            idempotency_key=f"{idempotency_key}:reject" if idempotency_key else None,
             executor_user_id=eff_executor,
-            created_by_user_name=actor_name,
-            executor_user_name=executor_name,
             performed_at=eff_performed,
             accounted_at=eff_accounted,
-        )
-        db.add(reject_movement)
-        await db.flush()
-        movement_ids.append(reject_movement.id)
+        ))
+        tx_ids.append(tx_scrap.id)
 
         defect = Defect(
             product_id=task.product_id,
             section_id=task.section_id,
             task_id=task.id,
-            movement_id=reject_movement.id,
             status=DefectStatus.decision_required,
             comment=comment,
             created_by=actor_id,
@@ -338,7 +326,6 @@ async def complete_task(
         )
         db.add(defect_item)
 
-    await _refresh_task_cache(db, task.id)
     await _refresh_section_plan_line_cache(db, task.section_plan_line_id)
 
     if auto_transfer_next and good_quantity > 0:
@@ -352,7 +339,8 @@ async def complete_task(
             comment=comment or "Авто-перемещение после завершения",
         )
 
-    return {"task_id": task.id, "movement_ids": movement_ids, "defect_id": defect_id, "status": task.status.value}
+    return {"task_id": task.id, "transaction_ids": tx_ids, "defect_id": defect_id, "status": task.status.value}
+
 
 async def final_release(
     db: AsyncSession,
@@ -366,10 +354,16 @@ async def final_release(
     performed_at: datetime | None = None,
     accounted_at: datetime | None = None,
 ) -> dict:
+    """Final release of finished goods to finished stock.
+
+    Writes StockTransaction(FINAL_RELEASE). No SpgRemainder or
+    compensate_spg_remainders.
+    """
     if idempotency_key:
-        existing = await _check_idempotency(db, idempotency_key=idempotency_key, entity_type=Movement)
+        from app.stock.models import StockTransaction
+        existing = await _check_idempotency(db, idempotency_key=idempotency_key, entity_type=StockTransaction)
         if existing is not None:
-            return {"movement_id": existing.id, "task_id": task_id, "idempotent_replay": True}
+            return {"transaction_id": existing.id, "task_id": task_id, "idempotent_replay": True}
 
     task = await _get_task(db, task_id)
     stage = await _get_route_stage(db, task.route_stage_id)
@@ -378,94 +372,58 @@ async def final_release(
 
     quantity = _to_decimal(quantity)
     _ensure_positive(quantity, "quantity")
-    final_released = await db.scalar(
-        select(func.coalesce(func.sum(Movement.quantity), 0)).where(
-            Movement.task_id == task.id, Movement.movement_type == MovementType.final_release
+
+    # Releasable = completed - already final_released
+    from app.stock.models import StockTransaction
+    already_released = await db.scalar(
+        select(func.coalesce(func.sum(StockTransaction.quantity), 0))
+        .where(
+            StockTransaction.task_id == task.id,
+            StockTransaction.reason == Reason.final_release,
         )
-    )
-    releasable = task.cached_completed_quantity - _to_decimal(final_released or 0)
+    ) or Decimal("0")
+
+    releasable = task.cached_completed_quantity - already_released
     if quantity > releasable:
         raise ValueError("Final release exceeds releasable quantity")
 
-    eff_executor = executor_user_id or actor_id
-    actor_name = await _get_user_snapshot_name(db, actor_id)
-    executor_name = await _get_user_snapshot_name(db, eff_executor)
-    movement = Movement(
+    # Find finished stock location
+    from app.models.section import Section as _FinSection
+    finished_stock = await db.scalar(
+        select(_FinSection.id)
+        .where(_FinSection.type == "finished_stock")
+        .limit(1)
+    )
+
+    svc = StockCommandService()
+    # final_release: from production section to finished stock (or None if not found)
+    tx = await svc.record(db, StockCommand(
         product_id=task.product_id,
-        task_id=task.id,
-        section_plan_line_id=task.section_plan_line_id,
-        from_section_id=task.section_id,
-        to_section_id=task.section_id,
-        movement_type=MovementType.final_release,
+        from_location_id=task.section_id if finished_stock else task.section_id,
+        to_location_id=finished_stock,
         quantity=quantity,
+        reason=Reason.final_release,
+        task_id=task.id,
+        source_ref=None,
+        idempotency_key=idempotency_key,
         comment=comment,
         created_by=actor_id,
-        idempotency_key=idempotency_key,
-        executor_user_id=eff_executor,
-        created_by_user_name=actor_name,
-        executor_user_name=executor_name,
+        executor_user_id=executor_user_id or actor_id,
         performed_at=performed_at or datetime.now(UTC),
         accounted_at=accounted_at or datetime.now(UTC),
-    )
-    db.add(movement)
+    ))
 
-    # Create warehouse remainder for finished goods in SPG
-    from app.models.spg import SpgSection
-    spg_section = await db.scalar(
-        select(SpgSection).where(SpgSection.section_id == task.section_id)
-    )
-    remainder = None
-    if spg_section is not None:
-        spg_id = spg_section.spg_id
-
-        line = await db.get(SectionPlanLine, task.section_plan_line_id)
-        completed_stages = []
-        if line is not None:
-            from app.models.route import RouteStage
-            stages = (await db.execute(
-                select(RouteStage)
-                .where(RouteStage.route_id == line.route_id)
-                .where(RouteStage.sequence <= line.sequence)
-                .order_by(RouteStage.sequence)
-            )).scalars().all()
-            for s in stages:
-                completed_stages.append({
-                    "section_id": s.section_id,
-                    "operation_code": s.operations[0].operation_code if s.operations else None,
-                    "operation_name": ", ".join(op.operation_name for op in s.operations) if s.operations else "",
-                    "sequence": s.sequence,
-                })
-
-        remainder = SpgRemainder(
-            product_id=task.product_id,
-            spg_id=spg_id,
-            route_stage_id=task.route_stage_id,
-            section_plan_line_id=task.section_plan_line_id,
-            origin_task_id=task.id,
-            remainder_quantity=quantity,
-            original_issued=quantity,
-            completed_stages_json=completed_stages,
-            source="final_release",
-            created_by=actor_id,
-            created_by_user_name=actor_name,
-            created_at=performed_at or datetime.now(UTC),
-        )
-        db.add(remainder)
-        await db.flush()
-        await compensate_spg_remainders(db, spg_id, task.product_id)
-
-    await _refresh_task_cache(db, task.id)
     await _refresh_section_plan_line_cache(db, task.section_plan_line_id)
 
     # Запись лога аудита (финальный выпуск)
     from app.services.audit_log_service import log_action
     from app.models.audit_log import AuditAction, AuditEntityType
-    from app.models.section import Section
+
+    from app.models.section import Section as _SecAudit
+    section = await db.get(_SecAudit, task.section_id)
     from app.models.product import Product
-    
-    section = await db.get(Section, task.section_id)
     product = await db.get(Product, task.product_id)
-    
+
     await log_action(
         db,
         status="success",
@@ -485,7 +443,8 @@ async def final_release(
         changes={"before": None, "after": {"status": "released", "quantity": str(quantity)}},
     )
 
-    return {"movement_id": movement.id, "remainder_id": remainder.id if remainder else None, "task_id": task.id}
+    return {"transaction_id": tx.id, "task_id": task.id}
+
 
 async def prepare_section_task(
     db: AsyncSession,
@@ -500,14 +459,12 @@ async def prepare_section_task(
     quantity = _to_decimal(quantity)
     _ensure_positive(quantity, "quantity")
 
-    # Check plan position exists and is released
     pos = await db.get(PlanPosition, plan_position_id)
     if pos is None:
         raise ValueError("Plan position not found")
     if pos.status != PlanPositionStatus.released:
         raise ValueError("Plan position must be released")
 
-    # Find the section plan line for this position + section
     line = await db.scalar(
         select(SectionPlanLine).where(
             SectionPlanLine.plan_position_id == plan_position_id,
@@ -517,9 +474,6 @@ async def prepare_section_task(
     if line is None:
         raise ValueError("No route step found for this section in the plan position")
 
-    # Склады (raw_stock, wip_stock, finished_stock) — это хранилища
-    # остатков в ГХП, а не реальные шаги маршрута. WorkTask на них
-    # не создаём; остатки перетекают через Transfer / auto_consume.
     from app.models.section import Section as _Section
     sec_meta = await db.get(_Section, line.section_id)
     if sec_meta is not None and sec_meta.kind != "production":
@@ -529,7 +483,6 @@ async def prepare_section_task(
             "section_kind": sec_meta.kind,
         }
 
-    # Check for existing open task
     existing_task = await db.scalar(
         select(WorkTask).where(
             WorkTask.section_plan_line_id == line.id,
@@ -543,7 +496,6 @@ async def prepare_section_task(
             "idempotent_replay": True,
         }
 
-    # Create new task
     task = WorkTask(
         section_plan_line_id=line.id,
         section_id=section_id,
@@ -555,380 +507,6 @@ async def prepare_section_task(
     )
     db.add(task)
     await db.flush()
-    await auto_consume_available_remainders(db, task, actor_id=actor_id)
-    await _refresh_task_cache(db, task.id)
+    # Auto-consume removed — use issue_to_work(auto_consume=True) explicitly
     await _refresh_section_plan_line_cache(db, task.section_plan_line_id)
     return {"task_id": task.id, "status": task.status.value}
-
-
-async def return_remainder_to_stock(
-    db: AsyncSession,
-    *,
-    task_id: int,
-    quantity: Decimal,
-    actor_id: int,
-    comment: str | None = None,
-    idempotency_key: str | None = None,
-    executor_user_id: int | None = None,
-    performed_at: datetime | None = None,
-    accounted_at: datetime | None = None,
-) -> dict:
-    """Manually return excess quantity from a task to warehouse stock."""
-    quantity = _to_decimal(quantity)
-    _ensure_positive(quantity, "quantity")
-
-    existing = await _check_idempotency(db, idempotency_key=idempotency_key, entity_type=Movement)
-    if existing is not None:
-        task = await _get_task(db, task_id)
-        return {"movement_id": existing.id, "task_id": task.id, "idempotent_replay": True}
-
-    task = await _get_task(db, task_id)
-    task = await _refresh_task_cache(db, task.id)
-
-    # Calculate available for return: issued - completed - transferred
-    available_for_return = task.cached_issued_quantity - task.cached_completed_quantity - task.cached_transferred_quantity
-    if available_for_return <= 0:
-        raise ValueError("No excess quantity available for return")
-    if quantity > available_for_return:
-        raise ValueError(f"Return quantity ({quantity}) exceeds available for return ({available_for_return})")
-
-    now = datetime.now(UTC)
-    eff_performed = performed_at or now
-    eff_accounted = accounted_at or now
-    eff_executor = executor_user_id or actor_id
-
-    # Build completed stages info
-    line = await db.get(SectionPlanLine, task.section_plan_line_id)
-    completed_stages = []
-    if line is not None:
-        from app.models.route import RouteStage
-        stages = await db.execute(
-            select(RouteStage)
-            .where(RouteStage.route_id == line.route_id)
-            .where(RouteStage.sequence <= line.sequence)
-            .order_by(RouteStage.sequence)
-        )
-        for stage in stages.scalars().all():
-            completed_stages.append({
-                "section_id": stage.section_id,
-                "operation_code": stage.operations[0].operation_code if stage.operations else None,
-                "operation_name": ", ".join(op.operation_name for op in stage.operations) if stage.operations else "",
-                "sequence": stage.sequence,
-            })
-
-    # Create remainder record in SPG
-    from app.models.spg import SpgSection
-    spg_section = await db.scalar(
-        select(SpgSection).where(SpgSection.section_id == task.section_id)
-    )
-    if spg_section is None:
-        raise ValueError("Section is not bound to any SPG")
-    spg_id = spg_section.spg_id
-
-    actor_name = await _get_user_snapshot_name(db, actor_id)
-    executor_name = await _get_user_snapshot_name(db, eff_executor)
-    remainder = SpgRemainder(
-        product_id=task.product_id,
-        spg_id=spg_id,
-        route_stage_id=task.route_stage_id,
-        section_plan_line_id=task.section_plan_line_id,
-        origin_task_id=task.id,
-        remainder_quantity=quantity,
-        original_issued=quantity,
-        completed_stages_json=completed_stages,
-        created_by=actor_id,
-        created_by_user_name=actor_name,
-        created_at=eff_performed,
-    )
-    db.add(remainder)
-    await db.flush()
-    await compensate_spg_remainders(db, spg_id, task.product_id)
-
-    # Create return movement
-    movement = Movement(
-        product_id=task.product_id,
-        task_id=task.id,
-        section_plan_line_id=task.section_plan_line_id,
-        from_section_id=task.section_id,
-        to_section_id=task.section_id,
-        movement_type=MovementType.return_to_stock,
-        quantity=quantity,
-        comment=comment,
-        created_by=actor_id,
-        idempotency_key=idempotency_key,
-        executor_user_id=eff_executor,
-        created_by_user_name=actor_name,
-        executor_user_name=executor_name,
-        performed_at=eff_performed,
-        accounted_at=eff_accounted,
-    )
-    db.add(movement)
-    await db.flush()
-    await _refresh_task_cache(db, task.id)
-    await _refresh_section_plan_line_cache(db, task.section_plan_line_id)
-    await trigger_auto_consume_for_spg_tasks(db, spg_id=spg_id, product_id=task.product_id, actor_id=actor_id)
-    return {"movement_id": movement.id, "remainder_id": remainder.id, "task_id": task.id}
-
-
-async def consume_remainder(
-    db: AsyncSession,
-    *,
-    remainder_id: int,
-    task_id: int,
-    quantity: Decimal,
-    actor_id: int,
-    comment: str | None = None,
-    idempotency_key: str | None = None,
-    executor_user_id: int | None = None,
-    performed_at: datetime | None = None,
-    accounted_at: datetime | None = None,
-) -> dict:
-    """Use a warehouse remainder for issuing to work on a task."""
-    quantity = _to_decimal(quantity)
-    _ensure_positive(quantity, "quantity")
-
-    existing = await _check_idempotency(db, idempotency_key=idempotency_key, entity_type=Movement)
-    if existing is not None:
-        task = await _get_task(db, task_id)
-        return {"movement_id": existing.id, "task_id": task.id, "idempotent_replay": True}
-
-    remainder = await db.get(SpgRemainder, remainder_id)
-    if remainder is None:
-        raise ValueError("Remainder not found")
-    if remainder.consumed_at is not None:
-        raise ValueError("Remainder already consumed")
-
-    task = await _get_task(db, task_id)
-    if task.status not in {WorkTaskStatus.ready, WorkTaskStatus.in_progress, WorkTaskStatus.partially_completed}:
-        if task.status == WorkTaskStatus.waiting_previous:
-            raise ValueError("Нельзя выдать из остатка задание, ожидающее передачи сырья с предыдущего участка")
-        raise ValueError("Task must be ready/in_progress/partially_completed")
-
-    now = datetime.now(UTC)
-    eff_performed = performed_at or now
-    eff_accounted = accounted_at or now
-    eff_executor = executor_user_id or actor_id
-
-    # Create issue movement
-    actor_name = await _get_user_snapshot_name(db, actor_id)
-    executor_name = await _get_user_snapshot_name(db, eff_executor)
-    movement = Movement(
-        product_id=task.product_id,
-        task_id=task.id,
-        section_plan_line_id=task.section_plan_line_id,
-        from_section_id=task.section_id,
-        to_section_id=task.section_id,
-        movement_type=MovementType.issue_to_work,
-        quantity=quantity,
-        source_ref=f"remainder:{remainder_id}",
-        comment=comment,
-        created_by=actor_id,
-        idempotency_key=idempotency_key,
-        executor_user_id=eff_executor,
-        created_by_user_name=actor_name,
-        executor_user_name=executor_name,
-        performed_at=eff_performed,
-        accounted_at=eff_accounted,
-    )
-    db.add(movement)
-
-    # Update remainder (allow negative when consuming more than available)
-    remainder.remainder_quantity -= quantity
-    if remainder.remainder_quantity == 0:
-        remainder.consumed_at = now
-        remainder.consumed_by_task_id = task.id
-
-    task.status = WorkTaskStatus.in_progress
-    await db.flush()
-    await _refresh_task_cache(db, task.id)
-    await _refresh_section_plan_line_cache(db, task.section_plan_line_id)
-    return {"movement_id": movement.id, "remainder_id": remainder.id, "task_id": task.id}
-
-
-async def get_section_spg_id(db: AsyncSession, section_id: int) -> int | None:
-    from app.models.spg import SpgSection
-    return await db.scalar(select(SpgSection.spg_id).where(SpgSection.section_id == section_id))
-
-
-async def auto_consume_available_remainders(db: AsyncSession, task: WorkTask, actor_id: int) -> Decimal:
-    """Find and consume compatible remainders for this task, issuing them to work."""
-    if task.status not in {WorkTaskStatus.ready, WorkTaskStatus.in_progress, WorkTaskStatus.partially_completed}:
-        return Decimal("0")
-
-    line = await db.get(SectionPlanLine, task.section_plan_line_id)
-    if not line:
-        return Decimal("0")
-
-    spg_id = await get_section_spg_id(db, task.section_id)
-    if not spg_id:
-        return Decimal("0")
-
-    # Get all active remainders for this product and SPG, ordered FIFO
-    active_remainders = (
-        await db.execute(
-            select(SpgRemainder)
-            .where(
-                SpgRemainder.product_id == task.product_id,
-                SpgRemainder.spg_id == spg_id,
-                SpgRemainder.remainder_quantity > 0,
-                SpgRemainder.consumed_at.is_(None),
-            )
-            .order_by(SpgRemainder.created_at.asc(), SpgRemainder.id.asc())
-        )
-    ).scalars().all()
-
-    # We also need the full route stages for this plan position to determine sequence ordering
-    from app.models.route import RouteStage
-    route_stages = (
-        await db.execute(
-            select(RouteStage)
-            .where(RouteStage.route_id == line.route_id)
-            .order_by(RouteStage.sequence.asc())
-        )
-    ).scalars().all()
-    route_sequences = [s.sequence for s in route_stages]
-
-    total_consumed = Decimal("0")
-
-    for rem in active_remainders:
-        # Check compatibility:
-        # 1. If reserved, it must be for this plan position
-        if rem.reserved_for_plan_position_id is not None:
-            if rem.reserved_for_plan_position_id != line.plan_position_id:
-                continue
-
-        # 2. Sequence compatibility:
-        # We find max_seq of completed stages
-        stages_json = rem.completed_stages_json or []
-        if stages_json:
-            max_seq = max((s.get("sequence", 0) for s in stages_json), default=0)
-            # The remainder belongs to this task's stage if line.sequence is the first stage in the route after max_seq
-            next_stages_in_route = [seq for seq in route_sequences if seq > max_seq]
-            if not next_stages_in_route:
-                continue
-            expected_seq = next_stages_in_route[0]
-        else:
-            # For manual remainders (empty stages_json), they are compatible with the first stage of this SPG in the route
-            from app.models.spg import SpgSection
-            spg_section_ids = await db.scalars(
-                select(SpgSection.section_id).where(SpgSection.spg_id == spg_id)
-            )
-            spg_section_ids = list(spg_section_ids)
-            
-            spg_stages_in_route = (
-                await db.execute(
-                    select(RouteStage.sequence)
-                    .where(
-                        RouteStage.route_id == line.route_id,
-                        RouteStage.section_id.in_(spg_section_ids),
-                    )
-                    .order_by(RouteStage.sequence.asc())
-                )
-            ).scalars().all()
-            if not spg_stages_in_route:
-                continue
-            expected_seq = spg_stages_in_route[0]
-
-        if line.sequence != expected_seq:
-            continue
-
-        # If we got here, this remainder is compatible and should be consumed for this task!
-        qty_to_consume = rem.remainder_quantity
-        if qty_to_consume > 0:
-            await consume_remainder(
-                db,
-                remainder_id=rem.id,
-                task_id=task.id,
-                quantity=qty_to_consume,
-                actor_id=actor_id,
-                comment=f"Auto-consumed remainder {rem.id} on task ready/in_progress",
-            )
-            total_consumed += qty_to_consume
-
-    return total_consumed
-
-
-async def trigger_auto_consume_for_spg_tasks(db: AsyncSession, spg_id: int, product_id: int, actor_id: int) -> None:
-    """Find all active tasks in this SPG for this product and trigger remainder auto-consumption on them."""
-    from app.models.spg import SpgSection
-    section_ids = await db.scalars(
-        select(SpgSection.section_id).where(SpgSection.spg_id == spg_id)
-    )
-    section_ids = list(section_ids)
-    if not section_ids:
-        return
-
-    tasks = (
-        await db.execute(
-            select(WorkTask)
-            .where(
-                WorkTask.product_id == product_id,
-                WorkTask.section_id.in_(section_ids),
-                WorkTask.status.in_([WorkTaskStatus.ready, WorkTaskStatus.in_progress, WorkTaskStatus.partially_completed]),
-            )
-            .join(SectionPlanLine, WorkTask.section_plan_line_id == SectionPlanLine.id)
-            .order_by(SectionPlanLine.sequence.asc(), WorkTask.id.asc())
-        )
-    ).scalars().all()
-
-    for task in tasks:
-        await auto_consume_available_remainders(db, task, actor_id=actor_id)
-
-
-async def compensate_spg_remainders(db: AsyncSession, spg_id: int, product_id: int) -> None:
-    """Find positive and negative remainders for this SPG and product, and compensate them FIFO."""
-    remainders = (
-        await db.execute(
-            select(SpgRemainder)
-            .where(
-                SpgRemainder.spg_id == spg_id,
-                SpgRemainder.product_id == product_id,
-                SpgRemainder.consumed_at.is_(None),
-            )
-            .order_by(SpgRemainder.created_at.asc(), SpgRemainder.id.asc())
-        )
-    ).scalars().all()
-
-    positives = [r for r in remainders if r.remainder_quantity > 0]
-    negatives = [r for r in remainders if r.remainder_quantity < 0]
-
-    if not positives or not negatives:
-        return
-
-    now = datetime.now(UTC)
-
-    p_idx = 0
-    n_idx = 0
-
-    while p_idx < len(positives) and n_idx < len(negatives):
-        pos = positives[p_idx]
-        neg = negatives[n_idx]
-
-        pos_qty = pos.remainder_quantity
-        neg_qty = -neg.remainder_quantity
-
-        if pos_qty == 0:
-            p_idx += 1
-            continue
-        if neg_qty == 0:
-            n_idx += 1
-            continue
-
-        compensated = min(pos_qty, neg_qty)
-
-        pos.remainder_quantity -= compensated
-        neg.remainder_quantity += compensated
-
-        if pos.remainder_quantity == 0:
-            pos.consumed_at = now
-            p_idx += 1
-
-        if neg.remainder_quantity == 0:
-            neg.consumed_at = now
-            n_idx += 1
-
-    await db.flush()
-
-
-
-

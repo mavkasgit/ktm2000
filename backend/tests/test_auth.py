@@ -313,18 +313,18 @@ async def test_transporter_can_manage_transfers_globally_but_not_shopfloor_tasks
         headers={"Authorization": f"Bearer {admin_token}"},
     )
 
-    from app.models.movement import Movement, MovementType
-    from app.services.shopfloor.cache import _refresh_task_cache
     from decimal import Decimal
-    m = Movement(
-        product_id=first_task.product_id, task_id=first_task.id,
-        section_plan_line_id=first_task.section_plan_line_id,
-        from_section_id=first_task.section_id, to_section_id=first_task.section_id,
-        movement_type=MovementType.issue_to_work, quantity=Decimal("100"), created_by=admin_user.id,
-    )
-    session.add(m)
-    await session.flush()
-    await _refresh_task_cache(session, first_task.id)
+    from app.stock import StockCommand, StockCommandService, Reason
+    svc = StockCommandService()
+    await svc.record(session, StockCommand(
+        product_id=first_task.product_id,
+        from_location_id=first_task.section_id,
+        to_location_id=first_task.section_id,
+        quantity=Decimal("100"),
+        reason=Reason.issue_to_work,
+        task_id=first_task.id,
+        created_by=admin_user.id,
+    ))
     from app.services.shopfloor.cache import _refresh_section_plan_line_cache
     await _refresh_section_plan_line_cache(session, first_task.section_plan_line_id)
 

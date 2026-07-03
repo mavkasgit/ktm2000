@@ -9,7 +9,7 @@ from app.models.defect import Defect, DefectDecision, DefectDecisionType, Defect
 from app.models.movement import Movement, MovementType
 from app.models.rework_task import ReworkTask, ReworkTaskStatus
 
-from .cache import _refresh_section_plan_line_cache, _refresh_task_cache
+from .cache import _refresh_section_plan_line_cache
 from .common import _check_idempotency, _ensure_positive, _get_defect, _get_task, _get_user_snapshot_name, _to_decimal
 
 async def create_defect(
@@ -275,7 +275,8 @@ async def defect_decide(
         defect.status = DefectStatus.decision_required
 
     if task:
-        await _refresh_task_cache(db, task.id)
+        # Cache проекций обновляется автоматически через StockProjectionManager
+        # при записи StockTransaction. _refresh_task_cache удалён на Этапе 3.
         await _refresh_section_plan_line_cache(db, task.section_plan_line_id)
 
     # Запись лога аудита (решение по браку)
