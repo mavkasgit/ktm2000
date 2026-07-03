@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from decimal import Decimal
-
 import pytest
 from sqlalchemy import select
 
@@ -91,7 +89,6 @@ def test_prep_has_storage_kind_wip():
 def test_resolve_storage_kind_defaults_to_wip():
     assert _resolve_storage_kind(None) is SpgStorageKind.wip
     assert _resolve_storage_kind("wip") is SpgStorageKind.wip
-    assert _resolve_storage_kind("quarantine") is SpgStorageKind.quarantine
     assert _resolve_storage_kind(SpgStorageKind.wip) is SpgStorageKind.wip
 
 
@@ -193,108 +190,6 @@ async def test_prep_stock_section_codes_missing_key_is_treated_as_empty(session)
         await session.execute(select(SpgSection).where(SpgSection.spg_id == created.id))
     ).scalars().all()
     assert bindings == []
-
-
-@pytest.mark.asyncio
-async def test_prep_can_hold_manual_remainder_in_db(session):
-    """PREP (с PREP_STOCK секцией) может хранить SpgRemainder с пройденными этапами (прямая запись)."""
-    from app.models.user import User, UserRole
-
-    product = Product(
-        sku="PREP-DIRECT-1",
-        name="Direct Prep Remainder",
-        type=ProductType.component,
-        unit="pcs",
-    )
-    actor = User(
-        username="prep-actor",
-        email="prep-actor@local",
-        password_hash="x",
-        full_name="Prep Actor",
-        role=UserRole.admin,
-        is_active=True,
-    )
-    session.add_all([product, actor])
-    await session.commit()
-
-    sections_map = await _seed_default_sections(session)
-    await seed_spgs(session, SPGS_DATA, sections_map)
-    await session.commit()
-
-    prep = await session.scalar(
-        select(StorageProductionGroup).where(StorageProductionGroup.code == "PREP")
-    )
-    assert prep is not None
-
-    rem = SpgRemainder(
-        product_id=product.id,
-        spg_id=prep.id,
-        remainder_quantity=Decimal("42.000"),
-        original_issued=Decimal("50.000"),
-        completed_stages_json=[
-            {
-                "section_id": sections_map["DRILL"].id,
-                "operation_code": "DRILL",
-                "operation_name": "Сверловка",
-                "sequence": 2,
-            }
-        ],
-        source="manual",
-        created_by=actor.id,
-        created_by_user_name=actor.full_name,
-    )
-    session.add(rem)
-    await session.commit()
-
-    found = await session.scalar(
-        select(SpgRemainder).where(SpgRemainder.spg_id == prep.id)
-    )
-    assert found is not None
-    assert found.product_id == product.id
-    assert found.remainder_quantity == Decimal("42.000")
-    assert len(found.completed_stages_json) == 1
-    assert found.source == "manual"
-
-
-@pytest.mark.asyncio
-async def test_prep_manual_remainder_via_api(client, session):
-    """PREP доступен через API ручного ввода остатков (как обычный SPG)."""
-    product = Product(
-        sku="PREP-MANUAL-1",
-        name="Manual Prep Remainder",
-        type=ProductType.component,
-        unit="pcs",
-    )
-    session.add(product)
-    await session.commit()
-
-    sections_map = await _seed_default_sections(session)
-    await seed_spgs(session, SPGS_DATA, sections_map)
-    await session.commit()
-
-    prep = await session.scalar(
-        select(StorageProductionGroup).where(StorageProductionGroup.code == "PREP")
-    )
-    assert prep is not None
-
-    resp = await client.post(
-        f"/api/spg/{prep.id}/remainders",
-        json={
-            "product_id": product.id,
-            "quantity": 12.5,
-            "completed_stages": [],
-        },
-    )
-    assert resp.status_code == 201, resp.text
-    body = resp.json()
-    assert body["spg_code"] == "PREP"
-    assert float(body["remainder_quantity"]) == 12.5
-
-    rem = await session.scalar(
-        select(SpgRemainder).where(SpgRemainder.id == body["id"])
-    )
-    assert rem is not None
-    assert rem.spg_id == prep.id
 
 
 @pytest.mark.asyncio

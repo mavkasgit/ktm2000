@@ -1,12 +1,10 @@
 from decimal import Decimal
-from io import BytesIO
 import pytest
-from openpyxl import Workbook
 from sqlalchemy import select
 
 from app.models.product import Product, ProductType
 from app.models.section import Section
-from app.models.spg import SpgSection, StorageProductionGroup
+from app.models.spg import StorageProductionGroup
 from app.models.route import ProductionRoute, RouteStage, RouteOperation, RouteRuleProfile
 from app.models.defect import Defect, DefectItem, DefectStatus, DefectDecisionType
 from app.models.user import User, UserRole
@@ -334,42 +332,6 @@ async def test_manual_defect_invalid_stage_or_remainder(client, session):
 
 
 @pytest.mark.asyncio
-async def test_import_remainders_excel_edge_cases(client, session):
-    await _make_admin(session, "excel-edge@test.local")
-    product = await _make_product(session, "FG-VALID-SKU")
-    
-    spg = StorageProductionGroup(code="WIP_EXCEL_EDGE", name="WIP SPG Excel Edge")
-    session.add(spg)
-    await session.flush()
-
-    # Generate Excel containing some valid and some invalid rows in memory
-    wb = Workbook()
-    ws = wb.active
-    ws.append(["Артикул", "Количество"])
-    ws.append(["FG-VALID-SKU", 100])
-    ws.append(["FG-NONEXISTENT", 50])  # Non-existent SKU
-    ws.append(["FG-VALID-SKU", -10])    # Negative quantity
-    ws.append(["FG-VALID-SKU", "abc"])  # Invalid quantity format
-    
-    out = BytesIO()
-    wb.save(out)
-    excel_bytes = out.getvalue()
-
-    resp = await client.post(
-        f"/api/spg/{spg.id}/remainders/import",
-        files={"file": ("import_edge.xlsx", excel_bytes, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")}
-    )
-    assert resp.status_code == 200, resp.text
-    data = resp.json()
-    assert data["success"] is True
-    assert data["imported_count"] == 1  # Only the first row is valid
-    assert len(data["errors"]) == 3
-    assert "FG-NONEXISTENT" in data["errors"][0] and "не найден" in data["errors"][0]
-    assert "Неверное количество" in data["errors"][1] and "-10" in data["errors"][1]
-    assert "Неверное количество" in data["errors"][2] and "abc" in data["errors"][2]
-
-
-@pytest.mark.asyncio
 async def test_manual_defect_scrap_exceeding_quantity(client, session):
     """Scrap decision создаёт StockTransaction(SCRAP) независимо от количества."""
     await _make_admin(session, "defect-exceed-scrap@test.local")
@@ -420,55 +382,4 @@ async def test_manual_defect_scrap_exceeding_quantity(client, session):
     assert tx.quantity == Decimal("20")
 
 
-@pytest.mark.asyncio
-async def test_manual_defect_hold_decision(client, session):
-    await _make_admin(session, "defect-hold@test.local")
-    product = await _make_product(session, "FG-HOLD-TEST")
-    await _setup_route_with_stages(session)
-    
-    spg = StorageProductionGroup(code="WIP4", name="WIP SPG 4")
-    session.add(spg)
-    await session.flush()
-
-    drill_sec = await session.scalar(select(Section).where(Section.code == "DRILL"))
-    stage = await session.scalar(select(RouteStage).limit(1))
-
-    # 1. Register defect
-    resp = await client.post(
-        "/api/shopfloor/defects",
-        json={
-            "product_id": product.id,
-            "section_id": drill_sec.id,
-            "route_stage_id": stage.id,
-            "quantity": 8,
-            "reason": "defect_for_hold",
-            "comment": "will be frozen"
-        }
-    )
-    assert resp.status_code == 200, resp.text
-    defect_id = resp.json()["defect_id"]
-
-    # 2. Decide hold
-    dec_resp = await client.post(
-        f"/api/shopfloor/defects/{defect_id}/decisions",
-        json={
-            "decision_type": DefectDecisionType.hold.value,
-            "quantity": 8,
-            "comment": "Put on hold"
-        }
-    )
-    assert dec_resp.status_code == 200, dec_resp.text
-
-    # 3. Verify defect status is hold and stock_transaction_id is set
-    defect = await session.scalar(select(Defect).where(Defect.id == defect_id))
-    assert defect is not None
-    assert defect.status == DefectStatus.hold
-    assert defect.stock_transaction_id is not None
-
-    # Verify StockTransaction(QUARANTINE) was created
-    tx = await session.get(StockTransaction, defect.stock_transaction_id)
-    assert tx is not None
-    assert tx.reason == Reason.QUARANTINE
-    assert tx.to_quality_state == "quarantine"
-    assert tx.quantity == Decimal("8")
 

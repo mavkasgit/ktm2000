@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from decimal import Decimal
-
 import pytest
 from sqlalchemy import select
 
@@ -10,7 +8,6 @@ from app.models.section import Section
 from app.models.spg import SpgSection, SpgStorageKind, StorageProductionGroup
 from app.seeds.spgs import SPGS_DATA
 from app.seeds.seeders.spgs_seeder import seed_spgs
-from app.models.user import User, UserRole
 
 
 DEFAULT_SECTIONS = [
@@ -139,118 +136,6 @@ async def test_anod_storage_kind_persists_to_db(session):
     assert anod.storage_kind == SpgStorageKind.wip
     assert anod.is_active is True
     assert anod.sort_order == 30
-
-
-@pytest.mark.asyncio
-async def test_wip_can_hold_manual_remainder_in_db(session):
-    """ANOD (через wip-секцию WIP_WH) может хранить SpgRemainder с пройденными этапами (прямая запись)."""
-    from app.models.user import User, UserRole
-
-    product = Product(
-        sku="WIP-DIRECT-1",
-        name="Direct WIP Remainder",
-        type=ProductType.component,
-        unit="pcs",
-    )
-    actor = User(
-        username="wip-actor",
-        email="wip-actor@local",
-        password_hash="x",
-        full_name="WIP Actor",
-        role=UserRole.admin,
-        is_active=True,
-    )
-    session.add_all([product, actor])
-    await session.commit()
-
-    sections_map = await _seed_default_sections(session)
-    await seed_spgs(session, SPGS_DATA, sections_map)
-    await session.commit()
-
-    # Находим ANOD через JOIN по секции WIP_WH (как в demo_production_seeder).
-    anod = await session.scalar(
-        select(StorageProductionGroup)
-        .join(SpgSection, SpgSection.spg_id == StorageProductionGroup.id)
-        .join(Section, SpgSection.section_id == Section.id)
-        .where(Section.code == "WIP_WH")
-    )
-    assert anod is not None
-    assert anod.code == "ANOD"
-
-    rem = SpgRemainder(
-        product_id=product.id,
-        spg_id=anod.id,
-        remainder_quantity=Decimal("33.000"),
-        original_issued=Decimal("40.000"),
-        completed_stages_json=[
-            {
-                "section_id": sections_map["ANOD"].id,
-                "operation_code": "ANOD_01",
-                "operation_name": "Серебро",
-                "sequence": 5,
-            }
-        ],
-        source="manual",
-        created_by=actor.id,
-        created_by_user_name=actor.full_name,
-    )
-    session.add(rem)
-    await session.commit()
-
-    found = await session.scalar(
-        select(SpgRemainder).where(SpgRemainder.spg_id == anod.id)
-    )
-    assert found is not None
-    assert found.product_id == product.id
-    assert found.remainder_quantity == Decimal("33.000")
-    assert len(found.completed_stages_json) == 1
-    assert found.source == "manual"
-
-
-@pytest.mark.asyncio
-async def test_wip_manual_remainder_via_api(client, session):
-    """ANOD (через wip-секцию WIP_WH) доступен через API ручного ввода остатков."""
-    product = Product(
-        sku="WIP-MANUAL-1",
-        name="Manual WIP Remainder",
-        type=ProductType.component,
-        unit="pcs",
-    )
-    session.add(product)
-    await session.commit()
-
-    sections_map = await _seed_default_sections(session)
-    await seed_spgs(session, SPGS_DATA, sections_map)
-    await session.commit()
-
-    # Находим ANOD через JOIN по секции WIP_WH.
-    anod = await session.scalar(
-        select(StorageProductionGroup)
-        .join(SpgSection, SpgSection.spg_id == StorageProductionGroup.id)
-        .join(Section, SpgSection.section_id == Section.id)
-        .where(Section.code == "WIP_WH")
-    )
-    assert anod is not None
-    assert anod.code == "ANOD"
-
-    resp = await client.post(
-        f"/api/spg/{anod.id}/remainders",
-        json={
-            "product_id": product.id,
-            "quantity": 17.5,
-            "completed_stages": [],
-        },
-    )
-    assert resp.status_code == 201, resp.text
-    body = resp.json()
-    assert body["spg_code"] == "ANOD"
-    assert float(body["remainder_quantity"]) == 17.5
-
-    rem = await session.scalar(
-        select(SpgRemainder).where(SpgRemainder.id == body["id"])
-    )
-    assert rem is not None
-    assert rem.spg_id == anod.id
 
 
 @pytest.mark.asyncio

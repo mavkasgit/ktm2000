@@ -323,7 +323,7 @@ async def test_rework_uses_rework_quality_state(session: AsyncSession):
     user = await _make_user(session)
     product = await _make_product(session)
     laser = await _make_location(session, code="LASER9", name="Laser9", loc_type="laser")
-    rework_loc = await _make_location(session, code="RW1", name="Rework", loc_type="quarantine")
+    rework_loc = await _make_location(session, code="RW1", name="Rework", loc_type="wip_stock")
 
     svc = StockCommandService()
     await svc.record(session, StockCommand(

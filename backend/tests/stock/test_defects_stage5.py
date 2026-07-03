@@ -96,13 +96,12 @@ async def _balance(
 
 
 async def _setup_minimal_route(session: AsyncSession, *, sku: str = "DEF5", qty: Decimal = Decimal("10")) -> dict:
-    """Minimal topology: raw_stock → production section → scrap/quarantine."""
+    """Minimal topology: raw_stock → production section → scrap."""
     user = await _make_user(session, f"{sku}@local")
 
     raw = await _make_location(session, code=f"{sku}-RAW", name="Raw", loc_type="raw_stock")
     prod = await _make_location(session, code=f"{sku}-PROD", name="Production", loc_type="laser")
     scrap_loc = await _make_location(session, code=f"{sku}-SCR", name="Scrap", loc_type="scrap")
-    quarantine_loc = await _make_location(session, code=f"{sku}-QUAR", name="Quarantine", loc_type="quarantine")
 
     spg = StorageProductionGroup(code=f"{sku}-SPG", name="SPG", is_active=True, sort_order=0)
     session.add(spg)
@@ -172,7 +171,7 @@ async def _setup_minimal_route(session: AsyncSession, *, sku: str = "DEF5", qty:
 
     return {
         "user": user, "product": product, "task": task,
-        "raw": raw, "prod": prod, "scrap": scrap_loc, "quarantine": quarantine_loc, "stage2": stage2,
+        "raw": raw, "prod": prod, "scrap": scrap_loc, "stage2": stage2,
     }
 
 
@@ -396,58 +395,6 @@ async def test_defect_decide_return_previous_creates_stock_tx(session: AsyncSess
     assert tx.task_id == task.id
 
     await assert_no_stock_ledger_invariants_violations(session, context="after-defect-return")
-
-
-async def test_defect_decide_hold_creates_quarantine_tx(session: AsyncSession):
-    """defect_decide(hold) → StockTransaction(QUARANTINE, to_quality_state=quarantine), defect.status=hold."""
-    fx = await _setup_minimal_route(session)
-    task = fx["task"]
-
-    from app.services.shopfloor.operations_defects import create_defect, defect_decide
-
-    defect_resp = await create_defect(
-        session,
-        task_id=task.id,
-        quantity=Decimal("6"),
-        actor_id=fx["user"].id,
-        reason="hold_test",
-    )
-    await session.commit()
-    defect_id = defect_resp["defect_id"]
-
-    # Decide hold
-    dec_resp = await defect_decide(
-        session,
-        defect_id=defect_id,
-        decision_type=DefectDecisionType.hold,
-        quantity=Decimal("6"),
-        actor_id=fx["user"].id,
-        idempotency_key="hold-test-1",
-    )
-    await session.commit()
-
-    assert dec_resp["defect_status"] == DefectStatus.hold.value
-
-    # Verify defect
-    defect = await session.get(Defect, defect_id)
-    assert defect is not None
-    assert defect.stock_transaction_id is not None
-    assert defect.status == DefectStatus.hold
-
-    # Verify StockTransaction(QUARANTINE)
-    tx = await session.get(StockTransaction, defect.stock_transaction_id)
-    assert tx is not None
-    assert tx.reason == Reason.QUARANTINE
-    assert tx.from_quality_state == QualityState.GOOD
-    assert tx.to_quality_state == QualityState.QUARANTINE
-    assert tx.quantity == Decimal("6")
-    assert tx.task_id == task.id
-
-    # Check StockBalance on quarantine location
-    quar_bal = await _balance(session, fx["product"].id, fx["quarantine"].id, QualityState.QUARANTINE)
-    assert quar_bal == Decimal("6")
-
-    await assert_no_stock_ledger_invariants_violations(session, context="after-defect-hold")
 
 
 async def test_defect_decide_accept_deviation_creates_complete_tx(session: AsyncSession):
