@@ -107,12 +107,12 @@ Reason enum и QualityState enum — как в предыдущей версии
 - [x] 5.4. 7 тестов по веткам решений (scrap/rework/return/hold/accept/idempotent)
 
 ### Этап 6 — Frontend (тоже big-bang, не strangler)
-- [ ] 6.1. `shared/api/stock.ts`
-- [ ] 6.2-6.4. Заменить компоненты на новый API напрямую (не городить
+- [x] 6.1. `shared/api/stock.ts`
+- [x] 6.2-6.4. Заменить компоненты на новый API напрямую (не городить
   переключатель legacy/new)
-- [ ] 6.5. UI для явных команд: чекбокс автопотребления, кнопки
+- [x] 6.5. UI для явных команд: чекбокс автопотребления, кнопки
   scrap/rework, индикатор перевыполнения
-- [ ] 6.6. Убрать `SpgRemainder` с фронта полностью
+- [x] 6.6. Убрать `SpgRemainder` с фронта полностью
 
 ### Этап 7 — Cleanup
 - [ ] 7.1. Удалить `SpgRemainder` (модель, таблица)
@@ -219,5 +219,5 @@ test_manual_pass_completes_single_stage_task
 - [x] Этап 3 — Shopfloor
 - [x] Этап 4 — WorkTask cleanup
 - [x] Этап 5 — Quality
-- [ ] Этап 6 — Frontend
+- [x] Этап 6 — Frontend
 - [ ] Этап 7 — Cleanup
