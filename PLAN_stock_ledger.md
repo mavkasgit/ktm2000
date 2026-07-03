@@ -147,6 +147,71 @@ Reason enum и QualityState enum — как в предыдущей версии
 
 ---
 
+## 4.1. Технический долг — `manual-pass` endpoint (отложено)
+
+Эндпоинт `POST /api/production-planning/rows/{id}/manual-pass` (ручной пропуск
+этапа/маршрута) сломался после Этапа 3 и **сознательно оставлен нерешённым** до
+отдельного сеанса.
+
+### Симптом
+
+6 тестов в `backend/tests/test_production_planning_rows.py` падают:
+
+```
+test_manual_pass_complete_route_finishes_all_tasks
+test_manual_pass_rejects_position_with_existing_nonmanual_facts
+test_manual_pass_idempotent
+test_manual_pass_with_intermediate_transfer
+test_manual_pass_creates_tasks_for_single_stage
+test_manual_pass_completes_single_stage_task
+```
+
+Все возвращают `400 Bad Request` вместо `200 OK`. Тесты также содержат
+устаревшие assertions (`movements_created == 22`, `movement_count == 5`),
+привязанные к Movement, который больше не пишется.
+
+### Предположительная причина
+
+`manual-pass` вызывает каскад `issue_to_work` + `complete_task` + `transfer_send`
+для всех этапов маршрута. После Этапа 3 `issue_to_work` использует
+`StockCommandService.record()` и требует stock-баланс на `from_location_id`.
+Внутри `manual-pass` не создаётся начальный остаток на складе → `StockCommand`
+падает с `StockValidationError` → endpoint возвращает 400.
+
+Возможен и второй сценарий: `manual-pass` ещё где-то пишет в `Movement`
+напрямую, минуя `StockCommandService` — это нужно проверить и вырезать.
+
+### Что сделать (отдельной сессией)
+
+1. Прочитать endpoint `POST /api/production-planning/rows/{id}/manual-pass`
+   в `backend/app/api/routes/production_planning.py` (поиск по `manual-pass`).
+2. Логировать `response.json()` в падающем тесте — увидеть причину 400.
+3. Если причина в отсутствии stock-баланса:
+   - либо создать начальный `StockCommand(manual_in)` перед каскадом,
+   - либо передавать `auto_consume=True` / `shortage_strategy="partial"` в `issue_to_work`.
+4. Если `manual-pass` пишет в `Movement` напрямую — переписать на `StockCommandService.record()`.
+5. Адаптировать assertions в тестах:
+   - `movements_created` → `stock_transactions_created` (или прямой SQL count по `StockTransaction.id`).
+   - `movement_count` через `select(func.count(Movement.id))` → `StockTransaction` count по `task_ids` позиции.
+6. Прогнать `cd backend && python -m pytest tests/test_production_planning_rows.py -v` — должны быть зелёными.
+
+### Почему не критично сейчас
+
+- `manual-pass` — режим ручного пропуска (не основная производственная цепочка).
+- Этапы 5-7 не зависят от его работы.
+- Фронт (Этап 6) использует этот endpoint, но это единственный потребитель;
+  если он временно недоступен — пользователь видит ошибку 400, не падение UI.
+- Чинится локально в одном endpoint + одном тестовом файле, без влияния на
+  остальную миграцию.
+
+### Коммит-якорь
+
+Проблема внесена на Этапе 3 (коммит `55c7392`), не обнаружена в ревью
+(оркестратор доверился отчёту executor'а «pre-existing»). Долг зафиксирован
+после Этапа 4. Чинить до мержа ветки `refactor/stock-ledger` в main.
+
+---
+
 ## 5. Прогресс
 
 - [x] Этап 0 — Подготовка
