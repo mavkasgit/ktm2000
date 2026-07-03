@@ -43,7 +43,6 @@ const DICT: Record<string, string> = {
   "Route stage not found": "Этап маршрута не найден",
   "Rework task not found": "Задача на доработку не найдена",
   "{0} must be > 0": "{0} должно быть > 0",
-  "SpgRemainder {0} not found": "Остаток СГП {0} не найден",
   "RouteStage {0} not found": "Этап маршрута {0} не найден",
 
   // === shopfloor / operations_defects ===

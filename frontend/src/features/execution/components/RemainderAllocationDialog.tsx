@@ -4,20 +4,15 @@ import {
   DialogContent,
   DialogHeader,
   DialogTitle,
-  DialogDescription,
   DialogFooter,
   Button,
-  Input,
   Badge,
+  Checkbox,
   renderIcon,
 } from "@/shared/ui";
-import {
-  getRemaindersPreview,
-  type RemaindersPreviewResponse,
-  type RemainderAllocationItem,
-} from "@/shared/api/productionPlans";
-import { Loader2, Layers, Package, ClipboardList, AlertCircle, ArrowRight } from "lucide-react";
-import { fmtQty } from "@/shared/utils/fmtQty";
+import { getProductStockBalances } from "@/shared/api/stock";
+import type { StockBalanceEntry } from "@/shared/api/stock";
+import { Loader2, Layers, Package, AlertCircle } from "lucide-react";
 
 interface RemainderAllocationDialogProps {
   open: boolean;
@@ -26,7 +21,7 @@ interface RemainderAllocationDialogProps {
   positionSku: string;
   positionName: string;
   releaseQuantity: number;
-  onConfirm: (allocation: RemainderAllocationItem[]) => void;
+  onConfirm: (autoConsume: boolean) => void;
   pending: boolean;
 }
 
@@ -40,34 +35,27 @@ export function RemainderAllocationDialog({
   onConfirm,
   pending,
 }: RemainderAllocationDialogProps) {
-  const [data, setData] = useState<RemaindersPreviewResponse | null>(null);
+  const [balances, setBalances] = useState<StockBalanceEntry[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [allocations, setAllocations] = useState<Record<number, string>>({});
+  const [autoConsume, setAutoConsume] = useState(true);
 
   useEffect(() => {
-    if (!open || positionId === null) {
-      setData(null);
+    if (!open) {
+      setBalances([]);
       setError(null);
-      setAllocations({});
+      setAutoConsume(true);
       return;
     }
 
     let isMounted = true;
-    async function loadPreview() {
+    async function loadBalances() {
       setLoading(true);
       setError(null);
       try {
-        const preview = await getRemaindersPreview(positionId!);
+        const allBalances = await getProductStockBalances(0);
         if (isMounted) {
-          setData(preview);
-          // Prefill allocations from default_allocation
-          const initialAlloc: Record<number, string> = {};
-          preview.available_remainders.forEach((rem) => {
-            const defItem = preview.default_allocation.find((d) => d.remainder_id === rem.id);
-            initialAlloc[rem.id] = defItem ? String(defItem.allocated_quantity) : "0";
-          });
-          setAllocations(initialAlloc);
+          setBalances(allBalances.filter((b) => b.balance_qty !== "0"));
         }
       } catch (err: any) {
         if (isMounted) {
@@ -80,513 +68,95 @@ export function RemainderAllocationDialog({
       }
     }
 
-    loadPreview();
-
+    loadBalances();
     return () => {
       isMounted = false;
     };
-  }, [open, positionId]);
+  }, [open]);
 
-  // Заполнить по убыванию операций (наиболее обработанные → наименее)
-  const handleFillDescending = () => {
-    if (!data) return;
-    const sorted = [...data.available_remainders].sort(
-      (a, b) => b.max_completed_seq - a.max_completed_seq
-    );
-    let remaining = releaseQuantity;
-    const newAlloc: Record<number, string> = {};
-    data.available_remainders.forEach((rem) => { newAlloc[rem.id] = "0"; });
-    for (const rem of sorted) {
-      if (remaining <= 0) break;
-      const take = Math.min(rem.remainder_quantity, remaining);
-      newAlloc[rem.id] = String(take);
-      remaining -= take;
-    }
-    setAllocations(newAlloc);
-  };
-
-  const handleClearAll = () => {
-    if (!data) return;
-    const cleared: Record<number, string> = {};
-    data.available_remainders.forEach((rem) => {
-      cleared[rem.id] = "0";
-    });
-    setAllocations(cleared);
-  };
-
-  const stockRemainder = useMemo(() => {
-    if (!data || data.available_remainders.length === 0) return null;
-    return data.available_remainders.slice().sort((a, b) => a.max_completed_seq - b.max_completed_seq)[0];
-  }, [data]);
-
-  const handleFillFromStock = () => {
-    if (!data || !stockRemainder) return;
-    
-    let otherAllocated = 0;
-    Object.entries(allocations).forEach(([idStr, valStr]) => {
-      const id = parseInt(idStr, 10);
-      if (id !== stockRemainder.id) {
-        const val = parseFloat(valStr);
-        if (!isNaN(val) && val > 0) {
-          otherAllocated += val;
-        }
-      }
-    });
-    
-    const needed = Math.max(0, releaseQuantity - otherAllocated);
-    const toAllocate = Math.min(needed, stockRemainder.remainder_quantity);
-    
-    setAllocations(prev => ({
-      ...prev,
-      [stockRemainder.id]: String(toAllocate)
-    }));
-  };
-
-  // Calculations
-  const sortedRemainders = useMemo(() => {
-    if (!data) return [];
-    return data.available_remainders.slice().sort((a, b) => {
-      if (a.max_completed_seq !== b.max_completed_seq) {
-        return a.max_completed_seq - b.max_completed_seq;
-      }
-      return a.id - b.id;
-    });
-  }, [data]);
-
-  const allocationErrors = useMemo(() => {
-    const errs: Record<number, string> = {};
-    if (!data) return errs;
-
-    data.available_remainders.forEach((rem) => {
-      const valStr = allocations[rem.id] || "0";
-      const val = parseFloat(valStr);
-      if (isNaN(val) || val < 0) {
-        errs[rem.id] = "Некорректное число";
-      } else if (val > rem.remainder_quantity) {
-        errs[rem.id] = `Макс. ${fmtQty(rem.remainder_quantity)}`;
-      }
-    });
-
-    return errs;
-  }, [data, allocations]);
-
-  const totalAllocated = useMemo(() => {
-    let sum = 0;
-    Object.values(allocations).forEach((v) => {
-      const val = parseFloat(v);
-      if (!isNaN(val) && val > 0) {
-        sum += val;
-      }
-    });
-    return sum;
-  }, [allocations]);
-
-  const hasErrors = Object.keys(allocationErrors).length > 0;
-  const isExceedingTotal = totalAllocated > releaseQuantity;
-
-  const routeStepsWithPlannedQuantities = useMemo(() => {
-    if (!data) return [];
-    
-    return data.route_steps.map((step) => {
-      let covered = 0;
-      data.available_remainders.forEach((rem) => {
-        const qty = parseFloat(allocations[rem.id] || "0");
-        if (!isNaN(qty) && qty > 0) {
-          if (rem.max_completed_seq >= step.sequence) {
-            covered += qty;
-          }
-        }
-      });
-      const planned = Math.max(0, releaseQuantity - covered);
-      return {
-        ...step,
-        planned,
-        covered,
-      };
-    });
-  }, [data, allocations, releaseQuantity]);
-
-  const handleConfirm = () => {
-    if (hasErrors) return;
-    const items: RemainderAllocationItem[] = [];
-    Object.entries(allocations).forEach(([idStr, valStr]) => {
-      const qty = parseFloat(valStr);
-      if (!isNaN(qty) && qty > 0) {
-        items.push({
-          remainder_id: parseInt(idStr, 10),
-          quantity: qty,
-        });
-      }
-    });
-    onConfirm(items);
-  };
+  const totalAvailable = useMemo(() => {
+    return balances.reduce((sum, b) => sum + parseFloat(b.balance_qty), 0);
+  }, [balances]);
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-[1400px] w-[95vw] h-[85vh] flex flex-col p-0 overflow-hidden gap-0">
-        <DialogHeader className="p-6 pb-4 border-b shrink-0">
+      <DialogContent className="max-w-[600px]">
+        <DialogHeader>
           <DialogTitle className="flex flex-col gap-1.5 text-left">
             <div className="flex items-center gap-2 text-xl font-bold">
               <Layers className="h-5 w-5 text-primary" />
-              <span>Распределение остатков</span>
+              <span>Запуск в производство</span>
               <Badge variant="outline" className="font-mono text-sm px-2.5 py-0.5 border-blue-500 text-blue-700 bg-blue-50 dark:bg-blue-950/30 dark:text-blue-400 ml-auto">
                 {positionSku}
               </Badge>
             </div>
             <div className="text-sm font-normal text-muted-foreground mt-1 bg-muted/50 p-2 rounded border">
-              <strong>Артикул изделия:</strong> {positionSku} {positionName ? `(${positionName})` : ""}
+              <strong>Артикул:</strong> {positionSku} {positionName ? `(${positionName})` : ""}
+              {" · "}
+              <strong>План:</strong> {releaseQuantity} шт.
             </div>
           </DialogTitle>
         </DialogHeader>
 
-        <div className="flex-1 overflow-y-auto p-6 space-y-6">
+        <div className="space-y-4 py-2">
           {loading ? (
-            <div className="flex flex-col items-center justify-center py-12 gap-3">
+            <div className="flex flex-col items-center justify-center py-8 gap-3">
               <Loader2 className="h-8 w-8 animate-spin text-primary" />
-              <span className="text-sm text-muted-foreground">Загрузка совместимых остатков...</span>
+              <span className="text-sm text-muted-foreground">Загрузка остатков...</span>
             </div>
           ) : error ? (
-            <div className="flex items-center gap-3 p-4 rounded-lg bg-destructive/10 text-destructive border border-destructive/20 my-2">
+            <div className="flex items-center gap-3 p-4 rounded-lg bg-destructive/10 text-destructive border border-destructive/20">
               <AlertCircle className="h-5 w-5 shrink-0" />
               <div className="text-sm font-medium">{error}</div>
             </div>
-          ) : data ? (
-            <div className="flex flex-col gap-6">
-              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 items-start">
-                {/* Склады подготовки (ГХП) */}
-                <div className="space-y-3">
-                  <div className="flex items-center border-b pb-2">
-                    <h3 className="text-base font-semibold flex items-center gap-2">
-                      <Package className="h-4 w-4 text-emerald-600" />
-                      <span>Остатки на складах подготовки (ГХП)</span>
-                    </h3>
-                  </div>
-
-                  {/* Карточка: артикул + план + все операции маршрута */}
-                  <div className="rounded-md border bg-muted/20 px-3 py-2 flex items-center justify-between gap-4">
-                    <div className="flex items-center gap-2 min-w-0">
-                      <div className="min-w-0">
-                        <span className="font-mono font-semibold text-sm">{data.product_sku}</span>
-                        {data.product_name && data.product_name !== data.product_sku && (
-                          <span className="text-xs text-muted-foreground ml-2">{data.product_name}</span>
-                        )}
-                        {/* Все операции маршрута с иконками участков */}
-                        <div className="flex flex-wrap items-center gap-1 mt-1">
-                          {data.route_steps.map((step, idx) => (
-                            <span key={step.sequence} className="flex items-center gap-1">
-                              {idx > 0 && <ArrowRight className="h-2.5 w-2.5 text-muted-foreground/40" />}
-                              <span
-                                className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] font-medium"
-                                style={step.op_icon_color ? {
-                                  backgroundColor: step.op_icon_color + "18",
-                                  color: step.op_icon_color,
-                                } : { backgroundColor: "hsl(var(--muted))", color: "hsl(var(--muted-foreground))" }}
-                              >
-                                {step.op_icon && step.op_icon_color && (
-                                  <span style={{ color: step.op_icon_color }}>
-                                    {renderIcon(step.op_icon, "h-3 w-3")}
-                                  </span>
-                                )}
-                                {step.operation_name}
-                              </span>
-                            </span>
-                          ))}
-                        </div>
+          ) : (
+            <>
+              <div className="rounded-md border bg-muted/20 p-3">
+                <div className="flex items-center gap-2 text-sm">
+                  <Package className="h-4 w-4 text-emerald-600" />
+                  <span className="font-medium">Доступно на складах:</span>
+                  <span className="font-mono font-bold">{totalAvailable.toFixed(2)} шт.</span>
+                </div>
+                {balances.length > 0 && (
+                  <div className="mt-2 text-xs text-muted-foreground">
+                    {balances.slice(0, 5).map((b) => (
+                      <div key={b.id} className="flex justify-between py-0.5">
+                        <span>{b.location_name || `#${b.location_id}`}</span>
+                        <span className="font-mono">{b.balance_qty} шт. ({b.quality_state})</span>
                       </div>
-                    </div>
-                    <div className="text-right shrink-0">
-                      <div className="text-xs text-muted-foreground">По плану</div>
-                      <div className="font-mono font-bold text-base">{fmtQty(releaseQuantity)} шт.</div>
-                    </div>
-                  </div>
-
-                  {data.available_remainders.length === 0 ? (
-                    <div className="text-sm py-4 px-3 text-center bg-destructive/10 text-destructive rounded-md border border-destructive/20">
-                      Нет активных остатков на складах подготовки для данного артикула.
-                      Взять в работу невозможно — закройте окно и пополните остатки.
-                    </div>
-                  ) : (
-                    <div className="border rounded-md overflow-hidden bg-card">
-                      <table className="w-full text-sm">
-                        <thead className="bg-muted/50 border-b">
-                          <tr>
-                            <th className="text-left p-3 font-medium text-muted-foreground">ГХП (выполненные операции)</th>
-                            <th className="text-right p-3 font-medium text-muted-foreground w-[260px]">Использовать / Доступно</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {sortedRemainders.map((rem) => {
-                            const err = allocationErrors[rem.id];
-                            const stagesWithIcons = (rem.stages_with_icons || rem.completed_stages_json)
-                              .slice()
-                              .sort((a: { sequence: number }, b: { sequence: number }) => a.sequence - b.sequence);
-                            return (
-                              <tr key={rem.id} className="border-b last:border-0 hover:bg-muted/20">
-                                <td className="p-3">
-                                  <div className="flex items-center gap-3">
-                                    {/* SPG icon */}
-                                    {rem.spg_icon && rem.spg_icon_color ? (
-                                      <div
-                                        className="flex h-8 w-8 shrink-0 items-center justify-center rounded"
-                                        style={{ backgroundColor: rem.spg_icon_color + "20" }}
-                                      >
-                                        <span style={{ color: rem.spg_icon_color }}>
-                                          {renderIcon(rem.spg_icon, "h-4 w-4")}
-                                        </span>
-                                      </div>
-                                    ) : (
-                                      <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded bg-emerald-100 text-emerald-800">
-                                        <Package className="h-4 w-4" />
-                                      </div>
-                                    )}
-                                    <div>
-                                      <div className="font-medium">{rem.spg_name}</div>
-                                      <div className="flex flex-wrap items-center gap-1 mt-0.5">
-                                        {rem.completed_stages_json.length === 0 ? (
-                                          <span className="text-xs text-muted-foreground">Без обработки (склад сырья)</span>
-                                        ) : (
-                                          stagesWithIcons.map((s: { sequence: number; op_icon?: string | null; op_icon_color?: string | null; operation_name?: string; operation_code?: string }, idx: number) => (
-                                            <span key={idx} className="flex items-center gap-1">
-                                              {idx > 0 && <ArrowRight className="h-2.5 w-2.5 text-muted-foreground/40" />}
-                                              <span
-                                                className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] font-medium"
-                                                style={s.op_icon_color ? {
-                                                  backgroundColor: s.op_icon_color + "18",
-                                                  color: s.op_icon_color,
-                                                } : {}}
-                                              >
-                                                {s.op_icon && s.op_icon_color && (
-                                                  <span style={{ color: s.op_icon_color }}>
-                                                    {renderIcon(s.op_icon, "h-3 w-3")}
-                                                  </span>
-                                                )}
-                                                {s.operation_name || s.operation_code}
-                                              </span>
-                                            </span>
-                                          ))
-                                        )}
-                                      </div>
-                                    </div>
-                                  </div>
-                                </td>
-                                <td className="p-3 text-right">
-                                  <div className="flex items-center justify-end gap-3">
-                                    <div className="flex flex-col items-end gap-0.5">
-                                      <Input
-                                        type="number"
-                                        step="any"
-                                        min="0"
-                                        max={rem.remainder_quantity}
-                                        value={allocations[rem.id] || "0"}
-                                        onChange={(e) =>
-                                          setAllocations((prev) => ({
-                                            ...prev,
-                                            [rem.id]: e.target.value,
-                                          }))
-                                        }
-                                        onFocus={(e) => e.target.select()}
-                                        className="h-8 w-24 text-right text-sm px-2 font-mono"
-                                      />
-                                      {err && <span className="text-[10px] text-destructive">{err}</span>}
-                                    </div>
-                                    <button
-                                      type="button"
-                                      title="Нажмите чтобы подставить максимально возможное кол-во без превышения плана"
-                                      className="font-mono font-semibold text-emerald-600 dark:text-emerald-400 hover:text-emerald-500 hover:underline cursor-pointer transition-colors"
-                                      onClick={() => {
-                                        const otherAllocated = Object.entries(allocations)
-                                          .filter(([id]) => Number(id) !== rem.id)
-                                          .reduce((sum, [, v]) => sum + (parseFloat(v) || 0), 0);
-                                        const remaining = Math.max(0, releaseQuantity - otherAllocated);
-                                        const fillQty = Math.min(rem.remainder_quantity, remaining);
-                                        setAllocations((prev) => ({
-                                          ...prev,
-                                          [rem.id]: String(fillQty),
-                                        }));
-                                      }}
-                                    >
-                                      / {fmtQty(rem.remainder_quantity)}
-                                    </button>
-                                  </div>
-                                </td>
-                              </tr>
-                            );
-                          })}
-                        </tbody>
-                        <tfoot className="border-t bg-muted/30">
-                          <tr>
-                            <td className="px-3 py-2 text-sm font-medium text-muted-foreground">Итого</td>
-                            <td className="px-3 py-2 text-right">
-                              <div className="flex items-center justify-end gap-2 font-mono text-sm">
-                                <span className={`font-bold ${isExceedingTotal ? "text-orange-500" : totalAllocated === releaseQuantity ? "text-emerald-600 dark:text-emerald-400" : "text-amber-600"}`}>
-                                  {fmtQty(totalAllocated)}
-                                </span>
-                                <span className="text-muted-foreground/50">/</span>
-                                <span className="font-semibold text-muted-foreground">{fmtQty(releaseQuantity)} шт.</span>
-                                {isExceedingTotal && (
-                                  <span className="text-xs font-normal text-orange-500 ml-1">· +{fmtQty(totalAllocated - releaseQuantity)} излишек</span>
-                                )}
-                                {!isExceedingTotal && totalAllocated === releaseQuantity && (
-                                  <span className="text-xs font-normal text-emerald-600 dark:text-emerald-400 ml-1">· план закрыт ✓</span>
-                                )}
-                                {!isExceedingTotal && totalAllocated < releaseQuantity && totalAllocated > 0 && (
-                                  <span className="text-xs font-normal text-amber-600 ml-1">· не закрыто {fmtQty(releaseQuantity - totalAllocated)} шт.</span>
-                                )}
-                              </div>
-                            </td>
-                          </tr>
-                        </tfoot>
-                      </table>
-                      {/* Кнопки действий под итогами */}
-                      <div className="flex items-center justify-end gap-2 px-3 py-2.5 border-t bg-muted/10">
-                        <Button
-                          type="button"
-                          variant="outline"
-                          onClick={handleFillDescending}
-                        >
-                          Перезаписать
-                        </Button>
-                        <Button
-                          type="button"
-                          variant="outline"
-                          onClick={handleClearAll}
-                        >
-                          Очистить всё
-                        </Button>
-                        {stockRemainder && (
-                          <Button
-                            type="button"
-                            variant="secondary"
-                            onClick={handleFillFromStock}
-                          >
-                            {stockRemainder.max_completed_seq === 0 ? "Добрать со склада" : "Добрать остаток"}
-                          </Button>
-                        )}
-                      </div>
-                    </div>
-                  )}
-                </div>
-
-                {/* В реальной работе на производственных участках */}
-                <div className="space-y-3">
-                  <h3 className="text-base font-semibold flex items-center gap-2 border-b pb-2">
-                    <ClipboardList className="h-4 w-4 text-blue-600" />
-                    <span>Расчет объемов по этапам с учетом остатков</span>
-                  </h3>
-
-                  <div className="border rounded-md overflow-hidden bg-card">
-                    <table className="w-full text-sm">
-                      <thead className="bg-muted/50 border-b">
-                        <tr>
-                          <th className="text-left p-3 font-medium text-muted-foreground">Операция (участок)</th>
-                          <th className="text-right p-3 font-medium text-muted-foreground w-[120px]">Исходный план</th>
-                          <th className="text-center p-3 font-medium text-muted-foreground w-[60px]"></th>
-                          <th className="text-right p-3 font-medium text-muted-foreground w-[160px]">План к производству</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {routeStepsWithPlannedQuantities.map((step) => {
-                          const isFullyCovered = step.planned === 0;
-                          const contributions = sortedRemainders
-                            .map((rem) => {
-                              const qty = parseFloat(allocations[rem.id] || "0");
-                              if (!isNaN(qty) && qty > 0 && rem.max_completed_seq >= step.sequence) {
-                                return {
-                                  id: rem.id,
-                                  qty,
-                                  spg_name: rem.spg_name,
-                                };
-                              }
-                              return null;
-                            })
-                            .filter(Boolean) as { id: number; qty: number; spg_name: string }[];
-
-                          return (
-                            <tr key={step.sequence} className={`border-b last:border-0 hover:bg-muted/20 ${isFullyCovered ? "bg-emerald-50/30 dark:bg-emerald-950/10" : ""}`}>
-                              <td className="p-3">
-                                <div className="flex items-center justify-between w-full gap-4">
-                                  <div className="flex items-center gap-3">
-                                    <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded bg-blue-100 text-blue-800 font-mono text-xs font-bold">
-                                      {step.sequence}
-                                    </div>
-                                    <div className="flex items-baseline gap-2">
-                                      <span className="font-medium">{step.operation_name}</span>
-                                      <span className="text-xs text-muted-foreground">({step.section_name})</span>
-                                    </div>
-                                  </div>
-                                  {contributions.length > 0 && (
-                                    <div className="flex flex-col items-start gap-1 text-left shrink-0 bg-emerald-50/50 dark:bg-emerald-950/20 px-2 py-0.5 rounded border border-emerald-100 dark:border-emerald-900/30">
-                                      {contributions.map((c) => (
-                                        <div key={c.id} className="text-[11px] flex items-center gap-1.5 text-emerald-600 dark:text-emerald-400 font-medium">
-                                          <span className="inline-block w-1 h-1 rounded-full bg-emerald-500" />
-                                          <span>Покрыто {fmtQty(c.qty)} шт. из #{c.id} ({c.spg_name})</span>
-                                        </div>
-                                      ))}
-                                    </div>
-                                  )}
-                                </div>
-                              </td>
-                              <td className="p-3 text-right font-mono text-muted-foreground">
-                                {fmtQty(releaseQuantity)}
-                              </td>
-                              <td className="p-3 text-center text-muted-foreground">
-                                <ArrowRight className="h-4 w-4 inline" />
-                              </td>
-                              <td className="p-3 text-right font-mono font-semibold">
-                                {isFullyCovered ? (
-                                  <Badge variant="outline" className="border-emerald-500 text-emerald-700 bg-emerald-50 hover:bg-emerald-100 dark:bg-emerald-950/30 dark:text-emerald-400 dark:hover:bg-emerald-950/50">
-                                    Из остатков ({fmtQty(step.covered || 0)})
-                                  </Badge>
-                                ) : (
-                                  <div className="flex flex-col items-end gap-0.5">
-                                    <span className={step.planned < releaseQuantity ? "text-amber-600 font-semibold" : "text-blue-600 dark:text-blue-400"}>
-                                      {fmtQty(step.planned)} шт.
-                                    </span>
-                                    {(step.covered || 0) > 0 && (
-                                      <span className="text-[10px] text-emerald-600 dark:text-emerald-400 font-medium">
-                                        (покрыто {fmtQty(step.covered || 0)})
-                                      </span>
-                                    )}
-                                  </div>
-                                )}
-                              </td>
-                            </tr>
-                          );
-                        })}
-                      </tbody>
-                    </table>
-                  </div>
-                </div>
-              </div>
-
-              {/* Итоговая информация */}
-              <div className="rounded-md bg-muted/50 p-4 flex items-center justify-between text-sm border border-border">
-                <div className="space-y-1">
-                  <div>
-                    Итого из остатков: <span className="font-semibold font-mono text-emerald-600 dark:text-emerald-400">{fmtQty(totalAllocated)} шт.</span>
-                  </div>
-                  <div>
-                    Будет произведено на 1-м этапе: <span className="font-semibold font-mono text-blue-600 dark:text-blue-400">{fmtQty(Math.max(0, releaseQuantity - totalAllocated))} шт.</span>
-                  </div>
-                </div>
-                {isExceedingTotal && (
-                  <div className="text-amber-600 dark:text-amber-400 text-xs flex items-center gap-1.5 font-medium bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-800 rounded px-2 py-1">
-                    <AlertCircle className="h-4 w-4 shrink-0" />
-                    <span>Излишек {fmtQty(totalAllocated - releaseQuantity)} шт. вернётся в ГХП после выполнения задания</span>
+                    ))}
+                    {balances.length > 5 && (
+                      <div className="text-muted-foreground pt-1">+ ещё {balances.length - 5} записей</div>
+                    )}
                   </div>
                 )}
               </div>
-            </div>
-          ) : null}
+
+              <label className="flex items-start gap-2 cursor-pointer select-none rounded-md border border-slate-200 bg-slate-50/50 p-3 hover:bg-slate-50">
+                <Checkbox
+                  checked={autoConsume}
+                  onCheckedChange={(v) => setAutoConsume(Boolean(v))}
+                  className="mt-0.5"
+                />
+                <div className="flex-1">
+                  <div className="text-sm font-medium">Автоматически потребить со склада</div>
+                  <div className="text-xs text-muted-foreground mt-0.5">
+                    Списать доступные остатки в производство. Если отключено — потребуется
+                    ручное распределение материалов.
+                  </div>
+                </div>
+              </label>
+            </>
+          )}
         </div>
 
-        <DialogFooter className="p-6 pt-4 border-t bg-muted/20 flex gap-2 justify-end shrink-0">
+        <DialogFooter className="flex gap-2 justify-end">
           <Button variant="outline" onClick={() => onOpenChange(false)}>
             Отмена
           </Button>
           <Button
-            onClick={handleConfirm}
-            disabled={loading || pending || hasErrors || !data || data.available_remainders.length === 0}
+            onClick={() => onConfirm(autoConsume)}
+            disabled={loading || pending}
             className="px-6"
           >
             {pending ? "Запуск..." : "Запустить в работу"}

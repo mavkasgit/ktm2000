@@ -301,11 +301,14 @@ export function TaskActionDrawer({
             <div className="rounded-lg border border-amber-300 bg-amber-50/50 p-4 space-y-3">
               <div className="text-sm font-medium text-amber-800 flex items-center gap-2">
                 <AlertTriangle className="h-4 w-4 shrink-0" />
-                <span>Нехватка материалов</span>
+                <span>Превышение доступного материала</span>
               </div>
               <p className="text-xs text-amber-700">
-                Фактический объем ({factTotal}) превышает доступный лимит ({maxQty + available}). Выберите действие при нехватке:
+                Фактический объем ({factTotal}) превышает доступный лимит ({maxQty + available}). Выберите действие:
               </p>
+              <div className="space-y-1">
+                <p className="text-[11px] font-medium text-slate-700">Что делать с излишком ({factTotal - (maxQty + available)} шт.)?</p>
+              </div>
               <div className="grid grid-cols-1 gap-2 pt-1">
                 <button
                   type="button"
@@ -317,8 +320,8 @@ export function TaskActionDrawer({
                       : "bg-background/50 border-slate-200"
                   )}
                 >
-                  <span className="font-semibold text-slate-800">Зачислить минус на участок</span>
-                  <span className="text-muted-foreground text-[10px] mt-0.5">Взять в работу полностью, записав разницу (-{factTotal - (maxQty + available)} шт) в дефицит участка.</span>
+                  <span className="font-semibold text-slate-800">В scrap (списать в брак)</span>
+                  <span className="text-muted-foreground text-[10px] mt-0.5">Завершить операцию, записав излишек (-{factTotal - (maxQty + available)} шт) как дефицит (списание). Рекомендуется, если излишек — брак.</span>
                 </button>
                 <button
                   type="button"
@@ -330,8 +333,8 @@ export function TaskActionDrawer({
                       : "bg-background/50 border-slate-200"
                   )}
                 >
-                  <span className="font-semibold text-slate-800">Частичное принятие</span>
-                  <span className="text-muted-foreground text-[10px] mt-0.5">Взять в работу и завершить только доступные детали ({maxQty + available} шт).</span>
+                  <span className="font-semibold text-slate-800">Частичное принятие (только доступное)</span>
+                  <span className="text-muted-foreground text-[10px] mt-0.5">Завершить только доступные детали ({maxQty + available} шт). Излишек ({factTotal - (maxQty + available)} шт) останется неучтённым.</span>
                 </button>
                 <button
                   type="button"
@@ -344,7 +347,7 @@ export function TaskActionDrawer({
                   )}
                 >
                   <span className="font-semibold text-slate-800">Отмена операции</span>
-                  <span className="text-muted-foreground text-[10px] mt-0.5">Заблокировать операцию и выдать ошибку о нехватке материалов.</span>
+                  <span className="text-muted-foreground text-[10px] mt-0.5">Блокировать операцию и вернуть ошибку о нехватке материалов. Ничего не будет сохранено.</span>
                 </button>
               </div>
             </div>

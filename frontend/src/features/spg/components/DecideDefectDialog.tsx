@@ -59,7 +59,6 @@ export function DecideDefectDialog({
       void queryClient.invalidateQueries({ queryKey: queryKeys.spg.defects(spgId ?? -1) });
       if (spgId != null) {
         void queryClient.invalidateQueries({ queryKey: queryKeys.spg.snapshot(spgId) });
-        void queryClient.invalidateQueries({ queryKey: queryKeys.spg.remainders(spgId) });
       }
       onSaved();
       onOpenChange(false);

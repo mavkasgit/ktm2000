@@ -17,7 +17,6 @@ import {
   type ProductionPlanningRow,
   type StatusHistoryEntry,
   type ProductionPlanningRowDetail,
-  type RemainderAllocationItem,
 } from "@/shared/api/productionPlans";
 import { RemainderAllocationDialog } from "../components/RemainderAllocationDialog";
 import { listSections } from "@/shared/api/sections";
@@ -113,7 +112,6 @@ export function ExecutionPage() {
     queryClient.invalidateQueries({ queryKey: queryKeys.transfers.readyAll() });
     queryClient.invalidateQueries({ queryKey: queryKeys.transfers.historyAll() });
     queryClient.invalidateQueries({ queryKey: queryKeys.spg.snapshotAll() });
-    queryClient.invalidateQueries({ queryKey: queryKeys.spg.remaindersAll() });
     queryClient.invalidateQueries({ queryKey: queryKeys.spg.defectsAll() });
     queryClient.invalidateQueries({ queryKey: queryKeys.plan.allPositions() });
     queryClient.invalidateQueries({ queryKey: queryKeys.plan.previewAll() });
@@ -178,8 +176,8 @@ export function ExecutionPage() {
   });
 
   const takeToWorkMutation = useMutation({
-    mutationFn: ({ positionIds, remainderAllocation }: { positionIds: number[]; remainderAllocation?: RemainderAllocationItem[] }) =>
-      takeToWork(positionIds, remainderAllocation),
+    mutationFn: ({ positionIds }: { positionIds: number[] }) =>
+      takeToWork(positionIds),
     onSuccess: (data) => {
       const results = data.results.map<BulkActionResultItem<number>>((result) => ({
         id: result.position_id,
@@ -336,6 +334,11 @@ export function ExecutionPage() {
     takeToWorkMutation.mutate({ positionIds: launchDialog.positionIds });
     setLaunchDialog({ open: false, mode: "single", positionIds: [] });
   }, [launchDialog.positionIds, takeToWorkMutation]);
+
+  const confirmLaunchWithAutoConsume = useCallback((autoConsume: boolean) => {
+    takeToWorkMutation.mutate({ positionIds: [remainderDialog.positionId!] });
+    setRemainderDialog((prev) => ({ ...prev, open: false }));
+  }, [remainderDialog.positionId, takeToWorkMutation]);
 
   const confirmManualPass = useCallback(() => {
     if (!manualPassDialog.positionId || !manualPassDialog.targetRouteStepId) return;
@@ -989,13 +992,7 @@ export function ExecutionPage() {
         positionName={remainderDialog.name}
         releaseQuantity={remainderDialog.quantity}
         pending={takeToWorkMutation.isPending}
-        onConfirm={(allocation) => {
-          setRemainderDialog((prev) => ({ ...prev, open: false }));
-          takeToWorkMutation.mutate({
-            positionIds: [remainderDialog.positionId!],
-            remainderAllocation: allocation,
-          });
-        }}
+        onConfirm={confirmLaunchWithAutoConsume}
       />
 
       <ProductWipStatsDialog

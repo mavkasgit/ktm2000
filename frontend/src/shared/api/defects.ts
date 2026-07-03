@@ -36,7 +36,6 @@ export type DefectOut = {
   task_id: number | null;
   route_stage_id: number | null;
   route_stage: DefectRouteStage | null;
-  spg_remainder_id: number | null;
   responsible_section_id: number | null;
   responsible_section_code: string | null;
   responsible_section_name: string | null;
@@ -65,7 +64,6 @@ export type CreateDefectPayload = {
   product_id?: number | null;
   section_id?: number | null;
   route_stage_id?: number | null;
-  spg_remainder_id?: number | null;
   quantity: number;
   reason?: string | null;
   comment?: string | null;

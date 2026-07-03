@@ -2,7 +2,7 @@ import { useState, useMemo } from "react";
 import { AlertCircle, Clock, CheckCircle, ShieldAlert, Plus, Search, ShieldCheck, Upload, ChevronDown, ChevronRight, XCircle, RotateCcw } from "lucide-react";
 import { Button, Input, Badge, Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from "@/shared/ui";
 import type { DefectOut } from "@/shared/api/defects";
-import type { SpgOut, SpgRemainder } from "@/shared/api/spg";
+import type { SpgOut } from "@/shared/api/spg";
 import { CreateDefectDialog } from "./CreateDefectDialog";
 import { DecideDefectDialog } from "./DecideDefectDialog";
 import { ImportDefectsDialog } from "./ImportDefectsDialog";
@@ -13,7 +13,6 @@ interface DefectsListPanelProps {
   selectedSpgIds: number[];
   sections: SpgOut["sections"];
   sectionIds?: number[];
-  remainders: SpgRemainder[];
   defects: DefectOut[];
   isLoading: boolean;
   onRefresh: () => void;
@@ -26,7 +25,6 @@ export function DefectsListPanel({
   selectedSpgIds,
   sections,
   sectionIds,
-  remainders,
   defects,
   isLoading,
   onRefresh,
@@ -281,11 +279,7 @@ export function DefectsListPanel({
                             <div className="text-[10px] text-muted-foreground truncate" title={d.product_name}>
                               {d.product_name}
                             </div>
-                            {d.spg_remainder_id && (
-                              <Badge variant="outline" className="text-[9px] h-4 mt-1 px-1 bg-purple-50/50">
-                                Партия #{d.spg_remainder_id}
-                              </Badge>
-                            )}
+                            
                           </td>
                           <td className="p-2 text-right font-bold text-rose-600 whitespace-nowrap text-xs">
                             {d.total_quantity} шт.
@@ -371,7 +365,6 @@ export function DefectsListPanel({
         spgId={spgId}
         spgs={spgs}
         sections={activeSections}
-        remainders={remainders}
         onSaved={onRefresh}
         defaultSectionId={null}
       />

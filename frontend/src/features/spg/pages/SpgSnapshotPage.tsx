@@ -1,13 +1,13 @@
 import { useState, useMemo } from "react";
 import { useQuery, useQueries, useQueryClient } from "@tanstack/react-query";
-import { Loader2, Search } from "lucide-react";
+import { Loader2, Search, ChevronDown, ChevronRight } from "lucide-react";
 
 import {
   getSpgList,
-  listSpgRemainders,
 } from "@/shared/api/spg";
+import { getStockBalances } from "@/shared/api/stock";
+import type { StockBalanceEntry } from "@/shared/api/stock";
 import { SpgSelector } from "../components/SpgSelector";
-import { RemaindersListPanel } from "../components/RemainderEditDialog";
 import { DefectsListPanel } from "../components/DefectsListPanel";
 import { getSpgDefects } from "@/shared/api/defects";
 import { queryKeys } from "@/shared/api/queryKeys";
@@ -27,12 +27,9 @@ export function SpgSnapshotPage() {
     return selectedSpgIds.length > 0 ? selectedSpgIds : spgs.map((s) => s.id);
   }, [selectedSpgIds, spgs]);
 
-  const remaindersQueries = useQueries({
-    queries: targetSpgIds.map((id) => ({
-      queryKey: queryKeys.spg.remainders(id),
-      queryFn: () => listSpgRemainders(id),
-      enabled: spgs.length > 0,
-    })),
+  const { data: stockBalances = [], isLoading: loadingBalances } = useQuery({
+    queryKey: queryKeys.stock.balances(),
+    queryFn: () => getStockBalances(),
   });
 
   const defectsQueries = useQueries({
@@ -43,22 +40,17 @@ export function SpgSnapshotPage() {
     })),
   });
 
-  const remainders = useMemo(() => {
-    return remaindersQueries.flatMap((q) => q.data ?? []);
-  }, [remaindersQueries]);
-
   const defects = useMemo(() => {
     return defectsQueries.flatMap((q) => q.data ?? []);
   }, [defectsQueries]);
 
-  const loadingRemainders = remaindersQueries.some((q) => q.isLoading);
   const loadingDefects = defectsQueries.some((q) => q.isLoading);
 
   const handleRefresh = () => {
     targetSpgIds.forEach((id) => {
-      void queryClient.invalidateQueries({ queryKey: queryKeys.spg.remainders(id) });
       void queryClient.invalidateQueries({ queryKey: queryKeys.spg.defects(id) });
     });
+    void queryClient.invalidateQueries({ queryKey: queryKeys.stock.balances() });
   };
 
   const refreshAll = handleRefresh;
@@ -111,7 +103,13 @@ export function SpgSnapshotPage() {
     return "Отображаются данные по всем участкам завода";
   }, [spgs, selectedSpgIds]);
 
-  const fallbackSpgId = spgs[0]?.id ?? 0;
+  const filteredBalances = useMemo(() => {
+    if (!searchQuery.trim()) return stockBalances;
+    const q = searchQuery.toLowerCase();
+    return stockBalances.filter((b) =>
+      String(b.product_id).toLowerCase().includes(q)
+    );
+  }, [stockBalances, searchQuery]);
 
   return (
     <div className="space-y-6 p-4">
@@ -148,10 +146,10 @@ export function SpgSnapshotPage() {
           <button
             type="button"
             onClick={handleRefresh}
-            disabled={loadingRemainders || loadingDefects}
+            disabled={loadingBalances || loadingDefects}
             className="rounded-md border border-border px-3 py-1.5 text-sm hover:bg-accent disabled:opacity-50"
           >
-            {loadingRemainders || loadingDefects ? "Обновление..." : "Обновить"}
+            {loadingBalances || loadingDefects ? "Обновление..." : "Обновить"}
           </button>
         </div>
       )}
@@ -172,28 +170,113 @@ export function SpgSnapshotPage() {
 
       {spgs.length > 0 && (
         <div className="space-y-8">
-          <RemaindersListPanel
-            spgId={fallbackSpgId}
-            spgs={spgs}
-            selectedSpgIds={selectedSpgIds}
-            sections={combinedSections}
-            remainders={remainders}
-            isLoading={loadingRemainders}
-            onRefresh={refreshAll}
+          <StockBalancesPanel
+            balances={filteredBalances}
+            isLoading={loadingBalances}
             searchQuery={searchQuery}
           />
           <DefectsListPanel
-            spgId={fallbackSpgId}
+            spgId={targetSpgIds[0] ?? 0}
             spgs={spgs}
             selectedSpgIds={selectedSpgIds}
             sections={combinedSections}
-            remainders={remainders}
             defects={defects}
             isLoading={loadingDefects}
             onRefresh={refreshAll}
             searchQuery={searchQuery}
           />
         </div>
+      )}
+    </div>
+  );
+}
+
+interface StockBalancesPanelProps {
+  balances: StockBalanceEntry[];
+  isLoading: boolean;
+  searchQuery: string;
+}
+
+function StockBalancesPanel({ balances, isLoading, searchQuery }: StockBalancesPanelProps) {
+  const [isExpanded, setIsExpanded] = useState(true);
+
+  const filteredBalances = useMemo(() => {
+    if (!searchQuery.trim()) return balances;
+    const q = searchQuery.toLowerCase();
+    return balances.filter((b) =>
+      String(b.product_id).toLowerCase().includes(q) ||
+      (b.location_name && b.location_name.toLowerCase().includes(q))
+    );
+  }, [balances, searchQuery]);
+
+  return (
+    <div className="space-y-3">
+      <div className="flex items-center justify-between border-b pb-2">
+        <button
+          type="button"
+          onClick={() => setIsExpanded(!isExpanded)}
+          className="flex items-center gap-2 hover:opacity-80 transition-opacity focus:outline-none"
+        >
+          {isExpanded ? (
+            <ChevronDown className="h-4 w-4 text-muted-foreground" />
+          ) : (
+            <ChevronRight className="h-4 w-4 text-muted-foreground" />
+          )}
+          <h3 className="text-sm font-semibold">
+            Наличие на участках ({filteredBalances.length} из {balances.length})
+          </h3>
+        </button>
+      </div>
+
+      {isExpanded && (
+        <>
+          {isLoading ? (
+            <p className="text-sm text-muted-foreground py-4 text-center">Загрузка остатков...</p>
+          ) : balances.length === 0 ? (
+            <div className="text-center py-8 text-sm text-muted-foreground border rounded-lg border-dashed">
+              Записей о наличии нет
+            </div>
+          ) : (
+            <div className="overflow-x-auto border rounded-lg">
+              {filteredBalances.length === 0 ? (
+                <div className="p-8 text-center text-sm text-muted-foreground">
+                  Ничего не найдено по выбранным фильтрам
+                </div>
+              ) : (
+                <table className="w-full text-sm">
+                  <thead className="bg-muted/50 border-b">
+                    <tr>
+                      <th className="p-2 text-left font-medium">Продукт</th>
+                      <th className="p-2 text-left font-medium">Участок</th>
+                      <th className="p-2 text-left font-medium">Статус качества</th>
+                      <th className="p-2 text-right font-medium">Остаток</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {filteredBalances.map((b) => (
+                      <tr key={b.id} className="border-b hover:bg-muted/30">
+                        <td className="p-2">
+                          <div className="font-medium">#{b.product_id}</div>
+                        </td>
+                        <td className="p-2 text-xs">
+                          {b.location_name || `#${b.location_id}`}
+                        </td>
+                        <td className="p-2">
+                          <span className="text-xs font-medium text-muted-foreground">
+                            {b.quality_state}
+                          </span>
+                        </td>
+                        <td className="p-2 text-right font-semibold font-mono">
+                          {b.balance_qty}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </div>
+          )}
+        </>
       )}
     </div>
   );

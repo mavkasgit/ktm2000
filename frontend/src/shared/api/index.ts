@@ -9,5 +9,6 @@ export * from "./importTemplates";
 export * from "./productionPlans";
 export * from "./releaseBatches";
 export * from "./spg";
+export * from "./stock";
 export * from "./defects";
 export * from "./auditLogs";

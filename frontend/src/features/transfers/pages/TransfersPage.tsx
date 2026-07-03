@@ -215,17 +215,24 @@ function ReadyTransferRow({
       {!bulkMode && (
         <TableCell onClick={(e) => e.stopPropagation()}>
           <div className="flex items-center justify-end gap-2">
-            <Input
-              type="number"
-              step="1"
-              min="0"
-              value={quantity}
-              className={`w-20 h-8 text-right px-2 ${
-                overLimit ? "border-amber-400 focus-visible:ring-amber-400" : ""
-              }`}
-              title={overLimit ? `Превышает доступное (${fmtQty(task.transferable_quantity)} шт.)` : undefined}
-              onChange={(e) => setQuantity(e.target.value)}
-            />
+            <div className="flex items-center gap-1">
+              <Input
+                type="number"
+                step="1"
+                min="0"
+                value={quantity}
+                className={`w-20 h-8 text-right px-2 ${
+                  overLimit ? "border-amber-400 focus-visible:ring-amber-400" : ""
+                }`}
+                title={overLimit ? `Превышает доступное (${fmtQty(task.transferable_quantity)} шт.)` : undefined}
+                onChange={(e) => setQuantity(e.target.value)}
+              />
+              {isOverPlan && (
+                <Badge variant="outline" className="border-amber-400 text-amber-700 bg-amber-50 dark:bg-amber-950/20 dark:text-amber-400 text-[10px] px-1.5 py-0 h-5 whitespace-nowrap">
+                  +{fmtQty(String(qtyNum - parseFloat(task.planned_quantity)))} сверх плана
+                </Badge>
+              )}
+            </div>
             <Button
               size="sm"
               disabled={!task.has_next_step || isSubmitting || mutation.isPending || qtyNum <= 0}

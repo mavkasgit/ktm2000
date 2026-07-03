@@ -9,7 +9,6 @@ import {
   DialogTitle,
   Button,
   Input,
-  Badge,
   SectionSelect,
   Select,
   SelectTrigger,
@@ -17,7 +16,7 @@ import {
   SelectContent,
   SelectItem,
 } from "@/shared/ui";
-import type { SpgOut, SpgRemainder } from "@/shared/api/spg";
+import type { SpgOut } from "@/shared/api/spg";
 import type { Product, ProductRouteStageOut } from "@/shared/api/products";
 import { listProducts, getProductRouteStages } from "@/shared/api/products";
 import type { DefectTypeOut } from "@/shared/api/defects";
@@ -29,7 +28,6 @@ interface CreateDefectDialogProps {
   onOpenChange: (open: boolean) => void;
   spgId: number;
   sections: SpgOut["sections"];
-  remainders: SpgRemainder[];
   onSaved: () => void;
   defaultSectionId?: number | null;
   spgs?: SpgOut[];
@@ -40,7 +38,6 @@ export function CreateDefectDialog({
   onOpenChange,
   spgId,
   sections,
-  remainders,
   onSaved,
   defaultSectionId,
   spgs,
@@ -74,9 +71,6 @@ export function CreateDefectDialog({
   const [selectedTypeError, setSelectedTypeError] = useState(false);
   const [defectTypeCode, setDefectTypeCode] = useState("");
 
-  // Remainders states
-  const [selectedRemainderId, setSelectedRemainderId] = useState<number | null>(null);
-
   const [quantity, setQuantity] = useState("");
   const [comment, setComment] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -92,7 +86,6 @@ export function CreateDefectDialog({
       setRouteStages([]);
       setSelectedStageId(null);
       setDefectTypeCode("");
-      setSelectedRemainderId(null);
       setQuantity("");
       setComment("");
       setError(null);
@@ -123,7 +116,6 @@ export function CreateDefectDialog({
       setRouteStages([]);
       setSelectedStageId(null);
     }
-    setSelectedRemainderId(null);
   }, [selectedProductId]);
 
   const filteredProducts = productSearch.trim()
@@ -134,18 +126,12 @@ export function CreateDefectDialog({
       )
     : products.slice(0, 30);
 
-  // Filter remainders for the selected product and section (or if remainder is generic for SPG)
-  const availableRemainders = remainders.filter(
-    (r) => r.product_id === selectedProductId && (!r.section_id || r.section_id === selectedSectionId)
-  );
-
   const saveMutation = useMutation({
     mutationFn: () =>
       createDefect({
         product_id: selectedProductId as number,
         section_id: selectedSectionId as number,
         route_stage_id: selectedStageId,
-        spg_remainder_id: selectedRemainderId,
         quantity: parseFloat(quantity),
         reason: defectTypeCode || null,
         comment: comment || null,
@@ -154,7 +140,6 @@ export function CreateDefectDialog({
       const actualSpgId = spgs?.find(s => s.sections.some(sec => sec.section_id === selectedSectionId))?.id || spgId;
       void queryClient.invalidateQueries({ queryKey: queryKeys.spg.defects(actualSpgId) });
       void queryClient.invalidateQueries({ queryKey: queryKeys.spg.snapshot(actualSpgId) });
-      void queryClient.invalidateQueries({ queryKey: queryKeys.spg.remainders(actualSpgId) });
       onSaved();
       onOpenChange(false);
     },
@@ -179,15 +164,6 @@ export function CreateDefectDialog({
     if (isNaN(qty) || qty <= 0) {
       setError("Количество брака должно быть положительным числом");
       return;
-    }
-
-    // Check remainder bounds if selected
-    if (selectedRemainderId) {
-      const activeRem = remainders.find((r) => r.id === selectedRemainderId);
-      if (activeRem && qty > activeRem.remainder_quantity) {
-        setError(`Количество брака (${qty}) не может превышать количество в остатке (${activeRem.remainder_quantity})`);
-        return;
-      }
     }
     setError(null);
     saveMutation.mutate();
@@ -304,34 +280,6 @@ export function CreateDefectDialog({
                     })}
                   </SelectContent>
                 </Select>
-              )}
-            </div>
-          )}
-
-          {/* Remainder selector */}
-          {selectedProductId && (
-            <div className="space-y-1">
-              <label className="text-sm font-medium">Списать из партии остатка (опционально)</label>
-              <Select
-                value={selectedRemainderId ? String(selectedRemainderId) : "none"}
-                onValueChange={(val) => setSelectedRemainderId(val === "none" ? null : Number(val))}
-              >
-                <SelectTrigger className="w-full h-10 text-sm bg-background">
-                  <SelectValue placeholder="Без привязки к партии остатка" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="none">Без привязки к партии остатка</SelectItem>
-                  {availableRemainders.map((r) => (
-                    <SelectItem key={r.id} value={String(r.id)}>
-                      Партия #{r.id} ({r.remainder_quantity} шт.) от {new Date(r.created_at).toLocaleDateString()}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              {availableRemainders.length === 0 && (
-                <p className="text-[11px] text-muted-foreground">
-                  На данном участке нет свободных остатков этого продукта для списания.
-                </p>
               )}
             </div>
           )}
