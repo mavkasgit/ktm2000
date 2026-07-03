@@ -96,7 +96,7 @@ export function ProductStockBalanceDialog({
                 <tfoot className="bg-muted/30 border-t font-semibold">
                   <tr>
                     <td colSpan={2} className="p-2 text-right">Итого:</td>
-                    <td className="p-2 text-right font-mono">{total.toFixed(2)}</td>
+                    <td className="p-2 text-right font-mono">{String(Math.round(total))}</td>
                     <td />
                   </tr>
                 </tfoot>

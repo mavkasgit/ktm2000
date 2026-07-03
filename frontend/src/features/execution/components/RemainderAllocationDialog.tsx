@@ -13,7 +13,7 @@ import {
 import { getProductStockBalances } from "@/shared/api/stock";
 import type { StockBalanceEntry } from "@/shared/api/stock";
 import { listProducts } from "@/shared/api/products";
-import { Loader2, Layers, Package, AlertCircle } from "lucide-react";
+import { Loader2, Layers, Package, AlertCircle, AlertTriangle } from "lucide-react";
 
 interface RemainderAllocationDialogProps {
   open: boolean;
@@ -39,13 +39,13 @@ export function RemainderAllocationDialog({
   const [balances, setBalances] = useState<StockBalanceEntry[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [autoConsume, setAutoConsume] = useState(true);
+  const [autoConsume, setAutoConsume] = useState(false);
 
   useEffect(() => {
     if (!open) {
       setBalances([]);
       setError(null);
-      setAutoConsume(true);
+      setAutoConsume(false);
       return;
     }
 
@@ -119,7 +119,7 @@ export function RemainderAllocationDialog({
                 <div className="flex items-center gap-2 text-sm">
                   <Package className="h-4 w-4 text-emerald-600" />
                   <span className="font-medium">Доступно на складах:</span>
-                  <span className="font-mono font-bold">{totalAvailable.toFixed(2)} шт.</span>
+                  <span className="font-mono font-bold">{String(Math.round(totalAvailable))} шт.</span>
                 </div>
                 {balances.length > 0 && (
                   <div className="mt-2 text-xs text-muted-foreground">
@@ -135,6 +135,22 @@ export function RemainderAllocationDialog({
                   </div>
                 )}
               </div>
+
+              {totalAvailable < releaseQuantity && (
+                <div className="flex items-start gap-3 p-3 rounded-md border border-amber-300 bg-amber-50 text-amber-900 dark:bg-amber-950/30 dark:text-amber-200">
+                  <AlertTriangle className="h-5 w-5 shrink-0 text-amber-600 dark:text-amber-400 mt-0.5" />
+                  <div className="text-sm">
+                    <div className="font-medium">
+                      {totalAvailable === 0 ? "Нет доступных остатков" : "Недостаточно остатков"}
+                    </div>
+                    <div className="text-xs mt-0.5 text-amber-800 dark:text-amber-300">
+                      {totalAvailable === 0
+                        ? "На складах нет материалов для списания. Брать в работу нечего."
+                        : `Доступно ${String(Math.round(totalAvailable))} из ${releaseQuantity} шт. по плану. Возможен только частичный запуск.`}
+                    </div>
+                  </div>
+                </div>
+              )}
 
               <label className="flex items-start gap-2 cursor-pointer select-none rounded-md border border-slate-200 bg-slate-50/50 p-3 hover:bg-slate-50">
                 <Checkbox
@@ -160,7 +176,7 @@ export function RemainderAllocationDialog({
           </Button>
           <Button
             onClick={() => onConfirm(autoConsume)}
-            disabled={loading || pending}
+            disabled={loading || pending || totalAvailable === 0}
             className="px-6"
           >
             {pending ? "Запуск..." : "Запустить в работу"}

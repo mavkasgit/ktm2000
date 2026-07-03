@@ -1,3 +1,4 @@
+import { fmtQty } from "@/shared/utils/fmtQty"
 import { useMemo, useState } from "react"
 import { AlertTriangle, Route } from "lucide-react"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
@@ -37,7 +38,7 @@ export function PositionRow({ pos, onApprove, onDelete, selected, routes, onAssi
   const noWarnings = !hasWarnings
   const routeColSpan = noErrors && noWarnings ? 3 : noWarnings ? 2 : 1
   const qty = Number(pos.quantity || 0)
-  const qtyStr = Number.isInteger(qty) ? String(qty) : qty.toFixed(3).replace(/\.?0+$/, '')
+  const qtyStr = fmtQty(qty)
   const originalQtyRaw = (pos.payload?.original_quantity as string | number | null | undefined) ?? null
   const originalQtyNum = originalQtyRaw != null ? Number(originalQtyRaw) : null
   const originalQtyDisplay = originalQtyNum != null && Number.isFinite(originalQtyNum)

@@ -12,9 +12,11 @@ interface SpgSelectorProps {
   onClear: () => void;
 }
 
-const LUCIDE = L as unknown as Record<string, ComponentType<{ className?: string; style?: CSSProperties }>>;
+type IconProps = { className?: string; style?: CSSProperties; title?: string };
 
-function pickIcon(name: string | null): ComponentType<{ className?: string; style?: CSSProperties }> | null {
+const LUCIDE = L as unknown as Record<string, ComponentType<IconProps>>;
+
+function pickIcon(name: string | null): ComponentType<IconProps> | null {
   if (!name) return null;
   return LUCIDE[name] ?? null;
 }
@@ -72,6 +74,35 @@ export function SpgSelector({ spgs, selectedIds, onToggle, onSelect, onClear }: 
                   className="h-4 w-4 shrink-0"
                   style={spg.icon_color ? { color: active ? undefined : spg.icon_color } : undefined}
                 />
+              )}
+              {/* Иконки всех секций ГХП (состав группы) */}
+              {spg.sections && spg.sections.length > 0 && (
+                <div
+                  className={cn(
+                    "flex items-center gap-0.5 ml-1 pl-2 border-l",
+                    active ? "border-primary-foreground/30" : "border-border",
+                  )}
+                >
+                  {spg.sections
+                    .slice()
+                    .sort((a, b) => a.sort_order - b.sort_order)
+                    .slice(0, 4)
+                    .map((sec) => {
+                      const SecIcon = pickIcon(sec.icon);
+                      if (!SecIcon) return null;
+                      return (
+                        <SecIcon
+                          key={sec.section_id}
+                          className="h-3 w-3 shrink-0 opacity-80"
+                          style={!active && sec.icon_color ? { color: sec.icon_color } : undefined}
+                          title={sec.section_name}
+                        />
+                      );
+                    })}
+                  {spg.sections.length > 4 && (
+                    <span className="text-[10px] opacity-60 ml-0.5">+{spg.sections.length - 4}</span>
+                  )}
+                </div>
               )}
               <span>{spg.name}</span>
               <span className="text-xs opacity-60 font-normal">({spg.sections?.length || 0})</span>

@@ -1,3 +1,4 @@
+import { fmtQty } from "@/shared/utils/fmtQty"
 import { Badge, Input, Button } from "@/shared/ui"
 import { renderIcon } from "@/shared/ui/EntityDialog"
 import { type RowDetailsData } from "./types"
@@ -45,13 +46,6 @@ const taskStatusLabels: Record<string, string> = {
   completed: "Выполнен",
   cancelled: "Отменён",
   not_started: "Не начат",
-}
-
-function fmtQty(value: number | string): string {
-  const num = typeof value === "string" ? Number(value) : value
-  if (!Number.isFinite(num)) return String(value)
-  if (Number.isInteger(num)) return String(num)
-  return num.toFixed(3).replace(/\.?0+$/, "")
 }
 
 function fmtEventAt(value: string | null | undefined): string {

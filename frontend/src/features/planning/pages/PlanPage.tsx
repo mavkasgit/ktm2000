@@ -23,6 +23,7 @@ import {
   type BulkActionSummary,
   type BulkRunnerProgress,
 } from "@/shared/bulk"
+import { fmtQty } from "@/shared/utils/fmtQty"
 import { FileRow } from "../components/PlanFileRow"
 import { PositionRow } from "../components/PlanPositionRow"
 import {
@@ -554,7 +555,7 @@ export function PlanPage() {
   }, [detailPosition, duplicateConflictsByPosition])
 
   const totalQty = positions?.reduce((sum, p) => sum + Number(p.quantity || 0), 0) ?? 0
-  const totalQtyStr = Number.isInteger(totalQty) ? String(totalQty) : totalQty.toFixed(3).replace(/\.?0+$/, '')
+  const totalQtyStr = fmtQty(totalQty)
   const errorCount = positions?.filter(p => p.errors?.length > 0).length ?? 0
   const warningCount = positions?.filter(p => p.warnings?.length > 0).length ?? 0
 
