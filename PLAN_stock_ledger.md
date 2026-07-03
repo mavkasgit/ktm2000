@@ -95,10 +95,10 @@ Reason enum и QualityState enum — как в предыдущей версии
   Написать 8-10 новых: по одному на каждую новую команду
 
 ### Этап 4 — WorkTask cleanup
-- [ ] 4.1. `_refresh_task_cache` → читает из StockBalance/transactions
-- [ ] 4.2. `cached_*` колонки — удалить сразу (не через отдельную миграцию
+- [x] 4.1. `_refresh_task_cache` → читает из StockBalance/transactions
+- [x] 4.2. `cached_*` колонки — удалить сразу (не через отдельную миграцию
   "потом"), если фронт на этот момент готов (см. Этап 6)
-- [ ] 4.3. 3-4 теста: `completed_qty` считается верно из ledger
+- [x] 4.3. 3-4 теста: `completed_qty` считается верно из ledger
 
 ### Этап 5 — Quality
 - [ ] 5.1. Data-migration: `quality_state=GOOD` для старых транзакций
@@ -153,7 +153,7 @@ Reason enum и QualityState enum — как в предыдущей версии
 - [x] Этап 1 — Ядро inventory
 - [x] Этап 2 — Transfer
 - [x] Этап 3 — Shopfloor
-- [ ] Этап 4 — WorkTask cleanup
+- [x] Этап 4 — WorkTask cleanup
 - [ ] Этап 5 — Quality
 - [ ] Этап 6 — Frontend
 - [ ] Этап 7 — Cleanup
