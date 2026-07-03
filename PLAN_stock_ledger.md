@@ -85,13 +85,13 @@ Reason enum и QualityState enum — как в предыдущей версии
   новых коротких (send/cancel/correct/partial → баланс верный)
 
 ### Этап 3 — Shopfloor (каскад схлопывается сразу, целиком)
-- [ ] 3.1. `issue_to_work` → `record(ISSUE_TO_WORK, auto_consume=bool)`
-- [ ] 3.2. `complete_task` → `record(COMPLETE)` [+ `record(SCRAP)` при браке]
-- [ ] 3.3. Удалить одним махом: `return_remainder_to_stock`,
+- [x] 3.1. `issue_to_work` → `record(ISSUE_TO_WORK, auto_consume=bool)`
+- [x] 3.2. `complete_task` → `record(COMPLETE)` [+ `record(SCRAP)` при браке]
+- [x] 3.3. Удалить одним махом: `return_remainder_to_stock`,
   `compensate_spg_remainders`, `trigger_auto_consume_for_spg_tasks`,
   `auto_consume_available_remainders`, `consume_remainder`. Заменить на
   один вызов `record(RETURN_TO_STOCK)` / `issue_to_work(auto_consume=True)`
-- [ ] 3.4. Их старые тесты — удалить вместе с кодом, не адаптировать.
+- [x] 3.4. Их старые тесты — удалить вместе с кодом, не адаптировать.
   Написать 8-10 новых: по одному на каждую новую команду
 
 ### Этап 4 — WorkTask cleanup
@@ -152,7 +152,7 @@ Reason enum и QualityState enum — как в предыдущей версии
 - [x] Этап 0 — Подготовка
 - [x] Этап 1 — Ядро inventory
 - [x] Этап 2 — Transfer
-- [ ] Этап 3 — Shopfloor
+- [x] Этап 3 — Shopfloor
 - [ ] Этап 4 — WorkTask cleanup
 - [ ] Этап 5 — Quality
 - [ ] Этап 6 — Frontend
