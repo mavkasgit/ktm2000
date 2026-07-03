@@ -1,5 +1,5 @@
 import { useState, useMemo } from "react";
-import { AlertCircle, Clock, CheckCircle, ShieldAlert, Plus, Search, ShieldCheck, Upload, ChevronDown, ChevronRight, XCircle, RotateCcw } from "lucide-react";
+import { AlertCircle, Clock, CheckCircle, Plus, Search, ShieldCheck, Upload, ChevronDown, ChevronRight, XCircle, RotateCcw } from "lucide-react";
 import { Button, Input, Badge, Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from "@/shared/ui";
 import type { DefectOut } from "@/shared/api/defects";
 import type { SpgOut } from "@/shared/api/spg";
@@ -126,13 +126,6 @@ export function DefectsListPanel({
             Принято с отклонением
           </Badge>
         );
-      case "hold":
-        return (
-          <Badge variant="outline" className="border-blue-500 text-blue-700 bg-blue-50 dark:bg-blue-950/20 inline-flex items-center gap-1">
-            <ShieldAlert className="h-3 w-3" />
-            Временное хранение
-          </Badge>
-        );
       case "closed":
         return (
           <Badge variant="outline" className="border-emerald-500 text-emerald-700 bg-emerald-50 dark:bg-emerald-950/20 inline-flex items-center gap-1">
@@ -163,8 +156,6 @@ export function DefectsListPanel({
         return "Возврат на предыд. этап";
       case "accept_with_deviation":
         return "Принято с отклонением";
-      case "hold":
-        return "Временное хранение";
       default:
         return type;
     }
@@ -218,7 +209,6 @@ export function DefectsListPanel({
                 <SelectItem value="scrapped">Списано</SelectItem>
                 <SelectItem value="returned">Возвращено</SelectItem>
                 <SelectItem value="accepted_with_deviation">Принято с отклонением</SelectItem>
-                <SelectItem value="hold">Временное хранение</SelectItem>
                 <SelectItem value="closed">Закрыто</SelectItem>
               </SelectContent>
             </Select>

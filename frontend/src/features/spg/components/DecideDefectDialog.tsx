@@ -130,7 +130,7 @@ export function DecideDefectDialog({
                 {defect?.task_id && (
                   <SelectItem value="rework_current">Направить на переделку</SelectItem>
                 )}
-                <SelectItem value="hold">Временное хранение</SelectItem>
+
               </SelectContent>
             </Select>
           </div>

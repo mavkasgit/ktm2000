@@ -5,14 +5,13 @@
 // both in sync when adding new stage kinds or section types.
 
 export type RouteStageKind = "production" | "transit";
-export type StorageType = "raw_stock" | "wip_stock" | "finished_stock" | "scrap" | "quarantine";
+export type StorageType = "raw_stock" | "wip_stock" | "finished_stock" | "scrap";
 
 export const STORAGE_TYPES: readonly StorageType[] = [
   "raw_stock",
   "wip_stock",
   "finished_stock",
   "scrap",
-  "quarantine",
 ] as const;
 
 export function isStorageType(type: string | null | undefined): boolean {

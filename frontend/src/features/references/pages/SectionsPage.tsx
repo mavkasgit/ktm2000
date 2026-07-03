@@ -47,7 +47,6 @@ const TYPE_LABELS: Record<string, string> = {
   wip_stock: "Склад полуфабриката",
   finished_stock: "Склад готовой продукции",
   scrap: "Брак",
-  quarantine: "Карантин",
 };
 
 const TYPE_OPTIONS = [
@@ -56,7 +55,6 @@ const TYPE_OPTIONS = [
   { value: "wip_stock", label: "Склад полуфабриката" },
   { value: "finished_stock", label: "Склад готовой продукции" },
   { value: "scrap", label: "Брак" },
-  { value: "quarantine", label: "Карантин" },
 ];
 
 const ui = UI as unknown as Record<string, React.ComponentType<any>>;
@@ -716,7 +714,7 @@ export function SectionsPage() {
     };
 
     items.forEach((item) => {
-      const isStock = ["raw_stock", "wip_stock", "finished_stock", "scrap", "quarantine"].includes(item.type || "");
+      const isStock = ["raw_stock", "wip_stock", "finished_stock", "scrap"].includes(item.type || "");
       
       if (item.spg_links && item.spg_links.length > 0) {
         item.spg_links.forEach((link) => {

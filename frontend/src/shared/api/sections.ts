@@ -1,6 +1,6 @@
 import { apiClient } from "./client";
 
-export type SectionType = "production" | "raw_stock" | "wip_stock" | "finished_stock" | "scrap" | "quarantine";
+export type SectionType = "production" | "raw_stock" | "wip_stock" | "finished_stock" | "scrap";
 
 export type Section = {
   id: number;

@@ -9,7 +9,6 @@ export const STOCK_SECTION_TYPES: readonly SectionType[] = [
   "wip_stock",
   "finished_stock",
   "scrap",
-  "quarantine",
 ] as const;
 
 /**

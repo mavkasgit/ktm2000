@@ -41,7 +41,6 @@ const QUALITY_OPTIONS: { value: QualityState; label: string }[] = [
   { value: "GOOD", label: "Годные" },
   { value: "SCRAP", label: "Брак" },
   { value: "REWORK", label: "Переделка" },
-  { value: "QUARANTINE", label: "Карантин" },
 ];
 
 export function StockAdjustmentDialog({ open, onOpenChange }: StockAdjustmentDialogProps) {

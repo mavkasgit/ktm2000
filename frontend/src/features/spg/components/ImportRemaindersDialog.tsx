@@ -79,7 +79,7 @@ export function ImportRemaindersDialog({
   const [showRawRows, setShowRawRows] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [filterStatus, setFilterStatus] = useState<"all" | "invalid">("all");
-  const [qualityState, setQualityState] = useState<"GOOD" | "SCRAP" | "REWORK" | "QUARANTINE">("GOOD");
+  const [qualityState, setQualityState] = useState<"GOOD" | "SCRAP" | "REWORK">("GOOD");
   const [targetSectionOverrides, setTargetSectionOverrides] = useState<Record<number, number>>({});
 
   const [previewData, setPreviewData] = useState<RemainderPreviewResponse | null>(null);
@@ -431,24 +431,6 @@ export function ImportRemaindersDialog({
                     </span>
                   </div>
                 )}
-              </div>
-
-              {/* Quality state selector */}
-              <div className="flex items-center gap-3">
-                <label className="text-xs font-medium text-foreground shrink-0">
-                  Состояние качества:
-                </label>
-                <Select value={qualityState} onValueChange={(v) => setQualityState(v as typeof qualityState)}>
-                  <SelectTrigger className="h-8 text-xs w-[140px] bg-background">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="GOOD">GOOD</SelectItem>
-                    <SelectItem value="SCRAP">SCRAP</SelectItem>
-                    <SelectItem value="REWORK">REWORK</SelectItem>
-                    <SelectItem value="QUARANTINE">QUARANTINE</SelectItem>
-                  </SelectContent>
-                </Select>
               </div>
 
               {/* Upload Dropzone */}

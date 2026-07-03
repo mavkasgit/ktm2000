@@ -1,6 +1,6 @@
 import { apiClient } from "./client";
 
-export type QualityState = "GOOD" | "SCRAP" | "REWORK" | "QUARANTINE";
+export type QualityState = "GOOD" | "SCRAP" | "REWORK";
 
 export type StockBalanceEntry = {
   id: number;

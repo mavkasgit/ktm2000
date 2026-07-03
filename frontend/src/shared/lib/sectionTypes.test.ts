@@ -22,19 +22,15 @@ describe("isProductionSection", () => {
     expect(isProductionSection("scrap")).toBe(false);
   });
 
-  it("returns false for quarantine", () => {
-    expect(isProductionSection("quarantine")).toBe(false);
-  });
 });
 
 describe("STOCK_SECTION_TYPES", () => {
-  it("contains exactly five stock types", () => {
+  it("contains exactly four stock types", () => {
     expect(STOCK_SECTION_TYPES).toEqual([
       "raw_stock",
       "wip_stock",
       "finished_stock",
       "scrap",
-      "quarantine",
     ]);
   });
 });
