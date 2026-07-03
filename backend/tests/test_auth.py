@@ -321,7 +321,7 @@ async def test_transporter_can_manage_transfers_globally_but_not_shopfloor_tasks
         from_location_id=first_task.section_id,
         to_location_id=first_task.section_id,
         quantity=Decimal("100"),
-        reason=Reason.issue_to_work,
+        reason=Reason.ISSUE_TO_WORK,
         task_id=first_task.id,
         created_by=admin_user.id,
     ))

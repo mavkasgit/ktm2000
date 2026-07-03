@@ -144,7 +144,7 @@ async def issue_to_work(
             .where(
                 StockBalance.product_id == task.product_id,
                 StockBalance.location_id == from_loc,
-                StockBalance.quality_state == QualityState.good,
+                StockBalance.quality_state == QualityState.GOOD,
             )
         ) or Decimal("0")
 
@@ -163,7 +163,7 @@ async def issue_to_work(
         from_location_id=from_loc,
         to_location_id=task.section_id,
         quantity=quantity,
-        reason=Reason.issue_to_work,
+        reason=Reason.ISSUE_TO_WORK,
         task_id=task.id,
         transfer_id=transfer_id,
         source_ref=source_ref,
@@ -259,8 +259,8 @@ async def complete_task(
             from_location_id=None,
             to_location_id=task.section_id,
             quantity=good_quantity,
-            reason=Reason.complete,
-            quality_state=QualityState.good,
+            reason=Reason.COMPLETE,
+            quality_state=QualityState.GOOD,
             task_id=task.id,
             source_ref=source_ref,
             idempotency_key=idempotency_key,
@@ -296,9 +296,9 @@ async def complete_task(
             from_location_id=task.section_id,
             to_location_id=scrap_loc,
             quantity=defect_quantity,
-            reason=Reason.scrap,
-            quality_state=QualityState.good,
-            to_quality_state=QualityState.scrap,
+            reason=Reason.SCRAP,
+            quality_state=QualityState.GOOD,
+            to_quality_state=QualityState.SCRAP,
             task_id=task.id,
             source_ref=source_ref,
             idempotency_key=f"{idempotency_key}:reject" if idempotency_key else None,
@@ -388,7 +388,7 @@ async def final_release(
         select(func.coalesce(func.sum(StockTransaction.quantity), 0))
         .where(
             StockTransaction.task_id == task.id,
-            StockTransaction.reason == Reason.final_release,
+            StockTransaction.reason == Reason.FINAL_RELEASE,
         )
     ) or Decimal("0")
 
@@ -414,7 +414,7 @@ async def final_release(
         from_location_id=task.section_id if finished_stock else task.section_id,
         to_location_id=finished_stock,
         quantity=quantity,
-        reason=Reason.final_release,
+        reason=Reason.FINAL_RELEASE,
         task_id=task.id,
         source_ref=None,
         idempotency_key=idempotency_key,

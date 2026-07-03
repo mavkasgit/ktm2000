@@ -611,14 +611,14 @@ async def get_warehouse_remainders(
     ).join(
         Product, StockBalance.product_id == Product.id,
     ).where(
-        StockBalance.quantity > 0,
+        StockBalance.balance_qty > 0,
         StockBalance.quality_state == QualityState.GOOD,
     )
 
     if section_id is not None:
         query = query.where(StockBalance.location_id == section_id)
 
-    query = query.order_by(StockBalance.created_at.desc())
+    query = query.order_by(StockBalance.refreshed_at.desc())
 
     rows = (await db.execute(query)).all()
 
@@ -630,11 +630,11 @@ async def get_warehouse_remainders(
             "product_id": bal.product_id,
             "product_sku": prod_sku,
             "product_name": prod_name,
-            "remainder_quantity": str(bal.quantity),
+            "remainder_quantity": str(bal.balance_qty),
             "section_id": bal.location_id,
             "section_code": section.code if section else "",
             "section_name": section.name if section else "",
-            "created_at": bal.created_at.isoformat() if bal.created_at else None,
+            "created_at": bal.refreshed_at.isoformat() if bal.refreshed_at else None,
         })
 
     return {"remainders": remainders}

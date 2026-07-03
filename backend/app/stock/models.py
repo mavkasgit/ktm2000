@@ -49,17 +49,17 @@ class LocationType(str, enum.Enum):
     между двумя складами при跨-GHP трансферах.
     """
 
-    raw_stock = "raw_stock"
-    wip_stock = "wip_stock"
-    finished_stock = "finished_stock"
-    production = "production"  # generic production section (refine to laser/welding/... via UI)
-    laser = "laser"
-    welding = "welding"
-    painting = "painting"
-    assembly = "assembly"
-    scrap = "scrap"
-    quarantine = "quarantine"
-    transit = "transit"
+    RAW_STOCK = "raw_stock"
+    WIP_STOCK = "wip_stock"
+    FINISHED_STOCK = "finished_stock"
+    PRODUCTION = "production"  # generic production section (refine to laser/welding/... via UI)
+    LASER = "laser"
+    WELDING = "welding"
+    PAINTING = "painting"
+    ASSEMBLY = "assembly"
+    SCRAP = "scrap"
+    QUARANTINE = "quarantine"
+    TRANSIT = "transit"
 
 
 class Reason(str, enum.Enum):
@@ -71,20 +71,20 @@ class Reason(str, enum.Enum):
     всегда).
     """
 
-    issue_to_work = "issue_to_work"  # RAW_STOCK → production
-    complete = "complete"  # production → WIP_STOCK/FINISHED_STOCK (good output)
-    transfer_send = "transfer_send"  # from_task.location → TRANSIT (or to_task.location)
-    transfer_receive = "transfer_receive"  # TRANSIT (or from_task.location) → to_task.location
-    return_to_stock = "return_to_stock"  # production → RAW_STOCK (unused material)
-    return_to_previous = "return_to_previous"  # → previous location (defect decision)
-    final_release = "final_release"  # WIP_STOCK → FINISHED_STOCK
-    scrap = "scrap"  # any → SCRAP, quality_state=SCRAP
-    rework = "rework"  # any → REWORK location, quality_state=REWORK
-    quarantine = "quarantine"  # any → QUARANTINE location, quality_state=QUARANTINE (hold decision)
-    adjustment_in = "adjustment_in"  # manual stock count correction (+)
-    adjustment_out = "adjustment_out"  # manual stock count correction (-)
-    manual_in = "manual_in"  # external supply → stock
-    manual_out = "manual_out"  # stock → external (write-off)
+    ISSUE_TO_WORK = "issue_to_work"  # RAW_STOCK → production
+    COMPLETE = "complete"  # production → WIP_STOCK/FINISHED_STOCK (good output)
+    TRANSFER_SEND = "transfer_send"  # from_task.location → TRANSIT (or to_task.location)
+    TRANSFER_RECEIVE = "transfer_receive"  # TRANSIT (or from_task.location) → to_task.location
+    RETURN_TO_STOCK = "return_to_stock"  # production → RAW_STOCK (unused material)
+    RETURN_TO_PREVIOUS = "return_to_previous"  # → previous location (defect decision)
+    FINAL_RELEASE = "final_release"  # WIP_STOCK → FINISHED_STOCK
+    SCRAP = "scrap"  # any → SCRAP, quality_state=SCRAP
+    REWORK = "rework"  # any → REWORK location, quality_state=REWORK
+    QUARANTINE = "quarantine"  # any → QUARANTINE location, quality_state=QUARANTINE (hold decision)
+    ADJUSTMENT_IN = "adjustment_in"  # manual stock count correction (+)
+    ADJUSTMENT_OUT = "adjustment_out"  # manual stock count correction (-)
+    MANUAL_IN = "manual_in"  # external supply → stock
+    MANUAL_OUT = "manual_out"  # stock → external (write-off)
 
 
 class QualityState(str, enum.Enum):
@@ -96,10 +96,10 @@ class QualityState(str, enum.Enum):
     переделки: брак = движение ``quality_state=SCRAP`` в ``SCRAP`` локацию.
     """
 
-    good = "good"
-    scrap = "scrap"
-    rework = "rework"
-    quarantine = "quarantine"
+    GOOD = "good"
+    SCRAP = "scrap"
+    REWORK = "rework"
+    QUARANTINE = "quarantine"
 
 
 class StockTransaction(Base):
@@ -133,22 +133,25 @@ class StockTransaction(Base):
         ForeignKey("sections.id"), nullable=True, index=True
     )
     quantity: Mapped[Decimal] = mapped_column(Numeric(14, 3), nullable=False)
-    reason: Mapped[Reason] = mapped_column(Enum(Reason, name="stock_reason"), nullable=False, index=True)
+    reason: Mapped[Reason] = mapped_column(
+        Enum(Reason, name="stock_reason", values_callable=lambda x: [e.value for e in x]),
+        nullable=False, index=True,
+    )
     # Качество материала на исходной стороне (до перехода).
     # Для SCRAP/REWORK: from_quality_state=good, to_quality_state=scrap/rework.
     # Для перемещения уже-брака: from_quality_state=scrap, to_quality_state=scrap.
     from_quality_state: Mapped[QualityState] = mapped_column(
-        Enum(QualityState, name="stock_quality_state"),
+        Enum(QualityState, name="stock_quality_state", values_callable=lambda x: [e.value for e in x]),
         nullable=False,
         server_default=text("'good'"),
-        default=QualityState.good,
+        default=QualityState.GOOD,
         index=True,
     )
     to_quality_state: Mapped[QualityState] = mapped_column(
-        Enum(QualityState, name="stock_quality_state", create_type=False),
+        Enum(QualityState, name="stock_quality_state", create_type=False, values_callable=lambda x: [e.value for e in x]),
         nullable=False,
         server_default=text("'good'"),
-        default=QualityState.good,
+        default=QualityState.GOOD,
         index=True,
     )
     task_id: Mapped[int | None] = mapped_column(
@@ -206,10 +209,10 @@ class StockBalance(Base):
     product_id: Mapped[int] = mapped_column(ForeignKey("products.id"), nullable=False, index=True)
     location_id: Mapped[int] = mapped_column(ForeignKey("sections.id"), nullable=False, index=True)
     quality_state: Mapped[QualityState] = mapped_column(
-        Enum(QualityState, name="stock_quality_state"),
+        Enum(QualityState, name="stock_quality_state", values_callable=lambda x: [e.value for e in x]),
         nullable=False,
         server_default=text("'good'"),
-        default=QualityState.good,
+        default=QualityState.GOOD,
     )
     balance_qty: Mapped[Decimal] = mapped_column(Numeric(14, 3), nullable=False, default=0)
     refreshed_at: Mapped[datetime] = mapped_column(

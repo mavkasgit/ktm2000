@@ -101,7 +101,7 @@ class StockAdjustmentIn(BaseModel):
     location_id: int
     quantity: float = Field(gt=0)
     reason: Reason
-    quality_state: QualityState = QualityState.good
+    quality_state: QualityState = QualityState.GOOD
     comment: str | None = None
 
 
@@ -228,7 +228,7 @@ async def list_transactions(
 # ─── Adjustment (write) ───────────────────────────────────────────────────────
 
 
-_ADJUSTMENT_REASONS = {Reason.adjustment_in, Reason.adjustment_out, Reason.manual_in, Reason.manual_out}
+_ADJUSTMENT_REASONS = {Reason.ADJUSTMENT_IN, Reason.ADJUSTMENT_OUT, Reason.MANUAL_IN, Reason.MANUAL_OUT}
 
 
 @router.post("/adjustment", response_model=StockAdjustmentOut, status_code=201)
@@ -250,7 +250,7 @@ async def create_adjustment(
             detail=f"reason must be one of {[r.value for r in _ADJUSTMENT_REASONS]}, got {payload.reason.value}",
         )
 
-    if payload.reason in (Reason.adjustment_in, Reason.manual_in):
+    if payload.reason in (Reason.ADJUSTMENT_IN, Reason.MANUAL_IN):
         from_location_id = None
         to_location_id = payload.location_id
     else:

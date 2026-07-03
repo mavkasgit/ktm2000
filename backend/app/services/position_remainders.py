@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from decimal import Decimal
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.stock.models import QualityState, StockBalance
@@ -18,7 +18,7 @@ async def compute_available_remainder_quantity(
     """Вернуть сумму остатков на складах для продукта.
 
     После Этапа 7 рефакторинга Stock Ledger возвращает сумму
-    StockBalance.quantity для продукта по всем локациям.
+    StockBalance.balance_qty для продукта по всем локациям.
 
     Args:
         db: Асинхронная сессия SQLAlchemy.
@@ -34,10 +34,9 @@ async def compute_available_remainder_quantity(
         return 0.0
 
     total = await db.scalar(
-        select(StockBalance.quantity)
-        .where(
+        select(func.coalesce(func.sum(StockBalance.balance_qty), 0)).where(
             StockBalance.product_id == effective_product_id,
-            StockBalance.quantity > 0,
+            StockBalance.balance_qty > 0,
             StockBalance.quality_state == QualityState.GOOD,
         )
     )

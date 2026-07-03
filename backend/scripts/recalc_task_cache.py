@@ -35,7 +35,7 @@ async def main():
                 # SQL-верификация: прямой SELECT из StockTransaction
                 sql_issued = await db.scalar(
                     select(func.coalesce(func.sum(StockTransaction.quantity), 0))
-                    .where(StockTransaction.task_id == task.id, StockTransaction.reason == Reason.issue_to_work)
+                    .where(StockTransaction.task_id == task.id, StockTransaction.reason == Reason.ISSUE_TO_WORK)
                 ) or Decimal("0")
 
                 if cache["issued_quantity"] != sql_issued:

@@ -127,11 +127,11 @@ async def get_spg_snapshot(
     rem_agg_q = (
         select(
             StockBalance.product_id,
-            func.sum(StockBalance.quantity).label("remainder_total"),
+            func.sum(StockBalance.balance_qty).label("remainder_total"),
         )
         .where(
             StockBalance.location_id.in_(section_ids),
-            StockBalance.quantity > 0,
+            StockBalance.balance_qty > 0,
             StockBalance.quality_state == QualityState.GOOD,
         )
         .group_by(StockBalance.product_id)

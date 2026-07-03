@@ -72,7 +72,7 @@ async def _balance(
     session: AsyncSession,
     product_id: int,
     location_id: int,
-    quality_state: QualityState = QualityState.good,
+    quality_state: QualityState = QualityState.GOOD,
 ) -> Decimal:
     row = await session.execute(
         select(StockBalance).where(
@@ -191,7 +191,7 @@ async def _make_tasks_transferable(
         from_location_id=None,
         to_location_id=stock_id,
         quantity=src.planned_quantity,
-        reason=Reason.manual_in,
+        reason=Reason.MANUAL_IN,
         created_by=setup["user"].id,
     ))
     # issue_to_work: from stock to source section
@@ -200,7 +200,7 @@ async def _make_tasks_transferable(
         from_location_id=stock_id,
         to_location_id=src.section_id,
         quantity=src.planned_quantity,
-        reason=Reason.issue_to_work,
+        reason=Reason.ISSUE_TO_WORK,
         task_id=src.id,
         created_by=setup["user"].id,
     ))
@@ -210,7 +210,7 @@ async def _make_tasks_transferable(
         from_location_id=None,
         to_location_id=src.section_id,
         quantity=src.planned_quantity,
-        reason=Reason.complete,
+        reason=Reason.COMPLETE,
         task_id=src.id,
         source_ref="test_seed",
         created_by=setup["user"].id,
@@ -259,9 +259,9 @@ async def test_transfer_send_creates_two_stock_tx(session: AsyncSession, client)
 
     send_tx = txs[0]
     recv_tx = txs[1]
-    assert send_tx.reason == Reason.transfer_send
+    assert send_tx.reason == Reason.TRANSFER_SEND
     assert send_tx.task_id == ctx["from_task_id"]
-    assert recv_tx.reason == Reason.transfer_receive
+    assert recv_tx.reason == Reason.TRANSFER_RECEIVE
     assert recv_tx.task_id == ctx["to_task_id"]
     assert send_tx.quantity == Decimal("5")
     assert recv_tx.quantity == Decimal("5")

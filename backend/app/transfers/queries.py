@@ -456,11 +456,11 @@ async def list_ready_to_transfer(
                     await db.flush()
 
                 remainders_qty = await db.scalar(
-                    select(func.coalesce(func.sum(StockBalance.quantity), 0))
+                    select(func.coalesce(func.sum(StockBalance.balance_qty), 0))
                     .where(
                         StockBalance.location_id == sec.id,
                         StockBalance.product_id == fake_task.product_id,
-                        StockBalance.quantity > 0,
+                        StockBalance.balance_qty > 0,
                         StockBalance.quality_state == QualityState.GOOD,
                     )
                 ) or Decimal("0")

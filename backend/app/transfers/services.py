@@ -117,7 +117,7 @@ async def _record_transfer_send_stock_tx(
         StockCommand(
             product_id=transfer.product_id,
             quantity=quantity,
-            reason=Reason.transfer_send,
+            reason=Reason.TRANSFER_SEND,
             from_location_id=transfer.from_section_id,
             to_location_id=transfer.to_section_id,
             task_id=from_task.id,
@@ -162,7 +162,7 @@ async def _compensate_transfer_stock_tx(
             StockTransaction.transfer_id == transfer.id,
             StockTransaction.compensates_tx_id.is_(None),
             StockTransaction.reason.in_(
-                [Reason.transfer_send, Reason.transfer_receive]
+                [Reason.TRANSFER_SEND, Reason.TRANSFER_RECEIVE]
             ),
         )
         .order_by(StockTransaction.id.asc())
@@ -218,7 +218,7 @@ async def _resync_transfer_stock_tx_quantity(
             StockTransaction.transfer_id == transfer.id,
             StockTransaction.compensates_tx_id.is_(None),
             StockTransaction.reason.in_(
-                [Reason.transfer_send, Reason.transfer_receive]
+                [Reason.TRANSFER_SEND, Reason.TRANSFER_RECEIVE]
             ),
         )
     )
@@ -421,7 +421,7 @@ async def transfer_send(
         StockCommand(
             product_id=transfer.product_id,
             quantity=quantity,
-            reason=Reason.transfer_receive,
+            reason=Reason.TRANSFER_RECEIVE,
             from_location_id=transfer.from_section_id,
             to_location_id=transfer.to_section_id,
             task_id=to_task.id,
@@ -741,7 +741,7 @@ async def cancel_transfer(
         select(StockTransaction)
         .where(
             StockTransaction.transfer_id == transfer.id,
-            StockTransaction.reason.in_([Reason.transfer_send, Reason.transfer_receive]),
+            StockTransaction.reason.in_([Reason.TRANSFER_SEND, Reason.TRANSFER_RECEIVE]),
         )
         .limit(2)
     )).scalars().all()

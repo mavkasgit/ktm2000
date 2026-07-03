@@ -83,7 +83,7 @@ async def _make_location(
 
 async def _balance(
     session: AsyncSession, product_id: int, location_id: int,
-    quality_state: QualityState = QualityState.good,
+    quality_state: QualityState = QualityState.GOOD,
 ) -> Decimal:
     row = await session.execute(
         select(StockBalance).where(
@@ -191,7 +191,7 @@ async def test_complete_task_scrap_links_defect_to_stock_tx(session: AsyncSessio
         from_location_id=None,
         to_location_id=fx["raw"].id,
         quantity=Decimal("100"),
-        reason=Reason.manual_in,
+        reason=Reason.MANUAL_IN,
         created_by=fx["user"].id,
     ))
     await svc.record(session, StockCommand(
@@ -199,7 +199,7 @@ async def test_complete_task_scrap_links_defect_to_stock_tx(session: AsyncSessio
         from_location_id=fx["raw"].id,
         to_location_id=task.section_id,
         quantity=Decimal("10"),
-        reason=Reason.issue_to_work,
+        reason=Reason.ISSUE_TO_WORK,
         task_id=task.id,
         created_by=fx["user"].id,
     ))
@@ -228,9 +228,9 @@ async def test_complete_task_scrap_links_defect_to_stock_tx(session: AsyncSessio
     # Verify StockTransaction(SCRAP) exists with correct quality_state
     tx = await session.get(StockTransaction, defect.stock_transaction_id)
     assert tx is not None
-    assert tx.reason == Reason.scrap
-    assert tx.from_quality_state == QualityState.good
-    assert tx.to_quality_state == QualityState.scrap
+    assert tx.reason == Reason.SCRAP
+    assert tx.from_quality_state == QualityState.GOOD
+    assert tx.to_quality_state == QualityState.SCRAP
     assert tx.quantity == Decimal("3")
     assert tx.task_id == task.id
 
@@ -280,15 +280,15 @@ async def test_defect_decide_scrap_creates_stock_tx(session: AsyncSession):
     # Verify StockTransaction
     tx = await session.get(StockTransaction, defect.stock_transaction_id)
     assert tx is not None
-    assert tx.reason == Reason.scrap
-    assert tx.from_quality_state == QualityState.good
-    assert tx.to_quality_state == QualityState.scrap
+    assert tx.reason == Reason.SCRAP
+    assert tx.from_quality_state == QualityState.GOOD
+    assert tx.to_quality_state == QualityState.SCRAP
     assert tx.quantity == Decimal("5")
     assert tx.task_id == task.id
     assert tx.product_id == product.id
 
     # Check StockBalance on scrap location
-    scrap_bal = await _balance(session, product.id, fx["scrap"].id, QualityState.scrap)
+    scrap_bal = await _balance(session, product.id, fx["scrap"].id, QualityState.SCRAP)
     assert scrap_bal == Decimal("5")
 
     await assert_no_stock_ledger_invariants_violations(session, context="after-defect-scrap")
@@ -336,10 +336,10 @@ async def test_defect_decide_rework_creates_stock_tx(session: AsyncSession):
     # Verify StockTransaction(REWORK) — from production to rework location
     tx = await session.get(StockTransaction, defect.stock_transaction_id)
     assert tx is not None
-    assert tx.reason == Reason.rework
+    assert tx.reason == Reason.REWORK
     assert tx.from_location_id == task.section_id
     assert tx.to_location_id == fx["raw"].id
-    assert tx.to_quality_state == QualityState.rework
+    assert tx.to_quality_state == QualityState.REWORK
     assert tx.quantity == Decimal("3")
     assert tx.task_id == task.id
 
@@ -391,7 +391,7 @@ async def test_defect_decide_return_previous_creates_stock_tx(session: AsyncSess
     # Verify StockTransaction(RETURN_TO_PREVIOUS)
     tx = await session.get(StockTransaction, defect.stock_transaction_id)
     assert tx is not None
-    assert tx.reason == Reason.return_to_previous
+    assert tx.reason == Reason.RETURN_TO_PREVIOUS
     assert tx.quantity == Decimal("4")
     assert tx.to_location_id == fx["raw"].id
     assert tx.task_id == task.id
@@ -438,14 +438,14 @@ async def test_defect_decide_hold_creates_quarantine_tx(session: AsyncSession):
     # Verify StockTransaction(QUARANTINE)
     tx = await session.get(StockTransaction, defect.stock_transaction_id)
     assert tx is not None
-    assert tx.reason == Reason.quarantine
-    assert tx.from_quality_state == QualityState.good
-    assert tx.to_quality_state == QualityState.quarantine
+    assert tx.reason == Reason.QUARANTINE
+    assert tx.from_quality_state == QualityState.GOOD
+    assert tx.to_quality_state == QualityState.QUARANTINE
     assert tx.quantity == Decimal("6")
     assert tx.task_id == task.id
 
     # Check StockBalance on quarantine location
-    quar_bal = await _balance(session, fx["product"].id, fx["quarantine"].id, QualityState.quarantine)
+    quar_bal = await _balance(session, fx["product"].id, fx["quarantine"].id, QualityState.QUARANTINE)
     assert quar_bal == Decimal("6")
 
     await assert_no_stock_ledger_invariants_violations(session, context="after-defect-hold")
@@ -463,7 +463,7 @@ async def test_defect_decide_accept_deviation_creates_complete_tx(session: Async
         from_location_id=None,
         to_location_id=fx["raw"].id,
         quantity=Decimal("100"),
-        reason=Reason.manual_in,
+        reason=Reason.MANUAL_IN,
         created_by=fx["user"].id,
     ))
     await svc.record(session, StockCommand(
@@ -471,7 +471,7 @@ async def test_defect_decide_accept_deviation_creates_complete_tx(session: Async
         from_location_id=fx["raw"].id,
         to_location_id=task.section_id,
         quantity=Decimal("10"),
-        reason=Reason.issue_to_work,
+        reason=Reason.ISSUE_TO_WORK,
         task_id=task.id,
         created_by=fx["user"].id,
     ))
@@ -511,7 +511,7 @@ async def test_defect_decide_accept_deviation_creates_complete_tx(session: Async
     # Verify StockTransaction(COMPLETE)
     tx = await session.get(StockTransaction, defect.stock_transaction_id)
     assert tx is not None
-    assert tx.reason == Reason.complete
+    assert tx.reason == Reason.COMPLETE
     assert tx.quantity == Decimal("3")
     assert tx.task_id == task.id
     assert tx.to_location_id == task.section_id
@@ -553,7 +553,7 @@ async def test_defect_decide_idempotent(session: AsyncSession):
         select(func.count(StockTransaction.id))
         .where(
             StockTransaction.idempotency_key == "idemp-test-scrap-1",
-            StockTransaction.reason == Reason.scrap,
+            StockTransaction.reason == Reason.SCRAP,
         )
     )
 
@@ -574,7 +574,7 @@ async def test_defect_decide_idempotent(session: AsyncSession):
         select(func.count(StockTransaction.id))
         .where(
             StockTransaction.idempotency_key == "idemp-test-scrap-1",
-            StockTransaction.reason == Reason.scrap,
+            StockTransaction.reason == Reason.SCRAP,
         )
     )
     assert scrap_tx_count_before == scrap_tx_count_after == 1

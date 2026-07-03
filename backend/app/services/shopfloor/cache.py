@@ -78,7 +78,7 @@ async def _refresh_section_plan_line_cache(db: AsyncSession, section_plan_line_i
         )
         .where(
             StockTransaction.task_id.in_(task_ids),
-            StockTransaction.reason.in_([Reason.transfer_send, Reason.transfer_receive]),
+            StockTransaction.reason.in_([Reason.TRANSFER_SEND, Reason.TRANSFER_RECEIVE]),
         )
         .group_by(StockTransaction.reason)
     )
@@ -89,17 +89,17 @@ async def _refresh_section_plan_line_cache(db: AsyncSession, section_plan_line_i
     def _s(reason: Reason) -> Decimal:
         return sums.get(reason.value) or Decimal("0")
 
-    issued = _s(Reason.issue_to_work)
-    completed = _s(Reason.complete)
-    scrapped = _s(Reason.scrap)
-    transferred = net_sums.get(Reason.transfer_send.value) or Decimal("0")
-    received = net_sums.get(Reason.transfer_receive.value) or Decimal("0")
+    issued = _s(Reason.ISSUE_TO_WORK)
+    completed = _s(Reason.COMPLETE)
+    scrapped = _s(Reason.SCRAP)
+    transferred = net_sums.get(Reason.TRANSFER_SEND.value) or Decimal("0")
+    received = net_sums.get(Reason.TRANSFER_RECEIVE.value) or Decimal("0")
     rejected = scrapped
 
     # available: для первой стадии = planned, иначе 0
     is_first_stage = (line.sequence == 1)
     base_available = line.planned_quantity if is_first_stage else Decimal("0")
-    returned = _s(Reason.return_to_stock)
+    returned = _s(Reason.RETURN_TO_STOCK)
     available = base_available + received + returned - issued
     if available < Decimal("0"):
         available = Decimal("0")

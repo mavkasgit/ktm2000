@@ -61,7 +61,7 @@ async def test_spg_with_requires_lot_blocks_negative_remainder(client, session):
         from_location_id=None,
         to_location_id=section.id,
         quantity=5,
-        reason=Reason.manual_in,
+        reason=Reason.MANUAL_IN,
         created_by=admin_user.id if admin_user else 1,
     ))
     await session.commit()
@@ -72,7 +72,7 @@ async def test_spg_with_requires_lot_blocks_negative_remainder(client, session):
         select(StockBalance).where(
             StockBalance.product_id == product.id,
             StockBalance.location_id == section.id,
-            StockBalance.quality_state == QualityState.good,
+            StockBalance.quality_state == QualityState.GOOD,
         )
     )
     assert bal is not None

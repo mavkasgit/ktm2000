@@ -86,7 +86,7 @@ async def _balance(
     session: AsyncSession,
     product_id: int,
     location_id: int,
-    quality_state: QualityState = QualityState.good,
+    quality_state: QualityState = QualityState.GOOD,
 ) -> Decimal:
     row = await session.execute(
         select(StockBalance).where(
@@ -116,7 +116,7 @@ async def test_issue_to_work_moves_balance_from_stock_to_production(session: Asy
         from_location_id=raw.id,
         to_location_id=laser.id,
         quantity=Decimal("100"),
-        reason=Reason.issue_to_work,
+        reason=Reason.ISSUE_TO_WORK,
         created_by=user.id,
     ))
 
@@ -141,7 +141,7 @@ async def test_balance_aggregates_multiple_transactions(session: AsyncSession):
             from_location_id=raw.id,
             to_location_id=laser.id,
             quantity=qty,
-            reason=Reason.issue_to_work,
+            reason=Reason.ISSUE_TO_WORK,
             created_by=user.id,
         ))
     await session.commit()
@@ -162,12 +162,12 @@ async def test_return_to_stock_reverses_balance(session: AsyncSession):
     # Выдали 100
     await svc.record(session, StockCommand(
         product_id=product.id, from_location_id=raw.id, to_location_id=laser.id,
-        quantity=Decimal("100"), reason=Reason.issue_to_work, created_by=user.id,
+        quantity=Decimal("100"), reason=Reason.ISSUE_TO_WORK, created_by=user.id,
     ))
     # Вернули 30
     await svc.record(session, StockCommand(
         product_id=product.id, from_location_id=laser.id, to_location_id=raw.id,
-        quantity=Decimal("30"), reason=Reason.return_to_stock, created_by=user.id,
+        quantity=Decimal("30"), reason=Reason.RETURN_TO_STOCK, created_by=user.id,
     ))
     await session.commit()
 
@@ -192,7 +192,7 @@ async def test_idempotency_key_returns_existing_transaction(session: AsyncSessio
         from_location_id=raw.id,
         to_location_id=laser.id,
         quantity=Decimal("50"),
-        reason=Reason.issue_to_work,
+        reason=Reason.ISSUE_TO_WORK,
         created_by=user.id,
         idempotency_key="op-123",
     )
@@ -221,7 +221,7 @@ async def test_validation_rejects_zero_quantity(session: AsyncSession):
     with pytest.raises(StockValidationError, match="quantity"):
         await svc.record(session, StockCommand(
             product_id=product.id, from_location_id=raw.id, to_location_id=laser.id,
-            quantity=Decimal("0"), reason=Reason.issue_to_work, created_by=user.id,
+            quantity=Decimal("0"), reason=Reason.ISSUE_TO_WORK, created_by=user.id,
         ))
 
 
@@ -234,7 +234,7 @@ async def test_validation_rejects_no_locations(session: AsyncSession):
     with pytest.raises(StockValidationError, match="at least one"):
         await svc.record(session, StockCommand(
             product_id=product.id, quantity=Decimal("10"),
-            reason=Reason.manual_in, created_by=user.id,
+            reason=Reason.MANUAL_IN, created_by=user.id,
         ))
 
 
@@ -248,7 +248,7 @@ async def test_validation_rejects_same_from_to(session: AsyncSession):
     with pytest.raises(StockValidationError, match="must differ"):
         await svc.record(session, StockCommand(
             product_id=product.id, from_location_id=raw.id, to_location_id=raw.id,
-            quantity=Decimal("10"), reason=Reason.adjustment_in, created_by=user.id,
+            quantity=Decimal("10"), reason=Reason.ADJUSTMENT_IN, created_by=user.id,
         ))
 
 
@@ -265,8 +265,8 @@ async def test_validation_rejects_scrap_with_wrong_quality_transition(session: A
     with pytest.raises(StockValidationError, match="reason=scrap"):
         await svc.record(session, StockCommand(
             product_id=product.id, from_location_id=laser.id, to_location_id=scrap.id,
-            quantity=Decimal("5"), reason=Reason.scrap,
-            quality_state=QualityState.good, to_quality_state=QualityState.good,
+            quantity=Decimal("5"), reason=Reason.SCRAP,
+            quality_state=QualityState.GOOD, to_quality_state=QualityState.GOOD,
             created_by=user.id,
         ))
 
@@ -282,8 +282,8 @@ async def test_validation_rejects_complete_with_non_good_quality(session: AsyncS
     with pytest.raises(StockValidationError, match="to_quality=good"):
         await svc.record(session, StockCommand(
             product_id=product.id, from_location_id=laser.id, to_location_id=wip.id,
-            quantity=Decimal("5"), reason=Reason.complete,
-            quality_state=QualityState.good, to_quality_state=QualityState.scrap,
+            quantity=Decimal("5"), reason=Reason.COMPLETE,
+            quality_state=QualityState.GOOD, to_quality_state=QualityState.SCRAP,
             created_by=user.id,
         ))
 
@@ -303,21 +303,21 @@ async def test_scrap_creates_separate_balance_key(session: AsyncSession):
     # 100 good на лазере
     await svc.record(session, StockCommand(
         product_id=product.id, from_location_id=None, to_location_id=laser.id,
-        quantity=Decimal("100"), reason=Reason.manual_in, created_by=user.id,
+        quantity=Decimal("100"), reason=Reason.MANUAL_IN, created_by=user.id,
     ))
     # 10 в брак: from_quality=good, to_quality=scrap
     await svc.record(session, StockCommand(
         product_id=product.id, from_location_id=laser.id, to_location_id=scrap_loc.id,
-        quantity=Decimal("10"), reason=Reason.scrap,
-        quality_state=QualityState.good, to_quality_state=QualityState.scrap,
+        quantity=Decimal("10"), reason=Reason.SCRAP,
+        quality_state=QualityState.GOOD, to_quality_state=QualityState.SCRAP,
         created_by=user.id,
     ))
     await session.commit()
 
-    assert (await _balance(session, product.id, laser.id, QualityState.good)) == Decimal("90")
-    assert (await _balance(session, product.id, scrap_loc.id, QualityState.scrap)) == Decimal("10")
+    assert (await _balance(session, product.id, laser.id, QualityState.GOOD)) == Decimal("90")
+    assert (await _balance(session, product.id, scrap_loc.id, QualityState.SCRAP)) == Decimal("10")
     # Good на scrap-локации = 0 (нет строки)
-    assert (await _balance(session, product.id, scrap_loc.id, QualityState.good)) == Decimal("0")
+    assert (await _balance(session, product.id, scrap_loc.id, QualityState.GOOD)) == Decimal("0")
 
 
 @pytest.mark.asyncio
@@ -330,18 +330,18 @@ async def test_rework_uses_rework_quality_state(session: AsyncSession):
     svc = StockCommandService()
     await svc.record(session, StockCommand(
         product_id=product.id, from_location_id=None, to_location_id=laser.id,
-        quantity=Decimal("50"), reason=Reason.manual_in, created_by=user.id,
+        quantity=Decimal("50"), reason=Reason.MANUAL_IN, created_by=user.id,
     ))
     await svc.record(session, StockCommand(
         product_id=product.id, from_location_id=laser.id, to_location_id=rework_loc.id,
-        quantity=Decimal("7"), reason=Reason.rework,
-        quality_state=QualityState.good, to_quality_state=QualityState.rework,
+        quantity=Decimal("7"), reason=Reason.REWORK,
+        quality_state=QualityState.GOOD, to_quality_state=QualityState.REWORK,
         created_by=user.id,
     ))
     await session.commit()
 
-    assert (await _balance(session, product.id, laser.id, QualityState.good)) == Decimal("43")
-    assert (await _balance(session, product.id, rework_loc.id, QualityState.rework)) == Decimal("7")
+    assert (await _balance(session, product.id, laser.id, QualityState.GOOD)) == Decimal("43")
+    assert (await _balance(session, product.id, rework_loc.id, QualityState.REWORK)) == Decimal("7")
 
 
 # ─── tests: rebuild_all_balances ─────────────────────────────────────────────
@@ -359,12 +359,12 @@ async def test_rebuild_all_balances_matches_incremental(session: AsyncSession):
     svc = StockCommandService()
     await svc.record(session, StockCommand(
         product_id=product.id, from_location_id=raw.id, to_location_id=laser.id,
-        quantity=Decimal("100"), reason=Reason.issue_to_work, created_by=user.id,
+        quantity=Decimal("100"), reason=Reason.ISSUE_TO_WORK, created_by=user.id,
     ))
     await svc.record(session, StockCommand(
         product_id=product.id, from_location_id=laser.id, to_location_id=scrap_loc.id,
-        quantity=Decimal("10"), reason=Reason.scrap,
-        quality_state=QualityState.good, to_quality_state=QualityState.scrap,
+        quantity=Decimal("10"), reason=Reason.SCRAP,
+        quality_state=QualityState.GOOD, to_quality_state=QualityState.SCRAP,
         created_by=user.id,
     ))
     await session.commit()
@@ -372,7 +372,7 @@ async def test_rebuild_all_balances_matches_incremental(session: AsyncSession):
     # Запоминаем инкрементальные балансы
     before_raw = await _balance(session, product.id, raw.id)
     before_laser = await _balance(session, product.id, laser.id)
-    before_scrap = await _balance(session, product.id, scrap_loc.id, QualityState.scrap)
+    before_scrap = await _balance(session, product.id, scrap_loc.id, QualityState.SCRAP)
 
     # Полный пересчёт
     pm = StockProjectionManager()
@@ -381,7 +381,7 @@ async def test_rebuild_all_balances_matches_incremental(session: AsyncSession):
 
     assert (await _balance(session, product.id, raw.id)) == before_raw
     assert (await _balance(session, product.id, laser.id)) == before_laser
-    assert (await _balance(session, product.id, scrap_loc.id, QualityState.scrap)) == before_scrap
+    assert (await _balance(session, product.id, scrap_loc.id, QualityState.SCRAP)) == before_scrap
     assert count >= 3  # хотя бы 3 строки баланса
 
 
@@ -400,12 +400,12 @@ async def test_stock_ledger_invariants_pass_after_operations(session: AsyncSessi
     svc = StockCommandService()
     await svc.record(session, StockCommand(
         product_id=product.id, from_location_id=raw.id, to_location_id=laser.id,
-        quantity=Decimal("100"), reason=Reason.issue_to_work, created_by=user.id,
+        quantity=Decimal("100"), reason=Reason.ISSUE_TO_WORK, created_by=user.id,
     ))
     await svc.record(session, StockCommand(
         product_id=product.id, from_location_id=laser.id, to_location_id=scrap_loc.id,
-        quantity=Decimal("10"), reason=Reason.scrap,
-        quality_state=QualityState.good, to_quality_state=QualityState.scrap,
+        quantity=Decimal("10"), reason=Reason.SCRAP,
+        quality_state=QualityState.GOOD, to_quality_state=QualityState.SCRAP,
         created_by=user.id,
     ))
     await session.commit()
@@ -425,11 +425,11 @@ async def test_zero_balance_row_removed(session: AsyncSession):
     # выдали 50, вернули 50 → на лазере баланс 0
     await svc.record(session, StockCommand(
         product_id=product.id, from_location_id=raw.id, to_location_id=laser.id,
-        quantity=Decimal("50"), reason=Reason.issue_to_work, created_by=user.id,
+        quantity=Decimal("50"), reason=Reason.ISSUE_TO_WORK, created_by=user.id,
     ))
     await svc.record(session, StockCommand(
         product_id=product.id, from_location_id=laser.id, to_location_id=raw.id,
-        quantity=Decimal("50"), reason=Reason.return_to_stock, created_by=user.id,
+        quantity=Decimal("50"), reason=Reason.RETURN_TO_STOCK, created_by=user.id,
     ))
     await session.commit()
 

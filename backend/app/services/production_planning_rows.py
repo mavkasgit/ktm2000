@@ -504,7 +504,7 @@ async def get_production_planning_row_detail(db: AsyncSession, position_id: int)
             )
             .where(
                 StockTransaction.task_id.in_([r.id for r in task_in_pos]),
-                StockTransaction.reason.in_([Reason.transfer_send, Reason.transfer_receive]),
+                StockTransaction.reason.in_([Reason.TRANSFER_SEND, Reason.TRANSFER_RECEIVE]),
             )
             .group_by(StockTransaction.task_id, StockTransaction.reason)
         )).all()
@@ -525,9 +525,9 @@ async def get_production_planning_row_detail(db: AsyncSession, position_id: int)
                 continue
             sums = tx_sums.get(t.id, {})
             nets = net_sums.get(t.id, {})
-            completed = float(sums.get(Reason.complete.value, Decimal("0")))
-            transferred = float(nets.get(Reason.transfer_send.value, Decimal("0")))
-            rejected = float(sums.get(Reason.scrap.value, Decimal("0")))
+            completed = float(sums.get(Reason.COMPLETE.value, Decimal("0")))
+            transferred = float(nets.get(Reason.TRANSFER_SEND.value, Decimal("0")))
+            rejected = float(sums.get(Reason.SCRAP.value, Decimal("0")))
             stage_totals = task_aggregates_by_stage.setdefault(
                 stage_id,
                 {"completed_quantity": 0.0, "transferred_quantity": 0.0, "rejected_quantity": 0.0},

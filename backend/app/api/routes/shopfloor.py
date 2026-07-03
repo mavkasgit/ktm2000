@@ -907,7 +907,7 @@ async def list_warehouse_remainders(
     ).join(
         Section, StockBalance.location_id == Section.id,
     ).where(
-        StockBalance.quality_state == QualityState.good,
+        StockBalance.quality_state == QualityState.GOOD,
         StockBalance.balance_qty > 0,
     )
 
@@ -974,7 +974,7 @@ async def return_remainder(
             from_location_id=task.section_id,
             to_location_id=None,
             quantity=quantity,
-            reason=Reason.return_to_stock,
+            reason=Reason.RETURN_TO_STOCK,
             task_id=task.id,
             comment=payload.comment,
             idempotency_key=payload.idempotency_key,
@@ -1020,7 +1020,7 @@ async def task_spg_available(
         .where(
             StockBalance.product_id == task.product_id,
             StockBalance.location_id == stock_loc,
-            StockBalance.quality_state == QualityState.good,
+            StockBalance.quality_state == QualityState.GOOD,
         )
     ) or 0
 

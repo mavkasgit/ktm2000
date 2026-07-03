@@ -63,7 +63,7 @@ async def test_adjustment_in_creates_stock_tx(client: AsyncClient, session: Asyn
     assert tx.product_id == product.id
     assert tx.to_location_id == location.id
     assert tx.from_location_id is None
-    assert tx.reason == Reason.manual_in
+    assert tx.reason == Reason.MANUAL_IN
     assert float(tx.quantity) == 10.0
 
     # Баланс должен быть 10

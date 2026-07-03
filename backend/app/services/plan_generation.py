@@ -259,7 +259,7 @@ async def release_batch(
                     from_location_id=None,
                     to_location_id=task.section_id,
                     quantity=batch_position.release_quantity,
-                    reason=Reason.complete,
+                    reason=Reason.COMPLETE,
                     task_id=task.id,
                     source_ref="auto_release_remainder",
                     comment="Автозавершение при покрытии остатками ГХП",

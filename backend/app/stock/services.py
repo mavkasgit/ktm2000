@@ -58,7 +58,7 @@ class StockCommand:
     reason: Reason
     from_location_id: int | None = None
     to_location_id: int | None = None
-    quality_state: QualityState = QualityState.good
+    quality_state: QualityState = QualityState.GOOD
     # Результирующее качество (на to_location). По умолчанию = quality_state
     # (без изменения состояния). Для SCRAP: quality_state=good, to_quality_state=scrap.
     to_quality_state: QualityState | None = None
@@ -264,7 +264,7 @@ class StockProjectionManager:
             )
             .where(
                 StockTransaction.task_id == task_id,
-                StockTransaction.reason.in_([Reason.transfer_send, Reason.transfer_receive]),
+                StockTransaction.reason.in_([Reason.TRANSFER_SEND, Reason.TRANSFER_RECEIVE]),
             )
             .group_by(StockTransaction.reason)
         )
@@ -272,12 +272,12 @@ class StockProjectionManager:
         for reason_val, net in net_rows:
             net_sums[reason_val] = net or Decimal("0")
 
-        issued = _sum_reason(Reason.issue_to_work)
-        completed = _sum_reason(Reason.complete)
-        scrapped = _sum_reason(Reason.scrap)
-        returned = _sum_reason(Reason.return_to_stock)
-        transferred = net_sums.get(Reason.transfer_send.value) or Decimal("0")
-        received = net_sums.get(Reason.transfer_receive.value) or Decimal("0")
+        issued = _sum_reason(Reason.ISSUE_TO_WORK)
+        completed = _sum_reason(Reason.COMPLETE)
+        scrapped = _sum_reason(Reason.SCRAP)
+        returned = _sum_reason(Reason.RETURN_TO_STOCK)
+        transferred = net_sums.get(Reason.TRANSFER_SEND.value) or Decimal("0")
+        received = net_sums.get(Reason.TRANSFER_RECEIVE.value) or Decimal("0")
         rejected = scrapped  # DefectDecision на Этапе 5
 
         base_available = task.planned_quantity if is_first_stage else Decimal("0")
@@ -370,7 +370,7 @@ class StockProjectionManager:
             )
             .where(
                 StockTransaction.task_id.in_(task_ids),
-                StockTransaction.reason.in_([Reason.transfer_send, Reason.transfer_receive]),
+                StockTransaction.reason.in_([Reason.TRANSFER_SEND, Reason.TRANSFER_RECEIVE]),
             )
             .group_by(StockTransaction.task_id, StockTransaction.reason)
         )
@@ -403,12 +403,12 @@ class StockProjectionManager:
             def _val(s: dict, key: Reason) -> Decimal:
                 return s.get(key.value) or Decimal("0")
 
-            issued = _val(t_sums, Reason.issue_to_work)
-            completed = _val(t_sums, Reason.complete)
-            scrapped = _val(t_sums, Reason.scrap)
-            returned = _val(t_sums, Reason.return_to_stock)
-            transferred = _val(t_net, Reason.transfer_send)
-            received = _val(t_net, Reason.transfer_receive)
+            issued = _val(t_sums, Reason.ISSUE_TO_WORK)
+            completed = _val(t_sums, Reason.COMPLETE)
+            scrapped = _val(t_sums, Reason.SCRAP)
+            returned = _val(t_sums, Reason.RETURN_TO_STOCK)
+            transferred = _val(t_net, Reason.TRANSFER_SEND)
+            received = _val(t_net, Reason.TRANSFER_RECEIVE)
             rejected = scrapped
 
             base_available = task.planned_quantity if is_first_stage else Decimal("0")
@@ -518,12 +518,12 @@ class StockCommandService:
         # Some reasons are "state changes" on the same location
         # (complete, scrap, rework) — allow same from/to for these.
         _state_change_reasons = {
-            Reason.complete,
-            Reason.scrap,
-            Reason.rework,
-            Reason.quarantine,
-            Reason.final_release,
-            Reason.issue_to_work,
+            Reason.COMPLETE,
+            Reason.SCRAP,
+            Reason.REWORK,
+            Reason.QUARANTINE,
+            Reason.FINAL_RELEASE,
+            Reason.ISSUE_TO_WORK,
         }
         if cmd.reason not in _state_change_reasons:
             if (
@@ -549,18 +549,18 @@ class StockCommandService:
                 raise StockValidationError(f"{label}={loc_id} not found")
         # Reason ↔ quality_state consistency
         to_qs = cmd.to_quality_state or cmd.quality_state
-        if cmd.reason == Reason.scrap:
-            if cmd.quality_state != QualityState.good or to_qs != QualityState.scrap:
+        if cmd.reason == Reason.SCRAP:
+            if cmd.quality_state != QualityState.GOOD or to_qs != QualityState.SCRAP:
                 raise StockValidationError(
                     f"reason=scrap requires from_quality=good, to_quality=scrap; "
                     f"got from={cmd.quality_state.value}, to={to_qs.value}"
                 )
-        if cmd.reason == Reason.rework:
-            if to_qs != QualityState.rework:
+        if cmd.reason == Reason.REWORK:
+            if to_qs != QualityState.REWORK:
                 raise StockValidationError(
                     f"reason=rework requires to_quality=rework, got {to_qs.value}"
                 )
-        if cmd.reason == Reason.complete and to_qs != QualityState.good:
+        if cmd.reason == Reason.COMPLETE and to_qs != QualityState.GOOD:
             raise StockValidationError(
                 f"reason=complete requires to_quality=good, got {to_qs.value}"
             )

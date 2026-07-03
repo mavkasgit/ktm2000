@@ -916,10 +916,10 @@ async def get_remainders_preview(
             select(StockBalance)
             .where(
                 StockBalance.product_id == effective_product_id,
-                StockBalance.quantity > 0,
+                StockBalance.balance_qty > 0,
                 StockBalance.quality_state == QualityState.GOOD,
             )
-            .order_by(StockBalance.created_at)
+            .order_by(StockBalance.refreshed_at)
         )).scalars().all()
 
         for b in balances:
@@ -933,9 +933,9 @@ async def get_remainders_preview(
 
             available_remainders.append({
                 "id": b.id,
-                "remainder_quantity": float(b.quantity),
-                "original_issued": float(b.quantity),
-                "created_at": b.created_at.isoformat() if b.created_at else None,
+                "remainder_quantity": float(b.balance_qty),
+                "original_issued": float(b.balance_qty),
+                "created_at": b.refreshed_at.isoformat() if b.refreshed_at else None,
                 "created_by_user_name": None,
                 "completed_stages_json": [],
                 "max_completed_seq": 0,
@@ -1620,10 +1620,10 @@ async def get_product_wip_stats(
         .join(Section, Section.id == StockBalance.location_id)
         .where(
             StockBalance.product_id == product.id,
-            StockBalance.quantity > 0,
+            StockBalance.balance_qty > 0,
             StockBalance.quality_state == QualityState.GOOD,
         )
-        .order_by(StockBalance.created_at)
+        .order_by(StockBalance.refreshed_at)
     )).all()
 
     # Group by location/SPG
@@ -1653,7 +1653,7 @@ async def get_product_wip_stats(
                 "max_completed_seq": 0,
                 "quantity": 0.0,
             }
-        rem_grouped[key]["quantity"] += float(bal.quantity or 0)
+        rem_grouped[key]["quantity"] += float(bal.balance_qty or 0)
 
     remainders = sorted(
         [

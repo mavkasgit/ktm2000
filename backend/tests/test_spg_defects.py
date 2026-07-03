@@ -267,7 +267,7 @@ async def test_manual_defect_registration_and_scrap_decision(client, session):
     from app.stock.models import StockTransaction
     tx = await session.get(StockTransaction, defect.stock_transaction_id)
     assert tx is not None
-    assert tx.reason == Reason.scrap
+    assert tx.reason == Reason.SCRAP
 
 
 @pytest.mark.asyncio
@@ -416,7 +416,7 @@ async def test_manual_defect_scrap_exceeding_quantity(client, session):
     # Verify StockTransaction(SCRAP) was created
     tx = await session.get(StockTransaction, defect.stock_transaction_id)
     assert tx is not None
-    assert tx.reason == Reason.scrap
+    assert tx.reason == Reason.SCRAP
     assert tx.quantity == Decimal("20")
 
 
@@ -468,7 +468,7 @@ async def test_manual_defect_hold_decision(client, session):
     # Verify StockTransaction(QUARANTINE) was created
     tx = await session.get(StockTransaction, defect.stock_transaction_id)
     assert tx is not None
-    assert tx.reason == Reason.quarantine
+    assert tx.reason == Reason.QUARANTINE
     assert tx.to_quality_state == "quarantine"
     assert tx.quantity == Decimal("8")
 

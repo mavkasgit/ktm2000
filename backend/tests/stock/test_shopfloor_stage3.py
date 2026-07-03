@@ -86,7 +86,7 @@ async def _make_location(
 
 async def _balance(
     session: AsyncSession, product_id: int, location_id: int,
-    quality_state: QualityState = QualityState.good,
+    quality_state: QualityState = QualityState.GOOD,
 ) -> Decimal:
     row = await session.execute(
         select(StockBalance).where(
@@ -197,7 +197,7 @@ async def test_issue_to_work_creates_stock_tx(session: AsyncSession):
         from_location_id=None,
         to_location_id=fx["raw"].id,
         quantity=Decimal("100"),
-        reason=Reason.manual_in,
+        reason=Reason.MANUAL_IN,
         created_by=fx["user"].id,
     ))
     await session.commit()
@@ -220,7 +220,7 @@ async def test_issue_to_work_creates_stock_tx(session: AsyncSession):
         select(func.count(StockTransaction.id))
         .where(
             StockTransaction.task_id == task.id,
-            StockTransaction.reason == Reason.issue_to_work,
+            StockTransaction.reason == Reason.ISSUE_TO_WORK,
         )
     )
     assert tx_count == 1, "Expected 1 StockTransaction(ISSUE_TO_WORK)"
@@ -243,7 +243,7 @@ async def test_issue_to_work_updates_cache(session: AsyncSession):
         from_location_id=None,
         to_location_id=fx["raw"].id,
         quantity=Decimal("100"),
-        reason=Reason.manual_in,
+        reason=Reason.MANUAL_IN,
         created_by=fx["user"].id,
     ))
     await session.commit()
@@ -266,7 +266,7 @@ async def test_issue_to_work_updates_cache(session: AsyncSession):
         select(func.coalesce(func.sum(StockTransaction.quantity), 0))
         .where(
             StockTransaction.task_id == task.id,
-            StockTransaction.reason == Reason.issue_to_work,
+            StockTransaction.reason == Reason.ISSUE_TO_WORK,
         )
     )
     assert cache["issued_quantity"] == sql_sum == Decimal("7")
@@ -301,7 +301,7 @@ async def test_issue_to_work_auto_consume_flag(session: AsyncSession):
         from_location_id=None,
         to_location_id=fx["raw"].id,
         quantity=Decimal("5"),
-        reason=Reason.manual_in,
+        reason=Reason.MANUAL_IN,
         created_by=fx["user"].id,
     ))
     await session.commit()
@@ -337,7 +337,7 @@ async def test_complete_task_creates_complete_tx(session: AsyncSession):
         from_location_id=None,
         to_location_id=fx["raw"].id,
         quantity=Decimal("100"),
-        reason=Reason.manual_in,
+        reason=Reason.MANUAL_IN,
         created_by=fx["user"].id,
     ))
     # Issue to work via StockCommand (to set up pre-requisite)
@@ -346,7 +346,7 @@ async def test_complete_task_creates_complete_tx(session: AsyncSession):
         from_location_id=fx["raw"].id,
         to_location_id=task.section_id,
         quantity=Decimal("10"),
-        reason=Reason.issue_to_work,
+        reason=Reason.ISSUE_TO_WORK,
         task_id=task.id,
         created_by=fx["user"].id,
     ))
@@ -369,7 +369,7 @@ async def test_complete_task_creates_complete_tx(session: AsyncSession):
         select(func.count(StockTransaction.id))
         .where(
             StockTransaction.task_id == task.id,
-            StockTransaction.reason == Reason.complete,
+            StockTransaction.reason == Reason.COMPLETE,
         )
     )
     assert tx_count == 1, "Expected 1 StockTransaction(COMPLETE)"
@@ -382,7 +382,7 @@ async def test_complete_task_creates_complete_tx(session: AsyncSession):
         select(func.coalesce(func.sum(StockTransaction.quantity), 0))
         .where(
             StockTransaction.task_id == task.id,
-            StockTransaction.reason == Reason.complete,
+            StockTransaction.reason == Reason.COMPLETE,
         )
     )
     assert cache["completed_quantity"] == sql_sum == Decimal("8")
@@ -401,7 +401,7 @@ async def test_complete_task_with_scrap(session: AsyncSession):
         from_location_id=None,
         to_location_id=fx["raw"].id,
         quantity=Decimal("100"),
-        reason=Reason.manual_in,
+        reason=Reason.MANUAL_IN,
         created_by=fx["user"].id,
     ))
     await svc.record(session, StockCommand(
@@ -409,7 +409,7 @@ async def test_complete_task_with_scrap(session: AsyncSession):
         from_location_id=fx["raw"].id,
         to_location_id=task.section_id,
         quantity=Decimal("10"),
-        reason=Reason.issue_to_work,
+        reason=Reason.ISSUE_TO_WORK,
         task_id=task.id,
         created_by=fx["user"].id,
     ))
@@ -432,7 +432,7 @@ async def test_complete_task_with_scrap(session: AsyncSession):
         select(func.coalesce(func.sum(StockTransaction.quantity), 0))
         .where(
             StockTransaction.task_id == task.id,
-            StockTransaction.reason == Reason.complete,
+            StockTransaction.reason == Reason.COMPLETE,
         )
     )
     assert complete_sum == Decimal("7")
@@ -442,7 +442,7 @@ async def test_complete_task_with_scrap(session: AsyncSession):
         select(func.coalesce(func.sum(StockTransaction.quantity), 0))
         .where(
             StockTransaction.task_id == task.id,
-            StockTransaction.reason == Reason.scrap,
+            StockTransaction.reason == Reason.SCRAP,
         )
     )
     assert scrap_sum == Decimal("3")
@@ -469,7 +469,7 @@ async def test_final_release_creates_stock_tx(session: AsyncSession):
         from_location_id=None,
         to_location_id=fx["raw"].id,
         quantity=Decimal("100"),
-        reason=Reason.manual_in,
+        reason=Reason.MANUAL_IN,
         created_by=fx["user"].id,
     ))
     await svc.record(session, StockCommand(
@@ -477,7 +477,7 @@ async def test_final_release_creates_stock_tx(session: AsyncSession):
         from_location_id=fx["raw"].id,
         to_location_id=task.section_id,
         quantity=Decimal("10"),
-        reason=Reason.issue_to_work,
+        reason=Reason.ISSUE_TO_WORK,
         task_id=task.id,
         created_by=fx["user"].id,
     ))
@@ -487,7 +487,7 @@ async def test_final_release_creates_stock_tx(session: AsyncSession):
         from_location_id=None,
         to_location_id=task.section_id,
         quantity=Decimal("8"),
-        reason=Reason.complete,
+        reason=Reason.COMPLETE,
         task_id=task.id,
         created_by=fx["user"].id,
     ))
@@ -506,7 +506,7 @@ async def test_final_release_creates_stock_tx(session: AsyncSession):
         select(func.count(StockTransaction.id))
         .where(
             StockTransaction.task_id == task.id,
-            StockTransaction.reason == Reason.final_release,
+            StockTransaction.reason == Reason.FINAL_RELEASE,
         )
     )
     assert tx_count == 1, "Expected 1 StockTransaction(FINAL_RELEASE)"
@@ -527,7 +527,7 @@ async def test_return_to_stock_endpoint(session: AsyncSession):
         from_location_id=None,
         to_location_id=fx["raw"].id,
         quantity=Decimal("100"),
-        reason=Reason.manual_in,
+        reason=Reason.MANUAL_IN,
         created_by=fx["user"].id,
     ))
     await svc.record(session, StockCommand(
@@ -535,7 +535,7 @@ async def test_return_to_stock_endpoint(session: AsyncSession):
         from_location_id=fx["raw"].id,
         to_location_id=task.section_id,
         quantity=Decimal("10"),
-        reason=Reason.issue_to_work,
+        reason=Reason.ISSUE_TO_WORK,
         task_id=task.id,
         created_by=fx["user"].id,
     ))
@@ -549,7 +549,7 @@ async def test_return_to_stock_endpoint(session: AsyncSession):
         from_location_id=task.section_id,
         to_location_id=None,
         quantity=Decimal("3"),
-        reason=Rsn.return_to_stock,
+        reason=Rsn.RETURN_TO_STOCK,
         task_id=task.id,
         created_by=fx["user"].id,
     ))
@@ -559,7 +559,7 @@ async def test_return_to_stock_endpoint(session: AsyncSession):
         select(func.count(StockTransaction.id))
         .where(
             StockTransaction.id == tx.id,
-            StockTransaction.reason == Reason.return_to_stock,
+            StockTransaction.reason == Reason.RETURN_TO_STOCK,
         )
     )
     assert tx_check == 1
@@ -576,7 +576,7 @@ async def test_no_movement_written_in_shopfloor(session: AsyncSession):
         from_location_id=None,
         to_location_id=fx["raw"].id,
         quantity=Decimal("100"),
-        reason=Reason.manual_in,
+        reason=Reason.MANUAL_IN,
         created_by=fx["user"].id,
     ))
     await svc.record(session, StockCommand(
@@ -584,7 +584,7 @@ async def test_no_movement_written_in_shopfloor(session: AsyncSession):
         from_location_id=fx["raw"].id,
         to_location_id=task.section_id,
         quantity=Decimal("10"),
-        reason=Reason.issue_to_work,
+        reason=Reason.ISSUE_TO_WORK,
         task_id=task.id,
         created_by=fx["user"].id,
     ))
@@ -594,7 +594,7 @@ async def test_no_movement_written_in_shopfloor(session: AsyncSession):
         from_location_id=None,
         to_location_id=task.section_id,
         quantity=Decimal("8"),
-        reason=Reason.complete,
+        reason=Reason.COMPLETE,
         task_id=task.id,
         created_by=fx["user"].id,
     ))
