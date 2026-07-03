@@ -115,10 +115,10 @@ Reason enum и QualityState enum — как в предыдущей версии
 - [x] 6.6. Убрать `SpgRemainder` с фронта полностью
 
 ### Этап 7 — Cleanup
-- [ ] 7.1. Удалить `SpgRemainder` (модель, таблица)
-- [ ] 7.2. Удалить `Movement` (модель, таблица)
-- [ ] 7.3. Удалить старые `_make_*` хелперы и всё, что осталось
-- [ ] 7.4. Обновить `AGENTS.md`
+- [x] 7.1. Удалить `SpgRemainder` (модель, таблица)
+- [x] 7.2. Удалить `Movement` (модель, таблица)
+- [x] 7.3. Удалить старые `_make_*` хелперы и всё, что осталось
+- [x] 7.4. Обновить `AGENTS.md`
 
 ---
 
@@ -220,4 +220,4 @@ test_manual_pass_completes_single_stage_task
 - [x] Этап 4 — WorkTask cleanup
 - [x] Этап 5 — Quality
 - [x] Этап 6 — Frontend
-- [ ] Этап 7 — Cleanup
+- [x] Этап 7 — Cleanup
