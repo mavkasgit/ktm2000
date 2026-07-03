@@ -130,6 +130,24 @@ export async function getStockTransactions(params?: StockTransactionsParams): Pr
 
 // ─── Remainder Excel Import (v2/stock) ──────────────────────────────────────
 
+// ─── Operations Reference (ImportOperationStep) ────────────────────────
+
+export type ImportOperationStep = {
+  sequence: number;
+  section_code: string;
+  section_name: string;
+  operation_code: string | null;
+  operation_name: string;
+  is_significant: boolean;
+};
+
+export async function getRemainderImportOperations(): Promise<ImportOperationStep[]> {
+  const { data } = await apiClient.get<ImportOperationStep[]>("/v2/stock/import/remainders/operations");
+  return data;
+}
+
+// ─── Extended Remainder Types ──────────────────────────────────────────
+
 export type RemainderImportItem = {
   source_row_number: number;
   sku: string;
@@ -140,6 +158,10 @@ export type RemainderImportItem = {
   status: "valid" | "invalid";
   errors: string[];
   raw_values: string[];
+  completed_operations_raw: string | null;
+  completed_stages: ImportOperationStep[];
+  target_section_name: string | null;
+  target_section_id: number | null;
 };
 
 export type RemainderImportSummary = {
@@ -169,6 +191,7 @@ export type RemainderImportOptions = {
   quality_state?: QualityState;
   skip_invalid?: boolean;
   clear_existing?: boolean;
+  target_section_overrides?: Record<number, number>; // row_number → section_id
 };
 
 export async function previewRemaindersExcel(
@@ -182,6 +205,9 @@ export async function previewRemaindersExcel(
   formData.append("quality_state", opts.quality_state ?? "GOOD");
   formData.append("sheet_index", String(opts.sheet_index ?? 0));
   if (opts.row_selection) formData.append("row_selection", opts.row_selection);
+  if (opts.target_section_overrides && !opts.clear_existing) {
+    formData.append("target_section_overrides", JSON.stringify(opts.target_section_overrides));
+  }
   const { data } = await apiClient.post<RemainderPreviewResponse>(
     "/v2/stock/import/remainders/preview",
     formData,
@@ -203,6 +229,9 @@ export async function importRemaindersExcel(
   formData.append("skip_invalid", String(opts.skip_invalid ?? true));
   formData.append("clear_existing", String(opts.clear_existing ?? false));
   if (opts.row_selection) formData.append("row_selection", opts.row_selection);
+  if (opts.target_section_overrides && !opts.clear_existing) {
+    formData.append("target_section_overrides", JSON.stringify(opts.target_section_overrides));
+  }
   const { data } = await apiClient.post<RemainderImportResponse>(
     "/v2/stock/import/remainders",
     formData,

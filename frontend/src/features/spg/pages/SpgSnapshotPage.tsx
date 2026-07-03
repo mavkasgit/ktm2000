@@ -184,14 +184,8 @@ export function SpgSnapshotPage() {
                 );
                 if (stockSection) {
                   setImportLocationId(stockSection.id);
-                  setIsImportDialogOpen(true);
-                } else {
-                  toast({
-                    title: "Нет доступных складов",
-                    description: "Создайте складскую секцию для импорта остатков",
-                    variant: "destructive",
-                  });
                 }
+                setIsImportDialogOpen(true);
               }}
               disabled={sections.length === 0}
             >
@@ -251,18 +245,16 @@ export function SpgSnapshotPage() {
         onOpenChange={setIsAdjustmentDialogOpen}
       />
 
-      {importLocationId !== null && (
-        <ImportRemaindersDialog
-          open={isImportDialogOpen}
-          onOpenChange={setIsImportDialogOpen}
-          locationId={importLocationId}
-          locationName={sections.find((s) => s.id === importLocationId)?.name}
-          onSaved={() => {
-            void queryClient.invalidateQueries({ queryKey: queryKeys.stock.balances() });
-            void queryClient.invalidateQueries({ queryKey: queryKeys.stock.transactions() });
-          }}
-        />
-      )}
+      <ImportRemaindersDialog
+        open={isImportDialogOpen}
+        onOpenChange={setIsImportDialogOpen}
+        locationId={importLocationId ?? undefined}
+        locationName={importLocationId ? sections.find((s) => s.id === importLocationId)?.name : undefined}
+        onSaved={() => {
+          void queryClient.invalidateQueries({ queryKey: queryKeys.stock.balances() });
+          void queryClient.invalidateQueries({ queryKey: queryKeys.stock.transactions() });
+        }}
+      />
 
       {selectedProductId !== null && (
         <ProductStockBalanceDialog

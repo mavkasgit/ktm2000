@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useMemo, Fragment } from "react";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Upload, Loader2, AlertCircle, CheckCircle, ChevronDown, ChevronRight, Download, Search } from "lucide-react";
 
 import {
@@ -16,31 +16,28 @@ import {
   SelectValue,
   SelectContent,
   SelectItem,
+  toast,
 } from "@/shared/ui";
 import {
   previewRemaindersExcel,
   importRemaindersExcel,
   downloadRemaindersImportTemplate,
+  getRemainderImportOperations,
   type RemainderPreviewResponse,
-  type QualityState,
+  type ImportOperationStep,
 } from "@/shared/api/stock";
 import { getExcelSheetNames } from "@/shared/api/imports";
 import { queryKeys } from "@/shared/api/queryKeys";
+import { RouteStepsDisplay } from "@/shared/ui/RouteStepsDisplay";
+import { listSections, type Section } from "@/shared/api/sections";
 
 interface ImportRemaindersDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  locationId: number;
+  locationId?: number;
   locationName?: string;
   onSaved: () => void;
 }
-
-const QUALITY_STATE_OPTIONS: { value: QualityState; label: string }[] = [
-  { value: "GOOD", label: "Годные" },
-  { value: "SCRAP", label: "Брак" },
-  { value: "REWORK", label: "Переделка" },
-  { value: "QUARANTINE", label: "Карантин" },
-];
 
 export function ImportRemaindersDialog({
   open,
@@ -51,6 +48,28 @@ export function ImportRemaindersDialog({
 }: ImportRemaindersDialogProps) {
   const queryClient = useQueryClient();
 
+  // ── Operations reference ──────────────────────────────────────────────
+  const { data: operations } = useQuery({
+    queryKey: ["stock-remainder-import-operations"],
+    queryFn: () => getRemainderImportOperations(),
+    enabled: open,
+  });
+
+  // ── Sections list for target selector ─────────────────────────────────
+  const { data: allSections } = useQuery({
+    queryKey: ["sections", "all"],
+    queryFn: () => listSections(),
+    enabled: open,
+  });
+
+  const importableSections = useMemo(() => {
+    if (!allSections) return [];
+    return allSections
+      .filter((s) => s.is_active && s.type !== "production")
+      .sort((a, b) => a.name.localeCompare(b.name, "ru"));
+  }, [allSections]);
+
+  // ── State machine ─────────────────────────────────────────────────────
   const [step, setStep] = useState<"upload" | "preview" | "result">("upload");
   const [file, setFile] = useState<File | null>(null);
   const [sheets, setSheets] = useState<string[]>([]);
@@ -58,10 +77,10 @@ export function ImportRemaindersDialog({
   const [rowSelection, setRowSelection] = useState("");
   const [clearExisting, setClearExisting] = useState(false);
   const [showRawRows, setShowRawRows] = useState(false);
-  const [qualityState, setQualityState] = useState<QualityState>("GOOD");
-
   const [searchQuery, setSearchQuery] = useState("");
   const [filterStatus, setFilterStatus] = useState<"all" | "invalid">("all");
+  const [qualityState, setQualityState] = useState<"GOOD" | "SCRAP" | "REWORK" | "QUARANTINE">("GOOD");
+  const [targetSectionOverrides, setTargetSectionOverrides] = useState<Record<number, number>>({});
 
   const [previewData, setPreviewData] = useState<RemainderPreviewResponse | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
@@ -69,9 +88,14 @@ export function ImportRemaindersDialog({
   const [result, setResult] = useState<{ imported_count: number; errors: string[] } | null>(null);
   const [expandedRows, setExpandedRows] = useState<Set<number>>(new Set());
 
+  const [selectedLocationId, setSelectedLocationId] = useState<number | null>(locationId ?? null);
+
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Reset state when dialog opens
+  // ── Resolve the effective location id for API calls ───────────────────
+  const currentLocationId = selectedLocationId ?? null;
+
+  // ── Reset state when dialog opens ─────────────────────────────────────
   useEffect(() => {
     if (open) {
       setStep("upload");
@@ -81,32 +105,36 @@ export function ImportRemaindersDialog({
       setRowSelection("");
       setClearExisting(false);
       setShowRawRows(false);
-      setQualityState("GOOD");
       setSearchQuery("");
       setFilterStatus("all");
+      setQualityState("GOOD");
+      setTargetSectionOverrides({});
       setPreviewData(null);
       setError(null);
       setResult(null);
       setExpandedRows(new Set());
+      setSelectedLocationId(locationId ?? null);
     }
-  }, [open]);
+  }, [open, locationId]);
 
-  // Load preview when sheet, row selection or quality state changes
+  // ── Load preview when relevant params change ──────────────────────────
   useEffect(() => {
-    if (step !== "preview" || !file) return;
+    if (step !== "preview" || !file || !currentLocationId) return;
     loadPreview();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [step, selectedSheet, rowSelection, qualityState]);
+  }, [step, selectedSheet, rowSelection, qualityState, selectedLocationId]);
 
   const loadPreview = async () => {
-    if (!file) return;
+    if (!file || !currentLocationId) return;
     setPreviewLoading(true);
     setError(null);
     try {
-      const data = await previewRemaindersExcel(locationId, file, {
+      const data = await previewRemaindersExcel(currentLocationId, file, {
         sheet_index: selectedSheet,
         row_selection: rowSelection || undefined,
         quality_state: qualityState,
+        target_section_overrides:
+          Object.keys(targetSectionOverrides).length > 0 ? targetSectionOverrides : undefined,
       });
       setPreviewData(data);
     } catch (err: any) {
@@ -117,7 +145,13 @@ export function ImportRemaindersDialog({
     }
   };
 
+  // ── File selection handler ────────────────────────────────────────────
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (!currentLocationId) {
+      toast({ title: "Выберите целевой участок перед загрузкой файла", variant: "destructive" });
+      if (e.target) e.target.value = "";
+      return;
+    }
     if (e.target.files && e.target.files.length > 0) {
       const selectedFile = e.target.files[0];
       setFile(selectedFile);
@@ -137,9 +171,15 @@ export function ImportRemaindersDialog({
     }
   };
 
+  // ── Download template ─────────────────────────────────────────────────
   const downloadTemplate = async () => {
+    const locId = currentLocationId;
+    if (!locId) {
+      toast({ title: "Выберите целевой участок", variant: "destructive" });
+      return;
+    }
     try {
-      const blob = await downloadRemaindersImportTemplate(locationId);
+      const blob = await downloadRemaindersImportTemplate(locId);
       const url = window.URL.createObjectURL(blob);
       const link = document.createElement("a");
       link.href = url;
@@ -153,15 +193,23 @@ export function ImportRemaindersDialog({
     }
   };
 
+  // ── Import mutation ───────────────────────────────────────────────────
   const importMutation = useMutation({
-    mutationFn: (skipInvalid: boolean) =>
-      importRemaindersExcel(locationId, file as File, {
+    mutationFn: (skipInvalid: boolean) => {
+      const locId = currentLocationId;
+      if (!locId) throw new Error("Не выбран целевой участок");
+      return importRemaindersExcel(locId, file as File, {
         sheet_index: selectedSheet,
         row_selection: rowSelection || undefined,
-        quality_state: qualityState,
         skip_invalid: skipInvalid,
         clear_existing: clearExisting,
-      }),
+        quality_state: qualityState,
+        target_section_overrides:
+          Object.keys(targetSectionOverrides).length > 0 && !clearExisting
+            ? targetSectionOverrides
+            : undefined,
+      });
+    },
     onSuccess: (response) => {
       if (response.success) {
         setResult({
@@ -173,7 +221,9 @@ export function ImportRemaindersDialog({
         onSaved();
         setStep("result");
       } else {
-        setError(`Импорт отклонен. Обнаружено ошибок: ${response.errors.length}. Загрузите исправленный файл или примените импорт с пропуском ошибок.`);
+        setError(
+          `Импорт отклонен. Обнаружено ошибок: ${response.errors.length}. Загрузите исправленный файл или примените импорт с пропуском ошибок.`,
+        );
       }
     },
     onError: (e: any) => {
@@ -183,6 +233,10 @@ export function ImportRemaindersDialog({
 
   const handleApply = (skipInvalid: boolean) => {
     if (!file) return;
+    if (!currentLocationId) {
+      toast({ title: "Выберите целевой участок", variant: "destructive" });
+      return;
+    }
     setError(null);
     importMutation.mutate(skipInvalid);
   };
@@ -204,7 +258,7 @@ export function ImportRemaindersDialog({
     });
   };
 
-  // Client-side filtering and searching of preview items
+  // ── Client-side filtering ─────────────────────────────────────────────
   const filteredItems = useMemo(() => {
     if (!previewData) return [];
     let items = previewData.items;
@@ -256,36 +310,53 @@ export function ImportRemaindersDialog({
         )}
 
         <div className="flex-1 overflow-y-auto py-2">
+          {/* ═══════════════════════ UPLOAD STEP ═══════════════════════ */}
           {step === "upload" && (
             <div className="space-y-6">
               <p className="text-xs text-muted-foreground leading-relaxed">
-                Загрузите Excel-файл для пакетного импорта остатков в выбранную секцию.
-                Система автоматически распознает артикулы и количества.
+                Загрузите Excel-файл. Система распознает артикулы, количества, целевые секции и выполненные операции.
               </p>
 
-              {/* Quality State Selector */}
+              {/* Section target selector */}
               <div className="space-y-2">
-                <label className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
-                  Состояние качества
+                <label className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">
+                  Целевой участок
                 </label>
                 <Select
-                  value={qualityState}
-                  onValueChange={(val) => setQualityState(val as QualityState)}
+                  value={selectedLocationId?.toString() ?? ""}
+                  onValueChange={(v) => setSelectedLocationId(Number(v))}
                 >
-                  <SelectTrigger className="w-full h-10 text-sm bg-background">
-                    <SelectValue />
+                  <SelectTrigger className="w-full">
+                    <SelectValue placeholder="Выберите участок для импорта остатков" />
                   </SelectTrigger>
                   <SelectContent>
-                    {QUALITY_STATE_OPTIONS.map((opt) => (
-                      <SelectItem key={opt.value} value={opt.value}>
-                        {opt.label}
-                      </SelectItem>
-                    ))}
+                    {importableSections.length === 0 ? (
+                      <div className="p-2 text-xs text-muted-foreground">
+                        Нет доступных складских участков
+                      </div>
+                    ) : (
+                      importableSections.map((s) => (
+                        <SelectItem key={s.id} value={s.id.toString()}>
+                          <div className="flex items-center gap-2">
+                            <span className="font-medium">{s.name}</span>
+                            <span className="text-[10px] text-muted-foreground font-mono">
+                              {s.code}
+                            </span>
+                            <span className="text-[10px] text-muted-foreground">
+                              {s.type}
+                            </span>
+                          </div>
+                        </SelectItem>
+                      ))
+                    )}
                   </SelectContent>
                 </Select>
+                <p className="text-[10px] text-muted-foreground leading-tight">
+                  Остатки будут записаны на выбранный участок. Можно переопределить для отдельных строк в колонке «Целевая секция» в Excel-файле.
+                </p>
               </div>
 
-              {/* Excel table preview example */}
+              {/* Example table — 5 columns */}
               <div className="space-y-2">
                 <div className="flex items-center justify-between">
                   <label className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">
@@ -307,6 +378,8 @@ export function ImportRemaindersDialog({
                       <tr className="bg-muted/50 border-b-2 border-b-emerald-500 dark:border-b-emerald-600">
                         <th className="p-2 font-semibold border-r border-border text-foreground">Артикул</th>
                         <th className="p-2 font-semibold border-r border-border text-foreground">Количество</th>
+                        <th className="p-2 font-semibold border-r border-border text-foreground">Целевая секция</th>
+                        <th className="p-2 font-semibold border-r border-border text-foreground">Выполненные операции</th>
                         <th className="p-2 font-semibold text-foreground">Комментарий</th>
                       </tr>
                     </thead>
@@ -314,21 +387,68 @@ export function ImportRemaindersDialog({
                       <tr className="border-b border-border">
                         <td className="p-2 font-mono border-r border-border text-foreground">ALS-1289</td>
                         <td className="p-2 border-r border-border text-foreground">150</td>
-                        <td className="p-2 text-muted-foreground">Дробеструй</td>
+                        <td className="p-2 border-r border-border text-muted-foreground">—</td>
+                        <td className="p-2 border-r border-border text-muted-foreground">Дробеструй</td>
+                        <td className="p-2 text-muted-foreground">Партия A</td>
                       </tr>
                       <tr className="border-b border-border bg-muted/20">
                         <td className="p-2 font-mono border-r border-border text-foreground">ЮП-2630</td>
                         <td className="p-2 border-r border-border text-foreground">80</td>
-                        <td className="p-2 text-muted-foreground">Сверловка, Дробеструй</td>
+                        <td className="p-2 border-r border-border font-medium text-emerald-700">Участок сборки</td>
+                        <td className="p-2 border-r border-border text-muted-foreground">Сверловка, Дробеструй</td>
+                        <td className="p-2 text-muted-foreground">Срочный заказ</td>
                       </tr>
                       <tr>
                         <td className="p-2 font-mono border-r border-border text-foreground">361</td>
                         <td className="p-2 border-r border-border text-foreground">200</td>
+                        <td className="p-2 border-r border-border text-muted-foreground">—</td>
+                        <td className="p-2 border-r border-border text-muted-foreground">— <span className="text-[10px] text-muted-foreground/50">(начнет с первого этапа)</span></td>
                         <td className="p-2 text-muted-foreground">—</td>
                       </tr>
                     </tbody>
                   </table>
                 </div>
+
+                {/* Operations chips */}
+                {operations && operations.length > 0 && (
+                  <div className="mt-2.5 p-2.5 bg-muted/40 rounded-lg border border-border/60">
+                    <span className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider block mb-1">
+                      Доступные операции для заполнения:
+                    </span>
+                    <div className="flex flex-wrap gap-1">
+                      {operations.map((op: ImportOperationStep) => (
+                        <span
+                          key={op.operation_name}
+                          className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-muted text-foreground border border-border/80"
+                          title={`Раздел: ${op.section_name}`}
+                        >
+                          {op.operation_name}
+                        </span>
+                      ))}
+                    </div>
+                    <span className="text-[9px] text-muted-foreground block mt-1.5 leading-tight">
+                      * Вы можете указывать эти названия через запятую в колонке «Выполненные операции» в любом порядке.
+                    </span>
+                  </div>
+                )}
+              </div>
+
+              {/* Quality state selector */}
+              <div className="flex items-center gap-3">
+                <label className="text-xs font-medium text-foreground shrink-0">
+                  Состояние качества:
+                </label>
+                <Select value={qualityState} onValueChange={(v) => setQualityState(v as typeof qualityState)}>
+                  <SelectTrigger className="h-8 text-xs w-[140px] bg-background">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="GOOD">GOOD</SelectItem>
+                    <SelectItem value="SCRAP">SCRAP</SelectItem>
+                    <SelectItem value="REWORK">REWORK</SelectItem>
+                    <SelectItem value="QUARANTINE">QUARANTINE</SelectItem>
+                  </SelectContent>
+                </Select>
               </div>
 
               {/* Upload Dropzone */}
@@ -352,6 +472,7 @@ export function ImportRemaindersDialog({
             </div>
           )}
 
+          {/* ═══════════════════════ PREVIEW STEP ═══════════════════════ */}
           {step === "preview" && (
             <div className="h-full flex flex-col space-y-3 overflow-hidden">
               {/* Sheet Selection & Main Options */}
@@ -396,14 +517,6 @@ export function ImportRemaindersDialog({
                     <span className="text-destructive font-semibold">Очистить остатки перед импортом</span>
                   </label>
                 </div>
-              </div>
-
-              {/* Quality State Display */}
-              <div className="text-xs text-muted-foreground">
-                Состояние качества: {" "}
-                <span className="font-semibold text-foreground">
-                  {QUALITY_STATE_OPTIONS.find((o) => o.value === qualityState)?.label || qualityState}
-                </span>
               </div>
 
               {/* Statistics & Fast Filters */}
@@ -458,7 +571,7 @@ export function ImportRemaindersDialog({
                 </div>
               )}
 
-              {/* Table Data Preview */}
+              {/* Table Data Preview — 8 columns */}
               <div className="flex-1 overflow-auto border rounded-xl bg-background">
                 {previewLoading ? (
                   <div className="p-8 flex flex-col items-center justify-center gap-2 text-muted-foreground h-full min-h-[200px]">
@@ -476,9 +589,10 @@ export function ImportRemaindersDialog({
                         <th className="p-2.5 w-10"></th>
                         <th className="p-2.5 w-16 text-center">Строка</th>
                         <th className="p-2.5 w-36">Артикул</th>
-                        <th className="p-2.5 w-64">Наименование изделия</th>
+                        <th className="p-2.5 w-64">Наименование</th>
                         <th className="p-2.5 w-24">Количество</th>
-                        <th className="p-2.5 w-64">Комментарий</th>
+                        <th className="p-2.5 flex-1 min-w-[200px]">Пройденные операции (по справочнику)</th>
+                        <th className="p-2.5 w-44">Целевая секция</th>
                         <th className="p-2.5 w-72">Ошибки валидации</th>
                       </tr>
                     </thead>
@@ -497,13 +611,12 @@ export function ImportRemaindersDialog({
                               }`}
                             >
                               <td className="p-2.5 text-center">
-                                {hasRaw && (
-                                  isExpanded ? (
+                                {hasRaw &&
+                                  (isExpanded ? (
                                     <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />
                                   ) : (
                                     <ChevronRight className="h-3.5 w-3.5 text-muted-foreground" />
-                                  )
-                                )}
+                                  ))}
                               </td>
                               <td className="p-2.5 text-center font-bold text-muted-foreground">
                                 #{item.source_row_number}
@@ -515,8 +628,24 @@ export function ImportRemaindersDialog({
                               <td className="p-2.5 font-semibold text-foreground">
                                 {item.quantity != null ? item.quantity : "—"}
                               </td>
-                              <td className="p-2.5 text-muted-foreground max-w-[240px] truncate" title={item.comment || ""}>
-                                {item.comment || "—"}
+                              <td className="p-2.5 max-w-[280px]">
+                                {item.completed_stages && item.completed_stages.length > 0 ? (
+                                  <RouteStepsDisplay steps={item.completed_stages} compact />
+                                ) : (
+                                  <span className="text-muted-foreground">—</span>
+                                )}
+                              </td>
+                              <td className="p-2.5">
+                                {item.target_section_name ? (
+                                  <Badge
+                                    variant="outline"
+                                    className="bg-emerald-50/50 text-emerald-700 border-emerald-200 dark:bg-emerald-950/20 dark:text-emerald-400 dark:border-emerald-900/50 font-semibold px-2 py-0.5 rounded text-[10px] whitespace-nowrap"
+                                  >
+                                    {item.target_section_name}
+                                  </Badge>
+                                ) : (
+                                  <span className="text-muted-foreground">—</span>
+                                )}
                               </td>
                               <td className="p-2.5 text-destructive font-medium leading-relaxed whitespace-pre-line">
                                 {item.errors.join(", ") || "—"}
@@ -524,13 +653,17 @@ export function ImportRemaindersDialog({
                             </tr>
                             {isExpanded && hasRaw && (
                               <tr className="bg-muted/20 border-b">
-                                <td colSpan={7} className="p-2 pl-10 text-[10px] font-mono text-muted-foreground">
+                                <td colSpan={8} className="p-2 pl-10 text-[10px] font-mono text-muted-foreground">
                                   <div className="flex flex-wrap gap-1 items-center">
                                     <span className="font-bold uppercase tracking-wider text-muted-foreground/60 mr-2">
                                       Сырые ячейки:
                                     </span>
                                     {item.raw_values.map((val, cellIdx) => (
-                                      <Badge key={cellIdx} variant="secondary" className="px-1 py-0 h-4 text-[9px] rounded font-mono border">
+                                      <Badge
+                                        key={cellIdx}
+                                        variant="secondary"
+                                        className="px-1 py-0 h-4 text-[9px] rounded font-mono border"
+                                      >
                                         {val || "пусто"}
                                       </Badge>
                                     ))}
@@ -548,6 +681,7 @@ export function ImportRemaindersDialog({
             </div>
           )}
 
+          {/* ═══════════════════════ RESULT STEP ════════════════════════ */}
           {step === "result" && result && (
             <div className="text-center py-6 space-y-4">
               <div className="inline-flex items-center justify-center w-14 h-14 rounded-full bg-emerald-100 dark:bg-emerald-950/30 text-emerald-600 mb-2">
@@ -581,6 +715,7 @@ export function ImportRemaindersDialog({
           )}
         </div>
 
+        {/* ═══════════════════════ FOOTER ═══════════════════════════════ */}
         <DialogFooter className="shrink-0 pt-2 border-t flex items-center justify-end gap-2">
           {step === "upload" && (
             <Button variant="outline" onClick={handleClose}>
