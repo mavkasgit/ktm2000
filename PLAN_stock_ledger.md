@@ -101,11 +101,10 @@ Reason enum и QualityState enum — как в предыдущей версии
 - [x] 4.3. 3-4 теста: `completed_qty` считается верно из ledger
 
 ### Этап 5 — Quality
-- [ ] 5.1. Data-migration: `quality_state=GOOD` для старых транзакций
-- [ ] 5.2. `Defect.stock_transaction_id` FK
-- [ ] 5.3. `DefectDecision` → `record(...)` по таблице reason (см. старую
-  версию плана, раздел не менялся)
-- [ ] 5.4. 5-6 тестов по веткам решений (scrap/rework/return/hold)
+- [x] 5.1. Data-migration: `quality_state=GOOD` для старых транзакций (уже в 022)
+- [x] 5.2. `Defect.stock_transaction_id` FK (миграция 025)
+- [x] 5.3. `DefectDecision` → `record(...)` по таблице reason (scrap/rework/return/accept/hold)
+- [x] 5.4. 7 тестов по веткам решений (scrap/rework/return/hold/accept/idempotent)
 
 ### Этап 6 — Frontend (тоже big-bang, не strangler)
 - [ ] 6.1. `shared/api/stock.ts`
@@ -219,6 +218,6 @@ test_manual_pass_completes_single_stage_task
 - [x] Этап 2 — Transfer
 - [x] Этап 3 — Shopfloor
 - [x] Этап 4 — WorkTask cleanup
-- [ ] Этап 5 — Quality
+- [x] Этап 5 — Quality
 - [ ] Этап 6 — Frontend
 - [ ] Этап 7 — Cleanup
