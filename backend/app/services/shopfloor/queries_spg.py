@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from decimal import Decimal
 
-from sqlalchemy import Integer, func, select
+from sqlalchemy import Integer, case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.product import Product
@@ -13,6 +13,7 @@ from app.models.work_task import WorkTask, WorkTaskStatus
 from app.models.internal_plan import SectionPlanLine
 from app.models.production_plan import PlanPosition, PlanPositionStatus
 from app.models.route import RouteStage
+from app.stock.models import Reason, StockTransaction
 
 
 async def get_spg_snapshot(
@@ -69,16 +70,14 @@ async def get_spg_snapshot(
     )
 
     # Aggregate work_tasks per (product_id, section_id), excluding completed/cancelled/deleted positions
-    task_agg_q = (
+    task_info_rows = (
         select(
+            WorkTask.id,
             WorkTask.product_id,
             WorkTask.section_id,
-            func.sum(WorkTask.planned_quantity).label("planned"),
-            func.sum(WorkTask.cached_completed_quantity).label("completed"),
-            func.sum(WorkTask.cached_available_quantity).label("available"),
-            func.sum(WorkTask.cached_issued_quantity).label("issued"),
-            func.sum(WorkTask.cached_transferred_quantity).label("transferred"),
-            func.sum(WorkTask.cached_received_quantity).label("received"),
+            WorkTask.planned_quantity,
+            WorkTask.section_plan_line_id,
+            SectionPlanLine.sequence,
         )
         .join(SectionPlanLine, WorkTask.section_plan_line_id == SectionPlanLine.id)
         .join(PlanPosition, SectionPlanLine.plan_position_id == PlanPosition.id)
@@ -88,9 +87,42 @@ async def get_spg_snapshot(
             PlanPosition.status != PlanPositionStatus.cancelled,
             SectionPlanLine.plan_position_id.notin_(completed_positions_subq),
         )
-        .group_by(WorkTask.product_id, WorkTask.section_id)
     )
-    task_rows = (await db.execute(task_agg_q)).all()
+    task_info = (await db.execute(task_info_rows)).all()
+    if not task_info:
+        task_rows = []
+    else:
+        matching_task_ids = [r.id for r in task_info]
+        from app.stock.services import StockProjectionManager
+        pm = StockProjectionManager()
+        tasks_cache = await pm.get_tasks_cache_bulk(db, matching_task_ids)
+
+        # Aggregate per (product_id, section_id) in Python
+        from collections import defaultdict
+        agg: dict[tuple[int, int], dict[str, Decimal]] = defaultdict(lambda: {
+            "planned": Decimal("0"), "completed": Decimal("0"), "issued": Decimal("0"),
+            "transferred": Decimal("0"), "received": Decimal("0"), "available": Decimal("0"),
+        })
+        for tid, pid, sid, planned_qty, spl_id, seq in task_info:
+            key = (pid, sid)
+            cache = tasks_cache.get(tid, {})
+            agg[key]["planned"] += planned_qty
+            agg[key]["completed"] += cache.get("completed_quantity", Decimal("0"))
+            agg[key]["issued"] += cache.get("issued_quantity", Decimal("0"))
+            agg[key]["transferred"] += cache.get("transferred_quantity", Decimal("0"))
+            agg[key]["received"] += cache.get("received_quantity", Decimal("0"))
+            agg[key]["available"] += cache.get("available_quantity", Decimal("0"))
+
+        # Format as row tuples (matching original structure)
+        task_rows = [
+            type("Row", (), {
+                "product_id": pid, "section_id": sid,
+                "planned": vals["planned"], "completed": vals["completed"],
+                "available": vals["available"], "issued": vals["issued"],
+                "transferred": vals["transferred"], "received": vals["received"],
+            })
+            for (pid, sid), vals in agg.items()
+        ]
 
     # Aggregate spg_remainders per product_id for this SPG
     rem_agg_q = (

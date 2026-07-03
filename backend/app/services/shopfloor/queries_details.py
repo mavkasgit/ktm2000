@@ -22,10 +22,15 @@ async def get_task_details(db: AsyncSession, task_id: int) -> dict:
         await db.execute(select(Movement).where(Movement.task_id == task.id).order_by(Movement.created_at, Movement.id))
     ).scalars().all()
     is_first_stage = bool(stage and stage.sequence == 1)
+
+    from app.stock.services import StockProjectionManager
+    pm = StockProjectionManager()
+    cache = await pm.get_task_cache(db, task.id)
+
     available = _compute_available_from_balances(
         planned_quantity=_to_decimal(task.planned_quantity),
-        received_quantity=_to_decimal(task.cached_received_quantity),
-        issued_quantity=_to_decimal(task.cached_issued_quantity),
+        received_quantity=cache["received_quantity"],
+        issued_quantity=cache["issued_quantity"],
         is_first_stage=is_first_stage,
     )
     return {
@@ -34,12 +39,12 @@ async def get_task_details(db: AsyncSession, task_id: int) -> dict:
         "planned_quantity": str(task.planned_quantity),
         "cache": {
             "available_quantity": str(available),
-            "issued_quantity": str(task.cached_issued_quantity),
-            "completed_quantity": str(task.cached_completed_quantity),
-            "transferred_quantity": str(task.cached_transferred_quantity),
-            "received_quantity": str(task.cached_received_quantity),
-            "rejected_quantity": str(task.cached_rejected_quantity),
-            "remaining_quantity": str(task.cached_remaining_quantity),
+            "issued_quantity": str(cache["issued_quantity"]),
+            "completed_quantity": str(cache["completed_quantity"]),
+            "transferred_quantity": str(cache["transferred_quantity"]),
+            "received_quantity": str(cache["received_quantity"]),
+            "rejected_quantity": str(cache["rejected_quantity"]),
+            "remaining_quantity": str(cache["remaining_quantity"]),
         },
         "route_step": {
             "id": stage.id if stage else None,

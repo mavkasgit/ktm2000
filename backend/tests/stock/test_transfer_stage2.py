@@ -217,8 +217,11 @@ async def _make_tasks_transferable(
     ))
     await session.flush()
 
-    # Verify source is transferable
-    assert src.cached_completed_quantity >= Decimal("0")
+    # Verify source is transferable (check via ledger)
+    from app.stock.services import StockProjectionManager
+    pm = StockProjectionManager()
+    cache = await pm.get_task_cache(session, src.id)
+    assert cache["completed_quantity"] >= Decimal("0")
 
     return {"from_task_id": src.id, "to_task_id": dst.id, "user": setup["user"]}
 
@@ -467,8 +470,8 @@ async def test_transfer_send_via_api(session: AsyncSession, client) -> None:
 
 
 @_py_test_mark
-async def test_transfer_send_task_cache_via_projection(session: AsyncSession, client) -> None:
-    """WorkTask.cached_transferred/received обновлён через refresh_task_projection."""
+async def test_transfer_send_task_cache_via_ledger(session: AsyncSession, client) -> None:
+    """get_task_cache() показывает transferred/received из StockTransaction после transfer_send."""
     setup = await _make_two_ghp_setup(session, sku="T2TCACHE", qty=Decimal("10"))
     ctx = await _make_tasks_transferable(session, client, setup)
 
@@ -481,8 +484,10 @@ async def test_transfer_send_task_cache_via_projection(session: AsyncSession, cl
     )
     await session.commit()
 
-    from_task = await session.get(WorkTask, ctx["from_task_id"])
-    to_task = await session.get(WorkTask, ctx["to_task_id"])
+    from app.stock.services import StockProjectionManager
+    pm = StockProjectionManager()
+    from_cache = await pm.get_task_cache(session, ctx["from_task_id"])
+    to_cache = await pm.get_task_cache(session, ctx["to_task_id"])
 
-    assert from_task.cached_transferred_quantity == Decimal("5")
-    assert to_task.cached_received_quantity == Decimal("5")
+    assert from_cache["transferred_quantity"] == Decimal("5")
+    assert to_cache["received_quantity"] == Decimal("5")

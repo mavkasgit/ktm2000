@@ -236,8 +236,8 @@ async def test_issue_to_work_creates_stock_tx(session: AsyncSession):
     await assert_no_stock_ledger_invariants_violations(session, context="after-issue")
 
 
-async def test_issue_to_work_updates_cached(session: AsyncSession):
-    """cached_issued_quantity = SUM(StockTransaction) после issue_to_work."""
+async def test_issue_to_work_updates_cache(session: AsyncSession):
+    """get_task_cache() отражает SUM(StockTransaction) после issue_to_work."""
     fx = await _setup_minimal_route(session)
     task = fx["task"]
 
@@ -262,8 +262,10 @@ async def test_issue_to_work_updates_cached(session: AsyncSession):
     )
     await session.commit()
 
-    # Проверка: cached_issued_quantity = SUM(stock_transactions WHERE reason=issue_to_work)
-    await session.refresh(task)
+    # Проверка через get_task_cache
+    from app.stock.services import StockProjectionManager
+    pm = StockProjectionManager()
+    cache = await pm.get_task_cache(session, task.id)
     sql_sum = await session.scalar(
         select(func.coalesce(func.sum(StockTransaction.quantity), 0))
         .where(
@@ -271,7 +273,7 @@ async def test_issue_to_work_updates_cached(session: AsyncSession):
             StockTransaction.reason == Reason.issue_to_work,
         )
     )
-    assert task.cached_issued_quantity == sql_sum == Decimal("7")
+    assert cache["issued_quantity"] == sql_sum == Decimal("7")
 
 
 async def test_issue_to_work_shortage_fail(session: AsyncSession):
@@ -320,8 +322,10 @@ async def test_issue_to_work_auto_consume_flag(session: AsyncSession):
     await session.commit()
 
     # Should have issued the available 5, not 100
-    await session.refresh(task)
-    assert task.cached_issued_quantity == Decimal("5")
+    from app.stock.services import StockProjectionManager
+    pm = StockProjectionManager()
+    cache = await pm.get_task_cache(session, task.id)
+    assert cache["issued_quantity"] == Decimal("5")
     assert result["task_id"] == task.id
 
 
@@ -374,8 +378,10 @@ async def test_complete_task_creates_complete_tx(session: AsyncSession):
     )
     assert tx_count == 1, "Expected 1 StockTransaction(COMPLETE)"
 
-    # cached_completed_quantity = SUM(stock_transactions WHERE reason=complete)
-    await session.refresh(task)
+    # get_task_cache completed = SUM(stock_transactions WHERE reason=complete)
+    from app.stock.services import StockProjectionManager
+    pm = StockProjectionManager()
+    cache = await pm.get_task_cache(session, task.id)
     sql_sum = await session.scalar(
         select(func.coalesce(func.sum(StockTransaction.quantity), 0))
         .where(
@@ -383,7 +389,7 @@ async def test_complete_task_creates_complete_tx(session: AsyncSession):
             StockTransaction.reason == Reason.complete,
         )
     )
-    assert task.cached_completed_quantity == sql_sum == Decimal("8")
+    assert cache["completed_quantity"] == sql_sum == Decimal("8")
 
     await assert_no_stock_ledger_invariants_violations(session, context="after-complete")
 

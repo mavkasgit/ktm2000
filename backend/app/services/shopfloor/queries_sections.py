@@ -177,6 +177,12 @@ async def get_section_board(
                 "icon_color": op.icon_color,
             }
 
+    # Load tasks cache (Этап 4: вычисляем из StockTransaction ledger)
+    from app.stock.services import StockProjectionManager
+    pm = StockProjectionManager()
+    all_task_ids = [row[0].id for row in rows]
+    tasks_cache = await pm.get_tasks_cache_bulk(db, all_task_ids)
+
     tasks_data = []
     for task, line, stage, product_sku, source_ref, source_payload, source_fingerprint, source_sku, output_sku in rows:
         # Determine effective operation_code.
@@ -296,10 +302,11 @@ async def get_section_board(
             if next_stage:
                 next_operation_name = ", ".join(op.operation_name for op in next_stage.operations) if next_stage.operations else ""
 
+        task_cache = tasks_cache.get(task.id, {})
         available = _compute_available_from_balances(
             planned_quantity=_to_decimal(task.planned_quantity),
-            received_quantity=_to_decimal(task.cached_received_quantity),
-            issued_quantity=_to_decimal(task.cached_issued_quantity),
+            received_quantity=task_cache.get("received_quantity", Decimal("0")),
+            issued_quantity=task_cache.get("issued_quantity", Decimal("0")),
             is_first_stage=bool(line.sequence == 1),
         )
 
@@ -344,12 +351,12 @@ async def get_section_board(
             "status": task.status.value,
             "cache": {
                 "available_quantity": str(available),
-                "issued_quantity": str(task.cached_issued_quantity),
-                "completed_quantity": str(task.cached_completed_quantity),
-                "transferred_quantity": str(task.cached_transferred_quantity),
-                "received_quantity": str(task.cached_received_quantity),
-                "rejected_quantity": str(task.cached_rejected_quantity),
-                "remaining_quantity": str(task.cached_remaining_quantity),
+                "issued_quantity": str(task_cache.get("issued_quantity", "0")),
+                "completed_quantity": str(task_cache.get("completed_quantity", "0")),
+                "transferred_quantity": str(task_cache.get("transferred_quantity", "0")),
+                "received_quantity": str(task_cache.get("received_quantity", "0")),
+                "rejected_quantity": str(task_cache.get("rejected_quantity", "0")),
+                "remaining_quantity": str(task_cache.get("remaining_quantity", "0")),
             },
             "previous_stage": prev_stage_info,
             "next_task_id": next_task_id,

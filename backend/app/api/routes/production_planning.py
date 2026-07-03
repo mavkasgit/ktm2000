@@ -11,7 +11,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import WRITER_ROLES, get_current_user, require_role
 from app.core.database import get_db
 from app.models.internal_plan import SectionPlanLine
-from app.models.movement import Movement
 from app.models.production_plan import PlanPosition, PlanPositionStatus, ProductionPlan, ProductionPlanStatus
 from app.models.transfer import Transfer
 from app.models.work_task import WorkTask, WorkTaskStatus
@@ -419,6 +418,10 @@ async def get_production_planning_overview(
                         completed_steps += 1
 
                     # Get operation info from route stage
+                    from app.stock.services import StockProjectionManager
+                    pm = StockProjectionManager()
+                    wt_cache = await pm.get_task_cache(db, wt.id)
+
                     stage = await db.get(RouteStage, wt.route_stage_id)
                     work_tasks_out.append(
                         WorkTaskOut(
@@ -428,7 +431,7 @@ async def get_production_planning_overview(
                             operation_code=wt.selected_operation_code or (stage.operations[0].operation_code if stage and stage.operations else None),
                             status=wt.status.value if hasattr(wt.status, 'value') else wt.status,
                             planned_quantity=float(wt.planned_quantity),
-                            completed_quantity=float(wt.cached_completed_quantity),
+                            completed_quantity=float(wt_cache["completed_quantity"]),
                             sequence=stage.sequence if stage else 0,
                         )
                     )
@@ -520,14 +523,20 @@ async def _collect_task_rows_for_position(
     ).all()
 
 
-async def _position_movement_source_refs(db: AsyncSession, position_id: int) -> list[str | None]:
+async def _position_stock_transaction_source_refs(db: AsyncSession, position_id: int) -> list[str | None]:
+    """Fetch StockTransaction source_refs for a position (replaces Movement check after Этап 3)."""
+    from app.stock.models import StockTransaction
     return [
         row[0]
         for row in (
             await db.execute(
-                select(Movement.source_ref)
-                .join(SectionPlanLine, SectionPlanLine.id == Movement.section_plan_line_id)
-                .where(SectionPlanLine.plan_position_id == position_id)
+                select(StockTransaction.source_ref)
+                .join(WorkTask, WorkTask.id == StockTransaction.task_id)
+                .join(SectionPlanLine, SectionPlanLine.id == WorkTask.section_plan_line_id)
+                .where(
+                    SectionPlanLine.plan_position_id == position_id,
+                    StockTransaction.source_ref.isnot(None),
+                )
             )
         ).all()
     ]
@@ -553,15 +562,29 @@ async def _ensure_manual_pass_can_start_or_replay(
     position_id: int,
     source_ref: str,
 ) -> bool:
-    movement_refs = await _position_movement_source_refs(db, position_id)
+    from app.stock.models import StockTransaction
+    tx_refs = await _position_stock_transaction_source_refs(db, position_id)
     transfer_keys = await _position_transfer_idempotency_keys(db, position_id)
-    if not movement_refs and not transfer_keys:
-        return False
 
-    same_manual_movements = all(ref == source_ref for ref in movement_refs)
-    same_manual_transfers = all(key is not None and key.startswith(f"{source_ref}:") for key in transfer_keys)
-    if same_manual_movements and same_manual_transfers:
-        return True
+    # Count ALL StockTransactions (including those without source_ref)
+    any_tx_count = await db.scalar(
+        select(func.count(StockTransaction.id))
+        .join(WorkTask, WorkTask.id == StockTransaction.task_id)
+        .join(SectionPlanLine, SectionPlanLine.id == WorkTask.section_plan_line_id)
+        .where(SectionPlanLine.plan_position_id == position_id)
+    )
+    has_any_tx = bool(any_tx_count)
+    has_any_transfer = bool(transfer_keys)
+
+    if not has_any_tx and not has_any_transfer:
+        return False  # First start, no facts yet
+
+    # All StockTransactions must have matching source_ref for replay
+    all_tx_match = tx_refs and all(ref == source_ref for ref in tx_refs) and len(tx_refs) == any_tx_count
+    all_transfers_match = all(key is not None and key.startswith(f"{source_ref}:") for key in transfer_keys) if transfer_keys else True
+
+    if all_tx_match and all_transfers_match:
+        return True  # Idempotent replay
 
     raise ValueError("Position already has execution facts; manual route pass is allowed only before execution starts")
 
@@ -572,17 +595,32 @@ async def _manual_pass_counts(
     position_id: int,
     source_ref: str,
 ) -> tuple[int, int]:
-    movements_count = await db.scalar(
-        select(func.count(Movement.id))
-        .join(SectionPlanLine, SectionPlanLine.id == Movement.section_plan_line_id)
+    import logging as _log
+    _logger = _log.getLogger(__name__)
+    from app.stock.models import StockTransaction
+    tx_count = await db.scalar(
+        select(func.count(StockTransaction.id))
+        .join(WorkTask, WorkTask.id == StockTransaction.task_id)
+        .join(SectionPlanLine, SectionPlanLine.id == WorkTask.section_plan_line_id)
         .where(
             SectionPlanLine.plan_position_id == position_id,
-            Movement.source_ref == source_ref,
+            StockTransaction.source_ref == source_ref,
         )
     )
     transfer_keys = await _position_transfer_idempotency_keys(db, position_id)
     transfers_count = sum(1 for key in transfer_keys if key is not None and key.startswith(f"{source_ref}:"))
-    return int(movements_count or 0), transfers_count
+    _logger.warning("DEBUG _manual_pass_counts: position_id=%s source_ref=%s tx_count=%s transfers_count=%s", position_id, source_ref, tx_count, transfers_count)
+    # Debug: print all StockTransaction source_refs for this position
+    all_tx = await db.execute(
+        select(StockTransaction.id, StockTransaction.source_ref, StockTransaction.reason, StockTransaction.task_id)
+        .join(WorkTask, WorkTask.id == StockTransaction.task_id)
+        .join(SectionPlanLine, SectionPlanLine.id == WorkTask.section_plan_line_id)
+        .where(SectionPlanLine.plan_position_id == position_id)
+        .order_by(StockTransaction.id)
+    )
+    for row in all_tx:
+        _logger.warning("DEBUG   TX id=%s source_ref=%s reason=%s task_id=%s", row.id, row.source_ref, row.reason, row.task_id)
+    return int(tx_count or 0), transfers_count
 
 
 @router.post(
@@ -673,7 +711,10 @@ async def _do_manual_pass(
 
             try:
                 await db.refresh(task)
-                issued_qty = Decimal(str(task.cached_issued_quantity or 0))
+                from app.stock.services import StockProjectionManager
+                pm = StockProjectionManager()
+                task_cache = await pm.get_task_cache(db, task.id)
+                issued_qty = task_cache["issued_quantity"]
                 to_issue = quantity - issued_qty
                 if to_issue > 0:
                     await issue_to_work(
@@ -687,9 +728,10 @@ async def _do_manual_pass(
                         executor_user_id=current_user.id,
                         performed_at=now,
                         accounted_at=now,
+                        shortage_strategy="force",
                     )
                 
-                completed_qty = Decimal(str(task.cached_completed_quantity or 0)) + Decimal(str(task.cached_rejected_quantity or 0))
+                completed_qty = task_cache["completed_quantity"] + task_cache["rejected_quantity"]
                 to_complete = quantity - completed_qty
                 if to_complete > 0:
                     await complete_task(
@@ -1729,6 +1771,11 @@ async def get_product_wip_stats(
     work_rows = (await db.execute(work_q)).all()
 
     # Группируем задачи по секциям и операциям в Python-коде
+    from app.stock.services import StockProjectionManager
+    pm = StockProjectionManager()
+    all_wt_ids = [wt.id for wt, _, _ in work_rows]
+    tasks_cache_bulk = await pm.get_tasks_cache_bulk(db, all_wt_ids)
+
     grouped: dict[tuple[int, str], dict] = {}
     for wt, sec, stage in work_rows:
         op_name = "Неизвестная операция"
@@ -1757,9 +1804,10 @@ async def get_product_wip_stats(
                 "active_tasks_count": 0,
             }
 
+        wt_cache = tasks_cache_bulk.get(wt.id, {})
         grouped[key]["planned_qty"] += float(wt.planned_quantity or 0)
-        grouped[key]["completed_qty"] += float(wt.cached_completed_quantity or 0)
-        grouped[key]["issued_qty"] += float(wt.cached_issued_quantity or 0)
+        grouped[key]["completed_qty"] += float(wt_cache.get("completed_quantity", 0) or 0)
+        grouped[key]["issued_qty"] += float(wt_cache.get("issued_quantity", 0) or 0)
         grouped[key]["active_tasks_count"] += 1
 
     in_work = [

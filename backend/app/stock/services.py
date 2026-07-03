@@ -22,7 +22,7 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Any
 
-from sqlalchemy import select, update
+from sqlalchemy import case, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Product, Section
@@ -217,77 +217,70 @@ class StockProjectionManager:
         return len(agg)
 
     async def refresh_task_projection(self, session: AsyncSession, tx: StockTransaction) -> None:
-        """Обновление WorkTask.cached_* из StockTransaction ledger.
+        """No-op — cached_* колонки удалены, используйте get_task_cache()."""
+        return None
 
-        Единая точка пересчёта всех ``cached_*`` колонок WorkTask из
-        StockTransaction для данного task_id. Вызывается на каждую новую
-        транзакцию из ``StockCommandService.record()``. Идемпотентна.
+    async def _compute_task_cache(
+        self, session: AsyncSession, task_id: int,
+    ) -> dict | None:
+        """Вычислить cache-словарь для одной задачи из StockTransaction ledger.
+
+        Возвращает dict с 7 полями или None если задача не найдена.
         """
-        if tx.task_id is None:
-            return
-        from sqlalchemy import case, func
-
-        task_id = tx.task_id
-
-        # Суммы по каждому reason (простая SUM, без компенсаций)
-        async def _sum_reason(reason: Reason) -> Decimal:
-            return await session.scalar(
-                select(func.coalesce(func.sum(StockTransaction.quantity), 0))
-                .where(
-                    StockTransaction.task_id == task_id,
-                    StockTransaction.reason == reason,
-                )
-            ) or Decimal("0")
-
-        # Net quantity с учётом компенсаций (только для transfer_send/receive)
-        _net = func.sum(
-            case(
-                (StockTransaction.compensates_tx_id.is_(None), StockTransaction.quantity),
-                else_=-StockTransaction.quantity,
-            )
-        )
-
-        issued = await _sum_reason(Reason.issue_to_work)
-        completed = await _sum_reason(Reason.complete)
-        scrapped = await _sum_reason(Reason.scrap)
-        returned = await _sum_reason(Reason.return_to_stock)
-        final_released = await _sum_reason(Reason.final_release)
-        rework_qty = await _sum_reason(Reason.rework)
-
-        transferred = await session.scalar(
-            select(func.coalesce(_net, 0))
-            .where(
-                StockTransaction.task_id == task_id,
-                StockTransaction.reason == Reason.transfer_send,
-            )
-        ) or Decimal("0")
-
-        received = await session.scalar(
-            select(func.coalesce(_net, 0))
-            .where(
-                StockTransaction.task_id == task_id,
-                StockTransaction.reason == Reason.transfer_receive,
-            )
-        ) or Decimal("0")
-
-        # Получаем задачу и план-линию для базовой доступности
         task = await session.get(WorkTask, task_id)
         if task is None:
-            return
+            return None
 
-        # base_available: для первого этапа маршрута = planned_quantity
         from app.models.internal_plan import SectionPlanLine
         line = await session.get(SectionPlanLine, task.section_plan_line_id)
         is_first_stage = (line is not None and line.sequence == 1)
+
+        # Один GROUP BY запрос
+        rows = await session.execute(
+            select(
+                StockTransaction.reason,
+                func.sum(StockTransaction.quantity).label("qty"),
+            )
+            .where(StockTransaction.task_id == task_id)
+            .group_by(StockTransaction.reason)
+        )
+        sums: dict[str, Decimal] = {}
+        for reason_val, qty in rows:
+            sums[reason_val] = (sums.get(reason_val) or Decimal("0")) + qty
+
+        def _sum_reason(reason: Reason) -> Decimal:
+            return sums.get(reason.value) or Decimal("0")
+
+        # Net transfer_send/receive с учётом компенсаций
+        net_rows = await session.execute(
+            select(
+                StockTransaction.reason,
+                func.sum(
+                    case(
+                        (StockTransaction.compensates_tx_id.is_(None), StockTransaction.quantity),
+                        else_=-StockTransaction.quantity,
+                    )
+                ).label("net"),
+            )
+            .where(
+                StockTransaction.task_id == task_id,
+                StockTransaction.reason.in_([Reason.transfer_send, Reason.transfer_receive]),
+            )
+            .group_by(StockTransaction.reason)
+        )
+        net_sums: dict[str, Decimal] = {}
+        for reason_val, net in net_rows:
+            net_sums[reason_val] = net or Decimal("0")
+
+        issued = _sum_reason(Reason.issue_to_work)
+        completed = _sum_reason(Reason.complete)
+        scrapped = _sum_reason(Reason.scrap)
+        returned = _sum_reason(Reason.return_to_stock)
+        transferred = net_sums.get(Reason.transfer_send.value) or Decimal("0")
+        received = net_sums.get(Reason.transfer_receive.value) or Decimal("0")
+        rejected = scrapped  # DefectDecision на Этапе 5
+
         base_available = task.planned_quantity if is_first_stage else Decimal("0")
-
-        # Комбинированные поля
-        rejected = scrapped  # упрощённо: DefectDecision учтём на Этапе 5
-        cached_in_work = issued - completed - rejected
-        if cached_in_work < Decimal("0"):
-            cached_in_work = Decimal("0")
-
-        # available = base_available + received + returned - issued
         available = base_available + received + returned - issued
         if available < Decimal("0"):
             available = Decimal("0")
@@ -296,20 +289,148 @@ class StockProjectionManager:
         if remaining < Decimal("0"):
             remaining = Decimal("0")
 
-        await session.execute(
-            update(WorkTask)
-            .where(WorkTask.id == task_id)
-            .values(
-                cached_issued_quantity=issued,
-                cached_completed_quantity=completed,
-                cached_transferred_quantity=transferred,
-                cached_received_quantity=received,
-                cached_rejected_quantity=rejected,
-                cached_available_quantity=available,
-                cached_in_work_quantity=cached_in_work,
-                cached_remaining_quantity=remaining,
+        return {
+            "available_quantity": available,
+            "issued_quantity": issued,
+            "completed_quantity": completed,
+            "transferred_quantity": transferred,
+            "received_quantity": received,
+            "rejected_quantity": rejected,
+            "remaining_quantity": remaining,
+        }
+
+    async def get_task_cache(self, session: AsyncSession, task_id: int) -> dict:
+        """Вернуть cache-словарь для задачи (вычисляется из StockTransaction).
+
+        Совместимая форма со старым API-ответом (фронт не мигрирован до Этапа 6).
+        """
+        result = await self._compute_task_cache(session, task_id)
+        if result is None:
+            return {
+                "available_quantity": Decimal("0"),
+                "issued_quantity": Decimal("0"),
+                "completed_quantity": Decimal("0"),
+                "transferred_quantity": Decimal("0"),
+                "received_quantity": Decimal("0"),
+                "rejected_quantity": Decimal("0"),
+                "remaining_quantity": Decimal("0"),
+            }
+        return result
+
+    async def get_tasks_cache_bulk(self, session: AsyncSession, task_ids: list[int]) -> dict[int, dict]:
+        """Вернуть dict {task_id: cache_dict} для списка задач, один GROUP BY запрос.
+
+        Для bulk-запросов (queries_sections, queries_spg).
+        """
+        if not task_ids:
+            return {}
+
+        # Загружаем задачи и линии
+        tasks = (await session.execute(
+            select(WorkTask).where(WorkTask.id.in_(task_ids))
+        )).scalars().all()
+        task_map = {t.id: t for t in tasks}
+
+        from app.models.internal_plan import SectionPlanLine
+        lines = (await session.execute(
+            select(SectionPlanLine).where(
+                SectionPlanLine.id.in_([t.section_plan_line_id for t in tasks])
             )
+        )).scalars().all()
+        line_map = {l.id: l for l in lines}
+
+        # GROUP BY reason, task_id
+        rows = await session.execute(
+            select(
+                StockTransaction.task_id,
+                StockTransaction.reason,
+                func.sum(StockTransaction.quantity).label("qty"),
+            )
+            .where(StockTransaction.task_id.in_(task_ids))
+            .group_by(StockTransaction.task_id, StockTransaction.reason)
         )
+
+        sums: dict[int, dict[str, Decimal]] = {}
+        for tid, reason_val, qty in rows:
+            if tid not in sums:
+                sums[tid] = {}
+            sums[tid][reason_val] = (sums[tid].get(reason_val) or Decimal("0")) + qty
+
+        # Net для transfer_send/receive с compensations
+        net_rows = await session.execute(
+            select(
+                StockTransaction.task_id,
+                StockTransaction.reason,
+                func.sum(
+                    case(
+                        (StockTransaction.compensates_tx_id.is_(None), StockTransaction.quantity),
+                        else_=-StockTransaction.quantity,
+                    )
+                ).label("net"),
+            )
+            .where(
+                StockTransaction.task_id.in_(task_ids),
+                StockTransaction.reason.in_([Reason.transfer_send, Reason.transfer_receive]),
+            )
+            .group_by(StockTransaction.task_id, StockTransaction.reason)
+        )
+        net_sums: dict[int, dict[str, Decimal]] = {}
+        for tid, reason_val, net_qty in net_rows:
+            if tid not in net_sums:
+                net_sums[tid] = {}
+            net_sums[tid][reason_val] = net_qty or Decimal("0")
+
+        result: dict[int, dict] = {}
+        for tid in task_ids:
+            task = task_map.get(tid)
+            if task is None:
+                result[tid] = {
+                    "available_quantity": Decimal("0"),
+                    "issued_quantity": Decimal("0"),
+                    "completed_quantity": Decimal("0"),
+                    "transferred_quantity": Decimal("0"),
+                    "received_quantity": Decimal("0"),
+                    "rejected_quantity": Decimal("0"),
+                    "remaining_quantity": Decimal("0"),
+                }
+                continue
+
+            line = line_map.get(task.section_plan_line_id)
+            is_first_stage = (line is not None and line.sequence == 1)
+            t_sums = sums.get(tid, {})
+            t_net = net_sums.get(tid, {})
+
+            def _val(s: dict, key: Reason) -> Decimal:
+                return s.get(key.value) or Decimal("0")
+
+            issued = _val(t_sums, Reason.issue_to_work)
+            completed = _val(t_sums, Reason.complete)
+            scrapped = _val(t_sums, Reason.scrap)
+            returned = _val(t_sums, Reason.return_to_stock)
+            transferred = _val(t_net, Reason.transfer_send)
+            received = _val(t_net, Reason.transfer_receive)
+            rejected = scrapped
+
+            base_available = task.planned_quantity if is_first_stage else Decimal("0")
+            available = base_available + received + returned - issued
+            if available < Decimal("0"):
+                available = Decimal("0")
+
+            remaining = task.planned_quantity - transferred
+            if remaining < Decimal("0"):
+                remaining = Decimal("0")
+
+            result[tid] = {
+                "available_quantity": available,
+                "issued_quantity": issued,
+                "completed_quantity": completed,
+                "transferred_quantity": transferred,
+                "received_quantity": received,
+                "rejected_quantity": rejected,
+                "remaining_quantity": remaining,
+            }
+
+        return result
 
     async def refresh_spl_projection(self, session: AsyncSession, tx: StockTransaction) -> None:
         """Этап 4: SectionPlanLine cache из ledger. Пока no-op."""

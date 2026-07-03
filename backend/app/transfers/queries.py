@@ -281,6 +281,12 @@ async def list_ready_to_transfer(
     rows = (await db.execute(query)).all()
 
     items: list[dict] = []
+    # Load all task caches at once (Этап 4)
+    from app.stock.services import StockProjectionManager
+    pm = StockProjectionManager()
+    task_ids = [r[0].id for r in rows]
+    tasks_cache = await pm.get_tasks_cache_bulk(db, task_ids)
+
     for (
         task,
         line,
@@ -292,8 +298,9 @@ async def list_ready_to_transfer(
         next_sec,
         completion_comment,
     ) in rows:
-        completed = _to_decimal(task.cached_completed_quantity or 0)
-        transferred = _to_decimal(task.cached_transferred_quantity or 0)
+        cache = tasks_cache.get(task.id, {})
+        completed = cache.get("completed_quantity", Decimal("0"))
+        transferred = cache.get("transferred_quantity", Decimal("0"))
         transferable = completed - transferred
         if transferable <= 0:
             continue
@@ -464,9 +471,8 @@ async def list_ready_to_transfer(
                 if transferable <= 0:
                     continue
 
-                fake_task.cached_completed_quantity = remainders_qty + transferred
-                fake_task.cached_transferred_quantity = transferred
-                fake_task.cached_available_quantity = remainders_qty
+                # cached_* columns were removed on Этап 4 — values now
+                # computed on the fly from StockTransaction ledger.
                 await db.flush()
 
                 product = await db.get(Product, fake_task.product_id)
@@ -488,7 +494,7 @@ async def list_ready_to_transfer(
                         "product_id": fake_task.product_id,
                         "product_sku": product_sku,
                         "planned_quantity": _fmt_qty(planned_qty),
-                        "completed_quantity": _fmt_qty(fake_task.cached_completed_quantity),
+                        "completed_quantity": _fmt_qty(remainders_qty + transferred),
                         "already_transferred_quantity": _fmt_qty(transferred),
                         "transferable_quantity": _fmt_qty(transferable),
                         "has_next_step": True,

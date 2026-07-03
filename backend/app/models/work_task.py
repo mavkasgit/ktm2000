@@ -2,7 +2,7 @@ import enum
 from datetime import date, datetime
 from decimal import Decimal
 
-from sqlalchemy import BigInteger, CheckConstraint, Date, DateTime, Enum, ForeignKey, Identity, Numeric, String, func, text
+from sqlalchemy import BigInteger, CheckConstraint, Date, DateTime, Enum, ForeignKey, Identity, Numeric, String, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base
@@ -20,14 +20,6 @@ class WorkTaskStatus(str, enum.Enum):
 class WorkTask(Base):
     __tablename__ = "work_tasks"
     __table_args__ = (
-        CheckConstraint("cached_available_quantity >= 0", name="ck_work_tasks_cached_available_quantity_non_negative"),
-        CheckConstraint("cached_issued_quantity >= 0", name="ck_work_tasks_cached_issued_quantity_non_negative"),
-        CheckConstraint("cached_in_work_quantity >= 0", name="ck_work_tasks_cached_in_work_quantity_non_negative"),
-        CheckConstraint("cached_completed_quantity >= 0", name="ck_work_tasks_cached_completed_quantity_non_negative"),
-        CheckConstraint("cached_transferred_quantity >= 0", name="ck_work_tasks_cached_transferred_quantity_non_negative"),
-        CheckConstraint("cached_received_quantity >= 0", name="ck_work_tasks_cached_received_quantity_non_negative"),
-        CheckConstraint("cached_rejected_quantity >= 0", name="ck_work_tasks_cached_rejected_quantity_non_negative"),
-        CheckConstraint("cached_remaining_quantity >= 0", name="ck_work_tasks_cached_remaining_quantity_non_negative"),
         CheckConstraint("planned_quantity >= 0", name="ck_work_tasks_planned_quantity_non_negative"),
     )
 
@@ -41,12 +33,4 @@ class WorkTask(Base):
     due_date: Mapped[date | None] = mapped_column(Date, nullable=True)
     assigned_to: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
-    cached_available_quantity: Mapped[Decimal] = mapped_column(Numeric(14, 3), nullable=False, server_default=text("0"), default=0)
-    cached_issued_quantity: Mapped[Decimal] = mapped_column(Numeric(14, 3), nullable=False, server_default=text("0"), default=0)
-    cached_in_work_quantity: Mapped[Decimal] = mapped_column(Numeric(14, 3), nullable=False, server_default=text("0"), default=0)
-    cached_completed_quantity: Mapped[Decimal] = mapped_column(Numeric(14, 3), nullable=False, server_default=text("0"), default=0)
-    cached_transferred_quantity: Mapped[Decimal] = mapped_column(Numeric(14, 3), nullable=False, server_default=text("0"), default=0)
-    cached_received_quantity: Mapped[Decimal] = mapped_column(Numeric(14, 3), nullable=False, server_default=text("0"), default=0)
-    cached_rejected_quantity: Mapped[Decimal] = mapped_column(Numeric(14, 3), nullable=False, server_default=text("0"), default=0)
-    cached_remaining_quantity: Mapped[Decimal] = mapped_column(Numeric(14, 3), nullable=False, server_default=text("0"), default=0)
     selected_operation_code: Mapped[str | None] = mapped_column(String(100), nullable=True)

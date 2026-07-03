@@ -84,7 +84,7 @@ async def issue_to_work(
     accounted_at: datetime | None = None,
     transfer_id: int | None = None,
     from_location_id: int | None = None,
-    shortage_strategy: Literal["fail", "partial"] = "partial",
+    shortage_strategy: Literal["fail", "partial", "force"] = "partial",
     auto_consume: bool = False,
 ) -> dict:
     """Issue material to a work task.
@@ -92,6 +92,7 @@ async def issue_to_work(
     Uses StockTransaction ledger (no Movement, no SpgRemainder).
     Stock availability is checked via StockBalance.
     ``auto_consume=True`` allows issuing whatever is available without hard-fail.
+    ``shortage_strategy='force'`` bypasses stock check (for manual pass etc.).
     """
     quantity = _to_decimal(quantity)
     _ensure_positive(quantity, "quantity")
@@ -128,29 +129,33 @@ async def issue_to_work(
 
     # Determine from_location (stock) if not provided
     from_loc = from_location_id
-    if from_loc is None:
-        from_loc = await _get_stock_location(db, task.section_id)
-    if from_loc is None:
-        from_loc = task.section_id
+    if shortage_strategy == "force":
+        # Force issue: material appears at the task section from nowhere
+        from_loc = None
+    else:
+        if from_loc is None:
+            from_loc = await _get_stock_location(db, task.section_id)
+        if from_loc is None:
+            from_loc = task.section_id
 
-    # Check availability via StockBalance
-    available = await db.scalar(
-        select(func.coalesce(func.sum(StockBalance.balance_qty), 0))
-        .where(
-            StockBalance.product_id == task.product_id,
-            StockBalance.location_id == from_loc,
-            StockBalance.quality_state == QualityState.good,
-        )
-    ) or Decimal("0")
+        # Check availability via StockBalance
+        available = await db.scalar(
+            select(func.coalesce(func.sum(StockBalance.balance_qty), 0))
+            .where(
+                StockBalance.product_id == task.product_id,
+                StockBalance.location_id == from_loc,
+                StockBalance.quality_state == QualityState.good,
+            )
+        ) or Decimal("0")
 
-    if quantity > available:
-        if shortage_strategy == "fail":
-            raise ValueError(f"Недостаточно доступного количества (доступно: {available}, запрошено: {quantity})")
-        elif shortage_strategy == "partial":
-            quantity = min(quantity, available)
-            if quantity <= 0:
-                raise ValueError("Доступное количество равно 0. Нечего брать в работу.")
-        # auto_consume: use what's available without error
+        if quantity > available:
+            if shortage_strategy == "fail":
+                raise ValueError(f"Недостаточно доступного количества (доступно: {available}, запрошено: {quantity})")
+            elif shortage_strategy == "partial":
+                quantity = min(quantity, available)
+                if quantity <= 0:
+                    raise ValueError("Доступное количество равно 0. Нечего брать в работу.")
+            # auto_consume: use what's available without error
 
     svc = StockCommandService()
     tx = await svc.record(db, StockCommand(
@@ -231,7 +236,10 @@ async def complete_task(
     total = good_quantity + defect_quantity
     _ensure_positive(total, "good_quantity + defect_quantity")
 
-    in_work = task.cached_issued_quantity - task.cached_completed_quantity - task.cached_rejected_quantity
+    from app.stock.services import StockProjectionManager
+    pm = StockProjectionManager()
+    cache = await pm.get_task_cache(db, task.id)
+    in_work = cache["issued_quantity"] - cache["completed_quantity"] - cache["rejected_quantity"]
     if total > in_work:
         raise ValueError("Complete quantity exceeds issued quantity")
 
@@ -383,7 +391,10 @@ async def final_release(
         )
     ) or Decimal("0")
 
-    releasable = task.cached_completed_quantity - already_released
+    from app.stock.services import StockProjectionManager
+    pm = StockProjectionManager()
+    cache = await pm.get_task_cache(db, task.id)
+    releasable = cache["completed_quantity"] - already_released
     if quantity > releasable:
         raise ValueError("Final release exceeds releasable quantity")
 

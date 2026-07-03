@@ -957,7 +957,10 @@ async def return_remainder(
             raise ValueError("Task not found")
 
         # Available for return = issued - completed - transferred
-        available_for_return = task.cached_issued_quantity - task.cached_completed_quantity - task.cached_transferred_quantity
+        from app.stock.services import StockProjectionManager
+        pm = StockProjectionManager()
+        cache = await pm.get_task_cache(db, task.id)
+        available_for_return = cache["issued_quantity"] - cache["completed_quantity"] - cache["transferred_quantity"]
         if available_for_return <= 0:
             raise ValueError("No excess quantity available for return")
         if quantity > available_for_return:

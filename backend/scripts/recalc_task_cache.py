@@ -1,18 +1,23 @@
 """
-Скрипт для пересчета кэша всех существующих задач из StockTransaction ledger.
+Скрипт для верификации кэша задач из StockTransaction ledger.
+
+После Этапа 4 cached_* колонки удалены, кэш вычисляется на лету через
+StockProjectionManager.get_task_cache(). Скрипт проверяет, что для всех
+задач get_task_cache возвращает корректные значения (сверка с прямым SQL).
 
 Usage:
     cd backend
     python -c "import asyncio; from scripts.recalc_task_cache import main; asyncio.run(main())"
 """
 import asyncio
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
+from decimal import Decimal
+
+from sqlalchemy import func, select
 
 from app.core.database import async_session
 from app.models.work_task import WorkTask
+from app.stock.models import Reason, StockTransaction
 from app.stock.services import StockProjectionManager
-from app.services.shopfloor.cache import _refresh_section_plan_line_cache
 
 
 async def main():
@@ -21,26 +26,31 @@ async def main():
         print(f"Найдено задач: {len(tasks)}")
 
         pm = StockProjectionManager()
-        updated = 0
         errors = 0
+        verified = 0
         for task in tasks:
             try:
-                # Создаём фиктивную транзакцию для вызова refresh_task_projection
-                # для каждой задачи (пересчёт всех cached_* из StockTransaction)
-                from app.stock.models import StockTransaction
-                dummy_tx = StockTransaction(task_id=task.id)
-                dummy_tx.task_id = task.id
-                await pm.refresh_task_projection(db, dummy_tx)
-                await _refresh_section_plan_line_cache(db, task.section_plan_line_id)
-                updated += 1
-                if updated % 50 == 0:
-                    print(f"  [{task.id}] processed...")
+                cache = await pm.get_task_cache(db, task.id)
+
+                # SQL-верификация: прямой SELECT из StockTransaction
+                sql_issued = await db.scalar(
+                    select(func.coalesce(func.sum(StockTransaction.quantity), 0))
+                    .where(StockTransaction.task_id == task.id, StockTransaction.reason == Reason.issue_to_work)
+                ) or Decimal("0")
+
+                if cache["issued_quantity"] != sql_issued:
+                    print(f"  [{task.id}] MISMATCH issued: cache={cache['issued_quantity']}, sql={sql_issued}")
+                    errors += 1
+                    continue
+
+                verified += 1
+                if verified % 50 == 0:
+                    print(f"  [{task.id}] verified OK...")
             except Exception as e:
                 errors += 1
                 print(f"  [{task.id}] ОШИБКА: {e}")
 
-        await db.commit()
-        print(f"\nГотово! Обновлено: {updated}, Ошибок: {errors}")
+        print(f"\nГотово! Проверено: {verified}, Ошибок: {errors}")
 
 
 if __name__ == "__main__":

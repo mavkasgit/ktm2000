@@ -41,24 +41,12 @@ async def test_transfer_discrepancy_qty_positive_constraint_exists(client, sessi
 
 
 @pytest.mark.asyncio
-async def test_work_task_cache_constraints_exist(client, session) -> None:
-    """DB-level constraints: ck_work_tasks_cached_*_non_negative."""
-    expected = [
-        "ck_work_tasks_cached_available_quantity_non_negative",
-        "ck_work_tasks_cached_issued_quantity_non_negative",
-        "ck_work_tasks_cached_in_work_quantity_non_negative",
-        "ck_work_tasks_cached_completed_quantity_non_negative",
-        "ck_work_tasks_cached_transferred_quantity_non_negative",
-        "ck_work_tasks_cached_received_quantity_non_negative",
-        "ck_work_tasks_cached_rejected_quantity_non_negative",
-        "ck_work_tasks_cached_remaining_quantity_non_negative",
-        "ck_work_tasks_planned_quantity_non_negative",
-    ]
-    for name in expected:
-        result = (await session.execute(text(
-            f"SELECT conname FROM pg_constraint WHERE conname = '{name}'"
-        ))).scalar()
-        assert result == name, f"Constraint {name} should exist"
+async def test_work_task_planned_quantity_constraint_exists(client, session) -> None:
+    """DB-level constraint: ck_work_tasks_planned_quantity_non_negative."""
+    result = (await session.execute(text(
+        "SELECT conname FROM pg_constraint WHERE conname = 'ck_work_tasks_planned_quantity_non_negative'"
+    ))).scalar()
+    assert result == "ck_work_tasks_planned_quantity_non_negative"
 
 
 @pytest.mark.asyncio

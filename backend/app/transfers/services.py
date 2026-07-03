@@ -71,9 +71,13 @@ _stock_command_service = StockCommandService()
 
 async def _get_task_transferable(db: AsyncSession, task: WorkTask) -> Decimal:
     from app.models.section import Section
+    from app.stock.services import StockProjectionManager
+
     sec = await db.get(Section, task.section_id)
     if sec and sec.kind in {"raw_stock", "wip_stock", "finished_stock"}:
-        return task.cached_available_quantity
+        pm = StockProjectionManager()
+        cache = await pm.get_task_cache(db, task.id)
+        return cache["available_quantity"]
 
     from sqlalchemy import func
     from app.models.movement import Movement, MovementType
@@ -99,7 +103,9 @@ async def _get_task_transferable(db: AsyncSession, task: WorkTask) -> Decimal:
                 if max_seq == line.sequence:
                     remainders_qty += rem.remainder_quantity
 
-    return task.cached_completed_quantity + remainders_qty - task.cached_transferred_quantity
+    pm = StockProjectionManager()
+    cache = await pm.get_task_cache(db, task.id)
+    return cache["completed_quantity"] + remainders_qty - cache["transferred_quantity"]
 
 
 async def _record_transfer_send_stock_tx(
@@ -504,11 +510,8 @@ async def transfer_send(
                     rem.consumed_by_task_id = to_task.id
                 qty_to_consume -= consume_qty
 
-    # Set auto-issue on receive: increment cached_issued_quantity on
-    # destination task so operators can complete without explicit issue.
-    # This is a temporary projection carry-over until Этап 4.
-    to_task.cached_issued_quantity = (to_task.cached_issued_quantity or Decimal("0")) + quantity
-    to_task.cached_in_work_quantity = (to_task.cached_in_work_quantity or Decimal("0")) + quantity
+    # Auto-issue on receive: no more cached_* columns (Этап 4).
+    # StockTransaction ledger is the source of truth for issued quantity.
     await db.flush()
 
     await _refresh_section_plan_line_cache(db, from_task.section_plan_line_id)
@@ -517,9 +520,12 @@ async def transfer_send(
     # If cumulative received quantity now exceeds the task's planned quantity
     # (i.e., over-plan material was transferred), expand planned_quantity so
     # operators can issue and complete the full received amount at this stage.
+    from app.stock.services import StockProjectionManager
+    pm = StockProjectionManager()
+    to_cache = await pm.get_task_cache(db, to_task.id)
     to_task_after = await db.get(WorkTask, to_task.id)
-    if to_task_after and to_task_after.cached_received_quantity > to_task_after.planned_quantity:
-        to_task_after.planned_quantity = to_task_after.cached_received_quantity
+    if to_task_after and to_cache["received_quantity"] > to_task_after.planned_quantity:
+        to_task_after.planned_quantity = to_cache["received_quantity"]
         await db.flush()
         await _refresh_section_plan_line_cache(db, to_task_after.section_plan_line_id)
 
@@ -663,18 +669,21 @@ async def correct_transfer(
     # rejected. If the operator already completed or rejected more
     # than the new sent quantity, reducing the transfer would create
     # a phantom drain.
-    diff = new_quantity - old_quantity
-    if diff < 0:
-        in_work = (
-            to_task.cached_issued_quantity
-            - to_task.cached_completed_quantity
-            - to_task.cached_rejected_quantity
-        )
-        if in_work + diff < 0:
-            raise ValueError(
-                f"Target task has already completed or rejected parts. "
-                f"Cannot reduce transfer by {abs(diff)} as target task only has {in_work} in work"
+        from app.stock.services import StockProjectionManager
+        pm = StockProjectionManager()
+        to_cache = await pm.get_task_cache(db, to_task.id)
+        diff = new_quantity - old_quantity
+        if diff < 0:
+            in_work = (
+                max(to_cache["received_quantity"], to_cache["issued_quantity"])
+                - to_cache["completed_quantity"]
+                - to_cache["rejected_quantity"]
             )
+            if in_work + diff < 0:
+                raise ValueError(
+                    f"Target task has already completed or rejected parts. "
+                    f"Cannot reduce transfer by {abs(diff)} as target task only has {in_work} in work"
+                )
 
     # 3. Update Transfer
     transfer.sent_quantity = new_quantity
@@ -763,8 +772,15 @@ async def cancel_transfer(
     from_task = await _get_task(db, transfer.from_task_id)
     to_task = await _get_task(db, transfer.to_task_id)
 
-    # Validate target in-work quantity before cancellation
-    in_work = to_task.cached_issued_quantity - to_task.cached_completed_quantity - to_task.cached_rejected_quantity
+    # Validate target in-work quantity before cancellation.
+    # Target has received material via transfer_receive which is effectively
+    # material available for work (on-section balance). Use received_quantity
+    # as the guard since issued_quantity is no longer auto-incremented
+    # after cached_* columns were removed (Этап 4).
+    from app.stock.services import StockProjectionManager
+    pm = StockProjectionManager()
+    to_cache = await pm.get_task_cache(db, to_task.id)
+    in_work = max(to_cache["received_quantity"], to_cache["issued_quantity"]) - to_cache["completed_quantity"] - to_cache["rejected_quantity"]
     if in_work < transfer.sent_quantity:
         raise ValueError(
             f"Target task has already completed or rejected parts. "

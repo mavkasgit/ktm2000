@@ -983,13 +983,16 @@ async def get_remainder_history(
             stage = await db.get(RouteStage, task.route_stage_id)
             op_code = stage.operations[0].operation_code if stage and stage.operations else None
             op_name = ", ".join(op.operation_name for op in stage.operations) if stage and stage.operations else ""
+            from app.stock.services import StockProjectionManager
+            pm = StockProjectionManager()
+            task_cache = await pm.get_task_cache(db, task.id)
             origin_payload = {
                 "task_id": task.id,
                 "task_status": task.status.value,
                 "planned_quantity": float(task.planned_quantity),
-                "issued_quantity": float(task.cached_issued_quantity),
-                "completed_quantity": float(task.cached_completed_quantity),
-                "transferred_quantity": float(task.cached_transferred_quantity),
+                "issued_quantity": float(task_cache["issued_quantity"]),
+                "completed_quantity": float(task_cache["completed_quantity"]),
+                "transferred_quantity": float(task_cache["transferred_quantity"]),
                 "section_id": task.section_id,
                 "operation_code": op_code,
                 "operation_name": op_name,

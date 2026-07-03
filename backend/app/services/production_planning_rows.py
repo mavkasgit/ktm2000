@@ -460,34 +460,83 @@ async def get_production_planning_row_detail(db: AsyncSession, position_id: int)
             ).all()
         }
 
+        # Этап 4: cached_* колонки удалены, агрегация из StockTransaction
+        from app.stock.models import StockTransaction, Reason
+        from sqlalchemy import case
+
+        # Get all task_ids for this position
+        task_in_pos = (await db.execute(
+            select(WorkTask.id, WorkTask.section_plan_line_id, WorkTask.status)
+            .join(SectionPlanLine, SectionPlanLine.id == WorkTask.section_plan_line_id)
+            .where(SectionPlanLine.plan_position_id == pos.id)
+        )).all()
+
+        # Map task_id -> route_stage_id via SectionPlanLine
+        spl_ids = [r.section_plan_line_id for r in task_in_pos]
+        spl_rows = (await db.execute(
+            select(SectionPlanLine.id, SectionPlanLine.route_stage_id)
+            .where(SectionPlanLine.id.in_(spl_ids))
+        )).all()
+        spl_to_stage = {r.id: r.route_stage_id for r in spl_rows}
+
+        # StockTransaction sums GROUP BY task_id, reason
+        tx_rows = (await db.execute(
+            select(
+                StockTransaction.task_id,
+                StockTransaction.reason,
+                func.sum(StockTransaction.quantity).label("qty"),
+            )
+            .where(StockTransaction.task_id.in_([r.id for r in task_in_pos]))
+            .group_by(StockTransaction.task_id, StockTransaction.reason)
+        )).all()
+
+        # Net for transfer_send/receive with compensations
+        net_rows = (await db.execute(
+            select(
+                StockTransaction.task_id,
+                StockTransaction.reason,
+                func.sum(
+                    case(
+                        (StockTransaction.compensates_tx_id.is_(None), StockTransaction.quantity),
+                        else_=-StockTransaction.quantity,
+                    )
+                ).label("net"),
+            )
+            .where(
+                StockTransaction.task_id.in_([r.id for r in task_in_pos]),
+                StockTransaction.reason.in_([Reason.transfer_send, Reason.transfer_receive]),
+            )
+            .group_by(StockTransaction.task_id, StockTransaction.reason)
+        )).all()
+
+        tx_sums: dict[int, dict[str, Decimal]] = {}
+        for tid, reason_val, qty in tx_rows:
+            tx_sums.setdefault(tid, {})[reason_val] = qty or Decimal("0")
+
+        net_sums: dict[int, dict[str, Decimal]] = {}
+        for tid, reason_val, nq in net_rows:
+            net_sums.setdefault(tid, {})[reason_val] = nq or Decimal("0")
+
         task_aggregates_by_stage: dict[int, dict[str, float]] = {}
         task_statuses_by_stage: dict[int, list[str]] = {}
-        task_aggregates = (
-            await db.execute(
-                select(
-                    SectionPlanLine.route_stage_id.label("route_stage_id"),
-                    func.coalesce(func.sum(WorkTask.cached_completed_quantity), 0).label("completed_quantity"),
-                    func.coalesce(func.sum(WorkTask.cached_transferred_quantity), 0).label("transferred_quantity"),
-                    func.coalesce(func.sum(WorkTask.cached_rejected_quantity), 0).label("rejected_quantity"),
-                    WorkTask.status.label("task_status"),
-                )
-                .join(SectionPlanLine, SectionPlanLine.id == WorkTask.section_plan_line_id)
-                .where(SectionPlanLine.plan_position_id == pos.id)
-                .group_by(SectionPlanLine.route_stage_id, WorkTask.status)
-            )
-        ).all()
-
-        for row in task_aggregates:
-            stage_id = row.route_stage_id
+        for t in task_in_pos:
+            stage_id = spl_to_stage.get(t.section_plan_line_id)
+            if stage_id is None:
+                continue
+            sums = tx_sums.get(t.id, {})
+            nets = net_sums.get(t.id, {})
+            completed = float(sums.get(Reason.complete.value, Decimal("0")))
+            transferred = float(nets.get(Reason.transfer_send.value, Decimal("0")))
+            rejected = float(sums.get(Reason.scrap.value, Decimal("0")))
             stage_totals = task_aggregates_by_stage.setdefault(
                 stage_id,
                 {"completed_quantity": 0.0, "transferred_quantity": 0.0, "rejected_quantity": 0.0},
             )
-            stage_totals["completed_quantity"] += _to_float(row.completed_quantity)
-            stage_totals["transferred_quantity"] += _to_float(row.transferred_quantity)
-            stage_totals["rejected_quantity"] += _to_float(row.rejected_quantity)
+            stage_totals["completed_quantity"] += completed
+            stage_totals["transferred_quantity"] += transferred
+            stage_totals["rejected_quantity"] += rejected
             task_statuses_by_stage.setdefault(stage_id, []).append(
-                row.task_status.value if hasattr(row.task_status, "value") else str(row.task_status)
+                t.status.value if hasattr(t.status, "value") else str(t.status)
             )
 
         flow_by_stage: dict[int, dict] = {}

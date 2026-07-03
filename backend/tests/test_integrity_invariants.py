@@ -29,7 +29,7 @@ from datetime import date
 from decimal import Decimal
 
 import pytest
-from sqlalchemy import text
+from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.security import create_access_token
@@ -146,33 +146,9 @@ _INVARIANT_QUERIES: list[tuple[str, str]] = [
             OR t.sent_quantity != COALESCE(r.qty, 0))
         """,
     ),
-    (
-        "7_section_plan_line_cached_diverges_from_worktask_sums",
-        """
-        SELECT spl.id AS line_id,
-               spl.cached_issued_quantity
-                 - COALESCE(SUM(wt.cached_issued_quantity), 0)        AS diff_issued,
-               spl.cached_completed_quantity
-                 - COALESCE(SUM(wt.cached_completed_quantity), 0)     AS diff_completed,
-               spl.cached_transferred_quantity
-                 - COALESCE(SUM(wt.cached_transferred_quantity), 0)  AS diff_transferred,
-               spl.cached_received_quantity
-                 - COALESCE(SUM(wt.cached_received_quantity), 0)     AS diff_received
-        FROM section_plan_lines spl
-        LEFT JOIN work_tasks wt ON wt.section_plan_line_id = spl.id
-        GROUP BY spl.id, spl.cached_issued_quantity, spl.cached_completed_quantity,
-                 spl.cached_transferred_quantity, spl.cached_received_quantity
-        HAVING
-            spl.cached_issued_quantity
-              != COALESCE(SUM(wt.cached_issued_quantity), 0)
-            OR spl.cached_completed_quantity
-              != COALESCE(SUM(wt.cached_completed_quantity), 0)
-            OR spl.cached_transferred_quantity
-              != COALESCE(SUM(wt.cached_transferred_quantity), 0)
-            OR spl.cached_received_quantity
-              != COALESCE(SUM(wt.cached_received_quantity), 0)
-        """,
-    ),
+    # I7: Удалён на Этапе 4 — WorkTask.cached_* колонки удалены.
+    # SectionPlanLine.cached_* теперь вычисляются напрямую из StockTransaction
+    # (см. _refresh_section_plan_line_cache в cache.py).
 ]
 
 
@@ -500,29 +476,30 @@ async def test_take_to_work_with_remainder_allocation_stays_consistent(
     assert resp.status_code == 200, resp.text
     await assert_no_invariants_violations(session, context="after-take-to-work-with-remainder")
 
-    # Step 1 must be auto-completed by the remainder coverage.  The
-    # cached_completed_quantity total on that task is the sum of
-    # every Movement(type=complete) on it — there is exactly one such
-    # row, with source_ref="auto_release_remainder".
+    # Step 1 must be auto-completed by the remainder coverage.
+    # Verify via StockTransaction ledger (cached_* columns removed on Этап 4).
+    from app.stock.models import Reason, StockTransaction
+    from app.stock.services import StockProjectionManager
+
     auto_completed_tasks = (await session.execute(
         text(
-            "SELECT id, status, cached_completed_quantity, cached_transferred_quantity "
-            "FROM work_tasks WHERE section_id = :s"
+            "SELECT id, status FROM work_tasks WHERE section_id = :s"
         ),
         {"s": fx["sections"][0].id},
     )).mappings().all()
     assert auto_completed_tasks, "Expected a WorkTask on the first section"
+    pm = StockProjectionManager()
     for row in auto_completed_tasks:
-        # StockTransaction-based check (Stage 3: Movement больше не пишется)
-        stock_sum = (await session.execute(
-            text(
-                "SELECT COALESCE(SUM(quantity), 0) FROM stock_transactions "
-                "WHERE task_id = :t AND reason = 'complete'"
-            ),
-            {"t": row["id"]},
-        )).scalar_one()
-        assert Decimal(stock_sum) == row["cached_completed_quantity"], (
-            f"WorkTask {row['id']} cached_completed={row['cached_completed_quantity']} "
+        cache = await pm.get_task_cache(session, row["id"])
+        stock_sum = await session.scalar(
+            select(func.coalesce(func.sum(StockTransaction.quantity), 0))
+            .where(
+                StockTransaction.task_id == row["id"],
+                StockTransaction.reason == Reason.complete,
+            )
+        ) or Decimal("0")
+        assert cache["completed_quantity"] == stock_sum, (
+            f"WorkTask {row['id']} cache.completed={cache['completed_quantity']} "
             f"diverges from SUM(StockTransaction.complete)={stock_sum}"
         )
 
@@ -534,29 +511,22 @@ async def test_take_to_work_with_remainder_allocation_stays_consistent(
         )
     )).mappings().all()
     for m in auto_release:
-        task_row = (await session.execute(
-            text("SELECT cached_completed_quantity FROM work_tasks WHERE id = :id"),
-            {"id": m["task_id"]},
-        )).mappings().one()
-        assert Decimal(m["quantity"]) == task_row["cached_completed_quantity"], (
+        cache = await pm.get_task_cache(session, m["task_id"])
+        assert Decimal(m["quantity"]) == cache["completed_quantity"], (
             f"auto_release_remainder tx qty={m['quantity']} does not match "
-            f"task {m['task_id']} cached_completed={task_row['cached_completed_quantity']}"
+            f"task {m['task_id']} cache.completed={cache['completed_quantity']}"
         )
 
-    # Step 2 should be ready and have all-zero cached totals because
-    # no transfer has been issued yet (the auto-completed step's
-    # Movement does NOT auto-create a cross-GHP transfer; the operator
-    # must explicitly ``POST /api/transfers``).
+    # Step 2 should be ready and have all-zero cached totals via ledger
     next_task = (await session.execute(
         text(
-            "SELECT id, cached_issued_quantity, cached_completed_quantity, "
-            "cached_transferred_quantity, cached_received_quantity, status "
-            "FROM work_tasks WHERE section_id = :s"
+            "SELECT id, status FROM work_tasks WHERE section_id = :s"
         ),
         {"s": fx["sections"][1].id},
     )).mappings().one()
     assert next_task["status"] in {"ready", "waiting_previous"}
-    assert next_task["cached_received_quantity"] == Decimal("0")
+    next_cache = await pm.get_task_cache(session, next_task["id"])
+    assert next_cache["received_quantity"] == Decimal("0")
 
     transfer_count = (await session.execute(text("SELECT count(*) FROM transfers"))).scalar_one()
     assert transfer_count == 0, \
