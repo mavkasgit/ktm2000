@@ -24,12 +24,12 @@ from __future__ import annotations
 
 from typing import Optional
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import READER_ROLES, WRITER_ROLES, require_role
+from app.api.deps import READER_ROLES, WRITER_ROLES, get_current_user, require_role
 from app.core.database import get_db
 from app.models.product import Product
 from app.models.section import Section
@@ -41,6 +41,17 @@ from app.stock.models import (
     StockTransaction,
 )
 from app.stock.services import StockCommand, StockCommandService
+from app.stock.import_service import (
+    ImportResult,
+    RemainderItem,
+    SheetSummary,
+    apply_remainders_import,
+    generate_remainders_template_for_location,
+    parse_remainders_excel,
+)
+from app.stock.import_service import _lookup_products as _lookup_remainder_products
+from fastapi.responses import StreamingResponse
+from io import BytesIO
 
 router = APIRouter(prefix="/v2/stock", tags=["stock-ledger"])
 
@@ -278,3 +289,159 @@ async def create_adjustment(
         quantity=str(tx.quantity),
         created_at=tx.created_at.isoformat() if tx.created_at else None,
     )
+
+
+# ─── Remainders Import ─────────────────────────────────────────────────────────
+
+
+def _location_or_404(location_id: int, db: AsyncSession) -> None:
+    """Check location exists, used as a dependency."""
+    # This is a placeholder — actual validation is done inline in each endpoint.
+
+
+@router.get("/import/remainders/template")
+async def download_remainders_template(
+    location_id: int = Query(...),
+    db: AsyncSession = Depends(get_db),
+    _user: User = Depends(get_current_user),
+) -> StreamingResponse:
+    """Скачать Excel-шаблон для импорта остатков на указанную локацию."""
+    try:
+        template_bytes = await generate_remainders_template_for_location(db, location_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+    filename = f"import_remainders_template_{location_id}.xlsx"
+    # Encode filename for Content-Disposition (RFC 5987)
+    encoded_name = filename.encode("utf-8")
+    return StreamingResponse(
+        BytesIO(template_bytes),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={
+            "Content-Disposition": f"attachment; filename*=UTF-8''{encoded_name.decode('latin-1')}",
+        },
+    )
+
+
+@router.post(
+    "/import/remainders/preview",
+    dependencies=[Depends(require_role(list(WRITER_ROLES)))],
+)
+async def preview_remainders_excel(
+    file: UploadFile = File(...),
+    location_id: int = Form(...),
+    quality_state: QualityState = Form(QualityState.GOOD),
+    sheet_index: int = Form(0),
+    row_selection: str | None = Form(None),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Парсит Excel и возвращает preview с валидацией, БЕЗ записи в БД.
+
+    * ``location_id`` проверяется на существование.
+    * ``quality_state`` пока не влияет на preview, но передаётся для
+      единообразия с POST /import/remainders.
+    """
+    # Validate location
+    location = await db.get(Section, location_id)
+    if location is None:
+        raise HTTPException(status_code=404, detail=f"Location id={location_id} not found")
+
+    content = await file.read()
+
+    try:
+        sheet_name, total_rows, items, summary = await parse_remainders_excel(
+            content, sheet_index, row_selection,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+    # Enrich items with product info
+    await _lookup_remainder_products(db, items)
+
+    # Recalculate summary after product enrichment
+    valid_count = sum(1 for it in items if it.status == "valid")
+    invalid_count = sum(1 for it in items if it.status == "invalid")
+    quantity_total = sum(
+        (it.quantity or 0) for it in items if it.status == "valid"
+    )
+
+    return {
+        "sheet_name": sheet_name,
+        "total_rows": total_rows,
+        "summary": {
+            "total": len(items),
+            "valid": valid_count,
+            "invalid": invalid_count,
+            "quantity_total": round(quantity_total, 3),
+        },
+        "items": [item.__dict__ for item in items],
+    }
+
+
+@router.post(
+    "/import/remainders",
+    dependencies=[Depends(require_role(list(WRITER_ROLES)))],
+)
+async def import_remainders_excel(
+    file: UploadFile = File(...),
+    location_id: int = Form(...),
+    quality_state: QualityState = Form(QualityState.GOOD),
+    sheet_index: int = Form(0),
+    row_selection: str | None = Form(None),
+    skip_invalid: bool = Form(True),
+    clear_existing: bool = Form(False),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> dict:
+    """Применить импорт остатков: создать ``MANUAL_IN`` транзакции.
+
+    Параметры:
+    * ``location_id`` — целевая секция (склад / участок).
+    * ``quality_state`` — состояние качества (по умолч. GOOD).
+    * ``file`` — .xlsx файл с колонками SKU | Количество | Комментарий.
+    * ``sheet_index`` — индекс листа (0=первый).
+    * ``row_selection`` — опциональный фильтр строк, ``"2-10,12"``.
+    * ``skip_invalid`` — пропускать строки с ошибками (True) или
+      откатывать весь импорт (False).
+    * ``clear_existing`` — обнулить текущие остатки по
+      ``(location_id, quality_state)`` перед импортом.
+    """
+    # Validate location
+    location = await db.get(Section, location_id)
+    if location is None:
+        raise HTTPException(status_code=404, detail=f"Location id={location_id} not found")
+
+    content = await file.read()
+
+    try:
+        _sheet_name, _total_rows, items, _summary = await parse_remainders_excel(
+            content, sheet_index, row_selection,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+    # If nothing to import
+    if not items:
+        return {
+            "success": True,
+            "imported_count": 0,
+            "errors": [],
+            "transaction_ids": [],
+        }
+
+    result: ImportResult = await apply_remainders_import(
+        db=db,
+        location_id=location_id,
+        items=items,
+        quality_state=quality_state,
+        user=user,
+        clear_existing=clear_existing,
+        skip_invalid=skip_invalid,
+    )
+
+    return {
+        "success": result.success,
+        "imported_count": result.imported_count,
+        "errors": result.errors,
+        "transaction_ids": result.transaction_ids,
+    }

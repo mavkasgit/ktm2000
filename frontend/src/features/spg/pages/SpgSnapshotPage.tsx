@@ -1,6 +1,6 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { useQuery, useQueries, useQueryClient } from "@tanstack/react-query";
-import { Loader2, Search, ChevronDown, ChevronRight } from "lucide-react";
+import { Loader2, Search, ChevronDown, ChevronRight, Upload } from "lucide-react";
 
 import {
   getSpgList,
@@ -10,11 +10,14 @@ import type { StockBalanceEntry } from "@/shared/api/stock";
 import { SpgSelector } from "../components/SpgSelector";
 import { DefectsListPanel } from "../components/DefectsListPanel";
 import { StockAdjustmentDialog } from "../components/StockAdjustmentDialog";
+import { ImportRemaindersDialog } from "../components/ImportRemaindersDialog";
 import { ProductStockBalanceDialog } from "../components/ProductStockBalanceDialog";
 import { StockTransactionsHistoryDrawer } from "../components/StockTransactionsHistoryDrawer";
 import { getSpgDefects } from "@/shared/api/defects";
 import { queryKeys } from "@/shared/api/queryKeys";
-import { Input, Button } from "@/shared/ui";
+import { Input, Button, toast } from "@/shared/ui";
+import { listSections } from "@/shared/api/sections";
+import type { Section } from "@/shared/api/sections";
 
 export function SpgSnapshotPage() {
   const [selectedSpgIds, setSelectedSpgIds] = useState<number[]>([]);
@@ -22,6 +25,9 @@ export function SpgSnapshotPage() {
   const [isAdjustmentDialogOpen, setIsAdjustmentDialogOpen] = useState(false);
   const [selectedProductId, setSelectedProductId] = useState<number | null>(null);
   const [historyProductId, setHistoryProductId] = useState<number | null>(null);
+  const [isImportDialogOpen, setIsImportDialogOpen] = useState(false);
+  const [importLocationId, setImportLocationId] = useState<number | null>(null);
+  const [sections, setSections] = useState<Section[]>([]);
   const queryClient = useQueryClient();
 
   const { data: spgs = [], isLoading: loadingList } = useQuery({
@@ -60,6 +66,10 @@ export function SpgSnapshotPage() {
   };
 
   const refreshAll = handleRefresh;
+
+  useEffect(() => {
+    listSections().then(setSections).catch(() => {});
+  }, []);
 
   const handleToggleSpg = (id: number) => {
     setSelectedSpgIds((prev) => {
@@ -165,6 +175,29 @@ export function SpgSnapshotPage() {
             >
               Ручная операция
             </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                const stockSection = sections.find((s) =>
+                  s.kind === "raw_stock" || s.kind === "wip_stock" || s.kind === "finished_stock",
+                );
+                if (stockSection) {
+                  setImportLocationId(stockSection.id);
+                  setIsImportDialogOpen(true);
+                } else {
+                  toast({
+                    title: "Нет доступных складов",
+                    description: "Создайте складскую секцию для импорта остатков",
+                    variant: "destructive",
+                  });
+                }
+              }}
+              disabled={sections.length === 0}
+            >
+              <Upload className="h-4 w-4 mr-1" />
+              Импорт из Excel
+            </Button>
             <button
               type="button"
               onClick={handleRefresh}
@@ -217,6 +250,19 @@ export function SpgSnapshotPage() {
         open={isAdjustmentDialogOpen}
         onOpenChange={setIsAdjustmentDialogOpen}
       />
+
+      {importLocationId !== null && (
+        <ImportRemaindersDialog
+          open={isImportDialogOpen}
+          onOpenChange={setIsImportDialogOpen}
+          locationId={importLocationId}
+          locationName={sections.find((s) => s.id === importLocationId)?.name}
+          onSaved={() => {
+            void queryClient.invalidateQueries({ queryKey: queryKeys.stock.balances() });
+            void queryClient.invalidateQueries({ queryKey: queryKeys.stock.transactions() });
+          }}
+        />
+      )}
 
       {selectedProductId !== null && (
         <ProductStockBalanceDialog

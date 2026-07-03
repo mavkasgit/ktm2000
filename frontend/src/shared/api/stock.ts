@@ -127,3 +127,94 @@ export async function getStockTransactions(params?: StockTransactionsParams): Pr
   );
   return data;
 }
+
+// ─── Remainder Excel Import (v2/stock) ──────────────────────────────────────
+
+export type RemainderImportItem = {
+  source_row_number: number;
+  sku: string;
+  product_id: number | null;
+  product_name: string | null;
+  quantity: number | null;
+  comment: string | null;
+  status: "valid" | "invalid";
+  errors: string[];
+  raw_values: string[];
+};
+
+export type RemainderImportSummary = {
+  total: number;
+  valid: number;
+  invalid: number;
+  quantity_total: number;
+};
+
+export type RemainderPreviewResponse = {
+  sheet_name: string;
+  total_rows: number;
+  summary: RemainderImportSummary;
+  items: RemainderImportItem[];
+};
+
+export type RemainderImportResponse = {
+  success: boolean;
+  imported_count: number;
+  errors: string[];
+  transaction_ids: number[];
+};
+
+export type RemainderImportOptions = {
+  sheet_index?: number;
+  row_selection?: string;
+  quality_state?: QualityState;
+  skip_invalid?: boolean;
+  clear_existing?: boolean;
+};
+
+export async function previewRemaindersExcel(
+  locationId: number,
+  file: File,
+  opts: RemainderImportOptions = {},
+): Promise<RemainderPreviewResponse> {
+  const formData = new FormData();
+  formData.append("file", file);
+  formData.append("location_id", String(locationId));
+  formData.append("quality_state", opts.quality_state ?? "GOOD");
+  formData.append("sheet_index", String(opts.sheet_index ?? 0));
+  if (opts.row_selection) formData.append("row_selection", opts.row_selection);
+  const { data } = await apiClient.post<RemainderPreviewResponse>(
+    "/v2/stock/import/remainders/preview",
+    formData,
+    { headers: { "Content-Type": "multipart/form-data" } },
+  );
+  return data;
+}
+
+export async function importRemaindersExcel(
+  locationId: number,
+  file: File,
+  opts: RemainderImportOptions = {},
+): Promise<RemainderImportResponse> {
+  const formData = new FormData();
+  formData.append("file", file);
+  formData.append("location_id", String(locationId));
+  formData.append("quality_state", opts.quality_state ?? "GOOD");
+  formData.append("sheet_index", String(opts.sheet_index ?? 0));
+  formData.append("skip_invalid", String(opts.skip_invalid ?? true));
+  formData.append("clear_existing", String(opts.clear_existing ?? false));
+  if (opts.row_selection) formData.append("row_selection", opts.row_selection);
+  const { data } = await apiClient.post<RemainderImportResponse>(
+    "/v2/stock/import/remainders",
+    formData,
+    { headers: { "Content-Type": "multipart/form-data" } },
+  );
+  return data;
+}
+
+export async function downloadRemaindersImportTemplate(locationId: number): Promise<Blob> {
+  const response = await apiClient.get<Blob>(
+    `/v2/stock/import/remainders/template?location_id=${locationId}`,
+    { responseType: "blob" },
+  );
+  return response.data;
+}
