@@ -737,7 +737,7 @@ async def get_production_planning_row_detail(db: AsyncSession, position_id: int)
                 "section_id": section.id,
                 "section_code": section.code,
                 "section_name": section.name,
-                "section_kind": section.kind,
+                "section_kind": section.type,
                 "section_icon": section.icon,
                 "section_icon_color": section.icon_color,
                 "operation_code": op_code,

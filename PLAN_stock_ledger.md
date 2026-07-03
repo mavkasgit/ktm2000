@@ -50,7 +50,10 @@
 
 ## 1. Целевая модель (без изменений по сути)
 
-- **Location** = `sections` + `type: LocationType` enum.
+- **Location** (= `Section`) = `sections` + `type: String(20)` — единый
+  классификатор, 6 значений: `production | raw_stock | wip_stock | finished_stock | scrap | quarantine`.
+  Поле `kind` и enum `LocationType` удалены в эпике `section-cleanup`
+  (см. `PLAN_section_cleanup.md`, миграция 027).
 - **StockTransaction**: `product_id, from_location_id, to_location_id, quantity,
   reason, from_quality_state, to_quality_state, task_id, transfer_id,
   idempotency_key, ...`
@@ -119,6 +122,17 @@ Reason enum и QualityState enum — как в предыдущей версии
 - [x] 7.2. Удалить `Movement` (модель, таблица)
 - [x] 7.3. Удалить старые `_make_*` хелперы и всё, что осталось
 - [x] 7.4. Обновить `AGENTS.md`
+
+### Этап 8 — Section Cleanup (выполнен в эпике `section-cleanup`)
+- [x] 8.1. Удалить `Section.kind`, переименовать `kind` → `type`
+- [x] 8.2. Удалить enum `LocationType` (Python) и PostgreSQL-тип `location_type`
+- [x] 8.3. R1-фикс: убрать фантомное `kind="storage"` в автосоздании секций
+- [x] 8.4. `STORAGE_KINDS` → `STORAGE_TYPES` (добавлены `scrap`, `quarantine`)
+- [x] 8.5. Pydantic-схемы и фронт: единый `type` (6 значений), `SectionKind` → `SectionType`
+- [x] 8.6. PL/pgSQL триггеры в `conftest.py` обновлены на `type`
+- [x] 8.7. Миграция 027 (`027_section_unified_type.py`)
+
+Подробный план: [`PLAN_section_cleanup.md`](file:///c:/Users/user/VibeCoding/ktm2000/PLAN_section_cleanup.md).
 
 ---
 
@@ -221,3 +235,4 @@ test_manual_pass_completes_single_stage_task
 - [x] Этап 5 — Quality
 - [x] Этап 6 — Frontend
 - [x] Этап 7 — Cleanup
+- [x] Этап 8 — Section Cleanup (см. `PLAN_section_cleanup.md`, миграция 027)

@@ -1,6 +1,6 @@
 import { apiClient } from "./client";
 
-export type SectionKind = "production" | "raw_stock" | "wip_stock" | "finished_stock";
+export type SectionType = "production" | "raw_stock" | "wip_stock" | "finished_stock" | "scrap" | "quarantine";
 
 export type Section = {
   id: number;
@@ -8,7 +8,7 @@ export type Section = {
   name: string;
   description: string | null;
   is_active: boolean;
-  kind: SectionKind;
+  type: SectionType;
   icon: string | null;
   icon_color: string | null;
 };
@@ -18,12 +18,12 @@ export type CreateSectionInput = {
   name: string;
   description?: string | null;
   is_active?: boolean;
-  kind?: SectionKind;
+  type?: SectionType;
   icon?: string | null;
   icon_color?: string | null;
 };
 
-export type PatchSectionInput = Partial<Pick<CreateSectionInput, "name" | "description" | "is_active" | "kind" | "icon" | "icon_color">>;
+export type PatchSectionInput = Partial<Pick<CreateSectionInput, "name" | "description" | "is_active" | "type" | "icon" | "icon_color">>;
 
 export async function listSections() {
   const { data } = await apiClient.get<Section[]>("/sections");
@@ -130,7 +130,7 @@ export type SectionWithOperations = {
   id: number;
   code: string;
   name: string;
-  kind: string;
+  type: SectionType;
   icon: string | null;
   icon_color: string | null;
   operations: Array<{

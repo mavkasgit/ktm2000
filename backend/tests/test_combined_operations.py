@@ -36,11 +36,11 @@ async def _make_combined_route_product(session, sku: str = "COMBO-1") -> tuple[P
     product = Product(sku=sku, name=f"Combined {sku}", type=ProductType.finished_good, unit="pcs")
     component = Product(sku=f"{sku}-RAW", name=f"Raw {sku}", type=ProductType.component, unit="pcs")
     sections = [
-        Section(code=f"{sku}-WH", name="Склад сырья", kind="raw_stock"),
-        Section(code=f"{sku}-SHOT", name="Дробеструй", kind="production"),
-        Section(code=f"{sku}-ANOD", name="Анодирование", kind="production"),
-        Section(code=f"{sku}-WIP", name="Склад ГП", kind="finished_stock"),
-        Section(code=f"{sku}-SHIP", name="Отгрузка", kind="shipment"),
+        Section(code=f"{sku}-WH", name="Склад сырья", type="raw_stock"),
+        Section(code=f"{sku}-SHOT", name="Дробеструй", type="production"),
+        Section(code=f"{sku}-ANOD", name="Анодирование", type="production"),
+        Section(code=f"{sku}-WIP", name="Склад ГП", type="finished_stock"),
+        Section(code=f"{sku}-SHIP", name="Отгрузка", type="shipment"),
     ]
     session.add_all([product, component, *sections])
     await session.flush()
@@ -253,9 +253,9 @@ async def test_no_combined_op_group_creates_separate_tasks(client, session) -> N
     product = Product(sku="NO-COMBO", name="No Combo", type=ProductType.finished_good, unit="pcs")
     component = Product(sku="NO-COMBO-RAW", name="Raw No Combo", type=ProductType.component, unit="pcs")
     sections = [
-        Section(code="NC-WH", name="Склад", kind="raw_stock"),
-        Section(code="NC-ANOD", name="Анодирование", kind="production"),
-        Section(code="NC-FINAL", name="Финал", kind="finished_stock"),
+        Section(code="NC-WH", name="Склад", type="raw_stock"),
+        Section(code="NC-ANOD", name="Анодирование", type="production"),
+        Section(code="NC-FINAL", name="Финал", type="finished_stock"),
     ]
     session.add_all([product, component, *sections])
     await session.flush()
@@ -322,9 +322,9 @@ async def test_different_cog_same_section_creates_separate_tasks(client, session
     product = Product(sku="DIFF-COG", name="Diff COG", type=ProductType.finished_good, unit="pcs")
     component = Product(sku="DIFF-COG-RAW", name="Raw Diff COG", type=ProductType.component, unit="pcs")
     sections = [
-        Section(code="DC-WH", name="Склад", kind="raw_stock"),
-        Section(code="DC-ANOD", name="Анодирование", kind="production"),
-        Section(code="DC-FINAL", name="Финал", kind="finished_stock"),
+        Section(code="DC-WH", name="Склад", type="raw_stock"),
+        Section(code="DC-ANOD", name="Анодирование", type="production"),
+        Section(code="DC-FINAL", name="Финал", type="finished_stock"),
     ]
     session.add_all([product, component, *sections])
     await session.flush()

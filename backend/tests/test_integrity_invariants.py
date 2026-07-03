@@ -225,8 +225,8 @@ async def _make_two_ghp_route(
     """Two production sections in two different SPGs — the minimal
     topology that makes a cross-GHP transfer possible.
     """
-    sec1 = Section(code=f"{sku}-S1", name="S1", kind="production", is_active=True, sort_order=0)
-    sec2 = Section(code=f"{sku}-S2", name="S2", kind="production", is_active=True, sort_order=1)
+    sec1 = Section(code=f"{sku}-S1", name="S1", type="production", is_active=True, sort_order=0)
+    sec2 = Section(code=f"{sku}-S2", name="S2", type="production", is_active=True, sort_order=1)
     session.add_all([sec1, sec2])
     await session.flush()
 

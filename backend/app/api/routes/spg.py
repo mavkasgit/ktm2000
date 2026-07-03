@@ -55,7 +55,7 @@ class SpgSectionOut(BaseModel):
     section_code: str
     section_name: str
     sort_order: int
-    kind: str
+    type: str
     icon: str | None = None
     icon_color: str | None = None
 
@@ -102,7 +102,7 @@ async def _build_spg_out(db: AsyncSession, spg: StorageProductionGroup) -> SpgOu
                 section_code=sec.code,
                 section_name=sec.name,
                 sort_order=b.sort_order,
-                kind=sec.kind,
+                type=sec.type,
                 icon=sec.icon,
                 icon_color=sec.icon_color,
             ))
@@ -174,7 +174,7 @@ async def list_spgs(db: AsyncSession = Depends(get_db)) -> list[SpgOut]:
                     section_code=sec.code,
                     section_name=sec.name,
                     sort_order=b.sort_order,
-                    kind=sec.kind,
+                    type=sec.type,
                     icon=sec.icon,
                     icon_color=sec.icon_color,
                 ))

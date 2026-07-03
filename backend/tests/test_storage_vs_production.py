@@ -41,8 +41,8 @@ from app.services.shopfloor.common import build_completed_stages_json
 # ---------- Pure classifier tests (no DB) ----------
 
 
-def _make_section(code: str, kind: str) -> Section:
-    return Section(code=code, name=code, kind=kind, is_active=True, sort_order=0)
+def _make_section(code: str, type_: str) -> Section:
+    return Section(code=code, name=code, type=type_, is_active=True, sort_order=0)
 
 
 def test_is_storage_section():
@@ -105,8 +105,8 @@ async def _seed_basic_sections(session: AsyncSession) -> dict[str, Section]:
         ("SENT", "finished_stock"),
     ]
     sections: dict[str, Section] = {}
-    for code, kind in data:
-        s = Section(code=code, name=code, kind=kind, is_active=True, sort_order=len(sections) * 10)
+    for code, type_ in data:
+        s = Section(code=code, name=code, type=type_, is_active=True, sort_order=len(sections) * 10)
         session.add(s)
         sections[code] = s
     await session.flush()
@@ -245,7 +245,7 @@ async def test_sections_all_operations_no_synthetic_fallback(client: AsyncClient
 
     drill = by_code.get("DRILL")
     assert drill is not None
-    assert drill["kind"] == "production"
+    assert drill["type"] == "production"
     assert drill["role"] == "production"
     # If the section has no real operations, list is empty and the flag is False.
     if not drill["operations"]:
@@ -264,7 +264,7 @@ async def test_sections_storage_points_returns_only_storage(client: AsyncClient,
     codes = {p["code"] for p in payload}
     assert {"WH", "WIP_WH", "FG_WH", "SHIPMENT", "SENT"} <= codes
     for p in payload:
-        assert p["kind"] in {"raw_stock", "wip_stock", "finished_stock"}
+        assert p["type"] in {"raw_stock", "wip_stock", "finished_stock"}
     # Production sections must not appear
     assert "DRILL" not in codes
     assert "ANOD" not in codes

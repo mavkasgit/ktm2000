@@ -60,7 +60,6 @@ async def _make_location(
 ) -> Section:
     section = Section(
         code=code, name=name,
-        kind="production" if loc_type in ("laser", "welding", "painting", "assembly") else loc_type,
         type=loc_type, is_active=True, sort_order=0,
     )
     session.add(section)
@@ -97,8 +96,8 @@ async def _make_two_ghp_setup(
     """
     user = await _make_user(session, f"{sku}@local")
 
-    sec1 = Section(code=f"{sku}-S1", name="S1", kind="production", is_active=True, sort_order=0)
-    sec2 = Section(code=f"{sku}-S2", name="S2", kind="production", is_active=True, sort_order=1)
+    sec1 = Section(code=f"{sku}-S1", name="S1", type="production", is_active=True, sort_order=0)
+    sec2 = Section(code=f"{sku}-S2", name="S2", type="production", is_active=True, sort_order=1)
     session.add_all([sec1, sec2])
     await session.flush()
 
@@ -178,7 +177,7 @@ async def _make_tasks_transferable(
     # Create a stock section for issue_to_work from/to
     from app.stock import StockCommand, StockCommandService, Reason
     from app.models.section import Section
-    stock = Section(code="T2-STK", name="Stock", kind="raw_stock", type="raw_stock",
+    stock = Section(code="T2-STK", name="Stock", type="raw_stock",
                     is_active=True, sort_order=0)
     session.add(stock)
     await session.flush()

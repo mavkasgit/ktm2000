@@ -1,9 +1,9 @@
-"""Модели домена Stock Ledger (Этап 1).
+"""Модели домена Stock Ledger.
 
-Location — это расширение существующей модели ``Section`` (новая колонка
-``type`` добавляется миграцией 022). Отдельной таблицы для Location нет:
-станки и склады остаются одинаковыми объектами в ``sections``, различаются
-только значением ``LocationType``.
+Локации — это секции (``Section``) с единым классификатором ``Section.type``
+(String(20), 6 значений: ``production | raw_stock | wip_stock | finished_stock | scrap | quarantine``).
+Отдельной таблицы Location нет: станки и склады — это Section, различаются по ``type``.
+Поле ``kind`` и enum ``LocationType`` удалены в эпике section-cleanup (миграция 027).
 
 ``StockTransaction`` — единый append-only ledger, заменяющий ``Movement``.
 Запись хранит явное перемещение ``from_location_id → to_location_id`` (оба
@@ -38,28 +38,6 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base
-
-
-class LocationType(str, enum.Enum):
-    """Тип локации (Section.type).
-
-    Складские локации хранят материал между операциями; производственные
-    локации — места, где выполняется работа; SCRAP/QUARANTINE — изоляторы
-    для брака и подозрительной продукции; TRANSIT — виртуальный буфер
-    между двумя складами при跨-GHP трансферах.
-    """
-
-    RAW_STOCK = "raw_stock"
-    WIP_STOCK = "wip_stock"
-    FINISHED_STOCK = "finished_stock"
-    PRODUCTION = "production"  # generic production section (refine to laser/welding/... via UI)
-    LASER = "laser"
-    WELDING = "welding"
-    PAINTING = "painting"
-    ASSEMBLY = "assembly"
-    SCRAP = "scrap"
-    QUARANTINE = "quarantine"
-    TRANSIT = "transit"
 
 
 class Reason(str, enum.Enum):

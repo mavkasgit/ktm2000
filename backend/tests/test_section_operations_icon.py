@@ -7,7 +7,7 @@ from app.models.section import Section
 
 
 async def _make_section(session, code: str = "TEST-DRILL", name: str = "Drill Test") -> Section:
-    section = Section(code=code, name=name, kind="production")
+    section = Section(code=code, name=name, type="production")
     session.add(section)
     await session.flush()
     return section

@@ -60,11 +60,11 @@ async def _make_transformation_route(session, sku: str = "SPLIT-1") -> tuple[Pro
     component = Product(sku=f"{sku}-BILLET", name=f"Billet {sku}", type=ProductType.component, unit="pcs")
 
     sections = [
-        Section(code=f"{sku}-RAW", name="Склад сырья", kind="raw_stock"),
-        Section(code=f"{sku}-PRESS", name="Пресс", kind="production"),
-        Section(code=f"{sku}-ANOD", name="Анодирование", kind="production"),
-        Section(code=f"{sku}-PACK", name="Упаковка", kind="production"),
-        Section(code=f"{sku}-FG", name="Склад ГП", kind="finished_stock"),
+        Section(code=f"{sku}-RAW", name="Склад сырья", type="raw_stock"),
+        Section(code=f"{sku}-PRESS", name="Пресс", type="production"),
+        Section(code=f"{sku}-ANOD", name="Анодирование", type="production"),
+        Section(code=f"{sku}-PACK", name="Упаковка", type="production"),
+        Section(code=f"{sku}-FG", name="Склад ГП", type="finished_stock"),
     ]
     session.add_all([product, component, *sections])
     await session.flush()

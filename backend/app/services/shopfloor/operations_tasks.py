@@ -36,7 +36,7 @@ async def _get_stock_location(session: AsyncSession, section_id: int) -> int | N
 
     # Check if the section itself is a stock location
     sec = await session.get(Section, section_id)
-    if sec is not None and sec.kind != "production":
+    if sec is not None and sec.type != "production":
         return section_id
 
     # Find the preceding stock stage in the route
@@ -64,7 +64,7 @@ async def _get_stock_location(session: AsyncSession, section_id: int) -> int | N
 
     for prev in prev_lines:
         prev_sec = await session.get(Section, prev.section_id)
-        if prev_sec is not None and prev_sec.kind != "production":
+        if prev_sec is not None and prev_sec.type != "production":
             return prev.section_id
 
     return None
@@ -282,7 +282,6 @@ async def complete_task(
             scrap_sec = _Section(
                 code="SCRAP",
                 name="Scrap",
-                kind="storage",
                 type="scrap",
                 is_active=True,
                 sort_order=999,
@@ -488,11 +487,11 @@ async def prepare_section_task(
 
     from app.models.section import Section as _Section
     sec_meta = await db.get(_Section, line.section_id)
-    if sec_meta is not None and sec_meta.kind != "production":
+    if sec_meta is not None and sec_meta.type != "production":
         return {
             "task_id": None,
             "status": "skipped_storage_section",
-            "section_kind": sec_meta.kind,
+            "section_kind": sec_meta.type,
         }
 
     existing_task = await db.scalar(

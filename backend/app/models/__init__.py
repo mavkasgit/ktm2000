@@ -42,7 +42,6 @@ from .attachment import Attachment, AttachmentLink
 from .spg import StorageProductionGroup, SpgSection
 from .audit_log import AuditLog
 from app.stock.models import (
-    LocationType,
     QualityState,
     Reason,
     StockBalance,
@@ -115,7 +114,6 @@ __all__ = [
     "SpgSection",
     "AuditLog",
     "UserLoginToken",
-    "LocationType",
     "QualityState",
     "Reason",
     "StockBalance",

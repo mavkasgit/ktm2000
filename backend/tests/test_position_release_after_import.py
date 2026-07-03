@@ -57,9 +57,9 @@ async def test_plan_position_can_be_released_after_import(session) -> None:
 
     # Create sections for route steps
     sections = [
-        Section(code="WH", name="Warehouse", sort_order=10, kind="raw_stock", is_active=True),
-        Section(code="ANOD", name="Anodizing", sort_order=50, kind="production", is_active=True),
-        Section(code="PACK", name="Packing", sort_order=80, kind="production", is_active=True),
+        Section(code="WH", name="Warehouse", sort_order=10, type="raw_stock", is_active=True),
+        Section(code="ANOD", name="Anodizing", sort_order=50, type="production", is_active=True),
+        Section(code="PACK", name="Packing", sort_order=80, type="production", is_active=True),
     ]
     for section in sections:
         session.add(section)

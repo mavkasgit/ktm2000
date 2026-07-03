@@ -6,7 +6,6 @@
 Подробности: PLAN_stock_ledger.md, AGENTS.md → «Рефакторинг Stock Ledger».
 """
 from app.stock.models import (
-    LocationType,
     QualityState,
     Reason,
     StockBalance,
@@ -20,7 +19,6 @@ from app.stock.services import (
 )
 
 __all__ = [
-    "LocationType",
     "QualityState",
     "Reason",
     "StockBalance",

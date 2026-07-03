@@ -276,7 +276,7 @@ async def list_ready_to_transfer(
             WorkTask.status.notin_(
                 [WorkTaskStatus.cancelled, WorkTaskStatus.waiting_previous]
             ),
-            from_section.kind == "production",  # ONLY production tasks
+            from_section.type == "production",  # ONLY production tasks
         )
     )
 
@@ -378,14 +378,14 @@ async def list_ready_to_transfer(
         sections = (
             await db.execute(
                 select(Section).where(
-                    Section.kind.in_(["raw_stock", "wip_stock", "finished_stock"])
+                    Section.type.in_(["raw_stock", "wip_stock", "finished_stock"])
                 )
             )
         ).scalars().all()
 
     stock_items = []
     for sec in sections:
-        if sec.kind in {"raw_stock", "wip_stock", "finished_stock"}:
+        if sec.type in {"raw_stock", "wip_stock", "finished_stock"}:
             sec_spg_id = await db.scalar(
                 select(SpgSection.spg_id).where(SpgSection.section_id == sec.id)
             )

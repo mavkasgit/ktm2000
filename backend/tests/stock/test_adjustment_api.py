@@ -29,7 +29,7 @@ async def _make_product(session: AsyncSession, sku: str = "ADJ-PROD") -> Product
 
 async def _make_location(session: AsyncSession, code: str = "STOCK-1") -> Section:
     section = Section(
-        code=code, name=code, kind="raw_stock", type="raw_stock", is_active=True, sort_order=0,
+        code=code, name=code, type="raw_stock", is_active=True, sort_order=0,
     )
     session.add(section)
     await session.flush()

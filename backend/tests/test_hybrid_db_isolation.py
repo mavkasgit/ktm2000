@@ -13,7 +13,7 @@ async def test_hybrid_session_uses_temp_schema(session) -> None:
 async def test_hybrid_isolation_can_write_data(session) -> None:
     await session.execute(
         text(
-            "INSERT INTO sections (code, name, kind, is_active) "
+            "INSERT INTO sections (code, name, type, is_active) "
             "VALUES ('HYB-1', 'Hybrid Section', 'production', true)"
         )
     )

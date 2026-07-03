@@ -495,7 +495,7 @@ async def get_production_planning_overview(
                 section_id=section.id,
                 section_code=section.code,
                 section_name=section.name,
-                section_kind=section.kind,
+                section_kind=section.type,
                 positions_count=len(section_positions),
                 ready_count=ready_count,
                 in_progress_count=in_progress_count,

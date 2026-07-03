@@ -24,7 +24,7 @@ type Section = {
   code: string;
   name: string;
   description?: string | null;
-  kind?: string;
+  type?: string;
   icon?: string | null;
   icon_color?: string | null;
   sort_order?: number;
@@ -41,18 +41,22 @@ type Group = {
   productions: Section[];
 };
 
-const KIND_LABELS: Record<string, string> = {
+const TYPE_LABELS: Record<string, string> = {
   production: "Производство",
   raw_stock: "Склад сырья",
   wip_stock: "Склад полуфабриката",
   finished_stock: "Склад готовой продукции",
+  scrap: "Брак",
+  quarantine: "Карантин",
 };
 
-const KIND_OPTIONS = [
+const TYPE_OPTIONS = [
   { value: "production", label: "Производство" },
   { value: "raw_stock", label: "Склад сырья" },
   { value: "wip_stock", label: "Склад полуфабриката" },
   { value: "finished_stock", label: "Склад готовой продукции" },
+  { value: "scrap", label: "Брак" },
+  { value: "quarantine", label: "Карантин" },
 ];
 
 const ui = UI as unknown as Record<string, React.ComponentType<any>>;
@@ -75,7 +79,7 @@ const GROUP_FIELDS: Record<string, EntityDialogField> = {
 const SECTION_FIELDS: Record<string, EntityDialogField> = {
   code: { type: "text", label: "Код", placeholder: "Введите код", required: true, rowGroup: "row1" },
   name: { type: "text", label: "Название", placeholder: "Введите название", required: true, rowGroup: "row1" },
-  kind: { type: "select", label: "Тип", required: true, options: KIND_OPTIONS },
+  type: { type: "select", label: "Тип", required: true, options: TYPE_OPTIONS },
   icon: { type: "icon", label: "Иконка" },
   icon_color: { type: "color", label: "Цвет" },
   description: { type: "text", label: "Описание", placeholder: "Введите описание (необязательно)" },
@@ -605,7 +609,7 @@ export function SectionsPage() {
     const payload = {
       code: (values.code as string)?.trim(),
       name: (values.name as string)?.trim(),
-      kind: values.kind as string,
+      type: values.type as string,
       icon: (values.icon as string) || null,
       icon_color: (values.icon_color as string) || null,
       description: (values.description as string) || null,
@@ -618,7 +622,7 @@ export function SectionsPage() {
         toast({ title: "Сохранено", description: `Участок "${payload.name}" (код: ${payload.code}, ID: ${editingItem.id}) успешно обновлён`, variant: "success" });
       } else {
         await apiCreateSection(payload);
-        toast({ title: "Создано", description: `Участок "${payload.name}" (код: ${payload.code}, тип: ${KIND_LABELS[payload.kind] ?? payload.kind}) успешно создан`, variant: "success" });
+        toast({ title: "Создано", description: `Участок "${payload.name}" (код: ${payload.code}, тип: ${TYPE_LABELS[payload.type] ?? payload.type}) успешно создан`, variant: "success" });
       }
       setDialogOpen(false);
       await load();
@@ -633,7 +637,7 @@ export function SectionsPage() {
     if (!editingItem?.id) return;
     try {
       await apiDeleteSection(Number(editingItem.id));
-      toast({ title: "Удалено", description: `Участок "${editingItem.name}" (код: ${editingItem.code}, ID: ${editingItem.id}, тип: ${KIND_LABELS[editingItem.kind ?? "production"] ?? editingItem.kind}) успешно удалён`, variant: "success" });
+      toast({ title: "Удалено", description: `Участок "${editingItem.name}" (код: ${editingItem.code}, ID: ${editingItem.id}, тип: ${TYPE_LABELS[editingItem.type ?? "production"] ?? editingItem.type}) успешно удалён`, variant: "success" });
       setDialogOpen(false);
       await load();
       invalidateRelatedCaches();
@@ -669,7 +673,7 @@ export function SectionsPage() {
           />
         ),
       },
-      kind: SECTION_FIELDS.kind,
+      type: SECTION_FIELDS.type,
       icon: SECTION_FIELDS.icon,
       icon_color: SECTION_FIELDS.icon_color,
       description: SECTION_FIELDS.description,
@@ -680,13 +684,13 @@ export function SectionsPage() {
     ? {
         code: editingItem?.code ?? "",
         name: editingItem?.name ?? "",
-        kind: editingItem?.kind ?? "production",
+        type: editingItem?.type ?? "production",
         icon: editingItem?.icon ?? "",
         icon_color: editingItem?.icon_color ?? "#3B82F6",
         description: editingItem?.description ?? "",
         spg_id: editingItem?.spg_links?.[0]?.id ?? null,
       }
-    : { kind: "production", spg_id: null };
+    : { type: "production", spg_id: null };
 
   const groups = React.useMemo<Group[]>(() => {
     const groupsMap: Record<string | number, Group> = {};
@@ -712,7 +716,7 @@ export function SectionsPage() {
     };
 
     items.forEach((item) => {
-      const isStock = ["raw_stock", "wip_stock", "finished_stock"].includes(item.kind || "");
+      const isStock = ["raw_stock", "wip_stock", "finished_stock", "scrap", "quarantine"].includes(item.type || "");
       
       if (item.spg_links && item.spg_links.length > 0) {
         item.spg_links.forEach((link) => {
@@ -874,7 +878,7 @@ export function SectionsPage() {
                   <td className="py-1.5 px-2 text-xs truncate cursor-pointer" style={{ minWidth: "112px", maxWidth: "240px", width: "25%" }} title={item.spg_links?.map(g => g.name).join(", ") || "—"} onClick={() => openEdit(item)}>
                     {item.spg_links?.map(g => g.name).join(", ") || "—"}
                   </td>
-                  <td className="py-1.5 px-2 text-xs truncate cursor-pointer" style={{ width: "104px", minWidth: "104px" }} title={KIND_LABELS[item.kind ?? "production"] ?? item.kind ?? "-"} onClick={() => openEdit(item)}>{KIND_LABELS[item.kind ?? "production"] ?? item.kind ?? "-"}</td>
+                  <td className="py-1.5 px-2 text-xs truncate cursor-pointer" style={{ width: "104px", minWidth: "104px" }} title={TYPE_LABELS[item.type ?? "production"] ?? item.type ?? "-"} onClick={() => openEdit(item)}>{TYPE_LABELS[item.type ?? "production"] ?? item.type ?? "-"}</td>
                   <td className="py-1.5 px-2 text-xs truncate cursor-pointer" style={{ minWidth: "96px", maxWidth: "280px", width: "25%" }} title={item.description ?? "-"} onClick={() => openEdit(item)}>{item.description ?? "-"}</td>
                   {!isStock && (
                     <td className="py-1.5 px-2 text-xs text-center">

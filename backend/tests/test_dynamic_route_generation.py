@@ -32,12 +32,12 @@ from app.services.plan_import_service import _make_change_items
 
 
 DEFAULT_SECTIONS = [
-    {"code": "WH", "name": "Склад сырья", "sort_order": 10, "kind": "raw_stock"},
-    {"code": "DRILL", "name": "Сверловка", "sort_order": 20, "kind": "production"},
-    {"code": "PRESS", "name": "Пресс", "sort_order": 30, "kind": "production"},
-    {"code": "ANOD", "name": "Анодирование", "sort_order": 50, "kind": "production"},
-    {"code": "PACK", "name": "Упаковка", "sort_order": 80, "kind": "production"},
-    {"code": "FG_WH", "name": "Склад готовой продукции", "sort_order": 90, "kind": "finished_stock"},
+    {"code": "WH", "name": "Склад сырья", "sort_order": 10, "type": "raw_stock"},
+    {"code": "DRILL", "name": "Сверловка", "sort_order": 20, "type": "production"},
+    {"code": "PRESS", "name": "Пресс", "sort_order": 30, "type": "production"},
+    {"code": "ANOD", "name": "Анодирование", "sort_order": 50, "type": "production"},
+    {"code": "PACK", "name": "Упаковка", "sort_order": 80, "type": "production"},
+    {"code": "FG_WH", "name": "Склад готовой продукции", "sort_order": 90, "type": "finished_stock"},
 ]
 
 
@@ -47,7 +47,7 @@ async def _seed_sections(session) -> None:
             code=item["code"],
             name=item["name"],
             sort_order=item["sort_order"],
-            kind=item["kind"],
+            type=item["type"],
             is_active=True,
         )
         session.add(section)

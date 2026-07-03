@@ -221,8 +221,8 @@ async def test_section_board_combined_anod_tasks_have_resolvable_operations(sess
     operation data so the frontend can filter correctly.
     """
     # Create anodizing section with multiple operations
-    raw_section = Section(code="ANOD-RAW", name="Склад сырья", kind="raw_stock", is_active=True)
-    anod_section = Section(code="ANOD", name="Анодирование", kind="production", is_active=True)
+    raw_section = Section(code="ANOD-RAW", name="Склад сырья", type="raw_stock", is_active=True)
+    anod_section = Section(code="ANOD", name="Анодирование", type="production", is_active=True)
     session.add_all([raw_section, anod_section])
     await session.flush()
 

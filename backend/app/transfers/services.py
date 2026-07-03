@@ -74,7 +74,7 @@ async def _get_task_transferable(db: AsyncSession, task: WorkTask) -> Decimal:
     from app.stock.services import StockProjectionManager
 
     sec = await db.get(Section, task.section_id)
-    if sec and sec.kind in {"raw_stock", "wip_stock", "finished_stock"}:
+    if sec and sec.type in {"raw_stock", "wip_stock", "finished_stock"}:
         pm = StockProjectionManager()
         cache = await pm.get_task_cache(db, task.id)
         return cache["available_quantity"]

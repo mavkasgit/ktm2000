@@ -75,7 +75,7 @@ def test_excel_condition_fallbacks_to_header_on_column_mismatch() -> None:
 
 @pytest.mark.asyncio
 async def test_excel_condition_diagnostics_capture_header_mismatch(session) -> None:
-    section = Section(code="WH", name="Warehouse", kind="raw_stock", is_active=True)
+    section = Section(code="WH", name="Warehouse", type="raw_stock", is_active=True)
     route = ProductionRoute(name="Warehouse route", is_active=True, sort_order=1)
     session.add_all([section, route])
     await session.flush()
@@ -122,7 +122,7 @@ async def test_excel_condition_diagnostics_capture_header_mismatch(session) -> N
 
 @pytest.mark.asyncio
 async def test_route_rule_conflict_returns_error(session) -> None:
-    section = Section(code="DRILL", name="Drill", kind="production", is_active=True)
+    section = Section(code="DRILL", name="Drill", type="production", is_active=True)
     session.add(section)
     await session.flush()
     session.add(
@@ -148,8 +148,8 @@ async def test_route_rule_conflict_returns_error(session) -> None:
 
 @pytest.mark.asyncio
 async def test_select_route_scores_by_extra_sections_sort_order_then_id(session) -> None:
-    required = Section(code="DRILL", name="Drill", kind="production", is_active=True)
-    extra = Section(code="PRESS", name="Press", kind="production", is_active=True)
+    required = Section(code="DRILL", name="Drill", type="production", is_active=True)
+    extra = Section(code="PRESS", name="Press", type="production", is_active=True)
     session.add_all([required, extra])
     await session.flush()
 
@@ -193,8 +193,8 @@ async def test_select_route_scores_by_extra_sections_sort_order_then_id(session)
 
 @pytest.mark.asyncio
 async def test_select_route_returns_no_candidate_without_fallback(session) -> None:
-    required = Section(code="DRILL", name="Drill", kind="production", is_active=True)
-    other = Section(code="PRESS", name="Press", kind="production", is_active=True)
+    required = Section(code="DRILL", name="Drill", type="production", is_active=True)
+    other = Section(code="PRESS", name="Press", type="production", is_active=True)
     session.add_all([required, other])
     await session.flush()
     route = ProductionRoute(name="Fallback must not be used", is_active=True, sort_order=0)
@@ -223,9 +223,9 @@ async def test_select_route_returns_no_candidate_without_fallback(session) -> No
 
 @pytest.mark.asyncio
 async def test_select_route_uses_global_and_profile_rules(session) -> None:
-    wh = Section(code="WH", name="WH", kind="raw_stock", is_active=True)
-    drill = Section(code="DRILL", name="Drill", kind="production", is_active=True)
-    press = Section(code="PRESS", name="Press", kind="production", is_active=True)
+    wh = Section(code="WH", name="WH", type="raw_stock", is_active=True)
+    drill = Section(code="DRILL", name="Drill", type="production", is_active=True)
+    press = Section(code="PRESS", name="Press", type="production", is_active=True)
     session.add_all([wh, drill, press])
     await session.flush()
 

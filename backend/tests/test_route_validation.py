@@ -46,9 +46,9 @@ async def _make_factory_route(
     )
 
     sections = []
-    for logical_code, kind, op_name in step_defs:
+    for logical_code, section_kind, op_name in step_defs:
         sections.append(
-            Section(code=f"{sku}-{logical_code}", name=logical_code, kind=kind)
+            Section(code=f"{sku}-{logical_code}", name=logical_code, type=section_kind)
         )
     session.add_all(sections)
     await session.flush()
@@ -115,7 +115,7 @@ async def _make_plan_position(
 async def _section_id(session, sku: str, logical_code: str) -> int:
     section = await session.scalar(select(Section).where(Section.code == f"{sku}-{logical_code}"))
     if section is None:
-        section = Section(code=f"{sku}-{logical_code}", name=logical_code, kind="production")
+        section = Section(code=f"{sku}-{logical_code}", name=logical_code, type="production")
         session.add(section)
         await session.flush()
     return section.id

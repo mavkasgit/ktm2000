@@ -39,8 +39,8 @@ def _workbook_with_row(
     return out.getvalue()
 
 
-async def _make_section(session, code: str, name: str, kind: str = "standard", sort_order: int = 0) -> Section:
-    section = Section(code=code, name=name, kind=kind, is_active=True, sort_order=sort_order)
+async def _make_section(session, code: str, name: str, type_: str = "standard", sort_order: int = 0) -> Section:
+    section = Section(code=code, name=name, type=type_, is_active=True, sort_order=sort_order)
     session.add(section)
     await session.flush()
     return section
@@ -120,8 +120,8 @@ async def _seed_infrastructure(session, profile: RouteRuleProfile):
     }
     
     section_map = {}
-    for code, (name, kind, order) in sections.items():
-        section = await _make_section(session, code, name, kind, order)
+    for code, (name, type_, order) in sections.items():
+        section = await _make_section(session, code, name, type_, order)
         section_map[code] = section
     
     # Create ANOD section operations (ANOD group)

@@ -29,24 +29,24 @@ from app.services.route_selection import select_route_for_payload
 
 
 DEFAULT_SECTIONS = [
-    {"code": "WH", "name": "Склад сырья", "sort_order": 10, "kind": "raw_stock"},
-    {"code": "DRILL", "name": "Сверловка", "sort_order": 20, "kind": "production"},
-    {"code": "PRESS", "name": "Пресс", "sort_order": 30, "kind": "production"},
-    {"code": "SHOT", "name": "Дробеструй", "sort_order": 40, "kind": "production"},
-    {"code": "PREP_STOCK", "name": "Склад подготовки", "sort_order": 45, "kind": "wip_stock"},
-    {"code": "ANOD", "name": "Анодирование", "sort_order": 50, "kind": "production"},
-    {"code": "WIP_WH", "name": "Склад полуфабриката", "sort_order": 60, "kind": "wip_stock"},
-    {"code": "SAW", "name": "Пила", "sort_order": 70, "kind": "production"},
-    {"code": "PACK", "name": "Упаковка", "sort_order": 80, "kind": "production"},
-    {"code": "FG_WH", "name": "Склад готовой продукции", "sort_order": 90, "kind": "finished_stock"},
-    {"code": "SHIPMENT", "name": "К отгрузке", "sort_order": 100, "kind": "finished_stock"},
-    {"code": "SENT", "name": "Отправлено", "sort_order": 110, "kind": "finished_stock"},
+    {"code": "WH", "name": "Склад сырья", "sort_order": 10, "type": "raw_stock"},
+    {"code": "DRILL", "name": "Сверловка", "sort_order": 20, "type": "production"},
+    {"code": "PRESS", "name": "Пресс", "sort_order": 30, "type": "production"},
+    {"code": "SHOT", "name": "Дробеструй", "sort_order": 40, "type": "production"},
+    {"code": "PREP_STOCK", "name": "Склад подготовки", "sort_order": 45, "type": "wip_stock"},
+    {"code": "ANOD", "name": "Анодирование", "sort_order": 50, "type": "production"},
+    {"code": "WIP_WH", "name": "Склад полуфабриката", "sort_order": 60, "type": "wip_stock"},
+    {"code": "SAW", "name": "Пила", "sort_order": 70, "type": "production"},
+    {"code": "PACK", "name": "Упаковка", "sort_order": 80, "type": "production"},
+    {"code": "FG_WH", "name": "Склад готовой продукции", "sort_order": 90, "type": "finished_stock"},
+    {"code": "SHIPMENT", "name": "К отгрузке", "sort_order": 100, "type": "finished_stock"},
+    {"code": "SENT", "name": "Отправлено", "sort_order": 110, "type": "finished_stock"},
 ]
 
 
 async def _seed_default_sections(session) -> None:
     for item in DEFAULT_SECTIONS:
-        session.add(Section(code=item["code"], name=item["name"], sort_order=item["sort_order"], kind=item["kind"], is_active=True))
+        session.add(Section(code=item["code"], name=item["name"], sort_order=item["sort_order"], type=item["type"], is_active=True))
     await session.commit()
 
 

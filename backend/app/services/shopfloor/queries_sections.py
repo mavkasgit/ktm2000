@@ -475,7 +475,7 @@ async def get_sections_summary(db: AsyncSession) -> dict:
                 "section_id": section.id,
                 "section_code": section.code,
                 "section_name": section.name,
-                "kind": section.kind,
+                "type": section.type,
                 "sort_order": section.sort_order,
                 "icon": section.icon,
                 "icon_color": section.icon_color,

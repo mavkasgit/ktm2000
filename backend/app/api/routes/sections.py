@@ -17,7 +17,7 @@ class SectionBase(BaseModel):
     description: str | None = None
     sort_order: int = 0
     is_active: bool = True
-    kind: str = "production"
+    type: str = "production"
     icon: str | None = None
     icon_color: str | None = None
 
@@ -37,7 +37,7 @@ class SectionWithOperationsOut(BaseModel):
     id: int
     code: str
     name: str
-    kind: str
+    type: str
     role: str
     has_real_operations: bool
     icon: str | None = None
@@ -49,7 +49,7 @@ class StoragePointOut(BaseModel):
     id: int
     code: str
     name: str
-    kind: str
+    type: str
     icon: str | None = None
     icon_color: str | None = None
 
@@ -63,7 +63,7 @@ class SectionPatch(BaseModel):
     description: str | None = None
     sort_order: int | None = None
     is_active: bool | None = None
-    kind: str | None = None
+    type: str | None = None
     icon: str | None = None
     icon_color: str | None = None
     spg_id: int | None = None
@@ -144,7 +144,7 @@ async def list_sections_with_operations(
                 id=s.id,
                 code=s.code,
                 name=s.name,
-                kind=s.kind,
+                type=s.type,
                 role=classify_section_role(s),
                 has_real_operations=has_real_ops,
                 icon=s.icon,
@@ -176,13 +176,13 @@ async def list_storage_points(
     Используется route editor'ом для выбора транзитного узла между
     production-этапами.
     """
-    from app.services.route_storage_classifier import STORAGE_KINDS
+    from app.services.route_storage_classifier import STORAGE_TYPES
 
     sections = (
         await db.execute(
             select(Section)
             .where(Section.is_active == True)
-            .where(Section.kind.in_(list(STORAGE_KINDS)))
+            .where(Section.type.in_(list(STORAGE_TYPES)))
             .order_by(Section.sort_order, Section.id)
         )
     ).scalars().all()
@@ -191,7 +191,7 @@ async def list_storage_points(
             id=s.id,
             code=s.code,
             name=s.name,
-            kind=s.kind,
+            type=s.type,
             icon=s.icon,
             icon_color=s.icon_color,
         )

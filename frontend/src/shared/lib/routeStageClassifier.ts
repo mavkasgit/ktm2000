@@ -2,19 +2,21 @@
 // in route UI components.
 //
 // Mirrors the backend `app.services.route_storage_classifier` module — keep
-// both in sync when adding new stage kinds or section kinds.
+// both in sync when adding new stage kinds or section types.
 
 export type RouteStageKind = "production" | "transit";
-export type StorageKind = "raw_stock" | "wip_stock" | "finished_stock";
+export type StorageType = "raw_stock" | "wip_stock" | "finished_stock" | "scrap" | "quarantine";
 
-export const STORAGE_KINDS: readonly StorageKind[] = [
+export const STORAGE_TYPES: readonly StorageType[] = [
   "raw_stock",
   "wip_stock",
   "finished_stock",
+  "scrap",
+  "quarantine",
 ] as const;
 
-export function isStorageKind(kind: string | null | undefined): boolean {
-  return STORAGE_KINDS.includes(kind as StorageKind);
+export function isStorageType(type: string | null | undefined): boolean {
+  return STORAGE_TYPES.includes(type as StorageType);
 }
 
 export function isTransitStage(stage: {
@@ -33,7 +35,7 @@ export function isProductionStage(stage: {
 export type SectionRole = "production" | "storage";
 
 export function classifySectionRole(
-  section: { kind?: string | null } | null | undefined,
+  section: { type?: string | null } | null | undefined,
 ): SectionRole {
-  return isStorageKind(section?.kind) ? "storage" : "production";
+  return isStorageType(section?.type) ? "storage" : "production";
 }

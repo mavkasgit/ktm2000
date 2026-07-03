@@ -19,7 +19,7 @@ import { queryKeys } from "@/shared/api/queryKeys";
 import { DateRangePicker, renderIcon, toast, Button, type DateRangeValue } from "@/shared/ui";
 import { useBulkSelection } from "@/shared/bulk";
 import { BulkResultsDialog, summarizeBulkResults, type BulkActionResultItem, type BulkActionSummary, type BulkRunnerProgress } from "@/shared/bulk";
-import { isProductionSection } from "@/shared/lib/sectionKinds";
+import { isProductionSection } from "@/shared/lib/sectionTypes";
 import { SectionSwitcherTiles } from "../components/SectionSwitcherTiles";
 import { SectionTasksBoard, type TaskActionDialogType, type TaskBoardViewMode } from "../components/SectionTasksBoard";
 import { TaskActionDrawer } from "../components/TaskActionDrawer";
@@ -204,7 +204,7 @@ export function SectionsTasksPage() {
   const isSingleWindowBlocked = isSingleWindow && !lockedSection;
 
   const selectedSectionIsStock = useMemo(
-    () => (selectedSection ? !isProductionSection(selectedSection.kind) : false),
+    () => (selectedSection ? !isProductionSection(selectedSection.type) : false),
     [selectedSection]
   );
 
@@ -247,8 +247,8 @@ export function SectionsTasksPage() {
       return;
     }
     const first =
-      sections.find((s) => s.is_active && isProductionSection(s.kind)) ||
-      sections.find((s) => isProductionSection(s.kind)) ||
+      sections.find((s) => s.is_active && isProductionSection(s.type)) ||
+      sections.find((s) => isProductionSection(s.type)) ||
       sections[0];
     if (!first) return;
     setSectionId(first.id);
@@ -846,7 +846,7 @@ export function SectionsTasksPage() {
               <div className="flex items-center gap-3 min-w-0">
                 {isSingleWindow ? (
                   <SectionSwitcherTiles
-                    sections={(sections || []).filter((s) => s.is_active && isProductionSection(s.kind))}
+                    sections={(sections || []).filter((s) => s.is_active && isProductionSection(s.type))}
                     summary={summary?.sections || []}
                     selectedSectionId={sectionId}
                     onSelect={(nextId) => {
@@ -947,7 +947,7 @@ export function SectionsTasksPage() {
 
         {!isSingleWindow && (
           <SectionSwitcherTiles
-            sections={(sections || []).filter((section) => section.is_active && isProductionSection(section.kind))}
+            sections={(sections || []).filter((section) => section.is_active && isProductionSection(section.type))}
             summary={summary?.sections || []}
             selectedSectionId={sectionId}
             onSelect={(nextId) => {

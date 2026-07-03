@@ -180,7 +180,7 @@ export function SpgSnapshotPage() {
               size="sm"
               onClick={() => {
                 const stockSection = sections.find((s) =>
-                  s.kind === "raw_stock" || s.kind === "wip_stock" || s.kind === "finished_stock",
+                  s.type === "raw_stock" || s.type === "wip_stock" || s.type === "finished_stock",
                 );
                 if (stockSection) {
                   setImportLocationId(stockSection.id);

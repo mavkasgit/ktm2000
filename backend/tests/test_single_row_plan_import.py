@@ -96,10 +96,10 @@ async def test_single_row_import_yup_2630_passes_when_product_techcard_and_route
         ("WH-FG-2630", "Склад ГП", "finished_stock"),
     ]
     sections: list[Section] = []
-    for code, name, kind in section_specs:
+    for code, name, type_ in section_specs:
         section = await session.scalar(select(Section).where(Section.code == code))
         if section is None:
-            section = Section(code=code, name=name, kind=kind, is_active=True)
+            section = Section(code=code, name=name, type=type_, is_active=True)
             session.add(section)
             await session.flush()
         sections.append(section)

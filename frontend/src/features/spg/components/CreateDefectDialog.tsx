@@ -51,7 +51,7 @@ export function CreateDefectDialog({
       name: s.section_name,
       description: "",
       is_active: true,
-      kind: "production" as any,
+      type: "production" as any,
       icon: null,
       icon_color: null,
     }));

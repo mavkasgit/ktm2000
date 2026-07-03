@@ -197,7 +197,7 @@ async def defect_decide(
         )
         if scrap_loc is None:
             scrap_sec = _Section(
-                code="SCRAP", name="Scrap", kind="storage",
+                code="SCRAP", name="Scrap",
                 type="scrap", is_active=True, sort_order=999,
             )
             db.add(scrap_sec)
@@ -322,7 +322,7 @@ async def defect_decide(
         )
         if quarantine_loc is None:
             quar_sec = _Section(
-                code="QUARANTINE", name="Quarantine", kind="storage",
+                code="QUARANTINE", name="Quarantine",
                 type="quarantine", is_active=True, sort_order=999,
             )
             db.add(quar_sec)

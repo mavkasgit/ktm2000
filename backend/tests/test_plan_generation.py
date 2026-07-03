@@ -31,12 +31,12 @@ async def _make_ready_product(session, sku: str = "FG-1") -> tuple[Product, list
     product = Product(sku=sku, name=f"Finished {sku}", type=ProductType.finished_good, unit="pcs")
     component = Product(sku=f"{sku}-RAW", name=f"Raw {sku}", type=ProductType.component, unit="pcs")
     sections = [
-        Section(code=f"{sku}-ISSUE", name="Issue", kind="raw_stock"),
-        Section(code=f"{sku}-DRILL", name="Drill", kind="production"),
-        Section(code=f"{sku}-SHOT", name="Shot", kind="production"),
-        Section(code=f"{sku}-ANOD", name="Anod", kind="production"),
-        Section(code=f"{sku}-WIP", name="WIP", kind="wip_stock"),
-        Section(code=f"{sku}-FINAL", name="Final", kind="finished_stock"),
+        Section(code=f"{sku}-ISSUE", name="Issue", type="raw_stock"),
+        Section(code=f"{sku}-DRILL", name="Drill", type="production"),
+        Section(code=f"{sku}-SHOT", name="Shot", type="production"),
+        Section(code=f"{sku}-ANOD", name="Anod", type="production"),
+        Section(code=f"{sku}-WIP", name="WIP", type="wip_stock"),
+        Section(code=f"{sku}-FINAL", name="Final", type="finished_stock"),
     ]
     session.add_all([product, component, *sections])
     await session.flush()
@@ -75,12 +75,12 @@ async def _make_ready_product(session, sku: str = "FG-1") -> tuple[Product, list
 async def _make_matching_route_product(session, sku: str = "FG-MATCH") -> tuple[Product, list[Section], ProductionRoute]:
     product = Product(sku=sku, name=f"Finished {sku}", type=ProductType.finished_good, unit="pcs")
     sections = [
-        Section(code=f"{sku}-ISSUE", name="Issue", kind="raw_stock"),
-        Section(code=f"{sku}-DRILL", name="Drill", kind="production"),
-        Section(code=f"{sku}-SHOT", name="Shot", kind="production"),
-        Section(code=f"{sku}-ANOD", name="Anod", kind="production"),
-        Section(code=f"{sku}-WIP", name="WIP", kind="wip_stock"),
-        Section(code=f"{sku}-FINAL", name="Final", kind="finished_stock"),
+        Section(code=f"{sku}-ISSUE", name="Issue", type="raw_stock"),
+        Section(code=f"{sku}-DRILL", name="Drill", type="production"),
+        Section(code=f"{sku}-SHOT", name="Shot", type="production"),
+        Section(code=f"{sku}-ANOD", name="Anod", type="production"),
+        Section(code=f"{sku}-WIP", name="WIP", type="wip_stock"),
+        Section(code=f"{sku}-FINAL", name="Final", type="finished_stock"),
     ]
     session.add_all([product, *sections])
     await session.flush()
@@ -393,9 +393,9 @@ async def test_release_blocked_on_route_mismatch(client, session) -> None:
     # Create a product with a route that lacks SHOT, ANOD, PACK, etc.
     product = Product(sku="FG-ROUTE-MISMATCH", name="Finished FG-ROUTE-MISMATCH", type=ProductType.finished_good, unit="pcs")
     sections = [
-        Section(code="FG-ROUTE-MISMATCH-ISSUE", name="Issue", kind="raw_stock"),
-        Section(code="FG-ROUTE-MISMATCH-DRILL", name="Drill", kind="production"),
-        Section(code="FG-ROUTE-MISMATCH-FINAL", name="Final", kind="finished_stock"),
+        Section(code="FG-ROUTE-MISMATCH-ISSUE", name="Issue", type="raw_stock"),
+        Section(code="FG-ROUTE-MISMATCH-DRILL", name="Drill", type="production"),
+        Section(code="FG-ROUTE-MISMATCH-FINAL", name="Final", type="finished_stock"),
     ]
     session.add_all([product, *sections])
     await session.flush()

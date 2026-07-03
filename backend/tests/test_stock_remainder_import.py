@@ -53,7 +53,6 @@ async def _make_location(session: AsyncSession, code: str = "STOCK-IMP") -> Sect
     section = Section(
         code=code,
         name=code,
-        kind="raw_stock",
         type="raw_stock",
         is_active=True,
         sort_order=0,

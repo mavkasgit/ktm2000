@@ -222,7 +222,7 @@ async def release_batch(
             # Transfer / auto_consume.
             from app.models.section import Section as _Section
             sec_meta = await db.get(_Section, step["section_id"])
-            if sec_meta is not None and sec_meta.kind != "production":
+            if sec_meta is not None and sec_meta.type != "production":
                 # SectionPlanLine нужен (привязка к маршруту), WorkTask — нет
                 continue
 
@@ -501,14 +501,14 @@ async def _route_snapshot(
                 "section_id": storage_section.id if storage_section else None,
                 "section_code": storage_section.code if storage_section else None,
                 "section_name": storage_section.name if storage_section else None,
-                "section_kind": storage_section.kind if storage_section else "wip_stock",
+                "section_kind": storage_section.type if storage_section else "wip_stock",
             }
         else:
             section_payload = {
                 "section_id": section.id,
                 "section_code": section.code,
                 "section_name": section.name,
-                "section_kind": section.kind,
+                "section_kind": section.type,
             }
 
         snapshot_steps.append({

@@ -25,18 +25,18 @@ from app.services.shopfloor.common import build_completed_stages_json
 
 
 DEFAULT_SECTIONS = [
-    {"code": "WH", "name": "Склад сырья", "sort_order": 10, "kind": "raw_stock"},
-    {"code": "DRILL", "name": "Сверловка", "sort_order": 20, "kind": "production"},
-    {"code": "PRESS", "name": "Пресс", "sort_order": 30, "kind": "production"},
-    {"code": "SHOT", "name": "Дробеструй", "sort_order": 40, "kind": "production"},
-    {"code": "PREP_STOCK", "name": "Склад подготовки", "sort_order": 45, "kind": "wip_stock"},
-    {"code": "ANOD", "name": "Анодирование", "sort_order": 50, "kind": "production"},
-    {"code": "WIP_WH", "name": "Склад полуфабриката", "sort_order": 60, "kind": "wip_stock"},
-    {"code": "SAW", "name": "Пила", "sort_order": 70, "kind": "production"},
-    {"code": "PACK", "name": "Упаковка", "sort_order": 80, "kind": "production"},
-    {"code": "FG_WH", "name": "Склад готовой продукции", "sort_order": 90, "kind": "finished_stock"},
-    {"code": "SHIPMENT", "name": "К отгрузке", "sort_order": 100, "kind": "finished_stock"},
-    {"code": "SENT", "name": "Отправлено", "sort_order": 110, "kind": "finished_stock"},
+    {"code": "WH", "name": "Склад сырья", "sort_order": 10, "type": "raw_stock"},
+    {"code": "DRILL", "name": "Сверловка", "sort_order": 20, "type": "production"},
+    {"code": "PRESS", "name": "Пресс", "sort_order": 30, "type": "production"},
+    {"code": "SHOT", "name": "Дробеструй", "sort_order": 40, "type": "production"},
+    {"code": "PREP_STOCK", "name": "Склад подготовки", "sort_order": 45, "type": "wip_stock"},
+    {"code": "ANOD", "name": "Анодирование", "sort_order": 50, "type": "production"},
+    {"code": "WIP_WH", "name": "Склад полуфабриката", "sort_order": 60, "type": "wip_stock"},
+    {"code": "SAW", "name": "Пила", "sort_order": 70, "type": "production"},
+    {"code": "PACK", "name": "Упаковка", "sort_order": 80, "type": "production"},
+    {"code": "FG_WH", "name": "Склад готовой продукции", "sort_order": 90, "type": "finished_stock"},
+    {"code": "SHIPMENT", "name": "К отгрузке", "sort_order": 100, "type": "finished_stock"},
+    {"code": "SENT", "name": "Отправлено", "sort_order": 110, "type": "finished_stock"},
 ]
 
 
@@ -47,7 +47,7 @@ async def _seed_default_sections(session) -> dict[str, Section]:
             code=item["code"],
             name=item["name"],
             sort_order=item["sort_order"],
-            kind=item["kind"],
+            type=item["type"],
             is_active=True,
         )
         session.add(sec)
@@ -65,9 +65,9 @@ def test_prep_present_in_spgs_data():
 
 
 def test_prep_stock_section_in_default_sections():
-    """PREP_STOCK — wip-секция (kind=wip_stock), не SPG."""
+    """PREP_STOCK — wip-секция (type=wip_stock), не SPG."""
     sec = next(item for item in DEFAULT_SECTIONS if item["code"] == "PREP_STOCK")
-    assert sec["kind"] == "wip_stock"
+    assert sec["type"] == "wip_stock"
 
 
 def test_prep_stock_not_in_spgs_data():
@@ -363,10 +363,10 @@ async def _build_route_with_sections(
     """
     from app.services.route_storage_classifier import is_storage_section
 
-    for code, name, kind, _sig in sections:
+    for code, name, type_, _sig in sections:
         exists = await session.scalar(select(Section).where(Section.code == code))
         if not exists:
-            section = Section(code=code, name=name, kind=kind, sort_order=10, is_active=True)
+            section = Section(code=code, name=name, type=type_, sort_order=10, is_active=True)
             session.add(section)
     await session.commit()
 
@@ -464,10 +464,10 @@ async def test_significant_section_ids_filters_pass_through_sections(session):
         ("PACK", "Упаковка", "production"),
         ("FG_WH", "Склад ГП", "finished_stock"),
     ]
-    for code, name, kind in sections:
+    for code, name, type_ in sections:
         section = await session.scalar(select(Section).where(Section.code == code))
         if section is None:
-            section = Section(code=code, name=name, kind=kind, is_active=True, sort_order=0)
+            section = Section(code=code, name=name, type=type_, is_active=True, sort_order=0)
             session.add(section)
     await session.flush()
 

@@ -139,7 +139,7 @@ await assert_no_invariants_violations(session, context="after-cancel")
 
 | Сущность | Таблица | Назначение |
 |---|---|---|
-| `Location` | `sections` (расшир.) | Где находится материал; `type: LocationType` enum (RAW_STOCK/WIP_STOCK/FINISHED_STOCK/LASER/WELDING/PAINTING/ASSEMBLY/SCRAP/QUARANTINE/TRANSIT) |
+| `Location` (= `Section`) | `sections` | Где находится материал; `type: String(20)` — единый классификатор, 6 значений: `production`, `raw_stock`, `wip_stock`, `finished_stock`, `scrap`, `quarantine`. Enum `LocationType` и поле `kind` удалены в эпике `section-cleanup` (миграция 027). |
 | `StockTransaction` | `stock_transactions` | Единый append-only ledger: `from_location_id`, `to_location_id`, `quantity`, `reason`, `from_quality_state`, `to_quality_state`, `task_id`, `transfer_id` |
 | `StockBalance` | `stock_balances` | Материализованный кэш баланса по `(product, location, quality_state)` |
 | `WorkTask` | `work_tasks` | Мутабельный агрегат: `planned_qty`, `completed_qty`, `scrap_qty` хранятся (не projection). `cached_*` удалены |

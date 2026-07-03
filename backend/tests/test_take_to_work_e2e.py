@@ -62,9 +62,9 @@ async def test_take_position_to_work_with_dynamic_route(session) -> None:
 
     # Create sections
     sections = [
-        Section(code="WH", name="Warehouse", sort_order=10, kind="raw_stock", is_active=True),
-        Section(code="PRESS", name="Press", sort_order=30, kind="production", is_active=True),
-        Section(code="PACK", name="Packing", sort_order=80, kind="production", is_active=True),
+        Section(code="WH", name="Warehouse", sort_order=10, type="raw_stock", is_active=True),
+        Section(code="PRESS", name="Press", sort_order=30, type="production", is_active=True),
+        Section(code="PACK", name="Packing", sort_order=80, type="production", is_active=True),
     ]
     for section in sections:
         session.add(section)

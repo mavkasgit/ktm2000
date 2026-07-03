@@ -29,21 +29,21 @@ STAGE_KIND_TRANSIT = "transit"
 OPERATION_TYPE_PRODUCTION = "production"
 OPERATION_TYPE_TRANSPORT = "transport"
 
-STORAGE_KINDS = frozenset({"raw_stock", "wip_stock", "finished_stock"})
+STORAGE_TYPES = frozenset({"raw_stock", "wip_stock", "finished_stock", "scrap", "quarantine"})
 
 
 def is_storage_section(section: Section | None) -> bool:
     """``True`` если секция — это место хранения (склад), а не цех."""
     if section is None:
         return False
-    return section.kind in STORAGE_KINDS
+    return section.type in STORAGE_TYPES
 
 
 def is_production_section(section: Section | None) -> bool:
     """``True`` если секция — это цех (место реальной работы)."""
     if section is None:
         return False
-    return section.kind == "production"
+    return section.type == "production"
 
 
 def classify_section_role(section: Section | None) -> str:
@@ -105,7 +105,7 @@ async def classify_stages(
 
     Единая функция-источник правды.  Использует ``stage.stage_kind`` и
     ``stage.storage_section_id`` — никаких ad-hoc проверок ``is_significant``
-    или ``Section.kind`` вне этого модуля.
+    или ``Section.type`` вне этого модуля.
     """
     stage_list = list(stages)
     if not stage_list:
@@ -135,7 +135,7 @@ __all__ = [
     "STAGE_KIND_TRANSIT",
     "OPERATION_TYPE_PRODUCTION",
     "OPERATION_TYPE_TRANSPORT",
-    "STORAGE_KINDS",
+    "STORAGE_TYPES",
     "is_storage_section",
     "is_production_section",
     "classify_section_role",

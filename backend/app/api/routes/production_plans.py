@@ -784,7 +784,7 @@ async def route_check(
                     "section_id": stage.section_id,
                     "section_code": section.code,
                     "section_name": section.name,
-                    "section_kind": section.kind,
+                    "section_kind": section.type,
                     "operation_name": ", ".join(op.operation_name for op in stage.operations) if stage.operations else "",
                 }
                 for stage, section in stages_result.all()
@@ -878,7 +878,7 @@ async def section_totals(
                     "section_id": section.id,
                     "section_code": section.code,
                     "section_name": section.name,
-                    "section_kind": section.kind,
+                    "section_kind": section.type,
                     "positions": set(),
                     "input": 0,
                     "output": 0,

@@ -197,8 +197,8 @@ _TRIGGERS_SQL = [
         sec_kind text;
     BEGIN
         IF NEW.operation_type = 'transport' THEN
-            SELECT kind INTO sec_kind FROM sections WHERE id = NEW.section_id;
-            IF sec_kind IS NULL OR NOT (sec_kind IN ('raw_stock', 'wip_stock', 'finished_stock')) THEN
+            SELECT type INTO sec_kind FROM sections WHERE id = NEW.section_id;
+            IF sec_kind IS NULL OR NOT (sec_kind IN ('raw_stock', 'wip_stock', 'finished_stock', 'scrap', 'quarantine')) THEN
                 RAISE EXCEPTION 'SectionOperation.operation_type=transport requires storage kind; got kind=% section_id=%', sec_kind, NEW.section_id
                     USING ERRCODE = 'check_violation';
             END IF;
@@ -229,8 +229,8 @@ _TRIGGERS_SQL = [
                 RAISE EXCEPTION 'RouteStage.stage_kind=transit requires storage_section_id IS NOT NULL'
                     USING ERRCODE = 'check_violation';
             END IF;
-            SELECT kind INTO sec_kind FROM sections WHERE id = NEW.storage_section_id;
-            IF sec_kind IS NULL OR NOT (sec_kind IN ('raw_stock', 'wip_stock', 'finished_stock')) THEN
+            SELECT type INTO sec_kind FROM sections WHERE id = NEW.storage_section_id;
+            IF sec_kind IS NULL OR NOT (sec_kind IN ('raw_stock', 'wip_stock', 'finished_stock', 'scrap', 'quarantine')) THEN
                 RAISE EXCEPTION 'RouteStage.storage_section_id must reference a storage section; got kind=% storage_section_id=%', sec_kind, NEW.storage_section_id
                     USING ERRCODE = 'check_violation';
             END IF;

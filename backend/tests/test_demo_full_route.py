@@ -29,15 +29,15 @@ async def _make_demo_route(session, code_prefix: str, step_defs: list[tuple[str,
 
     step_defs: list of (section_code_suffix, operation_code, operation_name, is_final)
     """
-    kind_map = {
+    type_map = {
         "ISSUE_RAW": "raw_stock",
         "MOVE_TO_WIP": "wip_stock",
         "ACCEPT_FINISHED": "finished_stock",
     }
     sections = []
     for suffix, op_code, op_name, _ in step_defs:
-        kind = kind_map.get(op_code, "production")
-        sections.append(Section(code=f"{code_prefix}-{suffix}", name=op_name, kind=kind, is_active=True))
+        type_val = type_map.get(op_code, "production")
+        sections.append(Section(code=f"{code_prefix}-{suffix}", name=op_name, type=type_val, is_active=True))
     session.add_all(sections)
     await session.flush()
 
@@ -215,7 +215,7 @@ async def test_demo_stage_preset_before_approve(client, session) -> None:
     )
 
     sections = [
-        Section(code="DEMO-BA-A", name="Demo BA A", kind="production", is_active=True),
+        Section(code="DEMO-BA-A", name="Demo BA A", type="production", is_active=True),
     ]
     session.add_all(sections)
     await session.flush()
@@ -282,7 +282,7 @@ async def test_demo_stage_preset_after_approve(client, session) -> None:
     )
 
     sections = [
-        Section(code="DEMO-AA-A", name="Demo AA A", kind="production", is_active=True),
+        Section(code="DEMO-AA-A", name="Demo AA A", type="production", is_active=True),
     ]
     session.add_all(sections)
     await session.flush()
@@ -527,7 +527,7 @@ async def test_demo_paired_profile_scenario_imports_as_paired_row(client, sessio
         )
     )
 
-    section = Section(code="DEMO-PAIR-A", name="Demo Pair A", kind="production", is_active=True)
+    section = Section(code="DEMO-PAIR-A", name="Demo Pair A", type="production", is_active=True)
     session.add(section)
     await session.flush()
 

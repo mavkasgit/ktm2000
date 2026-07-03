@@ -61,8 +61,8 @@ async def _make_raw_stock_to_production_fixture(
         ProductionPlanStatus,
     )
 
-    raw_sec = Section(code=f"{sku}-RAW", name="RAW", kind="raw_stock", is_active=True, sort_order=0)
-    prod_sec = Section(code=f"{sku}-PROD", name="PROD", kind="production", is_active=True, sort_order=1)
+    raw_sec = Section(code=f"{sku}-RAW", name="RAW", type="raw_stock", is_active=True, sort_order=0)
+    prod_sec = Section(code=f"{sku}-PROD", name="PROD", type="production", is_active=True, sort_order=1)
     session.add_all([raw_sec, prod_sec])
     await session.flush()
 

@@ -73,7 +73,6 @@ async def _make_location(
 ) -> Section:
     section = Section(
         code=code, name=name,
-        kind="production" if loc_type in ("laser", "welding", "painting", "assembly") else loc_type,
         type=loc_type, is_active=True, sort_order=0,
     )
     session.add(section)

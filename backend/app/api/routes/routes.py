@@ -358,7 +358,7 @@ async def create_route_step(route_id: int, payload: StepCreate, db: AsyncSession
         if not is_storage_section(storage_section):
             raise HTTPException(
                 status_code=400,
-                detail=f"Section {sid} (kind={storage_section.kind}) is not a storage section",
+                detail=f"Section {sid} (type={storage_section.type}) is not a storage section",
             )
         if payload.is_final:
             raise HTTPException(status_code=400, detail="Transit stage cannot be marked as final")
@@ -482,7 +482,7 @@ async def replace_route_steps(route_id: int, payload: list[StepUpdate], db: Asyn
             if not is_storage_section(storage_section):
                 raise HTTPException(
                     status_code=400,
-                    detail=f"Section {sid} (kind={storage_section.kind}) is not a storage section",
+                    detail=f"Section {sid} (type={storage_section.type}) is not a storage section",
                 )
             if item.is_final:
                 raise HTTPException(status_code=400, detail="Transit stage cannot be marked as final")

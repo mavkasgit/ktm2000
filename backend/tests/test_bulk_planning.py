@@ -47,8 +47,8 @@ async def _make_route(session, sku: str) -> tuple[Product, ProductionRoute]:
         unit="pcs",
     )
     sections = [
-        Section(code=f"{sku}-ISSUE", name="Issue", kind="raw_stock"),
-        Section(code=f"{sku}-FINAL", name="Final", kind="finished_stock"),
+        Section(code=f"{sku}-ISSUE", name="Issue", type="raw_stock"),
+        Section(code=f"{sku}-FINAL", name="Final", type="finished_stock"),
     ]
     session.add_all([product, *sections])
     await session.flush()
