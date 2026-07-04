@@ -1,7 +1,7 @@
 import { ProductionPlanningRow } from "@/shared/api/productionPlans";
 import { Badge, Button, PositionSkuCell } from "@/shared/ui";
 import { fmtQty } from "@/shared/utils/fmtQty";
-import { ArrowRight, History, RotateCcw, Trash2, XCircle } from "lucide-react";
+import { ArrowRight, RotateCcw, Trash2, XCircle } from "lucide-react";
 import { positionStatusLabels, positionStatusColor, routeMetaLabel, planPreviewUrl, getLaunchBlockReason } from "./execution-utils";
 import { StepIndicator } from "../components/StepIndicator";
 import type { ExecutionColumnId, ExecutionTableColumn } from "./execution-table-columns";
@@ -46,7 +46,6 @@ interface ExecutionRowProps {
   onCancel: (row: ProductionPlanningRow) => void;
   onRestore: (row: ProductionPlanningRow) => void;
   onSoftDelete: (row: ProductionPlanningRow) => void;
-  onOpenHistory: (row: ProductionPlanningRow) => void;
   onSkuClick: (sku: string) => void;
 }
 
@@ -63,7 +62,6 @@ export function ExecutionRow({
   onCancel,
   onRestore,
   onSoftDelete,
-  onOpenHistory,
   onSkuClick,
 }: ExecutionRowProps) {
   const canLaunch = row.position_status === "approved" && !row.has_tasks && !row.is_released && !!row.route_id;
@@ -217,15 +215,6 @@ export function ExecutionRow({
                 </Button>
               </>
             )}
-            <Button
-              size="sm"
-              variant="ghost"
-              className="h-8 w-8 shrink-0 px-0 text-gray-500 hover:text-gray-700"
-              onClick={() => onOpenHistory(row)}
-              title="История"
-            >
-              <History className="h-4 w-4" />
-            </Button>
           </div>
         );
       default:

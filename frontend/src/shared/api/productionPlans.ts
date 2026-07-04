@@ -367,6 +367,8 @@ export type ProductionPlanningStage = {
     event_at: string | null;
     task_id: number | null;
     transfer_id: number | null;
+    from_section_name?: string | null;
+    to_section_name?: string | null;
     manual_route_pass?: boolean;
   }[];
   route_step_id: number;
@@ -438,6 +440,7 @@ export type ProductionPlanningRowDetail = {
     steps: ProductionPlanningRouteSnapshotStep[];
   } | null;
   stages: ProductionPlanningStage[];
+  status_history: StatusHistoryEntry[];
   raw_excel_row: Record<string, unknown> | null;
   payload?: Record<string, unknown> | null;
   available_remainder_quantity?: number | null;

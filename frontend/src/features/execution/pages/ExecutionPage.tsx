@@ -13,9 +13,7 @@ import {
   softDeleteCancelledPosition,
   softDeletePositionsExecutionBatch,
   manualPassPositionsExecutionBatch,
-  getPositionHistory,
   type ProductionPlanningRow,
-  type StatusHistoryEntry,
   type ProductionPlanningRowDetail,
 } from "@/shared/api/productionPlans";
 import { RemainderAllocationDialog } from "../components/RemainderAllocationDialog";
@@ -283,24 +281,6 @@ export function ExecutionPage() {
     },
     onError: (err) => toast({ title: "Ошибка удаления", description: getErrorMessage(err), variant: "destructive" }),
   });
-
-  const [historyEntries, setHistoryEntries] = useState<StatusHistoryEntry[]>([]);
-  const [historyDialogOpen, setHistoryDialogOpen] = useState(false);
-  const [historyLoading, setHistoryLoading] = useState(false);
-
-  const openHistory = useCallback(async (row: ProductionPlanningRow) => {
-    setHistoryLoading(true);
-    setHistoryEntries([]);
-    setHistoryDialogOpen(true);
-    try {
-      const entries = await getPositionHistory(row.production_plan_id, row.plan_position_id);
-      setHistoryEntries(entries);
-    } catch (e) {
-      toast({ title: "Ошибка загрузки истории", description: getErrorMessage(e), variant: "destructive" });
-    } finally {
-      setHistoryLoading(false);
-    }
-  }, []);
 
   const handleSingleLaunch = useCallback((row: ProductionPlanningRow) => {
     const reason = getLaunchBlockReason(row);
@@ -927,7 +907,6 @@ export function ExecutionPage() {
         onCancel={handleCancel}
         onRestore={handleRestore}
         onSoftDelete={handleSoftDelete}
-        onOpenHistory={openHistory}
         onToggleSelect={toggleSelect}
         onSelectAll={handleSelectAll}
         onResetAll={handleResetAll}
@@ -982,10 +961,6 @@ export function ExecutionPage() {
         bulkSoftDeleting={bulkSoftDeleting}
         bulkSelectedCount={bulkSelection.selectedCount}
         onConfirmBulkSoftDelete={handleBulkSoftDelete}
-        historyDialogOpen={historyDialogOpen}
-        onHistoryDialogChange={setHistoryDialogOpen}
-        historyLoading={historyLoading}
-        historyEntries={historyEntries}
       />
 
       <RemainderAllocationDialog

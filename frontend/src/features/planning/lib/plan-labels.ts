@@ -153,3 +153,28 @@ export interface PlanFiltersState {
   has_warnings: "all" | "yes" | "no"
   has_duplicates: "all" | "yes" | "no"
 }
+
+const STATUS_HISTORY_REASON_EXACT: Record<string, string> = {
+  "Auto-released when fully covered by release batches":
+    "Автозапуск при полном покрытии партиями выпуска",
+}
+
+const STATUS_TOKEN_IN_QUOTES_RE = /'([a-z_]+)'/gi
+
+function translateEmbeddedStatusToken(status: string): string {
+  return statusLabels[status] || planStatusLabels[status] || status
+}
+
+/** Переводит reason/message из истории смен статуса для UI. */
+export function translateStatusHistoryReason(reason: string | null | undefined): string {
+  if (!reason?.trim()) return "—"
+
+  const trimmed = reason.trim()
+  const exact = STATUS_HISTORY_REASON_EXACT[trimmed]
+  if (exact) return exact
+
+  return trimmed.replace(STATUS_TOKEN_IN_QUOTES_RE, (_match, status: string) => {
+    const normalized = status.toLowerCase()
+    return `'${translateEmbeddedStatusToken(normalized)}'`
+  })
+}

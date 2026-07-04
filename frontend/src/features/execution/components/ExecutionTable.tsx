@@ -75,7 +75,6 @@ interface ExecutionTableProps {
   onCancel: (row: ProductionPlanningRow) => void;
   onRestore: (row: ProductionPlanningRow) => void;
   onSoftDelete: (row: ProductionPlanningRow) => void;
-  onOpenHistory: (row: ProductionPlanningRow) => void;
   onToggleSelect: (id: number) => void;
   onSelectAll: () => void;
   onResetAll: () => void;
@@ -120,7 +119,6 @@ export function ExecutionTable({
   onCancel,
   onRestore,
   onSoftDelete,
-  onOpenHistory,
   onToggleSelect,
   onSelectAll,
   onResetAll,
@@ -327,7 +325,6 @@ export function ExecutionTable({
                     onCancel={onCancel}
                     onRestore={onRestore}
                     onSoftDelete={onSoftDelete}
-                    onOpenHistory={onOpenHistory}
                     onSkuClick={onSkuClick}
                   />
                 )}

@@ -1,4 +1,6 @@
-import { type ProductionPlanningStage } from "@/shared/api/productionPlans"
+import { type ProductionPlanningStage, type StatusHistoryEntry } from "@/shared/api/productionPlans"
+
+export type RowDetailsContentMode = "stages" | "events"
 
 export type RowDetailsData = {
   id: string | number
@@ -14,6 +16,7 @@ export type RowDetailsData = {
   warnings: string[]
   productionPlanId: number
   stages?: ProductionPlanningStage[]
+  statusHistory?: StatusHistoryEntry[]
   routeCheckIssues?: string[]
   rawExcelRows?: { rowNumber: string; text: string }[]
   duplicateConflictIds?: number[]

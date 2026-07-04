@@ -177,6 +177,7 @@ export function adaptExecutionDetail(detail: ProductionPlanningRowDetail): RowDe
     warnings: [],
     productionPlanId: detail.production_plan_id,
     stages: detail.stages,
+    statusHistory: detail.status_history ?? [],
     rawExcelRows: buildRawExcelRows(detail.raw_excel_row, detail.payload),
     currentStageSectionId: (detail as any).current_stage_section_id,
     currentStageSectionName: (detail as any).current_stage_section_name,

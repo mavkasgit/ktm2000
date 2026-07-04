@@ -1,8 +1,7 @@
-import { ProductionPlanningRow, ProductionPlanningRowDetail, StatusHistoryEntry } from "@/shared/api/productionPlans";
-import { Badge, Button, Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, Input, Select, SelectContent, SelectItem, SelectTrigger, SelectValue, AlertDialog, AlertDialogContent, AlertDialogHeader, AlertDialogTitle, AlertDialogDescription, AlertDialogFooter, AlertDialogAction, AlertDialogCancel } from "@/shared/ui";
+import { ProductionPlanningRowDetail } from "@/shared/api/productionPlans";
+import { Button, Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, Input, Select, SelectContent, SelectItem, SelectTrigger, SelectValue, AlertDialog, AlertDialogContent, AlertDialogHeader, AlertDialogTitle, AlertDialogDescription, AlertDialogFooter, AlertDialogAction, AlertDialogCancel } from "@/shared/ui";
 import { BulkResultsDialog, type BulkActionResultItem, type BulkActionSummary } from "@/shared/bulk";
 import { RowDetailsSidePanel, adaptExecutionDetail } from "@/features/planning/components/row-details";
-import { positionStatusLabels } from "./execution-utils";
 
 interface ExecutionDialogsProps {
   // Row details
@@ -63,12 +62,6 @@ interface ExecutionDialogsProps {
   bulkSoftDeleting: boolean;
   bulkSelectedCount: number;
   onConfirmBulkSoftDelete: () => void;
-
-  // History dialog
-  historyDialogOpen: boolean;
-  onHistoryDialogChange: (open: boolean) => void;
-  historyLoading: boolean;
-  historyEntries: StatusHistoryEntry[];
 }
 
 export function ExecutionDialogs({
@@ -113,10 +106,6 @@ export function ExecutionDialogs({
   bulkSoftDeleting,
   bulkSelectedCount,
   onConfirmBulkSoftDelete,
-  historyDialogOpen,
-  onHistoryDialogChange,
-  historyLoading,
-  historyEntries,
 }: ExecutionDialogsProps) {
   return (
     <>
@@ -402,38 +391,6 @@ export function ExecutionDialogs({
         </AlertDialogContent>
       </AlertDialog>
 
-      <Dialog
-        open={historyDialogOpen}
-        onOpenChange={(open) => {
-          if (!open) onHistoryDialogChange(false);
-        }}
-      >
-        <DialogContent className="sm:max-w-[560px]">
-          <DialogHeader>
-            <DialogTitle>История статусов</DialogTitle>
-            <DialogDescription>Хронология изменений статуса позиции</DialogDescription>
-          </DialogHeader>
-          {historyLoading ? (
-            <p className="text-sm text-muted-foreground py-4">Загрузка истории...</p>
-          ) : historyEntries.length === 0 ? (
-            <p className="text-sm text-muted-foreground py-4">История изменений отсутствует</p>
-          ) : (
-            <div className="max-h-[400px] overflow-auto space-y-2">
-              {historyEntries.map((entry) => (
-                <div key={entry.id} className="rounded border p-3 text-sm">
-                  <div className="flex items-center justify-between">
-                    <span className="font-medium">
-                      {positionStatusLabels[entry.from_status] || entry.from_status} → {positionStatusLabels[entry.to_status] || entry.to_status}
-                    </span>
-                    <Badge variant="secondary">{new Date(entry.changed_at).toLocaleString("ru-RU", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" })}</Badge>
-                  </div>
-                  {entry.reason && <div className="text-xs text-muted-foreground mt-1">{entry.reason}</div>}
-                </div>
-              ))}
-            </div>
-          )}
-        </DialogContent>
-      </Dialog>
     </>
   );
 }
