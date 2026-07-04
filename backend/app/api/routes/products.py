@@ -66,6 +66,7 @@ class ProductIn(BaseModel):
 
 
 class ProductPatch(BaseModel):
+    sku: str | None = None
     name: str | None = None
     type: ProductType | None = None
     unit: str | None = None
@@ -479,6 +480,26 @@ async def patch_product(
     old_aliases = item.aliases if payload.aliases is not None else None
 
     patch_data = payload.model_dump(exclude_unset=True, exclude={"lengths_mm", "processing_flag_codes"})
+    new_sku = patch_data.pop("sku", None)
+    if new_sku is not None:
+        normalized_sku = new_sku.strip()
+        if not normalized_sku:
+            raise HTTPException(status_code=422, detail="SKU must not be empty")
+        if normalized_sku != item.sku:
+            duplicate = await db.scalar(
+                select(Product).where(Product.sku == normalized_sku, Product.id != product_id)
+            )
+            if duplicate:
+                raise HTTPException(status_code=409, detail="SKU already exists")
+            old_sku = item.sku
+            item.sku = normalized_sku
+            others = (await db.execute(select(Product).where(Product.id != product_id))).scalars().all()
+            for other in others:
+                if other.aliases and old_sku in other.aliases:
+                    other.aliases = [
+                        normalized_sku if alias == old_sku else alias for alias in other.aliases
+                    ]
+
     for key, value in patch_data.items():
         setattr(item, key, value)
 

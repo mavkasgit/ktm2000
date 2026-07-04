@@ -626,6 +626,7 @@ export function RawMaterialsPage() {
             <DialogTitle>{dialogMode === "create" ? "Новое сырье" : "Редактирование"}</DialogTitle>
           </DialogHeader>
           <CatalogForm
+            key={`${dialogMode}-${selectedProduct?.id ?? "new"}`}
             ref={formRef}
             product={selectedProduct}
             mode={dialogMode}

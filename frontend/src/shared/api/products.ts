@@ -65,7 +65,7 @@ export type CreateProductInput = {
   is_laminated?: boolean;
 };
 
-export type PatchProductInput = Partial<Omit<CreateProductInput, "sku">>;
+export type PatchProductInput = Partial<CreateProductInput>;
 
 export type ProductFilters = {
   q?: string;

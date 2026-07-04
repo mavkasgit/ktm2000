@@ -24,6 +24,31 @@ function getProductLengths(product: Product | null): number[] {
   return normalizeLengths([...(product.lengths_mm ?? []), product.length_mm ?? undefined]);
 }
 
+function buildInitialForm(product: Product | null, mode: DialogMode): CreateProductInput {
+  const lengths = getProductLengths(product);
+  return {
+    sku: product?.sku ?? "",
+    name: product?.name ?? "",
+    type: product?.type ?? (mode === "create" ? "component" : "finished_good"),
+    unit: product?.unit ?? "шт",
+    is_active: product?.is_active ?? true,
+    notes: product?.notes ?? null,
+    profile_type: product?.profile_type ?? null,
+    alloy: product?.alloy ?? null,
+    color: product?.color ?? null,
+    anod_type: product?.anod_type ?? null,
+    length_mm: lengths[0] ?? product?.length_mm ?? null,
+    weight_per_meter: product?.weight_per_meter ?? null,
+    quantity_per_hanger: product?.quantity_per_hanger ?? null,
+    cross_section: product?.cross_section ?? null,
+    is_paired_profile: product?.is_paired_profile ?? false,
+    skip_shot_blast: product?.skip_shot_blast ?? false,
+    aliases: product?.aliases ?? [],
+    lengths_mm: lengths,
+    is_laminated: product?.is_laminated ?? false,
+  };
+}
+
 function getChanges(form: CreateProductInput, product: Product | null, isCreate: boolean): FieldChange[] {
   if (isCreate || !product) return [];
   const changes: FieldChange[] = [];
@@ -31,6 +56,7 @@ function getChanges(form: CreateProductInput, product: Product | null, isCreate:
   const formLengths = normalizeLengths(form.lengths_mm ?? []);
   const productLengths = getProductLengths(product);
 
+  if (!eq(form.sku, product.sku)) changes.push({ field: "sku", label: "Артикул", from: product.sku, to: form.sku ?? "" });
   if (!eq(form.name, product.name)) changes.push({ field: "name", label: "Наименование", from: product.name, to: form.name ?? "" });
   if (!eq(form.type, product.type)) changes.push({ field: "type", label: "Тип", from: product.type, to: form.type ?? "" });
   if (!eq(form.unit, product.unit)) changes.push({ field: "unit", label: "Ед. изм.", from: product.unit, to: form.unit ?? "" });
@@ -77,7 +103,6 @@ export const CatalogForm = forwardRef<CatalogFormRef, {
   readOnly = false,
 }, ref) {
   const isCreate = mode === "create";
-  const initialLengths = getProductLengths(product);
   const [fullscreenPhoto, setFullscreenPhoto] = useState<string | null>(null);
   const handleCloseFullscreen = useCallback(() => {
     setFullscreenPhoto(null);
@@ -89,27 +114,15 @@ export const CatalogForm = forwardRef<CatalogFormRef, {
   const [uploading, setUploading] = useState(false);
   const [photoVersion, setPhotoVersion] = useState(0);
   const [newLength, setNewLength] = useState("");
-  const [form, setForm] = useState<CreateProductInput>({
-    sku: product?.sku ?? "",
-    name: product?.name ?? "",
-    type: product?.type ?? "finished_good",
-    unit: product?.unit ?? "шт",
-    is_active: product?.is_active ?? true,
-    notes: product?.notes ?? null,
-    profile_type: product?.profile_type ?? null,
-    alloy: product?.alloy ?? null,
-    color: product?.color ?? null,
-    anod_type: product?.anod_type ?? null,
-    length_mm: initialLengths[0] ?? product?.length_mm ?? null,
-    weight_per_meter: product?.weight_per_meter ?? null,
-    quantity_per_hanger: product?.quantity_per_hanger ?? null,
-    cross_section: product?.cross_section ?? null,
-    is_paired_profile: product?.is_paired_profile ?? false,
-    skip_shot_blast: product?.skip_shot_blast ?? false,
-    aliases: product?.aliases ?? [],
-    lengths_mm: initialLengths,
-    is_laminated: product?.is_laminated ?? false,
-  });
+  const [form, setForm] = useState<CreateProductInput>(() => buildInitialForm(product, mode));
+
+  useEffect(() => {
+    setForm(buildInitialForm(product, mode));
+    setLocalPhotoFull(null);
+    setLocalPhotoThumb(null);
+    setPhotoVersion(0);
+    setNewLength("");
+  }, [product?.id, mode]);
 
   const setLengths = useCallback((values: number[]) => {
     const normalized = normalizeLengths(values);
@@ -137,6 +150,7 @@ export const CatalogForm = forwardRef<CatalogFormRef, {
     const formPrimaryLength = formLengths[0] ?? null;
     const productPrimaryLength = productLengths[0] ?? (product.length_mm ?? null);
 
+    if (!eq(form.sku, product.sku)) patch.sku = form.sku.trim();
     if (!eq(form.name, product.name)) patch.name = form.name;
     if (!eq(form.type, product.type)) patch.type = form.type;
     if (!eq(form.unit, product.unit)) patch.unit = form.unit;
@@ -222,6 +236,11 @@ export const CatalogForm = forwardRef<CatalogFormRef, {
 
   return (
     <form onSubmit={handleSubmit} className="space-y-4 mt-4">
+      {readOnly && (
+        <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-md px-3 py-2">
+          Редактирование справочника доступно только ролям «admin», «planner» и «section_manager».
+        </p>
+      )}
       {fullscreenPhoto && (
         <FullscreenPhoto
           src={fullscreenPhoto}
@@ -334,7 +353,15 @@ export const CatalogForm = forwardRef<CatalogFormRef, {
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div className="space-y-1">
               <label className="text-sm font-medium">Артикул *</label>
-              <Input value={form.sku} onChange={(e) => update("sku", e.target.value)} disabled={!isCreate || readOnly} placeholder="ЮП-1234" />
+              <Input
+                value={form.sku}
+                onChange={(e) => update("sku", e.target.value)}
+                disabled={readOnly}
+                readOnly={false}
+                autoComplete="off"
+                spellCheck={false}
+                placeholder="ЮП-1234"
+              />
             </div>
             <div className="space-y-1">
               <label className="text-sm font-medium">Наименование *</label>
@@ -450,7 +477,8 @@ export const CatalogForm = forwardRef<CatalogFormRef, {
                 values={form.aliases || []}
                 onChange={(aliases) => update("aliases", aliases)}
                 onAliasClick={onAliasClick}
-                excludeSku={product?.sku}
+                excludeSku={form.sku || product?.sku}
+                showPairedStatus={false}
                 placeholder="Поиск по артикулу"
                 disabled={readOnly}
               />

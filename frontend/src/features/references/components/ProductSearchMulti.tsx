@@ -10,6 +10,7 @@ export function ProductSearchMulti({
   excludeSku,
   excludeValues,
   pairedOnly,
+  showPairedStatus = true,
   placeholder = "Поиск по артикулу",
   disabled = false,
 }: {
@@ -19,6 +20,7 @@ export function ProductSearchMulti({
   excludeSku?: string;
   excludeValues?: string[];
   pairedOnly?: boolean;
+  showPairedStatus?: boolean;
   placeholder?: string;
   disabled?: boolean;
 }) {
@@ -142,11 +144,11 @@ export function ProductSearchMulti({
                 <button
                   key={s.id}
                   type="button"
-                  className="w-full text-left px-3 py-1.5 text-sm hover:bg-muted cursor-pointer flex justify-between items-center"
+                  className={`w-full text-left px-3 py-1.5 text-sm hover:bg-muted cursor-pointer${showPairedStatus ? " flex justify-between items-center" : ""}`}
                   onClick={() => addFromSuggestion(s)}
                 >
                   <span className="font-medium">{s.sku}</span>
-                  {!s.is_paired_profile && (
+                  {showPairedStatus && !s.is_paired_profile && (
                     <span className="text-[10px] bg-amber-100 text-amber-800 px-1.5 py-0.5 rounded font-normal">непарный</span>
                   )}
                 </button>

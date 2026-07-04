@@ -247,6 +247,37 @@ async def test_product_includes_techcard_flags(client, session) -> None:
 
 
 @pytest.mark.asyncio
+async def test_patch_product_sku(client, session) -> None:
+    """PATCH /products/{id} позволяет переименовать артикул."""
+    product = Product(
+        sku="OLD-SKU-001",
+        name="Сырьё для переименования",
+        type=ProductType.component,
+        unit="pcs",
+    )
+    alias_holder = Product(
+        sku="ALIAS-HOLDER",
+        name="Держатель алиаса",
+        type=ProductType.component,
+        unit="pcs",
+        aliases=["OLD-SKU-001"],
+    )
+    session.add_all([product, alias_holder])
+    await session.commit()
+
+    resp = await client.patch(
+        f"/api/products/{product.id}",
+        json={"sku": "NEW-SKU-001"},
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["sku"] == "NEW-SKU-001"
+
+    await session.refresh(alias_holder)
+    assert alias_holder.aliases == ["NEW-SKU-001"]
+
+
+@pytest.mark.asyncio
 async def test_delete_product_cascade_techcards(client, session) -> None:
     # 1. Create a product with a standard techcard and a component
     prod = Product(sku="DEL-PROD", name="Product to delete", type=ProductType.finished_good, unit="pcs")
