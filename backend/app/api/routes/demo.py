@@ -34,7 +34,8 @@ from app.models.work_task import WorkTask
 from app.services.plan_generation import create_release_batch, release_batch
 from app.services.plan_import_service import create_excel_import_change_set
 from app.services.production_plan_service import apply_change_set, approve_plan_position
-from app.services.shopfloor_service import complete_task, issue_to_work, transfer_send
+from app.api.routes.production_planning import _ensure_task_issued_via_transfer
+from app.services.shopfloor_service import complete_task, transfer_send
 
 router = APIRouter(prefix="/demo", tags=["demo"])
 
@@ -439,7 +440,7 @@ async def run_full_route_test(
     stage_results: list[StageRunResult] = []
     section_urls: list[str] = []
 
-    for idx, (task, _line, step, section) in enumerate(task_rows):
+    for idx, (task, line, step, section) in enumerate(task_rows):
         # For to_step_ready: stop before executing the target step (leave it ready)
         if payload.stage_preset == StagePreset.to_step_ready and idx == target_step_index:
             # Target step stays ready, don't execute it
@@ -455,14 +456,17 @@ async def run_full_route_test(
         movement_key = f"{run_id}:step:{step.sequence}"
 
         try:
-            await issue_to_work(
+            prev_task = task_rows[idx - 1][0] if idx > 0 else None
+            await _ensure_task_issued_via_transfer(
                 db,
-                task_id=task.id,
+                task=task,
+                line=line,
                 quantity=input_qty,
+                prev_task=prev_task,
                 actor_id=current_user.id,
-                comment=f"demo issue {run_id}",
+                comment=f"demo receive {run_id}",
                 source_ref=run_id,
-                idempotency_key=f"{movement_key}:issue",
+                operation_key=movement_key,
                 executor_user_id=current_user.id,
                 performed_at=performed_at,
                 accounted_at=accounted_at,

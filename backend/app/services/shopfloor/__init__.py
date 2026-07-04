@@ -1,7 +1,7 @@
 from .cache import _refresh_section_plan_line_cache
 from .operations_defects import add_defect_item, create_defect, defect_decide, rework_create
 from .operations_meta import create_attachment, create_comment, link_attachment
-from .operations_tasks import complete_task, final_release, issue_to_work, prepare_section_task
+from .operations_tasks import complete_task, final_release, prepare_section_task
 from .queries import (
     get_defect_details,
     get_rework_details,
@@ -34,7 +34,6 @@ __all__ = [
     "get_sections_summary",
     "get_task_details",
     "get_warehouse_remainders",
-    "issue_to_work",
     "link_attachment",
     "list_entity_attachments",
     "list_entity_comments",

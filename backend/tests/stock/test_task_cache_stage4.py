@@ -37,6 +37,7 @@ from app.stock import (
     StockTransaction,
 )
 from app.stock.services import StockProjectionManager
+from tests.stock.helpers import record_transfer_receive
 
 pytestmark = pytest.mark.asyncio
 
@@ -152,11 +153,15 @@ async def test_completed_qty_from_ledger(session: AsyncSession):
         product_id=fx["product"].id, from_location_id=None, to_location_id=fx["raw"].id,
         quantity=Decimal("100"), reason=Reason.MANUAL_IN, created_by=fx["user"].id,
     ))
-    # Issue
-    await svc.record(session, StockCommand(
-        product_id=fx["product"].id, from_location_id=fx["raw"].id, to_location_id=task.section_id,
-        quantity=Decimal("10"), reason=Reason.ISSUE_TO_WORK, task_id=task.id, created_by=fx["user"].id,
-    ))
+    await record_transfer_receive(
+        session,
+        product_id=fx["product"].id,
+        from_location_id=fx["raw"].id,
+        to_location_id=task.section_id,
+        quantity=Decimal("10"),
+        task_id=task.id,
+        created_by=fx["user"].id,
+    )
     task.status = WorkTaskStatus.in_progress
     await session.commit()
 
@@ -172,25 +177,25 @@ async def test_completed_qty_from_ledger(session: AsyncSession):
 
 
 async def test_issued_qty_from_ledger(session: AsyncSession):
-    """После issue_to_work: get_task_cache()['issued_quantity'] == SUM(StockTransaction)."""
+    """После TRANSFER_RECEIVE: issued_quantity == net TRANSFER_RECEIVE."""
     fx = await _setup_one_task(session)
     task = fx["task"]
 
-    svc = StockCommandService()
-    await svc.record(session, StockCommand(
-        product_id=fx["product"].id, from_location_id=None, to_location_id=fx["raw"].id,
-        quantity=Decimal("100"), reason=Reason.MANUAL_IN, created_by=fx["user"].id,
-    ))
-    await svc.record(session, StockCommand(
-        product_id=fx["product"].id, from_location_id=fx["raw"].id, to_location_id=task.section_id,
-        quantity=Decimal("7"), reason=Reason.ISSUE_TO_WORK, task_id=task.id, created_by=fx["user"].id,
-    ))
+    await record_transfer_receive(
+        session,
+        product_id=fx["product"].id,
+        from_location_id=fx["raw"].id,
+        to_location_id=task.section_id,
+        quantity=Decimal("7"),
+        task_id=task.id,
+        created_by=fx["user"].id,
+    )
     task.status = WorkTaskStatus.in_progress
     await session.commit()
 
     pm = StockProjectionManager()
     cache = await pm.get_task_cache(session, task.id)
-    sql_sum = await _sql_sum_transactions(session, task.id, Reason.ISSUE_TO_WORK)
+    sql_sum = await _sql_net_transactions(session, task.id, Reason.TRANSFER_RECEIVE)
     assert cache["issued_quantity"] == sql_sum == Decimal("7")
 
 
@@ -233,10 +238,15 @@ async def test_transferred_qty_net_from_ledger(session: AsyncSession):
         product_id=fx["product"].id, from_location_id=None, to_location_id=fx["raw"].id,
         quantity=Decimal("100"), reason=Reason.MANUAL_IN, created_by=fx["user"].id,
     ))
-    await svc.record(session, StockCommand(
-        product_id=fx["product"].id, from_location_id=fx["raw"].id, to_location_id=from_task.section_id,
-        quantity=Decimal("15"), reason=Reason.ISSUE_TO_WORK, task_id=from_task.id, created_by=fx["user"].id,
-    ))
+    await record_transfer_receive(
+        session,
+        product_id=fx["product"].id,
+        from_location_id=fx["raw"].id,
+        to_location_id=from_task.section_id,
+        quantity=Decimal("15"),
+        task_id=from_task.id,
+        created_by=fx["user"].id,
+    )
     from_task.status = WorkTaskStatus.in_progress
     await svc.record(session, StockCommand(
         product_id=fx["product"].id, from_location_id=None, to_location_id=from_task.section_id,
@@ -256,13 +266,9 @@ async def test_transferred_qty_net_from_ledger(session: AsyncSession):
     net_sql = await _sql_net_transactions(session, from_task.id, Reason.TRANSFER_SEND)
     assert from_cache["transferred_quantity"] == net_sql == Decimal("10")
 
-    # Issue material on the target task so cancel validation passes
-    to_task.status = WorkTaskStatus.in_progress
-    await svc.record(session, StockCommand(
-        product_id=fx["product"].id, from_location_id=fx["raw"].id, to_location_id=to_task.section_id,
-        quantity=Decimal("10"), reason=Reason.ISSUE_TO_WORK, task_id=to_task.id, created_by=fx["user"].id,
-    ))
-    await session.commit()
+    to_cache = await pm.get_task_cache(session, to_task.id)
+    assert to_cache["received_quantity"] == Decimal("10")
+    assert to_cache["issued_quantity"] == Decimal("10")
 
     # Cancel transfer
     from app.transfers.services import cancel_transfer
@@ -285,11 +291,15 @@ async def test_available_qty_from_ledger(session: AsyncSession):
         product_id=fx["product"].id, from_location_id=None, to_location_id=fx["raw"].id,
         quantity=Decimal("100"), reason=Reason.MANUAL_IN, created_by=fx["user"].id,
     ))
-    # Issue 10
-    await svc.record(session, StockCommand(
-        product_id=fx["product"].id, from_location_id=fx["raw"].id, to_location_id=task.section_id,
-        quantity=Decimal("10"), reason=Reason.ISSUE_TO_WORK, task_id=task.id, created_by=fx["user"].id,
-    ))
+    await record_transfer_receive(
+        session,
+        product_id=fx["product"].id,
+        from_location_id=fx["raw"].id,
+        to_location_id=task.section_id,
+        quantity=Decimal("10"),
+        task_id=task.id,
+        created_by=fx["user"].id,
+    )
     # Return 3 to stock
     await svc.record(session, StockCommand(
         product_id=fx["product"].id, from_location_id=task.section_id, to_location_id=None,
@@ -300,9 +310,9 @@ async def test_available_qty_from_ledger(session: AsyncSession):
 
     pm = StockProjectionManager()
     cache = await pm.get_task_cache(session, task.id)
-    # first-stage: base_available = planned=20, received=0, returned=3, issued=10
-    # available = 20 + 0 + 3 - 10 = 13
-    assert cache["available_quantity"] == Decimal("13")
+    # first-stage: planned=20, received=10 (TRANSFER_RECEIVE), returned=3, issued=received=10
+    # available = 20 + 10 + 3 - 10 = 23
+    assert cache["available_quantity"] == Decimal("23")
     assert cache["issued_quantity"] == Decimal("10")
 
 
@@ -317,11 +327,15 @@ async def test_get_tasks_cache_bulk(session: AsyncSession):
             product_id=fx["product"].id, from_location_id=None, to_location_id=fx["raw"].id,
             quantity=Decimal("100"), reason=Reason.MANUAL_IN, created_by=fx["user"].id,
         ))
-        await svc.record(session, StockCommand(
-            product_id=fx["product"].id, from_location_id=fx["raw"].id, to_location_id=fx["task"].section_id,
-            quantity=fx["task"].planned_quantity, reason=Reason.ISSUE_TO_WORK,
-            task_id=fx["task"].id, created_by=fx["user"].id,
-        ))
+        await record_transfer_receive(
+            session,
+            product_id=fx["product"].id,
+            from_location_id=fx["raw"].id,
+            to_location_id=fx["task"].section_id,
+            quantity=fx["task"].planned_quantity,
+            task_id=fx["task"].id,
+            created_by=fx["user"].id,
+        )
         fx["task"].status = WorkTaskStatus.in_progress
     await session.commit()
 

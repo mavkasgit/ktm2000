@@ -8,10 +8,9 @@ write path: it creates the ``Transfer`` row and two
 ``StockTransaction`` is the single source of truth.
 
 The destination ``WorkTask`` flips from ``waiting_previous`` to
-``ready`` and is immediately considered issued — the operator can
-complete it without a separate «Взять в работу» click. The explicit
-``issue_to_work`` API still exists for the first route stage and for
-the production-planning «ручной сквозной проход» flow.
+``ready``; ``TRANSFER_RECEIVE`` автоматически попадает в
+``issued_quantity`` (колонка «Выдано») — единственный канал выдачи
+после миграции на Transfer.
 
 ``StockProjectionManager.refresh_task_projection`` updates
 ``WorkTask.cached_transferred_quantity`` and
@@ -330,10 +329,8 @@ async def transfer_send(
     the ledger.  The auto-accept collapses the historical
     «receive → issue to work» two-step into a single operator action:
     as soon as the material is on the receiving section, it is
-    considered issued and ready to be completed.  The explicit
-    ``issue_to_work`` API still exists for the first route stage
-    (where there is no incoming transfer) and for the
-    production-planning «ручной сквозной проход» flow.
+    considered issued and ready to be completed.  Stock-to-production
+    uses the same path via a stock-section fake_task.
 
     Idempotency is keyed on the ``idempotency_key`` of the Transfer
     itself; the send-side and receive-side StockTransaction entries use
@@ -682,7 +679,7 @@ async def correct_transfer(
         diff = new_quantity - old_quantity
         if diff < 0:
             in_work = (
-                max(to_cache["received_quantity"], to_cache["issued_quantity"])
+                to_cache["issued_quantity"]
                 - to_cache["completed_quantity"]
                 - to_cache["rejected_quantity"]
             )
@@ -787,7 +784,11 @@ async def cancel_transfer(
     from app.stock.services import StockProjectionManager
     pm = StockProjectionManager()
     to_cache = await pm.get_task_cache(db, to_task.id)
-    in_work = max(to_cache["received_quantity"], to_cache["issued_quantity"]) - to_cache["completed_quantity"] - to_cache["rejected_quantity"]
+    in_work = (
+        to_cache["issued_quantity"]
+        - to_cache["completed_quantity"]
+        - to_cache["rejected_quantity"]
+    )
     if in_work < transfer.sent_quantity:
         raise ValueError(
             f"Target task has already completed or rejected parts. "

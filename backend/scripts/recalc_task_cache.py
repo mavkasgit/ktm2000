@@ -12,7 +12,7 @@ Usage:
 import asyncio
 from decimal import Decimal
 
-from sqlalchemy import func, select
+from sqlalchemy import case, func, select
 
 from app.core.database import async_session
 from app.models.work_task import WorkTask
@@ -32,10 +32,25 @@ async def main():
             try:
                 cache = await pm.get_task_cache(db, task.id)
 
-                # SQL-верификация: прямой SELECT из StockTransaction
+                # SQL-верификация: net TRANSFER_RECEIVE (issued = received only)
                 sql_issued = await db.scalar(
-                    select(func.coalesce(func.sum(StockTransaction.quantity), 0))
-                    .where(StockTransaction.task_id == task.id, StockTransaction.reason == Reason.ISSUE_TO_WORK)
+                    select(
+                        func.coalesce(
+                            func.sum(
+                                case(
+                                    (
+                                        StockTransaction.compensates_tx_id.is_(None),
+                                        StockTransaction.quantity,
+                                    ),
+                                    else_=-StockTransaction.quantity,
+                                )
+                            ),
+                            0,
+                        )
+                    ).where(
+                        StockTransaction.task_id == task.id,
+                        StockTransaction.reason == Reason.TRANSFER_RECEIVE,
+                    )
                 ) or Decimal("0")
 
                 if cache["issued_quantity"] != sql_issued:

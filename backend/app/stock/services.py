@@ -27,6 +27,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Product, Section
 from app.models.work_task import WorkTask
+from app.stock.task_cache import (
+    compute_remaining,
+    compute_task_available,
+    effective_issued_quantity,
+)
 from app.stock.models import (
     QualityState,
     Reason,
@@ -272,22 +277,25 @@ class StockProjectionManager:
         for reason_val, net in net_rows:
             net_sums[reason_val] = net or Decimal("0")
 
-        issued = _sum_reason(Reason.ISSUE_TO_WORK)
         completed = _sum_reason(Reason.COMPLETE)
         scrapped = _sum_reason(Reason.SCRAP)
         returned = _sum_reason(Reason.RETURN_TO_STOCK)
         transferred = net_sums.get(Reason.TRANSFER_SEND.value) or Decimal("0")
         received = net_sums.get(Reason.TRANSFER_RECEIVE.value) or Decimal("0")
         rejected = scrapped  # DefectDecision на Этапе 5
+        issued = effective_issued_quantity(received=received)
 
-        base_available = task.planned_quantity if is_first_stage else Decimal("0")
-        available = base_available + received + returned - issued
-        if available < Decimal("0"):
-            available = Decimal("0")
-
-        remaining = task.planned_quantity - transferred
-        if remaining < Decimal("0"):
-            remaining = Decimal("0")
+        available = compute_task_available(
+            planned_quantity=task.planned_quantity,
+            received_quantity=received,
+            issued_quantity=issued,
+            returned_quantity=returned,
+            is_first_stage=is_first_stage,
+        )
+        remaining = compute_remaining(
+            planned_quantity=task.planned_quantity,
+            transferred_quantity=transferred,
+        )
 
         return {
             "available_quantity": available,
@@ -403,22 +411,25 @@ class StockProjectionManager:
             def _val(s: dict, key: Reason) -> Decimal:
                 return s.get(key.value) or Decimal("0")
 
-            issued = _val(t_sums, Reason.ISSUE_TO_WORK)
             completed = _val(t_sums, Reason.COMPLETE)
             scrapped = _val(t_sums, Reason.SCRAP)
             returned = _val(t_sums, Reason.RETURN_TO_STOCK)
             transferred = _val(t_net, Reason.TRANSFER_SEND)
             received = _val(t_net, Reason.TRANSFER_RECEIVE)
             rejected = scrapped
+            issued = effective_issued_quantity(received=received)
 
-            base_available = task.planned_quantity if is_first_stage else Decimal("0")
-            available = base_available + received + returned - issued
-            if available < Decimal("0"):
-                available = Decimal("0")
-
-            remaining = task.planned_quantity - transferred
-            if remaining < Decimal("0"):
-                remaining = Decimal("0")
+            available = compute_task_available(
+                planned_quantity=task.planned_quantity,
+                received_quantity=received,
+                issued_quantity=issued,
+                returned_quantity=returned,
+                is_first_stage=is_first_stage,
+            )
+            remaining = compute_remaining(
+                planned_quantity=task.planned_quantity,
+                transferred_quantity=transferred,
+            )
 
             result[tid] = {
                 "available_quantity": available,
@@ -509,6 +520,10 @@ class StockCommandService:
         return tx
 
     async def _validate(self, session: AsyncSession, cmd: StockCommand) -> None:
+        if cmd.reason == Reason.ISSUE_TO_WORK:
+            raise StockValidationError(
+                "reason=issue_to_work is no longer allowed; use TRANSFER_SEND/TRANSFER_RECEIVE"
+            )
         if cmd.quantity <= 0:
             raise StockValidationError(f"quantity must be > 0, got {cmd.quantity}")
         if cmd.from_location_id is None and cmd.to_location_id is None:
@@ -522,7 +537,6 @@ class StockCommandService:
             Reason.SCRAP,
             Reason.REWORK,
             Reason.FINAL_RELEASE,
-            Reason.ISSUE_TO_WORK,
         }
         if cmd.reason not in _state_change_reasons:
             if (

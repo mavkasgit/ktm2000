@@ -306,6 +306,9 @@ async def get_section_board(
             planned_quantity=_to_decimal(task.planned_quantity),
             received_quantity=task_cache.get("received_quantity", Decimal("0")),
             issued_quantity=task_cache.get("issued_quantity", Decimal("0")),
+            returned_quantity=task_cache.get("returned_quantity", Decimal("0"))
+            if "returned_quantity" in task_cache
+            else Decimal("0"),
             is_first_stage=bool(line.sequence == 1),
         )
 

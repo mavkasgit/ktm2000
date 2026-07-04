@@ -1,7 +1,7 @@
 """Тесты Этапа 3: Shopfloor на StockTransaction без двойной записи.
 
 Проверяют:
-- issue_to_work создаёт StockTransaction, обновляет cached_*
+- TRANSFER_RECEIVE задаёт issued_quantity (выдача через Transfer)
 - complete_task создаёт COMPLETE/SCRAP транзакции + Defect
 - final_release создаёт FINAL_RELEASE транзакцию
 - return_to_stock через endpoint
@@ -39,6 +39,7 @@ from app.stock import (
     StockCommandService,
     StockTransaction,
 )
+from tests.stock.helpers import record_transfer_receive
 from tests.test_integrity_invariants import assert_no_stock_ledger_invariants_violations
 
 pytestmark = pytest.mark.asyncio
@@ -183,80 +184,50 @@ async def _count_movements(session: AsyncSession, task_id: int) -> int:
 # ─── tests ──────────────────────────────────────────────────────────────────
 
 
-async def test_issue_to_work_creates_stock_tx(session: AsyncSession):
-    """issue_to_work создаёт StockTransaction(ISSUE_TO_WORK) + task in_progress."""
+async def test_transfer_receive_creates_stock_tx(session: AsyncSession):
+    """TRANSFER_RECEIVE создаёт StockTransaction и задаёт issued_quantity."""
     fx = await _setup_minimal_route(session)
     task = fx["task"]
 
-    # Seed stock balance
-    svc = StockCommandService()
-    await svc.record(session, StockCommand(
-        product_id=fx["product"].id,
-        from_location_id=None,
-        to_location_id=fx["raw"].id,
-        quantity=Decimal("100"),
-        reason=Reason.MANUAL_IN,
-        created_by=fx["user"].id,
-    ))
-    await session.commit()
-
-    from app.services.shopfloor.operations_tasks import issue_to_work
-    result = await issue_to_work(
+    await record_transfer_receive(
         session,
-        task_id=task.id,
-        quantity=Decimal("10"),
-        actor_id=fx["user"].id,
+        product_id=fx["product"].id,
         from_location_id=fx["raw"].id,
+        to_location_id=task.section_id,
+        quantity=Decimal("10"),
+        task_id=task.id,
+        created_by=fx["user"].id,
     )
     await session.commit()
 
-    assert result["task_id"] == task.id
-    assert "transaction_id" in result
-
-    # Verify StockTransaction was created
     tx_count = await session.scalar(
         select(func.count(StockTransaction.id))
         .where(
             StockTransaction.task_id == task.id,
-            StockTransaction.reason == Reason.ISSUE_TO_WORK,
+            StockTransaction.reason == Reason.TRANSFER_RECEIVE,
         )
     )
-    assert tx_count == 1, "Expected 1 StockTransaction(ISSUE_TO_WORK)"
+    assert tx_count == 1, "Expected 1 StockTransaction(TRANSFER_RECEIVE)"
 
-    # Verify task status updated
-    await session.refresh(task)
-    assert task.status == WorkTaskStatus.in_progress
-
-    await assert_no_stock_ledger_invariants_violations(session, context="after-issue")
+    await assert_no_stock_ledger_invariants_violations(session, context="after-receive")
 
 
-async def test_issue_to_work_updates_cache(session: AsyncSession):
-    """get_task_cache() отражает SUM(StockTransaction) после issue_to_work."""
+async def test_transfer_receive_updates_cache(session: AsyncSession):
+    """get_task_cache() отражает net TRANSFER_RECEIVE после приёма."""
     fx = await _setup_minimal_route(session)
     task = fx["task"]
 
-    svc = StockCommandService()
-    await svc.record(session, StockCommand(
-        product_id=fx["product"].id,
-        from_location_id=None,
-        to_location_id=fx["raw"].id,
-        quantity=Decimal("100"),
-        reason=Reason.MANUAL_IN,
-        created_by=fx["user"].id,
-    ))
-    await session.commit()
-
-    from app.services.shopfloor.operations_tasks import issue_to_work
-    await issue_to_work(
+    await record_transfer_receive(
         session,
-        task_id=task.id,
-        quantity=Decimal("7"),
-        actor_id=fx["user"].id,
+        product_id=fx["product"].id,
         from_location_id=fx["raw"].id,
+        to_location_id=task.section_id,
+        quantity=Decimal("7"),
+        task_id=task.id,
+        created_by=fx["user"].id,
     )
     await session.commit()
 
-    # Проверка через get_task_cache
     from app.stock.services import StockProjectionManager
     pm = StockProjectionManager()
     cache = await pm.get_task_cache(session, task.id)
@@ -264,63 +235,29 @@ async def test_issue_to_work_updates_cache(session: AsyncSession):
         select(func.coalesce(func.sum(StockTransaction.quantity), 0))
         .where(
             StockTransaction.task_id == task.id,
-            StockTransaction.reason == Reason.ISSUE_TO_WORK,
+            StockTransaction.reason == Reason.TRANSFER_RECEIVE,
         )
     )
     assert cache["issued_quantity"] == sql_sum == Decimal("7")
 
 
-async def test_issue_to_work_shortage_fail(session: AsyncSession):
-    """При недостатке на складе и shortage_strategy=fail — исключение."""
+async def test_validation_rejects_issue_to_work_command(session: AsyncSession):
+    """StockCommandService не принимает новые ISSUE_TO_WORK."""
     fx = await _setup_minimal_route(session)
     task = fx["task"]
 
-    from app.services.shopfloor.operations_tasks import issue_to_work
-    with pytest.raises(ValueError, match="Недостаточно доступного количества"):
-        await issue_to_work(
-            session,
-            task_id=task.id,
-            quantity=Decimal("100"),
-            actor_id=fx["user"].id,
-            from_location_id=fx["raw"].id,
-            shortage_strategy="fail",
-        )
-
-
-async def test_issue_to_work_auto_consume_flag(session: AsyncSession):
-    """issue_to_work(shortage_strategy=partial) выдаёт сколько есть, падает при 0."""
-    fx = await _setup_minimal_route(session)
-    task = fx["task"]
-
-    # Seed small stock, request more than available
     svc = StockCommandService()
-    await svc.record(session, StockCommand(
-        product_id=fx["product"].id,
-        from_location_id=None,
-        to_location_id=fx["raw"].id,
-        quantity=Decimal("5"),
-        reason=Reason.MANUAL_IN,
-        created_by=fx["user"].id,
-    ))
-    await session.commit()
-
-    from app.services.shopfloor.operations_tasks import issue_to_work
-    result = await issue_to_work(
-        session,
-        task_id=task.id,
-        quantity=Decimal("100"),
-        actor_id=fx["user"].id,
-        from_location_id=fx["raw"].id,
-        shortage_strategy="partial",
-    )
-    await session.commit()
-
-    # Should have issued the available 5, not 100
-    from app.stock.services import StockProjectionManager
-    pm = StockProjectionManager()
-    cache = await pm.get_task_cache(session, task.id)
-    assert cache["issued_quantity"] == Decimal("5")
-    assert result["task_id"] == task.id
+    from app.stock import StockValidationError
+    with pytest.raises(StockValidationError, match="issue_to_work"):
+        await svc.record(session, StockCommand(
+            product_id=fx["product"].id,
+            from_location_id=fx["raw"].id,
+            to_location_id=task.section_id,
+            quantity=Decimal("100"),
+            reason=Reason.ISSUE_TO_WORK,
+            task_id=task.id,
+            created_by=fx["user"].id,
+        ))
 
 
 async def test_complete_task_creates_complete_tx(session: AsyncSession):
@@ -338,16 +275,15 @@ async def test_complete_task_creates_complete_tx(session: AsyncSession):
         reason=Reason.MANUAL_IN,
         created_by=fx["user"].id,
     ))
-    # Issue to work via StockCommand (to set up pre-requisite)
-    await svc.record(session, StockCommand(
+    await record_transfer_receive(
+        session,
         product_id=fx["product"].id,
         from_location_id=fx["raw"].id,
         to_location_id=task.section_id,
         quantity=Decimal("10"),
-        reason=Reason.ISSUE_TO_WORK,
         task_id=task.id,
         created_by=fx["user"].id,
-    ))
+    )
     task.status = WorkTaskStatus.in_progress
     await session.commit()
 
@@ -402,15 +338,15 @@ async def test_complete_task_with_scrap(session: AsyncSession):
         reason=Reason.MANUAL_IN,
         created_by=fx["user"].id,
     ))
-    await svc.record(session, StockCommand(
+    await record_transfer_receive(
+        session,
         product_id=fx["product"].id,
         from_location_id=fx["raw"].id,
         to_location_id=task.section_id,
         quantity=Decimal("10"),
-        reason=Reason.ISSUE_TO_WORK,
         task_id=task.id,
         created_by=fx["user"].id,
-    ))
+    )
     task.status = WorkTaskStatus.in_progress
     await session.commit()
 
@@ -470,15 +406,15 @@ async def test_final_release_creates_stock_tx(session: AsyncSession):
         reason=Reason.MANUAL_IN,
         created_by=fx["user"].id,
     ))
-    await svc.record(session, StockCommand(
+    await record_transfer_receive(
+        session,
         product_id=fx["product"].id,
         from_location_id=fx["raw"].id,
         to_location_id=task.section_id,
         quantity=Decimal("10"),
-        reason=Reason.ISSUE_TO_WORK,
         task_id=task.id,
         created_by=fx["user"].id,
-    ))
+    )
     task.status = WorkTaskStatus.in_progress
     await svc.record(session, StockCommand(
         product_id=fx["product"].id,
@@ -528,15 +464,15 @@ async def test_return_to_stock_endpoint(session: AsyncSession):
         reason=Reason.MANUAL_IN,
         created_by=fx["user"].id,
     ))
-    await svc.record(session, StockCommand(
+    await record_transfer_receive(
+        session,
         product_id=fx["product"].id,
         from_location_id=fx["raw"].id,
         to_location_id=task.section_id,
         quantity=Decimal("10"),
-        reason=Reason.ISSUE_TO_WORK,
         task_id=task.id,
         created_by=fx["user"].id,
-    ))
+    )
     await session.commit()
 
     # Call return endpoint directly
@@ -577,15 +513,15 @@ async def test_no_movement_written_in_shopfloor(session: AsyncSession):
         reason=Reason.MANUAL_IN,
         created_by=fx["user"].id,
     ))
-    await svc.record(session, StockCommand(
+    await record_transfer_receive(
+        session,
         product_id=fx["product"].id,
         from_location_id=fx["raw"].id,
         to_location_id=task.section_id,
         quantity=Decimal("10"),
-        reason=Reason.ISSUE_TO_WORK,
         task_id=task.id,
         created_by=fx["user"].id,
-    ))
+    )
     task.status = WorkTaskStatus.in_progress
     await svc.record(session, StockCommand(
         product_id=fx["product"].id,

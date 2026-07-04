@@ -7,7 +7,8 @@ from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.internal_plan import SectionPlanLine
-from app.models.production_plan import PlanPosition, PlanPositionStatus
+from app.models.production_plan import PlanPosition, PlanPositionStatus, PositionStatusHistory
+from app.models.audit_log import AuditLog, AuditEntityType
 from app.models.route import RouteStage, SectionOperation
 from app.models.section import Section
 from app.models.transfer import Transfer
@@ -412,6 +413,75 @@ async def list_production_planning_rows(db: AsyncSession) -> list[dict]:
     return result
 
 
+async def _load_position_status_history(db: AsyncSession, position_id: int) -> list[dict]:
+    """История смен статуса позиции: legacy-таблица + аудит-логи с changes.status."""
+    entries: list[dict] = []
+    seen: set[tuple[str, str, str]] = set()
+
+    legacy_rows = (
+        await db.execute(
+            select(PositionStatusHistory)
+            .where(PositionStatusHistory.plan_position_id == position_id)
+            .order_by(PositionStatusHistory.changed_at.asc())
+        )
+    ).scalars().all()
+
+    for row in legacy_rows:
+        changed_at = row.changed_at.isoformat() if row.changed_at else ""
+        key = (row.from_status, row.to_status, changed_at)
+        if key in seen:
+            continue
+        seen.add(key)
+        entries.append(
+            {
+                "id": row.id,
+                "from_status": row.from_status,
+                "to_status": row.to_status,
+                "changed_by": row.changed_by,
+                "changed_at": changed_at,
+                "reason": row.reason,
+            }
+        )
+
+    audit_logs = (
+        await db.execute(
+            select(AuditLog)
+            .where(
+                AuditLog.entity_type == AuditEntityType.PLAN_POSITION.value,
+                AuditLog.entity_id == position_id,
+            )
+            .order_by(AuditLog.created_at.asc())
+        )
+    ).scalars().all()
+
+    for log in audit_logs:
+        changes = log.changes or {}
+        before = changes.get("before") or {}
+        after = changes.get("after") or {}
+        from_status = before.get("status")
+        to_status = after.get("status")
+        if not from_status or not to_status:
+            continue
+        changed_at = log.created_at.isoformat() if log.created_at else ""
+        key = (str(from_status), str(to_status), changed_at)
+        if key in seen:
+            continue
+        seen.add(key)
+        entries.append(
+            {
+                "id": log.id,
+                "from_status": str(from_status),
+                "to_status": str(to_status),
+                "changed_by": log.user_id,
+                "changed_at": changed_at,
+                "reason": log.comment or log.message,
+            }
+        )
+
+    entries.sort(key=lambda item: item.get("changed_at") or "")
+    return entries
+
+
 async def get_production_planning_row_detail(db: AsyncSession, position_id: int) -> dict | None:
     pos = await db.get(PlanPosition, position_id)
     if pos is None or pos.deleted_at is not None:
@@ -437,6 +507,7 @@ async def get_production_planning_row_detail(db: AsyncSession, position_id: int)
             )
         ).all()
         section_ids = {section.id for _stage, section in stages}
+        section_name_by_id = {section.id: section.name for _stage, section in stages}
         operation_names_by_key = {
             (operation.section_id, operation.operation_code): operation.operation_name
             for operation in (
@@ -587,15 +658,15 @@ async def get_production_planning_row_detail(db: AsyncSession, position_id: int)
                 },
             )
 
-            if reason_val == Reason.ISSUE_TO_WORK.value:
+            if reason_val == Reason.TRANSFER_RECEIVE.value:
                 entry["issued_qty"] += quantity
                 if entry["issued_last_dt"] is None or (event_sort_dt and event_sort_dt >= entry["issued_last_dt"]):
                     entry["issued_last_dt"] = event_sort_dt
                     entry["issued_last_at"] = event_at_iso
                 entry["flow_events"].append(
                     {
-                        "step": "issue",
-                        "label": "Выдано в работу",
+                        "step": "receive",
+                        "label": "Принято (выдано в работу)",
                         "quantity": round(quantity, 3),
                         "event_at": event_at_iso,
                         "task_id": tx.task_id,
@@ -650,12 +721,14 @@ async def get_production_planning_row_detail(db: AsyncSession, position_id: int)
                     entry["sent_last_at"] = event_at_iso
                 entry["flow_events"].append(
                     {
-                        "step": "send",
-                        "label": "Передано",
+                        "step": "transfer",
+                        "label": "Передача на след. этап",
                         "quantity": round(quantity, 3),
                         "event_at": event_at_iso,
                         "task_id": tx.task_id,
                         "transfer_id": tx.transfer_id,
+                        "from_section_name": section_name_by_id.get(tx.from_location_id),
+                        "to_section_name": section_name_by_id.get(tx.to_location_id),
                         "manual_route_pass": False,
                         "_sort_dt": event_sort_dt,
                         "_sort_id": tx.id,
@@ -668,6 +741,8 @@ async def get_production_planning_row_detail(db: AsyncSession, position_id: int)
                     SectionPlanLine.route_stage_id.label("route_stage_id"),
                     Transfer.id.label("transfer_id"),
                     Transfer.from_task_id.label("from_task_id"),
+                    Transfer.from_section_id.label("from_section_id"),
+                    Transfer.to_section_id.label("to_section_id"),
                     Transfer.accepted_quantity.label("accepted_quantity"),
                     Transfer.idempotency_key.label("idempotency_key"),
                     Transfer.accepted_at.label("accepted_at"),
@@ -712,14 +787,37 @@ async def get_production_planning_row_detail(db: AsyncSession, position_id: int)
             if entry["accepted_by_next_last_dt"] is None or (event_at and event_at >= entry["accepted_by_next_last_dt"]):
                 entry["accepted_by_next_last_dt"] = event_at
                 entry["accepted_by_next_last_at"] = event_at_iso
+
+            existing_transfer_event = next(
+                (
+                    event
+                    for event in entry["flow_events"]
+                    if event.get("step") == "transfer" and event.get("transfer_id") == row.transfer_id
+                ),
+                None,
+            )
+            transfer_from_name = section_name_by_id.get(row.from_section_id)
+            transfer_to_name = section_name_by_id.get(row.to_section_id)
+            if existing_transfer_event is not None:
+                if is_manual_route_pass:
+                    existing_transfer_event["label"] = "Ручной пропуск: передача на след. этап"
+                    existing_transfer_event["manual_route_pass"] = True
+                if not existing_transfer_event.get("from_section_name"):
+                    existing_transfer_event["from_section_name"] = transfer_from_name
+                if not existing_transfer_event.get("to_section_name"):
+                    existing_transfer_event["to_section_name"] = transfer_to_name
+                continue
+
             entry["flow_events"].append(
                 {
-                    "step": "accept",
-                    "label": "Ручной пропуск: принято след. этапом" if is_manual_route_pass else "Принято след. этапом",
+                    "step": "transfer",
+                    "label": "Ручной пропуск: передача на след. этап" if is_manual_route_pass else "Передача на след. этап",
                     "quantity": round(accepted_qty, 3),
                     "event_at": event_at_iso,
                     "task_id": row.from_task_id,
                     "transfer_id": row.transfer_id,
+                    "from_section_name": transfer_from_name,
+                    "to_section_name": transfer_to_name,
                     "manual_route_pass": is_manual_route_pass,
                     "_sort_dt": event_at or row.created_at,
                     "_sort_id": row.transfer_id,
@@ -817,6 +915,8 @@ async def get_production_planning_row_detail(db: AsyncSession, position_id: int)
                             "event_at": event["event_at"],
                             "task_id": event["task_id"],
                             "transfer_id": event["transfer_id"],
+                            "from_section_name": event.get("from_section_name"),
+                            "to_section_name": event.get("to_section_name"),
                             "manual_route_pass": bool(event.get("manual_route_pass")),
                         }
                         for event in flow_events
@@ -949,4 +1049,5 @@ async def get_production_planning_row_detail(db: AsyncSession, position_id: int)
         "available_remainder_quantity": round(available_remainder_quantity, 3),
         "raw_excel_row": (pos.source_payload or {}).get("raw_excel_row"),
         "payload": pos.source_payload,
+        "status_history": await _load_position_status_history(db, pos.id),
     }

@@ -9,6 +9,12 @@ from app.models.internal_plan import SectionPlanLine
 from app.models.work_task import WorkTask
 from app.stock.models import Reason, StockTransaction
 
+from app.stock.task_cache import (
+    compute_remaining,
+    compute_task_available,
+    effective_issued_quantity,
+)
+
 from .common import _to_decimal
 
 
@@ -17,12 +23,17 @@ def _compute_available_from_balances(
     planned_quantity: Decimal,
     received_quantity: Decimal,
     issued_quantity: Decimal,
+    returned_quantity: Decimal = Decimal("0"),
     is_first_stage: bool,
 ) -> Decimal:
     """Compute available quantity from cached balances (pure, no DB)."""
-    base_available = planned_quantity if is_first_stage else Decimal("0")
-    available = base_available + received_quantity - issued_quantity
-    return available if available > 0 else Decimal("0")
+    return compute_task_available(
+        planned_quantity=planned_quantity,
+        received_quantity=received_quantity,
+        issued_quantity=issued_quantity,
+        returned_quantity=returned_quantity,
+        is_first_stage=is_first_stage,
+    )
 
 
 async def _refresh_section_plan_line_cache(db: AsyncSession, section_plan_line_id: int) -> None:
@@ -89,24 +100,26 @@ async def _refresh_section_plan_line_cache(db: AsyncSession, section_plan_line_i
     def _s(reason: Reason) -> Decimal:
         return sums.get(reason.value) or Decimal("0")
 
-    issued = _s(Reason.ISSUE_TO_WORK)
     completed = _s(Reason.COMPLETE)
     scrapped = _s(Reason.SCRAP)
     transferred = net_sums.get(Reason.TRANSFER_SEND.value) or Decimal("0")
     received = net_sums.get(Reason.TRANSFER_RECEIVE.value) or Decimal("0")
     rejected = scrapped
+    issued = effective_issued_quantity(received=received)
 
-    # available: для первой стадии = planned, иначе 0
     is_first_stage = (line.sequence == 1)
-    base_available = line.planned_quantity if is_first_stage else Decimal("0")
     returned = _s(Reason.RETURN_TO_STOCK)
-    available = base_available + received + returned - issued
-    if available < Decimal("0"):
-        available = Decimal("0")
-
-    remaining = line.planned_quantity - transferred
-    if remaining < Decimal("0"):
-        remaining = Decimal("0")
+    available = compute_task_available(
+        planned_quantity=line.planned_quantity,
+        received_quantity=received,
+        issued_quantity=issued,
+        returned_quantity=returned,
+        is_first_stage=is_first_stage,
+    )
+    remaining = compute_remaining(
+        planned_quantity=line.planned_quantity,
+        transferred_quantity=transferred,
+    )
 
     line.cached_available_quantity = available
     line.cached_issued_quantity = issued

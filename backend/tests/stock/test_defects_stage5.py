@@ -37,6 +37,7 @@ from app.stock import (
     StockCommandService,
     StockTransaction,
 )
+from tests.stock.helpers import record_transfer_receive
 from tests.test_integrity_invariants import assert_no_stock_ledger_invariants_violations
 
 pytestmark = pytest.mark.asyncio
@@ -192,15 +193,15 @@ async def test_complete_task_scrap_links_defect_to_stock_tx(session: AsyncSessio
         reason=Reason.MANUAL_IN,
         created_by=fx["user"].id,
     ))
-    await svc.record(session, StockCommand(
+    await record_transfer_receive(
+        session,
         product_id=fx["product"].id,
         from_location_id=fx["raw"].id,
         to_location_id=task.section_id,
         quantity=Decimal("10"),
-        reason=Reason.ISSUE_TO_WORK,
         task_id=task.id,
         created_by=fx["user"].id,
-    ))
+    )
     await session.commit()
 
     from app.services.shopfloor.operations_tasks import complete_task
@@ -412,15 +413,15 @@ async def test_defect_decide_accept_deviation_creates_complete_tx(session: Async
         reason=Reason.MANUAL_IN,
         created_by=fx["user"].id,
     ))
-    await svc.record(session, StockCommand(
+    await record_transfer_receive(
+        session,
         product_id=fx["product"].id,
         from_location_id=fx["raw"].id,
         to_location_id=task.section_id,
         quantity=Decimal("10"),
-        reason=Reason.ISSUE_TO_WORK,
         task_id=task.id,
         created_by=fx["user"].id,
-    ))
+    )
     await session.commit()
 
     from app.services.shopfloor.operations_defects import create_defect, defect_decide

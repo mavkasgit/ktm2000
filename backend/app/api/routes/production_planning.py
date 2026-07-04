@@ -23,7 +23,7 @@ from app.services.production_planning_rows import get_production_planning_row_de
 from app.services.production_plan_service import _refresh_plan_status, restore_plan_position, soft_delete_cancelled_position
 from app.services.plan_generation import create_release_batch, release_batch
 from app.services.route_matcher import resolve_position_route, make_position_route_cache_key
-from app.services.shopfloor_service import complete_task, final_release, issue_to_work, transfer_send
+from app.services.shopfloor_service import complete_task, final_release, transfer_send
 
 router = APIRouter(prefix="/production-planning", tags=["execution-control"])
 MANUAL_ROUTE_PASS_PREFIX = "manual_route_pass:"
@@ -216,6 +216,8 @@ class PlanningStageOut(BaseModel):
         event_at: str | None = None
         task_id: int | None = None
         transfer_id: int | None = None
+        from_section_name: str | None = None
+        to_section_name: str | None = None
         manual_route_pass: bool = False
 
     route_stage_id: int
@@ -249,6 +251,15 @@ class PlanningStageOut(BaseModel):
     flow_events: list[FlowEventOut] = Field(default_factory=list)
 
 
+class PositionStatusHistoryOut(BaseModel):
+    id: int
+    from_status: str
+    to_status: str
+    changed_by: int | None = None
+    changed_at: str
+    reason: str | None = None
+
+
 class PlanningRowDetailOut(BaseModel):
     plan_position_id: int
     production_plan_id: int
@@ -278,6 +289,7 @@ class PlanningRowDetailOut(BaseModel):
     current_stage_task_status: str | None = None
     route_snapshot: PlanningRouteSnapshotOut | None
     stages: list[PlanningStageOut]
+    status_history: list[PositionStatusHistoryOut] = Field(default_factory=list)
     raw_excel_row: dict | None = None
     payload: dict | None = None
     available_remainder_quantity: float | None = None
@@ -523,6 +535,129 @@ async def _collect_task_rows_for_position(
     ).all()
 
 
+_STOCK_SECTION_TYPES = frozenset({"raw_stock", "wip_stock", "finished_stock"})
+
+
+async def _find_preceding_stock_line(
+    db: AsyncSession,
+    *,
+    plan_position_id: int,
+    before_sequence: int,
+) -> tuple[SectionPlanLine, Section] | None:
+    row = (
+        await db.execute(
+            select(SectionPlanLine, Section)
+            .join(Section, Section.id == SectionPlanLine.section_id)
+            .where(
+                SectionPlanLine.plan_position_id == plan_position_id,
+                SectionPlanLine.sequence < before_sequence,
+                Section.type.in_(_STOCK_SECTION_TYPES),
+            )
+            .order_by(SectionPlanLine.sequence.desc())
+            .limit(1)
+        )
+    ).first()
+    if row is None:
+        return None
+    return row[0], row[1]
+
+
+async def _get_or_create_stock_fake_task(
+    db: AsyncSession,
+    *,
+    stock_line: SectionPlanLine,
+    stock_section: Section,
+    product_id: int,
+) -> WorkTask:
+    fake_task = await db.scalar(
+        select(WorkTask).where(
+            WorkTask.section_plan_line_id == stock_line.id,
+            WorkTask.status.notin_([WorkTaskStatus.cancelled, WorkTaskStatus.completed]),
+        )
+    )
+    if fake_task is None:
+        planned_qty = stock_line.planned_quantity or Decimal("0")
+        fake_task = WorkTask(
+            section_plan_line_id=stock_line.id,
+            section_id=stock_section.id,
+            product_id=product_id,
+            route_stage_id=stock_line.route_stage_id,
+            planned_quantity=planned_qty,
+            status=WorkTaskStatus.ready,
+            due_date=stock_line.due_date,
+        )
+        db.add(fake_task)
+        await db.flush()
+    return fake_task
+
+
+async def _ensure_task_issued_via_transfer(
+    db: AsyncSession,
+    *,
+    task: WorkTask,
+    line: SectionPlanLine,
+    quantity: Decimal,
+    prev_task: WorkTask | None,
+    actor_id: int,
+    comment: str,
+    source_ref: str,
+    operation_key: str,
+    executor_user_id: int,
+    performed_at: datetime,
+    accounted_at: datetime,
+) -> None:
+    """Ensure ``in_work > 0`` via TRANSFER_RECEIVE before ``complete_task``.
+
+    First production stage: transfer from stock fake_task (ready-transfer pattern).
+    Later stages: transfer from the previous production task when not yet received.
+    """
+    from app.stock.services import StockProjectionManager
+
+    await db.refresh(task)
+    pm = StockProjectionManager()
+    task_cache = await pm.get_task_cache(db, task.id)
+    issued_qty = task_cache["issued_quantity"]
+    to_issue = quantity - issued_qty
+    if to_issue <= 0:
+        return
+
+    if prev_task is not None:
+        from_task_id = prev_task.id
+    else:
+        stock_pair = await _find_preceding_stock_line(
+            db,
+            plan_position_id=line.plan_position_id,
+            before_sequence=line.sequence,
+        )
+        if stock_pair is None:
+            raise ValueError(
+                "Cannot issue material: no preceding stock section and no previous production task"
+            )
+        stock_line, stock_section = stock_pair
+        fake_task = await _get_or_create_stock_fake_task(
+            db,
+            stock_line=stock_line,
+            stock_section=stock_section,
+            product_id=task.product_id,
+        )
+        from_task_id = fake_task.id
+
+    await transfer_send(
+        db,
+        from_task_id=from_task_id,
+        to_task_id=task.id,
+        quantity=to_issue,
+        actor_id=actor_id,
+        comment=comment,
+        source_ref=source_ref,
+        idempotency_key=f"{operation_key}:receive",
+        executor_user_id=executor_user_id,
+        performed_at=performed_at,
+        accounted_at=accounted_at,
+        allow_over_plan=True,
+    )
+
+
 async def _position_stock_transaction_source_refs(db: AsyncSession, position_id: int) -> list[str | None]:
     """Fetch StockTransaction source_refs for a position (replaces Movement check after Этап 3)."""
     from app.stock.models import StockTransaction
@@ -704,33 +839,31 @@ async def _do_manual_pass(
         )
 
         for idx in range(stages_to_execute):
-            task, _line, stage = task_rows[idx]
+            task, line, stage = task_rows[idx]
+            prev_task = task_rows[idx - 1][0] if idx > 0 else None
             next_task = task_rows[idx + 1][0] if idx < len(task_rows) - 1 else None
             quantity = Decimal(str(task.planned_quantity))
             operation_key = f"{source_ref}:step:{stage.sequence}"
 
             try:
-                await db.refresh(task)
+                await _ensure_task_issued_via_transfer(
+                    db,
+                    task=task,
+                    line=line,
+                    quantity=quantity,
+                    prev_task=prev_task,
+                    actor_id=current_user.id,
+                    comment=manual_comment,
+                    source_ref=source_ref,
+                    operation_key=operation_key,
+                    executor_user_id=current_user.id,
+                    performed_at=now,
+                    accounted_at=now,
+                )
+
                 from app.stock.services import StockProjectionManager
                 pm = StockProjectionManager()
                 task_cache = await pm.get_task_cache(db, task.id)
-                issued_qty = task_cache["issued_quantity"]
-                to_issue = quantity - issued_qty
-                if to_issue > 0:
-                    await issue_to_work(
-                        db,
-                        task_id=task.id,
-                        quantity=to_issue,
-                        actor_id=current_user.id,
-                        comment=manual_comment,
-                        source_ref=source_ref,
-                        idempotency_key=f"{operation_key}:issue",
-                        executor_user_id=current_user.id,
-                        performed_at=now,
-                        accounted_at=now,
-                        shortage_strategy="force",
-                    )
-                
                 completed_qty = task_cache["completed_quantity"] + task_cache["rejected_quantity"]
                 to_complete = quantity - completed_qty
                 if to_complete > 0:

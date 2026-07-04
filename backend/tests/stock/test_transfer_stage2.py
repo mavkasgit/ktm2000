@@ -174,7 +174,7 @@ async def _make_tasks_transferable(
     src = tasks[0]
     dst = tasks[1]
 
-    # Create a stock section for issue_to_work from/to
+    # Create a stock section for transfer_receive seed
     from app.stock import StockCommand, StockCommandService, Reason
     from app.models.section import Section
     stock = Section(code="T2-STK", name="Stock", type="raw_stock",
@@ -193,13 +193,13 @@ async def _make_tasks_transferable(
         reason=Reason.MANUAL_IN,
         created_by=setup["user"].id,
     ))
-    # issue_to_work: from stock to source section
+    # TRANSFER_RECEIVE: material received on source section (issued)
     await svc.record(session, StockCommand(
         product_id=src.product_id,
         from_location_id=stock_id,
         to_location_id=src.section_id,
         quantity=src.planned_quantity,
-        reason=Reason.ISSUE_TO_WORK,
+        reason=Reason.TRANSFER_RECEIVE,
         task_id=src.id,
         created_by=setup["user"].id,
     ))

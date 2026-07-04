@@ -11,16 +11,10 @@ from app.models.defect import Defect, DefectItem, DefectStatus
 from app.models.internal_plan import SectionPlanLine
 from app.models.production_plan import PlanPosition, PlanPositionStatus
 from app.models.work_task import WorkTask, WorkTaskStatus
-from app.stock import QualityState, Reason, StockBalance, StockCommand, StockCommandService
+from app.stock import QualityState, Reason, StockCommand, StockCommandService
 
 from .common import _check_idempotency, _ensure_positive, _get_route_stage, _get_task, _get_user_snapshot_name, _to_decimal
 from .cache import _refresh_section_plan_line_cache
-
-ISSUE_ALLOWED_STATUSES = {
-    WorkTaskStatus.ready,
-    WorkTaskStatus.in_progress,
-    WorkTaskStatus.partially_completed,
-}
 
 
 async def _get_stock_location(session: AsyncSession, section_id: int) -> int | None:
@@ -68,118 +62,6 @@ async def _get_stock_location(session: AsyncSession, section_id: int) -> int | N
             return prev.section_id
 
     return None
-
-
-async def issue_to_work(
-    db: AsyncSession,
-    *,
-    task_id: int,
-    quantity: Decimal,
-    actor_id: int,
-    comment: str | None = None,
-    source_ref: str | None = None,
-    idempotency_key: str | None = None,
-    executor_user_id: int | None = None,
-    performed_at: datetime | None = None,
-    accounted_at: datetime | None = None,
-    transfer_id: int | None = None,
-    from_location_id: int | None = None,
-    shortage_strategy: Literal["fail", "partial", "force"] = "partial",
-    auto_consume: bool = False,
-) -> dict:
-    """Issue material to a work task.
-
-    Uses StockTransaction ledger (no Movement, no SpgRemainder).
-    Stock availability is checked via StockBalance.
-    ``auto_consume=True`` allows issuing whatever is available without hard-fail.
-    ``shortage_strategy='force'`` bypasses stock check (for manual pass etc.).
-    """
-    quantity = _to_decimal(quantity)
-    _ensure_positive(quantity, "quantity")
-
-    if idempotency_key:
-        from app.stock.models import StockTransaction
-        existing = await _check_idempotency(db, idempotency_key=idempotency_key, entity_type=StockTransaction)
-        if existing is not None:
-            task = await _get_task(db, task_id)
-            return {"transaction_id": existing.id, "task_id": task.id, "status": task.status.value, "idempotent_replay": True}
-
-    task = await _get_task(db, task_id)
-    if task.status not in ISSUE_ALLOWED_STATUSES:
-        is_first_active = False
-        if task.status == WorkTaskStatus.waiting_previous:
-            line = await db.get(SectionPlanLine, task.section_plan_line_id)
-            if line is not None:
-                preceding_has_task = await db.scalar(
-                    select(func.count(WorkTask.id))
-                    .join(SectionPlanLine, WorkTask.section_plan_line_id == SectionPlanLine.id)
-                    .where(
-                        SectionPlanLine.plan_position_id == line.plan_position_id,
-                        SectionPlanLine.sequence < line.sequence,
-                        WorkTask.status.notin_([WorkTaskStatus.cancelled])
-                    )
-                ) > 0
-                if not preceding_has_task:
-                    is_first_active = True
-
-        if not is_first_active:
-            if task.status == WorkTaskStatus.waiting_previous:
-                raise ValueError("Нельзя выдать в работу задание, ожидающее передачи сырья с предыдущего участка")
-            raise ValueError("Task must be ready/in_progress/partially_completed")
-
-    # Determine from_location (stock) if not provided
-    from_loc = from_location_id
-    if shortage_strategy == "force":
-        # Force issue: material appears at the task section from nowhere
-        from_loc = None
-    else:
-        if from_loc is None:
-            from_loc = await _get_stock_location(db, task.section_id)
-        if from_loc is None:
-            from_loc = task.section_id
-
-        # Check availability via StockBalance
-        available = await db.scalar(
-            select(func.coalesce(func.sum(StockBalance.balance_qty), 0))
-            .where(
-                StockBalance.product_id == task.product_id,
-                StockBalance.location_id == from_loc,
-                StockBalance.quality_state == QualityState.GOOD,
-            )
-        ) or Decimal("0")
-
-        if quantity > available:
-            if shortage_strategy == "fail":
-                raise ValueError(f"Недостаточно доступного количества (доступно: {available}, запрошено: {quantity})")
-            elif shortage_strategy == "partial":
-                quantity = min(quantity, available)
-                if quantity <= 0:
-                    raise ValueError("Доступное количество равно 0. Нечего брать в работу.")
-            # auto_consume: use what's available without error
-
-    svc = StockCommandService()
-    tx = await svc.record(db, StockCommand(
-        product_id=task.product_id,
-        from_location_id=from_loc,
-        to_location_id=task.section_id,
-        quantity=quantity,
-        reason=Reason.ISSUE_TO_WORK,
-        task_id=task.id,
-        transfer_id=transfer_id,
-        source_ref=source_ref,
-        idempotency_key=idempotency_key,
-        comment=comment,
-        created_by=actor_id,
-        executor_user_id=executor_user_id or actor_id,
-        performed_at=performed_at or datetime.now(UTC),
-        accounted_at=accounted_at or datetime.now(UTC),
-    ))
-
-    task.status = WorkTaskStatus.in_progress
-    await db.flush()
-    await _refresh_section_plan_line_cache(db, task.section_plan_line_id)
-
-    return {"transaction_id": tx.id, "task_id": task.id, "status": task.status.value}
 
 
 async def complete_task(
@@ -518,6 +400,5 @@ async def prepare_section_task(
     )
     db.add(task)
     await db.flush()
-    # Auto-consume removed — use issue_to_work(auto_consume=True) explicitly
     await _refresh_section_plan_line_cache(db, task.section_plan_line_id)
     return {"task_id": task.id, "status": task.status.value}
