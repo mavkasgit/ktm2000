@@ -18,7 +18,7 @@ from app.models.route import ProductionRoute, RouteStage, SectionOperation
 from app.models.section import Section
 from app.models.user import User
 from app.models.product import Product
-from app.models.spg import StorageProductionGroup
+from app.models.spg import SpgSection, StorageProductionGroup
 from app.services.production_planning_rows import get_production_planning_row_detail, list_production_planning_rows
 from app.services.production_plan_service import _refresh_plan_status, restore_plan_position, soft_delete_cancelled_position
 from app.services.plan_generation import create_release_batch, release_batch
@@ -38,6 +38,7 @@ class TakeToWorkRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     position_ids: list[int]
     remainder_allocation: list[RemainderAllocationItem] | None = None
+    release_quantity: Decimal | None = None
 
 
 
@@ -982,12 +983,22 @@ async def take_rows_to_work(
     if payload.remainder_allocation:
         allocation_dict = {item.remainder_id: item.quantity for item in payload.remainder_allocation}
 
+    if payload.release_quantity is not None:
+        if len(payload.position_ids) != 1:
+            raise HTTPException(
+                status_code=422,
+                detail="release_quantity поддерживается только для одной позиции",
+            )
+        if payload.release_quantity <= 0:
+            raise HTTPException(status_code=422, detail="release_quantity must be > 0")
+
     for position_id in payload.position_ids:
         try:
             result = await _process_position_take_to_work(
                 db,
                 position_id,
                 remainder_allocation=allocation_dict if len(payload.position_ids) == 1 else None,
+                release_quantity=payload.release_quantity if len(payload.position_ids) == 1 else None,
             )
             results.append(result)
         except Exception as exc:
@@ -1444,6 +1455,7 @@ async def _process_position_take_to_work(
     db: AsyncSession,
     position_id: int,
     remainder_allocation: dict[int, Decimal] | None = None,
+    release_quantity: Decimal | None = None,
 ) -> TakeToWorkResult:
     """Process a single position: validate and release into production."""
     # Check position exists
@@ -1538,10 +1550,11 @@ async def _process_position_take_to_work(
 
     # Create and release batch
     try:
+        qty_to_release = release_quantity if release_quantity is not None else pos.quantity
         batch_summary = await create_release_batch(
             db,
             production_plan_id=pos.production_plan_id,
-            positions=[{"plan_position_id": position_id, "release_quantity": str(pos.quantity)}],
+            positions=[{"plan_position_id": position_id, "release_quantity": str(qty_to_release)}],
         )
         release_summary = await release_batch(db, batch_summary["id"], remainder_allocation=remainder_allocation)
 

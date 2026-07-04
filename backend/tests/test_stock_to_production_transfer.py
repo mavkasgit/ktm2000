@@ -3,7 +3,7 @@
 When a route contains storage sections (raw_stock / wip_stock), they are
 storage slots inside a GHP — not actual work steps.  ``take-to-work`` must
 NOT create a WorkTask on them; instead, raw material flows from storage
-to the production step via SpgRemainder + Transfer.
+to the production step via StockBalance + Transfer.
 """
 from __future__ import annotations
 
@@ -18,6 +18,8 @@ from app.models.section import Section
 from app.models.spg import SpgSection, StorageProductionGroup
 from app.models.user import User, UserRole
 from app.models.work_task import WorkTask
+from app.stock.models import QualityState, Reason, StockBalance
+from app.stock.services import StockCommand, StockCommandService
 
 
 # ─── helpers ─────────────────────────────────────────────────────────────────
@@ -131,12 +133,57 @@ async def _make_raw_stock_to_production_fixture(
     }
 
 
+async def _seed_stock_balance(session, *, user_id: int, location_id: int, product_id: int, qty: Decimal) -> None:
+    svc = StockCommandService()
+    await svc.record(
+        session,
+        StockCommand(
+            product_id=product_id,
+            to_location_id=location_id,
+            quantity=qty,
+            reason=Reason.MANUAL_IN,
+            created_by=user_id,
+        ),
+    )
+    await session.commit()
+
+
+async def _stock_balance_qty(session, *, location_id: int, product_id: int) -> Decimal:
+    bal = await session.scalar(
+        select(StockBalance.balance_qty).where(
+            StockBalance.location_id == location_id,
+            StockBalance.product_id == product_id,
+            StockBalance.quality_state == QualityState.GOOD,
+        )
+    )
+    return bal or Decimal("0")
+
+
 async def _release_via_take_to_work(client, position_id: int) -> None:
     resp = await client.post("/api/production-planning/rows/take-to-work", json={"position_ids": [position_id]})
     assert resp.status_code == 200, resp.text
 
 
 # ─── tests ──────────────────────────────────────────────────────────────────
+
+
+async def test_take_to_work_accepts_partial_release_quantity(client, session) -> None:
+    """Запуск в работу с release_quantity создаёт задачу на указанное количество."""
+    from app.models.release_batch import ReleaseBatchPosition
+
+    fx = await _make_raw_stock_to_production_fixture(session, sku="PARTREL", qty=Decimal("216"))
+    resp = await client.post(
+        "/api/production-planning/rows/take-to-work",
+        json={"position_ids": [fx["position"].id], "release_quantity": "100"},
+    )
+    assert resp.status_code == 200, resp.text
+
+    batch_pos = (await session.execute(select(ReleaseBatchPosition))).scalar_one()
+    assert batch_pos.release_quantity == Decimal("100")
+
+    tasks = (await session.execute(select(WorkTask))).scalars().all()
+    assert len(tasks) == 1
+    assert tasks[0].planned_quantity == Decimal("100")
 
 
 async def test_take_to_work_does_not_create_task_on_raw_stock(client, session) -> None:
@@ -152,61 +199,65 @@ async def test_take_to_work_does_not_create_task_on_raw_stock(client, session) -
 
 
 @pytest.mark.asyncio
-async def test_manual_stock_transfer_consumes_remainder(client, session) -> None:
-    """Если передача отправляется и принимается вручную со склада сырья,
-    соответствующие SpgRemainder на складе должны уменьшаться/потребляться.
-    Также transferable_quantity в ready-to-transfer списке должна уменьшаться."""
-    from datetime import UTC, datetime
-    # SpgRemainder removed in Stage 7
-    from app.models.transfer import Transfer, TransferStatus
-
+async def test_manual_stock_transfer_one_per_task_and_plan_cap(client, session) -> None:
+    """Со склада: transferable = min(план, остаток); одна передача на задание."""
     user = await _make_user(session, "manual-xfer@test.local")
     headers = _auth_headers(user)
-    fx = await _make_raw_stock_to_production_fixture(session, sku="MANXFER", qty=Decimal("100"))
-    raw_sec, prod_sec = fx["sections"][0], fx["sections"][1]
-    spg_a = fx["spgs"][0]
+    plan_qty = Decimal("100")
+    warehouse_qty = Decimal("4000")
+    fx = await _make_raw_stock_to_production_fixture(session, sku="MANXFER", qty=plan_qty)
+    raw_sec = fx["sections"][0]
 
-    # Создаем остаток на складе 100
-    rem = SpgRemainder(
-        spg_id=spg_a.id,
+    await _seed_stock_balance(
+        session,
+        user_id=user.id,
+        location_id=raw_sec.id,
         product_id=fx["product"].id,
-        remainder_quantity=Decimal("100"),
-        original_issued=Decimal("100"),
-        created_at=datetime.now(UTC),
+        qty=warehouse_qty,
     )
-    session.add(rem)
-    await session.commit()
 
     await _release_via_take_to_work(client, fx["position"].id)
 
-    # Запрашиваем готовые к передаче. Должна быть 1 запись с transferable=100
     resp = await client.get(f"/api/transfers/ready?section_id={raw_sec.id}", headers=headers)
     assert resp.status_code == 200
     items = resp.json()["items"]
     assert len(items) == 1
     assert items[0]["transferable_quantity"] == "100"
+    assert items[0]["planned_quantity"] == "100"
     task_id = items[0]["task_id"]
 
-    # Отправляем 40 штук — auto-accepts in one shot under the new model.
     send_resp = await client.post(
         "/api/transfers",
         json={
             "from_task_id": task_id,
             "quantity": "40",
-            "idempotency_key": "manual-xfer:send-40"
+            "idempotency_key": "manual-xfer:send-40",
         },
         headers=headers,
     )
     assert send_resp.status_code == 200
     assert send_resp.json()["status"] == "accepted"
 
-    # Запрашиваем готовые к передаче снова. Должно быть transferable = 60
-    # (100 - 40 уже в пути / принято)
     resp = await client.get(f"/api/transfers/ready?section_id={raw_sec.id}", headers=headers)
-    assert resp.json()["items"][0]["transferable_quantity"] == "60"
+    assert resp.status_code == 200
+    assert resp.json()["items"] == []
 
-    # Под новой моделью нет отдельного /accept шага — он произошёл
-    # внутри transfer_send. Проверяем, что SpgRemainder на складе
-    # уменьшился до 60 (consume происходит при auto-accept).
-    await session.refresh(rem)
-    assert rem.remainder_quantity == Decimal("60")
+    dup_resp = await client.post(
+        "/api/transfers",
+        json={
+            "from_task_id": task_id,
+            "quantity": "10",
+            "idempotency_key": "manual-xfer:send-dup",
+        },
+        headers=headers,
+    )
+    assert dup_resp.status_code == 400
+    assert "активная передача" in dup_resp.json()["detail"].lower()
+
+    bal = await _stock_balance_qty(
+        session,
+        location_id=raw_sec.id,
+        product_id=fx["product"].id,
+    )
+    # TRANSFER_SEND + TRANSFER_RECEIVE — обе from→to, склад уменьшается на 2×qty.
+    assert bal == warehouse_qty - Decimal("80")

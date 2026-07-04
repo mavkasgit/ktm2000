@@ -24,6 +24,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models import Product, ProductType, Section
 from app.models.route import SectionOperation
 from app.models.user import User, UserRole
+from app.stock.import_service import parse_operations_from_comment
 from app.stock.models import QualityState, Reason, StockBalance, StockTransaction
 from app.stock.services import StockCommand, StockCommandService
 from tests.test_integrity_invariants import assert_no_invariants_violations
@@ -79,6 +80,17 @@ def _make_excel(
     wb.save(buf)
     buf.seek(0)
     return buf
+
+
+def _make_clipboard_tsv(
+    rows: list[tuple],
+    headers: tuple[str, ...] = ("SKU", "Количество", "Комментарий"),
+) -> str:
+    """Create TSV clipboard text copied from Excel."""
+    lines = ["\t".join(headers)]
+    for row in rows:
+        lines.append("\t".join(str(cell) for cell in row))
+    return "\n".join(lines)
 
 
 async def _make_stock_balance(
@@ -204,6 +216,26 @@ async def test_preview_remainders_excel_happy_path(
     assert items[1]["comment"] is None
 
 
+async def test_preview_without_location_id(
+    client: AsyncClient,
+    session: AsyncSession,
+) -> None:
+    """Preview работает без location_id — только парсинг и валидация строк."""
+    await _make_product(session, "NO-LOC-001")
+    await session.commit()
+
+    excel_buf = _make_excel([("NO-LOC-001", 5, "")])
+    resp = await client.post(
+        "/api/v2/stock/import/remainders/preview",
+        files={"file": ("test.xlsx", excel_buf, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+        data={"sheet_index": "0"},
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["summary"]["valid"] == 1
+    assert body["items"][0]["sku"] == "NO-LOC-001"
+
+
 async def test_preview_remainders_excel_unknown_sku(
     client: AsyncClient,
     session: AsyncSession,
@@ -315,7 +347,7 @@ async def test_import_remainders_excel_skip_invalid(
     assert body["success"] is True
     assert body["imported_count"] == 1
     assert len(body["errors"]) == 1  # одна ошибка о пустом SKU
-    assert "SKU is empty" in body["errors"][0]
+    assert "артикул" in body["errors"][0].lower()
 
     # Только 1 транзакция создана
     txs = (await session.execute(select(StockTransaction))).scalars().all()
@@ -428,21 +460,21 @@ async def test_import_remainders_excel_quality_state(
     client: AsyncClient,
     session: AsyncSession,
 ) -> None:
-    """quality_state=SCRAP → StockBalance создан с quality_state=SCRAP."""
+    """Колонка «Статус качества»=Брак → StockBalance с quality_state=SCRAP."""
     product = await _make_product(session, "SCRAP-001")
     location = await _make_location(session, "SCRAP-LOC")
     await session.commit()
 
-    excel_buf = _make_excel([
-        ("SCRAP-001", 15, "брак"),
-    ])
+    excel_buf = _make_excel(
+        [("SCRAP-001", 15, "Брак")],
+        headers=("SKU", "Количество", "Статус качества"),
+    )
 
     resp = await client.post(
         "/api/v2/stock/import/remainders",
         files={"file": ("test.xlsx", excel_buf, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
         data={
             "location_id": str(location.id),
-            "quality_state": "scrap",
         },
     )
     assert resp.status_code == 200, resp.text
@@ -454,7 +486,6 @@ async def test_import_remainders_excel_quality_state(
     tx = (await session.execute(select(StockTransaction))).scalar_one()
     assert tx.to_quality_state == QualityState.SCRAP
 
-    # Проверяем баланс по scrap
     balance = await session.execute(
         select(StockBalance).where(
             StockBalance.product_id == product.id,
@@ -466,7 +497,6 @@ async def test_import_remainders_excel_quality_state(
     assert bal is not None
     assert float(bal.balance_qty) == 15.0
 
-    # Баланса по good быть не должно
     good_balance = await session.execute(
         select(StockBalance).where(
             StockBalance.product_id == product.id,
@@ -475,6 +505,95 @@ async def test_import_remainders_excel_quality_state(
         )
     )
     assert good_balance.scalar_one_or_none() is None
+
+
+async def test_import_remainders_excel_per_row_quality_states(
+    client: AsyncClient,
+    session: AsyncSession,
+) -> None:
+    """Разные статусы качества в одном файле импортируются построчно."""
+    good_product = await _make_product(session, "MIX-GOOD")
+    defect_product = await _make_product(session, "MIX-DEFECT")
+    final_product = await _make_product(session, "MIX-FINAL")
+    location = await _make_location(session, "MIX-LOC")
+    await session.commit()
+
+    excel_buf = _make_excel(
+        [
+            ("MIX-GOOD", 10, "Годный"),
+            ("MIX-DEFECT", 5, "Брак"),
+            ("MIX-FINAL", 3, "Окончательный брак"),
+        ],
+        headers=("SKU", "Количество", "Статус качества"),
+    )
+
+    resp = await client.post(
+        "/api/v2/stock/import/remainders",
+        files={"file": ("test.xlsx", excel_buf, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+        data={"location_id": str(location.id)},
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["success"] is True
+    assert body["imported_count"] == 3
+
+    txs = (await session.execute(select(StockTransaction))).scalars().all()
+    assert len(txs) == 3
+    by_product = {tx.product_id: tx for tx in txs}
+    assert by_product[good_product.id].to_quality_state == QualityState.GOOD
+    assert by_product[defect_product.id].to_quality_state == QualityState.SCRAP
+    assert by_product[final_product.id].to_quality_state == QualityState.FINAL_SCRAP
+
+
+async def test_preview_remainders_excel_rejects_rework_quality_state(
+    client: AsyncClient,
+    session: AsyncSession,
+) -> None:
+    """Переделка не поддерживается при импорте остатков."""
+    await _make_product(session, "RW-ERR")
+    location = await _make_location(session, "RW-LOC")
+    await session.commit()
+
+    excel_buf = _make_excel(
+        [("RW-ERR", 10, "Переделка")],
+        headers=("SKU", "Количество", "Статус качества"),
+    )
+
+    resp = await client.post(
+        "/api/v2/stock/import/remainders/preview",
+        files={"file": ("test.xlsx", excel_buf, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+        data={"location_id": str(location.id)},
+    )
+    assert resp.status_code == 200, resp.text
+    item = resp.json()["items"][0]
+    assert item["status"] == "invalid"
+    assert any("переделка" in err.lower() for err in item["errors"])
+
+
+async def test_preview_remainders_excel_unknown_quality_state(
+    client: AsyncClient,
+    session: AsyncSession,
+) -> None:
+    """Неизвестный статус качества помечает строку invalid."""
+    product = await _make_product(session, "QTY-ERR")
+    location = await _make_location(session, "QTY-LOC")
+    await session.commit()
+
+    excel_buf = _make_excel(
+        [("QTY-ERR", 10, "повреждённый")],
+        headers=("SKU", "Количество", "Статус качества"),
+    )
+
+    resp = await client.post(
+        "/api/v2/stock/import/remainders/preview",
+        files={"file": ("test.xlsx", excel_buf, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+        data={"location_id": str(location.id)},
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    item = body["items"][0]
+    assert item["status"] == "invalid"
+    assert any("статус качества" in err.lower() for err in item["errors"])
 
 
 async def test_import_remainders_excel_unknown_sku(
@@ -532,18 +651,22 @@ async def test_download_remainders_template(
     wb = load_workbook(BytesIO(content))
     assert wb.active is not None
     ws = wb.active
-    # 1 строка-справочник + заголовок + 2 примера = 4 строки
+    # заголовок + 3 примера = 4 строки
     assert ws.max_row == 4
-    # Первая строка — справочник операций
-    assert "Доступные операции:" in str(ws.cell(1, 1).value)
-    assert ws.cell(2, 1).value == "SKU / Артикул"
+    assert ws.cell(1, 1).value == "Артикул"
+    assert ws.cell(1, 3).value == "Статус качества"
+    assert ws.cell(1, 4).value == "Операции"
+    assert ws.cell(1, 5).value == "Участок"
+    assert ws.cell(2, 1).value == "361"
+    assert ws.cell(3, 1).value == "ALS-1289"
+    assert ws.cell(4, 1).value == "ЮП-2630"
 
 
-async def test_download_remainders_template_includes_operations(
+async def test_download_remainders_template_example_rows_match_modal(
     client: AsyncClient,
     session: AsyncSession,
 ) -> None:
-    """GET /import/remainders/template содержит строку 'Доступные операции:' с именами операций."""
+    """Шаблон содержит те же примеры строк, что и модалка импорта."""
     location = await _make_location(session, "TMPL-OPS-LOC")
     await session.commit()
 
@@ -558,12 +681,13 @@ async def test_download_remainders_template_includes_operations(
     ws = wb.active
     assert ws is not None
 
-    first_cell = str(ws.cell(1, 1).value or "")
-    assert first_cell.startswith("Доступные операции:")
-
-    # Должно быть хотя бы одно имя операции (из БД или fallback)
-    # Fallback: ["Дробеструй", "Сверловка"]
-    assert "Дробеструй" in first_cell or "Сверловка" in first_cell
+    assert ws.cell(3, 4).value == "Дробеструй"
+    row3_ops = str(ws.cell(4, 4).value or "")
+    assert "Дробеструй" in row3_ops
+    assert "Чёрный" in row3_ops
+    assert "Стрейч" in row3_ops
+    assert ws.cell(4, 3).value == "Окончательный брак"
+    assert ws.cell(4, 6).value == "Срочный заказ"
 
 
 # ─── Tests: Preview with completed stages & target section ──────────────────
@@ -605,7 +729,59 @@ async def test_preview_returns_completed_stages(
     assert stage["operation_name"] == "Прессование"
     assert stage["section_code"] == "PRESS"
     assert stage["is_significant"] is True
-    assert stage["sequence"] == 10
+    assert stage["sequence"] == section.sort_order
+
+
+async def test_preview_completed_stages_use_section_order_not_intra_section(
+    client: AsyncClient,
+    session: AsyncSession,
+) -> None:
+    """SHOT и ANOD не должны группироваться как «совмещено» из-за одинакового sort_order операции."""
+    await _make_product(session, "ROUTE-001")
+    location = await _make_location(session, "ROUTE-LOC")
+    shot_section = Section(
+        code="SHOT-TEST",
+        name="Дробеструй",
+        type="production",
+        is_active=True,
+        sort_order=40,
+    )
+    anod_section = Section(
+        code="ANOD-TEST",
+        name="Анодирование",
+        type="production",
+        is_active=True,
+        sort_order=50,
+    )
+    session.add_all([shot_section, anod_section])
+    await session.flush()
+    await _make_section_operation(session, shot_section, "Дробеструй", operation_code="SHOT", sort_order=10)
+    await _make_section_operation(session, anod_section, "Чёрный", operation_code="ANOD_05", sort_order=10)
+    await _make_section_operation(
+        session, anod_section, "Стрейч", operation_code="PACK_STRETCH", sort_order=20,
+    )
+    await session.commit()
+
+    excel_buf = _make_excel(
+        [("ROUTE-001", 100, "", "Дробеструй, Чёрный, Стрейч", "")],
+        headers=("SKU", "Количество", "Целевая секция", "Выполненные операции", "Комментарий"),
+    )
+    resp = await client.post(
+        "/api/v2/stock/import/remainders/preview",
+        files={"file": ("test.xlsx", excel_buf, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+        data={"location_id": str(location.id), "sheet_index": "0"},
+    )
+    assert resp.status_code == 200, resp.text
+    stages = resp.json()["items"][0]["completed_stages"]
+    assert len(stages) == 3
+    assert stages[0]["operation_name"] == "Дробеструй"
+    assert stages[0]["sequence"] == 40
+    assert stages[0]["section_code"] == "SHOT-TEST"
+    assert stages[1]["operation_name"] == "Чёрный"
+    assert stages[1]["sequence"] == 50
+    assert stages[2]["operation_name"] == "Стрейч"
+    assert stages[2]["sequence"] == 50
+    assert len({s["sequence"] for s in stages[:2]}) == 2
 
 
 async def test_preview_target_section_name_resolved(
@@ -663,8 +839,207 @@ async def test_preview_target_section_unknown_warns_but_not_fails(
     item = body["items"][0]
     assert item["target_section_id"] is None
     assert item["target_section_name"] == "Несуществующая секция"
-    assert any("не найдена" in e for e in item["errors"])
+    assert any("не найден" in e for e in item["errors"])
     assert item["status"] == "valid"
+
+
+async def test_preview_clipboard_text_parses_rows(
+    client: AsyncClient,
+    session: AsyncSession,
+) -> None:
+    """Preview принимает TSV из буфера обмена вместо Excel-файла."""
+    await _make_product(session, "CLIP-001")
+    location = await _make_location(session, "CLIP-LOC")
+    await session.commit()
+
+    clipboard = _make_clipboard_tsv(
+        [("CLIP-001", 42, "", "Дробеструй", "из буфера")],
+        headers=("Артикул", "Количество", "Участок", "Выполненные операции", "Комментарий"),
+    )
+    resp = await client.post(
+        "/api/v2/stock/import/remainders/preview",
+        data={
+            "location_id": str(location.id),
+            "clipboard_text": clipboard,
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["sheet_name"] == "Буфер обмена"
+    assert len(body["items"]) == 1
+    item = body["items"][0]
+    assert item["sku"] == "CLIP-001"
+    assert item["quantity"] == 42
+    assert item["comment"] == "из буфера"
+    assert item["status"] == "valid"
+
+
+async def test_import_clipboard_creates_balance(
+    client: AsyncClient,
+    session: AsyncSession,
+) -> None:
+    """Импорт из буфера создаёт MANUAL_IN и обновляет баланс."""
+    product = await _make_product(session, "CLIP-IMP")
+    location = await _make_location(session, "CLIP-IMP-LOC")
+    await session.commit()
+
+    clipboard = _make_clipboard_tsv(
+        [("CLIP-IMP", 15, "", "", "")],
+        headers=("SKU", "Количество", "Комментарий"),
+    )
+    resp = await client.post(
+        "/api/v2/stock/import/remainders",
+        data={
+            "location_id": str(location.id),
+            "clipboard_text": clipboard,
+            "skip_invalid": "true",
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["success"] is True
+    assert body["imported_count"] == 1
+
+    balance = await session.scalar(
+        select(StockBalance).where(
+            StockBalance.product_id == product.id,
+            StockBalance.location_id == location.id,
+            StockBalance.quality_state == QualityState.GOOD,
+        )
+    )
+    assert balance is not None
+    assert balance.balance_qty == Decimal("15")
+
+
+async def test_preview_clipboard_two_columns_without_quantity(
+    client: AsyncClient,
+    session: AsyncSession,
+) -> None:
+    """TSV с артикулом и операциями без колонки количества — qty=1 по умолчанию."""
+    await _make_product(session, "ЮП-460")
+    location = await _make_location(session, "CLIP-2COL")
+    await session.commit()
+
+    clipboard = _make_clipboard_tsv(
+        [
+            ("ЮП-460", "Окно, Дробеструй"),
+            ("ЮП-460", "Гребенка"),
+        ],
+        headers=("Артикул", "Выполненные операции"),
+    )
+    resp = await client.post(
+        "/api/v2/stock/import/remainders/preview",
+        data={"clipboard_text": clipboard},
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["summary"]["total"] == 2
+    assert body["summary"]["valid"] == 2
+    for item in body["items"]:
+        assert item["sku"] == "ЮП-460"
+        assert item["quantity"] == 1
+
+
+async def test_preview_positional_columns_without_headers(
+    client: AsyncClient,
+    session: AsyncSession,
+) -> None:
+    """Без заголовков столбцы читаются в порядке шаблона Excel."""
+    await _make_product(session, "POS-001")
+    location = await _make_location(session, "POS-LOC")
+    await session.commit()
+
+    clipboard = (
+        f"POS-001\t100\tГодный\tДробеструй\t{location.name}\tПартия A\n"
+        f"POS-001\t50\tБрак\t\t{location.name}\t"
+    )
+    resp = await client.post(
+        "/api/v2/stock/import/remainders/preview",
+        data={"clipboard_text": clipboard},
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["summary"]["total"] == 2
+    assert body["summary"]["valid"] == 2
+
+    first, second = body["items"]
+    assert first["sku"] == "POS-001"
+    assert first["quantity"] == 100
+    assert first["target_section_name"] == location.name
+    assert first["quality_state"] == "good"
+    assert first["completed_operations_raw"] == "Дробеструй"
+    assert first["comment"] == "Партия A"
+
+    assert second["quantity"] == 50
+    assert second["quality_state"] == "scrap"
+
+
+async def test_preview_positional_sparse_columns_default_qty(
+    client: AsyncClient,
+    session: AsyncSession,
+) -> None:
+    """Без заголовков: только артикул — количество по умолчанию 1."""
+    await _make_product(session, "POS-SPARSE")
+    await session.commit()
+
+    clipboard = "POS-SPARSE"
+    resp = await client.post(
+        "/api/v2/stock/import/remainders/preview",
+        data={"clipboard_text": clipboard},
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["summary"]["total"] == 1
+    assert body["summary"]["valid"] == 1
+    assert body["items"][0]["sku"] == "POS-SPARSE"
+    assert body["items"][0]["quantity"] == 1
+
+
+async def test_preview_clipboard_concatenated_without_tabs(
+    client: AsyncClient,
+    session: AsyncSession,
+) -> None:
+    """Склеенный paste без табуляции: Артикул + Выполненные операции."""
+    await _make_product(session, "ЮП-460")
+    await session.commit()
+
+    clipboard = (
+        "АртикулВыполненные операции\n"
+        "ЮП-460Окно, Дробеструй\n"
+        "ЮП-460Гребенка, Дробеструй\n"
+        "ЮП-460Окно"
+    )
+    resp = await client.post(
+        "/api/v2/stock/import/remainders/preview",
+        data={"clipboard_text": clipboard},
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["summary"]["total"] == 3
+    assert body["summary"]["valid"] == 3
+    items = body["items"]
+    assert items[0]["sku"] == "ЮП-460"
+    assert items[0]["quantity"] == 1
+    assert "Окно" in (items[0]["completed_operations_raw"] or "")
+    assert items[1]["completed_operations_raw"] is not None
+    assert "Гребенка" in items[1]["completed_operations_raw"]
+
+
+async def test_preview_clipboard_unrecognized_rows_still_returned(
+    client: AsyncClient,
+    session: AsyncSession,
+) -> None:
+    """Нераспознанные строки возвращаются как invalid, а не пропускаются."""
+    clipboard = "Артикул\tКоличество\n\t\nмусор без структуры"
+    resp = await client.post(
+        "/api/v2/stock/import/remainders/preview",
+        data={"clipboard_text": clipboard},
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["summary"]["total"] >= 1
+    assert body["summary"]["invalid"] >= 1
+    assert any(item["errors"] for item in body["items"])
 
 
 async def test_preview_target_section_production_type_rejected(
@@ -829,3 +1204,12 @@ async def test_operations_endpoint_returns_production_significant(
     assert op["operation_name"] == "Токарная"
     assert op["section_code"] == "OPS-PROD"
     assert op["is_significant"] is True
+
+
+def test_parse_operations_from_comment_extracts_names() -> None:
+    assert parse_operations_from_comment(None) == []
+    assert parse_operations_from_comment("Импорт остатков из Excel") == []
+    assert parse_operations_from_comment("Партия A | операции: Дробеструй, Чёрный") == [
+        "Дробеструй",
+        "Чёрный",
+    ]

@@ -178,7 +178,7 @@ async def cleanup_stats_endpoint(
     """Подсчитать количество записей во всех таблицах, доступных для очистки."""
     tables = [
         "defects", "defect_decisions", "defect_items", "transfer_discrepancy_defect_items",
-        "rework_tasks", "transfers", "transfer_discrepancies", "movements", "spg_remainders",
+        "rework_tasks", "transfers", "transfer_discrepancies", "stock_transactions", "stock_balances",
         "work_tasks", "section_plan_lines", "internal_plans", "release_batch_positions", "release_batches",
         "plan_change_items", "plan_change_sets", "plan_positions", "import_batches", "production_plans",
         "import_files", "production_routes", "route_stages", "route_operations", "route_rule_profiles",
@@ -209,7 +209,7 @@ async def cleanup_endpoint(
     # Защита: разрешены только определенные системные таблицы для предотвращения SQL-инъекций
     allowed_tables = {
         "defects", "defect_decisions", "defect_items", "transfer_discrepancy_defect_items",
-        "rework_tasks", "transfers", "transfer_discrepancies", "movements", "spg_remainders",
+        "rework_tasks", "transfers", "transfer_discrepancies", "stock_transactions", "stock_balances",
         "work_tasks", "section_plan_lines", "internal_plans", "release_batch_positions", "release_batches",
         "plan_change_items", "plan_change_sets", "plan_positions", "import_batches", "production_plans",
         "import_files", "production_routes", "route_stages", "route_operations", "route_rule_profiles",
@@ -235,10 +235,10 @@ async def cleanup_endpoint(
             "defect_decisions",
             "rework_tasks",
             "transfer_discrepancies",
-            "movements",
+            "stock_balances",
+            "stock_transactions",
             "transfers",
             "defects",
-            "spg_remainders",
             "work_tasks",
             "section_plan_lines",
             "internal_plans",
@@ -268,25 +268,22 @@ async def cleanup_endpoint(
         # очистку, когда пользователь выбрал target, но не выбрал ссылающуюся
         # таблицу (или наоборот). NOT NULL FK нельзя обнулить — для них порядок
         # удаления в ordered_tables гарантирует, что child удаляется раньше
-        # parent. FK с ondelete="SET NULL" в схеме (defects.spg_remainder_id,
-        # defects.route_stage_id, spg_remainders.reserved_for_plan_position_id)
+        # parent. FK с ondelete="SET NULL" в схеме (defects.route_stage_id)
         # обнуляются Postgres'ом автоматически и здесь не перечислены.
         NULLABLE_FK_REFS: dict[str, list[tuple[str, str]]] = {
             "transfers": [
-                ("movements", "transfer_id"),
+                ("stock_transactions", "transfer_id"),
             ],
-            "movements": [
-                ("defects", "movement_id"),
+            "stock_transactions": [
+                ("defects", "stock_transaction_id"),
+                ("stock_transactions", "compensates_tx_id"),
             ],
             "work_tasks": [
                 ("defects", "task_id"),
-                ("movements", "task_id"),
-                ("spg_remainders", "consumed_by_task_id"),
-                ("spg_remainders", "origin_task_id"),
+                ("stock_transactions", "task_id"),
             ],
             "section_plan_lines": [
-                ("movements", "section_plan_line_id"),
-                ("spg_remainders", "section_plan_line_id"),
+                ("stock_transactions", "section_plan_line_id"),
             ],
             "release_batches": [
                 ("internal_plans", "release_batch_id"),
@@ -300,7 +297,6 @@ async def cleanup_endpoint(
             ],
             "route_stages": [
                 ("internal_plans", "route_stage_id"),
-                ("spg_remainders", "route_stage_id"),
             ],
             "route_rule_profiles": [
                 ("import_batches", "rule_profile_id"),
@@ -318,8 +314,6 @@ async def cleanup_endpoint(
             "sections": [
                 ("defects", "responsible_section_id"),
                 ("defect_decisions", "target_section_id"),
-                ("movements", "from_section_id"),
-                ("movements", "to_section_id"),
                 ("route_stages", "section_id"),
                 ("route_stages", "storage_section_id"),
             ],

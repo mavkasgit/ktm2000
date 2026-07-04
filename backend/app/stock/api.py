@@ -28,6 +28,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from pydantic import BaseModel, Field
 from sqlalchemy import select
+from sqlalchemy.orm import aliased
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import READER_ROLES, WRITER_ROLES, get_current_user, require_role
@@ -48,7 +49,9 @@ from app.stock.import_service import (
     SheetSummary,
     apply_remainders_import,
     generate_remainders_template_for_location,
+    parse_remainders_clipboard,
     parse_remainders_excel,
+    parse_operations_from_comment,
     resolve_completed_stages,
     resolve_operations_dictionary,
     resolve_target_section,
@@ -60,16 +63,58 @@ from io import BytesIO
 router = APIRouter(prefix="/v2/stock", tags=["stock-ledger"])
 
 
+async def _parse_remainder_import_source(
+    *,
+    file: UploadFile | None,
+    clipboard_text: str | None,
+    sheet_index: int,
+    row_selection: str | None,
+) -> tuple[str, int, list[RemainderItem], SheetSummary]:
+    """Parse remainder rows from an uploaded Excel file or clipboard text."""
+    has_file = file is not None and file.filename
+    has_clipboard = bool(clipboard_text and clipboard_text.strip())
+
+    if has_file and has_clipboard:
+        raise HTTPException(
+            status_code=422,
+            detail="Укажите либо файл, либо данные из буфера обмена",
+        )
+    if not has_file and not has_clipboard:
+        raise HTTPException(
+            status_code=422,
+            detail="Укажите файл или вставьте данные из буфера обмена",
+        )
+
+    try:
+        if has_clipboard:
+            return await parse_remainders_clipboard(clipboard_text or "", row_selection)
+        content = await file.read()  # type: ignore[union-attr]
+        return await parse_remainders_excel(content, sheet_index, row_selection)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
 # ─── Schemas ──────────────────────────────────────────────────────────────────
+
+
+class StockBalanceCompletedStageOut(BaseModel):
+    sequence: int
+    section_code: str
+    section_name: str
+    operation_code: str | None
+    operation_name: str
+    is_significant: bool = True
 
 
 class StockBalanceOut(BaseModel):
     id: int
     product_id: int
+    product_sku: str | None = None
     location_id: int
     location_name: str | None = None
     quality_state: QualityState
     balance_qty: str  # Decimal → str для стабильной сериализации
+    completed_stages: list[StockBalanceCompletedStageOut] = Field(default_factory=list)
     refreshed_at: str | None = None
 
     class Config:
@@ -80,7 +125,9 @@ class StockTransactionOut(BaseModel):
     id: int
     product_id: int
     from_location_id: int | None
+    from_location_name: str | None = None
     to_location_id: int | None
+    to_location_name: str | None = None
     quantity: str
     reason: Reason
     from_quality_state: QualityState
@@ -130,16 +177,69 @@ class StockAdjustmentOut(BaseModel):
 # ─── Balance ──────────────────────────────────────────────────────────────────
 
 
-def _serialize_balance(row: StockBalance, location_name: str | None) -> StockBalanceOut:
+def _serialize_balance(
+    row: StockBalance,
+    location_name: str | None,
+    product_sku: str | None = None,
+    completed_stages: list[StockBalanceCompletedStageOut] | None = None,
+) -> StockBalanceOut:
     return StockBalanceOut(
         id=row.id,
         product_id=row.product_id,
+        product_sku=product_sku,
         location_id=row.location_id,
         location_name=location_name,
         quality_state=row.quality_state,
         balance_qty=str(row.balance_qty),
+        completed_stages=completed_stages or [],
         refreshed_at=row.refreshed_at.isoformat() if row.refreshed_at else None,
     )
+
+
+async def _serialize_balances_with_operations(
+    db: AsyncSession,
+    rows: list[tuple[StockBalance, str | None, str | None]],
+) -> list[StockBalanceOut]:
+    if not rows:
+        return []
+
+    product_ids = {row.product_id for row, _, _ in rows}
+    stmt = (
+        select(StockTransaction)
+        .where(
+            StockTransaction.reason == Reason.MANUAL_IN,
+            StockTransaction.compensates_tx_id.is_(None),
+            StockTransaction.product_id.in_(product_ids),
+            StockTransaction.to_location_id.isnot(None),
+        )
+        .order_by(StockTransaction.created_at.desc())
+    )
+    txs = (await db.execute(stmt)).scalars().all()
+
+    comment_by_key: dict[tuple[int, int, QualityState], str | None] = {}
+    for tx in txs:
+        if tx.to_location_id is None:
+            continue
+        key = (tx.product_id, tx.to_location_id, tx.to_quality_state)
+        if key not in comment_by_key:
+            comment_by_key[key] = tx.comment
+
+    ops_dict = await resolve_operations_dictionary(db)
+    result: list[StockBalanceOut] = []
+    for row, location_name, product_sku in rows:
+        key = (row.product_id, row.location_id, row.quality_state)
+        comment = comment_by_key.get(key)
+        stages_out: list[StockBalanceCompletedStageOut] = []
+        raw_ops = parse_operations_from_comment(comment)
+        if raw_ops:
+            stages_raw = await resolve_completed_stages(
+                db,
+                ", ".join(raw_ops),
+                ops_dict,
+            )
+            stages_out = [StockBalanceCompletedStageOut(**stage) for stage in stages_raw]
+        result.append(_serialize_balance(row, location_name, product_sku, stages_out))
+    return result
 
 
 @router.get("/balance", response_model=list[StockBalanceOut])
@@ -156,8 +256,10 @@ async def list_balances(
     по ключу ``(product, location, quality_state)``; нулевые строки не
     хранятся (см. ``StockProjectionManager.refresh_balance``).
     """
-    stmt = select(StockBalance, Section.name).outerjoin(
-        Section, Section.id == StockBalance.location_id
+    stmt = (
+        select(StockBalance, Section.name, Product.sku)
+        .outerjoin(Section, Section.id == StockBalance.location_id)
+        .outerjoin(Product, Product.id == StockBalance.product_id)
     )
     if product_id is not None:
         stmt = stmt.where(StockBalance.product_id == product_id)
@@ -167,9 +269,7 @@ async def list_balances(
         stmt = stmt.where(StockBalance.quality_state == quality_state)
     stmt = stmt.order_by(StockBalance.product_id, StockBalance.location_id)
     result = await db.execute(stmt)
-    return [
-        _serialize_balance(row, name) for row, name in result.all()
-    ]
+    return await _serialize_balances_with_operations(db, list(result.all()))
 
 
 @router.get("/balance/by-product/{product_id}", response_model=list[StockBalanceOut])
@@ -180,17 +280,56 @@ async def list_balances_by_product(
     _user: User = Depends(require_role(READER_ROLES)),
 ) -> list[StockBalanceOut]:
     """Все балансы конкретного продукта по локациям."""
-    stmt = select(StockBalance, Section.name).outerjoin(
-        Section, Section.id == StockBalance.location_id
-    ).where(StockBalance.product_id == product_id)
+    stmt = (
+        select(StockBalance, Section.name, Product.sku)
+        .outerjoin(Section, Section.id == StockBalance.location_id)
+        .outerjoin(Product, Product.id == StockBalance.product_id)
+        .where(StockBalance.product_id == product_id)
+    )
     if quality_state is not None:
         stmt = stmt.where(StockBalance.quality_state == quality_state)
     stmt = stmt.order_by(StockBalance.location_id, StockBalance.quality_state)
     result = await db.execute(stmt)
-    return [_serialize_balance(row, name) for row, name in result.all()]
+    return await _serialize_balances_with_operations(db, list(result.all()))
 
 
 # ─── Transactions ─────────────────────────────────────────────────────────────
+
+
+def _serialize_transaction(
+    tx: StockTransaction,
+    *,
+    from_location_name: str | None = None,
+    to_location_name: str | None = None,
+) -> StockTransactionOut:
+    """ORM → API: Decimal и datetime в строки для стабильной JSON-сериализации."""
+    return StockTransactionOut(
+        id=tx.id,
+        product_id=tx.product_id,
+        from_location_id=tx.from_location_id,
+        from_location_name=from_location_name,
+        to_location_id=tx.to_location_id,
+        to_location_name=to_location_name,
+        quantity=str(tx.quantity),
+        reason=tx.reason,
+        from_quality_state=tx.from_quality_state,
+        to_quality_state=tx.to_quality_state,
+        task_id=tx.task_id,
+        transfer_id=tx.transfer_id,
+        section_plan_line_id=tx.section_plan_line_id,
+        compensates_tx_id=tx.compensates_tx_id,
+        source_ref=tx.source_ref,
+        idempotency_key=tx.idempotency_key,
+        comment=tx.comment,
+        created_by=tx.created_by,
+        executor_user_id=tx.executor_user_id,
+        created_by_user_name=tx.created_by_user_name,
+        executor_user_name=tx.executor_user_name,
+        performed_at=tx.performed_at.isoformat() if tx.performed_at else None,
+        accounted_at=tx.accounted_at.isoformat() if tx.accounted_at else None,
+        is_post_factum=tx.is_post_factum,
+        created_at=tx.created_at.isoformat() if tx.created_at else None,
+    )
 
 
 @router.get("/transactions", response_model=list[StockTransactionOut])
@@ -217,7 +356,13 @@ async def list_transactions(
     Поддерживает комбинируемые фильтры и пагинацию. По умолчанию
     последние 100 записей в порядке убывания ``id`` (т.е. новые сверху).
     """
-    stmt = select(StockTransaction)
+    from_section = aliased(Section)
+    to_section = aliased(Section)
+    stmt = (
+        select(StockTransaction, from_section.name, to_section.name)
+        .outerjoin(from_section, from_section.id == StockTransaction.from_location_id)
+        .outerjoin(to_section, to_section.id == StockTransaction.to_location_id)
+    )
     if product_id is not None:
         stmt = stmt.where(StockTransaction.product_id == product_id)
     if transfer_id is not None:
@@ -237,7 +382,14 @@ async def list_transactions(
         stmt = stmt.where(StockTransaction.compensates_tx_id.is_(None))
     stmt = stmt.order_by(StockTransaction.id.desc()).limit(limit).offset(offset)
     result = await db.execute(stmt)
-    return [StockTransactionOut.model_validate(t) for t in result.scalars().all()]
+    return [
+        _serialize_transaction(
+            tx,
+            from_location_name=from_name,
+            to_location_name=to_name,
+        )
+        for tx, from_name, to_name in result.all()
+    ]
 
 
 # ─── Adjustment (write) ───────────────────────────────────────────────────────
@@ -344,35 +496,35 @@ async def get_remainder_import_operations(
     dependencies=[Depends(require_role(list(WRITER_ROLES)))],
 )
 async def preview_remainders_excel(
-    file: UploadFile = File(...),
-    location_id: int = Form(...),
+    location_id: int | None = Form(None),
     quality_state: QualityState = Form(QualityState.GOOD),
     target_section_overrides: str | None = Form(None),
+    quality_state_overrides: str | None = Form(None),
     sheet_index: int = Form(0),
     row_selection: str | None = Form(None),
+    file: UploadFile | None = File(None),
+    clipboard_text: str | None = Form(None),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
-    """Парсит Excel и возвращает preview с валидацией, БЕЗ записи в БД.
+    """Парсит Excel или буфер обмена и возвращает preview с валидацией, БЕЗ записи в БД.
 
-    * ``location_id`` проверяется на существование.
-    * ``quality_state`` пока не влияет на preview, но передаётся для
-      единообразия с POST /import/remainders.
+    * ``location_id`` опционален; если передан — проверяется на существование.
+    * ``quality_state`` — значение по умолчанию для строк без колонки «Статус качества».
     * ``target_section_overrides`` — опциональный JSON ``{"row_num": sec_id, ...}``
-      для UI-оверрайда целевой секции.
+      для UI-оверрайда участка.
+    * ``clipboard_text`` — TSV из буфера (копия из Excel), альтернатива ``file``.
     """
-    # Validate location
-    location = await db.get(Section, location_id)
-    if location is None:
-        raise HTTPException(status_code=404, detail=f"Location id={location_id} not found")
+    if location_id is not None:
+        location = await db.get(Section, location_id)
+        if location is None:
+            raise HTTPException(status_code=404, detail=f"Location id={location_id} not found")
 
-    content = await file.read()
-
-    try:
-        sheet_name, total_rows, items, summary = await parse_remainders_excel(
-            content, sheet_index, row_selection,
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc))
+    sheet_name, total_rows, items, summary = await _parse_remainder_import_source(
+        file=file,
+        clipboard_text=clipboard_text,
+        sheet_index=sheet_index,
+        row_selection=row_selection,
+    )
 
     # Enrich items with product info
     await _lookup_remainder_products(db, items)
@@ -415,25 +567,29 @@ async def preview_remainders_excel(
     dependencies=[Depends(require_role(list(WRITER_ROLES)))],
 )
 async def import_remainders_excel(
-    file: UploadFile = File(...),
     location_id: int = Form(...),
     quality_state: QualityState = Form(QualityState.GOOD),
     target_section_overrides: str | None = Form(None),
+    quality_state_overrides: str | None = Form(None),
     sheet_index: int = Form(0),
     row_selection: str | None = Form(None),
     skip_invalid: bool = Form(True),
     clear_existing: bool = Form(False),
+    file: UploadFile | None = File(None),
+    clipboard_text: str | None = Form(None),
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ) -> dict:
     """Применить импорт остатков: создать ``MANUAL_IN`` транзакции.
 
     Параметры:
-    * ``location_id`` — целевая секция (склад / участок).
-    * ``quality_state`` — состояние качества (по умолч. GOOD).
+    * ``location_id`` — участок (склад).
+    * ``quality_state`` — статус качества по умолчанию для пустых ячеек.
+    * ``quality_state_overrides`` — опциональный JSON ``{"row_num": "scrap", ...}``.
     * ``target_section_overrides`` — опциональный JSON ``{"row_num": sec_id, ...}``
-      для per-row оверрайда целевой секции.
+      для построчного оверрайда участка.
     * ``file`` — .xlsx файл с колонками SKU | Количество | Комментарий.
+    * ``clipboard_text`` — TSV из буфера, альтернатива ``file``.
     * ``sheet_index`` — индекс листа (0=первый).
     * ``row_selection`` — опциональный фильтр строк, ``"2-10,12"``.
     * ``skip_invalid`` — пропускать строки с ошибками (True) или
@@ -453,11 +609,25 @@ async def import_remainders_excel(
                 detail=f"Invalid target_section_overrides JSON: {exc}",
             )
 
+    parsed_quality_overrides: dict[int, QualityState] | None = None
+    if quality_state_overrides is not None:
+        try:
+            raw_quality = json.loads(quality_state_overrides)
+            parsed_quality_overrides = {
+                int(k): QualityState(str(v).lower())
+                for k, v in raw_quality.items()
+            }
+        except (ValueError, TypeError) as exc:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Invalid quality_state_overrides JSON: {exc}",
+            )
+
     # clear_existing + target_section_overrides is forbidden
     if clear_existing and target_section_overrides is not None:
         raise HTTPException(
             status_code=422,
-            detail="clear_existing не поддерживается при per-row target sections",
+            detail="clear_existing не поддерживается при построчном указании участков",
         )
 
     # Validate location
@@ -465,14 +635,12 @@ async def import_remainders_excel(
     if location is None:
         raise HTTPException(status_code=404, detail=f"Location id={location_id} not found")
 
-    content = await file.read()
-
-    try:
-        _sheet_name, _total_rows, items, _summary = await parse_remainders_excel(
-            content, sheet_index, row_selection,
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc))
+    _sheet_name, _total_rows, items, _summary = await _parse_remainder_import_source(
+        file=file,
+        clipboard_text=clipboard_text,
+        sheet_index=sheet_index,
+        row_selection=row_selection,
+    )
 
     # Resolve completed stages and target sections before import
     ops_dict = await resolve_operations_dictionary(db)
@@ -505,6 +673,7 @@ async def import_remainders_excel(
         clear_existing=clear_existing,
         skip_invalid=skip_invalid,
         target_section_overrides=parsed_overrides,
+        quality_state_overrides=parsed_quality_overrides,
     )
 
     return {

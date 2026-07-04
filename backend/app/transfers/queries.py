@@ -302,6 +302,8 @@ async def list_ready_to_transfer(
     task_ids = [r[0].id for r in rows]
     tasks_cache = await pm.get_tasks_cache_bulk(db, task_ids)
 
+    from app.transfers.services import has_active_transfer_for_task
+
     for (
         task,
         line,
@@ -313,6 +315,9 @@ async def list_ready_to_transfer(
         next_sec,
         completion_comment,
     ) in rows:
+        if await has_active_transfer_for_task(db, task.id):
+            continue
+
         cache = tasks_cache.get(task.id, {})
         completed = cache.get("completed_quantity", Decimal("0"))
         transferred = cache.get("transferred_quantity", Decimal("0"))
@@ -360,8 +365,7 @@ async def list_ready_to_transfer(
 
     # Special logic for stock sections (raw_stock, wip_stock, finished_stock)
     from app.models.production_plan import PlanPosition
-    from app.stock.models import QualityState, StockBalance
-    from sqlalchemy import func
+    from app.transfers.services import compute_stock_section_transferable
 
     if spg_id is not None:
         sections = (
@@ -455,38 +459,20 @@ async def list_ready_to_transfer(
                     db.add(fake_task)
                     await db.flush()
 
-                remainders_qty = await db.scalar(
-                    select(func.coalesce(func.sum(StockBalance.balance_qty), 0))
-                    .where(
-                        StockBalance.location_id == sec.id,
-                        StockBalance.product_id == fake_task.product_id,
-                        StockBalance.balance_qty > 0,
-                        StockBalance.quality_state == QualityState.GOOD,
-                    )
-                ) or Decimal("0")
+                if await has_active_transfer_for_task(db, fake_task.id):
+                    continue
 
-                transferred = await db.scalar(
-                    select(func.coalesce(func.sum(Transfer.sent_quantity), 0))
-                    .where(
-                        Transfer.from_task_id == fake_task.id,
-                        Transfer.status.notin_([TransferStatus.cancelled])
+                transferable, _plan_remaining, physical_stock, transferred = (
+                    await compute_stock_section_transferable(
+                        db,
+                        task=fake_task,
+                        section=sec,
+                        planned_qty=planned_qty,
                     )
-                ) or Decimal("0")
-
-                transferred_pending = await db.scalar(
-                    select(func.coalesce(func.sum(Transfer.sent_quantity), 0))
-                    .where(
-                        Transfer.from_task_id == fake_task.id,
-                        Transfer.status == TransferStatus.sent
-                    )
-                ) or Decimal("0")
-
-                transferable = remainders_qty - transferred_pending
+                )
                 if transferable <= 0:
                     continue
 
-                # cached_* columns were removed on Этап 4 — values now
-                # computed on the fly from StockTransaction ledger.
                 await db.flush()
 
                 product = await db.get(Product, fake_task.product_id)
@@ -508,7 +494,7 @@ async def list_ready_to_transfer(
                         "product_id": fake_task.product_id,
                         "product_sku": product_sku,
                         "planned_quantity": _fmt_qty(planned_qty),
-                        "completed_quantity": _fmt_qty(remainders_qty + transferred),
+                        "completed_quantity": _fmt_qty(physical_stock),
                         "already_transferred_quantity": _fmt_qty(transferred),
                         "transferable_quantity": _fmt_qty(transferable),
                         "has_next_step": True,

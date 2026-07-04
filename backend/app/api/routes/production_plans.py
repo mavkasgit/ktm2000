@@ -1595,7 +1595,8 @@ async def reset_all_plans(
     """Удалить все производственные планы, связанные данные и справочники (маршруты, правила, импорты)."""
     await db.execute(text("""
         TRUNCATE TABLE
-            defects, rework_tasks, transfers, movements, spg_remainders,
+            defect_items, defect_decisions, transfer_discrepancy_defect_items,
+            defects, rework_tasks, stock_balances, stock_transactions, transfers,
             work_tasks, section_plan_lines, internal_plans,
             release_batch_positions, release_batches,
             plan_change_items, plan_change_sets,

@@ -35,10 +35,11 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from decimal import Decimal
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.internal_plan import SectionPlanLine
+from app.models.section import Section
 from app.models.transfer import Transfer, TransferStatus
 from app.models.work_task import WorkTask, WorkTaskStatus
 
@@ -69,15 +70,83 @@ from app.stock.services import StockCommand, StockCommandService
 _stock_command_service = StockCommandService()
 
 
+async def count_active_transfers_from_task(db: AsyncSession, from_task_id: int) -> int:
+    """Количество неаннулированных передач с данного задания."""
+    return int(
+        await db.scalar(
+            select(func.count(Transfer.id)).where(
+                Transfer.from_task_id == from_task_id,
+                Transfer.status.notin_([TransferStatus.cancelled]),
+            )
+        )
+        or 0
+    )
+
+
+async def has_active_transfer_for_task(db: AsyncSession, from_task_id: int) -> bool:
+    """Есть ли уже активная (неаннулированная) передача с задания."""
+    return await count_active_transfers_from_task(db, from_task_id) > 0
+
+
+async def compute_stock_section_transferable(
+    db: AsyncSession,
+    *,
+    task: WorkTask,
+    section: Section,
+    planned_qty: Decimal,
+) -> tuple[Decimal, Decimal, Decimal, Decimal]:
+    """Остаток к передаче со склада, привязанный к плану позиции.
+
+    Возвращает ``(transferable, plan_remaining, physical_stock, already_transferred)``.
+    Нельзя передать больше плана позиции и больше физического остатка на складе.
+    """
+    from app.stock.models import QualityState, StockBalance
+
+    already_transferred = (
+        await db.scalar(
+            select(func.coalesce(func.sum(Transfer.sent_quantity), 0)).where(
+                Transfer.from_task_id == task.id,
+                Transfer.status.notin_([TransferStatus.cancelled]),
+            )
+        )
+        or Decimal("0")
+    )
+
+    plan_remaining = max(Decimal("0"), _to_decimal(planned_qty) - already_transferred)
+
+    physical_stock = (
+        await db.scalar(
+            select(func.coalesce(func.sum(StockBalance.balance_qty), 0)).where(
+                StockBalance.location_id == section.id,
+                StockBalance.product_id == task.product_id,
+                StockBalance.balance_qty > 0,
+                StockBalance.quality_state == QualityState.GOOD,
+            )
+        )
+        or Decimal("0")
+    )
+
+    transferable = min(plan_remaining, physical_stock)
+    return transferable, plan_remaining, physical_stock, already_transferred
+
+
 async def _get_task_transferable(db: AsyncSession, task: WorkTask) -> Decimal:
     from app.models.section import Section
     from app.stock.services import StockProjectionManager
 
     sec = await db.get(Section, task.section_id)
     if sec and sec.type in {"raw_stock", "wip_stock", "finished_stock"}:
-        pm = StockProjectionManager()
-        cache = await pm.get_task_cache(db, task.id)
-        return cache["available_quantity"]
+        line = await db.get(SectionPlanLine, task.section_plan_line_id)
+        planned_qty = task.planned_quantity
+        if line is not None and line.planned_quantity:
+            planned_qty = line.planned_quantity
+        transferable, _, _, _ = await compute_stock_section_transferable(
+            db,
+            task=task,
+            section=sec,
+            planned_qty=planned_qty,
+        )
+        return transferable
 
     pm = StockProjectionManager()
     cache = await pm.get_task_cache(db, task.id)
@@ -290,6 +359,11 @@ async def transfer_send(
             }
 
     from_task = await _get_task_for_update(db, from_task_id)
+    if await has_active_transfer_for_task(db, from_task.id):
+        raise ValueError(
+            "По этому заданию уже есть активная передача. "
+            "Измените количество в журнале передач."
+        )
     from_line = await db.get(SectionPlanLine, from_task.section_plan_line_id)
     if from_line is None:
         raise ValueError("Source task plan line not found")

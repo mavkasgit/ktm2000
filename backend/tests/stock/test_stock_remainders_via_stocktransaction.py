@@ -12,6 +12,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Product, ProductType, Section, User, UserRole
+from app.models.route import SectionOperation
 from app.stock import (
     QualityState,
     Reason,
@@ -244,4 +245,113 @@ async def test_list_stock_balances_endpoint_returns_correct_data(client, session
     our_balance = [b for b in data if b["product_id"] == product.id]
     assert len(our_balance) == 1, f"Expected 1 balance row, got {len(our_balance)}"
     assert our_balance[0]["balance_qty"] == "75.000"
+    assert our_balance[0]["product_sku"] == "REM-API"
     assert our_balance[0]["location_id"] == location.id
+    assert our_balance[0]["completed_stages"] == []
+
+
+@pytest.mark.asyncio
+async def test_list_stock_balances_returns_completed_stages_from_import_comment(
+    client, session: AsyncSession,
+):
+    """GET /api/v2/stock/balance возвращает операции из комментария последнего MANUAL_IN."""
+    from app.core.security import create_access_token
+
+    user = await _make_user(session)
+    token = create_access_token(subject=user.email)
+    client.headers["Authorization"] = f"Bearer {token}"
+
+    product = await _make_product(session, sku="REM-OPS")
+    location = await _make_location(
+        session, code="RAW-OPS-1", name="Raw Ops", loc_type="raw_stock"
+    )
+    shot_section = Section(
+        code="SHOT-OPS", name="Дробеструй", type="production", is_active=True, sort_order=10,
+    )
+    anod_section = Section(
+        code="ANOD-OPS", name="Анод", type="production", is_active=True, sort_order=20,
+    )
+    session.add_all([shot_section, anod_section])
+    await session.flush()
+    session.add_all([
+        SectionOperation(
+            section_id=shot_section.id,
+            operation_code="SHOT",
+            operation_name="Дробеструй",
+            is_significant=True,
+            operation_type="production",
+            sort_order=10,
+        ),
+        SectionOperation(
+            section_id=anod_section.id,
+            operation_code="ANOD_BLACK",
+            operation_name="Чёрный",
+            is_significant=True,
+            operation_type="production",
+            sort_order=20,
+        ),
+    ])
+    await session.flush()
+
+    svc = StockCommandService()
+    await svc.record(session, StockCommand(
+        product_id=product.id,
+        to_location_id=location.id,
+        quantity=Decimal("40"),
+        reason=Reason.MANUAL_IN,
+        comment="Партия A | операции: Дробеструй, Чёрный",
+        source_ref="import_remainders_excel",
+        created_by=user.id,
+    ))
+    await session.commit()
+
+    resp = await client.get("/api/v2/stock/balance")
+    assert resp.status_code == 200, resp.text
+    our_balance = [b for b in resp.json() if b["product_id"] == product.id]
+    assert len(our_balance) == 1
+    stage_names = [stage["operation_name"] for stage in our_balance[0]["completed_stages"]]
+    assert stage_names == ["Дробеструй", "Чёрный"]
+
+
+@pytest.mark.asyncio
+async def test_list_stock_transactions_serializes_decimal_and_datetime(
+    client, session: AsyncSession,
+):
+    """GET /api/v2/stock/transactions не падает на Decimal/datetime из ORM."""
+    from app.core.security import create_access_token
+
+    user = await _make_user(session)
+    token = create_access_token(subject=user.email)
+    client.headers["Authorization"] = f"Bearer {token}"
+
+    product = await _make_product(session, sku="TX-LIST")
+    location = await _make_location(
+        session, code="RAW-TX-1", name="Raw Tx", loc_type="raw_stock",
+    )
+    svc = StockCommandService()
+    await svc.record(session, StockCommand(
+        product_id=product.id,
+        to_location_id=location.id,
+        quantity=Decimal("150"),
+        reason=Reason.MANUAL_IN,
+        comment="Импорт остатков",
+        source_ref="import_remainders_excel",
+        created_by=user.id,
+    ))
+    await session.commit()
+
+    resp = await client.get(
+        f"/api/v2/stock/transactions?product_id={product.id}&limit=500",
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert len(body) >= 1
+    tx = body[0]
+    assert tx["product_id"] == product.id
+    assert tx["quantity"] == "150.000"
+    assert tx["from_location_id"] is None
+    assert tx["from_location_name"] is None
+    assert tx["to_location_id"] == location.id
+    assert tx["to_location_name"] == "Raw Tx"
+    assert isinstance(tx["created_at"], str)
+    assert tx["created_at"]

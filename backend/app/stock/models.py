@@ -76,6 +76,7 @@ class QualityState(str, enum.Enum):
     GOOD = "good"
     SCRAP = "scrap"
     REWORK = "rework"
+    FINAL_SCRAP = "final_scrap"
 
 
 class StockTransaction(Base):
