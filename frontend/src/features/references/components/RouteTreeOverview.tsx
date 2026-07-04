@@ -40,20 +40,12 @@ export const RouteTreeOverview = forwardRef<RouteTreeOverviewRef, RouteTreeOverv
     setLoading(true);
     try {
       const [routesList, sectionsList] = await Promise.all([
-        apiClient.get<API.ProductionRoute[]>("/routes"),
+        API.listRoutes({ includeSteps: true }),
         apiClient.get<Section[]>("/sections"),
       ]);
 
       setSections(sectionsList.data);
-
-      const details: API.RouteDetail[] = [];
-
-      for (const route of routesList.data) {
-        const detail = await API.getRoute(route.id);
-        details.push(detail);
-      }
-
-      setRoutes(details);
+      setRoutes(routesList as API.RouteDetail[]);
     } catch (e) {
       console.error("Failed to load route trees:", e);
     } finally {

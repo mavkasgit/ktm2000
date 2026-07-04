@@ -29,6 +29,7 @@ SELECTION_RULES = [
         ],
         "actions": [
             {"action": "require_section", "section_code": "DRILL"},
+            {"action": "require_section", "section_code": "PREP_STOCK"},
             {"action": "exclude_section", "section_code": "PRESS"},
         ],
     },
@@ -46,6 +47,7 @@ SELECTION_RULES = [
         "condition_logic": "and",
         "actions": [
             {"action": "require_section", "section_code": "PRESS"},
+            {"action": "require_section", "section_code": "PREP_STOCK"},
             {"action": "exclude_section", "section_code": "DRILL"},
         ],
     },
@@ -63,6 +65,7 @@ SELECTION_RULES = [
         "condition_logic": "and",
         "actions": [
             {"action": "require_section", "section_code": "PRESS"},
+            {"action": "require_section", "section_code": "PREP_STOCK"},
             {"action": "exclude_section", "section_code": "DRILL"},
         ],
     },
@@ -162,6 +165,23 @@ SELECTION_RULES = [
         ],
         "actions": [
             {"action": "require_section", "section_code": "SHOT"},
+            {"action": "require_section", "section_code": "PREP_STOCK"},
+        ],
+    },
+    {
+        "code": "prep_stock_no_prep_path",
+        "name": "Без подготовки — исключить склад подготовки",
+        "profile_code": "packaging_map_rp",
+        "priority": 580,
+        "is_active": True,
+        "phase": "route_select",
+        "conditions": [
+            {"source": "payload", "field_path": "operation", "operator": "empty", "value": None},
+            {"source": "product", "field_path": "skip_shot_blast", "operator": "equals", "value": True},
+        ],
+        "condition_logic": "and",
+        "actions": [
+            {"action": "exclude_section", "section_code": "PREP_STOCK"},
         ],
     },
 

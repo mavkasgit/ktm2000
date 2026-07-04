@@ -105,8 +105,18 @@ export type StepInput = {
   is_final?: boolean;
 };
 
-export async function listRoutes(q?: string) {
-  const { data } = await apiClient.get<ProductionRoute[]>("/routes", { params: q ? { q } : undefined });
+export type ListRoutesOptions = {
+  q?: string;
+  includeSteps?: boolean;
+};
+
+export async function listRoutes(options?: ListRoutesOptions) {
+  const params: Record<string, string | boolean> = {};
+  if (options?.q) params.q = options.q;
+  if (options?.includeSteps) params.include_steps = true;
+  const { data } = await apiClient.get<ProductionRoute[] | RouteDetail[]>("/routes", {
+    params: Object.keys(params).length > 0 ? params : undefined,
+  });
   return data;
 }
 

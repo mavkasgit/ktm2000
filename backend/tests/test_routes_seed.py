@@ -112,9 +112,9 @@ async def test_seed_routes_creates_characteristic_routes(client, session) -> Non
     response = await client.post("/api/routes-seed")
     assert response.status_code == 201
     data = response.json()
-    assert data == {"import_templates": 1, "route_rule_profiles": 1, "routes": 2, "selection_rules": 12, "sections": 12, "section_operations": 21}
+    assert data == {"import_templates": 1, "route_rule_profiles": 1, "routes": 2, "selection_rules": 13, "sections": 12, "section_operations": 21}
     first_rules_count = len((await session.execute(select(RouteSelectionRule))).scalars().all())
-    assert first_rules_count == 12
+    assert first_rules_count == 13
 
     # idempotency/update behavior
     response2 = await client.post("/api/routes-seed")
@@ -240,7 +240,7 @@ async def test_force_seed_clears_generated_production_data(client, session) -> N
 
     force_response = await client.post("/api/routes-seed?force=true")
     assert force_response.status_code == 201
-    assert force_response.json() == {"import_templates": 1, "route_rule_profiles": 1, "routes": 0, "selection_rules": 19, "sections": 12, "section_operations": 21}
+    assert force_response.json() == {"import_templates": 1, "route_rule_profiles": 1, "routes": 0, "selection_rules": 20, "sections": 12, "section_operations": 21}
 
     for model in (
         ReleaseBatchPosition,
@@ -386,3 +386,25 @@ async def test_cleanup_endpoints(client, session) -> None:
     # Обновляем объект из БД
     await session.refresh(profile)
     assert profile.import_template_id is None
+
+
+@pytest.mark.asyncio
+async def test_cleanup_stats_exposes_stock_ledger_not_legacy_tables(client, session) -> None:
+    """Статистика очистки отражает Stock Ledger, а не удалённые movements/spg_remainders."""
+    response = await client.get("/api/routes-seed/cleanup-stats")
+    assert response.status_code == 200
+    stats = response.json()["stats"]
+    assert "stock_transactions" in stats
+    assert "stock_balances" in stats
+    assert "movements" not in stats
+    assert "spg_remainders" not in stats
+
+
+@pytest.mark.asyncio
+async def test_cleanup_transfers_does_not_query_legacy_movements(client, session) -> None:
+    """Очистка transfers не выполняет UPDATE по удалённой таблице movements."""
+    user_res = await client.post("/api/routes-seed/reseed-system-user")
+    assert user_res.status_code == 200
+
+    cleanup_response = await client.post("/api/routes-seed/cleanup", json={"tables": ["transfers"]})
+    assert cleanup_response.status_code == 204, cleanup_response.text

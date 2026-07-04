@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel
 from sqlalchemy import func, select, delete
 from sqlalchemy.orm import selectinload
@@ -74,6 +74,7 @@ class StepOut(BaseModel):
     operation_name: str
     norm_time_minutes: int | None = None
     is_final: bool
+    allow_parallel: bool = False
     stage_kind: str = "production"
     storage_section_id: int | None = None
 
@@ -103,43 +104,29 @@ class ReorderRoutesIn(BaseModel):
     ids: list[int]
 
 
-@router.post("/reorder", status_code=status.HTTP_204_NO_CONTENT)
-async def reorder_routes(payload: ReorderRoutesIn, db: AsyncSession = Depends(get_db)):
-    from sqlalchemy import update
-    for idx, route_id in enumerate(payload.ids):
-        await db.execute(
-            update(ProductionRoute).where(ProductionRoute.id == route_id).values(sort_order=idx * 10)
-        )
-    await db.flush()
+def _resolve_section_for_stage(
+    stage: RouteStage,
+    sections_cache: dict[int, Section] | None,
+) -> Section | None:
+    if stage.stage_kind == "transit":
+        section_id = stage.storage_section_id
+    else:
+        section_id = stage.section_id
+    if section_id is None:
+        return None
+    if sections_cache is not None:
+        return sections_cache.get(section_id)
+    return None
 
 
-# --- Endpoints ---
-
-@router.get("", response_model=list[RouteOut])
-async def list_routes(
-    q: str | None = None,
-    db: AsyncSession = Depends(get_db),
-) -> list[RouteOut]:
-    stmt = select(ProductionRoute).order_by(ProductionRoute.sort_order, ProductionRoute.name)
-    if q:
-        stmt = stmt.where(ProductionRoute.name.ilike(f"%{q}%"))
-    rows = (await db.execute(stmt)).scalars().all()
-    return [RouteOut.model_validate(r, from_attributes=True) for r in rows]
-
-
-@router.get("/{route_id}", response_model=RouteDetailOut)
-async def get_route(route_id: int, db: AsyncSession = Depends(get_db)) -> RouteDetailOut:
-    route = await db.get(ProductionRoute, route_id)
-    if route is None:
-        raise HTTPException(status_code=404, detail="Route not found")
-
-    steps = []
+def _build_route_steps(
+    route: ProductionRoute,
+    sections_cache: dict[int, Section] | None = None,
+) -> list[StepOut]:
+    steps: list[StepOut] = []
     sorted_stages = sorted(route.stages, key=lambda s: s.sequence)
     for stage in sorted_stages:
-        if stage.stage_kind == "transit":
-            section = await db.get(Section, stage.storage_section_id) if stage.storage_section_id else None
-        else:
-            section = await db.get(Section, stage.section_id) if stage.section_id else None
+        section = _resolve_section_for_stage(stage, sections_cache)
         op_code = None
         op_name = ""
         if stage.operations:
@@ -160,24 +147,39 @@ async def get_route(route_id: int, db: AsyncSession = Depends(get_db)) -> RouteD
             operation_name=op_name,
             norm_time_minutes=stage.norm_time_minutes,
             is_final=stage.is_final,
+            allow_parallel=stage.allow_parallel,
             stage_kind=stage.stage_kind,
             storage_section_id=stage.storage_section_id,
         ))
+    return steps
 
+
+async def _load_route_rules(route_id: int, db: AsyncSession) -> list[RuleOut]:
     rules_result = await db.execute(
         select(RouteMatchingRule)
-        .where(RouteMatchingRule.route_id == route.id)
+        .where(RouteMatchingRule.route_id == route_id)
         .order_by(RouteMatchingRule.priority.desc(), RouteMatchingRule.id.asc())
     )
-    rules = []
-    for rule in rules_result.scalars().all():
-        rules.append(RuleOut(
+    return [
+        RuleOut(
             id=rule.id,
             route_id=rule.route_id,
             priority=rule.priority,
             is_active=True,
-        ))
+        )
+        for rule in rules_result.scalars().all()
+    ]
 
+
+async def _build_route_detail(
+    route: ProductionRoute,
+    db: AsyncSession,
+    sections_cache: dict[int, Section] | None = None,
+    rules: list[RuleOut] | None = None,
+) -> RouteDetailOut:
+    steps = _build_route_steps(route, sections_cache)
+    if rules is None:
+        rules = await _load_route_rules(route.id, db)
     return RouteDetailOut(
         id=route.id,
         name=route.name,
@@ -186,6 +188,97 @@ async def get_route(route_id: int, db: AsyncSession = Depends(get_db)) -> RouteD
         steps=steps,
         rules=rules,
     )
+
+
+async def _load_sections_cache(
+    routes: list[ProductionRoute],
+    db: AsyncSession,
+) -> dict[int, Section]:
+    section_ids: set[int] = set()
+    for route in routes:
+        for stage in route.stages:
+            if stage.stage_kind == "transit" and stage.storage_section_id:
+                section_ids.add(stage.storage_section_id)
+            elif stage.section_id:
+                section_ids.add(stage.section_id)
+    if not section_ids:
+        return {}
+    sections_result = await db.execute(select(Section).where(Section.id.in_(section_ids)))
+    return {section.id: section for section in sections_result.scalars().all()}
+
+
+async def _load_rules_by_route(
+    route_ids: list[int],
+    db: AsyncSession,
+) -> dict[int, list[RuleOut]]:
+    rules_by_route: dict[int, list[RuleOut]] = {route_id: [] for route_id in route_ids}
+    if not route_ids:
+        return rules_by_route
+    rules_result = await db.execute(
+        select(RouteMatchingRule)
+        .where(RouteMatchingRule.route_id.in_(route_ids))
+        .order_by(RouteMatchingRule.priority.desc(), RouteMatchingRule.id.asc())
+    )
+    for rule in rules_result.scalars().all():
+        rules_by_route[rule.route_id].append(RuleOut(
+            id=rule.id,
+            route_id=rule.route_id,
+            priority=rule.priority,
+            is_active=True,
+        ))
+    return rules_by_route
+
+
+@router.post("/reorder", status_code=status.HTTP_204_NO_CONTENT)
+async def reorder_routes(payload: ReorderRoutesIn, db: AsyncSession = Depends(get_db)):
+    from sqlalchemy import update
+    for idx, route_id in enumerate(payload.ids):
+        await db.execute(
+            update(ProductionRoute).where(ProductionRoute.id == route_id).values(sort_order=idx * 10)
+        )
+    await db.flush()
+
+
+# --- Endpoints ---
+
+@router.get("")
+async def list_routes(
+    q: str | None = None,
+    include_steps: bool = Query(False),
+    db: AsyncSession = Depends(get_db),
+) -> list[RouteOut] | list[RouteDetailOut]:
+    stmt = select(ProductionRoute).order_by(ProductionRoute.sort_order, ProductionRoute.name)
+    if include_steps:
+        stmt = stmt.options(
+            selectinload(ProductionRoute.stages).selectinload(RouteStage.operations),
+        )
+    if q:
+        stmt = stmt.where(ProductionRoute.name.ilike(f"%{q}%"))
+    rows = (await db.execute(stmt)).scalars().all()
+    if not include_steps:
+        return [RouteOut.model_validate(r, from_attributes=True) for r in rows]
+
+    sections_cache = await _load_sections_cache(rows, db)
+    rules_by_route = await _load_rules_by_route([route.id for route in rows], db)
+    return [
+        await _build_route_detail(
+            route,
+            db,
+            sections_cache=sections_cache,
+            rules=rules_by_route.get(route.id, []),
+        )
+        for route in rows
+    ]
+
+
+@router.get("/{route_id}", response_model=RouteDetailOut)
+async def get_route(route_id: int, db: AsyncSession = Depends(get_db)) -> RouteDetailOut:
+    route = await db.get(ProductionRoute, route_id)
+    if route is None:
+        raise HTTPException(status_code=404, detail="Route not found")
+
+    sections_cache = await _load_sections_cache([route], db)
+    return await _build_route_detail(route, db, sections_cache=sections_cache)
 
 
 @router.post("", response_model=RouteOut, status_code=status.HTTP_201_CREATED)
@@ -438,6 +531,7 @@ async def create_route_step(route_id: int, payload: StepCreate, db: AsyncSession
         operation_name=op.operation_name if op else f"Транзит через {storage_section.name if storage_section else ''}",
         norm_time_minutes=stage.norm_time_minutes,
         is_final=stage.is_final,
+        allow_parallel=stage.allow_parallel,
         stage_kind=stage.stage_kind,
         storage_section_id=stage.storage_section_id,
     )
@@ -555,6 +649,7 @@ async def replace_route_steps(route_id: int, payload: list[StepUpdate], db: Asyn
             operation_name=op.operation_name if op else f"Транзит через {storage_section.name if storage_section else ''}",
             norm_time_minutes=stage.norm_time_minutes,
             is_final=stage.is_final,
+            allow_parallel=stage.allow_parallel,
             stage_kind=stage.stage_kind,
             storage_section_id=stage.storage_section_id,
         ))

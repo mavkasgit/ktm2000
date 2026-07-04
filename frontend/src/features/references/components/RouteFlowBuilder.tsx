@@ -500,11 +500,10 @@ export function RouteFlowBuilder({ open, onOpenChange, route, onSave, readOnly =
   // Load section usage across all routes
   useEffect(() => {
     if (open) {
-      apiClient.get<API.ProductionRoute[]>("/routes").then(async (r) => {
+      API.listRoutes({ includeSteps: true }).then((routes) => {
         const usage: Record<number, number> = {};
-        for (const route of r.data) {
-          const detail = await API.getRoute(route.id);
-          for (const step of detail.steps) {
+        for (const route of routes as API.RouteDetail[]) {
+          for (const step of route.steps) {
             usage[step.section_id] = (usage[step.section_id] || 0) + 1;
           }
         }

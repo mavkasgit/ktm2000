@@ -40,6 +40,9 @@ export function RouteStepsDisplay({ steps, compact = true }: RouteStepsDisplayPr
   // Count total operations
   const totalOps = steps.length
 
+  const formatGroupLabel = (group: RouteStep[]) =>
+    group.map((step) => step.operation_name || step.section_name).join(" / ")
+
   if (compact) {
     return (
       <div className="text-xs">
@@ -54,33 +57,27 @@ export function RouteStepsDisplay({ steps, compact = true }: RouteStepsDisplayPr
           )}
           <span className="font-medium">{totalOps} опер.</span>
           <span className="text-muted-foreground">
-            ({groupedSteps.map(g => g[0].operation_name || g[0].section_name).join(" → ")})
+            ({groupedSteps.map(formatGroupLabel).join(" → ")})
           </span>
         </div>
 
         {expanded && (
-          <div className="mt-2 p-2 bg-muted/30 rounded border text-[11px] font-mono">
+          <div className="mt-1 py-1 px-1.5 bg-muted/30 rounded border text-[11px] leading-tight space-y-0.5">
             {groupedSteps.map((group, idx) => {
               const isCombined = group.length > 1
               const sectionName = group[0].section_name
+              const opsLabel = formatGroupLabel(group)
 
               return (
-                <div key={idx} className="mb-1 last:mb-0">
-                  <div className="font-semibold text-muted-foreground">
+                <div key={idx} className="flex flex-wrap items-baseline gap-x-1">
+                  <span className="text-muted-foreground shrink-0">
                     {sectionName}
-                    {isCombined && <span className="text-orange-600 ml-1">(совмещено)</span>}
-                  </div>
-                  <div className="pl-2">
-                    {group.map((step, opIdx) => (
-                      <div
-                        key={opIdx}
-                        className={step.is_significant ? "font-medium" : "text-muted-foreground"}
-                      >
-                        {step.operation_name || step.section_name}
-                        {opIdx < group.length - 1 && <span className="text-muted-foreground"> / </span>}
-                      </div>
-                    ))}
-                  </div>
+                    {isCombined && (
+                      <span className="text-orange-600 ml-1">(совмещено)</span>
+                    )}
+                    <span className="mx-0.5">·</span>
+                  </span>
+                  <span className="font-medium">{opsLabel}</span>
                 </div>
               )
             })}
@@ -96,29 +93,22 @@ export function RouteStepsDisplay({ steps, compact = true }: RouteStepsDisplayPr
       {groupedSteps.map((group, idx) => {
         const isCombined = group.length > 1
         const sectionName = group[0].section_name
+        const opsLabel = formatGroupLabel(group)
 
         return (
-          <div key={idx} className="flex items-start gap-2">
+          <div key={idx} className="flex items-baseline gap-2 text-sm leading-tight">
             <div className="flex-shrink-0 w-6 h-6 rounded-full bg-primary/10 text-primary text-xs font-bold flex items-center justify-center">
               {group[0].sequence}
             </div>
-            <div className="flex-1">
-              <div className="font-medium text-sm">
+            <div className="flex flex-wrap items-baseline gap-x-1 min-w-0">
+              <span className="font-medium">
                 {sectionName}
                 {isCombined && (
                   <span className="ml-1 text-xs text-orange-600">(совмещено)</span>
                 )}
-              </div>
-              <div className="text-xs text-muted-foreground">
-                {group.map((step, opIdx) => (
-                  <span key={opIdx}>
-                    <span className={step.is_significant ? "font-medium" : ""}>
-                      {step.operation_name || step.section_name}
-                    </span>
-                    {opIdx < group.length - 1 && <span className="mx-1">/</span>}
-                  </span>
-                ))}
-              </div>
+              </span>
+              <span className="text-muted-foreground">·</span>
+              <span className="text-xs">{opsLabel}</span>
             </div>
           </div>
         )

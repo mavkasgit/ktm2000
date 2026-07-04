@@ -67,6 +67,7 @@ async def _seed_profile_and_rules(session) -> int:
             ],
             "actions": [
                 {"action": "require_section", "section_id": _section_id("DRILL")},
+                {"action": "require_section", "section_id": _section_id("PREP_STOCK")},
                 {"action": "exclude_section", "section_id": _section_id("PRESS")},
             ],
         },
@@ -156,6 +157,20 @@ async def _seed_profile_and_rules(session) -> int:
             ],
             "actions": [
                 {"action": "require_section", "section_id": _section_id("SHOT")},
+                {"action": "require_section", "section_id": _section_id("PREP_STOCK")},
+            ],
+        },
+        {
+            "code": "prep_stock_no_prep_path",
+            "name": "Без подготовки — исключить склад подготовки",
+            "priority": 580,
+            "phase": "route_select",
+            "conditions": [
+                {"source": "payload", "field_path": "operation", "operator": "empty", "value": None},
+                {"source": "product", "field_path": "skip_shot_blast", "operator": "equals", "value": True},
+            ],
+            "actions": [
+                {"action": "exclude_section", "section_id": _section_id("PREP_STOCK")},
             ],
         },
         {
@@ -249,6 +264,9 @@ async def test_product_skip_shot_excludes_shot_section(client, session) -> None:
 
     excluded_codes = {s["code"] for s in result.excluded_sections}
     assert "SHOT" in excluded_codes, f"SHOT should be excluded when skip_shot_blast=True, got: {excluded_codes}"
+    assert "PREP_STOCK" in excluded_codes, (
+        f"PREP_STOCK should be excluded when no prep path (empty op + skip shot), got: {excluded_codes}"
+    )
 
     # SHOT should NOT be in required sections
     required_codes = {s["code"] for s in result.required_sections}
@@ -279,6 +297,7 @@ async def test_product_with_shot_requires_shot_section(client, session) -> None:
 
     required_codes = {s["code"] for s in result.required_sections}
     assert "SHOT" in required_codes, f"SHOT should be required when skip_shot_blast=False, got: {required_codes}"
+    assert "PREP_STOCK" in required_codes, f"PREP_STOCK should be required with SHOT, got: {required_codes}"
 
     # SHOT should NOT be in excluded sections
     excluded_codes = {s["code"] for s in result.excluded_sections}
@@ -519,6 +538,7 @@ async def test_drill_rule_requires_drill_excludes_press(client, session) -> None
     excluded_codes = {s["code"] for s in result.excluded_sections}
 
     assert "DRILL" in required_codes, f"DRILL should be required, got: {required_codes}"
+    assert "PREP_STOCK" in required_codes, f"PREP_STOCK should be required with DRILL, got: {required_codes}"
     assert "PRESS" in excluded_codes, f"PRESS should be excluded, got: {excluded_codes}"
 
 
@@ -719,3 +739,21 @@ async def test_no_product_uses_default_shot_behavior(client, session) -> None:
 
     required_codes = {s["code"] for s in result.required_sections}
     assert "SHOT" in required_codes, f"SHOT should be required when no product passed, got: {required_codes}"
+    assert "PREP_STOCK" in required_codes, f"PREP_STOCK should be required with SHOT, got: {required_codes}"
+
+
+@pytest.mark.asyncio
+async def test_prep_stock_required_with_shot_when_empty_primary(client, session) -> None:
+    """Пустая первичная операция, но SHOT в маршруте — склад подготовки обязателен."""
+    profile_id = await _seed_profile_and_rules(session)
+
+    result = await select_route_for_payload(
+        session,
+        {"operation": "", "output_kind": "ГП", "raw_columns": {"operation": "", "output_kind": "ГП"}},
+        product=None,
+        profile_id=profile_id,
+    )
+
+    required_codes = {s["code"] for s in result.required_sections}
+    assert "SHOT" in required_codes
+    assert "PREP_STOCK" in required_codes, f"PREP_STOCK should be required with SHOT, got: {required_codes}"
