@@ -16,7 +16,7 @@ interface ProductStockBalanceDialogProps {
   productId: number;
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  onShowHistory?: (productId: number) => void;
+  onShowHistory?: (productId: number, productSku?: string | null) => void;
 }
 
 export function ProductStockBalanceDialog({
@@ -85,7 +85,7 @@ export function ProductStockBalanceDialog({
                           size="sm"
                           variant="ghost"
                           className="h-7 text-xs"
-                          onClick={() => onShowHistory?.(productId)}
+                          onClick={() => onShowHistory?.(productId, product?.sku ?? null)}
                         >
                           История
                         </Button>

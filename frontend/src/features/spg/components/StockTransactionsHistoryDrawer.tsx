@@ -1,15 +1,11 @@
-import { useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Loader2, X } from "lucide-react";
 
 import {
   Button,
   DateRangePicker,
-  Select,
-  SelectTrigger,
-  SelectValue,
-  SelectContent,
-  SelectItem,
+  SortableFilterHeader,
   type DateRangeValue,
 } from "@/shared/ui";
 import {
@@ -17,202 +13,333 @@ import {
   formatBalanceQtyInteger,
   formatQualityStateLabel,
   formatStockReasonLabel,
-  IMPORT_REMAINDERS_SOURCE_REF,
-  toApiStockReason,
 } from "@/shared/api/stock";
-import type { StockReason } from "@/shared/api/stock";
+import type { StockTransactionEntry } from "@/shared/api/stock";
 import { queryKeys } from "@/shared/api/queryKeys";
+import {
+  useTableQueryEngine,
+  type SortConfig,
+  type ColumnSortDef,
+} from "@/shared/hooks/useTableQueryEngine";
+import { nextMultiSortConfigs } from "@/shared/lib/multiSort";
 
 interface StockTransactionsHistoryDrawerProps {
   productId?: number;
+  productSku?: string | null;
   locationId?: number;
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }
 
-const ALL_REASONS_VALUE = "all" as const;
-const IMPORT_REASON_VALUE = "import_remainders" as const;
+type TransactionSortField = "date" | "reason" | "from" | "to" | "quantity" | "quality" | "comment";
 
-type ReasonFilterValue = StockReason | typeof ALL_REASONS_VALUE | typeof IMPORT_REASON_VALUE;
+function formatTxDate(createdAt: string | null): string {
+  if (!createdAt) return "—";
+  return new Date(createdAt).toLocaleString("ru-RU");
+}
 
-const REASON_OPTIONS: { value: ReasonFilterValue; label: string }[] = [
-  { value: ALL_REASONS_VALUE, label: "Все причины" },
-  { value: IMPORT_REASON_VALUE, label: "Импорт остатков" },
-  { value: "MANUAL_IN", label: "Ручной приход" },
-  { value: "MANUAL_OUT", label: "Ручной расход" },
-  { value: "ADJUSTMENT_IN", label: "Корректировка +" },
-  { value: "ADJUSTMENT_OUT", label: "Корректировка −" },
-  { value: "ISSUE_TO_WORK", label: "Выдача в работу" },
-  { value: "COMPLETE", label: "Выпуск" },
-  { value: "TRANSFER_SEND", label: "Передача отправлено" },
-  { value: "TRANSFER_RECEIVE", label: "Передача получено" },
-  { value: "RETURN_TO_STOCK", label: "Возврат на склад" },
-  { value: "SCRAP", label: "Брак" },
-  { value: "REWORK", label: "Переделка" },
-];
+function formatTxQuality(tx: StockTransactionEntry): string {
+  if (tx.from_quality_state !== tx.to_quality_state) {
+    return `${formatQualityStateLabel(tx.from_quality_state)} → ${formatQualityStateLabel(tx.to_quality_state)}`;
+  }
+  return formatQualityStateLabel(tx.from_quality_state);
+}
+
+function getTxCellValue(tx: StockTransactionEntry, field: TransactionSortField): string {
+  switch (field) {
+    case "date":
+      return formatTxDate(tx.created_at);
+    case "reason":
+      return formatStockReasonLabel(String(tx.reason), tx.source_ref);
+    case "from":
+      return tx.from_location_name || (tx.from_location_id ? `#${tx.from_location_id}` : "—");
+    case "to":
+      return tx.to_location_name || (tx.to_location_id ? `#${tx.to_location_id}` : "—");
+    case "quantity":
+      return formatBalanceQtyInteger(tx.quantity);
+    case "quality":
+      return formatTxQuality(tx);
+    case "comment":
+      return tx.comment || "—";
+  }
+}
 
 export function StockTransactionsHistoryDrawer({
   productId,
+  productSku,
   locationId,
   open,
   onOpenChange,
 }: StockTransactionsHistoryDrawerProps) {
-  const [reasonFilter, setReasonFilter] = useState<ReasonFilterValue>(ALL_REASONS_VALUE);
+  const productLabel = productSku?.trim() || (productId !== undefined ? `#${productId}` : null);
   const [dateRange, setDateRange] = useState<DateRangeValue>({ from: "", to: "" });
+  const [sortConfigs, setSortConfigs] = useState<SortConfig<TransactionSortField>[]>([]);
+  const [columnFilters, setColumnFilters] = useState<Partial<Record<TransactionSortField, Set<string>>>>({});
+
+  useEffect(() => {
+    if (!open) {
+      setDateRange({ from: "", to: "" });
+      setSortConfigs([]);
+      setColumnFilters({});
+    }
+  }, [open]);
 
   const { data: transactions = [], isLoading } = useQuery({
     queryKey: queryKeys.stock.transactions(
-      JSON.stringify({
-        productId,
-        locationId,
-        reason:
-          reasonFilter === ALL_REASONS_VALUE || reasonFilter === IMPORT_REASON_VALUE
-            ? undefined
-            : reasonFilter,
-      }),
+      JSON.stringify({ productId, locationId }),
     ),
     queryFn: () =>
       getStockTransactions({
         product_id: productId,
         location_id: locationId,
-        reason:
-          reasonFilter === ALL_REASONS_VALUE || reasonFilter === IMPORT_REASON_VALUE
-            ? undefined
-            : reasonFilter,
         limit: 500,
       }),
-    enabled: open,
+    enabled: open && productId !== undefined,
   });
 
-  const filteredTransactions = useMemo(() => {
-    let rows = transactions;
-
-    if (reasonFilter === IMPORT_REASON_VALUE) {
-      rows = rows.filter((tx) => tx.source_ref === IMPORT_REMAINDERS_SOURCE_REF);
-    } else if (reasonFilter === "MANUAL_IN") {
-      rows = rows.filter(
-        (tx) =>
-          toApiStockReason("MANUAL_IN") === String(tx.reason).toLowerCase()
-          && tx.source_ref !== IMPORT_REMAINDERS_SOURCE_REF,
-      );
-    }
-
+  const dateFilteredTransactions = useMemo(() => {
     const { from, to } = dateRange;
-    if (!from && !to) return rows;
-    return rows.filter((tx) => {
+    if (!from && !to) return transactions;
+    return transactions.filter((tx) => {
       if (!tx.created_at) return false;
       const day = tx.created_at.slice(0, 10);
       if (from && day < from) return false;
       if (to && day > to) return false;
       return true;
     });
-  }, [transactions, dateRange, reasonFilter]);
+  }, [transactions, dateRange]);
+
+  const handleSortChange = useCallback((field: TransactionSortField) => {
+    setSortConfigs((prev) => nextMultiSortConfigs(prev, field));
+  }, []);
+
+  const handleColumnFilterChange = useCallback((field: TransactionSortField, selected: Set<string>) => {
+    setColumnFilters((prev) => ({ ...prev, [field]: selected }));
+  }, []);
+
+  const sortDefs = useMemo((): ColumnSortDef<StockTransactionEntry, TransactionSortField>[] => [
+    {
+      field: "date",
+      getSortValue: (tx) => (tx.created_at ? new Date(tx.created_at).getTime() : 0),
+    },
+    { field: "reason", getSortValue: (tx) => getTxCellValue(tx, "reason") },
+    { field: "from", getSortValue: (tx) => getTxCellValue(tx, "from") },
+    { field: "to", getSortValue: (tx) => getTxCellValue(tx, "to") },
+    {
+      field: "quantity",
+      getSortValue: (tx) => Number.parseFloat(String(tx.quantity)) || 0,
+    },
+    { field: "quality", getSortValue: (tx) => getTxCellValue(tx, "quality") },
+    { field: "comment", getSortValue: (tx) => getTxCellValue(tx, "comment") },
+  ], []);
+
+  const filterPredicate = useMemo(() => {
+    const hasFilters = Object.values(columnFilters).some((selected) => selected && selected.size > 0);
+    if (!hasFilters) return null;
+    return (tx: StockTransactionEntry) => {
+      for (const [field, selected] of Object.entries(columnFilters)) {
+        if (selected && selected.size > 0) {
+          const cellValue = getTxCellValue(tx, field as TransactionSortField);
+          if (!selected.has(cellValue)) return false;
+        }
+      }
+      return true;
+    };
+  }, [columnFilters]);
+
+  const uniqueValues = useMemo(() => ({
+    date: [...new Set(dateFilteredTransactions.map((tx) => getTxCellValue(tx, "date")))].sort((a, b) =>
+      a.localeCompare(b, "ru"),
+    ),
+    reason: [...new Set(dateFilteredTransactions.map((tx) => getTxCellValue(tx, "reason")))].sort((a, b) =>
+      a.localeCompare(b, "ru"),
+    ),
+    from: [...new Set(dateFilteredTransactions.map((tx) => getTxCellValue(tx, "from")))].sort((a, b) =>
+      a.localeCompare(b, "ru"),
+    ),
+    to: [...new Set(dateFilteredTransactions.map((tx) => getTxCellValue(tx, "to")))].sort((a, b) =>
+      a.localeCompare(b, "ru"),
+    ),
+    quantity: [...new Set(dateFilteredTransactions.map((tx) => getTxCellValue(tx, "quantity")))].sort(
+      (a, b) => (Number.parseFloat(a) || 0) - (Number.parseFloat(b) || 0),
+    ),
+    quality: [...new Set(dateFilteredTransactions.map((tx) => getTxCellValue(tx, "quality")))].sort((a, b) =>
+      a.localeCompare(b, "ru"),
+    ),
+    comment: [...new Set(dateFilteredTransactions.map((tx) => getTxCellValue(tx, "comment")))].sort((a, b) =>
+      a.localeCompare(b, "ru"),
+    ),
+  }), [dateFilteredTransactions]);
+
+  const { rows: filteredTransactions, filteredCount } = useTableQueryEngine<
+    StockTransactionEntry,
+    TransactionSortField
+  >({
+    rows: dateFilteredTransactions,
+    getId: (tx) => tx.id,
+    searchQuery: "",
+    filterPredicate,
+    sortConfigs,
+    sortDefs,
+  });
 
   if (!open) return null;
 
   return (
     <div className="fixed inset-0 z-50 flex justify-end">
       <div className="fixed inset-0 bg-black/30" onClick={() => onOpenChange(false)} />
-      <div className="relative w-full max-w-2xl bg-background shadow-xl border-l overflow-y-auto animate-in slide-in-from-right">
-        <div className="sticky top-0 bg-background border-b z-10 px-4 py-3 flex items-center justify-between">
-          <h2 className="text-lg font-semibold">История движения</h2>
+      <div className="relative w-full max-w-3xl bg-background shadow-xl border-l overflow-y-auto animate-in slide-in-from-right">
+        <div className="sticky top-0 bg-background border-b z-10 px-4 py-3 flex items-center justify-between gap-3">
+          <h2 className="text-lg font-semibold min-w-0 truncate">
+            {productLabel
+              ? <>История движения по артикулу <span className="text-primary">{productLabel}</span></>
+              : "История движения"}
+          </h2>
           <Button variant="ghost" size="icon" onClick={() => onOpenChange(false)}>
             <X className="h-5 w-5" />
           </Button>
         </div>
 
         <div className="p-4 space-y-4">
-          {/* Filters */}
-          <div className="flex flex-col sm:flex-row flex-wrap items-end gap-3">
-            <div className="space-y-1 w-full sm:flex-1 sm:min-w-[200px]">
-              <label className="text-xs font-medium text-muted-foreground">Причина</label>
-              <Select
-                value={reasonFilter}
-                onValueChange={(val) => setReasonFilter(val as ReasonFilterValue)}
-              >
-                <SelectTrigger className="w-full h-9 text-sm bg-background">
-                  <SelectValue placeholder="Все причины" />
-                </SelectTrigger>
-                <SelectContent>
-                  {REASON_OPTIONS.map((opt) => (
-                    <SelectItem key={opt.value} value={opt.value}>
-                      {opt.label}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-            <DateRangePicker
-              from={dateRange.from}
-              to={dateRange.to}
-              onChange={setDateRange}
-              className="w-full sm:w-auto sm:min-w-[280px] max-w-md"
-              placeholder="Выберите период"
-              align="start"
-            />
-          </div>
+          <DateRangePicker
+            from={dateRange.from}
+            to={dateRange.to}
+            onChange={setDateRange}
+            className="w-full sm:w-auto sm:min-w-[280px] max-w-md"
+            placeholder="Период"
+            align="start"
+          />
 
-          {/* Table */}
           {isLoading ? (
             <div className="flex items-center justify-center py-12">
               <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
             </div>
-          ) : filteredTransactions.length === 0 ? (
+          ) : transactions.length === 0 ? (
             <div className="text-center py-12 text-sm text-muted-foreground border rounded-lg border-dashed">
-              {transactions.length === 0 ? "Транзакции не найдены" : "Нет транзакций за выбранный период"}
+              Транзакции не найдены
             </div>
           ) : (
             <div className="overflow-x-auto border rounded-lg">
-              <table className="w-full text-sm">
-                <thead className="bg-muted/50 border-b">
-                  <tr>
-                    <th className="p-2 text-left font-medium">Дата</th>
-                    <th className="p-2 text-left font-medium">Причина</th>
-                    <th className="p-2 text-left font-medium">Откуда</th>
-                    <th className="p-2 text-left font-medium">Куда</th>
-                    <th className="p-2 text-right font-medium">Кол-во</th>
-                    <th className="p-2 text-left font-medium">Качество</th>
-                    <th className="p-2 text-left font-medium">Комментарий</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {filteredTransactions.map((tx) => (
-                    <tr key={tx.id} className="border-b hover:bg-muted/30">
-                      <td className="p-2 text-xs whitespace-nowrap">
-                        {tx.created_at ? new Date(tx.created_at).toLocaleString("ru-RU") : "—"}
-                      </td>
-                      <td className="p-2 text-xs font-medium">
-                        {formatStockReasonLabel(String(tx.reason), tx.source_ref)}
-                      </td>
-                      <td className="p-2 text-xs">
-                        {tx.from_location_name
-                          || (tx.from_location_id ? `#${tx.from_location_id}` : "—")}
-                      </td>
-                      <td className="p-2 text-xs">
-                        {tx.to_location_name
-                          || (tx.to_location_id ? `#${tx.to_location_id}` : "—")}
-                      </td>
-                      <td className="p-2 text-right font-mono text-xs">{formatBalanceQtyInteger(tx.quantity)}</td>
-                      <td className="p-2 text-xs">
-                        {tx.from_quality_state !== tx.to_quality_state
-                          ? `${formatQualityStateLabel(tx.from_quality_state)} → ${formatQualityStateLabel(tx.to_quality_state)}`
-                          : formatQualityStateLabel(tx.from_quality_state)}
-                      </td>
-                      <td className="p-2 text-xs text-muted-foreground max-w-[150px] truncate">
-                        {tx.comment || "—"}
-                      </td>
+              {filteredTransactions.length === 0 ? (
+                <div className="p-8 text-center text-sm text-muted-foreground">
+                  Ничего не найдено по выбранным фильтрам
+                </div>
+              ) : (
+                <table className="w-full text-sm">
+                  <thead className="bg-muted/50 border-b">
+                    <tr>
+                      <th className="p-2 text-left font-medium">
+                        <SortableFilterHeader
+                          field="date"
+                          label="Дата"
+                          currentSorts={sortConfigs}
+                          onSortChange={handleSortChange}
+                          values={uniqueValues.date}
+                          selectedValues={columnFilters.date ?? new Set()}
+                          onFilterChange={handleColumnFilterChange}
+                        />
+                      </th>
+                      <th className="p-2 text-left font-medium">
+                        <SortableFilterHeader
+                          field="reason"
+                          label="Причина"
+                          currentSorts={sortConfigs}
+                          onSortChange={handleSortChange}
+                          values={uniqueValues.reason}
+                          selectedValues={columnFilters.reason ?? new Set()}
+                          onFilterChange={handleColumnFilterChange}
+                        />
+                      </th>
+                      <th className="p-2 text-left font-medium">
+                        <SortableFilterHeader
+                          field="from"
+                          label="Откуда"
+                          currentSorts={sortConfigs}
+                          onSortChange={handleSortChange}
+                          values={uniqueValues.from}
+                          selectedValues={columnFilters.from ?? new Set()}
+                          onFilterChange={handleColumnFilterChange}
+                        />
+                      </th>
+                      <th className="p-2 text-left font-medium">
+                        <SortableFilterHeader
+                          field="to"
+                          label="Куда"
+                          currentSorts={sortConfigs}
+                          onSortChange={handleSortChange}
+                          values={uniqueValues.to}
+                          selectedValues={columnFilters.to ?? new Set()}
+                          onFilterChange={handleColumnFilterChange}
+                        />
+                      </th>
+                      <th className="p-2 text-right font-medium">
+                        <SortableFilterHeader
+                          field="quantity"
+                          label="Кол-во"
+                          currentSorts={sortConfigs}
+                          onSortChange={handleSortChange}
+                          values={uniqueValues.quantity}
+                          selectedValues={columnFilters.quantity ?? new Set()}
+                          onFilterChange={handleColumnFilterChange}
+                        />
+                      </th>
+                      <th className="p-2 text-left font-medium">
+                        <SortableFilterHeader
+                          field="quality"
+                          label="Качество"
+                          currentSorts={sortConfigs}
+                          onSortChange={handleSortChange}
+                          values={uniqueValues.quality}
+                          selectedValues={columnFilters.quality ?? new Set()}
+                          onFilterChange={handleColumnFilterChange}
+                        />
+                      </th>
+                      <th className="p-2 text-left font-medium">
+                        <SortableFilterHeader
+                          field="comment"
+                          label="Комментарий"
+                          currentSorts={sortConfigs}
+                          onSortChange={handleSortChange}
+                          values={uniqueValues.comment}
+                          selectedValues={columnFilters.comment ?? new Set()}
+                          onFilterChange={handleColumnFilterChange}
+                        />
+                      </th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
+                  </thead>
+                  <tbody>
+                    {filteredTransactions.map((tx) => (
+                      <tr key={tx.id} className="border-b hover:bg-muted/30">
+                        <td className="p-2 text-xs whitespace-nowrap">
+                          {formatTxDate(tx.created_at)}
+                        </td>
+                        <td className="p-2 text-xs font-medium">
+                          {getTxCellValue(tx, "reason")}
+                        </td>
+                        <td className="p-2 text-xs">{getTxCellValue(tx, "from")}</td>
+                        <td className="p-2 text-xs">{getTxCellValue(tx, "to")}</td>
+                        <td className="p-2 text-right font-mono text-xs">
+                          {getTxCellValue(tx, "quantity")}
+                        </td>
+                        <td className="p-2 text-xs">{getTxCellValue(tx, "quality")}</td>
+                        <td className="p-2 text-xs text-muted-foreground max-w-[150px] truncate">
+                          {getTxCellValue(tx, "comment")}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
             </div>
           )}
 
-          <div className="text-xs text-muted-foreground text-center">
-            {filteredTransactions.length === transactions.length
-              ? `Показано ${transactions.length} записей`
-              : `Показано ${filteredTransactions.length} из ${transactions.length} записей`}
-          </div>
+          {!isLoading && transactions.length > 0 && (
+            <div className="text-xs text-muted-foreground text-center">
+              {filteredCount === dateFilteredTransactions.length
+                ? `Показано ${filteredCount} записей`
+                : `Показано ${filteredCount} из ${dateFilteredTransactions.length} записей`}
+            </div>
+          )}
         </div>
       </div>
     </div>

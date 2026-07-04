@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState, useRef } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
 
+
 import { apiClient, getErrorMessage } from "@/shared/api/client";
 import { listSections } from "@/shared/api/sections";
 import {
@@ -25,6 +26,13 @@ import { SectionTasksBoard, type TaskActionDialogType, type TaskBoardViewMode } 
 import { TaskActionDrawer } from "../components/TaskActionDrawer";
 import { BulkOperationsPanel } from "../components/BulkOperationsPanel";
 import { PlanModal } from "../components/PlanModal";
+import { SectionStockBalances } from "../components/SectionStockBalances";
+import {
+  SectionPanelToggles,
+  isBalancesPanelVisible,
+  isTasksPanelVisible,
+  type SectionContentMode,
+} from "../components/SectionPanelToggles";
 import { PRESET_PROFILES, type GroupingProfile } from "../lib/groupingProfiles";
 import { isTaskCompletable, getNonCompletableTasks } from "../lib/taskStatus";
 import { createAuditLog, getAuditLogs, type AuditLogEntry } from "@/shared/api/auditLogs";
@@ -100,6 +108,7 @@ export function SectionsTasksPage() {
   const profile = PRESET_PROFILES.find((p) => p.id === "sku+routeHistoryAfter") || PRESET_PROFILES[2];
 
   const [viewMode, setViewMode] = useState<TaskBoardViewMode>({ active: true, waiting: true, completed: false });
+  const [sectionContentMode, setSectionContentMode] = useState<SectionContentMode>("both");
   const [dateRange, setDateRange] = useState<DateRangeValue>({ from: "", to: "" });
   const dateFrom = dateRange.from;
   const dateTo = dateRange.to;
@@ -291,6 +300,9 @@ export function SectionsTasksPage() {
     void queryClient.invalidateQueries({ queryKey: queryKeys.transfers.readyAll() });
     void queryClient.invalidateQueries({ queryKey: queryKeys.transfers.historyAll() });
     void queryClient.invalidateQueries({ queryKey: ["auditLogs"] });
+    if (sectionId !== null) {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.stock.balances(`section-${sectionId}`) });
+    }
   }, [queryClient, sectionId]);
 
   const openActionDialog = useCallback((_type: TaskActionDialogType, task: SectionBoardTask) => {
@@ -842,8 +854,8 @@ export function SectionsTasksPage() {
             className="rounded-xl border px-4 py-3"
             style={{ borderColor: selectedSectionColor, backgroundColor: selectedSectionTint }}
           >
-            <div className="flex items-start justify-between gap-3">
-              <div className="flex items-center gap-3 min-w-0">
+            <div className="flex items-center justify-between gap-3">
+              <div className="flex items-center gap-3 min-w-0 flex-wrap">
                 {isSingleWindow ? (
                   <SectionSwitcherTiles
                     sections={(sections || []).filter((s) => s.is_active && isProductionSection(s.type))}
@@ -862,13 +874,8 @@ export function SectionsTasksPage() {
                         >
                           {selectedSection.icon ? renderIcon(selectedSection.icon, "h-5 w-5") : <span className="h-2.5 w-2.5 rounded-full bg-current" />}
                         </span>
-                        <div className="min-w-0">
-                          <div className="text-xs font-semibold uppercase tracking-wide" style={{ color: selectedSectionColor }}>
-                            {selectedSection.code}
-                          </div>
-                          <div className="truncate text-xl font-bold leading-tight text-slate-900">
-                            {selectedSection.name}
-                          </div>
+                        <div className="min-w-0 truncate text-xl font-bold leading-tight text-slate-900">
+                          {selectedSection.name}
                         </div>
                       </>
                     }
@@ -881,15 +888,16 @@ export function SectionsTasksPage() {
                     >
                       {selectedSection.icon ? renderIcon(selectedSection.icon, "h-5 w-5") : <span className="h-2.5 w-2.5 rounded-full bg-current" />}
                     </span>
-                    <div className="min-w-0">
-                      <div className="text-xs font-semibold uppercase tracking-wide" style={{ color: selectedSectionColor }}>
-                        {selectedSection.code}
-                      </div>
-                      <div className="truncate text-xl font-bold leading-tight text-slate-900">
-                        {selectedSection.name}
-                      </div>
+                    <div className="min-w-0 truncate text-xl font-bold leading-tight text-slate-900">
+                      {selectedSection.name}
                     </div>
                   </>
+                )}
+                {!isSingleWindowBlocked && sectionId && (
+                  <SectionPanelToggles
+                    mode={sectionContentMode}
+                    onChange={setSectionContentMode}
+                  />
                 )}
               </div>
               <div className="shrink-0 flex flex-col items-end gap-2">
@@ -959,89 +967,95 @@ export function SectionsTasksPage() {
 
         {!isSingleWindowBlocked && sectionId && (
           <div className="space-y-4">
-            {/* Bulk operations panel */}
-            {bulkMode && bulkSelection.selectedCount > 0 && (
-              <BulkOperationsPanel
-                tasks={selectedTasks}
-                onExecuteAll={handleBulkExecuteAll}
-                pending={bulkExecuting}
-                onDone={() => setBulkMode(false)}
-              />
+            {isTasksPanelVisible(sectionContentMode) && (
+              <>
+                {bulkMode && bulkSelection.selectedCount > 0 && (
+                  <BulkOperationsPanel
+                    tasks={selectedTasks}
+                    onExecuteAll={handleBulkExecuteAll}
+                    pending={bulkExecuting}
+                    onDone={() => setBulkMode(false)}
+                  />
+                )}
+
+                <div className="flex flex-wrap items-center gap-2">
+                  <DateRangePicker
+                    from={dateRange.from}
+                    to={dateRange.to}
+                    onChange={setDateRange}
+                    className="w-full sm:w-auto sm:min-w-[280px] max-w-md"
+                  />
+                  <Button variant="outline" size="sm" onClick={() => setPlanModalOpen(true)}>
+                    План
+                  </Button>
+                </div>
+
+                <SectionTasksBoard
+                  tasks={tasks}
+                  isLoading={boardLoading}
+                  mode={viewMode}
+                  onModeChange={setViewMode}
+                  onAction={openActionDialog}
+                  bulkMode={bulkMode}
+                  onBulkModeChange={toggleBulkMode}
+                  bulkSelection={bulkMode ? bulkSelection : undefined}
+                  profile={profile}
+                  onSelectAllVisible={handleSelectAll}
+                  onCompleteGroup={handleCompleteGroup}
+                />
+
+                {!isSingleWindow && stats && (
+                  <div className="rounded-lg border p-4">
+                    <h3 className="text-sm font-semibold mb-3">Статистика по дням</h3>
+                    <div className="overflow-auto">
+                      <table className="w-full text-sm">
+                        <thead className="border-b bg-muted/50">
+                          <tr>
+                            <th className="text-left p-2">Дата</th>
+                            <th className="text-left p-2">Факт</th>
+                            <th className="text-left p-2">Брак</th>
+                            <th className="text-left p-2">Операций</th>
+                            <th className="text-left p-2">Ср. задержка учета</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {stats.daily_stats.map((row: DailyStatsRow) => (
+                            <tr key={row.date} className="border-b">
+                              <td className="p-2">{row.date}</td>
+                              <td className="p-2">{fmtQty(row.good_quantity)}</td>
+                              <td className="p-2">{parseFloat(row.rejected_quantity) > 0 ? <span className="text-red-600 font-medium">{fmtQty(row.rejected_quantity)}</span> : fmtQty(row.rejected_quantity)}</td>
+                              <td className="p-2">{row.op_count}</td>
+                              <td className="p-2">
+                                {(() => {
+                                  const delaySec = parseFloat(row.avg_accounting_delay_seconds);
+                                  if (!Number.isFinite(delaySec) || delaySec === 0) return "—";
+                                  const min = Math.floor(delaySec / 60);
+                                  const sec = Math.round(delaySec % 60);
+                                  return `${min}м ${sec}с`;
+                                })()}
+                              </td>
+                            </tr>
+                          ))}
+                          {stats.daily_stats.length === 0 && (
+                            <tr>
+                              <td colSpan={5} className="p-4 text-center text-muted-foreground">Нет данных за период</td>
+                            </tr>
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                )}
+              </>
             )}
 
-            {/* Group operations panel (opened by «Завершить группу») is now handled by TaskActionDrawer */}
-
-            <div className="flex flex-wrap items-center gap-2">
-              <DateRangePicker
-                from={dateRange.from}
-                to={dateRange.to}
-                onChange={setDateRange}
-                className="w-full sm:w-auto sm:min-w-[280px] max-w-md"
+            {isBalancesPanelVisible(sectionContentMode) && (
+              <SectionStockBalances
+                sectionId={sectionId}
+                sectionName={selectedSection?.name}
               />
-              <Button variant="outline" size="sm" onClick={() => setPlanModalOpen(true)}>
-                План
-              </Button>
-            </div>
-
-            <SectionTasksBoard
-              tasks={tasks}
-              isLoading={boardLoading}
-              mode={viewMode}
-              onModeChange={setViewMode}
-              onAction={openActionDialog}
-              bulkMode={bulkMode}
-              onBulkModeChange={toggleBulkMode}
-              bulkSelection={bulkMode ? bulkSelection : undefined}
-              profile={profile}
-              onSelectAllVisible={handleSelectAll}
-              onCompleteGroup={handleCompleteGroup}
-            />
-
-
-
-              {!isSingleWindow && stats && (
-                <div className="rounded-lg border p-4">
-                  <h3 className="text-sm font-semibold mb-3">Статистика по дням</h3>
-                  <div className="overflow-auto">
-                    <table className="w-full text-sm">
-                      <thead className="border-b bg-muted/50">
-                        <tr>
-                          <th className="text-left p-2">Дата</th>
-                          <th className="text-left p-2">Факт</th>
-                          <th className="text-left p-2">Брак</th>
-                          <th className="text-left p-2">Операций</th>
-                          <th className="text-left p-2">Ср. задержка учета</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {stats.daily_stats.map((row: DailyStatsRow) => (
-                          <tr key={row.date} className="border-b">
-                            <td className="p-2">{row.date}</td>
-                            <td className="p-2">{fmtQty(row.good_quantity)}</td>
-                            <td className="p-2">{parseFloat(row.rejected_quantity) > 0 ? <span className="text-red-600 font-medium">{fmtQty(row.rejected_quantity)}</span> : fmtQty(row.rejected_quantity)}</td>
-                            <td className="p-2">{row.op_count}</td>
-                            <td className="p-2">
-                              {(() => {
-                                const delaySec = parseFloat(row.avg_accounting_delay_seconds);
-                                if (!Number.isFinite(delaySec) || delaySec === 0) return "—";
-                                const min = Math.floor(delaySec / 60);
-                                const sec = Math.round(delaySec % 60);
-                                return `${min}м ${sec}с`;
-                              })()}
-                            </td>
-                          </tr>
-                        ))}
-                        {stats.daily_stats.length === 0 && (
-                          <tr>
-                            <td colSpan={5} className="p-4 text-center text-muted-foreground">Нет данных за период</td>
-                          </tr>
-                        )}
-                      </tbody>
-                    </table>
-                  </div>
-                </div>
-              )}
-            </div>
+            )}
+          </div>
         )}
       </section>
 
