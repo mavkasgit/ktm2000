@@ -5,7 +5,7 @@ import {
   ImportRawRows,
   extractPlanImportRawRows,
   type ImportRowExpansion,
-} from "@/shared/ui/import";
+} from "@/shared/ui/import-utils";
 
 export const PLAN_IMPORT_ERROR_LABELS: Record<string, string> = {
   product_not_found: "Изделие не найдено",

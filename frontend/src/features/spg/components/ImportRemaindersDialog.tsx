@@ -32,7 +32,7 @@ import {
   ImportUpload,
   ImportPreview,
   ImportRawRows,
-} from "@/shared/ui/import";
+} from "@/shared/ui/import-utils";
 import {
   previewRemaindersExcel,
   importRemaindersExcel,
