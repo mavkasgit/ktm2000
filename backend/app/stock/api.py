@@ -101,8 +101,12 @@ class StockBalanceCompletedStageOut(BaseModel):
     sequence: int
     section_code: str
     section_name: str
+    section_icon: str | None = None
+    section_icon_color: str | None = None
     operation_code: str | None
     operation_name: str
+    op_icon: str | None = None
+    op_icon_color: str | None = None
     is_significant: bool = True
 
 
@@ -486,7 +490,8 @@ async def get_remainder_import_operations(
     """Справочник значимых производственных операций для UI импорта остатков.
 
     Возвращает список в формате ``RouteStepsDisplay``:
-    ``[{sequence, section_code, section_name, operation_code, operation_name, is_significant}]``.
+    ``[{sequence, section_code, section_name, section_icon, section_icon_color,
+    operation_code, operation_name, op_icon, op_icon_color, is_significant}]``.
     """
     return await resolve_operations_dictionary(db)
 

@@ -218,8 +218,12 @@ export type ImportOperationStep = {
   sequence: number;
   section_code: string;
   section_name: string;
+  section_icon?: string | null;
+  section_icon_color?: string | null;
   operation_code: string | null;
   operation_name: string;
+  op_icon?: string | null;
+  op_icon_color?: string | null;
   is_significant: boolean;
 };
 

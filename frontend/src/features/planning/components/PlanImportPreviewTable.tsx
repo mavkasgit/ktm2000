@@ -305,9 +305,7 @@ export function PlanImportPreviewTable({
                       {routeMeta ? <span className="text-muted-foreground ml-1">({routeMeta})</span> : null}
                     </div>
                   ) : routeSteps && routeSteps.length > 0 ? (
-                    <div className="truncate whitespace-nowrap">
-                      <RouteStepsDisplay steps={routeSteps} compact />
-                    </div>
+                    <RouteStepsDisplay steps={routeSteps} compact size="sm" />
                   ) : (
                     <span className="text-muted-foreground">—</span>
                   )}

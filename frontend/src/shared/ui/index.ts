@@ -42,6 +42,8 @@ export { VirtualizedTableBody } from "./VirtualizedTableBody";
 export type { VirtualizedTableBodyProps } from "./VirtualizedTableBody";
 export { RouteStepsDisplay } from "./RouteStepsDisplay";
 export type { RouteStepsDisplayProps } from "./RouteStepsDisplay";
+export { SectionLocationBadge } from "./SectionLocationBadge";
+export type { SectionLocationBadgeProps } from "./SectionLocationBadge";
 export { StockBalancesPanel } from "./StockBalancesPanel";
 export type { StockBalancesPanelProps } from "./StockBalancesPanel";
 export * from "./import-utils";

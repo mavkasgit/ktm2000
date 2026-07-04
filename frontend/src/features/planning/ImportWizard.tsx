@@ -4,7 +4,7 @@ import { useNavigate } from "react-router-dom"
 import { uploadExcel, applyChangeSet, discardImport } from "./api"
 import { getExcelSheetNames, previewExcelSheet, type SheetPreviewResponse } from "shared/api/imports"
 import { Button, Input, AlertDialog, AlertDialogContent, AlertDialogHeader, AlertDialogTitle, AlertDialogDescription, AlertDialogFooter, AlertDialogAction, AlertDialogCancel, FiltersPanel, Select, SelectContent, SelectItem, SelectTrigger, SelectValue, type FiltersPanelField } from "shared/ui"
-import { useImportRowExpansion, ImportRawRows, ImportUpload, ImportPreview } from "@/shared/ui/import-utils"
+import { useImportRowExpansion, ImportRawRows, ImportUpload, ImportPreview, getImportDialogContentClass } from "@/shared/ui/import-utils"
 import { PlanImportPreviewTable, PLAN_IMPORT_ERROR_LABELS } from "./components/PlanImportPreviewTable"
 import { buildActiveFilterSummary } from "shared/ui/buildActiveFilterSummary"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
@@ -457,7 +457,7 @@ export function ImportWizard(props: {
   return (
     <>
       <Dialog open={props.open} onOpenChange={(open) => { if (!open) handleClose() }}>
-      <DialogContent className={`w-full max-h-[95vh] overflow-hidden flex flex-col transition-all duration-300 ${step === "preview" ? "w-[80vw] max-w-[80vw] h-[85vh]" : "max-w-2xl"}`}>
+      <DialogContent className={getImportDialogContentClass(step)}>
         <DialogHeader>
           <DialogTitle>Импорт производственного плана</DialogTitle>
         </DialogHeader>

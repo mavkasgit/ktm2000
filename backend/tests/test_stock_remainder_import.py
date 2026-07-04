@@ -123,6 +123,8 @@ async def _make_section_operation(
     is_significant: bool = True,
     operation_type: str = "production",
     sort_order: int = 0,
+    icon: str | None = None,
+    icon_color: str | None = None,
 ) -> SectionOperation:
     """Create a SectionOperation linked to the given section."""
     if operation_code is None:
@@ -134,6 +136,8 @@ async def _make_section_operation(
         is_significant=is_significant,
         operation_type=operation_type,
         sort_order=sort_order,
+        icon=icon,
+        icon_color=icon_color,
     )
     session.add(op)
     await session.flush()
@@ -1170,6 +1174,7 @@ async def test_operations_endpoint_returns_production_significant(
     prod_sec = Section(
         code="OPS-PROD", name="Производство", type="production",
         is_active=True, sort_order=0,
+        icon="Drill", icon_color="#3B82F6",
     )
     # Секция storage (wip_stock) для Op3 с operation_type='transport'
     storage_sec = Section(
@@ -1182,6 +1187,7 @@ async def test_operations_endpoint_returns_production_significant(
     # Op1: is_significant=True, production → ДОЛЖЕН быть в ответе
     await _make_section_operation(
         session, prod_sec, "Токарная", operation_code="TURN", sort_order=1,
+        icon="Wrench", icon_color="#EF4444",
     )
     # Op2: is_significant=False, production → НЕ должен быть в ответе
     await _make_section_operation(
@@ -1204,6 +1210,10 @@ async def test_operations_endpoint_returns_production_significant(
     assert op["operation_name"] == "Токарная"
     assert op["section_code"] == "OPS-PROD"
     assert op["is_significant"] is True
+    assert op["section_icon"] == "Drill"
+    assert op["section_icon_color"] == "#3B82F6"
+    assert op["op_icon"] == "Wrench"
+    assert op["op_icon_color"] == "#EF4444"
 
 
 def test_parse_operations_from_comment_extracts_names() -> None:

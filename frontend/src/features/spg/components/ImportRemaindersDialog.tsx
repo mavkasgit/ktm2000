@@ -17,8 +17,10 @@ import {
   SelectContent,
   SelectItem,
   SectionSelect,
+  SectionLocationBadge,
   SortableFilterHeader,
   toast,
+  renderIcon,
 } from "@/shared/ui";
 import {
   useTableQueryEngine,
@@ -32,6 +34,7 @@ import {
   ImportUpload,
   ImportPreview,
   ImportRawRows,
+  getImportDialogContentClass,
 } from "@/shared/ui/import-utils";
 import {
   previewRemaindersExcel,
@@ -219,6 +222,7 @@ export function ImportRemaindersDialog({
       return {
         code,
         name: section?.name ?? SEED_TARGET_SECTION_FALLBACKS[code],
+        sectionId: section?.id ?? null,
       };
     });
   }, [importableSections]);
@@ -641,20 +645,50 @@ export function ImportRemaindersDialog({
     resolveImportLocationId,
   ]);
 
+  const previewStatsBadges = previewData
+    ? [
+        { label: `Всего: ${stats.total}` },
+        {
+          label: `OK: ${stats.valid} (${stats.qty})`,
+          className: "text-green-700 border-green-200 bg-green-50/50",
+        },
+        ...(stats.invalid > 0
+          ? [
+              {
+                label: `Ошибок: ${stats.invalid}`,
+                className: "text-red-700 border-red-200 bg-red-50/50",
+              },
+            ]
+          : []),
+        ...(rowsMissingSection.length > 0
+          ? [
+              {
+                label: `Без участка: ${rowsMissingSection.length}`,
+                className: "text-amber-700 border-amber-200 bg-amber-50/50",
+              },
+            ]
+          : []),
+      ]
+    : [];
+
   return (
     <Dialog open={open} onOpenChange={(o) => { if (!o) handleClose(); }}>
-      <DialogContent className={`w-full max-h-[90vh] overflow-hidden flex flex-col transition-all duration-300 ${step === "preview" ? "w-[80vw] max-w-[80vw] h-[85vh]" : "w-[50vw] max-w-[50vw]"}`}>
-        <DialogHeader className="shrink-0">
-          <DialogTitle>Импорт остатков</DialogTitle>
+      <DialogContent className={getImportDialogContentClass(step, { uploadSize: "formWide" })}>
+        <DialogHeader className="shrink-0 space-y-0">
+          <DialogTitle className="text-base">Импорт остатков</DialogTitle>
         </DialogHeader>
 
-        {error ? <ImportPreview.Error message={error} /> : null}
+        {error ? <ImportPreview.Error message={error} className="p-2" /> : null}
 
-        <div className="flex-1 overflow-y-auto py-2">
+        <div
+          className={`flex-1 min-h-0 ${
+            step === "preview" ? "overflow-hidden" : "overflow-y-auto py-1"
+          }`}
+        >
           {/* ═══════════════════════ UPLOAD STEP ═══════════════════════ */}
           {step === "upload" && (
-            <div className="space-y-3">
-              <p className="text-xs text-muted-foreground leading-relaxed">
+            <div className="space-y-2">
+              <p className="text-[11px] text-muted-foreground leading-snug">
                 Одна таблица для всех остатков: годный, брак или окончательный брак — статус указывается в колонке{" "}
                 <strong className="text-foreground">«Статус качества»</strong>. Заголовки необязательны: без них
                 столбцы читаются в порядке шаблона. Загрузите Excel или нажмите{" "}
@@ -662,10 +696,10 @@ export function ImportRemaindersDialog({
                 — данные из буфера подхватятся сразу.
               </p>
 
-              <div className="grid grid-cols-[minmax(0,3fr)_minmax(180px,2fr)] gap-4 items-start">
+              <div className="grid grid-cols-[minmax(0,3fr)_minmax(160px,2fr)] gap-3 items-start">
                 {/* Левая колонка: таблица + загрузка */}
-                <div className="space-y-3 min-w-0">
-                  <div className="space-y-1.5">
+                <div className="space-y-2 min-w-0">
+                  <div className="space-y-1">
                     <div className="flex items-center justify-between gap-2">
                       <label className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">
                         Пример структуры таблицы
@@ -733,20 +767,20 @@ export function ImportRemaindersDialog({
                 </div>
 
                 {/* Правая колонка: справочники */}
-                <aside className="space-y-2.5 text-xs text-muted-foreground leading-relaxed min-w-0">
-                  <div className="p-2 bg-muted/40 rounded-lg border border-border/60 space-y-1.5">
+                <aside className="space-y-1.5 text-[11px] text-muted-foreground leading-snug min-w-0">
+                  <div className="p-1.5 bg-muted/40 rounded-lg border border-border/60 space-y-1">
                     <span className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider block">
                       Доступные участки
                     </span>
                     <div className="flex flex-wrap gap-1">
                       {seedTargetSections.map((section) => (
-                        <span
+                        <SectionLocationBadge
                           key={section.code}
-                          className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-emerald-50/80 text-emerald-800 border border-emerald-200/80 dark:bg-emerald-950/20 dark:text-emerald-300 dark:border-emerald-900/50"
-                          title={section.code}
-                        >
-                          {section.name}
-                        </span>
+                          sections={importableSections}
+                          sectionId={section.sectionId}
+                          sectionName={section.name}
+                          size="sm"
+                        />
                       ))}
                     </div>
                     <span className="text-[9px] leading-snug block">
@@ -754,7 +788,7 @@ export function ImportRemaindersDialog({
                     </span>
                   </div>
 
-                  <div className="p-2 bg-muted/40 rounded-lg border border-border/60 space-y-1.5">
+                  <div className="p-1.5 bg-muted/40 rounded-lg border border-border/60 space-y-1">
                     <span className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider block">
                       Статусы качества
                     </span>
@@ -774,20 +808,42 @@ export function ImportRemaindersDialog({
                   </div>
 
                   {operations && operations.length > 0 && (
-                    <div className="p-2 bg-muted/40 rounded-lg border border-border/60 space-y-1.5">
+                    <div className="p-1.5 bg-muted/40 rounded-lg border border-border/60 space-y-1 max-h-[220px] overflow-y-auto">
                       <span className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider block">
                         Доступные операции
                       </span>
                       <div className="flex flex-wrap gap-1">
-                        {operations.map((op: ImportOperationStep) => (
-                          <span
-                            key={op.operation_name}
-                            className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-muted text-foreground border border-border/80"
-                            title={`Участок: ${op.section_name}`}
-                          >
-                            {op.operation_name}
-                          </span>
-                        ))}
+                        {operations.map((op: ImportOperationStep) => {
+                          const accentColor = op.op_icon_color ?? op.section_icon_color ?? null;
+                          return (
+                            <span
+                              key={`${op.section_code}-${op.operation_code ?? op.operation_name}`}
+                              className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium leading-5 ${
+                                accentColor ? "" : "bg-muted text-foreground border border-border/80"
+                              }`}
+                              style={
+                                accentColor
+                                  ? {
+                                      backgroundColor: `${accentColor}18`,
+                                      color: accentColor,
+                                    }
+                                  : undefined
+                              }
+                              title={`Участок: ${op.section_name}`}
+                            >
+                              {op.op_icon && op.op_icon_color ? (
+                                <span className="shrink-0" style={{ color: op.op_icon_color }}>
+                                  {renderIcon(op.op_icon, "h-3 w-3")}
+                                </span>
+                              ) : op.section_icon && op.section_icon_color ? (
+                                <span className="shrink-0" style={{ color: op.section_icon_color }}>
+                                  {renderIcon(op.section_icon, "h-3 w-3")}
+                                </span>
+                              ) : null}
+                              {op.operation_name}
+                            </span>
+                          );
+                        })}
                       </div>
                       <span className="text-[9px] leading-snug block">
                         * через запятую в колонке «Операции»
@@ -801,8 +857,9 @@ export function ImportRemaindersDialog({
 
           {/* ═══════════════════════ PREVIEW STEP ═══════════════════════ */}
           {step === "preview" && (
-            <ImportPreview.Layout>
+            <ImportPreview.Layout className="space-y-1.5 min-h-0">
               <ImportPreview.Toolbar
+                className="p-1.5 gap-2"
                 left={
                   <>
                     <ImportPreview.SheetTabs
@@ -812,17 +869,17 @@ export function ImportRemaindersDialog({
                       disabled={importMode === "clipboard"}
                       label={importMode === "clipboard" ? "Источник" : "Лист"}
                     />
-                    <div className="flex items-center gap-1.5">
+                    <div className="flex items-center gap-1">
                       <span className="font-medium text-foreground">Строки</span>
                       <Input
                         value={rowSelection}
                         onChange={(e) => setRowSelection(e.target.value)}
                         placeholder="2-10,12"
-                        className="h-7 w-24 text-xs"
+                        className="h-6 w-20 text-[11px] px-2"
                       />
                     </div>
                     <label
-                      className={`flex items-center gap-1.5 font-medium select-none ${
+                      className={`flex items-center gap-1 font-medium select-none ${
                         Object.keys(targetSectionOverrides).length > 0
                           ? "cursor-not-allowed opacity-50"
                           : "cursor-pointer"
@@ -833,11 +890,26 @@ export function ImportRemaindersDialog({
                         checked={clearExisting}
                         disabled={Object.keys(targetSectionOverrides).length > 0}
                         onChange={(e) => setClearExisting(e.target.checked)}
-                        className="h-3.5 w-3.5 rounded border-input text-primary focus:ring-primary"
+                        className="h-3 w-3 rounded border-input text-primary focus:ring-primary"
                       />
                       <span className="text-destructive font-semibold">Очистить перед импортом</span>
                     </label>
                   </>
+                }
+                right={
+                  previewData ? (
+                    <div className="flex flex-wrap items-center justify-end gap-1 text-[11px] font-semibold">
+                      {previewStatsBadges.map((badge, idx) => (
+                        <Badge
+                          key={idx}
+                          variant="outline"
+                          className={`px-1.5 py-0 text-[10px] leading-5 ${badge.className ?? "bg-background"}`}
+                        >
+                          {badge.label}
+                        </Badge>
+                      ))}
+                    </div>
+                  ) : undefined
                 }
               />
 
@@ -850,56 +922,38 @@ export function ImportRemaindersDialog({
               ) : null}
 
               {previewData ? (
-                <>
-                  <ImportPreview.Stats
-                    badges={[
-                      { label: `Всего строк: ${stats.total}` },
-                      {
-                        label: `Корректных: ${stats.valid} (кол-во: ${stats.qty})`,
-                        className: "text-green-700 border-green-200 bg-green-50/50",
-                      },
-                      ...(stats.invalid > 0
-                        ? [
-                            {
-                              label: `Ошибок: ${stats.invalid}`,
-                              className: "text-red-700 border-red-200 bg-red-50/50",
-                            },
-                          ]
-                        : []),
-                      ...(rowsMissingSection.length > 0
-                        ? [
-                            {
-                              label: `Без участка: ${rowsMissingSection.length}`,
-                              className: "text-amber-700 border-amber-200 bg-amber-50/50",
-                            },
-                          ]
-                        : []),
-                    ]}
-                  />
-                  <ImportPreview.FilterRow
-                    search={searchQuery}
-                    onSearchChange={setSearchQuery}
-                    searchPlaceholder="Поиск по SKU..."
-                    filterSlot={
-                      <Select
-                        value={filterStatus}
-                        onValueChange={(value) => setFilterStatus(value as "all" | "invalid")}
-                      >
-                        <SelectTrigger className="h-7 text-xs w-[120px] font-medium bg-background">
-                          <SelectValue placeholder="Все строки" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="all">Все строки</SelectItem>
-                          <SelectItem value="invalid">Только ошибки</SelectItem>
-                        </SelectContent>
-                      </Select>
-                    }
-                    expansion={expansion}
-                  />
-                </>
+                <ImportPreview.FilterRow
+                  className="shrink-0"
+                  search={searchQuery}
+                  onSearchChange={setSearchQuery}
+                  searchPlaceholder="Поиск по SKU..."
+                  searchClassName="h-6 pl-6 w-36 text-[11px]"
+                  filterSlot={
+                    <Select
+                      value={filterStatus}
+                      onValueChange={(value) => setFilterStatus(value as "all" | "invalid")}
+                    >
+                      <SelectTrigger className="h-6 text-[11px] w-[108px] font-medium bg-background">
+                        <SelectValue placeholder="Все строки" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="all">Все строки</SelectItem>
+                        <SelectItem value="invalid">Только ошибки</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  }
+                  rightSlot={
+                    <ImportRawRows.Toggle
+                      active={expansion.expandAllRaw}
+                      onToggle={() => expansion.setExpandAllRaw(!expansion.expandAllRaw)}
+                      className="h-6 text-[11px] px-2"
+                    />
+                  }
+                />
               ) : null}
 
               <ImportPreview.TableFrame
+                className="rounded-lg min-h-0"
                 loading={previewLoading}
                 isEmpty={!previewLoading && filteredItems.length === 0}
                 onResetFilters={
@@ -928,11 +982,11 @@ export function ImportRemaindersDialog({
                   )
                 }
               >
-                <table className="w-full text-xs text-left border-collapse">
+                <table className="w-full text-[11px] text-left border-collapse">
                     <thead className="border-b bg-muted/50 sticky top-0 font-semibold text-muted-foreground z-10">
                       <tr>
-                        <th className="p-2.5 w-10" />
-                        <th className="p-2.5 w-14 text-left">
+                        <th className="px-1 py-1 w-7" />
+                        <th className="px-1.5 py-1 w-10 text-left">
                           <SortableFilterHeader
                             field="row"
                             label="#"
@@ -943,7 +997,7 @@ export function ImportRemaindersDialog({
                             onFilterChange={handleColumnFilterChange}
                           />
                         </th>
-                        <th className="p-2.5 w-32">
+                        <th className="px-1.5 py-1 w-24">
                           <SortableFilterHeader
                             field="sku"
                             label="Артикул"
@@ -954,7 +1008,7 @@ export function ImportRemaindersDialog({
                             onFilterChange={handleColumnFilterChange}
                           />
                         </th>
-                        <th className="p-2.5 w-20">
+                        <th className="px-1.5 py-1 w-14">
                           <SortableFilterHeader
                             field="quantity"
                             label="Кол-во"
@@ -965,7 +1019,7 @@ export function ImportRemaindersDialog({
                             onFilterChange={handleColumnFilterChange}
                           />
                         </th>
-                        <th className="p-2.5 min-w-[140px]">
+                        <th className="px-1.5 py-1 min-w-[160px]">
                           <SortableFilterHeader
                             field="operations"
                             label="Операции"
@@ -976,10 +1030,10 @@ export function ImportRemaindersDialog({
                             onFilterChange={handleColumnFilterChange}
                           />
                         </th>
-                        <th className="p-2.5 w-28">
+                        <th className="px-1.5 py-1 w-24">
                           <SortableFilterHeader
                             field="quality"
-                            label="Статус качества"
+                            label="Качество"
                             currentSorts={sortConfigs}
                             onSortChange={handleSortChange}
                             values={uniqueValues.quality}
@@ -987,7 +1041,7 @@ export function ImportRemaindersDialog({
                             onFilterChange={handleColumnFilterChange}
                           />
                         </th>
-                        <th className="p-2.5 min-w-[200px]">
+                        <th className="px-1.5 py-1 min-w-[150px]">
                           <SortableFilterHeader
                             field="section"
                             label="Участок"
@@ -998,10 +1052,10 @@ export function ImportRemaindersDialog({
                             onFilterChange={handleColumnFilterChange}
                           />
                         </th>
-                        <th className="p-2.5 w-72">
+                        <th className="px-1.5 py-1 min-w-[140px]">
                           <SortableFilterHeader
                             field="errors"
-                            label="Ошибки валидации"
+                            label="Ошибки"
                             currentSorts={sortConfigs}
                             onSortChange={handleSortChange}
                             values={uniqueValues.errors}
@@ -1025,25 +1079,30 @@ export function ImportRemaindersDialog({
                                 hasErrors ? "bg-red-50/50 dark:bg-red-950/5" : ""
                               }`}
                             >
-                              <td className="p-2.5 text-left">
+                              <td className="px-1 py-0.5 text-left">
                                 <ImportRawRows.Chevron expanded={isExpanded} hasContent={hasRaw} />
                               </td>
-                              <td className="p-2.5 text-left font-bold text-muted-foreground">
-                                #{item.source_row_number}
+                              <td className="px-1.5 py-0.5 text-left font-bold text-muted-foreground tabular-nums">
+                                {item.source_row_number}
                               </td>
-                              <td className="p-2.5 font-mono font-semibold">{item.sku}</td>
-                              <td className="p-2.5 font-semibold text-foreground">
+                              <td className="px-1.5 py-0.5 font-mono font-semibold">{item.sku}</td>
+                              <td className="px-1.5 py-0.5 font-semibold text-foreground tabular-nums">
                                 {item.quantity != null ? item.quantity : "—"}
                               </td>
-                              <td className="p-2.5 max-w-[280px]">
+                              <td className="px-1.5 py-0.5 min-w-[160px]">
                                 {item.completed_stages && item.completed_stages.length > 0 ? (
-                                  <RouteStepsDisplay steps={item.completed_stages} compact />
+                                  <RouteStepsDisplay
+                                    steps={item.completed_stages}
+                                    referenceOps={operations}
+                                    compact
+                                    size="sm"
+                                  />
                                 ) : (
                                   <span className="text-muted-foreground">—</span>
                                 )}
                               </td>
                               <td
-                                className="p-2.5"
+                                className="px-1.5 py-0.5"
                                 onClick={(e) => e.stopPropagation()}
                               >
                                 <Select
@@ -1056,7 +1115,7 @@ export function ImportRemaindersDialog({
                                   }
                                 >
                                   <SelectTrigger
-                                    className={`h-7 w-full min-w-[120px] text-[11px] font-semibold border ${qualityBadgeClass(
+                                    className={`h-6 w-full min-w-[96px] text-[10px] font-semibold border px-2 ${qualityBadgeClass(
                                       getEffectiveQualityState(item, qualityStateOverrides),
                                     )}`}
                                   >
@@ -1072,20 +1131,17 @@ export function ImportRemaindersDialog({
                                 </Select>
                               </td>
                               <td
-                                className="p-2.5"
+                                className="px-1.5 py-0.5"
                                 onClick={(e) => e.stopPropagation()}
                               >
                                 {hasSectionInFile(item) ? (
-                                  <Badge
-                                    variant="outline"
-                                    className={`font-semibold px-2 py-0.5 rounded text-[10px] whitespace-nowrap ${
-                                      item.target_section_id
-                                        ? "bg-emerald-50/50 text-emerald-700 border-emerald-200 dark:bg-emerald-950/20 dark:text-emerald-400 dark:border-emerald-900/50"
-                                        : "bg-amber-50/50 text-amber-700 border-amber-200"
-                                    }`}
-                                  >
-                                    {item.target_section_name}
-                                  </Badge>
+                                  <SectionLocationBadge
+                                    sections={importableSections}
+                                    sectionId={item.target_section_id}
+                                    sectionName={item.target_section_name}
+                                    invalid={!item.target_section_id}
+                                    size="sm"
+                                  />
                                 ) : (
                                   <SectionSelect
                                     sections={importableSections}
@@ -1098,11 +1154,11 @@ export function ImportRemaindersDialog({
                                       handleRowSectionChange(item.source_row_number, sectionId)
                                     }
                                     placeholder="Выберите участок"
-                                    className="h-7 w-full min-w-[180px] text-[11px]"
+                                    className="h-6 w-full min-w-[140px] text-[10px]"
                                   />
                                 )}
                               </td>
-                              <td className="p-2.5 text-destructive font-medium leading-relaxed whitespace-pre-line">
+                              <td className="px-1.5 py-0.5 text-destructive font-medium leading-snug whitespace-pre-line">
                                 {item.errors.map(translateImportError).join(", ") || "—"}
                               </td>
                             </tr>
@@ -1153,7 +1209,7 @@ export function ImportRemaindersDialog({
         </div>
 
         {/* ═══════════════════════ FOOTER ═══════════════════════════════ */}
-        <DialogFooter className="shrink-0 pt-2 border-t flex items-center justify-end gap-2">
+        <DialogFooter className="shrink-0 pt-1.5 border-t flex items-center justify-end gap-1.5">
           {step === "upload" && (
             <Button variant="outline" onClick={handleClose}>
               Отмена

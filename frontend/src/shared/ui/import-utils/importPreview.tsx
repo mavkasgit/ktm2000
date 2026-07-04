@@ -116,6 +116,7 @@ export type ImportPreviewFilterRowProps = {
   search?: string;
   onSearchChange?: (value: string) => void;
   searchPlaceholder?: string;
+  searchClassName?: string;
   filterSlot?: React.ReactNode;
   expansion?: ImportRowExpansion;
   rightSlot?: React.ReactNode;
@@ -126,6 +127,7 @@ export function ImportPreviewFilterRow({
   search,
   onSearchChange,
   searchPlaceholder = "Поиск...",
+  searchClassName,
   filterSlot,
   expansion,
   rightSlot,
@@ -147,7 +149,7 @@ export function ImportPreviewFilterRow({
               value={search ?? ""}
               onChange={(e) => onSearchChange!(e.target.value)}
               placeholder={searchPlaceholder}
-              className="h-7 pl-7 w-48 text-xs"
+              className={cn("h-7 pl-7 w-48 text-xs", searchClassName)}
             />
           </div>
         ) : null}

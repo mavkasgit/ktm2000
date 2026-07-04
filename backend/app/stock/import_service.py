@@ -611,7 +611,8 @@ async def resolve_operations_dictionary(db: AsyncSession) -> list[dict]:
     """Return the dictionary of significant production operations.
 
     Returns a list of dicts in ``RouteStepsDisplay`` format:
-    ``[{sequence, section_code, section_name, operation_code, operation_name, is_significant}]``
+    ``[{sequence, section_code, section_name, section_icon, section_icon_color,
+    operation_code, operation_name, op_icon, op_icon_color, is_significant}]``
     Only ``is_significant=True AND operation_type='production'`` are included.
     ``sequence`` is the route-level section order (``section.sort_order``), so
     operations from different sections never appear as «совмещено» in the UI.
@@ -632,8 +633,12 @@ async def resolve_operations_dictionary(db: AsyncSession) -> list[dict]:
             "sequence": section.sort_order,
             "section_code": section.code,
             "section_name": section.name,
+            "section_icon": section.icon,
+            "section_icon_color": section.icon_color,
             "operation_code": so.operation_code,
             "operation_name": so.operation_name,
+            "op_icon": so.icon,
+            "op_icon_color": so.icon_color,
             "is_significant": so.is_significant,
         }
         for so, section in result.all()

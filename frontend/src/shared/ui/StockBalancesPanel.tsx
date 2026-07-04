@@ -245,7 +245,7 @@ export function StockBalancesPanel({
                         </td>
                         <td className="p-2 max-w-[280px]">
                           {b.completed_stages && b.completed_stages.length > 0 ? (
-                            <RouteStepsDisplay steps={b.completed_stages} compact />
+                            <RouteStepsDisplay steps={b.completed_stages} compact showIcons={false} />
                           ) : (
                             <span className="text-xs text-muted-foreground">—</span>
                           )}
