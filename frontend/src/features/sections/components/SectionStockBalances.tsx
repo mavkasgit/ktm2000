@@ -45,6 +45,7 @@ export function SectionStockBalances({ sectionId, sectionName }: SectionStockBal
         balances={balances}
         isLoading={isLoading}
         searchQuery={searchQuery}
+        onSearchQueryReset={() => setSearchQuery("")}
         onSelectProduct={setSelectedProductId}
         onShowHistory={(id, sku) => setHistoryProduct({ id, sku: sku ?? null })}
         hideLocationColumn

@@ -42,7 +42,7 @@ export function SortableHeader<Field extends string>({
       data-sort-order={activeSort?.order ?? "none"}
       data-sort-priority={priority ?? undefined}
       className={cn(
-        "inline-flex items-center gap-1 text-left font-medium text-xs tracking-normal text-muted-foreground hover:text-foreground transition-colors cursor-pointer w-full select-none",
+        "inline-flex items-center gap-1 text-left font-medium text-xs tracking-normal text-muted-foreground hover:text-foreground transition-colors cursor-pointer select-none",
         activeSort && "text-foreground",
         className,
       )}

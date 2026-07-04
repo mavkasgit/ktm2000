@@ -1,14 +1,13 @@
-import { useCallback, useMemo, useState } from "react";
-import { Badge, SortableFilterHeader } from "@/shared/ui";
+import { useMemo } from "react";
+import { Badge, SortableFilterHeader, TableCornerResetCell, TableCornerResetHeader } from "@/shared/ui";
+import { useFilterableTable } from "@/shared/hooks/useFilterableTable";
 import { fmtQty } from "@/shared/utils/fmtQty";
 import { type ProductionPlanningStage, type StatusHistoryEntry } from "@/shared/api/productionPlans";
 import { translateStatusHistoryReason } from "@/features/planning/lib/plan-labels";
 import {
   useTableQueryEngine,
-  type SortConfig,
   type ColumnSortDef,
 } from "@/shared/hooks/useTableQueryEngine";
-import { nextMultiSortConfigs } from "@/shared/lib/multiSort";
 
 const positionStatusLabels: Record<string, string> = {
   draft: "Черновик",
@@ -124,21 +123,19 @@ function getCellValue(row: ExecutionEventRow, field: EventSortField): string {
 }
 
 export function ExecutionEventsTable({ stages, statusHistory }: ExecutionEventsTableProps) {
-  const [sortConfigs, setSortConfigs] = useState<SortConfig<EventSortField>[]>([]);
-  const [columnFilters, setColumnFilters] = useState<Partial<Record<EventSortField, Set<string>>>>({});
+  const {
+    bindColumn,
+    buildFilterPredicate,
+    sortConfigs,
+    handleSort: handleSortChange,
+    hasActiveFilters,
+    resetAll: handleResetFilters,
+  } = useFilterableTable<EventSortField>();
 
   const eventRows = useMemo(
     () => buildEventRows(stages, statusHistory),
     [stages, statusHistory],
   );
-
-  const handleSortChange = useCallback((field: EventSortField) => {
-    setSortConfigs((prev) => nextMultiSortConfigs(prev, field));
-  }, []);
-
-  const handleColumnFilterChange = useCallback((field: EventSortField, selected: Set<string>) => {
-    setColumnFilters((prev) => ({ ...prev, [field]: selected }));
-  }, []);
 
   const sortDefs = useMemo((): ColumnSortDef<ExecutionEventRow, EventSortField>[] => [
     {
@@ -155,19 +152,10 @@ export function ExecutionEventsTable({ stages, statusHistory }: ExecutionEventsT
     },
   ], []);
 
-  const filterPredicate = useMemo(() => {
-    const hasFilters = Object.values(columnFilters).some((selected) => selected && selected.size > 0);
-    if (!hasFilters) return null;
-    return (row: ExecutionEventRow) => {
-      for (const [field, selected] of Object.entries(columnFilters)) {
-        if (selected && selected.size > 0) {
-          const cellValue = getCellValue(row, field as EventSortField);
-          if (!selected.has(cellValue)) return false;
-        }
-      }
-      return true;
-    };
-  }, [columnFilters]);
+  const filterPredicate = useMemo(
+    () => buildFilterPredicate(getCellValue),
+    [buildFilterPredicate],
+  );
 
   const uniqueValues = useMemo(
     () => ({
@@ -222,8 +210,7 @@ export function ExecutionEventsTable({ stages, statusHistory }: ExecutionEventsT
                 currentSorts={sortConfigs}
                 onSortChange={handleSortChange}
                 values={uniqueValues.date}
-                selectedValues={columnFilters.date ?? new Set()}
-                onFilterChange={handleColumnFilterChange}
+                {...bindColumn("date")}
               />
             </th>
             <th className="text-left p-2">
@@ -233,8 +220,7 @@ export function ExecutionEventsTable({ stages, statusHistory }: ExecutionEventsT
                 currentSorts={sortConfigs}
                 onSortChange={handleSortChange}
                 values={uniqueValues.type}
-                selectedValues={columnFilters.type ?? new Set()}
-                onFilterChange={handleColumnFilterChange}
+                {...bindColumn("type")}
               />
             </th>
             <th className="text-left p-2">
@@ -244,8 +230,7 @@ export function ExecutionEventsTable({ stages, statusHistory }: ExecutionEventsT
                 currentSorts={sortConfigs}
                 onSortChange={handleSortChange}
                 values={uniqueValues.event}
-                selectedValues={columnFilters.event ?? new Set()}
-                onFilterChange={handleColumnFilterChange}
+                {...bindColumn("event")}
               />
             </th>
             <th className="text-left p-2">
@@ -255,8 +240,7 @@ export function ExecutionEventsTable({ stages, statusHistory }: ExecutionEventsT
                 currentSorts={sortConfigs}
                 onSortChange={handleSortChange}
                 values={uniqueValues.from}
-                selectedValues={columnFilters.from ?? new Set()}
-                onFilterChange={handleColumnFilterChange}
+                {...bindColumn("from")}
               />
             </th>
             <th className="text-left p-2">
@@ -266,8 +250,7 @@ export function ExecutionEventsTable({ stages, statusHistory }: ExecutionEventsT
                 currentSorts={sortConfigs}
                 onSortChange={handleSortChange}
                 values={uniqueValues.to}
-                selectedValues={columnFilters.to ?? new Set()}
-                onFilterChange={handleColumnFilterChange}
+                {...bindColumn("to")}
               />
             </th>
             <th className="text-left p-2">
@@ -277,11 +260,16 @@ export function ExecutionEventsTable({ stages, statusHistory }: ExecutionEventsT
                 currentSorts={sortConfigs}
                 onSortChange={handleSortChange}
                 values={uniqueValues.quantity}
-                selectedValues={columnFilters.quantity ?? new Set()}
-                onFilterChange={handleColumnFilterChange}
+                {...bindColumn("quantity")}
               />
             </th>
-            <th className="text-left p-2">Детали</th>
+            <th className="text-left p-2 text-xs font-medium text-muted-foreground">
+              Детали
+            </th>
+            <TableCornerResetHeader
+              hasActiveFilters={hasActiveFilters}
+              onReset={handleResetFilters}
+            />
           </tr>
         </thead>
         <tbody>
@@ -300,6 +288,7 @@ export function ExecutionEventsTable({ stages, statusHistory }: ExecutionEventsT
               <td className="p-2 align-top">{row.to_section_name}</td>
               <td className="p-2 align-top">{row.quantity === "—" ? "—" : `${row.quantity} шт.`}</td>
               <td className="p-2 align-top text-muted-foreground text-xs">{row.details}</td>
+              <TableCornerResetCell />
             </tr>
           ))}
         </tbody>

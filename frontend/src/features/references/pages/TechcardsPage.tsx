@@ -6,6 +6,8 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "
 import { AlertDialog, AlertDialogContent, AlertDialogHeader, AlertDialogTitle, AlertDialogDescription, AlertDialogFooter, AlertDialogCancel, AlertDialogAction } from "@/shared/ui/AlertDialog";
 import { ProductSearchMulti } from "../components/ProductSearchMulti";
 import { SortableFilterHeader } from "@/shared/ui/SortableFilterHeader";
+import { TableCornerResetCell, TableCornerResetHeader } from "@/shared/ui";
+import { useSortableColumnFilters } from "@/shared/hooks/useSortableColumnFilters";
 import { toast } from "@/shared/ui/use-toast";
 import { getErrorMessage } from "@/shared/api/client";
 import { usePermission } from "@/features/auth/hooks/usePermission";
@@ -28,14 +30,19 @@ export function TechcardsPage() {
   const [pageSearch, setPageSearch] = useState("");
   const [pairedSorts, setPairedSorts] = useState<Array<{ field: "sku" | "quantity"; order: "asc" | "desc" }>>([]);
   const [standardSorts, setStandardSorts] = useState<Array<{ field: "sku" | "quantity"; order: "asc" | "desc" }>>([]);
-  const [pairedFilters, setPairedFilters] = useState<Record<"sku" | "quantity", Set<string>>>({
-    sku: new Set(),
-    quantity: new Set(),
-  });
-  const [standardFilters, setStandardFilters] = useState<Record<"sku" | "quantity", Set<string>>>({
-    sku: new Set(),
-    quantity: new Set(),
-  });
+  type TechcardFilterField = "sku" | "quantity";
+  const {
+    bindColumn: bindPairedColumn,
+    buildFilterPredicate: buildPairedFilterPredicate,
+    hasActiveColumnFilters: hasPairedColumnFilters,
+    resetColumnFilters: resetPairedColumnFilters,
+  } = useSortableColumnFilters<TechcardFilterField>();
+  const {
+    bindColumn: bindStandardColumn,
+    buildFilterPredicate: buildStandardFilterPredicate,
+    hasActiveColumnFilters: hasStandardColumnFilters,
+    resetColumnFilters: resetStandardColumnFilters,
+  } = useSortableColumnFilters<TechcardFilterField>();
   // Bulk dialog
   const [bulkDialogOpen, setBulkDialogOpen] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
@@ -100,6 +107,34 @@ export function TechcardsPage() {
     };
   }, [techcards, rawItems]);
 
+  const getPairedCellValue = useCallback((card: any, field: TechcardFilterField): string => {
+    if (field === "sku") {
+      const { skuA, skuB } = resolvePairSkus(card);
+      return `${skuA} + ${skuB}`;
+    }
+    const qtyA = card.quantity_a_per_item ?? 1;
+    const qtyB = card.quantity_b_per_item ?? 1;
+    return `${card.quantity_total ?? "—"} шт. (${qtyA}/${qtyB} на подвес)`;
+  }, [resolvePairSkus]);
+
+  const getStandardCellValue = useCallback((card: any, field: TechcardFilterField): string => {
+    if (field === "sku") {
+      const product = rawItems.find((p) => Number(p.id) === card.product_id);
+      return product?.sku ?? String(card.product_id);
+    }
+    return String(card.quantity_total ?? "—");
+  }, [rawItems]);
+
+  const pairedFilterPredicate = useMemo(
+    () => buildPairedFilterPredicate(getPairedCellValue),
+    [buildPairedFilterPredicate, getPairedCellValue],
+  );
+
+  const standardFilterPredicate = useMemo(
+    () => buildStandardFilterPredicate(getStandardCellValue),
+    [buildStandardFilterPredicate, getStandardCellValue],
+  );
+
   // Derived data
   const pairedTechcards = useMemo(() => {
     let filtered = techcards.filter((t: any) => t.product_id === null && t.processing_type === "paired_processing");
@@ -110,19 +145,8 @@ export function TechcardsPage() {
         return skuA.toLowerCase().includes(q) || skuB.toLowerCase().includes(q);
       });
     }
-    if (pairedFilters.sku.size > 0) {
-      filtered = filtered.filter((card) => {
-        const { skuA, skuB } = resolvePairSkus(card);
-        return pairedFilters.sku.has(`${skuA} + ${skuB}`);
-      });
-    }
-    if (pairedFilters.quantity.size > 0) {
-      filtered = filtered.filter((card) => {
-        const qtyA = card.quantity_a_per_item ?? 1;
-        const qtyB = card.quantity_b_per_item ?? 1;
-        const label = `${card.quantity_total ?? "—"} шт. (${qtyA}/${qtyB} на подвес)`;
-        return pairedFilters.quantity.has(label);
-      });
+    if (pairedFilterPredicate) {
+      filtered = filtered.filter(pairedFilterPredicate);
     }
     const activeSort = pairedSorts[0];
     if (activeSort) {
@@ -148,7 +172,7 @@ export function TechcardsPage() {
       });
     }
     return filtered;
-  }, [techcards, pageSearch, pairedFilters, pairedSorts, resolvePairSkus]);
+  }, [techcards, pageSearch, pairedFilterPredicate, pairedSorts, resolvePairSkus]);
 
   const oneToOneTechcards = useMemo(() => {
     let filtered = techcards.filter((t: any) => t.product_id !== null);
@@ -159,18 +183,8 @@ export function TechcardsPage() {
         return String(product?.sku ?? "").toLowerCase().includes(q);
       });
     }
-    if (standardFilters.sku.size > 0) {
-      filtered = filtered.filter((card) => {
-        const product = rawItems.find((p) => Number(p.id) === card.product_id);
-        const label = product?.sku ?? String(card.product_id);
-        return standardFilters.sku.has(label);
-      });
-    }
-    if (standardFilters.quantity.size > 0) {
-      filtered = filtered.filter((card) => {
-        const label = String(card.quantity_total ?? "—");
-        return standardFilters.quantity.has(label);
-      });
+    if (standardFilterPredicate) {
+      filtered = filtered.filter(standardFilterPredicate);
     }
     const activeSort = standardSorts[0];
     if (activeSort) {
@@ -196,7 +210,7 @@ export function TechcardsPage() {
       });
     }
     return filtered;
-  }, [techcards, pageSearch, standardFilters, standardSorts, rawItems]);
+  }, [techcards, pageSearch, standardFilterPredicate, standardSorts, rawItems]);
 
   const techcardByProductId = useMemo(() => {
     const map = new Map<number, any>();
@@ -471,15 +485,6 @@ export function TechcardsPage() {
             </button>
           )}
         </div>
-        <Button variant="outline" size="sm" onClick={() => {
-          setPageSearch("");
-          setPairedSorts([]);
-          setStandardSorts([]);
-          setPairedFilters({ sku: new Set(), quantity: new Set() });
-          setStandardFilters({ sku: new Set(), quantity: new Set() });
-        }}>
-          Очистить
-        </Button>
       </div>
 
       {/* Paired techcards table */}
@@ -496,8 +501,7 @@ export function TechcardsPage() {
                     currentSorts={pairedSorts}
                     onSortChange={handlePairedSort}
                     values={pairedUniqueValues.sku}
-                    selectedValues={pairedFilters.sku}
-                    onFilterChange={(field, selected) => setPairedFilters(prev => ({ ...prev, [field]: selected }))}
+                    {...bindPairedColumn("sku")}
                   />
                 </th>
                 <th style={{ textAlign: "left", padding: 8, width: 250, minWidth: 250 }}>
@@ -507,11 +511,22 @@ export function TechcardsPage() {
                     currentSorts={pairedSorts}
                     onSortChange={handlePairedSort}
                     values={pairedUniqueValues.quantity}
-                    selectedValues={pairedFilters.quantity}
-                    onFilterChange={(field, selected) => setPairedFilters(prev => ({ ...prev, [field]: selected }))}
+                    {...bindPairedColumn("quantity")}
                   />
                 </th>
-                {!isReadOnly && <th style={{ textAlign: "left", padding: 8, width: 80 }}></th>}
+                <th style={{ textAlign: "right", padding: 4, width: 40 }} />
+                <TableCornerResetHeader
+                  hasActiveFilters={
+                    pageSearch.trim().length > 0 ||
+                    pairedSorts.length > 0 ||
+                    hasPairedColumnFilters
+                  }
+                  onReset={() => {
+                    setPageSearch("");
+                    setPairedSorts([]);
+                    resetPairedColumnFilters();
+                  }}
+                />
               </tr>
             </thead>
             <tbody>
@@ -523,18 +538,19 @@ export function TechcardsPage() {
                   <tr key={card.id} className="cursor-pointer hover:bg-muted/50" onClick={() => openView(card.id)}>
                     <td style={{ padding: 8, fontWeight: 600, borderTop: "1px solid #f3f4f6" }}>{cardSkuA} + {cardSkuB}</td>
                     <td style={{ padding: 8, borderTop: "1px solid #f3f4f6" }}>{card.quantity_total ?? "—"} шт. ({qtyA}/{qtyB} на подвес)</td>
-                    {!isReadOnly && (
-                      <td style={{ padding: 8, borderTop: "1px solid #f3f4f6" }}>
+                    <td style={{ padding: 8, borderTop: "1px solid #f3f4f6", textAlign: "right" }}>
+                      {!isReadOnly && (
                         <button type="button" onClick={(e) => { e.stopPropagation(); confirmDelete({ type: "techcard", id: card.id }); }} className="text-destructive hover:text-destructive/80">
                           <Trash2 className="h-4 w-4" />
                         </button>
-                      </td>
-                    )}
+                      )}
+                    </td>
+                    <TableCornerResetCell />
                   </tr>
                 );
               })}
               {pairedTechcards.length === 0 && (
-                <tr><td colSpan={isReadOnly ? 2 : 3} style={{ padding: 16, textAlign: "center", color: "#9ca3af" }}>Нет парных техкарт</td></tr>
+                <tr><td colSpan={4} style={{ padding: 16, textAlign: "center", color: "#9ca3af" }}>Нет парных техкарт</td></tr>
               )}
             </tbody>
           </table>
@@ -555,8 +571,7 @@ export function TechcardsPage() {
                     currentSorts={standardSorts}
                     onSortChange={handleStandardSort}
                     values={standardUniqueValues.sku}
-                    selectedValues={standardFilters.sku}
-                    onFilterChange={(field, selected) => setStandardFilters(prev => ({ ...prev, [field]: selected }))}
+                    {...bindStandardColumn("sku")}
                   />
                 </th>
                 <th style={{ textAlign: "left", padding: 8, width: 250, minWidth: 250 }}>
@@ -566,11 +581,22 @@ export function TechcardsPage() {
                     currentSorts={standardSorts}
                     onSortChange={handleStandardSort}
                     values={standardUniqueValues.quantity}
-                    selectedValues={standardFilters.quantity}
-                    onFilterChange={(field, selected) => setStandardFilters(prev => ({ ...prev, [field]: selected }))}
+                    {...bindStandardColumn("quantity")}
                   />
                 </th>
-                {!isReadOnly && <th style={{ textAlign: "left", padding: 8, width: 80 }}></th>}
+                <th style={{ textAlign: "right", padding: 4, width: 40 }} />
+                <TableCornerResetHeader
+                  hasActiveFilters={
+                    pageSearch.trim().length > 0 ||
+                    standardSorts.length > 0 ||
+                    hasStandardColumnFilters
+                  }
+                  onReset={() => {
+                    setPageSearch("");
+                    setStandardSorts([]);
+                    resetStandardColumnFilters();
+                  }}
+                />
               </tr>
             </thead>
             <tbody>
@@ -580,18 +606,19 @@ export function TechcardsPage() {
                    <tr key={card.id} className="cursor-pointer hover:bg-muted/50" onClick={() => openView(card.id)}>
                     <td style={{ padding: 8, fontWeight: 600, borderTop: "1px solid #f3f4f6" }}>{product?.sku ?? card.product_id}</td>
                     <td style={{ padding: 8, borderTop: "1px solid #f3f4f6" }}>{card.quantity_total ?? "—"}</td>
-                    {!isReadOnly && (
-                      <td style={{ padding: 8, borderTop: "1px solid #f3f4f6" }}>
+                    <td style={{ padding: 8, borderTop: "1px solid #f3f4f6", textAlign: "right" }}>
+                      {!isReadOnly && (
                         <button type="button" onClick={(e) => { e.stopPropagation(); confirmDelete({ type: "techcard", id: card.id }); }} className="text-destructive hover:text-destructive/80">
                           <Trash2 className="h-4 w-4" />
                         </button>
-                      </td>
-                    )}
+                      )}
+                    </td>
+                    <TableCornerResetCell />
                   </tr>
                 );
               })}
               {oneToOneTechcards.length === 0 && (
-                <tr><td colSpan={isReadOnly ? 2 : 3} style={{ padding: 16, textAlign: "center", color: "#9ca3af" }}>Нет стандартных техкарт</td></tr>
+                <tr><td colSpan={4} style={{ padding: 16, textAlign: "center", color: "#9ca3af" }}>Нет стандартных техкарт</td></tr>
               )}
             </tbody>
           </table>

@@ -33,7 +33,12 @@ import {
   AlertDialogDescription,
   AlertDialogAction,
   AlertDialogCancel,
+  SortableFilterHeader,
+  TableCornerResetCell,
+  TableCornerResetHeader,
 } from "@/shared/ui";
+import { useFilterableTable } from "@/shared/hooks/useFilterableTable";
+import { useTableQueryEngine, type ColumnSortDef } from "@/shared/hooks/useTableQueryEngine";
 import { getSpgList } from "@/shared/api/spg";
 import {
   cancelTransfer,
@@ -102,6 +107,58 @@ function statusBadgeLabel(status: string): string {
 function statusBadgeVariant(status: string): StatusBadgeVariant {
   if (status === "cancelled") return "destructive";
   return "outline";
+}
+
+type ReadySortField = "taskId" | "sku" | "stage" | "transferableQty" | "next";
+
+function getReadyCellValue(task: ReadyToTransferTask, field: ReadySortField): string {
+  switch (field) {
+    case "taskId":
+      return String(task.task_id);
+    case "sku":
+      return task.product_sku ?? "—";
+    case "stage":
+      return task.operation_name ?? "—";
+    case "transferableQty":
+      return fmtQty(task.transferable_quantity);
+    case "next":
+      return task.has_next_step
+        ? `${task.next_operation_name ?? "—"} / ${task.next_section_code ?? "—"}`
+        : "Финальный";
+  }
+}
+
+type HistorySortField = "from" | "to" | "sku" | "quantity" | "status";
+
+function getHistoryStatusLabel(
+  transfer: IncomingTransfer,
+  sectionIdsInSpg: Set<number>,
+): string {
+  const isIncoming = sectionIdsInSpg.has(transfer.to_section_id);
+  const direction = isIncoming ? "Входящая" : "Исходящая";
+  if (transfer.status === "cancelled") return `${direction} / Аннулирована`;
+  if (transfer.status === "sent") return `${direction} / Отправлена`;
+  if (transfer.status === "partially_accepted") return `${direction} / Частично принята`;
+  return `${direction} / Принята`;
+}
+
+function getHistoryCellValue(
+  transfer: IncomingTransfer,
+  field: HistorySortField,
+  sectionIdsInSpg: Set<number>,
+): string {
+  switch (field) {
+    case "from":
+      return `${transfer.from_section_name} / ${transfer.from_operation_name ?? "—"}`;
+    case "to":
+      return `${transfer.to_section_name} / ${transfer.to_operation_name ?? "—"}`;
+    case "sku":
+      return transfer.product_sku;
+    case "quantity":
+      return fmtQty(transfer.sent_quantity);
+    case "status":
+      return getHistoryStatusLabel(transfer, sectionIdsInSpg);
+  }
 }
 
 interface ReadyTransferRowProps {
@@ -257,6 +314,7 @@ function ReadyTransferRow({
           </div>
         </TableCell>
       )}
+      <TableCornerResetCell />
     </TableRow>
   );
 }
@@ -327,6 +385,105 @@ export function TransfersPage() {
 
   const readyItems = readyData?.items ?? [];
   const historyItems = historyData?.transfers ?? [];
+
+  const {
+    bindColumn: bindReadyColumn,
+    buildFilterPredicate: buildReadyFilterPredicate,
+    sortConfigs: readySortConfigs,
+    handleSort: handleReadySort,
+    hasActiveFilters: hasReadyFiltersActive,
+    resetAll: resetReadyFilters,
+  } = useFilterableTable<ReadySortField>();
+
+  const {
+    bindColumn: bindHistoryColumn,
+    buildFilterPredicate: buildHistoryFilterPredicate,
+    sortConfigs: historySortConfigs,
+    handleSort: handleHistorySort,
+    hasActiveFilters: hasHistoryFiltersActive,
+    resetAll: resetHistoryFilters,
+  } = useFilterableTable<HistorySortField>();
+
+  const readyFilterPredicate = useMemo(
+    () => buildReadyFilterPredicate(getReadyCellValue),
+    [buildReadyFilterPredicate],
+  );
+
+  const readySortDefs = useMemo((): ColumnSortDef<ReadyToTransferTask, ReadySortField>[] => [
+    { field: "taskId", getSortValue: (t) => t.task_id },
+    { field: "sku", getSortValue: (t) => t.product_sku ?? "" },
+    { field: "stage", getSortValue: (t) => t.operation_name ?? "" },
+    { field: "transferableQty", getSortValue: (t) => parseFloat(t.transferable_quantity) || 0 },
+    { field: "next", getSortValue: (t) => t.next_operation_name ?? "" },
+  ], []);
+
+  const readyUniqueValues = useMemo(
+    () => ({
+      taskId: [...new Set(readyItems.map((t) => String(t.task_id)))].sort((a, b) => Number(a) - Number(b)),
+      sku: [...new Set(readyItems.map((t) => t.product_sku ?? "—"))].sort(),
+      stage: [...new Set(readyItems.map((t) => t.operation_name ?? "—"))].sort(),
+      transferableQty: [...new Set(readyItems.map((t) => fmtQty(t.transferable_quantity)))].sort(
+        (a, b) => parseFloat(a) - parseFloat(b),
+      ),
+      next: [...new Set(readyItems.map((t) => getReadyCellValue(t, "next")))].sort(),
+    }),
+    [readyItems],
+  );
+
+  const { rows: filteredReadyItems } = useTableQueryEngine({
+    rows: readyItems,
+    getId: (t) => t.task_id,
+    searchQuery: "",
+    filterPredicate: readyFilterPredicate,
+    sortConfigs: readySortConfigs,
+    sortDefs: readySortDefs,
+  });
+
+  const historySectionIds = useMemo(() => {
+    if (showAllSpgs) return allSectionIds;
+    return new Set(spgs?.find((s) => s.id === activeSpgId)?.sections.map((sec) => sec.section_id) ?? []);
+  }, [showAllSpgs, allSectionIds, spgs, activeSpgId]);
+
+  const getHistoryCell = useCallback(
+    (transfer: IncomingTransfer, field: HistorySortField) =>
+      getHistoryCellValue(transfer, field, historySectionIds),
+    [historySectionIds],
+  );
+
+  const historyFilterPredicate = useMemo(
+    () => buildHistoryFilterPredicate(getHistoryCell),
+    [buildHistoryFilterPredicate, getHistoryCell],
+  );
+
+  const historySortDefs = useMemo((): ColumnSortDef<IncomingTransfer, HistorySortField>[] => [
+    { field: "from", getSortValue: (t) => t.from_section_name },
+    { field: "to", getSortValue: (t) => t.to_section_name },
+    { field: "sku", getSortValue: (t) => t.product_sku },
+    { field: "quantity", getSortValue: (t) => parseFloat(t.sent_quantity) || 0 },
+    { field: "status", getSortValue: (t) => getHistoryStatusLabel(t, historySectionIds) },
+  ], [historySectionIds]);
+
+  const historyUniqueValues = useMemo(
+    () => ({
+      from: [...new Set(historyItems.map((t) => getHistoryCellValue(t, "from", historySectionIds)))].sort(),
+      to: [...new Set(historyItems.map((t) => getHistoryCellValue(t, "to", historySectionIds)))].sort(),
+      sku: [...new Set(historyItems.map((t) => t.product_sku))].sort(),
+      quantity: [...new Set(historyItems.map((t) => fmtQty(t.sent_quantity)))].sort(
+        (a, b) => parseFloat(a) - parseFloat(b),
+      ),
+      status: [...new Set(historyItems.map((t) => getHistoryStatusLabel(t, historySectionIds)))].sort(),
+    }),
+    [historyItems, historySectionIds],
+  );
+
+  const { rows: filteredHistoryItems } = useTableQueryEngine({
+    rows: historyItems,
+    getId: (t) => t.transfer_id,
+    searchQuery: "",
+    filterPredicate: historyFilterPredicate,
+    sortConfigs: historySortConfigs,
+    sortDefs: historySortDefs,
+  });
 
   function handleRefresh() {
     void refetchReady();
@@ -572,10 +729,10 @@ export function TransfersPage() {
                     {bulkMode && (
                       <TableHead className="w-[40px] p-2">
                         <Checkbox
-                          checked={bulkSelection.isAllSelected(readyItems.map(t => t.task_id))}
+                          checked={bulkSelection.isAllSelected(filteredReadyItems.map((t) => t.task_id))}
                           onCheckedChange={(checked) => {
                             if (checked) {
-                              bulkSelection.selectAll(readyItems.map(t => t.task_id));
+                              bulkSelection.selectAll(filteredReadyItems.map((t) => t.task_id));
                             } else {
                               bulkSelection.clear();
                             }
@@ -583,29 +740,95 @@ export function TransfersPage() {
                         />
                       </TableHead>
                     )}
-                    <TableHead>Задание</TableHead>
-                    <TableHead>Артикул</TableHead>
-                    <TableHead>Этап</TableHead>
-                    <TableHead className="text-right">К передаче</TableHead>
-                    <TableHead>Следующий</TableHead>
-                    {!bulkMode && <TableHead />}
+                    <TableHead className="p-0">
+                      <SortableFilterHeader
+                        field="taskId"
+                        label="Задание"
+                        currentSorts={readySortConfigs}
+                        onSortChange={handleReadySort}
+                        values={readyUniqueValues.taskId}
+                        {...bindReadyColumn("taskId")}
+                        valueLabel={(v) => `#${v}`}
+                      />
+                    </TableHead>
+                    <TableHead className="p-0">
+                      <SortableFilterHeader
+                        field="sku"
+                        label="Артикул"
+                        currentSorts={readySortConfigs}
+                        onSortChange={handleReadySort}
+                        values={readyUniqueValues.sku}
+                        {...bindReadyColumn("sku")}
+                      />
+                    </TableHead>
+                    <TableHead className="p-0">
+                      <SortableFilterHeader
+                        field="stage"
+                        label="Этап"
+                        currentSorts={readySortConfigs}
+                        onSortChange={handleReadySort}
+                        values={readyUniqueValues.stage}
+                        {...bindReadyColumn("stage")}
+                      />
+                    </TableHead>
+                    <TableHead className="p-0 text-right">
+                      <SortableFilterHeader
+                        field="transferableQty"
+                        label="К передаче"
+                        currentSorts={readySortConfigs}
+                        onSortChange={handleReadySort}
+                        values={readyUniqueValues.transferableQty}
+                        {...bindReadyColumn("transferableQty")}
+                        valueLabel={(v) => `${v} шт.`}
+                      />
+                    </TableHead>
+                    <TableHead className="p-0">
+                      <SortableFilterHeader
+                        field="next"
+                        label="Следующий"
+                        currentSorts={readySortConfigs}
+                        onSortChange={handleReadySort}
+                        values={readyUniqueValues.next}
+                        {...bindReadyColumn("next")}
+                      />
+                    </TableHead>
+                    {!bulkMode && (
+                      <TableHead className="text-xs font-medium text-muted-foreground">
+                        Действия
+                      </TableHead>
+                    )}
+                    <TableCornerResetHeader
+                      hasActiveFilters={hasReadyFiltersActive}
+                      onReset={resetReadyFilters}
+                    />
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {readyItems.map((t) => (
-                    <ReadyTransferRow
-                      key={t.task_id}
-                      task={t}
-                      bulkMode={bulkMode}
-                      isSelected={bulkSelection.isSelected(t.task_id)}
-                      onSelect={() => bulkSelection.selectOne(t.task_id)}
-                      isSubmitting={isTransferInFlight(t.task_id)}
-                      tryAcquire={() => tryAcquireTransferLock(t.task_id)}
-                      release={() => releaseTransferLock(t.task_id)}
-                      invalidateShopfloorCaches={invalidateShopfloorCaches}
-                      invalidateTransfersCaches={invalidateTransfersCaches}
-                    />
-                  ))}
+                  {filteredReadyItems.length === 0 ? (
+                    <TableRow>
+                      <TableCell
+                        colSpan={bulkMode ? 7 : 7}
+                        className="py-6 text-center text-sm text-muted-foreground"
+                      >
+                        Нет заданий, соответствующих фильтру
+                      </TableCell>
+                    </TableRow>
+                  ) : (
+                    filteredReadyItems.map((t) => (
+                      <ReadyTransferRow
+                        key={t.task_id}
+                        task={t}
+                        bulkMode={bulkMode}
+                        isSelected={bulkSelection.isSelected(t.task_id)}
+                        onSelect={() => bulkSelection.selectOne(t.task_id)}
+                        isSubmitting={isTransferInFlight(t.task_id)}
+                        tryAcquire={() => tryAcquireTransferLock(t.task_id)}
+                        release={() => releaseTransferLock(t.task_id)}
+                        invalidateShopfloorCaches={invalidateShopfloorCaches}
+                        invalidateTransfersCaches={invalidateTransfersCaches}
+                      />
+                    ))
+                  )}
                 </TableBody>
               </Table>
             )}
@@ -631,20 +854,73 @@ export function TransfersPage() {
               <Table>
                 <TableHeader>
                   <TableRow>
-                    <TableHead>Отправитель (Откуда)</TableHead>
-                    <TableHead>Получатель (Куда)</TableHead>
-                    <TableHead>Артикул</TableHead>
-                    <TableHead className="text-right whitespace-nowrap">Кол-во</TableHead>
-                    <TableHead>Статус</TableHead>
+                    <TableHead className="p-0">
+                      <SortableFilterHeader
+                        field="from"
+                        label="Отправитель (Откуда)"
+                        currentSorts={historySortConfigs}
+                        onSortChange={handleHistorySort}
+                        values={historyUniqueValues.from}
+                        {...bindHistoryColumn("from")}
+                      />
+                    </TableHead>
+                    <TableHead className="p-0">
+                      <SortableFilterHeader
+                        field="to"
+                        label="Получатель (Куда)"
+                        currentSorts={historySortConfigs}
+                        onSortChange={handleHistorySort}
+                        values={historyUniqueValues.to}
+                        {...bindHistoryColumn("to")}
+                      />
+                    </TableHead>
+                    <TableHead className="p-0">
+                      <SortableFilterHeader
+                        field="sku"
+                        label="Артикул"
+                        currentSorts={historySortConfigs}
+                        onSortChange={handleHistorySort}
+                        values={historyUniqueValues.sku}
+                        {...bindHistoryColumn("sku")}
+                      />
+                    </TableHead>
+                    <TableHead className="p-0 text-right">
+                      <SortableFilterHeader
+                        field="quantity"
+                        label="Кол-во"
+                        currentSorts={historySortConfigs}
+                        onSortChange={handleHistorySort}
+                        values={historyUniqueValues.quantity}
+                        {...bindHistoryColumn("quantity")}
+                      />
+                    </TableHead>
+                    <TableHead className="p-0">
+                      <SortableFilterHeader
+                        field="status"
+                        label="Статус"
+                        currentSorts={historySortConfigs}
+                        onSortChange={handleHistorySort}
+                        values={historyUniqueValues.status}
+                        {...bindHistoryColumn("status")}
+                      />
+                    </TableHead>
                     <TableHead className="w-[40px]" />
+                    <TableCornerResetHeader
+                      hasActiveFilters={hasHistoryFiltersActive}
+                      onReset={resetHistoryFilters}
+                    />
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {historyItems.map((t) => {
-                    const sectionIdsInSpg = showAllSpgs
-                      ? allSectionIds
-                      : new Set(spgs?.find((s) => s.id === activeSpgId)?.sections.map((sec) => sec.section_id) ?? []);
-                    const isIncoming = sectionIdsInSpg.has(t.to_section_id);
+                  {filteredHistoryItems.length === 0 ? (
+                    <TableRow>
+                      <TableCell colSpan={7} className="py-6 text-center text-sm text-muted-foreground">
+                        Нет записей, соответствующих фильтру
+                      </TableCell>
+                    </TableRow>
+                  ) : (
+                  filteredHistoryItems.map((t) => {
+                    const isIncoming = historySectionIds.has(t.to_section_id);
                     const isCancelled = t.status === "cancelled";
                     const statusBadge = (() => {
                       if (isCancelled) return { label: "Аннулирована", variant: "destructive" as const };
@@ -703,9 +979,10 @@ export function TransfersPage() {
                         <TableCell className="text-right w-[40px]">
                           <ChevronRight className="h-4 w-4 text-muted-foreground/60 transition-transform group-hover:translate-x-0.5 inline-block" />
                         </TableCell>
+                        <TableCornerResetCell />
                       </TableRow>
                     );
-                  })}
+                  }))}
                 </TableBody>
               </Table>
             )}

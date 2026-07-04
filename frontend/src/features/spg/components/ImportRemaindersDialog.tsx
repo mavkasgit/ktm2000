@@ -19,15 +19,18 @@ import {
   SectionSelect,
   SectionLocationBadge,
   SortableFilterHeader,
+  TableCornerResetCell,
+  TableCornerResetHeader,
   toast,
   renderIcon,
 } from "@/shared/ui";
 import {
   useTableQueryEngine,
-  type SortConfig,
+
   type ColumnSortDef,
 } from "@/shared/hooks/useTableQueryEngine";
-import { nextMultiSortConfigs } from "@/shared/lib/multiSort";
+import { useFilterableTable } from "@/shared/hooks/useFilterableTable";
+
 import {
   useImportRowExpansion,
   useImportClipboardPaste,
@@ -259,10 +262,22 @@ export function ImportRemaindersDialog({
   const [filterStatus, setFilterStatus] = useState<"all" | "invalid">("all");
   const [targetSectionOverrides, setTargetSectionOverrides] = useState<Record<number, number>>({});
   const [qualityStateOverrides, setQualityStateOverrides] = useState<Record<number, QualityState>>({});
-  const [sortConfigs, setSortConfigs] = useState<SortConfig<RemainderPreviewSortField>[]>([]);
-  const [columnFilters, setColumnFilters] = useState<
-    Partial<Record<RemainderPreviewSortField, Set<string>>>
-  >({});
+  const {
+    bindColumn,
+    buildFilterPredicate,
+    sortConfigs,
+    setSortConfigs,
+    handleSort: handleSortChange,
+    hasActiveFilters: hasPreviewFilters,
+    resetAll: resetPreviewFilters,
+    resetColumnFilters,
+  } = useFilterableTable<RemainderPreviewSortField>({
+    extraHasActive: Boolean(searchQuery.trim() || filterStatus !== "all"),
+    onExtraReset: () => {
+      setFilterStatus("all");
+      setSearchQuery("");
+    },
+  });
 
   const [previewData, setPreviewData] = useState<RemainderPreviewResponse | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
@@ -303,12 +318,12 @@ export function ImportRemaindersDialog({
       setTargetSectionOverrides({});
       setQualityStateOverrides({});
       setSortConfigs([]);
-      setColumnFilters({});
+      resetColumnFilters();
       setPreviewData(null);
       setError(null);
       setResult(null);
     }
-  }, [open, resetExpansion]);
+  }, [open, resetExpansion, resetColumnFilters]);
 
   const getImportSource = (): RemainderImportSource | null => {
     if (importMode === "file" && file) {
@@ -505,24 +520,6 @@ export function ImportRemaindersDialog({
     });
   };
 
-  const handleSortChange = useCallback((field: RemainderPreviewSortField) => {
-    setSortConfigs((prev) => nextMultiSortConfigs(prev, field));
-  }, []);
-
-  const handleColumnFilterChange = useCallback(
-    (field: RemainderPreviewSortField, selected: Set<string>) => {
-      setColumnFilters((prev) => ({ ...prev, [field]: selected }));
-    },
-    [],
-  );
-
-  const resetPreviewFilters = useCallback(() => {
-    setFilterStatus("all");
-    setSearchQuery("");
-    setSortConfigs([]);
-    setColumnFilters({});
-  }, []);
-
   const rowsMissingSection = useMemo(() => {
     if (!previewData) return [];
     return previewData.items.filter(
@@ -557,25 +554,18 @@ export function ImportRemaindersDialog({
     { field: "errors", getSortValue: (item) => getImportItemErrorsLabel(item) },
   ], [qualityStateOverrides, targetSectionOverrides, importableSections]);
 
-  const filterPredicate = useMemo(() => {
-    const hasFilters = Object.values(columnFilters).some((selected) => selected && selected.size > 0);
-    if (!hasFilters) return null;
-    return (item: RemainderImportItem) => {
-      for (const [field, selected] of Object.entries(columnFilters)) {
-        if (selected && selected.size > 0) {
-          const cellValue = getImportItemCellValue(
-            item,
-            field as RemainderPreviewSortField,
-            targetSectionOverrides,
-            qualityStateOverrides,
-            importableSections,
-          );
-          if (!selected.has(cellValue)) return false;
-        }
-      }
-      return true;
-    };
-  }, [columnFilters, targetSectionOverrides, qualityStateOverrides, importableSections]);
+  const filterPredicate = useMemo(
+    () => buildFilterPredicate((item: RemainderImportItem, field) =>
+      getImportItemCellValue(
+        item,
+        field,
+        targetSectionOverrides,
+        qualityStateOverrides,
+        importableSections,
+      ),
+    ),
+    [buildFilterPredicate, targetSectionOverrides, qualityStateOverrides, importableSections],
+  );
 
   const uniqueValues = useMemo(() => {
     const fields: RemainderPreviewSortField[] = [
@@ -956,22 +946,9 @@ export function ImportRemaindersDialog({
                 className="rounded-lg min-h-0"
                 loading={previewLoading}
                 isEmpty={!previewLoading && filteredItems.length === 0}
-                onResetFilters={
-                  previewData && previewData.items.length > 0 ? resetPreviewFilters : undefined
-                }
                 emptyContent={
                   previewData && previewData.items.length > 0 ? (
-                    <>
-                      <span>Нет строк по текущему фильтру или поиску.</span>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        className="h-7 text-xs"
-                        onClick={resetPreviewFilters}
-                      >
-                        Сбросить фильтры
-                      </Button>
-                    </>
+                    <span>Нет строк по текущему фильтру или поиску.</span>
                   ) : importMode === "clipboard" && clipboardText ? (
                     <span className="max-w-md leading-relaxed">
                       Строки не распознаны — см. блок «Вставлено из буфера» выше.
@@ -993,8 +970,7 @@ export function ImportRemaindersDialog({
                             currentSorts={sortConfigs}
                             onSortChange={handleSortChange}
                             values={uniqueValues.row}
-                            selectedValues={columnFilters.row ?? new Set()}
-                            onFilterChange={handleColumnFilterChange}
+                            {...bindColumn("row")}
                           />
                         </th>
                         <th className="px-1.5 py-1 w-24">
@@ -1004,8 +980,7 @@ export function ImportRemaindersDialog({
                             currentSorts={sortConfigs}
                             onSortChange={handleSortChange}
                             values={uniqueValues.sku}
-                            selectedValues={columnFilters.sku ?? new Set()}
-                            onFilterChange={handleColumnFilterChange}
+                            {...bindColumn("sku")}
                           />
                         </th>
                         <th className="px-1.5 py-1 w-14">
@@ -1015,8 +990,7 @@ export function ImportRemaindersDialog({
                             currentSorts={sortConfigs}
                             onSortChange={handleSortChange}
                             values={uniqueValues.quantity}
-                            selectedValues={columnFilters.quantity ?? new Set()}
-                            onFilterChange={handleColumnFilterChange}
+                            {...bindColumn("quantity")}
                           />
                         </th>
                         <th className="px-1.5 py-1 min-w-[160px]">
@@ -1026,8 +1000,7 @@ export function ImportRemaindersDialog({
                             currentSorts={sortConfigs}
                             onSortChange={handleSortChange}
                             values={uniqueValues.operations}
-                            selectedValues={columnFilters.operations ?? new Set()}
-                            onFilterChange={handleColumnFilterChange}
+                            {...bindColumn("operations")}
                           />
                         </th>
                         <th className="px-1.5 py-1 w-24">
@@ -1037,8 +1010,7 @@ export function ImportRemaindersDialog({
                             currentSorts={sortConfigs}
                             onSortChange={handleSortChange}
                             values={uniqueValues.quality}
-                            selectedValues={columnFilters.quality ?? new Set()}
-                            onFilterChange={handleColumnFilterChange}
+                            {...bindColumn("quality")}
                           />
                         </th>
                         <th className="px-1.5 py-1 min-w-[150px]">
@@ -1048,8 +1020,7 @@ export function ImportRemaindersDialog({
                             currentSorts={sortConfigs}
                             onSortChange={handleSortChange}
                             values={uniqueValues.section}
-                            selectedValues={columnFilters.section ?? new Set()}
-                            onFilterChange={handleColumnFilterChange}
+                            {...bindColumn("section")}
                           />
                         </th>
                         <th className="px-1.5 py-1 min-w-[140px]">
@@ -1059,10 +1030,13 @@ export function ImportRemaindersDialog({
                             currentSorts={sortConfigs}
                             onSortChange={handleSortChange}
                             values={uniqueValues.errors}
-                            selectedValues={columnFilters.errors ?? new Set()}
-                            onFilterChange={handleColumnFilterChange}
+                            {...bindColumn("errors")}
                           />
                         </th>
+                        <TableCornerResetHeader
+                          hasActiveFilters={hasPreviewFilters}
+                          onReset={resetPreviewFilters}
+                        />
                       </tr>
                     </thead>
                     <tbody>
@@ -1161,9 +1135,10 @@ export function ImportRemaindersDialog({
                               <td className="px-1.5 py-0.5 text-destructive font-medium leading-snug whitespace-pre-line">
                                 {item.errors.map(translateImportError).join(", ") || "—"}
                               </td>
+                              <TableCornerResetCell />
                             </tr>
                             {isExpanded && hasRaw ? (
-                              <ImportRawRows.Detail colSpan={9} values={item.raw_values} />
+                              <ImportRawRows.Detail colSpan={10} values={item.raw_values} />
                             ) : null}
                           </Fragment>
                         );

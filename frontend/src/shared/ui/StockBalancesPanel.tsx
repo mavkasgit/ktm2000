@@ -1,5 +1,5 @@
-import { useState, useMemo, useCallback } from "react";
-import { ChevronDown, ChevronRight } from "lucide-react";
+import { useState, useMemo } from "react";
+
 
 import {
   formatQualityStateLabel,
@@ -7,13 +7,14 @@ import {
 } from "@/shared/api/stock";
 import type { StockBalanceEntry } from "@/shared/api/stock";
 import { SortableFilterHeader } from "./SortableFilterHeader";
+import { TablePanelHeader } from "./TablePanelHeader";
+import { TableCornerResetCell, TableCornerResetHeader } from "./TableCornerResetHeader";
+import { useFilterableTable } from "@/shared/hooks/useFilterableTable";
 import { RouteStepsDisplay } from "./RouteStepsDisplay";
 import {
   useTableQueryEngine,
-  type SortConfig,
   type ColumnSortDef,
 } from "@/shared/hooks/useTableQueryEngine";
-import { nextMultiSortConfigs } from "@/shared/lib/multiSort";
 
 type BalanceSortField = "sku" | "quantity" | "operations" | "quality" | "location";
 
@@ -43,6 +44,8 @@ export interface StockBalancesPanelProps {
   balances: StockBalanceEntry[];
   isLoading: boolean;
   searchQuery?: string;
+  /** Сброс внешнего поиска (глобальный searchQuery на странице) при reset в шапке таблицы */
+  onSearchQueryReset?: () => void;
   onSelectProduct: (productId: number) => void;
   onShowHistory: (productId: number, productSku?: string | null) => void;
   /** Скрыть колонку «Участок» — удобно, когда остатки уже отфильтрованы по одному участку */
@@ -54,22 +57,24 @@ export function StockBalancesPanel({
   balances,
   isLoading,
   searchQuery = "",
+  onSearchQueryReset,
   onSelectProduct,
   onShowHistory,
   hideLocationColumn = false,
   title = "Наличие на участках",
 }: StockBalancesPanelProps) {
   const [isExpanded, setIsExpanded] = useState(true);
-  const [sortConfigs, setSortConfigs] = useState<SortConfig<BalanceSortField>[]>([]);
-  const [columnFilters, setColumnFilters] = useState<Partial<Record<BalanceSortField, Set<string>>>>({});
-
-  const handleSortChange = useCallback((field: BalanceSortField) => {
-    setSortConfigs((prev) => nextMultiSortConfigs(prev, field));
-  }, []);
-
-  const handleColumnFilterChange = useCallback((field: BalanceSortField, selected: Set<string>) => {
-    setColumnFilters((prev) => ({ ...prev, [field]: selected }));
-  }, []);
+  const {
+    bindColumn,
+    buildFilterPredicate,
+    sortConfigs,
+    handleSort: handleSortChange,
+    hasActiveFilters,
+    resetAll: handleResetFilters,
+  } = useFilterableTable<BalanceSortField>({
+    extraHasActive: searchQuery.trim().length > 0,
+    onExtraReset: onSearchQueryReset,
+  });
 
   const searchFilteredBalances = useMemo(() => {
     if (!searchQuery.trim()) return balances;
@@ -89,19 +94,10 @@ export function StockBalancesPanel({
     { field: "location", getSortValue: (b) => getBalanceCellValue(b, "location") },
   ], []);
 
-  const filterPredicate = useMemo(() => {
-    const hasFilters = Object.values(columnFilters).some((selected) => selected && selected.size > 0);
-    if (!hasFilters) return null;
-    return (balance: StockBalanceEntry) => {
-      for (const [field, selected] of Object.entries(columnFilters)) {
-        if (selected && selected.size > 0) {
-          const cellValue = getBalanceCellValue(balance, field as BalanceSortField);
-          if (!selected.has(cellValue)) return false;
-        }
-      }
-      return true;
-    };
-  }, [columnFilters]);
+  const filterPredicate = useMemo(
+    () => buildFilterPredicate(getBalanceCellValue),
+    [buildFilterPredicate],
+  );
 
   const uniqueValues = useMemo(() => ({
     sku: [...new Set(searchFilteredBalances.map((b) => getBalanceCellValue(b, "sku")))].sort((a, b) =>
@@ -121,7 +117,9 @@ export function StockBalancesPanel({
     ),
   }), [searchFilteredBalances]);
 
-  const { rows: filteredBalances, filteredCount } = useTableQueryEngine<StockBalanceEntry, BalanceSortField>({
+  const columnCount = hideLocationColumn ? 6 : 7;
+
+  const { rows: filteredBalances } = useTableQueryEngine<StockBalanceEntry, BalanceSortField>({
     rows: searchFilteredBalances,
     getId: (b) => b.id,
     searchQuery: "",
@@ -132,22 +130,12 @@ export function StockBalancesPanel({
 
   return (
     <div className="space-y-3">
-      <div className="flex items-center justify-between border-b pb-2">
-        <button
-          type="button"
-          onClick={() => setIsExpanded(!isExpanded)}
-          className="flex items-center gap-2 hover:opacity-80 transition-opacity focus:outline-none"
-        >
-          {isExpanded ? (
-            <ChevronDown className="h-4 w-4 text-muted-foreground" />
-          ) : (
-            <ChevronRight className="h-4 w-4 text-muted-foreground" />
-          )}
-          <h3 className="text-sm font-semibold">
-            {title} ({filteredCount} из {balances.length})
-          </h3>
-        </button>
-      </div>
+      <TablePanelHeader
+        title={title}
+        countLabel={`(${filteredBalances.length} из ${balances.length})`}
+        expanded={isExpanded}
+        onToggleExpanded={() => setIsExpanded(!isExpanded)}
+      />
 
       {isExpanded && (
         <>
@@ -159,11 +147,6 @@ export function StockBalancesPanel({
             </div>
           ) : (
             <div className="overflow-x-auto border rounded-lg">
-              {filteredBalances.length === 0 ? (
-                <div className="p-8 text-center text-sm text-muted-foreground">
-                  Ничего не найдено по выбранным фильтрам
-                </div>
-              ) : (
                 <table className="w-full text-sm text-left">
                   <thead className="bg-muted/50 border-b">
                     <tr>
@@ -174,8 +157,7 @@ export function StockBalancesPanel({
                           currentSorts={sortConfigs}
                           onSortChange={handleSortChange}
                           values={uniqueValues.sku}
-                          selectedValues={columnFilters.sku ?? new Set()}
-                          onFilterChange={handleColumnFilterChange}
+                          {...bindColumn("sku")}
                         />
                       </th>
                       <th className="p-2 text-left font-medium">
@@ -185,8 +167,7 @@ export function StockBalancesPanel({
                           currentSorts={sortConfigs}
                           onSortChange={handleSortChange}
                           values={uniqueValues.quantity}
-                          selectedValues={columnFilters.quantity ?? new Set()}
-                          onFilterChange={handleColumnFilterChange}
+                          {...bindColumn("quantity")}
                         />
                       </th>
                       <th className="p-2 text-left font-medium min-w-[140px]">
@@ -196,8 +177,7 @@ export function StockBalancesPanel({
                           currentSorts={sortConfigs}
                           onSortChange={handleSortChange}
                           values={uniqueValues.operations}
-                          selectedValues={columnFilters.operations ?? new Set()}
-                          onFilterChange={handleColumnFilterChange}
+                          {...bindColumn("operations")}
                         />
                       </th>
                       <th className="p-2 text-left font-medium">
@@ -207,8 +187,7 @@ export function StockBalancesPanel({
                           currentSorts={sortConfigs}
                           onSortChange={handleSortChange}
                           values={uniqueValues.quality}
-                          selectedValues={columnFilters.quality ?? new Set()}
-                          onFilterChange={handleColumnFilterChange}
+                          {...bindColumn("quality")}
                         />
                       </th>
                       {!hideLocationColumn && (
@@ -219,16 +198,31 @@ export function StockBalancesPanel({
                             currentSorts={sortConfigs}
                             onSortChange={handleSortChange}
                             values={uniqueValues.location}
-                            selectedValues={columnFilters.location ?? new Set()}
-                            onFilterChange={handleColumnFilterChange}
+                            {...bindColumn("location")}
                           />
                         </th>
                       )}
-                      <th className="p-2 text-left font-medium">Действия</th>
+                      <th className="p-2 text-left font-medium text-xs text-muted-foreground">
+                        Действия
+                      </th>
+                      <TableCornerResetHeader
+                        hasActiveFilters={hasActiveFilters}
+                        onReset={handleResetFilters}
+                      />
                     </tr>
                   </thead>
                   <tbody>
-                    {filteredBalances.map((b) => (
+                    {filteredBalances.length === 0 ? (
+                      <tr>
+                        <td
+                          colSpan={columnCount}
+                          className="p-8 text-center text-sm text-muted-foreground"
+                        >
+                          Ничего не найдено по выбранным фильтрам
+                        </td>
+                      </tr>
+                    ) : (
+                    filteredBalances.map((b) => (
                       <tr key={b.id} className="border-b hover:bg-muted/30">
                         <td className="p-2">
                           <button
@@ -269,11 +263,11 @@ export function StockBalancesPanel({
                             История
                           </button>
                         </td>
+                        <TableCornerResetCell />
                       </tr>
-                    ))}
+                    )))}
                   </tbody>
                 </table>
-              )}
             </div>
           )}
         </>

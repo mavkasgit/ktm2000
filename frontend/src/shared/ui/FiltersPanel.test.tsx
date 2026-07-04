@@ -3,7 +3,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { FiltersPanel, type FiltersPanelField } from "./FiltersPanel";
 
 describe("FiltersPanel", () => {
-  it("renders configured search and select fields", () => {
+  it("renders configured search and select fields without reset when props omitted", () => {
     const fields: FiltersPanelField[] = [
       { kind: "search", key: "search", value: "abc", onChange: () => {}, placeholder: "Поиск..." },
       {
@@ -18,12 +18,22 @@ describe("FiltersPanel", () => {
       },
     ];
 
+    const html = renderToStaticMarkup(<FiltersPanel fields={fields} />);
+
+    expect(html).toContain('placeholder="Поиск..."');
+    expect(html).toContain('role="combobox"');
+    expect(html).not.toContain("Сбросить");
+  });
+
+  it("renders reset button when onReset and hasActiveFilters are provided", () => {
+    const fields: FiltersPanelField[] = [
+      { kind: "search", key: "search", value: "abc", onChange: () => {}, placeholder: "Поиск..." },
+    ];
+
     const html = renderToStaticMarkup(
       <FiltersPanel fields={fields} onReset={() => {}} hasActiveFilters={false} />,
     );
 
-    expect(html).toContain('placeholder="Поиск..."');
-    expect(html).toContain('role="combobox"');
     expect(html).toContain("Сбросить фильтры");
   });
 

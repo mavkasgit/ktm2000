@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Loader2, X } from "lucide-react";
 
@@ -6,8 +6,11 @@ import {
   Button,
   DateRangePicker,
   SortableFilterHeader,
+  TableCornerResetCell,
+  TableCornerResetHeader,
   type DateRangeValue,
 } from "@/shared/ui";
+import { useFilterableTable } from "@/shared/hooks/useFilterableTable";
 import {
   getStockTransactions,
   formatBalanceQtyInteger,
@@ -18,10 +21,8 @@ import type { StockTransactionEntry } from "@/shared/api/stock";
 import { queryKeys } from "@/shared/api/queryKeys";
 import {
   useTableQueryEngine,
-  type SortConfig,
   type ColumnSortDef,
 } from "@/shared/hooks/useTableQueryEngine";
-import { nextMultiSortConfigs } from "@/shared/lib/multiSort";
 
 interface StockTransactionsHistoryDrawerProps {
   productId?: number;
@@ -73,16 +74,28 @@ export function StockTransactionsHistoryDrawer({
 }: StockTransactionsHistoryDrawerProps) {
   const productLabel = productSku?.trim() || (productId !== undefined ? `#${productId}` : null);
   const [dateRange, setDateRange] = useState<DateRangeValue>({ from: "", to: "" });
-  const [sortConfigs, setSortConfigs] = useState<SortConfig<TransactionSortField>[]>([]);
-  const [columnFilters, setColumnFilters] = useState<Partial<Record<TransactionSortField, Set<string>>>>({});
+  const hasDateFilter = Boolean(dateRange.from || dateRange.to);
+  const {
+    bindColumn,
+    buildFilterPredicate,
+    sortConfigs,
+    setSortConfigs,
+    handleSort: handleSortChange,
+    hasActiveFilters,
+    resetAll: handleResetFilters,
+    resetColumnFilters,
+  } = useFilterableTable<TransactionSortField>({
+    extraHasActive: hasDateFilter,
+    onExtraReset: () => setDateRange({ from: "", to: "" }),
+  });
 
   useEffect(() => {
     if (!open) {
       setDateRange({ from: "", to: "" });
       setSortConfigs([]);
-      setColumnFilters({});
+      resetColumnFilters();
     }
-  }, [open]);
+  }, [open, resetColumnFilters, setSortConfigs]);
 
   const { data: transactions = [], isLoading } = useQuery({
     queryKey: queryKeys.stock.transactions(
@@ -109,14 +122,6 @@ export function StockTransactionsHistoryDrawer({
     });
   }, [transactions, dateRange]);
 
-  const handleSortChange = useCallback((field: TransactionSortField) => {
-    setSortConfigs((prev) => nextMultiSortConfigs(prev, field));
-  }, []);
-
-  const handleColumnFilterChange = useCallback((field: TransactionSortField, selected: Set<string>) => {
-    setColumnFilters((prev) => ({ ...prev, [field]: selected }));
-  }, []);
-
   const sortDefs = useMemo((): ColumnSortDef<StockTransactionEntry, TransactionSortField>[] => [
     {
       field: "date",
@@ -133,19 +138,10 @@ export function StockTransactionsHistoryDrawer({
     { field: "comment", getSortValue: (tx) => getTxCellValue(tx, "comment") },
   ], []);
 
-  const filterPredicate = useMemo(() => {
-    const hasFilters = Object.values(columnFilters).some((selected) => selected && selected.size > 0);
-    if (!hasFilters) return null;
-    return (tx: StockTransactionEntry) => {
-      for (const [field, selected] of Object.entries(columnFilters)) {
-        if (selected && selected.size > 0) {
-          const cellValue = getTxCellValue(tx, field as TransactionSortField);
-          if (!selected.has(cellValue)) return false;
-        }
-      }
-      return true;
-    };
-  }, [columnFilters]);
+  const filterPredicate = useMemo(
+    () => buildFilterPredicate(getTxCellValue),
+    [buildFilterPredicate],
+  );
 
   const uniqueValues = useMemo(() => ({
     date: [...new Set(dateFilteredTransactions.map((tx) => getTxCellValue(tx, "date")))].sort((a, b) =>
@@ -171,7 +167,7 @@ export function StockTransactionsHistoryDrawer({
     ),
   }), [dateFilteredTransactions]);
 
-  const { rows: filteredTransactions, filteredCount } = useTableQueryEngine<
+  const { rows: filteredTransactions } = useTableQueryEngine<
     StockTransactionEntry,
     TransactionSortField
   >({
@@ -220,11 +216,6 @@ export function StockTransactionsHistoryDrawer({
             </div>
           ) : (
             <div className="overflow-x-auto border rounded-lg">
-              {filteredTransactions.length === 0 ? (
-                <div className="p-8 text-center text-sm text-muted-foreground">
-                  Ничего не найдено по выбранным фильтрам
-                </div>
-              ) : (
                 <table className="w-full text-sm">
                   <thead className="bg-muted/50 border-b">
                     <tr>
@@ -235,8 +226,7 @@ export function StockTransactionsHistoryDrawer({
                           currentSorts={sortConfigs}
                           onSortChange={handleSortChange}
                           values={uniqueValues.date}
-                          selectedValues={columnFilters.date ?? new Set()}
-                          onFilterChange={handleColumnFilterChange}
+                          {...bindColumn("date")}
                         />
                       </th>
                       <th className="p-2 text-left font-medium">
@@ -246,8 +236,7 @@ export function StockTransactionsHistoryDrawer({
                           currentSorts={sortConfigs}
                           onSortChange={handleSortChange}
                           values={uniqueValues.reason}
-                          selectedValues={columnFilters.reason ?? new Set()}
-                          onFilterChange={handleColumnFilterChange}
+                          {...bindColumn("reason")}
                         />
                       </th>
                       <th className="p-2 text-left font-medium">
@@ -257,8 +246,7 @@ export function StockTransactionsHistoryDrawer({
                           currentSorts={sortConfigs}
                           onSortChange={handleSortChange}
                           values={uniqueValues.from}
-                          selectedValues={columnFilters.from ?? new Set()}
-                          onFilterChange={handleColumnFilterChange}
+                          {...bindColumn("from")}
                         />
                       </th>
                       <th className="p-2 text-left font-medium">
@@ -268,8 +256,7 @@ export function StockTransactionsHistoryDrawer({
                           currentSorts={sortConfigs}
                           onSortChange={handleSortChange}
                           values={uniqueValues.to}
-                          selectedValues={columnFilters.to ?? new Set()}
-                          onFilterChange={handleColumnFilterChange}
+                          {...bindColumn("to")}
                         />
                       </th>
                       <th className="p-2 text-right font-medium">
@@ -279,8 +266,7 @@ export function StockTransactionsHistoryDrawer({
                           currentSorts={sortConfigs}
                           onSortChange={handleSortChange}
                           values={uniqueValues.quantity}
-                          selectedValues={columnFilters.quantity ?? new Set()}
-                          onFilterChange={handleColumnFilterChange}
+                          {...bindColumn("quantity")}
                         />
                       </th>
                       <th className="p-2 text-left font-medium">
@@ -290,8 +276,7 @@ export function StockTransactionsHistoryDrawer({
                           currentSorts={sortConfigs}
                           onSortChange={handleSortChange}
                           values={uniqueValues.quality}
-                          selectedValues={columnFilters.quality ?? new Set()}
-                          onFilterChange={handleColumnFilterChange}
+                          {...bindColumn("quality")}
                         />
                       </th>
                       <th className="p-2 text-left font-medium">
@@ -301,14 +286,24 @@ export function StockTransactionsHistoryDrawer({
                           currentSorts={sortConfigs}
                           onSortChange={handleSortChange}
                           values={uniqueValues.comment}
-                          selectedValues={columnFilters.comment ?? new Set()}
-                          onFilterChange={handleColumnFilterChange}
+                          {...bindColumn("comment")}
                         />
                       </th>
+                      <TableCornerResetHeader
+                        hasActiveFilters={hasActiveFilters}
+                        onReset={handleResetFilters}
+                      />
                     </tr>
                   </thead>
                   <tbody>
-                    {filteredTransactions.map((tx) => (
+                    {filteredTransactions.length === 0 ? (
+                      <tr>
+                        <td colSpan={8} className="p-8 text-center text-sm text-muted-foreground">
+                          Ничего не найдено по выбранным фильтрам
+                        </td>
+                      </tr>
+                    ) : (
+                    filteredTransactions.map((tx) => (
                       <tr key={tx.id} className="border-b hover:bg-muted/30">
                         <td className="p-2 text-xs whitespace-nowrap">
                           {formatTxDate(tx.created_at)}
@@ -325,19 +320,19 @@ export function StockTransactionsHistoryDrawer({
                         <td className="p-2 text-xs text-muted-foreground max-w-[150px] truncate">
                           {getTxCellValue(tx, "comment")}
                         </td>
+                        <TableCornerResetCell />
                       </tr>
-                    ))}
+                    )))}
                   </tbody>
                 </table>
-              )}
             </div>
           )}
 
           {!isLoading && transactions.length > 0 && (
             <div className="text-xs text-muted-foreground text-center">
-              {filteredCount === dateFilteredTransactions.length
-                ? `Показано ${filteredCount} записей`
-                : `Показано ${filteredCount} из ${dateFilteredTransactions.length} записей`}
+              {filteredTransactions.length === dateFilteredTransactions.length
+                ? `Показано ${filteredTransactions.length} записей`
+                : `Показано ${filteredTransactions.length} из ${dateFilteredTransactions.length} записей`}
             </div>
           )}
         </div>

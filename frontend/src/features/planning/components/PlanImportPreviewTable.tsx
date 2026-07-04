@@ -1,6 +1,8 @@
 import { Fragment } from "react";
 
 import { RouteStepsDisplay } from "@/shared/ui/RouteStepsDisplay";
+import { TableCornerResetCell, TableCornerResetHeader } from "@/shared/ui";
+
 import {
   ImportRawRows,
   extractPlanImportRawRows,
@@ -113,6 +115,8 @@ export type PlanImportPreviewTableProps = {
   sortConfig?: { key: string; dir: "asc" | "desc" } | null;
   onSort?: (key: string) => void;
   expansion: ImportRowExpansion;
+  hasActiveFilters: boolean;
+  onReset: () => void;
 };
 
 export function PlanImportPreviewTable({
@@ -120,6 +124,8 @@ export function PlanImportPreviewTable({
   sortConfig,
   onSort,
   expansion,
+  hasActiveFilters,
+  onReset,
 }: PlanImportPreviewTableProps) {
   const { isRowExpanded, toggleRow } = expansion;
 
@@ -178,6 +184,10 @@ export function PlanImportPreviewTable({
             Предупр.
             {sortConfig?.key === "warnings" ? (sortConfig.dir === "asc" ? " ▲" : " ▼") : ""}
           </th>
+          <TableCornerResetHeader
+            hasActiveFilters={hasActiveFilters}
+            onReset={onReset}
+          />
         </tr>
       </thead>
       <tbody>
@@ -253,7 +263,7 @@ export function PlanImportPreviewTable({
           const idDisplayWithDuplicate =
             duplicateExistingId != null ? `${idDisplay} / #${duplicateExistingId}` : idDisplay;
           const isExpanded = isRowExpanded(idx);
-          const detailColSpan = 9 - (noErrors ? 1 : 0) - (noWarnings ? 1 : 0);
+          const detailColSpan = 10 - (noErrors ? 1 : 0) - (noWarnings ? 1 : 0);
 
           return (
             <Fragment key={idx}>
@@ -312,6 +322,7 @@ export function PlanImportPreviewTable({
                 </td>
                 {noErrors ? null : <td className="p-2 text-red-600">{errors}</td>}
                 {noWarnings ? null : <td className="p-2 text-amber-600">{warnings}</td>}
+                <TableCornerResetCell />
               </tr>
               {isExpanded && hasRawData ? (
                 <ImportRawRows.Detail

@@ -119,8 +119,8 @@ export type FiltersPanelField =
 
 export interface FiltersPanelProps {
   fields: FiltersPanelField[];
-  onReset: () => void;
-  hasActiveFilters: boolean;
+  onReset?: () => void;
+  hasActiveFilters?: boolean;
   activeSummary?: {
     count: number;
     labels?: string[];
@@ -148,6 +148,7 @@ export function FiltersPanel({
 }: FiltersPanelProps) {
   const summaryCount = activeSummary?.count ?? 0;
   const summaryLabels = activeSummary?.labels ?? [];
+  const showReset = onReset != null && hasActiveFilters != null;
 
   return (
     <div className={cn("rounded-lg border bg-card/60 p-3", className)}>
@@ -202,15 +203,17 @@ export function FiltersPanel({
             </div>
           )}
 
-          <Button
-            variant={hasActiveFilters ? "default" : "ghost"}
-            size="sm"
-            className="h-8 text-sm flex-shrink-0"
-            onClick={onReset}
-          >
-            <X className="mr-1 h-3.5 w-3.5" />
-            Сбросить
-          </Button>
+          {showReset && (
+            <Button
+              variant={hasActiveFilters ? "default" : "ghost"}
+              size="sm"
+              className="h-8 text-sm flex-shrink-0"
+              onClick={onReset}
+            >
+              <X className="mr-1 h-3.5 w-3.5" />
+              Сбросить
+            </Button>
+          )}
         </div>
       ) : (
         <>
@@ -266,15 +269,17 @@ export function FiltersPanel({
                   )}
                 </>
               )}
-              <Button
-                variant={hasActiveFilters ? "default" : "ghost"}
-                size="sm"
-                className="h-8 text-sm"
-                onClick={onReset}
-              >
-                <X className="mr-1 h-3.5 w-3.5" />
-                Сбросить фильтры
-              </Button>
+              {showReset && (
+                <Button
+                  variant={hasActiveFilters ? "default" : "ghost"}
+                  size="sm"
+                  className="h-8 text-sm"
+                  onClick={onReset}
+                >
+                  <X className="mr-1 h-3.5 w-3.5" />
+                  Сбросить фильтры
+                </Button>
+              )}
             </div>
           </div>
         </>

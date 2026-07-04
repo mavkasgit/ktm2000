@@ -2,10 +2,10 @@ import { useEffect, useMemo, useRef, useState } from "react"
 import { FileSpreadsheet, Plus, Upload, ListChecks } from "lucide-react"
 import { ImportWizard } from "../ImportWizard"
 import { ProductWipStatsDialog } from "@/features/execution/components/ProductWipStatsDialog"
-import { Button, Select, SelectContent, SelectItem, SelectTrigger, SelectValue, AlertDialog, AlertDialogContent, AlertDialogHeader, AlertDialogTitle, AlertDialogDescription, AlertDialogFooter, AlertDialogAction, AlertDialogCancel, SortableFilterHeader, FiltersPanel, type FiltersPanelField, Badge } from "@/shared/ui"
+import { Button, Select, SelectContent, SelectItem, SelectTrigger, SelectValue, AlertDialog, AlertDialogContent, AlertDialogHeader, AlertDialogTitle, AlertDialogDescription, AlertDialogFooter, AlertDialogAction, AlertDialogCancel, SortableFilterHeader, FiltersPanel, TableCornerResetHeader, type FiltersPanelField, Badge } from "@/shared/ui"
 import { buildActiveFilterSummary } from "@/shared/ui/buildActiveFilterSummary"
-import { useTableQueryEngine, SortConfig, ColumnSortDef } from "@/shared/hooks/useTableQueryEngine"
-import { nextMultiSortConfigs } from "@/shared/lib/multiSort"
+import { useTableQueryEngine, ColumnSortDef } from "@/shared/hooks/useTableQueryEngine"
+import { useFilterableTable } from "@/shared/hooks/useFilterableTable"
 import { PLAN_POSITIONS_GRID } from "../lib/gridTemplates"
 import { toast } from "@/shared/ui"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
@@ -73,10 +73,25 @@ export function PlanPage() {
     has_duplicates: "all",
   })
   const [searchQuery, setSearchQuery] = useState("")
-  const [sortConfigs, setSortConfigs] = useState<SortConfig<PlanSortField>[]>([])
-  const [columnFilters, setColumnFilters] = useState<
-    Partial<Record<PlanSortField, Set<string>>>
-  >({})
+  const panelFiltersActive = useMemo(
+    () =>
+      searchQuery.trim().length > 0 ||
+      Object.values(filters).some((value) => value !== "all"),
+    [searchQuery, filters],
+  )
+  const {
+    bindColumn,
+    buildFilterPredicate,
+    columnFilters,
+    columnSearchQueries,
+    sortConfigs,
+    setSortConfigs,
+    handleSort: handleSortChange,
+    resetColumnFilters,
+    hasActiveFilters: hasTableFiltersActive,
+  } = useFilterableTable<PlanSortField>({
+    extraHasActive: panelFiltersActive,
+  })
   const [templateImportOpen, setTemplateImportOpen] = useState<number | null>(null)
 
   const { data: duplicateGroupsByPlan } = useQuery({
@@ -163,7 +178,7 @@ export function PlanPage() {
   const resetAllFilters = () => {
     setSearchQuery("")
     setSortConfigs([])
-    setColumnFilters({})
+    resetColumnFilters()
     setFilters({
       status: "all",
       validation_status: "all",
@@ -397,18 +412,21 @@ export function PlanPage() {
     }
   }
 
+  const columnFilterPredicate = useMemo(
+    () => buildFilterPredicate(getPlanCellValue),
+    [buildFilterPredicate],
+  )
+
   const filterPredicate = useMemo(() => {
-    const hasColumnFilters = Object.values(columnFilters).some(s => s && s.size > 0)
     const hasTopFilters =
       filters.status !== "all" ||
       filters.validation_status !== "all" ||
       filters.has_route !== "all" ||
       filters.has_errors !== "all" ||
       filters.has_warnings !== "all" ||
-      filters.has_duplicates !== "all" ||
-      searchQuery.trim() !== ""
+      filters.has_duplicates !== "all"
 
-    if (!hasColumnFilters && !hasTopFilters) return null
+    if (!columnFilterPredicate && !hasTopFilters) return null
 
     return (row: PlanPositionOut) => {
       if (filters.status !== "all" && row.status !== filters.status) return false
@@ -421,16 +439,10 @@ export function PlanPage() {
       if (filters.has_warnings === "no" && row.warnings && row.warnings.length > 0) return false
       if (filters.has_duplicates === "yes" && !duplicateConflictsByPosition.has(row.id)) return false
       if (filters.has_duplicates === "no" && duplicateConflictsByPosition.has(row.id)) return false
-      // Column filters (AND across columns, OR within column)
-      for (const [field, selected] of Object.entries(columnFilters)) {
-        if (selected && selected.size > 0) {
-          const cellValue = getPlanCellValue(row, field as PlanSortField)
-          if (!selected.has(cellValue)) return false
-        }
-      }
+      if (columnFilterPredicate && !columnFilterPredicate(row)) return false
       return true
     }
-  }, [filters, duplicateConflictsByPosition, columnFilters, searchQuery])
+  }, [filters, duplicateConflictsByPosition, columnFilterPredicate])
 
   // Sort definitions for PlanPage columns
   const sortDefs: ColumnSortDef<PlanPositionOut, PlanSortField>[] = useMemo(() => [
@@ -465,13 +477,25 @@ export function PlanPage() {
   const processedRows = result.rows
   const filteredPositionIds = useMemo(() => processedRows.map((p) => p.id), [processedRows])
   const activeFilterSummary = useMemo(
-    () => buildActiveFilterSummary(filters, searchQuery, sortConfigs.length),
-    [filters, searchQuery, sortConfigs.length],
+    () =>
+      buildActiveFilterSummary(filters, searchQuery, sortConfigs.length, {
+        columnFilters,
+        columnSearchQueries,
+        columnLabels: {
+          id: "Id",
+          rowNum: "Строка",
+          sku: "Артикул",
+          name: "Наименование",
+          qty: "Кол-во",
+          route: "Маршрут",
+          status: "Статус",
+          validation: "Валидация",
+          errors: "Ошибки",
+          warnings: "Предупр.",
+        },
+      }),
+    [filters, searchQuery, sortConfigs.length, columnFilters, columnSearchQueries],
   )
-
-  const handleColumnFilterChange = (field: PlanSortField, selected: Set<string>) => {
-    setColumnFilters((prev) => ({ ...prev, [field]: selected }))
-  }
 
   const uniqueValuesByField = useMemo(() => {
     const allRows = positions ?? []
@@ -516,11 +540,6 @@ export function PlanPage() {
     ],
     [searchQuery, bulkMode, exitBulkMode],
   )
-
-  // Sort toggle handler: click cycles none -> asc -> desc -> removed
-  const handleSortChange = (field: PlanSortField) => {
-    setSortConfigs((prev) => nextMultiSortConfigs(prev, field))
-  }
 
   const getAriaSort = (field: PlanSortField): "none" | "ascending" | "descending" => {
     const active = sortConfigs.find((s) => s.field === field)
@@ -712,8 +731,6 @@ export function PlanPage() {
               className="mb-3"
               compact
               fields={filterFields}
-              onReset={resetAllFilters}
-              hasActiveFilters={activeFilterSummary.count > 0}
               activeSummary={activeFilterSummary}
               actions={
                 <>
@@ -774,8 +791,7 @@ export function PlanPage() {
                         currentSorts={sortConfigs}
                         onSortChange={handleSortChange}
                         values={uniqueValuesByField.id}
-                        selectedValues={columnFilters.id ?? new Set()}
-                        onFilterChange={handleColumnFilterChange}
+                        {...bindColumn("id")}
                       />
                     </div>
                     <div className="p-2">
@@ -785,8 +801,7 @@ export function PlanPage() {
                         currentSorts={sortConfigs}
                         onSortChange={handleSortChange}
                         values={uniqueValuesByField.rowNum}
-                        selectedValues={columnFilters.rowNum ?? new Set()}
-                        onFilterChange={handleColumnFilterChange}
+                        {...bindColumn("rowNum")}
                       />
                     </div>
                     <div className="p-2">
@@ -796,8 +811,7 @@ export function PlanPage() {
                         currentSorts={sortConfigs}
                         onSortChange={handleSortChange}
                         values={uniqueValuesByField.sku}
-                        selectedValues={columnFilters.sku ?? new Set()}
-                        onFilterChange={handleColumnFilterChange}
+                        {...bindColumn("sku")}
                       />
                     </div>
                     <div className="p-2">
@@ -807,8 +821,7 @@ export function PlanPage() {
                         currentSorts={sortConfigs}
                         onSortChange={handleSortChange}
                         values={uniqueValuesByField.qty}
-                        selectedValues={columnFilters.qty ?? new Set()}
-                        onFilterChange={handleColumnFilterChange}
+                        {...bindColumn("qty")}
                         valueLabel={(v) => v}
                       />
                     </div>
@@ -819,8 +832,7 @@ export function PlanPage() {
                         currentSorts={sortConfigs}
                         onSortChange={handleSortChange}
                         values={uniqueValuesByField.name}
-                        selectedValues={columnFilters.name ?? new Set()}
-                        onFilterChange={handleColumnFilterChange}
+                        {...bindColumn("name")}
                       />
                     </div>
                     <div className="p-2">
@@ -830,8 +842,7 @@ export function PlanPage() {
                         currentSorts={sortConfigs}
                         onSortChange={handleSortChange}
                         values={uniqueValuesByField.route}
-                        selectedValues={columnFilters.route ?? new Set()}
-                        onFilterChange={handleColumnFilterChange}
+                        {...bindColumn("route")}
                       />
                     </div>
                     <div className="p-2">
@@ -841,8 +852,7 @@ export function PlanPage() {
                         currentSorts={sortConfigs}
                         onSortChange={handleSortChange}
                         values={uniqueValuesByField.errors}
-                        selectedValues={columnFilters.errors ?? new Set()}
-                        onFilterChange={handleColumnFilterChange}
+                        {...bindColumn("errors")}
                       />
                     </div>
                     <div className="p-2">
@@ -852,11 +862,17 @@ export function PlanPage() {
                         currentSorts={sortConfigs}
                         onSortChange={handleSortChange}
                         values={uniqueValuesByField.warnings}
-                        selectedValues={columnFilters.warnings ?? new Set()}
-                        onFilterChange={handleColumnFilterChange}
+                        {...bindColumn("warnings")}
                       />
                     </div>
-                    <div className="p-2 text-xs font-medium text-muted-foreground">Действия</div>
+                    <div className="p-2 text-xs font-medium text-muted-foreground">
+                      Действия
+                    </div>
+                    <TableCornerResetHeader
+                      as="div"
+                      hasActiveFilters={hasTableFiltersActive}
+                      onReset={resetAllFilters}
+                    />
                   </div>
 
                   {/* Data rows */}

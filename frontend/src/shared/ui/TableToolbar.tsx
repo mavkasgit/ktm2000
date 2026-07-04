@@ -1,34 +1,24 @@
 import React from "react";
-import { IconSearch, IconX } from "@tabler/icons-react";
+import { IconSearch } from "@tabler/icons-react";
 import { Input } from "./Input";
-import { Button } from "./Button";
 import { cn } from "@/shared/utils/cn";
 
 export interface TableToolbarProps {
   searchQuery: string;
   onSearchChange: (q: string) => void;
-  onReset: () => void;
-  hasActiveFilters?: boolean;
   placeholder?: string;
   children?: React.ReactNode;
   className?: string;
 }
 
-/**
- * Toolbar with search input, reset button, and slot for custom filter controls.
- * The reset button gets a filled background when there are active filters.
- */
+/** Toolbar with search input and slot for custom filter controls. */
 export function TableToolbar({
   searchQuery,
   onSearchChange,
-  onReset,
-  hasActiveFilters,
   placeholder = "Поиск...",
   children,
   className,
 }: TableToolbarProps) {
-  const active = hasActiveFilters ?? searchQuery.trim().length > 0;
-
   return (
     <div className={cn("flex items-center gap-3 mb-3 flex-wrap", className)}>
       <div className="relative flex-1 min-w-[200px] max-w-md">
@@ -42,28 +32,6 @@ export function TableToolbar({
         />
       </div>
       {children}
-      {active && (
-        <Button
-          variant="default"
-          size="sm"
-          className="h-8 text-sm"
-          onClick={onReset}
-        >
-          <IconX className="h-3.5 w-3.5 mr-1" />
-          Сбросить
-        </Button>
-      )}
-      {!active && (
-        <Button
-          variant="ghost"
-          size="sm"
-          className="h-8 text-sm text-muted-foreground"
-          onClick={onReset}
-        >
-          <IconX className="h-3.5 w-3.5 mr-1" />
-          Сбросить
-        </Button>
-      )}
     </div>
   );
 }

@@ -1,9 +1,9 @@
 import { useEffect, useState, useMemo } from "react";
-import { Dialog, DialogContent, DialogHeader, DialogTitle, Badge, renderIcon, SortableFilterHeader } from "@/shared/ui";
-import { getProductWipStats, ProductWipStats } from "@/shared/api/productionPlans";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, Badge, renderIcon, SortableFilterHeader, TableCornerResetCell, TableCornerResetHeader } from "@/shared/ui";
+import { getProductWipStats, ProductWipStats, type ProductWipRemainder } from "@/shared/api/productionPlans";
 import { Loader2, Layers, Package, ClipboardList, AlertCircle } from "lucide-react";
 import type { SortConfig } from "@/shared/hooks/useTableQueryEngine";
-import { nextMultiSortConfigs } from "@/shared/lib/multiSort";
+import { useFilterableTable } from "@/shared/hooks/useFilterableTable";
 
 interface ProductWipStatsDialogProps {
   sku: string | null;
@@ -13,26 +13,33 @@ interface ProductWipStatsDialogProps {
 
 type WipRemainderSortField = "name" | "qty";
 
+const DEFAULT_WIP_SORT: SortConfig<WipRemainderSortField>[] = [{ field: "qty", order: "desc" }];
+
 export function ProductWipStatsDialog({ sku, open, onOpenChange }: ProductWipStatsDialogProps) {
   const [data, setData] = useState<ProductWipStats | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const [sortConfigs, setSortConfigs] = useState<SortConfig<WipRemainderSortField>[]>([
-    { field: "qty", order: "desc" }
-  ]);
-  const [columnFilters, setColumnFilters] = useState<Partial<Record<WipRemainderSortField, Set<string>>>>({});
+  const {
+    bindColumn,
+    buildFilterPredicate,
+    sortConfigs,
+    setSortConfigs,
+    handleSort: handleSortChange,
+    hasActiveColumnFilters,
+    resetAll,
+    resetColumnFilters,
+  } = useFilterableTable<WipRemainderSortField>({
+    onExtraReset: () => setSortConfigs(DEFAULT_WIP_SORT),
+  });
 
-  const handleSortChange = (field: WipRemainderSortField) => {
-    setSortConfigs((prev) => nextMultiSortConfigs(prev, field));
-  };
+  const sortIsNonDefault =
+    sortConfigs.length !== 1 ||
+    sortConfigs[0]?.field !== "qty" ||
+    sortConfigs[0]?.order !== "desc";
 
-  const handleFilterChange = (field: WipRemainderSortField, selected: Set<string>) => {
-    setColumnFilters((prev) => ({
-      ...prev,
-      [field]: selected,
-    }));
-  };
+  const hasActiveFilters = hasActiveColumnFilters || sortIsNonDefault;
+  const handleResetFilters = resetAll;
 
   const uniqueValues = useMemo(() => {
     if (!data) return { name: [], qty: [] };
@@ -42,20 +49,19 @@ export function ProductWipStatsDialog({ sku, open, onOpenChange }: ProductWipSta
     };
   }, [data]);
 
+  const filterPredicate = useMemo(
+    () => buildFilterPredicate((rem: ProductWipRemainder, field) => {
+      if (field === "name") return rem.spg_name;
+      return String(rem.quantity);
+    }),
+    [buildFilterPredicate],
+  );
+
   const filteredRemainders = useMemo(() => {
     if (!data) return [];
-    return data.remainders.filter((rem) => {
-      const nameFilter = columnFilters["name"];
-      if (nameFilter && nameFilter.size > 0) {
-        if (!nameFilter.has(rem.spg_name)) return false;
-      }
-      const qtyFilter = columnFilters["qty"];
-      if (qtyFilter && qtyFilter.size > 0) {
-        if (!qtyFilter.has(String(rem.quantity))) return false;
-      }
-      return true;
-    });
-  }, [data, columnFilters]);
+    if (!filterPredicate) return data.remainders;
+    return data.remainders.filter(filterPredicate);
+  }, [data, filterPredicate]);
 
   const sortedRemainders = useMemo(() => {
     const list = [...filteredRemainders];
@@ -92,6 +98,12 @@ export function ProductWipStatsDialog({ sku, open, onOpenChange }: ProductWipSta
   }, [filteredRemainders, sortConfigs]);
 
   useEffect(() => {
+    if (open) {
+      setSortConfigs(DEFAULT_WIP_SORT);
+    }
+  }, [open, setSortConfigs]);
+
+  useEffect(() => {
     const currentSku = sku;
     if (!open || !currentSku) {
       setData(null);
@@ -99,8 +111,8 @@ export function ProductWipStatsDialog({ sku, open, onOpenChange }: ProductWipSta
       return;
     }
 
-    setSortConfigs([{ field: "qty", order: "desc" }]);
-    setColumnFilters({});
+    setSortConfigs(DEFAULT_WIP_SORT);
+    resetColumnFilters();
 
     let isMounted = true;
     async function loadStats() {
@@ -189,8 +201,7 @@ export function ProductWipStatsDialog({ sku, open, onOpenChange }: ProductWipSta
                             currentSorts={sortConfigs}
                             onSortChange={handleSortChange}
                             values={uniqueValues.name}
-                            selectedValues={columnFilters["name"] ?? new Set()}
-                            onFilterChange={handleFilterChange}
+                            {...bindColumn("name")}
                           />
                         </th>
                         <th className="px-3 py-2 font-medium text-muted-foreground w-[180px] text-right">
@@ -200,10 +211,13 @@ export function ProductWipStatsDialog({ sku, open, onOpenChange }: ProductWipSta
                             currentSorts={sortConfigs}
                             onSortChange={handleSortChange}
                             values={uniqueValues.qty}
-                            selectedValues={columnFilters["qty"] ?? new Set()}
-                            onFilterChange={handleFilterChange}
+                            {...bindColumn("qty")}
                           />
                         </th>
+                        <TableCornerResetHeader
+                          hasActiveFilters={hasActiveFilters}
+                          onReset={handleResetFilters}
+                        />
                       </tr>
                     </thead>
                     <tbody>
@@ -260,6 +274,7 @@ export function ProductWipStatsDialog({ sku, open, onOpenChange }: ProductWipSta
                           <td className="px-3 py-2 text-right font-mono font-semibold text-emerald-600 dark:text-emerald-400">
                             {rem.quantity.toLocaleString("ru-RU")}
                           </td>
+                          <TableCornerResetCell />
                         </tr>
                       ))}
                     </tbody>

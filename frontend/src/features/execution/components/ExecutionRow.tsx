@@ -1,5 +1,5 @@
 import { ProductionPlanningRow } from "@/shared/api/productionPlans";
-import { Badge, Button, PositionSkuCell } from "@/shared/ui";
+import { Badge, Button, PositionSkuCell, TableCornerResetCell } from "@/shared/ui";
 import { fmtQty } from "@/shared/utils/fmtQty";
 import { ArrowRight, RotateCcw, Trash2, XCircle } from "lucide-react";
 import { positionStatusLabels, positionStatusColor, routeMetaLabel, planPreviewUrl, getLaunchBlockReason } from "./execution-utils";
@@ -241,6 +241,7 @@ export function ExecutionRow({
           {renderCell(column.id)}
         </td>
       ))}
+      <TableCornerResetCell />
     </tr>
   );
 }

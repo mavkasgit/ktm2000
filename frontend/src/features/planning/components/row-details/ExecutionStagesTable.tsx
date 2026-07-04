@@ -1,6 +1,7 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { SortableFilterHeader } from "@/shared/ui";
+import { SortableFilterHeader, TableCornerResetCell, TableCornerResetHeader } from "@/shared/ui";
+import { useFilterableTable } from "@/shared/hooks/useFilterableTable";
 import { renderIcon } from "@/shared/ui/EntityDialog";
 import { listSections } from "@/shared/api/sections";
 import { queryKeys } from "@/shared/api/queryKeys";
@@ -8,10 +9,8 @@ import { fmtQty } from "@/shared/utils/fmtQty";
 import { type ProductionPlanningStage } from "@/shared/api/productionPlans";
 import {
   useTableQueryEngine,
-  type SortConfig,
   type ColumnSortDef,
 } from "@/shared/hooks/useTableQueryEngine";
-import { nextMultiSortConfigs } from "@/shared/lib/multiSort";
 
 const taskStatusLabels: Record<string, string> = {
   waiting_previous: "Ожидает этап",
@@ -96,8 +95,14 @@ export function ExecutionStagesTable({
   currentStageSectionId,
   currentStageSequence = null,
 }: ExecutionStagesTableProps) {
-  const [sortConfigs, setSortConfigs] = useState<SortConfig<StageSortField>[]>([]);
-  const [columnFilters, setColumnFilters] = useState<Partial<Record<StageSortField, Set<string>>>>({});
+  const {
+    bindColumn,
+    buildFilterPredicate,
+    sortConfigs,
+    handleSort: handleSortChange,
+    hasActiveFilters,
+    resetAll: handleResetFilters,
+  } = useFilterableTable<StageSortField>();
 
   const { data: sectionsData } = useQuery({
     queryKey: queryKeys.sections.all(),
@@ -132,32 +137,15 @@ export function ExecutionStagesTable({
     [],
   );
 
-  const handleSortChange = useCallback((field: StageSortField) => {
-    setSortConfigs((prev) => nextMultiSortConfigs(prev, field));
-  }, []);
-
-  const handleColumnFilterChange = useCallback((field: StageSortField, selected: Set<string>) => {
-    setColumnFilters((prev) => ({ ...prev, [field]: selected }));
-  }, []);
-
   const sortDefs = useMemo((): ColumnSortDef<(typeof stageRows)[number], StageSortField>[] => [
     { field: "section", getSortValue: (row) => getCellValue(row, "section") },
     { field: "status", getSortValue: (row) => getCellValue(row, "status") },
   ], [getCellValue]);
 
-  const filterPredicate = useMemo(() => {
-    const hasFilters = Object.values(columnFilters).some((selected) => selected && selected.size > 0);
-    if (!hasFilters) return null;
-    return (row: (typeof stageRows)[number]) => {
-      for (const [field, selected] of Object.entries(columnFilters)) {
-        if (selected && selected.size > 0) {
-          const cellValue = getCellValue(row, field as StageSortField);
-          if (!selected.has(cellValue)) return false;
-        }
-      }
-      return true;
-    };
-  }, [columnFilters, getCellValue]);
+  const filterPredicate = useMemo(
+    () => buildFilterPredicate(getCellValue),
+    [buildFilterPredicate, getCellValue],
+  );
 
   const uniqueValues = useMemo(
     () => ({
@@ -203,8 +191,7 @@ export function ExecutionStagesTable({
                 currentSorts={sortConfigs}
                 onSortChange={handleSortChange}
                 values={uniqueValues.section}
-                selectedValues={columnFilters.section ?? new Set()}
-                onFilterChange={handleColumnFilterChange}
+                {...bindColumn("section")}
               />
             </th>
             <th className="text-left px-2 py-2 font-medium min-w-[120px]">
@@ -214,8 +201,7 @@ export function ExecutionStagesTable({
                 currentSorts={sortConfigs}
                 onSortChange={handleSortChange}
                 values={uniqueValues.status}
-                selectedValues={columnFilters.status ?? new Set()}
-                onFilterChange={handleColumnFilterChange}
+                {...bindColumn("status")}
               />
             </th>
             <th className={numHeaderClass}>План</th>
@@ -227,6 +213,10 @@ export function ExecutionStagesTable({
             <th className={numHeaderClass}>Принято</th>
             <th className={numHeaderClass}>Остаток</th>
             <th className={numHeaderClass}>%</th>
+            <TableCornerResetHeader
+              hasActiveFilters={hasActiveFilters}
+              onReset={handleResetFilters}
+            />
           </tr>
         </thead>
         <tbody>
@@ -282,6 +272,7 @@ export function ExecutionStagesTable({
                 <td className={`px-2 py-1.5 text-right align-top tabular-nums ${Number(pct) === 0 ? "text-muted-foreground/70" : ""}`}>
                   {pct}%
                 </td>
+                <TableCornerResetCell />
               </tr>
             );
           })}

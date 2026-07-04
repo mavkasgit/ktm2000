@@ -10,9 +10,9 @@
 import { useMemo, useState, useCallback } from "react";
 import { ChevronDown, ChevronRight } from "lucide-react";
 import type { SectionBoardTask, TaskGroup } from "@/shared/api/shopfloor";
-import { Badge, Button, SortableFilterHeader, FiltersPanel, type FiltersPanelField } from "@/shared/ui";
-import { useTableQueryEngine, SortConfig, ColumnSortDef } from "@/shared/hooks/useTableQueryEngine";
-import { nextMultiSortConfigs } from "@/shared/lib/multiSort";
+import { Badge, Button, SortableFilterHeader, FiltersPanel, TableCornerResetCell, TableCornerResetHeader, buildActiveFilterSummary, type FiltersPanelField } from "@/shared/ui";
+import { useTableQueryEngine, ColumnSortDef } from "@/shared/hooks/useTableQueryEngine";
+import { useFilterableTable } from "@/shared/hooks/useFilterableTable";
 import { groupTasksByProfile, groupStatus, sortGroupsByPriority } from "../lib/groupTasksByProfile";
 import type { GroupingProfile } from "../lib/groupingProfiles";
 import {
@@ -230,6 +230,7 @@ function renderTaskRow(
           <span>Завершить</span>
         </Button>
       </td>
+      <TableCornerResetCell />
     </tr>
   );
 }
@@ -392,6 +393,7 @@ function TableTaskGroupRow({
           </Button>
         )}
       </td>
+      <TableCornerResetCell />
     </tr>
   );
 }
@@ -431,17 +433,19 @@ export function SectionTasksBoard({
   onSelectAllVisible,
   onCompleteGroup,
 }: SectionTasksBoardProps) {
-  const [sortConfigs, setSortConfigs] = useState<SortConfig<TaskSortField>[]>([]);
-  const [columnFilters, setColumnFilters] = useState<Partial<Record<TaskSortField, Set<string>>>>({});
   const [searchQuery, setSearchQuery] = useState("");
-
-  const handleSortChange = useCallback((field: TaskSortField) => {
-    setSortConfigs((prev) => nextMultiSortConfigs(prev, field));
-  }, []);
-
-  const handleColumnFilterChange = useCallback((field: TaskSortField, selected: Set<string>) => {
-    setColumnFilters((prev) => ({ ...prev, [field]: selected }));
-  }, []);
+  const {
+    bindColumn,
+    buildFilterPredicate,
+    columnFilters,
+    columnSearchQueries,
+    sortConfigs,
+    handleSort: handleSortChange,
+    resetAll: resetAllFilters,
+    hasActiveFilters: hasTableFiltersActive,
+  } = useFilterableTable<TaskSortField>({
+    extraHasActive: searchQuery.trim().length > 0,
+  });
 
   const searchIndex = useMemo(() => {
     const map = new Map<string, string>();
@@ -482,19 +486,10 @@ export function SectionTasksBoard({
     { field: "remainingQty", getSortValue: (t) => parseFloat(t.cache.remaining_quantity) || 0 },
   ], []);
 
-  const filterPredicate = useMemo(() => {
-    const hasFilters = Object.values(columnFilters).some((s) => s && s.size > 0);
-    if (!hasFilters) return null;
-    return (task: SectionBoardTask) => {
-      for (const [field, selected] of Object.entries(columnFilters)) {
-        if (selected && selected.size > 0) {
-          const cellValue = getTaskCellValue(task, field as TaskSortField);
-          if (!selected.has(cellValue)) return false;
-        }
-      }
-      return true;
-    };
-  }, [columnFilters]);
+  const filterPredicate = useMemo(
+    () => buildFilterPredicate(getTaskCellValue),
+    [buildFilterPredicate],
+  );
 
   const uniqueValues = useMemo(() => ({
     sequence: [...new Set(visibleTasks.map((t) => String(t.sequence)))],
@@ -622,23 +617,38 @@ export function SectionTasksBoard({
     },
   ], [mode, onModeChange, searchQuery, bulkMode, onBulkModeChange, modeCounts]);
 
-  const activeFilterSummary = useMemo(() => {
-    const labels: string[] = [];
-    if (searchQuery.trim()) labels.push("Поиск");
-    return { count: labels.length, labels };
-  }, [searchQuery]);
+  const handleResetAllFilters = useCallback(() => {
+    setSearchQuery("");
+    resetAllFilters();
+    bulkSelection?.clear();
+    onBulkModeChange?.(false);
+  }, [resetAllFilters, bulkSelection, onBulkModeChange]);
+
+  const activeFilterSummary = useMemo(
+    () =>
+      buildActiveFilterSummary({}, searchQuery, sortConfigs.length, {
+        columnFilters,
+        columnSearchQueries,
+        columnLabels: {
+          sequence: "№",
+          productSku: "Артикул",
+          status: "Статус",
+          plannedQty: "План",
+          issuedQty: "Выдано",
+          completedQty: "Готово",
+          transferredQty: "Передано",
+          rejectedQty: "Брак",
+          remainingQty: "Остаток",
+        },
+      }),
+    [searchQuery, sortConfigs.length, columnFilters, columnSearchQueries],
+  );
 
   return (
     <div className="space-y-3">
       <FiltersPanel
         compact
         fields={modeFields}
-        onReset={() => {
-          setSearchQuery("");
-          bulkSelection?.clear();
-          onBulkModeChange?.(false);
-        }}
-        hasActiveFilters={activeFilterSummary.count > 0}
         activeSummary={activeFilterSummary}
         onSelectAll={() => {
           onBulkModeChange?.(true);
@@ -648,13 +658,13 @@ export function SectionTasksBoard({
       />
 
       {isLoading && <div className="rounded-lg border p-4 text-sm text-muted-foreground">Загрузка задач...</div>}
-      {!isLoading && sortedTasks.length === 0 && (
+      {!isLoading && visibleTasks.length === 0 && (
         <div className="rounded-lg border p-4 text-sm text-muted-foreground text-center">
-          {visibleTasks.length === 0 ? "Нет задач в выбранном режиме" : "Нет задач, соответствующих фильтру"}
+          Нет задач в выбранном режиме
         </div>
       )}
 
-      {!isLoading && sortedTasks.length > 0 && (
+      {!isLoading && visibleTasks.length > 0 && (
         <>
           {/* Desktop table */}
           <div className="hidden md:block rounded-lg border overflow-auto">
@@ -671,8 +681,7 @@ export function SectionTasksBoard({
                       currentSorts={sortConfigs}
                       onSortChange={handleSortChange}
                       values={uniqueValues.productSku}
-                      selectedValues={columnFilters.productSku ?? new Set()}
-                      onFilterChange={handleColumnFilterChange}
+                      {...bindColumn("productSku")}
                     />
                   </th>
                   <th className="text-left p-2 text-xs font-medium">Операция</th>
@@ -683,8 +692,7 @@ export function SectionTasksBoard({
                       currentSorts={sortConfigs}
                       onSortChange={handleSortChange}
                       values={uniqueValues.plannedQty}
-                      selectedValues={columnFilters.plannedQty ?? new Set()}
-                      onFilterChange={handleColumnFilterChange}
+                      {...bindColumn("plannedQty")}
                     />
                   </th>
                   <th className="text-left p-2">
@@ -694,8 +702,7 @@ export function SectionTasksBoard({
                       currentSorts={sortConfigs}
                       onSortChange={handleSortChange}
                       values={uniqueValues.issuedQty}
-                      selectedValues={columnFilters.issuedQty ?? new Set()}
-                      onFilterChange={handleColumnFilterChange}
+                      {...bindColumn("issuedQty")}
                     />
                   </th>
                   <th className="text-left p-2">
@@ -705,8 +712,7 @@ export function SectionTasksBoard({
                       currentSorts={sortConfigs}
                       onSortChange={handleSortChange}
                       values={uniqueValues.completedQty}
-                      selectedValues={columnFilters.completedQty ?? new Set()}
-                      onFilterChange={handleColumnFilterChange}
+                      {...bindColumn("completedQty")}
                     />
                   </th>
                   <th className="text-left p-2">
@@ -716,8 +722,7 @@ export function SectionTasksBoard({
                       currentSorts={sortConfigs}
                       onSortChange={handleSortChange}
                       values={uniqueValues.rejectedQty}
-                      selectedValues={columnFilters.rejectedQty ?? new Set()}
-                      onFilterChange={handleColumnFilterChange}
+                      {...bindColumn("rejectedQty")}
                     />
                   </th>
                   <th className="text-left p-2">
@@ -727,8 +732,7 @@ export function SectionTasksBoard({
                       currentSorts={sortConfigs}
                       onSortChange={handleSortChange}
                       values={uniqueValues.transferredQty}
-                      selectedValues={columnFilters.transferredQty ?? new Set()}
-                      onFilterChange={handleColumnFilterChange}
+                      {...bindColumn("transferredQty")}
                     />
                   </th>
                   <th className="text-left p-2">
@@ -738,8 +742,7 @@ export function SectionTasksBoard({
                       currentSorts={sortConfigs}
                       onSortChange={handleSortChange}
                       values={uniqueValues.remainingQty}
-                      selectedValues={columnFilters.remainingQty ?? new Set()}
-                      onFilterChange={handleColumnFilterChange}
+                      {...bindColumn("remainingQty")}
                     />
                   </th>
                   <th className="text-left p-2">
@@ -749,17 +752,29 @@ export function SectionTasksBoard({
                       currentSorts={sortConfigs}
                       onSortChange={handleSortChange}
                       values={uniqueValues.status}
-                      selectedValues={columnFilters.status ?? new Set()}
-                      onFilterChange={handleColumnFilterChange}
+                      {...bindColumn("status")}
                       valueLabel={statusLabel}
                     />
                   </th>
                   <th className="text-left p-2 text-xs font-medium">Пред. этап</th>
-                  <th className="text-left p-2 text-xs font-medium">Действия</th>
+                  <th className="text-left p-2 text-xs font-medium text-muted-foreground">
+                    Действия
+                  </th>
+                  <TableCornerResetHeader
+                    hasActiveFilters={hasTableFiltersActive}
+                    onReset={handleResetAllFilters}
+                  />
                 </tr>
               </thead>
               <tbody>
-                {groups.map((group) => {
+                {sortedTasks.length === 0 ? (
+                  <tr>
+                    <td colSpan={13} className="p-8 text-center text-sm text-muted-foreground">
+                      Нет задач, соответствующих фильтру
+                    </td>
+                  </tr>
+                ) : (
+                groups.map((group) => {
                   const isCollapsed = collapsedGroups.has(group.key);
                   const isSingleTask = group.tasks.length === 1;
 
@@ -803,14 +818,19 @@ export function SectionTasksBoard({
                       })}
                     </>
                   );
-                })}
+                })
+                )}
               </tbody>
             </table>
           </div>
 
           {/* Mobile cards */}
           <div className="md:hidden space-y-3">
-            {groups.map((group) => {
+            {sortedTasks.length === 0 ? (
+              <div className="rounded-lg border p-4 text-sm text-muted-foreground text-center">
+                Нет задач, соответствующих фильтру
+              </div>
+            ) : groups.map((group) => {
               const isCollapsed = collapsedGroups.has(group.key);
               const isSingleTask = group.tasks.length === 1;
 

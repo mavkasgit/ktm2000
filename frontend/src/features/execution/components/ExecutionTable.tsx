@@ -1,7 +1,8 @@
 import { useMemo, useRef } from "react";
 import { ListChecks } from "lucide-react";
 import { ProductionPlanningRow } from "@/shared/api/productionPlans";
-import { Button, FiltersPanel, VirtualizedTableBody, SortableFilterHeader, type FiltersPanelField } from "@/shared/ui";
+import { Button, FiltersPanel, VirtualizedTableBody, SortableFilterHeader, TableCornerResetHeader, type FiltersPanelField } from "@/shared/ui";
+import type { useFilterableTable } from "@/shared/hooks/useFilterableTable";
 import { SortConfig } from "@/shared/hooks/useTableQueryEngine";
 import { ExecutionSortField, positionStatusLabels } from "./execution-utils";
 import { fmtQty } from "@/shared/utils/fmtQty";
@@ -24,15 +25,13 @@ interface ExecutionTableProps {
   completedRows: number;
   // filters
   filterFields: FiltersPanelField[];
-  resetFilters: () => void;
   activeFilterSummary: { count: number; labels: string[] };
+  tableHasActiveFilters: boolean;
   // sorting
   sortConfigs: SortConfig<ExecutionSortField>[];
   handleSortChange: (field: ExecutionSortField) => void;
   getAriaSort: (field: ExecutionSortField) => "none" | "ascending" | "descending";
-  // column filters
-  columnFilters: Partial<Record<ExecutionSortField, Set<string>>>;
-  onColumnFilterChange: (field: ExecutionSortField, selected: Set<string>) => void;
+  bindColumn: ReturnType<typeof useFilterableTable<ExecutionSortField>>["bindColumn"];
   uniqueValuesByField: {
     id: string[];
     row: string[];
@@ -93,13 +92,12 @@ export function ExecutionTable({
   releasedRows,
   completedRows,
   filterFields,
-  resetFilters,
   activeFilterSummary,
+  tableHasActiveFilters,
   sortConfigs,
   handleSortChange,
   getAriaSort,
-  columnFilters,
-  onColumnFilterChange,
+  bindColumn,
   uniqueValuesByField,
   hideColumnIds,
   bulkSelection,
@@ -248,8 +246,6 @@ export function ExecutionTable({
           <FiltersPanel
             compact
             fields={filterFields}
-            onReset={onResetAll}
-            hasActiveFilters={activeFilterSummary.count > 0}
             activeSummary={activeFilterSummary}
             actions={bulkActions}
             onSelectAll={() => {
@@ -278,6 +274,7 @@ export function ExecutionTable({
                     style={{ width: column.width }}
                   />
                 ))}
+                <col style={{ width: "2.5rem" }} />
               </colgroup>
               <thead>
                 <tr>
@@ -294,21 +291,26 @@ export function ExecutionTable({
                           currentSorts={sortConfigs}
                           onSortChange={handleSortChange}
                           values={uniqueValuesByField[column.sortField]}
-                          selectedValues={columnFilters[column.sortField] ?? new Set()}
-                          onFilterChange={onColumnFilterChange}
+                          {...bindColumn(column.sortField)}
                           valueLabel={column.sortField === "status" ? (v) => positionStatusLabels[v] ?? v : undefined}
                         />
+                      ) : column.id === "actions" ? (
+                        <span className="block truncate">{column.label}</span>
                       ) : (
                         <span className="block truncate">{column.label}</span>
                       )}
                     </th>
                   ))}
+                  <TableCornerResetHeader
+                    hasActiveFilters={tableHasActiveFilters}
+                    onReset={onResetAll}
+                  />
                 </tr>
               </thead>
               <VirtualizedTableBody
                 rows={filteredRows}
                 rowHeight={48}
-                colSpan={visibleColumns.length}
+                colSpan={visibleColumns.length + 1}
                 scrollContainerRef={tableScrollRef as React.RefObject<HTMLElement | null>}
                 renderRow={(row, rowIdx) => (
                   <ExecutionRow

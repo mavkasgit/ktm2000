@@ -712,8 +712,6 @@ export function ImportWizard(props: {
                 <FiltersPanel
                   compact
                   fields={previewFilterFields}
-                  onReset={resetPreviewFilters}
-                  hasActiveFilters={previewActiveFilterSummary.count > 0}
                   activeSummary={previewActiveFilterSummary}
                   className="p-3"
                   actions={(
@@ -755,6 +753,8 @@ export function ImportWizard(props: {
                     sortConfig={sortConfig}
                     onSort={toggleSort}
                     expansion={expansion}
+                    hasActiveFilters={previewActiveFilterSummary.count > 0}
+                    onReset={resetPreviewFilters}
                   />
                 </ImportPreview.TableFrame>
               </>

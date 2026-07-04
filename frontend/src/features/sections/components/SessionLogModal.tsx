@@ -1,4 +1,4 @@
-import { useState, useMemo, Fragment, useEffect } from "react";
+import { useState, useMemo, Fragment, useEffect, useCallback } from "react";
 import {
   CheckCircle2,
   AlertCircle,
@@ -14,9 +14,10 @@ import {
 } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { getAuditLogs, type AuditLogEntry } from "@/shared/api/auditLogs";
-import { SectionSelect, SortableFilterHeader } from "@/shared/ui";
+import { SectionSelect, SortableFilterHeader, TableCornerResetCell, TableCornerResetHeader } from "@/shared/ui";
 import type { Section } from "@/shared/api/sections";
 import { listSections } from "@/shared/api/sections";
+import { useFilterableTable } from "@/shared/hooks/useFilterableTable";
 
 interface SessionLogModalProps {
   open: boolean;
@@ -61,6 +62,22 @@ function highlightText(text: string, search: string) {
 }
 
 type LogField = "status" | "createdAt" | "sectionName" | "productSku" | "taskIds" | "operationName" | "qtyText";
+type LogFilterField = "status" | "sectionName" | "productSku" | "taskIds" | "operationName";
+
+function getLogCellValue(entry: AuditLogEntry, field: LogFilterField): string {
+  switch (field) {
+    case "status":
+      return entry.status;
+    case "sectionName":
+      return entry.section_name || "—";
+    case "productSku":
+      return entry.product_sku || "—";
+    case "operationName":
+      return entry.operation_name || "—";
+    case "taskIds":
+      return entry.task_ids ? entry.task_ids.split(",")[0].trim() : "—";
+  }
+}
 export function SessionLogModal({
   open,
   onClose,
@@ -82,10 +99,42 @@ export function SessionLogModal({
   const limit = 50;
   const offset = (page - 1) * limit;
 
-  // Состояния сортировки через системный формат SortConfig
-  const [sortConfigs, setSortConfigs] = useState<{ field: LogField; order: "asc" | "desc" }[]>([
-    { field: "createdAt", order: "desc" }
-  ]);
+  const {
+    bindColumn,
+    buildFilterPredicate,
+    columnFilters,
+    columnSearchQueries,
+    sortConfigs,
+    setSortConfigs,
+    hasActiveColumnFilters,
+    resetAll,
+  } = useFilterableTable<LogFilterField, LogField>({
+    extraHasActive: search.trim().length > 0 || statusFilter !== "all",
+    onExtraReset: () => {
+      setSearch("");
+      setStatusFilter("all");
+      setSortConfigs([{ field: "createdAt", order: "desc" }]);
+    },
+  });
+
+  useEffect(() => {
+    if (open) {
+      setSortConfigs([{ field: "createdAt", order: "desc" }]);
+    }
+  }, [open, setSortConfigs]);
+
+  const sortIsNonDefault =
+    sortConfigs.length !== 1 ||
+    sortConfigs[0]?.field !== "createdAt" ||
+    sortConfigs[0]?.order !== "desc";
+
+  const hasActiveFilters =
+    search.trim().length > 0 ||
+    statusFilter !== "all" ||
+    hasActiveColumnFilters ||
+    sortIsNonDefault;
+
+  const handleResetFilters = resetAll;
 
   // Состояние раскрытых строк
   const [expandedRows, setExpandedRows] = useState<Set<number>>(new Set());
@@ -93,7 +142,7 @@ export function SessionLogModal({
   // Сброс страницы при изменении фильтров
   useEffect(() => {
     setPage(1);
-  }, [search, statusFilter, selectedSectionId]);
+  }, [search, statusFilter, selectedSectionId, columnFilters, columnSearchQueries]);
 
   // Запрос списка участков, если они не переданы
   const { data: queriedSections } = useQuery({
@@ -133,20 +182,36 @@ export function SessionLogModal({
 
   const availableSections = sections || [];
 
-  // Вычисление уникальных значений (заглушка для совместимости с интерфейсом)
-  const uniqueValues = useMemo(() => {
-    return {
-      status: [],
-      sectionName: [],
-      productSku: [],
-      operationName: [],
-      taskIds: [],
-    };
-  }, []);
+  const uniqueValues = useMemo(() => ({
+    status: [...new Set(parsedLogs.map((entry) => entry.status))].sort(),
+    sectionName: [...new Set(parsedLogs.map((entry) => entry.section_name || "—"))].sort((a, b) =>
+      a.localeCompare(b, "ru"),
+    ),
+    productSku: [...new Set(parsedLogs.map((entry) => entry.product_sku || "—"))].sort((a, b) =>
+      a.localeCompare(b, "ru"),
+    ),
+    operationName: [...new Set(parsedLogs.map((entry) => entry.operation_name || "—"))].sort((a, b) =>
+      a.localeCompare(b, "ru"),
+    ),
+    taskIds: [...new Set(parsedLogs.map((entry) =>
+      entry.task_ids ? entry.task_ids.split(",")[0].trim() : "—",
+    ))].sort((a, b) => {
+      const numA = Number.parseInt(a, 10) || 0;
+      const numB = Number.parseInt(b, 10) || 0;
+      return numA - numB;
+    }),
+  }), [parsedLogs]);
+
+  const columnFilterPredicate = useMemo(
+    () => buildFilterPredicate(getLogCellValue),
+    [buildFilterPredicate],
+  );
 
   // Filter and sort logs (сортировка локальная в пределах текущей страницы)
   const processedLogs = useMemo(() => {
-    let result = [...parsedLogs];
+    let result = columnFilterPredicate
+      ? parsedLogs.filter(columnFilterPredicate)
+      : [...parsedLogs];
 
     const activeSort = sortConfigs[0];
     if (activeSort) {
@@ -193,7 +258,7 @@ export function SessionLogModal({
     }
 
     return result;
-  }, [parsedLogs, sortConfigs]);
+  }, [parsedLogs, sortConfigs, columnFilterPredicate]);
 
   const handleSortChange = (field: LogField) => {
     setSortConfigs((prev) => {
@@ -208,10 +273,6 @@ export function SessionLogModal({
     });
   };
 
-  const handleColumnFilterChange = () => {
-    // Временно заглушено, фильтрация идет через глобальные фильтры
-  };
-
   const toggleRow = (id: number) => {
     setExpandedRows((prev) => {
       const next = new Set(prev);
@@ -223,16 +284,6 @@ export function SessionLogModal({
       return next;
     });
   };
-
-  const columnFilters = useMemo(() => {
-    return {
-      status: new Set<string>(),
-      sectionName: new Set<string>(),
-      productSku: new Set<string>(),
-      operationName: new Set<string>(),
-      taskIds: new Set<string>(),
-    };
-  }, []);
 
   const renderSimpleSortHeader = (field: LogField, label: string) => {
     const activeSort = sortConfigs.find((s) => s.field === field);
@@ -419,14 +470,13 @@ export function SessionLogModal({
                 <thead className="[&_th]:sticky [&_th]:top-0 [&_th]:z-20 [&_th]:bg-slate-100 [&_th]:border-b [&_th]:border-slate-200">
                   <tr>
                     <th className="w-[10%] p-3 text-left">
-                      <SortableFilterHeader<LogField>
+                      <SortableFilterHeader<LogFilterField>
                         field="status"
                         label="Статус"
-                        currentSorts={sortConfigs}
-                        onSortChange={handleSortChange}
+                        currentSorts={sortConfigs as { field: LogFilterField; order: "asc" | "desc" }[]}
+                        onSortChange={(field) => handleSortChange(field as LogField)}
                         values={uniqueValues.status}
-                        selectedValues={columnFilters.status}
-                        onFilterChange={handleColumnFilterChange}
+                        {...bindColumn("status")}
                         valueLabel={(val) => 
                           val === "success" ? "Успешно" : val === "error" ? "Ошибка" : "Информация"
                         }
@@ -436,48 +486,44 @@ export function SessionLogModal({
                       {renderSimpleSortHeader("createdAt", "Дата и время")}
                     </th>
                     <th className="w-[13%] p-3 text-left">
-                      <SortableFilterHeader<LogField>
+                      <SortableFilterHeader<LogFilterField>
                         field="sectionName"
                         label="Участок"
-                        currentSorts={sortConfigs}
-                        onSortChange={handleSortChange}
+                        currentSorts={sortConfigs as { field: LogFilterField; order: "asc" | "desc" }[]}
+                        onSortChange={(field) => handleSortChange(field as LogField)}
                         values={uniqueValues.sectionName}
-                        selectedValues={columnFilters.sectionName}
-                        onFilterChange={handleColumnFilterChange}
+                        {...bindColumn("sectionName")}
                       />
                     </th>
                     <th className="w-[10%] p-3 text-left">
-                      <SortableFilterHeader<LogField>
+                      <SortableFilterHeader<LogFilterField>
                         field="taskIds"
                         label="Задание"
-                        currentSorts={sortConfigs}
-                        onSortChange={handleSortChange}
+                        currentSorts={sortConfigs as { field: LogFilterField; order: "asc" | "desc" }[]}
+                        onSortChange={(field) => handleSortChange(field as LogField)}
                         values={uniqueValues.taskIds}
-                        selectedValues={columnFilters.taskIds}
-                        onFilterChange={handleColumnFilterChange}
+                        {...bindColumn("taskIds")}
                         valueLabel={(val) => `#${val}`}
                       />
                     </th>
                     <th className="w-[13%] p-3 text-left">
-                      <SortableFilterHeader<LogField>
+                      <SortableFilterHeader<LogFilterField>
                         field="productSku"
                         label="Артикул"
-                        currentSorts={sortConfigs}
-                        onSortChange={handleSortChange}
+                        currentSorts={sortConfigs as { field: LogFilterField; order: "asc" | "desc" }[]}
+                        onSortChange={(field) => handleSortChange(field as LogField)}
                         values={uniqueValues.productSku}
-                        selectedValues={columnFilters.productSku}
-                        onFilterChange={handleColumnFilterChange}
+                        {...bindColumn("productSku")}
                       />
                     </th>
                     <th className="w-[16%] p-3 text-left">
-                      <SortableFilterHeader<LogField>
+                      <SortableFilterHeader<LogFilterField>
                         field="operationName"
                         label="Операция"
-                        currentSorts={sortConfigs}
-                        onSortChange={handleSortChange}
+                        currentSorts={sortConfigs as { field: LogFilterField; order: "asc" | "desc" }[]}
+                        onSortChange={(field) => handleSortChange(field as LogField)}
                         values={uniqueValues.operationName}
-                        selectedValues={columnFilters.operationName}
-                        onFilterChange={handleColumnFilterChange}
+                        {...bindColumn("operationName")}
                       />
                     </th>
                     <th className="w-[12%] p-3 text-left">
@@ -486,6 +532,10 @@ export function SessionLogModal({
                     <th className="w-[10%] p-3 text-left text-xs font-bold text-slate-500 uppercase tracking-normal select-none">
                       Подробности
                     </th>
+                    <TableCornerResetHeader
+                      hasActiveFilters={hasActiveFilters}
+                      onReset={handleResetFilters}
+                    />
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 bg-white">
@@ -634,10 +684,11 @@ export function SessionLogModal({
                               </button>
                             </div>
                           </td>
+                          <TableCornerResetCell />
                         </tr>
                         {isExpanded && (
                           <tr className="bg-slate-50/50">
-                            <td colSpan={8} className="p-4 border-b border-slate-200">
+                            <td colSpan={9} className="p-4 border-b border-slate-200">
                               <div className="bg-white rounded-lg border border-slate-200 p-4 shadow-sm space-y-3 text-xs text-slate-700">
                                 <div className="flex items-center justify-between border-b border-slate-100 pb-2 mb-1">
                                   <div className="flex items-center gap-2">

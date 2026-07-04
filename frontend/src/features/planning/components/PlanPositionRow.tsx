@@ -344,6 +344,7 @@ export function PositionRow({ pos, onApprove, onDelete, selected, routes, onAssi
           )}
         </div>
       </div>
+      <div />
     </div>
 
     <AlertDialog open={approveDialogOpen} onOpenChange={setApproveDialogOpen}>

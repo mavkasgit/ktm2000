@@ -2,8 +2,8 @@ import { Loader2, Search, AlertCircle } from "lucide-react";
 
 import { cn } from "@/shared/utils/cn";
 import { Badge } from "../Badge";
-import { Button } from "../Button";
 import { Input } from "../Input";
+
 import type { ImportRowExpansion } from "./importRawRows";
 import { ImportRawRowsToggle } from "./importRawRows";
 
@@ -173,7 +173,8 @@ export type ImportPreviewTableFrameProps = {
   loadingLabel?: string;
   isEmpty?: boolean;
   emptyContent?: React.ReactNode;
-  onResetFilters?: () => void;
+  hasActiveFilters?: boolean;
+  onReset?: () => void;
   children: React.ReactNode;
   className?: string;
 };
@@ -185,7 +186,8 @@ export function ImportPreviewTableFrame({
   loadingLabel = "Загрузка данных листа...",
   isEmpty,
   emptyContent,
-  onResetFilters,
+  hasActiveFilters,
+  onReset,
   children,
   className,
 }: ImportPreviewTableFrameProps) {
@@ -201,16 +203,7 @@ export function ImportPreviewTableFrame({
         ) : null)
       ) : isEmpty ? (
         <div className="p-8 text-center text-xs text-muted-foreground h-full flex flex-col items-center justify-center gap-2 min-h-[200px]">
-          {emptyContent ?? (
-            <>
-              <span>Нет данных для отображения.</span>
-              {onResetFilters ? (
-                <Button variant="outline" size="sm" className="h-7 text-xs" onClick={onResetFilters}>
-                  Сбросить фильтры
-                </Button>
-              ) : null}
-            </>
-          )}
+          {emptyContent ?? <span>Нет данных для отображения.</span>}
         </div>
       ) : (
         children

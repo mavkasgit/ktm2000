@@ -186,6 +186,7 @@ export function SpgSnapshotPage() {
             balances={spgFilteredBalances}
             isLoading={loadingBalances}
             searchQuery={searchQuery}
+            onSearchQueryReset={() => setSearchQuery("")}
             onSelectProduct={handleSelectProduct}
             onShowHistory={handleShowHistory}
           />

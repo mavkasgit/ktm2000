@@ -18,9 +18,12 @@ import {
 } from "@/shared/api/productionPlans";
 import { RemainderAllocationDialog } from "../components/RemainderAllocationDialog";
 import { listSections } from "@/shared/api/sections";
-import { useTableQueryEngine, SortConfig, ColumnSortDef } from "@/shared/hooks/useTableQueryEngine";
-import { nextMultiSortConfigs } from "@/shared/lib/multiSort";
+import { useTableQueryEngine, ColumnSortDef } from "@/shared/hooks/useTableQueryEngine";
+import { useFilterableTable } from "@/shared/hooks/useFilterableTable";
+
+
 import { toast } from "@/shared/ui/use-toast";
+import { buildActiveFilterSummary } from "@/shared/ui/buildActiveFilterSummary";
 import { getErrorMessage } from "@/shared/api/client";
 import { queryKeys } from "@/shared/api/queryKeys";
 import {
@@ -55,17 +58,19 @@ export function ExecutionPage() {
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [hideColumnIds, setHideColumnIds] = useState(false);
-  const [sortConfigs, setSortConfigs] = useState<SortConfig<ExecutionSortField>[]>([]);
-  const [columnFilters, setColumnFilters] = useState<
-    Partial<Record<ExecutionSortField, Set<string>>>
-  >({});
-
-  const handleColumnFilterChange = useCallback(
-    (field: ExecutionSortField, selected: Set<string>) => {
-      setColumnFilters((prev) => ({ ...prev, [field]: selected }));
-    },
-    [],
-  );
+  const {
+    bindColumn,
+    buildFilterPredicate,
+    columnFilters,
+    columnSearchQueries,
+    sortConfigs,
+    setSortConfigs,
+    handleSort: handleSortChange,
+    resetColumnFilters,
+    hasActiveFilters: hasTableFiltersActive,
+  } = useFilterableTable<ExecutionSortField>({
+    extraHasActive: searchQuery.trim().length > 0,
+  });
 
   const { data: rows, isLoading, error } = useQuery({
     queryKey: queryKeys.execution.rows(),
@@ -540,25 +545,30 @@ export function ExecutionPage() {
   }, [cancelDialog.positionId, cancelPositionMutation]);
 
   // Filter states
-  const executionActiveFilterSummary = useMemo(() => {
-    const labels: string[] = [];
-    if (searchQuery.trim()) labels.push("Поиск");
-    const columnFilterFields: Partial<Record<ExecutionSortField, string>> = {
-      id: "ID", row: "Строка", plan: "План", sku: "SKU", name: "Наименование",
-      qty: "Кол-во", route: "Маршрут", status: "Статус", stage: "Этап",
-    };
-    for (const [field, selected] of Object.entries(columnFilters)) {
-      if (selected && selected.size > 0) {
-        labels.push(`Колонка: ${columnFilterFields[field as ExecutionSortField] || field}`);
-      }
-    }
-    return { count: labels.length, labels };
-  }, [columnFilters, searchQuery]);
+  const executionActiveFilterSummary = useMemo(
+    () =>
+      buildActiveFilterSummary({}, searchQuery, sortConfigs.length, {
+        columnFilters,
+        columnSearchQueries,
+        columnLabels: {
+          id: "ID",
+          row: "Строка",
+          plan: "План",
+          sku: "SKU",
+          name: "Наименование",
+          qty: "Кол-во",
+          route: "Маршрут",
+          status: "Статус",
+          stage: "Этап",
+        },
+      }),
+    [columnFilters, columnSearchQueries, searchQuery, sortConfigs.length],
+  );
 
   const resetExecutionFilters = useCallback(() => {
     setSearchQuery("");
-    setColumnFilters({});
-  }, []);
+    resetColumnFilters();
+  }, [resetColumnFilters]);
 
   const executionFilterFields = useMemo(() => [
     {
@@ -605,20 +615,10 @@ export function ExecutionPage() {
     };
   }, [rows, planNameById]);
 
-  const combinedPredicate = useMemo(() => {
-    const activeColumnFilters = Object.entries(columnFilters).filter(
-      ([, selected]) => selected && selected.size > 0,
-    );
-    if (activeColumnFilters.length === 0) return null;
-
-    return (row: ProductionPlanningRow) => {
-      for (const [field, selected] of activeColumnFilters) {
-        const cellValue = getCellValue(row, field as ExecutionSortField);
-        if (!selected.has(cellValue)) return false;
-      }
-      return true;
-    };
-  }, [columnFilters]);
+  const combinedPredicate = useMemo(
+    () => buildFilterPredicate(getCellValue),
+    [buildFilterPredicate],
+  );
 
   const executionSortDefs: ColumnSortDef<ProductionPlanningRow, ExecutionSortField>[] = useMemo(() => [
     { field: "id", getSortValue: (r) => r.plan_position_id },
@@ -651,6 +651,7 @@ export function ExecutionPage() {
   const handleResetAll = useCallback(() => {
     bulkSelection.clear();
     resetExecutionFilters();
+    setSortConfigs([]);
     setSelectionOrder([]);
   }, [bulkSelection, resetExecutionFilters]);
 
@@ -847,10 +848,6 @@ export function ExecutionPage() {
   const releasedRows = rows?.filter((r) => r.is_released && !r.is_completed).length || 0;
   const completedRows = rows?.filter((r) => r.is_completed).length || 0;
 
-  const handleSortChange = (field: ExecutionSortField) => {
-    setSortConfigs((prev) => nextMultiSortConfigs(prev, field));
-  };
-
   const getAriaSort = (field: ExecutionSortField): "none" | "ascending" | "descending" => {
     const active = sortConfigs.find((s) => s.field === field);
     if (!active) return "none";
@@ -881,13 +878,12 @@ export function ExecutionPage() {
         releasedRows={releasedRows}
         completedRows={completedRows}
         filterFields={executionFilterFields}
-        resetFilters={resetExecutionFilters}
         activeFilterSummary={executionActiveFilterSummary}
+        tableHasActiveFilters={hasTableFiltersActive}
         sortConfigs={sortConfigs}
         handleSortChange={handleSortChange}
         getAriaSort={getAriaSort}
-        columnFilters={columnFilters}
-        onColumnFilterChange={handleColumnFilterChange}
+        bindColumn={bindColumn}
         uniqueValuesByField={uniqueValuesByField}
         hideColumnIds={hideColumnIds}
         bulkSelection={bulkSelection}

@@ -15,10 +15,14 @@ import { getPhotoUrl } from "../components/getPhotoUrl";
 import type { Product, CreateProductInput, PatchProductInput, CatalogPreview } from "@/shared/api/products";
 import { usePermission } from "@/features/auth/hooks/usePermission";
 import { SortableFilterHeader } from "@/shared/ui/SortableFilterHeader";
+import { TableCornerResetCell, TableCornerResetHeader } from "@/shared/ui";
+import { useSortableColumnFilters } from "@/shared/hooks/useSortableColumnFilters";
+import { matchesPartialSearch } from "@/shared/lib/columnFilterSearch";
 
 type ViewMode = "grid" | "table";
 type DialogMode = "create" | "edit";
 type SortField = "sku" | "name" | "length_mm" | "quantity_per_hanger" | "id" | "is_paired_profile" | "skip_shot_blast" | "aliases" | "is_laminated";
+type ColumnFilterField = "sku" | "quantity_per_hanger" | "length_mm" | "is_paired_profile" | "skip_shot_blast" | "is_laminated";
 type SortOrder = "asc" | "desc";
 
 interface SortConfig {
@@ -29,6 +33,35 @@ interface SortConfig {
 function getProductLengths(product: Product): number[] {
   return [...new Set([...(product.lengths_mm ?? []), product.length_mm ?? undefined].filter((v): v is number => typeof v === "number" && Number.isFinite(v) && v > 0))]
     .sort((a, b) => a - b);
+}
+
+function getProductFilterCellValue(product: Product, field: Exclude<ColumnFilterField, "length_mm">): string {
+  switch (field) {
+    case "sku":
+      return product.sku;
+    case "quantity_per_hanger":
+      return product.quantity_per_hanger !== null && product.quantity_per_hanger !== undefined
+        ? String(product.quantity_per_hanger)
+        : "—";
+    case "is_paired_profile":
+      return product.is_paired_profile ? "Да" : "Нет";
+    case "skip_shot_blast":
+      return product.skip_shot_blast ? "Да" : "Нет";
+    case "is_laminated":
+      return product.is_laminated ? "Да" : "Нет";
+  }
+}
+
+function productMatchesLengthMmFilter(
+  product: Product,
+  selected: Set<string> | undefined,
+  search: string | undefined,
+): boolean {
+  const lengths = getProductLengths(product).map(String);
+  const q = search?.trim();
+  if (q && !lengths.some((len) => matchesPartialSearch(len, q))) return false;
+  if (selected && selected.size > 0 && !lengths.some((len) => selected.has(len))) return false;
+  return true;
 }
 
 export function RawMaterialsPage() {
@@ -45,17 +78,14 @@ export function RawMaterialsPage() {
   const [qtyFrom, setQtyFrom] = useState("");
   const [qtyTo, setQtyTo] = useState("");
   const [sortConfigs, setSortConfigs] = useState<SortConfig[]>([]);
-  const [filters, setFilters] = useState<Record<SortField, Set<string>>>({
-    sku: new Set(),
-    name: new Set(),
-    length_mm: new Set(),
-    quantity_per_hanger: new Set(),
-    id: new Set(),
-    is_paired_profile: new Set(),
-    skip_shot_blast: new Set(),
-    aliases: new Set(),
-    is_laminated: new Set(),
-  });
+  const {
+    columnFilters,
+    columnSearchQueries,
+    bindColumn,
+    buildFilterPredicate,
+    hasActiveColumnFilters: hasColumnFiltersActive,
+    resetColumnFilters,
+  } = useSortableColumnFilters<ColumnFilterField>();
   const [groupByAliases, setGroupByAliases] = useState(false);
 
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -254,6 +284,16 @@ export function RawMaterialsPage() {
     };
   }, [items]);
 
+  const standardColumnFilterPredicate = useMemo(
+    () =>
+      buildFilterPredicate<Product>(
+        (product, field) =>
+          getProductFilterCellValue(product, field as Exclude<ColumnFilterField, "length_mm">),
+        ["length_mm"],
+      ),
+    [buildFilterPredicate],
+  );
+
   const sortedItems = useMemo(() => {
     let filtered = items;
     const lengthFromNum = lengthFrom ? parseFloat(lengthFrom) : null;
@@ -272,39 +312,12 @@ export function RawMaterialsPage() {
     if (qtyFrom) filtered = filtered.filter((p) => (p.quantity_per_hanger ?? 0) >= parseFloat(qtyFrom));
     if (qtyTo) filtered = filtered.filter((p) => (p.quantity_per_hanger ?? 0) <= parseFloat(qtyTo));
 
-    if (filters.sku.size > 0) {
-      filtered = filtered.filter((p) => filters.sku.has(p.sku));
+    if (standardColumnFilterPredicate) {
+      filtered = filtered.filter(standardColumnFilterPredicate);
     }
-    if (filters.quantity_per_hanger.size > 0) {
-      filtered = filtered.filter((p) => {
-        const val = p.quantity_per_hanger !== null && p.quantity_per_hanger !== undefined ? String(p.quantity_per_hanger) : "—";
-        return filters.quantity_per_hanger.has(val);
-      });
-    }
-    if (filters.length_mm.size > 0) {
-      filtered = filtered.filter((p) => {
-        const lengths = getProductLengths(p);
-        return lengths.some((len) => filters.length_mm.has(String(len)));
-      });
-    }
-    if (filters.is_paired_profile.size > 0) {
-      filtered = filtered.filter((p) => {
-        const val = p.is_paired_profile ? "Да" : "Нет";
-        return filters.is_paired_profile.has(val);
-      });
-    }
-    if (filters.skip_shot_blast.size > 0) {
-      filtered = filtered.filter((p) => {
-        const val = p.skip_shot_blast ? "Да" : "Нет";
-        return filters.skip_shot_blast.has(val);
-      });
-    }
-    if (filters.is_laminated.size > 0) {
-      filtered = filtered.filter((p) => {
-        const val = p.is_laminated ? "Да" : "Нет";
-        return filters.is_laminated.has(val);
-      });
-    }
+    filtered = filtered.filter((p) =>
+      productMatchesLengthMmFilter(p, columnFilters.length_mm, columnSearchQueries.length_mm),
+    );
 
     if (!groupByAliases) {
       if (sortConfigs.length === 0) return filtered;
@@ -352,10 +365,27 @@ export function RawMaterialsPage() {
     };
 
     return [...applySort(withAliases), ...applySort(withoutAliases)];
-  }, [items, sortConfigs, lengthFrom, lengthTo, qtyFrom, qtyTo, groupByAliases]);
+  }, [items, sortConfigs, lengthFrom, lengthTo, qtyFrom, qtyTo, groupByAliases, standardColumnFilterPredicate, columnFilters.length_mm, columnSearchQueries.length_mm]);
 
   const activeFiltersCount = [lengthFrom, lengthTo, qtyFrom, qtyTo].filter(Boolean).length +
-    Object.values(filters).reduce((acc, set) => acc + set.size, 0);
+    Object.values(columnFilters).reduce((acc, set) => acc + (set?.size ?? 0), 0) +
+    Object.values(columnSearchQueries).filter((q) => q?.trim()).length;
+
+  const hasTableActiveFilters =
+    search.trim().length > 0 ||
+    [lengthFrom, lengthTo, qtyFrom, qtyTo].some(Boolean) ||
+    hasColumnFiltersActive ||
+    sortConfigs.length > 0;
+
+  const resetTableFilters = () => {
+    setSearch("");
+    setLengthFrom("");
+    setLengthTo("");
+    setQtyFrom("");
+    setQtyTo("");
+    setSortConfigs([]);
+    resetColumnFilters();
+  };
 
   return (
     <section className="space-y-4">
@@ -392,27 +422,6 @@ export function RawMaterialsPage() {
             </button>
           )}
         </div>
-        <Button variant="outline" size="sm" onClick={() => {
-          setSearch("");
-          setLengthFrom("");
-          setLengthTo("");
-          setQtyFrom("");
-          setQtyTo("");
-          setSortConfigs([]);
-          setFilters({
-            sku: new Set(),
-            name: new Set(),
-            length_mm: new Set(),
-            quantity_per_hanger: new Set(),
-            id: new Set(),
-            is_paired_profile: new Set(),
-            skip_shot_blast: new Set(),
-            aliases: new Set(),
-            is_laminated: new Set(),
-          });
-        }}>
-          Очистить
-        </Button>
         <Button variant={filtersOpen ? "default" : "outline"} size="sm" onClick={() => setFiltersOpen(!filtersOpen)} className="relative">
           <Filter className="h-4 w-4 mr-1" />
           Фильтры
@@ -467,72 +476,70 @@ export function RawMaterialsPage() {
               <tr>
                 <th className="px-4 py-3 text-left font-medium w-16">Фото</th>
                 <th className="px-4 py-3 text-left font-medium w-48">
-                  <SortableFilterHeader
+                  <SortableFilterHeader<ColumnFilterField>
                     field="sku"
                     label="Артикул"
-                    currentSorts={sortConfigs}
-                    onSortChange={handleSort}
+                    currentSorts={sortConfigs as { field: ColumnFilterField; order: SortOrder }[]}
+                    onSortChange={(field) => handleSort(field as SortField)}
                     values={uniqueValues.sku}
-                    selectedValues={filters.sku}
-                    onFilterChange={(field, selected) => setFilters(prev => ({ ...prev, [field]: selected }))}
+                    {...bindColumn("sku")}
                   />
                 </th>
                 <th className="px-4 py-3 text-left font-medium w-48">
-                  <SortableFilterHeader
+                  <SortableFilterHeader<ColumnFilterField>
                     field="quantity_per_hanger"
                     label="Кол-во на подвесе"
-                    currentSorts={sortConfigs}
-                    onSortChange={handleSort}
+                    currentSorts={sortConfigs as { field: ColumnFilterField; order: SortOrder }[]}
+                    onSortChange={(field) => handleSort(field as SortField)}
                     values={uniqueValues.quantity_per_hanger}
-                    selectedValues={filters.quantity_per_hanger}
-                    onFilterChange={(field, selected) => setFilters(prev => ({ ...prev, [field]: selected }))}
+                    {...bindColumn("quantity_per_hanger")}
                   />
                 </th>
                 <th className="px-4 py-3 text-left font-medium w-40">
-                  <SortableFilterHeader
+                  <SortableFilterHeader<ColumnFilterField>
                     field="length_mm"
                     label="Длина"
-                    currentSorts={sortConfigs}
-                    onSortChange={handleSort}
+                    currentSorts={sortConfigs as { field: ColumnFilterField; order: SortOrder }[]}
+                    onSortChange={(field) => handleSort(field as SortField)}
                     values={uniqueValues.length_mm}
-                    selectedValues={filters.length_mm}
-                    onFilterChange={(field, selected) => setFilters(prev => ({ ...prev, [field]: selected }))}
+                    {...bindColumn("length_mm")}
                     valueLabel={(v) => v + " мм"}
                   />
                 </th>
                 <th className="px-4 py-3 text-left font-medium w-36">
-                  <SortableFilterHeader
+                  <SortableFilterHeader<ColumnFilterField>
                     field="is_paired_profile"
                     label="Парный"
-                    currentSorts={sortConfigs}
-                    onSortChange={handleSort}
+                    currentSorts={sortConfigs as { field: ColumnFilterField; order: SortOrder }[]}
+                    onSortChange={(field) => handleSort(field as SortField)}
                     values={uniqueValues.is_paired_profile}
-                    selectedValues={filters.is_paired_profile}
-                    onFilterChange={(field, selected) => setFilters(prev => ({ ...prev, [field]: selected }))}
+                    {...bindColumn("is_paired_profile")}
                   />
                 </th>
                 <th className="px-4 py-3 text-left font-medium w-36">
-                  <SortableFilterHeader
+                  <SortableFilterHeader<ColumnFilterField>
                     field="skip_shot_blast"
                     label="Дробеструй"
-                    currentSorts={sortConfigs}
-                    onSortChange={handleSort}
+                    currentSorts={sortConfigs as { field: ColumnFilterField; order: SortOrder }[]}
+                    onSortChange={(field) => handleSort(field as SortField)}
                     values={uniqueValues.skip_shot_blast}
-                    selectedValues={filters.skip_shot_blast}
-                    onFilterChange={(field, selected) => setFilters(prev => ({ ...prev, [field]: selected }))}
+                    {...bindColumn("skip_shot_blast")}
                   />
                 </th>
                 <th className="px-4 py-3 text-left font-medium w-40">
-                  <SortableFilterHeader
+                  <SortableFilterHeader<ColumnFilterField>
                     field="is_laminated"
                     label="Ламинируется"
-                    currentSorts={sortConfigs}
-                    onSortChange={handleSort}
+                    currentSorts={sortConfigs as { field: ColumnFilterField; order: SortOrder }[]}
+                    onSortChange={(field) => handleSort(field as SortField)}
                     values={uniqueValues.is_laminated}
-                    selectedValues={filters.is_laminated}
-                    onFilterChange={(field, selected) => setFilters(prev => ({ ...prev, [field]: selected }))}
+                    {...bindColumn("is_laminated")}
                   />
                 </th>
+                <TableCornerResetHeader
+                  hasActiveFilters={hasTableActiveFilters}
+                  onReset={resetTableFilters}
+                />
               </tr>
             </thead>
             <tbody className="divide-y">
@@ -604,6 +611,7 @@ export function RawMaterialsPage() {
                       ? <Badge variant="secondary" className="text-xs bg-green-100">Да</Badge>
                       : <span className="text-muted-foreground text-xs">—</span>}
                   </td>
+                  <TableCornerResetCell />
                 </tr>
               ))}
             </tbody>
