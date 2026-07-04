@@ -1,6 +1,6 @@
-import { useState, useRef, useEffect, useMemo, Fragment } from "react";
+import { useState, useRef, useEffect, useMemo, useCallback, Fragment } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Upload, Loader2, AlertCircle, CheckCircle, ChevronDown, ChevronRight, Download, Search } from "lucide-react";
+import { AlertCircle, CheckCircle, Download, Loader2 } from "lucide-react";
 
 import {
   Dialog,
@@ -16,34 +16,177 @@ import {
   SelectValue,
   SelectContent,
   SelectItem,
+  SectionSelect,
+  SortableFilterHeader,
   toast,
 } from "@/shared/ui";
+import {
+  useTableQueryEngine,
+  type SortConfig,
+  type ColumnSortDef,
+} from "@/shared/hooks/useTableQueryEngine";
+import { nextMultiSortConfigs } from "@/shared/lib/multiSort";
+import {
+  useImportRowExpansion,
+  useImportClipboardPaste,
+  ImportUpload,
+  ImportPreview,
+  ImportRawRows,
+} from "@/shared/ui/import";
 import {
   previewRemaindersExcel,
   importRemaindersExcel,
   downloadRemaindersImportTemplate,
   getRemainderImportOperations,
+  formatQualityStateLabel,
+  IMPORT_QUALITY_OPTIONS,
+  normalizeImportQualityState,
+  type QualityState,
   type RemainderPreviewResponse,
+  type RemainderImportSource,
   type ImportOperationStep,
 } from "@/shared/api/stock";
+import { getErrorMessage } from "@/shared/api/client";
+import { translateImportError } from "@/shared/api/errorMessages";
 import { getExcelSheetNames } from "@/shared/api/imports";
 import { queryKeys } from "@/shared/api/queryKeys";
 import { RouteStepsDisplay } from "@/shared/ui/RouteStepsDisplay";
-import { listSections, type Section } from "@/shared/api/sections";
+import { listSections } from "@/shared/api/sections";
+import type { RemainderImportItem } from "@/shared/api/stock";
+
+function hasSectionInFile(item: RemainderImportItem): boolean {
+  const name = item.target_section_name?.trim();
+  return Boolean(name && name !== "—" && name !== "-");
+}
+
+function getEffectiveSectionId(
+  item: RemainderImportItem,
+  defaultSectionId: number | null,
+  overrides: Record<number, number>,
+): number | null {
+  if (overrides[item.source_row_number] != null) {
+    return overrides[item.source_row_number];
+  }
+  if (item.target_section_id != null) {
+    return item.target_section_id;
+  }
+  return defaultSectionId;
+}
+
+function getEffectiveQualityState(
+  item: RemainderImportItem,
+  overrides: Record<number, QualityState>,
+): QualityState {
+  if (overrides[item.source_row_number] != null) {
+    return overrides[item.source_row_number];
+  }
+  return normalizeImportQualityState(item.quality_state);
+}
+
+type RemainderPreviewSortField =
+  | "row"
+  | "sku"
+  | "quantity"
+  | "operations"
+  | "quality"
+  | "section"
+  | "errors";
+
+function getImportItemOperationsLabel(item: RemainderImportItem): string {
+  if (item.completed_stages?.length > 0) {
+    return item.completed_stages.map((stage) => stage.operation_name).join(", ");
+  }
+  const raw = item.completed_operations_raw?.trim();
+  return raw || "—";
+}
+
+function getImportItemQualityLabel(
+  item: RemainderImportItem,
+  qualityOverrides: Record<number, QualityState>,
+): string {
+  const state = getEffectiveQualityState(item, qualityOverrides);
+  return (
+    IMPORT_QUALITY_OPTIONS.find((option) => option.value === state)?.label
+    ?? formatQualityStateLabel(state)
+  );
+}
+
+function getImportItemSectionLabel(
+  item: RemainderImportItem,
+  sectionOverrides: Record<number, number>,
+  sections: { id: number; name: string }[],
+): string {
+  if (hasSectionInFile(item) && item.target_section_name) {
+    return item.target_section_name;
+  }
+  const sectionId = getEffectiveSectionId(item, null, sectionOverrides);
+  if (sectionId == null) return "—";
+  return sections.find((section) => section.id === sectionId)?.name ?? `#${sectionId}`;
+}
+
+function getImportItemErrorsLabel(item: RemainderImportItem): string {
+  if (item.errors.length === 0) {
+    return item.status === "valid" ? "—" : "Ошибка";
+  }
+  return item.errors.map(translateImportError).join(", ");
+}
+
+function getImportItemCellValue(
+  item: RemainderImportItem,
+  field: RemainderPreviewSortField,
+  sectionOverrides: Record<number, number>,
+  qualityOverrides: Record<number, QualityState>,
+  sections: { id: number; name: string }[],
+): string {
+  switch (field) {
+    case "row":
+      return String(item.source_row_number);
+    case "sku":
+      return item.sku;
+    case "quantity":
+      return item.quantity != null ? String(item.quantity) : "—";
+    case "operations":
+      return getImportItemOperationsLabel(item);
+    case "quality":
+      return getImportItemQualityLabel(item, qualityOverrides);
+    case "section":
+      return getImportItemSectionLabel(item, sectionOverrides, sections);
+    case "errors":
+      return getImportItemErrorsLabel(item);
+  }
+}
+
+function qualityBadgeClass(state: QualityState): string {
+  switch (state) {
+    case "FINAL_SCRAP":
+      return "bg-rose-50/50 text-rose-700 border-rose-200 dark:bg-rose-950/20 dark:text-rose-400 dark:border-rose-900/50";
+    case "SCRAP":
+      return "bg-amber-50/50 text-amber-700 border-amber-200 dark:bg-amber-950/20 dark:text-amber-400 dark:border-amber-900/50";
+    default:
+      return "bg-emerald-50/50 text-emerald-700 border-emerald-200 dark:bg-emerald-950/20 dark:text-emerald-400 dark:border-emerald-900/50";
+  }
+}
 
 interface ImportRemaindersDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  locationId?: number;
-  locationName?: string;
   onSaved: () => void;
 }
+
+const SEED_TARGET_SECTION_CODES = ["WH", "PREP_STOCK", "WIP_WH", "FG_WH", "SHIPMENT", "SENT"] as const;
+
+const SEED_TARGET_SECTION_FALLBACKS: Record<(typeof SEED_TARGET_SECTION_CODES)[number], string> = {
+  WH: "Склад сырья",
+  PREP_STOCK: "Склад подготовки",
+  WIP_WH: "Склад полуфабриката",
+  FG_WH: "Склад готовой продукции",
+  SHIPMENT: "К отгрузке",
+  SENT: "Отправлено",
+};
 
 export function ImportRemaindersDialog({
   open,
   onOpenChange,
-  locationId,
-  locationName,
   onSaved,
 }: ImportRemaindersDialogProps) {
   const queryClient = useQueryClient();
@@ -69,76 +212,135 @@ export function ImportRemaindersDialog({
       .sort((a, b) => a.name.localeCompare(b.name, "ru"));
   }, [allSections]);
 
+  const seedTargetSections = useMemo(() => {
+    const byCode = new Map(importableSections.map((s) => [s.code, s]));
+    return SEED_TARGET_SECTION_CODES.map((code) => {
+      const section = byCode.get(code);
+      return {
+        code,
+        name: section?.name ?? SEED_TARGET_SECTION_FALLBACKS[code],
+      };
+    });
+  }, [importableSections]);
+
+  const exampleTargetSections = useMemo(
+    () => ({
+      raw: seedTargetSections.find((s) => s.code === "WH")?.name ?? "Склад сырья",
+      prep: seedTargetSections.find((s) => s.code === "PREP_STOCK")?.name ?? "Склад подготовки",
+      wip: seedTargetSections.find((s) => s.code === "WIP_WH")?.name ?? "Склад полуфабриката",
+    }),
+    [seedTargetSections],
+  );
+
+  // Сид: Дробеструй (SHOT) → цвет анода (ANOD) → одна упаковка на аноде (Стрейч ИЛИ Спанбонд)
+  const exampleRow3Operations = useMemo(() => {
+    const seedOrder = ["Дробеструй", "Чёрный", "Стрейч"];
+    if (!operations?.length) return seedOrder.join(", ");
+    const resolved = seedOrder
+      .map((name) => operations.find((op) => op.operation_name === name)?.operation_name)
+      .filter((name): name is string => Boolean(name));
+    return resolved.length > 0 ? resolved.join(", ") : seedOrder.join(", ");
+  }, [operations]);
+
   // ── State machine ─────────────────────────────────────────────────────
   const [step, setStep] = useState<"upload" | "preview" | "result">("upload");
+  const [importMode, setImportMode] = useState<"file" | "clipboard">("file");
   const [file, setFile] = useState<File | null>(null);
+  const [clipboardText, setClipboardText] = useState("");
   const [sheets, setSheets] = useState<string[]>([]);
   const [selectedSheet, setSelectedSheet] = useState(0);
   const [rowSelection, setRowSelection] = useState("");
   const [clearExisting, setClearExisting] = useState(false);
-  const [showRawRows, setShowRawRows] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [filterStatus, setFilterStatus] = useState<"all" | "invalid">("all");
-  const [qualityState, setQualityState] = useState<"GOOD" | "SCRAP" | "REWORK">("GOOD");
   const [targetSectionOverrides, setTargetSectionOverrides] = useState<Record<number, number>>({});
+  const [qualityStateOverrides, setQualityStateOverrides] = useState<Record<number, QualityState>>({});
+  const [sortConfigs, setSortConfigs] = useState<SortConfig<RemainderPreviewSortField>[]>([]);
+  const [columnFilters, setColumnFilters] = useState<
+    Partial<Record<RemainderPreviewSortField, Set<string>>>
+  >({});
 
   const [previewData, setPreviewData] = useState<RemainderPreviewResponse | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<{ imported_count: number; errors: string[] } | null>(null);
-  const [expandedRows, setExpandedRows] = useState<Set<number>>(new Set());
 
-  const [selectedLocationId, setSelectedLocationId] = useState<number | null>(locationId ?? null);
+  const expansion = useImportRowExpansion();
+  const { toggleRow, isRowExpanded, resetExpansion } = expansion;
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // ── Resolve the effective location id for API calls ───────────────────
-  const currentLocationId = selectedLocationId ?? null;
+  // ── Resolve location id for API (из файла, per-row override или первая валидная строка) ──
+  const resolveImportLocationId = useMemo((): number | null => {
+    if (!previewData) return null;
+    const firstResolved = previewData.items.find(
+      (item) =>
+        item.status === "valid" &&
+        getEffectiveSectionId(item, null, targetSectionOverrides) != null,
+    );
+    if (!firstResolved) return null;
+    return getEffectiveSectionId(firstResolved, null, targetSectionOverrides);
+  }, [previewData, targetSectionOverrides]);
 
   // ── Reset state when dialog opens ─────────────────────────────────────
   useEffect(() => {
     if (open) {
       setStep("upload");
+      setImportMode("file");
       setFile(null);
+      setClipboardText("");
       setSheets([]);
       setSelectedSheet(0);
       setRowSelection("");
       setClearExisting(false);
-      setShowRawRows(false);
+      resetExpansion();
       setSearchQuery("");
       setFilterStatus("all");
-      setQualityState("GOOD");
       setTargetSectionOverrides({});
+      setQualityStateOverrides({});
+      setSortConfigs([]);
+      setColumnFilters({});
       setPreviewData(null);
       setError(null);
       setResult(null);
-      setExpandedRows(new Set());
-      setSelectedLocationId(locationId ?? null);
     }
-  }, [open, locationId]);
+  }, [open, resetExpansion]);
+
+  const getImportSource = (): RemainderImportSource | null => {
+    if (importMode === "file" && file) {
+      return { kind: "file", file };
+    }
+    if (importMode === "clipboard" && clipboardText.trim()) {
+      return { kind: "clipboard", clipboardText: clipboardText.trim() };
+    }
+    return null;
+  };
 
   // ── Load preview when relevant params change ──────────────────────────
   useEffect(() => {
-    if (step !== "preview" || !file || !currentLocationId) return;
+    if (step !== "preview" || !getImportSource()) return;
     loadPreview();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [step, selectedSheet, rowSelection, qualityState, selectedLocationId]);
+  }, [step, selectedSheet, rowSelection, importMode, file, clipboardText]);
 
   const loadPreview = async () => {
-    if (!file || !currentLocationId) return;
+    const source = getImportSource();
+    if (!source) return;
     setPreviewLoading(true);
     setError(null);
     try {
-      const data = await previewRemaindersExcel(currentLocationId, file, {
+      const data = await previewRemaindersExcel(source, {
+        location_id: resolveImportLocationId ?? undefined,
         sheet_index: selectedSheet,
         row_selection: rowSelection || undefined,
-        quality_state: qualityState,
         target_section_overrides:
           Object.keys(targetSectionOverrides).length > 0 ? targetSectionOverrides : undefined,
+        quality_state_overrides:
+          Object.keys(qualityStateOverrides).length > 0 ? qualityStateOverrides : undefined,
       });
       setPreviewData(data);
-    } catch (err: any) {
-      setError(err?.response?.data?.detail || "Не удалось загрузить предварительный просмотр листа.");
+    } catch (err: unknown) {
+      setError(getErrorMessage(err) || "Не удалось загрузить предварительный просмотр листа.");
       setPreviewData(null);
     } finally {
       setPreviewLoading(false);
@@ -147,13 +349,10 @@ export function ImportRemaindersDialog({
 
   // ── File selection handler ────────────────────────────────────────────
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (!currentLocationId) {
-      toast({ title: "Выберите целевой участок перед загрузкой файла", variant: "destructive" });
-      if (e.target) e.target.value = "";
-      return;
-    }
     if (e.target.files && e.target.files.length > 0) {
       const selectedFile = e.target.files[0];
+      setImportMode("file");
+      setClipboardText("");
       setFile(selectedFile);
       setError(null);
       setPreviewLoading(true);
@@ -162,8 +361,8 @@ export function ImportRemaindersDialog({
         setSheets(sheetNames);
         setSelectedSheet(0);
         setStep("preview");
-      } catch (err: any) {
-        setError(err?.response?.data?.detail || "Ошибка при чтении структуры Excel-файла");
+      } catch (err: unknown) {
+        setError(getErrorMessage(err) || "Ошибка при чтении структуры Excel-файла");
         setFile(null);
       } finally {
         setPreviewLoading(false);
@@ -171,11 +370,30 @@ export function ImportRemaindersDialog({
     }
   };
 
+  const applyClipboardText = useCallback((text: string) => {
+    const trimmed = text.trim();
+    if (!trimmed) return;
+    setImportMode("clipboard");
+    setClipboardText(trimmed);
+    setFile(null);
+    setSheets(["Буфер обмена"]);
+    setSelectedSheet(0);
+    setError(null);
+    setFilterStatus("all");
+    setSearchQuery("");
+    setStep("preview");
+  }, []);
+
+  useImportClipboardPaste({
+    enabled: open && step === "upload",
+    onPaste: applyClipboardText,
+  });
+
   // ── Download template ─────────────────────────────────────────────────
   const downloadTemplate = async () => {
-    const locId = currentLocationId;
+    const locId = importableSections[0]?.id ?? null;
     if (!locId) {
-      toast({ title: "Выберите целевой участок", variant: "destructive" });
+      toast({ title: "Нет доступных складских участков для шаблона", variant: "destructive" });
       return;
     }
     try {
@@ -196,18 +414,21 @@ export function ImportRemaindersDialog({
   // ── Import mutation ───────────────────────────────────────────────────
   const importMutation = useMutation({
     mutationFn: (skipInvalid: boolean) => {
-      const locId = currentLocationId;
-      if (!locId) throw new Error("Не выбран целевой участок");
-      return importRemaindersExcel(locId, file as File, {
+      const locId = resolveImportLocationId;
+      const source = getImportSource();
+      if (!locId) throw new Error("Не выбран участок");
+      if (!source) throw new Error("Не выбран источник данных");
+      return importRemaindersExcel(locId, source, {
         sheet_index: selectedSheet,
         row_selection: rowSelection || undefined,
         skip_invalid: skipInvalid,
         clear_existing: clearExisting,
-        quality_state: qualityState,
         target_section_overrides:
           Object.keys(targetSectionOverrides).length > 0 && !clearExisting
             ? targetSectionOverrides
             : undefined,
+        quality_state_overrides:
+          Object.keys(qualityStateOverrides).length > 0 ? qualityStateOverrides : undefined,
       });
     },
     onSuccess: (response) => {
@@ -226,15 +447,29 @@ export function ImportRemaindersDialog({
         );
       }
     },
-    onError: (e: any) => {
-      setError(e?.response?.data?.detail || "Ошибка при импорте Excel-файла");
+    onError: (e: unknown) => {
+      setError(getErrorMessage(e) || "Ошибка при импорте Excel-файла");
     },
   });
 
   const handleApply = (skipInvalid: boolean) => {
-    if (!file) return;
-    if (!currentLocationId) {
-      toast({ title: "Выберите целевой участок", variant: "destructive" });
+    if (!getImportSource()) return;
+    if (!resolveImportLocationId) {
+      toast({
+        title: clearExisting ? "Укажите участок для очистки" : "Укажите участок для импорта",
+        description: clearExisting
+          ? "При очистке укажите участок в колонке «Участок» файла или выберите для строк в таблице."
+          : "Заполните колонку «Участок» в файле или выберите участок для каждой строки в таблице.",
+        variant: "destructive",
+      });
+      return;
+    }
+    if (rowsMissingSection.length > 0) {
+      toast({
+        title: "Не для всех строк указан участок",
+        description: `Строк без участка: ${rowsMissingSection.length}. Заполните колонку «Участок» или выберите в таблице.`,
+        variant: "destructive",
+      });
       return;
     }
     setError(null);
@@ -246,39 +481,141 @@ export function ImportRemaindersDialog({
     onOpenChange(false);
   };
 
-  const toggleRow = (idx: number) => {
-    setExpandedRows((prev) => {
-      const next = new Set(prev);
-      if (next.has(idx)) {
-        next.delete(idx);
+  const handleRowSectionChange = (rowNumber: number, sectionId: number | null) => {
+    setTargetSectionOverrides((prev) => {
+      const next = { ...prev };
+      if (sectionId == null) {
+        delete next[rowNumber];
       } else {
-        next.add(idx);
+        next[rowNumber] = sectionId;
       }
       return next;
     });
   };
 
-  // ── Client-side filtering ─────────────────────────────────────────────
-  const filteredItems = useMemo(() => {
+  const handleRowQualityChange = (rowNumber: number, state: QualityState) => {
+    setQualityStateOverrides((prev) => {
+      const next = { ...prev };
+      next[rowNumber] = state;
+      return next;
+    });
+  };
+
+  const handleSortChange = useCallback((field: RemainderPreviewSortField) => {
+    setSortConfigs((prev) => nextMultiSortConfigs(prev, field));
+  }, []);
+
+  const handleColumnFilterChange = useCallback(
+    (field: RemainderPreviewSortField, selected: Set<string>) => {
+      setColumnFilters((prev) => ({ ...prev, [field]: selected }));
+    },
+    [],
+  );
+
+  const resetPreviewFilters = useCallback(() => {
+    setFilterStatus("all");
+    setSearchQuery("");
+    setSortConfigs([]);
+    setColumnFilters({});
+  }, []);
+
+  const rowsMissingSection = useMemo(() => {
     if (!previewData) return [];
-    let items = previewData.items;
+    return previewData.items.filter(
+      (item) =>
+        item.status === "valid" &&
+        getEffectiveSectionId(item, null, targetSectionOverrides) == null,
+    );
+  }, [previewData, targetSectionOverrides]);
 
+  const basePreviewItems = useMemo(() => {
+    if (!previewData) return [];
     if (filterStatus === "invalid") {
-      items = items.filter((item) => item.status === "invalid");
+      return previewData.items.filter((item) => item.status === "invalid");
     }
+    return previewData.items;
+  }, [previewData, filterStatus]);
 
-    if (searchQuery.trim()) {
-      const q = searchQuery.toLowerCase().trim();
-      items = items.filter(
-        (item) =>
-          item.sku.toLowerCase().includes(q) ||
-          String(item.source_row_number).includes(q) ||
-          (item.product_name && item.product_name.toLowerCase().includes(q)),
-      );
+  const sortDefs = useMemo((): ColumnSortDef<RemainderImportItem, RemainderPreviewSortField>[] => [
+    { field: "row", getSortValue: (item) => item.source_row_number },
+    { field: "sku", getSortValue: (item) => item.sku },
+    { field: "quantity", getSortValue: (item) => item.quantity ?? -1 },
+    { field: "operations", getSortValue: (item) => getImportItemOperationsLabel(item) },
+    {
+      field: "quality",
+      getSortValue: (item) => getImportItemQualityLabel(item, qualityStateOverrides),
+    },
+    {
+      field: "section",
+      getSortValue: (item) =>
+        getImportItemSectionLabel(item, targetSectionOverrides, importableSections),
+    },
+    { field: "errors", getSortValue: (item) => getImportItemErrorsLabel(item) },
+  ], [qualityStateOverrides, targetSectionOverrides, importableSections]);
+
+  const filterPredicate = useMemo(() => {
+    const hasFilters = Object.values(columnFilters).some((selected) => selected && selected.size > 0);
+    if (!hasFilters) return null;
+    return (item: RemainderImportItem) => {
+      for (const [field, selected] of Object.entries(columnFilters)) {
+        if (selected && selected.size > 0) {
+          const cellValue = getImportItemCellValue(
+            item,
+            field as RemainderPreviewSortField,
+            targetSectionOverrides,
+            qualityStateOverrides,
+            importableSections,
+          );
+          if (!selected.has(cellValue)) return false;
+        }
+      }
+      return true;
+    };
+  }, [columnFilters, targetSectionOverrides, qualityStateOverrides, importableSections]);
+
+  const uniqueValues = useMemo(() => {
+    const fields: RemainderPreviewSortField[] = [
+      "row",
+      "sku",
+      "quantity",
+      "operations",
+      "quality",
+      "section",
+      "errors",
+    ];
+    const result = {} as Record<RemainderPreviewSortField, string[]>;
+    for (const field of fields) {
+      result[field] = [
+        ...new Set(
+          basePreviewItems.map((item) =>
+            getImportItemCellValue(
+              item,
+              field,
+              targetSectionOverrides,
+              qualityStateOverrides,
+              importableSections,
+            ),
+          ),
+        ),
+      ].sort((a, b) => {
+        if (field === "row" || field === "quantity") {
+          return (Number.parseFloat(a) || 0) - (Number.parseFloat(b) || 0);
+        }
+        return a.localeCompare(b, "ru");
+      });
     }
+    return result;
+  }, [basePreviewItems, targetSectionOverrides, qualityStateOverrides, importableSections]);
 
-    return items;
-  }, [previewData, filterStatus, searchQuery]);
+  const { rows: filteredItems } = useTableQueryEngine<RemainderImportItem, RemainderPreviewSortField>({
+    rows: basePreviewItems,
+    getId: (item) => item.source_row_number,
+    searchQuery,
+    searchKeys: ["sku", "product_name", "source_row_number"],
+    filterPredicate,
+    sortConfigs,
+    sortDefs,
+  });
 
   const stats = useMemo(() => {
     if (!previewData) return { total: 0, valid: 0, invalid: 0, qty: 0 };
@@ -290,297 +627,393 @@ export function ImportRemaindersDialog({
     };
   }, [previewData]);
 
-  const titlePart = locationName ? ` (${locationName})` : "";
+  const canApplyImport = useMemo(() => {
+    if (previewLoading || importMutation.isPending) return false;
+    if (!previewData || stats.total === 0) return false;
+    if (rowsMissingSection.length > 0) return false;
+    return resolveImportLocationId != null;
+  }, [
+    previewLoading,
+    importMutation.isPending,
+    previewData,
+    stats.total,
+    rowsMissingSection.length,
+    resolveImportLocationId,
+  ]);
 
   return (
     <Dialog open={open} onOpenChange={(o) => { if (!o) handleClose(); }}>
-      <DialogContent className={`w-full max-h-[90vh] overflow-hidden flex flex-col transition-all duration-300 ${step === "preview" ? "max-w-[95vw] h-[85vh]" : "max-w-[500px]"}`}>
+      <DialogContent className={`w-full max-h-[90vh] overflow-hidden flex flex-col transition-all duration-300 ${step === "preview" ? "w-[80vw] max-w-[80vw] h-[85vh]" : "w-[50vw] max-w-[50vw]"}`}>
         <DialogHeader className="shrink-0">
-          <DialogTitle>Импорт остатков из Excel{titlePart}</DialogTitle>
+          <DialogTitle>Импорт остатков</DialogTitle>
         </DialogHeader>
 
-        {error && (
-          <div className="shrink-0 flex items-start gap-2 rounded-lg border border-destructive/20 bg-destructive/10 p-3 text-xs text-destructive">
-            <AlertCircle className="h-4 w-4 shrink-0 mt-0.5" />
-            <div className="space-y-1">
-              <span className="font-semibold block">Ошибка импорта</span>
-              <span className="leading-relaxed block whitespace-pre-wrap">{error}</span>
-            </div>
-          </div>
-        )}
+        {error ? <ImportPreview.Error message={error} /> : null}
 
         <div className="flex-1 overflow-y-auto py-2">
           {/* ═══════════════════════ UPLOAD STEP ═══════════════════════ */}
           {step === "upload" && (
-            <div className="space-y-6">
+            <div className="space-y-3">
               <p className="text-xs text-muted-foreground leading-relaxed">
-                Загрузите Excel-файл. Система распознает артикулы, количества, целевые секции и выполненные операции.
+                Одна таблица для всех остатков: годный, брак или окончательный брак — статус указывается в колонке{" "}
+                <strong className="text-foreground">«Статус качества»</strong>. Заголовки необязательны: без них
+                столбцы читаются в порядке шаблона. Загрузите Excel или нажмите{" "}
+                <kbd className="px-1 py-0.5 rounded border border-border bg-muted text-[10px] font-mono">Ctrl+V</kbd>{" "}
+                — данные из буфера подхватятся сразу.
               </p>
 
-              {/* Section target selector */}
-              <div className="space-y-2">
-                <label className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">
-                  Целевой участок
-                </label>
-                <Select
-                  value={selectedLocationId?.toString() ?? ""}
-                  onValueChange={(v) => setSelectedLocationId(Number(v))}
-                >
-                  <SelectTrigger className="w-full">
-                    <SelectValue placeholder="Выберите участок для импорта остатков" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {importableSections.length === 0 ? (
-                      <div className="p-2 text-xs text-muted-foreground">
-                        Нет доступных складских участков
-                      </div>
-                    ) : (
-                      importableSections.map((s) => (
-                        <SelectItem key={s.id} value={s.id.toString()}>
-                          <div className="flex items-center gap-2">
-                            <span className="font-medium">{s.name}</span>
-                            <span className="text-[10px] text-muted-foreground font-mono">
-                              {s.code}
-                            </span>
-                            <span className="text-[10px] text-muted-foreground">
-                              {s.type}
-                            </span>
-                          </div>
-                        </SelectItem>
-                      ))
-                    )}
-                  </SelectContent>
-                </Select>
-                <p className="text-[10px] text-muted-foreground leading-tight">
-                  Остатки будут записаны на выбранный участок. Можно переопределить для отдельных строк в колонке «Целевая секция» в Excel-файле.
-                </p>
-              </div>
+              <div className="grid grid-cols-[minmax(0,3fr)_minmax(180px,2fr)] gap-4 items-start">
+                {/* Левая колонка: таблица + загрузка */}
+                <div className="space-y-3 min-w-0">
+                  <div className="space-y-1.5">
+                    <div className="flex items-center justify-between gap-2">
+                      <label className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">
+                        Пример структуры таблицы
+                      </label>
+                      <Button
+                        variant="link"
+                        size="sm"
+                        onClick={downloadTemplate}
+                        className="h-auto p-0 text-xs text-emerald-600 hover:text-emerald-700 font-medium inline-flex items-center gap-1 shrink-0"
+                      >
+                        <Download className="h-3.5 w-3.5" />
+                        Шаблон Excel
+                      </Button>
+                    </div>
+                    <div className="border border-border rounded-lg overflow-x-auto bg-background">
+                      <table className="w-full min-w-[480px] text-left border-collapse text-[11px]">
+                        <thead>
+                          <tr className="bg-muted/50 border-b-2 border-b-emerald-500 dark:border-b-emerald-600">
+                            <th className="px-1.5 py-1.5 font-semibold border-r border-border text-foreground whitespace-nowrap">Артикул</th>
+                            <th className="px-1.5 py-1.5 font-semibold border-r border-border text-foreground whitespace-nowrap">Кол-во</th>
+                            <th className="px-1.5 py-1.5 font-semibold border-r border-border text-foreground whitespace-nowrap">Статус качества</th>
+                            <th className="px-1.5 py-1.5 font-semibold border-r border-border text-foreground whitespace-nowrap">Операции</th>
+                            <th className="px-1.5 py-1.5 font-semibold border-r border-border text-foreground whitespace-nowrap">Участок</th>
+                            <th className="px-1.5 py-1.5 font-semibold text-foreground whitespace-nowrap">Коммент.</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          <tr className="border-b border-border">
+                            <td className="px-1.5 py-1.5 font-mono border-r border-border text-foreground">361</td>
+                            <td className="px-1.5 py-1.5 border-r border-border text-foreground">200</td>
+                            <td className="px-1.5 py-1.5 border-r border-border font-medium text-emerald-700 whitespace-nowrap">Годный</td>
+                            <td className="px-1.5 py-1.5 border-r border-border text-muted-foreground">
+                              — <span className="text-[9px] text-muted-foreground/50">(с 1-го этапа)</span>
+                            </td>
+                            <td className="px-1.5 py-1.5 border-r border-border font-medium text-emerald-700 whitespace-nowrap">{exampleTargetSections.raw}</td>
+                            <td className="px-1.5 py-1.5 text-muted-foreground">—</td>
+                          </tr>
+                          <tr className="border-b border-border bg-muted/20">
+                            <td className="px-1.5 py-1.5 font-mono border-r border-border text-foreground">ALS-1289</td>
+                            <td className="px-1.5 py-1.5 border-r border-border text-foreground">150</td>
+                            <td className="px-1.5 py-1.5 border-r border-border font-medium text-emerald-700 whitespace-nowrap">Годный</td>
+                            <td className="px-1.5 py-1.5 border-r border-border text-muted-foreground">Дробеструй</td>
+                            <td className="px-1.5 py-1.5 border-r border-border font-medium text-emerald-700 whitespace-nowrap">{exampleTargetSections.prep}</td>
+                            <td className="px-1.5 py-1.5 text-muted-foreground">Партия A</td>
+                          </tr>
+                          <tr>
+                            <td className="px-1.5 py-1.5 font-mono border-r border-border text-foreground">ЮП-2630</td>
+                            <td className="px-1.5 py-1.5 border-r border-border text-foreground">80</td>
+                            <td className="px-1.5 py-1.5 border-r border-border font-medium text-rose-700 whitespace-nowrap">Окончательный брак</td>
+                            <td className="px-1.5 py-1.5 border-r border-border text-muted-foreground">{exampleRow3Operations}</td>
+                            <td className="px-1.5 py-1.5 border-r border-border font-medium text-emerald-700/80 whitespace-nowrap">{exampleTargetSections.wip}</td>
+                            <td className="px-1.5 py-1.5 text-muted-foreground">Срочный заказ</td>
+                          </tr>
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
 
-              {/* Example table — 5 columns */}
-              <div className="space-y-2">
-                <div className="flex items-center justify-between">
-                  <label className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">
-                    Пример структуры таблицы:
-                  </label>
-                  <Button
-                    variant="link"
-                    size="sm"
-                    onClick={downloadTemplate}
-                    className="h-auto p-0 text-xs text-emerald-600 hover:text-emerald-700 font-medium inline-flex items-center gap-1"
-                  >
-                    <Download className="h-3.5 w-3.5" />
-                    Скачать шаблон Excel
-                  </Button>
-                </div>
-                <div className="border border-border rounded-lg overflow-hidden bg-background">
-                  <table className="w-full text-left border-collapse text-xs">
-                    <thead>
-                      <tr className="bg-muted/50 border-b-2 border-b-emerald-500 dark:border-b-emerald-600">
-                        <th className="p-2 font-semibold border-r border-border text-foreground">Артикул</th>
-                        <th className="p-2 font-semibold border-r border-border text-foreground">Количество</th>
-                        <th className="p-2 font-semibold border-r border-border text-foreground">Целевая секция</th>
-                        <th className="p-2 font-semibold border-r border-border text-foreground">Выполненные операции</th>
-                        <th className="p-2 font-semibold text-foreground">Комментарий</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      <tr className="border-b border-border">
-                        <td className="p-2 font-mono border-r border-border text-foreground">ALS-1289</td>
-                        <td className="p-2 border-r border-border text-foreground">150</td>
-                        <td className="p-2 border-r border-border text-muted-foreground">—</td>
-                        <td className="p-2 border-r border-border text-muted-foreground">Дробеструй</td>
-                        <td className="p-2 text-muted-foreground">Партия A</td>
-                      </tr>
-                      <tr className="border-b border-border bg-muted/20">
-                        <td className="p-2 font-mono border-r border-border text-foreground">ЮП-2630</td>
-                        <td className="p-2 border-r border-border text-foreground">80</td>
-                        <td className="p-2 border-r border-border font-medium text-emerald-700">Участок сборки</td>
-                        <td className="p-2 border-r border-border text-muted-foreground">Сверловка, Дробеструй</td>
-                        <td className="p-2 text-muted-foreground">Срочный заказ</td>
-                      </tr>
-                      <tr>
-                        <td className="p-2 font-mono border-r border-border text-foreground">361</td>
-                        <td className="p-2 border-r border-border text-foreground">200</td>
-                        <td className="p-2 border-r border-border text-muted-foreground">—</td>
-                        <td className="p-2 border-r border-border text-muted-foreground">— <span className="text-[10px] text-muted-foreground/50">(начнет с первого этапа)</span></td>
-                        <td className="p-2 text-muted-foreground">—</td>
-                      </tr>
-                    </tbody>
-                  </table>
+                  <ImportUpload.Dropzone
+                    inputRef={fileInputRef}
+                    onFileChange={handleFileChange}
+                    accept=".xlsx,.xls"
+                    disabled={previewLoading}
+                  />
                 </div>
 
-                {/* Operations chips */}
-                {operations && operations.length > 0 && (
-                  <div className="mt-2.5 p-2.5 bg-muted/40 rounded-lg border border-border/60">
-                    <span className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider block mb-1">
-                      Доступные операции для заполнения:
+                {/* Правая колонка: справочники */}
+                <aside className="space-y-2.5 text-xs text-muted-foreground leading-relaxed min-w-0">
+                  <div className="p-2 bg-muted/40 rounded-lg border border-border/60 space-y-1.5">
+                    <span className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider block">
+                      Доступные участки
                     </span>
                     <div className="flex flex-wrap gap-1">
-                      {operations.map((op: ImportOperationStep) => (
+                      {seedTargetSections.map((section) => (
                         <span
-                          key={op.operation_name}
-                          className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-muted text-foreground border border-border/80"
-                          title={`Раздел: ${op.section_name}`}
+                          key={section.code}
+                          className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-emerald-50/80 text-emerald-800 border border-emerald-200/80 dark:bg-emerald-950/20 dark:text-emerald-300 dark:border-emerald-900/50"
+                          title={section.code}
                         >
-                          {op.operation_name}
+                          {section.name}
                         </span>
                       ))}
                     </div>
-                    <span className="text-[9px] text-muted-foreground block mt-1.5 leading-tight">
-                      * Вы можете указывать эти названия через запятую в колонке «Выполненные операции» в любом порядке.
+                    <span className="text-[9px] leading-snug block">
+                      * пусто (—) — участок выбирается в таблице предпросмотра
                     </span>
                   </div>
-                )}
-              </div>
 
-              {/* Upload Dropzone */}
-              <div
-                onClick={() => fileInputRef.current?.click()}
-                className="border-2 border-dashed border-muted-foreground/30 rounded-xl p-8 flex flex-col items-center justify-center cursor-pointer hover:bg-accent/40 hover:border-primary/50 transition-colors"
-              >
-                <input
-                  type="file"
-                  ref={fileInputRef}
-                  onChange={handleFileChange}
-                  accept=".xlsx, .xls"
-                  className="hidden"
-                />
-                <Upload className="h-10 w-10 text-muted-foreground mb-3" />
-                <span className="text-sm font-medium">Выберите файл для загрузки</span>
-                <span className="text-xs text-muted-foreground mt-1">
-                  Поддерживаются .xlsx, .xls
-                </span>
+                  <div className="p-2 bg-muted/40 rounded-lg border border-border/60 space-y-1.5">
+                    <span className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider block">
+                      Статусы качества
+                    </span>
+                    <div className="flex flex-wrap gap-1">
+                      {IMPORT_QUALITY_OPTIONS.map((option) => (
+                        <span
+                          key={option.value}
+                          className={`inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium border ${qualityBadgeClass(option.value)}`}
+                        >
+                          {option.label}
+                        </span>
+                      ))}
+                    </div>
+                    <span className="text-[9px] leading-snug block">
+                      * пусто — «Годный»
+                    </span>
+                  </div>
+
+                  {operations && operations.length > 0 && (
+                    <div className="p-2 bg-muted/40 rounded-lg border border-border/60 space-y-1.5">
+                      <span className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider block">
+                        Доступные операции
+                      </span>
+                      <div className="flex flex-wrap gap-1">
+                        {operations.map((op: ImportOperationStep) => (
+                          <span
+                            key={op.operation_name}
+                            className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-muted text-foreground border border-border/80"
+                            title={`Участок: ${op.section_name}`}
+                          >
+                            {op.operation_name}
+                          </span>
+                        ))}
+                      </div>
+                      <span className="text-[9px] leading-snug block">
+                        * через запятую в колонке «Операции»
+                      </span>
+                    </div>
+                  )}
+                </aside>
               </div>
             </div>
           )}
 
           {/* ═══════════════════════ PREVIEW STEP ═══════════════════════ */}
           {step === "preview" && (
-            <div className="h-full flex flex-col space-y-3 overflow-hidden">
-              {/* Sheet Selection & Main Options */}
-              <div className="flex flex-wrap items-center justify-between gap-3 bg-muted/40 p-3 rounded-lg border">
-                <div className="flex items-center gap-2">
-                  <span className="text-xs text-muted-foreground font-semibold uppercase">Лист Excel:</span>
-                  <div className="flex gap-1 flex-wrap">
-                    {sheets.map((name, idx) => (
-                      <button
-                        key={idx}
-                        onClick={() => setSelectedSheet(idx)}
-                        className={`px-3 py-1 text-xs rounded border transition-colors ${
-                          selectedSheet === idx
-                            ? "bg-primary text-primary-foreground border-primary font-medium"
-                            : "bg-background hover:bg-accent border-input text-foreground"
-                        }`}
-                      >
-                        {name}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-
-                <div className="flex items-center gap-3">
-                  <div className="flex items-center gap-1.5">
-                    <span className="text-xs font-medium text-foreground">Строки:</span>
-                    <Input
-                      value={rowSelection}
-                      onChange={(e) => setRowSelection(e.target.value)}
-                      placeholder="Напр. 2-10,12"
-                      className="h-7 w-28 text-xs"
+            <ImportPreview.Layout>
+              <ImportPreview.Toolbar
+                left={
+                  <>
+                    <ImportPreview.SheetTabs
+                      sheets={sheets}
+                      selectedIndex={selectedSheet}
+                      onSelect={setSelectedSheet}
+                      disabled={importMode === "clipboard"}
+                      label={importMode === "clipboard" ? "Источник" : "Лист"}
                     />
-                  </div>
-
-                  <label className="flex items-center gap-2 text-xs font-medium cursor-pointer select-none">
-                    <input
-                      type="checkbox"
-                      checked={clearExisting}
-                      onChange={(e) => setClearExisting(e.target.checked)}
-                      className="h-3.5 w-3.5 rounded border-input text-primary focus:ring-primary"
-                    />
-                    <span className="text-destructive font-semibold">Очистить остатки перед импортом</span>
-                  </label>
-                </div>
-              </div>
-
-              {/* Statistics & Fast Filters */}
-              {previewData && (
-                <div className="flex flex-wrap items-center gap-4 text-xs font-semibold shrink-0">
-                  <Badge variant="outline" className="bg-background px-2.5 py-1">
-                    Всего строк: {stats.total}
-                  </Badge>
-                  <Badge variant="outline" className="text-green-700 border-green-200 bg-green-50/50 px-2.5 py-1">
-                    Корректных: {stats.valid} (кол-во: {stats.qty})
-                  </Badge>
-                  {stats.invalid > 0 && (
-                    <Badge variant="outline" className="text-red-700 border-red-200 bg-red-50/50 px-2.5 py-1">
-                      Ошибок: {stats.invalid}
-                    </Badge>
-                  )}
-
-                  {/* Client Filter Inputs */}
-                  <div className="flex items-center gap-2 ml-auto shrink-0">
-                    <div className="relative">
-                      <Search className="absolute left-2 top-1.5 h-3.5 w-3.5 text-muted-foreground" />
+                    <div className="flex items-center gap-1.5">
+                      <span className="font-medium text-foreground">Строки</span>
                       <Input
-                        value={searchQuery}
-                        onChange={(e) => setSearchQuery(e.target.value)}
-                        placeholder="Поиск по SKU..."
-                        className="h-7 pl-7 w-48 text-xs"
+                        value={rowSelection}
+                        onChange={(e) => setRowSelection(e.target.value)}
+                        placeholder="2-10,12"
+                        className="h-7 w-24 text-xs"
                       />
                     </div>
-
-                    <Select
-                      value={filterStatus}
-                      onValueChange={(value) => setFilterStatus(value as "all" | "invalid")}
+                    <label
+                      className={`flex items-center gap-1.5 font-medium select-none ${
+                        Object.keys(targetSectionOverrides).length > 0
+                          ? "cursor-not-allowed opacity-50"
+                          : "cursor-pointer"
+                      }`}
                     >
-                      <SelectTrigger className="h-7 text-xs w-[120px] font-medium bg-background">
-                        <SelectValue placeholder="Все строки" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="all">Все строки</SelectItem>
-                        <SelectItem value="invalid">Только ошибки</SelectItem>
-                      </SelectContent>
-                    </Select>
+                      <input
+                        type="checkbox"
+                        checked={clearExisting}
+                        disabled={Object.keys(targetSectionOverrides).length > 0}
+                        onChange={(e) => setClearExisting(e.target.checked)}
+                        className="h-3.5 w-3.5 rounded border-input text-primary focus:ring-primary"
+                      />
+                      <span className="text-destructive font-semibold">Очистить перед импортом</span>
+                    </label>
+                  </>
+                }
+              />
 
-                    <Button
-                      variant={showRawRows ? "default" : "outline"}
-                      size="sm"
-                      className="h-7 text-xs"
-                      onClick={() => setShowRawRows(!showRawRows)}
-                    >
-                      Сырые строки
-                    </Button>
-                  </div>
-                </div>
-              )}
+              {importMode === "clipboard" && clipboardText ? (
+                <ImportUpload.ClipboardBanner
+                  text={clipboardText}
+                  invalidCount={previewData ? stats.invalid : 0}
+                  totalCount={previewData ? stats.total : 0}
+                />
+              ) : null}
 
-              {/* Table Data Preview — 8 columns */}
-              <div className="flex-1 overflow-auto border rounded-xl bg-background">
-                {previewLoading ? (
-                  <div className="p-8 flex flex-col items-center justify-center gap-2 text-muted-foreground h-full min-h-[200px]">
-                    <Loader2 className="h-6 w-6 animate-spin text-primary" />
-                    <span className="text-xs">Загрузка данных листа...</span>
-                  </div>
-                ) : filteredItems.length === 0 ? (
-                  <div className="p-8 text-center text-xs text-muted-foreground h-full flex items-center justify-center min-h-[200px]">
-                    Нет данных для отображения. Загрузите файл или измените фильтры.
-                  </div>
-                ) : (
-                  <table className="w-full text-xs text-left border-collapse">
+              {previewData ? (
+                <>
+                  <ImportPreview.Stats
+                    badges={[
+                      { label: `Всего строк: ${stats.total}` },
+                      {
+                        label: `Корректных: ${stats.valid} (кол-во: ${stats.qty})`,
+                        className: "text-green-700 border-green-200 bg-green-50/50",
+                      },
+                      ...(stats.invalid > 0
+                        ? [
+                            {
+                              label: `Ошибок: ${stats.invalid}`,
+                              className: "text-red-700 border-red-200 bg-red-50/50",
+                            },
+                          ]
+                        : []),
+                      ...(rowsMissingSection.length > 0
+                        ? [
+                            {
+                              label: `Без участка: ${rowsMissingSection.length}`,
+                              className: "text-amber-700 border-amber-200 bg-amber-50/50",
+                            },
+                          ]
+                        : []),
+                    ]}
+                  />
+                  <ImportPreview.FilterRow
+                    search={searchQuery}
+                    onSearchChange={setSearchQuery}
+                    searchPlaceholder="Поиск по SKU..."
+                    filterSlot={
+                      <Select
+                        value={filterStatus}
+                        onValueChange={(value) => setFilterStatus(value as "all" | "invalid")}
+                      >
+                        <SelectTrigger className="h-7 text-xs w-[120px] font-medium bg-background">
+                          <SelectValue placeholder="Все строки" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="all">Все строки</SelectItem>
+                          <SelectItem value="invalid">Только ошибки</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    }
+                    expansion={expansion}
+                  />
+                </>
+              ) : null}
+
+              <ImportPreview.TableFrame
+                loading={previewLoading}
+                isEmpty={!previewLoading && filteredItems.length === 0}
+                onResetFilters={
+                  previewData && previewData.items.length > 0 ? resetPreviewFilters : undefined
+                }
+                emptyContent={
+                  previewData && previewData.items.length > 0 ? (
+                    <>
+                      <span>Нет строк по текущему фильтру или поиску.</span>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="h-7 text-xs"
+                        onClick={resetPreviewFilters}
+                      >
+                        Сбросить фильтры
+                      </Button>
+                    </>
+                  ) : importMode === "clipboard" && clipboardText ? (
+                    <span className="max-w-md leading-relaxed">
+                      Строки не распознаны — см. блок «Вставлено из буфера» выше.
+                      Убедитесь, что данные скопированы из Excel с заголовками.
+                    </span>
+                  ) : (
+                    <span>Нет данных для отображения. Загрузите файл или измените фильтры.</span>
+                  )
+                }
+              >
+                <table className="w-full text-xs text-left border-collapse">
                     <thead className="border-b bg-muted/50 sticky top-0 font-semibold text-muted-foreground z-10">
                       <tr>
-                        <th className="p-2.5 w-10"></th>
-                        <th className="p-2.5 w-16 text-center">Строка</th>
-                        <th className="p-2.5 w-36">Артикул</th>
-                        <th className="p-2.5 w-64">Наименование</th>
-                        <th className="p-2.5 w-24">Количество</th>
-                        <th className="p-2.5 flex-1 min-w-[200px]">Пройденные операции (по справочнику)</th>
-                        <th className="p-2.5 w-44">Целевая секция</th>
-                        <th className="p-2.5 w-72">Ошибки валидации</th>
+                        <th className="p-2.5 w-10" />
+                        <th className="p-2.5 w-14 text-left">
+                          <SortableFilterHeader
+                            field="row"
+                            label="#"
+                            currentSorts={sortConfigs}
+                            onSortChange={handleSortChange}
+                            values={uniqueValues.row}
+                            selectedValues={columnFilters.row ?? new Set()}
+                            onFilterChange={handleColumnFilterChange}
+                          />
+                        </th>
+                        <th className="p-2.5 w-32">
+                          <SortableFilterHeader
+                            field="sku"
+                            label="Артикул"
+                            currentSorts={sortConfigs}
+                            onSortChange={handleSortChange}
+                            values={uniqueValues.sku}
+                            selectedValues={columnFilters.sku ?? new Set()}
+                            onFilterChange={handleColumnFilterChange}
+                          />
+                        </th>
+                        <th className="p-2.5 w-20">
+                          <SortableFilterHeader
+                            field="quantity"
+                            label="Кол-во"
+                            currentSorts={sortConfigs}
+                            onSortChange={handleSortChange}
+                            values={uniqueValues.quantity}
+                            selectedValues={columnFilters.quantity ?? new Set()}
+                            onFilterChange={handleColumnFilterChange}
+                          />
+                        </th>
+                        <th className="p-2.5 min-w-[140px]">
+                          <SortableFilterHeader
+                            field="operations"
+                            label="Операции"
+                            currentSorts={sortConfigs}
+                            onSortChange={handleSortChange}
+                            values={uniqueValues.operations}
+                            selectedValues={columnFilters.operations ?? new Set()}
+                            onFilterChange={handleColumnFilterChange}
+                          />
+                        </th>
+                        <th className="p-2.5 w-28">
+                          <SortableFilterHeader
+                            field="quality"
+                            label="Статус качества"
+                            currentSorts={sortConfigs}
+                            onSortChange={handleSortChange}
+                            values={uniqueValues.quality}
+                            selectedValues={columnFilters.quality ?? new Set()}
+                            onFilterChange={handleColumnFilterChange}
+                          />
+                        </th>
+                        <th className="p-2.5 min-w-[200px]">
+                          <SortableFilterHeader
+                            field="section"
+                            label="Участок"
+                            currentSorts={sortConfigs}
+                            onSortChange={handleSortChange}
+                            values={uniqueValues.section}
+                            selectedValues={columnFilters.section ?? new Set()}
+                            onFilterChange={handleColumnFilterChange}
+                          />
+                        </th>
+                        <th className="p-2.5 w-72">
+                          <SortableFilterHeader
+                            field="errors"
+                            label="Ошибки валидации"
+                            currentSorts={sortConfigs}
+                            onSortChange={handleSortChange}
+                            values={uniqueValues.errors}
+                            selectedValues={columnFilters.errors ?? new Set()}
+                            onFilterChange={handleColumnFilterChange}
+                          />
+                        </th>
                       </tr>
                     </thead>
                     <tbody>
                       {filteredItems.map((item, idx) => {
-                        const isExpanded = showRawRows || expandedRows.has(idx);
+                        const isExpanded = isRowExpanded(idx);
                         const hasErrors = item.status === "invalid";
                         const hasRaw = item.raw_values.length > 0;
 
@@ -592,21 +1025,13 @@ export function ImportRemaindersDialog({
                                 hasErrors ? "bg-red-50/50 dark:bg-red-950/5" : ""
                               }`}
                             >
-                              <td className="p-2.5 text-center">
-                                {hasRaw &&
-                                  (isExpanded ? (
-                                    <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />
-                                  ) : (
-                                    <ChevronRight className="h-3.5 w-3.5 text-muted-foreground" />
-                                  ))}
+                              <td className="p-2.5 text-left">
+                                <ImportRawRows.Chevron expanded={isExpanded} hasContent={hasRaw} />
                               </td>
-                              <td className="p-2.5 text-center font-bold text-muted-foreground">
+                              <td className="p-2.5 text-left font-bold text-muted-foreground">
                                 #{item.source_row_number}
                               </td>
                               <td className="p-2.5 font-mono font-semibold">{item.sku}</td>
-                              <td className="p-2.5 font-medium truncate max-w-[240px]" title={item.product_name || ""}>
-                                {item.product_name || "—"}
-                              </td>
                               <td className="p-2.5 font-semibold text-foreground">
                                 {item.quantity != null ? item.quantity : "—"}
                               </td>
@@ -617,50 +1042,80 @@ export function ImportRemaindersDialog({
                                   <span className="text-muted-foreground">—</span>
                                 )}
                               </td>
-                              <td className="p-2.5">
-                                {item.target_section_name ? (
+                              <td
+                                className="p-2.5"
+                                onClick={(e) => e.stopPropagation()}
+                              >
+                                <Select
+                                  value={getEffectiveQualityState(item, qualityStateOverrides)}
+                                  onValueChange={(value) =>
+                                    handleRowQualityChange(
+                                      item.source_row_number,
+                                      value as QualityState,
+                                    )
+                                  }
+                                >
+                                  <SelectTrigger
+                                    className={`h-7 w-full min-w-[120px] text-[11px] font-semibold border ${qualityBadgeClass(
+                                      getEffectiveQualityState(item, qualityStateOverrides),
+                                    )}`}
+                                  >
+                                    <SelectValue />
+                                  </SelectTrigger>
+                                  <SelectContent>
+                                    {IMPORT_QUALITY_OPTIONS.map((option) => (
+                                      <SelectItem key={option.value} value={option.value}>
+                                        {option.label}
+                                      </SelectItem>
+                                    ))}
+                                  </SelectContent>
+                                </Select>
+                              </td>
+                              <td
+                                className="p-2.5"
+                                onClick={(e) => e.stopPropagation()}
+                              >
+                                {hasSectionInFile(item) ? (
                                   <Badge
                                     variant="outline"
-                                    className="bg-emerald-50/50 text-emerald-700 border-emerald-200 dark:bg-emerald-950/20 dark:text-emerald-400 dark:border-emerald-900/50 font-semibold px-2 py-0.5 rounded text-[10px] whitespace-nowrap"
+                                    className={`font-semibold px-2 py-0.5 rounded text-[10px] whitespace-nowrap ${
+                                      item.target_section_id
+                                        ? "bg-emerald-50/50 text-emerald-700 border-emerald-200 dark:bg-emerald-950/20 dark:text-emerald-400 dark:border-emerald-900/50"
+                                        : "bg-amber-50/50 text-amber-700 border-amber-200"
+                                    }`}
                                   >
                                     {item.target_section_name}
                                   </Badge>
                                 ) : (
-                                  <span className="text-muted-foreground">—</span>
+                                  <SectionSelect
+                                    sections={importableSections}
+                                    value={
+                                      targetSectionOverrides[item.source_row_number] ??
+                                      item.target_section_id ??
+                                      null
+                                    }
+                                    onValueChange={(sectionId) =>
+                                      handleRowSectionChange(item.source_row_number, sectionId)
+                                    }
+                                    placeholder="Выберите участок"
+                                    className="h-7 w-full min-w-[180px] text-[11px]"
+                                  />
                                 )}
                               </td>
                               <td className="p-2.5 text-destructive font-medium leading-relaxed whitespace-pre-line">
-                                {item.errors.join(", ") || "—"}
+                                {item.errors.map(translateImportError).join(", ") || "—"}
                               </td>
                             </tr>
-                            {isExpanded && hasRaw && (
-                              <tr className="bg-muted/20 border-b">
-                                <td colSpan={8} className="p-2 pl-10 text-[10px] font-mono text-muted-foreground">
-                                  <div className="flex flex-wrap gap-1 items-center">
-                                    <span className="font-bold uppercase tracking-wider text-muted-foreground/60 mr-2">
-                                      Сырые ячейки:
-                                    </span>
-                                    {item.raw_values.map((val, cellIdx) => (
-                                      <Badge
-                                        key={cellIdx}
-                                        variant="secondary"
-                                        className="px-1 py-0 h-4 text-[9px] rounded font-mono border"
-                                      >
-                                        {val || "пусто"}
-                                      </Badge>
-                                    ))}
-                                  </div>
-                                </td>
-                              </tr>
-                            )}
+                            {isExpanded && hasRaw ? (
+                              <ImportRawRows.Detail colSpan={9} values={item.raw_values} />
+                            ) : null}
                           </Fragment>
                         );
                       })}
                     </tbody>
                   </table>
-                )}
-              </div>
-            </div>
+              </ImportPreview.TableFrame>
+            </ImportPreview.Layout>
           )}
 
           {/* ═══════════════════════ RESULT STEP ════════════════════════ */}
@@ -687,7 +1142,7 @@ export function ImportRemaindersDialog({
                   <div className="max-h-[160px] overflow-y-auto border border-destructive/20 rounded-lg bg-destructive/5 p-3 space-y-1 font-mono text-[10px]">
                     {result.errors.map((err, idx) => (
                       <div key={idx} className="text-destructive leading-tight border-b pb-1 last:border-0 last:pb-0">
-                        {err}
+                        {translateImportError(err)}
                       </div>
                     ))}
                   </div>
@@ -711,7 +1166,9 @@ export function ImportRemaindersDialog({
                 variant="outline"
                 onClick={() => {
                   setStep("upload");
+                  setImportMode("file");
                   setFile(null);
+                  setClipboardText("");
                   setSheets([]);
                   setPreviewData(null);
                   setError(null);
@@ -740,7 +1197,7 @@ export function ImportRemaindersDialog({
                   </Button>
                   <Button
                     onClick={() => handleApply(true)}
-                    disabled={previewLoading || importMutation.isPending || stats.valid === 0}
+                    disabled={!canApplyImport || stats.valid === 0}
                   >
                     {importMutation.isPending ? (
                       <>
@@ -755,7 +1212,7 @@ export function ImportRemaindersDialog({
               ) : (
                 <Button
                   onClick={() => handleApply(false)}
-                  disabled={previewLoading || importMutation.isPending || stats.total === 0}
+                  disabled={!canApplyImport}
                 >
                   {importMutation.isPending ? (
                     <>

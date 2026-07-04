@@ -28,8 +28,6 @@ export async function uploadExcel(
     templateId?: number;
     columnMapping?: Record<string, string>;
     productionPlanId?: number;
-    planMonth?: string;
-    planVersion?: string;
     rowSelection?: string;
     sheetIndex?: number;
     normalizeHangerQuantity?: boolean;
@@ -42,8 +40,6 @@ export async function uploadExcel(
     column_mapping: options?.columnMapping,
     mode: options?.productionPlanId ? "append_to_plan" : "create_plan",
     production_plan_id: options?.productionPlanId ?? undefined,
-    plan_month: options?.planMonth?.trim() || undefined,
-    plan_version: options?.planVersion?.trim() || undefined,
     row_selection: options?.rowSelection?.trim() || undefined,
     normalize_hanger_quantity: options?.normalizeHangerQuantity ?? true,
   })

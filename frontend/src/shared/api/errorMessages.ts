@@ -221,6 +221,7 @@ const DICT: Record<string, string> = {
   "Invalid sort field: {0}": "Неизвестное поле сортировки: {0}",
   "Invalid sort order: {0}": "Неизвестный порядок сортировки: {0}",
   "SKU already exists": "Артикул уже используется",
+  "SKU must not be empty": "Артикул не может быть пустым",
   "No route found for this product":
     "Для этого продукта не найден маршрут",
 
@@ -334,6 +335,13 @@ const DICT: Record<string, string> = {
   "Action references unknown section_code":
     "Действие ссылается на неизвестный section_code",
 
+  // === stock / remainder import ===
+  "SKU '{0}' not found in database": "Артикул «{0}» не найден в базе данных",
+  "Location with id={0} not found": "Участок с id={0} не найден",
+  "Location id={0} not found": "Участок с id={0} не найден",
+  "Буфер обмена пуст": "Буфер обмена пуст",
+  "Нет данных для импорта": "Нет данных для импорта",
+
   // === excel_import / plan_import_service ===
   "Unsupported Excel file extension: {0}":
     "Неподдерживаемое расширение Excel-файла: {0}",
@@ -424,4 +432,26 @@ export function translateError(message: string | null | undefined): string {
   }
 
   return message;
+}
+
+/**
+ * Переводит сообщения валидации импорта остатков (preview/import).
+ * Обрабатывает обёртку «Row N: … (SKU=…)» и вложенные ошибки.
+ */
+export function translateImportError(message: string | null | undefined): string {
+  if (!message) return message ?? "";
+  const trimmed = message.trim();
+  if (!trimmed) return message;
+
+  const rowMatch = trimmed.match(/^Row (\d+): (.+) \(SKU=(.*)\)$/);
+  if (rowMatch) {
+    const [, row, errs, sku] = rowMatch;
+    const translatedErrs = errs
+      .split(", ")
+      .map((part) => translateImportError(part.trim()))
+      .join(", ");
+    return `Строка ${row}: ${translatedErrs}${sku ? ` (артикул=${sku})` : ""}`;
+  }
+
+  return translateError(trimmed);
 }

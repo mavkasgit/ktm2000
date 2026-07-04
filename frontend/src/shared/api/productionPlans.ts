@@ -560,11 +560,23 @@ export type ManualPassResponse = {
   skipped_stages: number;
 };
 
-export async function takeToWork(positionIds: number[], remainderAllocation?: Array<{ remainder_id: number; quantity: number }>) {
-  const { data } = await apiClient.post<TakeToWorkResponse>("/production-planning/rows/take-to-work", {
+export async function takeToWork(
+  positionIds: number[],
+  remainderAllocation?: Array<{ remainder_id: number; quantity: number }>,
+  releaseQuantity?: number,
+) {
+  const payload: {
+    position_ids: number[];
+    remainder_allocation?: Array<{ remainder_id: number; quantity: number }>;
+    release_quantity?: number;
+  } = {
     position_ids: positionIds,
     remainder_allocation: remainderAllocation,
-  });
+  };
+  if (releaseQuantity !== undefined) {
+    payload.release_quantity = releaseQuantity;
+  }
+  const { data } = await apiClient.post<TakeToWorkResponse>("/production-planning/rows/take-to-work", payload);
   return data;
 }
 

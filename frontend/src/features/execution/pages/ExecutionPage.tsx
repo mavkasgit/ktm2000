@@ -335,10 +335,14 @@ export function ExecutionPage() {
     setLaunchDialog({ open: false, mode: "single", positionIds: [] });
   }, [launchDialog.positionIds, takeToWorkMutation]);
 
-  const confirmLaunchWithAutoConsume = useCallback((autoConsume: boolean) => {
-    takeToWorkMutation.mutate({ positionIds: [remainderDialog.positionId!] });
-    setRemainderDialog((prev) => ({ ...prev, open: false }));
-  }, [remainderDialog.positionId, takeToWorkMutation]);
+  const confirmLaunchWithAutoConsume = useCallback(
+    (_autoConsume: boolean) => {
+      if (!remainderDialog.positionId) return;
+      takeToWorkMutation.mutate({ positionIds: [remainderDialog.positionId] });
+      setRemainderDialog((prev) => ({ ...prev, open: false }));
+    },
+    [remainderDialog.positionId, takeToWorkMutation],
+  );
 
   const confirmManualPass = useCallback(() => {
     if (!manualPassDialog.positionId || !manualPassDialog.targetRouteStepId) return;

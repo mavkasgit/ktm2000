@@ -1,16 +1,45 @@
 import { apiClient } from "./client";
 
-export type QualityState = "GOOD" | "SCRAP" | "REWORK";
+export type QualityState = "GOOD" | "SCRAP" | "REWORK" | "FINAL_SCRAP";
+
+/** Бэкенд принимает lowercase: good | scrap | rework | final_scrap */
+export function toApiQualityState(state: QualityState = "GOOD"): string {
+  if (state === "FINAL_SCRAP") return "final_scrap";
+  return state.toLowerCase();
+}
 
 export type StockBalanceEntry = {
   id: number;
   product_id: number;
+  product_sku: string | null;
   location_id: number;
   location_name: string | null;
-  quality_state: QualityState;
+  quality_state: QualityState | "good" | "scrap" | "rework" | "final_scrap";
   balance_qty: string;
+  completed_stages?: ImportOperationStep[];
   refreshed_at: string | null;
 };
+
+const QUALITY_STATE_LABELS: Record<string, string> = {
+  GOOD: "Годный",
+  good: "Годный",
+  SCRAP: "Брак",
+  scrap: "Брак",
+  FINAL_SCRAP: "Окончательный брак",
+  final_scrap: "Окончательный брак",
+  REWORK: "Переделка",
+  rework: "Переделка",
+};
+
+export function formatQualityStateLabel(state: string): string {
+  return QUALITY_STATE_LABELS[state] ?? state;
+}
+
+export function formatBalanceQtyInteger(qty: string | number): string {
+  const n = typeof qty === "string" ? Number.parseFloat(qty) : qty;
+  if (!Number.isFinite(n)) return "—";
+  return String(Math.round(n));
+}
 
 export type StockReason =
   | "ISSUE_TO_WORK"
@@ -27,13 +56,63 @@ export type StockReason =
   | "MANUAL_IN"
   | "MANUAL_OUT";
 
+/** source_ref транзакций импорта остатков из Excel/буфера */
+export const IMPORT_REMAINDERS_SOURCE_REF = "import_remainders_excel";
+
+const STOCK_REASON_LABELS: Record<string, string> = {
+  ISSUE_TO_WORK: "Выдача в работу",
+  issue_to_work: "Выдача в работу",
+  COMPLETE: "Выпуск",
+  complete: "Выпуск",
+  TRANSFER_SEND: "Передача отправлено",
+  transfer_send: "Передача отправлено",
+  TRANSFER_RECEIVE: "Передача получено",
+  transfer_receive: "Передача получено",
+  RETURN_TO_STOCK: "Возврат на склад",
+  return_to_stock: "Возврат на склад",
+  RETURN_TO_PREVIOUS: "Возврат на предыдущий участок",
+  return_to_previous: "Возврат на предыдущий участок",
+  FINAL_RELEASE: "Финальный выпуск",
+  final_release: "Финальный выпуск",
+  SCRAP: "Списание в брак",
+  scrap: "Списание в брак",
+  REWORK: "Переделка",
+  rework: "Переделка",
+  ADJUSTMENT_IN: "Корректировка +",
+  adjustment_in: "Корректировка +",
+  ADJUSTMENT_OUT: "Корректировка −",
+  adjustment_out: "Корректировка −",
+  MANUAL_IN: "Ручной приход",
+  manual_in: "Ручной приход",
+  MANUAL_OUT: "Ручной расход",
+  manual_out: "Ручной расход",
+};
+
+/** Человекочитаемая причина движения; импорт остатков выделяется отдельно. */
+export function formatStockReasonLabel(
+  reason: string,
+  sourceRef?: string | null,
+): string {
+  if (sourceRef === IMPORT_REMAINDERS_SOURCE_REF) {
+    return "Импорт остатков";
+  }
+  return STOCK_REASON_LABELS[reason] ?? STOCK_REASON_LABELS[reason.toLowerCase()] ?? reason;
+}
+
+/** Бэкенд принимает lowercase enum values: manual_in, transfer_send, … */
+export function toApiStockReason(reason: StockReason): string {
+  return reason.toLowerCase();
+}
+
 export type StockTransactionEntry = {
   id: number;
   product_id: number;
   from_location_id: number | null;
+  from_location_name: string | null;
   to_location_id: number | null;
+  to_location_name: string | null;
   quantity: string;
-  reason: StockReason;
+  reason: StockReason | string;
   from_quality_state: QualityState;
   to_quality_state: QualityState;
   task_id: number | null;
@@ -74,7 +153,7 @@ export async function getStockBalances(params?: StockBalancesParams): Promise<St
   const search = new URLSearchParams();
   if (params?.product_id !== undefined) search.set("product_id", String(params.product_id));
   if (params?.location_id !== undefined) search.set("location_id", String(params.location_id));
-  if (params?.quality_state) search.set("quality_state", params.quality_state);
+  if (params?.quality_state) search.set("quality_state", toApiQualityState(params.quality_state));
   const qs = search.toString();
   const { data } = await apiClient.get<StockBalanceEntry[]>(
     `/v2/stock/balance${qs ? `?${qs}` : ""}`,
@@ -83,7 +162,7 @@ export async function getStockBalances(params?: StockBalancesParams): Promise<St
 }
 
 export async function getProductStockBalances(productId: number, qualityState?: QualityState): Promise<StockBalanceEntry[]> {
-  const search = qualityState ? `?quality_state=${qualityState}` : "";
+  const search = qualityState ? `?quality_state=${toApiQualityState(qualityState)}` : "";
   const { data } = await apiClient.get<StockBalanceEntry[]>(
     `/v2/stock/balance/by-product/${productId}${search}`,
   );
@@ -101,13 +180,16 @@ export type StockAdjustmentPayload = {
 
 export type StockAdjustmentResponse = {
   id: number;
-  reason: StockReason;
+  reason: StockReason | string;
   quantity: string;
   created_at: string | null;
 };
 
 export async function postStockAdjustment(payload: StockAdjustmentPayload): Promise<StockAdjustmentResponse> {
-  const { data } = await apiClient.post<StockAdjustmentResponse>("/api/v2/stock/adjustment", payload);
+  const { data } = await apiClient.post<StockAdjustmentResponse>("/api/v2/stock/adjustment", {
+    ...payload,
+    quality_state: toApiQualityState(payload.quality_state),
+  });
   return data;
 }
 
@@ -116,7 +198,7 @@ export async function getStockTransactions(params?: StockTransactionsParams): Pr
   if (params?.product_id !== undefined) search.set("product_id", String(params.product_id));
   if (params?.transfer_id !== undefined) search.set("transfer_id", String(params.transfer_id));
   if (params?.task_id !== undefined) search.set("task_id", String(params.task_id));
-  if (params?.reason) search.set("reason", params.reason);
+  if (params?.reason) search.set("reason", toApiStockReason(params.reason));
   if (params?.location_id !== undefined) search.set("location_id", String(params.location_id));
   if (params?.compensating !== undefined) search.set("compensating", String(params.compensating));
   if (params?.limit !== undefined) search.set("limit", String(params.limit));
@@ -162,7 +244,25 @@ export type RemainderImportItem = {
   completed_stages: ImportOperationStep[];
   target_section_name: string | null;
   target_section_id: number | null;
+  quality_state_raw: string | null;
+  quality_state: QualityState | "good" | "scrap" | "rework" | "final_scrap";
 };
+
+export const IMPORT_QUALITY_OPTIONS: { value: QualityState; label: string }[] = [
+  { value: "GOOD", label: "Годный" },
+  { value: "SCRAP", label: "Брак" },
+  { value: "FINAL_SCRAP", label: "Окончательный брак" },
+];
+
+export function normalizeImportQualityState(
+  state: string | null | undefined,
+): QualityState {
+  const norm = (state ?? "good").toLowerCase();
+  if (norm === "final_scrap") return "FINAL_SCRAP";
+  if (norm === "scrap") return "SCRAP";
+  if (norm === "rework") return "REWORK";
+  return "GOOD";
+}
 
 export type RemainderImportSummary = {
   total: number;
@@ -186,27 +286,51 @@ export type RemainderImportResponse = {
 };
 
 export type RemainderImportOptions = {
+  location_id?: number;
   sheet_index?: number;
   row_selection?: string;
   quality_state?: QualityState;
   skip_invalid?: boolean;
   clear_existing?: boolean;
   target_section_overrides?: Record<number, number>; // row_number → section_id
+  quality_state_overrides?: Record<number, QualityState>; // row_number → quality
 };
 
+export type RemainderImportSource =
+  | { kind: "file"; file: File }
+  | { kind: "clipboard"; clipboardText: string };
+
+function appendRemainderImportSource(formData: FormData, source: RemainderImportSource) {
+  if (source.kind === "file") {
+    formData.append("file", source.file);
+    return;
+  }
+  formData.append("clipboard_text", source.clipboardText);
+}
+
 export async function previewRemaindersExcel(
-  locationId: number,
-  file: File,
+  source: RemainderImportSource,
   opts: RemainderImportOptions = {},
 ): Promise<RemainderPreviewResponse> {
   const formData = new FormData();
-  formData.append("file", file);
-  formData.append("location_id", String(locationId));
-  formData.append("quality_state", opts.quality_state ?? "GOOD");
+  appendRemainderImportSource(formData, source);
+  if (opts.location_id != null) {
+    formData.append("location_id", String(opts.location_id));
+  }
+  formData.append("quality_state", toApiQualityState(opts.quality_state));
   formData.append("sheet_index", String(opts.sheet_index ?? 0));
   if (opts.row_selection) formData.append("row_selection", opts.row_selection);
   if (opts.target_section_overrides && !opts.clear_existing) {
     formData.append("target_section_overrides", JSON.stringify(opts.target_section_overrides));
+  }
+  if (opts.quality_state_overrides && Object.keys(opts.quality_state_overrides).length > 0) {
+    const payload = Object.fromEntries(
+      Object.entries(opts.quality_state_overrides).map(([row, state]) => [
+        row,
+        toApiQualityState(state),
+      ]),
+    );
+    formData.append("quality_state_overrides", JSON.stringify(payload));
   }
   const { data } = await apiClient.post<RemainderPreviewResponse>(
     "/v2/stock/import/remainders/preview",
@@ -218,19 +342,28 @@ export async function previewRemaindersExcel(
 
 export async function importRemaindersExcel(
   locationId: number,
-  file: File,
+  source: RemainderImportSource,
   opts: RemainderImportOptions = {},
 ): Promise<RemainderImportResponse> {
   const formData = new FormData();
-  formData.append("file", file);
+  appendRemainderImportSource(formData, source);
   formData.append("location_id", String(locationId));
-  formData.append("quality_state", opts.quality_state ?? "GOOD");
+  formData.append("quality_state", toApiQualityState(opts.quality_state));
   formData.append("sheet_index", String(opts.sheet_index ?? 0));
   formData.append("skip_invalid", String(opts.skip_invalid ?? true));
   formData.append("clear_existing", String(opts.clear_existing ?? false));
   if (opts.row_selection) formData.append("row_selection", opts.row_selection);
   if (opts.target_section_overrides && !opts.clear_existing) {
     formData.append("target_section_overrides", JSON.stringify(opts.target_section_overrides));
+  }
+  if (opts.quality_state_overrides && Object.keys(opts.quality_state_overrides).length > 0) {
+    const payload = Object.fromEntries(
+      Object.entries(opts.quality_state_overrides).map(([row, state]) => [
+        row,
+        toApiQualityState(state),
+      ]),
+    );
+    formData.append("quality_state_overrides", JSON.stringify(payload));
   }
   const { data } = await apiClient.post<RemainderImportResponse>(
     "/v2/stock/import/remainders",

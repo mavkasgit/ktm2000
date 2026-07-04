@@ -76,6 +76,9 @@ function conflictHintFromTransferError(message: string): string | null {
   if (n.includes("нельзя уменьшить передачу")) {
     return "Нельзя уменьшить передачу: целевая задача уже использовала материалы.";
   }
+  if (n.includes("уже есть активная передача")) {
+    return "По этому заданию передача уже создана — измените количество в журнале.";
+  }
   return null;
 }
 
@@ -124,12 +127,12 @@ function ReadyTransferRow({
   invalidateShopfloorCaches,
   invalidateTransfersCaches,
 }: ReadyTransferRowProps) {
-  const [quantity, setQuantity] = useState(task.planned_quantity);
+  const [quantity, setQuantity] = useState(task.transferable_quantity);
   const submittingRef = useRef(false);
 
   useEffect(() => {
-    setQuantity(task.planned_quantity);
-  }, [task.planned_quantity]);
+    setQuantity(task.transferable_quantity);
+  }, [task.transferable_quantity]);
 
   const mutation = useMutation({
     mutationFn: (idempotencyKey: string) =>

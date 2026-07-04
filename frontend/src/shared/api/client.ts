@@ -43,8 +43,41 @@ apiClient.interceptors.response.use(
 );
 
 export type ApiErrorResponse = {
-  detail?: string;
+  detail?: string | ValidationErrorItem[] | Record<string, unknown>;
 };
+
+type ValidationErrorItem = {
+  type?: string;
+  loc?: (string | number)[];
+  msg?: string;
+  input?: unknown;
+  ctx?: Record<string, unknown>;
+};
+
+/** Преобразует detail из FastAPI (строка или массив pydantic-ошибок) в текст */
+export function formatApiDetail(detail: unknown): string {
+  if (detail == null) return "";
+  if (typeof detail === "string") return translateError(detail);
+  if (Array.isArray(detail)) {
+    return detail
+      .map((item) => {
+        if (typeof item === "string") return translateError(item);
+        if (item && typeof item === "object" && "msg" in item) {
+          const ve = item as ValidationErrorItem;
+          const field = ve.loc?.filter((part) => part !== "body").join(" → ") ?? "";
+          const message = ve.msg ? translateError(ve.msg) : "";
+          return field ? `${field}: ${message}` : message;
+        }
+        return String(item);
+      })
+      .filter(Boolean)
+      .join("\n");
+  }
+  if (typeof detail === "object" && "msg" in detail) {
+    return formatApiDetail([(detail as ValidationErrorItem)]);
+  }
+  return translateError(String(detail));
+}
 
 /** Extract a human-readable error message from an Axios error */
 export function getErrorMessage(error: unknown): string {
@@ -52,7 +85,10 @@ export function getErrorMessage(error: unknown): string {
     const axErr = error as { response?: { status?: number; data?: ApiErrorResponse } };
     const status = axErr.response?.status;
     const detail = axErr.response?.data?.detail;
-    if (detail) return translateError(detail);
+    if (detail != null) {
+      const formatted = formatApiDetail(detail);
+      if (formatted) return formatted;
+    }
     if (status) return `HTTP ${status}: ${axErr.response?.data ? JSON.stringify(axErr.response.data) : "Нет тела ответа"}`;
   }
   if (error instanceof Error) return translateError(error.message);
