@@ -102,6 +102,12 @@ worktrees/
 # CodeGraph
 .codegraph/
 
+# MCP tool descriptors (local Cursor cache: codegraph, supabase, …)
+mcps/
+
+# Local terminal session dumps (Cursor / IDE)
+terminals/
+
 # oh-my-opencode-slim (deepwork working dir + local plugin workspace)
 .slim/
 .opencode/
