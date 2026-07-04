@@ -291,9 +291,9 @@ async def test_transfer_send_updates_balance(session: AsyncSession, client) -> N
     # From-location balance уменьшился, to-location увеличился
     bal_from = await _balance(session, from_task.product_id, from_task.section_id)
     bal_to = await _balance(session, to_task.product_id, to_task.section_id)
-    # Две транзакции (SEND + RECEIVE) обе from→to → from:-2Q, to:+2Q
-    assert bal_from == bal_before_from - Decimal("10")  # 2 × 5
-    assert bal_to == bal_before_to + Decimal("10")
+    # TRANSFER_SEND двигает остаток; TRANSFER_RECEIVE — только учёт задачи.
+    assert bal_from == bal_before_from - Decimal("5")
+    assert bal_to == bal_before_to + Decimal("5")
 
 
 @_py_test_mark

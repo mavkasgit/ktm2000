@@ -174,8 +174,9 @@ async def _record_transfer_send_stock_tx(
 
     Создаёт ``StockTransaction`` с геометрией
     ``from=from_section → to=to_section``, reason ``TRANSFER_SEND``,
-    ``task_id=from_task``. Одна проводка с обоими концами двигает
-    баланс обеих локаций на ``quantity``.
+    ``task_id=from_task``. Физическое движение остатков выполняет только
+    эта проводка; ``TRANSFER_RECEIVE`` на приёмной задаче — учётная
+    (без ``from``/``to``), чтобы не дублировать списание/приход.
 
     Идемпотентность по суффиксу ``:stock-send``. Возвращает созданную
     транзакцию (или существующую при идемпотентном повторе).
@@ -486,15 +487,15 @@ async def transfer_send(
         accounted_at=eff_accounted,
         is_post_factum=post_factum,
     )
-    # TRANSFER_RECEIVE на приёмную задачу
+    # TRANSFER_RECEIVE на приёмную задачу (только task-level; без локаций)
     receive_tx = await _stock_command_service.record(
         db,
         StockCommand(
             product_id=transfer.product_id,
             quantity=quantity,
             reason=Reason.TRANSFER_RECEIVE,
-            from_location_id=transfer.from_section_id,
-            to_location_id=transfer.to_section_id,
+            from_location_id=None,
+            to_location_id=None,
             task_id=to_task.id,
             transfer_id=transfer.id,
             section_plan_line_id=to_task.section_plan_line_id,

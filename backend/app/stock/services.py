@@ -527,9 +527,10 @@ class StockCommandService:
         if cmd.quantity <= 0:
             raise StockValidationError(f"quantity must be > 0, got {cmd.quantity}")
         if cmd.from_location_id is None and cmd.to_location_id is None:
-            raise StockValidationError(
-                "at least one of from_location_id / to_location_id must be set"
-            )
+            if cmd.reason != Reason.TRANSFER_RECEIVE:
+                raise StockValidationError(
+                    "at least one of from_location_id / to_location_id must be set"
+                )
         # Some reasons are "state changes" on the same location
         # (complete, scrap, rework) — allow same from/to for these.
         _state_change_reasons = {

@@ -259,5 +259,5 @@ async def test_manual_stock_transfer_one_per_task_and_plan_cap(client, session) 
         location_id=raw_sec.id,
         product_id=fx["product"].id,
     )
-    # TRANSFER_SEND + TRANSFER_RECEIVE — обе from→to, склад уменьшается на 2×qty.
-    assert bal == warehouse_qty - Decimal("80")
+    # TRANSFER_SEND списывает со склада; TRANSFER_RECEIVE не дублирует движение.
+    assert bal == warehouse_qty - Decimal("40")

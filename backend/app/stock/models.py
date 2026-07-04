@@ -90,7 +90,8 @@ class StockTransaction(Base):
     __table_args__ = (
         CheckConstraint("quantity > 0", name="ck_stock_transactions_quantity_positive"),
         CheckConstraint(
-            "(from_location_id IS NOT NULL) OR (to_location_id IS NOT NULL)",
+            "(from_location_id IS NOT NULL) OR (to_location_id IS NOT NULL) "
+            "OR (reason = 'transfer_receive')",
             name="ck_stock_transactions_at_least_one_location",
         ),
         CheckConstraint(
