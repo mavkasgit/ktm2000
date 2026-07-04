@@ -329,7 +329,10 @@ function TableTaskGroupRow({
   return (
     <tr
       className={`border-y border-slate-200 cursor-pointer transition-colors font-semibold ${isBulkMode && allSelected ? TABLE_ROW_STYLES.selectedGroupHeader : TABLE_ROW_STYLES.defaultGroupHeader}`}
-      onClick={isBulkMode ? onSelectGroup : undefined}
+      onClick={() => {
+        if (isBulkMode) onSelectGroup();
+        else onToggleCollapse();
+      }}
     >
       <td className="p-2 text-center">
         <div className="flex items-center justify-center">
@@ -821,7 +824,7 @@ export function SectionTasksBoard({
               return (
                 <div key={group.key} className={`rounded-lg overflow-hidden transition-colors ${bulkMode && bulkSelection?.isAllSelected(group.tasks.map(t => t.id)) ? TABLE_ROW_STYLES.selectedGroupContainer : TABLE_ROW_STYLES.defaultGroupContainer}`}>
                   <div
-                    className="p-3 flex items-center justify-between gap-2 border-b border-muted"
+                    className="p-3 flex items-center justify-between gap-2 border-b border-muted cursor-pointer"
                     onClick={() => {
                       if (bulkMode && bulkSelection) {
                         const taskIds = group.tasks.map((t) => t.id);
@@ -836,6 +839,8 @@ export function SectionTasksBoard({
                             bulkSelection.selectOne(id, true);
                           }
                         }
+                      } else {
+                        toggleGroup(group.key);
                       }
                     }}
                   >
