@@ -162,6 +162,55 @@ async def seed_demo_production(db: AsyncSession) -> dict:
 
     # SpgRemainder creation removed — table no longer exists.
     # Use StockCommandService.MANUAL_IN for demo stock creation.
+    from app.stock import StockCommand, StockCommandService, Reason, QualityState
+    from app.stock.models import StockTransaction
+    stock_service = StockCommandService()
+
+    # Find target section for remainder
+    target_sec = None
+    if prep_stock:
+        target_sec = await db.scalar(
+            select(Section)
+            .join(SpgSection, SpgSection.section_id == Section.id)
+            .where(SpgSection.spg_id == prep_stock.id)
+            .limit(1)
+        )
+    if not target_sec and spg:
+        target_sec = await db.scalar(
+            select(Section)
+            .join(SpgSection, SpgSection.section_id == Section.id)
+            .where(SpgSection.spg_id == spg.id)
+            .limit(1)
+        )
+    if not target_sec:
+        target_sec = await db.scalar(
+            select(Section).where(Section.is_active == True).limit(1)
+        )
+
+    tx1 = None
+    if target_sec is not None:
+        existing_tx1 = await db.scalar(
+            select(StockTransaction)
+            .where(
+                StockTransaction.product_id == rem1_prod.id,
+                StockTransaction.to_location_id == target_sec.id,
+                StockTransaction.reason == Reason.MANUAL_IN
+            )
+            .limit(1)
+        )
+        if existing_tx1:
+            tx1 = existing_tx1
+        else:
+            tx1 = await stock_service.record(db, StockCommand(
+                product_id=rem1_prod.id,
+                quantity=Decimal("150.000"),
+                reason=Reason.MANUAL_IN,
+                to_location_id=target_sec.id,
+                quality_state=QualityState.GOOD,
+                created_by=actor_id,
+                comment="Demo stock for remainder 1",
+            ))
+            stats["remainders"] += 1
 
     # Remainder 2: АТ-200-2700-AN, completed stages through SHOT
     # (after дробеструй, before анодирование).
@@ -177,7 +226,30 @@ async def seed_demo_production(db: AsyncSession) -> dict:
         stages_through_shot = production_stages[:4]
     completed_stages2 = await build_completed_stages_json(db, stages_through_shot)
 
-    # SpgRemainder creation removed — table no longer exists.
+    tx2 = None
+    if target_sec is not None:
+        existing_tx2 = await db.scalar(
+            select(StockTransaction)
+            .where(
+                StockTransaction.product_id == rem2_prod.id,
+                StockTransaction.to_location_id == target_sec.id,
+                StockTransaction.reason == Reason.MANUAL_IN
+            )
+            .limit(1)
+        )
+        if existing_tx2:
+            tx2 = existing_tx2
+        else:
+            tx2 = await stock_service.record(db, StockCommand(
+                product_id=rem2_prod.id,
+                quantity=Decimal("80.000"),
+                reason=Reason.MANUAL_IN,
+                to_location_id=target_sec.id,
+                quality_state=QualityState.GOOD,
+                created_by=actor_id,
+                comment="Demo stock for remainder 2",
+            ))
+            stats["remainders"] += 1
 
     # 6. Create defects (только если остатки попали в PREP — иначе привязка неуместна)
     if prep_stock is None:
@@ -187,10 +259,10 @@ async def seed_demo_production(db: AsyncSession) -> dict:
     # Defect 1: Open defect for ЮП-100-2700-BL on DRILL stage.
     if drill_stage is None:
         drill_stage = production_stages[0] if production_stages else None
-    if drill_stage is not None:
+    if drill_stage is not None and tx1 is not None:
         existing_def1 = await db.scalar(
             select(Defect)
-            .where(Defect.product_id == rem1_prod.id, Defect.route_stage_id == drill_stage.id, Defect.spg_remainder_id == rem1.id)
+            .where(Defect.product_id == rem1_prod.id, Defect.route_stage_id == drill_stage.id, Defect.stock_transaction_id == tx1.id)
             .limit(1)
         )
         if not existing_def1:
@@ -199,7 +271,7 @@ async def seed_demo_production(db: AsyncSession) -> dict:
                 section_id=drill_stage.section_id,
                 task_id=None,
                 route_stage_id=drill_stage.id,
-                spg_remainder_id=rem1.id,
+                stock_transaction_id=tx1.id,
                 status=DefectStatus.decision_required,
                 comment="Царапины после сверловки (демо)",
                 created_by=actor_id,
@@ -223,10 +295,10 @@ async def seed_demo_production(db: AsyncSession) -> dict:
         anod_stage = production_stages[4]
     if anod_stage is None and production_stages:
         anod_stage = production_stages[-1]
-    if anod_stage is not None:
+    if anod_stage is not None and tx2 is not None:
         existing_def2 = await db.scalar(
             select(Defect)
-            .where(Defect.product_id == rem2_prod.id, Defect.route_stage_id == anod_stage.id, Defect.spg_remainder_id == rem2.id)
+            .where(Defect.product_id == rem2_prod.id, Defect.route_stage_id == anod_stage.id, Defect.stock_transaction_id == tx2.id)
             .limit(1)
         )
         if not existing_def2:
@@ -235,7 +307,7 @@ async def seed_demo_production(db: AsyncSession) -> dict:
                 section_id=anod_stage.section_id,
                 task_id=None,
                 route_stage_id=anod_stage.id,
-                spg_remainder_id=rem2.id,
+                stock_transaction_id=tx2.id,
                 status=DefectStatus.decision_required,
                 comment="Непрокрас краев (демо)",
                 created_by=actor_id,

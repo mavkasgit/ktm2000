@@ -311,10 +311,6 @@ async def test_force_seed_is_forbidden_in_production(client, session, monkeypatc
 
 @pytest.mark.asyncio
 async def test_cleanup_endpoints(client, session) -> None:
-    # Восстанавливаем системного пользователя, чтобы логи аудита (FK user_id) работали
-    user_res = await client.post("/api/routes-seed/reseed-system-user")
-    assert user_res.status_code == 200
-
     # 1. Заполняем секции по умолчанию
     await _seed_default_sections(session)
     
@@ -403,8 +399,5 @@ async def test_cleanup_stats_exposes_stock_ledger_not_legacy_tables(client, sess
 @pytest.mark.asyncio
 async def test_cleanup_transfers_does_not_query_legacy_movements(client, session) -> None:
     """Очистка transfers не выполняет UPDATE по удалённой таблице movements."""
-    user_res = await client.post("/api/routes-seed/reseed-system-user")
-    assert user_res.status_code == 200
-
     cleanup_response = await client.post("/api/routes-seed/cleanup", json={"tables": ["transfers"]})
     assert cleanup_response.status_code == 204, cleanup_response.text

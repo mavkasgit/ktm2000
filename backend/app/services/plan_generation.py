@@ -556,7 +556,7 @@ async def _resolve_route_stage_operation_name(
     ``"Хранение: {name}"`` через классификатор.
 
     Для production-этапов без ``RouteOperation`` (не должно происходить
-    после миграции 020, но оставлено как defensive fallback) — возвращает
+    после baseline 004_routes (storage vs production), но оставлено как defensive fallback) — возвращает
     имя цеха, помеченное суффиксом, чтобы сразу было видно аномалию.
     """
     from app.services.route_storage_classifier import is_transit_stage, stage_display_name

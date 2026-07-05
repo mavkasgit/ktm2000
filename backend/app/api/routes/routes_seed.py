@@ -13,7 +13,6 @@ from app.models.user import User
 from app.core.config import settings
 from app.core.database import get_db
 from app.seeds.run_seed import run_full_seed
-from app.seeds.seeders.users_seeder import seed_users
 from app.seeds.seeders.demo_production_seeder import seed_demo_production
 from app.seeds.seeders.cleanup_seeder import clear_generated_production_data
 from app.services.audit_log_service import log_action
@@ -31,25 +30,6 @@ class SeedSummary(BaseModel):
     selection_rules: int
     sections: int
     section_operations: int
-
-
-class UserSeedResult(BaseModel):
-    user_id: int
-    email: str
-
-
-@router.post("/reseed-system-user", response_model=UserSeedResult, dependencies=[Depends(require_role(list(WRITER_ROLES)))])
-async def reseed_system_user(db: AsyncSession = Depends(get_db)) -> UserSeedResult:
-    """Delete and recreate system user with id=1. Ensures FK constraints work with _fake_user()."""
-    try:
-        result = await seed_users(db)
-        await db.commit()
-        user_id, user = next(iter(result.items()))
-        return UserSeedResult(user_id=user_id, email=user.email)
-    except Exception as e:
-        await db.rollback()
-        logger.exception("Reseed system user failed")
-        raise HTTPException(status_code=500, detail=str(e))
 
 
 class SeedPreview(BaseModel):

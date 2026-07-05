@@ -28,7 +28,7 @@ async def run_full_seed(db: AsyncSession, force: bool = False, include_demo: boo
     if force:
         result["cleanup"] = await clear_generated_production_data(db)
 
-    # 0. System user (required by dev-mode _fake_user)
+    # 0. System user + demo users (system is also seeded in migration 001)
     users_map = await seed_users(db)
     result["users"] = len(users_map)
 

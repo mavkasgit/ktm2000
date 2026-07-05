@@ -313,9 +313,21 @@ async def module_db_url(
         await _drop_database(admin_db_url, db_name)
 
 
-@pytest_asyncio.fixture
-async def engine(module_db_url: str) -> AsyncIterator[AsyncEngine]:
+@pytest_asyncio.fixture(scope="module", loop_scope="module")
+async def module_schema_name() -> str:
+    schema_name = f"{TEST_SCHEMA_PREFIX}{uuid.uuid4().hex[:8]}"
+    _validate_ident(schema_name, required_prefix=TEST_SCHEMA_PREFIX)
+    return schema_name
+
+
+@pytest_asyncio.fixture(scope="module", loop_scope="module")
+async def engine(module_db_url: str, module_schema_name: str) -> AsyncIterator[AsyncEngine]:
     engine = create_async_engine(module_db_url, poolclass=NullPool)
+    async with engine.begin() as conn:
+        await conn.execute(text(f"CREATE SCHEMA {_quote_ident(module_schema_name)}"))
+        await conn.execute(text(f"SET search_path TO {_quote_ident(module_schema_name)}"))
+        await conn.run_sync(Base.metadata.create_all)
+        await _install_storage_vs_production_triggers(conn)
     try:
         yield engine
     finally:
@@ -323,22 +335,19 @@ async def engine(module_db_url: str) -> AsyncIterator[AsyncEngine]:
 
 
 @pytest_asyncio.fixture
-async def session(engine: AsyncEngine) -> AsyncIterator[AsyncSession]:
-    schema_name = _safe_schema_name()
-
-    _validate_ident(schema_name, required_prefix=TEST_SCHEMA_PREFIX)
-
-    async with engine.begin() as conn:
-        await conn.execute(text(f"CREATE SCHEMA {_quote_ident(schema_name)}"))
-        await conn.execute(text(f"SET search_path TO {_quote_ident(schema_name)}"))
-        await conn.run_sync(Base.metadata.create_all)
-        await _install_storage_vs_production_triggers(conn)
-
+async def session(engine: AsyncEngine, module_schema_name: str) -> AsyncIterator[AsyncSession]:
     async with engine.connect() as conn:
-        await conn.execute(text(f"SET search_path TO {_quote_ident(schema_name)}"))
-        session_factory = async_sessionmaker(bind=conn, class_=AsyncSession, expire_on_commit=False)
+        transaction = await conn.begin()
+        await conn.execute(text(f"SET search_path TO {_quote_ident(module_schema_name)}"))
+        # Сброс генератора ID, чтобы system_user всегда получал id = 1
+        await conn.execute(text("ALTER TABLE users ALTER COLUMN id RESTART WITH 1"))
+        session_factory = async_sessionmaker(
+            bind=conn,
+            class_=AsyncSession,
+            expire_on_commit=False,
+            join_transaction_mode="create_savepoint"
+        )
         async with session_factory() as db:
-            # Seed default system user (id=1) to prevent foreign key errors in audit logs
             from app.models.user import User, UserRole
             system_user = User(
                 username="system",
@@ -350,15 +359,12 @@ async def session(engine: AsyncEngine) -> AsyncIterator[AsyncSession]:
             )
             db.add(system_user)
             await db.commit()
-
             try:
                 yield db
             finally:
                 await db.rollback()
+                await transaction.rollback()
         await conn.execute(text("SET search_path TO public"))
-
-    async with engine.begin() as conn:
-        await conn.execute(text(f"DROP SCHEMA {_quote_ident(schema_name)} CASCADE"))
 
 
 @pytest_asyncio.fixture

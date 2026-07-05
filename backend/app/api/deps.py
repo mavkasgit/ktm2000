@@ -12,7 +12,7 @@ from app.models.user import User, UserRole
 # Currently get_current_user returns a fake admin user for development.
 # To restore real JWT/token auth, replace the body of get_current_user only.
 # All routes already use Depends(get_current_user) — no other changes needed.
-# See also: migration 012_seed_system_user (seeds id=1, system@local).
+# See also: migration 001_sections_and_users seeds system user id=1 (system@local).
 
 WRITER_ROLES: frozenset[UserRole] = frozenset(
     {UserRole.admin, UserRole.section_manager, UserRole.operator}
@@ -23,19 +23,6 @@ READER_ROLES: frozenset[UserRole] = frozenset(
 TRANSFER_WRITER_ROLES: frozenset[UserRole] = frozenset(
     WRITER_ROLES | {UserRole.transporter}
 )
-
-
-def _fake_user() -> User:
-    """Dev-mode placeholder user. email 'system@local' signals a fake/dev user."""
-    return User(
-        id=1,
-        username="system",
-        email="system@local",
-        password_hash="",
-        role=UserRole.admin,
-        full_name="System User",
-        is_active=True,
-    )
 
 
 def require_role(allowed_roles: Sequence[UserRole]) -> Callable:
@@ -81,7 +68,11 @@ async def get_current_user(
         )
         if user:
             return user
-        return _fake_user()
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="System user not found in database",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
 
     # --- Strict JWT auth mode ---
     if not auth_header or not auth_header.startswith("Bearer "):
