@@ -143,6 +143,7 @@ async def ready_to_transfer(
     next_operation_name: str | None = Query(default=None),
     next_section_name: str | None = Query(default=None),
     task_id: int | None = Query(default=None),
+    plan_position_id: int | None = Query(default=None),
     transferable_qty: str | None = Query(default=None),
     db: AsyncSession = Depends(get_db),
     locked_section_id: int | None = Depends(get_single_window_locked_section_id),
@@ -171,6 +172,7 @@ async def ready_to_transfer(
         next_operation_name=next_operation_name,
         next_section_name=next_section_name,
         task_id=task_id,
+        plan_position_id=plan_position_id,
         transferable_qty=transferable_qty,
     )
 

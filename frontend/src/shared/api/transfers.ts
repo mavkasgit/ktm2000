@@ -65,6 +65,7 @@ export type ReadyToTransferListParams = {
   next_operation_name?: string;
   next_section_name?: string;
   task_id?: number;
+  plan_position_id?: number;
   transferable_qty?: string;
 };
 

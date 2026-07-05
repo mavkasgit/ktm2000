@@ -310,6 +310,7 @@ def _hydrate_production_ready_row(row) -> dict:
 READY_SORT_FIELDS = frozenset({
     "sequence",
     "task_id",
+    "plan_position_id",
     "product_sku",
     "operation_name",
     "transferable_qty",
@@ -343,6 +344,8 @@ def _apply_ready_production_order(
     order_column = from_line.sequence
     if sort_by == "task_id":
         order_column = WorkTask.id
+    elif sort_by == "plan_position_id":
+        order_column = from_line.plan_position_id
     elif sort_by == "product_sku":
         order_column = Product.sku
     elif sort_by == "operation_name":
@@ -367,6 +370,7 @@ def _build_production_ready_query(
     next_operation_name: str | None = None,
     next_section_name: str | None = None,
     task_id: int | None = None,
+    plan_position_id: int | None = None,
     transferable_qty: Decimal | None = None,
     sort_by: str = "sequence",
     sort_order: str = "asc",
@@ -470,6 +474,7 @@ def _build_production_ready_query(
             or_(
                 Product.sku.ilike(search_like),
                 cast(WorkTask.id, String).ilike(search_like),
+                cast(from_line.plan_position_id, String).ilike(search_like),
                 op_names_sq.c.operation_names.ilike(search_like),
             )
         )
@@ -491,6 +496,8 @@ def _build_production_ready_query(
         )
     if task_id is not None:
         query = query.where(WorkTask.id == task_id)
+    if plan_position_id is not None:
+        query = query.where(from_line.plan_position_id == plan_position_id)
     if transferable_qty is not None:
         query = query.where(transferable_expr == transferable_qty)
 
@@ -542,9 +549,12 @@ def _ready_item_matches_column_filters(
     next_operation_name: str | None,
     next_section_name: str | None,
     task_id: int | None,
+    plan_position_id: int | None,
     transferable_qty: Decimal | None,
 ) -> bool:
     if task_id is not None and item.get("task_id") != task_id:
+        return False
+    if plan_position_id is not None and item.get("plan_position_id") != plan_position_id:
         return False
     if product_sku:
         sku = (item.get("product_sku") or "").lower()
@@ -577,6 +587,8 @@ def _ready_item_matches_column_filters(
 def _ready_item_sort_key(item: dict, sort_by: str) -> tuple:
     if sort_by == "task_id":
         return (item.get("task_id") or 0,)
+    if sort_by == "plan_position_id":
+        return (item.get("plan_position_id") or 0,)
     if sort_by == "product_sku":
         return (item.get("product_sku") or "",)
     if sort_by == "operation_name":
@@ -599,10 +611,14 @@ async def _fetch_stock_ready_items(
     next_operation_name: str | None = None,
     next_section_name: str | None = None,
     task_id: int | None = None,
+    plan_position_id: int | None = None,
     transferable_qty: Decimal | None = None,
 ) -> list[dict]:
     from app.models.production_plan import PlanPosition
-    from app.transfers.services import compute_stock_section_transferable, has_active_transfer_for_task
+    from app.transfers.services import (
+        compute_stock_section_transferable,
+        has_active_transfer_for_plan_line,
+    )
 
     if spg_id is not None:
         sections = (
@@ -645,9 +661,18 @@ async def _fetch_stock_ready_items(
             )
         )
         if search_like:
-            lines_query = lines_query.where(Product.sku.ilike(search_like))
+            lines_query = lines_query.where(
+                or_(
+                    Product.sku.ilike(search_like),
+                    cast(SectionPlanLine.plan_position_id, String).ilike(search_like),
+                )
+            )
         elif product_sku:
             lines_query = lines_query.where(Product.sku.ilike(f"%{product_sku.strip()}%"))
+        if plan_position_id is not None:
+            lines_query = lines_query.where(
+                SectionPlanLine.plan_position_id == plan_position_id
+            )
 
         lines = (await db.execute(lines_query)).scalars().all()
 
@@ -661,15 +686,16 @@ async def _fetch_stock_ready_items(
             if next_line is None:
                 continue
 
-            from app.services.shopfloor.common import sections_share_spg
-
-            if await sections_share_spg(db, spl.section_id, next_line.section_id):
-                continue
-
             next_stage = await db.get(RouteStage, next_line.route_stage_id)
             next_sec = await db.get(Section, next_line.section_id)
             if next_stage is None or next_sec is None:
                 continue
+
+            from app.services.shopfloor.common import sections_share_spg
+
+            if await sections_share_spg(db, spl.section_id, next_line.section_id):
+                if next_sec.type not in STOCK_SECTION_TYPES:
+                    continue
 
             next_task = await db.scalar(
                 select(WorkTask).where(
@@ -677,14 +703,19 @@ async def _fetch_stock_ready_items(
                     WorkTask.status.notin_([WorkTaskStatus.completed, WorkTaskStatus.cancelled]),
                 )
             )
-            if next_task is None:
+            if next_task is None and next_sec.type not in STOCK_SECTION_TYPES:
+                continue
+
+            if await has_active_transfer_for_plan_line(db, spl.id):
                 continue
 
             fake_task = await db.scalar(
-                select(WorkTask).where(
+                select(WorkTask)
+                .where(
                     WorkTask.section_plan_line_id == spl.id,
-                    WorkTask.status.notin_([WorkTaskStatus.completed, WorkTaskStatus.cancelled]),
+                    WorkTask.status != WorkTaskStatus.cancelled,
                 )
+                .order_by(WorkTask.id.asc())
             )
 
             planned_qty = spl.planned_quantity or Decimal("0")
@@ -693,10 +724,19 @@ async def _fetch_stock_ready_items(
                 planned_qty = plan_pos.quantity if plan_pos else Decimal("0")
 
             if fake_task is None:
+                if next_task is not None:
+                    product_id = next_task.product_id
+                else:
+                    product_id = spl.product_id
+                    if product_id is None:
+                        plan_pos = await db.get(PlanPosition, spl.plan_position_id)
+                        product_id = plan_pos.product_id if plan_pos else None
+                    if product_id is None:
+                        continue
                 fake_task = WorkTask(
                     section_plan_line_id=spl.id,
                     section_id=sec.id,
-                    product_id=next_task.product_id,
+                    product_id=product_id,
                     route_stage_id=spl.route_stage_id,
                     planned_quantity=planned_qty,
                     status=WorkTaskStatus.ready,
@@ -704,9 +744,6 @@ async def _fetch_stock_ready_items(
                 )
                 db.add(fake_task)
                 await db.flush()
-
-            if await has_active_transfer_for_task(db, fake_task.id):
-                continue
 
             transferable, _plan_remaining, physical_stock, transferred = (
                 await compute_stock_section_transferable(
@@ -761,6 +798,7 @@ async def _fetch_stock_ready_items(
                 haystacks = (
                     candidate.get("product_sku") or "",
                     candidate.get("operation_name") or "",
+                    str(candidate.get("plan_position_id") or ""),
                     str(candidate.get("task_id") or ""),
                 )
                 if not any(search_lower in value.lower() for value in haystacks):
@@ -772,6 +810,7 @@ async def _fetch_stock_ready_items(
                 next_operation_name=next_operation_name,
                 next_section_name=next_section_name,
                 task_id=task_id,
+                plan_position_id=plan_position_id,
                 transferable_qty=transferable_qty,
             ):
                 continue
@@ -795,6 +834,7 @@ async def list_ready_to_transfer(
     next_operation_name: str | None = None,
     next_section_name: str | None = None,
     task_id: int | None = None,
+    plan_position_id: int | None = None,
     transferable_qty: str | None = None,
 ) -> dict:
     """List SectionTasks that have quantity ready to be transferred.
@@ -847,6 +887,7 @@ async def list_ready_to_transfer(
         next_operation_name=next_operation_name,
         next_section_name=next_section_name,
         task_id=task_id,
+        plan_position_id=plan_position_id,
         transferable_qty=parsed_transferable_qty,
         sort_by=sort_by,
         sort_order=sort_order,
@@ -879,6 +920,7 @@ async def list_ready_to_transfer(
             next_operation_name=next_operation_name,
             next_section_name=next_section_name,
             task_id=task_id,
+            plan_position_id=plan_position_id,
             transferable_qty=parsed_transferable_qty,
         )
         items.extend(stock_items)
@@ -997,6 +1039,7 @@ async def get_section_transfer_history(
                 to_section.name.ilike(search_like),
                 Transfer.transfer_no.ilike(search_like),
                 Transfer.comment.ilike(search_like),
+                cast(from_line.plan_position_id, String).ilike(search_like),
             )
         )
 

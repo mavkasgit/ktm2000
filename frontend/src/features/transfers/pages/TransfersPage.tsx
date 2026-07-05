@@ -119,12 +119,12 @@ function statusBadgeVariant(status: string): StatusBadgeVariant {
   return "outline";
 }
 
-type ReadySortField = "taskId" | "sku" | "stage" | "transferableQty" | "next";
+type ReadySortField = "positionId" | "sku" | "stage" | "transferableQty" | "next";
 
 function getReadyCellValue(task: ReadyToTransferTask, field: ReadySortField): string {
   switch (field) {
-    case "taskId":
-      return String(task.task_id);
+    case "positionId":
+      return String(task.plan_position_id);
     case "sku":
       return task.product_sku ?? "—";
     case "stage":
@@ -154,8 +154,8 @@ function getHistoryStatusLabel(
 
 function mapReadySortFieldToApi(field: ReadySortField): string {
   switch (field) {
-    case "taskId":
-      return "task_id";
+    case "positionId":
+      return "plan_position_id";
     case "sku":
       return "product_sku";
     case "stage":
@@ -268,7 +268,7 @@ function buildReadyColumnApiParams(
   | "operation_name"
   | "next_operation_name"
   | "next_section_name"
-  | "task_id"
+  | "plan_position_id"
   | "transferable_qty"
 > {
   const params: Pick<
@@ -277,7 +277,7 @@ function buildReadyColumnApiParams(
     | "operation_name"
     | "next_operation_name"
     | "next_section_name"
-    | "task_id"
+    | "plan_position_id"
     | "transferable_qty"
   > = {};
 
@@ -290,10 +290,10 @@ function buildReadyColumnApiParams(
   const transferableQty = pickColumnApiValue(columnFilters, columnSearchQueries, "transferableQty");
   if (transferableQty) params.transferable_qty = transferableQty;
 
-  const taskIdStr = pickColumnApiValue(columnFilters, columnSearchQueries, "taskId");
-  if (taskIdStr) {
-    const parsed = Number(taskIdStr);
-    if (Number.isFinite(parsed)) params.task_id = parsed;
+  const positionIdStr = pickColumnApiValue(columnFilters, columnSearchQueries, "positionId");
+  if (positionIdStr) {
+    const parsed = Number(positionIdStr);
+    if (Number.isFinite(parsed)) params.plan_position_id = parsed;
   }
 
   const nextSearch = columnSearchQueries.next?.trim();
@@ -373,7 +373,7 @@ function ReadyTransferRow({
       toast({
         variant: "success",
         title: "Передача создана",
-        description: `Задание #${task.task_id} отправлено`,
+        description: `Позиция #${task.plan_position_id} отправлена`,
       });
       invalidateShopfloorCaches(task.section_id, task.next_section_id);
       invalidateTransfersCaches();
@@ -407,7 +407,7 @@ function ReadyTransferRow({
           />
         </TableCell>
       )}
-      <TableCell className="font-mono text-xs">#{task.task_id}</TableCell>
+      <TableCell className="font-mono text-xs text-muted-foreground">#{task.plan_position_id}</TableCell>
       <TableCell>{task.product_sku ?? "—"}</TableCell>
       <TableCell>
         <div className="text-xs">
@@ -747,7 +747,9 @@ export function TransfersPage() {
 
   const readyUniqueValues = useMemo(
     () => ({
-      taskId: [...new Set(readyItems.map((t) => String(t.task_id)))].sort((a, b) => Number(a) - Number(b)),
+      positionId: [...new Set(readyItems.map((t) => String(t.plan_position_id)))].sort(
+        (a, b) => Number(a) - Number(b),
+      ),
       sku: [...new Set(readyItems.map((t) => t.product_sku ?? "—"))].sort(),
       stage: [...new Set(readyItems.map((t) => t.operation_name ?? "—"))].sort(),
       transferableQty: [...new Set(readyItems.map((t) => fmtQty(t.transferable_quantity)))].sort(
@@ -872,7 +874,7 @@ export function TransfersPage() {
         actionResults.push({
           id: task.task_id,
           status: "success" as const,
-          label: `Задание #${task.task_id} (${task.product_sku ?? "—"})`,
+          label: `Позиция #${task.plan_position_id} (${task.product_sku ?? "—"})`,
         });
       } catch (err) {
         completedCount++;
@@ -882,7 +884,7 @@ export function TransfersPage() {
           id: task.task_id,
           status: "failed" as const,
           reason: getErrorMessage(err),
-          label: `Задание #${task.task_id} (${task.product_sku ?? "—"})`,
+          label: `Позиция #${task.plan_position_id} (${task.product_sku ?? "—"})`,
         });
       }
     }
@@ -984,7 +986,7 @@ export function TransfersPage() {
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground pointer-events-none" />
               <Input
                 type="text"
-                placeholder="Поиск по артикулу, этапу, № задания…"
+                placeholder="Поиск по ID, артикулу, этапу…"
                 value={readySearch}
                 onChange={(e) => setReadySearch(e.target.value)}
                 onKeyDown={(e) => {
@@ -1046,12 +1048,12 @@ export function TransfersPage() {
                     )}
                     <TableHead className={`${headerCellClass} p-0`}>
                       <SortableFilterHeader
-                        field="taskId"
-                        label="Задание"
+                        field="positionId"
+                        label="ID"
                         currentSorts={readySortConfigs}
                         onSortChange={handleReadySort}
-                        values={readyUniqueValues.taskId}
-                        {...bindReadyColumn("taskId")}
+                        values={readyUniqueValues.positionId}
+                        {...bindReadyColumn("positionId")}
                         valueLabel={(v) => `#${v}`}
                       />
                     </TableHead>
@@ -1169,7 +1171,7 @@ export function TransfersPage() {
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground pointer-events-none" />
               <Input
                 type="text"
-                placeholder="Поиск по артикулу, участкам, № передачи…"
+                placeholder="Поиск по ID, артикулу, участкам, № передачи…"
                 value={historySearch}
                 onChange={(e) => setHistorySearch(e.target.value)}
                 onKeyDown={(e) => {
@@ -1199,6 +1201,9 @@ export function TransfersPage() {
                   <table className="w-full caption-bottom text-sm">
                     <TableHeader>
                       <TableRow>
+                        <TableHead className={`${headerCellClass} p-0 font-mono`}>
+                          ID
+                        </TableHead>
                         <TableHead className={`${headerCellClass} p-0`}>
                           <SortableFilterHeader
                             field="from"
@@ -1260,7 +1265,7 @@ export function TransfersPage() {
                     {historyItems.length === 0 ? (
                       <TableBody>
                         <TableRow>
-                          <TableCell colSpan={7} className="py-6 text-center text-sm text-muted-foreground">
+                          <TableCell colSpan={8} className="py-6 text-center text-sm text-muted-foreground">
                             Нет записей, соответствующих фильтру
                           </TableCell>
                         </TableRow>
@@ -1269,7 +1274,7 @@ export function TransfersPage() {
                       <VirtualizedTableBody
                         rows={historyItems}
                         rowHeight={56}
-                        colSpan={7}
+                        colSpan={8}
                         scrollContainerRef={historyScrollRef}
                         renderRow={(t) => {
                           const isIncoming = historySectionIds.has(t.to_section_id);
@@ -1287,6 +1292,9 @@ export function TransfersPage() {
                               className={`group cursor-pointer hover:bg-muted/50 transition-colors ${isCancelled ? "opacity-60" : ""}`}
                               onClick={() => setEditTransferRecord(t)}
                             >
+                              <TableCell className="font-mono text-xs text-muted-foreground">
+                                #{t.plan_position_id}
+                              </TableCell>
                               <TableCell>
                                 <div className="text-xs">
                                   <div className="font-medium">{t.from_section_name}</div>

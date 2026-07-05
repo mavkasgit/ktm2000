@@ -252,6 +252,26 @@ async def test_ready_search_by_task_id(client, session) -> None:
 
 
 @pytest.mark.asyncio
+async def test_ready_filter_plan_position_id_param(client, session) -> None:
+    seeded = await _seed_many_ready_tasks(session, client, count=3)
+    sec1 = seeded["setup"]["sections"][0]
+
+    all_response = await client.get(f"/api/transfers/ready?section_id={sec1.id}")
+    assert all_response.status_code == 200
+    items = all_response.json()["items"]
+    assert len(items) == 3
+    marker_position_id = items[1]["plan_position_id"]
+
+    filter_response = await client.get(
+        f"/api/transfers/ready?section_id={sec1.id}&plan_position_id={marker_position_id}"
+    )
+    assert filter_response.status_code == 200
+    filter_body = filter_response.json()
+    assert filter_body["total"] == 1
+    assert filter_body["items"][0]["plan_position_id"] == marker_position_id
+
+
+@pytest.mark.asyncio
 async def test_ready_filter_product_sku_param(client, session) -> None:
     seeded = await _seed_many_ready_tasks(session, client, count=3)
     sec1 = seeded["setup"]["sections"][0]
