@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from "react"
 import { NavLink, Outlet, useLocation } from "react-router-dom"
-import { Boxes, ClipboardList, Gauge, Factory, Cog, Wrench, Layers, Menu, X, ArrowRightLeft, History, LogOut } from "lucide-react"
+import { Boxes, ClipboardList, Gauge, Factory, Cog, Wrench, Layers, Menu, X, ArrowRightLeft, History, LogOut, Terminal } from "lucide-react"
 import { useAuth } from "@/features/auth/hooks/useAuth"
 import type { UserRole } from "@/features/auth/api"
 import { toast } from "@/shared/ui"
@@ -27,6 +27,7 @@ const NAV_ACCESS: Record<string, UserRole[]> = {
   "/audit-logs": ["admin", "planner", "section_manager", "operator", "viewer", "transporter"],
   "/settings": ["admin", "planner", "section_manager", "operator", "viewer", "transporter"],
   "/settings/dev": ["admin"],
+  "/dev": ["admin", "planner", "section_manager", "operator", "viewer", "transporter"],
 }
 
 const navItems = [
@@ -39,6 +40,7 @@ const navItems = [
   { to: "/spg", label: "ГХП", icon: Layers },
   { to: "/audit-logs", label: "Журнал действий", icon: History },
   { to: "/settings", label: "Настройки", icon: Cog },
+  ...(import.meta.env.DEV ? [{ to: "/dev", label: "Разработка (Dev)", icon: Terminal }] : []),
 ]
 
 export function Layout() {

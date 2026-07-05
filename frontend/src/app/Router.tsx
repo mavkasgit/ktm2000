@@ -63,7 +63,7 @@ export const router = createBrowserRouter([
         path: "settings/dev",
         element: <ProtectedRoute allowedRoles={["admin"]}><DevSettingsPage /></ProtectedRoute>,
       },
-      { path: "dev", element: <DevPage /> },
+      ...(import.meta.env.DEV ? [{ path: "dev", element: <DevPage /> }] : []),
     ],
   },
 ])
