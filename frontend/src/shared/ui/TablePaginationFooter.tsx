@@ -1,6 +1,9 @@
 import { ChevronLeft, ChevronRight } from "lucide-react";
 
 import type { PageLimitOption } from "@/shared/hooks/usePaginatedTableQuery";
+import { PageLimitSelect } from "@/shared/ui/PageLimitSelect";
+
+const MIN_PAGE_LIMIT = 50;
 
 export interface TablePaginationFooterProps {
   page: number;
@@ -12,6 +15,9 @@ export interface TablePaginationFooterProps {
   onLimitChange: (limit: PageLimitOption) => void;
   rangeLabel?: string;
   showLimitSelector?: boolean;
+  limitOptions?: PageLimitOption[];
+  /** Без внешней обёртки — для встраивания в составной футер (например, модалка). */
+  embedded?: boolean;
 }
 
 export function TablePaginationFooter({
@@ -24,12 +30,18 @@ export function TablePaginationFooter({
   onLimitChange,
   rangeLabel,
   showLimitSelector = true,
+  limitOptions,
+  embedded = false,
 }: TablePaginationFooterProps) {
+  if (total <= MIN_PAGE_LIMIT) {
+    return null;
+  }
+
   const label =
     rangeLabel ?? `Показано ${shownCount} из ${total} записей`;
 
-  return (
-    <div className="flex items-center justify-between p-4 border-t border-slate-200 bg-slate-50">
+  const content = (
+    <>
       <div className="flex items-center gap-2 text-xs text-slate-500 font-medium">
         {totalPages > 1 && (
           <>
@@ -62,19 +74,23 @@ export function TablePaginationFooter({
       {showLimitSelector && (
         <div className="flex items-center gap-2 text-xs text-slate-500">
           <span>На странице:</span>
-          <select
-            value={limit}
-            onChange={(e) => onLimitChange(Number(e.target.value) as PageLimitOption)}
-            className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-slate-700"
-            aria-label="Количество записей на странице"
-          >
-            <option value={50}>50</option>
-            <option value={100}>100</option>
-            <option value={200}>200</option>
-            <option value={500}>500</option>
-          </select>
+          <PageLimitSelect value={limit} onValueChange={onLimitChange} options={limitOptions} />
         </div>
       )}
+    </>
+  );
+
+  if (embedded) {
+    return (
+      <div className="flex items-center justify-between flex-1 min-w-0 gap-4">
+        {content}
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex items-center justify-between p-4 border-t border-slate-200 bg-slate-50">
+      {content}
     </div>
   );
 }

@@ -6,14 +6,13 @@ import {
   Search,
   X,
   Clock,
-  ChevronLeft,
-  ChevronRight,
 } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { getAuditLogs, type AuditLogEntry, type GetAuditLogsParams } from "@/shared/api/auditLogs";
 import { queryKeys } from "@/shared/api/queryKeys";
-import { DateRangePicker, SortableFilterHeader, TableCornerResetHeader, TableCornerResetCell, DATA_TABLE_STYLES } from "@/shared/ui";
+import { DateRangePicker, SortableFilterHeader, TableCornerResetHeader, TableCornerResetCell, TablePaginationFooter, DATA_TABLE_STYLES } from "@/shared/ui";
 import { useFilterableTable } from "@/shared/hooks/useFilterableTable";
+import { usePaginatedTableQuery } from "@/shared/hooks/usePaginatedTableQuery";
 import { pickColumnApiValue } from "@/shared/lib/columnFilterSearch";
 
 type LogFilterField = "createdAt" | "status" | "sectionName" | "productSku" | "action" | "entityType";
@@ -104,11 +103,6 @@ export function AuditLogsPage() {
   const [dateFrom, setDateFrom] = useState<string>("");
   const [dateTo, setDateTo] = useState<string>("");
 
-  // Пагинация
-  const [page, setPage] = useState(1);
-  const limit = 50;
-  const offset = (page - 1) * limit;
-
   // Раскрытие строк
   const [expandedRows, setExpandedRows] = useState<Set<number>>(new Set());
 
@@ -158,10 +152,11 @@ export function AuditLogsPage() {
 
   const handleResetAllFilters = resetAll;
 
-  // Сброс страницы при изменении любого фильтра
-  useEffect(() => {
-    setPage(1);
-  }, [search, statusFilter, dateFrom, dateTo, columnFilters, columnSearchQueries, sortConfigs]);
+  const pagination = usePaginatedTableQuery({
+    limitOptions: [50, 100],
+    resetPageDeps: [search, statusFilter, dateFrom, dateTo, columnFilters, columnSearchQueries, sortConfigs],
+  });
+  const { page, setPage, limit, setLimit, limitOptions, offset, getTotalPages, getRangeLabel } = pagination;
 
   const columnApiParams = useMemo(
     () => buildAuditColumnApiParams(columnFilters, columnSearchQueries),
@@ -202,7 +197,7 @@ export function AuditLogsPage() {
 
   const parsedLogs = data?.items || [];
   const total = data?.total || 0;
-  const totalPages = Math.ceil(total / limit) || 1;
+  const totalPages = getTotalPages(total);
   const counts = data?.counts || { all: 0, success: 0, error: 0, info: 0 };
   const taskStatuses = data?.task_statuses || {};
   const uniqueValues = useMemo(
@@ -718,38 +713,17 @@ export function AuditLogsPage() {
           )}
         </div>
 
-        {/* Футер пагинации */}
-        <div className="flex items-center justify-between p-4 border-t border-slate-200 bg-slate-50">
-          <div className="flex items-center gap-2 text-xs text-slate-500 font-medium">
-            {totalPages > 1 && (
-              <>
-                <button
-                  onClick={() => setPage((p) => Math.max(1, p - 1))}
-                  disabled={page === 1}
-                  className="p-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 disabled:opacity-50 disabled:hover:bg-white transition-colors"
-                  aria-label="Предыдущая страница"
-                >
-                  <ChevronLeft className="h-4 w-4" />
-                </button>
-                <span className="px-2">
-                  Страница <strong className="text-slate-700">{page}</strong> из{" "}
-                  <strong className="text-slate-700">{totalPages}</strong>
-                </span>
-                <button
-                  onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
-                  disabled={page === totalPages}
-                  className="p-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 disabled:opacity-50 disabled:hover:bg-white transition-colors"
-                  aria-label="Следующая страница"
-                >
-                  <ChevronRight className="h-4 w-4" />
-                </button>
-              </>
-            )}
-            <span className="ml-4">
-              Показано {parsedLogs.length} из {total} записей
-            </span>
-          </div>
-        </div>
+        <TablePaginationFooter
+          page={page}
+          totalPages={totalPages}
+          total={total}
+          shownCount={parsedLogs.length}
+          limit={limit}
+          limitOptions={[...limitOptions]}
+          onPageChange={setPage}
+          onLimitChange={setLimit}
+          rangeLabel={getRangeLabel(parsedLogs.length, total)}
+        />
       </div>
     </div>
   );

@@ -1,6 +1,6 @@
 import { useState, useCallback, useEffect, useMemo, useRef } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Send, Inbox, RefreshCw, AlertCircle, ChevronLeft, ChevronRight, Search } from "lucide-react";
+import { Send, Inbox, RefreshCw, AlertCircle, ChevronRight, Search } from "lucide-react";
 
 import {
   Badge,
@@ -37,9 +37,10 @@ import {
   TableCornerResetHeader,
   DATA_TABLE_STYLES,
   VirtualizedTableBody,
+  TablePaginationFooter,
 } from "@/shared/ui";
 import { useFilterableTable } from "@/shared/hooks/useFilterableTable";
-import { usePaginatedTableQuery, type PageLimitOption } from "@/shared/hooks/usePaginatedTableQuery";
+import { usePaginatedTableQuery } from "@/shared/hooks/usePaginatedTableQuery";
 
 import { getSpgList } from "@/shared/api/spg";
 import {
@@ -1142,53 +1143,16 @@ export function TransfersPage() {
                 )}
               </table>
               </div>
-              <div className="flex items-center justify-between p-4 border-t border-slate-200 bg-slate-50">
-                <div className="flex items-center gap-2 text-xs text-slate-500 font-medium">
-                  {readyTotalPages > 1 && (
-                    <>
-                      <button
-                        type="button"
-                        onClick={() => setReadyPage((p) => Math.max(1, p - 1))}
-                        disabled={readyPage === 1}
-                        className="p-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 disabled:opacity-50 disabled:hover:bg-white transition-colors"
-                        aria-label="Предыдущая страница"
-                      >
-                        <ChevronLeft className="h-4 w-4" />
-                      </button>
-                      <span className="px-2">
-                        Страница <strong className="text-slate-700">{readyPage}</strong> из{" "}
-                        <strong className="text-slate-700">{readyTotalPages}</strong>
-                      </span>
-                      <button
-                        type="button"
-                        onClick={() => setReadyPage((p) => Math.min(readyTotalPages, p + 1))}
-                        disabled={readyPage === readyTotalPages}
-                        className="p-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 disabled:opacity-50 disabled:hover:bg-white transition-colors"
-                        aria-label="Следующая страница"
-                      >
-                        <ChevronRight className="h-4 w-4" />
-                      </button>
-                    </>
-                  )}
-                  <span className="ml-4">
-                    {readyRangeLabel(readyItems.length, readyTotal)}
-                  </span>
-                </div>
-                <div className="flex items-center gap-2 text-xs text-slate-500">
-                  <span>На странице:</span>
-                  <select
-                    value={readyLimit}
-                    onChange={(e) => setReadyLimit(Number(e.target.value) as PageLimitOption)}
-                    className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-slate-700"
-                    aria-label="Количество записей на странице"
-                  >
-                    <option value={50}>50</option>
-                    <option value={100}>100</option>
-                    <option value={200}>200</option>
-                    <option value={500}>500</option>
-                  </select>
-                </div>
-              </div>
+              <TablePaginationFooter
+                page={readyPage}
+                totalPages={readyTotalPages}
+                total={readyTotal}
+                shownCount={readyItems.length}
+                limit={readyLimit}
+                onPageChange={setReadyPage}
+                onLimitChange={setReadyLimit}
+                rangeLabel={readyRangeLabel(readyItems.length, readyTotal)}
+              />
               </>
             )}
           </CardContent>
@@ -1375,53 +1339,16 @@ export function TransfersPage() {
                     )}
                   </table>
                 </div>
-                <div className="flex items-center justify-between p-4 border-t border-slate-200 bg-slate-50">
-                  <div className="flex items-center gap-2 text-xs text-slate-500 font-medium">
-                    {historyTotalPages > 1 && (
-                      <>
-                        <button
-                          type="button"
-                          onClick={() => setHistoryPage((p) => Math.max(1, p - 1))}
-                          disabled={historyPage === 1}
-                          className="p-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 disabled:opacity-50 disabled:hover:bg-white transition-colors"
-                          aria-label="Предыдущая страница"
-                        >
-                          <ChevronLeft className="h-4 w-4" />
-                        </button>
-                        <span className="px-2">
-                          Страница <strong className="text-slate-700">{historyPage}</strong> из{" "}
-                          <strong className="text-slate-700">{historyTotalPages}</strong>
-                        </span>
-                        <button
-                          type="button"
-                          onClick={() => setHistoryPage((p) => Math.min(historyTotalPages, p + 1))}
-                          disabled={historyPage === historyTotalPages}
-                          className="p-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 disabled:opacity-50 disabled:hover:bg-white transition-colors"
-                          aria-label="Следующая страница"
-                        >
-                          <ChevronRight className="h-4 w-4" />
-                        </button>
-                      </>
-                    )}
-                    <span className="ml-4">
-                      {historyRangeLabel(historyItems.length, historyTotal)}
-                    </span>
-                  </div>
-                  <div className="flex items-center gap-2 text-xs text-slate-500">
-                    <span>На странице:</span>
-                    <select
-                      value={historyLimit}
-                      onChange={(e) => setHistoryLimit(Number(e.target.value) as PageLimitOption)}
-                      className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-slate-700"
-                      aria-label="Количество записей на странице"
-                    >
-                      <option value={50}>50</option>
-                      <option value={100}>100</option>
-                      <option value={200}>200</option>
-                      <option value={500}>500</option>
-                    </select>
-                  </div>
-                </div>
+                <TablePaginationFooter
+                  page={historyPage}
+                  totalPages={historyTotalPages}
+                  total={historyTotal}
+                  shownCount={historyItems.length}
+                  limit={historyLimit}
+                  onPageChange={setHistoryPage}
+                  onLimitChange={setHistoryLimit}
+                  rangeLabel={historyRangeLabel(historyItems.length, historyTotal)}
+                />
               </>
             )}
           </CardContent>

@@ -28,7 +28,8 @@ import {
 import "@xyflow/react/dist/style.css";
 import { X, Plus, Trash2, AlertTriangle, Info } from "lucide-react";
 import * as API from "@/shared/api/routes";
-import type { Section } from "@/shared/api/sections";
+import type { RouteStep } from "@/shared/api/routes";
+import { listSections, type Section, type SectionType } from "@/shared/api/sections";
 import { Button } from "@/shared/ui/Button";
 import { Input } from "@/shared/ui/Input";
 import { cn } from "@/shared/utils/cn";
@@ -40,7 +41,7 @@ import {
   DialogDescription,
 } from "@/shared/ui/Dialog";
 import { toast } from "@/shared/ui/use-toast";
-import { apiClient, getErrorMessage } from "@/shared/api/client";
+import { getErrorMessage } from "@/shared/api/client";
 import { renderIcon } from "@/shared/ui/EntityDialog";
 import { RouteFlowNode, type RouteFlowNodeData } from "./RouteFlowNode";
 import {
@@ -52,6 +53,52 @@ import {
 } from "@/shared/ui";
 
 type PortId = "right" | "left";
+
+type SectionVisual = {
+  icon: string | null;
+  icon_color: string | null;
+  section_type: SectionType | null;
+};
+
+function sectionVisualFromSection(section: Section): SectionVisual {
+  return {
+    icon: section.icon,
+    icon_color: section.icon_color,
+    section_type: section.type,
+  };
+}
+
+function sectionVisualFromStep(step: RouteStep): SectionVisual {
+  return {
+    icon: step.icon,
+    icon_color: step.icon_color,
+    section_type: (step.section_type as SectionType | null) ?? null,
+  };
+}
+
+function SectionIconBadge({
+  icon,
+  iconColor,
+  size = "h-4 w-4",
+  boxClass = "h-8 w-8",
+}: {
+  icon: string | null;
+  iconColor: string | null;
+  size?: string;
+  boxClass?: string;
+}) {
+  if (!icon) return null;
+  const accentColor = iconColor || "#6B7280";
+  return (
+    <div
+      className={`flex ${boxClass} shrink-0 items-center justify-center rounded`}
+      style={{ backgroundColor: `${accentColor}20` }}
+    >
+      <span style={{ color: accentColor }}>{renderIcon(icon, size)}</span>
+    </div>
+  );
+}
+
 type RouteNode = Node<RouteFlowNodeData>;
 type RouteEdge = Edge;
 type InsertTarget =
@@ -451,7 +498,7 @@ export function RouteFlowBuilder({ open, onOpenChange, route, onSave, readOnly =
   // Load sections
   useEffect(() => {
     if (open) {
-      apiClient.get<Section[]>("/sections").then((r) => setSections(r.data)).catch(() => {});
+      listSections().then(setSections).catch(() => {});
     }
   }, [open]);
 
@@ -519,25 +566,29 @@ export function RouteFlowBuilder({ open, onOpenChange, route, onSave, readOnly =
       setDescription(route.description || "");
       setIsActive(route.is_active);
 
-      const newNodes: Node<RouteFlowNodeData>[] = route.steps.map((step, index) => ({
-        id: `node-${step.id}`,
-        type: "routeFlow",
-        position: getGridPosition(index, route.steps.length),
-        data: {
-          section_id: step.section_id,
-          section_code: step.section_code || "",
-          section_name: step.section_name || "",
-          icon: sections.find((s) => s.id === step.section_id)?.icon || null,
-          icon_color: sections.find((s) => s.id === step.section_id)?.icon_color || null,
-          operation_code: step.operation_code,
-          operation_name: step.operation_name,
-          norm_time_minutes: step.norm_time_minutes,
-          is_final: step.is_final,
-          allow_parallel: step.allow_parallel || false,
-          requires_acceptance: step.requires_acceptance || false,
-          usedInRoutes: sectionUsage[step.section_id] || 1,
-        },
-      }));
+      const newNodes: Node<RouteFlowNodeData>[] = route.steps.map((step, index) => {
+        const visual = sectionVisualFromStep(step);
+        return {
+          id: `node-${step.id}`,
+          type: "routeFlow",
+          position: getGridPosition(index, route.steps.length),
+          data: {
+            section_id: step.section_id,
+            section_code: step.section_code || "",
+            section_name: step.section_name || "",
+            icon: visual.icon,
+            icon_color: visual.icon_color,
+            section_type: visual.section_type,
+            operation_code: step.operation_code,
+            operation_name: step.operation_name,
+            norm_time_minutes: step.norm_time_minutes,
+            is_final: step.is_final,
+            allow_parallel: step.allow_parallel || false,
+            requires_acceptance: step.requires_acceptance || false,
+            usedInRoutes: sectionUsage[step.section_id] || 1,
+          },
+        };
+      });
 
       const newEdges: Edge[] = [];
       for (let i = 0; i < route.steps.length - 1; i++) {
@@ -566,7 +617,7 @@ export function RouteFlowBuilder({ open, onOpenChange, route, onSave, readOnly =
       setSelectedEdgeId(null);
       lastNodeId.current = null;
     }
-  }, [route, open, sections, sectionUsage, getEndNodeId]);
+  }, [route, open, sectionUsage, getEndNodeId]);
 
   const onConnect: OnConnect = useCallback(
     (params) => {
@@ -616,6 +667,7 @@ export function RouteFlowBuilder({ open, onOpenChange, route, onSave, readOnly =
     if (!section) return;
 
     const newNodeId = `node-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+    const visual = sectionVisualFromSection(section);
     const newNode: Node<RouteFlowNodeData> = {
       id: newNodeId,
       type: "routeFlow",
@@ -624,8 +676,9 @@ export function RouteFlowBuilder({ open, onOpenChange, route, onSave, readOnly =
         section_id: section.id,
         section_code: section.code,
         section_name: section.name,
-        icon: section.icon,
-        icon_color: section.icon_color,
+        icon: visual.icon,
+        icon_color: visual.icon_color,
+        section_type: visual.section_type,
         operation_code: null,
         operation_name: "",
         norm_time_minutes: null,
@@ -701,6 +754,7 @@ export function RouteFlowBuilder({ open, onOpenChange, route, onSave, readOnly =
       const position = getGridPosition(index, nextTotal);
 
       const newNodeId = `node-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+      const visual = sectionVisualFromSection(section);
       const newNode: Node<RouteFlowNodeData> = {
         id: newNodeId,
         type: "routeFlow",
@@ -709,8 +763,9 @@ export function RouteFlowBuilder({ open, onOpenChange, route, onSave, readOnly =
           section_id: section.id,
           section_code: section.code,
           section_name: section.name,
-          icon: section.icon,
-          icon_color: section.icon_color,
+          icon: visual.icon,
+          icon_color: visual.icon_color,
+          section_type: visual.section_type,
           operation_code: null,
           operation_name: "",
           norm_time_minutes: null,
@@ -888,27 +943,19 @@ export function RouteFlowBuilder({ open, onOpenChange, route, onSave, readOnly =
                 </label>
               </div>
               <div className="space-y-2">
-                {sections.map((section) => (
+                {sections.map((section) => {
+                  const accentColor = section.icon_color || "#6B7280";
+                  return (
                   <div
                     key={section.id}
                     onClick={() => addSectionToRoute(section)}
                     className="group flex items-center gap-2 p-2 rounded-md border bg-card cursor-pointer hover:shadow-md transition-all"
                     style={{
-                      borderLeft: section.icon_color ? `3px solid ${section.icon_color}` : undefined,
+                      borderLeft: section.icon ? `3px solid ${accentColor}` : undefined,
                     }}
                   >
-                    {section.icon && section.icon_color && (
-                      <div
-                        className="flex h-8 w-8 shrink-0 items-center justify-center rounded"
-                        style={{ backgroundColor: section.icon_color + "20" }}
-                      >
-                        <span style={{ color: section.icon_color }}>
-                          {renderIcon(section.icon, "h-4 w-4")}
-                        </span>
-                      </div>
-                    )}
+                    <SectionIconBadge icon={section.icon} iconColor={section.icon_color} />
                     <div className="min-w-0">
-                      <div className="text-xs font-medium text-muted-foreground">{section.code}</div>
                       <div className="text-sm truncate">{section.name}</div>
                     </div>
                     <Button
@@ -925,7 +972,8 @@ export function RouteFlowBuilder({ open, onOpenChange, route, onSave, readOnly =
                       <Plus className="h-3.5 w-3.5" />
                     </Button>
                   </div>
-                ))}
+                  );
+                })}
               </div>
             </div>
           )}
@@ -1128,16 +1176,7 @@ export function RouteFlowBuilder({ open, onOpenChange, route, onSave, readOnly =
                     onClick={() => insertNode(String(section.id))}
                     className="w-full text-left flex items-center gap-2 p-1.5 rounded-md border transition-colors border-border bg-card hover:bg-muted/40"
                   >
-                    {section.icon && section.icon_color && (
-                      <div
-                        className="flex h-8 w-8 shrink-0 items-center justify-center rounded"
-                        style={{ backgroundColor: section.icon_color + "20" }}
-                      >
-                        <span style={{ color: section.icon_color }}>
-                          {renderIcon(section.icon, "h-4 w-4")}
-                        </span>
-                      </div>
-                    )}
+                    <SectionIconBadge icon={section.icon} iconColor={section.icon_color} />
                     <div className="min-w-0">
                       <div className="text-xs font-medium text-muted-foreground">{section.code}</div>
                       <div className="text-sm truncate">{section.name}</div>

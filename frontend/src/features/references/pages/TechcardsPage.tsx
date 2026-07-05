@@ -204,8 +204,8 @@ export function TechcardsPage() {
 
   const loadProducts = useCallback(async () => {
     try {
-      const products = await api.listProducts({ limit: 2000 });
-      setRawItems(products?.items ?? products ?? []);
+      const products = await api.fetchAllProducts();
+      setRawItems(products ?? []);
     } catch (e) {
       setStatus(e instanceof Error ? e.message : "Ошибка загрузки продуктов");
     }
@@ -213,14 +213,12 @@ export function TechcardsPage() {
 
   const loadTechcardIndex = useCallback(async () => {
     try {
-      const data = await api.listTechcardsPaginated({
+      const items = await api.fetchAllTechcards({
         processing_type: "standart_processing",
         is_active: true,
-        limit: 2000,
-        offset: 0,
       });
       const map = new Map<number, Techcard>();
-      for (const card of data.items) {
+      for (const card of items) {
         if (card.product_id != null) {
           map.set(card.product_id, card);
         }

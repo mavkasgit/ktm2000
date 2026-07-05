@@ -49,6 +49,8 @@ export { buildActiveFilterSummary } from "./buildActiveFilterSummary";
 export type { ActiveFilterSummary, BuildActiveFilterSummaryOptions } from "./buildActiveFilterSummary";
 export { TablePaginationFooter } from "./TablePaginationFooter";
 export type { TablePaginationFooterProps } from "./TablePaginationFooter";
+export { PageLimitSelect } from "./PageLimitSelect";
+export type { PageLimitSelectProps } from "./PageLimitSelect";
 export { VirtualizedTableBody } from "./VirtualizedTableBody";
 export type { VirtualizedTableBodyProps } from "./VirtualizedTableBody";
 export { RouteStepsDisplay } from "./RouteStepsDisplay";

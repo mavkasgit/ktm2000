@@ -4,6 +4,7 @@ import type { Node, NodeProps } from "@xyflow/react";
 import { Badge } from "@/shared/ui/Badge";
 import { renderIcon } from "@/shared/ui/EntityDialog";
 import { CheckCircle, GitBranch } from "lucide-react";
+import type { SectionType } from "@/shared/api/sections";
 
 export interface RouteFlowNodeData extends Record<string, unknown> {
   section_id: number;
@@ -11,6 +12,7 @@ export interface RouteFlowNodeData extends Record<string, unknown> {
   section_name: string;
   icon: string | null;
   icon_color: string | null;
+  section_type?: SectionType | null;
   operation_code: string | null;
   operation_name: string;
   norm_time_minutes: number | null;
@@ -19,7 +21,6 @@ export interface RouteFlowNodeData extends Record<string, unknown> {
   requires_acceptance: boolean;
   usedInRoutes?: number;
   readOnly?: boolean;
-  // Track whether port is occupied by any connection (incoming or outgoing)
   occupiedPorts?: {
     right?: boolean;
     left?: boolean;
@@ -34,6 +35,7 @@ function RouteFlowNodeComponent({ data, selected }: NodeProps<Node<RouteFlowNode
   const nodeData = data as RouteFlowNodeData;
   const occupied = nodeData.occupiedPorts || {};
   const readOnly = nodeData.readOnly || false;
+  const accentColor = nodeData.icon_color || "#6B7280";
 
   const getPortStyle = (port: 'right' | 'left') => {
     const isOccupied = Boolean(occupied[port]);
@@ -74,39 +76,36 @@ function RouteFlowNodeComponent({ data, selected }: NodeProps<Node<RouteFlowNode
         title={getPortTitle('right')}
       />
 
-      {/* Header: Icon + Name */}
       <div className="flex items-start gap-2 mb-2">
-        {nodeData.icon && nodeData.icon_color && (
+        {nodeData.icon && (
           <div
             className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md"
-            style={{ backgroundColor: nodeData.icon_color + "20" }}
+            style={{ backgroundColor: `${accentColor}20` }}
           >
-            <span style={{ color: nodeData.icon_color }}>
+            <span style={{ color: accentColor }}>
               {renderIcon(nodeData.icon, "h-5 w-5")}
             </span>
           </div>
         )}
         <div className="flex-1 min-w-0">
-          <div className="text-xs font-medium text-muted-foreground">{nodeData.section_code}</div>
-          <div className="text-sm font-semibold truncate">{nodeData.section_name}</div>
+          <div className="text-sm font-semibold leading-tight break-words">
+            {nodeData.section_name}
+          </div>
         </div>
       </div>
 
-      {/* Operation */}
       {nodeData.operation_code && (
         <div className="mb-2 rounded bg-muted px-2 py-1 text-xs font-mono">
           {nodeData.operation_code}
         </div>
       )}
 
-      {/* Time */}
       {nodeData.norm_time_minutes && (
         <div className="text-xs text-muted-foreground mb-2">
           ⏱ {nodeData.norm_time_minutes} мин
         </div>
       )}
 
-      {/* Badges */}
       <div className="flex flex-wrap gap-1">
         {nodeData.is_final && (
           <Badge variant="outline" className="bg-green-50 text-green-700 border-green-200 text-[10px]">

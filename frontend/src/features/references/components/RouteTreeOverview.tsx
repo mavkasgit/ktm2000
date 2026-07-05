@@ -1,10 +1,9 @@
 import { useEffect, useState, useCallback, forwardRef, useImperativeHandle } from "react";
 import * as API from "@/shared/api/routes";
-import type { Section } from "@/shared/api/sections";
+import { listSections, type Section } from "@/shared/api/sections";
 import { Badge } from "@/shared/ui/Badge";
 import { Input } from "@/shared/ui/Input";
 import { Card, CardContent } from "@/shared/ui/Card";
-import { apiClient } from "@/shared/api/client";
 import { getErrorMessage } from "@/shared/api/client";
 import { renderIcon } from "@/shared/ui/EntityDialog";
 import { ArrowUp, ArrowDown, GripVertical } from "lucide-react";
@@ -41,10 +40,10 @@ export const RouteTreeOverview = forwardRef<RouteTreeOverviewRef, RouteTreeOverv
     try {
       const [routesList, sectionsList] = await Promise.all([
         API.listRoutes({ includeSteps: true }),
-        apiClient.get<Section[]>("/sections"),
+        listSections(),
       ]);
 
-      setSections(sectionsList.data);
+      setSections(sectionsList);
       setRoutes(routesList as API.RouteDetail[]);
     } catch (e) {
       console.error("Failed to load route trees:", e);
