@@ -242,6 +242,27 @@ async def test_defect_decide_scrap_creates_stock_tx(session: AsyncSession):
     task = fx["task"]
     product = fx["product"]
 
+    # Seed stock
+    svc = StockCommandService()
+    await svc.record(session, StockCommand(
+        product_id=product.id,
+        from_location_id=None,
+        to_location_id=fx["raw"].id,
+        quantity=Decimal("100"),
+        reason=Reason.MANUAL_IN,
+        created_by=fx["user"].id,
+    ))
+    await record_transfer_receive(
+        session,
+        product_id=product.id,
+        from_location_id=fx["raw"].id,
+        to_location_id=task.section_id,
+        quantity=Decimal("10"),
+        task_id=task.id,
+        created_by=fx["user"].id,
+    )
+    await session.commit()
+
     # Create a defect via API
     from app.services.shopfloor.operations_defects import create_defect, defect_decide
 
@@ -297,6 +318,27 @@ async def test_defect_decide_rework_creates_stock_tx(session: AsyncSession):
     """defect_decide(rework_current) → StockTransaction(REWORK, to_quality_state=rework), ReworkTask created."""
     fx = await _setup_minimal_route(session)
     task = fx["task"]
+
+    # Seed stock
+    svc = StockCommandService()
+    await svc.record(session, StockCommand(
+        product_id=fx["product"].id,
+        from_location_id=None,
+        to_location_id=fx["raw"].id,
+        quantity=Decimal("100"),
+        reason=Reason.MANUAL_IN,
+        created_by=fx["user"].id,
+    ))
+    await record_transfer_receive(
+        session,
+        product_id=fx["product"].id,
+        from_location_id=fx["raw"].id,
+        to_location_id=task.section_id,
+        quantity=Decimal("10"),
+        task_id=task.id,
+        created_by=fx["user"].id,
+    )
+    await session.commit()
 
     from app.services.shopfloor.operations_defects import create_defect, defect_decide
 
@@ -355,6 +397,27 @@ async def test_defect_decide_return_previous_creates_stock_tx(session: AsyncSess
     """defect_decide(return_previous) → StockTransaction(RETURN_TO_PREVIOUS)."""
     fx = await _setup_minimal_route(session)
     task = fx["task"]
+
+    # Seed stock
+    svc = StockCommandService()
+    await svc.record(session, StockCommand(
+        product_id=fx["product"].id,
+        from_location_id=None,
+        to_location_id=fx["raw"].id,
+        quantity=Decimal("100"),
+        reason=Reason.MANUAL_IN,
+        created_by=fx["user"].id,
+    ))
+    await record_transfer_receive(
+        session,
+        product_id=fx["product"].id,
+        from_location_id=fx["raw"].id,
+        to_location_id=task.section_id,
+        quantity=Decimal("10"),
+        task_id=task.id,
+        created_by=fx["user"].id,
+    )
+    await session.commit()
 
     from app.services.shopfloor.operations_defects import create_defect, defect_decide
 
@@ -470,6 +533,27 @@ async def test_defect_decide_idempotent(session: AsyncSession):
     """Повторный defect_decide с тем же idempotency_key не создаёт вторую StockTransaction."""
     fx = await _setup_minimal_route(session)
     task = fx["task"]
+
+    # Seed stock
+    svc = StockCommandService()
+    await svc.record(session, StockCommand(
+        product_id=fx["product"].id,
+        from_location_id=None,
+        to_location_id=fx["raw"].id,
+        quantity=Decimal("100"),
+        reason=Reason.MANUAL_IN,
+        created_by=fx["user"].id,
+    ))
+    await record_transfer_receive(
+        session,
+        product_id=fx["product"].id,
+        from_location_id=fx["raw"].id,
+        to_location_id=task.section_id,
+        quantity=Decimal("10"),
+        task_id=task.id,
+        created_by=fx["user"].id,
+    )
+    await session.commit()
 
     from app.services.shopfloor.operations_defects import create_defect, defect_decide
 

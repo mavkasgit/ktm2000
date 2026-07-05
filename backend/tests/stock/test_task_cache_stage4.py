@@ -181,6 +181,12 @@ async def test_issued_qty_from_ledger(session: AsyncSession):
     fx = await _setup_one_task(session)
     task = fx["task"]
 
+    svc = StockCommandService()
+    await svc.record(session, StockCommand(
+        product_id=fx["product"].id, from_location_id=None, to_location_id=fx["raw"].id,
+        quantity=Decimal("100"), reason=Reason.MANUAL_IN, created_by=fx["user"].id,
+    ))
+
     await record_transfer_receive(
         session,
         product_id=fx["product"].id,

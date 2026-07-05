@@ -189,6 +189,16 @@ async def test_transfer_receive_creates_stock_tx(session: AsyncSession):
     fx = await _setup_minimal_route(session)
     task = fx["task"]
 
+    svc = StockCommandService()
+    await svc.record(session, StockCommand(
+        product_id=fx["product"].id,
+        from_location_id=None,
+        to_location_id=fx["raw"].id,
+        quantity=Decimal("100"),
+        reason=Reason.MANUAL_IN,
+        created_by=fx["user"].id,
+    ))
+
     await record_transfer_receive(
         session,
         product_id=fx["product"].id,
@@ -216,6 +226,16 @@ async def test_transfer_receive_updates_cache(session: AsyncSession):
     """get_task_cache() отражает net TRANSFER_RECEIVE после приёма."""
     fx = await _setup_minimal_route(session)
     task = fx["task"]
+
+    svc = StockCommandService()
+    await svc.record(session, StockCommand(
+        product_id=fx["product"].id,
+        from_location_id=None,
+        to_location_id=fx["raw"].id,
+        quantity=Decimal("100"),
+        reason=Reason.MANUAL_IN,
+        created_by=fx["user"].id,
+    ))
 
     await record_transfer_receive(
         session,

@@ -467,10 +467,10 @@ class StockCommandService:
         """Записать движение в ledger + обновить проекции.
 
         Шаги:
-        1. Валидация (product exists, quantity > 0, locations differ, reason
-           consistent with quality_state).
-        2. Идемпотентность по ``idempotency_key`` — если уже есть транзакция
+        1. Идемпотентность по ``idempotency_key`` — если уже есть транзакция
            с таким ключом, вернуть её (не создавать дубль).
+        2. Валидация (product exists, quantity > 0, locations differ, reason
+           consistent with quality_state).
         3. INSERT StockTransaction.
         4. ``projection_manager.stock_changed(tx)`` — синхронно в той же
            транзакции.
@@ -478,8 +478,6 @@ class StockCommandService:
         Возвращает созданную (или существующую по идемпотентности)
         транзакцию.
         """
-        await self._validate(session, cmd)
-
         if cmd.idempotency_key is not None:
             existing = await session.execute(
                 select(StockTransaction).where(
@@ -489,6 +487,8 @@ class StockCommandService:
             prior = existing.scalar_one_or_none()
             if prior is not None:
                 return prior
+
+        await self._validate(session, cmd)
 
         tx = StockTransaction(
             product_id=cmd.product_id,
@@ -578,5 +578,22 @@ class StockCommandService:
             raise StockValidationError(
                 f"reason=complete requires to_quality=good, got {to_qs.value}"
             )
+
+        if cmd.from_location_id is not None and cmd.compensates_tx_id is None:
+            balance_result = await session.execute(
+                select(StockBalance).where(
+                    StockBalance.product_id == cmd.product_id,
+                    StockBalance.location_id == cmd.from_location_id,
+                    StockBalance.quality_state == cmd.quality_state,
+                )
+            )
+            balance_row = balance_result.scalar_one_or_none()
+            current_balance = balance_row.balance_qty if balance_row is not None else Decimal("0")
+            if current_balance < cmd.quantity:
+                raise StockValidationError(
+                    f"Insufficient stock for product_id={cmd.product_id} at location_id={cmd.from_location_id} "
+                    f"(quality={cmd.quality_state.value}): required {cmd.quantity}, available {current_balance}"
+                )
+
         # created_by mandatory at DB level — пока не enforced здесь (тесты могут
         # передавать 0/null); будет tightened когда все call sites подключатся.

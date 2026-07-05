@@ -109,6 +109,13 @@ async def test_transfer_send_moves_balance_from_stock_to_production(session: Asy
     laser = await _make_location(session, code="LASER", name="Laser", loc_type="laser")
 
     svc = StockCommandService()
+    await svc.record(session, StockCommand(
+        product_id=product.id,
+        to_location_id=raw.id,
+        quantity=Decimal("100"),
+        reason=Reason.MANUAL_IN,
+        created_by=user.id,
+    ))
     tx = await svc.record(session, StockCommand(
         product_id=product.id,
         from_location_id=raw.id,
@@ -120,7 +127,7 @@ async def test_transfer_send_moves_balance_from_stock_to_production(session: Asy
 
     await session.commit()
     assert tx.id is not None
-    assert (await _balance(session, product.id, raw.id)) == Decimal("-100")
+    assert (await _balance(session, product.id, raw.id)) == Decimal("0")
     assert (await _balance(session, product.id, laser.id)) == Decimal("100")
 
 
@@ -133,6 +140,13 @@ async def test_balance_aggregates_multiple_transactions(session: AsyncSession):
     laser = await _make_location(session, code="LASER2", name="Laser2", loc_type="laser")
 
     svc = StockCommandService()
+    await svc.record(session, StockCommand(
+        product_id=product.id,
+        to_location_id=raw.id,
+        quantity=Decimal("100"),
+        reason=Reason.MANUAL_IN,
+        created_by=user.id,
+    ))
     for qty in (Decimal("30"), Decimal("50"), Decimal("20")):
         await svc.record(session, StockCommand(
             product_id=product.id,
@@ -144,7 +158,7 @@ async def test_balance_aggregates_multiple_transactions(session: AsyncSession):
         ))
     await session.commit()
 
-    assert (await _balance(session, product.id, raw.id)) == Decimal("-100")
+    assert (await _balance(session, product.id, raw.id)) == Decimal("0")
     assert (await _balance(session, product.id, laser.id)) == Decimal("100")
 
 
@@ -158,6 +172,13 @@ async def test_return_to_stock_reverses_balance(session: AsyncSession):
 
     svc = StockCommandService()
     await svc.record(session, StockCommand(
+        product_id=product.id,
+        to_location_id=raw.id,
+        quantity=Decimal("100"),
+        reason=Reason.MANUAL_IN,
+        created_by=user.id,
+    ))
+    await svc.record(session, StockCommand(
         product_id=product.id, from_location_id=raw.id, to_location_id=laser.id,
         quantity=Decimal("100"), reason=Reason.TRANSFER_SEND, created_by=user.id,
     ))
@@ -167,7 +188,7 @@ async def test_return_to_stock_reverses_balance(session: AsyncSession):
     ))
     await session.commit()
 
-    assert (await _balance(session, product.id, raw.id)) == Decimal("-70")
+    assert (await _balance(session, product.id, raw.id)) == Decimal("30")
     assert (await _balance(session, product.id, laser.id)) == Decimal("70")
 
 
@@ -183,6 +204,13 @@ async def test_idempotency_key_returns_existing_transaction(session: AsyncSessio
     laser = await _make_location(session, code="LASER4", name="Laser4", loc_type="laser")
 
     svc = StockCommandService()
+    await svc.record(session, StockCommand(
+        product_id=product.id,
+        to_location_id=raw.id,
+        quantity=Decimal("50"),
+        reason=Reason.MANUAL_IN,
+        created_by=user.id,
+    ))
     cmd = StockCommand(
         product_id=product.id,
         from_location_id=raw.id,
@@ -366,6 +394,13 @@ async def test_rebuild_all_balances_matches_incremental(session: AsyncSession):
 
     svc = StockCommandService()
     await svc.record(session, StockCommand(
+        product_id=product.id,
+        to_location_id=raw.id,
+        quantity=Decimal("200"),
+        reason=Reason.MANUAL_IN,
+        created_by=user.id,
+    ))
+    await svc.record(session, StockCommand(
         product_id=product.id, from_location_id=raw.id, to_location_id=laser.id,
         quantity=Decimal("100"), reason=Reason.TRANSFER_SEND, created_by=user.id,
     ))
@@ -405,6 +440,13 @@ async def test_stock_ledger_invariants_pass_after_operations(session: AsyncSessi
 
     svc = StockCommandService()
     await svc.record(session, StockCommand(
+        product_id=product.id,
+        to_location_id=raw.id,
+        quantity=Decimal("100"),
+        reason=Reason.MANUAL_IN,
+        created_by=user.id,
+    ))
+    await svc.record(session, StockCommand(
         product_id=product.id, from_location_id=raw.id, to_location_id=laser.id,
         quantity=Decimal("100"), reason=Reason.TRANSFER_SEND, created_by=user.id,
     ))
@@ -429,6 +471,13 @@ async def test_zero_balance_row_removed(session: AsyncSession):
 
     svc = StockCommandService()
     await svc.record(session, StockCommand(
+        product_id=product.id,
+        to_location_id=raw.id,
+        quantity=Decimal("50"),
+        reason=Reason.MANUAL_IN,
+        created_by=user.id,
+    ))
+    await svc.record(session, StockCommand(
         product_id=product.id, from_location_id=raw.id, to_location_id=laser.id,
         quantity=Decimal("50"), reason=Reason.TRANSFER_SEND, created_by=user.id,
     ))
@@ -439,4 +488,4 @@ async def test_zero_balance_row_removed(session: AsyncSession):
     await session.commit()
 
     assert (await _balance(session, product.id, laser.id)) == Decimal("0")
-    assert (await _balance(session, product.id, raw.id)) == Decimal("0")
+    assert (await _balance(session, product.id, raw.id)) == Decimal("50")
