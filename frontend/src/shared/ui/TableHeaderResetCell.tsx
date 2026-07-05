@@ -2,7 +2,6 @@ import { X } from "lucide-react";
 import type { ReactNode } from "react";
 
 import { cn } from "@/shared/utils/cn";
-import { Button } from "./Button";
 
 export interface TableHeaderResetCellProps {
   hasActiveFilters: boolean;
@@ -21,15 +20,14 @@ function ResetIconButton({
   className?: string;
 }) {
   return (
-    <Button
+    <button
       type="button"
-      variant="ghost"
-      size="icon"
       className={cn(
-        "h-6 w-6 shrink-0 rounded-md transition-colors",
+        "inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md transition-colors",
+        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
         hasActiveFilters
-          ? "bg-black text-white hover:bg-black/90 hover:text-white dark:bg-foreground dark:text-background dark:hover:bg-foreground/90"
-          : "text-muted-foreground/45 hover:text-muted-foreground hover:bg-black/[0.04] dark:hover:bg-white/[0.06]",
+          ? "bg-black text-white hover:bg-black/90 hover:text-white dark:bg-foreground dark:text-background dark:hover:bg-foreground/90 dark:hover:text-background"
+          : "text-muted-foreground/45 hover:bg-black/[0.04] hover:text-muted-foreground dark:hover:bg-white/[0.06]",
         className,
       )}
       onClick={onClick}
@@ -37,7 +35,7 @@ function ResetIconButton({
       aria-label="Сбросить фильтры"
     >
       <X className="h-3 w-3" strokeWidth={hasActiveFilters ? 2.5 : 1.75} />
-    </Button>
+    </button>
   );
 }
 

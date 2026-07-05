@@ -46,6 +46,22 @@ export function hasActiveColumnFilters<Field extends string>(
   return hasSetFilters || hasSearchFilters;
 }
 
+/** Single column filter/search value for server-side ILIKE params (TransfersPage pattern). */
+export function pickColumnApiValue<T extends string>(
+  columnFilters: Partial<Record<T, Set<string>>>,
+  columnSearchQueries: Partial<Record<T, string>>,
+  field: T,
+  mapValue: (value: string) => string | undefined = (value) => value,
+): string | undefined {
+  const searchQuery = columnSearchQueries[field]?.trim();
+  if (searchQuery) return mapValue(searchQuery);
+
+  const selected = columnFilters[field];
+  if (!selected || selected.size !== 1) return undefined;
+  const [value] = selected;
+  return mapValue(value);
+}
+
 export function buildColumnFilterPredicate<T, Field extends string>(opts: {
   columnFilters: Partial<Record<Field, Set<string>>>;
   columnSearchQueries: Partial<Record<Field, string>>;

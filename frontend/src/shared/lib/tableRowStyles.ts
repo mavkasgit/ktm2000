@@ -10,16 +10,16 @@ export const TABLE_ROW_STYLES = {
   defaultGroupContainer: "bg-slate-50/30",
 
   // Selected rows (bulk)
-  selectedRow: "bg-indigo-50/80 ring-1 ring-indigo-300 hover:bg-indigo-100/70",
-  selectedMobileCard: "bg-indigo-50/80 border border-indigo-200",
+  selectedRow: "bg-blue-100 ring-1 ring-blue-300 hover:bg-blue-200/80",
+  selectedMobileCard: "bg-blue-100 border border-blue-300",
 
   // Selected group header
-  selectedGroupHeader: "bg-indigo-100/70 hover:bg-indigo-200/60",
-  selectedGroupContainer: "bg-indigo-50/40",
+  selectedGroupHeader: "bg-blue-100/90 hover:bg-blue-200/70",
+  selectedGroupContainer: "bg-blue-50/50",
 
   // Selection label
-  selectedLabel: "text-indigo-700 font-medium",
+  selectedLabel: "text-blue-700 font-medium",
 
   // Ring for visual focus
-  selectedRing: "ring-1 ring-indigo-300",
+  selectedRing: "ring-1 ring-blue-300",
 } as const;

@@ -19,6 +19,8 @@ describe("TableHeaderResetCell", () => {
     );
 
     expect(html).toContain('aria-label="Сбросить фильтры"');
+    expect(html).toContain("bg-black");
+    expect(html).toContain("text-white");
   });
 
   it("renders label alongside reset button", () => {
