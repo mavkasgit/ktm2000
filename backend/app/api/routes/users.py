@@ -1,12 +1,10 @@
 from datetime import datetime
 from typing import Optional
-import httpx
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, ConfigDict, EmailStr
-from sqlalchemy import select, or_
-from sqlalchemy.orm import selectinload
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user, require_role
@@ -14,6 +12,17 @@ from app.core.database import get_db
 from app.core.security import get_password_hash
 from app.models.user import User, UserRole
 from app.models.section import Section
+from app.services.hrms_employees import (
+    HrmsSyncError,
+    build_hrms_employees_url,
+    get_cached_hrms_employees,
+    get_hrms_integration_settings,
+    list_cached_hrms_employees_paginated,
+    sync_hrms_employees_cache,
+    test_hrms_connection,
+    update_hrms_integration_settings,
+)
+from app.services.users_queries import get_linked_hrms_ids, list_users_paginated
 
 router = APIRouter(prefix="/users", tags=["users"])
 
@@ -78,63 +87,231 @@ class PasswordReset(BaseModel):
     new_password: str | None = None
 
 
+class HrmsEmployeeOut(BaseModel):
+    id: int
+    name: str
+    tab_number: str | None = None
+    position: str | None = None
+    department: str | None = None
+    is_linked: bool = False
+
+
+class HrmsEmployeesCacheOut(BaseModel):
+    employees: list[HrmsEmployeeOut]
+    synced_at: datetime | None = None
+
+
+class HrmsEmployeesListOut(BaseModel):
+    employees: list[HrmsEmployeeOut]
+    total: int
+    limit: int
+    offset: int
+    synced_at: datetime | None = None
+
+
+class UsersListOut(BaseModel):
+    users: list[UserOut]
+    total: int
+    limit: int
+    offset: int
+    linked_hrms_ids: list[int] = []
+
+
+class HrmsIntegrationSettingsOut(BaseModel):
+    base_url: str | None = None
+    api_token: str = "admin"
+    employees_url: str | None = None
+    updated_at: datetime | None = None
+
+
+class HrmsIntegrationSettingsUpdate(BaseModel):
+    base_url: str | None = None
+    api_token: str | None = None
+
+
+class HrmsConnectionTestIn(BaseModel):
+    base_url: str | None = None
+    api_token: str | None = None
+
+
+class HrmsConnectionTestOut(BaseModel):
+    request_url: str
+    employee_count: int
+
+
+def _to_hrms_employee_out(employee, *, is_linked: bool = False) -> HrmsEmployeeOut:
+    return HrmsEmployeeOut(
+        id=employee.hrms_id,
+        name=employee.name,
+        tab_number=employee.tab_number,
+        position=employee.position,
+        department=employee.department,
+        is_linked=is_linked,
+    )
+
+
+def _to_hrms_employees_cache_out(employees, synced_at: datetime | None) -> HrmsEmployeesCacheOut:
+    return HrmsEmployeesCacheOut(
+        employees=[_to_hrms_employee_out(employee) for employee in employees],
+        synced_at=synced_at,
+    )
+
+
+def _to_hrms_settings_out(settings) -> HrmsIntegrationSettingsOut:
+    employees_url = build_hrms_employees_url(settings.base_url) if settings.base_url else None
+    return HrmsIntegrationSettingsOut(
+        base_url=settings.base_url,
+        api_token=settings.api_token,
+        employees_url=employees_url,
+        updated_at=settings.updated_at,
+    )
+
+
 # ─── Endpoints ────────────────────────────────────────────────────────
 
 
-@router.get("", response_model=list[UserOut])
+@router.get("", response_model=UsersListOut)
 async def list_users(
+    limit: int = Query(default=50, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
+    search: str | None = Query(default=None),
+    sort_by: str = Query(default="id"),
+    sort_order: str = Query(default="asc"),
+    role: str | None = Query(default=None),
+    is_active: bool | None = Query(default=None),
+    full_name: str | None = Query(default=None),
+    email: str | None = Query(default=None),
+    section: str | None = Query(default=None),
     db: AsyncSession = Depends(get_db),
     _current_user: User = Depends(require_role([UserRole.admin])),
-) -> list[UserOut]:
-    """Получить список всех пользователей (только для admin)."""
-    result = await db.execute(select(User).order_by(User.id))
-    users = result.scalars().all()
-    return [UserOut.model_validate(u) for u in users]
+) -> UsersListOut:
+    """Получить список пользователей с фильтрацией, сортировкой и пагинацией."""
+    users, total = await list_users_paginated(
+        db,
+        limit=limit,
+        offset=offset,
+        search=search,
+        sort_by=sort_by,
+        sort_order=sort_order,
+        role=role,
+        is_active=is_active,
+        full_name=full_name,
+        email=email,
+        section=section,
+    )
+    linked_hrms_ids = await get_linked_hrms_ids(db)
+    return UsersListOut(
+        users=[UserOut.model_validate(user) for user in users],
+        total=total,
+        limit=limit,
+        offset=offset,
+        linked_hrms_ids=linked_hrms_ids,
+    )
 
 
-from app.core.config import settings
-
-
-@router.get("/employees")
-async def list_employees(
+@router.get("/hrms-settings", response_model=HrmsIntegrationSettingsOut)
+async def get_hrms_settings(
+    db: AsyncSession = Depends(get_db),
     _current_user: User = Depends(require_role([UserRole.admin])),
-) -> list[dict]:
-    """
-    Получить список активных сотрудников из HRMS.
-    Запрос выполняется с использованием общего ключа JWT или специального токена.
-    """
+) -> HrmsIntegrationSettingsOut:
+    """Получить настройки подключения к HRMS."""
+    settings = await get_hrms_integration_settings(db)
+    return _to_hrms_settings_out(settings)
+
+
+@router.put("/hrms-settings", response_model=HrmsIntegrationSettingsOut)
+async def save_hrms_settings(
+    payload: HrmsIntegrationSettingsUpdate,
+    db: AsyncSession = Depends(get_db),
+    _current_user: User = Depends(require_role([UserRole.admin])),
+) -> HrmsIntegrationSettingsOut:
+    """Сохранить настройки подключения к HRMS."""
     try:
-        # Мы используем Authorization: Bearer admin для аутентификации на HRMS
-        headers = {"Authorization": "Bearer admin"}
-        params = {"status": "active", "per_page": 1000}
-        
-        # Определяем порядок URL на основе окружения
-        if settings.ENV == "dev":
-            urls = [
-                "http://localhost:8000/api/employees",
-                "http://hrms-backend-prod:8000/api/employees"
-            ]
-        else:
-            urls = [
-                "http://hrms-backend-prod:8000/api/employees",
-                "http://localhost:8000/api/employees"
-            ]
-            
-        async with httpx.AsyncClient(timeout=1.0) as client:
-            for url in urls:
-                try:
-                    response = await client.get(url, headers=headers, params=params)
-                    response.raise_for_status()
-                    data = response.json()
-                    return data.get("items", [])
-                except (httpx.ConnectError, httpx.ConnectTimeout, httpx.HTTPStatusError) as e:
-                    logger.info(f"Failed to connect to HRMS via {url} ({e}), trying next...")
-            
-            # Если оба варианта не сработали
-            return []
-    except Exception as e:
-        logger.error(f"Failed to fetch employees from HRMS: {e}")
-        return []
+        settings = await update_hrms_integration_settings(
+            db,
+            base_url=payload.base_url,
+            api_token=payload.api_token,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    return _to_hrms_settings_out(settings)
+
+
+@router.post("/hrms-settings/test", response_model=HrmsConnectionTestOut)
+async def test_hrms_settings(
+    payload: HrmsConnectionTestIn,
+    db: AsyncSession = Depends(get_db),
+    _current_user: User = Depends(require_role([UserRole.admin])),
+) -> HrmsConnectionTestOut:
+    """Проверить доступность HRMS по указанному или сохранённому адресу."""
+    try:
+        if payload.base_url is not None or payload.api_token is not None:
+            await update_hrms_integration_settings(
+                db,
+                base_url=payload.base_url,
+                api_token=payload.api_token,
+            )
+        result = await test_hrms_connection(
+            db,
+            base_url=payload.base_url,
+            api_token=payload.api_token,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    except HrmsSyncError as exc:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
+    return HrmsConnectionTestOut(**result)
+
+
+@router.get("/employees", response_model=HrmsEmployeesListOut)
+async def list_employees(
+    limit: int = Query(default=50, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
+    search: str | None = Query(default=None),
+    sort_by: str = Query(default="name"),
+    sort_order: str = Query(default="asc"),
+    department: str | None = Query(default=None),
+    linked: bool | None = Query(default=None),
+    db: AsyncSession = Depends(get_db),
+    _current_user: User = Depends(require_role([UserRole.admin])),
+) -> HrmsEmployeesListOut:
+    """Получить кешированный список сотрудников HRMS с пагинацией."""
+    rows, total, synced_at = await list_cached_hrms_employees_paginated(
+        db,
+        limit=limit,
+        offset=offset,
+        search=search,
+        sort_by=sort_by,
+        sort_order=sort_order,
+        department=department,
+        linked=linked,
+    )
+    return HrmsEmployeesListOut(
+        employees=[
+            _to_hrms_employee_out(employee, is_linked=row_is_linked)
+            for employee, row_is_linked in rows
+        ],
+        total=total,
+        limit=limit,
+        offset=offset,
+        synced_at=synced_at,
+    )
+
+
+@router.post("/employees/sync", response_model=HrmsEmployeesCacheOut)
+async def sync_employees(
+    db: AsyncSession = Depends(get_db),
+    _current_user: User = Depends(require_role([UserRole.admin])),
+) -> HrmsEmployeesCacheOut:
+    """Синхронизировать кеш сотрудников HRMS из внешнего сервиса."""
+    try:
+        employees, synced_at = await sync_hrms_employees_cache(db)
+    except HrmsSyncError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=str(exc),
+        ) from exc
+    return _to_hrms_employees_cache_out(employees, synced_at)
 
 
 @router.post("", response_model=UserOut, status_code=status.HTTP_201_CREATED)

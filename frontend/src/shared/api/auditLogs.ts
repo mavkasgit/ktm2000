@@ -55,8 +55,11 @@ export type GetAuditLogsParams = {
   status?: string | null;
   section_id?: number | null;
   search?: string | null;
+  section_name?: string | null;
+  product_sku?: string | null;
   action?: string | null;
   entity_type?: string | null;
+  user_name?: string | null;
   sort_by?: string | null;
   sort_order?: "asc" | "desc" | null;
   date_from?: string | null;

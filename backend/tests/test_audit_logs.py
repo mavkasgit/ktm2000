@@ -162,3 +162,61 @@ async def test_get_audit_logs_task_statuses(client, session) -> None:
     task_statuses = body["task_statuses"]
     assert task_statuses[str(task.id)] == "deleted"
     assert task_statuses["999"] == "deleted"
+
+
+@pytest.mark.asyncio
+async def test_audit_logs_filter_product_sku_across_pages(client, session) -> None:
+    await session.execute(AuditLog.__table__.delete())
+    await session.commit()
+
+    session.add(AuditLog(
+        status="success",
+        title="Target event",
+        message="Unique marker",
+        product_sku="UNIQUE-AUDIT-SKU-42",
+    ))
+    await session.flush()
+    for i in range(60):
+        session.add(AuditLog(
+            status="success",
+            title=f"Bulk event {i}",
+            message=f"Message {i}",
+            product_sku=f"BULK-SKU-{i:03d}",
+        ))
+    await session.commit()
+
+    unfiltered = await client.get("/api/audit-logs?limit=50&offset=0")
+    assert unfiltered.status_code == 200
+    first_page_skus = {item["product_sku"] for item in unfiltered.json()["items"]}
+    assert "UNIQUE-AUDIT-SKU-42" not in first_page_skus
+
+    filtered = await client.get(
+        "/api/audit-logs?product_sku=UNIQUE-AUDIT-SKU-42&limit=50&offset=0",
+    )
+    assert filtered.status_code == 200
+    body = filtered.json()
+    assert body["total"] == 1
+    assert len(body["items"]) == 1
+    assert body["items"][0]["product_sku"] == "UNIQUE-AUDIT-SKU-42"
+
+
+@pytest.mark.asyncio
+async def test_audit_logs_sort_by_section_name(client, session) -> None:
+    await session.execute(AuditLog.__table__.delete())
+    await session.commit()
+
+    for section_name in ("Zebra Section", "Alpha Section", "Mike Section"):
+        session.add(AuditLog(
+            status="success",
+            title=f"Event at {section_name}",
+            message="Sort test",
+            section_name=section_name,
+        ))
+    await session.commit()
+
+    response = await client.get(
+        "/api/audit-logs?sort_by=section_name&sort_order=asc&limit=50",
+    )
+    assert response.status_code == 200
+    names = [item["section_name"] for item in response.json()["items"]]
+    assert names == ["Alpha Section", "Mike Section", "Zebra Section"]

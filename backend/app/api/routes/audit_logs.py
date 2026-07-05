@@ -13,6 +13,61 @@ from app.models.work_task import WorkTask
 
 router = APIRouter(prefix="/audit-logs", tags=["audit-logs"])
 
+AUDIT_SORT_FIELDS = frozenset({
+    "created_at",
+    "status",
+    "section_name",
+    "product_sku",
+    "action",
+    "entity_type",
+    "user_name",
+})
+
+
+def _apply_audit_log_filters(
+    stmt,
+    *,
+    status: str | None = None,
+    section_id: int | None = None,
+    section_name: str | None = None,
+    product_sku: str | None = None,
+    action: str | None = None,
+    entity_type: str | None = None,
+    user_name: str | None = None,
+    search: str | None = None,
+    date_from: datetime | None = None,
+    date_to: datetime | None = None,
+):
+    if status:
+        stmt = stmt.where(AuditLog.status == status)
+    if section_id:
+        stmt = stmt.where(AuditLog.section_id == section_id)
+    if section_name:
+        stmt = stmt.where(AuditLog.section_name.ilike(f"%{section_name}%"))
+    if product_sku:
+        stmt = stmt.where(AuditLog.product_sku.ilike(f"%{product_sku}%"))
+    if action:
+        stmt = stmt.where(AuditLog.action.ilike(f"%{action}%"))
+    if entity_type:
+        stmt = stmt.where(AuditLog.entity_type.ilike(f"%{entity_type}%"))
+    if user_name:
+        stmt = stmt.where(AuditLog.user_name.ilike(f"%{user_name}%"))
+    if date_from:
+        stmt = stmt.where(AuditLog.created_at >= date_from)
+    if date_to:
+        stmt = stmt.where(AuditLog.created_at <= date_to)
+    if search:
+        search_like = f"%{search}%"
+        stmt = stmt.where(
+            or_(
+                AuditLog.message.ilike(search_like),
+                AuditLog.title.ilike(search_like),
+                AuditLog.user_name.ilike(search_like),
+                AuditLog.product_sku.ilike(search_like),
+            )
+        )
+    return stmt
+
 
 class AuditLogOut(BaseModel):
     id: int
@@ -72,8 +127,11 @@ async def get_audit_logs(
     offset: int = Query(0, ge=0),
     status: str | None = Query(None),
     section_id: int | None = Query(None),
+    section_name: str | None = Query(None),
+    product_sku: str | None = Query(None),
     action: str | None = Query(None),
     entity_type: str | None = Query(None),
+    user_name: str | None = Query(None),
     search: str | None = Query(None),
     date_from: datetime | None = Query(None),
     date_to: datetime | None = Query(None),
@@ -83,58 +141,44 @@ async def get_audit_logs(
     _current_user: User = Depends(get_current_user),
 ) -> AuditLogsResponse:
     """Получить список логов аудита с фильтрацией, пагинацией и сортировкой."""
-    stmt = select(AuditLog)
-
-    # Применяем фильтры
-    if status:
-        stmt = stmt.where(AuditLog.status == status)
-    if section_id:
-        stmt = stmt.where(AuditLog.section_id == section_id)
-    if action:
-        stmt = stmt.where(AuditLog.action == action)
-    if entity_type:
-        stmt = stmt.where(AuditLog.entity_type == entity_type)
-    if date_from:
-        stmt = stmt.where(AuditLog.created_at >= date_from)
-    if date_to:
-        stmt = stmt.where(AuditLog.created_at <= date_to)
-    if search:
-        search_like = f"%{search}%"
-        stmt = stmt.where(
-            or_(
-                AuditLog.message.ilike(search_like),
-                AuditLog.title.ilike(search_like),
-                AuditLog.user_name.ilike(search_like),
-                AuditLog.product_sku.ilike(search_like),
-            )
-        )
+    stmt = _apply_audit_log_filters(
+        select(AuditLog),
+        status=status,
+        section_id=section_id,
+        section_name=section_name,
+        product_sku=product_sku,
+        action=action,
+        entity_type=entity_type,
+        user_name=user_name,
+        search=search,
+        date_from=date_from,
+        date_to=date_to,
+    )
 
     # Подсчитываем общее количество
     count_stmt = select(func.count()).select_from(stmt.subquery())
     total = (await db.execute(count_stmt)).scalar() or 0
 
-    # Сортировка на сервере
+    # Сортировка на сервере (whitelist + fallback created_at)
+    resolved_sort_by = sort_by if sort_by in AUDIT_SORT_FIELDS else "created_at"
     order_column = AuditLog.created_at
-    if sort_by:
-        if sort_by == "status":
-            order_column = AuditLog.status
-        elif sort_by == "section_name":
-            order_column = AuditLog.section_name
-        elif sort_by == "product_sku":
-            order_column = AuditLog.product_sku
-        elif sort_by == "operation_name":
-            order_column = AuditLog.operation_name
-        elif sort_by == "qty_text":
-            order_column = AuditLog.qty_text
-        elif sort_by == "action":
-            order_column = AuditLog.action
-        elif sort_by == "entity_type":
-            order_column = AuditLog.entity_type
+    if resolved_sort_by == "status":
+        order_column = AuditLog.status
+    elif resolved_sort_by == "section_name":
+        order_column = AuditLog.section_name
+    elif resolved_sort_by == "product_sku":
+        order_column = AuditLog.product_sku
+    elif resolved_sort_by == "action":
+        order_column = AuditLog.action
+    elif resolved_sort_by == "entity_type":
+        order_column = AuditLog.entity_type
+    elif resolved_sort_by == "user_name":
+        order_column = AuditLog.user_name
 
     if sort_order == "asc":
-        stmt = stmt.order_by(order_column.asc())
+        stmt = stmt.order_by(order_column.asc(), AuditLog.id.asc())
     else:
-        stmt = stmt.order_by(order_column.desc())
+        stmt = stmt.order_by(order_column.desc(), AuditLog.id.desc())
 
     # Выполняем пагинацию
     stmt = stmt.limit(limit).offset(offset)
@@ -158,28 +202,19 @@ async def get_audit_logs(
         for tid in all_task_ids:
             task_statuses[tid] = "active" if tid in existing_ids else "deleted"
 
-    # Вычисляем counts по статусам (учитывая фильтр по участку и поиску, но не по самому статусу)
-    counts_base_stmt = select(AuditLog.status, func.count(AuditLog.id)).select_from(AuditLog)
-    if section_id:
-        counts_base_stmt = counts_base_stmt.where(AuditLog.section_id == section_id)
-    if action:
-        counts_base_stmt = counts_base_stmt.where(AuditLog.action == action)
-    if entity_type:
-        counts_base_stmt = counts_base_stmt.where(AuditLog.entity_type == entity_type)
-    if search:
-        search_like = f"%{search}%"
-        counts_base_stmt = counts_base_stmt.where(
-            or_(
-                AuditLog.message.ilike(search_like),
-                AuditLog.title.ilike(search_like),
-                AuditLog.user_name.ilike(search_like),
-                AuditLog.product_sku.ilike(search_like),
-            )
-        )
-    if date_from:
-        counts_base_stmt = counts_base_stmt.where(AuditLog.created_at >= date_from)
-    if date_to:
-        counts_base_stmt = counts_base_stmt.where(AuditLog.created_at <= date_to)
+    # Вычисляем counts по статусам (учитывая column/search фильтры, но не по самому статусу)
+    counts_base_stmt = _apply_audit_log_filters(
+        select(AuditLog.status, func.count(AuditLog.id)).select_from(AuditLog),
+        section_id=section_id,
+        section_name=section_name,
+        product_sku=product_sku,
+        action=action,
+        entity_type=entity_type,
+        user_name=user_name,
+        search=search,
+        date_from=date_from,
+        date_to=date_to,
+    )
     counts_base_stmt = counts_base_stmt.group_by(AuditLog.status)
     counts_rows = (await db.execute(counts_base_stmt)).all()
 

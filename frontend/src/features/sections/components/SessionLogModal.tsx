@@ -1,20 +1,19 @@
-import { useState, useMemo, Fragment, useEffect, useCallback } from "react";
+import { useState, useMemo, Fragment, useEffect } from "react";
 import {
   CheckCircle2,
   AlertCircle,
   Info,
   Search,
   X,
-  ArrowUpDown,
-  ArrowUp,
-  ArrowDown,
   Clock,
   ChevronLeft,
   ChevronRight,
 } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
-import { getAuditLogs, type AuditLogEntry } from "@/shared/api/auditLogs";
-import { SectionSelect, SortableFilterHeader, TableCornerResetCell, TableCornerResetHeader } from "@/shared/ui";
+import { getAuditLogs, type AuditLogEntry, type GetAuditLogsParams } from "@/shared/api/auditLogs";
+import { queryKeys } from "@/shared/api/queryKeys";
+import { pickColumnApiValue } from "@/shared/lib/columnFilterSearch";
+import { SectionSelect, SortableFilterHeader, TableCornerResetCell, TableCornerResetHeader, DATA_TABLE_STYLES } from "@/shared/ui";
 import type { Section } from "@/shared/api/sections";
 import { listSections } from "@/shared/api/sections";
 import { useFilterableTable } from "@/shared/hooks/useFilterableTable";
@@ -62,22 +61,47 @@ function highlightText(text: string, search: string) {
 }
 
 type LogField = "status" | "createdAt" | "sectionName" | "productSku" | "taskIds" | "operationName" | "qtyText";
-type LogFilterField = "status" | "sectionName" | "productSku" | "taskIds" | "operationName";
+type LogFilterField = "status" | "createdAt" | "sectionName" | "productSku" | "taskIds" | "operationName" | "qtyText";
 
-function getLogCellValue(entry: AuditLogEntry, field: LogFilterField): string {
+function mapSortFieldToApi(field: LogFilterField): string {
   switch (field) {
-    case "status":
-      return entry.status;
+    case "createdAt":
+      return "created_at";
     case "sectionName":
-      return entry.section_name || "—";
+      return "section_name";
     case "productSku":
-      return entry.product_sku || "—";
+      return "product_sku";
     case "operationName":
-      return entry.operation_name || "—";
-    case "taskIds":
-      return entry.task_ids ? entry.task_ids.split(",")[0].trim() : "—";
+      return "operation_name";
+    case "qtyText":
+      return "qty_text";
+    default:
+      return field;
   }
 }
+
+function buildSessionColumnApiParams(
+  columnFilters: Partial<Record<LogFilterField, Set<string>>>,
+  columnSearchQueries: Partial<Record<LogFilterField, string>>,
+): Pick<GetAuditLogsParams, "section_name" | "product_sku" | "status"> {
+  const params: Pick<GetAuditLogsParams, "section_name" | "product_sku" | "status"> = {};
+
+  const sectionName = pickColumnApiValue(columnFilters, columnSearchQueries, "sectionName", (v) =>
+    v === "—" ? undefined : v,
+  );
+  if (sectionName) params.section_name = sectionName;
+
+  const productSku = pickColumnApiValue(columnFilters, columnSearchQueries, "productSku", (v) =>
+    v === "—" ? undefined : v,
+  );
+  if (productSku) params.product_sku = productSku;
+
+  const status = pickColumnApiValue(columnFilters, columnSearchQueries, "status");
+  if (status) params.status = status;
+
+  return params;
+}
+
 export function SessionLogModal({
   open,
   onClose,
@@ -101,7 +125,6 @@ export function SessionLogModal({
 
   const {
     bindColumn,
-    buildFilterPredicate,
     columnFilters,
     columnSearchQueries,
     sortConfigs,
@@ -139,10 +162,17 @@ export function SessionLogModal({
   // Состояние раскрытых строк
   const [expandedRows, setExpandedRows] = useState<Set<number>>(new Set());
 
+  const activeSort = sortConfigs[0] ?? { field: "createdAt" as LogFilterField, order: "desc" as const };
+
+  const columnApiParams = useMemo(
+    () => buildSessionColumnApiParams(columnFilters, columnSearchQueries),
+    [columnFilters, columnSearchQueries],
+  );
+
   // Сброс страницы при изменении фильтров
   useEffect(() => {
     setPage(1);
-  }, [search, statusFilter, selectedSectionId, columnFilters, columnSearchQueries]);
+  }, [search, statusFilter, selectedSectionId, columnFilters, columnSearchQueries, sortConfigs]);
 
   // Запрос списка участков, если они не переданы
   const { data: queriedSections } = useQuery({
@@ -151,22 +181,37 @@ export function SessionLogModal({
     enabled: open && !sections,
   });
 
-  // Запрос логов аудита с бэкенда
-  const { data, isLoading } = useQuery({
-    queryKey: ["auditLogs", selectedSectionId, statusFilter, search, offset],
-    queryFn: () => getAuditLogs({
+  const auditQueryParams = useMemo(() => {
+    const { status: columnStatus, ...restColumnParams } = columnApiParams;
+    return {
       section_id: selectedSectionId === "all" ? undefined : Number(selectedSectionId),
-      status: statusFilter === "all" ? undefined : statusFilter,
+      status: statusFilter === "all" ? columnStatus : statusFilter,
       search: search.trim() || undefined,
+      sort_by: mapSortFieldToApi(activeSort.field),
+      sort_order: activeSort.order,
       limit,
       offset,
-    }),
+      ...restColumnParams,
+    };
+  }, [
+    selectedSectionId,
+    statusFilter,
+    columnApiParams,
+    search,
+    activeSort.field,
+    activeSort.order,
+    limit,
+    offset,
+  ]);
+
+  // Запрос логов аудита с бэкенда
+  const { data, isLoading } = useQuery({
+    queryKey: queryKeys.auditLogs.list(auditQueryParams),
+    queryFn: () => getAuditLogs(auditQueryParams),
     enabled: open,
   });
 
-  const parsedLogs = useMemo(() => {
-    return data?.items || [];
-  }, [data]);
+  const parsedLogs = data?.items ?? [];
 
   const total = data?.total || 0;
   const totalPages = Math.ceil(total / limit) || 1;
@@ -200,65 +245,17 @@ export function SessionLogModal({
       const numB = Number.parseInt(b, 10) || 0;
       return numA - numB;
     }),
+    createdAt: [...new Set(parsedLogs.map((entry) => formatDateTime(entry.created_at)))].sort((a, b) => {
+      const getTime = (formatted: string) => {
+        const entry = parsedLogs.find((item) => formatDateTime(item.created_at) === formatted);
+        return entry ? new Date(entry.created_at).getTime() : 0;
+      };
+      return getTime(a) - getTime(b);
+    }),
+    qtyText: [...new Set(parsedLogs.map((entry) => entry.qty_text || "—"))].sort((a, b) =>
+      a.localeCompare(b, "ru"),
+    ),
   }), [parsedLogs]);
-
-  const columnFilterPredicate = useMemo(
-    () => buildFilterPredicate(getLogCellValue),
-    [buildFilterPredicate],
-  );
-
-  // Filter and sort logs (сортировка локальная в пределах текущей страницы)
-  const processedLogs = useMemo(() => {
-    let result = columnFilterPredicate
-      ? parsedLogs.filter(columnFilterPredicate)
-      : [...parsedLogs];
-
-    const activeSort = sortConfigs[0];
-    if (activeSort) {
-      const { field, order } = activeSort;
-      result.sort((a, b) => {
-        let valA: any = "";
-        let valB: any = "";
-
-        switch (field) {
-          case "createdAt":
-            valA = new Date(a.created_at).getTime();
-            valB = new Date(b.created_at).getTime();
-            break;
-          case "status":
-            valA = a.status;
-            valB = b.status;
-            break;
-          case "sectionName":
-            valA = a.section_name || "";
-            valB = b.section_name || "";
-            break;
-          case "productSku":
-            valA = a.product_sku || "";
-            valB = b.product_sku || "";
-            break;
-          case "operationName":
-            valA = a.operation_name || "";
-            valB = b.operation_name || "";
-            break;
-          case "qtyText":
-            valA = a.qty_text || "";
-            valB = b.qty_text || "";
-            break;
-          case "taskIds":
-            valA = a.task_ids ? parseInt(a.task_ids.split(",")[0], 10) : 0;
-            valB = b.task_ids ? parseInt(b.task_ids.split(",")[0], 10) : 0;
-            break;
-        }
-
-        if (valA < valB) return order === "asc" ? -1 : 1;
-        if (valA > valB) return order === "asc" ? 1 : -1;
-        return 0;
-      });
-    }
-
-    return result;
-  }, [parsedLogs, sortConfigs, columnFilterPredicate]);
 
   const handleSortChange = (field: LogField) => {
     setSortConfigs((prev) => {
@@ -285,26 +282,7 @@ export function SessionLogModal({
     });
   };
 
-  const renderSimpleSortHeader = (field: LogField, label: string) => {
-    const activeSort = sortConfigs.find((s) => s.field === field);
-    return (
-      <button
-        onClick={() => handleSortChange(field)}
-        className="flex items-center gap-1 hover:text-indigo-600 transition-colors focus:outline-none font-bold text-xs uppercase tracking-normal select-none text-slate-500 text-left"
-      >
-        <span>{label}</span>
-        {activeSort ? (
-          activeSort.order === "asc" ? (
-            <ArrowUp className="h-3.5 w-3.5 text-indigo-650 text-indigo-600 font-bold" />
-          ) : (
-            <ArrowDown className="h-3.5 w-3.5 text-indigo-655 text-indigo-600 font-bold" />
-          )
-        ) : (
-          <ArrowUpDown className="h-3 w-3 text-slate-400 opacity-40 hover:opacity-100" />
-        )}
-      </button>
-    );
-  };
+  const headerCellClass = `${DATA_TABLE_STYLES.headerRow} ${DATA_TABLE_STYLES.headerCell}`;
 
   if (!open) return null;
 
@@ -452,7 +430,7 @@ export function SessionLogModal({
         </div>
 
         <div className="flex-1 overflow-auto bg-slate-50/30 flex flex-col">
-          {processedLogs.length === 0 ? (
+          {parsedLogs.length === 0 ? (
             <div className="flex flex-col items-center justify-center h-full py-16 text-center">
               <div className="h-14 w-14 rounded-full bg-slate-100 flex items-center justify-center text-slate-400 mb-4">
                 <Clock className="h-7 w-7" />
@@ -465,11 +443,11 @@ export function SessionLogModal({
               </p>
             </div>
           ) : (
-            <div className="w-full overflow-x-hidden">
+            <div className={DATA_TABLE_STYLES.container}>
               <table className="w-full border-separate border-spacing-0 text-sm">
-                <thead className="[&_th]:sticky [&_th]:top-0 [&_th]:z-20 [&_th]:bg-slate-100 [&_th]:border-b [&_th]:border-slate-200">
+                <thead>
                   <tr>
-                    <th className="w-[10%] p-3 text-left">
+                    <th className={`${headerCellClass} p-0 w-[10%] text-left`}>
                       <SortableFilterHeader<LogFilterField>
                         field="status"
                         label="Статус"
@@ -482,10 +460,17 @@ export function SessionLogModal({
                         }
                       />
                     </th>
-                    <th className="w-[16%] p-3 text-left">
-                      {renderSimpleSortHeader("createdAt", "Дата и время")}
+                    <th className={`${headerCellClass} p-0 w-[16%] text-left`}>
+                      <SortableFilterHeader<LogFilterField>
+                        field="createdAt"
+                        label="Дата и время"
+                        currentSorts={sortConfigs as { field: LogFilterField; order: "asc" | "desc" }[]}
+                        onSortChange={(field) => handleSortChange(field as LogField)}
+                        values={uniqueValues.createdAt}
+                        {...bindColumn("createdAt")}
+                      />
                     </th>
-                    <th className="w-[13%] p-3 text-left">
+                    <th className={`${headerCellClass} p-0 w-[13%] text-left`}>
                       <SortableFilterHeader<LogFilterField>
                         field="sectionName"
                         label="Участок"
@@ -495,7 +480,7 @@ export function SessionLogModal({
                         {...bindColumn("sectionName")}
                       />
                     </th>
-                    <th className="w-[10%] p-3 text-left">
+                    <th className={`${headerCellClass} p-0 w-[10%] text-left`}>
                       <SortableFilterHeader<LogFilterField>
                         field="taskIds"
                         label="Задание"
@@ -506,7 +491,7 @@ export function SessionLogModal({
                         valueLabel={(val) => `#${val}`}
                       />
                     </th>
-                    <th className="w-[13%] p-3 text-left">
+                    <th className={`${headerCellClass} p-0 w-[13%] text-left`}>
                       <SortableFilterHeader<LogFilterField>
                         field="productSku"
                         label="Артикул"
@@ -516,7 +501,7 @@ export function SessionLogModal({
                         {...bindColumn("productSku")}
                       />
                     </th>
-                    <th className="w-[16%] p-3 text-left">
+                    <th className={`${headerCellClass} p-0 w-[16%] text-left`}>
                       <SortableFilterHeader<LogFilterField>
                         field="operationName"
                         label="Операция"
@@ -526,20 +511,28 @@ export function SessionLogModal({
                         {...bindColumn("operationName")}
                       />
                     </th>
-                    <th className="w-[12%] p-3 text-left">
-                      {renderSimpleSortHeader("qtyText", "Количество")}
+                    <th className={`${headerCellClass} p-0 w-[12%] text-left`}>
+                      <SortableFilterHeader<LogFilterField>
+                        field="qtyText"
+                        label="Количество"
+                        currentSorts={sortConfigs as { field: LogFilterField; order: "asc" | "desc" }[]}
+                        onSortChange={(field) => handleSortChange(field as LogField)}
+                        values={uniqueValues.qtyText}
+                        {...bindColumn("qtyText")}
+                      />
                     </th>
-                    <th className="w-[10%] p-3 text-left text-xs font-bold text-slate-500 uppercase tracking-normal select-none">
-                      Подробности
+                    <th className={`${headerCellClass} w-[10%] text-left`}>
+                      <span className="text-xs font-medium text-muted-foreground">Подробности</span>
                     </th>
                     <TableCornerResetHeader
                       hasActiveFilters={hasActiveFilters}
                       onReset={handleResetFilters}
+                      dataTableHeader
                     />
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 bg-white">
-                  {processedLogs.map((entry) => {
+                  {parsedLogs.map((entry) => {
                     const isSuccess = entry.status === "success";
                     const isError = entry.status === "error";
                     const isInfo = entry.status === "info";
@@ -800,7 +793,7 @@ export function SessionLogModal({
               </>
             )}
             <span className="ml-4">
-              Показано {processedLogs.length} из {total} записей
+              Показано {parsedLogs.length} из {total} записей
             </span>
           </div>
           <button

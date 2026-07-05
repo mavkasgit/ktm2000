@@ -1,8 +1,19 @@
-import { useEffect, useState, useMemo } from "react"
-import { Users, Plus, Shield, MapPin, CheckCircle2, XCircle, Search, Edit2, Key, Power, Loader2, ArrowLeft, Ticket, Link } from "lucide-react"
+import { useCallback, useEffect, useState, useMemo } from "react"
+import { useQuery, useQueryClient } from "@tanstack/react-query"
+import { Users, Plus, Shield, MapPin, CheckCircle2, XCircle, Search, Edit2, Key, Power, Loader2, ArrowLeft, Ticket, Link, Settings2 } from "lucide-react"
 import { useNavigate } from "react-router-dom"
 import { useAuth } from "@/features/auth/hooks/useAuth"
-import { listUsers, createUser, updateUser, resetPassword, listHrmsEmployees, type CreateUserInput, type UpdateUserInput, type HrmsEmployee } from "../api"
+import {
+  listUsers,
+  createUser,
+  updateUser,
+  resetPassword,
+  getCachedHrmsEmployees,
+  type CreateUserInput,
+  type UpdateUserInput,
+  type HrmsEmployee,
+} from "../api"
+import { HrmsSyncDialog } from "../components/HrmsSyncDialog"
 import { listSections, type Section } from "@/shared/api/sections"
 import type { User, UserRole } from "@/features/auth/api"
 import { generateOTPApi } from "@/features/auth/api"
@@ -24,7 +35,16 @@ import {
   SelectContent,
   SelectItem,
   toast,
+  SortableFilterHeader,
+  TableCornerResetHeader,
+  TableCornerResetCell,
+  TablePaginationFooter,
+  DATA_TABLE_STYLES,
 } from "@/shared/ui"
+import { useFilterableTable } from "@/shared/hooks/useFilterableTable"
+import { usePaginatedTableQuery } from "@/shared/hooks/usePaginatedTableQuery"
+import { pickColumnApiValue } from "@/shared/lib/columnFilterSearch"
+import { queryKeys } from "@/shared/api/queryKeys"
 
 const ROLE_LABELS: Record<UserRole, string> = {
   admin: "Администратор",
@@ -44,6 +64,77 @@ const ROLE_COLORS: Record<UserRole, string> = {
   transporter: "bg-teal-500/10 text-teal-500 border-teal-500/20",
 }
 
+const ROLE_LABEL_TO_API: Record<string, UserRole> = Object.fromEntries(
+  Object.entries(ROLE_LABELS).map(([role, label]) => [label, role as UserRole]),
+) as Record<string, UserRole>
+
+type UserFilterField = "fullName" | "email" | "role" | "section" | "status"
+
+function mapUserSortFieldToApi(field: UserFilterField): string {
+  switch (field) {
+    case "fullName":
+      return "full_name"
+    case "status":
+      return "is_active"
+    default:
+      return field
+  }
+}
+
+function buildUsersColumnApiParams(
+  columnFilters: Partial<Record<UserFilterField, Set<string>>>,
+  columnSearchQueries: Partial<Record<UserFilterField, string>>,
+): {
+  full_name?: string
+  email?: string
+  role?: string
+  section?: string
+  is_active?: boolean
+} {
+  const params: {
+    full_name?: string
+    email?: string
+    role?: string
+    section?: string
+    is_active?: boolean
+  } = {}
+
+  const fullName = pickColumnApiValue(columnFilters, columnSearchQueries, "fullName")
+  if (fullName) params.full_name = fullName
+
+  const email = pickColumnApiValue(columnFilters, columnSearchQueries, "email")
+  if (email) params.email = email
+
+  const roleLabel = pickColumnApiValue(columnFilters, columnSearchQueries, "role")
+  if (roleLabel && ROLE_LABEL_TO_API[roleLabel]) {
+    params.role = ROLE_LABEL_TO_API[roleLabel]
+  }
+
+  const section = pickColumnApiValue(columnFilters, columnSearchQueries, "section", (value) =>
+    value === "—" ? undefined : value,
+  )
+  if (section) params.section = section
+
+  const statusLabel = pickColumnApiValue(columnFilters, columnSearchQueries, "status")
+  if (statusLabel === "Активен") params.is_active = true
+  if (statusLabel === "Заблокирован") params.is_active = false
+
+  return params
+}
+
+function getUserSectionLabel(user: User, sectionMap: Map<number, Section>): string {
+  const ids = user.section_ids?.length
+    ? user.section_ids
+    : user.section_id
+      ? [user.section_id]
+      : []
+  if (ids.length === 0) return "—"
+  return ids
+    .map((id) => sectionMap.get(id)?.code ?? String(id))
+    .sort((a, b) => a.localeCompare(b, "ru"))
+    .join(", ")
+}
+
 const getSessionDurationLabel = (seconds: number | null) => {
   if (seconds === null) return "30 мин"
   if (seconds === -1) return "Бессрочно"
@@ -56,13 +147,78 @@ const getSessionDurationLabel = (seconds: number | null) => {
 
 export function UsersPage() {
   const navigate = useNavigate()
+  const queryClient = useQueryClient()
   const { user: currentUser } = useAuth()
 
-  const [users, setUsers] = useState<User[]>([])
   const [sections, setSections] = useState<Section[]>([])
-  const [loading, setLoading] = useState(true)
+  const [sectionsLoading, setSectionsLoading] = useState(true)
   const [error, setError] = useState("")
   const [search, setSearch] = useState("")
+  const [debouncedSearch, setDebouncedSearch] = useState("")
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => setDebouncedSearch(search), 300)
+    return () => window.clearTimeout(timer)
+  }, [search])
+
+  const {
+    bindColumn,
+    columnFilters,
+    columnSearchQueries,
+    sortConfigs,
+    handleSort,
+    resetAll,
+    hasActiveFilters: hasTableFiltersActive,
+  } = useFilterableTable<UserFilterField>({
+    extraHasActive: search.trim().length > 0,
+    onExtraReset: () => setSearch(""),
+  })
+
+  const columnApiParams = useMemo(
+    () => buildUsersColumnApiParams(columnFilters, columnSearchQueries),
+    [columnFilters, columnSearchQueries],
+  )
+
+  const pagination = usePaginatedTableQuery({
+    resetPageDeps: [
+      debouncedSearch,
+      columnFilters,
+      columnSearchQueries,
+      sortConfigs,
+    ],
+  })
+
+  const activeSort = sortConfigs[0]
+  const usersQueryParams = useMemo(
+    () => ({
+      limit: pagination.limit,
+      offset: pagination.offset,
+      search: debouncedSearch.trim() || undefined,
+      sort_by: activeSort ? mapUserSortFieldToApi(activeSort.field) : "id",
+      sort_order: activeSort?.order ?? "asc",
+      ...columnApiParams,
+    }),
+    [
+      pagination.limit,
+      pagination.offset,
+      debouncedSearch,
+      activeSort,
+      columnApiParams,
+    ],
+  )
+
+  const { data: usersData, isLoading: usersLoading, refetch: refetchUsers } = useQuery({
+    queryKey: queryKeys.users.list(usersQueryParams),
+    queryFn: () => listUsers(usersQueryParams),
+  })
+
+  const users = usersData?.users ?? []
+  const total = usersData?.total ?? 0
+  const totalPages = pagination.getTotalPages(total)
+  const linkedHrmsIds = useMemo(
+    () => new Set(usersData?.linked_hrms_ids ?? []),
+    [usersData?.linked_hrms_ids],
+  )
 
   // Состояние диалога создания/редактирования
   const [dialogOpen, setDialogOpen] = useState(false)
@@ -80,9 +236,12 @@ export function UsersPage() {
   const [submitting, setSubmitting] = useState(false)
   const [hrmsAccessLevel, setHrmsAccessLevel] = useState<string>("no_access")
   
-  // Дополнительные состояния для привязки к сотрудникам HRMS
+  // Дополнительные состояния для привязки к сотрудникам HRMS (кеш в БД, синхронизация по кнопке)
   const [hrmsEmployeeId, setHrmsEmployeeId] = useState("")
   const [employees, setEmployees] = useState<HrmsEmployee[]>([])
+  const [employeesSyncedAt, setEmployeesSyncedAt] = useState<string | null>(null)
+  const [employeesLoading, setEmployeesLoading] = useState(false)
+  const [hrmsSyncDialogOpen, setHrmsSyncDialogOpen] = useState(false)
   const [linkEmployee, setLinkEmployee] = useState(false)
 
   // Состояние диалога сброса пароля
@@ -132,46 +291,54 @@ export function UsersPage() {
     }
   }
 
-  const loadData = async () => {
-    setLoading(true)
+  const loadSections = async () => {
+    setSectionsLoading(true)
     setError("")
     try {
-      const [usersData, sectionsData, employeesData] = await Promise.all([
-        listUsers(),
-        listSections(),
-        listHrmsEmployees(),
-      ])
-      setUsers(usersData)
+      const sectionsData = await listSections()
       setSections(sectionsData)
-      setEmployees(employeesData)
     } catch (err) {
       setError(err instanceof Error ? err.message : "Не удалось загрузить данные")
       toast({
         variant: "destructive",
         title: "Ошибка загрузки",
-        description: "Не удалось загрузить пользователей, участки или сотрудников.",
+        description: "Не удалось загрузить участки.",
       })
     } finally {
-      setLoading(false)
+      setSectionsLoading(false)
+    }
+  }
+
+  const refreshUsers = async () => {
+    await queryClient.invalidateQueries({ queryKey: queryKeys.users.list() })
+    await refetchUsers()
+  }
+
+  const applyEmployeesCache = useCallback((cache: { employees: HrmsEmployee[]; synced_at: string | null }) => {
+    setEmployees(cache.employees)
+    setEmployeesSyncedAt(cache.synced_at)
+  }, [])
+
+  const loadCachedEmployees = async () => {
+    setEmployeesLoading(true)
+    try {
+      const cache = await getCachedHrmsEmployees()
+      applyEmployeesCache(cache)
+    } catch (err: any) {
+      toast({
+        variant: "destructive",
+        title: "Ошибка загрузки кеша",
+        description: err?.response?.data?.detail || err.message || "Не удалось загрузить кеш сотрудников HRMS.",
+      })
+    } finally {
+      setEmployeesLoading(false)
     }
   }
 
   useEffect(() => {
-    void loadData()
+    void loadSections()
+    void loadCachedEmployees()
   }, [])
-
-  // Фильтрация пользователей
-  const filteredUsers = useMemo(() => {
-    const q = search.trim().toLowerCase()
-    if (!q) return users
-    return users.filter(
-      (u) =>
-        u.full_name.toLowerCase().includes(q) ||
-        u.username.toLowerCase().includes(q) ||
-        u.email.toLowerCase().includes(q) ||
-        ROLE_LABELS[u.role].toLowerCase().includes(q)
-    )
-  }, [users, search])
 
   // Карта участков для быстрого поиска названий
   const sectionMap = useMemo(() => {
@@ -179,6 +346,28 @@ export function UsersPage() {
     sections.forEach((s) => map.set(s.id, s))
     return map
   }, [sections])
+
+  const uniqueValues = useMemo(
+    () => ({
+      fullName: [...new Set(users.map((u) => u.full_name))].sort((a, b) =>
+        a.localeCompare(b, "ru"),
+      ),
+      email: [...new Set(users.map((u) => u.email))].sort((a, b) =>
+        a.localeCompare(b, "ru"),
+      ),
+      role: [...new Set(users.map((u) => ROLE_LABELS[u.role]))].sort((a, b) =>
+        a.localeCompare(b, "ru"),
+      ),
+      section: [...new Set(users.map((u) => getUserSectionLabel(u, sectionMap)))].sort((a, b) =>
+        a.localeCompare(b, "ru"),
+      ),
+      status: [...new Set(users.map((u) => (u.is_active ? "Активен" : "Заблокирован")))].sort(),
+    }),
+    [users, sectionMap],
+  )
+
+  const loading = usersLoading || sectionsLoading
+  const headerCellClass = `${DATA_TABLE_STYLES.headerRow} ${DATA_TABLE_STYLES.headerCell}`
 
   const openCreate = () => {
     setSelectedUser(null)
@@ -260,7 +449,7 @@ export function UsersPage() {
         })
       }
       setDialogOpen(false)
-      await loadData()
+      await refreshUsers()
     } catch (err: any) {
       const detail = err?.response?.data?.detail || err.message || "Не удалось сохранить изменения"
       toast({
@@ -340,7 +529,7 @@ export function UsersPage() {
         title: newStatus ? "Пользователь активирован" : "Пользователь заблокирован",
         description: `Статус пользователя ${user.username} успешно изменен.`,
       })
-      await loadData()
+      await refreshUsers()
     } catch (err: any) {
       toast({
         variant: "destructive",
@@ -356,24 +545,60 @@ export function UsersPage() {
   return (
     <div className="space-y-6">
       {/* Шапка */}
-      <header className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between border-b pb-5">
-        <div>
-          <div className="flex items-center gap-2 text-sm text-muted-foreground mb-1 cursor-pointer hover:text-foreground transition-colors" onClick={() => navigate("/settings")}>
-            <ArrowLeft className="h-4 w-4" />
-            <span>Назад в настройки</span>
+      <header className="border-b pb-5">
+        <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+          <div className="min-w-0">
+            <div
+              className="flex items-center gap-2 text-sm text-muted-foreground mb-1 cursor-pointer hover:text-foreground transition-colors"
+              onClick={() => navigate("/settings")}
+            >
+              <ArrowLeft className="h-4 w-4" />
+              <span>Назад в настройки</span>
+            </div>
+            <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2.5">
+              <Users className="h-6 w-6 text-violet-500" />
+              Пользователи системы
+            </h1>
+            <p className="text-sm text-muted-foreground mt-1">
+              Управление учетными записями, ролями и привязкой сотрудников к участкам.
+            </p>
           </div>
-          <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2.5">
-            <Users className="h-6 w-6 text-violet-500" />
-            Пользователи системы
-          </h1>
-          <p className="text-sm text-muted-foreground mt-1">
-            Управление учетными записями, ролями и привязкой сотрудников к участкам.
-          </p>
+
+          <div className="flex flex-col items-stretch sm:items-end gap-2 shrink-0">
+            <p className="text-xs text-muted-foreground text-right flex items-center justify-end gap-1.5">
+              <Link className="h-3.5 w-3.5 text-emerald-600 shrink-0" />
+              <span>
+                {employeesLoading
+                  ? "Загрузка кеша HRMS..."
+                  : employeesSyncedAt
+                    ? `HRMS: ${employees.length} в кеше · ${new Date(employeesSyncedAt).toLocaleString("ru-RU")}`
+                    : employees.length > 0
+                      ? `HRMS: ${employees.length} в кеше`
+                      : "Кеш HRMS пуст"}
+              </span>
+            </p>
+            <div className="flex flex-wrap items-center justify-end gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => setHrmsSyncDialogOpen(true)}
+                disabled={employeesLoading}
+              >
+                <Settings2 className="h-4 w-4 mr-1.5" />
+                HRMS
+              </Button>
+              <Button
+                size="sm"
+                onClick={openCreate}
+                className="bg-violet-600 hover:bg-violet-500 shadow-md shadow-violet-600/10"
+              >
+                <Plus className="h-4 w-4 mr-1.5" />
+                Добавить пользователя
+              </Button>
+            </div>
+          </div>
         </div>
-        <Button size="sm" onClick={openCreate} className="bg-violet-600 hover:bg-violet-500 shadow-md shadow-violet-600/10">
-          <Plus className="h-4 w-4 mr-1.5" />
-          Добавить пользователя
-        </Button>
       </header>
 
       {/* Панель поиска */}
@@ -386,8 +611,8 @@ export function UsersPage() {
             className="pl-9 bg-card"
           />
         </div>
-        <Button variant="outline" onClick={() => setSearch("")} disabled={!search}>
-          Сбросить поиск
+        <Button variant="outline" onClick={resetAll} disabled={!hasTableFiltersActive}>
+          Сбросить фильтры
         </Button>
       </div>
 
@@ -403,7 +628,7 @@ export function UsersPage() {
           <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
           <span className="text-sm text-muted-foreground">Загрузка списка пользователей...</span>
         </div>
-      ) : filteredUsers.length === 0 ? (
+      ) : total === 0 && !debouncedSearch.trim() && !hasTableFiltersActive ? (
         <Card className="flex flex-col items-center justify-center py-16 text-center border-dashed">
           <Users className="h-10 w-10 text-muted-foreground/40 mb-3" />
           <h3 className="font-semibold text-lg">Пользователи не найдены</h3>
@@ -413,20 +638,78 @@ export function UsersPage() {
         </Card>
       ) : (
         <div className="border rounded-xl overflow-hidden bg-card shadow-sm">
-          <div className="overflow-x-auto">
+          <div className={DATA_TABLE_STYLES.container}>
             <table className="w-full text-sm border-collapse">
               <thead>
-                <tr className="bg-muted/50 border-b text-muted-foreground">
-                  <th className="px-6 py-3.5 text-left font-medium">ФИО / Логин</th>
-                  <th className="px-6 py-3.5 text-left font-medium">Email</th>
-                  <th className="px-6 py-3.5 text-left font-medium">Роль</th>
-                  <th className="px-6 py-3.5 text-left font-medium">Закреплен за участком</th>
-                  <th className="px-6 py-3.5 text-left font-medium w-36">Статус</th>
-                  <th className="px-6 py-3.5 text-right font-medium w-48">Действия</th>
+                <tr>
+                  <th className={`${headerCellClass} p-0 px-6 text-left`}>
+                    <SortableFilterHeader<UserFilterField>
+                      field="fullName"
+                      label="ФИО / Логин"
+                      currentSorts={sortConfigs}
+                      onSortChange={handleSort}
+                      values={uniqueValues.fullName}
+                      {...bindColumn("fullName")}
+                    />
+                  </th>
+                  <th className={`${headerCellClass} p-0 px-6 text-left`}>
+                    <SortableFilterHeader<UserFilterField>
+                      field="email"
+                      label="Email"
+                      currentSorts={sortConfigs}
+                      onSortChange={handleSort}
+                      values={uniqueValues.email}
+                      {...bindColumn("email")}
+                    />
+                  </th>
+                  <th className={`${headerCellClass} p-0 px-6 text-left`}>
+                    <SortableFilterHeader<UserFilterField>
+                      field="role"
+                      label="Роль"
+                      currentSorts={sortConfigs}
+                      onSortChange={handleSort}
+                      values={uniqueValues.role}
+                      {...bindColumn("role")}
+                    />
+                  </th>
+                  <th className={`${headerCellClass} p-0 px-6 text-left`}>
+                    <SortableFilterHeader<UserFilterField>
+                      field="section"
+                      label="Закреплен за участком"
+                      currentSorts={sortConfigs}
+                      onSortChange={handleSort}
+                      values={uniqueValues.section}
+                      {...bindColumn("section")}
+                    />
+                  </th>
+                  <th className={`${headerCellClass} p-0 px-6 text-left w-36`}>
+                    <SortableFilterHeader<UserFilterField>
+                      field="status"
+                      label="Статус"
+                      currentSorts={sortConfigs}
+                      onSortChange={handleSort}
+                      values={uniqueValues.status}
+                      {...bindColumn("status")}
+                    />
+                  </th>
+                  <th className={`${headerCellClass} px-6 text-right w-48`}>
+                    <span className="text-xs font-medium text-muted-foreground">Действия</span>
+                  </th>
+                  <TableCornerResetHeader
+                    hasActiveFilters={hasTableFiltersActive}
+                    onReset={resetAll}
+                    dataTableHeader
+                  />
                 </tr>
               </thead>
               <tbody className="divide-y">
-                {filteredUsers.map((userItem) => {
+                {users.length === 0 ? (
+                  <tr>
+                    <td colSpan={7} className="px-6 py-8 text-center text-sm text-muted-foreground">
+                      Пользователи не найдены по текущим фильтрам
+                    </td>
+                  </tr>
+                ) : users.map((userItem) => {
                   const s = userItem.section_id ? sectionMap.get(userItem.section_id) : null
                   const isSelf = userItem.id === currentUser?.id
 
@@ -586,14 +869,34 @@ export function UsersPage() {
                           </Button>
                         </div>
                       </td>
+                      <TableCornerResetCell />
                     </tr>
                   )
                 })}
               </tbody>
             </table>
           </div>
+          <TablePaginationFooter
+            page={pagination.page}
+            totalPages={totalPages}
+            total={total}
+            shownCount={users.length}
+            limit={pagination.limit}
+            onPageChange={pagination.setPage}
+            onLimitChange={pagination.setLimit}
+            rangeLabel={pagination.getRangeLabel(users.length, total, { onPage: true })}
+          />
         </div>
       )}
+
+      <HrmsSyncDialog
+        open={hrmsSyncDialogOpen}
+        onOpenChange={setHrmsSyncDialogOpen}
+        employees={employees}
+        employeesSyncedAt={employeesSyncedAt}
+        linkedHrmsIds={linkedHrmsIds}
+        onEmployeesChange={applyEmployeesCache}
+      />
 
       {/* Диалог создания/редактирования */}
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
@@ -633,6 +936,22 @@ export function UsersPage() {
             {linkEmployee && (
               <div className="space-y-1.5">
                 <label className="text-sm font-medium">Выберите сотрудника</label>
+                <p className="text-[11px] text-muted-foreground">
+                  Список берётся из локального кеша HRMS
+                  {employeesSyncedAt
+                    ? ` (обновлён ${new Date(employeesSyncedAt).toLocaleString("ru-RU")})`
+                    : employees.length > 0
+                      ? ` (${employees.length} в кеше)`
+                      : ". Сначала выполните синхронизацию HRMS."}
+                  {" "}
+                  <button
+                    type="button"
+                    className="text-violet-600 hover:underline"
+                    onClick={() => setHrmsSyncDialogOpen(true)}
+                  >
+                    Открыть HRMS
+                  </button>
+                </p>
                 <Select
                   value={hrmsEmployeeId}
                   onValueChange={(val) => {

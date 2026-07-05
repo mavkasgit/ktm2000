@@ -32,18 +32,116 @@ export interface HrmsEmployee {
   tab_number: string | null
   position?: string
   department?: string
+  is_linked?: boolean
 }
 
-/** Получить список сотрудников из HRMS */
-export async function listHrmsEmployees(): Promise<HrmsEmployee[]> {
-  const { data } = await apiClient.get<HrmsEmployee[]>("/users/employees")
+export type HrmsEmployeesCacheResponse = {
+  employees: HrmsEmployee[]
+  synced_at: string | null
+}
+
+export type ListHrmsEmployeesParams = {
+  limit?: number
+  offset?: number
+  search?: string
+  sort_by?: string
+  sort_order?: "asc" | "desc"
+  department?: string
+  linked?: boolean
+}
+
+export type HrmsEmployeesListResponse = {
+  employees: HrmsEmployee[]
+  total: number
+  limit: number
+  offset: number
+  synced_at: string | null
+}
+
+export type ListUsersParams = {
+  limit?: number
+  offset?: number
+  search?: string
+  sort_by?: string
+  sort_order?: "asc" | "desc"
+  role?: string
+  is_active?: boolean
+  full_name?: string
+  email?: string
+  section?: string
+}
+
+export type UsersListResponse = {
+  users: User[]
+  total: number
+  limit: number
+  offset: number
+  linked_hrms_ids: number[]
+}
+
+/** Получить кешированный список сотрудников HRMS из БД (пагинация) */
+export async function listHrmsEmployees(
+  params: ListHrmsEmployeesParams = {},
+): Promise<HrmsEmployeesListResponse> {
+  const { data } = await apiClient.get<HrmsEmployeesListResponse>("/users/employees", { params })
+  return data
+}
+
+/** Получить первую страницу кеша HRMS для диалогов/селектов */
+export async function getCachedHrmsEmployees(): Promise<HrmsEmployeesCacheResponse> {
+  const page = await listHrmsEmployees({ limit: 500, offset: 0 })
+  return {
+    employees: page.employees,
+    synced_at: page.synced_at,
+  }
+}
+
+/** Синхронизировать кеш сотрудников HRMS из внешнего сервиса */
+export async function syncHrmsEmployees(): Promise<HrmsEmployeesCacheResponse> {
+  const { data } = await apiClient.post<HrmsEmployeesCacheResponse>("/users/employees/sync")
+  return data
+}
+
+export type HrmsIntegrationSettings = {
+  base_url: string | null
+  api_token: string
+  employees_url: string | null
+  updated_at: string | null
+}
+
+export type HrmsConnectionTestResult = {
+  request_url: string
+  employee_count: number
+}
+
+/** Получить настройки подключения к HRMS */
+export async function getHrmsSettings(): Promise<HrmsIntegrationSettings> {
+  const { data } = await apiClient.get<HrmsIntegrationSettings>("/users/hrms-settings")
+  return data
+}
+
+/** Сохранить настройки подключения к HRMS */
+export async function saveHrmsSettings(payload: {
+  base_url?: string | null
+  api_token?: string | null
+}): Promise<HrmsIntegrationSettings> {
+  const { data } = await apiClient.put<HrmsIntegrationSettings>("/users/hrms-settings", payload)
+  return data
+}
+
+/** Проверить подключение к HRMS (сохраняет адрес при успехе) */
+export async function testHrmsConnection(payload: {
+  base_url?: string | null
+  api_token?: string | null
+}): Promise<HrmsConnectionTestResult> {
+  const { data } = await apiClient.post<HrmsConnectionTestResult>("/users/hrms-settings/test", payload)
   return data
 }
 
 
-/** Получить список всех пользователей */
-export async function listUsers(): Promise<User[]> {
-  const { data } = await apiClient.get<User[]>("/users")
+/** Получить список пользователей с пагинацией и фильтрами */
+export async function listUsers(params: ListUsersParams = {}): Promise<UsersListResponse> {
+  const { data } = await apiClient.get<UsersListResponse>("/users", { params })
   return data
 }
 

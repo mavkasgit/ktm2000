@@ -5,19 +5,19 @@ import {
   Info,
   Search,
   X,
-  ArrowUpDown,
-  ArrowUp,
-  ArrowDown,
   Clock,
   ChevronLeft,
   ChevronRight,
 } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
-import { getAuditLogs, type AuditLogEntry } from "@/shared/api/auditLogs";
-import { SectionSelect, DateRangePicker, Combobox } from "@/shared/ui";
-import { listSections } from "@/shared/api/sections";
+import { getAuditLogs, type AuditLogEntry, type GetAuditLogsParams } from "@/shared/api/auditLogs";
+import { queryKeys } from "@/shared/api/queryKeys";
+import { DateRangePicker, SortableFilterHeader, TableCornerResetHeader, TableCornerResetCell, DATA_TABLE_STYLES } from "@/shared/ui";
+import { useFilterableTable } from "@/shared/hooks/useFilterableTable";
+import { pickColumnApiValue } from "@/shared/lib/columnFilterSearch";
 
-type LogField = "createdAt" | "status" | "sectionName" | "productSku" | "qtyText" | "action" | "entityType";
+type LogFilterField = "createdAt" | "status" | "sectionName" | "productSku" | "action" | "entityType";
+type LogField = LogFilterField;
 
 function formatDateTime(dateStr: string) {
   const d = new Date(dateStr);
@@ -35,15 +35,72 @@ function formatDateTime(dateStr: string) {
   return `${date} ${time}`;
 }
 
+function mapSortFieldToApi(field: LogFilterField): string {
+  switch (field) {
+    case "createdAt":
+      return "created_at";
+    case "sectionName":
+      return "section_name";
+    case "productSku":
+      return "product_sku";
+    case "entityType":
+      return "entity_type";
+    default:
+      return field;
+  }
+}
+
+function extractEntityType(cellValue: string): string | undefined {
+  if (cellValue === "—") return undefined;
+  const hashIdx = cellValue.indexOf(" #");
+  return hashIdx >= 0 ? cellValue.slice(0, hashIdx) : cellValue;
+}
+
+function buildAuditColumnApiParams(
+  columnFilters: Partial<Record<LogFilterField, Set<string>>>,
+  columnSearchQueries: Partial<Record<LogFilterField, string>>,
+): Pick<
+  GetAuditLogsParams,
+  "section_name" | "product_sku" | "action" | "entity_type" | "status"
+> {
+  const params: Pick<
+    GetAuditLogsParams,
+    "section_name" | "product_sku" | "action" | "entity_type" | "status"
+  > = {};
+
+  const sectionName = pickColumnApiValue(columnFilters, columnSearchQueries, "sectionName", (v) =>
+    v === "—" ? undefined : v,
+  );
+  if (sectionName) params.section_name = sectionName;
+
+  const productSku = pickColumnApiValue(columnFilters, columnSearchQueries, "productSku", (v) =>
+    v === "—" ? undefined : v,
+  );
+  if (productSku) params.product_sku = productSku;
+
+  const action = pickColumnApiValue(columnFilters, columnSearchQueries, "action", (v) =>
+    v === "—" ? undefined : v,
+  );
+  if (action) params.action = action;
+
+  const entityType = pickColumnApiValue(
+    columnFilters,
+    columnSearchQueries,
+    "entityType",
+    extractEntityType,
+  );
+  if (entityType) params.entity_type = entityType;
+
+  const status = pickColumnApiValue(columnFilters, columnSearchQueries, "status");
+  if (status) params.status = status;
+
+  return params;
+}
+
 export function AuditLogsPage() {
   // Поиск и базовые фильтры
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<"all" | "success" | "error" | "info">("all");
-  const [selectedSectionId, setSelectedSectionId] = useState<string>("all");
-
-  // Расширенные фильтры
-  const [actionFilter, setActionFilter] = useState<string>("all");
-  const [entityTypeFilter, setEntityTypeFilter] = useState<string>("all");
   const [dateFrom, setDateFrom] = useState<string>("");
   const [dateTo, setDateTo] = useState<string>("");
 
@@ -52,53 +109,95 @@ export function AuditLogsPage() {
   const limit = 50;
   const offset = (page - 1) * limit;
 
-  // Серверная сортировка
-  const [sortBy, setSortBy] = useState<LogField>("createdAt");
-  const [sortOrder, setSortOrder] = useState<"asc" | "desc">("desc");
-
   // Раскрытие строк
   const [expandedRows, setExpandedRows] = useState<Set<number>>(new Set());
+
+  const hasActiveExtraFilters = dateFrom !== "" || dateTo !== "";
+
+  const {
+    bindColumn,
+    columnFilters,
+    columnSearchQueries,
+    sortConfigs,
+    setSortConfigs,
+    resetAll,
+    hasActiveFilters: hasTableFiltersActive,
+  } = useFilterableTable<LogFilterField>({
+    extraHasActive:
+      search.trim().length > 0 ||
+      statusFilter !== "all" ||
+      hasActiveExtraFilters,
+    onExtraReset: () => {
+      setSearch("");
+      setStatusFilter("all");
+      setDateFrom("");
+      setDateTo("");
+      setSortConfigs([{ field: "createdAt", order: "desc" }]);
+    },
+  });
+
+  useEffect(() => {
+    setSortConfigs([{ field: "createdAt", order: "desc" }]);
+  }, [setSortConfigs]);
+
+  const activeSort = sortConfigs[0] ?? { field: "createdAt" as LogFilterField, order: "desc" as const };
+  const sortBy = activeSort.field;
+  const sortOrder = activeSort.order;
+
+  const sortIsNonDefault =
+    sortConfigs.length !== 1 ||
+    sortConfigs[0]?.field !== "createdAt" ||
+    sortConfigs[0]?.order !== "desc";
+
+  const hasActiveFilters =
+    search.trim().length > 0 ||
+    statusFilter !== "all" ||
+    hasActiveExtraFilters ||
+    hasTableFiltersActive ||
+    sortIsNonDefault;
+
+  const handleResetAllFilters = resetAll;
 
   // Сброс страницы при изменении любого фильтра
   useEffect(() => {
     setPage(1);
-  }, [search, statusFilter, selectedSectionId, actionFilter, entityTypeFilter, dateFrom, dateTo]);
+  }, [search, statusFilter, dateFrom, dateTo, columnFilters, columnSearchQueries, sortConfigs]);
 
-  // Запрос справочника участков
-  const { data: sections } = useQuery({
-    queryKey: ["sections"],
-    queryFn: listSections,
-  });
+  const columnApiParams = useMemo(
+    () => buildAuditColumnApiParams(columnFilters, columnSearchQueries),
+    [columnFilters, columnSearchQueries],
+  );
 
-  // Запрос логов с бэкенда с максимальным набором фильтров и сортировок
-  const { data, isLoading } = useQuery({
-    queryKey: [
-      "auditLogs",
-      selectedSectionId,
+  const auditQueryParams = useMemo(() => {
+    const { status: columnStatus, ...restColumnParams } = columnApiParams;
+    return {
+      status: statusFilter === "all" ? columnStatus : statusFilter,
+      search: search.trim() || undefined,
+      date_from: dateFrom ? `${dateFrom}T00:00:00` : undefined,
+      date_to: dateTo ? `${dateTo}T23:59:59` : undefined,
+      sort_by: mapSortFieldToApi(sortBy),
+      sort_order: sortOrder,
+      limit,
+      offset,
+      ...restColumnParams,
+    };
+  },
+    [
       statusFilter,
+      columnApiParams,
       search,
-      actionFilter,
-      entityTypeFilter,
       dateFrom,
       dateTo,
       sortBy,
       sortOrder,
+      limit,
       offset,
     ],
-    queryFn: () =>
-      getAuditLogs({
-        section_id: selectedSectionId === "all" ? undefined : Number(selectedSectionId),
-        status: statusFilter === "all" ? undefined : statusFilter,
-        search: search.trim() || undefined,
-        action: actionFilter === "all" ? undefined : actionFilter,
-        entity_type: entityTypeFilter === "all" ? undefined : entityTypeFilter,
-        date_from: dateFrom ? `${dateFrom}T00:00:00` : undefined,
-        date_to: dateTo ? `${dateTo}T23:59:59` : undefined,
-        sort_by: sortBy === "createdAt" ? "created_at" : sortBy === "sectionName" ? "section_name" : sortBy === "productSku" ? "product_sku" : sortBy === "qtyText" ? "qty_text" : sortBy === "entityType" ? "entity_type" : sortBy,
-        sort_order: sortOrder,
-        limit,
-        offset,
-      }),
+  );
+
+  const { data, isLoading } = useQuery({
+    queryKey: queryKeys.auditLogs.list(auditQueryParams),
+    queryFn: () => getAuditLogs(auditQueryParams),
   });
 
   const parsedLogs = data?.items || [];
@@ -106,15 +205,44 @@ export function AuditLogsPage() {
   const totalPages = Math.ceil(total / limit) || 1;
   const counts = data?.counts || { all: 0, success: 0, error: 0, info: 0 };
   const taskStatuses = data?.task_statuses || {};
-  const availableSections = sections || [];
+  const uniqueValues = useMemo(
+    () => ({
+      status: [...new Set(parsedLogs.map((entry) => entry.status))].sort(),
+      createdAt: [...new Set(parsedLogs.map((entry) => formatDateTime(entry.created_at)))].sort((a, b) => {
+        const getTime = (formatted: string) => {
+          const entry = parsedLogs.find((item) => formatDateTime(item.created_at) === formatted);
+          return entry ? new Date(entry.created_at).getTime() : 0;
+        };
+        return getTime(a) - getTime(b);
+      }),
+      sectionName: [...new Set(parsedLogs.map((entry) => entry.section_name || "—"))].sort((a, b) =>
+        a.localeCompare(b, "ru"),
+      ),
+      productSku: [...new Set(parsedLogs.map((entry) => entry.product_sku || "—"))].sort((a, b) =>
+        a.localeCompare(b, "ru"),
+      ),
+      action: [...new Set(parsedLogs.map((entry) => entry.action || "—"))].sort((a, b) =>
+        a.localeCompare(b, "ru"),
+      ),
+      entityType: [
+        ...new Set(
+          parsedLogs.map((entry) =>
+            entry.entity_type ? `${entry.entity_type} #${entry.entity_id}` : "—",
+          ),
+        ),
+      ].sort((a, b) => a.localeCompare(b, "ru")),
+    }),
+    [parsedLogs],
+  );
 
   const handleSortChange = (field: LogField) => {
-    if (sortBy === field) {
-      setSortOrder((o) => (o === "asc" ? "desc" : "asc"));
-    } else {
-      setSortBy(field);
-      setSortOrder("desc");
-    }
+    setSortConfigs((prev) => {
+      const existing = prev.find((s) => s.field === field);
+      if (!existing) {
+        return [{ field, order: "desc" }];
+      }
+      return [{ field, order: existing.order === "asc" ? "desc" : "asc" }];
+    });
   };
 
   const toggleRow = (id: number) => {
@@ -129,28 +257,7 @@ export function AuditLogsPage() {
     });
   };
 
-  const renderSortHeader = (field: LogField, label: string) => {
-    const isActive = sortBy === field;
-    return (
-      <button
-        onClick={() => handleSortChange(field)}
-        className="flex items-center gap-1 hover:text-indigo-600 transition-colors focus:outline-none font-bold text-xs uppercase tracking-normal select-none text-slate-500 text-left"
-      >
-        <span>{label}</span>
-        {isActive ? (
-          sortOrder === "asc" ? (
-            <ArrowUp className="h-3.5 w-3.5 text-indigo-655 text-indigo-600 font-bold" />
-          ) : (
-            <ArrowDown className="h-3.5 w-3.5 text-indigo-655 text-indigo-600 font-bold" />
-          )
-        ) : (
-          <ArrowUpDown className="h-3 w-3 text-slate-400 opacity-40 hover:opacity-100" />
-        )}
-      </button>
-    );
-  };
-
-  const hasActiveExtraFilters = actionFilter !== "all" || entityTypeFilter !== "all" || dateFrom !== "" || dateTo !== "";
+  const headerCellClass = `${DATA_TABLE_STYLES.headerRow} ${DATA_TABLE_STYLES.headerCell}`;
 
   return (
     <div className="space-y-6">
@@ -193,71 +300,6 @@ export function AuditLogsPage() {
                   </button>
                 )}
               </div>
-            </div>
-
-            {/* Участок */}
-            <div className="space-y-1.5 w-[250px]">
-              <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Участок</label>
-              <div className="flex items-center bg-white rounded-lg border border-slate-200 h-9">
-                <SectionSelect
-                  sections={availableSections}
-                  value={selectedSectionId === "all" ? null : Number(selectedSectionId)}
-                  onValueChange={(val) => setSelectedSectionId(val === null ? "all" : String(val))}
-                  emptyLabel="Все участки"
-                  placeholder="Все участки"
-                  className="h-8 w-full text-sm border-0"
-                />
-              </div>
-            </div>
-
-            {/* Тип действия (action) */}
-            <div className="space-y-1.5 w-[250px]">
-              <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Тип действия</label>
-              <Combobox
-                className="flex h-9 w-full items-center justify-between rounded-md border border-input bg-background px-3 py-2 text-sm"
-                options={[
-                  { label: "Все действия", value: "all" },
-                  { label: "Создание (create)", value: "create" },
-                  { label: "Обновление (update)", value: "update" },
-                  { label: "Удаление (delete)", value: "delete" },
-                  { label: "Утверждение (approve)", value: "approve" },
-                  { label: "Отмена (cancel)", value: "cancel" },
-                  { label: "Восстановление (restore)", value: "restore" },
-                  { label: "Импорт (import)", value: "import" },
-                  { label: "Отправка (send)", value: "send" },
-                  { label: "Приемка (receive)", value: "receive" },
-                  { label: "Корректировка (correct)", value: "correct" },
-                  { label: "Выпуск (release)", value: "release" },
-                ]}
-                value={actionFilter}
-                onValueChange={setActionFilter}
-                placeholder="Выберите действие..."
-              />
-            </div>
-
-            {/* Тип сущности (entity_type) */}
-            <div className="space-y-1.5 w-[250px]">
-              <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Тип сущности</label>
-              <Combobox
-                className="flex h-9 w-full items-center justify-between rounded-md border border-input bg-background px-3 py-2 text-sm"
-                options={[
-                  { label: "Все сущности", value: "all" },
-                  { label: "Номенклатура", value: "product" },
-                  { label: "Участок", value: "section" },
-                  { label: "Маршрут", value: "route" },
-                  { label: "Техкарта", value: "techcard" },
-                  { label: "План производства", value: "production_plan" },
-                  { label: "Позиция плана", value: "plan_position" },
-                  { label: "Сменное задание", value: "work_task" },
-                  { label: "Передача", value: "transfer" },
-                  { label: "Брак", value: "defect" },
-                  { label: "Импорт-пакет", value: "import_batch" },
-                  { label: "Пользователь", value: "user" },
-                ]}
-                value={entityTypeFilter}
-                onValueChange={setEntityTypeFilter}
-                placeholder="Выберите сущность..."
-              />
             </div>
 
             {/* Диапазон дат с помощью DateRangePicker */}
@@ -356,21 +398,19 @@ export function AuditLogsPage() {
             {hasActiveExtraFilters && (
               <button
                 onClick={() => {
-                  setActionFilter("all");
-                  setEntityTypeFilter("all");
                   setDateFrom("");
                   setDateTo("");
                 }}
                 className="text-xs text-red-600 hover:text-red-800 font-bold"
               >
-                Сбросить фильтры
+                Сбросить период
               </button>
             )}
           </div>
         </div>
 
         {/* Таблица */}
-        <div className="overflow-x-auto">
+        <div className={DATA_TABLE_STYLES.container}>
           {isLoading ? (
             <div className="flex items-center justify-center py-20 text-slate-400 text-sm">
               Загрузка журнала аудита...
@@ -389,16 +429,82 @@ export function AuditLogsPage() {
             </div>
           ) : (
             <table className="w-full border-separate border-spacing-0 text-sm">
-              <thead className="bg-slate-100 border-b border-slate-200">
+              <thead>
                 <tr>
-                  <th className="w-[8%] p-3 text-left">{renderSortHeader("status", "Статус")}</th>
-                  <th className="w-[16%] p-3 text-left">{renderSortHeader("createdAt", "Дата и время")}</th>
-                  <th className="w-[14%] p-3 text-left">{renderSortHeader("sectionName", "Участок")}</th>
-                  <th className="w-[12%] p-3 text-left font-bold text-xs uppercase text-slate-500">Задание</th>
-                  <th className="w-[12%] p-3 text-left">{renderSortHeader("productSku", "Артикул")}</th>
-                  <th className="w-[14%] p-3 text-left">{renderSortHeader("action", "Действие")}</th>
-                  <th className="w-[12%] p-3 text-left">{renderSortHeader("entityType", "Сущность")}</th>
-                  <th className="w-[12%] p-3 text-left font-bold text-xs uppercase text-slate-500">Подробности</th>
+                  <th className={`${headerCellClass} p-0 w-[8%] text-left`}>
+                    <SortableFilterHeader<LogFilterField>
+                      field="status"
+                      label="Статус"
+                      currentSorts={sortConfigs}
+                      onSortChange={handleSortChange}
+                      values={uniqueValues.status}
+                      {...bindColumn("status")}
+                      valueLabel={(val) =>
+                        val === "success" ? "Успешно" : val === "error" ? "Ошибка" : "Информация"
+                      }
+                    />
+                  </th>
+                  <th className={`${headerCellClass} p-0 w-[16%] text-left`}>
+                    <SortableFilterHeader<LogFilterField>
+                      field="createdAt"
+                      label="Дата и время"
+                      currentSorts={sortConfigs}
+                      onSortChange={handleSortChange}
+                      values={uniqueValues.createdAt}
+                      {...bindColumn("createdAt")}
+                    />
+                  </th>
+                  <th className={`${headerCellClass} p-0 w-[14%] text-left`}>
+                    <SortableFilterHeader<LogFilterField>
+                      field="sectionName"
+                      label="Участок"
+                      currentSorts={sortConfigs}
+                      onSortChange={handleSortChange}
+                      values={uniqueValues.sectionName}
+                      {...bindColumn("sectionName")}
+                    />
+                  </th>
+                  <th className={`${headerCellClass} w-[12%] text-left`}>
+                    <span className="text-xs font-medium text-muted-foreground">Задание</span>
+                  </th>
+                  <th className={`${headerCellClass} p-0 w-[12%] text-left`}>
+                    <SortableFilterHeader<LogFilterField>
+                      field="productSku"
+                      label="Артикул"
+                      currentSorts={sortConfigs}
+                      onSortChange={handleSortChange}
+                      values={uniqueValues.productSku}
+                      {...bindColumn("productSku")}
+                    />
+                  </th>
+                  <th className={`${headerCellClass} p-0 w-[14%] text-left`}>
+                    <SortableFilterHeader<LogFilterField>
+                      field="action"
+                      label="Действие"
+                      currentSorts={sortConfigs}
+                      onSortChange={handleSortChange}
+                      values={uniqueValues.action}
+                      {...bindColumn("action")}
+                    />
+                  </th>
+                  <th className={`${headerCellClass} p-0 w-[12%] text-left`}>
+                    <SortableFilterHeader<LogFilterField>
+                      field="entityType"
+                      label="Сущность"
+                      currentSorts={sortConfigs}
+                      onSortChange={handleSortChange}
+                      values={uniqueValues.entityType}
+                      {...bindColumn("entityType")}
+                    />
+                  </th>
+                  <th className={`${headerCellClass} w-[12%] text-left`}>
+                    <span className="text-xs font-medium text-muted-foreground">Подробности</span>
+                  </th>
+                  <TableCornerResetHeader
+                    hasActiveFilters={hasActiveFilters}
+                    onReset={handleResetAllFilters}
+                    dataTableHeader
+                  />
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 bg-white">
@@ -525,12 +631,13 @@ export function AuditLogsPage() {
                             </button>
                           </div>
                         </td>
+                        <TableCornerResetCell />
                       </tr>
 
                       {/* Детали раскрытой строки */}
                       {isExpanded && (
                         <tr className="bg-slate-50/50">
-                          <td colSpan={8} className="p-4 border-b border-slate-200">
+                          <td colSpan={9} className="p-4 border-b border-slate-200">
                             <div className="bg-white rounded-lg border border-slate-200 p-4 shadow-sm space-y-3 text-xs text-slate-700">
                               <div className="flex items-center justify-between border-b border-slate-100 pb-2 mb-1">
                                 <span className="font-bold text-slate-800 text-sm">Детали события: {entry.title}</span>

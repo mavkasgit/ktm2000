@@ -41,6 +41,8 @@ from .entity_comment import EntityComment, EntityType
 from .attachment import Attachment, AttachmentLink
 from .spg import StorageProductionGroup, SpgSection
 from .audit_log import AuditLog
+from .hrms_employee_cache import HrmsEmployeeCache
+from .hrms_integration_settings import HrmsIntegrationSettings
 from app.stock.models import (
     QualityState,
     Reason,
@@ -113,6 +115,8 @@ __all__ = [
     "StorageProductionGroup",
     "SpgSection",
     "AuditLog",
+    "HrmsEmployeeCache",
+    "HrmsIntegrationSettings",
     "UserLoginToken",
     "QualityState",
     "Reason",
