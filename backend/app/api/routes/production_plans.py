@@ -1008,7 +1008,7 @@ async def _compute_available_remainder_for_positions(
     """
     from sqlalchemy.orm import selectinload
 
-    from app.services.position_remainders import compute_available_remainder_quantity
+    from app.services.position_remainders import compute_available_remainder_quantities
     from app.services.production_planning_rows import _resolve_effective_product_id
 
     if not positions:
@@ -1046,6 +1046,22 @@ async def _compute_available_remainder_for_positions(
                 }
             )
 
+    product_ids_for_remainders: set[int] = set()
+    for p in positions:
+        info = route_info_by_id.get(p.id)
+        if info is None or info.route_id is None:
+            continue
+        if not route_remainder_steps_by_route_id.get(info.route_id):
+            continue
+        effective_id = effective_product_by_id.get(p.id)
+        if effective_id is not None:
+            product_ids_for_remainders.add(effective_id)
+
+    available_by_product = await compute_available_remainder_quantities(
+        db,
+        product_ids_for_remainders,
+    )
+
     result: dict[int, float] = {}
     for p in positions:
         info = route_info_by_id.get(p.id)
@@ -1056,12 +1072,8 @@ async def _compute_available_remainder_for_positions(
         if not steps:
             result[p.id] = 0.0
             continue
-        result[p.id] = await compute_available_remainder_quantity(
-            db,
-            effective_product_id=effective_product_by_id.get(p.id),
-            route_steps=steps,
-            position_id=p.id,
-        )
+        effective_id = effective_product_by_id.get(p.id)
+        result[p.id] = available_by_product.get(effective_id, 0.0) if effective_id is not None else 0.0
     return result
 
 

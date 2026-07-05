@@ -102,8 +102,8 @@ export type ProductListResponse = {
 };
 
 export async function listProducts(filters: ProductFilters = {}) {
-  const { data } = await apiClient.get<Product[]>("/products", { params: filters });
-  return data;
+  const response = await listProductsPaginated(filters);
+  return response.items;
 }
 
 /** Backward-compatible helper: returns all items (paginated, max 500 per request). */

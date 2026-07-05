@@ -614,7 +614,24 @@ async def _build_planning_rows_for_positions(db: AsyncSession, positions: list[P
                     for stage, section in stages
                 ]
 
-    # Считаем доступные остатки по позициям.
+    from app.services.position_remainders import compute_available_remainder_quantities
+
+    product_ids_for_remainders: set[int] = set()
+    for pos in positions:
+        route_info = route_cache[make_position_route_cache_key(pos)]
+        if route_info.route_id is None:
+            continue
+        if not route_remainder_steps_cache.get(route_info.route_id):
+            continue
+        effective_id = position_effective_product_id.get(pos.id)
+        if effective_id is not None:
+            product_ids_for_remainders.add(effective_id)
+
+    available_by_product = await compute_available_remainder_quantities(
+        db,
+        product_ids_for_remainders,
+    )
+
     for pos in positions:
         route_info = route_cache[make_position_route_cache_key(pos)]
         remainder_steps = (
@@ -622,16 +639,11 @@ async def _build_planning_rows_for_positions(db: AsyncSession, positions: list[P
             if route_info.route_id is not None
             else None
         )
-        if remainder_steps:
-            from app.services.position_remainders import compute_available_remainder_quantity
-            available = await compute_available_remainder_quantity(
-                db,
-                effective_product_id=position_effective_product_id.get(pos.id),
-                route_steps=remainder_steps,
-                position_id=pos.id,
-            )
-        else:
-            available = 0.0
+        if not remainder_steps:
+            position_remainder_steps[pos.id] = 0.0
+            continue
+        effective_id = position_effective_product_id.get(pos.id)
+        available = available_by_product.get(effective_id, 0.0) if effective_id is not None else 0.0
         position_remainder_steps[pos.id] = available
 
     result: list[dict] = []

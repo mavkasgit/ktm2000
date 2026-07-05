@@ -619,10 +619,12 @@ async def _get_or_create_stock_fake_task(
     product_id: int,
 ) -> WorkTask:
     fake_task = await db.scalar(
-        select(WorkTask).where(
+        select(WorkTask)
+        .where(
             WorkTask.section_plan_line_id == stock_line.id,
-            WorkTask.status.notin_([WorkTaskStatus.cancelled, WorkTaskStatus.completed]),
+            WorkTask.status != WorkTaskStatus.cancelled,
         )
+        .order_by(WorkTask.id.asc())
     )
     if fake_task is None:
         planned_qty = stock_line.planned_quantity or Decimal("0")

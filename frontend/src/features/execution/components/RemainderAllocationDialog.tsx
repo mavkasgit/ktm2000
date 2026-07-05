@@ -7,7 +7,6 @@ import {
   DialogFooter,
   Button,
   Badge,
-  Checkbox,
 } from "@/shared/ui";
 import {
   formatBalanceQtyInteger,
@@ -95,14 +94,12 @@ export function RemainderAllocationDialog({
   const [balances, setBalances] = useState<StockBalanceEntry[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [autoConsume, setAutoConsume] = useState(false);
   const planQty = Math.round(releaseQuantity);
 
   useEffect(() => {
     if (!open) {
       setBalances([]);
       setError(null);
-      setAutoConsume(false);
       return;
     }
 
@@ -111,8 +108,12 @@ export function RemainderAllocationDialog({
       setLoading(true);
       setError(null);
       try {
-        const products = await listProducts({ q: positionSku, limit: 1 });
-        const productId = products.length > 0 ? products[0].id : 0;
+        const products = await listProducts({ q: positionSku, limit: 20 });
+        const normalizedSku = positionSku.trim().toLowerCase();
+        const product =
+          products.find((p) => p.sku.trim().toLowerCase() === normalizedSku) ??
+          (products.length === 1 ? products[0] : undefined);
+        const productId = product?.id ?? 0;
         const allBalances = await getProductStockBalances(productId);
         if (isMounted) {
           setBalances(allBalances.filter((b) => b.balance_qty !== "0"));
@@ -269,25 +270,13 @@ export function RemainderAllocationDialog({
             </section>
           )}
 
-          <label className="flex items-center gap-2.5 cursor-pointer select-none rounded-md border px-3 py-2.5 hover:bg-muted/40 transition-colors">
-            <Checkbox
-              checked={autoConsume}
-              onCheckedChange={(v) => setAutoConsume(Boolean(v))}
-            />
-            <span className="text-sm leading-tight">
-              <span className="font-medium">Автосписание со склада</span>
-              <span className="block text-xs text-muted-foreground mt-0.5">
-                Списать доступное при первой выдаче на участок
-              </span>
-            </span>
-          </label>
         </div>
 
         <DialogFooter className="px-5 py-3 border-t bg-muted/20 gap-2">
           <Button variant="outline" size="sm" onClick={() => onOpenChange(false)}>
             Отмена
           </Button>
-          <Button size="sm" onClick={() => onConfirm(autoConsume)} disabled={loading || pending}>
+          <Button size="sm" onClick={() => onConfirm(false)} disabled={loading || pending}>
             {pending ? "Запуск…" : "Запустить в работу"}
           </Button>
         </DialogFooter>
