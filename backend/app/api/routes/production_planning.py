@@ -224,6 +224,7 @@ class PlanningStageOut(BaseModel):
     section_id: int
     section_code: str
     section_name: str
+    section_kind: str | None = None
     section_icon: str | None = None
     section_icon_color: str | None = None
     sequence: int

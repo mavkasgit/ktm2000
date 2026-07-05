@@ -1,11 +1,12 @@
 import { useCallback, useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { SortableFilterHeader, TableCornerResetCell, TableCornerResetHeader } from "@/shared/ui";
+import { SortableFilterHeader, TableCornerResetCell, TableCornerResetHeader, DATA_TABLE_STYLES } from "@/shared/ui";
 import { useFilterableTable } from "@/shared/hooks/useFilterableTable";
 import { renderIcon } from "@/shared/ui/EntityDialog";
 import { listSections } from "@/shared/api/sections";
 import { queryKeys } from "@/shared/api/queryKeys";
 import { fmtQty } from "@/shared/utils/fmtQty";
+import { isStorageType } from "@/shared/lib/routeStageClassifier";
 import { type ProductionPlanningStage } from "@/shared/api/productionPlans";
 import {
   useTableQueryEngine,
@@ -73,7 +74,7 @@ function getStageRowTone(
   if (
     opts.currentStageSequence !== null &&
     stage.sequence < opts.currentStageSequence &&
-    (stage.sent_qty > 0 || stage.accepted_by_next_qty > 0 || stage.task_status === "completed")
+    (stage.sent_qty > 0 || stage.task_status === "completed")
   ) {
     return "completed";
   }
@@ -89,6 +90,37 @@ function QtyCell({ value }: { value: number }) {
     </td>
   );
 }
+
+function StorageSkipCell() {
+  return (
+    <td className="px-2 py-1.5 text-right align-top text-muted-foreground/40">
+      —
+    </td>
+  );
+}
+
+function resolveTransferOnlyStage(
+  stage: ProductionPlanningStage,
+  sectionType?: string | null,
+): boolean {
+  return isStorageType(stage.section_kind ?? sectionType);
+}
+
+function getStageProgressPercent(
+  stage: ProductionPlanningStage,
+  isTransferOnly: boolean,
+): string {
+  if (stage.planned_quantity <= 0) return "0.0";
+  if (isTransferOnly) {
+    const issued = Math.max(stage.sent_qty, stage.transferred_quantity);
+    return ((issued / stage.planned_quantity) * 100).toFixed(1);
+  }
+  const produced = Math.max(stage.accounted_good_qty, stage.completed_quantity);
+  return ((produced / stage.planned_quantity) * 100).toFixed(1);
+}
+
+const headerCellClass = `${DATA_TABLE_STYLES.headerRow} ${DATA_TABLE_STYLES.headerCell}`;
+const numHeaderClass = `${headerCellClass} text-right whitespace-nowrap`;
 
 export function ExecutionStagesTable({
   stages,
@@ -110,10 +142,18 @@ export function ExecutionStagesTable({
   });
 
   const sectionMetaById = useMemo(() => {
-    const map = new Map<number, { icon: string | null; icon_color: string | null }>();
-    (sectionsData || []).forEach((s) => map.set(s.id, { icon: s.icon, icon_color: s.icon_color }));
+    const map = new Map<number, { icon: string | null; icon_color: string | null; type: string }>();
+    (sectionsData || []).forEach((s) =>
+      map.set(s.id, { icon: s.icon, icon_color: s.icon_color, type: s.type }),
+    );
     return map;
   }, [sectionsData]);
+
+  const isTransferOnlyStage = useCallback(
+    (stage: ProductionPlanningStage) =>
+      resolveTransferOnlyStage(stage, sectionMetaById.get(stage.section_id)?.type),
+    [sectionMetaById],
+  );
 
   const stageRows = useMemo(
     () =>
@@ -176,15 +216,13 @@ export function ExecutionStagesTable({
     );
   }
 
-  const numHeaderClass = "px-2 py-2 text-right font-medium whitespace-nowrap";
-
   return (
-    <div className="rounded-lg border overflow-auto max-h-[min(70vh,520px)]">
+    <div className={`${DATA_TABLE_STYLES.container} max-h-[min(70vh,520px)]`}>
       <table className="w-full text-sm border-separate border-spacing-0">
-        <thead className="sticky top-0 z-10 bg-muted/80 backdrop-blur-sm border-b shadow-[0_1px_0_0_hsl(var(--border))]">
-          <tr className="text-xs text-muted-foreground">
-            <th className="text-left px-2 py-2 font-medium w-14">Этап</th>
-            <th className="text-left px-2 py-2 font-medium min-w-[140px]">
+        <thead>
+          <tr>
+            <th className={`${headerCellClass} w-14`}>Этап</th>
+            <th className={`${headerCellClass} p-0 min-w-[140px]`}>
               <SortableFilterHeader
                 field="section"
                 label="Участок"
@@ -194,7 +232,7 @@ export function ExecutionStagesTable({
                 {...bindColumn("section")}
               />
             </th>
-            <th className="text-left px-2 py-2 font-medium min-w-[120px]">
+            <th className={`${headerCellClass} p-0 min-w-[120px]`}>
               <SortableFilterHeader
                 field="status"
                 label="Статус этапа"
@@ -205,31 +243,39 @@ export function ExecutionStagesTable({
               />
             </th>
             <th className={numHeaderClass}>План</th>
-            <th className={numHeaderClass}>Выдано</th>
+            <th className={numHeaderClass} title="Пришло с предыдущего этапа">
+              Получено
+            </th>
             <th className={numHeaderClass} title="Годные">Годные</th>
             <th className={numHeaderClass} title="Брак">Брак</th>
-            <th className={numHeaderClass} title="Итог = Годные + Брак">Итог</th>
-            <th className={numHeaderClass}>Передано</th>
-            <th className={numHeaderClass}>Принято</th>
+            <th className={numHeaderClass} title="Выдано на следующий этап">
+              Выдано
+            </th>
             <th className={numHeaderClass}>Остаток</th>
-            <th className={numHeaderClass}>%</th>
+            <th className={numHeaderClass} title="Склад: выдано/план, производство: годные/план">%</th>
             <TableCornerResetHeader
               hasActiveFilters={hasActiveFilters}
               onReset={handleResetFilters}
+              dataTableHeader
             />
           </tr>
         </thead>
         <tbody>
           {filteredRows.map(({ stage, isFinalStage, tone }) => {
-            const pct =
-              stage.planned_quantity > 0
-                ? ((stage.completed_quantity / stage.planned_quantity) * 100).toFixed(1)
-                : "0.0";
+            const isTransferOnly = isTransferOnlyStage(stage);
+            const pct = getStageProgressPercent(stage, isTransferOnly);
             const sectionMeta = sectionMetaById.get(stage.section_id);
             const stageIcon = stage.section_icon || sectionMeta?.icon || null;
             const iconColor = stage.section_icon_color || sectionMeta?.icon_color || "#2563EB";
             const stageStatusText = getStageStatusLabel(stage, isFinalStage);
-            const remainingQty = Math.max(stage.planned_quantity - stage.accounted_total_qty, 0);
+            const receivedQty = stage.issued_qty;
+            const issuedQty = Math.max(stage.sent_qty, stage.transferred_quantity);
+            const remainingQty = isTransferOnly
+              ? Math.max(
+                  (receivedQty > 0 ? receivedQty : stage.planned_quantity) - issuedQty,
+                  0,
+                )
+              : Math.max(stage.planned_quantity - stage.accounted_total_qty, 0);
 
             return (
               <tr
@@ -256,18 +302,19 @@ export function ExecutionStagesTable({
                   {stageStatusText}
                 </td>
                 <QtyCell value={stage.planned_quantity} />
-                <QtyCell value={stage.issued_qty} />
-                <QtyCell value={stage.accounted_good_qty} />
-                <QtyCell value={stage.accounted_reject_qty} />
-                <QtyCell value={stage.accounted_total_qty} />
-                <QtyCell value={stage.sent_qty} />
-                <td className="px-2 py-1.5 text-right align-top tabular-nums text-muted-foreground/80">
-                  {isFinalStage ? (
-                    <span className="text-xs">—</span>
-                  ) : (
-                    fmtQty(stage.accepted_by_next_qty)
-                  )}
-                </td>
+                <QtyCell value={receivedQty} />
+                {isTransferOnly ? (
+                  <>
+                    <StorageSkipCell />
+                    <StorageSkipCell />
+                  </>
+                ) : (
+                  <>
+                    <QtyCell value={stage.accounted_good_qty} />
+                    <QtyCell value={stage.accounted_reject_qty} />
+                  </>
+                )}
+                <QtyCell value={issuedQty} />
                 <QtyCell value={remainingQty} />
                 <td className={`px-2 py-1.5 text-right align-top tabular-nums ${Number(pct) === 0 ? "text-muted-foreground/70" : ""}`}>
                   {pct}%

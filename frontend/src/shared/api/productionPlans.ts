@@ -375,6 +375,7 @@ export type ProductionPlanningStage = {
   section_id: number;
   section_code: string;
   section_name: string;
+  section_kind?: string | null;
   section_icon: string | null;
   section_icon_color: string | null;
   sequence: number;

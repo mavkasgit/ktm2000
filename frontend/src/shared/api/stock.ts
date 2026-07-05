@@ -62,8 +62,8 @@ export const IMPORT_REMAINDERS_SOURCE_REF = "import_remainders_excel";
 const STOCK_REASON_LABELS: Record<string, string> = {
   ISSUE_TO_WORK: "Выдача в работу",
   issue_to_work: "Выдача в работу",
-  COMPLETE: "Выпуск",
-  complete: "Выпуск",
+  COMPLETE: "Завершено",
+  complete: "Завершено",
   TRANSFER_SEND: "Передача отправлено",
   transfer_send: "Передача отправлено",
   TRANSFER_RECEIVE: "Передача получено",
