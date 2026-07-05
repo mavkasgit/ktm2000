@@ -22,6 +22,7 @@ existing UI keeps functioning during the migration.
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Header, Query
@@ -132,6 +133,17 @@ async def create_transfer(
 async def ready_to_transfer(
     section_id: Optional[int] = Query(default=None),
     spg_id: Optional[int] = Query(default=None),
+    limit: int = Query(default=50, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
+    search: str | None = Query(default=None),
+    sort_by: str = Query(default="sequence"),
+    sort_order: str = Query(default="asc"),
+    product_sku: str | None = Query(default=None),
+    operation_name: str | None = Query(default=None),
+    next_operation_name: str | None = Query(default=None),
+    next_section_name: str | None = Query(default=None),
+    task_id: int | None = Query(default=None),
+    transferable_qty: str | None = Query(default=None),
     db: AsyncSession = Depends(get_db),
     locked_section_id: int | None = Depends(get_single_window_locked_section_id),
 ) -> dict:
@@ -145,7 +157,22 @@ async def ready_to_transfer(
         section_id = locked_section_id
     if locked_section_id is not None and section_id != locked_section_id:
         raise HTTPException(status_code=403, detail=LOCKED_SECTION_ERROR)
-    return await list_ready_to_transfer(db, section_id=section_id, spg_id=spg_id)
+    return await list_ready_to_transfer(
+        db,
+        section_id=section_id,
+        spg_id=spg_id,
+        limit=limit,
+        offset=offset,
+        search=search,
+        sort_by=sort_by,
+        sort_order=sort_order,
+        product_sku=product_sku,
+        operation_name=operation_name,
+        next_operation_name=next_operation_name,
+        next_section_name=next_section_name,
+        task_id=task_id,
+        transferable_qty=transferable_qty,
+    )
 
 
 @router.get(
@@ -169,7 +196,17 @@ async def incoming_transfers(
 async def transfer_history_generic(
     section_id: Optional[int] = Query(default=None),
     spg_id: Optional[int] = Query(default=None),
-    limit: int = Query(default=100),
+    limit: int = Query(default=50, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
+    search: str | None = Query(default=None),
+    status: str | None = Query(default=None),
+    sort_by: str = Query(default="created_at"),
+    sort_order: str = Query(default="desc"),
+    date_from: datetime | None = Query(default=None),
+    date_to: datetime | None = Query(default=None),
+    product_sku: str | None = Query(default=None),
+    from_section_name: str | None = Query(default=None),
+    to_section_name: str | None = Query(default=None),
     db: AsyncSession = Depends(get_db),
     locked_section_id: int | None = Depends(get_single_window_locked_section_id),
 ) -> dict:
@@ -178,7 +215,22 @@ async def transfer_history_generic(
             section_id = locked_section_id
         if section_id != locked_section_id:
             raise HTTPException(status_code=403, detail=LOCKED_SECTION_ERROR)
-    return await get_section_transfer_history(db, section_id=section_id, spg_id=spg_id, limit=limit)
+    return await get_section_transfer_history(
+        db,
+        section_id=section_id,
+        spg_id=spg_id,
+        limit=limit,
+        offset=offset,
+        search=search,
+        status=status,
+        sort_by=sort_by,
+        sort_order=sort_order,
+        date_from=date_from,
+        date_to=date_to,
+        product_sku=product_sku,
+        from_section_name=from_section_name,
+        to_section_name=to_section_name,
+    )
 
 
 @router.get("/{transfer_id}", dependencies=[Depends(require_role(list(READER_ROLES)))])
@@ -235,13 +287,37 @@ async def cancel_transfer_qty(
 )
 async def transfer_history(
     section_id: int,
-    limit: int = Query(default=100),
+    limit: int = Query(default=50, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
+    search: str | None = Query(default=None),
+    status: str | None = Query(default=None),
+    sort_by: str = Query(default="created_at"),
+    sort_order: str = Query(default="desc"),
+    date_from: datetime | None = Query(default=None),
+    date_to: datetime | None = Query(default=None),
+    product_sku: str | None = Query(default=None),
+    from_section_name: str | None = Query(default=None),
+    to_section_name: str | None = Query(default=None),
     db: AsyncSession = Depends(get_db),
     locked_section_id: int | None = Depends(get_single_window_locked_section_id),
 ) -> dict:
     if locked_section_id is not None and section_id != locked_section_id:
         raise HTTPException(status_code=403, detail=LOCKED_SECTION_ERROR)
-    return await get_section_transfer_history(db, section_id=section_id, limit=limit)
+    return await get_section_transfer_history(
+        db,
+        section_id=section_id,
+        limit=limit,
+        offset=offset,
+        search=search,
+        status=status,
+        sort_by=sort_by,
+        sort_order=sort_order,
+        date_from=date_from,
+        date_to=date_to,
+        product_sku=product_sku,
+        from_section_name=from_section_name,
+        to_section_name=to_section_name,
+    )
 
 
 

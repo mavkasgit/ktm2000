@@ -1,7 +1,17 @@
 import { useMemo, useRef } from "react";
 import { ListChecks } from "lucide-react";
 import { ProductionPlanningRow } from "@/shared/api/productionPlans";
-import { Button, FiltersPanel, VirtualizedTableBody, SortableFilterHeader, TableCornerResetHeader, type FiltersPanelField } from "@/shared/ui";
+import {
+  Button,
+  FiltersPanel,
+  VirtualizedTableBody,
+  SortableFilterHeader,
+  TableCornerResetHeader,
+  TablePaginationFooter,
+  DATA_TABLE_STYLES,
+  type FiltersPanelField,
+} from "@/shared/ui";
+import type { PageLimitOption } from "@/shared/hooks/usePaginatedTableQuery";
 import type { useFilterableTable } from "@/shared/hooks/useFilterableTable";
 import { SortConfig } from "@/shared/hooks/useTableQueryEngine";
 import { ExecutionSortField, positionStatusLabels } from "./execution-utils";
@@ -17,7 +27,6 @@ import {
 
 interface ExecutionTableProps {
   rows: ProductionPlanningRow[];
-  filteredRows: ProductionPlanningRow[];
   isLoading: boolean;
   bulkMode: boolean;
   totalRows: number;
@@ -81,11 +90,17 @@ interface ExecutionTableProps {
   onRemoveSelection?: (id: number) => void;
   onSkuClick: (sku: string) => void;
   tableScrollRef: React.MutableRefObject<HTMLDivElement | null>;
+  page: number;
+  totalPages: number;
+  total: number;
+  limit: PageLimitOption;
+  onPageChange: (page: number) => void;
+  onLimitChange: (limit: PageLimitOption) => void;
+  rangeLabel: string;
 }
 
 export function ExecutionTable({
   rows,
-  filteredRows,
   isLoading,
   bulkMode,
   totalRows,
@@ -124,10 +139,16 @@ export function ExecutionTable({
   onRemoveSelection,
   onSkuClick,
   tableScrollRef,
+  page,
+  totalPages,
+  total,
+  limit,
+  onPageChange,
+  onLimitChange,
+  rangeLabel,
 }: ExecutionTableProps) {
   const visibleColumns = getExecutionTableColumns(hideColumnIds);
-  const headerCellClass =
-    "sticky top-0 z-20 border-b bg-background p-2 text-left align-middle text-xs font-medium text-muted-foreground overflow-hidden";
+  const headerCellClass = `${DATA_TABLE_STYLES.headerRow} ${DATA_TABLE_STYLES.headerCell}`;
 
   const actionVariant = (actionId: string): "default" | "destructive" | "outline" | "success" => {
     switch (actionId) {
@@ -210,20 +231,18 @@ export function ExecutionTable({
 
   return (
     <>
-      {!bulkMode && (
-        <header className="page-header">
-          <div>
-            <h1 className="page-title">Контроль выполнения</h1>
-            <div className="flex flex-wrap gap-3 text-sm">
-              <span className="px-3 py-1 rounded-full bg-muted">Строк всего: {totalRows}</span>
-              <span className="px-3 py-1 rounded-full bg-emerald-100 text-emerald-700">В работе: {releasedRows}</span>
-              <span className="px-3 py-1 rounded-full bg-violet-100 text-violet-700">Завершено: {completedRows}</span>
-            </div>
+      <header className="page-header">
+        <div>
+          <h1 className="page-title">Контроль выполнения</h1>
+          <div className="flex flex-wrap gap-3 text-sm">
+            <span className="px-3 py-1 rounded-full bg-muted">Строк всего: {totalRows}</span>
+            <span className="px-3 py-1 rounded-full bg-emerald-100 text-emerald-700">В работе: {releasedRows}</span>
+            <span className="px-3 py-1 rounded-full bg-violet-100 text-violet-700">Завершено: {completedRows}</span>
           </div>
-        </header>
-      )}
+        </div>
+      </header>
 
-      <div className={bulkMode ? "fixed inset-0 z-50 bg-background flex min-w-0 flex-col overflow-x-hidden overflow-y-auto p-4" : "min-w-0"}>
+      <div className="min-w-0">
         {bulkMode && (
           <div className="mb-3">
             <div className="flex items-center justify-between">
@@ -242,7 +261,7 @@ export function ExecutionTable({
           </div>
         )}
 
-        <section className={bulkMode ? "flex min-h-0 min-w-0 flex-1 flex-col" : "min-w-0 space-y-3"}>
+        <section className="min-w-0 space-y-3">
           <FiltersPanel
             compact
             fields={filterFields}
@@ -252,17 +271,13 @@ export function ExecutionTable({
               onEnterBulkMode();
               onSelectAll();
             }}
-            totalRowCount={filteredRows.length}
+            totalRowCount={total}
           />
 
           <div
             ref={tableScrollRef}
-            className={
-              bulkMode
-                ? "min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto rounded-lg border"
-                : "min-w-0 max-w-full overflow-x-hidden overflow-y-auto rounded-lg border"
-            }
-            style={bulkMode ? undefined : { maxHeight: '70vh' }}
+            className={`max-w-full ${DATA_TABLE_STYLES.container}`}
+            style={{ maxHeight: '70vh' }}
           >
             <div style={{ maxWidth: 1850 }}>
             <table className="execution-table w-full table-fixed border-separate border-spacing-0">
@@ -304,11 +319,12 @@ export function ExecutionTable({
                   <TableCornerResetHeader
                     hasActiveFilters={tableHasActiveFilters}
                     onReset={onResetAll}
+                    dataTableHeader
                   />
                 </tr>
               </thead>
               <VirtualizedTableBody
-                rows={filteredRows}
+                rows={rows}
                 rowHeight={48}
                 colSpan={visibleColumns.length + 1}
                 scrollContainerRef={tableScrollRef as React.RefObject<HTMLElement | null>}
@@ -333,9 +349,19 @@ export function ExecutionTable({
               />
             </table>
             </div>
-            {filteredRows.length === 0 && (
+            {rows.length === 0 && !isLoading && (
               <p className="p-4 text-sm text-muted-foreground text-center">Нет строк по выбранному фильтру</p>
             )}
+            <TablePaginationFooter
+              page={page}
+              totalPages={totalPages}
+              total={total}
+              shownCount={rows.length}
+              limit={limit}
+              onPageChange={onPageChange}
+              onLimitChange={onLimitChange}
+              rangeLabel={rangeLabel}
+            />
           </div>
         </section>
       </div>

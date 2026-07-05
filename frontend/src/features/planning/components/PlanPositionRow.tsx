@@ -4,6 +4,7 @@ import { AlertTriangle, Route } from "lucide-react"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { Button, AlertDialog, AlertDialogContent, AlertDialogHeader, AlertDialogTitle, AlertDialogDescription, AlertDialogFooter, AlertDialogAction, AlertDialogCancel, Combobox, PositionSkuCell } from "@/shared/ui"
 import { cn } from "@/shared/utils/cn"
+import { TABLE_ROW_STYLES } from "@/shared/lib/tableRowStyles"
 import { PlanPositionOut } from "@/shared/api/productionPlans"
 import { ProductionRoute } from "@/shared/api/routes"
 import { routeCheck } from "@/shared/api/productionPlans"
@@ -36,7 +37,6 @@ export function PositionRow({ pos, onApprove, onDelete, selected, routes, onAssi
   const hasWarnings = pos.warnings && pos.warnings.length > 0
   const noErrors = !hasErrors && !duplicateConflict
   const noWarnings = !hasWarnings
-  const routeColSpan = noErrors && noWarnings ? 3 : noWarnings ? 2 : 1
   const qty = Number(pos.quantity || 0)
   const qtyStr = fmtQty(qty)
   const originalQtyRaw = (pos.payload?.original_quantity as string | number | null | undefined) ?? null
@@ -207,7 +207,7 @@ export function PositionRow({ pos, onApprove, onDelete, selected, routes, onAssi
     <>
     <div
       id={`plan-position-${pos.id}`}
-      className={`grid items-start border-b ${hasErrors || hasDuplicateConflict ? "bg-red-50" : hasWarnings ? "bg-amber-50" : ""} ${selected ? "bg-blue-100 ring-1 ring-blue-300" : ""} cursor-pointer hover:bg-accent hover:ring-1 hover:ring-ring/20 transition-colors`}
+      className={`grid items-start border-b ${hasErrors || hasDuplicateConflict ? "bg-red-50" : hasWarnings ? "bg-amber-50" : ""} ${selected ? TABLE_ROW_STYLES.selectedRow : ""} cursor-pointer hover:bg-accent hover:ring-1 hover:ring-ring/20 transition-colors`}
       style={{ gridTemplateColumns: PLAN_POSITIONS_GRID }}
       onClick={(e) => {
         if (onSelect) {

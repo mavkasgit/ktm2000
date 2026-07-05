@@ -158,8 +158,33 @@ export async function allPlanFiles() {
   return data;
 }
 
-export async function allPlanPositions() {
-  const { data } = await apiClient.get<PlanPositionOut[]>("/production-plans/all-positions");
+export type AllPlanPositionsParams = {
+  limit?: number;
+  offset?: number;
+  search?: string;
+  sort_by?: string;
+  sort_order?: string;
+  status?: string;
+  validation_status?: string;
+  source_sku?: string;
+  source_name?: string;
+  has_route?: string;
+  has_errors?: string;
+  has_warnings?: string;
+};
+
+export type AllPlanPositionsListResponse = {
+  positions: PlanPositionOut[];
+  total: number;
+  limit: number;
+  offset: number;
+};
+
+export async function allPlanPositions(params?: AllPlanPositionsParams) {
+  const { data } = await apiClient.get<AllPlanPositionsListResponse>(
+    "/production-plans/all-positions",
+    { params },
+  );
   return data;
 }
 
@@ -447,8 +472,37 @@ export type ProductionPlanningRowDetail = {
   available_remainder_quantity?: number | null;
 };
 
-export async function listProductionPlanningRows() {
-  const { data } = await apiClient.get<ProductionPlanningRow[]>("/production-planning/rows");
+export type ListProductionPlanningRowsParams = {
+  section_id?: number;
+  limit?: number;
+  offset?: number;
+  search?: string;
+  sort_by?: string;
+  sort_order?: "asc" | "desc";
+  plan_position_id?: string;
+  source_row_number?: string;
+  production_plan_id?: string;
+  product_sku?: string;
+  source_sku?: string;
+  source_name?: string;
+  quantity?: string;
+  route_name?: string;
+  status?: string;
+  current_stage_section_name?: string;
+};
+
+export type ProductionPlanningRowsListResponse = {
+  rows: ProductionPlanningRow[];
+  total: number;
+  limit: number;
+  offset: number;
+};
+
+export async function listProductionPlanningRows(params?: ListProductionPlanningRowsParams) {
+  const { data } = await apiClient.get<ProductionPlanningRowsListResponse>(
+    "/production-planning/rows",
+    { params },
+  );
   return data;
 }
 

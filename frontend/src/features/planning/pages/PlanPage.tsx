@@ -2,16 +2,17 @@ import { useEffect, useMemo, useRef, useState } from "react"
 import { FileSpreadsheet, Plus, Upload, ListChecks } from "lucide-react"
 import { ImportWizard } from "../ImportWizard"
 import { ProductWipStatsDialog } from "@/features/execution/components/ProductWipStatsDialog"
-import { Button, Select, SelectContent, SelectItem, SelectTrigger, SelectValue, AlertDialog, AlertDialogContent, AlertDialogHeader, AlertDialogTitle, AlertDialogDescription, AlertDialogFooter, AlertDialogAction, AlertDialogCancel, SortableFilterHeader, FiltersPanel, TableCornerResetHeader, type FiltersPanelField, Badge } from "@/shared/ui"
+import { Button, Select, SelectContent, SelectItem, SelectTrigger, SelectValue, AlertDialog, AlertDialogContent, AlertDialogHeader, AlertDialogTitle, AlertDialogDescription, AlertDialogFooter, AlertDialogAction, AlertDialogCancel, SortableFilterHeader, FiltersPanel, TableCornerResetHeader, TablePaginationFooter, DATA_TABLE_STYLES, type FiltersPanelField, Badge } from "@/shared/ui"
 import { buildActiveFilterSummary } from "@/shared/ui/buildActiveFilterSummary"
-import { useTableQueryEngine, ColumnSortDef } from "@/shared/hooks/useTableQueryEngine"
+import { usePaginatedTableQuery } from "@/shared/hooks/usePaginatedTableQuery"
 import { useFilterableTable } from "@/shared/hooks/useFilterableTable"
+import { buildColumnFilterPredicate, pickColumnApiValue } from "@/shared/lib/columnFilterSearch"
 import { PLAN_POSITIONS_GRID } from "../lib/gridTemplates"
 import { toast } from "@/shared/ui"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { allPlanFiles, allPlanPositions, PlanPositionOut, listPlans, batchAssignRouteGlobal, deleteImportBatch, approveProductionPlanPosition, getPlanDuplicates, bulkApprovePositions, bulkDeletePositions } from "@/shared/api/productionPlans"
 import { listRoutes } from "@/shared/api/routes"
-import { listImportTemplates } from "@/shared/api/importTemplates"
+import { listAllImportTemplates } from "@/shared/api/importTemplates"
 import { apiClient, getErrorMessage } from "@/shared/api/client"
 import { queryKeys } from "@/shared/api/queryKeys"
 import { RowDetailsSidePanel, adaptPlanPositionOut } from "../components/row-details"
@@ -23,7 +24,6 @@ import {
   type BulkActionSummary,
   type BulkRunnerProgress,
 } from "@/shared/bulk"
-import { fmtQty } from "@/shared/utils/fmtQty"
 import { FileRow } from "../components/PlanFileRow"
 import { PositionRow } from "../components/PlanPositionRow"
 import {
@@ -31,6 +31,7 @@ import {
   PlanSortField,
   PlanFiltersState,
 } from "../lib/plan-labels"
+import { buildPlanColumnApiParams, mapPlanSortFieldToApi } from "../lib/planApiParams"
 
 export function PlanPage() {
   const [importOpen, setImportOpen] = useState(false)
@@ -61,7 +62,7 @@ export function PlanPage() {
   const { data: routes } = useQuery({ queryKey: queryKeys.routes.all(), queryFn: () => listRoutes() })
   const activeRoutes = routes?.filter(r => r.is_active) ?? []
 
-  const { data: templates } = useQuery({ queryKey: queryKeys.importTemplates.all(), queryFn: listImportTemplates })
+  const { data: templates } = useQuery({ queryKey: queryKeys.importTemplates.all(), queryFn: listAllImportTemplates })
   const activeTemplates = (templates ?? []).filter(t => t.is_active).sort((a, b) => a.sort_order - b.sort_order)
 
   const [filters, setFilters] = useState<PlanFiltersState>({
@@ -73,6 +74,7 @@ export function PlanPage() {
     has_duplicates: "all",
   })
   const [searchQuery, setSearchQuery] = useState("")
+  const [debouncedSearchQuery, setDebouncedSearchQuery] = useState("")
   const panelFiltersActive = useMemo(
     () =>
       searchQuery.trim().length > 0 ||
@@ -81,7 +83,6 @@ export function PlanPage() {
   )
   const {
     bindColumn,
-    buildFilterPredicate,
     columnFilters,
     columnSearchQueries,
     sortConfigs,
@@ -91,6 +92,26 @@ export function PlanPage() {
     hasActiveFilters: hasTableFiltersActive,
   } = useFilterableTable<PlanSortField>({
     extraHasActive: panelFiltersActive,
+  })
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => setDebouncedSearchQuery(searchQuery), 300)
+    return () => window.clearTimeout(timer)
+  }, [searchQuery])
+
+  const columnApiParams = useMemo(
+    () => buildPlanColumnApiParams(columnFilters, columnSearchQueries),
+    [columnFilters, columnSearchQueries],
+  )
+
+  const pagination = usePaginatedTableQuery({
+    resetPageDeps: [
+      debouncedSearchQuery,
+      filters,
+      columnFilters,
+      columnSearchQueries,
+      sortConfigs,
+    ],
   })
   const [templateImportOpen, setTemplateImportOpen] = useState<number | null>(null)
 
@@ -187,6 +208,7 @@ export function PlanPage() {
       has_warnings: "all",
       has_duplicates: "all",
     })
+    pagination.resetPage()
     bulkSelection.clear()
     setBulkMode(false)
   }
@@ -370,10 +392,41 @@ export function PlanPage() {
     queryFn: () => allPlanFiles(),
   })
 
-  const { data: positions, isLoading: posLoading } = useQuery({
-    queryKey: queryKeys.plan.allPositions(),
-    queryFn: () => allPlanPositions(),
+  const activeSort = sortConfigs[0]
+  const positionsQueryParams = useMemo(
+    () => ({
+      limit: pagination.limit,
+      offset: pagination.offset,
+      search: debouncedSearchQuery.trim() || undefined,
+      sort_by: activeSort ? mapPlanSortFieldToApi(activeSort.field) : "source_row_number",
+      sort_order: activeSort?.order ?? "asc",
+      status: filters.status !== "all" ? filters.status : undefined,
+      validation_status: filters.validation_status !== "all" ? filters.validation_status : undefined,
+      has_route: filters.has_route !== "all" ? filters.has_route : columnApiParams.has_route,
+      has_errors: filters.has_errors !== "all" ? filters.has_errors : columnApiParams.has_errors,
+      has_warnings: filters.has_warnings !== "all" ? filters.has_warnings : columnApiParams.has_warnings,
+      source_sku: columnApiParams.source_sku,
+      source_name: columnApiParams.source_name,
+    }),
+    [
+      pagination.limit,
+      pagination.offset,
+      debouncedSearchQuery,
+      activeSort,
+      filters,
+      columnApiParams,
+    ],
+  )
+
+  const { data: positionsData, isLoading: posLoading } = useQuery({
+    queryKey: queryKeys.plan.allPositions(positionsQueryParams),
+    queryFn: () => allPlanPositions(positionsQueryParams),
+    enabled: !!activePlan,
   })
+
+  const positions = positionsData?.positions ?? []
+  const positionsTotal = positionsData?.total ?? 0
+  const positionsTotalPages = pagination.getTotalPages(positionsTotal)
 
   const duplicateConflictsByPosition = useMemo(() => {
     const map = new Map<number, DuplicateConflict>()
@@ -392,7 +445,6 @@ export function PlanPage() {
     return map
   }, [duplicateGroupsByPlan])
 
-  // Build filter predicate from PlanFiltersState
   const getPlanCellValue = (row: PlanPositionOut, field: PlanSortField): string => {
     switch (field) {
       case "id": return String(row.id)
@@ -412,69 +464,58 @@ export function PlanPage() {
     }
   }
 
-  const columnFilterPredicate = useMemo(
-    () => buildFilterPredicate(getPlanCellValue),
-    [buildFilterPredicate],
+  const routeColumnValue = pickColumnApiValue(columnFilters, columnSearchQueries, "route")
+  const needsClientRouteFilter = Boolean(
+    routeColumnValue && routeColumnValue !== "Не назначен",
   )
 
-  const filterPredicate = useMemo(() => {
-    const hasTopFilters =
-      filters.status !== "all" ||
-      filters.validation_status !== "all" ||
-      filters.has_route !== "all" ||
-      filters.has_errors !== "all" ||
-      filters.has_warnings !== "all" ||
-      filters.has_duplicates !== "all"
-
-    if (!columnFilterPredicate && !hasTopFilters) return null
-
-    return (row: PlanPositionOut) => {
-      if (filters.status !== "all" && row.status !== filters.status) return false
-      if (filters.validation_status !== "all" && row.validation_status !== filters.validation_status) return false
-      if (filters.has_route === "yes" && !row.route_id) return false
-      if (filters.has_route === "no" && row.route_id) return false
-      if (filters.has_errors === "yes" && (!row.errors || row.errors.length === 0)) return false
-      if (filters.has_errors === "no" && row.errors && row.errors.length > 0) return false
-      if (filters.has_warnings === "yes" && (!row.warnings || row.warnings.length === 0)) return false
-      if (filters.has_warnings === "no" && row.warnings && row.warnings.length > 0) return false
-      if (filters.has_duplicates === "yes" && !duplicateConflictsByPosition.has(row.id)) return false
-      if (filters.has_duplicates === "no" && duplicateConflictsByPosition.has(row.id)) return false
-      if (columnFilterPredicate && !columnFilterPredicate(row)) return false
-      return true
+  const clientOnlyColumnFilters = useMemo(() => {
+    const fields: PlanSortField[] = ["id", "rowNum", "qty", ...(needsClientRouteFilter ? (["route"] as const) : [])]
+    const result: Partial<Record<PlanSortField, Set<string>>> = {}
+    for (const field of fields) {
+      if (columnFilters[field]?.size) result[field] = columnFilters[field]
     }
-  }, [filters, duplicateConflictsByPosition, columnFilterPredicate])
+    return result
+  }, [columnFilters, needsClientRouteFilter])
 
-  // Sort definitions for PlanPage columns
-  const sortDefs: ColumnSortDef<PlanPositionOut, PlanSortField>[] = useMemo(() => [
-    { field: "id", getSortValue: (p) => p.id },
-    {
-      field: "rowNum",
-      getSortValue: (p) => {
-        const numbers = Array.isArray(p.source_row_numbers)
-          ? p.source_row_numbers.filter((v): v is number => typeof v === "number")
-          : []
-        return numbers.length > 0 ? Math.min(...numbers) : (p.source_row_number ?? 0)
-      },
-    },
-    { field: "sku", getSortValue: (p) => p.source_sku },
-    { field: "name", getSortValue: (p) => p.source_name ?? "" },
-    { field: "qty", getSortValue: (p) => Number(p.quantity || 0) },
-    { field: "route", getSortValue: (p) => p.route_name ?? "" },
-    { field: "status", getSortValue: (p) => p.status },
-    { field: "validation", getSortValue: (p) => p.validation_status },
-    { field: "errors", getSortValue: (p) => p.errors?.length ?? 0 },
-    { field: "warnings", getSortValue: (p) => p.warnings?.length ?? 0 },
-  ], [])
+  const clientOnlyColumnSearch = useMemo(() => {
+    const fields: PlanSortField[] = ["id", "rowNum", "qty", ...(needsClientRouteFilter ? (["route"] as const) : [])]
+    const result: Partial<Record<PlanSortField, string>> = {}
+    for (const field of fields) {
+      if (columnSearchQueries[field]?.trim()) result[field] = columnSearchQueries[field]
+    }
+    return result
+  }, [columnSearchQueries, needsClientRouteFilter])
 
-  const result = useTableQueryEngine<PlanPositionOut, PlanSortField>({
-    rows: positions ?? [],
-    getId: (p) => p.id,
-    searchQuery,
-    filterPredicate,
-    sortConfigs,
-    sortDefs,
-  })
-  const processedRows = result.rows
+  const clientOnlyFilterPredicate = useMemo(() => {
+    const predicates: Array<(row: PlanPositionOut) => boolean> = []
+
+    if (filters.has_duplicates === "yes") {
+      predicates.push((row) => duplicateConflictsByPosition.has(row.id))
+    } else if (filters.has_duplicates === "no") {
+      predicates.push((row) => !duplicateConflictsByPosition.has(row.id))
+    }
+
+    const columnPredicate = buildColumnFilterPredicate({
+      columnFilters: clientOnlyColumnFilters,
+      columnSearchQueries: clientOnlyColumnSearch,
+      getCellValue: getPlanCellValue,
+    })
+    if (columnPredicate) predicates.push(columnPredicate)
+
+    if (predicates.length === 0) return null
+    return (row: PlanPositionOut) => predicates.every((predicate) => predicate(row))
+  }, [
+    filters.has_duplicates,
+    clientOnlyColumnFilters,
+    clientOnlyColumnSearch,
+    duplicateConflictsByPosition,
+  ])
+
+  const processedRows = useMemo(() => {
+    if (!clientOnlyFilterPredicate) return positions
+    return positions.filter(clientOnlyFilterPredicate)
+  }, [positions, clientOnlyFilterPredicate])
   const filteredPositionIds = useMemo(() => processedRows.map((p) => p.id), [processedRows])
   const activeFilterSummary = useMemo(
     () =>
@@ -498,7 +539,7 @@ export function PlanPage() {
   )
 
   const uniqueValuesByField = useMemo(() => {
-    const allRows = positions ?? []
+    const allRows = positions
     return {
       id: [...new Set(allRows.map((p) => String(p.id)))],
       rowNum: [...new Set(allRows.map((p) => {
@@ -573,19 +614,12 @@ export function PlanPage() {
     return data
   }, [detailPosition, duplicateConflictsByPosition])
 
-  const totalQty = positions?.reduce((sum, p) => sum + Number(p.quantity || 0), 0) ?? 0
-  const totalQtyStr = fmtQty(totalQty)
-  const errorCount = positions?.filter(p => p.errors?.length > 0).length ?? 0
-  const warningCount = positions?.filter(p => p.warnings?.length > 0).length ?? 0
-
-  // Use file stats when positions are not yet created (change set not applied)
   const fileParsedRows = files?.reduce((sum, f) => sum + f.parsed_rows, 0) ?? 0
-  const displayPositions = positions && positions.length > 0 ? positions.length : fileParsedRows
-  const displayTotalQty = totalQty > 0 ? totalQtyStr : (fileParsedRows > 0 ? String(fileParsedRows) : "0")
+  const displayPositions = activePlan?.total_positions ?? (positionsTotal > 0 ? positionsTotal : fileParsedRows)
+  const displayTotalQty = fileParsedRows > 0 && positionsTotal === 0 ? String(fileParsedRows) : "—"
 
   return (
     <>
-      {!bulkMode && (
       <header className="page-header">
         <div>
           <h1 className="page-title">План</h1>
@@ -604,9 +638,8 @@ export function PlanPage() {
           </Button>
         </div>
       </header>
-      )}
 
-      {!bulkMode && !activePlan && (
+      {!activePlan && (
         <div className="rounded-lg border border-dashed p-12 text-center">
           <Upload className="h-12 w-12 mx-auto text-muted-foreground mb-3" />
           <h3 className="text-lg font-medium mb-1">Нет активного плана</h3>
@@ -620,7 +653,7 @@ export function PlanPage() {
         </div>
       )}
 
-      {!bulkMode && activePlan && (
+      {activePlan && (
         <div className="space-y-6">
           {/* Unified plan card: two columns */}
           <div className="rounded-lg border bg-card flex flex-col md:flex-row">
@@ -640,18 +673,7 @@ export function PlanPage() {
                   <span className="text-muted-foreground">Общее кол-во</span>
                   <strong>{displayTotalQty}</strong>
                 </div>
-                {errorCount > 0 && (
-                  <div className="flex justify-between text-red-600">
-                    <span>Ошибок</span>
-                    <strong>{errorCount}</strong>
-                  </div>
-                )}
-                {warningCount > 0 && (
-                  <div className="flex justify-between text-amber-600">
-                    <span>Предупр.</span>
-                    <strong>{warningCount}</strong>
-                  </div>
-                )}
+
               </div>
             </div>
 
@@ -697,7 +719,7 @@ export function PlanPage() {
       )}
 
       {activePlan && (
-        <div className={bulkMode ? "fixed inset-0 z-50 bg-background flex flex-col p-4" : undefined}>
+        <div>
           {bulkMode && (
             <div className="mb-3 shrink-0">
               <div className="flex items-center justify-between">
@@ -717,15 +739,13 @@ export function PlanPage() {
           )}
 
           {/* Aggregated positions */}
-          <section className="flex-1 flex flex-col min-h-0">
-            {!bulkMode && (
+          <section className="flex flex-col min-h-0">
             <div className="flex items-center gap-2 mb-2">
               <h3 className="text-base font-semibold">Сводная таблица позиций</h3>
               <span className="inline-flex items-center justify-center h-5 min-w-[20px] px-1.5 rounded-full bg-muted text-[11px] font-medium text-muted-foreground">
-                {processedRows.length} строк
+                {positionsTotal} строк
               </span>
             </div>
-            )}
 
             <FiltersPanel
               className="mb-3"
@@ -771,20 +791,24 @@ export function PlanPage() {
                 setBulkMode(true);
                 selectAll();
               }}
-              totalRowCount={processedRows.length}
+              totalRowCount={positionsTotal}
             />
 
 
             <div className="flex-1 flex flex-col min-h-0">
             {posLoading && <p className="text-sm text-muted-foreground">Загрузка...</p>}
-            {positions && positions.length > 0 && (
+            {(positionsTotal > 0 || posLoading) && (
               <>
-              <div className="flex-1 flex flex-col min-h-0" style={{ maxWidth: detailOpen ? 1600 : 1850, width: '100%' }}>
+              <div
+                className={`flex-1 ${DATA_TABLE_STYLES.frame}`}
+                style={{ maxWidth: detailOpen ? 1600 : 1850, width: "100%" }}
+              >
                   {/* Header row */}
-                  <div className="grid items-start border-b bg-muted text-xs font-medium text-muted-foreground sticky top-0 z-20 shrink-0"
+                  <div
+                    className={`grid items-start ${DATA_TABLE_STYLES.headerRow}`}
                     style={{ gridTemplateColumns: PLAN_POSITIONS_GRID }}
                   >
-                    <div className="p-2">
+                    <div className={DATA_TABLE_STYLES.headerCell}>
                       <SortableFilterHeader
                         field="id"
                         label="Id"
@@ -794,7 +818,7 @@ export function PlanPage() {
                         {...bindColumn("id")}
                       />
                     </div>
-                    <div className="p-2">
+                    <div className={DATA_TABLE_STYLES.headerCell}>
                       <SortableFilterHeader
                         field="rowNum"
                         label="Строка"
@@ -804,7 +828,7 @@ export function PlanPage() {
                         {...bindColumn("rowNum")}
                       />
                     </div>
-                    <div className="p-2">
+                    <div className={DATA_TABLE_STYLES.headerCell}>
                       <SortableFilterHeader
                         field="sku"
                         label="Артикул"
@@ -814,7 +838,7 @@ export function PlanPage() {
                         {...bindColumn("sku")}
                       />
                     </div>
-                    <div className="p-2">
+                    <div className={DATA_TABLE_STYLES.headerCell}>
                       <SortableFilterHeader
                         field="qty"
                         label="Кол-во"
@@ -825,7 +849,7 @@ export function PlanPage() {
                         valueLabel={(v) => v}
                       />
                     </div>
-                    <div className="p-2">
+                    <div className={DATA_TABLE_STYLES.headerCell}>
                       <SortableFilterHeader
                         field="name"
                         label="Наименование"
@@ -835,7 +859,7 @@ export function PlanPage() {
                         {...bindColumn("name")}
                       />
                     </div>
-                    <div className="p-2">
+                    <div className={DATA_TABLE_STYLES.headerCell}>
                       <SortableFilterHeader
                         field="route"
                         label="Маршрут"
@@ -845,7 +869,7 @@ export function PlanPage() {
                         {...bindColumn("route")}
                       />
                     </div>
-                    <div className="p-2">
+                    <div className={DATA_TABLE_STYLES.headerCell}>
                       <SortableFilterHeader
                         field="errors"
                         label="Ошибки"
@@ -855,7 +879,7 @@ export function PlanPage() {
                         {...bindColumn("errors")}
                       />
                     </div>
-                    <div className="p-2">
+                    <div className={DATA_TABLE_STYLES.headerCell}>
                       <SortableFilterHeader
                         field="warnings"
                         label="Предупр."
@@ -865,18 +889,19 @@ export function PlanPage() {
                         {...bindColumn("warnings")}
                       />
                     </div>
-                    <div className="p-2 text-xs font-medium text-muted-foreground">
+                    <div className={`${DATA_TABLE_STYLES.headerCell} text-xs font-medium text-muted-foreground`}>
                       Действия
                     </div>
                     <TableCornerResetHeader
                       as="div"
                       hasActiveFilters={hasTableFiltersActive}
                       onReset={resetAllFilters}
+                      className={DATA_TABLE_STYLES.headerCell}
                     />
                   </div>
 
                   {/* Data rows */}
-                  <div className="flex-1 overflow-auto min-h-0" style={{ maxHeight: bulkMode ? 'none' : '70vh' }}>
+                  <div className="flex-1 overflow-auto min-h-0" style={{ maxHeight: '70vh' }}>
                     {processedRows.map((p) => (
                       <PositionRow
                         key={p.id}
@@ -897,6 +922,16 @@ export function PlanPage() {
                       <p className="text-sm text-muted-foreground p-4 text-center">Нет позиций, соответствующих фильтру</p>
                     )}
                   </div>
+                  <TablePaginationFooter
+                    page={pagination.page}
+                    totalPages={positionsTotalPages}
+                    total={positionsTotal}
+                    shownCount={processedRows.length}
+                    limit={pagination.limit}
+                    onPageChange={pagination.setPage}
+                    onLimitChange={pagination.setLimit}
+                    rangeLabel={pagination.getRangeLabel(processedRows.length, positionsTotal, { onPage: true })}
+                  />
                 </div>
               </>
             )}

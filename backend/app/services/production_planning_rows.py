@@ -1,15 +1,17 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from decimal import Decimal
 
-from sqlalchemy import case, func, select
+from sqlalchemy import String, and_, case, cast, exists, func, or_, select
 from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.internal_plan import SectionPlanLine
+from app.models.product import Product
 from app.models.production_plan import PlanPosition, PlanPositionStatus, PositionStatusHistory
 from app.models.audit_log import AuditLog, AuditEntityType
-from app.models.route import RouteStage, SectionOperation
+from app.models.route import ProductionRoute, RouteOperation, RouteStage, SectionOperation
 from app.models.section import Section
 from app.models.transfer import Transfer
 from app.models.work_task import WorkTask, WorkTaskStatus
@@ -17,6 +19,253 @@ from app.stock.models import Reason, StockTransaction
 from app.services.route_matcher import ResolvedRouteInfo, resolve_position_route, make_position_route_cache_key
 
 MANUAL_ROUTE_PASS_PREFIX = "manual_route_pass:"
+
+ROWS_SORT_FIELDS = frozenset({
+    "row_number",
+    "product_sku",
+    "status",
+    "planned_qty",
+    "completed_qty",
+    "due_date",
+    "sequence",
+})
+
+_ACTIVE_POSITION_STATUSES = (
+    PlanPositionStatus.approved,
+    PlanPositionStatus.released,
+    PlanPositionStatus.cancelled,
+)
+
+
+@dataclass(frozen=True)
+class PlanningRowsQueryParams:
+    section_id: int | None = None
+    search: str | None = None
+    sort_by: str | None = None
+    sort_order: str = "desc"
+    limit: int = 50
+    offset: int = 0
+    plan_position_id: str | None = None
+    source_row_number: str | None = None
+    production_plan_id: str | None = None
+    product_sku: str | None = None
+    source_sku: str | None = None
+    source_name: str | None = None
+    quantity: str | None = None
+    route_name: str | None = None
+    status: str | None = None
+    current_stage_section_name: str | None = None
+
+
+def _active_positions_stmt():
+    return (
+        select(PlanPosition)
+        .where(PlanPosition.status.in_(_ACTIVE_POSITION_STATUSES))
+        .where(PlanPosition.deleted_at.is_(None))
+    )
+
+
+def _operation_name_search_exists(search_like: str):
+    return exists(
+        select(1)
+        .select_from(SectionPlanLine)
+        .join(WorkTask, WorkTask.section_plan_line_id == SectionPlanLine.id)
+        .join(RouteStage, RouteStage.id == WorkTask.route_stage_id)
+        .join(RouteOperation, RouteOperation.route_stage_id == RouteStage.id)
+        .where(
+            SectionPlanLine.plan_position_id == PlanPosition.id,
+            RouteOperation.operation_name.ilike(search_like),
+        )
+    )
+
+
+def _position_has_task_on_section_exists(section_id: int):
+    return exists(
+        select(1)
+        .select_from(SectionPlanLine)
+        .join(WorkTask, WorkTask.section_plan_line_id == SectionPlanLine.id)
+        .join(RouteStage, RouteStage.id == SectionPlanLine.route_stage_id)
+        .where(
+            SectionPlanLine.plan_position_id == PlanPosition.id,
+            RouteStage.section_id == section_id,
+            WorkTask.status.in_([WorkTaskStatus.in_progress, WorkTaskStatus.ready]),
+        )
+    )
+
+
+def _current_stage_section_name_exists(section_name_like: str):
+    return exists(
+        select(1)
+        .select_from(SectionPlanLine)
+        .join(WorkTask, WorkTask.section_plan_line_id == SectionPlanLine.id)
+        .join(RouteStage, RouteStage.id == SectionPlanLine.route_stage_id)
+        .join(Section, Section.id == RouteStage.section_id)
+        .where(
+            SectionPlanLine.plan_position_id == PlanPosition.id,
+            Section.name.ilike(section_name_like),
+            WorkTask.status.in_([WorkTaskStatus.in_progress, WorkTaskStatus.ready]),
+        )
+    )
+
+
+def _position_is_completed_condition():
+    has_tasks = exists(
+        select(1)
+        .select_from(SectionPlanLine)
+        .where(SectionPlanLine.plan_position_id == PlanPosition.id)
+    )
+    no_open_tasks = ~exists(
+        select(1)
+        .select_from(SectionPlanLine)
+        .join(WorkTask, WorkTask.section_plan_line_id == SectionPlanLine.id)
+        .where(
+            SectionPlanLine.plan_position_id == PlanPosition.id,
+            WorkTask.status.notin_([WorkTaskStatus.completed, WorkTaskStatus.cancelled]),
+        )
+    )
+    final_stage_completed = exists(
+        select(1)
+        .select_from(SectionPlanLine)
+        .join(WorkTask, WorkTask.section_plan_line_id == SectionPlanLine.id)
+        .join(RouteStage, RouteStage.id == SectionPlanLine.route_stage_id)
+        .where(
+            SectionPlanLine.plan_position_id == PlanPosition.id,
+            WorkTask.status == WorkTaskStatus.completed,
+            RouteStage.is_final.is_(True),
+        )
+    )
+    return or_(and_(has_tasks, no_open_tasks), final_stage_completed)
+
+
+def _completed_qty_subquery():
+    return (
+        select(func.coalesce(func.sum(SectionPlanLine.cached_completed_quantity), 0))
+        .where(SectionPlanLine.plan_position_id == PlanPosition.id)
+        .correlate(PlanPosition)
+        .scalar_subquery()
+    )
+
+
+def _current_sequence_subquery():
+    return (
+        select(func.min(RouteStage.sequence))
+        .select_from(SectionPlanLine)
+        .join(WorkTask, WorkTask.section_plan_line_id == SectionPlanLine.id)
+        .join(RouteStage, RouteStage.id == SectionPlanLine.route_stage_id)
+        .where(
+            SectionPlanLine.plan_position_id == PlanPosition.id,
+            WorkTask.status.in_([WorkTaskStatus.in_progress, WorkTaskStatus.ready]),
+        )
+        .correlate(PlanPosition)
+        .scalar_subquery()
+    )
+
+
+def _apply_planning_rows_filters(stmt, params: PlanningRowsQueryParams, *, product: Product | None = None, route: ProductionRoute | None = None):
+    if product is None:
+        product = Product
+    if route is None:
+        route = ProductionRoute
+
+    stmt = stmt.outerjoin(product, product.id == PlanPosition.product_id)
+    stmt = stmt.outerjoin(route, route.id == PlanPosition.route_id)
+
+    if params.section_id is not None:
+        stmt = stmt.where(_position_has_task_on_section_exists(params.section_id))
+
+    if params.plan_position_id:
+        stmt = stmt.where(cast(PlanPosition.id, String).ilike(f"%{params.plan_position_id}%"))
+
+    if params.source_row_number:
+        stmt = stmt.where(cast(PlanPosition.source_row_number, String).ilike(f"%{params.source_row_number}%"))
+
+    if params.production_plan_id:
+        stmt = stmt.where(cast(PlanPosition.production_plan_id, String).ilike(f"%{params.production_plan_id}%"))
+
+    sku_filter = params.product_sku or params.source_sku
+    if sku_filter:
+        sku_like = f"%{sku_filter}%"
+        stmt = stmt.where(
+            or_(
+                PlanPosition.source_sku.ilike(sku_like),
+                product.sku.ilike(sku_like),
+            )
+        )
+
+    if params.source_name:
+        stmt = stmt.where(PlanPosition.source_name.ilike(f"%{params.source_name}%"))
+
+    if params.quantity:
+        stmt = stmt.where(cast(PlanPosition.quantity, String).ilike(f"%{params.quantity}%"))
+
+    if params.route_name:
+        route_like = f"%{params.route_name}%"
+        stmt = stmt.where(func.coalesce(route.name, "Не назначен").ilike(route_like))
+
+    if params.current_stage_section_name:
+        stmt = stmt.where(_current_stage_section_name_exists(f"%{params.current_stage_section_name}%"))
+
+    if params.status:
+        if params.status == "completed":
+            stmt = stmt.where(_position_is_completed_condition())
+        else:
+            stmt = stmt.where(cast(PlanPosition.status, String).ilike(f"%{params.status}%"))
+
+    if params.search:
+        search_like = f"%{params.search}%"
+        stmt = stmt.where(
+            or_(
+                PlanPosition.source_sku.ilike(search_like),
+                product.sku.ilike(search_like),
+                cast(PlanPosition.id, String).ilike(search_like),
+                _operation_name_search_exists(search_like),
+            )
+        )
+
+    return stmt
+
+
+def _apply_planning_rows_order(stmt, params: PlanningRowsQueryParams, *, product: Product | None = None, route: ProductionRoute | None = None):
+    if product is None:
+        product = Product
+    if route is None:
+        route = ProductionRoute
+
+    resolved_sort_by = params.sort_by if params.sort_by in ROWS_SORT_FIELDS else None
+    sort_order = params.sort_order if params.sort_order in ("asc", "desc") else "desc"
+
+    if resolved_sort_by is None:
+        if sort_order == "asc":
+            return stmt.order_by(
+                PlanPosition.production_plan_id.asc(),
+                PlanPosition.source_row_number.asc().nulls_last(),
+                PlanPosition.id.asc(),
+            )
+        return stmt.order_by(
+            PlanPosition.production_plan_id.desc(),
+            PlanPosition.source_row_number.asc().nulls_last(),
+            PlanPosition.id.asc(),
+        )
+
+    order_column = PlanPosition.id
+    if resolved_sort_by == "row_number":
+        order_column = PlanPosition.source_row_number
+    elif resolved_sort_by == "product_sku":
+        order_column = func.coalesce(product.sku, PlanPosition.source_sku)
+    elif resolved_sort_by == "status":
+        order_column = PlanPosition.status
+    elif resolved_sort_by == "planned_qty":
+        order_column = PlanPosition.quantity
+    elif resolved_sort_by == "completed_qty":
+        order_column = _completed_qty_subquery()
+    elif resolved_sort_by == "due_date":
+        order_column = PlanPosition.due_date
+    elif resolved_sort_by == "sequence":
+        order_column = _current_sequence_subquery()
+
+    if sort_order == "asc":
+        return stmt.order_by(order_column.asc().nulls_last(), PlanPosition.id.asc())
+    return stmt.order_by(order_column.desc().nulls_last(), PlanPosition.id.desc())
 
 
 async def _get_stage_with_operations(db: AsyncSession, stage_id: int) -> RouteStage | None:
@@ -115,15 +364,36 @@ async def _resolve_effective_product_id(
     return first_component
 
 
-async def list_production_planning_rows(db: AsyncSession) -> list[dict]:
-    positions = (
-        await db.execute(
-            select(PlanPosition)
-            .where(PlanPosition.status.in_([PlanPositionStatus.approved, PlanPositionStatus.released, PlanPositionStatus.cancelled]))
-            .where(PlanPosition.deleted_at.is_(None))
-            .order_by(PlanPosition.production_plan_id.desc(), PlanPosition.source_row_number, PlanPosition.id)
-        )
-    ).scalars().all()
+async def _fetch_paginated_positions(
+    db: AsyncSession,
+    params: PlanningRowsQueryParams,
+) -> tuple[list[PlanPosition], int]:
+    product_alias = Product
+    route_alias = ProductionRoute
+
+    base_stmt = _active_positions_stmt()
+    filtered_stmt = _apply_planning_rows_filters(
+        base_stmt,
+        params,
+        product=product_alias,
+        route=route_alias,
+    )
+
+    count_stmt = select(func.count()).select_from(filtered_stmt.subquery())
+    total = (await db.execute(count_stmt)).scalar() or 0
+
+    ordered_stmt = _apply_planning_rows_order(
+        filtered_stmt,
+        params,
+        product=product_alias,
+        route=route_alias,
+    )
+    page_stmt = ordered_stmt.limit(params.limit).offset(params.offset)
+    positions = (await db.execute(page_stmt)).scalars().all()
+    return list(positions), total
+
+
+async def _build_planning_rows_for_positions(db: AsyncSession, positions: list[PlanPosition]) -> list[dict]:
     if not positions:
         return []
 
@@ -411,6 +681,22 @@ async def list_production_planning_rows(db: AsyncSession) -> list[dict]:
         )
 
     return result
+
+
+async def list_production_planning_rows(
+    db: AsyncSession,
+    *,
+    params: PlanningRowsQueryParams | None = None,
+) -> dict:
+    query_params = params or PlanningRowsQueryParams()
+    positions, total = await _fetch_paginated_positions(db, query_params)
+    rows = await _build_planning_rows_for_positions(db, positions)
+    return {
+        "rows": rows,
+        "total": total,
+        "limit": query_params.limit,
+        "offset": query_params.offset,
+    }
 
 
 async def _load_position_status_history(db: AsyncSession, position_id: int) -> list[dict]:

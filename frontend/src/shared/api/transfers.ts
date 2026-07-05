@@ -46,7 +46,26 @@ export type ReadyToTransferTask = {
 
 export type ReadyToTransferResponse = {
   items: ReadyToTransferTask[];
+  total: number;
+  limit: number;
+  offset: number;
   filters: { section_id: number | null; spg_id: number | null };
+};
+
+export type ReadyToTransferListParams = {
+  section_id?: number | null;
+  spg_id?: number | null;
+  limit?: number;
+  offset?: number;
+  search?: string;
+  sort_by?: string;
+  sort_order?: "asc" | "desc";
+  product_sku?: string;
+  operation_name?: string;
+  next_operation_name?: string;
+  next_section_name?: string;
+  task_id?: number;
+  transferable_qty?: string;
 };
 
 export type IncomingTransfer = {
@@ -118,12 +137,23 @@ export type CreateTransferResponse = {
 // ---------------------------------------------------------------------------
 
 export async function listReadyToTransfer(
-  params: { section_id?: number | null; spg_id?: number | null } = {},
+  params: ReadyToTransferListParams = {},
   options?: ShopfloorRequestOptions,
 ): Promise<ReadyToTransferResponse> {
   const search = new URLSearchParams();
   if (params.section_id) search.set("section_id", String(params.section_id));
   if (params.spg_id) search.set("spg_id", String(params.spg_id));
+  if (params.limit != null) search.set("limit", String(params.limit));
+  if (params.offset != null) search.set("offset", String(params.offset));
+  if (params.search) search.set("search", params.search);
+  if (params.sort_by) search.set("sort_by", params.sort_by);
+  if (params.sort_order) search.set("sort_order", params.sort_order);
+  if (params.product_sku) search.set("product_sku", params.product_sku);
+  if (params.operation_name) search.set("operation_name", params.operation_name);
+  if (params.next_operation_name) search.set("next_operation_name", params.next_operation_name);
+  if (params.next_section_name) search.set("next_section_name", params.next_section_name);
+  if (params.task_id != null) search.set("task_id", String(params.task_id));
+  if (params.transferable_qty) search.set("transferable_qty", params.transferable_qty);
   const qs = search.toString();
   const { data } = await apiClient.get<ReadyToTransferResponse>(
     `/transfers/ready${qs ? `?${qs}` : ""}`,
@@ -206,16 +236,51 @@ export async function cancelTransfer(
   return data;
 }
 
+export type TransferHistoryResponse = {
+  section_id: number | null;
+  spg_id: number | null;
+  transfers: IncomingTransfer[];
+  total: number;
+  limit: number;
+  offset: number;
+};
+
+export type TransferHistoryListParams = {
+  section_id?: number | null;
+  spg_id?: number | null;
+  limit?: number;
+  offset?: number;
+  search?: string;
+  status?: string;
+  sort_by?: string;
+  sort_order?: "asc" | "desc";
+  date_from?: string;
+  date_to?: string;
+  product_sku?: string;
+  from_section_name?: string;
+  to_section_name?: string;
+};
+
 export async function listTransferHistory(
-  params: { section_id?: number | null; spg_id?: number | null; limit?: number } = {},
+  params: TransferHistoryListParams = {},
   options?: ShopfloorRequestOptions,
-): Promise<{ section_id: number | null; spg_id: number | null; transfers: IncomingTransfer[] }> {
+): Promise<TransferHistoryResponse> {
   const search = new URLSearchParams();
   if (params.section_id) search.set("section_id", String(params.section_id));
   if (params.spg_id) search.set("spg_id", String(params.spg_id));
-  if (params.limit) search.set("limit", String(params.limit));
+  if (params.limit != null) search.set("limit", String(params.limit));
+  if (params.offset != null) search.set("offset", String(params.offset));
+  if (params.search) search.set("search", params.search);
+  if (params.status) search.set("status", params.status);
+  if (params.sort_by) search.set("sort_by", params.sort_by);
+  if (params.sort_order) search.set("sort_order", params.sort_order);
+  if (params.date_from) search.set("date_from", params.date_from);
+  if (params.date_to) search.set("date_to", params.date_to);
+  if (params.product_sku) search.set("product_sku", params.product_sku);
+  if (params.from_section_name) search.set("from_section_name", params.from_section_name);
+  if (params.to_section_name) search.set("to_section_name", params.to_section_name);
   const qs = search.toString();
-  const { data } = await apiClient.get<{ section_id: number | null; spg_id: number | null; transfers: IncomingTransfer[] }>(
+  const { data } = await apiClient.get<TransferHistoryResponse>(
     `/transfers/history${qs ? `?${qs}` : ""}`,
     makeRequestConfig(options),
   );

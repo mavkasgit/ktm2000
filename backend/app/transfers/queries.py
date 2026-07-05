@@ -13,9 +13,10 @@ dedicated ``/transfers`` UI page.
 
 from __future__ import annotations
 
+from datetime import datetime
 from decimal import Decimal
 
-from sqlalchemy import select
+from sqlalchemy import String, case, cast, exists, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
@@ -201,25 +202,175 @@ async def get_section_incoming_transfers(
     }
 
 
-async def list_ready_to_transfer(
-    db: AsyncSession,
+STOCK_SECTION_TYPES = frozenset({"raw_stock", "wip_stock", "finished_stock"})
+
+
+def _completed_qty_subquery():
+    from app.stock.models import Reason, StockTransaction
+
+    return (
+        select(
+            StockTransaction.task_id,
+            func.coalesce(func.sum(StockTransaction.quantity), 0).label("completed_qty"),
+        )
+        .where(StockTransaction.reason == Reason.COMPLETE)
+        .group_by(StockTransaction.task_id)
+        .subquery("completed_qty_sq")
+    )
+
+
+def _transferred_qty_subquery():
+    from app.stock.models import Reason, StockTransaction
+
+    return (
+        select(
+            StockTransaction.task_id,
+            func.coalesce(
+                func.sum(
+                    case(
+                        (StockTransaction.compensates_tx_id.is_(None), StockTransaction.quantity),
+                        else_=-StockTransaction.quantity,
+                    )
+                ),
+                0,
+            ).label("transferred_qty"),
+        )
+        .where(StockTransaction.reason == Reason.TRANSFER_SEND)
+        .group_by(StockTransaction.task_id)
+        .subquery("transferred_qty_sq")
+    )
+
+
+def _operation_names_subquery():
+    return (
+        select(
+            RouteOperation.route_stage_id,
+            func.string_agg(RouteOperation.operation_name, ", ").label("operation_names"),
+        )
+        .group_by(RouteOperation.route_stage_id)
+        .subquery("op_names_sq")
+    )
+
+
+def _hydrate_production_ready_row(row) -> dict:
+    (
+        task,
+        line,
+        stage,
+        section,
+        product_sku,
+        next_l,
+        next_stg,
+        next_sec,
+        completion_comment,
+        completed,
+        transferred,
+    ) = row
+    completed = _to_decimal(completed)
+    transferred = _to_decimal(transferred)
+    transferable = completed - transferred
+    has_next = (
+        next_l is not None
+        and next_stg is not None
+        and not bool(next_stg.is_final)
+    )
+
+    op_code = stage.operations[0].operation_code if stage and stage.operations else None
+    op_name = ", ".join(op.operation_name for op in stage.operations) if stage and stage.operations else ""
+    next_op_name = ", ".join(op.operation_name for op in next_stg.operations) if next_stg and next_stg.operations else None
+
+    return {
+        "task_id": task.id,
+        "section_id": task.section_id,
+        "section_code": section.code,
+        "section_name": section.name,
+        "plan_position_id": line.plan_position_id,
+        "route_stage_id": stage.id,
+        "sequence": stage.sequence,
+        "operation_code": op_code,
+        "operation_name": op_name,
+        "product_id": task.product_id,
+        "product_sku": product_sku,
+        "planned_quantity": _fmt_qty(task.planned_quantity),
+        "completed_quantity": _fmt_qty(completed),
+        "already_transferred_quantity": _fmt_qty(transferred),
+        "transferable_quantity": _fmt_qty(transferable),
+        "has_next_step": has_next,
+        "next_section_id": next_sec.id if next_sec is not None else None,
+        "next_section_code": next_sec.code if next_sec is not None else None,
+        "next_section_name": next_sec.name if next_sec is not None else None,
+        "next_operation_name": next_op_name,
+        "next_step_sequence": next_stg.sequence if next_stg is not None else None,
+        "next_step_is_final": bool(next_stg.is_final) if next_stg is not None else None,
+        "is_final": False,
+        "completion_comment": completion_comment,
+    }
+
+
+READY_SORT_FIELDS = frozenset({
+    "sequence",
+    "task_id",
+    "product_sku",
+    "operation_name",
+    "transferable_qty",
+    "next_section_name",
+})
+
+
+def _next_operation_names_subquery():
+    next_stage_ops = aliased(RouteOperation, name="next_stage_op")
+    return (
+        select(
+            next_stage_ops.route_stage_id,
+            func.string_agg(next_stage_ops.operation_name, ", ").label("next_operation_names"),
+        )
+        .group_by(next_stage_ops.route_stage_id)
+        .subquery("next_op_names_sq")
+    )
+
+
+def _apply_ready_production_order(
+    query,
     *,
+    sort_by: str,
+    sort_order: str,
+    transferable_expr,
+    from_line,
+    from_stage,
+    next_section,
+    next_op_names_sq,
+):
+    order_column = from_line.sequence
+    if sort_by == "task_id":
+        order_column = WorkTask.id
+    elif sort_by == "product_sku":
+        order_column = Product.sku
+    elif sort_by == "operation_name":
+        order_column = from_stage.sequence
+    elif sort_by == "transferable_qty":
+        order_column = transferable_expr
+    elif sort_by == "next_section_name":
+        order_column = next_section.name
+
+    if sort_order == "asc":
+        return query.order_by(order_column.asc(), WorkTask.id.asc())
+    return query.order_by(order_column.desc(), WorkTask.id.desc())
+
+
+def _build_production_ready_query(
+    *,
+    section_ids: list[int] | None = None,
     section_id: int | None = None,
-    spg_id: int | None = None,
-) -> dict:
-    """List SectionTasks that have quantity ready to be transferred.
-
-    A task is "ready to transfer" when:
-      * it has a next route step (``SectionPlanLine.sequence + 1``
-        exists),
-      * the next step is not final,
-      * ``cached_completed - cached_transferred > 0``.
-
-    Filters:
-      * ``section_id`` — restrict to a single section.
-      * ``spg_id`` — restrict to all sections of an SPG (overrides
-        ``section_id`` if both given).
-    """
+    search: str | None = None,
+    product_sku: str | None = None,
+    operation_name: str | None = None,
+    next_operation_name: str | None = None,
+    next_section_name: str | None = None,
+    task_id: int | None = None,
+    transferable_qty: Decimal | None = None,
+    sort_by: str = "sequence",
+    sort_order: str = "asc",
+):
     from_section = aliased(Section, name="from_section")
     next_section = aliased(Section, name="next_section")
     from_stage = aliased(RouteStage, name="from_stage")
@@ -229,7 +380,13 @@ async def list_ready_to_transfer(
 
     from app.stock.models import Reason, StockTransaction
 
-    # Subquery: get the latest complete StockTransaction comment per task
+    completed_sq = _completed_qty_subquery()
+    transferred_sq = _transferred_qty_subquery()
+    transferable_expr = (
+        func.coalesce(completed_sq.c.completed_qty, 0)
+        - func.coalesce(transferred_sq.c.transferred_qty, 0)
+    )
+
     latest_complete = (
         select(
             StockTransaction.task_id,
@@ -239,6 +396,15 @@ async def list_ready_to_transfer(
         .distinct(StockTransaction.task_id)
         .order_by(StockTransaction.task_id, StockTransaction.id.desc())
         .subquery()
+    )
+
+    active_transfer_exists = (
+        select(Transfer.id)
+        .where(
+            Transfer.from_task_id == WorkTask.id,
+            Transfer.status.notin_([TransferStatus.cancelled]),
+        )
+        .correlate(WorkTask)
     )
 
     query = (
@@ -252,11 +418,15 @@ async def list_ready_to_transfer(
             next_stage,
             next_section,
             StockTransaction.id.label("completion_tx_id"),
+            func.coalesce(completed_sq.c.completed_qty, 0).label("completed_qty"),
+            func.coalesce(transferred_sq.c.transferred_qty, 0).label("transferred_qty"),
         )
         .join(from_line, from_line.id == WorkTask.section_plan_line_id)
         .join(from_stage, from_stage.id == WorkTask.route_stage_id)
         .join(from_section, from_section.id == WorkTask.section_id)
         .join(Product, Product.id == WorkTask.product_id)
+        .outerjoin(completed_sq, completed_sq.c.task_id == WorkTask.id)
+        .outerjoin(transferred_sq, transferred_sq.c.task_id == WorkTask.id)
         .outerjoin(
             next_line,
             (next_line.plan_position_id == from_line.plan_position_id)
@@ -276,96 +446,163 @@ async def list_ready_to_transfer(
             WorkTask.status.notin_(
                 [WorkTaskStatus.cancelled, WorkTaskStatus.waiting_previous]
             ),
-            from_section.type == "production",  # ONLY production tasks
+            from_section.type == "production",
+            from_stage.is_final.is_(False),
+            next_line.id.isnot(None),
+            transferable_expr > 0,
+            ~exists(active_transfer_exists),
         )
     )
 
-    if spg_id is not None:
-        spg_section_ids = (
-            await db.execute(
-                select(SpgSection.section_id).where(SpgSection.spg_id == spg_id)
-            )
-        ).scalars().all()
-        if not spg_section_ids:
-            return {"items": [], "filters": {"section_id": section_id, "spg_id": spg_id}}
-        query = query.where(WorkTask.section_id.in_(spg_section_ids))
+    if section_ids is not None:
+        query = query.where(WorkTask.section_id.in_(section_ids))
     elif section_id is not None:
         query = query.where(WorkTask.section_id == section_id)
 
-    query = query.order_by(from_line.sequence, WorkTask.id)
-    rows = (await db.execute(query)).all()
+    op_names_sq = _operation_names_subquery()
+    next_op_names_sq = _next_operation_names_subquery()
+    query = query.outerjoin(op_names_sq, op_names_sq.c.route_stage_id == from_stage.id)
+    query = query.outerjoin(next_op_names_sq, next_op_names_sq.c.route_stage_id == next_stage.id)
 
-    items: list[dict] = []
-    # Load all task caches at once (Этап 4)
-    from app.stock.services import StockProjectionManager
-    pm = StockProjectionManager()
-    task_ids = [r[0].id for r in rows]
-    tasks_cache = await pm.get_tasks_cache_bulk(db, task_ids)
-
-    from app.transfers.services import has_active_transfer_for_task
-
-    for (
-        task,
-        line,
-        stage,
-        section,
-        product_sku,
-        next_l,
-        next_stg,
-        next_sec,
-        completion_comment,
-    ) in rows:
-        if await has_active_transfer_for_task(db, task.id):
-            continue
-
-        cache = tasks_cache.get(task.id, {})
-        completed = cache.get("completed_quantity", Decimal("0"))
-        transferred = cache.get("transferred_quantity", Decimal("0"))
-        transferable = completed - transferred
-        if transferable <= 0:
-            continue
-
-        has_next = next_l is not None and next_stg is not None and not bool(next_stg.is_final)
-        is_final_step = bool(stage.is_final)
-        if is_final_step:
-            continue
-
-        op_code = stage.operations[0].operation_code if stage and stage.operations else None
-        op_name = ", ".join(op.operation_name for op in stage.operations) if stage and stage.operations else ""
-        next_op_name = ", ".join(op.operation_name for op in next_stg.operations) if next_stg and next_stg.operations else None
-
-        items.append(
-            {
-                "task_id": task.id,
-                "section_id": task.section_id,
-                "section_code": section.code,
-                "section_name": section.name,
-                "plan_position_id": line.plan_position_id,
-                "route_stage_id": stage.id,
-                "sequence": stage.sequence,
-                "operation_code": op_code,
-                "operation_name": op_name,
-                "product_id": task.product_id,
-                "product_sku": product_sku,
-                "planned_quantity": _fmt_qty(task.planned_quantity),
-                "completed_quantity": _fmt_qty(completed),
-                "already_transferred_quantity": _fmt_qty(transferred),
-                "transferable_quantity": _fmt_qty(transferable),
-                "has_next_step": has_next,
-                "next_section_id": next_sec.id if next_sec is not None else None,
-                "next_section_code": next_sec.code if next_sec is not None else None,
-                "next_section_name": next_sec.name if next_sec is not None else None,
-                "next_operation_name": next_op_name,
-                "next_step_sequence": next_stg.sequence if next_stg is not None else None,
-                "next_step_is_final": bool(next_stg.is_final) if next_stg is not None else None,
-                "is_final": False,
-                "completion_comment": completion_comment,
-            }
+    if search:
+        search_like = f"%{search.strip()}%"
+        query = query.where(
+            or_(
+                Product.sku.ilike(search_like),
+                cast(WorkTask.id, String).ilike(search_like),
+                op_names_sq.c.operation_names.ilike(search_like),
+            )
         )
 
-    # Special logic for stock sections (raw_stock, wip_stock, finished_stock)
+    if product_sku:
+        query = query.where(Product.sku.ilike(f"%{product_sku.strip()}%"))
+    if operation_name and operation_name.strip() not in ("", "—"):
+        query = query.where(op_names_sq.c.operation_names.ilike(f"%{operation_name.strip()}%"))
+    if next_operation_name:
+        query = query.where(
+            next_op_names_sq.c.next_operation_names.ilike(f"%{next_operation_name.strip()}%")
+        )
+    if next_section_name:
+        query = query.where(
+            or_(
+                next_section.name.ilike(f"%{next_section_name.strip()}%"),
+                next_section.code.ilike(f"%{next_section_name.strip()}%"),
+            )
+        )
+    if task_id is not None:
+        query = query.where(WorkTask.id == task_id)
+    if transferable_qty is not None:
+        query = query.where(transferable_expr == transferable_qty)
+
+    if sort_by not in READY_SORT_FIELDS:
+        sort_by = "sequence"
+    if sort_order not in ("asc", "desc"):
+        sort_order = "asc"
+
+    return _apply_ready_production_order(
+        query,
+        sort_by=sort_by,
+        sort_order=sort_order,
+        transferable_expr=transferable_expr,
+        from_line=from_line,
+        from_stage=from_stage,
+        next_section=next_section,
+        next_op_names_sq=next_op_names_sq,
+    )
+
+
+async def _scope_has_stock_sections(
+    db: AsyncSession,
+    *,
+    section_id: int | None,
+    spg_id: int | None,
+) -> bool:
+    if section_id is not None:
+        sec = await db.get(Section, section_id)
+        return sec is not None and sec.type in STOCK_SECTION_TYPES
+    if spg_id is not None:
+        count = await db.scalar(
+            select(func.count())
+            .select_from(Section)
+            .join(SpgSection, SpgSection.section_id == Section.id)
+            .where(
+                SpgSection.spg_id == spg_id,
+                Section.type.in_(STOCK_SECTION_TYPES),
+            )
+        )
+        return bool(count)
+    return True
+
+
+def _ready_item_matches_column_filters(
+    item: dict,
+    *,
+    product_sku: str | None,
+    operation_name: str | None,
+    next_operation_name: str | None,
+    next_section_name: str | None,
+    task_id: int | None,
+    transferable_qty: Decimal | None,
+) -> bool:
+    if task_id is not None and item.get("task_id") != task_id:
+        return False
+    if product_sku:
+        sku = (item.get("product_sku") or "").lower()
+        if product_sku.strip().lower() not in sku:
+            return False
+    if operation_name and operation_name.strip() not in ("", "—"):
+        op = (item.get("operation_name") or "").lower()
+        if operation_name.strip().lower() not in op:
+            return False
+    if next_operation_name:
+        next_op = (item.get("next_operation_name") or "").lower()
+        if next_operation_name.strip().lower() not in next_op:
+            return False
+    if next_section_name:
+        code = (item.get("next_section_code") or "").lower()
+        name = (item.get("next_section_name") or "").lower()
+        needle = next_section_name.strip().lower()
+        if needle not in code and needle not in name:
+            return False
+    if transferable_qty is not None:
+        try:
+            item_qty = _to_decimal(item.get("transferable_quantity"))
+        except Exception:
+            return False
+        if item_qty != transferable_qty:
+            return False
+    return True
+
+
+def _ready_item_sort_key(item: dict, sort_by: str) -> tuple:
+    if sort_by == "task_id":
+        return (item.get("task_id") or 0,)
+    if sort_by == "product_sku":
+        return (item.get("product_sku") or "",)
+    if sort_by == "operation_name":
+        return (item.get("sequence") or 0, item.get("operation_name") or "")
+    if sort_by == "transferable_qty":
+        return (_to_decimal(item.get("transferable_quantity") or "0"),)
+    if sort_by == "next_section_name":
+        return (item.get("next_section_name") or "",)
+    return (item.get("sequence") or 0, item.get("task_id") or 0)
+
+
+async def _fetch_stock_ready_items(
+    db: AsyncSession,
+    *,
+    section_id: int | None,
+    spg_id: int | None,
+    search: str | None,
+    product_sku: str | None = None,
+    operation_name: str | None = None,
+    next_operation_name: str | None = None,
+    next_section_name: str | None = None,
+    task_id: int | None = None,
+    transferable_qty: Decimal | None = None,
+) -> list[dict]:
     from app.models.production_plan import PlanPosition
-    from app.transfers.services import compute_stock_section_transferable
+    from app.transfers.services import compute_stock_section_transferable, has_active_transfer_for_task
 
     if spg_id is not None:
         sections = (
@@ -381,136 +618,282 @@ async def list_ready_to_transfer(
     else:
         sections = (
             await db.execute(
-                select(Section).where(
-                    Section.type.in_(["raw_stock", "wip_stock", "finished_stock"])
-                )
+                select(Section).where(Section.type.in_(STOCK_SECTION_TYPES))
             )
         ).scalars().all()
 
-    stock_items = []
+    stock_items: list[dict] = []
+    search_like = f"%{search.strip()}%" if search else None
+
     for sec in sections:
-        if sec.type in {"raw_stock", "wip_stock", "finished_stock"}:
-            sec_spg_id = await db.scalar(
-                select(SpgSection.spg_id).where(SpgSection.section_id == sec.id)
+        if sec.type not in STOCK_SECTION_TYPES:
+            continue
+
+        sec_spg_id = await db.scalar(
+            select(SpgSection.spg_id).where(SpgSection.section_id == sec.id)
+        )
+        if sec_spg_id is None:
+            continue
+
+        lines_query = (
+            select(SectionPlanLine)
+            .join(PlanPosition, PlanPosition.id == SectionPlanLine.plan_position_id)
+            .join(Product, Product.id == PlanPosition.product_id)
+            .where(
+                SectionPlanLine.section_id == sec.id,
+                PlanPosition.status == "released",
             )
-            if sec_spg_id is None:
+        )
+        if search_like:
+            lines_query = lines_query.where(Product.sku.ilike(search_like))
+        elif product_sku:
+            lines_query = lines_query.where(Product.sku.ilike(f"%{product_sku.strip()}%"))
+
+        lines = (await db.execute(lines_query)).scalars().all()
+
+        for spl in lines:
+            next_line = await db.scalar(
+                select(SectionPlanLine).where(
+                    SectionPlanLine.plan_position_id == spl.plan_position_id,
+                    SectionPlanLine.sequence == spl.sequence + 1,
+                )
+            )
+            if next_line is None:
                 continue
 
-            res = await db.execute(
-                select(SectionPlanLine)
-                .join(PlanPosition, PlanPosition.id == SectionPlanLine.plan_position_id)
-                .where(
-                    SectionPlanLine.section_id == sec.id,
-                    PlanPosition.status == 'released'
+            from app.services.shopfloor.common import sections_share_spg
+
+            if await sections_share_spg(db, spl.section_id, next_line.section_id):
+                continue
+
+            next_stage = await db.get(RouteStage, next_line.route_stage_id)
+            next_sec = await db.get(Section, next_line.section_id)
+            if next_stage is None or next_sec is None:
+                continue
+
+            next_task = await db.scalar(
+                select(WorkTask).where(
+                    WorkTask.section_plan_line_id == next_line.id,
+                    WorkTask.status.notin_([WorkTaskStatus.completed, WorkTaskStatus.cancelled]),
                 )
             )
-            lines = res.scalars().all()
+            if next_task is None:
+                continue
 
-            for spl in lines:
-                next_line = await db.scalar(
-                    select(SectionPlanLine).where(
-                        SectionPlanLine.plan_position_id == spl.plan_position_id,
-                        SectionPlanLine.sequence == spl.sequence + 1
-                    )
+            fake_task = await db.scalar(
+                select(WorkTask).where(
+                    WorkTask.section_plan_line_id == spl.id,
+                    WorkTask.status.notin_([WorkTaskStatus.completed, WorkTaskStatus.cancelled]),
                 )
-                if next_line is None:
-                    continue
+            )
 
-                from app.services.shopfloor.common import sections_share_spg
-                if await sections_share_spg(db, spl.section_id, next_line.section_id):
-                    continue
+            planned_qty = spl.planned_quantity or Decimal("0")
+            if planned_qty <= 0:
+                plan_pos = await db.get(PlanPosition, spl.plan_position_id)
+                planned_qty = plan_pos.quantity if plan_pos else Decimal("0")
 
-                next_stage = await db.get(RouteStage, next_line.route_stage_id)
-                next_sec = await db.get(Section, next_line.section_id)
-                if next_stage is None or next_sec is None:
-                    continue
-
-                next_task = await db.scalar(
-                    select(WorkTask).where(
-                        WorkTask.section_plan_line_id == next_line.id,
-                        WorkTask.status.notin_([WorkTaskStatus.completed, WorkTaskStatus.cancelled])
-                    )
+            if fake_task is None:
+                fake_task = WorkTask(
+                    section_plan_line_id=spl.id,
+                    section_id=sec.id,
+                    product_id=next_task.product_id,
+                    route_stage_id=spl.route_stage_id,
+                    planned_quantity=planned_qty,
+                    status=WorkTaskStatus.ready,
+                    due_date=spl.due_date,
                 )
-                if next_task is None:
-                    continue
-
-                fake_task = await db.scalar(
-                    select(WorkTask).where(
-                        WorkTask.section_plan_line_id == spl.id,
-                        WorkTask.status.notin_([WorkTaskStatus.completed, WorkTaskStatus.cancelled])
-                    )
-                )
-
-                planned_qty = spl.planned_quantity or Decimal("0")
-                if planned_qty <= 0:
-                    plan_pos = await db.get(PlanPosition, spl.plan_position_id)
-                    planned_qty = plan_pos.quantity if plan_pos else Decimal("0")
-
-                if fake_task is None:
-                    fake_task = WorkTask(
-                        section_plan_line_id=spl.id,
-                        section_id=sec.id,
-                        product_id=next_task.product_id,
-                        route_stage_id=spl.route_stage_id,
-                        planned_quantity=planned_qty,
-                        status=WorkTaskStatus.ready,
-                        due_date=spl.due_date,
-                    )
-                    db.add(fake_task)
-                    await db.flush()
-
-                if await has_active_transfer_for_task(db, fake_task.id):
-                    continue
-
-                transferable, _plan_remaining, physical_stock, transferred = (
-                    await compute_stock_section_transferable(
-                        db,
-                        task=fake_task,
-                        section=sec,
-                        planned_qty=planned_qty,
-                    )
-                )
-                if transferable <= 0:
-                    continue
-
+                db.add(fake_task)
                 await db.flush()
 
-                product = await db.get(Product, fake_task.product_id)
-                product_sku = product.sku if product else ""
+            if await has_active_transfer_for_task(db, fake_task.id):
+                continue
 
-                next_op_name = ", ".join(op.operation_name for op in next_stage.operations) if next_stage and next_stage.operations else None
-
-                stock_items.append(
-                    {
-                        "task_id": fake_task.id,
-                        "section_id": fake_task.section_id,
-                        "section_code": sec.code,
-                        "section_name": sec.name,
-                        "plan_position_id": spl.plan_position_id,
-                        "route_stage_id": spl.route_stage_id,
-                        "sequence": spl.sequence,
-                        "operation_code": None,
-                        "operation_name": "",
-                        "product_id": fake_task.product_id,
-                        "product_sku": product_sku,
-                        "planned_quantity": _fmt_qty(planned_qty),
-                        "completed_quantity": _fmt_qty(physical_stock),
-                        "already_transferred_quantity": _fmt_qty(transferred),
-                        "transferable_quantity": _fmt_qty(transferable),
-                        "has_next_step": True,
-                        "next_section_id": next_sec.id,
-                        "next_section_code": next_sec.code,
-                        "next_section_name": next_sec.name,
-                        "next_operation_name": next_op_name,
-                        "next_step_sequence": next_stage.sequence,
-                        "next_step_is_final": bool(next_stage.is_final),
-                        "is_final": False,
-                        "completion_comment": None,
-                    }
+            transferable, _plan_remaining, physical_stock, transferred = (
+                await compute_stock_section_transferable(
+                    db,
+                    task=fake_task,
+                    section=sec,
+                    planned_qty=planned_qty,
                 )
+            )
+            if transferable <= 0:
+                continue
 
-    items.extend(stock_items)
-    return {"items": items, "filters": {"section_id": section_id, "spg_id": spg_id}}
+            await db.flush()
+
+            product = await db.get(Product, fake_task.product_id)
+            product_sku = product.sku if product else ""
+
+            next_op_name = (
+                ", ".join(op.operation_name for op in next_stage.operations)
+                if next_stage and next_stage.operations
+                else None
+            )
+
+            candidate = {
+                    "task_id": fake_task.id,
+                    "section_id": fake_task.section_id,
+                    "section_code": sec.code,
+                    "section_name": sec.name,
+                    "plan_position_id": spl.plan_position_id,
+                    "route_stage_id": spl.route_stage_id,
+                    "sequence": spl.sequence,
+                    "operation_code": None,
+                    "operation_name": "",
+                    "product_id": fake_task.product_id,
+                    "product_sku": product_sku,
+                    "planned_quantity": _fmt_qty(planned_qty),
+                    "completed_quantity": _fmt_qty(physical_stock),
+                    "already_transferred_quantity": _fmt_qty(transferred),
+                    "transferable_quantity": _fmt_qty(transferable),
+                    "has_next_step": True,
+                    "next_section_id": next_sec.id,
+                    "next_section_code": next_sec.code,
+                    "next_section_name": next_sec.name,
+                    "next_operation_name": next_op_name,
+                    "next_step_sequence": next_stage.sequence,
+                    "next_step_is_final": bool(next_stage.is_final),
+                    "is_final": False,
+                    "completion_comment": None,
+                }
+            if search and search.strip():
+                search_lower = search.strip().lower()
+                haystacks = (
+                    candidate.get("product_sku") or "",
+                    candidate.get("operation_name") or "",
+                    str(candidate.get("task_id") or ""),
+                )
+                if not any(search_lower in value.lower() for value in haystacks):
+                    continue
+            if not _ready_item_matches_column_filters(
+                candidate,
+                product_sku=product_sku,
+                operation_name=operation_name,
+                next_operation_name=next_operation_name,
+                next_section_name=next_section_name,
+                task_id=task_id,
+                transferable_qty=transferable_qty,
+            ):
+                continue
+            stock_items.append(candidate)
+
+    return stock_items
+
+
+async def list_ready_to_transfer(
+    db: AsyncSession,
+    *,
+    section_id: int | None = None,
+    spg_id: int | None = None,
+    limit: int = 50,
+    offset: int = 0,
+    search: str | None = None,
+    sort_by: str = "sequence",
+    sort_order: str = "asc",
+    product_sku: str | None = None,
+    operation_name: str | None = None,
+    next_operation_name: str | None = None,
+    next_section_name: str | None = None,
+    task_id: int | None = None,
+    transferable_qty: str | None = None,
+) -> dict:
+    """List SectionTasks that have quantity ready to be transferred.
+
+    A task is "ready to transfer" when:
+      * it has a next route step (``SectionPlanLine.sequence + 1``
+        exists),
+      * the next step is not final,
+      * ``completed_qty - transferred_qty > 0`` (ledger aggregates).
+
+    Filters:
+      * ``section_id`` — restrict to a single section.
+      * ``spg_id`` — restrict to all sections of an SPG (overrides
+        ``section_id`` if both given).
+    """
+    spg_section_ids: list[int] | None = None
+    if spg_id is not None:
+        spg_section_ids = (
+            await db.execute(
+                select(SpgSection.section_id).where(SpgSection.spg_id == spg_id)
+            )
+        ).scalars().all()
+        if not spg_section_ids:
+            return {
+                "items": [],
+                "total": 0,
+                "limit": limit,
+                "offset": offset,
+                "filters": {"section_id": section_id, "spg_id": spg_id},
+            }
+
+    parsed_transferable_qty: Decimal | None = None
+    if transferable_qty:
+        try:
+            parsed_transferable_qty = _to_decimal(transferable_qty)
+        except Exception:
+            parsed_transferable_qty = None
+
+    if sort_by not in READY_SORT_FIELDS:
+        sort_by = "sequence"
+    if sort_order not in ("asc", "desc"):
+        sort_order = "asc"
+
+    production_query = _build_production_ready_query(
+        section_ids=spg_section_ids,
+        section_id=section_id if spg_id is None else None,
+        search=search,
+        product_sku=product_sku,
+        operation_name=operation_name,
+        next_operation_name=next_operation_name,
+        next_section_name=next_section_name,
+        task_id=task_id,
+        transferable_qty=parsed_transferable_qty,
+        sort_by=sort_by,
+        sort_order=sort_order,
+    )
+
+    has_stock = await _scope_has_stock_sections(db, section_id=section_id, spg_id=spg_id)
+
+    if not has_stock:
+        total = (
+            await db.execute(
+                select(func.count()).select_from(production_query.order_by(None).subquery())
+            )
+        ).scalar() or 0
+
+        rows = (
+            await db.execute(production_query.offset(offset).limit(limit))
+        ).all()
+        items = [_hydrate_production_ready_row(row) for row in rows]
+    else:
+        rows = (await db.execute(production_query)).all()
+        items = [_hydrate_production_ready_row(row) for row in rows]
+
+        stock_items = await _fetch_stock_ready_items(
+            db,
+            section_id=section_id,
+            spg_id=spg_id,
+            search=search,
+            product_sku=product_sku,
+            operation_name=operation_name,
+            next_operation_name=next_operation_name,
+            next_section_name=next_section_name,
+            task_id=task_id,
+            transferable_qty=parsed_transferable_qty,
+        )
+        items.extend(stock_items)
+        reverse = sort_order == "desc"
+        items.sort(key=lambda item: _ready_item_sort_key(item, sort_by), reverse=reverse)
+        total = len(items)
+        items = items[offset : offset + limit]
+
+    return {
+        "items": items,
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+        "filters": {"section_id": section_id, "spg_id": spg_id},
+    }
 
 
 async def get_section_transfer_history(
@@ -518,7 +901,17 @@ async def get_section_transfer_history(
     *,
     section_id: int | None = None,
     spg_id: int | None = None,
-    limit: int = 100,
+    limit: int = 50,
+    offset: int = 0,
+    search: str | None = None,
+    status: str | None = None,
+    sort_by: str = "created_at",
+    sort_order: str = "desc",
+    date_from: datetime | None = None,
+    date_to: datetime | None = None,
+    product_sku: str | None = None,
+    from_section_name: str | None = None,
+    to_section_name: str | None = None,
 ) -> dict:
     """Return both incoming and outgoing transfers for a section or SPG (history log)."""
     from_section = aliased(Section)
@@ -559,7 +952,14 @@ async def get_section_transfer_history(
             )
         ).scalars().all()
         if not spg_section_ids:
-            return {"section_id": None, "spg_id": spg_id, "transfers": []}
+            return {
+                "section_id": None,
+                "spg_id": spg_id,
+                "transfers": [],
+                "total": 0,
+                "limit": limit,
+                "offset": offset,
+            }
         base_query = base_query.where(
             (Transfer.from_section_id.in_(spg_section_ids)) | (Transfer.to_section_id.in_(spg_section_ids))
         )
@@ -568,10 +968,65 @@ async def get_section_transfer_history(
             (Transfer.from_section_id == section_id) | (Transfer.to_section_id == section_id)
         )
 
+    if status:
+        try:
+            status_enum = TransferStatus(status)
+        except ValueError:
+            status_enum = None
+        if status_enum is not None:
+            base_query = base_query.where(Transfer.status == status_enum)
+    if date_from is not None:
+        base_query = base_query.where(Transfer.created_at >= date_from)
+    if date_to is not None:
+        base_query = base_query.where(Transfer.created_at <= date_to)
+    if product_sku:
+        product_sku_like = f"%{product_sku}%"
+        base_query = base_query.where(Product.sku.ilike(product_sku_like))
+    if from_section_name:
+        from_section_name_like = f"%{from_section_name}%"
+        base_query = base_query.where(from_section.name.ilike(from_section_name_like))
+    if to_section_name:
+        to_section_name_like = f"%{to_section_name}%"
+        base_query = base_query.where(to_section.name.ilike(to_section_name_like))
+    if search:
+        search_like = f"%{search}%"
+        base_query = base_query.where(
+            or_(
+                Product.sku.ilike(search_like),
+                from_section.name.ilike(search_like),
+                to_section.name.ilike(search_like),
+                Transfer.transfer_no.ilike(search_like),
+                Transfer.comment.ilike(search_like),
+            )
+        )
+
+    count_stmt = select(func.count()).select_from(base_query.subquery())
+    total = (await db.execute(count_stmt)).scalar() or 0
+
+    order_column = Transfer.created_at
+    if sort_by == "status":
+        order_column = Transfer.status
+    elif sort_by in ("product_sku", "sku"):
+        order_column = Product.sku
+    elif sort_by in ("from_section_name", "from"):
+        order_column = from_section.name
+    elif sort_by in ("to_section_name", "to"):
+        order_column = to_section.name
+    elif sort_by in ("sent_quantity", "quantity"):
+        order_column = Transfer.sent_quantity
+    elif sort_by == "transfer_no":
+        order_column = Transfer.transfer_no
+
+    if sort_order == "asc":
+        order_by = (order_column.asc(), Transfer.id.asc())
+    else:
+        order_by = (order_column.desc(), Transfer.id.desc())
+
     rows = (
         await db.execute(
             base_query
-            .order_by(Transfer.created_at.desc(), Transfer.id.desc())
+            .order_by(*order_by)
+            .offset(offset)
             .limit(limit)
         )
     ).all()
@@ -625,5 +1080,8 @@ async def get_section_transfer_history(
         "section_id": section_id,
         "spg_id": spg_id,
         "transfers": transfers,
+        "total": total,
+        "limit": limit,
+        "offset": offset,
     }
 

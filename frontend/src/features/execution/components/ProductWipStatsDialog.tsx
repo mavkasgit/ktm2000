@@ -1,5 +1,5 @@
 import { useEffect, useState, useMemo } from "react";
-import { Dialog, DialogContent, DialogHeader, DialogTitle, Badge, renderIcon, SortableFilterHeader, TableCornerResetCell, TableCornerResetHeader } from "@/shared/ui";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, Badge, renderIcon, SortableFilterHeader, TableCornerResetCell, TableCornerResetHeader, DATA_TABLE_STYLES } from "@/shared/ui";
 import { getProductWipStats, ProductWipStats, type ProductWipRemainder } from "@/shared/api/productionPlans";
 import { Loader2, Layers, Package, ClipboardList, AlertCircle } from "lucide-react";
 import type { SortConfig } from "@/shared/hooks/useTableQueryEngine";
@@ -14,6 +14,8 @@ interface ProductWipStatsDialogProps {
 type WipRemainderSortField = "name" | "qty";
 
 const DEFAULT_WIP_SORT: SortConfig<WipRemainderSortField>[] = [{ field: "qty", order: "desc" }];
+
+const headerCellClass = `${DATA_TABLE_STYLES.headerRow} ${DATA_TABLE_STYLES.headerCell}`;
 
 export function ProductWipStatsDialog({ sku, open, onOpenChange }: ProductWipStatsDialogProps) {
   const [data, setData] = useState<ProductWipStats | null>(null);
@@ -190,11 +192,11 @@ export function ProductWipStatsDialog({ sku, open, onOpenChange }: ProductWipSta
                   Нет активных остатков на складах подготовки для данного артикула.
                 </div>
               ) : (
-                <div className="border rounded-md overflow-hidden bg-card">
+                <div className={DATA_TABLE_STYLES.container}>
                   <table className="w-full text-xs">
-                    <thead className="bg-muted/50 border-b">
+                    <thead>
                       <tr>
-                        <th className="px-3 py-2 font-medium text-muted-foreground text-left">
+                        <th className={`${headerCellClass} p-0`}>
                           <SortableFilterHeader
                             field="name"
                             label="ГХП (выполненные операции)"
@@ -204,7 +206,7 @@ export function ProductWipStatsDialog({ sku, open, onOpenChange }: ProductWipSta
                             {...bindColumn("name")}
                           />
                         </th>
-                        <th className="px-3 py-2 font-medium text-muted-foreground w-[180px] text-right">
+                        <th className={`${headerCellClass} p-0 w-[180px] text-right`}>
                           <SortableFilterHeader
                             field="qty"
                             label="Остаток (шт.)"
@@ -217,6 +219,7 @@ export function ProductWipStatsDialog({ sku, open, onOpenChange }: ProductWipSta
                         <TableCornerResetHeader
                           hasActiveFilters={hasActiveFilters}
                           onReset={handleResetFilters}
+                          dataTableHeader
                         />
                       </tr>
                     </thead>

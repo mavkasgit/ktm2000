@@ -17,6 +17,8 @@ import {
   type ShortageStrategy,
 } from "@/shared/api/shopfloor";
 import { queryKeys } from "@/shared/api/queryKeys";
+import { usePaginatedTableQuery } from "@/shared/hooks/usePaginatedTableQuery";
+import type { SectionBoardQueryParams } from "@/shared/api/shopfloor";
 import { DateRangePicker, renderIcon, toast, Button, type DateRangeValue } from "@/shared/ui";
 import { useBulkSelection } from "@/shared/bulk";
 import { BulkResultsDialog, summarizeBulkResults, type BulkActionResultItem, type BulkActionSummary, type BulkRunnerProgress } from "@/shared/bulk";
@@ -272,12 +274,49 @@ export function SectionsTasksPage() {
     [dateFrom, dateTo]
   );
 
+  const [serverQuery, setServerQuery] = useState<
+    Pick<SectionBoardQueryParams, "search" | "product_sku" | "sort_by" | "sort_order">
+  >({});
+
+  const {
+    page: boardPage,
+    setPage: setBoardPage,
+    limit: boardLimit,
+    setLimit: setBoardLimit,
+    offset: boardOffset,
+    getTotalPages: getBoardTotalPages,
+    getRangeLabel: getBoardRangeLabel,
+  } = usePaginatedTableQuery({
+    resetPageDeps: [
+      sectionId,
+      boardParams,
+      serverQuery,
+      requestOptions?.singleSectionLockId ?? null,
+    ],
+  });
+
+  const boardQueryParams = useMemo(
+    () => ({
+      ...boardParams,
+      ...serverQuery,
+      limit: boardLimit,
+      offset: boardOffset,
+    }),
+    [boardParams, serverQuery, boardLimit, boardOffset],
+  );
+
   const { data: board, isLoading: boardLoading } = useQuery({
-    queryKey: ["shopfloor-board", sectionId, boardParams, requestOptions?.singleSectionLockId ?? null],
-    queryFn: () => getSectionBoard(sectionId as number, boardParams, requestOptions),
+    queryKey: queryKeys.shopfloor.board(sectionId as number, {
+      ...boardQueryParams,
+      singleSectionLockId: requestOptions?.singleSectionLockId ?? null,
+    }),
+    queryFn: () => getSectionBoard(sectionId as number, boardQueryParams, requestOptions),
     enabled: sectionId !== null && !!me?.id && !isSingleWindowBlocked,
     retry: false,
   });
+
+  const boardTotal = board?.total ?? 0;
+  const boardTotalPages = getBoardTotalPages(boardTotal);
 
   const { data: stats } = useQuery({
     queryKey: ["shopfloor-stats", sectionId, dateFrom, dateTo, requestOptions?.singleSectionLockId ?? null],
@@ -301,7 +340,7 @@ export function SectionsTasksPage() {
     void queryClient.invalidateQueries({ queryKey: queryKeys.transfers.historyAll() });
     void queryClient.invalidateQueries({ queryKey: ["auditLogs"] });
     if (sectionId !== null) {
-      void queryClient.invalidateQueries({ queryKey: queryKeys.stock.balances(`section-${sectionId}`) });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.stock.balancesAll() });
     }
   }, [queryClient, sectionId]);
 
@@ -992,6 +1031,7 @@ export function SectionsTasksPage() {
 
                 <SectionTasksBoard
                   tasks={tasks}
+                  total={boardTotal}
                   isLoading={boardLoading}
                   mode={viewMode}
                   onModeChange={setViewMode}
@@ -1002,6 +1042,13 @@ export function SectionsTasksPage() {
                   profile={profile}
                   onSelectAllVisible={handleSelectAll}
                   onCompleteGroup={handleCompleteGroup}
+                  page={boardPage}
+                  setPage={setBoardPage}
+                  limit={boardLimit}
+                  setLimit={setBoardLimit}
+                  totalPages={boardTotalPages}
+                  rangeLabel={getBoardRangeLabel(tasks.length, boardTotal, { onPage: true })}
+                  onServerQueryChange={setServerQuery}
                 />
 
                 {!isSingleWindow && stats && (

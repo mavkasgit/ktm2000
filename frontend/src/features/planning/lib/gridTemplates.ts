@@ -9,10 +9,3 @@
 export const PLAN_POSITIONS_GRID =
   'auto auto auto auto minmax(200px, 1fr) minmax(250px, 2fr) auto auto auto 2.5rem';
 
-/**
- * Grid template for execution table — matches execution-table-columns order:
- * ID, №, План, Артикул, Кол-во, Наименование, Маршрут, Статус, Этап, Действия
- */
-export const EXECUTION_GRID =
-  'auto auto auto auto auto minmax(150px, 1fr) minmax(200px, 2fr) auto auto auto';
-

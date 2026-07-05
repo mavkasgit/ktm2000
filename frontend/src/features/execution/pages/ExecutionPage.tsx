@@ -13,13 +13,15 @@ import {
   softDeleteCancelledPosition,
   softDeletePositionsExecutionBatch,
   manualPassPositionsExecutionBatch,
+  type ListProductionPlanningRowsParams,
   type ProductionPlanningRow,
   type ProductionPlanningRowDetail,
 } from "@/shared/api/productionPlans";
 import { RemainderAllocationDialog } from "../components/RemainderAllocationDialog";
 import { listSections } from "@/shared/api/sections";
-import { useTableQueryEngine, ColumnSortDef } from "@/shared/hooks/useTableQueryEngine";
 import { useFilterableTable } from "@/shared/hooks/useFilterableTable";
+import { usePaginatedTableQuery } from "@/shared/hooks/usePaginatedTableQuery";
+import { pickColumnApiValue } from "@/shared/lib/columnFilterSearch";
 
 
 import { toast } from "@/shared/ui/use-toast";
@@ -48,19 +50,108 @@ import {
   getRestoreBlockReason,
   getSoftDeleteBlockReason,
   getManualPassBlockReason,
-  getCellValue,
 } from "../components/execution-utils";
 import { fmtQty } from "@/shared/utils/fmtQty";
+
+function extractPlanId(value: string): string | undefined {
+  const trimmed = value.trim();
+  if (!trimmed) return undefined;
+  return trimmed.split(/\s+/)[0];
+}
+
+function mapExecutionSortFieldToApi(field: ExecutionSortField): string | undefined {
+  switch (field) {
+    case "row":
+      return "row_number";
+    case "sku":
+      return "product_sku";
+    case "status":
+      return "status";
+    case "qty":
+      return "planned_qty";
+    case "stage":
+      return "sequence";
+    default:
+      return undefined;
+  }
+}
+
+function buildExecutionColumnApiParams(
+  columnFilters: Partial<Record<ExecutionSortField, Set<string>>>,
+  columnSearchQueries: Partial<Record<ExecutionSortField, string>>,
+): Pick<
+  ListProductionPlanningRowsParams,
+  | "plan_position_id"
+  | "source_row_number"
+  | "production_plan_id"
+  | "source_sku"
+  | "source_name"
+  | "quantity"
+  | "route_name"
+  | "status"
+  | "current_stage_section_name"
+> {
+  const params: Pick<
+    ListProductionPlanningRowsParams,
+    | "plan_position_id"
+    | "source_row_number"
+    | "production_plan_id"
+    | "source_sku"
+    | "source_name"
+    | "quantity"
+    | "route_name"
+    | "status"
+    | "current_stage_section_name"
+  > = {};
+
+  const planPositionId = pickColumnApiValue(columnFilters, columnSearchQueries, "id");
+  if (planPositionId) params.plan_position_id = planPositionId;
+
+  const sourceRowNumber = pickColumnApiValue(columnFilters, columnSearchQueries, "row");
+  if (sourceRowNumber) params.source_row_number = sourceRowNumber;
+
+  const productionPlanId = pickColumnApiValue(
+    columnFilters,
+    columnSearchQueries,
+    "plan",
+    extractPlanId,
+  );
+  if (productionPlanId) params.production_plan_id = productionPlanId;
+
+  const sourceSku = pickColumnApiValue(columnFilters, columnSearchQueries, "sku");
+  if (sourceSku) params.source_sku = sourceSku;
+
+  const sourceName = pickColumnApiValue(columnFilters, columnSearchQueries, "name");
+  if (sourceName) params.source_name = sourceName;
+
+  const quantity = pickColumnApiValue(columnFilters, columnSearchQueries, "qty");
+  if (quantity) params.quantity = quantity;
+
+  const routeName = pickColumnApiValue(columnFilters, columnSearchQueries, "route", (v) =>
+    v === "Не назначен" ? undefined : v,
+  );
+  if (routeName) params.route_name = routeName;
+
+  const status = pickColumnApiValue(columnFilters, columnSearchQueries, "status");
+  if (status) params.status = status;
+
+  const stageName = pickColumnApiValue(columnFilters, columnSearchQueries, "stage", (v) =>
+    v === "—" ? undefined : v,
+  );
+  if (stageName) params.current_stage_section_name = stageName;
+
+  return params;
+}
 
 export function ExecutionPage() {
   const [selectedPositionId, setSelectedPositionId] = useState<number | null>(null);
   const [wipStatsSku, setWipStatsSku] = useState<string | null>(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
+  const [debouncedSearchQuery, setDebouncedSearchQuery] = useState("");
   const [hideColumnIds, setHideColumnIds] = useState(false);
   const {
     bindColumn,
-    buildFilterPredicate,
     columnFilters,
     columnSearchQueries,
     sortConfigs,
@@ -72,10 +163,57 @@ export function ExecutionPage() {
     extraHasActive: searchQuery.trim().length > 0,
   });
 
-  const { data: rows, isLoading, error } = useQuery({
-    queryKey: queryKeys.execution.rows(),
-    queryFn: listProductionPlanningRows,
+  const {
+    page,
+    setPage,
+    limit,
+    setLimit,
+    offset,
+    getTotalPages,
+    getRangeLabel,
+    resetPage,
+  } = usePaginatedTableQuery({
+    resetPageDeps: [
+      debouncedSearchQuery,
+      columnFilters,
+      columnSearchQueries,
+      sortConfigs,
+    ],
   });
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => setDebouncedSearchQuery(searchQuery), 300);
+    return () => window.clearTimeout(timer);
+  }, [searchQuery]);
+
+  const columnApiParams = useMemo(
+    () => buildExecutionColumnApiParams(columnFilters, columnSearchQueries),
+    [columnFilters, columnSearchQueries],
+  );
+
+  const activeSort = sortConfigs[0];
+  const sortByApi = activeSort ? mapExecutionSortFieldToApi(activeSort.field) : undefined;
+
+  const rowsQueryParams = useMemo(
+    () => ({
+      search: debouncedSearchQuery.trim() || undefined,
+      sort_by: sortByApi,
+      sort_order: sortByApi ? activeSort?.order : undefined,
+      limit,
+      offset,
+      ...columnApiParams,
+    }),
+    [debouncedSearchQuery, sortByApi, activeSort?.order, limit, offset, columnApiParams],
+  );
+
+  const { data: rowsData, isLoading, error } = useQuery({
+    queryKey: queryKeys.execution.rows(rowsQueryParams),
+    queryFn: () => listProductionPlanningRows(rowsQueryParams),
+  });
+
+  const rows = rowsData?.rows ?? [];
+  const total = rowsData?.total ?? 0;
+  const totalPages = getTotalPages(total);
   const { data: plans } = useQuery({
     queryKey: queryKeys.execution.plans(),
     queryFn: listPlans,
@@ -351,7 +489,7 @@ export function ExecutionPage() {
   const confirmBulkManualPass = useCallback(async () => {
     if (!manualPassBulkDialog.targetRouteStepId || manualPassBulkDialog.positionIds.length === 0) return;
     setManualPassBulkDialog((prev) => ({ ...prev, open: false }));
-    const selectedPositionsMap = new Map(rows?.map((r) => [r.plan_position_id, r]) ?? []);
+    const selectedPositionsMap = new Map(rows.map((r) => [r.plan_position_id, r]));
     const results: BulkActionResultItem<number>[] = [];
     setBulkProgress({ total: manualPassBulkDialog.positionIds.length, completed: 0, running: true });
 
@@ -437,7 +575,7 @@ export function ExecutionPage() {
 
   const confirmSoftDelete = useCallback(() => {
     if (deleteDialog.positionId) {
-      const row = rows?.find((r) => r.plan_position_id === deleteDialog.positionId);
+      const row = rows.find((r) => r.plan_position_id === deleteDialog.positionId);
       if (row) {
         softDeleteMutation.mutate({ planId: row.production_plan_id, positionId: deleteDialog.positionId, reason: deleteDialog.reason || undefined });
       }
@@ -480,7 +618,7 @@ export function ExecutionPage() {
     setBulkDeleteConfirmOpen(false);
     if (bulkSelection.selectedCount === 0) return;
     const selectedIds = Array.from(bulkSelection.selectedIds);
-    const selectedPositionsMap = new Map(rows?.map((r) => [r.plan_position_id, r]) ?? []);
+    const selectedPositionsMap = new Map(rows.map((r) => [r.plan_position_id, r]));
 
     const results: BulkActionResultItem<number>[] = [];
     setBulkProgress({ total: selectedIds.length, completed: 0, running: true });
@@ -567,8 +705,18 @@ export function ExecutionPage() {
 
   const resetExecutionFilters = useCallback(() => {
     setSearchQuery("");
+    setDebouncedSearchQuery("");
     resetColumnFilters();
-  }, [resetColumnFilters]);
+    resetPage();
+  }, [resetColumnFilters, resetPage]);
+
+  const handleSortWithReset = useCallback(
+    (field: ExecutionSortField) => {
+      handleSortChange(field);
+      resetPage();
+    },
+    [handleSortChange, resetPage],
+  );
 
   const executionFilterFields = useMemo(() => [
     {
@@ -601,52 +749,24 @@ export function ExecutionPage() {
   ], [hideColumnIds, searchQuery, bulkMode, exitBulkMode]);
 
   const uniqueValuesByField = useMemo(() => {
-    const allRows = rows || [];
     return {
-      id: [...new Set(allRows.map((r) => String(r.plan_position_id)))],
-      row: [...new Set(allRows.map((r) => String(r.source_row_number ?? "")))],
-      plan: [...new Set(allRows.map((r) => `${r.production_plan_id} ${planNameById.get(r.production_plan_id) || ""}`))],
-      sku: [...new Set(allRows.map((r) => r.source_sku))],
-      name: [...new Set(allRows.map((r) => r.source_name || "").filter(Boolean))],
-      qty: [...new Set(allRows.map((r) => fmtQty(r.quantity)))],
-      route: [...new Set(allRows.map((r) => r.route_name || "Не назначен"))],
-      status: [...new Set(allRows.map((r) => r.is_completed ? "completed" : r.position_status))],
-      stage: [...new Set(allRows.map((r) => r.current_stage_section_name || "—"))],
+      id: [...new Set(rows.map((r) => String(r.plan_position_id)))],
+      row: [...new Set(rows.map((r) => String(r.source_row_number ?? "")))],
+      plan: [...new Set(rows.map((r) => `${r.production_plan_id} ${planNameById.get(r.production_plan_id) || ""}`))],
+      sku: [...new Set(rows.map((r) => r.source_sku))],
+      name: [...new Set(rows.map((r) => r.source_name || "").filter(Boolean))],
+      qty: [...new Set(rows.map((r) => fmtQty(r.quantity)))],
+      route: [...new Set(rows.map((r) => r.route_name || "Не назначен"))],
+      status: [...new Set(rows.map((r) => (r.is_completed ? "completed" : r.position_status)))],
+      stage: [...new Set(rows.map((r) => r.current_stage_section_name || "—"))],
     };
   }, [rows, planNameById]);
 
-  const combinedPredicate = useMemo(
-    () => buildFilterPredicate(getCellValue),
-    [buildFilterPredicate],
-  );
-
-  const executionSortDefs: ColumnSortDef<ProductionPlanningRow, ExecutionSortField>[] = useMemo(() => [
-    { field: "id", getSortValue: (r) => r.plan_position_id },
-    { field: "row", getSortValue: (r) => r.source_row_number ?? 0 },
-    { field: "plan", getSortValue: (r) => r.production_plan_id },
-    { field: "sku", getSortValue: (r) => r.source_sku },
-    { field: "name", getSortValue: (r) => r.source_name || "" },
-    { field: "qty", getSortValue: (r) => r.quantity },
-    { field: "route", getSortValue: (r) => r.route_name || "" },
-    { field: "status", getSortValue: (r) => r.position_status },
-    { field: "stage", getSortValue: (r) => r.current_stage_sequence ?? 0 },
-  ], []);
-
-  const executionQueryResult = useTableQueryEngine<ProductionPlanningRow, ExecutionSortField>({
-    rows: rows || [],
-    getId: (r) => r.plan_position_id,
-    searchQuery,
-    filterPredicate: combinedPredicate,
-    sortConfigs,
-    sortDefs: executionSortDefs,
-  });
-  const filteredRows = executionQueryResult.rows;
-
   const handleSelectAll = useCallback(() => {
-    const filteredIds = filteredRows.map((r) => r.plan_position_id);
-    bulkSelection.selectAll(filteredIds);
-    setSelectionOrder(filteredIds);
-  }, [bulkSelection, filteredRows]);
+    const pageIds = rows.map((r) => r.plan_position_id);
+    bulkSelection.selectAll(pageIds);
+    setSelectionOrder(pageIds);
+  }, [bulkSelection, rows]);
 
   const handleResetAll = useCallback(() => {
     bulkSelection.clear();
@@ -657,7 +777,7 @@ export function ExecutionPage() {
 
   const rowById = useMemo(() => {
     const map = new Map<number, ProductionPlanningRow>();
-    (rows || []).forEach((row) => map.set(row.plan_position_id, row));
+    rows.forEach((row) => map.set(row.plan_position_id, row));
     return map;
   }, [rows]);
 
@@ -831,7 +951,7 @@ export function ExecutionPage() {
 
   const tableScrollRef = useRef<HTMLDivElement>(null);
 
-  const filteredIds = useMemo(() => filteredRows.map((r) => r.plan_position_id), [filteredRows]);
+  const filteredIds = useMemo(() => rows.map((r) => r.plan_position_id), [rows]);
 
   useBulkHotkeys({
     scopeRef: tableScrollRef,
@@ -844,9 +964,9 @@ export function ExecutionPage() {
     runPrimary: runSelectedBulkAction,
   });
 
-  const totalRows = rows?.length || 0;
-  const releasedRows = rows?.filter((r) => r.is_released && !r.is_completed).length || 0;
-  const completedRows = rows?.filter((r) => r.is_completed).length || 0;
+  const totalRows = total;
+  const releasedRows = rows.filter((r) => r.is_released && !r.is_completed).length;
+  const completedRows = rows.filter((r) => r.is_completed).length;
 
   const getAriaSort = (field: ExecutionSortField): "none" | "ascending" | "descending" => {
     const active = sortConfigs.find((s) => s.field === field);
@@ -870,8 +990,7 @@ export function ExecutionPage() {
   return (
     <>
       <ExecutionTable
-        rows={rows || []}
-        filteredRows={filteredRows}
+        rows={rows}
         isLoading={isLoading}
         bulkMode={bulkMode}
         totalRows={totalRows}
@@ -881,8 +1000,15 @@ export function ExecutionPage() {
         activeFilterSummary={executionActiveFilterSummary}
         tableHasActiveFilters={hasTableFiltersActive}
         sortConfigs={sortConfigs}
-        handleSortChange={handleSortChange}
+        handleSortChange={handleSortWithReset}
         getAriaSort={getAriaSort}
+        page={page}
+        totalPages={totalPages}
+        total={total}
+        limit={limit}
+        onPageChange={setPage}
+        onLimitChange={setLimit}
+        rangeLabel={getRangeLabel(rows.length, total, { onPage: true })}
         bindColumn={bindColumn}
         uniqueValuesByField={uniqueValuesByField}
         hideColumnIds={hideColumnIds}

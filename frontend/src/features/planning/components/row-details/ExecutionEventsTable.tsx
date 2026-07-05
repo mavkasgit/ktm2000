@@ -1,5 +1,5 @@
 import { useMemo } from "react";
-import { Badge, SortableFilterHeader, TableCornerResetCell, TableCornerResetHeader } from "@/shared/ui";
+import { Badge, SortableFilterHeader, TableCornerResetCell, TableCornerResetHeader, DATA_TABLE_STYLES } from "@/shared/ui";
 import { useFilterableTable } from "@/shared/hooks/useFilterableTable";
 import { fmtQty } from "@/shared/utils/fmtQty";
 import { type ProductionPlanningStage, type StatusHistoryEntry } from "@/shared/api/productionPlans";
@@ -122,6 +122,8 @@ function getCellValue(row: ExecutionEventRow, field: EventSortField): string {
   }
 }
 
+const headerCellClass = `${DATA_TABLE_STYLES.headerRow} ${DATA_TABLE_STYLES.headerCell}`;
+
 export function ExecutionEventsTable({ stages, statusHistory }: ExecutionEventsTableProps) {
   const {
     bindColumn,
@@ -199,11 +201,11 @@ export function ExecutionEventsTable({ stages, statusHistory }: ExecutionEventsT
   }
 
   return (
-    <div className="rounded-lg border overflow-auto">
+    <div className={DATA_TABLE_STYLES.container}>
       <table className="w-full text-sm">
-        <thead className="border-b bg-muted/50">
+        <thead>
           <tr>
-            <th className="text-left p-2">
+            <th className={`${headerCellClass} p-0`}>
               <SortableFilterHeader
                 field="date"
                 label="Дата"
@@ -213,7 +215,7 @@ export function ExecutionEventsTable({ stages, statusHistory }: ExecutionEventsT
                 {...bindColumn("date")}
               />
             </th>
-            <th className="text-left p-2">
+            <th className={`${headerCellClass} p-0`}>
               <SortableFilterHeader
                 field="type"
                 label="Тип"
@@ -223,7 +225,7 @@ export function ExecutionEventsTable({ stages, statusHistory }: ExecutionEventsT
                 {...bindColumn("type")}
               />
             </th>
-            <th className="text-left p-2">
+            <th className={`${headerCellClass} p-0`}>
               <SortableFilterHeader
                 field="event"
                 label="Событие"
@@ -233,7 +235,7 @@ export function ExecutionEventsTable({ stages, statusHistory }: ExecutionEventsT
                 {...bindColumn("event")}
               />
             </th>
-            <th className="text-left p-2">
+            <th className={`${headerCellClass} p-0`}>
               <SortableFilterHeader
                 field="from"
                 label="Откуда"
@@ -243,7 +245,7 @@ export function ExecutionEventsTable({ stages, statusHistory }: ExecutionEventsT
                 {...bindColumn("from")}
               />
             </th>
-            <th className="text-left p-2">
+            <th className={`${headerCellClass} p-0`}>
               <SortableFilterHeader
                 field="to"
                 label="Куда"
@@ -253,7 +255,7 @@ export function ExecutionEventsTable({ stages, statusHistory }: ExecutionEventsT
                 {...bindColumn("to")}
               />
             </th>
-            <th className="text-left p-2">
+            <th className={`${headerCellClass} p-0`}>
               <SortableFilterHeader
                 field="quantity"
                 label="Кол-во"
@@ -263,12 +265,13 @@ export function ExecutionEventsTable({ stages, statusHistory }: ExecutionEventsT
                 {...bindColumn("quantity")}
               />
             </th>
-            <th className="text-left p-2 text-xs font-medium text-muted-foreground">
+            <th className={headerCellClass}>
               Детали
             </th>
             <TableCornerResetHeader
               hasActiveFilters={hasActiveFilters}
               onReset={handleResetFilters}
+              dataTableHeader
             />
           </tr>
         </thead>

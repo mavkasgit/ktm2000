@@ -85,10 +85,25 @@ export type SectionBoardTask = {
   combined_operation_codes?: (string | null)[];
 };
 
+export type SectionBoardQueryParams = {
+  date_from?: string;
+  date_to?: string;
+  status?: string;
+  search?: string;
+  product_sku?: string;
+  sort_by?: string;
+  sort_order?: "asc" | "desc";
+  limit?: number;
+  offset?: number;
+};
+
 export type SectionBoardResponse = {
   section_id: number;
   tasks: SectionBoardTask[];
-  available_operations: SectionOperation[];
+  available_operations?: SectionOperation[];
+  total: number;
+  limit: number;
+  offset: number;
 };
 
 export type DailyStatsRow = {
@@ -187,13 +202,19 @@ export type CompleteTaskInput = {
 
 export async function getSectionBoard(
   sectionId: number,
-  params?: { date_from?: string; date_to?: string; status?: string },
+  params?: SectionBoardQueryParams,
   options?: ShopfloorRequestOptions
 ): Promise<SectionBoardResponse> {
   const search = new URLSearchParams();
   if (params?.date_from) search.set("date_from", params.date_from);
   if (params?.date_to) search.set("date_to", params.date_to);
   if (params?.status) search.set("status", params.status);
+  if (params?.search) search.set("search", params.search);
+  if (params?.product_sku) search.set("product_sku", params.product_sku);
+  if (params?.sort_by) search.set("sort_by", params.sort_by);
+  if (params?.sort_order) search.set("sort_order", params.sort_order);
+  if (params?.limit != null) search.set("limit", String(params.limit));
+  if (params?.offset != null) search.set("offset", String(params.offset));
   const qs = search.toString();
   const { data } = await apiClient.get<SectionBoardResponse>(
     `/shopfloor/sections/${sectionId}/board${qs ? `?${qs}` : ""}`,

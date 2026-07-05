@@ -7,12 +7,31 @@
  * использует новый groupTasksByProfile вместо BoardRowItem.
  */
 
-import { useMemo, useState, useCallback } from "react";
+import { useMemo, useState, useCallback, useEffect, useRef } from "react";
 import { ChevronDown, ChevronRight } from "lucide-react";
-import type { SectionBoardTask, TaskGroup } from "@/shared/api/shopfloor";
-import { Badge, Button, SortableFilterHeader, FiltersPanel, TableCornerResetCell, TableCornerResetHeader, DATA_TABLE_STYLES, buildActiveFilterSummary, type FiltersPanelField } from "@/shared/ui";
-import { useTableQueryEngine, ColumnSortDef } from "@/shared/hooks/useTableQueryEngine";
+import type { SectionBoardQueryParams, SectionBoardTask, TaskGroup } from "@/shared/api/shopfloor";
+import {
+  Badge,
+  Button,
+  SortableFilterHeader,
+  FiltersPanel,
+  TableCornerResetCell,
+  TableCornerResetHeader,
+  TablePaginationFooter,
+  VirtualizedTableBody,
+  DATA_TABLE_STYLES,
+  buildActiveFilterSummary,
+  type FiltersPanelField,
+} from "@/shared/ui";
+import type { ColumnSortDef } from "@/shared/hooks/useTableQueryEngine";
+import type { PageLimitOption } from "@/shared/hooks/usePaginatedTableQuery";
 import { useFilterableTable } from "@/shared/hooks/useFilterableTable";
+import { buildColumnFilterPredicate } from "@/shared/lib/columnFilterSearch";
+import {
+  buildBoardServerQueryParams,
+  isServerSortField,
+  type TaskSortField,
+} from "../lib/boardQueryParams";
 import { groupTasksByProfile, groupStatus, sortGroupsByPriority } from "../lib/groupTasksByProfile";
 import type { GroupingProfile } from "../lib/groupingProfiles";
 import {
@@ -52,16 +71,29 @@ export type BulkSelectionController = {
 // Внутренние типы
 // ---------------------------------------------------------------------------
 
-type TaskSortField =
-  | "sequence"
-  | "productSku"
-  | "plannedQty"
-  | "issuedQty"
-  | "completedQty"
-  | "transferredQty"
-  | "rejectedQty"
-  | "remainingQty"
-  | "status";
+const CLIENT_FILTER_FIELDS: TaskSortField[] = [
+  "plannedQty",
+  "issuedQty",
+  "completedQty",
+  "transferredQty",
+  "rejectedQty",
+  "remainingQty",
+  "status",
+];
+
+function pickClientFilterState<Field extends string>(
+  columnFilters: Partial<Record<Field, Set<string>>>,
+  columnSearchQueries: Partial<Record<Field, string>>,
+  fields: readonly Field[],
+) {
+  const nextFilters: Partial<Record<Field, Set<string>>> = {};
+  const nextSearches: Partial<Record<Field, string>> = {};
+  for (const field of fields) {
+    if (columnFilters[field]) nextFilters[field] = columnFilters[field];
+    if (columnSearchQueries[field]) nextSearches[field] = columnSearchQueries[field];
+  }
+  return { columnFilters: nextFilters, columnSearchQueries: nextSearches };
+}
 
 function fmtQty(value: string): string {
   const n = parseFloat(value);
@@ -412,6 +444,7 @@ function TableTaskGroupRow({
 
 type SectionTasksBoardProps = {
   tasks: SectionBoardTask[];
+  total: number;
   isLoading: boolean;
   mode: TaskBoardViewMode;
   onModeChange: (next: TaskBoardViewMode) => void;
@@ -422,7 +455,31 @@ type SectionTasksBoardProps = {
   profile: GroupingProfile;
   onSelectAllVisible?: (ids: number[]) => void;
   onCompleteGroup?: (group: TaskGroup) => void;
+  page: number;
+  setPage: (page: number) => void;
+  limit: PageLimitOption;
+  setLimit: (limit: PageLimitOption) => void;
+  totalPages: number;
+  rangeLabel: string;
+  onServerQueryChange: (
+    query: Pick<SectionBoardQueryParams, "search" | "product_sku" | "sort_by" | "sort_order">,
+  ) => void;
 };
+
+type VirtualBoardRow =
+  | {
+      kind: "group";
+      key: string;
+      group: ReturnType<typeof groupTasksByProfile>[number];
+      isCollapsed: boolean;
+    }
+  | {
+      kind: "task";
+      key: string;
+      task: SectionBoardTask;
+      isLastInGroup: boolean;
+      isInGroup: boolean;
+    };
 
 // ---------------------------------------------------------------------------
 // Компонент
@@ -430,6 +487,7 @@ type SectionTasksBoardProps = {
 
 export function SectionTasksBoard({
   tasks,
+  total,
   isLoading,
   mode,
   onModeChange,
@@ -440,11 +498,19 @@ export function SectionTasksBoard({
   profile,
   onSelectAllVisible,
   onCompleteGroup,
+  page,
+  setPage,
+  limit,
+  setLimit,
+  totalPages,
+  rangeLabel,
+  onServerQueryChange,
 }: SectionTasksBoardProps) {
+  const tableScrollRef = useRef<HTMLDivElement>(null);
   const [searchQuery, setSearchQuery] = useState("");
+  const [debouncedSearch, setDebouncedSearch] = useState("");
   const {
     bindColumn,
-    buildFilterPredicate,
     columnFilters,
     columnSearchQueries,
     sortConfigs,
@@ -455,32 +521,43 @@ export function SectionTasksBoard({
     extraHasActive: searchQuery.trim().length > 0,
   });
 
-  const searchIndex = useMemo(() => {
-    const map = new Map<string, string>();
-    for (const task of tasks) {
-      const terms = [
-        String(task.sequence),
-        task.product_sku,
-        task.operation_name || "",
-        task.status,
-      ].filter(Boolean).map((s) => s.toLowerCase());
-      map.set(String(task.id), terms.join(" "));
-    }
-    return map;
-  }, [tasks]);
+  useEffect(() => {
+    const timer = window.setTimeout(() => setDebouncedSearch(searchQuery), 300);
+    return () => window.clearTimeout(timer);
+  }, [searchQuery]);
 
-  const visibleTasks = useMemo(
-    () => {
-      const modeFiltered = tasks.filter((task) => isTaskVisible(task, mode));
-      if (!searchQuery.trim()) return modeFiltered;
-      const q = searchQuery.trim().toLowerCase();
-      return modeFiltered.filter((task) => {
-        const index = searchIndex.get(String(task.id));
-        return index ? index.includes(q) : false;
-      });
-    },
-    [tasks, mode, searchQuery, searchIndex],
+  useEffect(() => {
+    onServerQueryChange(
+      buildBoardServerQueryParams({
+        search: debouncedSearch,
+        columnFilters,
+        columnSearchQueries,
+        sortConfigs,
+      }),
+    );
+  }, [debouncedSearch, columnFilters, columnSearchQueries, sortConfigs, onServerQueryChange]);
+
+  const clientFilterState = useMemo(
+    () => pickClientFilterState(columnFilters, columnSearchQueries, CLIENT_FILTER_FIELDS),
+    [columnFilters, columnSearchQueries],
   );
+
+  const clientFilterPredicate = useMemo(
+    () =>
+      buildColumnFilterPredicate({
+        ...clientFilterState,
+        getCellValue: getTaskCellValue,
+      }),
+    [clientFilterState],
+  );
+
+  const visibleTasks = useMemo(() => {
+    let result = tasks.filter((task) => isTaskVisible(task, mode));
+    if (clientFilterPredicate) {
+      result = result.filter(clientFilterPredicate);
+    }
+    return result;
+  }, [tasks, mode, clientFilterPredicate]);
 
   const sortDefs: ColumnSortDef<SectionBoardTask, TaskSortField>[] = useMemo(() => [
     { field: "sequence", getSortValue: (t) => t.sequence },
@@ -494,11 +571,6 @@ export function SectionTasksBoard({
     { field: "remainingQty", getSortValue: (t) => parseFloat(t.cache.remaining_quantity) || 0 },
   ], []);
 
-  const filterPredicate = useMemo(
-    () => buildFilterPredicate(getTaskCellValue),
-    [buildFilterPredicate],
-  );
-
   const uniqueValues = useMemo(() => ({
     sequence: [...new Set(visibleTasks.map((t) => String(t.sequence)))],
     productSku: [...new Set(visibleTasks.map((t) => t.product_sku))],
@@ -511,16 +583,21 @@ export function SectionTasksBoard({
     remainingQty: [...new Set(visibleTasks.map((t) => String(parseFloat(t.cache.remaining_quantity) || 0)))],
   }), [visibleTasks]);
 
-  const result = useTableQueryEngine<SectionBoardTask, TaskSortField>({
-    rows: visibleTasks,
-    getId: (t) => t.id,
-    searchQuery: "",
-    filterPredicate,
-    sortConfigs,
-    sortDefs,
-  });
-
-  const sortedTasks = result.rows;
+  const sortedTasks = useMemo(() => {
+    const activeSort = sortConfigs[0];
+    if (!activeSort || isServerSortField(activeSort.field)) {
+      return visibleTasks;
+    }
+    const def = sortDefs.find((item) => item.field === activeSort.field);
+    if (!def) return visibleTasks;
+    return [...visibleTasks].sort((a, b) => {
+      const left = def.getSortValue(a);
+      const right = def.getSortValue(b);
+      if (left === right) return 0;
+      const cmp = left < right ? -1 : 1;
+      return activeSort.order === "asc" ? cmp : -cmp;
+    });
+  }, [visibleTasks, sortConfigs, sortDefs]);
 
   const groups = useMemo(() => {
     const grouped = groupTasksByProfile(sortedTasks, profile);
@@ -627,10 +704,94 @@ export function SectionTasksBoard({
 
   const handleResetAllFilters = useCallback(() => {
     setSearchQuery("");
+    setDebouncedSearch("");
     resetAllFilters();
     bulkSelection?.clear();
     onBulkModeChange?.(false);
-  }, [resetAllFilters, bulkSelection, onBulkModeChange]);
+    setPage(1);
+  }, [resetAllFilters, bulkSelection, onBulkModeChange, setPage]);
+
+  const virtualRows = useMemo((): VirtualBoardRow[] => {
+    const items: VirtualBoardRow[] = [];
+    for (const group of groups) {
+      if (group.tasks.length === 1) {
+        const task = group.tasks[0];
+        items.push({
+          kind: "task",
+          key: `task-${task.id}`,
+          task,
+          isLastInGroup: true,
+          isInGroup: false,
+        });
+        continue;
+      }
+
+      const isCollapsed = collapsedGroups.has(group.key);
+      items.push({
+        kind: "group",
+        key: `group-${group.key}`,
+        group,
+        isCollapsed,
+      });
+      if (!isCollapsed) {
+        group.tasks.forEach((task, idx) => {
+          items.push({
+            kind: "task",
+            key: `task-${task.id}`,
+            task,
+            isLastInGroup: idx === group.tasks.length - 1,
+            isInGroup: true,
+          });
+        });
+      }
+    }
+    return items;
+  }, [groups, collapsedGroups]);
+
+  const renderVirtualRow = useCallback(
+    (row: VirtualBoardRow) => {
+      if (row.kind === "group") {
+        return (
+          <TableTaskGroupRow
+            key={row.key}
+            group={row.group}
+            isCollapsed={row.isCollapsed}
+            isBulkMode={!!bulkMode}
+            bulkSelection={bulkSelection}
+            onToggleCollapse={() => toggleGroup(row.group.key)}
+            onCompleteGroup={onCompleteGroup}
+            onSelectGroup={() => {
+              if (!bulkMode || !bulkSelection) return;
+              const taskIds = row.group.tasks.map((t) => t.id);
+              const allSelected = bulkSelection.isAllSelected(taskIds);
+              const someSelected = bulkSelection.isIndeterminate(taskIds);
+              if (allSelected || someSelected) {
+                for (const id of taskIds) {
+                  bulkSelection.selectOne(id, false);
+                }
+              } else {
+                for (const id of taskIds) {
+                  bulkSelection.selectOne(id, true);
+                }
+              }
+            }}
+          />
+        );
+      }
+
+      const isSelected = bulkMode && bulkSelection?.isSelected(row.task.id);
+      return renderTaskRow(
+        row.task,
+        isSelected,
+        bulkMode,
+        bulkSelection,
+        onAction,
+        row.isLastInGroup,
+        row.isInGroup,
+      );
+    },
+    [bulkMode, bulkSelection, onAction, onCompleteGroup, toggleGroup],
+  );
 
   const headerCellClass = `${DATA_TABLE_STYLES.headerRow} ${DATA_TABLE_STYLES.headerCell}`;
 
@@ -664,20 +825,25 @@ export function SectionTasksBoard({
           onBulkModeChange?.(true);
           onSelectAllVisible?.(visibleTasks.filter((t) => t.status !== "waiting_previous").map((t) => t.id));
         }}
-        totalRowCount={visibleTasks.length}
+        totalRowCount={total}
       />
 
       {isLoading && <div className="rounded-lg border p-4 text-sm text-muted-foreground">Загрузка задач...</div>}
-      {!isLoading && visibleTasks.length === 0 && (
+      {!isLoading && total === 0 && (
         <div className="rounded-lg border p-4 text-sm text-muted-foreground text-center">
           Нет задач в выбранном режиме
         </div>
       )}
 
-      {!isLoading && visibleTasks.length > 0 && (
+      {!isLoading && total > 0 && (
         <>
           {/* Desktop table */}
           <div className={`hidden md:block ${DATA_TABLE_STYLES.container}`}>
+            <div
+              ref={tableScrollRef}
+              className="overflow-auto"
+              style={{ maxHeight: "70vh" }}
+            >
             <table className="w-full border-separate border-spacing-0 text-sm">
               <thead>
                 <tr>
@@ -781,62 +947,25 @@ export function SectionTasksBoard({
                   />
                 </tr>
               </thead>
-              <tbody>
-                {sortedTasks.length === 0 ? (
+              {sortedTasks.length === 0 ? (
+                <tbody>
                   <tr>
                     <td colSpan={13} className="p-8 text-center text-sm text-muted-foreground">
                       Нет задач, соответствующих фильтру
                     </td>
                   </tr>
-                ) : (
-                groups.map((group) => {
-                  const isCollapsed = collapsedGroups.has(group.key);
-                  const isSingleTask = group.tasks.length === 1;
-
-                  // Одна задача — рендерим напрямую без шапки группы
-                  if (isSingleTask) {
-                    const task = group.tasks[0];
-                    const isSelected = bulkMode && bulkSelection?.isSelected(task.id);
-                    return renderTaskRow(task, isSelected, bulkMode, bulkSelection, onAction, true, false);
-                  }
-
-                  return (
-                    <>
-                      <TableTaskGroupRow
-                        key={group.key}
-                        group={group}
-                        isCollapsed={isCollapsed}
-                        isBulkMode={!!bulkMode}
-                        bulkSelection={bulkSelection}
-                        onToggleCollapse={() => toggleGroup(group.key)}
-                        onCompleteGroup={onCompleteGroup}
-                        onSelectGroup={() => {
-                          if (!bulkMode || !bulkSelection) return;
-                          const taskIds = group.tasks.map((t) => t.id);
-                          const allSelected = bulkSelection.isAllSelected(taskIds);
-                          const someSelected = bulkSelection.isIndeterminate(taskIds);
-                          if (allSelected || someSelected) {
-                            for (const id of taskIds) {
-                              bulkSelection.selectOne(id, false);
-                            }
-                          } else {
-                            for (const id of taskIds) {
-                              bulkSelection.selectOne(id, true);
-                            }
-                          }
-                        }}
-                      />
-                      {!isCollapsed && group.tasks.map((task, idx) => {
-                        const isSelected = bulkMode && bulkSelection?.isSelected(task.id);
-                        const isLast = idx === group.tasks.length - 1;
-                        return renderTaskRow(task, isSelected, bulkMode, bulkSelection, onAction, isLast, true);
-                      })}
-                    </>
-                  );
-                })
-                )}
-              </tbody>
+                </tbody>
+              ) : (
+                <VirtualizedTableBody
+                  rows={virtualRows}
+                  rowHeight={48}
+                  colSpan={13}
+                  scrollContainerRef={tableScrollRef}
+                  renderRow={(row) => renderVirtualRow(row)}
+                />
+              )}
             </table>
+            </div>
           </div>
 
           {/* Mobile cards */}
@@ -934,6 +1063,17 @@ export function SectionTasksBoard({
               );
             })}
           </div>
+
+          <TablePaginationFooter
+            page={page}
+            totalPages={totalPages}
+            total={total}
+            shownCount={visibleTasks.length}
+            limit={limit}
+            onPageChange={setPage}
+            onLimitChange={setLimit}
+            rangeLabel={rangeLabel}
+          />
         </>
       )}
     </div>

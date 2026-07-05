@@ -834,6 +834,12 @@ async def section_board(
     date_from: datetime | None = Query(None),
     date_to: datetime | None = Query(None),
     status: str | None = Query(None),
+    search: str | None = Query(None, description="ILIKE: product_sku, task id, operation_name"),
+    product_sku: str | None = Query(None, description="Column filter: ILIKE on product/source/output sku"),
+    sort_by: str = Query(default="sequence"),
+    sort_order: str = Query(default="asc"),
+    limit: int = Query(default=50, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
     db: AsyncSession = Depends(get_db),
     locked_section_id: int | None = Depends(get_single_window_locked_section_id),
 ) -> dict:
@@ -844,6 +850,12 @@ async def section_board(
         date_from=date_from,
         date_to=date_to,
         status=status,
+        search=search,
+        product_sku=product_sku,
+        sort_by=sort_by,
+        sort_order=sort_order,
+        limit=limit,
+        offset=offset,
     )
 
 

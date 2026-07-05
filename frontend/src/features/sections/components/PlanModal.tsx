@@ -24,7 +24,7 @@ import {
   loadPresets,
   type PlanPreset,
 } from "../lib/planPresets";
-import { renderIcon, AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/shared/ui";
+import { renderIcon, AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, DATA_TABLE_STYLES } from "@/shared/ui";
 
 
 // ---------------------------------------------------------------------------
@@ -151,6 +151,8 @@ function PlanTable({
     (profile.criteria.includes("outputKind") ? 1 : 0) +
     (profile.criteria.includes("sourceRef") ? 1 : 0);
 
+  const headerCellClass = `${DATA_TABLE_STYLES.headerRow} ${DATA_TABLE_STYLES.headerCell}`;
+
   if (tasks.length === 0) {
     return (
       <div className="mb-6">
@@ -182,39 +184,39 @@ function PlanTable({
         </button>
       </div>
 
-      <div className="overflow-x-auto">
+      <div className={DATA_TABLE_STYLES.container}>
       <table className="w-full text-sm border-collapse table-auto">
         <thead>
-          <tr className="border-b">
+          <tr>
             {showSku && (
-              <th className="text-left px-2 py-2 font-medium max-w-[120px] break-words">Артикул</th>
+              <th className={`${headerCellClass} max-w-[120px] break-words`}>Артикул</th>
             )}
             {showOp && profile.criteria.includes("operationCode") && (
               <>
-                <th className="text-left px-2 py-2 font-medium w-[1px] whitespace-nowrap">Маршрут</th>
-                <th className="text-left px-2 py-2 font-medium max-w-[140px] break-words">Операция</th>
+                <th className={`${headerCellClass} w-[1px] whitespace-nowrap`}>Маршрут</th>
+                <th className={`${headerCellClass} max-w-[140px] break-words`}>Операция</th>
               </>
             )}
             {profile.criteria.includes("outputKind") && (
-              <th className="text-left px-2 py-2 font-medium">Цвет</th>
+              <th className={headerCellClass}>Цвет</th>
             )}
             {profile.criteria.includes("sourceRef") && (
-              <th className="text-left px-2 py-2 font-medium">Заказ</th>
+              <th className={headerCellClass}>Заказ</th>
             )}
             {showQtyPlan && (
-              <th className="text-right px-2 py-2 font-medium whitespace-nowrap">План</th>
+              <th className={`${headerCellClass} text-right whitespace-nowrap`}>План</th>
             )}
             {showQtyRemaining && (
-              <th className="text-right px-2 py-2 font-medium whitespace-nowrap" style={{ minWidth: "60px" }}>Осталось<br/>выдать</th>
+              <th className={`${headerCellClass} text-right whitespace-nowrap`} style={{ minWidth: "60px" }}>Осталось<br/>выдать</th>
             )}
             {showQtyTransferred && (
-              <th className="text-right px-2 py-2 font-medium whitespace-nowrap">Передано</th>
+              <th className={`${headerCellClass} text-right whitespace-nowrap`}>Передано</th>
             )}
             {showQtyBalance && (
-              <th className="text-right px-2 py-2 font-medium whitespace-nowrap">Остаток</th>
+              <th className={`${headerCellClass} text-right whitespace-nowrap`}>Остаток</th>
             )}
-            <th className="text-right px-2 py-2 font-medium whitespace-nowrap">Заказов</th>
-            {onHideGroup && <th className="w-8"></th>}
+            <th className={`${headerCellClass} text-right whitespace-nowrap`}>Заказов</th>
+            {onHideGroup && <th className={`${headerCellClass} w-8`}></th>}
           </tr>
         </thead>
         <tbody>

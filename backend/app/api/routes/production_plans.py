@@ -2,9 +2,9 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Literal
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, ConfigDict
-from sqlalchemy import select, text
+from sqlalchemy import String, cast, exists, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from sqlalchemy import func as sa_func
@@ -17,6 +17,7 @@ from app.models.production_plan import (
     PlanPosition,
     PlanPositionRouteOrigin,
     PlanPositionStatus,
+    PlanPositionValidationStatus,
     ProductionPlan,
 )
 from app.models.audit_log import AuditLog
@@ -1064,48 +1065,136 @@ async def _compute_available_remainder_for_positions(
     return result
 
 
-@router.get("/all-files", response_model=list[PlanFileInfo])
-async def all_plan_files(db: AsyncSession = Depends(get_db)) -> list[PlanFileInfo]:
-    """Return files from all production plans."""
-    from app.models.imports import ImportBatch, ImportFile
+ALL_POSITIONS_PLANNING_STATUSES = (
+    PlanPositionStatus.draft,
+    PlanPositionStatus.invalid,
+    PlanPositionStatus.valid,
+)
 
-    batches = (
-        await db.execute(
-            select(ImportBatch, ImportFile)
-            .join(ImportFile, ImportBatch.source_file_id == ImportFile.id)
-            .order_by(ImportBatch.created_at.desc())
+ALL_POSITIONS_SORT_FIELDS = frozenset({
+    "source_row_number",
+    "source_sku",
+    "quantity",
+    "status",
+    "validation_status",
+    "period_start",
+})
+
+
+class AllPlanPositionsListResponse(BaseModel):
+    positions: list[PlanPositionOut]
+    total: int
+    limit: int
+    offset: int
+
+
+def _apply_all_positions_filters(
+    stmt,
+    *,
+    search: str | None,
+    status: str | None,
+    validation_status: str | None,
+    source_sku: str | None,
+    source_name: str | None,
+    has_route: str | None,
+    has_errors: str | None,
+    has_warnings: str | None,
+):
+    stmt = stmt.where(
+        PlanPosition.status.in_(ALL_POSITIONS_PLANNING_STATUSES),
+        PlanPosition.deleted_at.is_(None),
+    )
+
+    if status:
+        try:
+            status_enum = PlanPositionStatus(status)
+        except ValueError:
+            status_enum = None
+        if status_enum in ALL_POSITIONS_PLANNING_STATUSES:
+            stmt = stmt.where(PlanPosition.status == status_enum)
+
+    if validation_status:
+        try:
+            validation_enum = PlanPositionValidationStatus(validation_status)
+        except ValueError:
+            validation_enum = None
+        if validation_enum is not None:
+            stmt = stmt.where(PlanPosition.validation_status == validation_enum)
+
+    if source_sku:
+        stmt = stmt.where(PlanPosition.source_sku.ilike(f"%{source_sku}%"))
+    if source_name:
+        stmt = stmt.where(PlanPosition.source_name.ilike(f"%{source_name}%"))
+
+    if has_route == "yes":
+        stmt = stmt.where(PlanPosition.route_id.is_not(None))
+    elif has_route == "no":
+        stmt = stmt.where(PlanPosition.route_id.is_(None))
+
+    errors_len = sa_func.coalesce(sa_func.jsonb_array_length(PlanPosition.validation_errors), 0)
+    if has_errors == "yes":
+        stmt = stmt.where(errors_len > 0)
+    elif has_errors == "no":
+        stmt = stmt.where(errors_len == 0)
+
+    if has_warnings in {"yes", "no"}:
+        warnings_exists = (
+            select(PlanChangeItem.id)
+            .where(PlanChangeItem.plan_position_id == PlanPosition.id)
+            .where(sa_func.coalesce(sa_func.jsonb_array_length(PlanChangeItem.warnings), 0) > 0)
+            .correlate(PlanPosition)
         )
-    ).all()
-    return [
-        PlanFileInfo(
-            batch_id=batch.id,
-            file_id=file.id,
-            filename=file.original_filename,
-            extension=file.file_extension,
-            size_bytes=file.size_bytes,
-            sheet_name=batch.sheet_name,
-            total_rows=batch.total_rows,
-            parsed_rows=batch.parsed_rows,
-            status=batch.status.value,
-            created_at=batch.created_at.isoformat(),
+        if has_warnings == "yes":
+            stmt = stmt.where(exists(warnings_exists))
+        else:
+            stmt = stmt.where(~exists(warnings_exists))
+
+    if search:
+        search_like = f"%{search}%"
+        stmt = stmt.outerjoin(Product, Product.id == PlanPosition.product_id)
+        stmt = stmt.where(
+            or_(
+                PlanPosition.source_sku.ilike(search_like),
+                PlanPosition.source_name.ilike(search_like),
+                Product.sku.ilike(search_like),
+                Product.name.ilike(search_like),
+            )
         )
-        for batch, file in batches
-    ]
+
+    return stmt
 
 
-@router.get("/all-positions", response_model=list[PlanPositionOut])
-async def all_plan_positions(db: AsyncSession = Depends(get_db)) -> list[PlanPositionOut]:
-    """Return positions from all production plans that are still in planning stage (draft/invalid/valid)."""
+def _all_positions_order_columns(sort_by: str, sort_order: str):
+    resolved_sort_by = sort_by if sort_by in ALL_POSITIONS_SORT_FIELDS else "source_row_number"
+    if sort_order not in ("asc", "desc"):
+        sort_order = "asc"
+
+    if resolved_sort_by == "source_sku":
+        order_column = PlanPosition.source_sku
+    elif resolved_sort_by == "quantity":
+        order_column = PlanPosition.quantity
+    elif resolved_sort_by == "status":
+        order_column = cast(PlanPosition.status, String)
+    elif resolved_sort_by == "validation_status":
+        order_column = cast(PlanPosition.validation_status, String)
+    elif resolved_sort_by == "period_start":
+        order_column = PlanPosition.period_start
+    else:
+        order_column = PlanPosition.source_row_number
+
+    if sort_order == "asc":
+        return order_column.asc(), PlanPosition.id.asc()
+    return order_column.desc(), PlanPosition.id.desc()
+
+
+async def _serialize_plan_positions(
+    db: AsyncSession,
+    positions: list[PlanPosition],
+) -> list[PlanPositionOut]:
     from app.models.production_plan import PlanChangeItem
 
-    positions = (
-        await db.execute(
-            select(PlanPosition)
-            .where(PlanPosition.status.in_([PlanPositionStatus.draft, PlanPositionStatus.invalid, PlanPositionStatus.valid]))
-            .where(PlanPosition.deleted_at.is_(None))
-            .order_by(PlanPosition.source_row_number, PlanPosition.id)
-        )
-    ).scalars().all()
+    if not positions:
+        return []
 
     change_items = (
         await db.execute(
@@ -1132,7 +1221,7 @@ async def all_plan_positions(db: AsyncSession = Depends(get_db)) -> list[PlanPos
         db, positions, route_info_by_id
     )
 
-    result = []
+    result: list[PlanPositionOut] = []
     for p in positions:
         route_info = route_info_by_id[p.id]
         result.append(
@@ -1167,8 +1256,85 @@ async def all_plan_positions(db: AsyncSession = Depends(get_db)) -> list[PlanPos
                 available_remainder_quantity=round(available_remainder_by_id.get(p.id, 0.0), 3),
             )
         )
-
     return result
+
+
+@router.get("/all-files", response_model=list[PlanFileInfo])
+async def all_plan_files(db: AsyncSession = Depends(get_db)) -> list[PlanFileInfo]:
+    """Return files from all production plans."""
+    from app.models.imports import ImportBatch, ImportFile
+
+    batches = (
+        await db.execute(
+            select(ImportBatch, ImportFile)
+            .join(ImportFile, ImportBatch.source_file_id == ImportFile.id)
+            .order_by(ImportBatch.created_at.desc())
+        )
+    ).all()
+    return [
+        PlanFileInfo(
+            batch_id=batch.id,
+            file_id=file.id,
+            filename=file.original_filename,
+            extension=file.file_extension,
+            size_bytes=file.size_bytes,
+            sheet_name=batch.sheet_name,
+            total_rows=batch.total_rows,
+            parsed_rows=batch.parsed_rows,
+            status=batch.status.value,
+            created_at=batch.created_at.isoformat(),
+        )
+        for batch, file in batches
+    ]
+
+
+@router.get("/all-positions", response_model=AllPlanPositionsListResponse)
+async def all_plan_positions(
+    search: str | None = Query(default=None, description="Поиск по source_sku, source_name, product sku/name"),
+    status: str | None = Query(default=None, description="Фильтр статуса: draft, valid, invalid"),
+    validation_status: str | None = Query(default=None, description="Фильтр validation_status"),
+    source_sku: str | None = Query(default=None, description="Column filter: ILIKE по source_sku"),
+    source_name: str | None = Query(default=None, description="Column filter: ILIKE по source_name"),
+    has_route: str | None = Query(default=None, description="Фильтр маршрута: yes | no"),
+    has_errors: str | None = Query(default=None, description="Фильтр ошибок валидации: yes | no"),
+    has_warnings: str | None = Query(default=None, description="Фильтр предупреждений импорта: yes | no"),
+    sort_by: str = Query(default="source_row_number"),
+    sort_order: str = Query(default="asc"),
+    limit: int = Query(default=50, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
+    db: AsyncSession = Depends(get_db),
+) -> AllPlanPositionsListResponse:
+    """Return paginated positions from all production plans in planning stage (draft/invalid/valid)."""
+    stmt = select(PlanPosition)
+    stmt = _apply_all_positions_filters(
+        stmt,
+        search=search,
+        status=status,
+        validation_status=validation_status,
+        source_sku=source_sku,
+        source_name=source_name,
+        has_route=has_route,
+        has_errors=has_errors,
+        has_warnings=has_warnings,
+    )
+
+    count_stmt = select(sa_func.count()).select_from(stmt.subquery())
+    total = (await db.execute(count_stmt)).scalar() or 0
+
+    primary_order, tiebreaker_order = _all_positions_order_columns(sort_by, sort_order)
+    positions = (
+        await db.execute(
+            stmt.order_by(primary_order, tiebreaker_order).limit(limit).offset(offset)
+        )
+    ).scalars().all()
+
+    serialized = await _serialize_plan_positions(db, positions)
+    return AllPlanPositionsListResponse(
+        positions=serialized,
+        total=total,
+        limit=limit,
+        offset=offset,
+    )
 
 
 @router.get("/cancelled-positions", response_model=list[PlanPositionOut])

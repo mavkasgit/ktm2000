@@ -5,14 +5,14 @@ import json
 from datetime import datetime
 from decimal import Decimal
 
-from sqlalchemy import case, func, select
+from sqlalchemy import String, case, cast, exists, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
 from app.models.internal_plan import SectionPlanLine
 from app.models.production_plan import PlanPosition
 from app.models.product import Product
-from app.models.route import RouteStage, SectionOperation
+from app.models.route import RouteOperation, RouteStage, SectionOperation
 from app.models.section import Section
 from app.models.transfer import Transfer, TransferStatus
 from app.models.work_task import WorkTask, WorkTaskStatus
@@ -42,15 +42,21 @@ def _compute_fingerprint(
     return hashlib.sha256(canonical.encode()).hexdigest()[:16]
 
 
-async def get_section_board(
-    db: AsyncSession,
+BOARD_SORT_FIELDS = frozenset({"sequence", "task_id", "product_sku", "status", "due_date"})
+DEFAULT_BOARD_LIMIT = 50
+MAX_BOARD_LIMIT = 500
+
+
+def _build_section_board_query(
     *,
     section_id: int,
     date_from: datetime | None = None,
     date_to: datetime | None = None,
     status: str | None = None,
-) -> dict:
-    """Return the section board: tasks + previous stage progress."""
+    search: str | None = None,
+    product_sku: str | None = None,
+):
+    """Base board query with SQL-first filters (no pagination/sort)."""
     query = select(
         WorkTask,
         SectionPlanLine,
@@ -81,13 +87,117 @@ async def get_section_board(
         query = query.where(WorkTask.created_at >= date_from)
     if date_to:
         query = query.where(WorkTask.created_at <= date_to)
+    if product_sku:
+        sku_like = f"%{product_sku}%"
+        query = query.where(
+            or_(
+                Product.sku.ilike(sku_like),
+                PlanPosition.source_sku.ilike(sku_like),
+                PlanPosition.output_sku.ilike(sku_like),
+            )
+        )
+    if search:
+        search_like = f"%{search}%"
+        route_op_search = exists(
+            select(1).where(
+                RouteOperation.route_stage_id == RouteStage.id,
+                RouteOperation.operation_name.ilike(search_like),
+            )
+        )
+        section_op_search = exists(
+            select(1).where(
+                SectionOperation.section_id == WorkTask.section_id,
+                SectionOperation.operation_code == WorkTask.selected_operation_code,
+                SectionOperation.operation_name.ilike(search_like),
+            )
+        )
+        query = query.where(
+            or_(
+                Product.sku.ilike(search_like),
+                PlanPosition.source_sku.ilike(search_like),
+                PlanPosition.output_sku.ilike(search_like),
+                cast(WorkTask.id, String).ilike(search_like),
+                route_op_search,
+                section_op_search,
+                PlanPosition.source_payload["operation_name"].astext.ilike(search_like),
+            )
+        )
 
-    query = query.order_by(SectionPlanLine.sequence, WorkTask.id)
+    return query
 
+
+def _apply_board_sort(query, *, sort_by: str, sort_order: str):
+    resolved_sort_by = sort_by if sort_by in BOARD_SORT_FIELDS else "sequence"
+    if sort_order not in ("asc", "desc"):
+        sort_order = "asc"
+
+    if resolved_sort_by == "task_id":
+        order_column = WorkTask.id
+    elif resolved_sort_by == "product_sku":
+        order_column = Product.sku
+    elif resolved_sort_by == "status":
+        order_column = WorkTask.status
+    elif resolved_sort_by == "due_date":
+        order_column = WorkTask.due_date
+    else:
+        order_column = SectionPlanLine.sequence
+
+    if sort_order == "asc":
+        primary = order_column.asc()
+        if resolved_sort_by == "due_date":
+            primary = primary.nulls_last()
+        return query.order_by(primary, WorkTask.id.asc())
+
+    primary = order_column.desc()
+    if resolved_sort_by == "due_date":
+        primary = primary.nulls_last()
+    return query.order_by(primary, WorkTask.id.desc())
+
+
+async def get_section_board(
+    db: AsyncSession,
+    *,
+    section_id: int,
+    date_from: datetime | None = None,
+    date_to: datetime | None = None,
+    status: str | None = None,
+    search: str | None = None,
+    product_sku: str | None = None,
+    sort_by: str = "sequence",
+    sort_order: str = "asc",
+    limit: int = DEFAULT_BOARD_LIMIT,
+    offset: int = 0,
+) -> dict:
+    """Return the section board: tasks + previous stage progress."""
+    limit = min(max(limit, 1), MAX_BOARD_LIMIT)
+    offset = max(offset, 0)
+
+    query = _build_section_board_query(
+        section_id=section_id,
+        date_from=date_from,
+        date_to=date_to,
+        status=status,
+        search=search,
+        product_sku=product_sku,
+    )
+
+    count_stmt = select(func.count()).select_from(
+        query.with_only_columns(WorkTask.id).order_by(None).subquery()
+    )
+    total = (await db.execute(count_stmt)).scalar() or 0
+
+    query = _apply_board_sort(query, sort_by=sort_by, sort_order=sort_order)
+    query = query.limit(limit).offset(offset)
     rows = (await db.execute(query)).all()
 
     if not rows:
-        return {"section_id": section_id, "tasks": []}
+        return {
+            "section_id": section_id,
+            "tasks": [],
+            "total": total,
+            "limit": limit,
+            "offset": offset,
+        }
 
     # --- Batched loading to fix N+1 ---
     route_ids: set[int] = set()
@@ -383,7 +493,14 @@ async def get_section_board(
             "operation_names": operation_names,
         })
 
-    return {"section_id": section_id, "tasks": tasks_data, "available_operations": available_operations}
+    return {
+        "section_id": section_id,
+        "tasks": tasks_data,
+        "available_operations": available_operations,
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+    }
 
 
 async def get_sections_summary(db: AsyncSession) -> dict:

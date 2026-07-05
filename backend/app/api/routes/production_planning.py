@@ -3,7 +3,7 @@ from decimal import Decimal
 from typing import Literal
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -19,7 +19,11 @@ from app.models.section import Section
 from app.models.user import User
 from app.models.product import Product
 from app.models.spg import SpgSection, StorageProductionGroup
-from app.services.production_planning_rows import get_production_planning_row_detail, list_production_planning_rows
+from app.services.production_planning_rows import (
+    PlanningRowsQueryParams,
+    get_production_planning_row_detail,
+    list_production_planning_rows,
+)
 from app.services.production_plan_service import _refresh_plan_status, restore_plan_position, soft_delete_cancelled_position
 from app.services.plan_generation import create_release_batch, release_batch
 from app.services.route_matcher import resolve_position_route, make_position_route_cache_key
@@ -150,6 +154,13 @@ class SectionOut(BaseModel):
 
 class ProductionPlanningOverview(BaseModel):
     sections: list[SectionOut]
+
+
+class PlanningRowsListResponse(BaseModel):
+    rows: list["PlanningRowOut"]
+    total: int
+    limit: int
+    offset: int
 
 
 class PlanningRowOut(BaseModel):
@@ -296,11 +307,48 @@ class PlanningRowDetailOut(BaseModel):
     available_remainder_quantity: float | None = None
 
 
-@router.get("/rows", response_model=list[PlanningRowOut])
+@router.get("/rows", response_model=PlanningRowsListResponse)
 async def list_rows(
+    section_id: int | None = Query(default=None),
+    search: str | None = Query(default=None),
+    sort_by: str | None = Query(default=None),
+    sort_order: str = Query(default="desc"),
+    limit: int = Query(default=50, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
+    plan_position_id: str | None = Query(default=None, description="Column filter: position id"),
+    source_row_number: str | None = Query(default=None, description="Column filter: source row number"),
+    production_plan_id: str | None = Query(default=None, description="Column filter: production plan id"),
+    product_sku: str | None = Query(default=None, description="Column filter: product/source sku"),
+    source_sku: str | None = Query(default=None, description="Alias for product_sku column filter"),
+    source_name: str | None = Query(default=None, description="Column filter: source name"),
+    quantity: str | None = Query(default=None, description="Column filter: planned quantity"),
+    route_name: str | None = Query(default=None, description="Column filter: route name"),
+    status: str | None = Query(default=None, description="Column filter: position status or completed"),
+    current_stage_section_name: str | None = Query(
+        default=None,
+        description="Column filter: current stage section name",
+    ),
     db: AsyncSession = Depends(get_db),
 ):
-    return await list_production_planning_rows(db)
+    params = PlanningRowsQueryParams(
+        section_id=section_id,
+        search=search,
+        sort_by=sort_by,
+        sort_order=sort_order,
+        limit=limit,
+        offset=offset,
+        plan_position_id=plan_position_id,
+        source_row_number=source_row_number,
+        production_plan_id=production_plan_id,
+        product_sku=product_sku,
+        source_sku=source_sku,
+        source_name=source_name,
+        quantity=quantity,
+        route_name=route_name,
+        status=status,
+        current_stage_section_name=current_stage_section_name,
+    )
+    return await list_production_planning_rows(db, params=params)
 
 
 @router.get("/rows/{position_id}", response_model=PlanningRowDetailOut)
