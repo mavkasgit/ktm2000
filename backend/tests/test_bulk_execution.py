@@ -26,10 +26,11 @@ from app.models.production_plan import (
 from app.models.product import Product, ProductType
 from app.models.route import ProductionRoute, RouteOperation, RouteStage
 from app.models.section import Section
+from app.stock.models import Reason, StockTransaction
 from app.models.techcard import Techcard, TechcardLine
 from app.models.transfer import Transfer
 from app.models.user import User, UserRole
-from app.models.work_task import WorkTask, WorkTaskStatus
+from app.models.work_task import WorkTask
 
 
 async def _make_user(session, email: str = "bulk-exec@test.local") -> User:
@@ -301,17 +302,26 @@ async def test_restore_batch_after_cancel(client, session) -> None:
 
 @pytest.mark.asyncio
 async def test_manual_pass_batch_full_route(client, session) -> None:
-    pytest.skip("manual-pass known debt (PLAN 4.1)")
     user = await _make_user(session, "manual-pass@test.local")
-    plan, positions, _, _ = await _make_plan_with_positions(
+    plan, positions, _, stages = await _make_plan_with_positions(
         session, "FG-MANUAL-PASS", 2, status=PlanPositionStatus.approved
     )
+    raw_section_id = stages[0].section_id
+    for pos in positions:
+        await _seed_stock_balance(
+            session,
+            user_id=user.id,
+            location_id=raw_section_id,
+            product_id=pos.product_id,
+            qty=pos.quantity,
+        )
+    position_ids = [p.id for p in positions]
     headers = _auth_headers(user)
 
     response = await client.post(
         "/api/production-planning/rows/manual-pass-batch",
         json={
-            "position_ids": [p.id for p in positions],
+            "position_ids": position_ids,
             "complete_route": True,
             "comment": "bulk test pass",
         },
@@ -322,30 +332,51 @@ async def test_manual_pass_batch_full_route(client, session) -> None:
     assert len(payload["results"]) == 2
     for result in payload["results"]:
         assert result["status"] == "success"
-        assert result["position_completed"] is True
-        assert (result["movements_created"] or 0) >= 1
+        # Stock fake_task stays ready; only the production WorkTask completes.
+        assert result["position_completed"] is False
+        assert result["movements_created"] == 3  # TRANSFER_SEND + TRANSFER_RECEIVE + COMPLETE
+        assert result["transfers_created"] == 1  # stock→production for the single production step
 
-    # Verify movements and transfers were created for the through-pass.
-    movement_count = (
+    # Verify StockTransaction ledger facts for the through-pass (ISSUE via transfer + COMPLETE).
+    tx_rows = (
         await session.execute(
-            select(Movement)
-            .join(SectionPlanLine, SectionPlanLine.id == Movement.section_plan_line_id)
-            .where(SectionPlanLine.plan_position_id.in_([p.id for p in positions]))
+            select(StockTransaction.reason)
+            .join(WorkTask, WorkTask.id == StockTransaction.task_id)
+            .join(SectionPlanLine, SectionPlanLine.id == WorkTask.section_plan_line_id)
+            .where(SectionPlanLine.plan_position_id.in_(position_ids))
         )
     ).scalars().all()
-    assert len(movement_count) >= 4  # at least 2 movements per position (issue + complete)
+    assert len(tx_rows) >= 4  # at least issue (send/receive) + complete per position
+    assert Reason.TRANSFER_SEND.value in tx_rows
+    assert Reason.TRANSFER_RECEIVE.value in tx_rows
+    assert Reason.COMPLETE.value in tx_rows
 
-    transfer_count = await session.execute(select(Transfer))
-    assert len(transfer_count.scalars().all()) >= 2  # one transfer per position
+    transfer_rows = (
+        await session.execute(
+            select(Transfer)
+            .join(WorkTask, WorkTask.id == Transfer.from_task_id)
+            .join(SectionPlanLine, SectionPlanLine.id == WorkTask.section_plan_line_id)
+            .where(SectionPlanLine.plan_position_id.in_(position_ids))
+        )
+    ).scalars().all()
+    # Route has 1 production step: one stock→production transfer per position.
+    assert len(transfer_rows) == 2
 
-    # Verify all tasks are completed.
-    tasks = await session.execute(
-        select(WorkTask)
-        .join(SectionPlanLine, SectionPlanLine.id == WorkTask.section_plan_line_id)
-        .where(SectionPlanLine.plan_position_id.in_([p.id for p in positions]))
-    )
-    task_list = tasks.scalars().all()
-    assert all(t.status == WorkTaskStatus.completed for t in task_list)
+    # Production step facts: COMPLETE tx per position (WorkTask may stay in_progress
+    # when there is no next stage to transfer to).
+    for position_id in position_ids:
+        complete_qty = await session.scalar(
+            select(StockTransaction.quantity)
+            .join(WorkTask, WorkTask.id == StockTransaction.task_id)
+            .join(SectionPlanLine, SectionPlanLine.id == WorkTask.section_plan_line_id)
+            .join(Section, Section.id == WorkTask.section_id)
+            .where(
+                SectionPlanLine.plan_position_id == position_id,
+                Section.type == "production",
+                StockTransaction.reason == Reason.COMPLETE,
+            )
+        )
+        assert complete_qty == Decimal("10")
 
 
 @pytest.mark.asyncio

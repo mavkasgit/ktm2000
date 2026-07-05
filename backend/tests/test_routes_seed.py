@@ -26,6 +26,7 @@ from app.models.techcard import Techcard, TechcardLine
 from app.models.transfer import Transfer
 from app.models.work_task import WorkTask
 from app.services.route_selection import select_route_for_payload
+from app.stock.models import StockBalance, StockTransaction
 
 
 DEFAULT_SECTIONS = [
@@ -54,10 +55,15 @@ async def _count(session, model) -> int:
     return await session.scalar(select(func.count()).select_from(model)) or 0
 
 
-async def _make_releasable_position(session, route_name: str = "ГП • Без первичной • Без дробеструя") -> tuple[ProductionPlan, PlanPosition]:
+async def _make_releasable_position(session, route_name: str = "Универсальный маршрут РП") -> tuple[ProductionPlan, PlanPosition]:
     from app.models.route import ProductionRoute
 
-    route = await session.scalar(select(ProductionRoute).where(ProductionRoute.name == route_name))
+    route = await session.scalar(
+        select(ProductionRoute).where(
+            (ProductionRoute.name == route_name) | (ProductionRoute.code == "universal_rp")
+        )
+    )
+    assert route is not None, f"Route not found: {route_name!r} / universal_rp"
     product = Product(sku=f"ЮП-TEST-{datetime.now(UTC).timestamp()}", name="Микроплинтус тест", type=ProductType.finished_good, unit="pcs")
     component = Product(sku=f"RAW-{datetime.now(UTC).timestamp()}", name="Сырьё тест", type=ProductType.component, unit="pcs")
     session.add_all([product, component])
@@ -219,7 +225,6 @@ async def test_seeded_rules_exclude_finished_good_branch_for_semi_finished(clien
     assert "PACKING" in excluded_codes
 
 
-@pytest.mark.skip(reason="Phase 4: release tests need dynamic route builder")
 @pytest.mark.asyncio
 async def test_force_seed_clears_generated_production_data(client, session) -> None:
     await _seed_default_sections(session)
@@ -236,11 +241,11 @@ async def test_force_seed_clears_generated_production_data(client, session) -> N
     assert create_response.status_code == 201
     release_response = await client.post(f"/api/release-batches/{create_response.json()['id']}/release")
     assert release_response.status_code == 200
-    assert release_response.json()["tasks_created"] == 8
+    assert release_response.json()["tasks_created"] == 6
 
     force_response = await client.post("/api/routes-seed?force=true")
     assert force_response.status_code == 201
-    assert force_response.json() == {"import_templates": 1, "route_rule_profiles": 1, "routes": 0, "selection_rules": 20, "sections": 12, "section_operations": 21}
+    assert force_response.json() == {"import_templates": 1, "route_rule_profiles": 1, "routes": 2, "selection_rules": 13, "sections": 12, "section_operations": 21}
 
     for model in (
         ReleaseBatchPosition,
@@ -248,7 +253,8 @@ async def test_force_seed_clears_generated_production_data(client, session) -> N
         InternalPlan,
         SectionPlanLine,
         WorkTask,
-        Movement,
+        StockTransaction,
+        StockBalance,
         Transfer,
         Defect,
         ReworkTask,
@@ -257,10 +263,9 @@ async def test_force_seed_clears_generated_production_data(client, session) -> N
     ):
         assert await _count(session, model) == 0
 
-    assert len((await session.execute(select(RouteSelectionRule))).scalars().all()) == 19
+    assert len((await session.execute(select(RouteSelectionRule))).scalars().all()) == 13
 
 
-@pytest.mark.skip(reason="Phase 4: release tests need dynamic route builder")
 @pytest.mark.asyncio
 async def test_new_release_after_force_seed_uses_new_route_steps(client, session) -> None:
     await _seed_default_sections(session)
@@ -287,14 +292,14 @@ async def test_new_release_after_force_seed_uses_new_route_steps(client, session
     assert create_response.status_code == 201
     batch = create_response.json()
     snapshot_steps = batch["positions"][0]["route_snapshot"]["steps"]
-    assert len(snapshot_steps) == 9
+    assert len(snapshot_steps) == 12
 
     release_response = await client.post(f"/api/release-batches/{batch['id']}/release")
     assert release_response.status_code == 200
     released = release_response.json()
-    assert released["tasks_created"] == 8
-    assert released["task_count"] == 8
-    assert await _count(session, WorkTask) == 8
+    assert released["tasks_created"] == 6
+    assert released["task_count"] == 6
+    assert await _count(session, WorkTask) == 6
 
 
 @pytest.mark.asyncio

@@ -260,10 +260,16 @@ async def test_update_user_sections(auth_client, session) -> None:
 
 @pytest.mark.asyncio
 async def test_transporter_can_manage_transfers_globally_but_not_shopfloor_tasks(session, client) -> None:
-    pytest.skip("test_shopfloor_api removed in Stage 7")
-    from app.core.security import create_access_token
-    from httpx import AsyncClient, ASGITransport
-    from app.main import app
+    from decimal import Decimal
+
+    from sqlalchemy import select
+
+    from app.models.internal_plan import SectionPlanLine
+    from app.models.section import Section
+    from app.models.work_task import WorkTask
+    from app.services.shopfloor.cache import _refresh_section_plan_line_cache
+    from app.stock import StockCommand, StockCommandService, Reason
+    from tests.test_plan_generation import _make_plan_position, _make_ready_product
 
     transporter = User(
         username="transporter_user",
@@ -276,12 +282,19 @@ async def test_transporter_can_manage_transfers_globally_but_not_shopfloor_tasks
     session.add(transporter)
     await session.commit()
 
-    product, plan, pos = await _make_product_route_plan(session, "FG-TRANS")
-    await _release_plan_position(client, plan.id, pos.id)
+    product, _sections, route = await _make_ready_product(session, "FG-TRANS")
+    plan, pos = await _make_plan_position(session, product, route_id=route.id)
+    await session.commit()
 
-    from sqlalchemy import select
-    from app.models.work_task import WorkTask
-    from app.models.internal_plan import SectionPlanLine
+    create_response = await client.post(
+        f"/api/production-plans/{plan.id}/release-batches",
+        json={"positions": [{"plan_position_id": pos.id, "release_quantity": "100"}]},
+    )
+    assert create_response.status_code == 201
+    batch = create_response.json()
+    release_response = await client.post(f"/api/release-batches/{batch['id']}/release")
+    assert release_response.status_code == 200
+
     tasks = (
         await session.execute(
             select(WorkTask)
@@ -290,11 +303,9 @@ async def test_transporter_can_manage_transfers_globally_but_not_shopfloor_tasks
             .order_by(SectionPlanLine.sequence)
         )
     ).scalars().all()
-    
     assert len(tasks) >= 2
     first_task, second_task = tasks[0], tasks[1]
 
-    # Подготавливаем первую задачу через админа
     admin_user = User(
         username="admin_test_t",
         email="admin_t@example.com",
@@ -303,54 +314,65 @@ async def test_transporter_can_manage_transfers_globally_but_not_shopfloor_tasks
         role=UserRole.admin,
         is_active=True,
     )
-    session.add(admin_user)
+    raw_stock = Section(code="FG-TRANS-STK", name="Stock", type="raw_stock", is_active=True)
+    session.add_all([admin_user, raw_stock])
     await session.commit()
 
-    admin_token = create_access_token(subject=admin_user.username)
-    admin_client = AsyncClient(
-        transport=ASGITransport(app=app),
-        base_url="http://test",
-        headers={"Authorization": f"Bearer {admin_token}"},
-    )
+    admin_headers = {"Authorization": f"Bearer {create_access_token(subject=admin_user.username)}"}
 
-    from decimal import Decimal
-    from app.stock import StockCommand, StockCommandService, Reason
     svc = StockCommandService()
-    await svc.record(session, StockCommand(
-        product_id=first_task.product_id,
-        from_location_id=first_task.section_id,
-        to_location_id=first_task.section_id,
-        quantity=Decimal("100"),
-        reason=Reason.ISSUE_TO_WORK,
-        task_id=first_task.id,
-        created_by=admin_user.id,
-    ))
-    from app.services.shopfloor.cache import _refresh_section_plan_line_cache
+    await svc.record(
+        session,
+        StockCommand(
+            product_id=first_task.product_id,
+            to_location_id=raw_stock.id,
+            quantity=Decimal("100"),
+            reason=Reason.MANUAL_IN,
+            created_by=admin_user.id,
+        ),
+    )
+    await svc.record(
+        session,
+        StockCommand(
+            product_id=first_task.product_id,
+            from_location_id=raw_stock.id,
+            to_location_id=first_task.section_id,
+            quantity=Decimal("100"),
+            reason=Reason.TRANSFER_RECEIVE,
+            task_id=first_task.id,
+            created_by=admin_user.id,
+        ),
+    )
+    await session.commit()
     await _refresh_section_plan_line_cache(session, first_task.section_plan_line_id)
 
-    await admin_client.post(
+    complete_response = await client.post(
         f"/api/shopfloor/tasks/{first_task.id}/complete",
         json={"good_quantity": "100", "defect_quantity": "0"},
+        headers=admin_headers,
     )
+    assert complete_response.status_code == 200, complete_response.text
 
-    # Клиент транспортировщика
-    token = create_access_token(subject=transporter.username)
-    t_client = AsyncClient(
-        transport=ASGITransport(app=app),
-        base_url="http://test",
-        headers={"Authorization": f"Bearer {token}"},
-    )
+    transporter_headers = {
+        "Authorization": f"Bearer {create_access_token(subject=transporter.username)}",
+        "X-Shopfloor-Single-Section-Id": str(first_task.section_id),
+    }
 
-    # Трансфер
-    response = await t_client.post(
+    transfer_response = await client.post(
         "/api/transfers",
         json={
             "from_task_id": first_task.id,
             "to_task_id": second_task.id,
-            "quantity": 50,
+            "quantity": "50",
         },
-        headers={"X-Shopfloor-Single-Section-Id": str(first_task.section_id)}
+        headers=transporter_headers,
     )
-    assert response.status_code == 200
-    body = response.json()
-    assert body["status"] == "accepted"
+    assert transfer_response.status_code == 200, transfer_response.text
+    assert transfer_response.json()["status"] == "accepted"
+
+    forbidden_response = await client.post(
+        f"/api/shopfloor/tasks/{second_task.id}/complete",
+        json={"good_quantity": "50", "defect_quantity": "0"},
+        headers={"Authorization": transporter_headers["Authorization"]},
+    )
+    assert forbidden_response.status_code == 403

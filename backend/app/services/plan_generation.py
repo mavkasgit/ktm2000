@@ -395,6 +395,8 @@ async def _get_route_stages_with_sections(
     sections_cache: dict | None = None,
 ) -> list[tuple[RouteStage, Section, list[RouteOperation]]]:
     """Return ordered list of ``(RouteStage, Section, operations)`` for a route."""
+    from app.services.route_storage_classifier import is_transit_stage
+
     if route_stages_cache is not None and route.id in route_stages_cache:
         return route_stages_cache[route.id]
 
@@ -416,13 +418,14 @@ async def _get_route_stages_with_sections(
         if stage.sequence <= previous:
             raise ValueError("Route sequence is invalid")
         previous = stage.sequence
-        
-        if sections_cache is not None and stage.section_id in sections_cache:
-            section = sections_cache[stage.section_id]
+
+        section_id = stage.storage_section_id if is_transit_stage(stage) else stage.section_id
+        if sections_cache is not None and section_id in sections_cache:
+            section = sections_cache[section_id]
         else:
-            section = await db.get(Section, stage.section_id)
+            section = await db.get(Section, section_id)
             if sections_cache is not None and section is not None:
-                sections_cache[stage.section_id] = section
+                sections_cache[section_id] = section
 
         if section is None or not section.is_active:
             raise ValueError("Route contains inactive section")
@@ -460,7 +463,7 @@ def _dynamic_route_snapshot(
                 "section_id": step["section_id"],
                 "section_code": step["section_code"],
                 "section_name": step["section_name"],
-                "section_kind": step["section_kind"],
+                "section_type": step["section_type"],
                 "group_code": step.get("group_code"),
                 "group_name": step.get("group_name"),
                 "operation_code": step["operation_code"],
@@ -501,14 +504,14 @@ async def _route_snapshot(
                 "section_id": storage_section.id if storage_section else None,
                 "section_code": storage_section.code if storage_section else None,
                 "section_name": storage_section.name if storage_section else None,
-                "section_kind": storage_section.type if storage_section else "wip_stock",
+                "section_type": storage_section.type if storage_section else "wip_stock",
             }
         else:
             section_payload = {
                 "section_id": section.id,
                 "section_code": section.code,
                 "section_name": section.name,
-                "section_kind": section.type,
+                "section_type": section.type,
             }
 
         snapshot_steps.append({
