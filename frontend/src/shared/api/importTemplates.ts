@@ -25,9 +25,29 @@ export type CreateImportTemplateInput = {
 
 export type UpdateImportTemplateInput = CreateImportTemplateInput;
 
-export async function listImportTemplates() {
-  const { data } = await apiClient.get<ImportTemplate[]>("/import-templates");
+export type ListImportTemplatesParams = {
+  limit?: number;
+  offset?: number;
+};
+
+export type ImportTemplatesListResponse = {
+  items: ImportTemplate[];
+  total: number;
+  limit: number;
+  offset: number;
+};
+
+export async function listImportTemplates(
+  params: ListImportTemplatesParams = {},
+): Promise<ImportTemplatesListResponse> {
+  const { data } = await apiClient.get<ImportTemplatesListResponse>("/import-templates", { params });
   return data;
+}
+
+/** Все шаблоны для селектов/диалогов (первая страница с большим limit). */
+export async function listAllImportTemplates(): Promise<ImportTemplate[]> {
+  const page = await listImportTemplates({ limit: 500, offset: 0 });
+  return page.items;
 }
 
 export async function createImportTemplate(input: CreateImportTemplateInput) {

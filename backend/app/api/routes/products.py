@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import List
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status, Response
 from pydantic import BaseModel
-from sqlalchemy import func, or_, select, type_coerce, delete
+from sqlalchemy import exists, func, or_, select, type_coerce, delete
 from sqlalchemy.types import ARRAY, String
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -125,6 +125,11 @@ class ProductOut(BaseModel):
 VALID_SORT_FIELDS = {"sku", "name", "length_mm", "quantity_per_hanger", "id"}
 
 
+class ProductsListResponse(BaseModel):
+    items: List[ProductOut]
+    total: int
+
+
 async def _sync_lengths(db: AsyncSession, product_id: int, lengths: list[float]) -> None:
     """Replace all lengths for a product with the given list."""
     await db.execute(delete(ProductLength).where(ProductLength.product_id == product_id))
@@ -238,10 +243,13 @@ def _parse_sort(sort_param: str):
     return rules
 
 
-@router.get("", response_model=list[ProductOut])
+@router.get("", response_model=ProductsListResponse)
 async def list_products(
+    response: Response,
     db: AsyncSession = Depends(get_db),
     q: str | None = Query(None, description="Search by sku or name"),
+    sku: str | None = Query(None, description="Column filter: ILIKE on Product.sku"),
+    name: str | None = Query(None, description="Column filter: ILIKE on Product.name"),
     type: ProductType | None = Query(None),
     profile_type: str | None = Query(None),
     alloy: str | None = Query(None),
@@ -249,10 +257,16 @@ async def list_products(
     is_active: bool | None = Query(None),
     is_catalog_item: bool | None = Query(None),
     is_paired_profile: bool | None = Query(None),
+    skip_shot_blast: bool | None = Query(None),
+    is_laminated: bool | None = Query(None),
+    length_from: float | None = Query(None),
+    length_to: float | None = Query(None),
+    qty_from: int | None = Query(None),
+    qty_to: int | None = Query(None),
     sort: str = Query("sku:asc", description="Comma-separated sort rules: field:asc|desc, e.g. sku:asc,length_mm:desc"),
-    limit: int = Query(500, ge=1, le=2000),
+    limit: int = Query(50, ge=1, le=2000),
     offset: int = Query(0, ge=0),
-) -> list[ProductOut]:
+) -> ProductsListResponse:
     stmt = select(Product).options(
         selectinload(Product.lengths),
         selectinload(Product.processing_flags),
@@ -282,11 +296,41 @@ async def list_products(
         stmt = stmt.where(Product.is_catalog_item == is_catalog_item)
     if is_paired_profile is not None:
         stmt = stmt.where(Product.is_paired_profile == is_paired_profile)
+    if skip_shot_blast is not None:
+        stmt = stmt.where(Product.skip_shot_blast == skip_shot_blast)
+    if is_laminated is not None:
+        stmt = stmt.where(Product.is_laminated == is_laminated)
+    if sku:
+        stmt = stmt.where(Product.sku.ilike(f"%{sku}%"))
+    if name:
+        stmt = stmt.where(Product.name.ilike(f"%{name}%"))
+    if length_from is not None:
+        stmt = stmt.where(
+            exists().where(
+                ProductLength.product_id == Product.id,
+                ProductLength.length_mm >= length_from,
+            )
+        )
+    if length_to is not None:
+        stmt = stmt.where(
+            exists().where(
+                ProductLength.product_id == Product.id,
+                ProductLength.length_mm <= length_to,
+            )
+        )
+    if qty_from is not None:
+        stmt = stmt.where(Product.quantity_per_hanger >= qty_from)
+    if qty_to is not None:
+        stmt = stmt.where(Product.quantity_per_hanger <= qty_to)
+
+    count_stmt = select(func.count()).select_from(stmt.subquery())
+    total = (await db.execute(count_stmt)).scalar() or 0
 
     for order_clause in _parse_sort(sort):
         stmt = stmt.order_by(order_clause)
     stmt = stmt.limit(limit).offset(offset)
     items = (await db.execute(stmt)).scalars().unique().all()
+    response.headers["X-Total-Count"] = str(total)
 
     # Query active standard techcard product IDs (direct reference)
     std_direct_stmt = select(Techcard.product_id).where(
@@ -316,7 +360,10 @@ async def list_products(
     )
     has_paired_ids = set((await db.execute(paired_line_stmt)).scalars().all())
 
-    return [_to_product_out(i, i.id in has_std_ids, i.id in has_paired_ids) for i in items]
+    return ProductsListResponse(
+        items=[_to_product_out(i, i.id in has_std_ids, i.id in has_paired_ids) for i in items],
+        total=total,
+    )
 
 
 @router.get("/search/suggestions", response_model=list[str])

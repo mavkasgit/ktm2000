@@ -132,9 +132,9 @@ async def test_list_sections_ordered_by_sort_order(client, session) -> None:
     session.add(Section(code="M-MIDDLE", name="M Middle", sort_order=20))
     await session.commit()
 
-    resp = await client.get("/api/sections")
+    resp = await client.get("/api/sections?limit=500&offset=0")
     assert resp.status_code == 200
-    data = resp.json()
+    data = resp.json()["items"]
     
     # Filter out seeded sections from other tests
     test_sections = [s for s in data if s["code"] in ("Z-LAST", "A-FIRST", "M-MIDDLE")]
@@ -228,7 +228,7 @@ async def test_product_includes_techcard_flags(client, session) -> None:
     # 3. Call list products API
     resp = await client.get("/api/products", params={"type": "component"})
     assert resp.status_code == 200
-    data = resp.json()
+    data = resp.json()["items"]
 
     # Verify standard techcard flag
     item1 = next(item for item in data if item["id"] == comp1.id)

@@ -19,10 +19,10 @@ export function useUpdateBackupConfig() {
   });
 }
 
-export function useBackups() {
+export function useBackups(params: api.ListBackupsParams = {}) {
   return useQuery({
-    queryKey: queryKeys.backups.all(),
-    queryFn: api.fetchBackups,
+    queryKey: queryKeys.backups.list(params),
+    queryFn: () => api.fetchBackups(params),
   });
 }
 
@@ -69,6 +69,7 @@ export function useUploadPreview() {
     mutationFn: (file: File) => api.uploadPreview(file),
     onSuccess: (_data, file) => {
       void queryClient.invalidateQueries({ queryKey: queryKeys.backups.all() });
+      void queryClient.invalidateQueries({ queryKey: ["backups", "list"] });
       void queryClient.invalidateQueries({ queryKey: queryKeys.backups.previews((file as unknown as { batch_id?: number })?.batch_id ?? -1) });
       void queryClient.invalidateQueries({ queryKey: queryKeys.backups.currentPreview() });
     },
@@ -82,6 +83,7 @@ export function useUpdateBackupComment() {
       api.updateBackupComment(filename, comment),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: queryKeys.backups.all() });
+      void queryClient.invalidateQueries({ queryKey: ["backups", "list"] });
       void queryClient.invalidateQueries({ queryKey: queryKeys.backups.currentPreview() });
       void queryClient.invalidateQueries({ queryKey: queryKeys.backups.previewsAll() });
     },
@@ -94,6 +96,7 @@ export function useDeleteBackup() {
     mutationFn: (filename: string) => api.deleteBackup(filename),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: queryKeys.backups.all() });
+      void queryClient.invalidateQueries({ queryKey: ["backups", "list"] });
       void queryClient.invalidateQueries({ queryKey: queryKeys.backups.previewsAll() });
       void queryClient.invalidateQueries({ queryKey: queryKeys.backups.currentPreview() });
       void queryClient.invalidateQueries({ queryKey: queryKeys.backups.jobs() });
@@ -107,6 +110,7 @@ export function useBulkDeleteBackups() {
     mutationFn: (filenames: string[]) => api.bulkDeleteBackups(filenames),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: queryKeys.backups.all() });
+      void queryClient.invalidateQueries({ queryKey: ["backups", "list"] });
       void queryClient.invalidateQueries({ queryKey: queryKeys.backups.previewsAll() });
       void queryClient.invalidateQueries({ queryKey: queryKeys.backups.currentPreview() });
     },
@@ -119,6 +123,7 @@ export function useDeleteBackupsOlderThan() {
     mutationFn: (days: number) => api.deleteBackupsOlderThan(days),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: queryKeys.backups.all() });
+      void queryClient.invalidateQueries({ queryKey: ["backups", "list"] });
       void queryClient.invalidateQueries({ queryKey: queryKeys.backups.previewsAll() });
       void queryClient.invalidateQueries({ queryKey: queryKeys.backups.currentPreview() });
     },

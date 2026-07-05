@@ -1,6 +1,9 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Search, Image, X, Grid, List, Plus, Filter, FileUp, Check, CheckCheck } from "lucide-react";
+import { usePaginatedTableQuery } from "@/shared/hooks/usePaginatedTableQuery";
 import * as API from "@/shared/api/products";
+import type { ProductFilters } from "@/shared/api/products";
+import { pickColumnApiValue } from "@/shared/lib/columnFilterSearch";
 import { Button } from "@/shared/ui/Button";
 import { Input } from "@/shared/ui/Input";
 import { Card } from "@/shared/ui/Card";
@@ -15,9 +18,8 @@ import { getPhotoUrl } from "../components/getPhotoUrl";
 import type { Product, CreateProductInput, PatchProductInput, CatalogPreview } from "@/shared/api/products";
 import { usePermission } from "@/features/auth/hooks/usePermission";
 import { SortableFilterHeader } from "@/shared/ui/SortableFilterHeader";
-import { TableCornerResetCell, TableCornerResetHeader } from "@/shared/ui";
+import { TableCornerResetCell, TableCornerResetHeader, TablePaginationFooter, DATA_TABLE_STYLES } from "@/shared/ui";
 import { useSortableColumnFilters } from "@/shared/hooks/useSortableColumnFilters";
-import { matchesPartialSearch } from "@/shared/lib/columnFilterSearch";
 
 type ViewMode = "grid" | "table";
 type DialogMode = "create" | "edit";
@@ -35,43 +37,120 @@ function getProductLengths(product: Product): number[] {
     .sort((a, b) => a - b);
 }
 
-function getProductFilterCellValue(product: Product, field: Exclude<ColumnFilterField, "length_mm">): string {
-  switch (field) {
-    case "sku":
-      return product.sku;
-    case "quantity_per_hanger":
-      return product.quantity_per_hanger !== null && product.quantity_per_hanger !== undefined
-        ? String(product.quantity_per_hanger)
-        : "—";
-    case "is_paired_profile":
-      return product.is_paired_profile ? "Да" : "Нет";
-    case "skip_shot_blast":
-      return product.skip_shot_blast ? "Да" : "Нет";
-    case "is_laminated":
-      return product.is_laminated ? "Да" : "Нет";
-  }
+function boolFromYesNo(value: string | undefined): boolean | undefined {
+  if (value === "Да") return true;
+  if (value === "Нет") return false;
+  return undefined;
 }
 
-function productMatchesLengthMmFilter(
-  product: Product,
-  selected: Set<string> | undefined,
-  search: string | undefined,
-): boolean {
-  const lengths = getProductLengths(product).map(String);
-  const q = search?.trim();
-  if (q && !lengths.some((len) => matchesPartialSearch(len, q))) return false;
-  if (selected && selected.size > 0 && !lengths.some((len) => selected.has(len))) return false;
-  return true;
+function buildRawMaterialsApiParams(
+  columnFilters: Partial<Record<ColumnFilterField, Set<string>>>,
+  columnSearchQueries: Partial<Record<ColumnFilterField, string>>,
+  lengthFrom: string,
+  lengthTo: string,
+  qtyFrom: string,
+  qtyTo: string,
+  sortConfigs: SortConfig[],
+): Pick<
+  ProductFilters,
+  | "sku"
+  | "length_from"
+  | "length_to"
+  | "qty_from"
+  | "qty_to"
+  | "is_paired_profile"
+  | "skip_shot_blast"
+  | "is_laminated"
+  | "sort"
+> {
+  const params: Pick<
+    ProductFilters,
+    | "sku"
+    | "length_from"
+    | "length_to"
+    | "qty_from"
+    | "qty_to"
+    | "is_paired_profile"
+    | "skip_shot_blast"
+    | "is_laminated"
+    | "sort"
+  > = {};
+
+  const sku = pickColumnApiValue(columnFilters, columnSearchQueries, "sku");
+  if (sku) params.sku = sku;
+
+  const lengthValue = pickColumnApiValue(columnFilters, columnSearchQueries, "length_mm");
+  if (lengthValue) {
+    const parsed = Number.parseFloat(lengthValue);
+    if (Number.isFinite(parsed)) {
+      params.length_from = parsed;
+      params.length_to = parsed;
+    }
+  }
+
+  const qtyValue = pickColumnApiValue(columnFilters, columnSearchQueries, "quantity_per_hanger", (v) =>
+    v === "—" ? undefined : v,
+  );
+  if (qtyValue) {
+    const parsed = Number.parseInt(qtyValue, 10);
+    if (Number.isFinite(parsed)) {
+      params.qty_from = parsed;
+      params.qty_to = parsed;
+    }
+  }
+
+  const paired = boolFromYesNo(
+    pickColumnApiValue(columnFilters, columnSearchQueries, "is_paired_profile"),
+  );
+  if (paired !== undefined) params.is_paired_profile = paired;
+
+  const skipShot = boolFromYesNo(
+    pickColumnApiValue(columnFilters, columnSearchQueries, "skip_shot_blast"),
+  );
+  if (skipShot !== undefined) params.skip_shot_blast = skipShot;
+
+  const laminated = boolFromYesNo(
+    pickColumnApiValue(columnFilters, columnSearchQueries, "is_laminated"),
+  );
+  if (laminated !== undefined) params.is_laminated = laminated;
+
+  if (lengthFrom) {
+    const parsed = Number.parseFloat(lengthFrom);
+    if (Number.isFinite(parsed)) params.length_from = parsed;
+  }
+  if (lengthTo) {
+    const parsed = Number.parseFloat(lengthTo);
+    if (Number.isFinite(parsed)) params.length_to = parsed;
+  }
+  if (qtyFrom) {
+    const parsed = Number.parseInt(qtyFrom, 10);
+    if (Number.isFinite(parsed)) params.qty_from = parsed;
+  }
+  if (qtyTo) {
+    const parsed = Number.parseInt(qtyTo, 10);
+    if (Number.isFinite(parsed)) params.qty_to = parsed;
+  }
+
+  const activeSort = sortConfigs[0];
+  if (activeSort) {
+    params.sort = `${activeSort.field}:${activeSort.order}`;
+  }
+
+  return params;
 }
+
+const headerCellClass = `${DATA_TABLE_STYLES.headerRow} ${DATA_TABLE_STYLES.headerCell}`;
 
 export function RawMaterialsPage() {
   const { canEditReferences } = usePermission();
   const isReadOnly = !canEditReferences;
   const [items, setItems] = useState<Product[]>([]);
+  const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [viewMode, setViewMode] = useState<ViewMode>("table");
   const [search, setSearch] = useState("");
+  const [debouncedSearch, setDebouncedSearch] = useState("");
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [lengthFrom, setLengthFrom] = useState("");
   const [lengthTo, setLengthTo] = useState("");
@@ -82,11 +161,32 @@ export function RawMaterialsPage() {
     columnFilters,
     columnSearchQueries,
     bindColumn,
-    buildFilterPredicate,
     hasActiveColumnFilters: hasColumnFiltersActive,
     resetColumnFilters,
   } = useSortableColumnFilters<ColumnFilterField>();
   const [groupByAliases, setGroupByAliases] = useState(false);
+  const {
+    page,
+    setPage,
+    limit,
+    setLimit,
+    offset,
+    getTotalPages,
+    getRangeLabel,
+    resetPage,
+  } = usePaginatedTableQuery({
+    resetPageDeps: [
+      debouncedSearch,
+      lengthFrom,
+      lengthTo,
+      qtyFrom,
+      qtyTo,
+      columnFilters,
+      columnSearchQueries,
+      sortConfigs,
+    ],
+  });
+  const totalPages = getTotalPages(total);
 
   const [dialogOpen, setDialogOpen] = useState(false);
   const [dialogMode, setDialogMode] = useState<DialogMode>("create");
@@ -126,22 +226,49 @@ export function RawMaterialsPage() {
   const [previewLoading, setPreviewLoading] = useState(false);
   const [pendingZipFile, setPendingZipFile] = useState<File | null>(null);
 
+  useEffect(() => {
+    const timer = window.setTimeout(() => setDebouncedSearch(search), 300);
+    return () => window.clearTimeout(timer);
+  }, [search]);
+
+  const filterApiParams = useMemo(
+    () =>
+      buildRawMaterialsApiParams(
+        columnFilters,
+        columnSearchQueries,
+        lengthFrom,
+        lengthTo,
+        qtyFrom,
+        qtyTo,
+        sortConfigs,
+      ),
+    [columnFilters, columnSearchQueries, lengthFrom, lengthTo, qtyFrom, qtyTo, sortConfigs],
+  );
+
+  const productsQueryParams = useMemo(
+    () => ({
+      q: debouncedSearch || undefined,
+      type: "component" as const,
+      limit,
+      offset,
+      ...filterApiParams,
+    }),
+    [debouncedSearch, limit, offset, filterApiParams],
+  );
+
   const load = useCallback(async () => {
     setLoading(true);
     setError("");
     try {
-      const data = await API.listProducts({
-        q: search || undefined,
-        type: "component",
-        limit: 500,
-      });
-      setItems(data);
+      const data = await API.listProductsPaginated(productsQueryParams);
+      setItems(data.items);
+      setTotal(data.total);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Ошибка загрузки");
     } finally {
       setLoading(false);
     }
-  }, [search]);
+  }, [productsQueryParams]);
 
   useEffect(() => {
     setError("");
@@ -284,88 +411,13 @@ export function RawMaterialsPage() {
     };
   }, [items]);
 
-  const standardColumnFilterPredicate = useMemo(
-    () =>
-      buildFilterPredicate<Product>(
-        (product, field) =>
-          getProductFilterCellValue(product, field as Exclude<ColumnFilterField, "length_mm">),
-        ["length_mm"],
-      ),
-    [buildFilterPredicate],
-  );
+  const displayedItems = useMemo(() => {
+    if (!groupByAliases) return items;
 
-  const sortedItems = useMemo(() => {
-    let filtered = items;
-    const lengthFromNum = lengthFrom ? parseFloat(lengthFrom) : null;
-    const lengthToNum = lengthTo ? parseFloat(lengthTo) : null;
-    if (lengthFromNum !== null || lengthToNum !== null) {
-      filtered = filtered.filter((p) => {
-        const lengths = getProductLengths(p);
-        if (lengths.length === 0) return false;
-        return lengths.some((len) => {
-          if (lengthFromNum !== null && len < lengthFromNum) return false;
-          if (lengthToNum !== null && len > lengthToNum) return false;
-          return true;
-        });
-      });
-    }
-    if (qtyFrom) filtered = filtered.filter((p) => (p.quantity_per_hanger ?? 0) >= parseFloat(qtyFrom));
-    if (qtyTo) filtered = filtered.filter((p) => (p.quantity_per_hanger ?? 0) <= parseFloat(qtyTo));
-
-    if (standardColumnFilterPredicate) {
-      filtered = filtered.filter(standardColumnFilterPredicate);
-    }
-    filtered = filtered.filter((p) =>
-      productMatchesLengthMmFilter(p, columnFilters.length_mm, columnSearchQueries.length_mm),
-    );
-
-    if (!groupByAliases) {
-      if (sortConfigs.length === 0) return filtered;
-      return [...filtered].sort((a, b) => {
-        for (const { field, order } of sortConfigs) {
-          let aVal: string | number | boolean;
-          let bVal: string | number | boolean;
-          if (field === "aliases") {
-            aVal = (a.aliases?.length ?? 0);
-            bVal = (b.aliases?.length ?? 0);
-          } else {
-            aVal = (a[field as keyof Product] ?? (typeof a[field as keyof Product] === "boolean" ? false : "")) as string | number | boolean;
-            bVal = (b[field as keyof Product] ?? (typeof b[field as keyof Product] === "boolean" ? false : "")) as string | number | boolean;
-          }
-          if (aVal < bVal) return order === "asc" ? -1 : 1;
-          if (aVal > bVal) return order === "asc" ? 1 : -1;
-        }
-        return 0;
-      });
-    }
-
-    // Grouping is enabled: products with aliases first, then without
-    const withAliases = filtered.filter((p) => (p.aliases?.length ?? 0) > 0);
-    const withoutAliases = filtered.filter((p) => (p.aliases?.length ?? 0) === 0);
-
-    // Sort within groups if sortConfigs exist
-    const applySort = (arr: Product[]) => {
-      if (sortConfigs.length === 0) return arr;
-      return [...arr].sort((a, b) => {
-        for (const { field, order } of sortConfigs) {
-          let aVal: string | number | boolean;
-          let bVal: string | number | boolean;
-          if (field === "aliases") {
-            aVal = (a.aliases?.length ?? 0);
-            bVal = (b.aliases?.length ?? 0);
-          } else {
-            aVal = (a[field as keyof Product] ?? (typeof a[field as keyof Product] === "boolean" ? false : "")) as string | number | boolean;
-            bVal = (b[field as keyof Product] ?? (typeof b[field as keyof Product] === "boolean" ? false : "")) as string | number | boolean;
-          }
-          if (aVal < bVal) return order === "asc" ? -1 : 1;
-          if (aVal > bVal) return order === "asc" ? 1 : -1;
-        }
-        return 0;
-      });
-    };
-
-    return [...applySort(withAliases), ...applySort(withoutAliases)];
-  }, [items, sortConfigs, lengthFrom, lengthTo, qtyFrom, qtyTo, groupByAliases, standardColumnFilterPredicate, columnFilters.length_mm, columnSearchQueries.length_mm]);
+    const withAliases = items.filter((p) => (p.aliases?.length ?? 0) > 0);
+    const withoutAliases = items.filter((p) => (p.aliases?.length ?? 0) === 0);
+    return [...withAliases, ...withoutAliases];
+  }, [items, groupByAliases]);
 
   const activeFiltersCount = [lengthFrom, lengthTo, qtyFrom, qtyTo].filter(Boolean).length +
     Object.values(columnFilters).reduce((acc, set) => acc + (set?.size ?? 0), 0) +
@@ -379,12 +431,14 @@ export function RawMaterialsPage() {
 
   const resetTableFilters = () => {
     setSearch("");
+    setDebouncedSearch("");
     setLengthFrom("");
     setLengthTo("");
     setQtyFrom("");
     setQtyTo("");
     setSortConfigs([]);
     resetColumnFilters();
+    resetPage();
   };
 
   return (
@@ -461,21 +515,37 @@ export function RawMaterialsPage() {
 
       {loading ? (
         <div className="text-muted-foreground py-8 text-center">Загрузка...</div>
-      ) : sortedItems.length === 0 ? (
+      ) : total === 0 ? (
         <div className="text-muted-foreground py-8 text-center">Ничего не найдено</div>
       ) : viewMode === "grid" ? (
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-          {sortedItems.map((product) => (
-            <CatalogCard key={product.id} product={product} onClick={() => openEdit(product)} />
-          ))}
+        <div className="space-y-0">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+            {displayedItems.map((product) => (
+              <CatalogCard key={product.id} product={product} onClick={() => openEdit(product)} />
+            ))}
+          </div>
+          <TablePaginationFooter
+            page={page}
+            totalPages={totalPages}
+            total={total}
+            shownCount={displayedItems.length}
+            limit={limit}
+            onPageChange={setPage}
+            onLimitChange={setLimit}
+            rangeLabel={
+              displayedItems.length === items.length
+                ? getRangeLabel(displayedItems.length, total)
+                : getRangeLabel(displayedItems.length, total, { onPage: true })
+            }
+          />
         </div>
       ) : (
-        <div className="border rounded-lg overflow-hidden">
+        <div className={DATA_TABLE_STYLES.container}>
           <table className="w-full text-sm">
-            <thead className="bg-muted">
+            <thead>
               <tr>
-                <th className="px-4 py-3 text-left font-medium w-16">Фото</th>
-                <th className="px-4 py-3 text-left font-medium w-48">
+                <th className={`${headerCellClass} w-16`}>Фото</th>
+                <th className={`${headerCellClass} p-0 w-48`}>
                   <SortableFilterHeader<ColumnFilterField>
                     field="sku"
                     label="Артикул"
@@ -485,7 +555,7 @@ export function RawMaterialsPage() {
                     {...bindColumn("sku")}
                   />
                 </th>
-                <th className="px-4 py-3 text-left font-medium w-48">
+                <th className={`${headerCellClass} p-0 w-48`}>
                   <SortableFilterHeader<ColumnFilterField>
                     field="quantity_per_hanger"
                     label="Кол-во на подвесе"
@@ -495,7 +565,7 @@ export function RawMaterialsPage() {
                     {...bindColumn("quantity_per_hanger")}
                   />
                 </th>
-                <th className="px-4 py-3 text-left font-medium w-40">
+                <th className={`${headerCellClass} p-0 w-40`}>
                   <SortableFilterHeader<ColumnFilterField>
                     field="length_mm"
                     label="Длина"
@@ -506,7 +576,7 @@ export function RawMaterialsPage() {
                     valueLabel={(v) => v + " мм"}
                   />
                 </th>
-                <th className="px-4 py-3 text-left font-medium w-36">
+                <th className={`${headerCellClass} p-0 w-36`}>
                   <SortableFilterHeader<ColumnFilterField>
                     field="is_paired_profile"
                     label="Парный"
@@ -516,7 +586,7 @@ export function RawMaterialsPage() {
                     {...bindColumn("is_paired_profile")}
                   />
                 </th>
-                <th className="px-4 py-3 text-left font-medium w-36">
+                <th className={`${headerCellClass} p-0 w-36`}>
                   <SortableFilterHeader<ColumnFilterField>
                     field="skip_shot_blast"
                     label="Дробеструй"
@@ -526,7 +596,7 @@ export function RawMaterialsPage() {
                     {...bindColumn("skip_shot_blast")}
                   />
                 </th>
-                <th className="px-4 py-3 text-left font-medium w-40">
+                <th className={`${headerCellClass} p-0 w-40`}>
                   <SortableFilterHeader<ColumnFilterField>
                     field="is_laminated"
                     label="Ламинируется"
@@ -539,11 +609,12 @@ export function RawMaterialsPage() {
                 <TableCornerResetHeader
                   hasActiveFilters={hasTableActiveFilters}
                   onReset={resetTableFilters}
+                  dataTableHeader
                 />
               </tr>
             </thead>
             <tbody className="divide-y">
-              {sortedItems.map((product) => (
+              {displayedItems.map((product) => (
                 <tr key={product.id} className="hover:bg-muted/50 cursor-pointer" onClick={() => openEdit(product)}>
                   <td className="px-4 py-2">
                     <div className="w-10 h-10 bg-muted rounded flex items-center justify-center overflow-hidden">
@@ -616,6 +687,20 @@ export function RawMaterialsPage() {
               ))}
             </tbody>
           </table>
+          <TablePaginationFooter
+            page={page}
+            totalPages={totalPages}
+            total={total}
+            shownCount={displayedItems.length}
+            limit={limit}
+            onPageChange={setPage}
+            onLimitChange={setLimit}
+            rangeLabel={
+              displayedItems.length === items.length
+                ? getRangeLabel(displayedItems.length, total)
+                : getRangeLabel(displayedItems.length, total, { onPage: true })
+            }
+          />
         </div>
       )}
 

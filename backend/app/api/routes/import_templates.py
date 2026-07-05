@@ -1,8 +1,8 @@
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, HTTPException, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from pydantic import BaseModel, ConfigDict
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
@@ -37,12 +37,35 @@ class ImportTemplateOut(BaseModel):
     created_at: datetime | None = None
 
 
-@router.get("", response_model=list[ImportTemplateOut])
-async def list_templates(db: AsyncSession = Depends(get_db)) -> list[ImportTemplateOut]:
+class ImportTemplatesListResponse(BaseModel):
+    items: list[ImportTemplateOut]
+    total: int
+    limit: int
+    offset: int
+
+
+@router.get("", response_model=ImportTemplatesListResponse)
+async def list_templates(
+    limit: int = Query(default=50, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
+    db: AsyncSession = Depends(get_db),
+) -> ImportTemplatesListResponse:
+    base_stmt = select(ImportTemplate)
+    total = (await db.execute(select(func.count()).select_from(base_stmt.subquery()))).scalar() or 0
+
     items = (
-        await db.execute(select(ImportTemplate).order_by(ImportTemplate.sort_order.asc(), ImportTemplate.id.asc()))
+        await db.execute(
+            base_stmt.order_by(ImportTemplate.sort_order.asc(), ImportTemplate.id.asc())
+            .limit(limit)
+            .offset(offset)
+        )
     ).scalars().all()
-    return [await _template_out(db, item) for item in items]
+    return ImportTemplatesListResponse(
+        items=[await _template_out(db, item) for item in items],
+        total=total,
+        limit=limit,
+        offset=offset,
+    )
 
 
 @router.post("", response_model=ImportTemplateOut, status_code=status.HTTP_201_CREATED)

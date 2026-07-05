@@ -12,6 +12,16 @@ export type Techcard = {
   hangers_a?: number | null;
   hangers_b?: number | null;
   hangers_total?: number | null;
+  product_sku?: string | null;
+  techcard_lines?: TechcardLineSummary[];
+};
+
+export type TechcardLineSummary = {
+  id: number;
+  component_product_id: number;
+  component_product_sku?: string | null;
+  quantity: number;
+  unit: string;
 };
 
 export type TechcardLine = {
@@ -45,14 +55,53 @@ export type PatchTechcardInput = Partial<
   Pick<CreateTechcardInput, "version" | "is_active" | "processing_type" | "quantity_total" | "quantity_a_per_item" | "quantity_b_per_item" | "hangers_a" | "hangers_b" | "hangers_total">
 >;
 
+export type TechcardListParams = {
+  limit?: number;
+  offset?: number;
+  search?: string;
+  sort_by?: string;
+  sort_order?: "asc" | "desc";
+  processing_type?: "standart_processing" | "paired_processing";
+  is_active?: boolean;
+  sku?: string;
+  quantity_total?: number;
+};
+
+export type TechcardListResponse = {
+  items: Techcard[];
+  total: number;
+  limit: number;
+  offset: number;
+};
+
 export async function createTechcard(payload: CreateTechcardInput) {
   const { data } = await apiClient.post<Techcard>("/techcards", payload);
   return data;
 }
 
+export async function listTechcardsPaginated(
+  params: TechcardListParams = {},
+): Promise<TechcardListResponse> {
+  const limit = params.limit ?? 50;
+  const offset = params.offset ?? 0;
+  const { data } = await apiClient.get<TechcardListResponse>("/techcards", { params });
+  return {
+    items: data.items ?? [],
+    total: data.total ?? data.items?.length ?? 0,
+    limit: data.limit ?? limit,
+    offset: data.offset ?? offset,
+  };
+}
+
+/** Backward-compatible helper: returns items array (fetches one page, default limit 2000). */
+export async function fetchAllTechcards(params: TechcardListParams = {}) {
+  const response = await listTechcardsPaginated({ limit: 2000, offset: 0, ...params });
+  return response.items;
+}
+
+/** Used as react-query queryFn — no params to avoid QueryFunction signature clash. */
 export async function listTechcards() {
-  const { data } = await apiClient.get<Techcard[]>("/techcards");
-  return data;
+  return fetchAllTechcards();
 }
 
 export async function getTechcard(techcardId: number) {

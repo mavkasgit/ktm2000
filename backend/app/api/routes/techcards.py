@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -9,6 +9,7 @@ from typing import Literal
 from app.core.database import get_db
 from app.models.techcard import Techcard, TechcardLine
 from app.models.product import Product
+from app.services.techcards_queries import enrich_techcard_list_items, list_techcards_paginated
 
 router = APIRouter(prefix="/techcards", tags=["techcards"])
 
@@ -56,6 +57,14 @@ class TechcardLineOut(BaseModel):
 
 class TechcardWithLinesOut(TechcardOut):
     techcard_lines: list[dict] = []
+    product_sku: str | None = None
+
+
+class TechcardsListOut(BaseModel):
+    items: list[TechcardWithLinesOut]
+    total: int
+    limit: int
+    offset: int
 
 
 class TechcardDetailOut(TechcardOut):
@@ -102,35 +111,38 @@ async def create_techcard(payload: TechcardCreate, db: AsyncSession = Depends(ge
     return TechcardOut.model_validate(item, from_attributes=True)
 
 
-@router.get("")
-async def list_techcards(db: AsyncSession = Depends(get_db)):
-    stmt = select(Techcard).order_by(Techcard.id.desc())
-    rows = (await db.execute(stmt)).scalars().all()
-
-    # Load lines for paired techcards
-    paired_ids = [r.id for r in rows if r.processing_type == "paired_processing"]
-    lines_by_tc: dict[int, list[dict]] = {}
-    if paired_ids:
-        lines = (
-            await db.execute(
-                select(TechcardLine).where(TechcardLine.techcard_id.in_(paired_ids)).order_by(TechcardLine.id)
-            )
-        ).scalars().all()
-        for line in lines:
-            lines_by_tc.setdefault(line.techcard_id, []).append({
-                "id": line.id,
-                "component_product_id": line.component_product_id,
-                "quantity": line.quantity,
-                "unit": line.unit,
-            })
-
-    result = []
-    for item in rows:
-        data = TechcardOut.model_validate(item, from_attributes=True).model_dump()
-        if item.processing_type == "paired_processing":
-            data["techcard_lines"] = lines_by_tc.get(item.id, [])
-        result.append(data)
-    return result
+@router.get("", response_model=TechcardsListOut)
+async def list_techcards(
+    db: AsyncSession = Depends(get_db),
+    limit: int = Query(default=50, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
+    search: str | None = Query(default=None),
+    sort_by: str = Query(default="id"),
+    sort_order: str = Query(default="desc"),
+    processing_type: Literal["standart_processing", "paired_processing"] | None = Query(default=None),
+    is_active: bool | None = Query(default=None),
+    sku: str | None = Query(default=None),
+    quantity_total: int | None = Query(default=None),
+) -> TechcardsListOut:
+    rows, total = await list_techcards_paginated(
+        db,
+        limit=limit,
+        offset=offset,
+        search=search,
+        sort_by=sort_by,
+        sort_order=sort_order,
+        processing_type=processing_type,
+        is_active=is_active,
+        sku=sku,
+        quantity_total=quantity_total,
+    )
+    enriched = await enrich_techcard_list_items(db, rows)
+    return TechcardsListOut(
+        items=[TechcardWithLinesOut.model_validate(item) for item in enriched],
+        total=total,
+        limit=limit,
+        offset=offset,
+    )
 
 
 @router.get("/{techcard_id}", response_model=TechcardDetailOut)

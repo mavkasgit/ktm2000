@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
-import { Plus, ArrowUp, ArrowDown, Settings, X, Pencil, Trash2, Move, Layers, ChevronRight, Warehouse, Factory } from "lucide-react";
+import { Plus, ArrowUp, ArrowDown, Settings, X, Pencil, Trash2, Move, Layers, ChevronRight, Warehouse, Factory, Search } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 import * as API from "shared/api";
 import { usePermission } from "@/features/auth/hooks/usePermission";
@@ -15,8 +15,12 @@ import { cn } from "@/shared/utils/cn";
 import { Popover, PopoverTrigger, PopoverContent } from "@/shared/ui/Popover";
 import { AlertDialog, AlertDialogContent, AlertDialogHeader, AlertDialogTitle, AlertDialogDescription, AlertDialogFooter, AlertDialogCancel, AlertDialogAction } from "@/shared/ui/AlertDialog";
 import { toast } from "@/shared/ui/use-toast";
+import { Input } from "@/shared/ui/Input";
+import { TablePaginationFooter } from "@/shared/ui/TablePaginationFooter";
+import { usePaginatedTableQuery } from "@/shared/hooks/usePaginatedTableQuery";
 import type { EntityDialogField } from "@/shared/ui/EntityDialog";
 import type { OperationGroup, SectionOperationInfo } from "shared/api/sections";
+import { listSectionsPaginated } from "shared/api/sections";
 import { queryKeys } from "@/shared/api/queryKeys";
 
 type Section = {
@@ -92,14 +96,15 @@ const SPG_FIELDS: Record<string, EntityDialogField> = {
   description: { type: "text", label: "Описание", placeholder: "Введите описание (необязательно)" },
 };
 
-async function apiListSections(): Promise<Section[]> {
-  const api = API as Record<string, any>;
-  if (typeof api.listSections === "function") {
-    return api.listSections();
-  }
-  const response = await fetch("/api/sections");
-  if (!response.ok) throw new Error(`Failed to load sections: ${response.status}`);
-  return response.json();
+async function apiListSections(params: {
+  limit: number;
+  offset: number;
+  search?: string;
+  sort_by?: string;
+  sort_order?: "asc" | "desc";
+}): Promise<{ items: Section[]; total: number }> {
+  const data = await listSectionsPaginated(params);
+  return { items: data.items as Section[], total: data.total };
 }
 
 async function apiCreateSection(payload: Partial<Section>): Promise<void> {
@@ -152,8 +157,23 @@ export function SectionsPage() {
   const isReadOnly = !canEditReferences;
   const queryClient = useQueryClient();
   const [items, setItems] = useState<Section[]>([]);
+  const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string>("");
+  const [search, setSearch] = useState("");
+  const [debouncedSearch, setDebouncedSearch] = useState("");
+  const {
+    page,
+    setPage,
+    limit,
+    setLimit,
+    offset,
+    getTotalPages,
+    getRangeLabel,
+  } = usePaginatedTableQuery({
+    resetPageDeps: [debouncedSearch],
+  });
+  const totalPages = getTotalPages(total);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [dialogMode, setDialogMode] = useState<"add" | "edit">("add");
   const [editingItem, setEditingItem] = useState<Section | null>(null);
@@ -474,8 +494,15 @@ export function SectionsPage() {
     setLoading(true);
     setError("");
     try {
-      const sections = await apiListSections();
+      const { items: sections, total: sectionsTotal } = await apiListSections({
+        limit,
+        offset,
+        search: debouncedSearch || undefined,
+        sort_by: "sort_order",
+        sort_order: "asc",
+      });
       setItems(sections);
+      setTotal(sectionsTotal);
       setOpsCountById((prev) => {
         const next = { ...prev };
         sections.forEach((s) => {
@@ -490,7 +517,7 @@ export function SectionsPage() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [limit, offset, debouncedSearch]);
 
   const commitReorder = useCallback(async () => {
     try {
@@ -513,6 +540,11 @@ export function SectionsPage() {
       console.error("Failed to load SPGs:", e);
     }
   }, []);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => setDebouncedSearch(search), 300);
+    return () => window.clearTimeout(timer);
+  }, [search]);
 
   useEffect(() => {
     void load();
@@ -1132,6 +1164,28 @@ export function SectionsPage() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      <div className="flex flex-col sm:flex-row gap-2 items-start sm:items-center justify-between">
+        <div className="relative w-72">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+          <Input
+            placeholder="Поиск по коду, названию, описанию, ГХП"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            className="pl-9"
+          />
+        </div>
+        <TablePaginationFooter
+          page={page}
+          totalPages={totalPages}
+          total={total}
+          shownCount={items.length}
+          limit={limit}
+          onPageChange={setPage}
+          onLimitChange={setLimit}
+          rangeLabel={getRangeLabel(items.length, total, { onPage: true })}
+        />
+      </div>
 
       {error ? <div role="alert">{error}</div> : null}
       {loading ? <div>Загрузка...</div> : null}

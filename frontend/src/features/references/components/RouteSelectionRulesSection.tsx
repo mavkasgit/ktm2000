@@ -640,7 +640,7 @@ export function RouteSelectionRulesSection({ refreshKey }: Props) {
       const [loadedSections, loadedProfiles, loadedTemplates] = await Promise.all([
         SectionsAPI.listSections(),
         RoutesAPI.listRouteRuleProfiles(),
-        ImportTemplatesAPI.listImportTemplates(),
+        ImportTemplatesAPI.listAllImportTemplates(),
       ]);
       setSections(loadedSections);
       setProfiles(loadedProfiles);

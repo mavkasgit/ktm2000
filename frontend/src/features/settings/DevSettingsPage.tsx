@@ -9,7 +9,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, Di
 import { toast } from "@/shared/ui"
 import { resetAllPlans } from "@/shared/api/productionPlans"
 import { seedRoutes, listRoutes, listRouteRuleProfiles, listRouteSelectionRules, reseedSystemUser, seedPreview, seedDemoProduction, clearDemoProduction, getCleanupStats, executeCleanup } from "@/shared/api/routes"
-import { listImportTemplates } from "@/shared/api/importTemplates"
+import { listAllImportTemplates } from "@/shared/api/importTemplates"
 import { listSections } from "@/shared/api/sections"
 import { queryKeys } from "@/shared/api/queryKeys"
 import { usePermission } from "@/features/auth/hooks/usePermission"
@@ -18,7 +18,7 @@ function useCurrentData() {
   const routes = useQuery({ queryKey: queryKeys.routes.all(), queryFn: () => listRoutes() })
   const profiles = useQuery({ queryKey: queryKeys.routes.ruleProfiles(), queryFn: () => listRouteRuleProfiles() })
   const selectionRules = useQuery({ queryKey: queryKeys.routes.selectionRules(), queryFn: () => listRouteSelectionRules() })
-  const templates = useQuery({ queryKey: queryKeys.importTemplates.all(), queryFn: () => listImportTemplates() })
+  const templates = useQuery({ queryKey: queryKeys.importTemplates.all(), queryFn: () => listAllImportTemplates() })
   const sections = useQuery({ queryKey: queryKeys.sections.all(), queryFn: () => listSections() })
   return { routes, profiles, selectionRules, templates, sections }
 }

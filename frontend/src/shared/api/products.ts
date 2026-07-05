@@ -76,14 +76,57 @@ export type ProductFilters = {
   is_active?: boolean;
   is_catalog_item?: boolean;
   is_paired_profile?: boolean;
+  skip_shot_blast?: boolean;
+  is_laminated?: boolean;
+  sku?: string;
+  name?: string;
+  length_from?: number;
+  length_to?: number;
+  qty_from?: number;
+  qty_to?: number;
   sort?: string;
   limit?: number;
   offset?: number;
 };
 
+export type ProductsListBody = {
+  items: Product[];
+  total: number;
+};
+
+export type ProductListResponse = {
+  items: Product[];
+  total: number;
+  limit: number;
+  offset: number;
+};
+
 export async function listProducts(filters: ProductFilters = {}) {
   const { data } = await apiClient.get<Product[]>("/products", { params: filters });
   return data;
+}
+
+export async function listProductsPaginated(
+  filters: ProductFilters = {},
+): Promise<ProductListResponse> {
+  const limit = filters.limit ?? 50;
+  const offset = filters.offset ?? 0;
+  const response = await apiClient.get<ProductsListBody>("/products", { params: filters });
+  const { items } = response.data;
+  const bodyTotal = response.data.total;
+  const headerTotal = response.headers["x-total-count"];
+  const total =
+    bodyTotal != null && Number.isFinite(bodyTotal)
+      ? bodyTotal
+      : headerTotal !== undefined
+        ? Number(headerTotal)
+        : items.length;
+  return {
+    items,
+    total: Number.isFinite(total) ? total : items.length,
+    limit,
+    offset,
+  };
 }
 
 export async function createProduct(payload: CreateProductInput) {

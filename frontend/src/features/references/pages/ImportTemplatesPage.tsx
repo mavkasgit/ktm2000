@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import { Plus, Trash2, Upload } from "lucide-react"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 import {
@@ -10,6 +10,8 @@ import {
   type CreateImportTemplateInput,
 } from "@/shared/api/importTemplates"
 import { queryKeys } from "@/shared/api/queryKeys"
+import { usePaginatedTableQuery } from "@/shared/hooks/usePaginatedTableQuery"
+import { TablePaginationFooter } from "@/shared/ui"
 import { getExcelSheetNames, previewExcelSheet } from "@/shared/api/imports"
 import { Button } from "@/shared/ui/Button"
 import { Input } from "@/shared/ui/Input"
@@ -99,19 +101,29 @@ export function ImportTemplatesPage() {
   const { canEditReferences } = usePermission()
   const isReadOnly = !canEditReferences
   const queryClient = useQueryClient()
-  const { data: templates, isLoading } = useQuery({
-    queryKey: queryKeys.importTemplates.all(),
-    queryFn: listImportTemplates,
+  const pagination = usePaginatedTableQuery()
+
+  const templatesQueryParams = useMemo(
+    () => ({
+      limit: pagination.limit,
+      offset: pagination.offset,
+    }),
+    [pagination.limit, pagination.offset],
+  )
+
+  const { data: templatesPage, isLoading } = useQuery({
+    queryKey: queryKeys.importTemplates.list(templatesQueryParams),
+    queryFn: () => listImportTemplates(templatesQueryParams),
   })
+
+  const templates = templatesPage?.items ?? []
+  const total = templatesPage?.total ?? 0
+  const totalPages = pagination.getTotalPages(total)
 
   const [editDialogOpen, setEditDialogOpen] = useState(false)
   const [editingTemplate, setEditingTemplate] = useState<ImportTemplate | null>(null)
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
   const [deletingTemplate, setDeletingTemplate] = useState<ImportTemplate | null>(null)
-
-  const sortedTemplates = (templates ?? [])
-    .slice()
-    .sort((a, b) => a.sort_order - b.sort_order)
 
   const createFileRef = useRef<HTMLInputElement>(null)
 
@@ -136,6 +148,7 @@ export function ImportTemplatesPage() {
       await deleteImportTemplate(deletingTemplate.id)
       toast({ title: "Шаблон удалён", variant: "success" })
       queryClient.invalidateQueries({ queryKey: queryKeys.importTemplates.all() })
+      queryClient.invalidateQueries({ queryKey: ["import-templates", "list"] })
     } catch (e) {
       toast({ title: "Ошибка", description: getErrorMessage(e), variant: "destructive" })
     } finally {
@@ -171,13 +184,13 @@ export function ImportTemplatesPage() {
 
       {isLoading && <p className="text-sm text-muted-foreground">Загрузка...</p>}
 
-      {!isLoading && sortedTemplates.length === 0 && (
+      {!isLoading && total === 0 && (
         <div className="rounded-lg border p-8 text-center text-sm text-muted-foreground">
           Нет шаблонов. Нажмите «Создать шаблон» чтобы добавить.
         </div>
       )}
 
-      {sortedTemplates.length > 0 && (
+      {total > 0 && (
         <div className="rounded-lg border overflow-auto">
           <table className="w-full text-sm">
             <thead className="border-b bg-muted/50">
@@ -189,7 +202,7 @@ export function ImportTemplatesPage() {
               </tr>
             </thead>
             <tbody>
-              {sortedTemplates.map(t => (
+              {templates.map(t => (
                 <tr key={t.id} className={`border-b cursor-pointer hover:bg-muted/50 ${!t.is_active ? "opacity-50" : ""}`} onClick={() => handleEdit(t)}>
                   <td className="p-3 font-medium">{t.name}</td>
                   <td className="p-3 font-mono text-xs">{t.code ?? "—"}</td>
@@ -201,6 +214,16 @@ export function ImportTemplatesPage() {
               ))}
             </tbody>
           </table>
+          <TablePaginationFooter
+            page={pagination.page}
+            totalPages={totalPages}
+            total={total}
+            shownCount={templates.length}
+            limit={pagination.limit}
+            onPageChange={pagination.setPage}
+            onLimitChange={pagination.setLimit}
+            rangeLabel={pagination.getRangeLabel(templates.length, total)}
+          />
         </div>
       )}
 
@@ -222,6 +245,7 @@ export function ImportTemplatesPage() {
           setEditDialogOpen(false)
           setPendingCreateFile(null)
           queryClient.invalidateQueries({ queryKey: queryKeys.importTemplates.all() })
+      queryClient.invalidateQueries({ queryKey: ["import-templates", "list"] })
         }}
         readOnly={isReadOnly}
       />

@@ -3,8 +3,11 @@ import { Download, RotateCcw, Eye, Database, Upload, AlertTriangle, Loader2, Che
 import { Button } from "@/shared/ui/Button"
 import { Input } from "@/shared/ui/Input"
 import { cn } from "@/shared/utils/cn"
-import { SortableFilterHeader, TableCornerResetCell, TableCornerResetHeader } from "@/shared/ui"
+import { SortableFilterHeader, TableCornerResetCell, TableCornerResetHeader, TablePaginationFooter, DATA_TABLE_STYLES } from "@/shared/ui"
 import { useFilterableTable } from "@/shared/hooks/useFilterableTable"
+import { usePaginatedTableQuery } from "@/shared/hooks/usePaginatedTableQuery"
+import { pickColumnApiValue } from "@/shared/lib/columnFilterSearch"
+import { fetchBackups } from "@/entities/backup/api"
 import type { BackupInfo } from "@/entities/backup/types"
 import {
   Dialog,
@@ -68,21 +71,46 @@ function storageLabel(name: string): string {
 
 type BackupSortField = "filename" | "db_name" | "backup_type" | "size" | "created_at" | "comment"
 
-function getBackupCellValue(backup: BackupInfo, field: BackupSortField): string {
-  switch (field) {
-    case "filename":
-      return backup.filename
-    case "db_name":
-      return backup.db_name
-    case "backup_type":
-      return backup.backup_type || "manual"
-    case "size":
-      return String(backup.size)
-    case "created_at":
-      return backup.created_at
-    case "comment":
-      return backup.comment || "—"
+function buildBackupsQueryParams(
+  pagination: { limit: number; offset: number },
+  activeTypeFilter: string,
+  columnFilters: Partial<Record<BackupSortField, Set<string>>>,
+  columnSearchQueries: Partial<Record<BackupSortField, string>>,
+  sortConfigs: Array<{ field: BackupSortField; order: "asc" | "desc" }>,
+) {
+  const activeSort = sortConfigs[0] ?? { field: "created_at" as const, order: "desc" as const }
+  const params: Parameters<typeof fetchBackups>[0] = {
+    limit: pagination.limit,
+    offset: pagination.offset,
+    sort_by: activeSort.field,
+    sort_order: activeSort.order,
   }
+
+  const typeFromColumn = pickColumnApiValue(columnFilters, columnSearchQueries, "backup_type")
+  const backupType = activeTypeFilter !== "all" ? activeTypeFilter : typeFromColumn
+  if (backupType) params.backup_type = backupType
+
+  const filename = pickColumnApiValue(columnFilters, columnSearchQueries, "filename")
+  if (filename) params.filename = filename
+
+  const dbName = pickColumnApiValue(columnFilters, columnSearchQueries, "db_name")
+  if (dbName) params.db_name = dbName
+
+  const comment = pickColumnApiValue(columnFilters, columnSearchQueries, "comment", (value) =>
+    value === "—" ? undefined : value,
+  )
+  if (comment) params.comment = comment
+
+  const sizeValue = pickColumnApiValue(columnFilters, columnSearchQueries, "size")
+  if (sizeValue) {
+    const parsed = Number.parseInt(sizeValue, 10)
+    if (Number.isFinite(parsed)) params.size = parsed
+  }
+
+  const createdAt = pickColumnApiValue(columnFilters, columnSearchQueries, "created_at")
+  if (createdAt) params.created_at = createdAt
+
+  return params
 }
 
 function backupStageLabel(stage: string): string {
@@ -101,21 +129,55 @@ function backupStageLabel(stage: string): string {
   return labels[stage] || stage
 }
 
+const headerCellClass = `${DATA_TABLE_STYLES.headerRow} ${DATA_TABLE_STYLES.headerCell}`
+
 export function BackupsPage() {
   const { canEditSettings } = usePermission()
   const isReadOnly = !canEditSettings
-  const { data: backups, isLoading, refetch: refetchBackups } = useBackups()
-
   const {
     bindColumn,
     columnFilters,
-    buildFilterPredicate,
+    columnSearchQueries,
     sortConfigs,
     setSortConfigs,
     hasActiveColumnFilters,
     resetAll: clearFilters,
     setColumnFilters,
   } = useFilterableTable<BackupSortField>()
+
+  const activeTypeFilter = useMemo(() => {
+    const selected = columnFilters.backup_type
+    if (!selected || selected.size === 0 || selected.size > 1) return "all"
+    return Array.from(selected)[0]
+  }, [columnFilters.backup_type])
+
+  const pagination = usePaginatedTableQuery({
+    resetPageDeps: [columnFilters, columnSearchQueries, sortConfigs, activeTypeFilter],
+  })
+
+  const backupsQueryParams = useMemo(
+    () =>
+      buildBackupsQueryParams(
+        { limit: pagination.limit, offset: pagination.offset },
+        activeTypeFilter,
+        columnFilters,
+        columnSearchQueries,
+        sortConfigs,
+      ),
+    [
+      pagination.limit,
+      pagination.offset,
+      activeTypeFilter,
+      columnFilters,
+      columnSearchQueries,
+      sortConfigs,
+    ],
+  )
+
+  const { data: backupsPage, isLoading, refetch: refetchBackups } = useBackups(backupsQueryParams)
+  const displayedBackups = backupsPage?.items ?? []
+  const total = backupsPage?.total ?? 0
+  const totalPages = pagination.getTotalPages(total)
 
   const handleSort = (field: BackupSortField) => {
     const defaultOrder = (field === "created_at" || field === "size") ? "desc" : "asc"
@@ -131,23 +193,12 @@ export function BackupsPage() {
     })
   }
 
-  const activeTypeFilter = useMemo(() => {
-    const selected = columnFilters.backup_type
-    if (!selected || selected.size === 0 || selected.size > 1) return "all"
-    return Array.from(selected)[0]
-  }, [columnFilters.backup_type])
-
   const handleTypeFilterChange = (type: string) => {
     setColumnFilters(prev => ({
       ...prev,
       backup_type: type === "all" ? new Set() : new Set([type])
     }))
   }
-
-  const filterPredicate = useMemo(
-    () => buildFilterPredicate(getBackupCellValue),
-    [buildFilterPredicate],
-  )
 
   const hasActiveFilters = useMemo(() => {
     if (hasActiveColumnFilters) return true
@@ -162,7 +213,7 @@ export function BackupsPage() {
   }, [hasActiveColumnFilters, sortConfigs])
 
   const uniqueValues = useMemo(() => {
-    const items = backups ?? []
+    const items = displayedBackups
     return {
       filename: [...new Set(items.map(b => b.filename))].sort(),
       db_name: [...new Set(items.map(b => b.db_name))].sort(),
@@ -171,39 +222,7 @@ export function BackupsPage() {
       created_at: [...new Set(items.map(b => b.created_at))].sort((a, b) => new Date(a).getTime() - new Date(b).getTime()),
       comment: [...new Set(items.map(b => b.comment || "—"))].sort(),
     }
-  }, [backups])
-
-  const displayedBackups = useMemo(() => {
-    if (!backups) return []
-    
-    let result = filterPredicate ? backups.filter(filterPredicate) : [...backups]
-
-    // Sort (default to created_at desc if no sorting active)
-    const activeSort = sortConfigs[0] || { field: "created_at", order: "desc" }
-    result.sort((a, b) => {
-      let valA = a[activeSort.field]
-      let valB = b[activeSort.field]
-      
-      if (activeSort.field === "created_at") {
-        const timeA = new Date(valA || 0).getTime()
-        const timeB = new Date(valB || 0).getTime()
-        return activeSort.order === "asc" ? timeA - timeB : timeB - timeA
-      }
-      
-      if (activeSort.field === "size") {
-        const numA = Number(valA || 0)
-        const numB = Number(valB || 0)
-        return activeSort.order === "asc" ? numA - numB : numB - numA
-      }
-      
-      const strA = String(valA || "")
-      const strB = String(valB || "")
-      if (strA < strB) return activeSort.order === "asc" ? -1 : 1
-      if (strA > strB) return activeSort.order === "asc" ? 1 : -1
-      return 0
-    })
-    return result
-  }, [backups, filterPredicate, sortConfigs])
+  }, [displayedBackups])
 
   const { data: config, isLoading: isConfigLoading } = useBackupConfig()
   const dbName = config?.db_name || "unknown"
@@ -480,14 +499,19 @@ export function BackupsPage() {
     setOlderThanOpen(true)
   }
 
-  const previewOlderThan = () => {
+  const previewOlderThan = async () => {
     const days = parseInt(olderThanDays, 10)
-    if (isNaN(days) || days < 0 || !backups) return
+    if (isNaN(days) || days < 0) return
     const cutoff = new Date(Date.now() - days * 24 * 60 * 60 * 1000)
-    const toDelete = backups
-      .filter((b) => new Date(b.created_at) < cutoff)
-      .map((b) => b.filename)
-    setOlderThanPreview(toDelete)
+    try {
+      const allBackups = await fetchBackups({ limit: 500, offset: 0, sort_by: "created_at", sort_order: "desc" })
+      const toDelete = allBackups.items
+        .filter((b) => new Date(b.created_at) < cutoff)
+        .map((b) => b.filename)
+      setOlderThanPreview(toDelete)
+    } catch {
+      setOlderThanPreview([])
+    }
   }
 
   const confirmOlderThanDelete = async () => {
@@ -734,12 +758,12 @@ export function BackupsPage() {
       </div>
 
       {/* Table */}
-      <div className="border rounded-lg overflow-hidden max-w-[1240px]">
+      <div className={`${DATA_TABLE_STYLES.container} max-w-[1240px]`}>
         <table className="w-full text-sm">
-          <thead className="bg-muted/50 text-xs">
+          <thead>
             <tr>
               {!isReadOnly && (
-                <th className="px-2 py-2 w-8">
+                <th className={`${headerCellClass} w-8`}>
                   <input
                     type="checkbox"
                     checked={allSelected}
@@ -748,7 +772,7 @@ export function BackupsPage() {
                   />
                 </th>
               )}
-              <th className="text-left px-3 py-2 font-medium p-0">
+              <th className={`${headerCellClass} p-0`}>
                 <SortableFilterHeader
                   field="filename"
                   label="Имя файла"
@@ -758,7 +782,7 @@ export function BackupsPage() {
                   {...bindColumn("filename")}
                 />
               </th>
-              <th className="text-left px-3 py-2 font-medium p-0">
+              <th className={`${headerCellClass} p-0`}>
                 <SortableFilterHeader
                   field="db_name"
                   label="База данных"
@@ -768,7 +792,7 @@ export function BackupsPage() {
                   {...bindColumn("db_name")}
                 />
               </th>
-              <th className="text-left px-3 py-2 font-medium p-0">
+              <th className={`${headerCellClass} p-0`}>
                 <SortableFilterHeader
                   field="backup_type"
                   label="Тип"
@@ -787,7 +811,7 @@ export function BackupsPage() {
                   }}
                 />
               </th>
-              <th className="text-left px-3 py-2 font-medium p-0">
+              <th className={`${headerCellClass} p-0`}>
                 <SortableFilterHeader
                   field="size"
                   label="Размер"
@@ -798,7 +822,7 @@ export function BackupsPage() {
                   valueLabel={(val) => formatBytes(Number(val))}
                 />
               </th>
-              <th className="text-left px-3 py-2 font-medium p-0">
+              <th className={`${headerCellClass} p-0`}>
                 <SortableFilterHeader
                   field="created_at"
                   label="Дата создания"
@@ -809,7 +833,7 @@ export function BackupsPage() {
                   valueLabel={formatDate}
                 />
               </th>
-              <th className="text-left px-3 py-2 font-medium p-0">
+              <th className={`${headerCellClass} p-0`}>
                 <SortableFilterHeader
                   field="comment"
                   label="Комментарий"
@@ -819,12 +843,13 @@ export function BackupsPage() {
                   {...bindColumn("comment")}
                 />
               </th>
-              <th className="text-right px-2 py-2 text-xs font-medium text-muted-foreground">
+              <th className={`${headerCellClass} text-right`}>
                 Действия
               </th>
               <TableCornerResetHeader
                 hasActiveFilters={hasActiveFilters}
                 onReset={clearFilters}
+                dataTableHeader
               />
             </tr>
           </thead>
@@ -835,7 +860,7 @@ export function BackupsPage() {
                   Загрузка...
                 </td>
               </tr>
-            ) : !backups || backups.length === 0 ? (
+            ) : total === 0 ? (
               <tr>
                 <td colSpan={isReadOnly ? 8 : 9} className="px-3 py-4 text-center text-muted-foreground text-xs">
                   Нет бэкапов. {!isReadOnly && 'Нажмите "Создать бэкап"'}
@@ -968,6 +993,16 @@ export function BackupsPage() {
             )}
           </tbody>
         </table>
+        <TablePaginationFooter
+          page={pagination.page}
+          totalPages={totalPages}
+          total={total}
+          shownCount={displayedBackups.length}
+          limit={pagination.limit}
+          onPageChange={pagination.setPage}
+          onLimitChange={pagination.setLimit}
+          rangeLabel={pagination.getRangeLabel(displayedBackups.length, total)}
+        />
       </div>
 
       {/* Preview Dialog */}

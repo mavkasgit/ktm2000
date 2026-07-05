@@ -1,17 +1,20 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
-import { Plus, Trash2, ArrowUp, ArrowDown, ArrowUpDown, Search, X } from "lucide-react";
+import { Plus, Trash2, Search, X } from "lucide-react";
 import * as API from "shared/api";
 import * as UI from "shared/ui";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/shared/ui/Dialog";
 import { AlertDialog, AlertDialogContent, AlertDialogHeader, AlertDialogTitle, AlertDialogDescription, AlertDialogFooter, AlertDialogCancel, AlertDialogAction } from "@/shared/ui/AlertDialog";
 import { ProductSearchMulti } from "../components/ProductSearchMulti";
 import { SortableFilterHeader } from "@/shared/ui/SortableFilterHeader";
-import { TableCornerResetCell, TableCornerResetHeader } from "@/shared/ui";
+import { TableCornerResetCell, TableCornerResetHeader, TablePaginationFooter, DATA_TABLE_STYLES } from "@/shared/ui";
 import { useSortableColumnFilters } from "@/shared/hooks/useSortableColumnFilters";
+import { usePaginatedTableQuery } from "@/shared/hooks/usePaginatedTableQuery";
+import { pickColumnApiValue } from "@/shared/lib/columnFilterSearch";
 import { toast } from "@/shared/ui/use-toast";
 import { getErrorMessage } from "@/shared/api/client";
 import { usePermission } from "@/features/auth/hooks/usePermission";
 import { cn } from "@/shared/utils/cn";
+import type { Techcard, TechcardListParams } from "@/shared/api/techcards";
 
 type ProcessingType = "standart_processing" | "paired_processing";
 
@@ -19,30 +22,83 @@ const ui = UI as unknown as Record<string, React.ComponentType<any>>;
 const Button = ui.Button ?? "button";
 const Input = ui.Input ?? "input";
 
+const headerCellClass = `${DATA_TABLE_STYLES.headerRow} ${DATA_TABLE_STYLES.headerCell}`;
+
+type TechcardFilterField = "sku" | "quantity";
+
+function parseQuantityTotalFilter(value: string | undefined): number | undefined {
+  if (!value) return undefined;
+  const match = value.match(/^(\d+)/);
+  if (match) return Number(match[1]);
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+function mapTechcardSortFieldToApi(field: TechcardFilterField): string {
+  return field === "quantity" ? "quantity_total" : "sku";
+}
+
+function buildTechcardApiParams(
+  columnFilters: Partial<Record<TechcardFilterField, Set<string>>>,
+  columnSearchQueries: Partial<Record<TechcardFilterField, string>>,
+  sorts: Array<{ field: TechcardFilterField; order: "asc" | "desc" }>,
+): Pick<TechcardListParams, "sku" | "quantity_total" | "sort_by" | "sort_order"> {
+  const params: Pick<TechcardListParams, "sku" | "quantity_total" | "sort_by" | "sort_order"> = {};
+
+  const sku = pickColumnApiValue(columnFilters, columnSearchQueries, "sku");
+  if (sku) params.sku = sku;
+
+  const quantityValue = pickColumnApiValue(columnFilters, columnSearchQueries, "quantity", (value) =>
+    value === "—" ? undefined : value,
+  );
+  const quantityTotal = parseQuantityTotalFilter(quantityValue);
+  if (quantityTotal !== undefined) params.quantity_total = quantityTotal;
+
+  const activeSort = sorts[0];
+  if (activeSort) {
+    params.sort_by = mapTechcardSortFieldToApi(activeSort.field);
+    params.sort_order = activeSort.order;
+  }
+
+  return params;
+}
+
 export function TechcardsPage() {
   const { canEditReferences } = usePermission();
   const isReadOnly = !canEditReferences;
   const api = API as Record<string, any>;
   const [rawItems, setRawItems] = useState<any[]>([]);
-  const [techcards, setTechcards] = useState<any[]>([]);
+  const [pairedTechcards, setPairedTechcards] = useState<Techcard[]>([]);
+  const [pairedTotal, setPairedTotal] = useState(0);
+  const [standardTechcards, setStandardTechcards] = useState<Techcard[]>([]);
+  const [standardTotal, setStandardTotal] = useState(0);
+  const [techcardByProductId, setTechcardByProductId] = useState<Map<number, Techcard>>(new Map());
   const [loading, setLoading] = useState(false);
   const [status, setStatus] = useState("");
   const [pageSearch, setPageSearch] = useState("");
-  const [pairedSorts, setPairedSorts] = useState<Array<{ field: "sku" | "quantity"; order: "asc" | "desc" }>>([]);
-  const [standardSorts, setStandardSorts] = useState<Array<{ field: "sku" | "quantity"; order: "asc" | "desc" }>>([]);
-  type TechcardFilterField = "sku" | "quantity";
+  const [debouncedPageSearch, setDebouncedPageSearch] = useState("");
+  const [pairedSorts, setPairedSorts] = useState<Array<{ field: TechcardFilterField; order: "asc" | "desc" }>>([]);
+  const [standardSorts, setStandardSorts] = useState<Array<{ field: TechcardFilterField; order: "asc" | "desc" }>>([]);
   const {
+    columnFilters: pairedColumnFilters,
+    columnSearchQueries: pairedColumnSearchQueries,
     bindColumn: bindPairedColumn,
-    buildFilterPredicate: buildPairedFilterPredicate,
     hasActiveColumnFilters: hasPairedColumnFilters,
     resetColumnFilters: resetPairedColumnFilters,
   } = useSortableColumnFilters<TechcardFilterField>();
   const {
+    columnFilters: standardColumnFilters,
+    columnSearchQueries: standardColumnSearchQueries,
     bindColumn: bindStandardColumn,
-    buildFilterPredicate: buildStandardFilterPredicate,
     hasActiveColumnFilters: hasStandardColumnFilters,
     resetColumnFilters: resetStandardColumnFilters,
   } = useSortableColumnFilters<TechcardFilterField>();
+  const pairedPagination = usePaginatedTableQuery({
+    resetPageDeps: [debouncedPageSearch, pairedColumnFilters, pairedColumnSearchQueries, pairedSorts],
+  });
+  const standardPagination = usePaginatedTableQuery({
+    resetPageDeps: [debouncedPageSearch, standardColumnFilters, standardColumnSearchQueries, standardSorts],
+  });
   // Bulk dialog
   const [bulkDialogOpen, setBulkDialogOpen] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
@@ -72,155 +128,63 @@ export function TechcardsPage() {
   const resolvePairSkus = useCallback((detail: any): { skuA: string; skuB: string } => {
     const lines = detail?.techcard_lines ?? detail?.lines ?? [];
     const skus = lines.map((l: any) => {
+      if (l.component_product_sku) return l.component_product_sku;
       const product = rawItems.find((p) => Number(p.id) === Number(l.component_product_id));
       return product?.sku ?? String(l.component_product_id);
     });
     return { skuA: skus[0] ?? "—", skuB: skus[1] ?? "—" };
   }, [rawItems]);
 
-  // Unique values for filtering
-  const pairedUniqueValues = useMemo(() => {
-    const items = techcards.filter((t: any) => t.product_id === null && t.processing_type === "paired_processing");
-    return {
-      sku: [...new Set(items.map((card) => {
-        const { skuA, skuB } = resolvePairSkus(card);
-        return `${skuA} + ${skuB}`;
-      }))].sort(),
-      quantity: [...new Set(items.map((card) => {
-        const qtyA = card.quantity_a_per_item ?? 1;
-        const qtyB = card.quantity_b_per_item ?? 1;
-        return `${card.quantity_total ?? "—"} шт. (${qtyA}/${qtyB} на подвес)`;
-      }))].sort(),
-    };
-  }, [techcards, resolvePairSkus]);
-
-  const standardUniqueValues = useMemo(() => {
-    const items = techcards.filter((t: any) => t.product_id !== null);
-    return {
-      sku: [...new Set(items.map((card) => {
-        const product = rawItems.find((p) => Number(p.id) === card.product_id);
-        return product?.sku ?? String(card.product_id);
-      }))].sort(),
-      quantity: [...new Set(items.map((card) => {
-        return String(card.quantity_total ?? "—");
-      }))].sort((a, b) => Number(a) - Number(b)),
-    };
-  }, [techcards, rawItems]);
-
-  const getPairedCellValue = useCallback((card: any, field: TechcardFilterField): string => {
-    if (field === "sku") {
+  const pairedUniqueValues = useMemo(() => ({
+    sku: [...new Set(pairedTechcards.map((card) => {
       const { skuA, skuB } = resolvePairSkus(card);
       return `${skuA} + ${skuB}`;
-    }
-    const qtyA = card.quantity_a_per_item ?? 1;
-    const qtyB = card.quantity_b_per_item ?? 1;
-    return `${card.quantity_total ?? "—"} шт. (${qtyA}/${qtyB} на подвес)`;
-  }, [resolvePairSkus]);
+    }))].sort(),
+    quantity: [...new Set(pairedTechcards.map((card) => {
+      const qtyA = card.quantity_a_per_item ?? 1;
+      const qtyB = card.quantity_b_per_item ?? 1;
+      return `${card.quantity_total ?? "—"} шт. (${qtyA}/${qtyB} на подвес)`;
+    }))].sort(),
+  }), [pairedTechcards, resolvePairSkus]);
 
-  const getStandardCellValue = useCallback((card: any, field: TechcardFilterField): string => {
-    if (field === "sku") {
-      const product = rawItems.find((p) => Number(p.id) === card.product_id);
-      return product?.sku ?? String(card.product_id);
-    }
-    return String(card.quantity_total ?? "—");
-  }, [rawItems]);
+  const standardUniqueValues = useMemo(() => ({
+    sku: [...new Set(standardTechcards.map((card) => card.product_sku ?? String(card.product_id)))].sort(),
+    quantity: [...new Set(standardTechcards.map((card) => String(card.quantity_total ?? "—")))].sort(
+      (a, b) => Number(a) - Number(b),
+    ),
+  }), [standardTechcards]);
 
-  const pairedFilterPredicate = useMemo(
-    () => buildPairedFilterPredicate(getPairedCellValue),
-    [buildPairedFilterPredicate, getPairedCellValue],
+  const pairedApiParams = useMemo(
+    () => buildTechcardApiParams(pairedColumnFilters, pairedColumnSearchQueries, pairedSorts),
+    [pairedColumnFilters, pairedColumnSearchQueries, pairedSorts],
   );
 
-  const standardFilterPredicate = useMemo(
-    () => buildStandardFilterPredicate(getStandardCellValue),
-    [buildStandardFilterPredicate, getStandardCellValue],
+  const standardApiParams = useMemo(
+    () => buildTechcardApiParams(standardColumnFilters, standardColumnSearchQueries, standardSorts),
+    [standardColumnFilters, standardColumnSearchQueries, standardSorts],
   );
 
-  // Derived data
-  const pairedTechcards = useMemo(() => {
-    let filtered = techcards.filter((t: any) => t.product_id === null && t.processing_type === "paired_processing");
-    const q = pageSearch.trim().toLowerCase();
-    if (q) {
-      filtered = filtered.filter((card) => {
-        const { skuA, skuB } = resolvePairSkus(card);
-        return skuA.toLowerCase().includes(q) || skuB.toLowerCase().includes(q);
-      });
-    }
-    if (pairedFilterPredicate) {
-      filtered = filtered.filter(pairedFilterPredicate);
-    }
-    const activeSort = pairedSorts[0];
-    if (activeSort) {
-      const { field, order } = activeSort;
-      return [...filtered].sort((a, b) => {
-        let aVal = "";
-        let bVal = "";
-        if (field === "sku") {
-          const { skuA: a1, skuB: a2 } = resolvePairSkus(a);
-          const { skuA: b1, skuB: b2 } = resolvePairSkus(b);
-          aVal = `${a1} + ${a2}`;
-          bVal = `${b1} + ${b2}`;
-        } else {
-          aVal = String(a.quantity_total ?? 0);
-          bVal = String(b.quantity_total ?? 0);
-        }
-        if (field === "quantity") {
-          const aNum = Number(aVal);
-          const bNum = Number(bVal);
-          return order === "asc" ? aNum - bNum : bNum - aNum;
-        }
-        return order === "asc" ? aVal.localeCompare(bVal) : bVal.localeCompare(aVal);
-      });
-    }
-    return filtered;
-  }, [techcards, pageSearch, pairedFilterPredicate, pairedSorts, resolvePairSkus]);
+  const pairedQueryParams = useMemo(
+    () => ({
+      processing_type: "paired_processing" as const,
+      search: debouncedPageSearch || undefined,
+      limit: pairedPagination.limit,
+      offset: pairedPagination.offset,
+      ...pairedApiParams,
+    }),
+    [debouncedPageSearch, pairedPagination.limit, pairedPagination.offset, pairedApiParams],
+  );
 
-  const oneToOneTechcards = useMemo(() => {
-    let filtered = techcards.filter((t: any) => t.product_id !== null);
-    const q = pageSearch.trim().toLowerCase();
-    if (q) {
-      filtered = filtered.filter((card) => {
-        const product = rawItems.find((p) => Number(p.id) === card.product_id);
-        return String(product?.sku ?? "").toLowerCase().includes(q);
-      });
-    }
-    if (standardFilterPredicate) {
-      filtered = filtered.filter(standardFilterPredicate);
-    }
-    const activeSort = standardSorts[0];
-    if (activeSort) {
-      const { field, order } = activeSort;
-      return [...filtered].sort((a, b) => {
-        let aVal = "";
-        let bVal = "";
-        if (field === "sku") {
-          const pA = rawItems.find((p) => Number(p.id) === a.product_id);
-          const pB = rawItems.find((p) => Number(p.id) === b.product_id);
-          aVal = pA?.sku ?? "";
-          bVal = pB?.sku ?? "";
-        } else {
-          aVal = String(a.quantity_total ?? 0);
-          bVal = String(b.quantity_total ?? 0);
-        }
-        if (field === "quantity") {
-          const aNum = Number(aVal);
-          const bNum = Number(bVal);
-          return order === "asc" ? aNum - bNum : bNum - aNum;
-        }
-        return order === "asc" ? aVal.localeCompare(bVal) : bVal.localeCompare(aVal);
-      });
-    }
-    return filtered;
-  }, [techcards, pageSearch, standardFilterPredicate, standardSorts, rawItems]);
-
-  const techcardByProductId = useMemo(() => {
-    const map = new Map<number, any>();
-    for (const card of techcards) {
-      if (card.is_active && card.product_id != null) {
-        map.set(card.product_id, card);
-      }
-    }
-    return map;
-  }, [techcards]);
+  const standardQueryParams = useMemo(
+    () => ({
+      processing_type: "standart_processing" as const,
+      search: debouncedPageSearch || undefined,
+      limit: standardPagination.limit,
+      offset: standardPagination.offset,
+      ...standardApiParams,
+    }),
+    [debouncedPageSearch, standardPagination.limit, standardPagination.offset, standardApiParams],
+  );
 
   const rows = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -238,25 +202,84 @@ export function TechcardsPage() {
     return { pairProfileSku: sorted.join("+"), pairProfileName: sorted.join(" + ") };
   }, [skuA, skuB]);
 
-  const loadData = useCallback(async () => {
-    setLoading(true);
+  const loadProducts = useCallback(async () => {
     try {
-      const [products, cards] = await Promise.all([
-        api.listProducts({ limit: 2000 }),
-        api.listTechcards(),
-      ]);
-      setRawItems(products ?? []);
-      setTechcards(cards ?? []);
+      const products = await api.listProducts({ limit: 2000 });
+      setRawItems(products?.items ?? products ?? []);
     } catch (e) {
-      setStatus(e instanceof Error ? e.message : "Ошибка загрузки");
-    } finally {
-      setLoading(false);
+      setStatus(e instanceof Error ? e.message : "Ошибка загрузки продуктов");
     }
   }, [api]);
 
+  const loadTechcardIndex = useCallback(async () => {
+    try {
+      const data = await api.listTechcardsPaginated({
+        processing_type: "standart_processing",
+        is_active: true,
+        limit: 2000,
+        offset: 0,
+      });
+      const map = new Map<number, Techcard>();
+      for (const card of data.items) {
+        if (card.product_id != null) {
+          map.set(card.product_id, card);
+        }
+      }
+      setTechcardByProductId(map);
+    } catch {
+      setTechcardByProductId(new Map());
+    }
+  }, [api]);
+
+  const loadPairedTechcards = useCallback(async () => {
+    setLoading(true);
+    try {
+      const data = await api.listTechcardsPaginated(pairedQueryParams);
+      setPairedTechcards(data.items);
+      setPairedTotal(data.total);
+      setStatus("");
+    } catch (e) {
+      setStatus(e instanceof Error ? e.message : "Ошибка загрузки парных техкарт");
+    } finally {
+      setLoading(false);
+    }
+  }, [api, pairedQueryParams]);
+
+  const loadStandardTechcards = useCallback(async () => {
+    setLoading(true);
+    try {
+      const data = await api.listTechcardsPaginated(standardQueryParams);
+      setStandardTechcards(data.items);
+      setStandardTotal(data.total);
+      setStatus("");
+    } catch (e) {
+      setStatus(e instanceof Error ? e.message : "Ошибка загрузки стандартных техкарт");
+    } finally {
+      setLoading(false);
+    }
+  }, [api, standardQueryParams]);
+
+  const reloadAll = useCallback(async () => {
+    await Promise.all([loadPairedTechcards(), loadStandardTechcards(), loadTechcardIndex()]);
+  }, [loadPairedTechcards, loadStandardTechcards, loadTechcardIndex]);
+
   useEffect(() => {
-    loadData().catch(() => {});
-  }, [loadData]);
+    const timer = window.setTimeout(() => setDebouncedPageSearch(pageSearch), 300);
+    return () => window.clearTimeout(timer);
+  }, [pageSearch]);
+
+  useEffect(() => {
+    void loadProducts();
+    void loadTechcardIndex();
+  }, [loadProducts, loadTechcardIndex]);
+
+  useEffect(() => {
+    void loadPairedTechcards();
+  }, [loadPairedTechcards]);
+
+  useEffect(() => {
+    void loadStandardTechcards();
+  }, [loadStandardTechcards]);
 
   const openView = async (techcardId: number) => {
     setViewTechcardId(techcardId);
@@ -290,7 +313,7 @@ export function TechcardsPage() {
         const sku = rawItems.find((p) => Number(p.id) === viewDetail.product_id)?.sku ?? viewDetail.product_id;
         toast({ title: "Сохранено", description: `Техкарта #${viewTechcardId} (артикул: ${sku}, ID: ${viewTechcardId}, кол-во: ${editQuantityTotal}) успешно обновлена`, variant: "success" });
       }
-      await loadData();
+      await reloadAll();
       await openView(viewTechcardId);
     } catch (e) {
       toast({ title: `Ошибка сохранения: техкарта #${viewTechcardId}`, description: getErrorMessage(e), variant: "destructive" });
@@ -305,7 +328,7 @@ export function TechcardsPage() {
   const handleDelete = async () => {
     if (!deleteTarget) return;
     try {
-      const targetCard = techcards.find((t: any) => t.id === deleteTarget.id);
+      const targetCard = [...pairedTechcards, ...standardTechcards].find((t) => t.id === deleteTarget.id);
       let detail = "";
       if (targetCard) {
         const isPaired = targetCard.product_id === null;
@@ -323,7 +346,7 @@ export function TechcardsPage() {
       toast({ title: "Удалено", description: `Техкарта #${deleteTarget.id} (${detail}, версия: ${targetCard?.version ?? "—"}) успешно удалена`, variant: "success" });
       setViewTechcardId(null);
       setViewDetail(null);
-      await loadData();
+      await reloadAll();
     } catch (e) {
       toast({ title: `Ошибка удаления: техкарта #${deleteTarget.id}`, description: getErrorMessage(e), variant: "destructive" });
     } finally {
@@ -373,7 +396,7 @@ export function TechcardsPage() {
       }
       toast({ title: "Массовое создание завершено", description: `Выбрано ${selectedIds.size} артикулов: создано ${created} техкарт, обновлено ${updated}`, variant: "success" });
       setBulkDialogOpen(false);
-      await loadData();
+      await reloadAll();
       clearSelection();
     } catch (e) {
       toast({ title: `Ошибка массового создания: ${selectedIds.size} артикулов`, description: getErrorMessage(e), variant: "destructive" });
@@ -429,7 +452,7 @@ export function TechcardsPage() {
       await api.createTechcardLine(Number(card.id), { component_product_id: Number(productB.id), quantity: qtyB, unit: "pcs" });
       toast({ title: "Парная техкарта создана", description: `${pairProfileSku} (ID: #${card.id}): общее=${calcTotal}, ${productA.sku}=${qtyA}, ${productB.sku}=${qtyB} на подвес`, variant: "success" });
       setSkuA(""); setSkuB(""); setQuantityPerItem(""); setQuantityAPerItem(""); setQuantityBPerItem(""); setDifferentQuantities(false); setPairedDialogOpen(false);
-      await loadData();
+      await reloadAll();
     } catch (e) {
       toast({ title: `Ошибка создания парной техкарты: ${pairProfileSku}`, description: getErrorMessage(e), variant: "destructive" });
     } finally {
@@ -490,11 +513,11 @@ export function TechcardsPage() {
       {/* Paired techcards table */}
       <div>
         <h3 className="text-sm font-medium text-muted-foreground mb-2">Парные техкарты</h3>
-        <div style={{ border: "1px solid #e5e7eb", borderRadius: 6, overflow: "auto", maxHeight: 400, width: "fit-content" }}>
-          <table style={{ borderCollapse: "collapse", fontSize: 13 }}>
+        <div className={`${DATA_TABLE_STYLES.container} max-h-[400px] w-fit`}>
+          <table className="w-full border-collapse text-[13px]">
             <thead>
-              <tr style={{ background: "#f9fafb", position: "sticky", top: 0 }}>
-                <th style={{ textAlign: "left", padding: 8, width: 300, minWidth: 300 }}>
+              <tr>
+                <th className={`${headerCellClass} p-0 w-[300px] min-w-[300px]`}>
                   <SortableFilterHeader
                     field="sku"
                     label="Парный артикул"
@@ -504,7 +527,7 @@ export function TechcardsPage() {
                     {...bindPairedColumn("sku")}
                   />
                 </th>
-                <th style={{ textAlign: "left", padding: 8, width: 250, minWidth: 250 }}>
+                <th className={`${headerCellClass} p-0 w-[250px] min-w-[250px]`}>
                   <SortableFilterHeader
                     field="quantity"
                     label="Кол-во"
@@ -514,7 +537,7 @@ export function TechcardsPage() {
                     {...bindPairedColumn("quantity")}
                   />
                 </th>
-                <th style={{ textAlign: "right", padding: 4, width: 40 }} />
+                <th className={`${headerCellClass} text-right w-10`} />
                 <TableCornerResetHeader
                   hasActiveFilters={
                     pageSearch.trim().length > 0 ||
@@ -526,6 +549,7 @@ export function TechcardsPage() {
                     setPairedSorts([]);
                     resetPairedColumnFilters();
                   }}
+                  dataTableHeader
                 />
               </tr>
             </thead>
@@ -554,17 +578,27 @@ export function TechcardsPage() {
               )}
             </tbody>
           </table>
+          <TablePaginationFooter
+            page={pairedPagination.page}
+            totalPages={pairedPagination.getTotalPages(pairedTotal)}
+            total={pairedTotal}
+            shownCount={pairedTechcards.length}
+            limit={pairedPagination.limit}
+            onPageChange={pairedPagination.setPage}
+            onLimitChange={pairedPagination.setLimit}
+            rangeLabel={pairedPagination.getRangeLabel(pairedTechcards.length, pairedTotal, { onPage: true })}
+          />
         </div>
       </div>
 
       {/* Standard techcards table */}
       <div>
         <h3 className="text-sm font-medium text-muted-foreground mb-2">Стандартные техкарты</h3>
-        <div style={{ border: "1px solid #e5e7eb", borderRadius: 6, overflow: "auto", maxHeight: 400, width: "fit-content" }}>
-          <table style={{ borderCollapse: "collapse", fontSize: 13 }}>
+        <div className={`${DATA_TABLE_STYLES.container} max-h-[400px] w-fit`}>
+          <table className="w-full border-collapse text-[13px]">
             <thead>
-              <tr style={{ background: "#f9fafb", position: "sticky", top: 0 }}>
-                <th style={{ textAlign: "left", padding: 8, width: 300, minWidth: 300 }}>
+              <tr>
+                <th className={`${headerCellClass} p-0 w-[300px] min-w-[300px]`}>
                   <SortableFilterHeader
                     field="sku"
                     label="Артикул"
@@ -574,7 +608,7 @@ export function TechcardsPage() {
                     {...bindStandardColumn("sku")}
                   />
                 </th>
-                <th style={{ textAlign: "left", padding: 8, width: 250, minWidth: 250 }}>
+                <th className={`${headerCellClass} p-0 w-[250px] min-w-[250px]`}>
                   <SortableFilterHeader
                     field="quantity"
                     label="Кол-во"
@@ -584,7 +618,7 @@ export function TechcardsPage() {
                     {...bindStandardColumn("quantity")}
                   />
                 </th>
-                <th style={{ textAlign: "right", padding: 4, width: 40 }} />
+                <th className={`${headerCellClass} text-right w-10`} />
                 <TableCornerResetHeader
                   hasActiveFilters={
                     pageSearch.trim().length > 0 ||
@@ -596,15 +630,15 @@ export function TechcardsPage() {
                     setStandardSorts([]);
                     resetStandardColumnFilters();
                   }}
+                  dataTableHeader
                 />
               </tr>
             </thead>
             <tbody>
-              {oneToOneTechcards.map((card: any) => {
-                const product = rawItems.find((p) => Number(p.id) === card.product_id);
+              {standardTechcards.map((card) => {
                 return (
                    <tr key={card.id} className="cursor-pointer hover:bg-muted/50" onClick={() => openView(card.id)}>
-                    <td style={{ padding: 8, fontWeight: 600, borderTop: "1px solid #f3f4f6" }}>{product?.sku ?? card.product_id}</td>
+                    <td style={{ padding: 8, fontWeight: 600, borderTop: "1px solid #f3f4f6" }}>{card.product_sku ?? card.product_id}</td>
                     <td style={{ padding: 8, borderTop: "1px solid #f3f4f6" }}>{card.quantity_total ?? "—"}</td>
                     <td style={{ padding: 8, borderTop: "1px solid #f3f4f6", textAlign: "right" }}>
                       {!isReadOnly && (
@@ -617,11 +651,21 @@ export function TechcardsPage() {
                   </tr>
                 );
               })}
-              {oneToOneTechcards.length === 0 && (
+              {standardTechcards.length === 0 && (
                 <tr><td colSpan={4} style={{ padding: 16, textAlign: "center", color: "#9ca3af" }}>Нет стандартных техкарт</td></tr>
               )}
             </tbody>
           </table>
+          <TablePaginationFooter
+            page={standardPagination.page}
+            totalPages={standardPagination.getTotalPages(standardTotal)}
+            total={standardTotal}
+            shownCount={standardTechcards.length}
+            limit={standardPagination.limit}
+            onPageChange={standardPagination.setPage}
+            onLimitChange={standardPagination.setLimit}
+            rangeLabel={standardPagination.getRangeLabel(standardTechcards.length, standardTotal, { onPage: true })}
+          />
         </div>
       </div>
 
@@ -874,7 +918,7 @@ export function TechcardsPage() {
             <AlertDialogTitle>
               {(() => {
                 if (!deleteTarget) return "Удалить техкарту?";
-                const targetCard = techcards.find((t: any) => t.id === deleteTarget.id);
+                const targetCard = [...pairedTechcards, ...standardTechcards].find((t) => t.id === deleteTarget.id);
                 if (!targetCard) return `Удалить техкарту #${deleteTarget.id}?`;
                 if (targetCard.product_id === null) {
                   const { skuA, skuB } = resolvePairSkus(targetCard);

@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel
 from sqlalchemy import select, delete
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -7,6 +7,7 @@ from app.core.database import get_db
 from app.models.route import ProductionRoute, RouteStage, SectionOperation
 from app.models.section import Section
 from app.models.spg import SpgSection, StorageProductionGroup
+from app.services.sections_queries import list_sections_paginated
 
 router = APIRouter(prefix="/sections", tags=["sections"])
 
@@ -82,12 +83,48 @@ class SectionOut(SectionBase):
     operations_count: int = 0
 
 
+class SectionsListOut(BaseModel):
+    items: list[SectionOut]
+    total: int
+    limit: int
+    offset: int
 
 
-@router.get("", response_model=list[SectionOut])
-async def list_sections(db: AsyncSession = Depends(get_db)) -> list[SectionOut]:
-    items = (await db.execute(select(Section).order_by(Section.sort_order, Section.id))).scalars().all()
-    return [SectionOut.model_validate(i, from_attributes=True) for i in items]
+@router.get("", response_model=SectionsListOut)
+async def list_sections(
+    db: AsyncSession = Depends(get_db),
+    limit: int = Query(default=50, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
+    search: str | None = Query(default=None),
+    sort_by: str = Query(default="sort_order"),
+    sort_order: str = Query(default="asc"),
+    type: str | None = Query(default=None),
+    is_active: bool | None = Query(default=None),
+    code: str | None = Query(default=None),
+    name: str | None = Query(default=None),
+    description: str | None = Query(default=None),
+    spg_id: int | None = Query(default=None),
+) -> SectionsListOut:
+    items, total = await list_sections_paginated(
+        db,
+        limit=limit,
+        offset=offset,
+        search=search,
+        sort_by=sort_by,
+        sort_order=sort_order,
+        type=type,
+        is_active=is_active,
+        code=code,
+        name=name,
+        description=description,
+        spg_id=spg_id,
+    )
+    return SectionsListOut(
+        items=[SectionOut.model_validate(i, from_attributes=True) for i in items],
+        total=total,
+        limit=limit,
+        offset=offset,
+    )
 
 
 # Static path segments must be registered BEFORE the catch-all /{section_id}

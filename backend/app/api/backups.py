@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Callable, Dict, List, Optional
 from urllib.parse import unquote, urlparse
 
-from fastapi import APIRouter, Body, Depends, Form, HTTPException, UploadFile, File, status
+from fastapi import APIRouter, Body, Depends, Form, HTTPException, Query, UploadFile, File, status
 from fastapi.responses import FileResponse
 from openpyxl import Workbook
 from sqlalchemy import text
@@ -49,6 +49,15 @@ BACKUP_STORAGE_DIRS = {
 
 BACKUP_JOBS: dict[str, dict] = {}
 BACKUP_JOBS_LOCK = threading.Lock()
+
+BACKUP_SORT_FIELDS = {
+    "filename",
+    "db_name",
+    "backup_type",
+    "size",
+    "created_at",
+    "comment",
+}
 
 
 def _get_db_name() -> str:
@@ -281,6 +290,130 @@ def _iter_backup_files() -> list[Path]:
         key=lambda p: p.stat().st_mtime,
         reverse=True,
     )
+
+
+def _build_backup_list_item(path: Path) -> Dict:
+    meta = _read_backup_meta(path.name)
+    return {
+        "filename": path.name,
+        "db_name": (meta or {}).get("source_db") or _parse_backup_db_name(path.name),
+        "size": path.stat().st_size,
+        "created_at": datetime.fromtimestamp(path.stat().st_mtime).isoformat(),
+        "comment": meta.get("comment", "") if meta else "",
+        "backup_type": (meta or {}).get("backup_type") or "manual",
+        "format": (meta or {}).get("format") or ("archive-v2" if _is_archive_backup(path) else "database-dump"),
+    }
+
+
+def _collect_backup_items() -> list[Dict]:
+    return [_build_backup_list_item(path) for path in _iter_backup_files()]
+
+
+def _contains(value: str, needle: str) -> bool:
+    return needle.lower() in value.lower()
+
+
+def _backup_matches_search(item: Dict, search: str) -> bool:
+    needle = search.strip().lower()
+    if not needle:
+        return True
+    haystacks = (
+        str(item.get("filename", "")),
+        str(item.get("db_name", "")),
+        str(item.get("comment", "")),
+    )
+    return any(needle in value.lower() for value in haystacks)
+
+
+def _backup_matches_filters(
+    item: Dict,
+    *,
+    search: str | None = None,
+    filename: str | None = None,
+    db_name: str | None = None,
+    comment: str | None = None,
+    backup_type: str | None = None,
+    size: int | None = None,
+    created_at: str | None = None,
+) -> bool:
+    if backup_type and str(item.get("backup_type") or "manual") != backup_type:
+        return False
+    if size is not None and int(item.get("size") or 0) != size:
+        return False
+    if created_at is not None and str(item.get("created_at") or "") != created_at:
+        return False
+    if filename and not _contains(str(item.get("filename", "")), filename):
+        return False
+    if db_name and not _contains(str(item.get("db_name", "")), db_name):
+        return False
+    if comment and not _contains(str(item.get("comment", "")), comment):
+        return False
+    if search and not _backup_matches_search(item, search):
+        return False
+    return True
+
+
+def _backup_sort_key(item: Dict, sort_by: str) -> str | int | float:
+    if sort_by == "size":
+        return int(item.get("size") or 0)
+    if sort_by == "created_at":
+        return str(item.get("created_at") or "")
+    if sort_by == "backup_type":
+        return str(item.get("backup_type") or "manual")
+    if sort_by == "comment":
+        return str(item.get("comment") or "")
+    if sort_by == "db_name":
+        return str(item.get("db_name") or "")
+    return str(item.get("filename") or "")
+
+
+def _list_backups_paginated(
+    *,
+    limit: int,
+    offset: int,
+    search: str | None = None,
+    sort_by: str = "created_at",
+    sort_order: str = "desc",
+    backup_type: str | None = None,
+    filename: str | None = None,
+    db_name: str | None = None,
+    comment: str | None = None,
+    size: int | None = None,
+    created_at: str | None = None,
+) -> tuple[list[Dict], int]:
+    resolved_sort_by = sort_by if sort_by in BACKUP_SORT_FIELDS else "created_at"
+    resolved_sort_order = sort_order if sort_order in {"asc", "desc"} else "desc"
+
+    items = _collect_backup_items()
+
+    items = [
+        item
+        for item in items
+        if _backup_matches_filters(
+            item,
+            search=search,
+            filename=filename,
+            db_name=db_name,
+            comment=comment,
+            backup_type=backup_type,
+            size=size,
+            created_at=created_at,
+        )
+    ]
+
+    reverse = resolved_sort_order == "desc"
+    items.sort(key=lambda item: _backup_sort_key(item, resolved_sort_by), reverse=reverse)
+
+    total = len(items)
+    page = items[offset : offset + limit]
+    return page, total
+
+
+class BackupsListResponse(BaseModel):
+    items: list[Dict]
+    total: int
+    limit: int
+    offset: int
 
 
 def _parse_backup_db_name(filename: str) -> str:
@@ -887,23 +1020,36 @@ async def update_backup_config(payload: BackupConfigUpdate) -> Dict:
     return config
 
 
-@router.get("")
-async def list_backups() -> List[Dict]:
-    """Список всех бэкапов с метаданными из JSON."""
+@router.get("", response_model=BackupsListResponse)
+async def list_backups(
+    limit: int = Query(default=50, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
+    search: str | None = Query(default=None),
+    sort_by: str = Query(default="created_at"),
+    sort_order: str = Query(default="desc"),
+    backup_type: str | None = Query(default=None),
+    filename: str | None = Query(default=None),
+    db_name: str | None = Query(default=None),
+    comment: str | None = Query(default=None),
+    size: int | None = Query(default=None),
+    created_at: str | None = Query(default=None),
+) -> BackupsListResponse:
+    """Список бэкапов с метаданными из JSON (пагинация после сортировки FS-списка)."""
     _validate_admin()
-    backups = []
-    for f in _iter_backup_files():
-        meta = _read_backup_meta(f.name)
-        backups.append({
-            "filename": f.name,
-            "db_name": (meta or {}).get("source_db") or _parse_backup_db_name(f.name),
-            "size": f.stat().st_size,
-            "created_at": datetime.fromtimestamp(f.stat().st_mtime).isoformat(),
-            "comment": meta.get("comment", "") if meta else "",
-            "backup_type": (meta or {}).get("backup_type") or "manual",
-            "format": (meta or {}).get("format") or ("archive-v2" if _is_archive_backup(f) else "database-dump"),
-        })
-    return backups
+    items, total = _list_backups_paginated(
+        limit=limit,
+        offset=offset,
+        search=search,
+        sort_by=sort_by,
+        sort_order=sort_order,
+        backup_type=backup_type,
+        filename=filename,
+        db_name=db_name,
+        comment=comment,
+        size=size,
+        created_at=created_at,
+    )
+    return BackupsListResponse(items=items, total=total, limit=limit, offset=offset)
 
 
 @router.get("/{filename}/download")

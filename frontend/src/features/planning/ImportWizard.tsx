@@ -8,7 +8,7 @@ import { useImportRowExpansion, ImportRawRows, ImportUpload, ImportPreview, getI
 import { PlanImportPreviewTable, PLAN_IMPORT_ERROR_LABELS } from "./components/PlanImportPreviewTable"
 import { buildActiveFilterSummary } from "shared/ui/buildActiveFilterSummary"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
-import { listImportTemplates, type ImportTemplate } from "@/shared/api/importTemplates"
+import { listAllImportTemplates, type ImportTemplate } from "@/shared/api/importTemplates"
 import { getErrorMessage } from "@/shared/api/client"
 import { queryKeys } from "@/shared/api/queryKeys"
 import {
@@ -64,7 +64,7 @@ export function ImportWizard(props: {
   const navigate = useNavigate()
   const { data: templates } = useQuery<ImportTemplate[]>({
     queryKey: queryKeys.importTemplates.modal(),
-    queryFn: listImportTemplates,
+    queryFn: listAllImportTemplates,
     enabled: props.open,
   })
 

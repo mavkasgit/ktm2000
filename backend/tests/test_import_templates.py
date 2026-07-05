@@ -27,6 +27,7 @@ async def test_create_and_list_import_templates(client) -> None:
 
     list_response = await client.get("/api/import-templates")
     assert list_response.status_code == 200
-    items = list_response.json()
-    assert len(items) >= 1
-    assert any(item["id"] == created["id"] for item in items)
+    body = list_response.json()
+    assert "items" in body
+    assert body["total"] >= 1
+    assert any(item["id"] == created["id"] for item in body["items"])

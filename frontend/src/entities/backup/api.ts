@@ -11,8 +11,29 @@ export async function updateBackupConfig(payload: { auto_enabled: boolean; time_
   return data;
 }
 
-export async function fetchBackups(): Promise<BackupInfo[]> {
-  const { data } = await apiClient.get<BackupInfo[]>("/backups");
+export type ListBackupsParams = {
+  limit?: number;
+  offset?: number;
+  search?: string;
+  sort_by?: string;
+  sort_order?: "asc" | "desc";
+  backup_type?: string;
+  filename?: string;
+  db_name?: string;
+  comment?: string;
+  size?: number;
+  created_at?: string;
+};
+
+export type BackupsListResponse = {
+  items: BackupInfo[];
+  total: number;
+  limit: number;
+  offset: number;
+};
+
+export async function fetchBackups(params: ListBackupsParams = {}): Promise<BackupsListResponse> {
+  const { data } = await apiClient.get<BackupsListResponse>("/backups", { params });
   return data;
 }
 

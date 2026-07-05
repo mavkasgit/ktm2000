@@ -25,9 +25,50 @@ export type CreateSectionInput = {
 
 export type PatchSectionInput = Partial<Pick<CreateSectionInput, "name" | "description" | "is_active" | "type" | "icon" | "icon_color">>;
 
+export type SectionListParams = {
+  limit?: number;
+  offset?: number;
+  search?: string;
+  sort_by?: string;
+  sort_order?: "asc" | "desc";
+  type?: SectionType | string;
+  is_active?: boolean;
+  code?: string;
+  name?: string;
+  description?: string;
+  spg_id?: number;
+};
+
+export type SectionListResponse = {
+  items: Section[];
+  total: number;
+  limit: number;
+  offset: number;
+};
+
+export async function listSectionsPaginated(
+  params: SectionListParams = {},
+): Promise<SectionListResponse> {
+  const limit = params.limit ?? 50;
+  const offset = params.offset ?? 0;
+  const { data } = await apiClient.get<SectionListResponse>("/sections", { params });
+  return {
+    items: data.items ?? [],
+    total: data.total ?? data.items?.length ?? 0,
+    limit: data.limit ?? limit,
+    offset: data.offset ?? offset,
+  };
+}
+
+/** Backward-compatible helper: returns items array (fetches one page, default limit 2000). */
+export async function fetchAllSections(params: SectionListParams = {}) {
+  const response = await listSectionsPaginated({ limit: 2000, offset: 0, ...params });
+  return response.items;
+}
+
+/** Used as react-query queryFn — no params to avoid QueryFunction signature clash. */
 export async function listSections() {
-  const { data } = await apiClient.get<Section[]>("/sections");
-  return data;
+  return fetchAllSections();
 }
 
 export async function createSection(payload: CreateSectionInput) {
