@@ -103,7 +103,7 @@ function resolveTransferOnlyStage(
   stage: ProductionPlanningStage,
   sectionType?: string | null,
 ): boolean {
-  return isStorageType(stage.section_kind ?? sectionType);
+  return isStorageType(stage.section_type ?? sectionType);
 }
 
 function getStageProgressPercent(

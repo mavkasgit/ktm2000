@@ -37,7 +37,7 @@ class BuiltRouteStep:
     section_id: int | None
     section_code: str | None
     section_name: str | None
-    section_kind: str
+    section_type: str
     stage_kind: str = "production"
     storage_section_id: int | None = None
     group_code: str | None = None
@@ -152,7 +152,7 @@ async def build_route_from_profile(
                 section_id=None,
                 section_code=section.code,
                 section_name=section.name,
-                section_kind=section.type,
+                section_type=section.type,
                 stage_kind="transit",
                 storage_section_id=section.id,
                 operation_code=None,
@@ -181,7 +181,7 @@ async def build_route_from_profile(
                 section_id=section.id,
                 section_code=section.code,
                 section_name=section.name,
-                section_kind=section.type,
+                section_type=section.type,
                 stage_kind=infer_stage_kind(section=section),
                 group_code=first_op.group_code,
                 group_name=first_op.group_name,
@@ -229,7 +229,7 @@ async def build_route_from_profile(
                         section_id=section.id,
                         section_code=section.code,
                         section_name=section.name,
-                        section_kind=section.type,
+                        section_type=section.type,
                         stage_kind=infer_stage_kind(section=section),
                         group_code=group_code,
                         group_name=group_name,
@@ -491,7 +491,7 @@ async def build_route_steps_for_release(
             "section_id": step.section_id,
             "section_code": step.section_code,
             "section_name": step.section_name,
-            "section_kind": step.section_kind,
+            "section_type": step.section_type,
             "group_code": step.group_code,
             "group_name": step.group_name,
             "operation_code": step.operation_code,

@@ -56,10 +56,10 @@ async def seed_data(session: AsyncSession):
     """Инициализация необходимых тестовых справочников."""
     # 1. Секции
     sections_def = [
-        {"code": "RAW_STOCK", "name": "Склад сырья", "sort_order": 10, "kind": "raw_stock"},
-        {"code": "ANODIZING", "name": "Анодирование", "sort_order": 50, "kind": "production"},
-        {"code": "PACKING", "name": "Упаковка", "sort_order": 80, "kind": "production"},
-        {"code": "FINISHED_STOCK", "name": "Склад готовой продукции", "sort_order": 90, "kind": "finished_stock"},
+        {"code": "RAW_STOCK", "name": "Склад сырья", "sort_order": 10, "type": "raw_stock"},
+        {"code": "ANODIZING", "name": "Анодирование", "sort_order": 50, "type": "production"},
+        {"code": "PACKING", "name": "Упаковка", "sort_order": 80, "type": "production"},
+        {"code": "FINISHED_STOCK", "name": "Склад готовой продукции", "sort_order": 90, "type": "finished_stock"},
     ]
     
     sections = {}
@@ -70,7 +70,7 @@ async def seed_data(session: AsyncSession):
                 code=item["code"],
                 name=item["name"],
                 sort_order=item["sort_order"],
-                kind=item["kind"],
+                type=item["type"],
                 is_active=True,
             )
             session.add(sec)

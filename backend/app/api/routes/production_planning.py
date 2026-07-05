@@ -144,7 +144,7 @@ class SectionOut(BaseModel):
     section_id: int
     section_code: str
     section_name: str
-    section_kind: str
+    section_type: str
     positions_count: int
     ready_count: int
     in_progress_count: int
@@ -200,7 +200,7 @@ class PlanningRouteSnapshotStepOut(BaseModel):
     section_id: int
     section_code: str
     section_name: str
-    section_kind: str | None
+    section_type: str | None
     section_icon: str | None = None
     section_icon_color: str | None = None
     operation_code: str | None
@@ -235,7 +235,7 @@ class PlanningStageOut(BaseModel):
     section_id: int
     section_code: str
     section_name: str
-    section_kind: str | None = None
+    section_type: str | None = None
     section_icon: str | None = None
     section_icon_color: str | None = None
     sequence: int
@@ -557,7 +557,7 @@ async def get_production_planning_overview(
                 section_id=section.id,
                 section_code=section.code,
                 section_name=section.name,
-                section_kind=section.type,
+                section_type=section.type,
                 positions_count=len(section_positions),
                 ready_count=ready_count,
                 in_progress_count=in_progress_count,

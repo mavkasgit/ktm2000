@@ -246,7 +246,7 @@ async def _build_route_with_sections(
     route_code: str,
     sections: list[tuple[str, str, str, bool]],
 ) -> ProductionRoute:
-    """Create a minimal route with the given (section_code, section_name, section_kind, is_section_significant) entries.
+    """Create a minimal route with the given (section_code, section_name, section_type, is_section_significant) entries.
 
     Each entry becomes one RouteStage with one RouteOperation.
 

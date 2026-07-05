@@ -123,7 +123,7 @@ export type SectionSummary = {
   section_id: number;
   section_code: string;
   section_name: string;
-  kind: string;
+  type: string;
   sort_order: number;
   icon: string | null;
   icon_color: string | null;

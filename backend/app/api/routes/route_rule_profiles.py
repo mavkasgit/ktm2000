@@ -162,7 +162,7 @@ class RouteStepPreview(BaseModel):
     section_id: int
     section_code: str
     section_name: str
-    section_kind: str
+    section_type: str
     group_code: str | None = None
     group_name: str | None = None
     operation_code: str | None = None
@@ -213,7 +213,7 @@ async def preview_profile_route(
                 section_id=step.section_id,
                 section_code=step.section_code,
                 section_name=step.section_name,
-                section_kind=step.section_kind,
+                section_type=step.section_type,
                 group_code=step.group_code,
                 group_name=step.group_name,
                 operation_code=step.operation_code,

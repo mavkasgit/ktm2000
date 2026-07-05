@@ -5,7 +5,7 @@ export type SpgSectionOut = {
   section_code: string;
   section_name: string;
   sort_order: number;
-  kind: string;
+  type: string;
   icon: string | null;
   icon_color: string | null;
 };

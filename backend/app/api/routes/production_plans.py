@@ -154,7 +154,7 @@ class SectionTotalsLineOut(BaseModel):
     section_id: int
     section_code: str
     section_name: str
-    section_kind: str | None
+    section_type: str | None
     positions_count: int
     planned_input_quantity: str
     planned_output_quantity: str
@@ -785,7 +785,7 @@ async def route_check(
                     "section_id": stage.section_id,
                     "section_code": section.code,
                     "section_name": section.name,
-                    "section_kind": section.type,
+                    "section_type": section.type,
                     "operation_name": ", ".join(op.operation_name for op in stage.operations) if stage.operations else "",
                 }
                 for stage, section in stages_result.all()
@@ -879,7 +879,7 @@ async def section_totals(
                     "section_id": section.id,
                     "section_code": section.code,
                     "section_name": section.name,
-                    "section_kind": section.type,
+                    "section_type": section.type,
                     "positions": set(),
                     "input": 0,
                     "output": 0,
@@ -895,7 +895,7 @@ async def section_totals(
             section_id=b["section_id"],
             section_code=b["section_code"],
             section_name=b["section_name"],
-            section_kind=b["section_kind"],
+            section_type=b["section_type"],
             positions_count=len(b["positions"]),
             planned_input_quantity=str(b["input"]),
             planned_output_quantity=str(b["output"]),

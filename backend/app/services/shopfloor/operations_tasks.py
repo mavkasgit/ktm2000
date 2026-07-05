@@ -386,7 +386,7 @@ async def prepare_section_task(
         return {
             "task_id": None,
             "status": "skipped_storage_section",
-            "section_kind": sec_meta.type,
+            "section_type": sec_meta.type,
         }
 
     existing_task = await db.scalar(

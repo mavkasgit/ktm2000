@@ -270,7 +270,7 @@ export type RouteCheckResponse = {
     route_id: number;
     route_name: string;
     route_source: string;
-    steps: { sequence: number; section_id: number; section_code: string; section_name: string; section_kind: string; operation_name: string }[];
+    steps: { sequence: number; section_id: number; section_code: string; section_name: string; section_type: string; operation_name: string }[];
     diagnostic?: {
       error: string | null;
       template_id: number | null;
@@ -298,7 +298,7 @@ export type SectionTotalsLine = {
   section_id: number;
   section_code: string;
   section_name: string;
-  section_kind: string | null;
+  section_type: string | null;
   positions_count: number;
   planned_input_quantity: string;
   planned_output_quantity: string;
@@ -377,7 +377,7 @@ export type ProductionPlanningRouteSnapshotStep = {
   section_id: number;
   section_code: string;
   section_name: string;
-  section_kind: string | null;
+  section_type: string | null;
   section_icon: string | null;
   section_icon_color: string | null;
   operation_code: string | null;
@@ -400,7 +400,7 @@ export type ProductionPlanningStage = {
   section_id: number;
   section_code: string;
   section_name: string;
-  section_kind?: string | null;
+  section_type?: string | null;
   section_icon: string | null;
   section_icon_color: string | null;
   sequence: number;
@@ -547,7 +547,7 @@ export type PlanningSectionOut = {
   section_id: number;
   section_code: string;
   section_name: string;
-  section_kind: string;
+  section_type: string;
   positions_count: number;
   ready_count: number;
   in_progress_count: number;

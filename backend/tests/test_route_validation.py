@@ -25,7 +25,7 @@ async def _make_factory_route(
 ) -> tuple[Product, ProductionRoute]:
     """Create a product with techcard, sections, and an active route.
 
-    step_defs: list of (logical_code, section_kind, operation_name)
+    step_defs: list of (logical_code, section_type, operation_name)
     """
     product = Product(
         sku=sku, name=f"Finished {sku}", type=ProductType.finished_good, unit="pcs"
@@ -46,9 +46,9 @@ async def _make_factory_route(
     )
 
     sections = []
-    for logical_code, section_kind, op_name in step_defs:
+    for logical_code, section_type, op_name in step_defs:
         sections.append(
-            Section(code=f"{sku}-{logical_code}", name=logical_code, type=section_kind)
+            Section(code=f"{sku}-{logical_code}", name=logical_code, type=section_type)
         )
     session.add_all(sections)
     await session.flush()
