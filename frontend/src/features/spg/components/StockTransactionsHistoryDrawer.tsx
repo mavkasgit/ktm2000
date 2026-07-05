@@ -215,15 +215,16 @@ export function StockTransactionsHistoryDrawer({
   }, [search]);
 
   useEffect(() => {
-    if (!open) {
-      setDateRange({ from: "", to: "" });
-      setSearch("");
-      setDebouncedSearch("");
-      setSortConfigs([]);
-      resetColumnFilters();
-      resetPage();
-    }
-  }, [open, resetColumnFilters, resetPage, setSortConfigs]);
+    if (open) return;
+    setDateRange({ from: "", to: "" });
+    setSearch("");
+    setDebouncedSearch("");
+    setSortConfigs([]);
+    resetColumnFilters();
+    resetPage();
+    // Reset only when the drawer closes; avoid unstable callback deps while closed.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
 
   const txQueryParams = useMemo(
     () => ({

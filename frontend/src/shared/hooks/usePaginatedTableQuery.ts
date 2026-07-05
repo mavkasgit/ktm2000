@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 export type PaginatedTableLimit = 50 | 100 | 200 | 500;
 export type PageLimitOption = PaginatedTableLimit;
@@ -47,6 +47,10 @@ export function usePaginatedTableQuery(options: UsePaginatedTableQueryOptions = 
     // eslint-disable-next-line react-hooks/exhaustive-deps -- pageResetDeps is caller-controlled
   }, [limit, ...pageResetDeps]);
 
+  const resetPage = useCallback(() => {
+    setPage(1);
+  }, []);
+
   const getTotalPages = (total: number) => Math.max(1, Math.ceil(total / limit));
 
   const getRangeLabel = (
@@ -71,6 +75,6 @@ export function usePaginatedTableQuery(options: UsePaginatedTableQueryOptions = 
     getRangeLabel,
     totalPages: getTotalPages,
     rangeLabel: getRangeLabel,
-    resetPage: () => setPage(1),
+    resetPage,
   };
 }
