@@ -182,7 +182,7 @@ async def test_preview_remainders_excel_happy_path(
     ])
 
     resp = await client.post(
-        "/api/v2/stock/import/remainders/preview",
+        "/api/stock/import/remainders/preview",
         files={"file": ("test.xlsx", excel_buf, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
         data={
             "location_id": str(location.id),
@@ -230,7 +230,7 @@ async def test_preview_without_location_id(
 
     excel_buf = _make_excel([("NO-LOC-001", 5, "")])
     resp = await client.post(
-        "/api/v2/stock/import/remainders/preview",
+        "/api/stock/import/remainders/preview",
         files={"file": ("test.xlsx", excel_buf, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
         data={"sheet_index": "0"},
     )
@@ -253,7 +253,7 @@ async def test_preview_remainders_pagination_limit_offset(
     excel_buf = _make_excel(rows)
 
     resp = await client.post(
-        "/api/v2/stock/import/remainders/preview",
+        "/api/stock/import/remainders/preview",
         files={"file": ("test.xlsx", excel_buf, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
         data={"sheet_index": "0", "limit": "2", "offset": "0", "sort_by": "row", "sort_order": "asc"},
     )
@@ -269,7 +269,7 @@ async def test_preview_remainders_pagination_limit_offset(
     assert body["items"][1]["sku"] == "PAGE-002"
 
     resp_page2 = await client.post(
-        "/api/v2/stock/import/remainders/preview",
+        "/api/stock/import/remainders/preview",
         files={"file": ("test.xlsx", excel_buf, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
         data={"sheet_index": "0", "limit": "2", "offset": "2", "sort_by": "row", "sort_order": "asc"},
     )
@@ -294,7 +294,7 @@ async def test_preview_remainders_search_and_invalid_filter(
     ])
 
     search_resp = await client.post(
-        "/api/v2/stock/import/remainders/preview",
+        "/api/stock/import/remainders/preview",
         files={"file": ("test.xlsx", excel_buf, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
         data={"sheet_index": "0", "search": "FILTER-OK", "limit": "50"},
     )
@@ -305,7 +305,7 @@ async def test_preview_remainders_search_and_invalid_filter(
     assert search_body["summary"]["total"] == 2
 
     invalid_resp = await client.post(
-        "/api/v2/stock/import/remainders/preview",
+        "/api/stock/import/remainders/preview",
         files={"file": ("test.xlsx", excel_buf, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
         data={"sheet_index": "0", "filter_status": "invalid", "limit": "50"},
     )
@@ -329,7 +329,7 @@ async def test_preview_remainders_excel_unknown_sku(
     ])
 
     resp = await client.post(
-        "/api/v2/stock/import/remainders/preview",
+        "/api/stock/import/remainders/preview",
         files={"file": ("test.xlsx", excel_buf, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
         data={"location_id": str(location.id), "sheet_index": "0"},
     )
@@ -361,7 +361,7 @@ async def test_import_remainders_excel_creates_manual_in_transactions(
     ])
 
     resp = await client.post(
-        "/api/v2/stock/import/remainders",
+        "/api/stock/import/remainders",
         files={"file": ("test.xlsx", excel_buf, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
         data={
             "location_id": str(location.id),
@@ -415,7 +415,7 @@ async def test_import_remainders_excel_skip_invalid(
     ])
 
     resp = await client.post(
-        "/api/v2/stock/import/remainders",
+        "/api/stock/import/remainders",
         files={"file": ("test.xlsx", excel_buf, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
         data={
             "location_id": str(location.id),
@@ -449,7 +449,7 @@ async def test_import_remainders_excel_atomic_fail(
     ])
 
     resp = await client.post(
-        "/api/v2/stock/import/remainders",
+        "/api/stock/import/remainders",
         files={"file": ("test.xlsx", excel_buf, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
         data={
             "location_id": str(location.id),
@@ -494,7 +494,7 @@ async def test_import_remainders_excel_clear_existing(
     ])
 
     resp = await client.post(
-        "/api/v2/stock/import/remainders",
+        "/api/stock/import/remainders",
         files={"file": ("test.xlsx", excel_buf, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
         data={
             "location_id": str(location.id),
@@ -551,7 +551,7 @@ async def test_import_remainders_excel_quality_state(
     )
 
     resp = await client.post(
-        "/api/v2/stock/import/remainders",
+        "/api/stock/import/remainders",
         files={"file": ("test.xlsx", excel_buf, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
         data={
             "location_id": str(location.id),
@@ -608,7 +608,7 @@ async def test_import_remainders_excel_per_row_quality_states(
     )
 
     resp = await client.post(
-        "/api/v2/stock/import/remainders",
+        "/api/stock/import/remainders",
         files={"file": ("test.xlsx", excel_buf, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
         data={"location_id": str(location.id)},
     )
@@ -640,7 +640,7 @@ async def test_preview_remainders_excel_rejects_rework_quality_state(
     )
 
     resp = await client.post(
-        "/api/v2/stock/import/remainders/preview",
+        "/api/stock/import/remainders/preview",
         files={"file": ("test.xlsx", excel_buf, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
         data={"location_id": str(location.id)},
     )
@@ -665,7 +665,7 @@ async def test_preview_remainders_excel_unknown_quality_state(
     )
 
     resp = await client.post(
-        "/api/v2/stock/import/remainders/preview",
+        "/api/stock/import/remainders/preview",
         files={"file": ("test.xlsx", excel_buf, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
         data={"location_id": str(location.id)},
     )
@@ -689,7 +689,7 @@ async def test_import_remainders_excel_unknown_sku(
     ])
 
     resp = await client.post(
-        "/api/v2/stock/import/remainders",
+        "/api/stock/import/remainders",
         files={"file": ("test.xlsx", excel_buf, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
         data={
             "location_id": str(location.id),
@@ -714,7 +714,7 @@ async def test_download_remainders_template(
     await session.commit()
 
     resp = await client.get(
-        "/api/v2/stock/import/remainders/template",
+        "/api/stock/import/remainders/template",
         params={"location_id": location.id},
     )
     assert resp.status_code == 200, resp.text
@@ -751,7 +751,7 @@ async def test_download_remainders_template_example_rows_match_modal(
     await session.commit()
 
     resp = await client.get(
-        "/api/v2/stock/import/remainders/template",
+        "/api/stock/import/remainders/template",
         params={"location_id": location.id},
     )
     assert resp.status_code == 200, resp.text
@@ -795,7 +795,7 @@ async def test_preview_returns_completed_stages(
         headers=("SKU", "Количество", "Целевая секция", "Выполненные операции", "Комментарий"),
     )
     resp = await client.post(
-        "/api/v2/stock/import/remainders/preview",
+        "/api/stock/import/remainders/preview",
         files={"file": ("test.xlsx", excel_buf, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
         data={"location_id": str(location.id), "sheet_index": "0"},
     )
@@ -847,7 +847,7 @@ async def test_preview_completed_stages_use_section_order_not_intra_section(
         headers=("SKU", "Количество", "Целевая секция", "Выполненные операции", "Комментарий"),
     )
     resp = await client.post(
-        "/api/v2/stock/import/remainders/preview",
+        "/api/stock/import/remainders/preview",
         files={"file": ("test.xlsx", excel_buf, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
         data={"location_id": str(location.id), "sheet_index": "0"},
     )
@@ -881,7 +881,7 @@ async def test_preview_target_section_name_resolved(
         headers=("SKU", "Количество", "Целевая секция", "Выполненные операции", "Комментарий"),
     )
     resp = await client.post(
-        "/api/v2/stock/import/remainders/preview",
+        "/api/stock/import/remainders/preview",
         files={"file": ("test.xlsx", excel_buf, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
         data={"location_id": str(location.id), "sheet_index": "0"},
     )
@@ -909,7 +909,7 @@ async def test_preview_target_section_unknown_warns_but_not_fails(
         headers=("SKU", "Количество", "Целевая секция", "Выполненные операции", "Комментарий"),
     )
     resp = await client.post(
-        "/api/v2/stock/import/remainders/preview",
+        "/api/stock/import/remainders/preview",
         files={"file": ("test.xlsx", excel_buf, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
         data={"location_id": str(location.id), "sheet_index": "0"},
     )
@@ -937,7 +937,7 @@ async def test_preview_clipboard_text_parses_rows(
         headers=("Артикул", "Количество", "Участок", "Выполненные операции", "Комментарий"),
     )
     resp = await client.post(
-        "/api/v2/stock/import/remainders/preview",
+        "/api/stock/import/remainders/preview",
         data={
             "location_id": str(location.id),
             "clipboard_text": clipboard,
@@ -968,7 +968,7 @@ async def test_import_clipboard_creates_balance(
         headers=("SKU", "Количество", "Комментарий"),
     )
     resp = await client.post(
-        "/api/v2/stock/import/remainders",
+        "/api/stock/import/remainders",
         data={
             "location_id": str(location.id),
             "clipboard_text": clipboard,
@@ -1008,7 +1008,7 @@ async def test_preview_clipboard_two_columns_without_quantity(
         headers=("Артикул", "Выполненные операции"),
     )
     resp = await client.post(
-        "/api/v2/stock/import/remainders/preview",
+        "/api/stock/import/remainders/preview",
         data={"clipboard_text": clipboard},
     )
     assert resp.status_code == 200, resp.text
@@ -1034,7 +1034,7 @@ async def test_preview_positional_columns_without_headers(
         f"POS-001\t50\tБрак\t\t{location.name}\t"
     )
     resp = await client.post(
-        "/api/v2/stock/import/remainders/preview",
+        "/api/stock/import/remainders/preview",
         data={"clipboard_text": clipboard},
     )
     assert resp.status_code == 200, resp.text
@@ -1064,7 +1064,7 @@ async def test_preview_positional_sparse_columns_default_qty(
 
     clipboard = "POS-SPARSE"
     resp = await client.post(
-        "/api/v2/stock/import/remainders/preview",
+        "/api/stock/import/remainders/preview",
         data={"clipboard_text": clipboard},
     )
     assert resp.status_code == 200, resp.text
@@ -1090,7 +1090,7 @@ async def test_preview_clipboard_concatenated_without_tabs(
         "ЮП-460Окно"
     )
     resp = await client.post(
-        "/api/v2/stock/import/remainders/preview",
+        "/api/stock/import/remainders/preview",
         data={"clipboard_text": clipboard},
     )
     assert resp.status_code == 200, resp.text
@@ -1112,7 +1112,7 @@ async def test_preview_clipboard_unrecognized_rows_still_returned(
     """Нераспознанные строки возвращаются как invalid, а не пропускаются."""
     clipboard = "Артикул\tКоличество\n\t\nмусор без структуры"
     resp = await client.post(
-        "/api/v2/stock/import/remainders/preview",
+        "/api/stock/import/remainders/preview",
         data={"clipboard_text": clipboard},
     )
     assert resp.status_code == 200, resp.text
@@ -1141,7 +1141,7 @@ async def test_preview_target_section_production_type_rejected(
         headers=("SKU", "Количество", "Целевая секция", "Выполненные операции", "Комментарий"),
     )
     resp = await client.post(
-        "/api/v2/stock/import/remainders/preview",
+        "/api/stock/import/remainders/preview",
         files={"file": ("test.xlsx", excel_buf, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
         data={"location_id": str(location.id), "sheet_index": "0"},
     )
@@ -1180,7 +1180,7 @@ async def test_import_per_row_target_creates_distinct_balances(
         headers=("SKU", "Количество", "Целевая секция", "Выполненные операции", "Комментарий"),
     )
     resp = await client.post(
-        "/api/v2/stock/import/remainders",
+        "/api/stock/import/remainders",
         files={"file": ("test.xlsx", excel_buf, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
         data={
             "location_id": str(s1.id),
@@ -1228,7 +1228,7 @@ async def test_import_clear_existing_with_target_section_override_returns_422(
         headers=("SKU", "Количество", "Целевая секция", "Выполненные операции", "Комментарий"),
     )
     resp = await client.post(
-        "/api/v2/stock/import/remainders",
+        "/api/stock/import/remainders",
         files={"file": ("test.xlsx", excel_buf, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
         data={
             "location_id": str(location.id),
@@ -1277,7 +1277,7 @@ async def test_operations_endpoint_returns_production_significant(
     )
     await session.commit()
 
-    resp = await client.get("/api/v2/stock/import/remainders/operations")
+    resp = await client.get("/api/stock/import/remainders/operations")
     assert resp.status_code == 200, resp.text
     data = resp.json()
     assert isinstance(data, list)

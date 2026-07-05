@@ -215,7 +215,7 @@ async def test_stock_balance_quality_state_filtering(session: AsyncSession):
 
 @pytest.mark.asyncio
 async def test_list_stock_balances_endpoint_returns_correct_data(client, session: AsyncSession):
-    """GET /api/v2/stock/balance возвращает корректные балансы после создания транзакций."""
+    """GET /api/stock/balance возвращает корректные балансы после создания транзакций."""
     from app.core.security import create_access_token
 
     user = await _make_user(session)
@@ -237,7 +237,7 @@ async def test_list_stock_balances_endpoint_returns_correct_data(client, session
     ))
     await session.commit()
 
-    resp = await client.get("/api/v2/stock/balance?limit=500")
+    resp = await client.get("/api/stock/balance?limit=500")
     assert resp.status_code == 200, resp.text
     data = resp.json()["balances"]
 
@@ -254,7 +254,7 @@ async def test_list_stock_balances_endpoint_returns_correct_data(client, session
 async def test_list_stock_balances_returns_completed_stages_from_import_comment(
     client, session: AsyncSession,
 ):
-    """GET /api/v2/stock/balance возвращает операции из комментария последнего MANUAL_IN."""
+    """GET /api/stock/balance возвращает операции из комментария последнего MANUAL_IN."""
     from app.core.security import create_access_token
 
     user = await _make_user(session)
@@ -305,7 +305,7 @@ async def test_list_stock_balances_returns_completed_stages_from_import_comment(
     ))
     await session.commit()
 
-    resp = await client.get("/api/v2/stock/balance?limit=500")
+    resp = await client.get("/api/stock/balance?limit=500")
     assert resp.status_code == 200, resp.text
     our_balance = [b for b in resp.json()["balances"] if b["product_id"] == product.id]
     assert len(our_balance) == 1
@@ -317,7 +317,7 @@ async def test_list_stock_balances_returns_completed_stages_from_import_comment(
 async def test_list_stock_transactions_serializes_decimal_and_datetime(
     client, session: AsyncSession,
 ):
-    """GET /api/v2/stock/transactions не падает на Decimal/datetime из ORM."""
+    """GET /api/stock/transactions не падает на Decimal/datetime из ORM."""
     from app.core.security import create_access_token
 
     user = await _make_user(session)
@@ -341,7 +341,7 @@ async def test_list_stock_transactions_serializes_decimal_and_datetime(
     await session.commit()
 
     resp = await client.get(
-        f"/api/v2/stock/transactions?product_id={product.id}&limit=500",
+        f"/api/stock/transactions?product_id={product.id}&limit=500",
     )
     assert resp.status_code == 200, resp.text
     body = resp.json()

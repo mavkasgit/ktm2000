@@ -207,7 +207,7 @@ export async function getStockBalances(
   if (params?.offset !== undefined) search.set("offset", String(params.offset));
   const qs = search.toString();
   const { data } = await apiClient.get<StockBalancesListResponse>(
-    `/v2/stock/balance${qs ? `?${qs}` : ""}`,
+    `/stock/balance${qs ? `?${qs}` : ""}`,
   );
   return data;
 }
@@ -215,7 +215,7 @@ export async function getStockBalances(
 export async function getProductStockBalances(productId: number, qualityState?: QualityState): Promise<StockBalanceEntry[]> {
   const search = qualityState ? `?quality_state=${toApiQualityState(qualityState)}` : "";
   const { data } = await apiClient.get<StockBalanceEntry[]>(
-    `/v2/stock/balance/by-product/${productId}${search}`,
+    `/stock/balance/by-product/${productId}${search}`,
   );
   return data;
 }
@@ -237,7 +237,7 @@ export type StockAdjustmentResponse = {
 };
 
 export async function postStockAdjustment(payload: StockAdjustmentPayload): Promise<StockAdjustmentResponse> {
-  const { data } = await apiClient.post<StockAdjustmentResponse>("/api/v2/stock/adjustment", {
+  const { data } = await apiClient.post<StockAdjustmentResponse>("/api/stock/adjustment", {
     ...payload,
     quality_state: toApiQualityState(payload.quality_state),
   });
@@ -272,12 +272,12 @@ export async function getStockTransactions(
   if (params?.offset !== undefined) search.set("offset", String(params.offset));
   const qs = search.toString();
   const { data } = await apiClient.get<StockTransactionsListResponse>(
-    `/v2/stock/transactions${qs ? `?${qs}` : ""}`,
+    `/stock/transactions${qs ? `?${qs}` : ""}`,
   );
   return data;
 }
 
-// ─── Remainder Excel Import (v2/stock) ──────────────────────────────────────
+// ─── Remainder Excel Import (stock) ──────────────────────────────────────
 
 // ─── Operations Reference (ImportOperationStep) ────────────────────────
 
@@ -295,7 +295,7 @@ export type ImportOperationStep = {
 };
 
 export async function getRemainderImportOperations(): Promise<ImportOperationStep[]> {
-  const { data } = await apiClient.get<ImportOperationStep[]>("/v2/stock/import/remainders/operations");
+  const { data } = await apiClient.get<ImportOperationStep[]>("/stock/import/remainders/operations");
   return data;
 }
 
@@ -444,7 +444,7 @@ export async function previewRemaindersExcel(
     formData.append("quality_state_overrides", JSON.stringify(payload));
   }
   const { data } = await apiClient.post<RemainderPreviewResponse>(
-    "/v2/stock/import/remainders/preview",
+    "/stock/import/remainders/preview",
     formData,
     { headers: { "Content-Type": "multipart/form-data" } },
   );
@@ -477,7 +477,7 @@ export async function importRemaindersExcel(
     formData.append("quality_state_overrides", JSON.stringify(payload));
   }
   const { data } = await apiClient.post<RemainderImportResponse>(
-    "/v2/stock/import/remainders",
+    "/stock/import/remainders",
     formData,
     { headers: { "Content-Type": "multipart/form-data" } },
   );
@@ -486,7 +486,7 @@ export async function importRemaindersExcel(
 
 export async function downloadRemaindersImportTemplate(locationId: number): Promise<Blob> {
   const response = await apiClient.get<Blob>(
-    `/v2/stock/import/remainders/template?location_id=${locationId}`,
+    `/stock/import/remainders/template?location_id=${locationId}`,
     { responseType: "blob" },
   );
   return response.data;

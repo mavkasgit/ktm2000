@@ -1,4 +1,4 @@
-"""Pagination, total and search for GET /api/v2/stock/transactions."""
+"""Pagination, total and search for GET /api/stock/transactions."""
 from __future__ import annotations
 
 from decimal import Decimal
@@ -90,7 +90,7 @@ async def test_transactions_default_limit_returns_total(client, session: AsyncSe
     )
 
     resp = await client.get(
-        f"/api/v2/stock/transactions?product_id={product.id}",
+        f"/api/stock/transactions?product_id={product.id}",
     )
     assert resp.status_code == 200, resp.text
     body = resp.json()
@@ -117,10 +117,10 @@ async def test_transactions_offset_pagination(client, session: AsyncSession):
     )
 
     first = await client.get(
-        f"/api/v2/stock/transactions?product_id={product.id}&limit=50&offset=0",
+        f"/api/stock/transactions?product_id={product.id}&limit=50&offset=0",
     )
     second = await client.get(
-        f"/api/v2/stock/transactions?product_id={product.id}&limit=50&offset=50",
+        f"/api/stock/transactions?product_id={product.id}&limit=50&offset=50",
     )
     assert first.status_code == 200, first.text
     assert second.status_code == 200, second.text
@@ -162,7 +162,7 @@ async def test_transactions_search_finds_record_on_second_page(client, session: 
     await session.commit()
 
     resp = await client.get(
-        f"/api/v2/stock/transactions?product_id={product.id}"
+        f"/api/stock/transactions?product_id={product.id}"
         f"&search=UNIQUE-TX-MARKER-42&limit=50&offset=0",
     )
     assert resp.status_code == 200, resp.text
@@ -178,7 +178,7 @@ async def test_transactions_limit_max_validation(client, session: AsyncSession):
     token = create_access_token(subject=user.email)
     client.headers["Authorization"] = f"Bearer {token}"
 
-    resp = await client.get("/api/v2/stock/transactions?limit=1000")
+    resp = await client.get("/api/stock/transactions?limit=1000")
     assert resp.status_code == 422
 
 
@@ -203,7 +203,7 @@ async def test_stock_tx_sort_by_quantity(client, session: AsyncSession):
     await session.commit()
 
     resp = await client.get(
-        f"/api/v2/stock/transactions?product_id={product.id}"
+        f"/api/stock/transactions?product_id={product.id}"
         f"&sort_by=quantity&sort_order=asc&limit=50",
     )
     assert resp.status_code == 200, resp.text
@@ -241,7 +241,7 @@ async def test_stock_tx_filter_reason(client, session: AsyncSession):
     await session.commit()
 
     resp = await client.get(
-        f"/api/v2/stock/transactions?product_id={product.id}"
+        f"/api/stock/transactions?product_id={product.id}"
         f"&reason=adjustment_in&limit=50&offset=0",
     )
     assert resp.status_code == 200, resp.text

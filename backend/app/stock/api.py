@@ -1,17 +1,17 @@
-"""FastAPI router for the Stock Ledger (v2).
+"""FastAPI router for the Stock Ledger.
 
-Mounted at ``/api/v2/stock``. Read-only endpoints для сверки и будущего
+Mounted at ``/api/stock``. Read-only endpoints для сверки и будущего
 UI-перехода (Этап 6). Старый ``/api/spg/*`` остаётся live до Этапа 7 —
 никаких ``if legacy`` флагов, версии живут параллельно.
 
 Endpoints:
 
-  * ``GET /v2/stock/balance``             — список строк StockBalance
+  * ``GET /stock/balance``             — список строк StockBalance
     с фильтрами ``product_id`` / ``location_id`` / ``quality_state``,
     поиском, сортировкой и пагинацией ``limit`` / ``offset``.
-  * ``GET /v2/stock/balance/by-product/{product_id}`` — все балансы
+  * ``GET /stock/balance/by-product/{product_id}`` — все балансы
     конкретного продукта по локациям.
-  * ``GET /v2/stock/transactions``        — лента StockTransaction с
+  * ``GET /stock/transactions``        — лента StockTransaction с
     фильтрами ``product_id`` / ``transfer_id`` / ``task_id`` / ``reason``
     и пагинацией ``limit`` / ``offset``.
 
@@ -63,7 +63,7 @@ from app.stock.import_service import _lookup_products as _lookup_remainder_produ
 from fastapi.responses import StreamingResponse
 from io import BytesIO
 
-router = APIRouter(prefix="/v2/stock", tags=["stock-ledger"])
+router = APIRouter(prefix="/stock", tags=["stock-ledger"])
 
 
 async def _parse_remainder_import_source(
@@ -174,7 +174,7 @@ class StockTransactionOut(BaseModel):
 
 
 class StockAdjustmentIn(BaseModel):
-    """Payload для ручной корректировки остатков (POST /v2/stock/adjustment).
+    """Payload для ручной корректировки остатков (POST /stock/adjustment).
 
     ``reason`` определяет направление движения:
     * ``adjustment_in`` / ``manual_in`` — приход на ``location_id`` (to_location)

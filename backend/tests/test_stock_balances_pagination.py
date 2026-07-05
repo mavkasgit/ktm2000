@@ -1,4 +1,4 @@
-"""Pagination, total and search for GET /api/v2/stock/balance."""
+"""Pagination, total and search for GET /api/stock/balance."""
 from __future__ import annotations
 
 from decimal import Decimal
@@ -89,7 +89,7 @@ async def test_balances_default_limit_returns_total(client, session: AsyncSessio
         count=65,
     )
 
-    resp = await client.get(f"/api/v2/stock/balance?location_id={location.id}")
+    resp = await client.get(f"/api/stock/balance?location_id={location.id}")
     assert resp.status_code == 200, resp.text
     body = resp.json()
     assert len(body["balances"]) == 50
@@ -113,10 +113,10 @@ async def test_balances_offset_pagination(client, session: AsyncSession):
     )
 
     first = await client.get(
-        f"/api/v2/stock/balance?location_id={location.id}&limit=50&offset=0",
+        f"/api/stock/balance?location_id={location.id}&limit=50&offset=0",
     )
     second = await client.get(
-        f"/api/v2/stock/balance?location_id={location.id}&limit=50&offset=50",
+        f"/api/stock/balance?location_id={location.id}&limit=50&offset=50",
     )
     assert first.status_code == 200, first.text
     assert second.status_code == 200, second.text
@@ -156,7 +156,7 @@ async def test_balances_search_finds_record_on_second_page(client, session: Asyn
     await session.commit()
 
     resp = await client.get(
-        f"/api/v2/stock/balance?location_id={location.id}"
+        f"/api/stock/balance?location_id={location.id}"
         f"&search=UNIQUE-BAL-MARKER-42&limit=50&offset=0",
     )
     assert resp.status_code == 200, resp.text
@@ -172,7 +172,7 @@ async def test_balances_limit_max_validation(client, session: AsyncSession):
     token = create_access_token(subject=user.email)
     client.headers["Authorization"] = f"Bearer {token}"
 
-    resp = await client.get("/api/v2/stock/balance?limit=1000")
+    resp = await client.get("/api/stock/balance?limit=1000")
     assert resp.status_code == 422
 
 
@@ -202,7 +202,7 @@ async def test_balances_sort_by_quantity(client, session: AsyncSession):
     await session.commit()
 
     resp = await client.get(
-        f"/api/v2/stock/balance?location_id={location.id}"
+        f"/api/stock/balance?location_id={location.id}"
         f"&sort_by=quantity&sort_order=asc&limit=50",
     )
     assert resp.status_code == 200, resp.text
@@ -238,7 +238,7 @@ async def test_balances_filter_quality_state(client, session: AsyncSession):
     await session.commit()
 
     resp = await client.get(
-        f"/api/v2/stock/balance?location_id={location.id}"
+        f"/api/stock/balance?location_id={location.id}"
         f"&quality_state=scrap&limit=50&offset=0",
     )
     assert resp.status_code == 200, resp.text
@@ -276,7 +276,7 @@ async def test_balances_location_ids_filter(client, session: AsyncSession):
     await session.commit()
 
     resp = await client.get(
-        f"/api/v2/stock/balance?location_ids={loc_a.id}&location_ids={loc_b.id}&limit=50",
+        f"/api/stock/balance?location_ids={loc_a.id}&location_ids={loc_b.id}&limit=50",
     )
     assert resp.status_code == 200, resp.text
     body = resp.json()

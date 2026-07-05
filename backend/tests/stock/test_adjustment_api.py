@@ -1,4 +1,4 @@
-"""Тесты POST /api/api/v2/stock/adjustment.
+"""Тесты POST /api/stock/adjustment.
 
 Проверяют:
 - Создание StockTransaction при manual_in / manual_out
@@ -50,7 +50,7 @@ async def test_adjustment_in_creates_stock_tx(client: AsyncClient, session: Asyn
         "quality_state": "good",
         "comment": "тестовый приход",
     }
-    resp = await client.post("/api/v2/stock/adjustment", json=payload)
+    resp = await client.post("/api/stock/adjustment", json=payload)
     assert resp.status_code == 201, resp.text
     body = resp.json()
     assert body["reason"] == "manual_in"
@@ -88,7 +88,7 @@ async def test_adjustment_out_creates_stock_tx(client: AsyncClient, session: Asy
         "reason": "manual_in",
         "quality_state": "good",
     }
-    resp_in = await client.post("/api/v2/stock/adjustment", json=payload_in)
+    resp_in = await client.post("/api/stock/adjustment", json=payload_in)
     assert resp_in.status_code == 201
 
     # Расход
@@ -99,7 +99,7 @@ async def test_adjustment_out_creates_stock_tx(client: AsyncClient, session: Asy
         "reason": "manual_out",
         "quality_state": "good",
     }
-    resp_out = await client.post("/api/v2/stock/adjustment", json=payload_out)
+    resp_out = await client.post("/api/stock/adjustment", json=payload_out)
     assert resp_out.status_code == 201, resp_out.text
     body = resp_out.json()
     assert body["reason"] == "manual_out"
@@ -129,7 +129,7 @@ async def test_adjustment_validates_reason(client: AsyncClient, session: AsyncSe
         "quantity": 5.0,
         "reason": "complete",  # недопустимый reason для adjustment
     }
-    resp = await client.post("/api/v2/stock/adjustment", json=payload)
+    resp = await client.post("/api/stock/adjustment", json=payload)
     assert resp.status_code == 422, resp.text
     detail = resp.json()["detail"]
     assert "reason" in detail.lower() or "complete" in detail
