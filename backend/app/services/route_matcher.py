@@ -15,6 +15,7 @@ from app.models.production_plan import (
     PlanPositionRouteOrigin,
 )
 from app.models.route import ProductionRoute, RouteRuleProfile
+from app.services.color_extraction import resolve_payload_color
 from app.services.route_selection import RouteCandidateDiagnostic, select_route_for_payload
 from app.services.route_builder import build_route_from_profile
 
@@ -78,6 +79,38 @@ def _compat_source_from_origin(origin: str | None, route_id: int | None) -> str:
     return "legacy"
 
 
+def _payload_for_dynamic_build(position: PlanPosition) -> dict:
+    """Build a mutable payload copy with color fallback from source_name."""
+    payload = dict(position.source_payload or {})
+    if not str(payload.get("color") or "").strip():
+        source_text = payload.get("source_name")
+        resolved = resolve_payload_color(None, str(source_text) if source_text else None)
+        if resolved:
+            payload["color"] = resolved
+    if position.product_id and not payload.get("product_id"):
+        payload["product_id"] = position.product_id
+    return payload
+
+
+async def _resolve_route_id_for_dynamic_name(
+    db: AsyncSession,
+    *,
+    built_name: str,
+    stored_route_id: int | None,
+) -> int | None:
+    """Prefer stored route_id when its name matches; otherwise lookup by dynamic name."""
+    if stored_route_id is not None:
+        route = await db.get(ProductionRoute, stored_route_id)
+        if route is not None and route.name == built_name:
+            return route.id
+    return await db.scalar(
+        select(ProductionRoute.id)
+        .where(ProductionRoute.name == built_name)
+        .order_by(ProductionRoute.id.desc())
+        .limit(1)
+    )
+
+
 def make_position_route_cache_key(position: PlanPosition) -> tuple:
     """Generate a cache key for route resolution based on position fields that affect it."""
     payload_key = None
@@ -115,7 +148,66 @@ async def resolve_position_route(
     assigned_at = position.route_assigned_at
     manual_confirmed_at = position.route_manual_confirmed_at
 
-    # If position has a stored route_id, use it directly without recalculation
+    # Manual override: trust stored route_id as-is.
+    if (
+        route_id is not None
+        and origin == PlanPositionRouteOrigin.manual_confirmed.value
+    ):
+        route = await db.get(ProductionRoute, route_id)
+        source = _compat_source_from_origin(origin, route_id)
+        if route is None:
+            return ResolvedRouteInfo(
+                route_id=None,
+                route_name=None,
+                source=source,
+                route_origin=origin,
+                route_match_quality=quality,
+                route_match_reason=reason,
+                route_assigned_at=assigned_at,
+                route_manual_confirmed_at=manual_confirmed_at,
+                error="manual_route_not_found",
+            )
+        return ResolvedRouteInfo(
+            route_id=route.id,
+            route_name=route.name,
+            source=source,
+            route_origin=origin,
+            route_match_quality=quality,
+            route_match_reason=reason,
+            route_assigned_at=assigned_at,
+            route_manual_confirmed_at=manual_confirmed_at,
+            error=None,
+        )
+
+    # Dynamic profile: rebuild route name from payload (same logic as import preview).
+    if position.route_profile_id is not None:
+        profile = await db.get(RouteRuleProfile, position.route_profile_id)
+        if profile is not None and profile.route_sections:
+            try:
+                payload = _payload_for_dynamic_build(position)
+                built_route = await build_route_from_profile(db, profile, payload, position)
+
+                if not built_route.error and built_route.name:
+                    resolved_route_id = await _resolve_route_id_for_dynamic_name(
+                        db,
+                        built_name=built_route.name,
+                        stored_route_id=route_id,
+                    )
+                    return ResolvedRouteInfo(
+                        route_id=resolved_route_id,
+                        route_name=built_route.name,
+                        source="dynamic_build",
+                        route_origin=origin or PlanPositionRouteOrigin.auto.value,
+                        route_match_quality=quality or PlanPositionRouteMatchQuality.exact.value,
+                        route_match_reason=reason or PlanPositionRouteMatchReason.selection_rules.value,
+                        route_assigned_at=assigned_at,
+                        route_manual_confirmed_at=manual_confirmed_at,
+                        error=None,
+                    )
+            except Exception:
+                pass  # Fall through to stored route_id or auto selection
+
+    # Stored route_id without dynamic profile (legacy/static assignment).
     if route_id is not None:
         route = await db.get(ProductionRoute, route_id)
         source = _compat_source_from_origin(origin, route_id)
@@ -129,10 +221,9 @@ async def resolve_position_route(
                 route_match_reason=reason,
                 route_assigned_at=assigned_at,
                 route_manual_confirmed_at=manual_confirmed_at,
-                error="manual_route_not_found" if source == "manual" else "route_not_found",
+                error="route_not_found",
             )
-        
-        # Return stored route with its metadata
+
         return ResolvedRouteInfo(
             route_id=route.id,
             route_name=route.name,
@@ -144,30 +235,6 @@ async def resolve_position_route(
             route_manual_confirmed_at=manual_confirmed_at,
             error=None,
         )
-
-    # No stored route_id - check if we have a dynamic route profile
-    if position.route_profile_id is not None:
-        profile = await db.get(RouteRuleProfile, position.route_profile_id)
-        if profile is not None and profile.route_sections:
-            # Build dynamic route from profile
-            try:
-                product = await db.get(Product, position.product_id) if position.product_id is not None else None
-                built_route = await build_route_from_profile(db, profile, position.source_payload, position)
-                
-                if not built_route.error:
-                    return ResolvedRouteInfo(
-                        route_id=None,  # Dynamic route, no static ProductionRoute
-                        route_name=built_route.name or f"Dynamic: {profile.name}",
-                        source="dynamic_build",
-                        route_origin=PlanPositionRouteOrigin.auto.value,
-                        route_match_quality=PlanPositionRouteMatchQuality.exact.value,
-                        route_match_reason=PlanPositionRouteMatchReason.selection_rules.value,
-                        route_assigned_at=position.route_assigned_at,
-                        route_manual_confirmed_at=position.route_manual_confirmed_at,
-                        error=None,
-                    )
-            except Exception:
-                pass  # Fall through to normal route selection if dynamic build fails
 
     # No stored route_id - try to resolve from source_payload
     import_batch = await db.get(ImportBatch, position.import_batch_id) if position.import_batch_id is not None else None

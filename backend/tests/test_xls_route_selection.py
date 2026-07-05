@@ -189,6 +189,23 @@ async def _seed_full_environment(session) -> int:
             ],
         },
         {
+            "code": "anod_color_from_source_name",
+            "name": "Анод: цвет из наименования",
+            "priority": 200,
+            "phase": "normalize",
+            "conditions": [
+                {"source": "payload", "field_path": "color", "operator": "empty", "value": None},
+                {"source": "payload", "field_path": "source_name", "operator": "not_empty", "value": None},
+            ],
+            "actions": [
+                {
+                    "action": "set_field_from_color_extraction",
+                    "target_field": "color",
+                    "source_field": "source_name",
+                },
+            ],
+        },
+        {
             "code": "anod_colors",
             "name": "Анод: определение цвета",
             "priority": 100,
@@ -203,6 +220,14 @@ async def _seed_full_environment(session) -> int:
                     "group_code": "ANOD",
                     "lookup_field": "color",
                     "mapping": [
+                        {"keyword": "анодсеребро", "operation_code": "ANOD_01"},
+                        {"keyword": "анодтитан", "operation_code": "ANOD_08"},
+                        {"keyword": "анодчерный", "operation_code": "ANOD_05"},
+                        {"keyword": "анодчёрный", "operation_code": "ANOD_05"},
+                        {"keyword": "анодшампань", "operation_code": "ANOD_06"},
+                        {"keyword": "анодзолото", "operation_code": "ANOD_02"},
+                        {"keyword": "анодбронза", "operation_code": "ANOD_03"},
+                        {"keyword": "анодмедь", "operation_code": "ANOD_07"},
                         {"keyword": "серебр", "operation_code": "ANOD_01"},
                         {"keyword": "золот", "operation_code": "ANOD_02"},
                         {"keyword": "бронз", "operation_code": "ANOD_03"},
@@ -513,3 +538,37 @@ async def test_test_xls_row_2256_with_skip_shot_blast_excludes_shot(client, sess
     # No PRESS/DRILL since operation is empty
     assert "DRILLING" in excluded_codes
     assert "PRESSING" in excluded_codes
+
+
+@pytest.mark.asyncio
+async def test_import_row_without_color_extracts_black_from_name(client, session) -> None:
+    """Import row with empty color column and анодчерный in name resolves ANOD_05."""
+    profile_id = await _seed_full_environment(session)
+    rows = _load_test_rows()
+
+    black_from_name_rows = [
+        row for row in rows
+        if row["payload"].get("color") == "черный"
+        and row["source_name"]
+        and "анод" in row["source_name"].lower()
+        and not row["payload"].get("raw_columns", {}).get("color")
+    ]
+    if not black_from_name_rows:
+        payload = {
+            "operation": "",
+            "output_kind": "ГП",
+            "color": "черный",
+            "source_name": "РП-АКТ-03 2,7 м анодчерный матов",
+            "raw_columns": {"operation": "", "output_kind": "ГП"},
+        }
+    else:
+        payload = black_from_name_rows[0]["payload"]
+
+    result = await select_route_for_payload(
+        session,
+        payload,
+        product=None,
+        profile_id=profile_id,
+    )
+
+    assert result.resolved_operations.get(("ANODIZING", "ANOD")) == "ANOD_05"

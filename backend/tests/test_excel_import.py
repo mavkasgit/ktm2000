@@ -338,6 +338,58 @@ def test_factory_plan_parser_with_custom_mapping() -> None:
     assert row.payload["order_ref"] == "ORD-001"
 
 
+def test_factory_plan_parser_extracts_color_from_product_name_when_color_empty() -> None:
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "План май 26 05"
+    ws.append(["", "", "Комментарий"])
+    ws.append(["Заявка № 05", "май"])
+    ws.append([])
+    ws.append(["", "", "", "", "", "", "", "", "", "", "", "", "Формирование ящиков"])
+    ws.append(
+        [
+            "Артикул",
+            "пополнение",
+            "Наименование",
+            "остатки сырья на КТМ",
+            "Цвет",
+            "кол-во шт. в 2,7",
+            "Длина, м",
+            "Пробивка/сверловка",
+            "Упаковка",
+            "Примечание",
+            "Длина после упак, м",
+            "кол-во штук готовой продукции",
+            "Вид конечного продукта",
+        ]
+    )
+    ws.append(
+        [
+            "ХТ-466-3776",
+            "",
+            "РП-АКТ-03 2,7 м анодчерный матов",
+            "",
+            "",
+            100,
+            2.7,
+            "",
+            "",
+            "",
+            "",
+            100,
+            "ГП",
+        ]
+    )
+    out = BytesIO()
+    wb.save(out)
+    parsed = parse_factory_plan_workbook(out.getvalue(), "anod-color.xlsx")
+
+    assert len(parsed.parsed_rows) == 1
+    row = parsed.parsed_rows[0]
+    assert row.payload["color"] == "черный"
+    assert row.payload["source_name"] == "РП-АКТ-03 2,7 м анодчерный матов"
+
+
 def test_factory_plan_parser_preserves_raw_operation_and_output_kind() -> None:
     """Normalization is handled by route selection rules now; parser only preserves raw values."""
     wb = Workbook()

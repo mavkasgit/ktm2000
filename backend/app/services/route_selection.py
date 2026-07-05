@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.product import Product
 from app.models.route import ProductionRoute, RouteSelectionRule, RouteStage
 from app.models.section import Section
+from app.services.color_extraction import resolve_payload_color
 
 
 Condition = dict[str, Any]
@@ -121,6 +122,37 @@ def _remove_from_nested(ctx: dict[str, Any], parts: list[str], value: Any) -> No
         del current[parts[-1]]
 
 
+def _apply_set_field_from_color_extraction(
+    context: dict[str, Any],
+    action: Action,
+) -> dict[str, Any] | None:
+    """Set payload field from color extraction helper (normalize phase)."""
+    payload = context.get("payload")
+    if not isinstance(payload, dict):
+        return None
+
+    target_field = str(action.get("target_field") or "color")
+    source_field = str(action.get("source_field") or "source_name")
+
+    current_color = payload.get(target_field)
+    if current_color and str(current_color).strip():
+        return None
+
+    source_value = payload.get(source_field)
+    source_text = str(source_value).strip() if source_value else None
+    resolved = resolve_payload_color(None, source_text)
+    if not resolved:
+        return None
+
+    payload[target_field] = resolved
+    return {
+        "action": "set_field_from_color_extraction",
+        "target_field": target_field,
+        "source_field": source_field,
+        "value": resolved,
+    }
+
+
 def _apply_dsl_action(ctx: dict[str, Any], action: Action) -> dict[str, Any] | None:
     """Apply a DSL action (set/add/remove) to ctx. Returns diagnostic record or None."""
     path = action.get("path", "")
@@ -149,6 +181,48 @@ def _load_rules_by_phase(
     return [r for r in rules if (r.phase if hasattr(r, "phase") else "route_select") == phase]
 
 
+def apply_normalize_phase(
+    context: dict[str, Any],
+    normalize_rules: list[RouteSelectionRule],
+) -> list[dict[str, Any]]:
+    """Apply normalize-phase rules, mutating context['payload'] and context['ctx'] in place."""
+    normalize_applied_actions: list[dict[str, Any]] = []
+    for rule in normalize_rules:
+        conditions = list(rule.conditions or [])
+        conditions_matched = True
+        for condition in conditions:
+            matched, _diagnostic = _evaluate_condition_with_diagnostic(context, condition)
+            if not matched:
+                conditions_matched = False
+                break
+        if not conditions_matched:
+            continue
+        for action in rule.actions or []:
+            action_kind = str(action.get("action") or "")
+            if action_kind == "set_field_from_color_extraction":
+                result = _apply_set_field_from_color_extraction(context, action)
+            else:
+                result = _apply_dsl_action(context["ctx"], action)
+            if result is not None:
+                normalize_applied_actions.append({**result, "rule_id": rule.id, "rule_code": rule.code})
+    return normalize_applied_actions
+
+
+async def apply_normalize_to_payload(
+    db: AsyncSession,
+    profile_id: int | None,
+    source_payload: dict[str, Any] | None,
+    product: Product | None = None,
+) -> list[dict[str, Any]]:
+    """Run normalize rules against payload (mutates source_payload in place)."""
+    if not source_payload:
+        return []
+    all_rules = await load_selection_rules_for_profile(db, profile_id=profile_id)
+    normalize_rules = _load_rules_by_phase(all_rules, "normalize")
+    context = build_route_rule_context(source_payload, product)
+    return apply_normalize_phase(context, normalize_rules)
+
+
 async def select_route_for_payload(
     db: AsyncSession,
     source_payload: dict[str, Any] | None,
@@ -164,21 +238,7 @@ async def select_route_for_payload(
 
     # Phase 1: normalize — apply set/add/remove actions to ctx
     normalize_rules = _load_rules_by_phase(all_rules, "normalize")
-    normalize_applied_actions: list[dict[str, Any]] = []
-    for rule in normalize_rules:
-        conditions = list(rule.conditions or [])
-        conditions_matched = True
-        for condition_index, condition in enumerate(conditions):
-            matched, _diagnostic = _evaluate_condition_with_diagnostic(context, condition)
-            if not matched:
-                conditions_matched = False
-                break
-        if not conditions_matched:
-            continue
-        for action in rule.actions or []:
-            result = _apply_dsl_action(context["ctx"], action)
-            if result is not None:
-                normalize_applied_actions.append({**result, "rule_id": rule.id, "rule_code": rule.code})
+    normalize_applied_actions = apply_normalize_phase(context, normalize_rules)
 
     ctx = context["ctx"]
 

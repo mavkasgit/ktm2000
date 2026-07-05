@@ -304,3 +304,42 @@ async def test_resolve_position_route_manual_has_priority(session) -> None:
     assert result.source == "manual"
     assert result.route_id == route.id
     assert result.error is None
+
+
+@pytest.mark.asyncio
+async def test_resolve_position_route_rebuilds_dynamic_name_over_wrong_route_id(session) -> None:
+    """Plan page must match import preview: dynamic name from payload, not stale route_id."""
+    from tests.test_dynamic_route_generation import _seed_sections, _make_profile_with_rules
+
+    await _seed_sections(session)
+    profile_id = await _make_profile_with_rules(session)
+
+    wrong_route = ProductionRoute(name="П/Ф - Окно - Серебро - Спанбонд (автомат/полное)", is_active=True)
+    session.add(wrong_route)
+    await session.flush()
+
+    pos = PlanPosition(
+        production_plan_id=1,
+        product_id=None,
+        source_type=PlanSourceType.excel_import,
+        source_sku="ХТ-466-3776",
+        quantity=1,
+        source_payload={
+            "output_kind": "П/Ф",
+            "source_name": "РП-АКТ-03 2,7 м анодчерный матов",
+        },
+        status=PlanPositionStatus.draft,
+        validation_status=PlanPositionValidationStatus.pending,
+        validation_errors=[],
+        route_id=wrong_route.id,
+        route_profile_id=profile_id,
+        route_origin=PlanPositionRouteOrigin.auto,
+    )
+
+    result = await resolve_position_route(session, pos)
+
+    assert result.source == "dynamic_build"
+    assert result.route_name is not None
+    assert result.route_name != wrong_route.name
+    assert "Чёрный" in result.route_name or "Черный" in result.route_name
+    assert "Серебро" not in result.route_name

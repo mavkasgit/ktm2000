@@ -922,14 +922,13 @@ async def _make_change_items(
                         logger.warning(f"Built route has NO STEPS! route_sections={built_route.route_sections}, excluded={built_route.excluded_sections}")
                     
                     if not built_route.error and built_route.name:
-                        # Cache key must be based on resolved operations only
-                        # (name can differ due to payload but route structure is the same)
+                        # Cache key includes route name — color/output_kind are encoded in the name.
                         resolved_ops_summary = tuple(
                             (step.section_code, step.operation_code)
                             for step in built_route.steps
                             if step.operation_code
                         )
-                        cache_key = resolved_ops_summary
+                        cache_key = (built_route.name, resolved_ops_summary)
                         
                         import logging
                         logger = logging.getLogger(__name__)

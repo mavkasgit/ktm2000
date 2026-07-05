@@ -9,6 +9,8 @@ from io import BytesIO
 from pathlib import Path
 from typing import Any
 
+from app.services.color_extraction import resolve_payload_color
+
 SUPPORTED_EXCEL_EXTENSIONS = {".xls", ".xlsx", ".xlsm", ".xlsb", ".ods"}
 
 HEADER_ALIASES = {
@@ -363,10 +365,12 @@ def _make_plan_row(
     component = _component_from_raw(row_number, raw)
     raw_operation = _cell_text(raw.get("operation")) or None
     raw_output_kind = _cell_text(raw.get("output_kind")) or None
+    product_name = _cell_text(raw.get("product_name")) or None
     payload = {
         "row_numbers": [row_number],
         "components": [component],
-        "color": _cell_text(raw.get("color")) or None,
+        "source_name": product_name,
+        "color": resolve_payload_color(_cell_text(raw.get("color")) or None, product_name),
         "input_length": _decimal_to_str(_decimal_or_none(raw.get("input_length"))),
         "operation": raw_operation,
         "operation_code": None,

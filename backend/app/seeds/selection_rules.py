@@ -185,6 +185,28 @@ SELECTION_RULES = [
         ],
     },
 
+    # Normalize: extract color from source_name when Excel color column is empty
+    {
+        "code": "anod_color_from_source_name",
+        "name": "Анод: цвет из наименования",
+        "profile_code": "packaging_map_rp",
+        "priority": 200,
+        "is_active": True,
+        "phase": "normalize",
+        "conditions": [
+            {"source": "payload", "field_path": "color", "operator": "empty", "value": None},
+            {"source": "payload", "field_path": "source_name", "operator": "not_empty", "value": None},
+        ],
+        "condition_logic": "and",
+        "actions": [
+            {
+                "action": "set_field_from_color_extraction",
+                "target_field": "color",
+                "source_field": "source_name",
+            },
+        ],
+    },
+
     # ANOD operation resolution — consolidated color mapping
     {
         "code": "anod_colors",
@@ -203,6 +225,14 @@ SELECTION_RULES = [
                 "group_code": "ANOD",
                 "lookup_field": "color",
                 "mapping": [
+                    {"keyword": "анодсеребро", "operation_code": "ANOD_01"},
+                    {"keyword": "анодтитан", "operation_code": "ANOD_08"},
+                    {"keyword": "анодчерный", "operation_code": "ANOD_05"},
+                    {"keyword": "анодчёрный", "operation_code": "ANOD_05"},
+                    {"keyword": "анодшампань", "operation_code": "ANOD_06"},
+                    {"keyword": "анодзолото", "operation_code": "ANOD_02"},
+                    {"keyword": "анодбронза", "operation_code": "ANOD_03"},
+                    {"keyword": "анодмедь", "operation_code": "ANOD_07"},
                     {"keyword": "серебр", "operation_code": "ANOD_01"},
                     {"keyword": "золот", "operation_code": "ANOD_02"},
                     {"keyword": "бронз", "operation_code": "ANOD_03"},

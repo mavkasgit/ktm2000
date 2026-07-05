@@ -24,6 +24,7 @@ from app.models.section import Section
 from app.models.production_plan import PlanPosition
 from app.models.product import Product
 from app.services.route_selection import (
+    apply_normalize_to_payload,
     build_route_rule_context,
     load_selection_rules_for_profile,
     _load_rules_by_phase,
@@ -86,6 +87,8 @@ async def build_route_from_profile(
         payload_product_id = source_payload.get("product_id")
         if payload_product_id:
             product = await db.get(Product, int(payload_product_id))
+
+    await apply_normalize_to_payload(db, profile.id, source_payload, product)
 
     # Вычислить excluded sections из route_select правил
     excluded_codes = await _compute_excluded_sections(db, profile.id, source_payload, product)

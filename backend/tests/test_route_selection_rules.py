@@ -174,6 +174,23 @@ async def _seed_profile_and_rules(session) -> int:
             ],
         },
         {
+            "code": "anod_color_from_source_name",
+            "name": "Анод: цвет из наименования",
+            "priority": 200,
+            "phase": "normalize",
+            "conditions": [
+                {"source": "payload", "field_path": "color", "operator": "empty", "value": None},
+                {"source": "payload", "field_path": "source_name", "operator": "not_empty", "value": None},
+            ],
+            "actions": [
+                {
+                    "action": "set_field_from_color_extraction",
+                    "target_field": "color",
+                    "source_field": "source_name",
+                },
+            ],
+        },
+        {
             "code": "anod_colors",
             "name": "Анод: определение цвета",
             "priority": 100,
@@ -188,6 +205,14 @@ async def _seed_profile_and_rules(session) -> int:
                     "group_code": "ANOD",
                     "lookup_field": "color",
                     "mapping": [
+                        {"keyword": "анодсеребро", "operation_code": "ANOD_01"},
+                        {"keyword": "анодтитан", "operation_code": "ANOD_08"},
+                        {"keyword": "анодчерный", "operation_code": "ANOD_05"},
+                        {"keyword": "анодчёрный", "operation_code": "ANOD_05"},
+                        {"keyword": "анодшампань", "operation_code": "ANOD_06"},
+                        {"keyword": "анодзолото", "operation_code": "ANOD_02"},
+                        {"keyword": "анодбронза", "operation_code": "ANOD_03"},
+                        {"keyword": "анодмедь", "operation_code": "ANOD_07"},
                         {"keyword": "серебр", "operation_code": "ANOD_01"},
                         {"keyword": "золот", "operation_code": "ANOD_02"},
                         {"keyword": "бронз", "operation_code": "ANOD_03"},
@@ -740,6 +765,32 @@ async def test_no_product_uses_default_shot_behavior(client, session) -> None:
     required_codes = {s["code"] for s in result.required_sections}
     assert "SHOT_BLAST" in required_codes, f"SHOT should be required when no product passed, got: {required_codes}"
     assert "PREP_STOCK" in required_codes, f"PREP_STOCK should be required with SHOT, got: {required_codes}"
+
+
+@pytest.mark.asyncio
+async def test_anod_color_from_source_name_resolves_titan(client, session) -> None:
+    """Empty color + source_name with анодтитан → ANOD_08 via normalize phase."""
+    profile_id = await _seed_profile_and_rules(session)
+
+    result = await select_route_for_payload(
+        session,
+        {
+            "operation": "",
+            "output_kind": "ГП",
+            "color": None,
+            "source_name": "ХТ-466-3776 РП-АКТ-03 2,7 м анодтитан матов",
+            "raw_columns": {"operation": "", "output_kind": "ГП"},
+        },
+        profile_id=profile_id,
+    )
+
+    assert result.resolved_operations.get(("ANODIZING", "ANOD")) == "ANOD_08", (
+        f"Expected ANOD_08 for анодтитан in source_name, got: {result.resolved_operations}"
+    )
+    assert any(
+        action.get("rule_code") == "anod_color_from_source_name"
+        for action in result.normalize_applied_actions
+    ), "normalize rule should have filled color from source_name"
 
 
 @pytest.mark.asyncio
