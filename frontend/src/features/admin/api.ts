@@ -87,18 +87,68 @@ export async function listHrmsEmployees(
   return data
 }
 
-/** Получить первую страницу кеша HRMS для диалогов/селектов */
+/** Получить весь кеш HRMS для диалогов/селектов (пагинация, max 500 на запрос). */
 export async function getCachedHrmsEmployees(): Promise<HrmsEmployeesCacheResponse> {
-  const page = await listHrmsEmployees({ limit: 500, offset: 0 })
+  const pageSize = 500
+  const all: HrmsEmployee[] = []
+  let offset = 0
+  let total = Infinity
+  let synced_at: string | null = null
+
+  while (offset < total) {
+    const page = await listHrmsEmployees({ limit: pageSize, offset })
+    all.push(...page.employees)
+    total = page.total
+    synced_at = page.synced_at
+    offset += page.employees.length
+    if (page.employees.length === 0) break
+  }
+
   return {
-    employees: page.employees,
-    synced_at: page.synced_at,
+    employees: all,
+    synced_at,
   }
 }
 
 /** Синхронизировать кеш сотрудников HRMS из внешнего сервиса */
 export async function syncHrmsEmployees(): Promise<HrmsEmployeesCacheResponse> {
   const { data } = await apiClient.post<HrmsEmployeesCacheResponse>("/users/employees/sync")
+  return data
+}
+
+export type HrmsSyncField = "name" | "tab_number" | "position" | "department"
+
+export type HrmsSyncDiffEntry = {
+  id: number
+  name: string
+  tab_number: string | null
+  position: string | null
+  department: string | null
+  is_linked: boolean
+}
+
+export type HrmsSyncChange = {
+  before: HrmsSyncDiffEntry
+  after: HrmsSyncDiffEntry
+  fields: HrmsSyncField[]
+}
+
+export type HrmsSyncDiff = {
+  added: HrmsSyncDiffEntry[]
+  removed: HrmsSyncDiffEntry[]
+  changed: HrmsSyncChange[]
+  unchanged_count: number
+}
+
+export type HrmsSyncPreviewResponse = {
+  employees: HrmsSyncDiffEntry[]
+  synced_at: string
+  diff: HrmsSyncDiff
+}
+
+/** Предпросмотр синхронизации — показывает diff без записи в БД */
+export async function previewHrmsSync(): Promise<HrmsSyncPreviewResponse> {
+  const { data } = await apiClient.post<HrmsSyncPreviewResponse>("/users/employees/sync/preview")
   return data
 }
 

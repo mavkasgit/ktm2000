@@ -27,12 +27,20 @@ import {
 } from "@/shared/ui"
 import {
   getHrmsSettings,
+  previewHrmsSync,
   saveHrmsSettings,
   syncHrmsEmployees,
   testHrmsConnection,
   type HrmsEmployee,
   type HrmsEmployeesCacheResponse,
+  type HrmsSyncDiffEntry,
+  type HrmsSyncPreviewResponse,
 } from "../api"
+import {
+  buildHrmsServerAddress,
+  findHrmsConnectionPreset,
+  getHrmsConnectionPresets,
+} from "../lib/hrmsConnectionPresets"
 import {
   computeHrmsSyncDiff,
   getHrmsFieldLabel,
@@ -41,7 +49,7 @@ import {
 } from "../lib/hrmsSyncDiff"
 import { HrmsEmployeesTable } from "./HrmsEmployeesTable"
 
-type DialogStep = "settings" | "diff"
+type DialogStep = "settings" | "preview" | "diff"
 
 function formatDateTime(value: string | null | undefined): string {
   if (!value) return "—"
@@ -161,6 +169,20 @@ function EmployeeRow({ employee }: { employee: HrmsEmployee }) {
   )
 }
 
+function PreviewEmployeeRow({ employee }: { employee: HrmsSyncDiffEntry }) {
+  return (
+    <div className="px-3 py-2 text-sm">
+      <div className="font-medium">{employee.name}</div>
+      <div className="text-xs text-muted-foreground mt-0.5 flex flex-wrap gap-x-3 gap-y-0.5">
+        <span>ID: {employee.id}</span>
+        {employee.tab_number ? <span>Таб. № {employee.tab_number}</span> : null}
+        {employee.position ? <span>{employee.position}</span> : null}
+        {employee.department ? <span>{employee.department}</span> : null}
+      </div>
+    </div>
+  )
+}
+
 export interface HrmsSyncDialogProps {
   open: boolean
   onOpenChange: (open: boolean) => void
@@ -191,11 +213,19 @@ export function HrmsSyncDialog({
   const [lastTestUrl, setLastTestUrl] = useState<string | null>(null)
   const [syncDiff, setSyncDiff] = useState<HrmsSyncDiff | null>(null)
   const [syncedAt, setSyncedAt] = useState<string | null>(null)
+  const [preview, setPreview] = useState<HrmsSyncPreviewResponse | null>(null)
+  const [previewing, setPreviewing] = useState(false)
+  const [applying, setApplying] = useState(false)
 
   const linkedRemovedCount = useMemo(() => {
     if (!syncDiff) return 0
     return syncDiff.removed.filter((employee) => linkedHrmsIds.has(employee.id)).length
   }, [syncDiff, linkedHrmsIds])
+
+  const previewLinkedRemovedCount = useMemo(() => {
+    if (!preview) return 0
+    return preview.diff.removed.filter((employee) => linkedHrmsIds.has(employee.id)).length
+  }, [preview, linkedHrmsIds])
 
   const handleLoadSavedSettings = async () => {
     setLoadingSavedSettings(true)
@@ -264,7 +294,7 @@ export function HrmsSyncDialog({
       toast({
         variant: "destructive",
         title: "Адрес не указан",
-        description: "Введите адрес HRMS, например 192.168.1.50:8000",
+        description: "Введите адрес HRMS или выберите один из пресетов",
       })
       return
     }
@@ -301,9 +331,9 @@ export function HrmsSyncDialog({
     }
   }
 
-  const handleSync = async () => {
+  const handleApply = async () => {
     const snapshot = [...employees]
-    setSyncing(true)
+    setApplying(true)
     try {
       const cache = await syncHrmsEmployees()
       onEmployeesChange(cache)
@@ -311,6 +341,7 @@ export function HrmsSyncDialog({
       const diff = computeHrmsSyncDiff(snapshot, cache.employees)
       setSyncDiff(diff)
       setStep("diff")
+      setPreview(null)
       toast({
         variant: "success",
         title: "Синхронизация завершена",
@@ -327,13 +358,44 @@ export function HrmsSyncDialog({
         title: "Синхронизация не выполнена",
         description: detail,
       })
+      setStep("settings")
+      setPreview(null)
     } finally {
-      setSyncing(false)
+      setApplying(false)
     }
   }
 
-  const busy = loadingSavedSettings || savingSettings || testing || syncing
+  const handlePreview = async () => {
+    setPreviewing(true)
+    try {
+      const result = await previewHrmsSync()
+      setPreview(result)
+      setStep("preview")
+    } catch (err: unknown) {
+      const detail =
+        (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail
+        || (err instanceof Error ? err.message : "Не удалось выполнить предпросмотр синхронизации")
+      toast({
+        variant: "destructive",
+        title: "Предпросмотр не выполнен",
+        description: detail,
+      })
+      setStep("settings")
+      setPreview(null)
+    } finally {
+      setPreviewing(false)
+    }
+  }
+
+  const handleCancelPreview = () => {
+    setStep("settings")
+    setPreview(null)
+  }
+
+  const busy = loadingSavedSettings || savingSettings || testing || syncing || previewing || applying
   const cacheSyncedAt = syncedAt ?? employeesSyncedAt
+  const connectionPresets = useMemo(() => getHrmsConnectionPresets(), [])
+  const activeConnectionPreset = findHrmsConnectionPreset(baseUrl, connectionPresets)
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -341,12 +403,14 @@ export function HrmsSyncDialog({
         <DialogHeader className="px-4 pt-4 pb-3 border-b shrink-0">
           <DialogTitle className="flex items-center gap-2 text-base">
             <Settings2 className="h-4 w-4 text-emerald-600" />
-            {step === "settings" ? "Синхронизация HRMS" : "Результат синхронизации"}
+            {step === "settings" ? "Синхронизация HRMS" : step === "preview" ? "Предпросмотр синхронизации" : "Результат синхронизации"}
           </DialogTitle>
           <DialogDescription className="text-xs">
             {step === "settings"
               ? "Без автозапросов. Действия — вручную."
-              : "Сравнение кеша до и после синхронизации."}
+              : step === "preview"
+                ? "Проверьте изменения перед применением."
+                : "Сравнение кеша до и после синхронизации."}
           </DialogDescription>
         </DialogHeader>
 
@@ -370,35 +434,57 @@ export function HrmsSyncDialog({
                     Загрузить из БД
                   </Button>
                 </div>
-                <div className="grid grid-cols-1 md:grid-cols-[1fr_7rem_1fr] gap-2 items-end">
-                  <div className="space-y-1">
-                    <label className="text-xs font-medium">Адрес HRMS</label>
-                    <Input
-                      value={baseUrl}
-                      onChange={(e) => setBaseUrl(e.target.value)}
-                      placeholder="192.168.1.50:8000"
-                      className="bg-card h-8 text-sm"
-                      disabled={busy}
-                    />
+                <div className="space-y-2">
+                  <div className="grid grid-cols-1 md:grid-cols-[minmax(0,1fr)_7rem_minmax(0,1fr)] gap-x-2 gap-y-2 items-start">
+                    <div className="space-y-1 min-w-0">
+                      <label className="text-xs font-medium">Адрес HRMS</label>
+                      <Input
+                        value={baseUrl}
+                        onChange={(e) => setBaseUrl(e.target.value)}
+                        placeholder={buildHrmsServerAddress()}
+                        className="bg-card h-8 text-sm"
+                        disabled={busy}
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <label className="text-xs font-medium">Токен</label>
+                      <Input
+                        value={apiToken}
+                        onChange={(e) => setApiToken(e.target.value)}
+                        placeholder="admin"
+                        className="bg-card font-mono h-8 text-sm"
+                        disabled={busy}
+                      />
+                    </div>
+                    <div className="space-y-1 min-w-0">
+                      <label className="text-xs font-medium">URL сотрудников</label>
+                      <Input
+                        value={employeesUrl ?? ""}
+                        readOnly
+                        placeholder="После сохранения или проверки"
+                        className="bg-muted/30 text-muted-foreground h-8 text-sm"
+                      />
+                    </div>
                   </div>
-                  <div className="space-y-1">
-                    <label className="text-xs font-medium">Токен</label>
-                    <Input
-                      value={apiToken}
-                      onChange={(e) => setApiToken(e.target.value)}
-                      placeholder="admin"
-                      className="bg-card font-mono h-8 text-sm"
-                      disabled={busy}
-                    />
-                  </div>
-                  <div className="space-y-1">
-                    <label className="text-xs font-medium">URL сотрудников</label>
-                    <Input
-                      value={employeesUrl ?? ""}
-                      readOnly
-                      placeholder="После сохранения или проверки"
-                      className="bg-muted/30 text-muted-foreground h-8 text-sm"
-                    />
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <span className="text-[11px] text-muted-foreground">Основные:</span>
+                    {connectionPresets.map((preset) => {
+                      const isActive = activeConnectionPreset?.id === preset.id
+                      return (
+                        <Button
+                          key={preset.id}
+                          type="button"
+                          variant={isActive ? "default" : "outline"}
+                          size="sm"
+                          className="h-6 px-2 text-[11px]"
+                          title={preset.hint}
+                          disabled={busy}
+                          onClick={() => setBaseUrl(preset.value)}
+                        >
+                          {preset.label}
+                        </Button>
+                      )
+                    })}
                   </div>
                 </div>
               </section>
@@ -427,6 +513,99 @@ export function HrmsSyncDialog({
                 </p>
                 <HrmsEmployeesTable />
               </section>
+            </>
+          ) : step === "preview" && preview ? (
+            <>
+              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                <StatusCard label="Добавлено" value={String(preview.diff.added.length)} />
+                <StatusCard label="Удалено" value={String(preview.diff.removed.length)} />
+                <StatusCard label="Изменено" value={String(preview.diff.changed.length)} />
+                <StatusCard label="Без изменений" value={String(preview.diff.unchanged_count)} />
+              </div>
+
+              {previewLinkedRemovedCount > 0 ? (
+                <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2.5 text-sm flex items-start gap-2">
+                  <AlertTriangle className="h-4 w-4 text-amber-600 shrink-0 mt-0.5" />
+                  <div>
+                    <div className="font-medium text-amber-800">
+                      Будет удалено {previewLinkedRemovedCount} привязанных сотрудников
+                    </div>
+                    <div className="text-xs text-amber-700 mt-0.5">
+                      Связь с KTM-пользователями сохранится по hrms_employee_id, но карточка исчезнет из списка.
+                    </div>
+                  </div>
+                </div>
+              ) : null}
+
+              {preview.diff.added.length === 0 && preview.diff.removed.length === 0 && preview.diff.changed.length === 0 ? (
+                <div className="rounded-lg border border-emerald-500/20 bg-emerald-500/5 px-4 py-6 text-center">
+                  <CheckCircle2 className="h-8 w-8 text-emerald-600 mx-auto mb-2" />
+                  <div className="font-medium">Расхождений нет</div>
+                  <div className="text-sm text-muted-foreground mt-1">
+                    Данные в HRMS совпадают с кешем — синхронизация не требуется.
+                  </div>
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  <DiffSection
+                    title="Новые сотрудники"
+                    count={preview.diff.added.length}
+                    tone="emerald"
+                    icon={<UserPlus className="h-4 w-4" />}
+                  >
+                    {preview.diff.added.map((employee) => (
+                      <PreviewEmployeeRow key={employee.id} employee={employee} />
+                    ))}
+                  </DiffSection>
+
+                  <DiffSection
+                    title="Удалены из HRMS"
+                    count={preview.diff.removed.length}
+                    tone="red"
+                    icon={<UserMinus className="h-4 w-4" />}
+                  >
+                    {preview.diff.removed.map((employee) => (
+                      <div key={employee.id} className="px-3 py-2">
+                        <PreviewEmployeeRow employee={employee} />
+                        {linkedHrmsIds.has(employee.id) ? (
+                          <div className="mt-1 flex items-center gap-1 text-[11px] text-amber-700">
+                            <Link2 className="h-3 w-3" />
+                            Привязан к пользователю KTM
+                          </div>
+                        ) : null}
+                      </div>
+                    ))}
+                  </DiffSection>
+
+                  <DiffSection
+                    title="Изменённые данные"
+                    count={preview.diff.changed.length}
+                    tone="amber"
+                    icon={<RefreshCw className="h-4 w-4" />}
+                  >
+                    {preview.diff.changed.map(({ before, after, fields }) => (
+                      <div key={after.id} className="px-3 py-2 text-sm">
+                        <div className="font-medium">{after.name}</div>
+                        <div className="text-xs text-muted-foreground mt-0.5">ID: {after.id}</div>
+                        <div className="mt-2 space-y-1">
+                          {fields.map((field) => (
+                            <div key={field} className="flex flex-wrap items-center gap-2 text-xs">
+                              <span className="text-muted-foreground min-w-28">{getHrmsFieldLabel(field)}:</span>
+                              <span className="line-through text-red-500/80">
+                                {(before[field] as string | undefined) || "—"}
+                              </span>
+                              <span>→</span>
+                              <span className="text-emerald-700 font-medium">
+                                {(after[field] as string | undefined) || "—"}
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    ))}
+                  </DiffSection>
+                </div>
+              )}
             </>
           ) : syncDiff ? (
             <>
@@ -565,6 +744,32 @@ export function HrmsSyncDialog({
                 Готово
               </Button>
             </>
+          ) : step === "preview" ? (
+            <>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={handleCancelPreview}
+                disabled={applying}
+                className="w-full sm:w-auto"
+              >
+                <ArrowLeft className="h-4 w-4 mr-1.5" />
+                Отмена
+              </Button>
+              <Button
+                type="button"
+                onClick={() => void handleApply()}
+                disabled={applying}
+                className="w-full sm:w-auto bg-emerald-600 hover:bg-emerald-500"
+              >
+                {applying ? (
+                  <Loader2 className="h-4 w-4 mr-1.5 animate-spin" />
+                ) : (
+                  <RefreshCw className="h-4 w-4 mr-1.5" />
+                )}
+                Применить
+              </Button>
+            </>
           ) : (
             <>
               <Button
@@ -603,11 +808,11 @@ export function HrmsSyncDialog({
                 </Button>
                 <Button
                   type="button"
-                  onClick={() => void handleSync()}
+                  onClick={() => void handlePreview()}
                   disabled={busy}
                   className="w-full sm:w-auto bg-emerald-600 hover:bg-emerald-500"
                 >
-                  {syncing ? (
+                  {previewing ? (
                     <Loader2 className="h-4 w-4 mr-1.5 animate-spin" />
                   ) : (
                     <RefreshCw className="h-4 w-4 mr-1.5" />

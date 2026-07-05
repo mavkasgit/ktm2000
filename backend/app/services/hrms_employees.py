@@ -6,6 +6,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 import httpx
+from pydantic import BaseModel
 from sqlalchemy import cast, delete, exists, func, or_, select, String
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -14,6 +15,37 @@ from app.models.hrms_integration_settings import HrmsIntegrationSettings
 from app.models.user import User
 
 logger = logging.getLogger(__name__)
+
+
+# ─── Preview Pydantic schemas ─────────────────────────────────────────
+
+
+class HrmsSyncDiffEntryOut(BaseModel):
+    id: int
+    name: str
+    tab_number: str | None = None
+    position: str | None = None
+    department: str | None = None
+    is_linked: bool = False
+
+
+class HrmsSyncChangeOut(BaseModel):
+    before: HrmsSyncDiffEntryOut
+    after: HrmsSyncDiffEntryOut
+    fields: list[str]  # подмножество ["name","tab_number","position","department"]
+
+
+class HrmsSyncDiffOut(BaseModel):
+    added: list[HrmsSyncDiffEntryOut]
+    removed: list[HrmsSyncDiffEntryOut]
+    changed: list[HrmsSyncChangeOut]
+    unchanged_count: int
+
+
+class HrmsSyncPreviewOut(BaseModel):
+    employees: list[HrmsSyncDiffEntryOut]   # что в кеше будет после применения
+    synced_at: datetime
+    diff: HrmsSyncDiffOut
 
 HRMS_REQUEST_TIMEOUT_SECONDS = 5.0
 
@@ -287,14 +319,15 @@ async def get_cached_hrms_employees(
     return employees, synced_at
 
 
-async def sync_hrms_employees_cache(
-    db: AsyncSession,
-) -> tuple[list[HrmsEmployeeCache], datetime]:
-    raw_items = await fetch_hrms_employees_from_api(db)
-    if not raw_items:
-        raise HrmsSyncError("HRMS недоступен или вернул пустой список сотрудников")
+def _build_hrms_employees_from_items(
+    raw_items: list[dict[str, Any]],
+    synced_at: datetime,
+) -> list[HrmsEmployeeCache]:
+    """Convert raw HRMS API items to HrmsEmployeeCache objects without DB writes.
 
-    synced_at = datetime.now(timezone.utc)
+    Skips items with missing id or name. Raises HrmsSyncError if the resulting
+    list is empty.
+    """
     employees: list[HrmsEmployeeCache] = []
     for item in raw_items:
         hrms_id = item.get("id")
@@ -311,9 +344,20 @@ async def sync_hrms_employees_cache(
                 synced_at=synced_at,
             )
         )
-
     if not employees:
         raise HrmsSyncError("HRMS вернул данные без валидных сотрудников")
+    return employees
+
+
+async def sync_hrms_employees_cache(
+    db: AsyncSession,
+) -> tuple[list[HrmsEmployeeCache], datetime]:
+    raw_items = await fetch_hrms_employees_from_api(db)
+    if not raw_items:
+        raise HrmsSyncError("HRMS недоступен или вернул пустой список сотрудников")
+
+    synced_at = datetime.now(timezone.utc)
+    employees = _build_hrms_employees_from_items(raw_items, synced_at)
 
     await db.execute(delete(HrmsEmployeeCache))
     for employee in employees:
@@ -325,3 +369,85 @@ async def sync_hrms_employees_cache(
         await db.refresh(employee)
 
     return employees, synced_at
+
+
+async def compute_hrms_sync_preview(db: AsyncSession) -> HrmsSyncPreviewOut:
+    """Compute diff between current cache and live HRMS data without writing to DB.
+
+    Returns a HrmsSyncPreviewOut with added/removed/changed employees.
+    """
+    from app.services.users_queries import get_linked_hrms_ids
+
+    current_employees, _ = await get_cached_hrms_employees(db)
+    raw_items = await fetch_hrms_employees_from_api(db)
+    if not raw_items:
+        raise HrmsSyncError("HRMS недоступен или вернул пустой список сотрудников")
+
+    synced_at = datetime.now(timezone.utc)
+    next_employees = _build_hrms_employees_from_items(raw_items, synced_at)
+
+    # Build lookup dicts by hrms_id
+    current_by_id: dict[int, HrmsEmployeeCache] = {e.hrms_id: e for e in current_employees}
+    next_by_id: dict[int, HrmsEmployeeCache] = {e.hrms_id: e for e in next_employees}
+    current_ids = set(current_by_id.keys())
+    next_ids = set(next_by_id.keys())
+
+    linked_ids = set(await get_linked_hrms_ids(db))
+
+    def _to_entry(emp: HrmsEmployeeCache) -> HrmsSyncDiffEntryOut:
+        return HrmsSyncDiffEntryOut(
+            id=emp.hrms_id,
+            name=emp.name,
+            tab_number=emp.tab_number,
+            position=emp.position,
+            department=emp.department,
+            is_linked=emp.hrms_id in linked_ids,
+        )
+
+    # Added — in next but not in current
+    added_ids = next_ids - current_ids
+    added = [_to_entry(next_by_id[eid]) for eid in sorted(added_ids)]
+
+    # Removed — in current but not in next
+    removed_ids = current_ids - next_ids
+    removed = [_to_entry(current_by_id[eid]) for eid in sorted(removed_ids)]
+
+    # Changed — in both but some fields differ
+    common_ids = current_ids & next_ids
+    changed: list[HrmsSyncChangeOut] = []
+    unchanged_count = 0
+    for eid in sorted(common_ids):
+        cur = current_by_id[eid]
+        nxt = next_by_id[eid]
+        fields: list[str] = []
+        if cur.name != nxt.name:
+            fields.append("name")
+        if (cur.tab_number or "").strip() != (nxt.tab_number or "").strip():
+            fields.append("tab_number")
+        if (cur.position or "").strip() != (nxt.position or "").strip():
+            fields.append("position")
+        if (cur.department or "").strip() != (nxt.department or "").strip():
+            fields.append("department")
+        if fields:
+            changed.append(
+                HrmsSyncChangeOut(
+                    before=_to_entry(cur),
+                    after=_to_entry(nxt),
+                    fields=fields,
+                )
+            )
+        else:
+            unchanged_count += 1
+
+    diff = HrmsSyncDiffOut(
+        added=added,
+        removed=removed,
+        changed=changed,
+        unchanged_count=unchanged_count,
+    )
+
+    return HrmsSyncPreviewOut(
+        employees=[_to_entry(e) for e in next_employees],
+        synced_at=synced_at,
+        diff=diff,
+    )

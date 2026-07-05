@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react"
+import { useMemo, useState } from "react"
 import { useQuery } from "@tanstack/react-query"
 import { Link2, Loader2, Search, Users } from "lucide-react"
 
@@ -64,12 +64,6 @@ export function HrmsEmployeesTable({
   emptyMessage = "Кеш пуст. Запустите синхронизацию, чтобы загрузить сотрудников из HRMS.",
 }: HrmsEmployeesTableProps) {
   const [search, setSearch] = useState("")
-  const [debouncedSearch, setDebouncedSearch] = useState("")
-
-  useEffect(() => {
-    const timer = window.setTimeout(() => setDebouncedSearch(search), 300)
-    return () => window.clearTimeout(timer)
-  }, [search])
 
   const {
     bindColumn,
@@ -91,7 +85,7 @@ export function HrmsEmployeesTable({
 
   const pagination = usePaginatedTableQuery({
     resetPageDeps: [
-      debouncedSearch,
+      search,
       columnFilters,
       columnSearchQueries,
       sortConfigs,
@@ -103,7 +97,7 @@ export function HrmsEmployeesTable({
     () => ({
       limit: pagination.limit,
       offset: pagination.offset,
-      search: debouncedSearch.trim() || undefined,
+      search: search.trim() || undefined,
       sort_by: activeSort ? mapSortFieldToApi(activeSort.field) : "name",
       sort_order: activeSort?.order ?? "asc",
       ...columnApiParams,
@@ -111,7 +105,7 @@ export function HrmsEmployeesTable({
     [
       pagination.limit,
       pagination.offset,
-      debouncedSearch,
+      search,
       activeSort,
       columnApiParams,
     ],
@@ -150,7 +144,7 @@ export function HrmsEmployeesTable({
     [employees],
   )
 
-  if (!isLoading && total === 0 && !debouncedSearch.trim() && !hasTableFiltersActive) {
+  if (!isLoading && total === 0 && !search.trim() && !hasTableFiltersActive) {
     return (
       <div className="rounded-lg border border-dashed bg-muted/10 px-4 py-10 text-center">
         <Users className="h-8 w-8 text-muted-foreground/40 mx-auto mb-2" />
