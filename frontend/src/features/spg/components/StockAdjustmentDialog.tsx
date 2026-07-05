@@ -92,7 +92,7 @@ export function StockAdjustmentDialog({ open, onOpenChange }: StockAdjustmentDia
         comment: comment || undefined,
       }),
     onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: queryKeys.stock.balances() });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.stock.balancesAll() });
       void queryClient.invalidateQueries({ queryKey: queryKeys.stock.productBalance(selectedProductId!) });
       onOpenChange(false);
     },

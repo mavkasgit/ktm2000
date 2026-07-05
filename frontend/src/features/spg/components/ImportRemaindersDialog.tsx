@@ -21,15 +21,14 @@ import {
   SortableFilterHeader,
   TableCornerResetCell,
   TableCornerResetHeader,
+  TablePaginationFooter,
+  DATA_TABLE_STYLES,
   toast,
   renderIcon,
 } from "@/shared/ui";
-import {
-  useTableQueryEngine,
-
-  type ColumnSortDef,
-} from "@/shared/hooks/useTableQueryEngine";
 import { useFilterableTable } from "@/shared/hooks/useFilterableTable";
+import { usePaginatedTableQuery } from "@/shared/hooks/usePaginatedTableQuery";
+import { pickColumnApiValue } from "@/shared/lib/columnFilterSearch";
 
 import {
   useImportRowExpansion,
@@ -58,15 +57,15 @@ import { getExcelSheetNames } from "@/shared/api/imports";
 import { queryKeys } from "@/shared/api/queryKeys";
 import { RouteStepsDisplay } from "@/shared/ui/RouteStepsDisplay";
 import { listSections } from "@/shared/api/sections";
-import type { RemainderImportItem } from "@/shared/api/stock";
+import type { RemainderImportItem, RemainderSectionMeta } from "@/shared/api/stock";
 
-function hasSectionInFile(item: RemainderImportItem): boolean {
+function hasSectionInFile(item: Pick<RemainderImportItem, "target_section_name">): boolean {
   const name = item.target_section_name?.trim();
   return Boolean(name && name !== "—" && name !== "-");
 }
 
 function getEffectiveSectionId(
-  item: RemainderImportItem,
+  item: Pick<RemainderImportItem, "source_row_number" | "target_section_id">,
   defaultSectionId: number | null,
   overrides: Record<number, number>,
 ): number | null {
@@ -77,6 +76,30 @@ function getEffectiveSectionId(
     return item.target_section_id;
   }
   return defaultSectionId;
+}
+
+function getEffectiveSectionIdFromMeta(
+  row: RemainderSectionMeta,
+  overrides: Record<number, number>,
+): number | null {
+  return getEffectiveSectionId(row, null, overrides);
+}
+
+function buildRemainderPreviewColumnApiParams(
+  columnFilters: Partial<Record<RemainderPreviewSortField, Set<string>>>,
+  columnSearchQueries: Partial<Record<RemainderPreviewSortField, string>>,
+) {
+  return {
+    row: pickColumnApiValue(columnFilters, columnSearchQueries, "row"),
+    sku: pickColumnApiValue(columnFilters, columnSearchQueries, "sku"),
+    quantity: pickColumnApiValue(columnFilters, columnSearchQueries, "quantity"),
+    operations: pickColumnApiValue(columnFilters, columnSearchQueries, "operations"),
+    quality: pickColumnApiValue(columnFilters, columnSearchQueries, "quality"),
+    section: pickColumnApiValue(columnFilters, columnSearchQueries, "section"),
+    errors: pickColumnApiValue(columnFilters, columnSearchQueries, "errors", (value) =>
+      value === "—" || value === "Ошибка" ? undefined : value,
+    ),
+  };
 }
 
 function getEffectiveQualityState(
@@ -190,6 +213,8 @@ const SEED_TARGET_SECTION_FALLBACKS: Record<(typeof SEED_TARGET_SECTION_CODES)[n
   SENT: "Отправлено",
 };
 
+const headerCellClass = `${DATA_TABLE_STYLES.headerRow} ${DATA_TABLE_STYLES.headerCell}`;
+
 export function ImportRemaindersDialog({
   open,
   onOpenChange,
@@ -259,15 +284,16 @@ export function ImportRemaindersDialog({
   const [rowSelection, setRowSelection] = useState("");
   const [clearExisting, setClearExisting] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
+  const [debouncedSearch, setDebouncedSearch] = useState("");
   const [filterStatus, setFilterStatus] = useState<"all" | "invalid">("all");
   const [targetSectionOverrides, setTargetSectionOverrides] = useState<Record<number, number>>({});
   const [qualityStateOverrides, setQualityStateOverrides] = useState<Record<number, QualityState>>({});
   const {
     bindColumn,
-    buildFilterPredicate,
+    columnFilters,
+    columnSearchQueries,
     sortConfigs,
     setSortConfigs,
-    handleSort: handleSortChange,
     hasActiveFilters: hasPreviewFilters,
     resetAll: resetPreviewFilters,
     resetColumnFilters,
@@ -276,8 +302,54 @@ export function ImportRemaindersDialog({
     onExtraReset: () => {
       setFilterStatus("all");
       setSearchQuery("");
+      setDebouncedSearch("");
     },
   });
+
+  const columnApiParams = useMemo(
+    () => buildRemainderPreviewColumnApiParams(columnFilters, columnSearchQueries),
+    [columnFilters, columnSearchQueries],
+  );
+
+  const activeSort = sortConfigs[0];
+
+  const {
+    page,
+    setPage,
+    limit,
+    setLimit,
+    offset,
+    getTotalPages,
+    getRangeLabel,
+    resetPage,
+  } = usePaginatedTableQuery({
+    resetPageDeps: [
+      selectedSheet,
+      rowSelection,
+      importMode,
+      file,
+      clipboardText,
+      debouncedSearch,
+      filterStatus,
+      columnFilters,
+      columnSearchQueries,
+      sortConfigs,
+    ],
+  });
+
+  const handleSortChange = useCallback(
+    (field: RemainderPreviewSortField) => {
+      setSortConfigs((prev) => {
+        const existing = prev.find((sort) => sort.field === field);
+        if (!existing) {
+          return [{ field, order: "asc" }];
+        }
+        return [{ field, order: existing.order === "asc" ? "desc" : "asc" }];
+      });
+      resetPage();
+    },
+    [resetPage, setSortConfigs],
+  );
 
   const [previewData, setPreviewData] = useState<RemainderPreviewResponse | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
@@ -291,15 +363,15 @@ export function ImportRemaindersDialog({
 
   // ── Resolve location id for API (из файла, per-row override или первая валидная строка) ──
   const resolveImportLocationId = useMemo((): number | null => {
-    if (!previewData) return null;
-    const firstResolved = previewData.items.find(
-      (item) =>
-        item.status === "valid" &&
-        getEffectiveSectionId(item, null, targetSectionOverrides) != null,
+    if (!previewData?.section_meta) return null;
+    const firstResolved = previewData.section_meta.find(
+      (row) =>
+        row.status === "valid" &&
+        getEffectiveSectionIdFromMeta(row, targetSectionOverrides) != null,
     );
     if (!firstResolved) return null;
-    return getEffectiveSectionId(firstResolved, null, targetSectionOverrides);
-  }, [previewData, targetSectionOverrides]);
+    return getEffectiveSectionIdFromMeta(firstResolved, targetSectionOverrides);
+  }, [previewData?.section_meta, targetSectionOverrides]);
 
   // ── Reset state when dialog opens ─────────────────────────────────────
   useEffect(() => {
@@ -314,7 +386,9 @@ export function ImportRemaindersDialog({
       setClearExisting(false);
       resetExpansion();
       setSearchQuery("");
+      setDebouncedSearch("");
       setFilterStatus("all");
+      resetPage();
       setTargetSectionOverrides({});
       setQualityStateOverrides({});
       setSortConfigs([]);
@@ -323,7 +397,12 @@ export function ImportRemaindersDialog({
       setError(null);
       setResult(null);
     }
-  }, [open, resetExpansion, resetColumnFilters]);
+  }, [open, resetExpansion, resetColumnFilters, resetPage]);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => setDebouncedSearch(searchQuery), 300);
+    return () => window.clearTimeout(timer);
+  }, [searchQuery]);
 
   const getImportSource = (): RemainderImportSource | null => {
     if (importMode === "file" && file) {
@@ -335,12 +414,38 @@ export function ImportRemaindersDialog({
     return null;
   };
 
+  const previewQueryOptions = useMemo(
+    () => ({
+      location_id: resolveImportLocationId ?? undefined,
+      sheet_index: selectedSheet,
+      row_selection: rowSelection || undefined,
+      search: debouncedSearch.trim() || undefined,
+      filter_status: filterStatus,
+      sort_by: activeSort?.field ?? "row",
+      sort_order: activeSort?.order ?? "asc",
+      limit,
+      offset,
+      ...columnApiParams,
+    }),
+    [
+      resolveImportLocationId,
+      selectedSheet,
+      rowSelection,
+      debouncedSearch,
+      filterStatus,
+      activeSort,
+      limit,
+      offset,
+      columnApiParams,
+    ],
+  );
+
   // ── Load preview when relevant params change ──────────────────────────
   useEffect(() => {
     if (step !== "preview" || !getImportSource()) return;
     loadPreview();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [step, selectedSheet, rowSelection, importMode, file, clipboardText]);
+  }, [step, importMode, file, clipboardText, previewQueryOptions]);
 
   const loadPreview = async () => {
     const source = getImportSource();
@@ -348,15 +453,7 @@ export function ImportRemaindersDialog({
     setPreviewLoading(true);
     setError(null);
     try {
-      const data = await previewRemaindersExcel(source, {
-        location_id: resolveImportLocationId ?? undefined,
-        sheet_index: selectedSheet,
-        row_selection: rowSelection || undefined,
-        target_section_overrides:
-          Object.keys(targetSectionOverrides).length > 0 ? targetSectionOverrides : undefined,
-        quality_state_overrides:
-          Object.keys(qualityStateOverrides).length > 0 ? qualityStateOverrides : undefined,
-      });
+      const data = await previewRemaindersExcel(source, previewQueryOptions);
       setPreviewData(data);
     } catch (err: unknown) {
       setError(getErrorMessage(err) || "Не удалось загрузить предварительный просмотр листа.");
@@ -400,8 +497,10 @@ export function ImportRemaindersDialog({
     setError(null);
     setFilterStatus("all");
     setSearchQuery("");
+    setDebouncedSearch("");
+    resetPage();
     setStep("preview");
-  }, []);
+  }, [resetPage]);
 
   useImportClipboardPaste({
     enabled: open && step === "upload",
@@ -456,7 +555,7 @@ export function ImportRemaindersDialog({
           imported_count: response.imported_count,
           errors: response.errors,
         });
-        void queryClient.invalidateQueries({ queryKey: queryKeys.stock.balances() });
+        void queryClient.invalidateQueries({ queryKey: queryKeys.stock.balancesAll() });
         void queryClient.invalidateQueries({ queryKey: queryKeys.stock.transactions() });
         onSaved();
         setStep("result");
@@ -521,51 +620,17 @@ export function ImportRemaindersDialog({
   };
 
   const rowsMissingSection = useMemo(() => {
-    if (!previewData) return [];
-    return previewData.items.filter(
-      (item) =>
-        item.status === "valid" &&
-        getEffectiveSectionId(item, null, targetSectionOverrides) == null,
+    if (!previewData?.section_meta) return [];
+    return previewData.section_meta.filter(
+      (row) =>
+        row.status === "valid" &&
+        getEffectiveSectionIdFromMeta(row, targetSectionOverrides) == null,
     );
-  }, [previewData, targetSectionOverrides]);
+  }, [previewData?.section_meta, targetSectionOverrides]);
 
-  const basePreviewItems = useMemo(() => {
-    if (!previewData) return [];
-    if (filterStatus === "invalid") {
-      return previewData.items.filter((item) => item.status === "invalid");
-    }
-    return previewData.items;
-  }, [previewData, filterStatus]);
-
-  const sortDefs = useMemo((): ColumnSortDef<RemainderImportItem, RemainderPreviewSortField>[] => [
-    { field: "row", getSortValue: (item) => item.source_row_number },
-    { field: "sku", getSortValue: (item) => item.sku },
-    { field: "quantity", getSortValue: (item) => item.quantity ?? -1 },
-    { field: "operations", getSortValue: (item) => getImportItemOperationsLabel(item) },
-    {
-      field: "quality",
-      getSortValue: (item) => getImportItemQualityLabel(item, qualityStateOverrides),
-    },
-    {
-      field: "section",
-      getSortValue: (item) =>
-        getImportItemSectionLabel(item, targetSectionOverrides, importableSections),
-    },
-    { field: "errors", getSortValue: (item) => getImportItemErrorsLabel(item) },
-  ], [qualityStateOverrides, targetSectionOverrides, importableSections]);
-
-  const filterPredicate = useMemo(
-    () => buildFilterPredicate((item: RemainderImportItem, field) =>
-      getImportItemCellValue(
-        item,
-        field,
-        targetSectionOverrides,
-        qualityStateOverrides,
-        importableSections,
-      ),
-    ),
-    [buildFilterPredicate, targetSectionOverrides, qualityStateOverrides, importableSections],
-  );
+  const previewItems = previewData?.items ?? [];
+  const previewItemsTotal = previewData?.items_total ?? 0;
+  const previewTotalPages = getTotalPages(previewItemsTotal);
 
   const uniqueValues = useMemo(() => {
     const fields: RemainderPreviewSortField[] = [
@@ -581,7 +646,7 @@ export function ImportRemaindersDialog({
     for (const field of fields) {
       result[field] = [
         ...new Set(
-          basePreviewItems.map((item) =>
+          previewItems.map((item) =>
             getImportItemCellValue(
               item,
               field,
@@ -599,17 +664,7 @@ export function ImportRemaindersDialog({
       });
     }
     return result;
-  }, [basePreviewItems, targetSectionOverrides, qualityStateOverrides, importableSections]);
-
-  const { rows: filteredItems } = useTableQueryEngine<RemainderImportItem, RemainderPreviewSortField>({
-    rows: basePreviewItems,
-    getId: (item) => item.source_row_number,
-    searchQuery,
-    searchKeys: ["sku", "product_name", "source_row_number"],
-    filterPredicate,
-    sortConfigs,
-    sortDefs,
-  });
+  }, [previewItems, targetSectionOverrides, qualityStateOverrides, importableSections]);
 
   const stats = useMemo(() => {
     if (!previewData) return { total: 0, valid: 0, invalid: 0, qty: 0 };
@@ -921,7 +976,10 @@ export function ImportRemaindersDialog({
                   filterSlot={
                     <Select
                       value={filterStatus}
-                      onValueChange={(value) => setFilterStatus(value as "all" | "invalid")}
+                      onValueChange={(value) => {
+                        setFilterStatus(value as "all" | "invalid");
+                        resetPage();
+                      }}
                     >
                       <SelectTrigger className="h-6 text-[11px] w-[108px] font-medium bg-background">
                         <SelectValue placeholder="Все строки" />
@@ -943,11 +1001,11 @@ export function ImportRemaindersDialog({
               ) : null}
 
               <ImportPreview.TableFrame
-                className="rounded-lg min-h-0"
+                className={`${DATA_TABLE_STYLES.container} min-h-0`}
                 loading={previewLoading}
-                isEmpty={!previewLoading && filteredItems.length === 0}
+                isEmpty={!previewLoading && previewItems.length === 0}
                 emptyContent={
-                  previewData && previewData.items.length > 0 ? (
+                  previewData && previewItemsTotal > 0 ? (
                     <span>Нет строк по текущему фильтру или поиску.</span>
                   ) : importMode === "clipboard" && clipboardText ? (
                     <span className="max-w-md leading-relaxed">
@@ -960,10 +1018,10 @@ export function ImportRemaindersDialog({
                 }
               >
                 <table className="w-full text-[11px] text-left border-collapse">
-                    <thead className="border-b bg-muted/50 sticky top-0 font-semibold text-muted-foreground z-10">
+                    <thead>
                       <tr>
-                        <th className="px-1 py-1 w-7" />
-                        <th className="px-1.5 py-1 w-10 text-left">
+                        <th className={`${headerCellClass} w-7`} />
+                        <th className={`${headerCellClass} p-0 w-10`}>
                           <SortableFilterHeader
                             field="row"
                             label="#"
@@ -973,7 +1031,7 @@ export function ImportRemaindersDialog({
                             {...bindColumn("row")}
                           />
                         </th>
-                        <th className="px-1.5 py-1 w-24">
+                        <th className={`${headerCellClass} p-0 w-24`}>
                           <SortableFilterHeader
                             field="sku"
                             label="Артикул"
@@ -983,7 +1041,7 @@ export function ImportRemaindersDialog({
                             {...bindColumn("sku")}
                           />
                         </th>
-                        <th className="px-1.5 py-1 w-14">
+                        <th className={`${headerCellClass} p-0 w-14`}>
                           <SortableFilterHeader
                             field="quantity"
                             label="Кол-во"
@@ -993,7 +1051,7 @@ export function ImportRemaindersDialog({
                             {...bindColumn("quantity")}
                           />
                         </th>
-                        <th className="px-1.5 py-1 min-w-[160px]">
+                        <th className={`${headerCellClass} p-0 min-w-[160px]`}>
                           <SortableFilterHeader
                             field="operations"
                             label="Операции"
@@ -1003,7 +1061,7 @@ export function ImportRemaindersDialog({
                             {...bindColumn("operations")}
                           />
                         </th>
-                        <th className="px-1.5 py-1 w-24">
+                        <th className={`${headerCellClass} p-0 w-24`}>
                           <SortableFilterHeader
                             field="quality"
                             label="Качество"
@@ -1013,7 +1071,7 @@ export function ImportRemaindersDialog({
                             {...bindColumn("quality")}
                           />
                         </th>
-                        <th className="px-1.5 py-1 min-w-[150px]">
+                        <th className={`${headerCellClass} p-0 min-w-[150px]`}>
                           <SortableFilterHeader
                             field="section"
                             label="Участок"
@@ -1023,7 +1081,7 @@ export function ImportRemaindersDialog({
                             {...bindColumn("section")}
                           />
                         </th>
-                        <th className="px-1.5 py-1 min-w-[140px]">
+                        <th className={`${headerCellClass} p-0 min-w-[140px]`}>
                           <SortableFilterHeader
                             field="errors"
                             label="Ошибки"
@@ -1036,19 +1094,21 @@ export function ImportRemaindersDialog({
                         <TableCornerResetHeader
                           hasActiveFilters={hasPreviewFilters}
                           onReset={resetPreviewFilters}
+                          dataTableHeader
                         />
                       </tr>
                     </thead>
                     <tbody>
-                      {filteredItems.map((item, idx) => {
-                        const isExpanded = isRowExpanded(idx);
+                      {previewItems.map((item) => {
+                        const rowKey = item.source_row_number;
+                        const isExpanded = isRowExpanded(rowKey);
                         const hasErrors = item.status === "invalid";
                         const hasRaw = item.raw_values.length > 0;
 
                         return (
-                          <Fragment key={idx}>
+                          <Fragment key={rowKey}>
                             <tr
-                              onClick={() => hasRaw && toggleRow(idx)}
+                              onClick={() => hasRaw && toggleRow(rowKey)}
                               className={`border-b transition-colors cursor-pointer hover:bg-muted/30 ${
                                 hasErrors ? "bg-red-50/50 dark:bg-red-950/5" : ""
                               }`}
@@ -1146,6 +1206,19 @@ export function ImportRemaindersDialog({
                     </tbody>
                   </table>
               </ImportPreview.TableFrame>
+
+              {previewData && previewItemsTotal > 0 ? (
+                <TablePaginationFooter
+                  page={page}
+                  totalPages={previewTotalPages}
+                  total={previewItemsTotal}
+                  shownCount={previewItems.length}
+                  limit={limit}
+                  onPageChange={setPage}
+                  onLimitChange={setLimit}
+                  rangeLabel={getRangeLabel(previewItems.length, previewItemsTotal)}
+                />
+              ) : null}
             </ImportPreview.Layout>
           )}
 

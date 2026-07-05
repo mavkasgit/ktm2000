@@ -984,3 +984,294 @@ async def generate_remainders_template_for_location(
     wb.save(buf)
     buf.seek(0)
     return buf.getvalue()
+
+
+# ─── Preview table query (server pagination / filter / sort) ───────────────────
+
+REMAINDER_PREVIEW_SORT_FIELDS = frozenset({
+    "row",
+    "sku",
+    "quantity",
+    "operations",
+    "quality",
+    "section",
+    "errors",
+})
+
+_PREVIEW_QUALITY_LABELS: dict[QualityState, str] = {
+    QualityState.GOOD: "Годный",
+    QualityState.SCRAP: "Брак",
+    QualityState.FINAL_SCRAP: "Окончательный брак",
+    QualityState.REWORK: "Переделка",
+}
+
+
+@dataclass
+class RemainderSectionMeta:
+    """Compact per-row section info for client-side override validation."""
+
+    source_row_number: int
+    status: Literal["valid", "invalid"]
+    target_section_id: int | None
+    target_section_name: str | None
+
+
+@dataclass
+class RemainderPreviewQueryResult:
+    items: list[RemainderItem]
+    items_total: int
+    section_meta: list[RemainderSectionMeta]
+
+
+def _norm_preview_text(value: str) -> str:
+    return " ".join(str(value).lower().split())
+
+
+def _matches_preview_partial(haystack: str, needle: str | None) -> bool:
+    if needle is None or not needle.strip():
+        return True
+    return _norm_preview_text(needle) in _norm_preview_text(haystack)
+
+
+def _preview_has_section_in_file(item: RemainderItem) -> bool:
+    name = (item.target_section_name or "").strip()
+    return bool(name and name not in ("—", "-"))
+
+
+def _preview_effective_section_id(
+    item: RemainderItem,
+    target_section_overrides: dict[int, int] | None,
+) -> int | None:
+    if target_section_overrides and item.source_row_number in target_section_overrides:
+        return target_section_overrides[item.source_row_number]
+    return item.target_section_id
+
+
+def _preview_operations_label(item: RemainderItem) -> str:
+    if item.completed_stages:
+        return ", ".join(stage["operation_name"] for stage in item.completed_stages)
+    raw = (item.completed_operations_raw or "").strip()
+    return raw or "—"
+
+
+def _preview_quality_label(
+    item: RemainderItem,
+    *,
+    default_quality_state: QualityState,
+    quality_state_overrides: dict[int, QualityState] | None,
+) -> str:
+    state = _resolve_item_quality_state(item, default_quality_state, quality_state_overrides)
+    return _PREVIEW_QUALITY_LABELS.get(state, state.value)
+
+
+def _preview_section_label(
+    item: RemainderItem,
+    *,
+    target_section_overrides: dict[int, int] | None,
+    section_names: dict[int, str],
+) -> str:
+    if _preview_has_section_in_file(item) and item.target_section_name:
+        return item.target_section_name
+    section_id = _preview_effective_section_id(item, target_section_overrides)
+    if section_id is None:
+        return "—"
+    return section_names.get(section_id, f"#{section_id}")
+
+
+def _preview_errors_label(item: RemainderItem) -> str:
+    if not item.errors:
+        return "—" if item.status == "valid" else "Ошибка"
+    return ", ".join(item.errors)
+
+
+def _preview_cell_value(
+    item: RemainderItem,
+    field: str,
+    *,
+    default_quality_state: QualityState,
+    target_section_overrides: dict[int, int] | None,
+    quality_state_overrides: dict[int, QualityState] | None,
+    section_names: dict[int, str],
+) -> str:
+    if field == "row":
+        return str(item.source_row_number)
+    if field == "sku":
+        return item.sku
+    if field == "quantity":
+        return "—" if item.quantity is None else str(item.quantity)
+    if field == "operations":
+        return _preview_operations_label(item)
+    if field == "quality":
+        return _preview_quality_label(
+            item,
+            default_quality_state=default_quality_state,
+            quality_state_overrides=quality_state_overrides,
+        )
+    if field == "section":
+        return _preview_section_label(
+            item,
+            target_section_overrides=target_section_overrides,
+            section_names=section_names,
+        )
+    if field == "errors":
+        return _preview_errors_label(item)
+    return ""
+
+
+def _preview_matches_search(item: RemainderItem, search: str | None) -> bool:
+    if search is None or not search.strip():
+        return True
+    needle = search.strip()
+    haystacks = [
+        item.sku,
+        item.product_name or "",
+        str(item.source_row_number),
+    ]
+    return any(_matches_preview_partial(haystack, needle) for haystack in haystacks)
+
+
+def _preview_matches_column_filters(
+    item: RemainderItem,
+    *,
+    default_quality_state: QualityState,
+    target_section_overrides: dict[int, int] | None,
+    quality_state_overrides: dict[int, QualityState] | None,
+    section_names: dict[int, str],
+    column_filters: dict[str, str | None],
+) -> bool:
+    for field, needle in column_filters.items():
+        if needle is None or not needle.strip():
+            continue
+        cell = _preview_cell_value(
+            item,
+            field,
+            default_quality_state=default_quality_state,
+            target_section_overrides=target_section_overrides,
+            quality_state_overrides=quality_state_overrides,
+            section_names=section_names,
+        )
+        if not _matches_preview_partial(cell, needle):
+            return False
+    return True
+
+
+def _preview_sort_key(
+    item: RemainderItem,
+    field: str,
+    *,
+    default_quality_state: QualityState,
+    target_section_overrides: dict[int, int] | None,
+    quality_state_overrides: dict[int, QualityState] | None,
+    section_names: dict[int, str],
+) -> tuple[int | float | str, ...]:
+    if field == "row":
+        return (item.source_row_number,)
+    if field == "quantity":
+        return (item.quantity if item.quantity is not None else -1,)
+    cell = _preview_cell_value(
+        item,
+        field,
+        default_quality_state=default_quality_state,
+        target_section_overrides=target_section_overrides,
+        quality_state_overrides=quality_state_overrides,
+        section_names=section_names,
+    )
+    if field in {"row", "quantity"}:
+        try:
+            return (float(cell),)
+        except ValueError:
+            return (0.0,)
+    return (cell.casefold(),)
+
+
+def build_remainder_section_meta(items: list[RemainderItem]) -> list[RemainderSectionMeta]:
+    return [
+        RemainderSectionMeta(
+            source_row_number=item.source_row_number,
+            status=item.status,
+            target_section_id=item.target_section_id,
+            target_section_name=item.target_section_name,
+        )
+        for item in items
+    ]
+
+
+def query_remainder_preview_items(
+    items: list[RemainderItem],
+    *,
+    search: str | None = None,
+    filter_status: str = "all",
+    sort_by: str = "row",
+    sort_order: str = "asc",
+    limit: int = 50,
+    offset: int = 0,
+    default_quality_state: QualityState = QualityState.GOOD,
+    target_section_overrides: dict[int, int] | None = None,
+    quality_state_overrides: dict[int, QualityState] | None = None,
+    section_names: dict[int, str] | None = None,
+    row: str | None = None,
+    sku: str | None = None,
+    quantity: str | None = None,
+    operations: str | None = None,
+    quality: str | None = None,
+    section: str | None = None,
+    errors: str | None = None,
+) -> RemainderPreviewQueryResult:
+    """Filter, sort and paginate parsed remainder preview rows in memory."""
+    resolved_section_names = section_names or {}
+    section_meta = build_remainder_section_meta(items)
+
+    filtered = list(items)
+    if filter_status == "invalid":
+        filtered = [item for item in filtered if item.status == "invalid"]
+
+    if search:
+        filtered = [item for item in filtered if _preview_matches_search(item, search)]
+
+    column_filters = {
+        "row": row,
+        "sku": sku,
+        "quantity": quantity,
+        "operations": operations,
+        "quality": quality,
+        "section": section,
+        "errors": errors,
+    }
+    if any(value and value.strip() for value in column_filters.values()):
+        filtered = [
+            item
+            for item in filtered
+            if _preview_matches_column_filters(
+                item,
+                default_quality_state=default_quality_state,
+                target_section_overrides=target_section_overrides,
+                quality_state_overrides=quality_state_overrides,
+                section_names=resolved_section_names,
+                column_filters=column_filters,
+            )
+        ]
+
+    resolved_sort_by = sort_by if sort_by in REMAINDER_PREVIEW_SORT_FIELDS else "row"
+    reverse = sort_order.lower() == "desc"
+    filtered.sort(
+        key=lambda item: _preview_sort_key(
+            item,
+            resolved_sort_by,
+            default_quality_state=default_quality_state,
+            target_section_overrides=target_section_overrides,
+            quality_state_overrides=quality_state_overrides,
+            section_names=resolved_section_names,
+        ),
+        reverse=reverse,
+    )
+
+    items_total = len(filtered)
+    safe_limit = max(1, min(limit, 500))
+    safe_offset = max(0, offset)
+    page_items = filtered[safe_offset: safe_offset + safe_limit]
+
+    return RemainderPreviewQueryResult(
+        items=page_items,
+        items_total=items_total,
+        section_meta=section_meta,
+    )

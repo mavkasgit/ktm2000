@@ -1,9 +1,6 @@
 import { useState } from "react";
-import { useQuery } from "@tanstack/react-query";
 import { Search } from "lucide-react";
 
-import { getStockBalances } from "@/shared/api/stock";
-import { queryKeys } from "@/shared/api/queryKeys";
 import { Input, StockBalancesPanel } from "@/shared/ui";
 import { ProductStockBalanceDialog } from "@/features/spg/components/ProductStockBalanceDialog";
 import { StockTransactionsHistoryDrawer } from "@/features/spg/components/StockTransactionsHistoryDrawer";
@@ -21,12 +18,6 @@ export function SectionStockBalances({ sectionId, sectionName }: SectionStockBal
     sku: string | null;
   } | null>(null);
 
-  const { data: balances = [], isLoading } = useQuery({
-    queryKey: queryKeys.stock.balances(`section-${sectionId}`),
-    queryFn: () => getStockBalances({ location_id: sectionId }),
-    enabled: sectionId > 0,
-  });
-
   const title = sectionName ? `Остатки на участке «${sectionName}»` : "Остатки на участке";
 
   return (
@@ -42,14 +33,14 @@ export function SectionStockBalances({ sectionId, sectionName }: SectionStockBal
       </div>
 
       <StockBalancesPanel
-        balances={balances}
-        isLoading={isLoading}
+        locationId={sectionId}
         searchQuery={searchQuery}
         onSearchQueryReset={() => setSearchQuery("")}
         onSelectProduct={setSelectedProductId}
         onShowHistory={(id, sku) => setHistoryProduct({ id, sku: sku ?? null })}
         hideLocationColumn
         title={title}
+        enabled={sectionId > 0}
       />
 
       {selectedProductId !== null && (

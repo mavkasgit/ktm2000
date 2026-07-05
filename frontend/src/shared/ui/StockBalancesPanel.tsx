@@ -1,20 +1,22 @@
-import { useState, useMemo } from "react";
-
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 
 import {
   formatQualityStateLabel,
   formatBalanceQtyInteger,
+  getStockBalances,
 } from "@/shared/api/stock";
 import type { StockBalanceEntry } from "@/shared/api/stock";
+import { queryKeys } from "@/shared/api/queryKeys";
 import { SortableFilterHeader } from "./SortableFilterHeader";
 import { TablePanelHeader } from "./TablePanelHeader";
 import { TableCornerResetCell, TableCornerResetHeader } from "./TableCornerResetHeader";
+import { TablePaginationFooter } from "./TablePaginationFooter";
+import { DATA_TABLE_STYLES } from "@/shared/lib/dataTableStyles";
 import { useFilterableTable } from "@/shared/hooks/useFilterableTable";
+import { usePaginatedTableQuery } from "@/shared/hooks/usePaginatedTableQuery";
+import { pickColumnApiValue } from "@/shared/lib/columnFilterSearch";
 import { RouteStepsDisplay } from "./RouteStepsDisplay";
-import {
-  useTableQueryEngine,
-  type ColumnSortDef,
-} from "@/shared/hooks/useTableQueryEngine";
 
 type BalanceSortField = "sku" | "quantity" | "operations" | "quality" | "location";
 
@@ -40,9 +42,66 @@ function getBalanceCellValue(balance: StockBalanceEntry, field: BalanceSortField
   }
 }
 
+function mapBalanceSortFieldToApi(field: BalanceSortField): string {
+  return field;
+}
+
+function extractQualityStateApiValue(label: string): string | undefined {
+  if (label === "—") return undefined;
+  const normalized = label.toLowerCase();
+  if (normalized === "годный") return "good";
+  if (normalized === "брак") return "scrap";
+  if (normalized === "окончательный брак") return "final_scrap";
+  if (normalized === "переделка") return "rework";
+  return label;
+}
+
+function buildBalanceColumnApiParams(
+  columnFilters: Partial<Record<BalanceSortField, Set<string>>>,
+  columnSearchQueries: Partial<Record<BalanceSortField, string>>,
+) {
+  const params: {
+    sku?: string;
+    quantity?: string;
+    quality?: string;
+    location?: string;
+    operations?: string;
+  } = {};
+
+  const sku = pickColumnApiValue(columnFilters, columnSearchQueries, "sku", (v) =>
+    v.startsWith("#") ? undefined : v,
+  );
+  if (sku) params.sku = sku;
+
+  const quantity = pickColumnApiValue(columnFilters, columnSearchQueries, "quantity", (v) =>
+    v === "—" ? undefined : v,
+  );
+  if (quantity) params.quantity = quantity;
+
+  const quality = pickColumnApiValue(
+    columnFilters,
+    columnSearchQueries,
+    "quality",
+    extractQualityStateApiValue,
+  );
+  if (quality) params.quality = quality;
+
+  const location = pickColumnApiValue(columnFilters, columnSearchQueries, "location", (v) =>
+    v.startsWith("#") ? undefined : v,
+  );
+  if (location) params.location = location;
+
+  const operations = pickColumnApiValue(columnFilters, columnSearchQueries, "operations", (v) =>
+    v === "—" ? undefined : v,
+  );
+  if (operations) params.operations = operations;
+
+  return params;
+}
+
 export interface StockBalancesPanelProps {
-  balances: StockBalanceEntry[];
-  isLoading: boolean;
+  locationId?: number;
+  locationIds?: number[];
   searchQuery?: string;
   /** Сброс внешнего поиска (глобальный searchQuery на странице) при reset в шапке таблицы */
   onSearchQueryReset?: () => void;
@@ -51,24 +110,31 @@ export interface StockBalancesPanelProps {
   /** Скрыть колонку «Участок» — удобно, когда остатки уже отфильтрованы по одному участку */
   hideLocationColumn?: boolean;
   title?: string;
+  enabled?: boolean;
 }
 
+const headerCellClass = `${DATA_TABLE_STYLES.headerRow} ${DATA_TABLE_STYLES.headerCell}`;
+
 export function StockBalancesPanel({
-  balances,
-  isLoading,
+  locationId,
+  locationIds,
   searchQuery = "",
   onSearchQueryReset,
   onSelectProduct,
   onShowHistory,
   hideLocationColumn = false,
   title = "Наличие на участках",
+  enabled = true,
 }: StockBalancesPanelProps) {
   const [isExpanded, setIsExpanded] = useState(true);
+  const [debouncedSearch, setDebouncedSearch] = useState(searchQuery);
+
   const {
     bindColumn,
-    buildFilterPredicate,
+    columnFilters,
+    columnSearchQueries,
     sortConfigs,
-    handleSort: handleSortChange,
+    setSortConfigs,
     hasActiveFilters,
     resetAll: handleResetFilters,
   } = useFilterableTable<BalanceSortField>({
@@ -76,63 +142,134 @@ export function StockBalancesPanel({
     onExtraReset: onSearchQueryReset,
   });
 
-  const searchFilteredBalances = useMemo(() => {
-    if (!searchQuery.trim()) return balances;
-    const q = searchQuery.toLowerCase();
-    return balances.filter((b) =>
-      String(b.product_id).toLowerCase().includes(q) ||
-      (b.product_sku && b.product_sku.toLowerCase().includes(q)) ||
-      (b.location_name && b.location_name.toLowerCase().includes(q))
-    );
-  }, [balances, searchQuery]);
-
-  const sortDefs = useMemo((): ColumnSortDef<StockBalanceEntry, BalanceSortField>[] => [
-    { field: "sku", getSortValue: (b) => getBalanceCellValue(b, "sku") },
-    { field: "quantity", getSortValue: (b) => Number.parseFloat(String(b.balance_qty)) || 0 },
-    { field: "operations", getSortValue: (b) => getBalanceOperationsLabel(b) },
-    { field: "quality", getSortValue: (b) => getBalanceCellValue(b, "quality") },
-    { field: "location", getSortValue: (b) => getBalanceCellValue(b, "location") },
-  ], []);
-
-  const filterPredicate = useMemo(
-    () => buildFilterPredicate(getBalanceCellValue),
-    [buildFilterPredicate],
+  const columnApiParams = useMemo(
+    () => buildBalanceColumnApiParams(columnFilters, columnSearchQueries),
+    [columnFilters, columnSearchQueries],
   );
 
+  const activeSort = sortConfigs[0];
+  const normalizedLocationIds = useMemo(
+    () => (locationIds?.length ? [...locationIds].sort((a, b) => a - b) : undefined),
+    [locationIds],
+  );
+
+  const {
+    page,
+    setPage,
+    limit,
+    setLimit,
+    offset,
+    getTotalPages,
+    getRangeLabel,
+    resetPage,
+  } = usePaginatedTableQuery({
+    resetPageDeps: [
+      locationId,
+      normalizedLocationIds,
+      debouncedSearch,
+      columnFilters,
+      columnSearchQueries,
+      sortConfigs,
+    ],
+  });
+
+  const handleSortChange = useCallback(
+    (field: BalanceSortField) => {
+      setSortConfigs((prev) => {
+        const existing = prev.find((sort) => sort.field === field);
+        if (!existing) {
+          return [{ field, order: "asc" }];
+        }
+        return [{ field, order: existing.order === "asc" ? "desc" : "asc" }];
+      });
+      resetPage();
+    },
+    [resetPage, setSortConfigs],
+  );
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => setDebouncedSearch(searchQuery), 300);
+    return () => window.clearTimeout(timer);
+  }, [searchQuery]);
+
+  const balanceQueryParams = useMemo(
+    () => ({
+      location_id: locationId,
+      location_ids: normalizedLocationIds,
+      search: debouncedSearch.trim() || undefined,
+      sort_by: activeSort ? mapBalanceSortFieldToApi(activeSort.field) : "sku",
+      sort_order: activeSort?.order ?? "asc",
+      limit,
+      offset,
+      ...columnApiParams,
+    }),
+    [
+      locationId,
+      normalizedLocationIds,
+      debouncedSearch,
+      activeSort,
+      limit,
+      offset,
+      columnApiParams,
+    ],
+  );
+
+  const { data, isLoading } = useQuery({
+    queryKey: queryKeys.stock.balances({
+      locationId,
+      locationIds: normalizedLocationIds,
+      search: debouncedSearch.trim() || undefined,
+      limit,
+      offset,
+      sort_by: balanceQueryParams.sort_by,
+      sort_order: balanceQueryParams.sort_order,
+      sku: columnApiParams.sku,
+      quantity: columnApiParams.quantity,
+      quality: columnApiParams.quality,
+      location: columnApiParams.location,
+      operations: columnApiParams.operations,
+    }),
+    queryFn: () => getStockBalances(balanceQueryParams),
+    enabled,
+  });
+
+  const balances = data?.balances ?? [];
+  const total = data?.total ?? 0;
+  const totalPages = getTotalPages(total);
+
   const uniqueValues = useMemo(() => ({
-    sku: [...new Set(searchFilteredBalances.map((b) => getBalanceCellValue(b, "sku")))].sort((a, b) =>
+    sku: [...new Set(balances.map((b) => getBalanceCellValue(b, "sku")))].sort((a, b) =>
       a.localeCompare(b, "ru"),
     ),
-    quantity: [...new Set(searchFilteredBalances.map((b) => getBalanceCellValue(b, "quantity")))].sort(
+    quantity: [...new Set(balances.map((b) => getBalanceCellValue(b, "quantity")))].sort(
       (a, b) => (Number.parseFloat(a) || 0) - (Number.parseFloat(b) || 0),
     ),
-    operations: [...new Set(searchFilteredBalances.map((b) => getBalanceOperationsLabel(b)))].sort((a, b) =>
+    operations: [...new Set(balances.map((b) => getBalanceOperationsLabel(b)))].sort((a, b) =>
       a.localeCompare(b, "ru"),
     ),
-    quality: [...new Set(searchFilteredBalances.map((b) => getBalanceCellValue(b, "quality")))].sort((a, b) =>
+    quality: [...new Set(balances.map((b) => getBalanceCellValue(b, "quality")))].sort((a, b) =>
       a.localeCompare(b, "ru"),
     ),
-    location: [...new Set(searchFilteredBalances.map((b) => getBalanceCellValue(b, "location")))].sort((a, b) =>
+    location: [...new Set(balances.map((b) => getBalanceCellValue(b, "location")))].sort((a, b) =>
       a.localeCompare(b, "ru"),
     ),
-  }), [searchFilteredBalances]);
+  }), [balances]);
 
   const columnCount = hideLocationColumn ? 6 : 7;
 
-  const { rows: filteredBalances } = useTableQueryEngine<StockBalanceEntry, BalanceSortField>({
-    rows: searchFilteredBalances,
-    getId: (b) => b.id,
-    searchQuery: "",
-    filterPredicate,
-    sortConfigs,
-    sortDefs,
-  });
+  const handlePanelReset = useCallback(() => {
+    handleResetFilters();
+    resetPage();
+  }, [handleResetFilters, resetPage]);
+
+  const hasTableFilters =
+    hasActiveFilters || sortConfigs.length > 0 || debouncedSearch.trim().length > 0;
 
   return (
     <div className="space-y-3">
       <TablePanelHeader
         title={title}
-        countLabel={`(${filteredBalances.length} из ${balances.length})`}
+        countLabel={`(${balances.length} из ${total})`}
         expanded={isExpanded}
         onToggleExpanded={() => setIsExpanded(!isExpanded)}
       />
@@ -141,16 +278,17 @@ export function StockBalancesPanel({
         <>
           {isLoading ? (
             <p className="text-sm text-muted-foreground py-4 text-center">Загрузка остатков...</p>
-          ) : balances.length === 0 ? (
+          ) : total === 0 ? (
             <div className="text-center py-8 text-sm text-muted-foreground border rounded-lg border-dashed">
-              Записей о наличии нет
+              {hasTableFilters ? "Ничего не найдено по выбранным фильтрам" : "Записей о наличии нет"}
             </div>
           ) : (
-            <div className="overflow-x-auto border rounded-lg">
+            <div className={DATA_TABLE_STYLES.container}>
+              <div className="overflow-auto" style={{ maxHeight: "70vh" }}>
                 <table className="w-full text-sm text-left">
-                  <thead className="bg-muted/50 border-b">
+                  <thead>
                     <tr>
-                      <th className="p-2 text-left font-medium">
+                      <th className={`${headerCellClass} p-0`}>
                         <SortableFilterHeader
                           field="sku"
                           label="Артикул"
@@ -160,7 +298,7 @@ export function StockBalancesPanel({
                           {...bindColumn("sku")}
                         />
                       </th>
-                      <th className="p-2 text-left font-medium">
+                      <th className={`${headerCellClass} p-0`}>
                         <SortableFilterHeader
                           field="quantity"
                           label="Количество"
@@ -170,7 +308,7 @@ export function StockBalancesPanel({
                           {...bindColumn("quantity")}
                         />
                       </th>
-                      <th className="p-2 text-left font-medium min-w-[140px]">
+                      <th className={`${headerCellClass} p-0 min-w-[140px]`}>
                         <SortableFilterHeader
                           field="operations"
                           label="Операции"
@@ -180,7 +318,7 @@ export function StockBalancesPanel({
                           {...bindColumn("operations")}
                         />
                       </th>
-                      <th className="p-2 text-left font-medium">
+                      <th className={`${headerCellClass} p-0`}>
                         <SortableFilterHeader
                           field="quality"
                           label="Статус качества"
@@ -191,7 +329,7 @@ export function StockBalancesPanel({
                         />
                       </th>
                       {!hideLocationColumn && (
-                        <th className="p-2 text-left font-medium">
+                        <th className={`${headerCellClass} p-0`}>
                           <SortableFilterHeader
                             field="location"
                             label="Участок"
@@ -202,17 +340,18 @@ export function StockBalancesPanel({
                           />
                         </th>
                       )}
-                      <th className="p-2 text-left font-medium text-xs text-muted-foreground">
+                      <th className={headerCellClass}>
                         Действия
                       </th>
                       <TableCornerResetHeader
-                        hasActiveFilters={hasActiveFilters}
-                        onReset={handleResetFilters}
+                        hasActiveFilters={hasTableFilters}
+                        onReset={handlePanelReset}
+                        dataTableHeader
                       />
                     </tr>
                   </thead>
                   <tbody>
-                    {filteredBalances.length === 0 ? (
+                    {balances.length === 0 ? (
                       <tr>
                         <td
                           colSpan={columnCount}
@@ -222,7 +361,7 @@ export function StockBalancesPanel({
                         </td>
                       </tr>
                     ) : (
-                    filteredBalances.map((b) => (
+                    balances.map((b) => (
                       <tr key={b.id} className="border-b hover:bg-muted/30">
                         <td className="p-2">
                           <button
@@ -268,6 +407,17 @@ export function StockBalancesPanel({
                     )))}
                   </tbody>
                 </table>
+              </div>
+              <TablePaginationFooter
+                page={page}
+                totalPages={totalPages}
+                total={total}
+                shownCount={balances.length}
+                limit={limit}
+                onPageChange={setPage}
+                onLimitChange={setLimit}
+                rangeLabel={getRangeLabel(balances.length, total)}
+              />
             </div>
           )}
         </>

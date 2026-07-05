@@ -1,28 +1,29 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Loader2, X } from "lucide-react";
+import { Loader2, Search, X } from "lucide-react";
 
 import {
   Button,
   DateRangePicker,
+  Input,
   SortableFilterHeader,
   TableCornerResetCell,
   TableCornerResetHeader,
+  TablePaginationFooter,
+  DATA_TABLE_STYLES,
   type DateRangeValue,
 } from "@/shared/ui";
 import { useFilterableTable } from "@/shared/hooks/useFilterableTable";
+import { usePaginatedTableQuery } from "@/shared/hooks/usePaginatedTableQuery";
 import {
   getStockTransactions,
   formatBalanceQtyInteger,
   formatQualityStateLabel,
   formatStockReasonLabel,
 } from "@/shared/api/stock";
-import type { StockTransactionEntry } from "@/shared/api/stock";
+import type { StockTransactionEntry, StockTransactionsParams } from "@/shared/api/stock";
 import { queryKeys } from "@/shared/api/queryKeys";
-import {
-  useTableQueryEngine,
-  type ColumnSortDef,
-} from "@/shared/hooks/useTableQueryEngine";
+import { pickColumnApiValue } from "@/shared/lib/columnFilterSearch";
 
 interface StockTransactionsHistoryDrawerProps {
   productId?: number;
@@ -65,6 +66,74 @@ function getTxCellValue(tx: StockTransactionEntry, field: TransactionSortField):
   }
 }
 
+function mapTxSortFieldToApi(field: TransactionSortField): string {
+  switch (field) {
+    case "date":
+      return "created_at";
+    case "from":
+      return "from_location";
+    case "to":
+      return "to_location";
+    case "quality":
+      return "quality_state";
+    default:
+      return field;
+  }
+}
+
+function extractQualityStateLabel(label: string): string | undefined {
+  if (label === "—") return undefined;
+  const part = label.split(" → ")[0]?.trim() ?? label;
+  const normalized = part.toLowerCase();
+  if (normalized === "годный") return "good";
+  if (normalized === "брак") return "scrap";
+  if (normalized === "окончательный брак") return "final_scrap";
+  if (normalized === "переделка") return "rework";
+  return part;
+}
+
+function buildTxColumnApiParams(
+  columnFilters: Partial<Record<TransactionSortField, Set<string>>>,
+  columnSearchQueries: Partial<Record<TransactionSortField, string>>,
+): Pick<StockTransactionsParams, "reason" | "from_location" | "to_location" | "quality_state" | "comment"> {
+  const params: Pick<
+    StockTransactionsParams,
+    "reason" | "from_location" | "to_location" | "quality_state" | "comment"
+  > = {};
+
+  const reason = pickColumnApiValue(columnFilters, columnSearchQueries, "reason", (v) =>
+    v === "—" ? undefined : v,
+  );
+  if (reason) params.reason = reason;
+
+  const fromLocation = pickColumnApiValue(columnFilters, columnSearchQueries, "from", (v) =>
+    v === "—" ? undefined : v,
+  );
+  if (fromLocation) params.from_location = fromLocation;
+
+  const toLocation = pickColumnApiValue(columnFilters, columnSearchQueries, "to", (v) =>
+    v === "—" ? undefined : v,
+  );
+  if (toLocation) params.to_location = toLocation;
+
+  const qualityState = pickColumnApiValue(
+    columnFilters,
+    columnSearchQueries,
+    "quality",
+    extractQualityStateLabel,
+  );
+  if (qualityState) params.quality_state = qualityState;
+
+  const comment = pickColumnApiValue(columnFilters, columnSearchQueries, "comment", (v) =>
+    v === "—" ? undefined : v,
+  );
+  if (comment) params.comment = comment;
+
+  return params;
+}
+
+const headerCellClass = `${DATA_TABLE_STYLES.headerRow} ${DATA_TABLE_STYLES.headerCell}`;
+
 export function StockTransactionsHistoryDrawer({
   productId,
   productSku,
@@ -74,110 +143,162 @@ export function StockTransactionsHistoryDrawer({
 }: StockTransactionsHistoryDrawerProps) {
   const productLabel = productSku?.trim() || (productId !== undefined ? `#${productId}` : null);
   const [dateRange, setDateRange] = useState<DateRangeValue>({ from: "", to: "" });
+  const [search, setSearch] = useState("");
+  const [debouncedSearch, setDebouncedSearch] = useState("");
+  const tableScrollRef = useRef<HTMLDivElement>(null);
   const hasDateFilter = Boolean(dateRange.from || dateRange.to);
+
   const {
     bindColumn,
-    buildFilterPredicate,
+    columnFilters,
+    columnSearchQueries,
     sortConfigs,
     setSortConfigs,
-    handleSort: handleSortChange,
     hasActiveFilters,
     resetAll: handleResetFilters,
     resetColumnFilters,
   } = useFilterableTable<TransactionSortField>({
-    extraHasActive: hasDateFilter,
-    onExtraReset: () => setDateRange({ from: "", to: "" }),
+    extraHasActive: hasDateFilter || search.trim().length > 0,
+    onExtraReset: () => {
+      setDateRange({ from: "", to: "" });
+      setSearch("");
+      setDebouncedSearch("");
+    },
   });
+
+  const columnApiParams = useMemo(
+    () => buildTxColumnApiParams(columnFilters, columnSearchQueries),
+    [columnFilters, columnSearchQueries],
+  );
+
+  const activeSort = sortConfigs[0];
+
+  const {
+    page,
+    setPage,
+    limit,
+    setLimit,
+    offset,
+    getTotalPages,
+    getRangeLabel,
+    resetPage,
+  } = usePaginatedTableQuery({
+    resetPageDeps: [
+      productId,
+      locationId,
+      debouncedSearch,
+      dateRange.from,
+      dateRange.to,
+      columnFilters,
+      columnSearchQueries,
+      sortConfigs,
+    ],
+  });
+
+  const handleSortChange = useCallback(
+    (field: TransactionSortField) => {
+      setSortConfigs((prev) => {
+        const existing = prev.find((sort) => sort.field === field);
+        if (!existing) {
+          return [{ field, order: "desc" }];
+        }
+        return [{ field, order: existing.order === "asc" ? "desc" : "asc" }];
+      });
+      resetPage();
+    },
+    [resetPage, setSortConfigs],
+  );
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => setDebouncedSearch(search), 300);
+    return () => window.clearTimeout(timer);
+  }, [search]);
 
   useEffect(() => {
     if (!open) {
       setDateRange({ from: "", to: "" });
+      setSearch("");
+      setDebouncedSearch("");
       setSortConfigs([]);
       resetColumnFilters();
+      resetPage();
     }
-  }, [open, resetColumnFilters, setSortConfigs]);
+  }, [open, resetColumnFilters, resetPage, setSortConfigs]);
 
-  const { data: transactions = [], isLoading } = useQuery({
-    queryKey: queryKeys.stock.transactions(
-      JSON.stringify({ productId, locationId }),
-    ),
-    queryFn: () =>
-      getStockTransactions({
-        product_id: productId,
-        location_id: locationId,
-        limit: 500,
-      }),
+  const txQueryParams = useMemo(
+    () => ({
+      product_id: productId,
+      location_id: locationId,
+      search: debouncedSearch.trim() || undefined,
+      date_from: dateRange.from || undefined,
+      date_to: dateRange.to || undefined,
+      sort_by: activeSort ? mapTxSortFieldToApi(activeSort.field) : "created_at",
+      sort_order: activeSort?.order ?? "desc",
+      limit,
+      offset,
+      ...columnApiParams,
+    }),
+    [
+      productId,
+      locationId,
+      debouncedSearch,
+      dateRange.from,
+      dateRange.to,
+      activeSort,
+      limit,
+      offset,
+      columnApiParams,
+    ],
+  );
+
+  const { data, isLoading } = useQuery({
+    queryKey: queryKeys.stock.transactions({
+      productId,
+      locationId,
+      limit,
+      offset,
+      search: debouncedSearch || undefined,
+      dateFrom: dateRange.from || undefined,
+      dateTo: dateRange.to || undefined,
+      sort_by: txQueryParams.sort_by,
+      sort_order: txQueryParams.sort_order,
+      reason: txQueryParams.reason as string | undefined,
+      from_location: txQueryParams.from_location,
+      to_location: txQueryParams.to_location,
+      quality_state: txQueryParams.quality_state,
+      comment: txQueryParams.comment,
+    }),
+    queryFn: () => getStockTransactions(txQueryParams),
     enabled: open && productId !== undefined,
   });
 
-  const dateFilteredTransactions = useMemo(() => {
-    const { from, to } = dateRange;
-    if (!from && !to) return transactions;
-    return transactions.filter((tx) => {
-      if (!tx.created_at) return false;
-      const day = tx.created_at.slice(0, 10);
-      if (from && day < from) return false;
-      if (to && day > to) return false;
-      return true;
-    });
-  }, [transactions, dateRange]);
-
-  const sortDefs = useMemo((): ColumnSortDef<StockTransactionEntry, TransactionSortField>[] => [
-    {
-      field: "date",
-      getSortValue: (tx) => (tx.created_at ? new Date(tx.created_at).getTime() : 0),
-    },
-    { field: "reason", getSortValue: (tx) => getTxCellValue(tx, "reason") },
-    { field: "from", getSortValue: (tx) => getTxCellValue(tx, "from") },
-    { field: "to", getSortValue: (tx) => getTxCellValue(tx, "to") },
-    {
-      field: "quantity",
-      getSortValue: (tx) => Number.parseFloat(String(tx.quantity)) || 0,
-    },
-    { field: "quality", getSortValue: (tx) => getTxCellValue(tx, "quality") },
-    { field: "comment", getSortValue: (tx) => getTxCellValue(tx, "comment") },
-  ], []);
-
-  const filterPredicate = useMemo(
-    () => buildFilterPredicate(getTxCellValue),
-    [buildFilterPredicate],
-  );
+  const transactions = data?.transactions ?? [];
+  const total = data?.total ?? 0;
+  const totalPages = getTotalPages(total);
 
   const uniqueValues = useMemo(() => ({
-    date: [...new Set(dateFilteredTransactions.map((tx) => getTxCellValue(tx, "date")))].sort((a, b) =>
+    date: [...new Set(transactions.map((tx) => getTxCellValue(tx, "date")))].sort((a, b) =>
       a.localeCompare(b, "ru"),
     ),
-    reason: [...new Set(dateFilteredTransactions.map((tx) => getTxCellValue(tx, "reason")))].sort((a, b) =>
+    reason: [...new Set(transactions.map((tx) => getTxCellValue(tx, "reason")))].sort((a, b) =>
       a.localeCompare(b, "ru"),
     ),
-    from: [...new Set(dateFilteredTransactions.map((tx) => getTxCellValue(tx, "from")))].sort((a, b) =>
+    from: [...new Set(transactions.map((tx) => getTxCellValue(tx, "from")))].sort((a, b) =>
       a.localeCompare(b, "ru"),
     ),
-    to: [...new Set(dateFilteredTransactions.map((tx) => getTxCellValue(tx, "to")))].sort((a, b) =>
+    to: [...new Set(transactions.map((tx) => getTxCellValue(tx, "to")))].sort((a, b) =>
       a.localeCompare(b, "ru"),
     ),
-    quantity: [...new Set(dateFilteredTransactions.map((tx) => getTxCellValue(tx, "quantity")))].sort(
+    quantity: [...new Set(transactions.map((tx) => getTxCellValue(tx, "quantity")))].sort(
       (a, b) => (Number.parseFloat(a) || 0) - (Number.parseFloat(b) || 0),
     ),
-    quality: [...new Set(dateFilteredTransactions.map((tx) => getTxCellValue(tx, "quality")))].sort((a, b) =>
+    quality: [...new Set(transactions.map((tx) => getTxCellValue(tx, "quality")))].sort((a, b) =>
       a.localeCompare(b, "ru"),
     ),
-    comment: [...new Set(dateFilteredTransactions.map((tx) => getTxCellValue(tx, "comment")))].sort((a, b) =>
+    comment: [...new Set(transactions.map((tx) => getTxCellValue(tx, "comment")))].sort((a, b) =>
       a.localeCompare(b, "ru"),
     ),
-  }), [dateFilteredTransactions]);
-
-  const { rows: filteredTransactions } = useTableQueryEngine<
-    StockTransactionEntry,
-    TransactionSortField
-  >({
-    rows: dateFilteredTransactions,
-    getId: (tx) => tx.id,
-    searchQuery: "",
-    filterPredicate,
-    sortConfigs,
-    sortDefs,
-  });
+  }), [transactions]);
 
   if (!open) return null;
 
@@ -197,29 +318,55 @@ export function StockTransactionsHistoryDrawer({
         </div>
 
         <div className="p-4 space-y-4">
-          <DateRangePicker
-            from={dateRange.from}
-            to={dateRange.to}
-            onChange={setDateRange}
-            className="w-full sm:w-auto sm:min-w-[280px] max-w-md"
-            placeholder="Период"
-            align="start"
-          />
+          <div className="flex flex-col sm:flex-row gap-2">
+            <div className="relative flex-1 max-w-md">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+              <Input
+                placeholder="Поиск по комментарию, причине, локациям…"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                className="pl-9"
+              />
+              {search && (
+                <button
+                  type="button"
+                  onClick={() => setSearch("")}
+                  className="absolute right-3 top-1/2 -translate-y-1/2"
+                  aria-label="Очистить поиск"
+                >
+                  <X className="h-4 w-4 text-muted-foreground" />
+                </button>
+              )}
+            </div>
+            <DateRangePicker
+              from={dateRange.from}
+              to={dateRange.to}
+              onChange={setDateRange}
+              className="w-full sm:w-auto sm:min-w-[280px] max-w-md"
+              placeholder="Период"
+              align="start"
+            />
+          </div>
 
           {isLoading ? (
             <div className="flex items-center justify-center py-12">
               <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
             </div>
-          ) : transactions.length === 0 ? (
+          ) : total === 0 ? (
             <div className="text-center py-12 text-sm text-muted-foreground border rounded-lg border-dashed">
               Транзакции не найдены
             </div>
           ) : (
-            <div className="overflow-x-auto border rounded-lg">
+            <div className={DATA_TABLE_STYLES.container}>
+              <div
+                ref={tableScrollRef}
+                className="overflow-auto"
+                style={{ maxHeight: "70vh" }}
+              >
                 <table className="w-full text-sm">
-                  <thead className="bg-muted/50 border-b">
+                  <thead>
                     <tr>
-                      <th className="p-2 text-left font-medium">
+                      <th className={`${headerCellClass} p-0`}>
                         <SortableFilterHeader
                           field="date"
                           label="Дата"
@@ -229,7 +376,7 @@ export function StockTransactionsHistoryDrawer({
                           {...bindColumn("date")}
                         />
                       </th>
-                      <th className="p-2 text-left font-medium">
+                      <th className={`${headerCellClass} p-0`}>
                         <SortableFilterHeader
                           field="reason"
                           label="Причина"
@@ -239,7 +386,7 @@ export function StockTransactionsHistoryDrawer({
                           {...bindColumn("reason")}
                         />
                       </th>
-                      <th className="p-2 text-left font-medium">
+                      <th className={`${headerCellClass} p-0`}>
                         <SortableFilterHeader
                           field="from"
                           label="Откуда"
@@ -249,7 +396,7 @@ export function StockTransactionsHistoryDrawer({
                           {...bindColumn("from")}
                         />
                       </th>
-                      <th className="p-2 text-left font-medium">
+                      <th className={`${headerCellClass} p-0`}>
                         <SortableFilterHeader
                           field="to"
                           label="Куда"
@@ -259,7 +406,7 @@ export function StockTransactionsHistoryDrawer({
                           {...bindColumn("to")}
                         />
                       </th>
-                      <th className="p-2 text-right font-medium">
+                      <th className={`${headerCellClass} p-0 text-right`}>
                         <SortableFilterHeader
                           field="quantity"
                           label="Кол-во"
@@ -269,7 +416,7 @@ export function StockTransactionsHistoryDrawer({
                           {...bindColumn("quantity")}
                         />
                       </th>
-                      <th className="p-2 text-left font-medium">
+                      <th className={`${headerCellClass} p-0`}>
                         <SortableFilterHeader
                           field="quality"
                           label="Качество"
@@ -279,7 +426,7 @@ export function StockTransactionsHistoryDrawer({
                           {...bindColumn("quality")}
                         />
                       </th>
-                      <th className="p-2 text-left font-medium">
+                      <th className={`${headerCellClass} p-0`}>
                         <SortableFilterHeader
                           field="comment"
                           label="Комментарий"
@@ -292,18 +439,19 @@ export function StockTransactionsHistoryDrawer({
                       <TableCornerResetHeader
                         hasActiveFilters={hasActiveFilters}
                         onReset={handleResetFilters}
+                        dataTableHeader
                       />
                     </tr>
                   </thead>
                   <tbody>
-                    {filteredTransactions.length === 0 ? (
+                    {transactions.length === 0 ? (
                       <tr>
                         <td colSpan={8} className="p-8 text-center text-sm text-muted-foreground">
                           Ничего не найдено по выбранным фильтрам
                         </td>
                       </tr>
                     ) : (
-                    filteredTransactions.map((tx) => (
+                    transactions.map((tx) => (
                       <tr key={tx.id} className="border-b hover:bg-muted/30">
                         <td className="p-2 text-xs whitespace-nowrap">
                           {formatTxDate(tx.created_at)}
@@ -325,14 +473,17 @@ export function StockTransactionsHistoryDrawer({
                     )))}
                   </tbody>
                 </table>
-            </div>
-          )}
-
-          {!isLoading && transactions.length > 0 && (
-            <div className="text-xs text-muted-foreground text-center">
-              {filteredTransactions.length === dateFilteredTransactions.length
-                ? `Показано ${filteredTransactions.length} записей`
-                : `Показано ${filteredTransactions.length} из ${dateFilteredTransactions.length} записей`}
+              </div>
+              <TablePaginationFooter
+                page={page}
+                totalPages={totalPages}
+                total={total}
+                shownCount={transactions.length}
+                limit={limit}
+                onPageChange={setPage}
+                onLimitChange={setLimit}
+                rangeLabel={getRangeLabel(transactions.length, total)}
+              />
             </div>
           )}
         </div>

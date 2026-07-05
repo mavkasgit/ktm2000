@@ -7,8 +7,8 @@ UI-перехода (Этап 6). Старый ``/api/spg/*`` остаётся l
 Endpoints:
 
   * ``GET /v2/stock/balance``             — список строк StockBalance
-    с опциональными фильтрами ``product_id`` / ``location_id`` /
-    ``quality_state``.
+    с фильтрами ``product_id`` / ``location_id`` / ``quality_state``,
+    поиском, сортировкой и пагинацией ``limit`` / ``offset``.
   * ``GET /v2/stock/balance/by-product/{product_id}`` — все балансы
     конкретного продукта по локациям.
   * ``GET /v2/stock/transactions``        — лента StockTransaction с
@@ -23,12 +23,14 @@ Endpoints:
 from __future__ import annotations
 
 import json
+from datetime import date, datetime, time
 from typing import Optional
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from sqlalchemy import cast, func, or_, select
 from sqlalchemy.orm import aliased
+from sqlalchemy.types import String
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import READER_ROLES, WRITER_ROLES, get_current_user, require_role
@@ -52,6 +54,7 @@ from app.stock.import_service import (
     parse_remainders_clipboard,
     parse_remainders_excel,
     parse_operations_from_comment,
+    query_remainder_preview_items,
     resolve_completed_stages,
     resolve_operations_dictionary,
     resolve_target_section,
@@ -125,6 +128,20 @@ class StockBalanceOut(BaseModel):
         from_attributes = True
 
 
+class StockBalancesListResponse(BaseModel):
+    balances: list[StockBalanceOut]
+    total: int
+    limit: int
+    offset: int
+
+
+class StockTransactionsListResponse(BaseModel):
+    transactions: list["StockTransactionOut"]
+    total: int
+    limit: int
+    offset: int
+
+
 class StockTransactionOut(BaseModel):
     id: int
     product_id: int
@@ -179,6 +196,122 @@ class StockAdjustmentOut(BaseModel):
 
 
 # ─── Balance ──────────────────────────────────────────────────────────────────
+
+BALANCE_SORT_FIELDS = frozenset({
+    "sku",
+    "quantity",
+    "operations",
+    "quality",
+    "location",
+    "product_id",
+})
+
+
+def _latest_manual_in_comment_expr():
+    """Коррелированный подзапрос: комментарий последнего MANUAL_IN по ключу баланса."""
+    return (
+        select(StockTransaction.comment)
+        .where(
+            StockTransaction.reason == Reason.MANUAL_IN,
+            StockTransaction.compensates_tx_id.is_(None),
+            StockTransaction.product_id == StockBalance.product_id,
+            StockTransaction.to_location_id == StockBalance.location_id,
+            StockTransaction.to_quality_state == StockBalance.quality_state,
+        )
+        .order_by(StockTransaction.created_at.desc(), StockTransaction.id.desc())
+        .limit(1)
+        .correlate(StockBalance)
+        .scalar_subquery()
+    )
+
+
+def _balance_base_stmt():
+    return (
+        select(StockBalance, Section.name, Product.sku)
+        .outerjoin(Section, Section.id == StockBalance.location_id)
+        .outerjoin(Product, Product.id == StockBalance.product_id)
+    )
+
+
+def _apply_balance_filters(
+    stmt,
+    *,
+    product_id: Optional[int],
+    location_id: Optional[int],
+    location_ids: Optional[list[int]],
+    quality_state: Optional[QualityState],
+    search: Optional[str],
+    sku: Optional[str],
+    quantity: Optional[str],
+    quality: Optional[str],
+    location: Optional[str],
+    operations: Optional[str],
+):
+    if product_id is not None:
+        stmt = stmt.where(StockBalance.product_id == product_id)
+    if location_id is not None:
+        stmt = stmt.where(StockBalance.location_id == location_id)
+    elif location_ids:
+        stmt = stmt.where(StockBalance.location_id.in_(location_ids))
+    if quality_state is not None:
+        stmt = stmt.where(StockBalance.quality_state == quality_state)
+    if sku is not None:
+        stmt = stmt.where(Product.sku.ilike(f"%{sku}%"))
+    if quantity is not None:
+        stmt = stmt.where(cast(StockBalance.balance_qty, String).ilike(f"%{quantity}%"))
+    if quality is not None:
+        stmt = stmt.where(cast(StockBalance.quality_state, String).ilike(f"%{quality}%"))
+    if location is not None:
+        location_like = f"%{location}%"
+        stmt = stmt.where(
+            or_(
+                Section.name.ilike(location_like),
+                Section.code.ilike(location_like),
+            )
+        )
+    if operations is not None:
+        latest_comment = _latest_manual_in_comment_expr()
+        stmt = stmt.where(latest_comment.ilike(f"%{operations}%"))
+    if search:
+        search_like = f"%{search}%"
+        stmt = stmt.where(
+            or_(
+                Product.sku.ilike(search_like),
+                cast(StockBalance.product_id, String).ilike(search_like),
+                Section.name.ilike(search_like),
+                Section.code.ilike(search_like),
+            )
+        )
+    return stmt
+
+
+def _apply_balance_sort(stmt, *, sort_by: str, sort_order: str):
+    resolved_sort_by = sort_by if sort_by in BALANCE_SORT_FIELDS else "sku"
+    order_column = Product.sku
+    if resolved_sort_by == "quantity":
+        order_column = StockBalance.balance_qty
+    elif resolved_sort_by == "quality":
+        order_column = StockBalance.quality_state
+    elif resolved_sort_by == "location":
+        order_column = Section.name
+    elif resolved_sort_by == "product_id":
+        order_column = StockBalance.product_id
+    elif resolved_sort_by == "operations":
+        order_column = _latest_manual_in_comment_expr()
+
+    if sort_order == "desc":
+        return stmt.order_by(
+            order_column.desc().nulls_last(),
+            StockBalance.product_id.desc(),
+            StockBalance.location_id.desc(),
+            StockBalance.id.desc(),
+        )
+    return stmt.order_by(
+        order_column.asc().nulls_last(),
+        StockBalance.product_id.asc(),
+        StockBalance.location_id.asc(),
+        StockBalance.id.asc(),
+    )
 
 
 def _serialize_balance(
@@ -246,34 +379,77 @@ async def _serialize_balances_with_operations(
     return result
 
 
-@router.get("/balance", response_model=list[StockBalanceOut])
+@router.get("/balance", response_model=StockBalancesListResponse)
 async def list_balances(
     product_id: Optional[int] = Query(default=None),
     location_id: Optional[int] = Query(default=None),
+    location_ids: Optional[list[int]] = Query(default=None),
     quality_state: Optional[QualityState] = Query(default=None),
+    search: Optional[str] = Query(
+        default=None,
+        description="Поиск по артикулу, product_id, названию участка",
+    ),
+    sku: Optional[str] = Query(
+        default=None,
+        description="Column filter: ILIKE on product SKU",
+    ),
+    quantity: Optional[str] = Query(
+        default=None,
+        description="Column filter: ILIKE on balance quantity",
+    ),
+    quality: Optional[str] = Query(
+        default=None,
+        description="Column filter: ILIKE on quality_state enum value",
+    ),
+    location: Optional[str] = Query(
+        default=None,
+        description="Column filter: ILIKE on section name or code",
+    ),
+    operations: Optional[str] = Query(
+        default=None,
+        description="Column filter: ILIKE on latest MANUAL_IN comment",
+    ),
+    sort_by: str = Query(default="sku"),
+    sort_order: str = Query(default="asc"),
+    limit: int = Query(default=50, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
     db: AsyncSession = Depends(get_db),
     _user: User = Depends(require_role(READER_ROLES)),
-) -> list[StockBalanceOut]:
+) -> StockBalancesListResponse:
     """Список строк баланса (projection из StockTransaction).
 
     Без фильтров возвращает все ненулевые строки. Баланс = SUM(in) - SUM(out)
     по ключу ``(product, location, quality_state)``; нулевые строки не
     хранятся (см. ``StockProjectionManager.refresh_balance``).
     """
-    stmt = (
-        select(StockBalance, Section.name, Product.sku)
-        .outerjoin(Section, Section.id == StockBalance.location_id)
-        .outerjoin(Product, Product.id == StockBalance.product_id)
+    stmt = _balance_base_stmt()
+    stmt = _apply_balance_filters(
+        stmt,
+        product_id=product_id,
+        location_id=location_id,
+        location_ids=location_ids,
+        quality_state=quality_state,
+        search=search,
+        sku=sku,
+        quantity=quantity,
+        quality=quality,
+        location=location,
+        operations=operations,
     )
-    if product_id is not None:
-        stmt = stmt.where(StockBalance.product_id == product_id)
-    if location_id is not None:
-        stmt = stmt.where(StockBalance.location_id == location_id)
-    if quality_state is not None:
-        stmt = stmt.where(StockBalance.quality_state == quality_state)
-    stmt = stmt.order_by(StockBalance.product_id, StockBalance.location_id)
+
+    count_stmt = select(func.count()).select_from(stmt.subquery())
+    total = (await db.execute(count_stmt)).scalar() or 0
+
+    stmt = _apply_balance_sort(stmt, sort_by=sort_by, sort_order=sort_order)
+    stmt = stmt.limit(limit).offset(offset)
     result = await db.execute(stmt)
-    return await _serialize_balances_with_operations(db, list(result.all()))
+    balances = await _serialize_balances_with_operations(db, list(result.all()))
+    return StockBalancesListResponse(
+        balances=balances,
+        total=total,
+        limit=limit,
+        offset=offset,
+    )
 
 
 @router.get("/balance/by-product/{product_id}", response_model=list[StockBalanceOut])
@@ -298,6 +474,16 @@ async def list_balances_by_product(
 
 
 # ─── Transactions ─────────────────────────────────────────────────────────────
+
+TX_SORT_FIELDS = frozenset({
+    "created_at",
+    "reason",
+    "quantity",
+    "from_location",
+    "to_location",
+    "quality_state",
+    "comment",
+})
 
 
 def _serialize_transaction(
@@ -336,12 +522,31 @@ def _serialize_transaction(
     )
 
 
-@router.get("/transactions", response_model=list[StockTransactionOut])
+@router.get("/transactions", response_model=StockTransactionsListResponse)
 async def list_transactions(
     product_id: Optional[int] = Query(default=None),
     transfer_id: Optional[int] = Query(default=None),
     task_id: Optional[int] = Query(default=None),
-    reason: Optional[Reason] = Query(default=None),
+    reason: Optional[str] = Query(
+        default=None,
+        description="Column filter: ILIKE on reason enum value or label",
+    ),
+    from_location: Optional[str] = Query(
+        default=None,
+        description="Column filter: ILIKE on from section name or code",
+    ),
+    to_location: Optional[str] = Query(
+        default=None,
+        description="Column filter: ILIKE on to section name or code",
+    ),
+    quality_state: Optional[QualityState] = Query(
+        default=None,
+        description="Column filter: exact match on from/to quality state",
+    ),
+    comment: Optional[str] = Query(
+        default=None,
+        description="Column filter: ILIKE on comment",
+    ),
     location_id: Optional[int] = Query(
         default=None,
         description="Фильтр по участию локации (from или to)",
@@ -350,15 +555,23 @@ async def list_transactions(
         default=None,
         description="True — только компенсации; False — только оригиналы",
     ),
-    limit: int = Query(default=100, ge=1, le=1000),
+    search: Optional[str] = Query(
+        default=None,
+        description="Поиск по комментарию, причине, локациям, source_ref",
+    ),
+    date_from: Optional[date] = Query(default=None),
+    date_to: Optional[date] = Query(default=None),
+    sort_by: str = Query(default="created_at"),
+    sort_order: str = Query(default="desc"),
+    limit: int = Query(default=50, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
     db: AsyncSession = Depends(get_db),
     _user: User = Depends(require_role(READER_ROLES)),
-) -> list[StockTransactionOut]:
+) -> StockTransactionsListResponse:
     """Лента StockTransaction (append-only аудит).
 
     Поддерживает комбинируемые фильтры и пагинацию. По умолчанию
-    последние 100 записей в порядке убывания ``id`` (т.е. новые сверху).
+    последние 50 записей в порядке убывания ``id`` (т.е. новые сверху).
     """
     from_section = aliased(Section)
     to_section = aliased(Section)
@@ -374,7 +587,31 @@ async def list_transactions(
     if task_id is not None:
         stmt = stmt.where(StockTransaction.task_id == task_id)
     if reason is not None:
-        stmt = stmt.where(StockTransaction.reason == reason)
+        reason_like = f"%{reason}%"
+        stmt = stmt.where(cast(StockTransaction.reason, String).ilike(reason_like))
+    if from_location is not None:
+        from_location_like = f"%{from_location}%"
+        stmt = stmt.where(
+            or_(
+                from_section.name.ilike(from_location_like),
+                from_section.code.ilike(from_location_like),
+            )
+        )
+    if to_location is not None:
+        to_location_like = f"%{to_location}%"
+        stmt = stmt.where(
+            or_(
+                to_section.name.ilike(to_location_like),
+                to_section.code.ilike(to_location_like),
+            )
+        )
+    if quality_state is not None:
+        stmt = stmt.where(
+            (StockTransaction.from_quality_state == quality_state)
+            | (StockTransaction.to_quality_state == quality_state)
+        )
+    if comment is not None:
+        stmt = stmt.where(StockTransaction.comment.ilike(f"%{comment}%"))
     if location_id is not None:
         stmt = stmt.where(
             (StockTransaction.from_location_id == location_id)
@@ -384,9 +621,52 @@ async def list_transactions(
         stmt = stmt.where(StockTransaction.compensates_tx_id.is_not(None))
     elif compensating is False:
         stmt = stmt.where(StockTransaction.compensates_tx_id.is_(None))
-    stmt = stmt.order_by(StockTransaction.id.desc()).limit(limit).offset(offset)
+    if date_from is not None:
+        stmt = stmt.where(
+            StockTransaction.created_at >= datetime.combine(date_from, time.min),
+        )
+    if date_to is not None:
+        stmt = stmt.where(
+            StockTransaction.created_at <= datetime.combine(date_to, time.max),
+        )
+    if search:
+        search_like = f"%{search}%"
+        stmt = stmt.where(
+            or_(
+                StockTransaction.comment.ilike(search_like),
+                StockTransaction.source_ref.ilike(search_like),
+                cast(StockTransaction.reason, String).ilike(search_like),
+                from_section.name.ilike(search_like),
+                to_section.name.ilike(search_like),
+            )
+        )
+
+    count_stmt = select(func.count()).select_from(stmt.subquery())
+    total = (await db.execute(count_stmt)).scalar() or 0
+
+    resolved_sort_by = sort_by if sort_by in TX_SORT_FIELDS else "created_at"
+    order_column = StockTransaction.created_at
+    if resolved_sort_by == "reason":
+        order_column = StockTransaction.reason
+    elif resolved_sort_by == "quantity":
+        order_column = StockTransaction.quantity
+    elif resolved_sort_by == "from_location":
+        order_column = from_section.name
+    elif resolved_sort_by == "to_location":
+        order_column = to_section.name
+    elif resolved_sort_by == "quality_state":
+        order_column = StockTransaction.to_quality_state
+    elif resolved_sort_by == "comment":
+        order_column = StockTransaction.comment
+
+    if sort_order == "asc":
+        stmt = stmt.order_by(order_column.asc(), StockTransaction.id.asc())
+    else:
+        stmt = stmt.order_by(order_column.desc(), StockTransaction.id.desc())
+
+    stmt = stmt.limit(limit).offset(offset)
     result = await db.execute(stmt)
-    return [
+    transactions = [
         _serialize_transaction(
             tx,
             from_location_name=from_name,
@@ -394,6 +674,12 @@ async def list_transactions(
         )
         for tx, from_name, to_name in result.all()
     ]
+    return StockTransactionsListResponse(
+        transactions=transactions,
+        total=total,
+        limit=limit,
+        offset=offset,
+    )
 
 
 # ─── Adjustment (write) ───────────────────────────────────────────────────────
@@ -496,6 +782,36 @@ async def get_remainder_import_operations(
     return await resolve_operations_dictionary(db)
 
 
+def _parse_remainder_override_json(
+    raw: str | None,
+    *,
+    field_name: str,
+    value_parser,
+) -> dict[int, object] | None:
+    if raw is None:
+        return None
+    try:
+        parsed = json.loads(raw)
+        return {int(k): value_parser(v) for k, v in parsed.items()}
+    except (ValueError, TypeError) as exc:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Invalid {field_name} JSON: {exc}",
+        ) from exc
+
+
+async def _load_section_names(
+    db: AsyncSession,
+    section_ids: set[int],
+) -> dict[int, str]:
+    if not section_ids:
+        return {}
+    result = await db.execute(
+        select(Section.id, Section.name).where(Section.id.in_(section_ids))
+    )
+    return {row.id: row.name for row in result.all()}
+
+
 @router.post(
     "/import/remainders/preview",
     dependencies=[Depends(require_role(list(WRITER_ROLES)))],
@@ -507,6 +823,19 @@ async def preview_remainders_excel(
     quality_state_overrides: str | None = Form(None),
     sheet_index: int = Form(0),
     row_selection: str | None = Form(None),
+    search: str | None = Form(None),
+    filter_status: str = Form("all"),
+    sort_by: str = Form("row"),
+    sort_order: str = Form("asc"),
+    limit: int = Form(50),
+    offset: int = Form(0),
+    row: str | None = Form(None),
+    sku: str | None = Form(None),
+    quantity: str | None = Form(None),
+    operations: str | None = Form(None),
+    quality: str | None = Form(None),
+    section: str | None = Form(None),
+    errors: str | None = Form(None),
     file: UploadFile | None = File(None),
     clipboard_text: str | None = Form(None),
     db: AsyncSession = Depends(get_db),
@@ -518,11 +847,31 @@ async def preview_remainders_excel(
     * ``target_section_overrides`` — опциональный JSON ``{"row_num": sec_id, ...}``
       для UI-оверрайда участка.
     * ``clipboard_text`` — TSV из буфера (копия из Excel), альтернатива ``file``.
+    * ``limit`` / ``offset`` / ``items_total`` — серверная пагинация по ``items``.
+    * ``search`` — поиск по SKU, product_name, номеру строки.
+    * ``filter_status`` — ``all`` или ``invalid``.
+    * ``sort_by`` / ``sort_order`` — сортировка страницы preview.
+    * ``row``, ``sku``, ``quantity``, ``operations``, ``quality``, ``section``, ``errors``
+      — column filters (partial match).
     """
     if location_id is not None:
         location = await db.get(Section, location_id)
         if location is None:
             raise HTTPException(status_code=404, detail=f"Location id={location_id} not found")
+
+    if filter_status not in {"all", "invalid"}:
+        raise HTTPException(status_code=422, detail="filter_status must be 'all' or 'invalid'")
+
+    parsed_target_overrides = _parse_remainder_override_json(
+        target_section_overrides,
+        field_name="target_section_overrides",
+        value_parser=int,
+    )
+    parsed_quality_overrides = _parse_remainder_override_json(
+        quality_state_overrides,
+        field_name="quality_state_overrides",
+        value_parser=lambda value: QualityState(str(value).lower()),
+    )
 
     sheet_name, total_rows, items, summary = await _parse_remainder_import_source(
         file=file,
@@ -554,6 +903,35 @@ async def preview_remainders_excel(
         (it.quantity or 0) for it in items if it.status == "valid"
     )
 
+    section_ids: set[int] = set()
+    if parsed_target_overrides:
+        section_ids.update(parsed_target_overrides.values())
+    for item in items:
+        if item.target_section_id is not None:
+            section_ids.add(item.target_section_id)
+    section_names = await _load_section_names(db, section_ids)
+
+    preview_page = query_remainder_preview_items(
+        items,
+        search=search,
+        filter_status=filter_status,
+        sort_by=sort_by,
+        sort_order=sort_order,
+        limit=limit,
+        offset=offset,
+        default_quality_state=quality_state,
+        target_section_overrides=parsed_target_overrides,
+        quality_state_overrides=parsed_quality_overrides,
+        section_names=section_names,
+        row=row,
+        sku=sku,
+        quantity=quantity,
+        operations=operations,
+        quality=quality,
+        section=section,
+        errors=errors,
+    )
+
     return {
         "sheet_name": sheet_name,
         "total_rows": total_rows,
@@ -563,7 +941,19 @@ async def preview_remainders_excel(
             "invalid": invalid_count,
             "quantity_total": round(quantity_total, 3),
         },
-        "items": [item.__dict__ for item in items],
+        "section_meta": [
+            {
+                "source_row_number": meta.source_row_number,
+                "status": meta.status,
+                "target_section_id": meta.target_section_id,
+                "target_section_name": meta.target_section_name,
+            }
+            for meta in preview_page.section_meta
+        ],
+        "items": [item.__dict__ for item in preview_page.items],
+        "items_total": preview_page.items_total,
+        "limit": max(1, min(limit, 500)),
+        "offset": max(0, offset),
     }
 
 

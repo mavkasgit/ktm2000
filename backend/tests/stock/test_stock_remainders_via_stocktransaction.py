@@ -237,9 +237,9 @@ async def test_list_stock_balances_endpoint_returns_correct_data(client, session
     ))
     await session.commit()
 
-    resp = await client.get("/api/v2/stock/balance")
+    resp = await client.get("/api/v2/stock/balance?limit=500")
     assert resp.status_code == 200, resp.text
-    data = resp.json()
+    data = resp.json()["balances"]
 
     # Находим нашу запись баланса в ответе
     our_balance = [b for b in data if b["product_id"] == product.id]
@@ -305,9 +305,9 @@ async def test_list_stock_balances_returns_completed_stages_from_import_comment(
     ))
     await session.commit()
 
-    resp = await client.get("/api/v2/stock/balance")
+    resp = await client.get("/api/v2/stock/balance?limit=500")
     assert resp.status_code == 200, resp.text
-    our_balance = [b for b in resp.json() if b["product_id"] == product.id]
+    our_balance = [b for b in resp.json()["balances"] if b["product_id"] == product.id]
     assert len(our_balance) == 1
     stage_names = [stage["operation_name"] for stage in our_balance[0]["completed_stages"]]
     assert stage_names == ["Дробеструй", "Чёрный"]
@@ -345,8 +345,9 @@ async def test_list_stock_transactions_serializes_decimal_and_datetime(
     )
     assert resp.status_code == 200, resp.text
     body = resp.json()
-    assert len(body) >= 1
-    tx = body[0]
+    assert len(body["transactions"]) >= 1
+    assert body["total"] >= 1
+    tx = body["transactions"][0]
     assert tx["product_id"] == product.id
     assert tx["quantity"] == "150.000"
     assert tx["from_location_id"] is None

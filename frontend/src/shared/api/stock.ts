@@ -135,27 +135,78 @@ export type StockTransactionEntry = {
 export type StockBalancesParams = {
   product_id?: number;
   location_id?: number;
+  location_ids?: number[];
   quality_state?: QualityState;
+  search?: string;
+  sku?: string;
+  quantity?: string;
+  quality?: string;
+  location?: string;
+  operations?: string;
+  sort_by?: string;
+  sort_order?: "asc" | "desc";
+  limit?: number;
+  offset?: number;
+};
+
+export type StockBalancesListResponse = {
+  balances: StockBalanceEntry[];
+  total: number;
+  limit: number;
+  offset: number;
 };
 
 export type StockTransactionsParams = {
   product_id?: number;
   transfer_id?: number;
   task_id?: number;
-  reason?: StockReason;
+  reason?: StockReason | string;
   location_id?: number;
   compensating?: boolean;
+  search?: string;
+  date_from?: string;
+  date_to?: string;
+  sort_by?: string;
+  sort_order?: "asc" | "desc";
+  from_location?: string;
+  to_location?: string;
+  quality_state?: string;
+  comment?: string;
   limit?: number;
   offset?: number;
 };
 
-export async function getStockBalances(params?: StockBalancesParams): Promise<StockBalanceEntry[]> {
+export type StockTransactionsListResponse = {
+  transactions: StockTransactionEntry[];
+  total: number;
+  limit: number;
+  offset: number;
+};
+
+export async function getStockBalances(
+  params?: StockBalancesParams,
+): Promise<StockBalancesListResponse> {
   const search = new URLSearchParams();
   if (params?.product_id !== undefined) search.set("product_id", String(params.product_id));
   if (params?.location_id !== undefined) search.set("location_id", String(params.location_id));
+  if (params?.location_ids?.length) {
+    for (const id of params.location_ids) {
+      search.append("location_ids", String(id));
+    }
+  }
   if (params?.quality_state) search.set("quality_state", toApiQualityState(params.quality_state));
+  if (params?.search) search.set("search", params.search);
+  if (params?.sku) search.set("sku", params.sku);
+  if (params?.quantity) search.set("quantity", params.quantity);
+  if (params?.quality) search.set("quality", params.quality);
+  if (params?.location) search.set("location", params.location);
+  if (params?.operations) search.set("operations", params.operations);
+  if (params?.sort_by) search.set("sort_by", params.sort_by);
+  if (params?.sort_order) search.set("sort_order", params.sort_order);
+  if (params?.limit !== undefined) search.set("limit", String(params.limit));
+  if (params?.offset !== undefined) search.set("offset", String(params.offset));
   const qs = search.toString();
-  const { data } = await apiClient.get<StockBalanceEntry[]>(
+  const { data } = await apiClient.get<StockBalancesListResponse>(
     `/v2/stock/balance${qs ? `?${qs}` : ""}`,
   );
   return data;
@@ -193,18 +244,34 @@ export async function postStockAdjustment(payload: StockAdjustmentPayload): Prom
   return data;
 }
 
-export async function getStockTransactions(params?: StockTransactionsParams): Promise<StockTransactionEntry[]> {
+export async function getStockTransactions(
+  params?: StockTransactionsParams,
+): Promise<StockTransactionsListResponse> {
   const search = new URLSearchParams();
   if (params?.product_id !== undefined) search.set("product_id", String(params.product_id));
   if (params?.transfer_id !== undefined) search.set("transfer_id", String(params.transfer_id));
   if (params?.task_id !== undefined) search.set("task_id", String(params.task_id));
-  if (params?.reason) search.set("reason", toApiStockReason(params.reason));
+  if (params?.reason) {
+    search.set(
+      "reason",
+      typeof params.reason === "string" ? params.reason : toApiStockReason(params.reason),
+    );
+  }
+  if (params?.sort_by) search.set("sort_by", params.sort_by);
+  if (params?.sort_order) search.set("sort_order", params.sort_order);
+  if (params?.from_location) search.set("from_location", params.from_location);
+  if (params?.to_location) search.set("to_location", params.to_location);
+  if (params?.quality_state) search.set("quality_state", params.quality_state);
+  if (params?.comment) search.set("comment", params.comment);
   if (params?.location_id !== undefined) search.set("location_id", String(params.location_id));
   if (params?.compensating !== undefined) search.set("compensating", String(params.compensating));
+  if (params?.search) search.set("search", params.search);
+  if (params?.date_from) search.set("date_from", params.date_from);
+  if (params?.date_to) search.set("date_to", params.date_to);
   if (params?.limit !== undefined) search.set("limit", String(params.limit));
   if (params?.offset !== undefined) search.set("offset", String(params.offset));
   const qs = search.toString();
-  const { data } = await apiClient.get<StockTransactionEntry[]>(
+  const { data } = await apiClient.get<StockTransactionsListResponse>(
     `/v2/stock/transactions${qs ? `?${qs}` : ""}`,
   );
   return data;
@@ -275,11 +342,22 @@ export type RemainderImportSummary = {
   quantity_total: number;
 };
 
+export type RemainderSectionMeta = {
+  source_row_number: number;
+  status: "valid" | "invalid";
+  target_section_id: number | null;
+  target_section_name: string | null;
+};
+
 export type RemainderPreviewResponse = {
   sheet_name: string;
   total_rows: number;
   summary: RemainderImportSummary;
+  section_meta: RemainderSectionMeta[];
   items: RemainderImportItem[];
+  items_total: number;
+  limit: number;
+  offset: number;
 };
 
 export type RemainderImportResponse = {
@@ -289,7 +367,23 @@ export type RemainderImportResponse = {
   transaction_ids: number[];
 };
 
-export type RemainderImportOptions = {
+export type RemainderPreviewQueryParams = {
+  search?: string;
+  filter_status?: "all" | "invalid";
+  sort_by?: "row" | "sku" | "quantity" | "operations" | "quality" | "section" | "errors";
+  sort_order?: "asc" | "desc";
+  limit?: number;
+  offset?: number;
+  row?: string;
+  sku?: string;
+  quantity?: string;
+  operations?: string;
+  quality?: string;
+  section?: string;
+  errors?: string;
+};
+
+export type RemainderImportOptions = RemainderPreviewQueryParams & {
   location_id?: number;
   sheet_index?: number;
   row_selection?: string;
@@ -323,7 +417,20 @@ export async function previewRemaindersExcel(
   }
   formData.append("quality_state", toApiQualityState(opts.quality_state));
   formData.append("sheet_index", String(opts.sheet_index ?? 0));
+  formData.append("filter_status", opts.filter_status ?? "all");
+  formData.append("sort_by", opts.sort_by ?? "row");
+  formData.append("sort_order", opts.sort_order ?? "asc");
+  formData.append("limit", String(opts.limit ?? 50));
+  formData.append("offset", String(opts.offset ?? 0));
+  if (opts.search) formData.append("search", opts.search);
   if (opts.row_selection) formData.append("row_selection", opts.row_selection);
+  if (opts.row) formData.append("row", opts.row);
+  if (opts.sku) formData.append("sku", opts.sku);
+  if (opts.quantity) formData.append("quantity", opts.quantity);
+  if (opts.operations) formData.append("operations", opts.operations);
+  if (opts.quality) formData.append("quality", opts.quality);
+  if (opts.section) formData.append("section", opts.section);
+  if (opts.errors) formData.append("errors", opts.errors);
   if (opts.target_section_overrides && !opts.clear_existing) {
     formData.append("target_section_overrides", JSON.stringify(opts.target_section_overrides));
   }

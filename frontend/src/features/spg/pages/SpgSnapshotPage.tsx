@@ -5,9 +5,6 @@ import { Loader2, Search, Upload } from "lucide-react";
 import {
   getSpgList,
 } from "@/shared/api/spg";
-import {
-  getStockBalances,
-} from "@/shared/api/stock";
 import { SpgSelector } from "../components/SpgSelector";
 import { StockAdjustmentDialog } from "../components/StockAdjustmentDialog";
 import { ImportRemaindersDialog } from "../components/ImportRemaindersDialog";
@@ -33,13 +30,8 @@ export function SpgSnapshotPage() {
     queryFn: getSpgList,
   });
 
-  const { data: stockBalances = [], isLoading: loadingBalances } = useQuery({
-    queryKey: queryKeys.stock.balances(),
-    queryFn: () => getStockBalances(),
-  });
-
   const handleRefresh = () => {
-    void queryClient.invalidateQueries({ queryKey: queryKeys.stock.balances() });
+    void queryClient.invalidateQueries({ queryKey: queryKeys.stock.balancesAll() });
   };
 
   const handleToggleSpg = (id: number) => {
@@ -87,13 +79,8 @@ export function SpgSnapshotPage() {
     const selectedSpgs = selectedSpgIds.length > 0
       ? spgs.filter((s) => selectedSpgIds.includes(s.id))
       : spgs;
-    return new Set(selectedSpgs.flatMap((s) => s.sections.map((sec) => sec.section_id)));
+    return selectedSpgs.flatMap((s) => s.sections.map((sec) => sec.section_id));
   }, [spgs, selectedSpgIds]);
-
-  const spgFilteredBalances = useMemo(() => {
-    if (activeSectionIds.size === 0) return stockBalances;
-    return stockBalances.filter((b) => activeSectionIds.has(b.location_id));
-  }, [stockBalances, activeSectionIds]);
 
   const handleSelectProduct = (productId: number) => {
     setSelectedProductId(productId);
@@ -157,10 +144,9 @@ export function SpgSnapshotPage() {
             <button
               type="button"
               onClick={handleRefresh}
-              disabled={loadingBalances}
-              className="rounded-md border border-border px-3 py-1.5 text-sm hover:bg-accent disabled:opacity-50"
+              className="rounded-md border border-border px-3 py-1.5 text-sm hover:bg-accent"
             >
-              {loadingBalances ? "Обновление..." : "Обновить"}
+              Обновить
             </button>
           </div>
         </div>
@@ -183,8 +169,7 @@ export function SpgSnapshotPage() {
       {spgs.length > 0 && (
         <div className="space-y-8">
           <StockBalancesPanel
-            balances={spgFilteredBalances}
-            isLoading={loadingBalances}
+            locationIds={activeSectionIds}
             searchQuery={searchQuery}
             onSearchQueryReset={() => setSearchQuery("")}
             onSelectProduct={handleSelectProduct}
@@ -202,7 +187,7 @@ export function SpgSnapshotPage() {
         open={isImportDialogOpen}
         onOpenChange={setIsImportDialogOpen}
         onSaved={() => {
-          void queryClient.invalidateQueries({ queryKey: queryKeys.stock.balances() });
+          void queryClient.invalidateQueries({ queryKey: queryKeys.stock.balancesAll() });
           void queryClient.invalidateQueries({ queryKey: queryKeys.stock.transactions() });
         }}
       />
@@ -229,5 +214,3 @@ export function SpgSnapshotPage() {
     </div>
   );
 }
-
-

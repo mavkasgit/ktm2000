@@ -240,6 +240,82 @@ async def test_preview_without_location_id(
     assert body["items"][0]["sku"] == "NO-LOC-001"
 
 
+async def test_preview_remainders_pagination_limit_offset(
+    client: AsyncClient,
+    session: AsyncSession,
+) -> None:
+    """Preview возвращает items_total и страницу items."""
+    for idx in range(1, 6):
+        await _make_product(session, f"PAGE-{idx:03d}")
+    await session.commit()
+
+    rows = [(f"PAGE-{idx:03d}", idx, None) for idx in range(1, 6)]
+    excel_buf = _make_excel(rows)
+
+    resp = await client.post(
+        "/api/v2/stock/import/remainders/preview",
+        files={"file": ("test.xlsx", excel_buf, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+        data={"sheet_index": "0", "limit": "2", "offset": "0", "sort_by": "row", "sort_order": "asc"},
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["summary"]["total"] == 5
+    assert body["items_total"] == 5
+    assert body["limit"] == 2
+    assert body["offset"] == 0
+    assert len(body["items"]) == 2
+    assert len(body["section_meta"]) == 5
+    assert body["items"][0]["sku"] == "PAGE-001"
+    assert body["items"][1]["sku"] == "PAGE-002"
+
+    resp_page2 = await client.post(
+        "/api/v2/stock/import/remainders/preview",
+        files={"file": ("test.xlsx", excel_buf, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+        data={"sheet_index": "0", "limit": "2", "offset": "2", "sort_by": "row", "sort_order": "asc"},
+    )
+    assert resp_page2.status_code == 200, resp_page2.text
+    body2 = resp_page2.json()
+    assert body2["items_total"] == 5
+    assert len(body2["items"]) == 2
+    assert body2["items"][0]["sku"] == "PAGE-003"
+
+
+async def test_preview_remainders_search_and_invalid_filter(
+    client: AsyncClient,
+    session: AsyncSession,
+) -> None:
+    """Preview search и filter_status=invalid работают на сервере."""
+    await _make_product(session, "FILTER-OK")
+    await session.commit()
+
+    excel_buf = _make_excel([
+        ("FILTER-OK", 10, "ok"),
+        ("FILTER-MISSING", 5, "bad"),
+    ])
+
+    search_resp = await client.post(
+        "/api/v2/stock/import/remainders/preview",
+        files={"file": ("test.xlsx", excel_buf, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+        data={"sheet_index": "0", "search": "FILTER-OK", "limit": "50"},
+    )
+    assert search_resp.status_code == 200, search_resp.text
+    search_body = search_resp.json()
+    assert search_body["items_total"] == 1
+    assert search_body["items"][0]["sku"] == "FILTER-OK"
+    assert search_body["summary"]["total"] == 2
+
+    invalid_resp = await client.post(
+        "/api/v2/stock/import/remainders/preview",
+        files={"file": ("test.xlsx", excel_buf, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+        data={"sheet_index": "0", "filter_status": "invalid", "limit": "50"},
+    )
+    assert invalid_resp.status_code == 200, invalid_resp.text
+    invalid_body = invalid_resp.json()
+    assert invalid_body["items_total"] == 1
+    assert invalid_body["items"][0]["status"] == "invalid"
+    assert invalid_body["summary"]["invalid"] == 1
+
+
 async def test_preview_remainders_excel_unknown_sku(
     client: AsyncClient,
     session: AsyncSession,
