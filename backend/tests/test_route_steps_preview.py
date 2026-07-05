@@ -95,7 +95,7 @@ async def _make_profile(session, template_id: int) -> RouteRuleProfile:
         code="packaging_map_rp",  # Use the actual profile code from seeds
         import_template_id=template_id,
         is_active=True,
-        route_sections=["WH", "SHOT", "ANOD", "FG_WH", "SHIPMENT", "SENT"],
+        route_sections=["RAW_STOCK", "SHOT_BLAST", "PREP_STOCK", "ANODIZING", "FINISHED_STOCK", "SHIPMENT", "SHIPPED"],
     )
     session.add(profile)
     await session.flush()
@@ -106,17 +106,18 @@ async def _seed_infrastructure(session, profile: RouteRuleProfile):
     """Seed sections, section_operations, and selection rules."""
     # Create sections
     sections = {
-        "WH": ("Склад заготовок", "warehouse", 1),
-        "DRILL": ("Сверловка", "processing", 2),
-        "PRESS": ("Пресс", "processing", 3),
-        "SHOT": ("Дробеструй", "processing", 4),
-        "ANOD": ("Анодирование", "processing", 5),
-        "WIP_WH": ("Склад промежуточной продукции", "warehouse", 6),
-        "SAW": ("Пила", "processing", 7),
-        "PACK": ("Упаковка", "processing", 8),
-        "FG_WH": ("Склад готовой продукции", "warehouse", 9),
-        "SHIPMENT": ("Отгрузка", "processing", 10),
-        "SENT": ("Отправлено", "final", 11),
+        "RAW_STOCK": ("Склад заготовок", "raw_stock", 1),
+        "DRILLING": ("Сверловка", "production", 2),
+        "PRESSING": ("Пресс", "production", 3),
+        "SHOT_BLAST": ("Дробеструй", "production", 4),
+        "PREP_STOCK": ("Склад подготовки", "wip_stock", 5),
+        "ANODIZING": ("Анодирование", "production", 6),
+        "WIP_STOCK": ("Склад промежуточной продукции", "wip_stock", 7),
+        "SAWING": ("Пила", "production", 8),
+        "PACKING": ("Упаковка", "production", 9),
+        "FINISHED_STOCK": ("Склад готовой продукции", "finished_stock", 10),
+        "SHIPMENT": ("Отгрузка", "finished_stock", 11),
+        "SHIPPED": ("Отправлено", "finished_stock", 12),
     }
     
     section_map = {}
@@ -124,21 +125,29 @@ async def _seed_infrastructure(session, profile: RouteRuleProfile):
         section = await _make_section(session, code, name, type_, order)
         section_map[code] = section
     
+    # Create PREP_STOCK section operation
+    await _make_section_operation(
+        session, section_map["PREP_STOCK"].id,
+        "MOVE_TO_PREP_STOCK", "Передача на склад подготовки",
+        group_code="PREP_STOCK", group_name="Склад подготовки",
+        sort_order=1, is_significant=False,
+    )
+
     # Create ANOD section operations (ANOD group)
     await _make_section_operation(
-        session, section_map["ANOD"].id,
+        session, section_map["ANODIZING"].id,
         "ANOD_01", "Анод: Серебро",
         group_code="ANOD", group_name="Анодирование",
         sort_order=1, is_significant=True,
     )
     await _make_section_operation(
-        session, section_map["ANOD"].id,
+        session, section_map["ANODIZING"].id,
         "ANOD_05", "Анод: Чёрный",
         group_code="ANOD", group_name="Анодирование",
         sort_order=2, is_significant=True,
     )
     await _make_section_operation(
-        session, section_map["ANOD"].id,
+        session, section_map["ANODIZING"].id,
         "ANOD_06", "Анод: Шампань",
         group_code="ANOD", group_name="Анодирование",
         sort_order=3, is_significant=True,
@@ -162,7 +171,7 @@ async def _seed_infrastructure(session, profile: RouteRuleProfile):
     session.add(TechcardLine(techcard_id=techcard.id, component_product_id=product.id, quantity=Decimal("1"), unit="pcs"))
     
     # Create route stages and operations for each section in profile's route_sections
-    stage_ops = ["ISSUE_RAW", "SHOT_BLAST", "ANOD", "MOVE_TO_FG", "SHIPMENT", "SENT"]
+    stage_ops = ["ISSUE_RAW", "SHOT_BLAST", "MOVE_TO_PREP_STOCK", "ANOD", "MOVE_TO_FG", "SHIPMENT", "SENT"]
     for idx, (section_code, op_code) in enumerate(zip(profile.route_sections, stage_ops, strict=True), start=1):
         section = section_map[section_code]
         session.add(
@@ -261,7 +270,7 @@ async def test_preview_route_stages_resolves_anod_operation_by_color(
     route_stages = item["after_data"]["route_steps"]
 
     # Find ANOD stage
-    anod_stage = next((s for s in route_stages if s["section_code"] == "ANOD"), None)
+    anod_stage = next((s for s in route_stages if s["section_code"] == "ANODIZING"), None)
     assert anod_stage is not None
 
     # Should resolve to ANOD_05 (black)
@@ -297,8 +306,8 @@ async def test_preview_route_stages_excludes_sections_for_empty_operation(
 
     # Should not contain DRILL or PRESS sections
     section_codes = [s["section_code"] for s in route_stages]
-    assert "DRILL" not in section_codes
-    assert "PRESS" not in section_codes
+    assert "DRILLING" not in section_codes
+    assert "PRESSING" not in section_codes
 
 
 @pytest.mark.asyncio

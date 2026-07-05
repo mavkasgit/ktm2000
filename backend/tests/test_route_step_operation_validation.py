@@ -143,7 +143,7 @@ async def test_replace_steps_with_mixed_valid_and_invalid_operation_codes(client
 @pytest.mark.asyncio
 async def test_press_section_rejects_press_operation_code(client, session) -> None:
     """Press section (like real DB) should reject 'PRESS' since only PRESS_WINDOW and PRESS_COMB are registered."""
-    press_section = Section(code="PRESS", name="Пресс", is_active=True)
+    press_section = Section(code="PRESSING", name="Пресс", is_active=True)
     session.add(press_section)
     await session.commit()
 

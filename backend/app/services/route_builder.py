@@ -158,7 +158,7 @@ async def build_route_from_profile(
                 operation_code=None,
                 operation_name=f"Хранение: {section.name}",
                 is_significant=False,
-                is_final=(section_code == "SENT"),
+                is_final=(section_code == "SHIPPED"),
             ))
             continue
 
@@ -188,7 +188,7 @@ async def build_route_from_profile(
                 operation_code=first_op.operation_code,
                 operation_name=first_op.operation_name,
                 is_significant=first_op.is_significant,
-                is_final=(section_code == "SENT"),
+                is_final=(section_code == "SHIPPED"),
 
             ))
         else:
@@ -236,10 +236,10 @@ async def build_route_from_profile(
                         operation_code=op.operation_code,
                         operation_name=op.operation_name,
                         is_significant=is_sig,
-                        is_final=(section_code == "SENT"),
+                is_final=(section_code == "SHIPPED"),
 
-                    ))
 
+            ))
     # Generate descriptive name from profile template
     route_name = _build_route_name_from_template(
         profile, filtered_section_codes, excluded_codes, resolved_ops, source_payload,
@@ -398,9 +398,9 @@ def _build_route_name_from_template(
     values: dict[str, str] = {}
 
     # output_kind: ГП or П/Ф
-    has_pack = "PACK" in included_sections
-    has_wip = "WIP_WH" in included_sections
-    has_saw = "SAW" in included_sections
+    has_pack = "PACKING" in included_sections
+    has_wip = "WIP_STOCK" in included_sections
+    has_saw = "SAWING" in included_sections
     if has_pack and has_wip and has_saw:
         values["output_kind"] = "ГП"
     elif not has_pack and not has_wip and not has_saw:
@@ -409,9 +409,9 @@ def _build_route_name_from_template(
         values["output_kind"] = ""
 
     # press_op: Окно, Гребёнка, or empty
-    has_press = "PRESS" in included_sections
+    has_press = "PRESSING" in included_sections
     if has_press:
-        press_op = resolved_ops.get(("PRESS", "PRESS"))
+        press_op = resolved_ops.get(("PRESSING", "PRESS"))
         if press_op == "PRESS_WINDOW":
             values["press_op"] = "Окно"
         elif press_op == "PRESS_COMB":
@@ -422,15 +422,15 @@ def _build_route_name_from_template(
         values["press_op"] = ""
 
     # drill_op: Сверловка if section is included, empty otherwise
-    has_drill = "DRILL" in included_sections
+    has_drill = "DRILLING" in included_sections
     values["drill_op"] = "Сверловка" if has_drill else ""
 
     # shot_op: "Без операций" only if SHOT section is excluded
-    has_shot = "SHOT" in included_sections
+    has_shot = "SHOT_BLAST" in included_sections
     values["shot_op"] = "" if has_shot else "Без операций"
 
     # color from ANOD operation
-    anod_op = resolved_ops.get(("ANOD", "ANOD"))
+    anod_op = resolved_ops.get(("ANODIZING", "ANOD"))
     color_map = {
         "ANOD_01": "Серебро",
         "ANOD_02": "Золото",
@@ -443,7 +443,7 @@ def _build_route_name_from_template(
     values["color"] = color_map.get(anod_op, "")
 
     # pack_op: Стрейч or Спанбонд
-    pack_op = resolved_ops.get(("ANOD", "PACK"))
+    pack_op = resolved_ops.get(("ANODIZING", "PACK"))
     if pack_op == "PACK_STRETCH":
         values["pack_op"] = "Стрейч"
     elif pack_op == "PACK_SPUNBOND":

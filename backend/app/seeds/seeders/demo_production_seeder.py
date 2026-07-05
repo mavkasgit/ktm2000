@@ -20,7 +20,7 @@ from app.services.shopfloor.common import build_completed_stages_json
 
 
 PREP_STOCK_SECTION_CODE = "PREP_STOCK"
-WIP_STOCK_SECTION_CODE = "WIP_WH"
+WIP_STOCK_SECTION_CODE = "WIP_STOCK"
 
 
 async def seed_demo_production(db: AsyncSession) -> dict:
@@ -149,8 +149,8 @@ async def seed_demo_production(db: AsyncSession) -> dict:
     # by build_completed_stages_json.
     rem1_sku = "ЮП-100-2700-BL"
     rem1_prod = products_by_sku[rem1_sku]
-    drill_stage = _find_production_by_code("DRILL")
-    press_stage = _find_production_by_code("PRESS")
+    drill_stage = _find_production_by_code("DRILLING")
+    press_stage = _find_production_by_code("PRESSING")
     if drill_stage is not None and press_stage is not None:
         # Take everything from the start up to (but not including) PRESS
         drill_seq = drill_stage.sequence
@@ -216,8 +216,8 @@ async def seed_demo_production(db: AsyncSession) -> dict:
     # (after дробеструй, before анодирование).
     rem2_sku = "АТ-200-2700-AN"
     rem2_prod = products_by_sku[rem2_sku]
-    shot_stage = _find_production_by_code("SHOT")
-    anod_stage = _find_production_by_code("ANOD")
+    shot_stage = _find_production_by_code("SHOT_BLAST")
+    anod_stage = _find_production_by_code("ANODIZING")
     if shot_stage is not None and anod_stage is not None:
         shot_seq = shot_stage.sequence
         stages_through_shot = [s for s in stages if s.sequence <= shot_seq]

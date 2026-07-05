@@ -782,7 +782,7 @@ async def test_preview_returns_completed_stages(
     await _make_product(session, "CS-001")
     location = await _make_location(session, "CS-LOC")
     section = Section(
-        code="PRESS", name="Прессовый участок", type="production",
+        code="PRESSING", name="Прессовый участок", type="production",
         is_active=True, sort_order=0,
     )
     session.add(section)
@@ -791,7 +791,7 @@ async def test_preview_returns_completed_stages(
     await session.commit()
 
     excel_buf = _make_excel(
-        [("CS-001", 100, "PRESS", "Прессование, Прессование, Прессование", "коммент")],
+        [("CS-001", 100, "PRESSING", "Прессование, Прессование, Прессование", "коммент")],
         headers=("SKU", "Количество", "Целевая секция", "Выполненные операции", "Комментарий"),
     )
     resp = await client.post(
@@ -807,7 +807,7 @@ async def test_preview_returns_completed_stages(
     assert len(item["completed_stages"]) == 1
     stage = item["completed_stages"][0]
     assert stage["operation_name"] == "Прессование"
-    assert stage["section_code"] == "PRESS"
+    assert stage["section_code"] == "PRESSING"
     assert stage["is_significant"] is True
     assert stage["sequence"] == section.sort_order
 

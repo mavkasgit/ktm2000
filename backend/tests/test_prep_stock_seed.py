@@ -24,9 +24,9 @@ from app.services.shopfloor.common import build_completed_stages_json
 
 DEFAULT_SECTIONS = [
     {"code": "WH", "name": "Склад сырья", "sort_order": 10, "type": "raw_stock"},
-    {"code": "DRILL", "name": "Сверловка", "sort_order": 20, "type": "production"},
-    {"code": "PRESS", "name": "Пресс", "sort_order": 30, "type": "production"},
-    {"code": "SHOT", "name": "Дробеструй", "sort_order": 40, "type": "production"},
+    {"code": "DRILLING", "name": "Сверловка", "sort_order": 20, "type": "production"},
+    {"code": "PRESSING", "name": "Пресс", "sort_order": 30, "type": "production"},
+    {"code": "SHOT_BLAST", "name": "Дробеструй", "sort_order": 40, "type": "production"},
     {"code": "PREP_STOCK", "name": "Склад подготовки", "sort_order": 45, "type": "wip_stock"},
     {"code": "ANOD", "name": "Анодирование", "sort_order": 50, "type": "production"},
     {"code": "WIP_WH", "name": "Склад полуфабриката", "sort_order": 60, "type": "wip_stock"},
@@ -77,7 +77,7 @@ def test_prep_stock_not_in_spgs_data():
 def test_prep_has_all_prep_sections():
     """PREP содержит 3 production + 1 storage секцию."""
     prep = next(item for item in SPGS_DATA if item["code"] == "PREP")
-    assert prep["section_codes"] == ["DRILL", "PRESS", "SHOT", "PREP_STOCK"]
+    assert prep["section_codes"] == ["DRILLING", "PRESSING", "SHOT_BLAST", "PREP_STOCK"]
 
 
 def test_prep_has_storage_kind_wip():
@@ -115,7 +115,7 @@ async def test_seed_spgs_creates_prep_with_all_sections_and_storage(session):
         await session.execute(select(SpgSection).where(SpgSection.spg_id == prep.id))
     ).scalars().all()
     assert len(bindings) == 4
-    bound_section_codes = {sections_map[code].id for code in ("DRILL", "PRESS", "SHOT", "PREP_STOCK")}
+    bound_section_codes = {sections_map[code].id for code in ("DRILLING", "PRESSING", "SHOT_BLAST", "PREP_STOCK")}
     assert {b.section_id for b in bindings} == bound_section_codes
 
 
@@ -154,7 +154,7 @@ async def test_prep_binds_only_prep_sections(session):
     await seed_spgs(session, SPGS_DATA, sections_map)
     await session.commit()
 
-    for code in ("DRILL", "PRESS", "SHOT", "PREP_STOCK"):
+    for code in ("DRILLING", "PRESSING", "SHOT_BLAST", "PREP_STOCK"):
         sec = sections_map[code]
         bindings = (
             await session.execute(select(SpgSection).where(SpgSection.section_id == sec.id))
@@ -354,7 +354,7 @@ async def test_significant_section_ids_filters_pass_through_sections(session):
     treated as transit by the new ``stage_kind`` model."""
     sections = [
         ("WH", "Склад сырья", "raw_stock"),
-        ("DRILL", "Сверловка", "production"),
+        ("DRILLING", "Сверловка", "production"),
         ("WIP_WH", "Склад пф", "wip_stock"),
         ("PACK", "Упаковка", "production"),
         ("FG_WH", "Склад ГП", "finished_stock"),
@@ -367,7 +367,7 @@ async def test_significant_section_ids_filters_pass_through_sections(session):
     await session.flush()
 
     wh = await session.scalar(select(Section).where(Section.code == "WH"))
-    drill = await session.scalar(select(Section).where(Section.code == "DRILL"))
+    drill = await session.scalar(select(Section).where(Section.code == "DRILLING"))
     wip = await session.scalar(select(Section).where(Section.code == "WIP_WH"))
     pack = await session.scalar(select(Section).where(Section.code == "PACK"))
     fg = await session.scalar(select(Section).where(Section.code == "FG_WH"))
@@ -388,18 +388,18 @@ async def test_build_completed_stages_json_drops_warehouse_and_transfer_stages(s
         route_code="R-SIG-2",
         sections=[
             ("WH", "Склад сырья", "raw_stock", False),
-            ("DRILL", "Сверловка", "production", True),
-            ("PRESS", "Пресс", "production", True),
-            ("SHOT", "Дробеструй", "production", True),
+            ("DRILLING", "Сверловка", "production", True),
+            ("PRESSING", "Пресс", "production", True),
+            ("SHOT_BLAST", "Дробеструй", "production", True),
             ("WIP_WH", "Склад пф", "wip_stock", False),
             ("FG_WH", "Склад ГП", "finished_stock", False),
         ],
     )
 
-    # Берём первые 4 этапа (WH, DRILL, PRESS, SHOT) — как в демо-сидере
+    # Берём первые 4 этапа (WH, DRILLING, PRESSING, SHOT_BLAST) — как в демо-сидере
     completed = await build_completed_stages_json(session, stages[:4])
 
-    # WH выкинут, остались DRILL, PRESS, SHOT
+    # WH выкинут, остались DRILLING, PRESSING, SHOT_BLAST
     assert len(completed) == 3
     sec_ids = {entry["section_id"] for entry in completed}
     wh = await session.scalar(select(Section).where(Section.code == "WH"))
@@ -435,22 +435,24 @@ async def test_build_completed_stages_json_keeps_operation_metadata(session):
         session,
         route_code="R-SIG-4",
         sections=[
-            ("DRILL", "Сверловка", "production", True),
+            ("DRILLING", "Сверловка", "production", True),
         ],
     )
     completed = await build_completed_stages_json(session, stages)
     assert len(completed) == 1
     entry = completed[0]
-    assert entry["operation_code"] == "OP_DRILL"
-    assert entry["operation_name"] == "Операция DRILL"
+    assert entry["operation_code"] == "OP_DRILLING"
+    assert entry["operation_name"] == "Операция DRILLING"
     assert entry["sequence"] == 1
 
 
 @pytest.mark.asyncio
 async def test_demo_production_seeder_omits_non_significant_stages(session, monkeypatch):
-    """Демо-сидер кладёт в completed_stages_json только значимые этапы."""
+    """Демо-сидер создаёт остатки в PREP через StockTransaction/StockBalance."""
     from app.seeds.seeders import demo_production_seeder
     from app.models.user import User, UserRole
+    from app.stock import Reason
+    from app.stock.models import StockBalance, StockTransaction
 
     actor = User(
         username="filter-actor",
@@ -463,7 +465,7 @@ async def test_demo_production_seeder_omits_non_significant_stages(session, monk
     session.add(actor)
     await session.commit()
 
-    # Подготовим полный сценарий: секции, SPGs, маршрут с WH/DRILL/PRESS/SHOT/WIP_WH
+    # Подготовим полный сценарий: секции, SPGs, маршрут с WH/DRILLING/PRESSING/SHOT_BLAST/WIP_WH
     sections_map = await _seed_default_sections(session)
     await seed_spgs(session, SPGS_DATA, sections_map)
     await session.commit()
@@ -473,9 +475,9 @@ async def test_demo_production_seeder_omits_non_significant_stages(session, monk
         route_code="dynamic_packaging_map_rp",
         sections=[
             ("WH", "Склад сырья", "raw_stock", False),
-            ("DRILL", "Сверловка", "production", True),
-            ("PRESS", "Пресс", "production", True),
-            ("SHOT", "Дробеструй", "production", True),
+            ("DRILLING", "Сверловка", "production", True),
+            ("PRESSING", "Пресс", "production", True),
+            ("SHOT_BLAST", "Дробеструй", "production", True),
             ("WIP_WH", "Склад пф", "wip_stock", False),
         ],
     )
@@ -489,24 +491,26 @@ async def test_demo_production_seeder_omits_non_significant_stages(session, monk
     )
     assert prep is not None
 
-    remainders = (
+    prep_section_ids = (
         await session.execute(
-            select(SpgRemainder).where(SpgRemainder.spg_id == prep.id)
+            select(SpgSection.section_id).where(SpgSection.spg_id == prep.id)
         )
     ).scalars().all()
-    assert remainders, "Демо-сидер должен был положить остатки в PREP"
+    assert prep_section_ids, "PREP должен быть привязан хотя бы к одной секции"
 
-    # В каждом remainder completed_stages_json не должен содержать WH (issue raw)
-    wh = await session.scalar(select(Section).where(Section.code == "WH"))
-    for rem in remainders:
-        stages_json = rem.completed_stages_json or []
-        section_ids = {s.get("section_id") for s in stages_json}
-        assert wh.id not in section_ids, (
-            "WH (issue raw) не должен попадать в completed_stages_json демо-остатков"
+    txs = (
+        await session.execute(
+            select(StockTransaction).where(
+                StockTransaction.to_location_id.in_(prep_section_ids),
+                StockTransaction.reason == Reason.MANUAL_IN,
+            )
         )
-        # А все сохранённые этапы должны быть значимыми
-        for entry in stages_json:
-            assert entry.get("section_id") != wh.id
-        # Поля корректные
-        for entry in stages_json:
-            assert {"section_id", "operation_code", "operation_name", "sequence"} <= entry.keys()
+    ).scalars().all()
+    assert txs, "Демо-сидер должен был создать StockTransaction в секции PREP"
+
+    balances = (
+        await session.execute(
+            select(StockBalance).where(StockBalance.location_id.in_(prep_section_ids))
+        )
+    ).scalars().all()
+    assert balances, "Демо-сидер должен был обновить StockBalance в секции PREP"

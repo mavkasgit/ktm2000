@@ -46,44 +46,44 @@ def _make_section(code: str, type_: str) -> Section:
 
 
 def test_is_storage_section():
-    assert is_storage_section(_make_section("WH", "raw_stock")) is True
+    assert is_storage_section(_make_section("RAW_STOCK", "raw_stock")) is True
     assert is_storage_section(_make_section("WIP", "wip_stock")) is True
     assert is_storage_section(_make_section("FG", "finished_stock")) is True
-    assert is_storage_section(_make_section("DRILL", "production")) is False
+    assert is_storage_section(_make_section("DRILLING", "production")) is False
     assert is_storage_section(None) is False
 
 
 def test_is_production_section():
-    assert is_production_section(_make_section("DRILL", "production")) is True
-    assert is_production_section(_make_section("WH", "raw_stock")) is False
+    assert is_production_section(_make_section("DRILLING", "production")) is True
+    assert is_production_section(_make_section("RAW_STOCK", "raw_stock")) is False
     assert is_production_section(None) is False
 
 
 def test_classify_section_role():
-    assert classify_section_role(_make_section("DRILL", "production")) == "production"
-    assert classify_section_role(_make_section("WH", "raw_stock")) == "storage"
+    assert classify_section_role(_make_section("DRILLING", "production")) == "production"
+    assert classify_section_role(_make_section("RAW_STOCK", "raw_stock")) == "storage"
     assert classify_section_role(_make_section("WIP", "wip_stock")) == "storage"
     assert classify_section_role(_make_section("FG", "finished_stock")) == "storage"
 
 
 def test_infer_stage_kind():
-    assert infer_stage_kind(section=_make_section("DRILL", "production")) == STAGE_KIND_PRODUCTION
-    assert infer_stage_kind(section=_make_section("WH", "raw_stock")) == STAGE_KIND_TRANSIT
+    assert infer_stage_kind(section=_make_section("DRILLING", "production")) == STAGE_KIND_PRODUCTION
+    assert infer_stage_kind(section=_make_section("RAW_STOCK", "raw_stock")) == STAGE_KIND_TRANSIT
     assert infer_stage_kind(section=None, storage_section_id=42) == STAGE_KIND_TRANSIT
-    assert infer_stage_kind(section=_make_section("DRILL", "production"), storage_section_id=None) == STAGE_KIND_PRODUCTION
+    assert infer_stage_kind(section=_make_section("DRILLING", "production"), storage_section_id=None) == STAGE_KIND_PRODUCTION
 
 
 def test_stage_display_name():
-    drill = _make_section("DRILL", "production")
-    wh = _make_section("WH", "raw_stock")
+    drill = _make_section("DRILLING", "production")
+    wh = _make_section("RAW_STOCK", "raw_stock")
     fg = _make_section("FG", "finished_stock")
 
     prod_stage = RouteStage(sequence=1, section_id=drill.id, stage_kind="production")
     prod_stage.section = drill
-    assert stage_display_name(prod_stage, None) == "DRILL"
+    assert stage_display_name(prod_stage, None) == "DRILLING"
 
     transit_stage = RouteStage(sequence=1, stage_kind="transit", storage_section_id=wh.id)
-    assert "WH" in stage_display_name(transit_stage, wh)
+    assert "RAW_STOCK" in stage_display_name(transit_stage, wh)
 
 
 # ---------- DB-backed tests ----------
@@ -92,17 +92,17 @@ def test_stage_display_name():
 async def _seed_basic_sections(session: AsyncSession) -> dict[str, Section]:
     """Create the default 11 sections and basic ops matching the production seeder."""
     data = [
-        ("WH", "raw_stock"),
-        ("DRILL", "production"),
-        ("PRESS", "production"),
-        ("SHOT", "production"),
-        ("ANOD", "production"),
-        ("WIP_WH", "wip_stock"),
-        ("SAW", "production"),
-        ("PACK", "production"),
-        ("FG_WH", "finished_stock"),
+        ("RAW_STOCK", "raw_stock"),
+        ("DRILLING", "production"),
+        ("PRESSING", "production"),
+        ("SHOT_BLAST", "production"),
+        ("ANODIZING", "production"),
+        ("WIP_STOCK", "wip_stock"),
+        ("SAWING", "production"),
+        ("PACKING", "production"),
+        ("FINISHED_STOCK", "finished_stock"),
         ("SHIPMENT", "finished_stock"),
-        ("SENT", "finished_stock"),
+        ("SHIPPED", "finished_stock"),
     ]
     sections: dict[str, Section] = {}
     for code, type_ in data:
@@ -116,7 +116,7 @@ async def _seed_basic_sections(session: AsyncSession) -> dict[str, Section]:
 async def test_section_operation_operation_type_default_is_production(session: AsyncSession):
     sections = await _seed_basic_sections(session)
     op = SectionOperation(
-        section_id=sections["DRILL"].id,
+        section_id=sections["DRILLING"].id,
         operation_code="DRILL",
         operation_name="Drill",
         is_significant=True,
@@ -130,7 +130,7 @@ async def test_section_operation_operation_type_default_is_production(session: A
 async def test_section_operation_transport_only_on_storage(session: AsyncSession):
     sections = await _seed_basic_sections(session)
     op = SectionOperation(
-        section_id=sections["DRILL"].id,  # production section
+        section_id=sections["DRILLING"].id,  # production section
         operation_code="WEIRD",
         operation_name="Weird transport on production section",
         is_significant=False,
@@ -145,7 +145,7 @@ async def test_section_operation_transport_only_on_storage(session: AsyncSession
 async def test_section_operation_transport_allowed_on_storage(session: AsyncSession):
     sections = await _seed_basic_sections(session)
     op = SectionOperation(
-        section_id=sections["WH"].id,
+        section_id=sections["RAW_STOCK"].id,
         operation_code="ISSUE_RAW",
         operation_name="Issue raw",
         is_significant=False,
@@ -167,9 +167,9 @@ async def test_route_stage_transit_check_constraint(session: AsyncSession):
     stage = RouteStage(
         route_id=route.id,
         sequence=1,
-        section_id=sections["DRILL"].id,  # production, not storage
+        section_id=sections["DRILLING"].id,  # production, not storage
         stage_kind=STAGE_KIND_TRANSIT,
-        storage_section_id=sections["DRILL"].id,
+        storage_section_id=sections["DRILLING"].id,
     )
     session.add(stage)
     with pytest.raises(IntegrityError):
@@ -183,9 +183,9 @@ async def test_classify_stages_splits_production_and_transit(session: AsyncSessi
     session.add(route)
     await session.flush()
 
-    s1 = RouteStage(route_id=route.id, sequence=1, section_id=sections["DRILL"].id, stage_kind=STAGE_KIND_PRODUCTION)
-    s2 = RouteStage(route_id=route.id, sequence=2, section_id=None, stage_kind=STAGE_KIND_TRANSIT, storage_section_id=sections["WIP_WH"].id)
-    s3 = RouteStage(route_id=route.id, sequence=3, section_id=sections["ANOD"].id, stage_kind=STAGE_KIND_PRODUCTION)
+    s1 = RouteStage(route_id=route.id, sequence=1, section_id=sections["DRILLING"].id, stage_kind=STAGE_KIND_PRODUCTION)
+    s2 = RouteStage(route_id=route.id, sequence=2, section_id=None, stage_kind=STAGE_KIND_TRANSIT, storage_section_id=sections["WIP_STOCK"].id)
+    s3 = RouteStage(route_id=route.id, sequence=3, section_id=sections["ANODIZING"].id, stage_kind=STAGE_KIND_PRODUCTION)
     session.add_all([s1, s2, s3])
     await session.flush()
 
@@ -207,9 +207,9 @@ async def test_build_completed_stages_json_drops_transit(session: AsyncSession):
     session.add(route)
     await session.flush()
 
-    s_drill = RouteStage(route_id=route.id, sequence=1, section_id=sections["DRILL"].id, stage_kind=STAGE_KIND_PRODUCTION)
-    s_wip = RouteStage(route_id=route.id, sequence=2, section_id=None, stage_kind=STAGE_KIND_TRANSIT, storage_section_id=sections["WIP_WH"].id)
-    s_anod = RouteStage(route_id=route.id, sequence=3, section_id=sections["ANOD"].id, stage_kind=STAGE_KIND_PRODUCTION)
+    s_drill = RouteStage(route_id=route.id, sequence=1, section_id=sections["DRILLING"].id, stage_kind=STAGE_KIND_PRODUCTION)
+    s_wip = RouteStage(route_id=route.id, sequence=2, section_id=None, stage_kind=STAGE_KIND_TRANSIT, storage_section_id=sections["WIP_STOCK"].id)
+    s_anod = RouteStage(route_id=route.id, sequence=3, section_id=sections["ANODIZING"].id, stage_kind=STAGE_KIND_PRODUCTION)
     session.add_all([s_drill, s_wip, s_anod])
     await session.flush()
     session.add_all([
@@ -221,9 +221,9 @@ async def test_build_completed_stages_json_drops_transit(session: AsyncSession):
     completed = await build_completed_stages_json(session, [s_drill, s_wip, s_anod])
     assert len(completed) == 2
     section_ids = {c["section_id"] for c in completed}
-    assert section_ids == {sections["DRILL"].id, sections["ANOD"].id}
+    assert section_ids == {sections["DRILLING"].id, sections["ANODIZING"].id}
     # WIP_WH must not appear even though it's a real section id
-    assert sections["WIP_WH"].id not in section_ids
+    assert sections["WIP_STOCK"].id not in section_ids
 
 
 async def test_build_completed_stages_json_empty(session: AsyncSession):
@@ -243,7 +243,7 @@ async def test_sections_all_operations_no_synthetic_fallback(client: AsyncClient
     payload = res.json()
     by_code = {p["code"]: p for p in payload}
 
-    drill = by_code.get("DRILL")
+    drill = by_code.get("DRILLING")
     assert drill is not None
     assert drill["type"] == "production"
     assert drill["role"] == "production"
@@ -262,12 +262,12 @@ async def test_sections_storage_points_returns_only_storage(client: AsyncClient,
     assert res.status_code == 200, res.text
     payload = res.json()
     codes = {p["code"] for p in payload}
-    assert {"WH", "WIP_WH", "FG_WH", "SHIPMENT", "SENT"} <= codes
+    assert {"RAW_STOCK", "WIP_STOCK", "FINISHED_STOCK", "SHIPMENT", "SHIPPED"} <= codes
     for p in payload:
         assert p["type"] in {"raw_stock", "wip_stock", "finished_stock"}
     # Production sections must not appear
-    assert "DRILL" not in codes
-    assert "ANOD" not in codes
+    assert "DRILLING" not in codes
+    assert "ANODIZING" not in codes
 
 
 async def test_create_route_step_rejects_storage_as_production(client: AsyncClient, session: AsyncSession):
@@ -281,7 +281,7 @@ async def test_create_route_step_rejects_storage_as_production(client: AsyncClie
         f"/api/routes/{route.id}/steps",
         json={
             "sequence": 1,
-            "section_id": sections["WH"].id,
+            "section_id": sections["RAW_STOCK"].id,
             "operation_code": "ISSUE_RAW",
             "operation_name": "Issue raw",
             "stage_kind": "production",
@@ -302,17 +302,17 @@ async def test_create_route_step_accepts_transit_for_storage(client: AsyncClient
         f"/api/routes/{route.id}/steps",
         json={
             "sequence": 1,
-            "section_id": sections["WIP_WH"].id,
+            "section_id": sections["WIP_STOCK"].id,
             "operation_code": "MOVE",
             "operation_name": "ignore",
             "stage_kind": "transit",
-            "storage_section_id": sections["WIP_WH"].id,
+            "storage_section_id": sections["WIP_STOCK"].id,
         },
     )
     assert res.status_code == 201, res.text
     body = res.json()
     assert body["stage_kind"] == "transit"
-    assert body["storage_section_id"] == sections["WIP_WH"].id
+    assert body["storage_section_id"] == sections["WIP_STOCK"].id
     assert body["section_id"] is None
     # transit stages should not have a real operation linked
     stage_id = body["id"]
@@ -333,10 +333,10 @@ async def test_create_route_step_transit_cannot_be_final(client: AsyncClient, se
         f"/api/routes/{route.id}/steps",
         json={
             "sequence": 1,
-            "section_id": sections["WIP_WH"].id,
+            "section_id": sections["WIP_STOCK"].id,
             "operation_name": "ignore",
             "stage_kind": "transit",
-            "storage_section_id": sections["WIP_WH"].id,
+            "storage_section_id": sections["WIP_STOCK"].id,
             "is_final": True,
         },
     )

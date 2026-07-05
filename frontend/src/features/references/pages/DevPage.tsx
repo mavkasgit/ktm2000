@@ -11,15 +11,15 @@ type SectionPreview = {
 };
 
 const PROPOSED_SECTIONS: SectionPreview[] = [
-  { code: "WH", name: "Склад сырья", icon: "Warehouse", color: "#F59E0B" },
-  { code: "DRILL", name: "Сверловка", icon: "Drill", color: "#3B82F6" },
-  { code: "PRESS", name: "Пресс", icon: "Anvil", color: "#EF4444" },
-  { code: "SHOT", name: "Дробеструй", icon: "Fan", color: "#6B7280" },
-  { code: "ANOD", name: "Анодирование", icon: "FlaskConical", color: "#06B6D4" },
-  { code: "WIP_WH", name: "Склад полуфабриката", icon: "Boxes", color: "#84CC16" },
-  { code: "SAW", name: "Пила", icon: "Axe", color: "#F97316" },
-  { code: "PACK", name: "Упаковка", icon: "Package", color: "#10B981" },
-  { code: "FG_WH", name: "Склад готовой продукции", icon: "Container", color: "#065F46" },
+  { code: "RAW_STOCK", name: "Склад сырья", icon: "Warehouse", color: "#F59E0B" },
+  { code: "DRILLING", name: "Сверловка", icon: "Drill", color: "#3B82F6" },
+  { code: "PRESSING", name: "Пресс", icon: "Anvil", color: "#EF4444" },
+  { code: "SHOT_BLAST", name: "Дробеструй", icon: "Fan", color: "#6B7280" },
+  { code: "ANODIZING", name: "Анодирование", icon: "FlaskConical", color: "#06B6D4" },
+  { code: "WIP_STOCK", name: "Склад полуфабриката", icon: "Boxes", color: "#84CC16" },
+  { code: "SAWING", name: "Пила", icon: "Axe", color: "#F97316" },
+  { code: "PACKING", name: "Упаковка", icon: "Package", color: "#10B981" },
+  { code: "FINISHED_STOCK", name: "Склад готовой продукции", icon: "Container", color: "#065F46" },
 ];
 
 const SAW_ALTERNATIVES: SectionPreview[] = [
@@ -45,15 +45,15 @@ const ANOD_ALTERNATIVES: SectionPreview[] = [
 ];
 
 const FINAL_SECTIONS: SectionPreview[] = [
-  { code: "WH", name: "Склад сырья", icon: "Warehouse", color: "#F59E0B" },
-  { code: "DRILL", name: "Сверловка", icon: "Drill", color: "#3B82F6" },
-  { code: "PRESS", name: "Пресс", icon: "Anvil", color: "#EF4444" },
-  { code: "SHOT", name: "Дробеструй", icon: "SprayCan", color: "#6B7280" },
-  { code: "ANOD", name: "Анодирование", icon: "FlaskConical", color: "#06B6D4" },
-  { code: "WIP_WH", name: "Склад полуфабриката", icon: "Boxes", color: "#84CC16" },
-  { code: "SAW", name: "Пила", icon: "Fan", color: "#F97316" },
-  { code: "PACK", name: "Упаковка", icon: "Package", color: "#10B981" },
-  { code: "FG_WH", name: "Склад готовой продукции", icon: "Container", color: "#065F46" },
+  { code: "RAW_STOCK", name: "Склад сырья", icon: "Warehouse", color: "#F59E0B" },
+  { code: "DRILLING", name: "Сверловка", icon: "Drill", color: "#3B82F6" },
+  { code: "PRESSING", name: "Пресс", icon: "Anvil", color: "#EF4444" },
+  { code: "SHOT_BLAST", name: "Дробеструй", icon: "SprayCan", color: "#6B7280" },
+  { code: "ANODIZING", name: "Анодирование", icon: "FlaskConical", color: "#06B6D4" },
+  { code: "WIP_STOCK", name: "Склад полуфабриката", icon: "Boxes", color: "#84CC16" },
+  { code: "SAWING", name: "Пила", icon: "Fan", color: "#F97316" },
+  { code: "PACKING", name: "Упаковка", icon: "Package", color: "#10B981" },
+  { code: "FINISHED_STOCK", name: "Склад готовой продукции", icon: "Container", color: "#065F46" },
 ];
 
 function TablerIconsTable() {

@@ -1,6 +1,7 @@
 from decimal import Decimal
 
 import pytest
+from sqlalchemy import select
 
 from app.core.security import create_access_token
 from app.models.product import Product, ProductType
@@ -66,6 +67,21 @@ async def _make_demo_route(session, code_prefix: str, step_defs: list[tuple[str,
     return route
 
 
+async def _seed_demo_stock(session, product_id: int, section_id: int, quantity: Decimal = Decimal("100")) -> None:
+    """Seed initial stock for demo tests using StockCommandService."""
+    from app.stock import StockCommand, StockCommandService, Reason, QualityState
+    svc = StockCommandService()
+    await svc.record(session, StockCommand(
+        product_id=product_id,
+        quantity=quantity,
+        reason=Reason.MANUAL_IN,
+        to_location_id=section_id,
+        quality_state=QualityState.GOOD,
+        created_by=1,
+        comment="Demo stock seed",
+    ))
+
+
 @pytest.mark.asyncio
 async def test_demo_full_route_run_and_replay(client, session) -> None:
     user = await _make_user(session)
@@ -89,14 +105,20 @@ async def test_demo_full_route_run_and_replay(client, session) -> None:
 
     route_steps_def = [
         ("ISSUE", "ISSUE_RAW", "Выдача сырья", False),
-        ("SHOT", "SHOT", "Дробеструй", False),
-        ("ANOD", "ANOD", "Анодирование", False),
+        ("SHOT_BLAST", "SHOT", "Дробеструй", False),
+        ("ANODIZING", "ANOD", "Анодирование", False),
         ("WIP", "MOVE_TO_WIP", "Перед. на склад п/ф", False),
-        ("SAW", "SAW", "Резка на пиле", False),
-        ("PACK", "PACK", "Упаковка", False),
-        ("FG_WH", "ACCEPT_FINISHED", "Приемка ГП", True),
+        ("SAWING", "SAW", "Резка на пиле", False),
+        ("PACKING", "PACK", "Упаковка", False),
+        ("FINISHED_STOCK", "ACCEPT_FINISHED", "Приемка ГП", True),
     ]
     route = await _make_demo_route(session, "DEMO-001", route_steps_def)
+
+    # Seed initial stock into the raw_stock section for the demo run
+    raw_section = await session.scalar(
+        select(Section).where(Section.code == "DEMO-001-ISSUE")
+    )
+    await _seed_demo_stock(session, product.id, raw_section.id, Decimal("200"))
 
     run_id = "demo-run-001"
     response = await client.post(
@@ -116,10 +138,10 @@ async def test_demo_full_route_run_and_replay(client, session) -> None:
     assert body["plan_position_id"] > 0
     assert body["production_plan_id"] > 0
     assert body["route_id"] == route.id
-    assert body["tasks_created"] == 7
+    assert body["tasks_created"] == 4
     assert body["stage_preset"] == "full_route"
     assert body["stopped_at_stage"] == "completed"
-    assert len(body["stage_results"]) == 7
+    assert len(body["stage_results"]) == 4
     assert all(1 <= int(stage["defect_percent"]) <= 10 for stage in body["stage_results"])
 
     # Test strict uniqueness: duplicate run_id should return 409
@@ -167,14 +189,20 @@ async def test_demo_full_route_forks_when_target_plan_released(client, session) 
 
     route_steps_def = [
         ("ISSUE", "ISSUE_RAW", "Выдача сырья", False),
-        ("SHOT", "SHOT", "Дробеструй", False),
-        ("ANOD", "ANOD", "Анодирование", False),
+        ("SHOT_BLAST", "SHOT", "Дробеструй", False),
+        ("ANODIZING", "ANOD", "Анодирование", False),
         ("WIP", "MOVE_TO_WIP", "Перед. на склад п/ф", False),
-        ("SAW", "SAW", "Резка на пиле", False),
-        ("PACK", "PACK", "Упаковка", False),
-        ("FG_WH", "ACCEPT_FINISHED", "Приемка ГП", True),
+        ("SAWING", "SAW", "Резка на пиле", False),
+        ("PACKING", "PACK", "Упаковка", False),
+        ("FINISHED_STOCK", "ACCEPT_FINISHED", "Приемка ГП", True),
     ]
     route = await _make_demo_route(session, "DEMO-002", route_steps_def)
+
+    # Seed initial stock into the raw_stock section
+    raw_section = await session.scalar(
+        select(Section).where(Section.code == "DEMO-002-ISSUE")
+    )
+    await _seed_demo_stock(session, product.id, raw_section.id, Decimal("200"))
 
     response = await client.post(
         "/api/demo/test-runs/full-route",
@@ -190,7 +218,7 @@ async def test_demo_full_route_forks_when_target_plan_released(client, session) 
     assert response.status_code == 200, response.text
     body = response.json()
     assert body["production_plan_id"] != released_plan.id
-    assert body["tasks_created"] == 7
+    assert body["tasks_created"] == 4
 
 
 @pytest.mark.asyncio
@@ -350,12 +378,12 @@ async def test_demo_stage_preset_after_release(client, session) -> None:
 
     route_steps_def = [
         ("ISSUE", "ISSUE_RAW", "Выдача сырья", False),
-        ("SHOT", "SHOT", "Дробеструй", False),
-        ("ANOD", "ANOD", "Анодирование", False),
+        ("SHOT_BLAST", "SHOT", "Дробеструй", False),
+        ("ANODIZING", "ANOD", "Анодирование", False),
         ("WIP", "MOVE_TO_WIP", "Перед. на склад п/ф", False),
-        ("SAW", "SAW", "Резка на пиле", False),
-        ("PACK", "PACK", "Упаковка", False),
-        ("FG_WH", "ACCEPT_FINISHED", "Приемка ГП", True),
+        ("SAWING", "SAW", "Резка на пиле", False),
+        ("PACKING", "PACK", "Упаковка", False),
+        ("FINISHED_STOCK", "ACCEPT_FINISHED", "Приемка ГП", True),
     ]
     route = await _make_demo_route(session, "DEMO-AR", route_steps_def)
 
@@ -374,7 +402,7 @@ async def test_demo_stage_preset_after_release(client, session) -> None:
     body = response.json()
     assert body["stage_preset"] == "after_release"
     assert body["stopped_at_stage"] == "released"
-    assert body["tasks_created"] == 7
+    assert body["tasks_created"] == 4
     assert len(body["stage_results"]) == 0
 
 
@@ -401,22 +429,26 @@ async def test_demo_stage_preset_to_step_ready_first_step(client, session) -> No
 
     route_steps_def = [
         ("ISSUE", "ISSUE_RAW", "Выдача сырья", False),
-        ("SHOT", "SHOT", "Дробеструй", False),
-        ("ANOD", "ANOD", "Анодирование", False),
+        ("SHOT_BLAST", "SHOT", "Дробеструй", False),
+        ("ANODIZING", "ANOD", "Анодирование", False),
         ("WIP", "MOVE_TO_WIP", "Перед. на склад п/ф", False),
-        ("SAW", "SAW", "Резка на пиле", False),
-        ("PACK", "PACK", "Упаковка", False),
-        ("FG_WH", "ACCEPT_FINISHED", "Приемка ГП", True),
+        ("SAWING", "SAW", "Резка на пиле", False),
+        ("PACKING", "PACK", "Упаковка", False),
+        ("FINISHED_STOCK", "ACCEPT_FINISHED", "Приемка ГП", True),
     ]
     route = await _make_demo_route(session, "DEMO-TSR", route_steps_def)
 
-    # Get the first route stage id
+    # Get the first production route stage (SHOT_BLAST, seq 2)
+    # ISSUE (seq 1) is raw_stock — no WorkTask, so it won't appear in task_rows
     from sqlalchemy import select as sa_select
-    first_stage = await session.scalar(
-        sa_select(RouteStage).where(RouteStage.route_id == route.id).order_by(RouteStage.sequence).limit(1)
-    )
+    all_route_stages = (
+        await session.execute(
+            sa_select(RouteStage).where(RouteStage.route_id == route.id).order_by(RouteStage.sequence)
+        )
+    ).scalars().all()
+    first_production_stage = all_route_stages[1]  # SHOT_BLAST (seq 2)
 
-    # Target first step: no steps should be executed
+    # Target first production step: no steps should be executed
     response = await client.post(
         "/api/demo/test-runs/full-route",
         json={
@@ -425,14 +457,14 @@ async def test_demo_stage_preset_to_step_ready_first_step(client, session) -> No
             "route_id": route.id,
             "run_id": "demo-tsr-001",
             "stage_preset": "to_step_ready",
-            "target_route_stage_id": first_stage.id,
+            "target_route_stage_id": first_production_stage.id,
         },
         headers=headers,
     )
     assert response.status_code == 200, response.text
     body = response.json()
     assert body["stage_preset"] == "to_step_ready"
-    assert body["stopped_at_stage"] == f"step_{first_stage.id}_ready"
+    assert body["stopped_at_stage"] == f"step_{first_production_stage.id}_ready"
     assert body["tasks_created"] == 0
     assert len(body["stage_results"]) == 0
 
@@ -460,25 +492,33 @@ async def test_demo_stage_preset_to_step_ready_middle_step(client, session) -> N
 
     route_steps_def = [
         ("ISSUE", "ISSUE_RAW", "Выдача сырья", False),
-        ("SHOT", "SHOT", "Дробеструй", False),
-        ("ANOD", "ANOD", "Анодирование", False),
+        ("SHOT_BLAST", "SHOT", "Дробеструй", False),
+        ("ANODIZING", "ANOD", "Анодирование", False),
         ("WIP", "MOVE_TO_WIP", "Перед. на склад п/ф", False),
-        ("SAW", "SAW", "Резка на пиле", False),
-        ("PACK", "PACK", "Упаковка", False),
-        ("FG_WH", "ACCEPT_FINISHED", "Приемка ГП", True),
+        ("SAWING", "SAW", "Резка на пиле", False),
+        ("PACKING", "PACK", "Упаковка", False),
+        ("FINISHED_STOCK", "ACCEPT_FINISHED", "Приемка ГП", True),
     ]
     route = await _make_demo_route(session, "DEMO-TSRM", route_steps_def)
 
-    # Get route stages to target middle stage (stage 3 = ANOD, 0-indexed = 2)
+    # Seed initial stock into the raw_stock section
+    raw_section = await session.scalar(
+        select(Section).where(Section.code == "DEMO-TSRM-ISSUE")
+    )
+    await _seed_demo_stock(session, product.id, raw_section.id, Decimal("200"))
+
+    # Target 3rd production step (SAWING): execute SHOT_BLAST + ANODIZING, leave SAWING ready.
+    # Route stages: ISSUE (raw_stock), SHOT, ANOD, WIP (wip_stock), SAW, PACK, FG (finished_stock).
+    # WorkTasks exist only on production sections: SHOT_BLAST, ANODIZING, SAWING, PACKING.
     from sqlalchemy import select as sa_select
     all_stages = (
         await session.execute(
             sa_select(RouteStage).where(RouteStage.route_id == route.id).order_by(RouteStage.sequence)
         )
     ).scalars().all()
-    target_stage = all_stages[2]  # ANOD (3rd step)
+    target_stage = all_stages[4]  # SAWING — 3rd production task in task_rows
 
-    # Target middle step (step 3): steps 1-2 should be executed, step 3 stays ready
+    # Execute indices [0, 1] (SHOT_BLAST, ANODIZING) → 2 tasks, stop before SAWING
     response = await client.post(
         "/api/demo/test-runs/full-route",
         json={
@@ -495,9 +535,9 @@ async def test_demo_stage_preset_to_step_ready_middle_step(client, session) -> N
     body = response.json()
     assert body["stage_preset"] == "to_step_ready"
     assert body["stopped_at_stage"] == f"step_{target_stage.id}_ready"
-    assert body["tasks_created"] == 2  # Steps 1-2 executed
+    assert body["tasks_created"] == 2  # SHOT_BLAST + ANODIZING executed
     assert len(body["stage_results"]) == 2
-    assert body["stage_results"][0]["section_code"].startswith("DEMO-TSRM-ISSUE")
+    assert body["stage_results"][0]["section_code"] == "DEMO-TSRM-SHOT_BLAST"
 
 
 @pytest.mark.asyncio

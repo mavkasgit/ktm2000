@@ -296,7 +296,7 @@ async def seed_production_routes_from_profiles(db: AsyncSession) -> int:
                     section_id=section.id,
                     stage_kind=STAGE_KIND_PRODUCTION,
                     is_significant=True,
-                    is_final=(section_code == "SENT"),
+                    is_final=(section_code == "SHIPPED"),
                     requires_acceptance=True,
                     allow_parallel=False,
                 )

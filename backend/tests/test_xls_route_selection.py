@@ -82,9 +82,9 @@ async def _seed_full_environment(session) -> int:
             "phase": "route_select",
             "conditions": [],
             "actions": [
-                {"action": "require_section", "section_id": _section_id("WH")},
-                {"action": "require_section", "section_id": _section_id("ANOD")},
-                {"action": "require_section", "section_id": _section_id("FG_WH")},
+                {"action": "require_section", "section_id": _section_id("RAW_STOCK")},
+                {"action": "require_section", "section_id": _section_id("ANODIZING")},
+                {"action": "require_section", "section_id": _section_id("FINISHED_STOCK")},
             ],
         },
         {
@@ -96,8 +96,8 @@ async def _seed_full_environment(session) -> int:
                 {"source": "payload", "field_path": "operation", "operator": "contains", "value": "сверл", "case_sensitive": False},
             ],
             "actions": [
-                {"action": "require_section", "section_id": _section_id("DRILL")},
-                {"action": "exclude_section", "section_id": _section_id("PRESS")},
+                {"action": "require_section", "section_id": _section_id("DRILLING")},
+                {"action": "exclude_section", "section_id": _section_id("PRESSING")},
             ],
         },
         {
@@ -109,11 +109,11 @@ async def _seed_full_environment(session) -> int:
                 {"source": "payload", "field_path": "operation", "operator": "not_empty", "value": None},
             ],
             "actions": [
-                {"action": "require_section", "section_code": "PRESS"},
-                {"action": "exclude_section", "section_code": "DRILL"},
+                {"action": "require_section", "section_code": "PRESSING"},
+                {"action": "exclude_section", "section_code": "DRILLING"},
                 {
                     "action": "set_operation_by_mapping",
-                    "section_code": "PRESS",
+                    "section_code": "PRESSING",
                     "group_code": "PRESS",
                     "lookup_field": "operation",
                     "mapping": [
@@ -132,8 +132,8 @@ async def _seed_full_environment(session) -> int:
                 {"source": "payload", "field_path": "operation", "operator": "empty", "value": None},
             ],
             "actions": [
-                {"action": "exclude_section", "section_id": _section_id("DRILL")},
-                {"action": "exclude_section", "section_id": _section_id("PRESS")},
+                {"action": "exclude_section", "section_id": _section_id("DRILLING")},
+                {"action": "exclude_section", "section_id": _section_id("PRESSING")},
             ],
         },
         {
@@ -145,9 +145,9 @@ async def _seed_full_environment(session) -> int:
                 {"source": "payload", "field_path": "output_kind", "operator": "contains", "value": "ГП"},
             ],
             "actions": [
-                {"action": "require_section", "section_id": _section_id("WIP_WH")},
-                {"action": "require_section", "section_id": _section_id("SAW")},
-                {"action": "require_section", "section_id": _section_id("PACK")},
+                {"action": "require_section", "section_id": _section_id("WIP_STOCK")},
+                {"action": "require_section", "section_id": _section_id("SAWING")},
+                {"action": "require_section", "section_id": _section_id("PACKING")},
             ],
         },
         {
@@ -159,9 +159,9 @@ async def _seed_full_environment(session) -> int:
                 {"source": "payload", "field_path": "output_kind", "operator": "contains", "value": "П/Ф"},
             ],
             "actions": [
-                {"action": "exclude_section", "section_id": _section_id("WIP_WH")},
-                {"action": "exclude_section", "section_id": _section_id("SAW")},
-                {"action": "exclude_section", "section_id": _section_id("PACK")},
+                {"action": "exclude_section", "section_id": _section_id("WIP_STOCK")},
+                {"action": "exclude_section", "section_id": _section_id("SAWING")},
+                {"action": "exclude_section", "section_id": _section_id("PACKING")},
             ],
         },
         {
@@ -173,7 +173,7 @@ async def _seed_full_environment(session) -> int:
                 {"source": "product", "field_path": "skip_shot_blast", "operator": "equals", "value": True},
             ],
             "actions": [
-                {"action": "exclude_section", "section_id": _section_id("SHOT")},
+                {"action": "exclude_section", "section_id": _section_id("SHOT_BLAST")},
             ],
         },
         {
@@ -185,7 +185,7 @@ async def _seed_full_environment(session) -> int:
                 {"source": "product", "field_path": "skip_shot_blast", "operator": "not_equals", "value": True},
             ],
             "actions": [
-                {"action": "require_section", "section_id": _section_id("SHOT")},
+                {"action": "require_section", "section_id": _section_id("SHOT_BLAST")},
             ],
         },
         {
@@ -199,7 +199,7 @@ async def _seed_full_environment(session) -> int:
             "actions": [
                 {
                     "action": "set_operation_by_mapping",
-                    "section_code": "ANOD",
+                    "section_code": "ANODIZING",
                     "group_code": "ANOD",
                     "lookup_field": "color",
                     "mapping": [
@@ -226,7 +226,7 @@ async def _seed_full_environment(session) -> int:
             "actions": [
                 {
                     "action": "set_operation_by_mapping",
-                    "section_code": "ANOD",
+                    "section_code": "ANODIZING",
                     "group_code": "PACK",
                     "lookup_field": "output_kind",
                     "mapping": [
@@ -311,9 +311,9 @@ async def test_test_xls_rows_produce_diverse_routes(client, session) -> None:
     window_rows = [r for r in results if r["operation"] and "окн" in r["operation"].lower()]
     assert len(window_rows) > 0, "Should have rows with 'окно' operation"
     for r in window_rows:
-        assert "PRESS" in r["signature"]["required_sections"], f"PRESS required for окно row {r['rows']}"
-        assert "DRILL" in r["signature"]["excluded_sections"], f"DRILL excluded for окно row {r['rows']}"
-        assert r["signature"]["resolved_operations"].get("PRESS/PRESS") == "PRESS_WINDOW", (
+        assert "PRESSING" in r["signature"]["required_sections"], f"PRESS required for окно row {r['rows']}"
+        assert "DRILLING" in r["signature"]["excluded_sections"], f"DRILL excluded for окно row {r['rows']}"
+        assert r["signature"]["resolved_operations"].get("PRESSING/PRESS") == "PRESS_WINDOW", (
             f"PRESS_WINDOW resolved for окно row {r['rows']}"
         )
 
@@ -321,7 +321,7 @@ async def test_test_xls_rows_produce_diverse_routes(client, session) -> None:
     comb_rows = [r for r in results if r["operation"] and "греб" in r["operation"].lower()]
     assert len(comb_rows) > 0, "Should have rows with 'гребенка' operation"
     for r in comb_rows:
-        assert r["signature"]["resolved_operations"].get("PRESS/PRESS") == "PRESS_COMB", (
+        assert r["signature"]["resolved_operations"].get("PRESSING/PRESS") == "PRESS_COMB", (
             f"PRESS_COMB resolved for гребенка row {r['rows']}"
         )
 
@@ -329,17 +329,17 @@ async def test_test_xls_rows_produce_diverse_routes(client, session) -> None:
     drill_rows = [r for r in results if r["operation"] and "сверл" in r["operation"].lower()]
     assert len(drill_rows) > 0, "Should have rows with 'сверло' operation"
     for r in drill_rows:
-        assert "DRILL" in r["signature"]["required_sections"], f"DRILL required for сверло row {r['rows']}"
-        assert "PRESS" in r["signature"]["excluded_sections"], f"PRESS excluded for сверло row {r['rows']}"
+        assert "DRILLING" in r["signature"]["required_sections"], f"DRILL required for сверло row {r['rows']}"
+        assert "PRESSING" in r["signature"]["excluded_sections"], f"PRESS excluded for сверло row {r['rows']}"
 
     # 4. Rows with output_kind=ГП → WIP_WH, SAW, PACK required
     gp_rows = [r for r in results if "ГП" in r["output_kind"]]
     assert len(gp_rows) > 0, "Should have rows with output_kind=ГП"
     for r in gp_rows:
-        assert "WIP_WH" in r["signature"]["required_sections"], f"WIP_WH required for ГП row {r['rows']}"
-        assert "SAW" in r["signature"]["required_sections"], f"SAW required for ГП row {r['rows']}"
-        assert "PACK" in r["signature"]["required_sections"], f"PACK required for ГП row {r['rows']}"
-        assert r["signature"]["resolved_operations"].get("ANOD/PACK") == "PACK_STRETCH", (
+        assert "WIP_STOCK" in r["signature"]["required_sections"], f"WIP_WH required for ГП row {r['rows']}"
+        assert "SAWING" in r["signature"]["required_sections"], f"SAW required for ГП row {r['rows']}"
+        assert "PACKING" in r["signature"]["required_sections"], f"PACK required for ГП row {r['rows']}"
+        assert r["signature"]["resolved_operations"].get("ANODIZING/PACK") == "PACK_STRETCH", (
             f"PACK_STRETCH resolved for ГП row {r['rows']}"
         )
 
@@ -347,10 +347,10 @@ async def test_test_xls_rows_produce_diverse_routes(client, session) -> None:
     pf_rows = [r for r in results if "П/ф" in r["output_kind"] or "П/Ф" in r["output_kind"]]
     assert len(pf_rows) > 0, "Should have rows with output_kind=П/Ф"
     for r in pf_rows:
-        assert "WIP_WH" in r["signature"]["excluded_sections"], f"WIP_WH excluded for П/Ф row {r['rows']}"
-        assert "SAW" in r["signature"]["excluded_sections"], f"SAW excluded for П/Ф row {r['rows']}"
-        assert "PACK" in r["signature"]["excluded_sections"], f"PACK excluded for П/Ф row {r['rows']}"
-        assert r["signature"]["resolved_operations"].get("ANOD/PACK") == "PACK_SPUNBOND", (
+        assert "WIP_STOCK" in r["signature"]["excluded_sections"], f"WIP_WH excluded for П/Ф row {r['rows']}"
+        assert "SAWING" in r["signature"]["excluded_sections"], f"SAW excluded for П/Ф row {r['rows']}"
+        assert "PACKING" in r["signature"]["excluded_sections"], f"PACK excluded for П/Ф row {r['rows']}"
+        assert r["signature"]["resolved_operations"].get("ANODIZING/PACK") == "PACK_SPUNBOND", (
             f"PACK_SPUNBOND resolved for П/Ф row {r['rows']}"
         )
 
@@ -358,7 +358,7 @@ async def test_test_xls_rows_produce_diverse_routes(client, session) -> None:
     silver_rows = [r for r in results if "серебр" in r["color"].lower()]
     assert len(silver_rows) > 0, "Should have rows with color=серебро"
     for r in silver_rows:
-        assert r["signature"]["resolved_operations"].get("ANOD/ANOD") == "ANOD_01", (
+        assert r["signature"]["resolved_operations"].get("ANODIZING/ANOD") == "ANOD_01", (
             f"ANOD_01 resolved for серебро row {r['rows']}"
         )
 
@@ -366,7 +366,7 @@ async def test_test_xls_rows_produce_diverse_routes(client, session) -> None:
     black_rows = [r for r in results if "черн" in r["color"].lower()]
     assert len(black_rows) > 0, "Should have rows with color=черный"
     for r in black_rows:
-        assert r["signature"]["resolved_operations"].get("ANOD/ANOD") == "ANOD_05", (
+        assert r["signature"]["resolved_operations"].get("ANODIZING/ANOD") == "ANOD_05", (
             f"ANOD_05 resolved for черный row {r['rows']}"
         )
 
@@ -374,7 +374,7 @@ async def test_test_xls_rows_produce_diverse_routes(client, session) -> None:
     gold_rows = [r for r in results if "золот" in r["color"].lower()]
     assert len(gold_rows) > 0, "Should have rows with color=золото"
     for r in gold_rows:
-        assert r["signature"]["resolved_operations"].get("ANOD/ANOD") == "ANOD_02", (
+        assert r["signature"]["resolved_operations"].get("ANODIZING/ANOD") == "ANOD_02", (
             f"ANOD_02 resolved for золото row {r['rows']}"
         )
 
@@ -382,7 +382,7 @@ async def test_test_xls_rows_produce_diverse_routes(client, session) -> None:
     champagne_rows = [r for r in results if "шампань" in r["color"].lower()]
     assert len(champagne_rows) > 0, "Should have rows with color=шампань"
     for r in champagne_rows:
-        assert r["signature"]["resolved_operations"].get("ANOD/ANOD") == "ANOD_06", (
+        assert r["signature"]["resolved_operations"].get("ANODIZING/ANOD") == "ANOD_06", (
             f"ANOD_06 resolved for шампань row {r['rows']}"
         )
 
@@ -390,7 +390,7 @@ async def test_test_xls_rows_produce_diverse_routes(client, session) -> None:
     copper_rows = [r for r in results if "мед" in r["color"].lower()]
     assert len(copper_rows) > 0, "Should have rows with color=медь"
     for r in copper_rows:
-        assert r["signature"]["resolved_operations"].get("ANOD/ANOD") == "ANOD_07", (
+        assert r["signature"]["resolved_operations"].get("ANODIZING/ANOD") == "ANOD_07", (
             f"ANOD_07 resolved for медь row {r['rows']}"
         )
 
@@ -398,22 +398,22 @@ async def test_test_xls_rows_produce_diverse_routes(client, session) -> None:
     titan_rows = [r for r in results if "титан" in r["color"].lower()]
     assert len(titan_rows) > 0, "Should have rows with color=титан"
     for r in titan_rows:
-        assert r["signature"]["resolved_operations"].get("ANOD/ANOD") == "ANOD_08", (
+        assert r["signature"]["resolved_operations"].get("ANODIZING/ANOD") == "ANOD_08", (
             f"ANOD_08 resolved for титан row {r['rows']}"
         )
 
     # 12. Core sections (WH, ANOD, FG_WH) should ALWAYS be required
     for r in results:
-        assert "WH" in r["signature"]["required_sections"], f"WH always required, failed for row {r['rows']}"
-        assert "ANOD" in r["signature"]["required_sections"], f"ANOD always required, failed for row {r['rows']}"
-        assert "FG_WH" in r["signature"]["required_sections"], f"FG_WH always required, failed for row {r['rows']}"
+        assert "RAW_STOCK" in r["signature"]["required_sections"], f"WH always required, failed for row {r['rows']}"
+        assert "ANODIZING" in r["signature"]["required_sections"], f"ANOD always required, failed for row {r['rows']}"
+        assert "FINISHED_STOCK" in r["signature"]["required_sections"], f"FG_WH always required, failed for row {r['rows']}"
 
     # 13. Empty operation rows → DRILL and PRESS both excluded
     empty_op_rows = [r for r in results if not r["operation"]]
     assert len(empty_op_rows) > 0, "Should have rows with empty operation"
     for r in empty_op_rows:
-        assert "DRILL" in r["signature"]["excluded_sections"], f"DRILL excluded when op empty, row {r['rows']}"
-        assert "PRESS" in r["signature"]["excluded_sections"], f"PRESS excluded when op empty, row {r['rows']}"
+        assert "DRILLING" in r["signature"]["excluded_sections"], f"DRILL excluded when op empty, row {r['rows']}"
+        assert "PRESSING" in r["signature"]["excluded_sections"], f"PRESS excluded when op empty, row {r['rows']}"
 
 
 @pytest.mark.asyncio
@@ -495,21 +495,21 @@ async def test_test_xls_row_2256_with_skip_shot_blast_excludes_shot(client, sess
     excluded_codes = {s["code"] for s in result.excluded_sections}
 
     # SHOT must be excluded because product has skip_shot_blast=True
-    assert "SHOT" in excluded_codes, f"SHOT must be excluded for ЮП-2256 (skip_shot_blast=True), got excluded: {excluded_codes}"
-    assert "SHOT" not in required_codes, f"SHOT must NOT be required for ЮП-2256, got required: {required_codes}"
+    assert "SHOT_BLAST" in excluded_codes, f"SHOT must be excluded for ЮП-2256 (skip_shot_blast=True), got excluded: {excluded_codes}"
+    assert "SHOT_BLAST" not in required_codes, f"SHOT must NOT be required for ЮП-2256, got required: {required_codes}"
 
     # But core sections and ГП route sections should still be present
-    assert "WH" in required_codes
-    assert "ANOD" in required_codes
-    assert "FG_WH" in required_codes
-    assert "WIP_WH" in required_codes  # ГП → stretch route
-    assert "SAW" in required_codes
-    assert "PACK" in required_codes
+    assert "RAW_STOCK" in required_codes
+    assert "ANODIZING" in required_codes
+    assert "FINISHED_STOCK" in required_codes
+    assert "WIP_STOCK" in required_codes  # ГП → stretch route
+    assert "SAWING" in required_codes
+    assert "PACKING" in required_codes
 
     # Operations should resolve correctly
-    assert result.resolved_operations.get(("ANOD", "ANOD")) == "ANOD_05", "черный → ANOD_05"
-    assert result.resolved_operations.get(("ANOD", "PACK")) == "PACK_STRETCH", "ГП → PACK_STRETCH"
+    assert result.resolved_operations.get(("ANODIZING", "ANOD")) == "ANOD_05", "черный → ANOD_05"
+    assert result.resolved_operations.get(("ANODIZING", "PACK")) == "PACK_STRETCH", "ГП → PACK_STRETCH"
 
     # No PRESS/DRILL since operation is empty
-    assert "DRILL" in excluded_codes
-    assert "PRESS" in excluded_codes
+    assert "DRILLING" in excluded_codes
+    assert "PRESSING" in excluded_codes

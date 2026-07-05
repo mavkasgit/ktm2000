@@ -36,11 +36,11 @@ async def _make_combined_route_product(session, sku: str = "COMBO-1") -> tuple[P
     product = Product(sku=sku, name=f"Combined {sku}", type=ProductType.finished_good, unit="pcs")
     component = Product(sku=f"{sku}-RAW", name=f"Raw {sku}", type=ProductType.component, unit="pcs")
     sections = [
-        Section(code=f"{sku}-WH", name="Склад сырья", type="raw_stock"),
+        Section(code=f"{sku}-WH", name="Склад сырья", type="production"),
         Section(code=f"{sku}-SHOT", name="Дробеструй", type="production"),
-        Section(code=f"{sku}-ANOD", name="Анодирование", type="production"),
-        Section(code=f"{sku}-WIP", name="Склад ГП", type="finished_stock"),
-        Section(code=f"{sku}-SHIP", name="Отгрузка", type="shipment"),
+        Section(code=f"{sku}-ANODIZING", name="Анодирование", type="production"),
+        Section(code=f"{sku}-WIP", name="Склад ГП", type="production"),
+        Section(code=f"{sku}-SHIP", name="Отгрузка", type="production"),
     ]
     session.add_all([product, component, *sections])
     await session.flush()
@@ -65,7 +65,7 @@ async def _make_combined_route_product(session, sku: str = "COMBO-1") -> tuple[P
         {
             "sequence": 2,
             "section_idx": 1,
-            "ops": [("SHOT", "Дробеструй")],
+            "ops": [("SHOT_BLAST", "Дробеструй")],
         },
         {
             "sequence": 3,
@@ -75,7 +75,7 @@ async def _make_combined_route_product(session, sku: str = "COMBO-1") -> tuple[P
         {
             "sequence": 4,
             "section_idx": 3,
-            "ops": [("FG_WH", "Склад ГП")],
+            "ops": [("FINISHED_STOCK", "Склад ГП")],
         },
         {
             "sequence": 5,
@@ -171,7 +171,7 @@ async def test_combined_op_group_merges_anod_tasks(client, session) -> None:
 
     # Проверяем что в snapshot один шаг ANOD с двумя операциями внутри
     snapshot_steps = batch["positions"][0]["route_snapshot"]["steps"]
-    anod_steps = [s for s in snapshot_steps if s["section_code"].endswith("ANOD")]
+    anod_steps = [s for s in snapshot_steps if s["section_code"].endswith("ANODIZING")]
     assert len(anod_steps) == 1  # Под RouteStage ANOD = одна задача с операциями
     assert len(anod_steps[0]["operations"]) == 2  # Две операции внутри
     assert anod_steps[0]["operations"][0]["operation_name"] == "Анодирование"
@@ -253,9 +253,9 @@ async def test_no_combined_op_group_creates_separate_tasks(client, session) -> N
     product = Product(sku="NO-COMBO", name="No Combo", type=ProductType.finished_good, unit="pcs")
     component = Product(sku="NO-COMBO-RAW", name="Raw No Combo", type=ProductType.component, unit="pcs")
     sections = [
-        Section(code="NC-WH", name="Склад", type="raw_stock"),
+        Section(code="NC-WH", name="Склад", type="production"),
         Section(code="NC-ANOD", name="Анодирование", type="production"),
-        Section(code="NC-FINAL", name="Финал", type="finished_stock"),
+        Section(code="NC-FINAL", name="Финал", type="production"),
     ]
     session.add_all([product, component, *sections])
     await session.flush()
@@ -322,9 +322,9 @@ async def test_different_cog_same_section_creates_separate_tasks(client, session
     product = Product(sku="DIFF-COG", name="Diff COG", type=ProductType.finished_good, unit="pcs")
     component = Product(sku="DIFF-COG-RAW", name="Raw Diff COG", type=ProductType.component, unit="pcs")
     sections = [
-        Section(code="DC-WH", name="Склад", type="raw_stock"),
+        Section(code="DC-WH", name="Склад", type="production"),
         Section(code="DC-ANOD", name="Анодирование", type="production"),
-        Section(code="DC-FINAL", name="Финал", type="finished_stock"),
+        Section(code="DC-FINAL", name="Финал", type="production"),
     ]
     session.add_all([product, component, *sections])
     await session.flush()

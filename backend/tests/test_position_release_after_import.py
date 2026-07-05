@@ -57,9 +57,9 @@ async def test_plan_position_can_be_released_after_import(session) -> None:
 
     # Create sections for route steps
     sections = [
-        Section(code="WH", name="Warehouse", sort_order=10, type="raw_stock", is_active=True),
-        Section(code="ANOD", name="Anodizing", sort_order=50, type="production", is_active=True),
-        Section(code="PACK", name="Packing", sort_order=80, type="production", is_active=True),
+        Section(code="RAW_STOCK", name="Warehouse", sort_order=10, type="raw_stock", is_active=True),
+        Section(code="ANODIZING", name="Anodizing", sort_order=50, type="production", is_active=True),
+        Section(code="PACKING", name="Packing", sort_order=80, type="production", is_active=True),
     ]
     for section in sections:
         session.add(section)
@@ -67,9 +67,9 @@ async def test_plan_position_can_be_released_after_import(session) -> None:
 
     # Create route steps
     steps_data = [
-        {"sequence": 1, "section_code": "WH", "op_code": "STOCK_IN", "op_name": "Receive", "is_significant": False},
-        {"sequence": 2, "section_code": "ANOD", "op_code": "ANOD_01", "op_name": "Anodize silver", "is_significant": True},
-        {"sequence": 3, "section_code": "PACK", "op_code": "PACK_STRETCH", "op_name": "Pack stretch", "is_significant": False},
+        {"sequence": 1, "section_code": "RAW_STOCK", "op_code": "STOCK_IN", "op_name": "Receive", "is_significant": False},
+        {"sequence": 2, "section_code": "ANODIZING", "op_code": "ANOD_01", "op_name": "Anodize silver", "is_significant": True},
+        {"sequence": 3, "section_code": "PACKING", "op_code": "PACK_STRETCH", "op_name": "Pack stretch", "is_significant": False},
     ]
 
     for step_data in steps_data:

@@ -11,17 +11,17 @@ from app.seeds.seeders.spgs_seeder import seed_spgs
 
 
 DEFAULT_SECTIONS = [
-    {"code": "WH", "name": "Склад сырья", "sort_order": 10, "type": "raw_stock"},
-    {"code": "DRILL", "name": "Сверловка", "sort_order": 20, "type": "production"},
-    {"code": "PRESS", "name": "Пресс", "sort_order": 30, "type": "production"},
-    {"code": "SHOT", "name": "Дробеструй", "sort_order": 40, "type": "production"},
-    {"code": "ANOD", "name": "Анодирование", "sort_order": 50, "type": "production"},
-    {"code": "WIP_WH", "name": "Склад полуфабриката", "sort_order": 60, "type": "wip_stock"},
-    {"code": "SAW", "name": "Пила", "sort_order": 70, "type": "production"},
-    {"code": "PACK", "name": "Упаковка", "sort_order": 80, "type": "production"},
-    {"code": "FG_WH", "name": "Склад готовой продукции", "sort_order": 90, "type": "finished_stock"},
+    {"code": "RAW_STOCK", "name": "Склад сырья", "sort_order": 10, "type": "raw_stock"},
+    {"code": "DRILLING", "name": "Сверловка", "sort_order": 20, "type": "production"},
+    {"code": "PRESSING", "name": "Пресс", "sort_order": 30, "type": "production"},
+    {"code": "SHOT_BLAST", "name": "Дробеструй", "sort_order": 40, "type": "production"},
+    {"code": "ANODIZING", "name": "Анодирование", "sort_order": 50, "type": "production"},
+    {"code": "WIP_STOCK", "name": "Склад полуфабриката", "sort_order": 60, "type": "wip_stock"},
+    {"code": "SAWING", "name": "Пила", "sort_order": 70, "type": "production"},
+    {"code": "PACKING", "name": "Упаковка", "sort_order": 80, "type": "production"},
+    {"code": "FINISHED_STOCK", "name": "Склад готовой продукции", "sort_order": 90, "type": "finished_stock"},
     {"code": "SHIPMENT", "name": "К отгрузке", "sort_order": 100, "type": "finished_stock"},
-    {"code": "SENT", "name": "Отправлено", "sort_order": 110, "type": "finished_stock"},
+    {"code": "SHIPPED", "name": "Отправлено", "sort_order": 110, "type": "finished_stock"},
 ]
 
 
@@ -51,8 +51,8 @@ def test_wip_not_in_spgs_data():
 
 def test_anod_has_wip_wh_and_storage_kind_wip():
     """ANOD содержит секции ANOD + WIP_WH и имеет storage_kind=wip."""
-    anod = next(item for item in SPGS_DATA if item["code"] == "ANOD")
-    assert anod["section_codes"] == ["ANOD", "WIP_WH"]
+    anod = next(item for item in SPGS_DATA if item["code"] == "ANODIZING")
+    assert anod["section_codes"] == ["ANODIZING", "WIP_STOCK"]
     assert anod.get("storage_kind") == "wip"
 
 
@@ -64,7 +64,7 @@ async def test_wip_wh_is_bound_only_to_anod(session):
     await seed_spgs(session, SPGS_DATA, sections_map)
     await session.commit()
 
-    wip_wh = sections_map["WIP_WH"]
+    wip_wh = sections_map["WIP_STOCK"]
     bindings = (
         await session.execute(select(SpgSection).where(SpgSection.section_id == wip_wh.id))
     ).scalars().all()
@@ -73,7 +73,7 @@ async def test_wip_wh_is_bound_only_to_anod(session):
         f"(получили {len(bindings)})"
     )
     spg = await session.get(StorageProductionGroup, bindings[0].spg_id)
-    assert spg.code == "ANOD", (
+    assert spg.code == "ANODIZING", (
         f"WIP_WH должна быть привязана к ANOD, а не к {spg.code}"
     )
 
@@ -86,7 +86,7 @@ async def test_wip_wh_section_still_exists_after_seed(session):
     await seed_spgs(session, SPGS_DATA, sections_map)
     await session.commit()
 
-    wip_wh = await session.scalar(select(Section).where(Section.code == "WIP_WH"))
+    wip_wh = await session.scalar(select(Section).where(Section.code == "WIP_STOCK"))
     assert wip_wh is not None
     assert wip_wh.is_active is True
     assert wip_wh.type == "wip_stock"
@@ -100,11 +100,11 @@ async def test_other_spgs_keep_their_sections_after_seed(session):
     await session.commit()
 
     expectations: list[tuple[str, list[str]]] = [
-        ("STOCK", ["WH"]),
-        ("PREP", ["DRILL", "PRESS", "SHOT"]),
-        ("ANOD", ["ANOD", "WIP_WH"]),
-        ("PACK", ["SAW", "PACK"]),
-        ("FG", ["FG_WH", "SHIPMENT", "SENT"]),
+        ("STOCK", ["RAW_STOCK"]),
+        ("PREP", ["DRILLING", "PRESSING", "SHOT_BLAST"]),
+        ("ANODIZING", ["ANODIZING", "WIP_STOCK"]),
+        ("PACKING", ["SAWING", "PACKING"]),
+        ("FG", ["FINISHED_STOCK", "SHIPMENT", "SHIPPED"]),
     ]
     for spg_code, expected_section_codes in expectations:
         spg = await session.scalar(
@@ -130,7 +130,7 @@ async def test_anod_storage_kind_persists_to_db(session):
     await session.commit()
 
     anod = await session.scalar(
-        select(StorageProductionGroup).where(StorageProductionGroup.code == "ANOD")
+        select(StorageProductionGroup).where(StorageProductionGroup.code == "ANODIZING")
     )
     assert anod is not None
     assert anod.storage_kind == SpgStorageKind.wip
@@ -151,11 +151,11 @@ async def test_list_spgs_includes_anod_with_wip_wh_and_excludes_wip(client, sess
 
     codes = {item["code"] for item in data}
     assert "WIP" not in codes, "WIP как SPG должен быть удалён из списка"
-    assert "ANOD" in codes, "ANOD должен присутствовать"
+    assert "ANODIZING" in codes, "ANOD должен присутствовать"
 
-    anod = next(item for item in data if item["code"] == "ANOD")
+    anod = next(item for item in data if item["code"] == "ANODIZING")
     section_codes = {sec["section_code"] for sec in anod["sections"]}
-    assert section_codes == {"ANOD", "WIP_WH"}, (
+    assert section_codes == {"ANODIZING", "WIP_STOCK"}, (
         f"ANOD должен быть привязан к ANOD + WIP_WH, получили {section_codes}"
     )
     assert anod["is_active"] is True

@@ -109,7 +109,7 @@ async def test_hrms_employees_department_filter(auth_client, session) -> None:
 @pytest.mark.asyncio
 async def test_hrms_employees_linked_filter_and_sort(auth_client, session) -> None:
     await session.execute(HrmsEmployeeCache.__table__.delete())
-    await session.execute(User.__table__.delete())
+    await session.execute(User.__table__.delete().where(User.__table__.c.username != "testauth"))
     await session.commit()
 
     employees = await _seed_hrms_cache(session, 6)

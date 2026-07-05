@@ -177,40 +177,42 @@ async def test_bulk_approve_positions_partial_failure(client, session) -> None:
     # Mark the first position as already approved to make it ineligible
     positions[0].status = PlanPositionStatus.approved
     await session.commit()
+    pos_ids = [p.id for p in positions]
     headers = _auth_headers(user)
 
     response = await client.post(
         f"/api/production-plans/{plan.id}/positions/bulk-approve",
-        json={"ids": [p.id for p in positions], "force": False},
+        json={"ids": pos_ids, "force": False},
         headers=headers,
     )
     assert response.status_code == 200
     payload = response.json()
     by_id = {r["id"]: r for r in payload["results"]}
-    assert by_id[positions[0].id]["status"] == "failed"
-    assert by_id[positions[1].id]["status"] == "success"
-    assert by_id[positions[2].id]["status"] == "success"
+    assert by_id[pos_ids[0]]["status"] == "failed"
+    assert by_id[pos_ids[1]]["status"] == "success"
+    assert by_id[pos_ids[2]]["status"] == "success"
 
 
 @pytest.mark.asyncio
 async def test_bulk_approve_positions_does_not_block_on_invalid_id(client, session) -> None:
     user = await _make_user(session, "bulk-approve-badid@test.local")
     plan, positions, _ = await _make_plan_with_positions(session, "FG-APPROVE-BAD", 2)
+    pos_ids = [p.id for p in positions]
     headers = _auth_headers(user)
 
     response = await client.post(
         f"/api/production-plans/{plan.id}/positions/bulk-approve",
-        json={"ids": [positions[0].id, 99_999], "force": False},
+        json={"ids": [pos_ids[0], 99_999], "force": False},
         headers=headers,
     )
     assert response.status_code == 200
     payload = response.json()
     by_id = {r["id"]: r for r in payload["results"]}
-    assert by_id[positions[0].id]["status"] == "success"
+    assert by_id[pos_ids[0]]["status"] == "success"
     assert by_id[99_999]["status"] == "failed"
 
     # The valid position must have been approved even though the other failed.
-    refreshed = await session.get(PlanPosition, positions[0].id)
+    refreshed = await session.get(PlanPosition, pos_ids[0])
     assert refreshed is not None
     assert refreshed.status == PlanPositionStatus.approved
 
@@ -248,11 +250,12 @@ async def test_bulk_delete_cancelled_positions_soft_delete(client, session) -> N
     plan, positions, _ = await _make_plan_with_positions(
         session, "FG-DELETE-CANCEL", 3, cancelled_count=2
     )
+    pos_ids = [p.id for p in positions]
     headers = _auth_headers(user)
 
     response = await client.post(
         f"/api/production-plans/{plan.id}/positions/bulk-delete",
-        json={"ids": [positions[0].id, positions[1].id], "reason": "bulk test"},
+        json={"ids": [pos_ids[0], pos_ids[1]], "reason": "bulk test"},
         headers=headers,
     )
     assert response.status_code == 200
@@ -261,7 +264,7 @@ async def test_bulk_delete_cancelled_positions_soft_delete(client, session) -> N
 
     refreshed = (
         await session.execute(
-            select(PlanPosition).where(PlanPosition.id.in_([positions[0].id, positions[1].id]))
+            select(PlanPosition).where(PlanPosition.id.in_([pos_ids[0], pos_ids[1]]))
         )
     ).scalars().all()
     assert all(p.deleted_at is not None for p in refreshed)
@@ -305,24 +308,25 @@ async def test_bulk_delete_with_mixed_targets_isolated(client, session) -> None:
     # Make the second position approved so it cannot be deleted.
     positions[1].status = PlanPositionStatus.approved
     await session.commit()
+    pos_ids = [p.id for p in positions]
     headers = _auth_headers(user)
 
     response = await client.post(
         f"/api/production-plans/{plan.id}/positions/bulk-delete",
-        json={"ids": [p.id for p in positions]},
+        json={"ids": pos_ids},
         headers=headers,
     )
     assert response.status_code == 200
     payload = response.json()
     by_id = {r["id"]: r for r in payload["results"]}
-    assert by_id[positions[0].id]["status"] == "success"
-    assert by_id[positions[1].id]["status"] == "failed"
-    assert by_id[positions[2].id]["status"] == "success"
+    assert by_id[pos_ids[0]]["status"] == "success"
+    assert by_id[pos_ids[1]]["status"] == "failed"
+    assert by_id[pos_ids[2]]["status"] == "success"
 
     # The approved position must remain in the database.
-    approved_still_there = await session.get(PlanPosition, positions[1].id)
+    approved_still_there = await session.get(PlanPosition, pos_ids[1])
     assert approved_still_there is not None
     assert approved_still_there.deleted_at is None
 
     # The hard-deleted position must be gone.
-    assert await session.get(PlanPosition, positions[2].id) is None
+    assert await session.get(PlanPosition, pos_ids[2]) is None

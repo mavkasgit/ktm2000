@@ -10,11 +10,11 @@ SELECTION_RULES = [
         "phase": "route_select",
         "conditions": [],
         "actions": [
-            {"action": "require_section", "section_code": "WH"},
-            {"action": "require_section", "section_code": "ANOD"},
-            {"action": "require_section", "section_code": "FG_WH"},
+            {"action": "require_section", "section_code": "RAW_STOCK"},
+            {"action": "require_section", "section_code": "ANODIZING"},
+            {"action": "require_section", "section_code": "FINISHED_STOCK"},
             {"action": "require_section", "section_code": "SHIPMENT"},
-            {"action": "require_section", "section_code": "SENT"},
+            {"action": "require_section", "section_code": "SHIPPED"},
         ],
     },
     {
@@ -28,9 +28,9 @@ SELECTION_RULES = [
             {"source": "payload", "field_path": "operation", "operator": "contains", "value": "сверл"},
         ],
         "actions": [
-            {"action": "require_section", "section_code": "DRILL"},
+            {"action": "require_section", "section_code": "DRILLING"},
             {"action": "require_section", "section_code": "PREP_STOCK"},
-            {"action": "exclude_section", "section_code": "PRESS"},
+            {"action": "exclude_section", "section_code": "PRESSING"},
         ],
     },
     {
@@ -46,9 +46,9 @@ SELECTION_RULES = [
         ],
         "condition_logic": "and",
         "actions": [
-            {"action": "require_section", "section_code": "PRESS"},
+            {"action": "require_section", "section_code": "PRESSING"},
             {"action": "require_section", "section_code": "PREP_STOCK"},
-            {"action": "exclude_section", "section_code": "DRILL"},
+            {"action": "exclude_section", "section_code": "DRILLING"},
         ],
     },
     {
@@ -64,9 +64,9 @@ SELECTION_RULES = [
         ],
         "condition_logic": "and",
         "actions": [
-            {"action": "require_section", "section_code": "PRESS"},
+            {"action": "require_section", "section_code": "PRESSING"},
             {"action": "require_section", "section_code": "PREP_STOCK"},
-            {"action": "exclude_section", "section_code": "DRILL"},
+            {"action": "exclude_section", "section_code": "DRILLING"},
         ],
     },
     {
@@ -82,7 +82,7 @@ SELECTION_RULES = [
         "actions": [
             {
                 "action": "set_operation_by_mapping",
-                "section_code": "PRESS",
+                "section_code": "PRESSING",
                 "group_code": "PRESS",
                 "lookup_field": "operation",
                 "mapping": [
@@ -103,8 +103,8 @@ SELECTION_RULES = [
             {"source": "payload", "field_path": "operation", "operator": "empty", "value": None},
         ],
         "actions": [
-            {"action": "exclude_section", "section_code": "DRILL"},
-            {"action": "exclude_section", "section_code": "PRESS"},
+            {"action": "exclude_section", "section_code": "DRILLING"},
+            {"action": "exclude_section", "section_code": "PRESSING"},
         ],
     },
     {
@@ -118,9 +118,9 @@ SELECTION_RULES = [
             {"source": "payload", "field_path": "output_kind", "operator": "contains", "value": "ГП"},
         ],
         "actions": [
-            {"action": "require_section", "section_code": "WIP_WH"},
-            {"action": "require_section", "section_code": "SAW"},
-            {"action": "require_section", "section_code": "PACK"},
+            {"action": "require_section", "section_code": "WIP_STOCK"},
+            {"action": "require_section", "section_code": "SAWING"},
+            {"action": "require_section", "section_code": "PACKING"},
         ],
     },
     {
@@ -134,9 +134,9 @@ SELECTION_RULES = [
             {"source": "payload", "field_path": "output_kind", "operator": "contains", "value": "П/ф"},
         ],
         "actions": [
-            {"action": "exclude_section", "section_code": "WIP_WH"},
-            {"action": "exclude_section", "section_code": "SAW"},
-            {"action": "exclude_section", "section_code": "PACK"},
+            {"action": "exclude_section", "section_code": "WIP_STOCK"},
+            {"action": "exclude_section", "section_code": "SAWING"},
+            {"action": "exclude_section", "section_code": "PACKING"},
         ],
     },
     {
@@ -150,7 +150,7 @@ SELECTION_RULES = [
             {"source": "product", "field_path": "skip_shot_blast", "operator": "equals", "value": True},
         ],
         "actions": [
-            {"action": "exclude_section", "section_code": "SHOT"},
+            {"action": "exclude_section", "section_code": "SHOT_BLAST"},
         ],
     },
     {
@@ -164,7 +164,7 @@ SELECTION_RULES = [
             {"source": "product", "field_path": "skip_shot_blast", "operator": "not_equals", "value": True},
         ],
         "actions": [
-            {"action": "require_section", "section_code": "SHOT"},
+            {"action": "require_section", "section_code": "SHOT_BLAST"},
             {"action": "require_section", "section_code": "PREP_STOCK"},
         ],
     },
@@ -199,7 +199,7 @@ SELECTION_RULES = [
         "actions": [
             {
                 "action": "set_operation_by_mapping",
-                "section_code": "ANOD",
+                "section_code": "ANODIZING",
                 "group_code": "ANOD",
                 "lookup_field": "color",
                 "mapping": [
@@ -230,7 +230,7 @@ SELECTION_RULES = [
         "actions": [
             {
                 "action": "set_operation_by_mapping",
-                "section_code": "ANOD",
+                "section_code": "ANODIZING",
                 "group_code": "PACK",
                 "lookup_field": "output_kind",
                 "mapping": [

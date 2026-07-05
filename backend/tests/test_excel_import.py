@@ -429,7 +429,7 @@ async def test_replace_draft_mode_creates_cancel_for_missing_rows(client, sessio
     component = Product(sku="FG-TEST-RAW", name="Test Raw", type=ProductType.component, unit="pcs")
     sections = [
         Section(code="CUT", name="Cut"),
-        Section(code="PACK", name="Pack"),
+        Section(code="PACKING", name="Pack"),
     ]
     session.add_all([product, component, *sections])
     await session.flush()
@@ -730,7 +730,7 @@ async def test_import_with_normalize_hanger_quantity_rounds_up(
 
     product = Product(sku="FG-TEST", name="Test Product", type=ProductType.finished_good, unit="pcs", quantity_per_hanger=5)
     component = Product(sku="FG-TEST-RAW", name="Test Raw", type=ProductType.component, unit="pcs")
-    sections = [Section(code="CUT", name="Cut"), Section(code="PACK", name="Pack")]
+    sections = [Section(code="CUT", name="Cut"), Section(code="PACKING", name="Pack")]
     session.add_all([product, component, *sections])
     await session.flush()
 
@@ -807,7 +807,7 @@ async def test_import_without_normalize_hanger_quantity_keeps_original(
 
     product = Product(sku="FG-TEST", name="Test Product", type=ProductType.finished_good, unit="pcs", quantity_per_hanger=5)
     component = Product(sku="FG-TEST-RAW", name="Test Raw", type=ProductType.component, unit="pcs")
-    sections = [Section(code="CUT", name="Cut"), Section(code="PACK", name="Pack")]
+    sections = [Section(code="CUT", name="Cut"), Section(code="PACKING", name="Pack")]
     session.add_all([product, component, *sections])
     await session.flush()
 
@@ -875,7 +875,7 @@ async def test_import_product_without_quantity_per_hanger_shows_warning(
     # Продукт БЕЗ quantity_per_hanger
     product = Product(sku="FG-TEST", name="Test Product", type=ProductType.finished_good, unit="pcs")
     component = Product(sku="FG-TEST-RAW", name="Test Raw", type=ProductType.component, unit="pcs")
-    sections = [Section(code="CUT", name="Cut"), Section(code="PACK", name="Pack")]
+    sections = [Section(code="CUT", name="Cut"), Section(code="PACKING", name="Pack")]
     session.add_all([product, component, *sections])
     await session.flush()
 
@@ -942,7 +942,7 @@ async def test_import_already_multiple_no_warning(
 
     product = Product(sku="FG-TEST", name="Test Product", type=ProductType.finished_good, unit="pcs", quantity_per_hanger=5)
     component = Product(sku="FG-TEST-RAW", name="Test Raw", type=ProductType.component, unit="pcs")
-    sections = [Section(code="CUT", name="Cut"), Section(code="PACK", name="Pack")]
+    sections = [Section(code="CUT", name="Cut"), Section(code="PACKING", name="Pack")]
     session.add_all([product, component, *sections])
     await session.flush()
 

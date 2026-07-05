@@ -29,18 +29,18 @@ from app.services.route_selection import select_route_for_payload
 
 
 DEFAULT_SECTIONS = [
-    {"code": "WH", "name": "Склад сырья", "sort_order": 10, "type": "raw_stock"},
-    {"code": "DRILL", "name": "Сверловка", "sort_order": 20, "type": "production"},
-    {"code": "PRESS", "name": "Пресс", "sort_order": 30, "type": "production"},
-    {"code": "SHOT", "name": "Дробеструй", "sort_order": 40, "type": "production"},
+    {"code": "RAW_STOCK", "name": "Склад сырья", "sort_order": 10, "type": "raw_stock"},
+    {"code": "DRILLING", "name": "Сверловка", "sort_order": 20, "type": "production"},
+    {"code": "PRESSING", "name": "Пресс", "sort_order": 30, "type": "production"},
+    {"code": "SHOT_BLAST", "name": "Дробеструй", "sort_order": 40, "type": "production"},
     {"code": "PREP_STOCK", "name": "Склад подготовки", "sort_order": 45, "type": "wip_stock"},
-    {"code": "ANOD", "name": "Анодирование", "sort_order": 50, "type": "production"},
-    {"code": "WIP_WH", "name": "Склад полуфабриката", "sort_order": 60, "type": "wip_stock"},
-    {"code": "SAW", "name": "Пила", "sort_order": 70, "type": "production"},
-    {"code": "PACK", "name": "Упаковка", "sort_order": 80, "type": "production"},
-    {"code": "FG_WH", "name": "Склад готовой продукции", "sort_order": 90, "type": "finished_stock"},
+    {"code": "ANODIZING", "name": "Анодирование", "sort_order": 50, "type": "production"},
+    {"code": "WIP_STOCK", "name": "Склад полуфабриката", "sort_order": 60, "type": "wip_stock"},
+    {"code": "SAWING", "name": "Пила", "sort_order": 70, "type": "production"},
+    {"code": "PACKING", "name": "Упаковка", "sort_order": 80, "type": "production"},
+    {"code": "FINISHED_STOCK", "name": "Склад готовой продукции", "sort_order": 90, "type": "finished_stock"},
     {"code": "SHIPMENT", "name": "К отгрузке", "sort_order": 100, "type": "finished_stock"},
-    {"code": "SENT", "name": "Отправлено", "sort_order": 110, "type": "finished_stock"},
+    {"code": "SHIPPED", "name": "Отправлено", "sort_order": 110, "type": "finished_stock"},
 ]
 
 
@@ -136,7 +136,7 @@ async def test_route_selection_rule_can_be_updated(client, session) -> None:
     rules_response = await client.get("/api/route-selection-rules")
     assert rules_response.status_code == 200
     rule = rules_response.json()[0]
-    drill = await session.scalar(select(Section).where(Section.code == "DRILL"))
+    drill = await session.scalar(select(Section).where(Section.code == "DRILLING"))
 
     update_response = await client.put(
         f"/api/route-selection-rules/{rule['id']}",
@@ -184,10 +184,10 @@ async def test_seeded_rules_select_drill_finished_good_route(client, session) ->
     assert result.route_match_reason == "no_route_candidate"
     # DRILL should be required (from global_drill rule)
     required_codes = {s["code"] for s in result.required_sections}
-    assert "DRILL" in required_codes
+    assert "DRILLING" in required_codes
     # PRESS should be excluded (from global_drill rule)
     excluded_codes = {s["code"] for s in result.excluded_sections}
-    assert "PRESS" in excluded_codes
+    assert "PRESSING" in excluded_codes
 
 
 @pytest.mark.asyncio
@@ -214,9 +214,9 @@ async def test_seeded_rules_exclude_finished_good_branch_for_semi_finished(clien
     assert result.route is None
     assert result.route_match_reason == "no_route_candidate"
     excluded_codes = {s["code"] for s in result.excluded_sections}
-    assert "WIP_WH" in excluded_codes
-    assert "SAW" in excluded_codes
-    assert "PACK" in excluded_codes
+    assert "WIP_STOCK" in excluded_codes
+    assert "SAWING" in excluded_codes
+    assert "PACKING" in excluded_codes
 
 
 @pytest.mark.skip(reason="Phase 4: release tests need dynamic route builder")
@@ -316,7 +316,7 @@ async def test_cleanup_endpoints(client, session) -> None:
     
     # Добавим одну операцию участка для проверки
     from app.models.route import SectionOperation
-    section = await session.scalar(select(Section).where(Section.code == "WH"))
+    section = await session.scalar(select(Section).where(Section.code == "RAW_STOCK"))
     op = SectionOperation(section_id=section.id, operation_code="OP_TEST", operation_name="Test Op")
     session.add(op)
     await session.commit()

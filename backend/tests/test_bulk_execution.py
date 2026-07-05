@@ -45,6 +45,30 @@ async def _make_user(session, email: str = "bulk-exec@test.local") -> User:
     return user
 
 
+async def _seed_stock_balance(
+    session,
+    *,
+    user_id: int,
+    location_id: int,
+    product_id: int,
+    qty: Decimal,
+) -> None:
+    from app.stock.services import StockCommand, StockCommandService, Reason
+
+    svc = StockCommandService()
+    await svc.record(
+        session,
+        StockCommand(
+            product_id=product_id,
+            to_location_id=location_id,
+            quantity=qty,
+            reason=Reason.MANUAL_IN,
+            created_by=user_id,
+        ),
+    )
+    await session.commit()
+
+
 async def _make_route(session, sku: str) -> tuple[Product, ProductionRoute, list[RouteStage]]:
     product = Product(
         sku=sku,
@@ -53,8 +77,9 @@ async def _make_route(session, sku: str) -> tuple[Product, ProductionRoute, list
         unit="pcs",
     )
     sections = [
-        Section(code=f"{sku}-ISSUE", name="Issue", type="raw_stock"),
-        Section(code=f"{sku}-FINAL", name="Final", type="finished_stock"),
+        Section(code=f"{sku}-ISSUE", name="Issue", type="raw_stock", is_active=True),
+        Section(code=f"{sku}-PROD", name="Production", type="production", is_active=True),
+        Section(code=f"{sku}-FINAL", name="Final", type="finished_stock", is_active=True),
     ]
     session.add_all([product, *sections])
     await session.flush()
@@ -75,7 +100,7 @@ async def _make_route(session, sku: str) -> tuple[Product, ProductionRoute, list
         )
     )
 
-    step_ops = ["ISSUE_RAW", "ACCEPT_FINISHED"]
+    step_ops = ["ISSUE_RAW", "PROD", "ACCEPT_FINISHED"]
     stages: list[RouteStage] = []
     for idx, (section, op_code) in enumerate(zip(sections, step_ops, strict=True), start=1):
         stage = RouteStage(
@@ -326,15 +351,24 @@ async def test_manual_pass_batch_full_route(client, session) -> None:
 @pytest.mark.asyncio
 async def test_manual_pass_batch_isolates_failure(client, session) -> None:
     user = await _make_user(session, "manual-pass-isolate@test.local")
-    plan, positions, _, _ = await _make_plan_with_positions(
+    plan, positions, _, stages = await _make_plan_with_positions(
         session, "FG-MANUAL-ISO", 2, status=PlanPositionStatus.approved
+    )
+    position_id = positions[0].id
+    raw_section_id = stages[0].section_id
+    await _seed_stock_balance(
+        session,
+        user_id=user.id,
+        location_id=raw_section_id,
+        product_id=positions[0].product_id,
+        qty=positions[0].quantity,
     )
     headers = _auth_headers(user)
 
     response = await client.post(
         "/api/production-planning/rows/manual-pass-batch",
         json={
-            "position_ids": [positions[0].id, 99_999],
+            "position_ids": [position_id, 99_999],
             "complete_route": True,
         },
         headers=headers,
@@ -342,5 +376,5 @@ async def test_manual_pass_batch_isolates_failure(client, session) -> None:
     assert response.status_code == 200
     payload = response.json()
     by_id = {r["position_id"]: r for r in payload["results"]}
-    assert by_id[positions[0].id]["status"] == "success"
+    assert by_id[position_id]["status"] == "success"
     assert by_id[99_999]["status"] == "failed"

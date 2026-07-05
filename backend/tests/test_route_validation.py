@@ -145,12 +145,12 @@ async def test_validate_route_match_valid(session):
         "FG-OK",
         [
             ("ISSUE", "raw_stock", "Выдача"),
-            ("DRILL", "production", "Сверло"),
-            ("SHOT", "production", "Дробеструй"),
-            ("ANOD", "production", "Анод"),
+            ("DRILLING", "production", "Сверло"),
+            ("SHOT_BLAST", "production", "Дробеструй"),
+            ("ANODIZING", "production", "Анод"),
             ("INTER", "wip_stock", "Пром.склад"),
-            ("SAW", "production", "Пила"),
-            ("PACK", "production", "Упаковка"),
+            ("SAWING", "production", "Пила"),
+            ("PACKING", "production", "Упаковка"),
             ("FINAL", "finished_stock", "Сдача"),
         ],
     )
@@ -177,12 +177,12 @@ async def test_validate_route_match_pack_glue_as_attribute(session):
         "FG-NO-GLUE",
         [
             ("ISSUE", "raw_stock", "Выдача"),
-            ("DRILL", "production", "Сверло"),
-            ("SHOT", "production", "Дробеструй"),
-            ("ANOD", "production", "Анод"),
+            ("DRILLING", "production", "Сверло"),
+            ("SHOT_BLAST", "production", "Дробеструй"),
+            ("ANODIZING", "production", "Анод"),
             ("INTER", "wip_stock", "Пром.склад"),
-            ("SAW", "production", "Пила"),
-            ("PACK", "production", "Упаковка"),
+            ("SAWING", "production", "Пила"),
+            ("PACKING", "production", "Упаковка"),
             ("FINAL", "finished_stock", "Сдача"),
         ],
     )
@@ -211,12 +211,12 @@ async def test_validate_route_match_wrong_branch(session):
         "FG-BRANCH",
         [
             ("ISSUE", "raw_stock", "Выдача"),
-            ("DRILL", "production", "Сверло"),
-            ("SHOT", "production", "Дробеструй"),
-            ("ANOD", "production", "Анод"),
+            ("DRILLING", "production", "Сверло"),
+            ("SHOT_BLAST", "production", "Дробеструй"),
+            ("ANODIZING", "production", "Анод"),
             ("INTER", "wip_stock", "Пром.склад"),
-            ("SAW", "production", "Пила"),
-            ("PACK", "production", "Упаковка"),
+            ("SAWING", "production", "Пила"),
+            ("PACKING", "production", "Упаковка"),
             ("FINAL", "finished_stock", "Сдача"),
         ],
     )
@@ -235,7 +235,7 @@ async def test_validate_route_match_wrong_branch(session):
     await _add_selection_rule(
         session,
         "FG-BRANCH",
-        [("exclude_section", "INTER"), ("exclude_section", "SAW"), ("exclude_section", "PACK")],
+        [("exclude_section", "INTER"), ("exclude_section", "SAWING"), ("exclude_section", "PACKING")],
     )
 
     issues = await validate_route_match(session, position)
@@ -249,11 +249,11 @@ async def test_validate_route_match_missing_anod(session):
         "FG-NO-ANOD",
         [
             ("ISSUE", "raw_stock", "Выдача"),
-            ("DRILL", "production", "Сверло"),
-            ("SHOT", "production", "Дробеструй"),
+            ("DRILLING", "production", "Сверло"),
+            ("SHOT_BLAST", "production", "Дробеструй"),
             ("INTER", "wip_stock", "Пром.склад"),
-            ("SAW", "production", "Пила"),
-            ("PACK", "production", "Упаковка"),
+            ("SAWING", "production", "Пила"),
+            ("PACKING", "production", "Упаковка"),
             ("FINAL", "finished_stock", "Сдача"),
         ],
     )
@@ -269,7 +269,7 @@ async def test_validate_route_match_missing_anod(session):
         route.id,
     )
 
-    await _add_selection_rule(session, "FG-NO-ANOD", [("require_section", "ANOD")])
+    await _add_selection_rule(session, "FG-NO-ANOD", [("require_section", "ANODIZING")])
 
     issues = await validate_route_match(session, position)
     assert any("route_missing_required_step" in i for i in issues)
@@ -283,12 +283,12 @@ async def test_validate_route_match_primary_operation_mismatch(session):
         "FG-PRESS",
         [
             ("ISSUE", "raw_stock", "Выдача"),
-            ("PRESS", "production", "PRESS_WINDOW"),
-            ("SHOT", "production", "Дробеструй"),
-            ("ANOD", "production", "Анод"),
+            ("PRESSING", "production", "PRESS_WINDOW"),
+            ("SHOT_BLAST", "production", "Дробеструй"),
+            ("ANODIZING", "production", "Анод"),
             ("INTER", "wip_stock", "Пром.склад"),
-            ("SAW", "production", "Пила"),
-            ("PACK", "production", "Упаковка"),
+            ("SAWING", "production", "Пила"),
+            ("PACKING", "production", "Упаковка"),
             ("FINAL", "finished_stock", "Сдача"),
         ],
     )
@@ -304,7 +304,7 @@ async def test_validate_route_match_primary_operation_mismatch(session):
         route.id,
     )
 
-    await _add_selection_rule(session, "FG-PRESS", [("require_section", "DRILL"), ("exclude_section", "PRESS")])
+    await _add_selection_rule(session, "FG-PRESS", [("require_section", "DRILLING"), ("exclude_section", "PRESSING")])
 
     issues = await validate_route_match(session, position)
     assert any("route_missing_required_step" in i or "route_contains_excluded_step" in i for i in issues)
@@ -318,12 +318,12 @@ async def test_validate_route_match_skips_for_manual_confirmed(session):
         "FG-MANUAL",
         [
             ("ISSUE", "raw_stock", "Выдача"),
-            ("PRESS", "production", "PRESS_WINDOW"),
-            ("SHOT", "production", "Дробеструй"),
-            ("ANOD", "production", "Анод"),
+            ("PRESSING", "production", "PRESS_WINDOW"),
+            ("SHOT_BLAST", "production", "Дробеструй"),
+            ("ANODIZING", "production", "Анод"),
             ("INTER", "wip_stock", "Пром.склад"),
-            ("SAW", "production", "Пила"),
-            ("PACK", "production", "Упаковка"),
+            ("SAWING", "production", "Пила"),
+            ("PACKING", "production", "Упаковка"),
             ("FINAL", "finished_stock", "Сдача"),
         ],
     )

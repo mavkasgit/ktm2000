@@ -56,10 +56,10 @@ async def seed_data(session: AsyncSession):
     """Инициализация необходимых тестовых справочников."""
     # 1. Секции
     sections_def = [
-        {"code": "WH", "name": "Склад сырья", "sort_order": 10, "kind": "raw_stock"},
-        {"code": "ANOD", "name": "Анодирование", "sort_order": 50, "kind": "production"},
-        {"code": "PACK", "name": "Упаковка", "sort_order": 80, "kind": "production"},
-        {"code": "FG_WH", "name": "Склад готовой продукции", "sort_order": 90, "kind": "finished_stock"},
+        {"code": "RAW_STOCK", "name": "Склад сырья", "sort_order": 10, "kind": "raw_stock"},
+        {"code": "ANODIZING", "name": "Анодирование", "sort_order": 50, "kind": "production"},
+        {"code": "PACKING", "name": "Упаковка", "sort_order": 80, "kind": "production"},
+        {"code": "FINISHED_STOCK", "name": "Склад готовой продукции", "sort_order": 90, "kind": "finished_stock"},
     ]
     
     sections = {}
@@ -78,7 +78,7 @@ async def seed_data(session: AsyncSession):
         sections[item["code"]] = sec
 
     # 2. Операции для ANOD и PACK
-    anod_sec = sections["ANOD"]
+    anod_sec = sections["ANODIZING"]
     op_anod = await session.scalar(select(SectionOperation).where(SectionOperation.operation_code == "ANOD_BENCH"))
     if not op_anod:
         session.add(SectionOperation(
@@ -91,7 +91,7 @@ async def seed_data(session: AsyncSession):
             sort_order=1,
         ))
         
-    pack_sec = sections["PACK"]
+    pack_sec = sections["PACKING"]
     op_pack = await session.scalar(select(SectionOperation).where(SectionOperation.operation_code == "PACK_BENCH"))
     if not op_pack:
         session.add(SectionOperation(
@@ -125,7 +125,7 @@ async def seed_data(session: AsyncSession):
             is_active=True,
             priority=1000,
             import_template_id=template.id,
-            route_sections=["WH", "ANOD", "PACK", "FG_WH"],
+            route_sections=["RAW_STOCK", "ANODIZING", "PACKING", "FINISHED_STOCK"],
         )
         session.add(profile)
         await session.flush()
@@ -139,8 +139,8 @@ async def seed_data(session: AsyncSession):
             phase="route_select",
             conditions=[],
             actions=[
-                {"action_type": "require_section", "section_code": "ANOD"},
-                {"action_type": "require_section", "section_code": "PACK"},
+                {"action_type": "require_section", "section_code": "ANODIZING"},
+                {"action_type": "require_section", "section_code": "PACKING"},
             ],
         )
         session.add(rule)

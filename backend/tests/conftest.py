@@ -387,6 +387,9 @@ async def client(session: AsyncSession) -> AsyncIterator[AsyncClient]:
 @pytest_asyncio.fixture
 async def auth_client(session: AsyncSession) -> AsyncIterator[AsyncClient]:
     """Client with a valid JWT token in Authorization header."""
+    from sqlalchemy import select
+    from sqlalchemy.orm import selectinload
+
     from app.core.security import create_access_token, get_password_hash
     from app.models.user import User, UserRole
 
@@ -402,8 +405,18 @@ async def auth_client(session: AsyncSession) -> AsyncIterator[AsyncClient]:
     session.add(test_user)
     await session.commit()
 
+    # Eager-load sections so MeResponse.section_ids does not trigger lazy IO
+    loaded = await session.execute(
+        select(User).where(User.id == test_user.id).options(selectinload(User.sections))
+    )
+    test_user = loaded.scalar_one()
+
     # Generate JWT token
     token = create_access_token(subject=test_user.username)
+
+    # Override get_current_user to return test_user directly (no DB lookup)
+    from app.api.deps import get_current_user
+    app.dependency_overrides[get_current_user] = lambda: test_user
 
     async def override_get_db() -> AsyncIterator[AsyncSession]:
         try:
@@ -414,11 +427,12 @@ async def auth_client(session: AsyncSession) -> AsyncIterator[AsyncClient]:
     app.dependency_overrides[get_db] = override_get_db
 
     transport = ASGITransport(app=app)
-    async with AsyncClient(
-        transport=transport,
-        base_url="http://test",
-        headers={"Authorization": f"Bearer {token}"},
-    ) as ac:
-        yield ac
-
-    app.dependency_overrides.clear()
+    try:
+        async with AsyncClient(
+            transport=transport,
+            base_url="http://test",
+            headers={"Authorization": f"Bearer {token}"},
+        ) as ac:
+            yield ac
+    finally:
+        app.dependency_overrides.clear()

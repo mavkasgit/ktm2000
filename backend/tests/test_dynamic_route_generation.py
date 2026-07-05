@@ -32,12 +32,12 @@ from app.services.plan_import_service import _make_change_items
 
 
 DEFAULT_SECTIONS = [
-    {"code": "WH", "name": "Склад сырья", "sort_order": 10, "type": "raw_stock"},
-    {"code": "DRILL", "name": "Сверловка", "sort_order": 20, "type": "production"},
-    {"code": "PRESS", "name": "Пресс", "sort_order": 30, "type": "production"},
-    {"code": "ANOD", "name": "Анодирование", "sort_order": 50, "type": "production"},
-    {"code": "PACK", "name": "Упаковка", "sort_order": 80, "type": "production"},
-    {"code": "FG_WH", "name": "Склад готовой продукции", "sort_order": 90, "type": "finished_stock"},
+    {"code": "RAW_STOCK", "name": "Склад сырья", "sort_order": 10, "type": "raw_stock"},
+    {"code": "DRILLING", "name": "Сверловка", "sort_order": 20, "type": "production"},
+    {"code": "PRESSING", "name": "Пресс", "sort_order": 30, "type": "production"},
+    {"code": "ANODIZING", "name": "Анодирование", "sort_order": 50, "type": "production"},
+    {"code": "PACKING", "name": "Упаковка", "sort_order": 80, "type": "production"},
+    {"code": "FINISHED_STOCK", "name": "Склад готовой продукции", "sort_order": 90, "type": "finished_stock"},
 ]
 
 
@@ -54,7 +54,7 @@ async def _seed_sections(session) -> None:
     await session.flush()
 
     # Add SectionOperation for ANOD section
-    anod_section = (await session.execute(select(Section).where(Section.code == "ANOD"))).scalar_one()
+    anod_section = (await session.execute(select(Section).where(Section.code == "ANODIZING"))).scalar_one()
     session.add(SectionOperation(
         section_id=anod_section.id,
         operation_code="ANOD_01",
@@ -75,7 +75,7 @@ async def _seed_sections(session) -> None:
     ))
 
     # Add SectionOperation for PACK section
-    pack_section = (await session.execute(select(Section).where(Section.code == "PACK"))).scalar_one()
+    pack_section = (await session.execute(select(Section).where(Section.code == "PACKING"))).scalar_one()
     session.add(SectionOperation(
         section_id=pack_section.id,
         operation_code="PACK_STRETCH",
@@ -144,7 +144,7 @@ async def _make_profile_with_rules(session, template_id: int | None = None) -> i
         is_active=True,
         priority=1000,
         import_template_id=template_id,
-        route_sections=["WH", "ANOD", "PACK", "FG_WH"],
+        route_sections=["RAW_STOCK", "ANODIZING", "PACKING", "FINISHED_STOCK"],
     )
     session.add(profile)
     await session.flush()
@@ -158,10 +158,10 @@ async def _make_profile_with_rules(session, template_id: int | None = None) -> i
         phase="route_select",
         conditions=[],
         actions=[
-            {"action": "require_section", "section_code": "WH"},
-            {"action": "require_section", "section_code": "ANOD"},
-            {"action": "require_section", "section_code": "PACK"},
-            {"action": "require_section", "section_code": "FG_WH"},
+            {"action": "require_section", "section_code": "RAW_STOCK"},
+            {"action": "require_section", "section_code": "ANODIZING"},
+            {"action": "require_section", "section_code": "PACKING"},
+            {"action": "require_section", "section_code": "FINISHED_STOCK"},
         ],
     ))
 
@@ -178,7 +178,7 @@ async def _make_profile_with_rules(session, template_id: int | None = None) -> i
         actions=[
             {
                 "action": "set_operation_by_mapping",
-                "section_code": "ANOD",
+                "section_code": "ANODIZING",
                 "group_code": "ANOD",
                 "lookup_field": "color",
                 "mapping": [
@@ -188,7 +188,7 @@ async def _make_profile_with_rules(session, template_id: int | None = None) -> i
             },
             {
                 "action": "set_operation_by_mapping",
-                "section_code": "PACK",
+                "section_code": "PACKING",
                 "group_code": "PACK",
                 "lookup_field": "output_kind",
                 "mapping": [

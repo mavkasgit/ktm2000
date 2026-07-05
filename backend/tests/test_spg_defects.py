@@ -8,7 +8,7 @@ from app.models.spg import StorageProductionGroup
 from app.models.route import ProductionRoute, RouteStage, RouteOperation, RouteRuleProfile
 from app.models.defect import Defect, DefectItem, DefectStatus, DefectDecisionType
 from app.models.user import User, UserRole
-from app.stock import Reason, StockTransaction
+from app.stock import Reason, StockCommand, StockCommandService, StockTransaction
 
 
 async def _make_admin(session, email: str = "admin-def@test.local") -> User:
@@ -37,6 +37,26 @@ async def _make_product(session, sku: str) -> Product:
     return product
 
 
+async def _seed_section_good_stock(
+    session,
+    *,
+    product_id: int,
+    section_id: int,
+    quantity: Decimal | int,
+    created_by: int,
+) -> None:
+    """Seed GOOD stock at a section so scrap decisions can debit from_location."""
+    svc = StockCommandService()
+    await svc.record(session, StockCommand(
+        product_id=product_id,
+        from_location_id=None,
+        to_location_id=section_id,
+        quantity=Decimal(str(quantity)),
+        reason=Reason.MANUAL_IN,
+        created_by=created_by,
+    ))
+
+
 async def _setup_route_with_stages(session) -> ProductionRoute:
     # 1. Create RouteRuleProfile
     profile = RouteRuleProfile(
@@ -44,7 +64,7 @@ async def _setup_route_with_stages(session) -> ProductionRoute:
         name="Упаковочная карта РП",
         is_active=True,
         priority=1000,
-        route_sections=["DRILL", "SAW", "SENT"],
+        route_sections=["DRILLING", "SAWING", "SHIPPED"],
     )
     session.add(profile)
     await session.flush()
@@ -60,9 +80,9 @@ async def _setup_route_with_stages(session) -> ProductionRoute:
     await session.flush()
 
     # 3. Create stages and operations
-    sec_drill = Section(code="DRILL", name="Сверловка", is_active=True)
-    sec_saw = Section(code="SAW", name="Резка", is_active=True)
-    sec_sent = Section(code="SENT", name="Отправлено", is_active=True)
+    sec_drill = Section(code="DRILLING", name="Сверловка", is_active=True)
+    sec_saw = Section(code="SAWING", name="Резка", is_active=True)
+    sec_sent = Section(code="SHIPPED", name="Отправлено", is_active=True)
     session.add(sec_drill)
     session.add(sec_saw)
     session.add(sec_sent)
@@ -96,9 +116,9 @@ async def test_get_product_route_stages(client, session):
     assert resp.status_code == 200, resp.text
     data = resp.json()
     assert len(data) == 2
-    assert data[0]["section_code"] == "DRILL"
+    assert data[0]["section_code"] == "DRILLING"
     assert data[0]["operations"][0]["operation_code"] == "DRILL_OP"
-    assert data[1]["section_code"] == "SAW"
+    assert data[1]["section_code"] == "SAWING"
     assert data[1]["operations"][0]["operation_code"] == "SAW_OP"
 
 
@@ -115,7 +135,6 @@ async def test_get_product_last_completed_operation(client, session):
         PlanPositionValidationStatus,
     )
     from app.models.route import SectionOperation
-    from app.stock.models import Reason, StockCommand, StockCommandService
     from datetime import datetime, date
 
     admin = await _make_admin(session)
@@ -129,7 +148,7 @@ async def test_get_product_last_completed_operation(client, session):
     assert data.get("section_id") is None
 
     # 2. Complete an operation via StockTransaction
-    sec_drill = await session.scalar(select(Section).where(Section.code == "DRILL"))
+    sec_drill = await session.scalar(select(Section).where(Section.code == "DRILLING"))
     stage1 = await session.scalar(select(RouteStage).where(RouteStage.route_id == route.id, RouteStage.sequence == 1))
 
     plan = ProductionPlan(plan_no="PLAN-TEST-OP", name="Test Plan", period_start=date(2026, 6, 1), period_end=date(2026, 6, 30))
@@ -197,8 +216,9 @@ async def test_get_product_last_completed_operation(client, session):
     svc = StockCommandService()
     await svc.record(session, StockCommand(
         product_id=product.id, task_id=task.id,
-        from_location_id=sec_drill.id, to_location_id=sec_drill.id,
+        from_location_id=None, to_location_id=sec_drill.id,
         quantity=Decimal("100"), reason=Reason.COMPLETE,
+        created_by=admin.id,
     ))
     await session.commit()
 
@@ -215,12 +235,20 @@ async def test_get_product_last_completed_operation(client, session):
 
 @pytest.mark.asyncio
 async def test_manual_defect_registration_and_scrap_decision(client, session):
-    await _make_admin(session)
+    admin = await _make_admin(session)
     product = await _make_product(session, "FG-DEFECT-TEST")
     route = await _setup_route_with_stages(session)
     
-    drill_sec = await session.scalar(select(Section).where(Section.code == "DRILL"))
+    drill_sec = await session.scalar(select(Section).where(Section.code == "DRILLING"))
     stage = await session.scalar(select(RouteStage).where(RouteStage.route_id == route.id).limit(1))
+
+    await _seed_section_good_stock(
+        session,
+        product_id=product.id,
+        section_id=drill_sec.id,
+        quantity=10,
+        created_by=admin.id,
+    )
 
     # Register defect manually
     resp = await client.post(
@@ -262,7 +290,6 @@ async def test_manual_defect_registration_and_scrap_decision(client, session):
     assert defect.status == DefectStatus.scrapped
 
     # Verify StockTransaction(SCRAP) was created
-    from app.stock.models import StockTransaction
     tx = await session.get(StockTransaction, defect.stock_transaction_id)
     assert tx is not None
     assert tx.reason == Reason.SCRAP
@@ -278,7 +305,7 @@ async def test_manual_defect_invalid_rework_decision(client, session):
     session.add(spg)
     await session.flush()
 
-    drill_sec = await session.scalar(select(Section).where(Section.code == "DRILL"))
+    drill_sec = await session.scalar(select(Section).where(Section.code == "DRILLING"))
     stage = await session.scalar(select(RouteStage).limit(1))
 
     # 1. Register defect manually (no task_id)
@@ -334,12 +361,20 @@ async def test_manual_defect_invalid_stage_or_remainder(client, session):
 @pytest.mark.asyncio
 async def test_manual_defect_scrap_exceeding_quantity(client, session):
     """Scrap decision создаёт StockTransaction(SCRAP) независимо от количества."""
-    await _make_admin(session, "defect-exceed-scrap@test.local")
+    admin = await _make_admin(session, "defect-exceed-scrap@test.local")
     product = await _make_product(session, "FG-EXCEED-TEST")
     await _setup_route_with_stages(session)
 
-    drill_sec = await session.scalar(select(Section).where(Section.code == "DRILL"))
+    drill_sec = await session.scalar(select(Section).where(Section.code == "DRILLING"))
     stage = await session.scalar(select(RouteStage).limit(1))
+
+    await _seed_section_good_stock(
+        session,
+        product_id=product.id,
+        section_id=drill_sec.id,
+        quantity=20,
+        created_by=admin.id,
+    )
 
     # Register defect
     resp = await client.post(

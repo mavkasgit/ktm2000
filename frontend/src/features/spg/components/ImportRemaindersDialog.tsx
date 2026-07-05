@@ -202,15 +202,15 @@ interface ImportRemaindersDialogProps {
   onSaved: () => void;
 }
 
-const SEED_TARGET_SECTION_CODES = ["WH", "PREP_STOCK", "WIP_WH", "FG_WH", "SHIPMENT", "SENT"] as const;
+const SEED_TARGET_SECTION_CODES = ["RAW_STOCK", "PREP_STOCK", "WIP_STOCK", "FINISHED_STOCK", "SHIPMENT", "SHIPPED"] as const;
 
 const SEED_TARGET_SECTION_FALLBACKS: Record<(typeof SEED_TARGET_SECTION_CODES)[number], string> = {
-  WH: "Склад сырья",
+  RAW_STOCK: "Склад сырья",
   PREP_STOCK: "Склад подготовки",
-  WIP_WH: "Склад полуфабриката",
-  FG_WH: "Склад готовой продукции",
+  WIP_STOCK: "Склад полуфабриката",
+  FINISHED_STOCK: "Склад готовой продукции",
   SHIPMENT: "К отгрузке",
-  SENT: "Отправлено",
+  SHIPPED: "Отправлено",
 };
 
 const headerCellClass = `${DATA_TABLE_STYLES.headerRow} ${DATA_TABLE_STYLES.headerCell}`;
@@ -257,9 +257,9 @@ export function ImportRemaindersDialog({
 
   const exampleTargetSections = useMemo(
     () => ({
-      raw: seedTargetSections.find((s) => s.code === "WH")?.name ?? "Склад сырья",
+      raw: seedTargetSections.find((s) => s.code === "RAW_STOCK")?.name ?? "Склад сырья",
       prep: seedTargetSections.find((s) => s.code === "PREP_STOCK")?.name ?? "Склад подготовки",
-      wip: seedTargetSections.find((s) => s.code === "WIP_WH")?.name ?? "Склад полуфабриката",
+      wip: seedTargetSections.find((s) => s.code === "WIP_STOCK")?.name ?? "Склад полуфабриката",
     }),
     [seedTargetSections],
   );

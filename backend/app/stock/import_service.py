@@ -910,9 +910,9 @@ async def apply_remainders_import(
 
 
 _TEMPLATE_SECTION_FALLBACKS: dict[str, str] = {
-    "WH": "Склад сырья",
+    "RAW_STOCK": "Склад сырья",
     "PREP_STOCK": "Склад подготовки",
-    "WIP_WH": "Склад полуфабриката",
+    "WIP_STOCK": "Склад полуфабриката",
 }
 _TEMPLATE_ROW3_OPERATION_NAMES = ("Дробеструй", "Чёрный", "Стрейч")
 
@@ -959,9 +959,9 @@ async def generate_remainders_template_for_location(
     if location is None:
         raise ValueError(f"Location with id={location_id} not found")
 
-    raw_name = await _template_section_name(db, "WH")
+    raw_name = await _template_section_name(db, "RAW_STOCK")
     prep_name = await _template_section_name(db, "PREP_STOCK")
-    wip_name = await _template_section_name(db, "WIP_WH")
+    wip_name = await _template_section_name(db, "WIP_STOCK")
     row3_ops = await _template_example_row3_operations(db)
 
     wb = Workbook()

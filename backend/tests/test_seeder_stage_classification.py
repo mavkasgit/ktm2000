@@ -133,7 +133,7 @@ async def test_seed_routes_from_profile_marks_storage_as_transit(session: AsyncS
         name="Test Profile",
         is_active=True,
         priority=0,
-        route_sections=["WH", "DRILL", "PRESS", "WIP_WH", "PACK", "SENT"],
+        route_sections=["RAW_STOCK", "DRILLING", "PRESSING", "WIP_STOCK", "PACKING", "SHIPPED"],
         route_name_pattern="{operations}",
     )
     session.add(profile)
@@ -166,7 +166,7 @@ async def test_seed_routes_from_profile_marks_storage_as_transit(session: AsyncS
 
     assert len(stages) == 6  # WH, DRILL, PRESS, WIP_WH, PACK, SENT
 
-    storage_codes = {"WH", "WIP_WH", "SENT"}
+    storage_codes = {"RAW_STOCK", "WIP_STOCK", "SHIPPED"}
     for s in stages:
         if s.storage_section_id is not None:
             assert s.section_id is None

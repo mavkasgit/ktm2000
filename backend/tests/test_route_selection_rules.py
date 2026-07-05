@@ -52,9 +52,9 @@ async def _seed_profile_and_rules(session) -> int:
             "phase": "route_select",
             "conditions": [],
             "actions": [
-                {"action": "require_section", "section_id": _section_id("WH")},
-                {"action": "require_section", "section_id": _section_id("ANOD")},
-                {"action": "require_section", "section_id": _section_id("FG_WH")},
+                {"action": "require_section", "section_id": _section_id("RAW_STOCK")},
+                {"action": "require_section", "section_id": _section_id("ANODIZING")},
+                {"action": "require_section", "section_id": _section_id("FINISHED_STOCK")},
             ],
         },
         {
@@ -66,9 +66,9 @@ async def _seed_profile_and_rules(session) -> int:
                 {"source": "payload", "field_path": "operation", "operator": "contains", "value": "сверл", "case_sensitive": False},
             ],
             "actions": [
-                {"action": "require_section", "section_id": _section_id("DRILL")},
+                {"action": "require_section", "section_id": _section_id("DRILLING")},
                 {"action": "require_section", "section_id": _section_id("PREP_STOCK")},
-                {"action": "exclude_section", "section_id": _section_id("PRESS")},
+                {"action": "exclude_section", "section_id": _section_id("PRESSING")},
             ],
         },
         {
@@ -80,11 +80,11 @@ async def _seed_profile_and_rules(session) -> int:
                 {"source": "payload", "field_path": "operation", "operator": "not_empty", "value": None},
             ],
             "actions": [
-                {"action": "require_section", "section_code": "PRESS"},
-                {"action": "exclude_section", "section_code": "DRILL"},
+                {"action": "require_section", "section_code": "PRESSING"},
+                {"action": "exclude_section", "section_code": "DRILLING"},
                 {
                     "action": "set_operation_by_mapping",
-                    "section_code": "PRESS",
+                    "section_code": "PRESSING",
                     "group_code": "PRESS",
                     "lookup_field": "operation",
                     "mapping": [
@@ -103,8 +103,8 @@ async def _seed_profile_and_rules(session) -> int:
                 {"source": "payload", "field_path": "operation", "operator": "empty", "value": None},
             ],
             "actions": [
-                {"action": "exclude_section", "section_id": _section_id("DRILL")},
-                {"action": "exclude_section", "section_id": _section_id("PRESS")},
+                {"action": "exclude_section", "section_id": _section_id("DRILLING")},
+                {"action": "exclude_section", "section_id": _section_id("PRESSING")},
             ],
         },
         {
@@ -116,9 +116,9 @@ async def _seed_profile_and_rules(session) -> int:
                 {"source": "payload", "field_path": "output_kind", "operator": "contains", "value": "ГП"},
             ],
             "actions": [
-                {"action": "require_section", "section_id": _section_id("WIP_WH")},
-                {"action": "require_section", "section_id": _section_id("SAW")},
-                {"action": "require_section", "section_id": _section_id("PACK")},
+                {"action": "require_section", "section_id": _section_id("WIP_STOCK")},
+                {"action": "require_section", "section_id": _section_id("SAWING")},
+                {"action": "require_section", "section_id": _section_id("PACKING")},
             ],
         },
         {
@@ -130,9 +130,9 @@ async def _seed_profile_and_rules(session) -> int:
                 {"source": "payload", "field_path": "output_kind", "operator": "contains", "value": "П/Ф"},
             ],
             "actions": [
-                {"action": "exclude_section", "section_id": _section_id("WIP_WH")},
-                {"action": "exclude_section", "section_id": _section_id("SAW")},
-                {"action": "exclude_section", "section_id": _section_id("PACK")},
+                {"action": "exclude_section", "section_id": _section_id("WIP_STOCK")},
+                {"action": "exclude_section", "section_id": _section_id("SAWING")},
+                {"action": "exclude_section", "section_id": _section_id("PACKING")},
             ],
         },
         {
@@ -144,7 +144,7 @@ async def _seed_profile_and_rules(session) -> int:
                 {"source": "product", "field_path": "skip_shot_blast", "operator": "equals", "value": True},
             ],
             "actions": [
-                {"action": "exclude_section", "section_id": _section_id("SHOT")},
+                {"action": "exclude_section", "section_id": _section_id("SHOT_BLAST")},
             ],
         },
         {
@@ -156,7 +156,7 @@ async def _seed_profile_and_rules(session) -> int:
                 {"source": "product", "field_path": "skip_shot_blast", "operator": "not_equals", "value": True},
             ],
             "actions": [
-                {"action": "require_section", "section_id": _section_id("SHOT")},
+                {"action": "require_section", "section_id": _section_id("SHOT_BLAST")},
                 {"action": "require_section", "section_id": _section_id("PREP_STOCK")},
             ],
         },
@@ -184,7 +184,7 @@ async def _seed_profile_and_rules(session) -> int:
             "actions": [
                 {
                     "action": "set_operation_by_mapping",
-                    "section_code": "ANOD",
+                    "section_code": "ANODIZING",
                     "group_code": "ANOD",
                     "lookup_field": "color",
                     "mapping": [
@@ -211,7 +211,7 @@ async def _seed_profile_and_rules(session) -> int:
             "actions": [
                 {
                     "action": "set_operation_by_mapping",
-                    "section_code": "ANOD",
+                    "section_code": "ANODIZING",
                     "group_code": "PACK",
                     "lookup_field": "output_kind",
                     "mapping": [
@@ -263,14 +263,14 @@ async def test_product_skip_shot_excludes_shot_section(client, session) -> None:
     )
 
     excluded_codes = {s["code"] for s in result.excluded_sections}
-    assert "SHOT" in excluded_codes, f"SHOT should be excluded when skip_shot_blast=True, got: {excluded_codes}"
+    assert "SHOT_BLAST" in excluded_codes, f"SHOT should be excluded when skip_shot_blast=True, got: {excluded_codes}"
     assert "PREP_STOCK" in excluded_codes, (
         f"PREP_STOCK should be excluded when no prep path (empty op + skip shot), got: {excluded_codes}"
     )
 
     # SHOT should NOT be in required sections
     required_codes = {s["code"] for s in result.required_sections}
-    assert "SHOT" not in required_codes, f"SHOT should NOT be required when skip_shot_blast=True, got: {required_codes}"
+    assert "SHOT_BLAST" not in required_codes, f"SHOT should NOT be required when skip_shot_blast=True, got: {required_codes}"
 
 
 @pytest.mark.asyncio
@@ -296,12 +296,12 @@ async def test_product_with_shot_requires_shot_section(client, session) -> None:
     )
 
     required_codes = {s["code"] for s in result.required_sections}
-    assert "SHOT" in required_codes, f"SHOT should be required when skip_shot_blast=False, got: {required_codes}"
+    assert "SHOT_BLAST" in required_codes, f"SHOT should be required when skip_shot_blast=False, got: {required_codes}"
     assert "PREP_STOCK" in required_codes, f"PREP_STOCK should be required with SHOT, got: {required_codes}"
 
     # SHOT should NOT be in excluded sections
     excluded_codes = {s["code"] for s in result.excluded_sections}
-    assert "SHOT" not in excluded_codes, f"SHOT should NOT be excluded when skip_shot_blast=False, got: {excluded_codes}"
+    assert "SHOT_BLAST" not in excluded_codes, f"SHOT should NOT be excluded when skip_shot_blast=False, got: {excluded_codes}"
 
 
 @pytest.mark.asyncio
@@ -327,7 +327,7 @@ async def test_product_skip_shot_default_false_requires_shot(client, session) ->
     )
 
     required_codes = {s["code"] for s in result.required_sections}
-    assert "SHOT" in required_codes, f"SHOT should be required by default, got: {required_codes}"
+    assert "SHOT_BLAST" in required_codes, f"SHOT should be required by default, got: {required_codes}"
 
 
 @pytest.mark.asyncio
@@ -341,7 +341,7 @@ async def test_press_types_resolve_window_operation(client, session) -> None:
         profile_id=profile_id,
     )
 
-    assert result.resolved_operations.get(("PRESS", "PRESS")) == "PRESS_WINDOW", (
+    assert result.resolved_operations.get(("PRESSING", "PRESS")) == "PRESS_WINDOW", (
         f"Expected PRESS_WINDOW, got: {result.resolved_operations}"
     )
 
@@ -357,7 +357,7 @@ async def test_press_types_resolve_comb_operation(client, session) -> None:
         profile_id=profile_id,
     )
 
-    assert result.resolved_operations.get(("PRESS", "PRESS")) == "PRESS_COMB", (
+    assert result.resolved_operations.get(("PRESSING", "PRESS")) == "PRESS_COMB", (
         f"Expected PRESS_COMB, got: {result.resolved_operations}"
     )
 
@@ -373,7 +373,7 @@ async def test_press_types_no_match_when_empty_operation(client, session) -> Non
         profile_id=profile_id,
     )
 
-    assert ("PRESS", "PRESS") not in result.resolved_operations, (
+    assert ("PRESSING", "PRESS") not in result.resolved_operations, (
         f"PRESS should not be resolved when operation is empty, got: {result.resolved_operations}"
     )
 
@@ -389,7 +389,7 @@ async def test_anod_colors_resolve_silver(client, session) -> None:
         profile_id=profile_id,
     )
 
-    assert result.resolved_operations.get(("ANOD", "ANOD")) == "ANOD_01", (
+    assert result.resolved_operations.get(("ANODIZING", "ANOD")) == "ANOD_01", (
         f"Expected ANOD_01 for 'серебро', got: {result.resolved_operations}"
     )
 
@@ -405,7 +405,7 @@ async def test_anod_colors_resolve_gold(client, session) -> None:
         profile_id=profile_id,
     )
 
-    assert result.resolved_operations.get(("ANOD", "ANOD")) == "ANOD_02", (
+    assert result.resolved_operations.get(("ANODIZING", "ANOD")) == "ANOD_02", (
         f"Expected ANOD_02 for 'золотистый', got: {result.resolved_operations}"
     )
 
@@ -421,7 +421,7 @@ async def test_anod_colors_resolve_black_cyrillic(client, session) -> None:
         profile_id=profile_id,
     )
 
-    assert result.resolved_operations.get(("ANOD", "ANOD")) == "ANOD_05", (
+    assert result.resolved_operations.get(("ANODIZING", "ANOD")) == "ANOD_05", (
         f"Expected ANOD_05 for 'чёрный', got: {result.resolved_operations}"
     )
 
@@ -437,7 +437,7 @@ async def test_anod_colors_resolve_black_without_yo(client, session) -> None:
         profile_id=profile_id,
     )
 
-    assert result.resolved_operations.get(("ANOD", "ANOD")) == "ANOD_05", (
+    assert result.resolved_operations.get(("ANODIZING", "ANOD")) == "ANOD_05", (
         f"Expected ANOD_05 for 'черный', got: {result.resolved_operations}"
     )
 
@@ -453,7 +453,7 @@ async def test_anod_colors_resolve_titan(client, session) -> None:
         profile_id=profile_id,
     )
 
-    assert result.resolved_operations.get(("ANOD", "ANOD")) == "ANOD_08", (
+    assert result.resolved_operations.get(("ANODIZING", "ANOD")) == "ANOD_08", (
         f"Expected ANOD_08 for 'титан', got: {result.resolved_operations}"
     )
 
@@ -469,7 +469,7 @@ async def test_anod_colors_no_match_when_empty(client, session) -> None:
         profile_id=profile_id,
     )
 
-    assert ("ANOD", "ANOD") not in result.resolved_operations, (
+    assert ("ANODIZING", "ANOD") not in result.resolved_operations, (
         f"ANOD should not be resolved when color is empty, got: {result.resolved_operations}"
     )
 
@@ -485,7 +485,7 @@ async def test_pack_types_resolve_stretch_for_gp(client, session) -> None:
         profile_id=profile_id,
     )
 
-    assert result.resolved_operations.get(("ANOD", "PACK")) == "PACK_STRETCH", (
+    assert result.resolved_operations.get(("ANODIZING", "PACK")) == "PACK_STRETCH", (
         f"Expected PACK_STRETCH for ГП, got: {result.resolved_operations}"
     )
 
@@ -501,7 +501,7 @@ async def test_pack_types_resolve_spunbond_for_pf(client, session) -> None:
         profile_id=profile_id,
     )
 
-    assert result.resolved_operations.get(("ANOD", "PACK")) == "PACK_SPUNBOND", (
+    assert result.resolved_operations.get(("ANODIZING", "PACK")) == "PACK_SPUNBOND", (
         f"Expected PACK_SPUNBOND for П/Ф, got: {result.resolved_operations}"
     )
 
@@ -517,10 +517,10 @@ async def test_multiple_operations_resolved_simultaneously(client, session) -> N
         profile_id=profile_id,
     )
 
-    assert ("ANOD", "ANOD") in result.resolved_operations, f"ANOD operation should be resolved, got: {result.resolved_operations}"
-    assert ("ANOD", "PACK") in result.resolved_operations, f"PACK operation should be resolved, got: {result.resolved_operations}"
-    assert result.resolved_operations[("ANOD", "ANOD")] == "ANOD_02"
-    assert result.resolved_operations[("ANOD", "PACK")] == "PACK_STRETCH"
+    assert ("ANODIZING", "ANOD") in result.resolved_operations, f"ANOD operation should be resolved, got: {result.resolved_operations}"
+    assert ("ANODIZING", "PACK") in result.resolved_operations, f"PACK operation should be resolved, got: {result.resolved_operations}"
+    assert result.resolved_operations[("ANODIZING", "ANOD")] == "ANOD_02"
+    assert result.resolved_operations[("ANODIZING", "PACK")] == "PACK_STRETCH"
 
 
 @pytest.mark.asyncio
@@ -537,9 +537,9 @@ async def test_drill_rule_requires_drill_excludes_press(client, session) -> None
     required_codes = {s["code"] for s in result.required_sections}
     excluded_codes = {s["code"] for s in result.excluded_sections}
 
-    assert "DRILL" in required_codes, f"DRILL should be required, got: {required_codes}"
+    assert "DRILLING" in required_codes, f"DRILL should be required, got: {required_codes}"
     assert "PREP_STOCK" in required_codes, f"PREP_STOCK should be required with DRILL, got: {required_codes}"
-    assert "PRESS" in excluded_codes, f"PRESS should be excluded, got: {excluded_codes}"
+    assert "PRESSING" in excluded_codes, f"PRESS should be excluded, got: {excluded_codes}"
 
 
 @pytest.mark.asyncio
@@ -554,8 +554,8 @@ async def test_empty_primary_excludes_drill_and_press(client, session) -> None:
     )
 
     excluded_codes = {s["code"] for s in result.excluded_sections}
-    assert "DRILL" in excluded_codes, f"DRILL should be excluded when operation is empty, got: {excluded_codes}"
-    assert "PRESS" in excluded_codes, f"PRESS should be excluded when operation is empty, got: {excluded_codes}"
+    assert "DRILLING" in excluded_codes, f"DRILL should be excluded when operation is empty, got: {excluded_codes}"
+    assert "PRESSING" in excluded_codes, f"PRESS should be excluded when operation is empty, got: {excluded_codes}"
 
 
 @pytest.mark.asyncio
@@ -570,9 +570,9 @@ async def test_gp_route_requires_wip_wh_saw_pack(client, session) -> None:
     )
 
     required_codes = {s["code"] for s in result.required_sections}
-    assert "WIP_WH" in required_codes, f"WIP_WH should be required for ГП, got: {required_codes}"
-    assert "SAW" in required_codes, f"SAW should be required for ГП, got: {required_codes}"
-    assert "PACK" in required_codes, f"PACK should be required for ГП, got: {required_codes}"
+    assert "WIP_STOCK" in required_codes, f"WIP_WH should be required for ГП, got: {required_codes}"
+    assert "SAWING" in required_codes, f"SAW should be required for ГП, got: {required_codes}"
+    assert "PACKING" in required_codes, f"PACK should be required for ГП, got: {required_codes}"
 
 
 @pytest.mark.asyncio
@@ -587,9 +587,9 @@ async def test_pf_route_excludes_wip_wh_saw_pack(client, session) -> None:
     )
 
     excluded_codes = {s["code"] for s in result.excluded_sections}
-    assert "WIP_WH" in excluded_codes, f"WIP_WH should be excluded for П/Ф, got: {excluded_codes}"
-    assert "SAW" in excluded_codes, f"SAW should be excluded for П/Ф, got: {excluded_codes}"
-    assert "PACK" in excluded_codes, f"PACK should be excluded for П/Ф, got: {excluded_codes}"
+    assert "WIP_STOCK" in excluded_codes, f"WIP_WH should be excluded for П/Ф, got: {excluded_codes}"
+    assert "SAWING" in excluded_codes, f"SAW should be excluded for П/Ф, got: {excluded_codes}"
+    assert "PACKING" in excluded_codes, f"PACK should be excluded for П/Ф, got: {excluded_codes}"
 
 
 @pytest.mark.asyncio
@@ -604,9 +604,9 @@ async def test_core_sections_always_required(client, session) -> None:
     )
 
     required_codes = {s["code"] for s in result.required_sections}
-    assert "WH" in required_codes, f"WH should always be required, got: {required_codes}"
-    assert "ANOD" in required_codes, f"ANOD should always be required, got: {required_codes}"
-    assert "FG_WH" in required_codes, f"FG_WH should always be required, got: {required_codes}"
+    assert "RAW_STOCK" in required_codes, f"WH should always be required, got: {required_codes}"
+    assert "ANODIZING" in required_codes, f"ANOD should always be required, got: {required_codes}"
+    assert "FINISHED_STOCK" in required_codes, f"FG_WH should always be required, got: {required_codes}"
 
 
 @pytest.mark.asyncio
@@ -656,8 +656,8 @@ async def test_priority_ordering_within_route_select_phase(client, session) -> N
     required_codes = {s["code"] for s in result.required_sections}
 
     # drill rule fired — PRESS excluded, DRILL required
-    assert "PRESS" in excluded_codes
-    assert "DRILL" in required_codes
+    assert "PRESSING" in excluded_codes
+    assert "DRILLING" in required_codes
 
 
 @pytest.mark.asyncio
@@ -688,16 +688,16 @@ async def test_skip_shot_combined_with_gp_route(client, session) -> None:
     excluded_codes = {s["code"] for s in result.excluded_sections}
     required_codes = {s["code"] for s in result.required_sections}
 
-    assert "SHOT" in excluded_codes, f"SHOT should be excluded, got: {excluded_codes}"
-    assert "WIP_WH" in required_codes, f"WIP_WH should be required for ГП, got: {required_codes}"
-    assert "SAW" in required_codes, f"SAW should be required for ГП, got: {required_codes}"
-    assert "PACK" in required_codes, f"PACK should be required for ГП, got: {required_codes}"
-    assert "WH" in required_codes, f"WH should be required, got: {required_codes}"
-    assert "ANOD" in required_codes, f"ANOD should be required, got: {required_codes}"
+    assert "SHOT_BLAST" in excluded_codes, f"SHOT should be excluded, got: {excluded_codes}"
+    assert "WIP_STOCK" in required_codes, f"WIP_WH should be required for ГП, got: {required_codes}"
+    assert "SAWING" in required_codes, f"SAW should be required for ГП, got: {required_codes}"
+    assert "PACKING" in required_codes, f"PACK should be required for ГП, got: {required_codes}"
+    assert "RAW_STOCK" in required_codes, f"WH should be required, got: {required_codes}"
+    assert "ANODIZING" in required_codes, f"ANOD should be required, got: {required_codes}"
 
     # Operations should also be resolved
-    assert result.resolved_operations.get(("ANOD", "ANOD")) == "ANOD_08", "Titanium color should resolve"
-    assert result.resolved_operations.get(("ANOD", "PACK")) == "PACK_STRETCH", "ГП should resolve PACK_STRETCH"
+    assert result.resolved_operations.get(("ANODIZING", "ANOD")) == "ANOD_08", "Titanium color should resolve"
+    assert result.resolved_operations.get(("ANODIZING", "PACK")) == "PACK_STRETCH", "ГП should resolve PACK_STRETCH"
 
 
 @pytest.mark.asyncio
@@ -719,8 +719,8 @@ async def test_case_insensitive_keyword_matching(client, session) -> None:
         profile_id=profile_id,
     )
 
-    assert result_lower.resolved_operations.get(("ANOD", "ANOD")) == "ANOD_01"
-    assert result_upper.resolved_operations.get(("ANOD", "ANOD")) == "ANOD_01", (
+    assert result_lower.resolved_operations.get(("ANODIZING", "ANOD")) == "ANOD_01"
+    assert result_upper.resolved_operations.get(("ANODIZING", "ANOD")) == "ANOD_01", (
         f"Case-insensitive match failed, got: {result_upper.resolved_operations}"
     )
 
@@ -738,7 +738,7 @@ async def test_no_product_uses_default_shot_behavior(client, session) -> None:
     )
 
     required_codes = {s["code"] for s in result.required_sections}
-    assert "SHOT" in required_codes, f"SHOT should be required when no product passed, got: {required_codes}"
+    assert "SHOT_BLAST" in required_codes, f"SHOT should be required when no product passed, got: {required_codes}"
     assert "PREP_STOCK" in required_codes, f"PREP_STOCK should be required with SHOT, got: {required_codes}"
 
 
@@ -755,5 +755,5 @@ async def test_prep_stock_required_with_shot_when_empty_primary(client, session)
     )
 
     required_codes = {s["code"] for s in result.required_sections}
-    assert "SHOT" in required_codes
+    assert "SHOT_BLAST" in required_codes
     assert "PREP_STOCK" in required_codes, f"PREP_STOCK should be required with SHOT, got: {required_codes}"

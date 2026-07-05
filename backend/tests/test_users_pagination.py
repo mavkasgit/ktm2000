@@ -55,7 +55,7 @@ async def _seed_users(session, count: int) -> list[User]:
 
 @pytest.mark.asyncio
 async def test_users_offset_limit_pagination(auth_client, session) -> None:
-    await session.execute(User.__table__.delete())
+    await session.execute(User.__table__.delete().where(User.__table__.c.username != "testauth"))
     await session.commit()
 
     await _seed_users(session, 12)
@@ -64,7 +64,7 @@ async def test_users_offset_limit_pagination(auth_client, session) -> None:
     assert first_page.status_code == 200
     first_body = first_page.json()
     assert len(first_body["users"]) == 5
-    assert first_body["total"] == 12
+    assert first_body["total"] == 13  # 12 seeded + testauth from auth_client fixture
     assert first_body["limit"] == 5
     assert first_body["offset"] == 0
 
@@ -72,7 +72,7 @@ async def test_users_offset_limit_pagination(auth_client, session) -> None:
     assert second_page.status_code == 200
     second_body = second_page.json()
     assert len(second_body["users"]) == 5
-    assert second_body["total"] == 12
+    assert second_body["total"] == 13
 
     first_ids = {user["id"] for user in first_body["users"]}
     second_ids = {user["id"] for user in second_body["users"]}
@@ -81,7 +81,7 @@ async def test_users_offset_limit_pagination(auth_client, session) -> None:
 
 @pytest.mark.asyncio
 async def test_users_search_across_pages(auth_client, session) -> None:
-    await session.execute(User.__table__.delete())
+    await session.execute(User.__table__.delete().where(User.__table__.c.username != "testauth"))
     await session.commit()
 
     await _make_user(
@@ -106,7 +106,7 @@ async def test_users_search_across_pages(auth_client, session) -> None:
 
 @pytest.mark.asyncio
 async def test_users_role_and_active_filters(auth_client, session) -> None:
-    await session.execute(User.__table__.delete())
+    await session.execute(User.__table__.delete().where(User.__table__.c.username != "testauth"))
     await session.commit()
 
     users = await _seed_users(session, 9)
@@ -126,7 +126,7 @@ async def test_users_role_and_active_filters(auth_client, session) -> None:
 
 @pytest.mark.asyncio
 async def test_users_section_filter_and_sort(auth_client, session) -> None:
-    await session.execute(User.__table__.delete())
+    await session.execute(User.__table__.delete().where(User.__table__.c.username != "testauth"))
     await session.execute(Section.__table__.delete())
     await session.commit()
 
@@ -162,7 +162,7 @@ async def test_users_section_filter_and_sort(auth_client, session) -> None:
 
 @pytest.mark.asyncio
 async def test_users_linked_hrms_ids_metadata(auth_client, session) -> None:
-    await session.execute(User.__table__.delete())
+    await session.execute(User.__table__.delete().where(User.__table__.c.username != "testauth"))
     await session.commit()
 
     await _make_user(

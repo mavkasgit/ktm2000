@@ -8,7 +8,7 @@ ROUTE_RULE_PROFILES = [
         "priority": 1000,
         "route_name_pattern": "{output_kind} - {press_op} - {drill_op} - {shot_op} - {color} - {pack_op}",
         "import_template_code": "upakovochnaya_karta_rp",
-        "route_sections": ["WH", "DRILL", "PRESS", "SHOT", "PREP_STOCK", "ANOD", "WIP_WH", "SAW", "PACK", "FG_WH", "SHIPMENT", "SENT"],
+        "route_sections": ["RAW_STOCK", "DRILLING", "PRESSING", "SHOT_BLAST", "PREP_STOCK", "ANODIZING", "WIP_STOCK", "SAWING", "PACKING", "FINISHED_STOCK", "SHIPMENT", "SHIPPED"],
         "excel_column_passport": [
             {"index": 1, "header": "Артикул", "letter": "A", "field_path": "sku"},
             {"index": 2, "header": "пополнение", "letter": "B", "field_path": "replenishment"},
