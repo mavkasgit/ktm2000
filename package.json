@@ -34,10 +34,10 @@
     "test:pytest:mon": "npm run test:db:up && npm run test:db:wait && cd backend && pytest --testmon -q",
     "test:pytest:lf": "npm run test:db:up && npm run test:db:wait && cd backend && pytest --lf -q",
     "test:tunnel:up": "docker compose --env-file .env.test -f infra/compose/docker-compose.test.yml --profile tunnel up -d --build",
-    "prod:up": "docker compose --env-file .env.prod -f infra/compose/docker-compose.prod.yml up -d --build",
-    "prod:down": "docker compose --env-file .env.prod -f infra/compose/docker-compose.prod.yml down",
-    "prod:logs": "docker compose --env-file .env.prod -f infra/compose/docker-compose.prod.yml logs -f",
-    "prod:tunnel:up": "docker compose --env-file .env.prod -f infra/compose/docker-compose.prod.yml --profile tunnel up -d --build"
+    "prod:up": "docker compose -f infra/compose/docker-compose.prod.yml up -d --build",
+    "prod:down": "docker compose -f infra/compose/docker-compose.prod.yml down",
+    "prod:logs": "docker compose -f infra/compose/docker-compose.prod.yml logs -f",
+    "prod:tunnel:up": "docker compose -f infra/compose/docker-compose.prod.yml --profile tunnel up -d --build"
   },
   "devDependencies": {
     "@playwright/test": "^1.59.1",

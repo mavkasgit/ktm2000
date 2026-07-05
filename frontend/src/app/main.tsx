@@ -4,7 +4,10 @@ import { RouterProvider } from "react-router-dom"
 import { router } from "./Router"
 import { Toaster } from "@/shared/ui"
 import { AuthProvider } from "@/features/auth/hooks/useAuth"
+import { startAppVersionWatch } from "@/shared/lib/appVersionWatch"
 import "./styles.css"
+
+startAppVersionWatch()
 
 const queryClient = new QueryClient({
   defaultOptions: {
