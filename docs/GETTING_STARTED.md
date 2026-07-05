@@ -1,86 +1,67 @@
 # Getting Started — KTM-2000
 
-Это руководство предназначено для быстрой настройки и запуска среды разработки KTM-2000 с нуля.
+Пошаговая установка с нуля. Архитектура → [project-overview.md](project-overview.md).
 
-## Шаг 1. Клонирование и установка зависимостей
-
-Сначала установите Node.js-зависимости для корневого проекта и фронтенда:
+## Шаг 1. Зависимости Node
 
 ```bash
 npm run setup
 ```
-*(Эта команда выполнит `npm install` в корне и в папке `frontend`)*
 
-## Шаг 2. Создание виртуального окружения бэкенда
-
-Перейдите в каталог `backend/`, создайте виртуальное окружение Python (рекомендуется версия 3.12+) и установите необходимые зависимости:
+## Шаг 2. Виртуальное окружение Python
 
 ```bash
 cd backend
 python -m venv .venv
 
-# Активация виртуального окружения:
-# Windows (PowerShell):
+# Windows PowerShell:
 .venv\Scripts\Activate.ps1
-# Windows (cmd):
-.venv\Scripts\activate.bat
 # Linux/macOS:
 source .venv/bin/activate
 
-# Обновите pip и установите зависимости:
 pip install --upgrade pip
 pip install -r requirements.txt
 ```
 
-## Шаг 3. Настройка переменных окружения
-
-В корневой директории проекта скопируйте файл `.env.example` в `.env.dev`:
+## Шаг 3. Переменные окружения
 
 ```bash
 cp .env.example .env.dev
 ```
-В файле `.env.dev` указаны стандартные настройки для локальной разработки (порт БД `5202`, порт приложения `5180`).
-Также убедитесь, что у вас есть `.env` файл в корневом каталоге для вспомогательных утилит (например, SSH/SFTP MCP серверов).
 
-## Шаг 4. Запуск dev-окружения
+Порты dev: Postgres `5202`, frontend `5180`, backend `8010`.
 
-Запуск среды разработки выполняется одной командой из корня проекта:
+> Файл `.env` в корне — для MCP-утилит (SSH/SFTP), отдельно от `.env.dev`.
+
+## Шаг 4. Запуск
 
 ```bash
 npm run dev
 ```
 
-### Что делает эта команда автоматически:
-1. **Запускает БД:** Поднимает Postgres в Docker-контейнере (`ktm2000-postgres`) на порту `5202` (используя docker-compose файл из `infra/compose/docker-compose.dev.yml`).
-2. **Ожидает готовности:** Запускает скрипт `scripts/wait-for-container-health.ps1` и ждет, пока база данных станет полностью доступна.
-3. **Применяет миграции Alembic:** Выполняет команду `alembic upgrade head` в каталоге бэкенда.
-4. **Запускает бэкенд и фронтенд:** Запускает FastAPI сервер на порту `8010` и Vite dev server на порту `5180`.
+Автоматически: Postgres в Docker → ожидание готовности → `alembic upgrade head` → backend `:8010` + frontend `:5180`.
 
-По завершении команды вы можете открыть приложение в браузере:
-- **Frontend:** [http://localhost:5180](http://localhost:5180)
-- **Backend Swagger API Docs:** [http://localhost:8010/docs](http://localhost:8010/docs)
+- Frontend: [http://localhost:5180](http://localhost:5180)
+- Swagger: [http://localhost:8010/docs](http://localhost:8010/docs)
 
----
+## Шаг 5. Демо-данные (опционально)
 
-## Миграции базы данных
+```bash
+npm run db:seed
+```
 
-При внесении изменений в ORM-модели (в каталоге `backend/app/models/`) необходимо генерировать и применять миграции Alembic.
+## Миграции
 
-### 1. Создание новой миграции
-Запустите команду из корня проекта:
 ```bash
 npm run db:makemigrate -- "описание изменений"
-```
-Она сгенерирует файл миграции в `backend/migrations/versions/`.
-
-### 2. Применение миграций
-Для ручного применения миграций запустите:
-```bash
 npm run db:migrate
 ```
 
-### 3. Наполнение базы данных тестовыми данными (Seed)
-Для сброса и наполнения базы демонстрационными данными (номенклатура, этапы, участки) выполните:
+## Troubleshooting
+
 ```bash
-npm run db:seed
+npm run devkill       # Остановить серверы на 8010 и 5180
+npm run devrestart    # Перезапустить dev-окружение
+npm run db:down       # Остановить Postgres
+npm run db:up         # Поднять Postgres заново
 ```

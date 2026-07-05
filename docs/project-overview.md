@@ -2,71 +2,92 @@
 
 ## Описание
 
-**KTM-2000** — это локальная система производственного планирования и контроля для цехового производства. Система управляет задачами производственных участков, отслеживает выполнение планов, позволяет импортировать номенклатуру и ведомости из файлов Excel, настраивать технологические карты и создавать бэкапы базы данных напрямую из интерфейса.
+**KTM-2000** — локальная система производственного планирования и контроля для цехового производства. Управление участками, планы, импорт Excel, технологические карты, складской ledger, бэкапы.
 
-Проект разработан по принципу монорепозитория, где фронтенд и бэкенд находятся в раздельных директориях, а база данных запускается в Docker.
+Монорепозиторий: frontend + backend + PostgreSQL в Docker.
+
+Установка → [GETTING_STARTED.md](GETTING_STARTED.md). AI-агенты → [AGENTS.md](../AGENTS.md).
 
 ## Стек технологий
 
-| Слой | Технология | Версия | Описание |
-|------|-----------|--------|----------|
-| **Backend** | Python + FastAPI | 3.12+ / v0.100+ | Асинхронный API-сервис |
-| **ORM** | SQLAlchemy + Alembic | — | Асинхронный клиент `asyncpg` для Postgres, миграции схемы |
-| **Database** | PostgreSQL | 15 | Запуск в Docker-контейнере |
-| **Frontend** | React + TypeScript | 19+ | Single Page Application (SPA), сборка через Vite |
-| **Styling** | Tailwind CSS + shadcn/ui | — | Vanilla CSS / Tailwind CSS, библиотека компонентов |
-| **Testing** | pytest | — | Юнит и интеграционное тестирование бэкенда |
-| **E2E Testing** | Playwright | ^1.59.1 | Сквозное тестирование интерфейса (CDP порт 9222) |
+| Слой | Технология | Версия |
+|------|-----------|--------|
+| Backend | Python + FastAPI | 3.12+ |
+| ORM | SQLAlchemy + Alembic | async `asyncpg` |
+| Database | PostgreSQL | 15 (Docker) |
+| Frontend | React + TypeScript | 19+ (Vite) |
+| Styling | Tailwind CSS + shadcn/ui | — |
+| Backend tests | pytest + xdist + testmon | — |
+| E2E | Playwright | ^1.59.1 |
 
-## Архитектура и Структура директорий
+## UI-модули
 
-Кодовая база разделена на три основные части:
-1. **Frontend:** Клиентское приложение на React, построенное по методологии **Feature-Sliced Design (FSD)**.
-2. **Backend:** Асинхронный FastAPI бэкенд.
-3. **Infrastructure:** Docker-конфигурации для PostgreSQL.
+| Маршрут | Назначение |
+|---------|------------|
+| `/` | Обзор (dashboard) |
+| `/references/*` | Справочники: сырьё, продукция, ГХП, техкарты, маршруты |
+| `/planning` | Планирование производства |
+| `/execution` | Контроль выполнения |
+| `/section-tasks` | Участки (shopfloor) |
+| `/transfers` | Передачи между участками |
+| `/spg` | ГХП (снимок) |
+| `/audit-logs` | Журнал действий |
+| `/settings/*` | Настройки, бэкапы, пользователи |
 
-### Дерево каталогов
+## Дерево каталогов
 
 ```
 ktm2000/
-├── backend/            # Асинхронный FastAPI backend
+├── AGENTS.md              # Bootstrap для AI-агентов
+├── backend/
 │   ├── app/
-│   │   ├── api/        # Эндпоинты (auth, products, routes, shopfloor, imports...)
-│   │   ├── core/       # Конфигурация, сессии БД, зависимости
-│   │   ├── models/     # SQLAlchemy ORM модели
-│   │   ├── schemas/    # Pydantic схемы валидации
-│   │   └── services/   # Бизнес-логика (импорт Excel, планирование)
-│   ├── migrations/     # Миграции Alembic
-│   └── tests/          # Тесты pytest
-├── frontend/           # React frontend (Vite)
-│   ├── src/
-│   │   ├── app/        # Инициализация приложения, глобальные стили, роутер
-│   │   ├── pages/      # Страницы приложения (если применимо)
-│   │   ├── widgets/    # Крупные самостоятельные блоки интерфейса
-│   │   ├── features/   # Интерактивные фичи с бизнес-логикой
-│   │   ├── entities/   # Бизнес-сущности (участки, продукты, маршруты)
-│   │   └── shared/     # UI-kit, API-клиенты, утилиты
-│   └── public/         # Статические файлы (favicon, логотипы)
-├── infra/              # Скрипты развертывания и конфигурации Docker
-│   └── compose/        # Файлы docker-compose (dev, test, prod)
-├── scripts/            # Вспомогательные скрипты запуска и проверки
-└── docs/               # Техническая документация
+│   │   ├── api/routes/    # Эндпоинты
+│   │   ├── models/        # ORM
+│   │   ├── services/      # Бизнес-логика
+│   │   ├── stock/         # Stock Ledger
+│   │   ├── transfers/     # Передачи
+│   │   └── seeds/         # Демо-данные
+│   ├── migrations/        # Alembic
+│   └── tests/             # pytest (канон → tests/AGENTS.md)
+├── frontend/
+│   ├── src/               # FSD: app, features, entities, shared
+│   └── e2e/               # Playwright
+├── infra/compose/         # docker-compose (dev, test, prod)
+├── scripts/               # Вспомогательные скрипты
+└── docs/                  # Документация
 ```
 
-## Порты и окружение
+## Домен Stock Ledger
 
-Система поддерживает три раздельных окружения: **dev**, **test** и **prod**.
+Единый источник правды — `StockTransaction` (append-only). Legacy `SpgRemainder`, `Movement` удалены.
 
-| Окружение | Frontend (внешний) | Postgres (внешний) | Backend (внутренний) | Описание |
-|---|---|---|---|---|
-| **dev** | `5180` | `5202` | `8010` | Режим активной локальной разработки |
-| **test** | `8100` | `5212` | `8010` | Запуск автотестов и изолированное тестирование |
-| **prod** | `8020` | `5432` *(внутри)* | `8010` | Production сборка в Docker |
-| **E2E CDP**| — | — | `9222` | Порт удаленной отладки Chrome для e2e тестов |
+| Сущность | Таблица | Назначение |
+|----------|---------|------------|
+| `Location` (= `Section`) | `sections` | Локация материала; `type`: `production`, `raw_stock`, `wip_stock`, `finished_stock`, `scrap`, `quarantine` |
+| `StockTransaction` | `stock_transactions` | Ledger: from/to location, quantity, reason, quality_state |
+| `StockBalance` | `stock_balances` | Кэш баланса по (product, location, quality_state) |
+| `WorkTask` | `work_tasks` | План в `planned_quantity`; выполнение — из транзакций |
+| `Transfer` | `transfers` | Бизнес-lifecycle; 2 StockTransaction; cancel = компенсация |
+| `Defect` | `defects` | Обоснование брака; `stock_transaction_id` FK |
+
+Принципы:
+1. Ядро хранит факты, UI — политики.
+2. Баланс = projection из `StockTransaction`.
+3. Append-only: отмена = компенсационная транзакция.
+4. API: `/api/stock/*` и `/api/spg/*`.
+
+## Порты
+
+| Окружение | Frontend | Postgres | Backend |
+|-----------|----------|----------|---------|
+| dev | `5180` | `5202` | `8010` |
+| test | `8100` | `5212` | `8010` |
+| prod | `8020` | `5432` (внутри Docker) | `8010` |
+| E2E CDP | — | — | `9222` |
 
 ## Архитектурные решения
 
-1. **Feature-Sliced Design (FSD) на фронтенде**: Кодовая база разбита на слои (`app`, `pages`, `widgets`, `features`, `entities`, `shared`). Строго запрещено импортировать модули из фичи в фичу (cross-imports), все общие вещи должны спускаться на уровень `entities` или `shared`.
-2. **Асинхронность бэкенда**: Взаимодействие с базой данных PostgreSQL выполняется через асинхронные сессии SQLAlchemy (`AsyncSession`).
-3. **Локальный Docker для БД**: Для простоты развертывания и разработки, СУБД PostgreSQL запускается в контейнере, а бэкенд и фронтенд запускаются локально на хосте (в dev-режиме) для поддержки Hot Reload.
-4. **Playwright E2E через CDP**: Автотесты могут подключаться к работающему браузеру Chrome с включенным Remote Debugging (`--remote-debugging-port=9222`), что позволяет запускать тесты в реальном окружении разработчика без надобности повторно открывать сессии.
+1. **FSD на фронтенде** — слои `app` → `features` → `entities` → `shared`; без cross-imports между features.
+2. **Async backend** — все операции БД через `AsyncSession`.
+3. **Docker только для БД в dev** — backend/frontend на хосте для hot reload.
+4. **Playwright CDP** — E2E через Chrome `--remote-debugging-port=9222`.
