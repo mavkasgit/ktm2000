@@ -167,3 +167,63 @@ async def build_completed_stages_json(
         })
     return result
 
+
+def format_operations_comment_suffix(stages: list[dict]) -> str:
+    """Return ``| операции: ...`` suffix for stock transaction comments."""
+    if not stages:
+        return ""
+    ops_names = ", ".join(
+        s["operation_name"]
+        for s in stages
+        if s.get("operation_name")
+    )
+    if not ops_names:
+        return ""
+    return f" | операции: {ops_names}"
+
+
+def append_operations_to_comment(comment: str | None, stages: list[dict]) -> str | None:
+    """Append completed-operations suffix to an existing transaction comment."""
+    suffix = format_operations_comment_suffix(stages)
+    if not suffix:
+        return comment
+    return f"{comment or ''}{suffix}"
+
+
+async def build_operations_comment_suffix_for_route(
+    db: AsyncSession,
+    *,
+    route_id: int,
+    through_sequence: int,
+) -> str:
+    """Build operations suffix for route stages up to ``through_sequence`` (inclusive)."""
+    stages = (
+        await db.execute(
+            select(RouteStage)
+            .where(
+                RouteStage.route_id == route_id,
+                RouteStage.sequence <= through_sequence,
+            )
+            .order_by(RouteStage.sequence)
+        )
+    ).scalars().all()
+    completed = await build_completed_stages_json(db, stages)
+    return format_operations_comment_suffix(completed)
+
+
+async def enrich_comment_with_route_operations(
+    db: AsyncSession,
+    comment: str | None,
+    *,
+    route_id: int,
+    through_sequence: int,
+) -> str | None:
+    """Append route-progress operations suffix to a stock transaction comment."""
+    suffix = await build_operations_comment_suffix_for_route(
+        db,
+        route_id=route_id,
+        through_sequence=through_sequence,
+    )
+    if not suffix:
+        return comment
+    return f"{comment or ''}{suffix}"

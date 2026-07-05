@@ -261,3 +261,74 @@ async def test_manual_stock_transfer_one_per_task_and_plan_cap(client, session) 
     )
     # TRANSFER_SEND списывает со склада; TRANSFER_RECEIVE не дублирует движение.
     assert bal == warehouse_qty - Decimal("40")
+
+
+@pytest.mark.asyncio
+async def test_full_stock_transfer_does_not_reappear_in_ready_list(client, session) -> None:
+    """После полной передачи со склада задание не должно снова появляться в ready.
+
+    Регрессия: completed fake_task + новый WorkTask на ту же section_plan_line
+    обнулял already_transferred и позволял повторно передать весь план.
+    """
+    user = await _make_user(session, "full-xfer@test.local")
+    headers = _auth_headers(user)
+    plan_qty = Decimal("100")
+    warehouse_qty = Decimal("4000")
+    fx = await _make_raw_stock_to_production_fixture(session, sku="FULLXFER", qty=plan_qty)
+    raw_sec = fx["sections"][0]
+
+    await _seed_stock_balance(
+        session,
+        user_id=user.id,
+        location_id=raw_sec.id,
+        product_id=fx["product"].id,
+        qty=warehouse_qty,
+    )
+    await _release_via_take_to_work(client, fx["position"].id)
+
+    ready_before = await client.get(
+        f"/api/transfers/ready?section_id={raw_sec.id}",
+        headers=headers,
+    )
+    assert ready_before.status_code == 200
+    items_before = ready_before.json()["items"]
+    assert len(items_before) == 1
+    task_id = items_before[0]["task_id"]
+
+    send_resp = await client.post(
+        "/api/transfers",
+        json={
+            "from_task_id": task_id,
+            "quantity": str(plan_qty),
+            "idempotency_key": "full-xfer:send-100",
+        },
+        headers=headers,
+    )
+    assert send_resp.status_code == 200
+    assert send_resp.json()["status"] == "accepted"
+
+    ready_after = await client.get(
+        f"/api/transfers/ready?section_id={raw_sec.id}",
+        headers=headers,
+    )
+    assert ready_after.status_code == 200
+    assert ready_after.json()["items"] == []
+
+    dup_resp = await client.post(
+        "/api/transfers",
+        json={
+            "from_task_id": task_id,
+            "quantity": "10",
+            "idempotency_key": "full-xfer:send-dup",
+        },
+        headers=headers,
+    )
+    assert dup_resp.status_code == 400
+    assert "активная передача" in dup_resp.json()["detail"].lower()
+
+    tasks = (
+        await session.execute(
+            select(WorkTask).where(WorkTask.section_id == raw_sec.id)
+        )
+    ).scalars().all()
+    assert len(tasks) == 1, "Не должно создаваться второго fake_task на складской линии"

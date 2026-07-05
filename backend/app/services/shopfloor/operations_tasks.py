@@ -13,7 +13,15 @@ from app.models.production_plan import PlanPosition, PlanPositionStatus
 from app.models.work_task import WorkTask, WorkTaskStatus
 from app.stock import QualityState, Reason, StockCommand, StockCommandService
 
-from .common import _check_idempotency, _ensure_positive, _get_route_stage, _get_task, _get_user_snapshot_name, _to_decimal
+from .common import (
+    _check_idempotency,
+    _ensure_positive,
+    _get_route_stage,
+    _get_task,
+    _get_user_snapshot_name,
+    _to_decimal,
+    enrich_comment_with_route_operations,
+)
 from .cache import _refresh_section_plan_line_cache
 
 
@@ -144,6 +152,17 @@ async def complete_task(
         else:
             complete_from = None
             complete_to = task.section_id
+        complete_comment = comment
+        if complete_to == task.section_id:
+            line = await db.get(SectionPlanLine, task.section_plan_line_id)
+            stage = await _get_route_stage(db, task.route_stage_id)
+            if line is not None:
+                complete_comment = await enrich_comment_with_route_operations(
+                    db,
+                    comment,
+                    route_id=line.route_id,
+                    through_sequence=stage.sequence,
+                )
         tx_good = await svc.record(db, StockCommand(
             product_id=task.product_id,
             from_location_id=complete_from,
@@ -154,7 +173,7 @@ async def complete_task(
             task_id=task.id,
             source_ref=source_ref,
             idempotency_key=idempotency_key,
-            comment=comment,
+            comment=complete_comment,
             created_by=actor_id,
             executor_user_id=eff_executor,
             performed_at=eff_performed,

@@ -55,6 +55,7 @@ from app.services.shopfloor.common import (
     _get_user_snapshot_name,
     _to_decimal,
     _transfer_no,
+    enrich_comment_with_route_operations,
 )
 
 # ─── Ledger helpers (Этап 2) ─────────────────────────────────────────────────
@@ -82,9 +83,42 @@ async def count_active_transfers_from_task(db: AsyncSession, from_task_id: int) 
     )
 
 
+async def count_active_transfers_from_plan_line(
+    db: AsyncSession,
+    section_plan_line_id: int,
+) -> int:
+    """Количество неаннулированных передач со склада по строке плана.
+
+    Складской fake_task после полной передачи переходит в ``completed``,
+    а ``_fetch_stock_ready_items`` может создать новый WorkTask на ту же
+    ``section_plan_line``. Счётчик по ``from_task_id`` в таком случае
+    обнуляется — поэтому для складских строк плана считаем все передачи
+    с любого задания этой линии.
+    """
+    return int(
+        await db.scalar(
+            select(func.count(Transfer.id))
+            .join(WorkTask, WorkTask.id == Transfer.from_task_id)
+            .where(
+                WorkTask.section_plan_line_id == section_plan_line_id,
+                Transfer.status.notin_([TransferStatus.cancelled]),
+            )
+        )
+        or 0
+    )
+
+
 async def has_active_transfer_for_task(db: AsyncSession, from_task_id: int) -> bool:
     """Есть ли уже активная (неаннулированная) передача с задания."""
     return await count_active_transfers_from_task(db, from_task_id) > 0
+
+
+async def has_active_transfer_for_plan_line(
+    db: AsyncSession,
+    section_plan_line_id: int,
+) -> bool:
+    """Есть ли активная передача по складской строке плана (любой fake_task)."""
+    return await count_active_transfers_from_plan_line(db, section_plan_line_id) > 0
 
 
 async def compute_stock_section_transferable(
@@ -103,8 +137,10 @@ async def compute_stock_section_transferable(
 
     already_transferred = (
         await db.scalar(
-            select(func.coalesce(func.sum(Transfer.sent_quantity), 0)).where(
-                Transfer.from_task_id == task.id,
+            select(func.coalesce(func.sum(Transfer.sent_quantity), 0))
+            .join(WorkTask, WorkTask.id == Transfer.from_task_id)
+            .where(
+                WorkTask.section_plan_line_id == task.section_plan_line_id,
                 Transfer.status.notin_([TransferStatus.cancelled]),
             )
         )
@@ -357,7 +393,18 @@ async def transfer_send(
             }
 
     from_task = await _get_task_for_update(db, from_task_id)
-    if await has_active_transfer_for_task(db, from_task.id):
+    source_section = await db.get(Section, from_task.section_id)
+    if source_section is not None and source_section.type in {
+        "raw_stock",
+        "wip_stock",
+        "finished_stock",
+    }:
+        has_active = await has_active_transfer_for_plan_line(
+            db, from_task.section_plan_line_id
+        )
+    else:
+        has_active = await has_active_transfer_for_task(db, from_task.id)
+    if has_active:
         raise ValueError(
             "По этому заданию уже есть активная передача. "
             "Измените количество в журнале передач."
@@ -488,6 +535,12 @@ async def transfer_send(
         is_post_factum=post_factum,
     )
     # TRANSFER_RECEIVE на приёмную задачу (только task-level; без локаций)
+    receive_comment = await enrich_comment_with_route_operations(
+        db,
+        comment,
+        route_id=from_line.route_id,
+        through_sequence=from_stage.sequence,
+    )
     receive_tx = await _stock_command_service.record(
         db,
         StockCommand(
@@ -504,7 +557,7 @@ async def transfer_send(
             created_by_user_name=actor_name,
             executor_user_name=executor_name,
             source_ref=source_ref,
-            comment=comment,
+            comment=receive_comment,
             idempotency_key=f"{idempotency_key}:stock-receive" if idempotency_key else None,
             performed_at=eff_performed,
             accounted_at=eff_accounted,
@@ -546,7 +599,6 @@ async def transfer_send(
     # Запись лога аудита (передача)
     from app.services.audit_log_service import log_action
     from app.models.audit_log import AuditAction, AuditEntityType
-    from app.models.section import Section
     from app.models.product import Product
     
     from_section = await db.get(Section, from_task.section_id)

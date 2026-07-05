@@ -37,6 +37,7 @@ from app.api.deps import READER_ROLES, WRITER_ROLES, get_current_user, require_r
 from app.core.database import get_db
 from app.models.product import Product
 from app.models.section import Section
+from app.models.transfer import Transfer
 from app.models.user import User
 from app.stock.models import (
     QualityState,
@@ -333,6 +334,13 @@ def _serialize_balance(
     )
 
 
+_OPERATION_COMMENT_REASONS = (
+    Reason.MANUAL_IN,
+    Reason.TRANSFER_RECEIVE,
+    Reason.COMPLETE,
+)
+
+
 async def _serialize_balances_with_operations(
     db: AsyncSession,
     rows: list[tuple[StockBalance, str | None, str | None]],
@@ -344,20 +352,38 @@ async def _serialize_balances_with_operations(
     stmt = (
         select(StockTransaction)
         .where(
-            StockTransaction.reason == Reason.MANUAL_IN,
+            StockTransaction.reason.in_(_OPERATION_COMMENT_REASONS),
             StockTransaction.compensates_tx_id.is_(None),
             StockTransaction.product_id.in_(product_ids),
-            StockTransaction.to_location_id.isnot(None),
         )
         .order_by(StockTransaction.created_at.desc())
     )
     txs = (await db.execute(stmt)).scalars().all()
 
+    transfer_ids = {
+        tx.transfer_id
+        for tx in txs
+        if tx.transfer_id is not None and tx.reason == Reason.TRANSFER_RECEIVE
+    }
+    transfers_by_id: dict[int, Transfer] = {}
+    if transfer_ids:
+        transfers = (
+            await db.execute(select(Transfer).where(Transfer.id.in_(transfer_ids)))
+        ).scalars().all()
+        transfers_by_id = {transfer.id: transfer for transfer in transfers}
+
     comment_by_key: dict[tuple[int, int, QualityState], str | None] = {}
     for tx in txs:
-        if tx.to_location_id is None:
+        if not parse_operations_from_comment(tx.comment):
             continue
-        key = (tx.product_id, tx.to_location_id, tx.to_quality_state)
+        location_id = tx.to_location_id
+        if location_id is None and tx.reason == Reason.TRANSFER_RECEIVE and tx.transfer_id:
+            transfer = transfers_by_id.get(tx.transfer_id)
+            if transfer is not None:
+                location_id = transfer.to_section_id
+        if location_id is None:
+            continue
+        key = (tx.product_id, location_id, tx.to_quality_state)
         if key not in comment_by_key:
             comment_by_key[key] = tx.comment
 
