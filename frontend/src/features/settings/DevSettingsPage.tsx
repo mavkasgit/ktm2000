@@ -1,4 +1,4 @@
-import { HardDrive, Database, Trash2, Download, Check, X, Loader2, UserCog, Wrench, ArrowLeft } from "lucide-react"
+import { HardDrive, Database, Trash2, Download, Check, X, Loader2, Wrench, ArrowLeft } from "lucide-react"
 import { useNavigate } from "react-router-dom"
 import { useState } from "react"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
@@ -8,7 +8,7 @@ import { AlertDialog, AlertDialogContent, AlertDialogHeader, AlertDialogTitle, A
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/shared/ui/Dialog"
 import { toast } from "@/shared/ui"
 import { resetAllPlans } from "@/shared/api/productionPlans"
-import { seedRoutes, listRoutes, listRouteRuleProfiles, listRouteSelectionRules, reseedSystemUser, seedPreview, seedDemoProduction, clearDemoProduction, getCleanupStats, executeCleanup } from "@/shared/api/routes"
+import { seedRoutes, listRoutes, listRouteRuleProfiles, listRouteSelectionRules, seedPreview, seedDemoProduction, clearDemoProduction, getCleanupStats, executeCleanup } from "@/shared/api/routes"
 import { listAllImportTemplates } from "@/shared/api/importTemplates"
 import { listSections } from "@/shared/api/sections"
 import { queryKeys } from "@/shared/api/queryKeys"
@@ -621,8 +621,6 @@ export function DevSettingsPage() {
   const queryClient = useQueryClient()
   const [cleanupOpen, setCleanupOpen] = useState(false)
   const [seedOpen, setSeedOpen] = useState(false)
-  const [reseedingUser, setReseedingUser] = useState(false)
-  
   const [seedingDemo, setSeedingDemo] = useState(false)
   const [clearingDemo, setClearingDemo] = useState(false)
   const [confirmDemoClearOpen, setConfirmDemoClearOpen] = useState(false)
@@ -636,19 +634,6 @@ export function DevSettingsPage() {
         <Button onClick={() => navigate("/settings")}>Назад к настройкам</Button>
       </div>
     )
-  }
-
-  const handleReseedUser = async () => {
-    setReseedingUser(true)
-    try {
-      const result = await reseedSystemUser()
-      queryClient.invalidateQueries()
-      toast({ title: "Системный пользователь восстановлен", description: `ID: ${result.user_id}, Email: ${result.email}`, variant: "success" })
-    } catch (e) {
-      toast({ title: "Ошибка", description: e instanceof Error ? e.message : "Не удалось восстановить пользователя", variant: "destructive" })
-    } finally {
-      setReseedingUser(false)
-    }
   }
 
   const handleSeedDemo = async () => {
@@ -748,22 +733,6 @@ export function DevSettingsPage() {
               {clearingDemo ? "Очистить" : "Очистить"}
             </Button>
           </div>
-        </div>
-
-        <div className="rounded-lg border bg-card p-6 space-y-4">
-          <div className="flex items-center gap-3">
-            <div className="rounded-lg bg-violet-500/10 p-2">
-              <UserCog className="h-5 w-5 text-violet-500" />
-            </div>
-            <div>
-              <h3 className="font-medium">Системный пользователь</h3>
-              <p className="text-sm text-muted-foreground">Восстановить ID=1 для dev-режима</p>
-            </div>
-          </div>
-          <Button onClick={handleReseedUser} disabled={reseedingUser} className="w-full">
-            {reseedingUser ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : <UserCog className="h-4 w-4 mr-1" />}
-            {reseedingUser ? "Восстановление..." : "Восстановить"}
-          </Button>
         </div>
 
         <div className="rounded-lg border bg-card p-6 space-y-4">

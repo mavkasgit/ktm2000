@@ -194,11 +194,6 @@ export async function seedPreview() {
   return data;
 }
 
-export async function reseedSystemUser() {
-  const { data } = await apiClient.post<{ user_id: number; email: string }>("/routes-seed/reseed-system-user");
-  return data;
-}
-
 export type DemoSeedSummary = {
   products: number;
   remainders: number;

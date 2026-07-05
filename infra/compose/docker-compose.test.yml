@@ -10,8 +10,8 @@ services:
       POSTGRES_DB: ${POSTGRES_DB:-ktm2000_test}
     ports:
       - "${POSTGRES_PORT:-5212}:5432"
-    volumes:
-      - postgres_test_data:/var/lib/postgresql/data
+    tmpfs:
+      - /var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
       interval: 10s
