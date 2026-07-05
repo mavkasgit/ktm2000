@@ -18,7 +18,7 @@ class ReworkTaskStatus(str, enum.Enum):
 class ReworkTask(Base):
     __tablename__ = "rework_tasks"
     __table_args__ = (
-        CheckConstraint("quantity > 0", name="ck_rework_tasks_qty_positive"),
+        CheckConstraint("quantity > 0", name="qty_positive"),
     )
 
     id: Mapped[int] = mapped_column(BigInteger, Identity(always=True), primary_key=True)

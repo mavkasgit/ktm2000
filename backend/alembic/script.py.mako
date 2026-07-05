@@ -1,5 +1,8 @@
 """${message}
 
+Эпик: <заполнить при создании>
+Irreversible: no
+
 Revision ID: ${up_revision}
 Revises: ${down_revision | comma,n}
 Create Date: ${create_date}
@@ -20,7 +23,14 @@ depends_on: Union[str, Sequence[str], None] = ${repr(depends_on)}
 
 
 def upgrade() -> None:
+    # --- SCHEMA ---
     ${upgrades if upgrades else "pass"}
+
+    # --- DATA ---
+    pass
+
+    # --- TRIGGERS ---
+    pass
 
 
 def downgrade() -> None:

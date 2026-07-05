@@ -88,17 +88,17 @@ class StockTransaction(Base):
 
     __tablename__ = "stock_transactions"
     __table_args__ = (
-        CheckConstraint("quantity > 0", name="ck_stock_transactions_quantity_positive"),
+        CheckConstraint("quantity > 0", name="quantity_positive"),
         CheckConstraint(
             "(from_location_id IS NOT NULL) OR (to_location_id IS NOT NULL) "
             "OR (reason = 'transfer_receive')",
-            name="ck_stock_transactions_at_least_one_location",
+            name="at_least_one_location",
         ),
         CheckConstraint(
             "from_location_id IS NULL OR to_location_id IS NULL "
             "OR from_location_id <> to_location_id "
             "OR reason = 'complete'",
-            name="ck_stock_transactions_locations_differ",
+            name="locations_differ",
         ),
     )
 
@@ -180,7 +180,7 @@ class StockBalance(Base):
             "quality_state",
             name="uq_stock_balances_product_location_quality",
         ),
-        CheckConstraint("balance_qty <> 0", name="ck_stock_balances_nonzero"),
+        CheckConstraint("balance_qty <> 0", name="nonzero"),
     )
 
     id: Mapped[int] = mapped_column(

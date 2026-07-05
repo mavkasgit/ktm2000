@@ -58,7 +58,7 @@ class Product(Base):
 class ProductLength(Base):
     __tablename__ = "product_lengths"
     __table_args__ = (
-        CheckConstraint("length_mm > 0", name="ck_product_lengths_positive"),
+        CheckConstraint("length_mm > 0", name="positive"),
     )
 
     id: Mapped[int] = mapped_column(BigInteger, Identity(always=True), primary_key=True)

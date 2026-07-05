@@ -69,7 +69,7 @@ class Defect(Base):
 class DefectItem(Base):
     __tablename__ = "defect_items"
     __table_args__ = (
-        CheckConstraint("quantity > 0", name="ck_defect_items_qty_positive"),
+        CheckConstraint("quantity > 0", name="qty_positive"),
     )
 
     id: Mapped[int] = mapped_column(BigInteger, Identity(always=True), primary_key=True)
@@ -88,7 +88,7 @@ class DefectItem(Base):
 class DefectDecision(Base):
     __tablename__ = "defect_decisions"
     __table_args__ = (
-        CheckConstraint("quantity > 0", name="ck_defect_decisions_qty_positive"),
+        CheckConstraint("quantity > 0", name="qty_positive"),
     )
 
     id: Mapped[int] = mapped_column(BigInteger, Identity(always=True), primary_key=True)
@@ -109,7 +109,7 @@ class DefectDecision(Base):
 class TransferDiscrepancyDefectItem(Base):
     __tablename__ = "transfer_discrepancy_defect_items"
     __table_args__ = (
-        CheckConstraint("quantity > 0", name="ck_discrepancy_defect_item_qty_positive"),
+        CheckConstraint("quantity > 0", name="qty_positive"),
     )
 
     id: Mapped[int] = mapped_column(BigInteger, Identity(always=True), primary_key=True)

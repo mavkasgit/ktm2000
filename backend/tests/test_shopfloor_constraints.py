@@ -24,11 +24,11 @@ async def test_transfers_sent_quantity_positive_constraint_exists(client, sessio
 
 @pytest.mark.asyncio
 async def test_transfer_discrepancy_qty_positive_constraint_exists(client, session) -> None:
-    """DB-level constraint: ck_transfer_discrepancy_qty_positive."""
+    """DB-level constraint: ck_transfer_discrepancies_qty_positive."""
     result = (await session.execute(text(
-        "SELECT conname FROM pg_constraint WHERE conname = 'ck_transfer_discrepancy_qty_positive'"
+        "SELECT conname FROM pg_constraint WHERE conname = 'ck_transfer_discrepancies_qty_positive'"
     ))).scalar()
-    assert result == "ck_transfer_discrepancy_qty_positive"
+    assert result == "ck_transfer_discrepancies_qty_positive"
 
 
 @pytest.mark.asyncio
@@ -60,11 +60,11 @@ async def test_defect_decisions_qty_positive_constraint_exists(client, session) 
 
 @pytest.mark.asyncio
 async def test_discrepancy_defect_item_qty_positive_constraint_exists(client, session) -> None:
-    """DB-level constraint: ck_discrepancy_defect_item_qty_positive."""
+    """DB-level constraint: ck_transfer_discrepancy_defect_items_qty_positive."""
     result = (await session.execute(text(
-        "SELECT conname FROM pg_constraint WHERE conname = 'ck_discrepancy_defect_item_qty_positive'"
+        "SELECT conname FROM pg_constraint WHERE conname = 'ck_transfer_discrepancy_defect_items_qty_positive'"
     ))).scalar()
-    assert result == "ck_discrepancy_defect_item_qty_positive"
+    assert result == "ck_transfer_discrepancy_defect_items_qty_positive"
 
 
 @pytest.mark.asyncio
@@ -80,7 +80,7 @@ async def test_transfer_accepted_rejected_non_negative_constraints_exist(client,
 @pytest.mark.asyncio
 async def test_transfer_discrepancy_non_negative_constraints_exist(client, session) -> None:
     """DB-level constraints for transfer_discrepancies resolved/unresolved non-negative."""
-    for name in ["ck_transfer_discrepancy_resolved_non_negative", "ck_transfer_discrepancy_unresolved_non_negative"]:
+    for name in ["ck_transfer_discrepancies_resolved_non_negative", "ck_transfer_discrepancies_unresolved_non_negative"]:
         result = (await session.execute(text(
             f"SELECT conname FROM pg_constraint WHERE conname = '{name}'"
         ))).scalar()

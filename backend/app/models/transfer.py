@@ -27,9 +27,9 @@ class TransferDiscrepancyStatus(str, enum.Enum):
 class Transfer(Base):
     __tablename__ = "transfers"
     __table_args__ = (
-        CheckConstraint("sent_quantity > 0", name="ck_transfers_sent_quantity_positive"),
-        CheckConstraint("accepted_quantity IS NULL OR accepted_quantity >= 0", name="ck_transfers_accepted_quantity_non_negative"),
-        CheckConstraint("rejected_quantity IS NULL OR rejected_quantity >= 0", name="ck_transfers_rejected_quantity_non_negative"),
+        CheckConstraint("sent_quantity > 0", name="sent_quantity_positive"),
+        CheckConstraint("accepted_quantity IS NULL OR accepted_quantity >= 0", name="accepted_quantity_non_negative"),
+        CheckConstraint("rejected_quantity IS NULL OR rejected_quantity >= 0", name="rejected_quantity_non_negative"),
     )
 
     id: Mapped[int] = mapped_column(BigInteger, Identity(always=True), primary_key=True)
@@ -64,9 +64,9 @@ class Transfer(Base):
 class TransferDiscrepancy(Base):
     __tablename__ = "transfer_discrepancies"
     __table_args__ = (
-        CheckConstraint("discrepancy_quantity > 0", name="ck_transfer_discrepancy_qty_positive"),
-        CheckConstraint("resolved_quantity >= 0", name="ck_transfer_discrepancy_resolved_non_negative"),
-        CheckConstraint("unresolved_quantity >= 0", name="ck_transfer_discrepancy_unresolved_non_negative"),
+        CheckConstraint("discrepancy_quantity > 0", name="qty_positive"),
+        CheckConstraint("resolved_quantity >= 0", name="resolved_non_negative"),
+        CheckConstraint("unresolved_quantity >= 0", name="unresolved_non_negative"),
     )
 
     id: Mapped[int] = mapped_column(BigInteger, Identity(always=True), primary_key=True)
