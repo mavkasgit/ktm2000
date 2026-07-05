@@ -14,7 +14,12 @@ from app.models.user import User, UserRole
 from app.models.section import Section
 from app.services.hrms_employees import (
     HrmsSyncError,
+    HrmsSyncChangeOut,
+    HrmsSyncDiffEntryOut,
+    HrmsSyncDiffOut,
+    HrmsSyncPreviewOut,
     build_hrms_employees_url,
+    compute_hrms_sync_preview,
     get_cached_hrms_employees,
     get_hrms_integration_settings,
     list_cached_hrms_employees_paginated,
@@ -312,6 +317,22 @@ async def sync_employees(
             detail=str(exc),
         ) from exc
     return _to_hrms_employees_cache_out(employees, synced_at)
+
+
+@router.post("/employees/sync/preview", response_model=HrmsSyncPreviewOut)
+async def sync_employees_preview(
+    db: AsyncSession = Depends(get_db),
+    _current_user: User = Depends(require_role([UserRole.admin])),
+) -> HrmsSyncPreviewOut:
+    """Предпросмотр синхронизации HRMS: возвращает diff БЕЗ записи в БД."""
+    try:
+        preview = await compute_hrms_sync_preview(db)
+    except HrmsSyncError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=str(exc),
+        ) from exc
+    return preview
 
 
 @router.post("", response_model=UserOut, status_code=status.HTTP_201_CREATED)

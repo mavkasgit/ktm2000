@@ -36,7 +36,13 @@ async def test_list_routes_without_steps_returns_route_out(client, session) -> N
 
 @pytest.mark.asyncio
 async def test_list_routes_include_steps_returns_details(client, session) -> None:
-    section = Section(code="SEC-STEPS", name="Steps Section")
+    section = Section(
+        code="SEC-STEPS",
+        name="Steps Section",
+        icon="Drill",
+        icon_color="#3B82F6",
+        type="production",
+    )
     session.add(section)
     await session.flush()
 
@@ -78,6 +84,9 @@ async def test_list_routes_include_steps_returns_details(client, session) -> Non
 
     step = detail["steps"][0]
     assert step["section_id"] == section.id
+    assert step["icon"] == "Drill"
+    assert step["icon_color"] == "#3B82F6"
+    assert step["section_type"] == "production"
     assert step["operation_code"] == "OP-1"
     assert step["operation_name"] == "Assembly"
     assert step["allow_parallel"] is True

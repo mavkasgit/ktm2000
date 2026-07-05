@@ -15,6 +15,9 @@ export type RouteStep = {
   section_id: number;
   section_code: string | null;
   section_name: string | null;
+  icon: string | null;
+  icon_color: string | null;
+  section_type: string | null;
   operation_code: string | null;
   operation_name: string;
   norm_time_minutes: number | null;

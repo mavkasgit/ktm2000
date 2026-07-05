@@ -93,10 +93,22 @@ export async function listTechcardsPaginated(
   };
 }
 
-/** Backward-compatible helper: returns items array (fetches one page, default limit 2000). */
+/** Backward-compatible helper: returns all items (paginated, max 500 per request). */
 export async function fetchAllTechcards(params: TechcardListParams = {}) {
-  const response = await listTechcardsPaginated({ limit: 2000, offset: 0, ...params });
-  return response.items;
+  const pageSize = 500;
+  const all: Techcard[] = [];
+  let offset = 0;
+  let total = Infinity;
+
+  while (offset < total) {
+    const response = await listTechcardsPaginated({ limit: pageSize, offset, ...params });
+    all.push(...response.items);
+    total = response.total;
+    offset += response.items.length;
+    if (response.items.length === 0) break;
+  }
+
+  return all;
 }
 
 /** Used as react-query queryFn — no params to avoid QueryFunction signature clash. */

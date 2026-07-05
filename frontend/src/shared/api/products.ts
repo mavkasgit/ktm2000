@@ -106,6 +106,24 @@ export async function listProducts(filters: ProductFilters = {}) {
   return data;
 }
 
+/** Backward-compatible helper: returns all items (paginated, max 500 per request). */
+export async function fetchAllProducts(params: ProductFilters = {}) {
+  const pageSize = 500;
+  const all: Product[] = [];
+  let offset = 0;
+  let total = Infinity;
+
+  while (offset < total) {
+    const response = await listProductsPaginated({ limit: pageSize, offset, ...params });
+    all.push(...response.items);
+    total = response.total;
+    offset += response.items.length;
+    if (response.items.length === 0) break;
+  }
+
+  return all;
+}
+
 export async function listProductsPaginated(
   filters: ProductFilters = {},
 ): Promise<ProductListResponse> {

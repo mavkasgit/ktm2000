@@ -70,6 +70,9 @@ class StepOut(BaseModel):
     section_id: int | None
     section_code: str | None = None
     section_name: str | None = None
+    icon: str | None = None
+    icon_color: str | None = None
+    section_type: str | None = None
     operation_code: str | None = None
     operation_name: str
     norm_time_minutes: int | None = None
@@ -102,6 +105,24 @@ class RouteDetailOut(BaseModel):
 
 class ReorderRoutesIn(BaseModel):
     ids: list[int]
+
+
+def _section_step_fields(section: Section | None) -> dict[str, str | None]:
+    if section is None:
+        return {
+            "section_code": None,
+            "section_name": None,
+            "icon": None,
+            "icon_color": None,
+            "section_type": None,
+        }
+    return {
+        "section_code": section.code,
+        "section_name": section.name,
+        "icon": section.icon,
+        "icon_color": section.icon_color,
+        "section_type": section.type,
+    }
 
 
 def _resolve_section_for_stage(
@@ -141,8 +162,7 @@ def _build_route_steps(
             route_id=stage.route_id,
             sequence=stage.sequence,
             section_id=stage.section_id,
-            section_code=section.code if section else None,
-            section_name=section.name if section else None,
+            **_section_step_fields(section),
             operation_code=op_code,
             operation_name=op_name,
             norm_time_minutes=stage.norm_time_minutes,
@@ -525,8 +545,7 @@ async def create_route_step(route_id: int, payload: StepCreate, db: AsyncSession
         route_id=stage.route_id,
         sequence=stage.sequence,
         section_id=stage.section_id,
-        section_code=section_for_response.code if section_for_response else None,
-        section_name=section_for_response.name if section_for_response else None,
+        **_section_step_fields(section_for_response),
         operation_code=op.operation_code if op else None,
         operation_name=op.operation_name if op else f"Транзит через {storage_section.name if storage_section else ''}",
         norm_time_minutes=stage.norm_time_minutes,
@@ -643,8 +662,7 @@ async def replace_route_steps(route_id: int, payload: list[StepUpdate], db: Asyn
             route_id=stage.route_id,
             sequence=stage.sequence,
             section_id=stage.section_id,
-            section_code=section_for_response.code if section_for_response else None,
-            section_name=section_for_response.name if section_for_response else None,
+            **_section_step_fields(section_for_response),
             operation_code=op.operation_code if op else None,
             operation_name=op.operation_name if op else f"Транзит через {storage_section.name if storage_section else ''}",
             norm_time_minutes=stage.norm_time_minutes,

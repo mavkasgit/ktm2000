@@ -44,10 +44,22 @@ export async function listImportTemplates(
   return data;
 }
 
-/** Все шаблоны для селектов/диалогов (первая страница с большим limit). */
+/** Все шаблоны для селектов/диалогов (пагинация, max 500 на запрос). */
 export async function listAllImportTemplates(): Promise<ImportTemplate[]> {
-  const page = await listImportTemplates({ limit: 500, offset: 0 });
-  return page.items;
+  const pageSize = 500;
+  const all: ImportTemplate[] = [];
+  let offset = 0;
+  let total = Infinity;
+
+  while (offset < total) {
+    const response = await listImportTemplates({ limit: pageSize, offset });
+    all.push(...response.items);
+    total = response.total;
+    offset += response.items.length;
+    if (response.items.length === 0) break;
+  }
+
+  return all;
 }
 
 export async function createImportTemplate(input: CreateImportTemplateInput) {
