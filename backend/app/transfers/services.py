@@ -522,6 +522,15 @@ async def transfer_send(
     await _refresh_section_plan_line_cache(db, from_task.section_plan_line_id)
     await _refresh_section_plan_line_cache(db, to_task.section_plan_line_id)
 
+    from app.services.shopfloor.task_status import sync_work_task_status
+
+    from_task_after = await db.get(WorkTask, from_task.id)
+    to_task_after = await db.get(WorkTask, to_task.id)
+    if from_task_after:
+        await sync_work_task_status(db, from_task_after)
+    if to_task_after:
+        await sync_work_task_status(db, to_task_after)
+
     # If cumulative received quantity now exceeds the task's planned quantity
     # (i.e., over-plan material was transferred), expand planned_quantity so
     # operators can issue and complete the full received amount at this stage.

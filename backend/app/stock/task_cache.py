@@ -30,3 +30,43 @@ def compute_task_available(
 def compute_remaining(*, planned_quantity: Decimal, transferred_quantity: Decimal) -> Decimal:
     remaining = planned_quantity - transferred_quantity
     return remaining if remaining > Decimal("0") else Decimal("0")
+
+
+def resolve_work_task_status(
+    *,
+    current_status: str,
+    planned_quantity: Decimal,
+    remaining_quantity: Decimal,
+    transferred_quantity: Decimal,
+    completed_quantity: Decimal,
+    rejected_quantity: Decimal,
+    issued_quantity: Decimal,
+    received_quantity: Decimal,
+) -> str | None:
+    """Вывести целевой статус WorkTask из проекции ledger.
+
+    Возвращает новый статус или None, если переход не требуется.
+    """
+    if current_status in ("completed", "cancelled"):
+        return None
+    if planned_quantity <= Decimal("0"):
+        return None
+
+    if current_status == "waiting_previous":
+        return "ready" if received_quantity > Decimal("0") else None
+
+    active_statuses = {"ready", "in_progress", "partially_completed"}
+    if current_status not in active_statuses:
+        return None
+
+    if remaining_quantity <= Decimal("0") and transferred_quantity >= planned_quantity:
+        return "completed"
+
+    produced = completed_quantity + rejected_quantity
+    if produced > Decimal("0") and produced < planned_quantity:
+        return "partially_completed"
+
+    if (issued_quantity > Decimal("0") or produced > Decimal("0")) and current_status == "ready":
+        return "in_progress"
+
+    return None

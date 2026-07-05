@@ -6,6 +6,8 @@ import {
   getStatusColor,
   isTaskCompletable,
   getNonCompletableTasks,
+  isTaskFullyTransferred,
+  getTaskViewCategory,
 } from "./taskStatus";
 
 function makeTask(overrides: Partial<SectionBoardTask> = {}): SectionBoardTask {
@@ -85,6 +87,22 @@ describe("getReadyStatusLabel", () => {
 });
 
 describe("getStatusLabel", () => {
+  it("полностью переданная ready-задача → «Завершен»", () => {
+    const task = makeTask({
+      status: "ready",
+      cache: {
+        available_quantity: "0",
+        issued_quantity: "216",
+        completed_quantity: "216",
+        transferred_quantity: "216",
+        received_quantity: "216",
+        rejected_quantity: "0",
+        remaining_quantity: "0",
+      },
+    });
+    expect(getStatusLabel(task)).toBe("Завершен");
+  });
+
   it("для ready подставляет «Передано»/«Не передано»", () => {
     const transferred = makeTask({
       status: "ready",
@@ -159,6 +177,82 @@ describe("isTaskCompletable", () => {
 
   it("in_progress → true", () => {
     expect(isTaskCompletable(makeTask({ status: "in_progress" }))).toBe(true);
+  });
+});
+
+describe("isTaskFullyTransferred", () => {
+  it("ready + остаток 0 → полностью передано", () => {
+    const task = makeTask({
+      status: "ready",
+      cache: {
+        available_quantity: "0",
+        issued_quantity: "100",
+        completed_quantity: "100",
+        transferred_quantity: "100",
+        received_quantity: "100",
+        rejected_quantity: "0",
+        remaining_quantity: "0",
+      },
+      previous_stage: {
+        section_plan_line_id: 1,
+        completed_quantity: "100",
+        transferred_quantity: "100",
+        received_quantity: "100",
+      },
+    });
+    expect(isTaskFullyTransferred(task)).toBe(true);
+  });
+
+  it("ready + остаток > 0 → ещё в работе", () => {
+    expect(isTaskFullyTransferred(makeTask({ status: "ready" }))).toBe(false);
+  });
+
+  it("completed → не считается «переданным без закрытия»", () => {
+    const task = makeTask({
+      status: "completed",
+      cache: {
+        available_quantity: "0",
+        issued_quantity: "100",
+        completed_quantity: "100",
+        transferred_quantity: "100",
+        received_quantity: "100",
+        rejected_quantity: "0",
+        remaining_quantity: "0",
+      },
+    });
+    expect(isTaskFullyTransferred(task)).toBe(false);
+  });
+});
+
+describe("getTaskViewCategory", () => {
+  it("полностью переданная ready-задача → completed", () => {
+    const task = makeTask({
+      status: "ready",
+      cache: {
+        available_quantity: "0",
+        issued_quantity: "216",
+        completed_quantity: "216",
+        transferred_quantity: "216",
+        received_quantity: "216",
+        rejected_quantity: "0",
+        remaining_quantity: "0",
+      },
+      previous_stage: {
+        section_plan_line_id: 1,
+        completed_quantity: "216",
+        transferred_quantity: "216",
+        received_quantity: "216",
+      },
+    });
+    expect(getTaskViewCategory(task)).toBe("completed");
+  });
+
+  it("ready с остатком → active", () => {
+    expect(getTaskViewCategory(makeTask({ status: "ready" }))).toBe("active");
+  });
+
+  it("waiting_previous → waiting", () => {
+    expect(getTaskViewCategory(makeTask({ status: "waiting_previous" }))).toBe("waiting");
   });
 });
 

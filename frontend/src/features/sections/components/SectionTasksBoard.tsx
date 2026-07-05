@@ -10,7 +10,7 @@
 import { useMemo, useState, useCallback } from "react";
 import { ChevronDown, ChevronRight } from "lucide-react";
 import type { SectionBoardTask, TaskGroup } from "@/shared/api/shopfloor";
-import { Badge, Button, SortableFilterHeader, FiltersPanel, TableCornerResetCell, TableCornerResetHeader, buildActiveFilterSummary, type FiltersPanelField } from "@/shared/ui";
+import { Badge, Button, SortableFilterHeader, FiltersPanel, TableCornerResetCell, TableCornerResetHeader, DATA_TABLE_STYLES, buildActiveFilterSummary, type FiltersPanelField } from "@/shared/ui";
 import { useTableQueryEngine, ColumnSortDef } from "@/shared/hooks/useTableQueryEngine";
 import { useFilterableTable } from "@/shared/hooks/useFilterableTable";
 import { groupTasksByProfile, groupStatus, sortGroupsByPriority } from "../lib/groupTasksByProfile";
@@ -21,6 +21,8 @@ import {
   getStatusColor,
   isTaskCompletable,
   getCompletionDisabledReason,
+  getTaskViewCategory,
+  isTaskFullyTransferred,
 } from "../lib/taskStatus";
 import { TABLE_ROW_STYLES } from "@/shared/lib/tableRowStyles";
 
@@ -68,25 +70,29 @@ function fmtQty(value: string): string {
 }
 
 function isTaskVisible(task: SectionBoardTask, mode: TaskBoardViewMode): boolean {
-  if (mode.active && ["ready", "in_progress", "partially_completed", "in_work", "partially"].includes(task.status)) return true;
-  if (mode.waiting && (task.status === "waiting_previous" || task.status === "pending" || task.status === "blocked")) return true;
-  if (mode.completed && ["completed", "cancelled", "done"].includes(task.status)) return true;
+  const category = getTaskViewCategory(task);
+  if (mode.active && category === "active") return true;
+  if (mode.waiting && category === "waiting") return true;
+  if (mode.completed && category === "completed") return true;
   return false;
 }
 
-function getStatusPriority(status: string): number {
-  if (["ready", "in_progress", "partially_completed", "in_work", "partially"].includes(status)) return 0; // Active
-  if (["waiting_previous", "pending", "blocked"].includes(status)) return 1; // Waiting
-  if (["completed", "cancelled", "done"].includes(status)) return 2; // Completed
+function getStatusPriority(task: SectionBoardTask): number {
+  const category = getTaskViewCategory(task);
+  if (category === "active") return 0;
+  if (category === "waiting") return 1;
+  if (category === "completed") return 2;
   return 3;
 }
 
-function getRowStatusClass(status: string, isSelected: boolean, isInGroup: boolean): string {
+function getRowStatusClass(task: SectionBoardTask, isSelected: boolean, isInGroup: boolean): string {
   if (isSelected) return TABLE_ROW_STYLES.selectedRow;
-  
-  const isWaiting = ["waiting_previous", "pending", "blocked"].includes(status);
-  const isActive = ["ready", "in_progress", "partially_completed", "in_work", "partially"].includes(status);
-  const isCompleted = ["completed", "cancelled", "done"].includes(status);
+
+  const category = getTaskViewCategory(task);
+  const status = task.status;
+  const isWaiting = category === "waiting";
+  const isActive = category === "active";
+  const isCompleted = category === "completed";
 
   if (isWaiting) {
     return "bg-background hover:bg-slate-50 transition-colors border-l-4 border-l-yellow-400 text-slate-800";
@@ -104,12 +110,14 @@ function getRowStatusClass(status: string, isSelected: boolean, isInGroup: boole
   return isInGroup ? TABLE_ROW_STYLES.defaultGroupRow : TABLE_ROW_STYLES.defaultRow;
 }
 
-function getMobileCardStatusClass(status: string, isSelected: boolean): string {
+function getMobileCardStatusClass(task: SectionBoardTask, isSelected: boolean): string {
   if (isSelected) return TABLE_ROW_STYLES.selectedMobileCard;
-  
-  const isWaiting = ["waiting_previous", "pending", "blocked"].includes(status);
-  const isActive = ["ready", "in_progress", "partially_completed", "in_work", "partially"].includes(status);
-  const isCompleted = ["completed", "cancelled", "done"].includes(status);
+
+  const category = getTaskViewCategory(task);
+  const status = task.status;
+  const isWaiting = category === "waiting";
+  const isActive = category === "active";
+  const isCompleted = category === "completed";
 
   if (isWaiting) {
     return "border border-slate-200 bg-background text-slate-800 rounded-lg border-l-4 border-l-yellow-400";
@@ -149,7 +157,7 @@ function StatusDot({ task }: { task: SectionBoardTask }) {
     colorClass = status === "ready" && getReadyStatusLabel(task) === "Не передано"
       ? "bg-slate-400"
       : "bg-blue-500";
-  } else if (["completed", "done"].includes(status)) {
+  } else if (["completed", "done"].includes(status) || isTaskFullyTransferred(task)) {
     colorClass = "bg-emerald-500";
   } else if (status === "blocked") {
     colorClass = "bg-red-500";
@@ -179,7 +187,7 @@ function renderTaskRow(
   return (
     <tr
       key={task.id}
-      className={`cursor-pointer transition-colors ${getRowStatusClass(task.status, !!isSelected, isInGroup)} ${isLastInGroup ? "border-b-2 border-blue-300" : "border-b"}`}
+      className={`cursor-pointer transition-colors ${getRowStatusClass(task, !!isSelected, isInGroup)} ${isLastInGroup ? "border-b-2 border-blue-300" : "border-b"}`}
       onClick={() => {
         if (bulkMode && bulkSelection && task.status !== "waiting_previous") {
           bulkSelection.selectOne(task.id);
@@ -252,7 +260,7 @@ function renderMobileCard(
   return (
     <div
       key={task.id}
-      className={`p-4 space-y-3 cursor-pointer transition-colors ${getMobileCardStatusClass(task.status, !!isSelected)} ${isLastInGroup ? "border-b-2 border-blue-300 mb-3" : "mb-0"}`}
+      className={`p-4 space-y-3 cursor-pointer transition-colors ${getMobileCardStatusClass(task, !!isSelected)} ${isLastInGroup ? "border-b-2 border-blue-300 mb-3" : "mb-0"}`}
       onClick={() => {
         if (bulkMode && bulkSelection && task.status !== "waiting_previous") {
           bulkSelection.selectOne(task.id);
@@ -520,8 +528,8 @@ export function SectionTasksBoard({
     // Sort tasks inside each group by status priority, then by sequence
     for (const g of grouped) {
       g.tasks.sort((a, b) => {
-        const pA = getStatusPriority(a.status);
-        const pB = getStatusPriority(b.status);
+        const pA = getStatusPriority(a);
+        const pB = getStatusPriority(b);
         if (pA !== pB) return pA - pB;
         return a.sequence - b.sequence;
       });
@@ -532,7 +540,7 @@ export function SectionTasksBoard({
     const completed: typeof grouped = [];
 
     for (const g of grouped) {
-      const isCompleted = g.tasks.every((t) => getStatusPriority(t.status) >= 2);
+      const isCompleted = g.tasks.every((t) => getStatusPriority(t) >= 2);
       if (isCompleted) {
         completed.push(g);
       } else {
@@ -568,9 +576,9 @@ export function SectionTasksBoard({
   const statusLabel = (label: string) => label;
 
   const modeCounts = useMemo(() => ({
-    active: tasks.filter((t) => ["ready", "in_progress", "partially_completed", "in_work", "partially"].includes(t.status)).length,
-    waiting: tasks.filter((t) => t.status === "waiting_previous" || t.status === "pending" || t.status === "blocked").length,
-    completed: tasks.filter((t) => ["completed", "cancelled", "done"].includes(t.status)).length,
+    active: tasks.filter((t) => getTaskViewCategory(t) === "active").length,
+    waiting: tasks.filter((t) => getTaskViewCategory(t) === "waiting").length,
+    completed: tasks.filter((t) => getTaskViewCategory(t) === "completed").length,
   }), [tasks]);
 
   const modeFields = useMemo((): FiltersPanelField[] => [
@@ -624,6 +632,8 @@ export function SectionTasksBoard({
     onBulkModeChange?.(false);
   }, [resetAllFilters, bulkSelection, onBulkModeChange]);
 
+  const headerCellClass = `${DATA_TABLE_STYLES.headerRow} ${DATA_TABLE_STYLES.headerCell}`;
+
   const activeFilterSummary = useMemo(
     () =>
       buildActiveFilterSummary({}, searchQuery, sortConfigs.length, {
@@ -667,14 +677,14 @@ export function SectionTasksBoard({
       {!isLoading && visibleTasks.length > 0 && (
         <>
           {/* Desktop table */}
-          <div className="hidden md:block rounded-lg border overflow-auto">
+          <div className={`hidden md:block ${DATA_TABLE_STYLES.container}`}>
             <table className="w-full border-separate border-spacing-0 text-sm">
-              <thead className="[&_th]:sticky [&_th]:top-0 [&_th]:z-20 [&_th]:bg-background [&_th]:border-b">
+              <thead>
                 <tr>
-                  <th className="w-12 text-center p-2 text-xs font-semibold text-muted-foreground">
-                    Статус
+                  <th className={`${headerCellClass} w-12 text-center`}>
+                    <span className="text-xs font-medium text-muted-foreground">Статус</span>
                   </th>
-                  <th className="text-left p-2">
+                  <th className={`${headerCellClass} p-0 text-left`}>
                     <SortableFilterHeader
                       field="productSku"
                       label="Артикул"
@@ -684,8 +694,10 @@ export function SectionTasksBoard({
                       {...bindColumn("productSku")}
                     />
                   </th>
-                  <th className="text-left p-2 text-xs font-medium">Операция</th>
-                  <th className="text-left p-2">
+                  <th className={`${headerCellClass} text-left`}>
+                    <span className="text-xs font-medium text-muted-foreground">Операция</span>
+                  </th>
+                  <th className={`${headerCellClass} p-0 text-left`}>
                     <SortableFilterHeader
                       field="plannedQty"
                       label="План"
@@ -695,7 +707,7 @@ export function SectionTasksBoard({
                       {...bindColumn("plannedQty")}
                     />
                   </th>
-                  <th className="text-left p-2">
+                  <th className={`${headerCellClass} p-0 text-left`}>
                     <SortableFilterHeader
                       field="issuedQty"
                       label="Выдано"
@@ -705,7 +717,7 @@ export function SectionTasksBoard({
                       {...bindColumn("issuedQty")}
                     />
                   </th>
-                  <th className="text-left p-2">
+                  <th className={`${headerCellClass} p-0 text-left`}>
                     <SortableFilterHeader
                       field="completedQty"
                       label="Годные"
@@ -715,7 +727,7 @@ export function SectionTasksBoard({
                       {...bindColumn("completedQty")}
                     />
                   </th>
-                  <th className="text-left p-2">
+                  <th className={`${headerCellClass} p-0 text-left`}>
                     <SortableFilterHeader
                       field="rejectedQty"
                       label="Брак"
@@ -725,7 +737,7 @@ export function SectionTasksBoard({
                       {...bindColumn("rejectedQty")}
                     />
                   </th>
-                  <th className="text-left p-2">
+                  <th className={`${headerCellClass} p-0 text-left`}>
                     <SortableFilterHeader
                       field="transferredQty"
                       label="Передано"
@@ -735,7 +747,7 @@ export function SectionTasksBoard({
                       {...bindColumn("transferredQty")}
                     />
                   </th>
-                  <th className="text-left p-2">
+                  <th className={`${headerCellClass} p-0 text-left`}>
                     <SortableFilterHeader
                       field="remainingQty"
                       label="Остаток"
@@ -745,7 +757,7 @@ export function SectionTasksBoard({
                       {...bindColumn("remainingQty")}
                     />
                   </th>
-                  <th className="text-left p-2">
+                  <th className={`${headerCellClass} p-0 text-left`}>
                     <SortableFilterHeader
                       field="status"
                       label="Статус"
@@ -756,13 +768,16 @@ export function SectionTasksBoard({
                       valueLabel={statusLabel}
                     />
                   </th>
-                  <th className="text-left p-2 text-xs font-medium">Пред. этап</th>
-                  <th className="text-left p-2 text-xs font-medium text-muted-foreground">
-                    Действия
+                  <th className={`${headerCellClass} text-left`}>
+                    <span className="text-xs font-medium text-muted-foreground">Пред. этап</span>
+                  </th>
+                  <th className={`${headerCellClass} text-left`}>
+                    <span className="text-xs font-medium text-muted-foreground">Действия</span>
                   </th>
                   <TableCornerResetHeader
                     hasActiveFilters={hasTableFiltersActive}
                     onReset={handleResetAllFilters}
+                    dataTableHeader
                   />
                 </tr>
               </thead>

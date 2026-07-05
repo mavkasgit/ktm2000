@@ -182,6 +182,11 @@ async def get_section_board(
     all_task_ids = [row[0].id for row in rows]
     tasks_cache = await pm.get_tasks_cache_bulk(db, all_task_ids)
 
+    from .task_status import sync_work_tasks_status_bulk
+
+    board_tasks = [row[0] for row in rows]
+    await sync_work_tasks_status_bulk(db, tasks=board_tasks, tasks_cache=tasks_cache)
+
     tasks_data = []
     for task, line, stage, product_sku, source_ref, source_payload, source_fingerprint, source_sku, output_sku in rows:
         # Determine effective operation_code.
