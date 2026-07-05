@@ -203,10 +203,10 @@ async def _make_tasks_transferable(
         task_id=src.id,
         created_by=setup["user"].id,
     ))
-    # complete: good output appears on the source section
+    # complete: net-zero when material already issued on section
     await svc.record(session, StockCommand(
         product_id=src.product_id,
-        from_location_id=None,
+        from_location_id=src.section_id,
         to_location_id=src.section_id,
         quantity=src.planned_quantity,
         reason=Reason.COMPLETE,
@@ -352,9 +352,9 @@ async def test_cancel_transfer_creates_compensation(session: AsyncSession, clien
     )
     await session.commit()
 
-    # После компенсации: на секции источника остаётся issue+complete (20)
-    # минус transfer_send (5) плюс компенсация send (5) = 20
-    assert (await _balance(session, from_task.product_id, from_task.section_id)) == Decimal("20")
+    # После компенсации: на секции источника остаётся TRANSFER_RECEIVE (10)
+    # минус transfer_send (5) плюс компенсация send (5) = 10
+    assert (await _balance(session, from_task.product_id, from_task.section_id)) == Decimal("10")
     assert (await _balance(session, to_task.product_id, to_task.section_id)) == Decimal("0")
 
     # Есть компенсационные записи
@@ -490,3 +490,57 @@ async def test_transfer_send_task_cache_via_ledger(session: AsyncSession, client
 
     assert from_cache["transferred_quantity"] == Decimal("5")
     assert to_cache["received_quantity"] == Decimal("5")
+
+
+@_py_test_mark
+async def test_complete_after_transfer_balance_not_doubled(session: AsyncSession, client) -> None:
+    """transfer_send + complete_task: balance приёмника == qty, не 2×."""
+    setup = await _make_two_ghp_setup(session, sku="T2CMP", qty=Decimal("10"))
+    ctx = await _make_tasks_transferable(session, client, setup)
+
+    xfer_qty = Decimal("10")
+    await transfer_send(
+        session,
+        from_task_id=ctx["from_task_id"],
+        to_task_id=ctx["to_task_id"],
+        quantity=xfer_qty,
+        actor_id=ctx["user"].id,
+        idempotency_key="t2cmp:send",
+    )
+    await session.commit()
+
+    to_task = await session.get(WorkTask, ctx["to_task_id"])
+    assert to_task is not None
+    bal_after_xfer = await _balance(session, to_task.product_id, to_task.section_id)
+    assert bal_after_xfer == xfer_qty
+
+    from app.services.shopfloor.operations_tasks import complete_task
+    await complete_task(
+        session,
+        task_id=to_task.id,
+        good_quantity=xfer_qty,
+        defect_quantity=Decimal("0"),
+        actor_id=ctx["user"].id,
+    )
+    await session.commit()
+
+    bal_after_complete = await _balance(session, to_task.product_id, to_task.section_id)
+    assert bal_after_complete == xfer_qty, (
+        f"Expected receiver balance {xfer_qty}, got {bal_after_complete}"
+    )
+
+    complete_tx = await session.scalar(
+        select(StockTransaction).where(
+            StockTransaction.task_id == to_task.id,
+            StockTransaction.reason == Reason.COMPLETE,
+        )
+    )
+    assert complete_tx is not None
+    assert complete_tx.from_location_id == to_task.section_id
+    assert complete_tx.to_location_id == to_task.section_id
+
+    from app.stock.services import StockProjectionManager
+    pm = StockProjectionManager()
+    cache = await pm.get_task_cache(session, to_task.id)
+    assert cache["issued_quantity"] == xfer_qty
+    assert cache["completed_quantity"] == xfer_qty

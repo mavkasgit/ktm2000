@@ -135,11 +135,19 @@ async def complete_task(
     defect_id: int | None = None
 
     if good_quantity > 0:
-        # complete: good output appears on the section (from nowhere)
+        # Material already on section (issued_quantity > 0): net-zero COMPLETE
+        # records выпуск without duplicating balance after TRANSFER_SEND.
+        # Legacy path (issued_quantity == 0): good appears from nowhere.
+        if cache["issued_quantity"] > 0:
+            complete_from = task.section_id
+            complete_to = task.section_id
+        else:
+            complete_from = None
+            complete_to = task.section_id
         tx_good = await svc.record(db, StockCommand(
             product_id=task.product_id,
-            from_location_id=None,
-            to_location_id=task.section_id,
+            from_location_id=complete_from,
+            to_location_id=complete_to,
             quantity=good_quantity,
             reason=Reason.COMPLETE,
             quality_state=QualityState.GOOD,
@@ -217,6 +225,11 @@ async def complete_task(
         db.add(defect_item)
 
     await _refresh_section_plan_line_cache(db, task.section_plan_line_id)
+
+    from .task_status import sync_work_task_status
+
+    cache_after = await pm.get_task_cache(db, task.id)
+    await sync_work_task_status(db, task, cache=cache_after)
 
     if auto_transfer_next and good_quantity > 0:
         from app.transfers.services import auto_create_transfer_after_complete

@@ -95,7 +95,9 @@ class StockTransaction(Base):
             name="ck_stock_transactions_at_least_one_location",
         ),
         CheckConstraint(
-            "from_location_id IS NULL OR to_location_id IS NULL OR from_location_id <> to_location_id",
+            "from_location_id IS NULL OR to_location_id IS NULL "
+            "OR from_location_id <> to_location_id "
+            "OR reason = 'complete'",
             name="ck_stock_transactions_locations_differ",
         ),
     )
