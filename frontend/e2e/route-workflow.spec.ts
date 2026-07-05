@@ -71,7 +71,8 @@ async function apiTakeToWork(positionIds: number[]) {
 
 async function apiGetTemplates() {
   const res = await fetch(`${BACKEND_URL}/api/import-templates`);
-  return res.json();
+  const body = await res.json();
+  return body.items ?? body;
 }
 
 async function apiGetRouteProfiles() {

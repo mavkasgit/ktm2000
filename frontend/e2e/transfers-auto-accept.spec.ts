@@ -56,7 +56,8 @@ async function apiGetOrCreateTechcard(productId: number) {
   if (!res.ok) {
     throw new Error(`Get techcards failed: ${res.statusText} (${res.status})`);
   }
-  const techcards = (await res.json()) as Array<{ id: number; product_id: number; is_active: boolean }>;
+  const body = (await res.json()) as { items?: Array<{ id: number; product_id: number; is_active: boolean }> } | Array<{ id: number; product_id: number; is_active: boolean }>;
+  const techcards = Array.isArray(body) ? body : body.items ?? [];
   const existing = techcards.find((t) => t.product_id === productId && t.is_active);
   if (existing) {
     return existing;
@@ -82,7 +83,7 @@ async function apiGetActiveTemplate() {
   if (!res.ok) {
     throw new Error(`Get templates failed: ${res.statusText} (${res.status})`);
   }
-  const templates = (await res.json()) as Array<{ id: number; is_active: boolean }>;
+  const { items: templates } = (await res.json()) as { items: Array<{ id: number; is_active: boolean }> };
   const template = templates.find((t) => t.is_active);
   if (!template) {
     throw new Error("No active import template found");
