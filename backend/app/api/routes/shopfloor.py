@@ -161,7 +161,6 @@ class CreateDefectPayload(BaseModel):
     product_id: int | None = None
     section_id: int | None = None
     route_stage_id: int | None = None
-    spg_remainder_id: int | None = None
     quantity: Decimal
     reason: str | None = None
     comment: str | None = None
@@ -588,7 +587,6 @@ async def create_defect_endpoint(
             product_id=payload.product_id,
             section_id=payload.section_id,
             route_stage_id=payload.route_stage_id,
-            spg_remainder_id=payload.spg_remainder_id,
             quantity=payload.quantity,
             actor_id=current_user.id,
             reason=payload.reason,
