@@ -189,9 +189,11 @@ async def test_seed_demo_production_resolves_stages_by_code(session: AsyncSessio
     """Ensure the demo seeder picks DRILL/SHOT/ANOD stages by section code,
     not by positional index, and works with transit stages interleaved."""
     from app.seeds.run_seed import run_full_seed
+    from app.seeds.seeders.demo_production_seeder import seed_demo_production
 
     # Pre-seed a profile so dynamic route can be built
-    stats = await run_full_seed(session, force=True, include_demo=True)
+    stats = await run_full_seed(session, force=True)
+    await seed_demo_production(session)
     # At least the routes and remainders were created
     assert stats.get("routes", 0) >= 1
 
