@@ -181,6 +181,9 @@ async def me(
                 authentik_sub=user.authentik_sub,
                 local_full_name=user.full_name,
                 local_avatar_seed=user.avatar_seed,
+                local_locale=user.locale,
+                local_theme=user.theme,
+                local_email=user.email,
             )
             if snapshot is not None and apply_profile_to_user(user, snapshot):
                 db.add(user)
@@ -203,9 +206,12 @@ async def update_my_profile(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> ProfileUpdateResponse:
-    """Update display name / avatar. SoT = Authentik when sub + API token set."""
+    """Update display name / email / locale / theme / avatar. SoT = Authentik when linked."""
     user = current_user
     want_name = payload.full_name.strip() if payload.full_name else None
+    want_email = str(payload.email).strip() if payload.email is not None else None
+    want_locale = payload.locale
+    want_theme = payload.theme
 
     if payload.clear_avatar:
         avatar_arg: object = None
@@ -220,6 +226,9 @@ async def update_my_profile(
                 user.authentik_sub,
                 full_name=want_name,
                 avatar_seed=avatar_arg,
+                email=want_email,
+                locale=want_locale,
+                theme=want_theme,
             )
             if want_name:
                 user.full_name = remote.full_name or want_name
@@ -227,6 +236,12 @@ async def update_my_profile(
                 user.avatar_seed = remote.avatar_seed
             elif remote.full_name:
                 user.full_name = remote.full_name
+            if want_email is not None:
+                user.email = remote.email or want_email
+            if want_locale is not None:
+                user.locale = remote.locale or want_locale
+            if want_theme is not None:
+                user.theme = remote.theme or want_theme
         except AuthentikProfileError as exc:
             raise HTTPException(
                 status_code=exc.status_code or 502,
@@ -239,11 +254,23 @@ async def update_my_profile(
             user.avatar_seed = None
         elif payload.avatar_seed is not None:
             user.avatar_seed = payload.avatar_seed
+        if want_email is not None:
+            user.email = want_email
+        if want_locale is not None:
+            user.locale = want_locale
+        if want_theme is not None:
+            user.theme = want_theme
 
     db.add(user)
     await db.commit()
     await db.refresh(user)
-    return ProfileUpdateResponse(full_name=user.full_name, avatar_seed=user.avatar_seed)
+    return ProfileUpdateResponse(
+        full_name=user.full_name,
+        avatar_seed=user.avatar_seed,
+        email=user.email,
+        locale=user.locale,
+        theme=user.theme,
+    )
 
 
 @router.patch("/me/avatar", response_model=ProfileUpdateResponse)

@@ -25,6 +25,8 @@ export interface User {
   active_login_token?: ActiveToken | null
   /** Multiavatar seed — cache of IdP attributes.profile_avatar_seed */
   avatar_seed?: string | null
+  locale?: string | null
+  theme?: string | null
   authentik_linked?: boolean
   profile_sot?: "authentik" | "local" | string
 }
@@ -32,6 +34,9 @@ export interface User {
 export interface ProfileUpdateResponse {
   full_name: string
   avatar_seed?: string | null
+  email?: string | null
+  locale?: string | null
+  theme?: string | null
 }
 
 /** Ответ сервера на запрос /auth/login */
@@ -52,11 +57,14 @@ export async function fetchMeApi(): Promise<User> {
   return data
 }
 
-/** Unified profile: name / avatar → Authentik SoT when linked */
+/** Unified profile: name / email / locale / theme / avatar → Authentik SoT when linked */
 export async function updateMyProfileApi(payload: {
   full_name?: string
   avatar_seed?: string | null
   clear_avatar?: boolean
+  email?: string
+  locale?: "ru" | "en"
+  theme?: "system" | "light" | "dark"
 }): Promise<ProfileUpdateResponse> {
   const { data } = await apiClient.patch<ProfileUpdateResponse>("/auth/me/profile", payload)
   return data

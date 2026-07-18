@@ -46,6 +46,9 @@ class User(Base):
     authentik_sub: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
     # Multiavatar seed — cache of Authentik attributes.profile_avatar_seed
     avatar_seed: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # Unified profile cache (SoT = Authentik attributes)
+    locale: Mapped[str | None] = mapped_column(String(16), nullable=True)  # ru | en
+    theme: Mapped[str | None] = mapped_column(String(16), nullable=True)  # system | light | dark
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=text("now()")
     )

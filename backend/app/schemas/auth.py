@@ -1,4 +1,6 @@
-from pydantic import BaseModel, ConfigDict
+from typing import Literal
+
+from pydantic import BaseModel, ConfigDict, EmailStr
 
 from app.models.user import UserRole
 
@@ -28,6 +30,8 @@ class MeResponse(BaseModel):
     is_active: bool
     hrms_access_level: str = "no_access"
     avatar_seed: str | None = None
+    locale: str | None = None
+    theme: str | None = None
     authentik_linked: bool = False
     profile_sot: str = "local"
 
@@ -36,8 +40,14 @@ class ProfileUpdateRequest(BaseModel):
     full_name: str | None = None
     avatar_seed: str | None = None
     clear_avatar: bool = False
+    email: EmailStr | None = None
+    locale: Literal["ru", "en"] | None = None
+    theme: Literal["system", "light", "dark"] | None = None
 
 
 class ProfileUpdateResponse(BaseModel):
     full_name: str
     avatar_seed: str | None = None
+    email: str | None = None
+    locale: str | None = None
+    theme: str | None = None

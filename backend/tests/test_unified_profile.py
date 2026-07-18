@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, patch
+from unittest.mock import patch
 
 import pytest
 
@@ -31,6 +31,7 @@ async def test_push_profile_maps_attributes(idp_on):
         "pk": 5,
         "uuid": "sub-1",
         "name": "Old",
+        "email": "old@example.com",
         "attributes": {"other": "keep"},
     }
     calls: list = []
@@ -46,6 +47,8 @@ async def test_push_profile_maps_attributes(idp_on):
                 out["attributes"] = json_body["attributes"]
             if json_body and "name" in json_body:
                 out["name"] = json_body["name"]
+            if json_body and "email" in json_body:
+                out["email"] = json_body["email"]
             return out
         return ak
 
@@ -54,14 +57,43 @@ async def test_push_profile_maps_attributes(idp_on):
             "sub-1",
             full_name="New Name",
             avatar_seed="abcd1234",
+            email="new@example.com",
+            locale="en",
+            theme="dark",
         )
 
     assert result.full_name == "New Name"
     assert result.avatar_seed == "abcd1234"
+    assert result.email == "new@example.com"
+    assert result.locale == "en"
+    assert result.theme == "dark"
     patch_body = next(c[2] for c in calls if c[0] == "PATCH")
     assert patch_body["name"] == "New Name"
+    assert patch_body["email"] == "new@example.com"
     assert patch_body["attributes"]["profile_avatar_seed"] == "abcd1234"
+    assert patch_body["attributes"]["profile_locale"] == "en"
+    assert patch_body["attributes"]["profile_theme"] == "dark"
     assert patch_body["attributes"]["other"] == "keep"
+
+
+@pytest.mark.asyncio
+async def test_profile_from_ak_user_reads_attrs():
+    profile = ups.profile_from_ak_user(
+        {
+            "pk": 1,
+            "name": "N",
+            "email": "a@b.c",
+            "attributes": {
+                "profile_avatar_seed": "seed1",
+                "profile_locale": "ru",
+                "profile_theme": "system",
+            },
+        }
+    )
+    assert profile.email == "a@b.c"
+    assert profile.locale == "ru"
+    assert profile.theme == "system"
+    assert profile.avatar_seed == "seed1"
 
 
 @pytest.mark.asyncio
