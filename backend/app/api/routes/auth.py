@@ -8,6 +8,7 @@ from app.api.deps import get_current_user
 from app.core.database import get_db
 from app.core.security import TokenError, decode_access_token, verify_password
 from app.models.user import User
+from app.models.user_session import UserSession
 from app.schemas.auth import LoginRequest, MeResponse, TokenResponse
 from app.schemas.oidc_auth import (
     OidcCallbackRequest,
@@ -136,10 +137,7 @@ async def logout(
     if user is None:
         return
 
-    session = await db.get(
-        __import__("app.models.user_session", fromlist=["UserSession"]).UserSession,
-        session_id,
-    )
+    session = await db.get(UserSession, session_id)
     if session is not None and session.user_id == user.id and session.revoked_at is None:
         await revoke_session(db, session_id)
 

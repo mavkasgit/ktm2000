@@ -1,5 +1,5 @@
 import { createContext, useContext, useState, useEffect, useCallback, type ReactNode } from "react"
-import { loginApi, fetchMeApi, loginWithOTPApi, type User } from "../api"
+import { loginApi, fetchMeApi, loginWithOTPApi, logoutApi, type User } from "../api"
 import { fetchOidcLogoutUrl } from "../api/oidcAuth"
 
 const TOKEN_KEY = "ktm2000_token"
@@ -62,10 +62,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [])
 
   const logout = useCallback(async () => {
+    // 1) Best-effort server revoke (needs Authorization while token still present)
+    try {
+      await logoutApi()
+    } catch {
+      /* ignore — always clear local tokens */
+    }
+    // 2) Clear app token
     localStorage.removeItem(TOKEN_KEY)
     document.cookie = "ktm2000_token=; path=/; max-age=0"
     setUser(null)
-    // OIDC: clear app token then IdP end-session when enabled
+    // 3) OIDC end-session when enabled
     try {
       const { enabled, logout_url } = await fetchOidcLogoutUrl()
       if (enabled && logout_url) {

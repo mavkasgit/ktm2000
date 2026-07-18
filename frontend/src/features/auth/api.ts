@@ -43,6 +43,11 @@ export async function fetchMeApi(): Promise<User> {
   return data
 }
 
+/** Server revoke current session (best-effort before local clear). */
+export async function logoutApi(): Promise<void> {
+  await apiClient.post("/auth/logout")
+}
+
 /** Параметры для генерации OTP кода */
 export interface OTPGenerateInput {
   user_id: number

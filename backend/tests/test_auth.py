@@ -16,6 +16,10 @@ async def test_password_hashing_roundtrip() -> None:
 
 @pytest.mark.asyncio
 async def test_login_success(client, session) -> None:
+    from jose import jwt
+
+    from app.core.config import settings
+
     user = User(
         username="planner",
         email="planner@example.com",
@@ -36,6 +40,9 @@ async def test_login_success(client, session) -> None:
     body = response.json()
     assert "access_token" in body
     assert body["token_type"] == "bearer"
+    secret = settings.JWT_SECRET_KEY or settings.SECRET_KEY
+    claims = jwt.get_unverified_claims(body["access_token"])
+    assert claims.get("sid"), "login JWT must include sid claim"
 
     # 2. Проверяем вход по email
     response_email = await client.post(
@@ -45,6 +52,8 @@ async def test_login_success(client, session) -> None:
     assert response_email.status_code == 200
     body_email = response_email.json()
     assert "access_token" in body_email
+    claims_email = jwt.get_unverified_claims(body_email["access_token"])
+    assert claims_email.get("sid")
 
 
 @pytest.mark.asyncio
@@ -201,8 +210,9 @@ async def test_expired_token_returns_401(client, session, monkeypatch) -> None:
 
 @pytest.mark.asyncio
 async def test_disabled_user_token_returns_403(client, session, monkeypatch) -> None:
-    """Valid token for disabled user must return 403."""
+    """Valid token + active sid for disabled user must return 403."""
     from app.core.config import settings
+    from app.services.session_service import issue_session
 
     monkeypatch.setattr(settings, "DEV_BYPASS_AUTH", False)
 
@@ -218,8 +228,17 @@ async def test_disabled_user_token_returns_403(client, session, monkeypatch) -> 
     session.add(disabled_user)
     await session.commit()
 
-    # Create a valid token for the disabled user
-    token = create_access_token(subject=disabled_user.username)
+    # Create a valid token with active session for the disabled user
+    usess = await issue_session(
+        session,
+        user_id=disabled_user.id,
+        login_method="password",
+        ttl_minutes=60,
+    )
+    await session.commit()
+    token = create_access_token(
+        subject=disabled_user.username, session_id=usess.id
+    )
 
     response = await client.get(
         "/api/auth/me",
@@ -228,6 +247,77 @@ async def test_disabled_user_token_returns_403(client, session, monkeypatch) -> 
 
     assert response.status_code == 403
     assert response.json()["detail"] == "User account is disabled"
+
+
+@pytest.mark.asyncio
+async def test_login_me_logout_session_flow(client, session, monkeypatch) -> None:
+    """Login issues sid → /me ok → logout revokes → /me 401 (strict)."""
+    from jose import jwt
+
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "DEV_BYPASS_AUTH", False)
+
+    user = User(
+        username="session_user",
+        email="session_user@example.com",
+        password_hash=get_password_hash("password123"),
+        full_name="Session User",
+        role=UserRole.operator,
+        is_active=True,
+    )
+    session.add(user)
+    await session.commit()
+
+    login = await client.post(
+        "/api/auth/login",
+        json={"username": "session_user", "password": "password123"},
+    )
+    assert login.status_code == 200
+    token = login.json()["access_token"]
+    secret = settings.JWT_SECRET_KEY or settings.SECRET_KEY
+    claims = jwt.get_unverified_claims(token)
+    assert claims.get("sid")
+    assert claims.get("sub") == "session_user"
+
+    headers = {"Authorization": f"Bearer {token}"}
+    me = await client.get("/api/auth/me", headers=headers)
+    assert me.status_code == 200
+    assert me.json()["username"] == "session_user"
+
+    logout = await client.post("/api/auth/logout", headers=headers)
+    assert logout.status_code == 204
+
+    me_after = await client.get("/api/auth/me", headers=headers)
+    assert me_after.status_code == 401
+    assert "Session" in me_after.json()["detail"] or "session" in me_after.json()["detail"].lower()
+
+
+@pytest.mark.asyncio
+async def test_strict_jwt_without_sid_returns_401(client, session, monkeypatch) -> None:
+    """Strict mode rejects JWT without sid claim."""
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "DEV_BYPASS_AUTH", False)
+
+    user = User(
+        username="nosid",
+        email="nosid@example.com",
+        password_hash=get_password_hash("password123"),
+        full_name="No Sid",
+        role=UserRole.viewer,
+        is_active=True,
+    )
+    session.add(user)
+    await session.commit()
+
+    token = create_access_token(subject=user.username)
+    response = await client.get(
+        "/api/auth/me",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert response.status_code == 401
+    assert response.json()["detail"] == "Session required"
 
 
 @pytest.mark.asyncio

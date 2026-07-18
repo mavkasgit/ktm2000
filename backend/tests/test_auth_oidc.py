@@ -269,6 +269,10 @@ async def test_oidc_callback_links_by_username_and_persists_sub(
     body = response.json()
     assert "access_token" in body
     assert body["token_type"] == "bearer"
+    from jose import jwt as jose_jwt_claims
+
+    app_claims = jose_jwt_claims.get_unverified_claims(body["access_token"])
+    assert app_claims.get("sid"), "OIDC callback JWT must include sid"
 
     # Re-query: callback commits on request session, not this fixture session
     session.expire_all()

@@ -6,7 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
 from app.core.database import get_db
-from app.core.security import create_access_token, get_password_hash
+from app.core.security import get_password_hash
 from app.models.user import User, UserRole
 from app.models.user_login_token import UserLoginToken
 from app.schemas.otp import (
@@ -17,6 +17,7 @@ from app.schemas.otp import (
     OTPSetupPasswordRequest,
 )
 from app.schemas.auth import TokenResponse
+from app.services.session_service import issue_app_token
 
 router = APIRouter(prefix="/auth/otp", tags=["otp"])
 
@@ -142,12 +143,14 @@ async def login_with_otp(
     login_token.is_used = True
     await db.commit()
 
-    # 4. Генерируем JWT-токен
+    # 4. Генерируем JWT-токен + user_sessions.sid
     expires_delta = None
     if login_token.session_duration_seconds is not None:
         expires_delta = timedelta(seconds=login_token.session_duration_seconds)
 
-    token = create_access_token(subject=user.username, expires_delta=expires_delta)
+    token = await issue_app_token(
+        db, user=user, login_method="otp", expires_delta=expires_delta
+    )
     return TokenResponse(access_token=token)
 
 
@@ -249,16 +252,13 @@ async def setup_password(
     login_token.is_used = True
     await db.commit()
 
-    # 5. Генерируем JWT-токен (наследуем session_duration_seconds)
+    # 5. Генерируем JWT-токен + sid (наследуем session_duration_seconds)
     expires_delta = None
     if login_token.session_duration_seconds is not None:
         expires_delta = timedelta(seconds=login_token.session_duration_seconds)
 
-    token = create_access_token(
-        subject=user.username,
-        role=user.role.value if hasattr(user.role, "value") else str(user.role),
-        full_name=user.full_name,
-        expires_delta=expires_delta
+    token = await issue_app_token(
+        db, user=user, login_method="setup_password", expires_delta=expires_delta
     )
     return TokenResponse(access_token=token)
 

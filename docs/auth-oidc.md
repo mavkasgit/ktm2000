@@ -18,11 +18,22 @@
 GET /api/auth/oidc/config → PKCE S256 → Authentik authorize
   → FE /auth/callback?code&state
   → POST /api/auth/oidc/callback {code, code_verifier, redirect_uri}
-  → BE: token exchange + JWKS id_token → link User → app JWT (HS256)
+  → BE: token exchange + JWKS id_token → link User → app JWT (HS256 + claim `sid`)
   → localStorage/cookie ktm2000_token
 ```
 
 API всегда принимает **app JWT**, не IdP access_token.
+
+## App sessions (`sid`)
+
+| | |
+|--|--|
+| Table | `user_sessions` (id UUID PK, user_id, created_at, expires_at, revoked_at, login_method) |
+| JWT claim | `sid` = `user_sessions.id` |
+| Issue | password / OTP / setup-password / OIDC callback → `issue_app_token` |
+| Strict check | `DEV_BYPASS_AUTH=false`: `get_current_user` requires active `sid` (missing/revoked/expired → 401) |
+| Dev | `DEV_BYPASS_AUTH=true`: sid **not** required (tests mint JWT without session) |
+| Logout | `POST /api/auth/logout` revokes current sid (idempotent 204) |
 
 ## Связка пользователя (link order)
 
@@ -40,10 +51,10 @@ Rename username/email не ломает link после первого OIDC-вх
 
 ## Logout
 
-1. FE `useAuth.logout`: clear `ktm2000_token` (localStorage + cookie)
-2. Если OIDC on: `GET /api/auth/oidc/logout-url` → redirect `logout_url` (Authentik end-session → `/login`)
-3. Иначе: `window.location = /login`
-4. Server session revoke (`user_sessions` + JWT `sid`) — **фаза W4**, пока нет
+1. FE `useAuth.logout`: **best-effort** `POST /api/auth/logout` (revoke `sid` while Bearer still present)
+2. Clear `ktm2000_token` (localStorage + cookie)
+3. Если OIDC on: `GET /api/auth/oidc/logout-url` → redirect `logout_url` (Authentik end-session → `/login`)
+4. Иначе: `window.location = /login`
 
 ## Endpoints
 
@@ -53,7 +64,8 @@ Rename username/email не ломает link после первого OIDC-вх
 | POST | `/api/auth/oidc/callback` | public |
 | GET | `/api/auth/oidc/logout-url` | public |
 | POST | `/api/auth/login` | public |
-| GET | `/api/auth/me` | Bearer |
+| POST | `/api/auth/logout` | Bearer (idempotent revoke sid) |
+| GET | `/api/auth/me` | Bearer (+ active sid in strict) |
 | OTP | `/api/auth/otp/*` | dual-run |
 
 ## Env (ключевые)
@@ -87,8 +99,9 @@ Rename username/email не ломает link после первого OIDC-вх
 | Deps | `backend/app/api/deps.py` |
 | OIDC service | `backend/app/services/oidc_auth_service.py` |
 | Routes | `backend/app/api/routes/auth.py` |
-| Model | `backend/app/models/user.py` (`authentik_sub`) |
-| Migration | `backend/alembic/versions/013_users_authentik_sub.py` |
+| Model | `backend/app/models/user.py` (`authentik_sub`), `user_session.py` |
+| Sessions | `backend/app/services/session_service.py` |
+| Migration | `013_users_authentik_sub`, `014_user_sessions` |
 | FE auth | `frontend/src/features/auth/hooks/useAuth.tsx` |
 | FE OIDC | `frontend/src/features/auth/api/oidcAuth.ts` |
 | Tests | `backend/tests/test_auth_oidc.py`, `test_auth.py` |

@@ -102,7 +102,7 @@ async def test_otp_generation_and_login_flow(session, client) -> None:
     # 5. Логинимся по коду 2 (для оператора)
     response_login_2 = await client.post(
         "/api/auth/otp/login",
-        json={"token": otp_code_2}
+        json={"token": otp_code_2},
     )
     assert response_login_2.status_code == 200
     login_body = response_login_2.json()
@@ -112,6 +112,7 @@ async def test_otp_generation_and_login_flow(session, client) -> None:
     # Раскодируем токен и проверим время жизни (должно быть около 1 часа / 3600 сек)
     payload = decode_access_token(retrieved_jwt)
     assert payload["sub"] == operator_user.username
+    assert payload.get("sid"), "OTP login JWT must include sid"
     exp_time = datetime.fromtimestamp(payload["exp"], UTC)
     now_time = datetime.now(UTC)
     duration = exp_time - now_time

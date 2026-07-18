@@ -2,7 +2,7 @@
 
 Flow (public SPA + PKCE):
   FE authorize → Authentik → FE /auth/callback → POST /api/auth/oidc/callback
-  → exchange code → validate id_token → resolve User → create_access_token
+  → exchange code → validate id_token → resolve User → issue_app_token (JWT+sid)
 
 Link order (canon R2):
   1. users.authentik_sub == id_token.sub
@@ -29,8 +29,8 @@ from sqlalchemy import or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
-from app.core.security import create_access_token
 from app.models.user import User, UserRole
+from app.services.session_service import issue_app_token
 
 logger = logging.getLogger(__name__)
 
@@ -676,12 +676,7 @@ class OidcAuthService:
                 detail="User is disabled",
             )
 
-        token = create_access_token(
-            subject=user.username,
-            role=user.role.value if hasattr(user.role, "value") else str(user.role),
-            full_name=user.full_name,
-            hrms_access_level=user.hrms_access_level,
-        )
+        token = await issue_app_token(self.db, user=user, login_method="oidc")
         return {
             "access_token": token,
             "token_type": "bearer",

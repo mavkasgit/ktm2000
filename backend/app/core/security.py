@@ -1,4 +1,5 @@
 from datetime import UTC, datetime, timedelta
+from uuid import UUID
 
 from jose import JWTError, jwt
 from passlib.context import CryptContext
@@ -31,6 +32,7 @@ def create_access_token(
     full_name: str | None = None,
     hrms_access_level: str | None = None,
     expires_delta: timedelta | None = None,
+    session_id: UUID | str | None = None,
 ) -> str:
     payload = {
         "sub": subject,
@@ -42,6 +44,8 @@ def create_access_token(
         payload["full_name"] = full_name
     if hrms_access_level is not None:
         payload["hrms_access_level"] = hrms_access_level
+    if session_id is not None:
+        payload["sid"] = str(session_id)
 
     if expires_delta is not None:
         if expires_delta.total_seconds() != -1:
