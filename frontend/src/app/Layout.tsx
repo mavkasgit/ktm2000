@@ -97,7 +97,7 @@ export function Layout() {
             <Menu size={24} />
           </button>
           <div className="mobile-header-brand">
-            <Factory className="h-5 w-5" />
+            <img src="/logo.svg" alt="" className="h-7 w-7 rounded-md" width={28} height={28} />
             <span className="mobile-header-title">KTM-2000</span>
           </div>
         </div>
@@ -111,7 +111,7 @@ export function Layout() {
           <div className="sidebar-top-bar">
             <div className="sidebar-brand">
               <div className="flex items-center gap-2">
-                <Factory className="h-5 w-5" />
+                <img src="/logo.svg" alt="" className="h-8 w-8 rounded-lg" width={32} height={32} />
                 <div className="brand-title">KTM-2000</div>
               </div>
               <div className="brand-caption">Планирование производства</div>
