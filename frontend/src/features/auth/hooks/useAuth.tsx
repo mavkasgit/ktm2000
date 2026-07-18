@@ -1,5 +1,6 @@
 import { createContext, useContext, useState, useEffect, useCallback, type ReactNode } from "react"
 import { loginApi, fetchMeApi, loginWithOTPApi, type User } from "../api"
+import { fetchOidcLogoutUrl } from "../api/oidcAuth"
 
 const TOKEN_KEY = "ktm2000_token"
 
@@ -10,7 +11,7 @@ interface AuthContextValue {
   login: (username: string, password: string) => Promise<void>
   loginWithOTP: (token: string) => Promise<void>
   loginWithToken: (accessToken: string) => Promise<void>
-  logout: () => void
+  logout: () => void | Promise<void>
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null)
@@ -60,10 +61,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUser(me)
   }, [])
 
-  const logout = useCallback(() => {
+  const logout = useCallback(async () => {
     localStorage.removeItem(TOKEN_KEY)
     document.cookie = "ktm2000_token=; path=/; max-age=0"
     setUser(null)
+    // OIDC: clear app token then IdP end-session when enabled
+    try {
+      const { enabled, logout_url } = await fetchOidcLogoutUrl()
+      if (enabled && logout_url) {
+        window.location.href = logout_url
+        return
+      }
+    } catch {
+      // fall through to local /login
+    }
     window.location.href = "/login"
   }, [])
 

@@ -2,11 +2,13 @@ from fastapi import Depends, HTTPException, Request, status
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from typing import Callable, Sequence
+from uuid import UUID
 
 from app.core.config import settings
 from app.core.database import get_db
 from app.core.security import decode_access_token, TokenError
 from app.models.user import User, UserRole
+from app.services.session_service import SessionInactiveError, assert_session_active
 
 # TODO(auth): This module centralises authentication.
 # Currently get_current_user returns a fake admin user for development.
@@ -36,25 +38,70 @@ def require_role(allowed_roles: Sequence[UserRole]) -> Callable:
     return _guard
 
 
+async def _resolve_magic_admin(db: AsyncSession) -> User | None:
+    """Literal Bearer 'admin' — only used when DEV_BYPASS_AUTH is true."""
+    return await db.scalar(select(User).where(User.username == "admin"))
+
+
+async def _load_user_by_subject(db: AsyncSession, subject: str) -> User | None:
+    return await db.scalar(
+        select(User).where(or_(User.username == subject, User.email == subject))
+    )
+
+
+async def _assert_sid_active(db: AsyncSession, payload: dict) -> UUID:
+    """Require JWT claim sid and active server session (strict/prod)."""
+    sid_raw = payload.get("sid")
+    if not sid_raw:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Session required",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    try:
+        session_id = UUID(str(sid_raw))
+    except (ValueError, TypeError):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Session required",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    try:
+        await assert_session_active(db, session_id)
+    except SessionInactiveError:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Session revoked or expired",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    return session_id
+
+
 async def get_current_user(
     request: Request,
     db: AsyncSession = Depends(get_db),
 ) -> User:
     auth_header = request.headers.get("Authorization")
 
-    # --- DEV bypass mode: fallback to system@local ---
+    # --- DEV bypass mode: JWT if valid (sid optional), magic admin, else system@local ---
     if settings.DEV_BYPASS_AUTH:
         if auth_header and auth_header.startswith("Bearer "):
             token = auth_header[7:]
+            # Magic bearer (dev/test tools) — gated by DEV_BYPASS_AUTH
+            if token == "admin":
+                admin = await _resolve_magic_admin(db)
+                if admin:
+                    return admin
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="Admin user not found in database",
+                    headers={"WWW-Authenticate": "Bearer"},
+                )
             try:
                 payload = decode_access_token(token)
                 subject = payload.get("sub")
                 if subject:
-                    user = await db.scalar(
-                        select(User).where(
-                            or_(User.username == subject, User.email == subject)
-                        )
-                    )
+                    user = await _load_user_by_subject(db, subject)
                     if user:
                         return user
             except (TokenError, Exception):
@@ -74,7 +121,7 @@ async def get_current_user(
             headers={"WWW-Authenticate": "Bearer"},
         )
 
-    # --- Strict JWT auth mode ---
+    # --- Strict JWT auth mode (prod): require sid + active session ---
     if not auth_header or not auth_header.startswith("Bearer "):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -84,14 +131,11 @@ async def get_current_user(
 
     token = auth_header[7:]
 
-    # Bypass for testing, internal communication, and dev tools (matching HRMS)
+    # Magic Bearer "admin" is dev-only; reject in strict/prod
     if token == "admin":
-        user = await db.scalar(select(User).where(User.username == "admin"))
-        if user:
-            return user
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Admin user not found in database",
+            detail="Invalid or expired token",
             headers={"WWW-Authenticate": "Bearer"},
         )
 
@@ -112,11 +156,10 @@ async def get_current_user(
             headers={"WWW-Authenticate": "Bearer"},
         )
 
-    user = await db.scalar(
-        select(User).where(
-            or_(User.username == subject, User.email == subject)
-        )
-    )
+    # Hybrid JWT + server session: claim sid required (except DEV_BYPASS / magic admin)
+    await _assert_sid_active(db, payload)
+
+    user = await _load_user_by_subject(db, subject)
     if user is None:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,

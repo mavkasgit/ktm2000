@@ -31,10 +31,9 @@ apiClient.interceptors.request.use((config) => {
 apiClient.interceptors.response.use(
   (response) => response,
   (error) => {
-    if (
-      error?.response?.status === 401 &&
-      window.location.pathname !== "/login"
-    ) {
+    const path = window.location.pathname;
+    const isAuthPage = path === "/login" || path.startsWith("/auth/");
+    if (error?.response?.status === 401 && !isAuthPage) {
       localStorage.removeItem(TOKEN_KEY);
       window.location.href = "/login";
     }

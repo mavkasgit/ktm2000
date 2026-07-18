@@ -42,6 +42,8 @@ class User(Base):
     hrms_employee_id: Mapped[int | None] = mapped_column(BigInteger, unique=True, nullable=True)
     position: Mapped[str | None] = mapped_column(String(255), nullable=True)
     department: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # OIDC subject from Authentik (stable link; primary match key)
+    authentik_sub: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=text("now()")
     )

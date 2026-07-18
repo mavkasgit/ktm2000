@@ -119,6 +119,62 @@ async def test_unauthenticated_request_returns_401(client, session, monkeypatch)
 
 
 @pytest.mark.asyncio
+async def test_magic_admin_rejected_when_strict(client, session, monkeypatch) -> None:
+    """Literal Bearer 'admin' is rejected when DEV_BYPASS_AUTH is false (prod/strict)."""
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "DEV_BYPASS_AUTH", False)
+
+    admin = User(
+        username="admin",
+        email="admin@example.com",
+        password_hash=get_password_hash("admin"),
+        full_name="Admin",
+        role=UserRole.admin,
+        is_active=True,
+    )
+    session.add(admin)
+    await session.commit()
+
+    response = await client.get(
+        "/api/auth/me",
+        headers={"Authorization": "Bearer admin"},
+    )
+    assert response.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_magic_admin_allowed_when_dev_bypass(client, session, monkeypatch) -> None:
+    """Literal Bearer 'admin' works only when DEV_BYPASS_AUTH is true."""
+    from sqlalchemy import select
+
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "DEV_BYPASS_AUTH", True)
+
+    admin = await session.scalar(select(User).where(User.username == "admin"))
+    if admin is None:
+        admin = User(
+            username="admin",
+            email="admin_magic@example.com",
+            password_hash=get_password_hash("admin"),
+            full_name="Admin",
+            role=UserRole.admin,
+            is_active=True,
+        )
+        session.add(admin)
+        await session.commit()
+
+    response = await client.get(
+        "/api/auth/me",
+        headers={"Authorization": "Bearer admin"},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["username"] == "admin"
+
+
+@pytest.mark.asyncio
 async def test_expired_token_returns_401(client, session, monkeypatch) -> None:
     """Request with an expired token must return 401."""
     from datetime import UTC, datetime, timedelta

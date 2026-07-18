@@ -13,6 +13,7 @@ import { SettingsPage } from "../features/settings/SettingsPage"
 import { BackupsPage } from "../features/settings/SettingsBackupsPage"
 import { DevSettingsPage } from "../features/settings/DevSettingsPage"
 import { LoginPage } from "../features/auth/pages/LoginPage"
+import { OidcCallbackPage } from "../features/auth/pages/OidcCallbackPage"
 import { ProtectedRoute } from "../features/auth/components/ProtectedRoute"
 import { UsersPage } from "../features/admin"
 
@@ -20,6 +21,10 @@ export const router = createBrowserRouter([
   {
     path: "/login",
     element: <LoginPage />,
+  },
+  {
+    path: "/auth/callback",
+    element: <OidcCallbackPage />,
   },
   {
     path: "/",

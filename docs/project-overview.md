@@ -76,6 +76,17 @@ ktm2000/
 3. Append-only: отмена = компенсационная транзакция.
 4. API: `/api/stock/*` и `/api/spg/*`.
 
+## Auth / OIDC
+
+Локальная auth (password + OTP) + dual-run OIDC bridge к Authentik (public SPA + PKCE → app JWT).
+
+- Связка: primary `users.authentik_sub`, secondary username/email, optional JIT.
+- MES-роли (`users.role`) — app SoT; IdP groups не перезаписывают роль по умолчанию.
+- Logout: clear `ktm2000_token` + Authentik end-session при OIDC on.
+- Dev: `DEV_BYPASS_AUTH` + magic Bearer `admin` (только dev); prod strict off.
+
+Канон и env → [`docs/auth-oidc.md`](auth-oidc.md).
+
 ## Порты
 
 | Окружение | Frontend | Postgres | Backend |
