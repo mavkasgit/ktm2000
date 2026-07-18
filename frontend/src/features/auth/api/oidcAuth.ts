@@ -577,6 +577,11 @@ export async function completeOidcCallback(params: {
     })
   }
   clearOidcReloginGuard()
+  try {
+    sessionStorage.removeItem("ktm2000_logged_out")
+  } catch {
+    /* ignore */
+  }
   localStorage.setItem(TOKEN_KEY, data.access_token)
   document.cookie = `ktm2000_token=${data.access_token}; path=/; max-age=86400; SameSite=Lax`
   return data

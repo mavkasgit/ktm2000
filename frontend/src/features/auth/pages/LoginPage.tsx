@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, type FormEvent } from "react"
 import { Navigate, useSearchParams } from "react-router-dom"
 import { Loader2, Eye, EyeOff, Shield } from "lucide-react"
-import { useAuth } from "../hooks/useAuth"
+import { LOGGED_OUT_KEY, useAuth } from "../hooks/useAuth"
 import { getErrorMessage } from "@/shared/api/client"
 import { verifyOTPProfileApi, setupPasswordWithOTPApi } from "../api"
 import {
@@ -10,10 +10,18 @@ import {
   type OidcConfig,
 } from "../api/oidcAuth"
 
+function readJustLoggedOut(): boolean {
+  try {
+    return sessionStorage.getItem(LOGGED_OUT_KEY) === "1"
+  } catch {
+    return false
+  }
+}
 
 /**
  * Страница входа в систему KTM-2000.
  * Dual-run SSO: OIDC on → stub auto-redirect to Authentik; escape via /login?password=1.
+ * After logout: sessionStorage LOGGED_OUT_KEY disables stub so user is not bounced back into IdP.
  */
 export function LoginPage() {
   const { login, loginWithOTP, loginWithToken, isAuthenticated, isLoading: authLoading } = useAuth()
@@ -27,6 +35,7 @@ export function LoginPage() {
   const [error, setError] = useState("")
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [shake, setShake] = useState(false)
+  const [justLoggedOut, setJustLoggedOut] = useState(readJustLoggedOut)
 
   // OTP two-step: code → optional setup-password
   const [otpStep, setOtpStep] = useState<"code" | "setup-password">("code")
@@ -42,6 +51,8 @@ export function LoginPage() {
 
   const forceFullForm =
     searchParams.get("password") === "1" ||
+    searchParams.get("logged_out") === "1" ||
+    justLoggedOut ||
     import.meta.env.VITE_SSO_STUB === "false"
   const oidcEnabled = Boolean(
     oidcConfig?.enabled &&
@@ -90,6 +101,13 @@ export function LoginPage() {
     if (!oidcConfig || !oidcEnabled) return
     setError("")
     setOidcStarting(true)
+    // Explicit re-login after logout: allow SSO again
+    try {
+      sessionStorage.removeItem(LOGGED_OUT_KEY)
+    } catch {
+      /* ignore */
+    }
+    setJustLoggedOut(false)
     try {
       await startOidcLogin(oidcConfig)
     } catch (err: unknown) {
@@ -98,7 +116,8 @@ export function LoginPage() {
     }
   }
 
-  // Stub mode: auto-redirect to Authentik once (ref guard)
+  // Stub mode: auto-redirect to Authentik once (ref guard).
+  // Skipped after logout (forceFullForm) so user is not instantly re-authenticated.
   useEffect(() => {
     if (!ssoStubActive || !oidcConfig || oidcAutoStartedRef.current) return
     if (authLoading || isAuthenticated) return
@@ -222,6 +241,12 @@ export function LoginPage() {
               <p className="mt-1 text-sm text-slate-500">Система планирования производства</p>
             </div>
           </div>
+
+          {justLoggedOut && (
+            <div className="mb-5 rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 text-center text-sm text-slate-700">
+              Вы вышли из системы. Войдите снова, когда будете готовы.
+            </div>
+          )}
 
           {/* SSO button when OIDC enabled and full form forced */}
           {oidcEnabled && forceFullForm && (

@@ -51,10 +51,12 @@ Rename username/email не ломает link после первого OIDC-вх
 
 ## Logout
 
-1. FE `useAuth.logout`: **best-effort** `POST /api/auth/logout` (revoke `sid` while Bearer still present)
-2. Clear `ktm2000_token` (localStorage + cookie)
-3. Если OIDC on: `GET /api/auth/oidc/logout-url` → redirect `logout_url` (Authentik end-session → `/login`)
-4. Иначе: `window.location = /login`
+1. FE sets `sessionStorage.ktm2000_logged_out=1` (**до** навигации) — иначе SSO stub на `/login` сразу снова открывает Authentik (петля «нельзя выйти»).
+2. Best-effort `POST /api/auth/logout` (revoke `sid` while Bearer still present).
+3. Clear `ktm2000_token` (localStorage + cookie).
+4. Если OIDC on: `GET /api/auth/oidc/logout-url` → Authentik end-session → `/login`.
+5. `LoginPage`: при флаге/`?logged_out=1` **нет** auto-SSO stub; форма + кнопка «Единый вход».
+6. Успешный login / SSO clear flag.
 
 ## Endpoints
 

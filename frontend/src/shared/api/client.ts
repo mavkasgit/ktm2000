@@ -33,9 +33,17 @@ apiClient.interceptors.response.use(
   (error) => {
     const path = window.location.pathname;
     const isAuthPage = path === "/login" || path.startsWith("/auth/");
-    if (error?.response?.status === 401 && !isAuthPage) {
+    const reqUrl = String(error?.config?.url ?? "");
+    // Logout is best-effort in useAuth — do not race-redirect mid-logout flow
+    const isLogoutCall = reqUrl.includes("/auth/logout");
+    if (error?.response?.status === 401 && !isAuthPage && !isLogoutCall) {
       localStorage.removeItem(TOKEN_KEY);
-      window.location.href = "/login";
+      try {
+        sessionStorage.setItem("ktm2000_logged_out", "1");
+      } catch {
+        /* ignore */
+      }
+      window.location.assign("/login");
     }
     return Promise.reject(error);
   },

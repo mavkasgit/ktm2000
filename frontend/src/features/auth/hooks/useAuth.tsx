@@ -3,6 +3,8 @@ import { loginApi, fetchMeApi, loginWithOTPApi, logoutApi, type User } from "../
 import { fetchOidcLogoutUrl } from "../api/oidcAuth"
 
 const TOKEN_KEY = "ktm2000_token"
+/** Set before logout navigation so /login does not SSO-stub auto-redirect back into IdP. */
+export const LOGGED_OUT_KEY = "ktm2000_logged_out"
 
 interface AuthContextValue {
   user: User | null
@@ -38,8 +40,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       .finally(() => setIsLoading(false))
   }, [])
 
+  const clearLoggedOutFlag = () => {
+    try {
+      sessionStorage.removeItem(LOGGED_OUT_KEY)
+    } catch {
+      /* ignore */
+    }
+  }
+
   const login = useCallback(async (username: string, password: string) => {
     const { access_token } = await loginApi(username, password)
+    clearLoggedOutFlag()
     localStorage.setItem(TOKEN_KEY, access_token)
     document.cookie = `ktm2000_token=${access_token}; path=/; max-age=86400; SameSite=Lax`
     const me = await fetchMeApi()
@@ -48,6 +59,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const loginWithOTP = useCallback(async (token: string) => {
     const { access_token } = await loginWithOTPApi(token)
+    clearLoggedOutFlag()
     localStorage.setItem(TOKEN_KEY, access_token)
     document.cookie = `ktm2000_token=${access_token}; path=/; max-age=86400; SameSite=Lax`
     const me = await fetchMeApi()
@@ -55,6 +67,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [])
 
   const loginWithToken = useCallback(async (accessToken: string) => {
+    clearLoggedOutFlag()
     localStorage.setItem(TOKEN_KEY, accessToken)
     document.cookie = `ktm2000_token=${accessToken}; path=/; max-age=86400; SameSite=Lax`
     const me = await fetchMeApi()
@@ -62,6 +75,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [])
 
   const logout = useCallback(async () => {
+    // Prevent SSO stub on /login from immediately re-entering Authentik (re-login loop).
+    try {
+      sessionStorage.setItem(LOGGED_OUT_KEY, "1")
+    } catch {
+      /* ignore */
+    }
+
     // 1) Best-effort server revoke (needs Authorization while token still present)
     try {
       await logoutApi()
@@ -72,17 +92,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     localStorage.removeItem(TOKEN_KEY)
     document.cookie = "ktm2000_token=; path=/; max-age=0"
     setUser(null)
-    // 3) OIDC end-session when enabled
+    // 3) OIDC end-session when enabled (post_logout → /login; LoginPage honors LOGGED_OUT_KEY)
     try {
       const { enabled, logout_url } = await fetchOidcLogoutUrl()
       if (enabled && logout_url) {
-        window.location.href = logout_url
+        window.location.assign(logout_url)
         return
       }
     } catch {
       // fall through to local /login
     }
-    window.location.href = "/login"
+    window.location.assign("/login")
   }, [])
 
   return (
