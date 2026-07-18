@@ -6,7 +6,7 @@ export type HrmsConnectionPreset = {
 }
 
 /** IP сервера по умолчанию, если hostname в браузере недоступен. */
-export const HRMS_DEFAULT_SERVER_HOST = "192.168.100.200"
+export const HRMS_DEFAULT_SERVER_HOST = "localhost"
 
 export const HRMS_API_PORT = 8000
 

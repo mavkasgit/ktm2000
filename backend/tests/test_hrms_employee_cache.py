@@ -23,12 +23,12 @@ def test_normalize_hrms_base_url_accepts_host_port() -> None:
 def test_normalize_hrms_base_url_accepts_connection_presets() -> None:
     assert normalize_hrms_base_url("localhost:8000") == "http://localhost:8000"
     assert (
-        normalize_hrms_base_url("192.168.100.200:8000")
-        == "http://192.168.100.200:8000"
+        normalize_hrms_base_url("192.168.1.100:8000")
+        == "http://192.168.1.100:8000"
     )
     assert (
-        build_hrms_employees_url("192.168.100.200:8000")
-        == "http://192.168.100.200:8000/api/employees"
+        build_hrms_employees_url("192.168.1.100:8000")
+        == "http://192.168.1.100:8000/api/employees"
     )
 
 
