@@ -14,6 +14,8 @@ interface AuthContextValue {
   loginWithOTP: (token: string) => Promise<void>
   loginWithToken: (accessToken: string) => Promise<void>
   logout: () => void | Promise<void>
+  /** Re-fetch /auth/me (unified profile pull). */
+  refreshUser: () => Promise<void>
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null)
@@ -74,6 +76,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUser(me)
   }, [])
 
+  const refreshUser = useCallback(async () => {
+    const me = await fetchMeApi()
+    setUser(me)
+  }, [])
+
   const logout = useCallback(async () => {
     // Prevent SSO stub on /login from immediately re-entering Authentik (re-login loop).
     try {
@@ -92,9 +99,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     localStorage.removeItem(TOKEN_KEY)
     document.cookie = "ktm2000_token=; path=/; max-age=0"
     setUser(null)
-    // 3) OIDC end-session when enabled (post_logout → /login; LoginPage honors LOGGED_OUT_KEY)
+    // 3) OIDC end-session when enabled (id_token_hint + post_logout → /login)
     try {
       const { enabled, logout_url } = await fetchOidcLogoutUrl()
+      try {
+        const { clearOidcIdToken } = await import("../api/oidcAuth")
+        clearOidcIdToken()
+      } catch {
+        /* ignore */
+      }
       if (enabled && logout_url) {
         window.location.assign(logout_url)
         return
@@ -115,6 +128,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         loginWithOTP,
         loginWithToken,
         logout,
+        refreshUser,
       }}
     >
       {children}

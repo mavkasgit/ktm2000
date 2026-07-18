@@ -9,10 +9,13 @@
     "preview": "vite preview",
     "test": "vitest run",
     "test:e2e": "playwright test",
-    "test:e2e:ui": "playwright test --ui",
+    "test:e2e:ui": "playwright test --project=ui-e2e",
+    "test:e2e:smoke": "playwright test --project=smoke",
+    "test:e2e:playwright-ui": "playwright test --ui",
     "test:e2e:report": "playwright show-report"
   },
   "dependencies": {
+    "@multiavatar/multiavatar": "^1.0.7",
     "@radix-ui/react-alert-dialog": "^1.1.4",
     "@radix-ui/react-checkbox": "^1.1.2",
     "@radix-ui/react-dialog": "^1.1.4",

@@ -46,6 +46,12 @@ class Settings(BaseSettings):
     # When true, soft-map IdP groups → users.role on link/JIT; default false = app SoT
     AUTH_OIDC_SYNC_ROLE_FROM_IDP: bool = False
 
+    # Authentik Admin API — unified profile (name + avatar). Token never exposed to FE.
+    # AUTHENTIK_*_URL: absolute URL or "auto" (detect host LAN IP at runtime)
+    AUTHENTIK_API_URL: str | None = "auto"
+    AUTHENTIK_API_TOKEN: str | None = None
+    AUTHENTIK_PUBLIC_URL: str | None = "auto"
+
     model_config = {"env_file": _env_file, "env_file_encoding": "utf-8", "extra": "ignore"}
 
 

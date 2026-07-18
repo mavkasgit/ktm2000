@@ -23,6 +23,15 @@ export interface User {
   hrms_employee_id?: number | null
   hrms_access_level?: string
   active_login_token?: ActiveToken | null
+  /** Multiavatar seed — cache of IdP attributes.profile_avatar_seed */
+  avatar_seed?: string | null
+  authentik_linked?: boolean
+  profile_sot?: "authentik" | "local" | string
+}
+
+export interface ProfileUpdateResponse {
+  full_name: string
+  avatar_seed?: string | null
 }
 
 /** Ответ сервера на запрос /auth/login */
@@ -40,6 +49,24 @@ export async function loginApi(username: string, password: string): Promise<Toke
 /** Получение данных текущего авторизованного пользователя */
 export async function fetchMeApi(): Promise<User> {
   const { data } = await apiClient.get<User>("/auth/me")
+  return data
+}
+
+/** Unified profile: name / avatar → Authentik SoT when linked */
+export async function updateMyProfileApi(payload: {
+  full_name?: string
+  avatar_seed?: string | null
+  clear_avatar?: boolean
+}): Promise<ProfileUpdateResponse> {
+  const { data } = await apiClient.patch<ProfileUpdateResponse>("/auth/me/profile", payload)
+  return data
+}
+
+export async function updateMyAvatarApi(avatar_seed: string | null): Promise<ProfileUpdateResponse> {
+  const { data } = await apiClient.patch<ProfileUpdateResponse>("/auth/me/avatar", {
+    avatar_seed,
+    clear_avatar: avatar_seed == null,
+  })
   return data
 }
 
