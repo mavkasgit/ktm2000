@@ -7,15 +7,7 @@ import { toast } from "@/shared/ui"
 import { UserAvatar, getUserSeed } from "@user/ui"
 import { UserProfileModal } from "@/features/profile/UserProfileModal"
 
-/** Перевод ролей на русский */
-const ROLE_LABELS: Record<UserRole, string> = {
-  admin: "Администратор",
-  planner: "Планировщик",
-  section_manager: "Начальник участка",
-  operator: "Оператор",
-  viewer: "Наблюдатель",
-  transporter: "Транспортировщик",
-}
+import { ROLE_LABELS } from "@/features/profile/lib/roleLabels"
 
 /** Карта доступа: какие роли имеют доступ к каждому пункту меню */
 const NAV_ACCESS: Record<string, UserRole[]> = {
