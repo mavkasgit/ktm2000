@@ -1,19 +1,18 @@
 import { useCallback, useEffect, useState } from "react"
-import { CheckCircle2, Loader2, Pencil, Laptop } from "lucide-react"
-import { formatDistanceToNow } from "date-fns"
-import { ru } from "date-fns/locale"
+import { Pencil } from "lucide-react"
 
 import {
   Dialog,
   DialogContent,
-  DialogHeader,
-  DialogTitle,
 } from "@/shared/ui/Dialog"
-import { Button } from "@/shared/ui/Button"
-import { Input } from "@/shared/ui/Input"
 import { UserAvatar, getUserSeed, applyTheme, storeLocale, type ProfileLocale, type ProfileTheme } from "@user/ui"
-import { Badge } from "@/shared/ui/Badge"
 import { AvatarPickerDialog } from "@/features/profile/AvatarPickerDialog"
+import { ROLE_LABELS } from "@/features/profile/lib/roleLabels"
+import { idpUserSettingsUrlFromIssuer } from "@/features/profile/lib/idpUserSettingsUrl"
+import { ProfileSection } from "@/features/profile/sections/ProfileSection"
+import { AppearanceSection } from "@/features/profile/sections/AppearanceSection"
+import { SecuritySection } from "@/features/profile/sections/SecuritySection"
+import { fetchOidcConfig } from "@/features/auth/api/oidcAuth"
 import {
   updateMyAvatarApi,
   updateMyProfileApi,
@@ -23,7 +22,6 @@ import {
   fetchSessions,
   revokeSession,
   revokeOtherSessions,
-  formatLoginMethod,
   type SessionDto,
 } from "@/features/profile/api/sessionsApi"
 
@@ -47,20 +45,26 @@ export function UserProfileModal({ open, onOpenChange, currentUser, onUpdated }:
   const [nameSaving, setNameSaving] = useState(false)
   const [nameError, setNameError] = useState<string | null>(null)
   const [nameSaved, setNameSaved] = useState(false)
+  
   const [prefsSaving, setPrefsSaving] = useState(false)
   const [prefsError, setPrefsError] = useState<string | null>(null)
   const [prefsSaved, setPrefsSaved] = useState(false)
+  
   const [avatarOpen, setAvatarOpen] = useState(false)
   const [avatarSaving, setAvatarSaving] = useState(false)
   const [avatarError, setAvatarError] = useState<string | null>(null)
 
-  // Вкладки: Профиль или Сессии
-  const [activeTab, setActiveTab] = useState<"profile" | "sessions">("profile")
+  // Вкладки: profile, appearance, security
+  const [activeTab, setActiveTab] = useState<"profile" | "appearance" | "security">("profile")
   const [sessions, setSessions] = useState<SessionDto[]>([])
   const [sessionsLoading, setSessionsLoading] = useState(false)
   const [sessionsError, setSessionsError] = useState<string | null>(null)
   const [revokingId, setRevokingId] = useState<string | null>(null)
   const [revokingOthers, setRevokingOthers] = useState(false)
+
+  // OIDC State
+  const [oidcEnabled, setOidcEnabled] = useState(false)
+  const [userSettingsUrl, setUserSettingsUrl] = useState<string | null>(null)
 
   useEffect(() => {
     if (currentUser) {
@@ -74,12 +78,32 @@ export function UserProfileModal({ open, onOpenChange, currentUser, onUpdated }:
     }
   }, [currentUser])
 
-  // Сбрасываем вкладку при открытии модалки
+  // Reset tab when modal opens, load OIDC config
   useEffect(() => {
     if (open) {
       setActiveTab("profile")
+      fetchOidcConfig()
+        .then((cfg) => {
+          setOidcEnabled(!!cfg.enabled)
+          setUserSettingsUrl(idpUserSettingsUrlFromIssuer(cfg.issuer))
+        })
+        .catch((err) => {
+          console.error("Failed to load OIDC config:", err)
+          setOidcEnabled(false)
+          setUserSettingsUrl(null)
+        })
     }
   }, [open])
+
+  // Revert previewed theme if closed without saving
+  useEffect(() => {
+    if (!open) {
+      const savedTheme = (currentUser.theme as ProfileTheme) || "system"
+      if (themeDraft !== savedTheme) {
+        applyTheme(savedTheme)
+      }
+    }
+  }, [open, themeDraft, currentUser.theme])
 
   const loadSessions = useCallback(async () => {
     setSessionsLoading(true)
@@ -96,20 +120,21 @@ export function UserProfileModal({ open, onOpenChange, currentUser, onUpdated }:
   }, [])
 
   useEffect(() => {
-    if (open && activeTab === "sessions") {
+    if (open && activeTab === "security") {
       loadSessions()
     }
   }, [open, activeTab, loadSessions])
 
   const handleRevokeSession = useCallback(
-    async (session: SessionDto) => {
+    async (id: string) => {
+      const session = sessions.find((s) => s.id === id)
       const confirmed = window.confirm(
-        `Вы действительно хотите завершить сеанс на устройстве "${session.device_label || "Неизвестное устройство"}"?`
+        `Вы действительно хотите завершить сеанс на устройстве "${session?.device_label || "Неизвестное устройство"}"?`
       )
       if (!confirmed) return
-      setRevokingId(session.id)
+      setRevokingId(id)
       try {
-        await revokeSession(session.id)
+        await revokeSession(id)
         await loadSessions()
       } catch (err) {
         console.error(err)
@@ -118,7 +143,7 @@ export function UserProfileModal({ open, onOpenChange, currentUser, onUpdated }:
         setRevokingId(null)
       }
     },
-    [loadSessions],
+    [sessions, loadSessions],
   )
 
   const handleRevokeOthers = useCallback(async () => {
@@ -167,420 +192,305 @@ export function UserProfileModal({ open, onOpenChange, currentUser, onUpdated }:
     [avatarSaving, onUpdated],
   )
 
-  const handleSaveName = useCallback(
-    async (e?: React.FormEvent) => {
-      e?.preventDefault()
-      const next = fullNameDraft.trim()
-      if (!next || nameSaving) return
-      if (next === (localUser.full_name || "").trim()) return
+  const handleSaveProfile = useCallback(
+    async (e: React.FormEvent) => {
+      e.preventDefault()
       setNameSaving(true)
       setNameError(null)
       setNameSaved(false)
       try {
-        const res = await updateMyProfileApi({ full_name: next })
+        const res = await updateMyProfileApi({
+          full_name: fullNameDraft.trim(),
+          email: emailDraft.trim(),
+        })
         setLocalUser((u) => ({
           ...u,
           full_name: res.full_name,
-          avatar_seed: res.avatar_seed,
           email: res.email ?? u.email,
-          locale: res.locale ?? u.locale,
-          theme: res.theme ?? u.theme,
+          avatar_seed: res.avatar_seed ?? u.avatar_seed,
         }))
         await onUpdated()
         setNameSaved(true)
         window.setTimeout(() => setNameSaved(false), 2000)
-      } catch (err) {
+      } catch (err: any) {
         console.error(err)
-        setNameError("Не удалось сохранить имя")
+        const detail = err?.response?.data?.detail
+        setNameError(
+          typeof detail === "string"
+            ? detail
+            : "Не удалось сохранить профиль"
+        )
       } finally {
         setNameSaving(false)
       }
     },
-    [fullNameDraft, nameSaving, localUser.full_name, onUpdated],
+    [fullNameDraft, emailDraft, onUpdated],
   )
 
   const handleSavePrefs = useCallback(
-    async (e?: React.FormEvent) => {
-      e?.preventDefault()
-      if (prefsSaving) return
-      const payload: {
-        email?: string
-        locale?: ProfileLocale
-        theme?: ProfileTheme
-      } = {}
-      const nextEmail = emailDraft.trim()
-      if (nextEmail && nextEmail !== (localUser.email || "").trim()) {
-        payload.email = nextEmail
-      }
-      if (localeDraft !== (localUser.locale || "ru")) {
-        payload.locale = localeDraft
-      }
-      if (themeDraft !== (localUser.theme || "system")) {
-        payload.theme = themeDraft
-      }
-      if (Object.keys(payload).length === 0) return
+    async (e: React.FormEvent) => {
+      e.preventDefault()
       setPrefsSaving(true)
       setPrefsError(null)
       setPrefsSaved(false)
       try {
-        const res = await updateMyProfileApi(payload)
+        const res = await updateMyProfileApi({
+          locale: localeDraft,
+          theme: themeDraft,
+        })
         setLocalUser((u) => ({
           ...u,
-          email: res.email ?? payload.email ?? u.email,
-          locale: res.locale ?? payload.locale ?? u.locale,
-          theme: res.theme ?? payload.theme ?? u.theme,
-          full_name: res.full_name ?? u.full_name,
-          avatar_seed: res.avatar_seed ?? u.avatar_seed,
+          locale: res.locale ?? localeDraft,
+          theme: res.theme ?? themeDraft,
         }))
-        if (res.theme || payload.theme) applyTheme(res.theme ?? payload.theme)
-        if (res.locale || payload.locale) storeLocale(res.locale ?? payload.locale)
+        if (res.theme || themeDraft) applyTheme((res.theme ?? themeDraft) as ProfileTheme)
+        if (res.locale || localeDraft) storeLocale((res.locale ?? localeDraft) as ProfileLocale)
         await onUpdated()
         setPrefsSaved(true)
         window.setTimeout(() => setPrefsSaved(false), 2000)
-      } catch (err: unknown) {
+      } catch (err: any) {
         console.error(err)
-        const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data
-          ?.detail
+        const detail = err?.response?.data?.detail
         setPrefsError(
           typeof detail === "string"
             ? detail
-            : "Не удалось сохранить. Проверьте email.",
+            : "Не удалось сохранить оформление",
         )
       } finally {
         setPrefsSaving(false)
       }
     },
-    [
-      prefsSaving,
-      emailDraft,
-      localeDraft,
-      themeDraft,
-      localUser.email,
-      localUser.locale,
-      localUser.theme,
-      onUpdated,
-    ],
+    [localeDraft, themeDraft, onUpdated],
   )
 
-  const formatDateTime = (dateStr: string) => {
-    try {
-      const d = new Date(dateStr)
-      return d.toLocaleString("ru-RU", {
-        day: "2-digit",
-        month: "2-digit",
-        year: "numeric",
-        hour: "2-digit",
-        minute: "2-digit",
-        second: "2-digit",
-      })
-    } catch {
-      return dateStr
-    }
+  // Live theme preview
+  const handleThemeChange = (nextTheme: ProfileTheme) => {
+    setThemeDraft(nextTheme)
+    applyTheme(nextTheme)
+    setPrefsError(null)
+    setPrefsSaved(false)
   }
 
-  const formatLastSeen = (dateStr: string) => {
-    try {
-      return formatDistanceToNow(new Date(dateStr), {
-        addSuffix: true,
-        locale: ru,
-      })
-    } catch {
-      return formatDateTime(dateStr)
+  const handleOpenChange = (isOpen: boolean) => {
+    if (!isOpen) {
+      const savedTheme = (currentUser.theme as ProfileTheme) || "system"
+      if (themeDraft !== savedTheme) {
+        applyTheme(savedTheme)
+      }
     }
+    onOpenChange(isOpen)
   }
 
   return (
     <>
-      <Dialog open={open} onOpenChange={onOpenChange}>
-        <DialogContent className="sm:max-w-lg">
-          <DialogHeader>
-            <DialogTitle>Настройки профиля</DialogTitle>
-          </DialogHeader>
-
-          {/* Вкладки навигации */}
-          <div className="flex border-b border-border -mt-2 mb-4">
-            <button
-              type="button"
-              className={`px-4 py-2 text-sm font-semibold border-b-2 transition-colors -mb-[1px] ${
-                activeTab === "profile"
-                  ? "border-primary text-primary"
-                  : "border-transparent text-muted-foreground hover:text-foreground"
-              }`}
-              onClick={() => setActiveTab("profile")}
-            >
-              Профиль
-            </button>
-            <button
-              type="button"
-              className={`px-4 py-2 text-sm font-semibold border-b-2 transition-colors -mb-[1px] ${
-                activeTab === "sessions"
-                  ? "border-primary text-primary"
-                  : "border-transparent text-muted-foreground hover:text-foreground"
-              }`}
-              onClick={() => setActiveTab("sessions")}
-            >
-              Сессии
-            </button>
-          </div>
-
-          <div className="flex flex-col gap-6">
-            {activeTab === "profile" ? (
-              <>
-                <div className="flex items-center gap-4">
-                  <button
-                    type="button"
-                    className="relative group rounded-full focus:outline-none focus:ring-2 focus:ring-primary"
-                    onClick={() => setAvatarOpen(true)}
-                    title="Сменить аватар"
-                  >
-                    <UserAvatar seed={seed} size={72} />
-                    <span className="absolute inset-0 flex items-center justify-center rounded-full bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity">
-                      <Pencil className="h-4 w-4 text-white" />
-                    </span>
-                  </button>
-                  <div className="min-w-0">
-                    <div className="font-semibold truncate">{localUser.full_name}</div>
-                    <div className="text-xs text-muted-foreground truncate">@{localUser.username}</div>
-                    {localUser.profile_sot === "authentik" && (
-                      <div className="text-[11px] text-muted-foreground mt-1">
-                        Единый профиль (Authentik)
-                      </div>
-                    )}
-                  </div>
+      <Dialog open={open} onOpenChange={handleOpenChange}>
+        <DialogContent className="max-w-3xl w-[min(100vw-1.5rem,48rem)] h-[min(90vh,560px)] p-0 overflow-hidden flex flex-col md:flex-row rounded-2xl">
+          {/* Sidebar - Desktop */}
+          <aside className="hidden md:flex md:w-[240px] border-r border-border/50 bg-muted/20 p-6 flex-col gap-6 shrink-0">
+            {/* User Avatar + Profile Info */}
+            <div className="flex flex-col items-center text-center gap-3">
+              <button
+                type="button"
+                className="relative group rounded-full focus:outline-none focus:ring-2 focus:ring-primary shrink-0"
+                onClick={() => setAvatarOpen(true)}
+                title="Сменить аватар"
+              >
+                <UserAvatar seed={seed} size={80} />
+                <span className="absolute inset-0 flex items-center justify-center rounded-full bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity">
+                  <Pencil className="h-5 w-5 text-white" />
+                </span>
+              </button>
+              <div className="min-w-0 w-full">
+                <div className="font-semibold truncate text-foreground text-sm">
+                  {localUser.full_name}
                 </div>
-                {avatarError && <p className="text-xs text-destructive">{avatarError}</p>}
-
-                <form onSubmit={handleSaveName} className="space-y-2">
-                  <label className="text-xs font-semibold text-muted-foreground" htmlFor="ktm-full-name">
-                    Полное имя
-                  </label>
-                  <div className="flex gap-2">
-                    <Input
-                      id="ktm-full-name"
-                      value={fullNameDraft}
-                      onChange={(e) => {
-                        setFullNameDraft(e.target.value)
-                        setNameError(null)
-                        setNameSaved(false)
-                      }}
-                      maxLength={255}
-                    />
-                    <Button
-                      type="submit"
-                      size="sm"
-                      disabled={
-                        nameSaving ||
-                        !fullNameDraft.trim() ||
-                        fullNameDraft.trim() === (localUser.full_name || "").trim()
-                      }
-                    >
-                      {nameSaving ? (
-                        <Loader2 className="h-4 w-4 animate-spin" />
-                      ) : nameSaved ? (
-                        <>
-                          <CheckCircle2 className="h-4 w-4 mr-1" />
-                          Ок
-                        </>
-                      ) : (
-                        "Сохранить"
-                      )}
-                    </Button>
-                  </div>
-                  {nameError && <p className="text-xs text-destructive">{nameError}</p>}
-                </form>
-
-                <form onSubmit={handleSavePrefs} className="space-y-3">
-                  <div className="space-y-1.5">
-                    <label className="text-xs font-semibold text-muted-foreground" htmlFor="ktm-email">
-                      Email
-                    </label>
-                    <Input
-                      id="ktm-email"
-                      type="email"
-                      value={emailDraft}
-                      onChange={(e) => {
-                        setEmailDraft(e.target.value)
-                        setPrefsError(null)
-                        setPrefsSaved(false)
-                      }}
-                    />
-                  </div>
-
-                  <h4 className="text-xs font-bold uppercase tracking-wider text-muted-foreground">
-                    Оформление
-                  </h4>
-                  <div className="grid grid-cols-2 gap-3">
-                    <div className="space-y-1.5">
-                      <label className="text-xs font-semibold text-muted-foreground" htmlFor="ktm-locale">
-                        Язык
-                      </label>
-                      <select
-                        id="ktm-locale"
-                        value={localeDraft}
-                        onChange={(e) => {
-                          setLocaleDraft(e.target.value as ProfileLocale)
-                          setPrefsError(null)
-                          setPrefsSaved(false)
-                        }}
-                        className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
-                      >
-                        <option value="ru">Русский</option>
-                        <option value="en">English</option>
-                      </select>
-                    </div>
-                    <div className="space-y-1.5">
-                      <label className="text-xs font-semibold text-muted-foreground" htmlFor="ktm-theme">
-                        Тема
-                      </label>
-                      <select
-                        id="ktm-theme"
-                        value={themeDraft}
-                        onChange={(e) => {
-                          setThemeDraft(e.target.value as ProfileTheme)
-                          setPrefsError(null)
-                          setPrefsSaved(false)
-                        }}
-                        className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
-                      >
-                        <option value="system">Системная</option>
-                        <option value="light">Светлая</option>
-                        <option value="dark">Тёмная</option>
-                      </select>
-                    </div>
-                  </div>
-                  <Button type="submit" size="sm" disabled={prefsSaving}>
-                    {prefsSaving ? (
-                      <Loader2 className="h-4 w-4 animate-spin" />
-                    ) : prefsSaved ? (
-                      <>
-                        <CheckCircle2 className="h-4 w-4 mr-1" />
-                        Ок
-                      </>
-                    ) : (
-                      "Сохранить email / оформление"
-                    )}
-                  </Button>
-                  {prefsError && <p className="text-xs text-destructive">{prefsError}</p>}
-                  <p className="text-[11px] text-muted-foreground">
-                    Общие настройки — сохраняются в IdP (KTM и HRMS).
-                  </p>
-                </form>
-              </>
-            ) : (
-              <div className="space-y-6">
-                <div className="flex items-center justify-between gap-2 border-b border-border pb-2">
-                  <div>
-                    <h3 className="text-sm font-bold text-foreground">Активные сессии</h3>
-                    <p className="text-xs text-muted-foreground mt-0.5">
-                      Список устройств и браузеров, с которых вы вошли в систему
-                    </p>
-                  </div>
-                  {sessions.some((s) => !s.is_current) && (
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      disabled={revokingOthers || sessionsLoading}
-                      onClick={handleRevokeOthers}
-                      className="text-xs h-8 px-3"
-                    >
-                      {revokingOthers ? (
-                        <>
-                          <Loader2 className="h-3 w-3 animate-spin mr-1.5" />
-                          Завершение...
-                        </>
-                      ) : (
-                        "Завершить другие"
-                      )}
-                    </Button>
-                  )}
-                </div>
-
-                {sessionsLoading && (
-                  <div className="flex items-center gap-2 text-xs text-muted-foreground py-4 justify-center">
-                    <Loader2 className="h-4 w-4 animate-spin text-primary" />
-                    Загрузка сессий...
-                  </div>
-                )}
-
-                {sessionsError && (
-                  <p className="text-sm text-destructive py-2 text-center">{sessionsError}</p>
-                )}
-
-                {!sessionsLoading && sessions.length === 0 && !sessionsError && (
-                  <p className="text-sm text-muted-foreground py-4 text-center">
-                    Нет активных сессий
-                  </p>
-                )}
-
-                {!sessionsLoading && sessions.length > 0 && (
-                  <div className="space-y-3 max-h-[300px] overflow-y-auto pr-1">
-                    {sessions.map((session) => {
-                      const deviceLabel = session.device_label || "Неизвестное устройство"
-                      const ipLabel = session.ip_address || "IP неизвестен"
-                      return (
-                        <div
-                          key={session.id}
-                          className="p-3.5 rounded-xl border border-border bg-card flex items-start gap-4 transition-colors hover:bg-muted/10"
-                        >
-                          <div
-                            className={`w-9 h-9 rounded-lg flex items-center justify-center shrink-0 ${
-                              session.is_current
-                                ? "bg-green-500/10 text-green-500"
-                                : "bg-muted text-muted-foreground"
-                            }`}
-                          >
-                            <Laptop className="h-5 w-5" />
-                          </div>
-                          <div className="flex-1 min-w-0">
-                            <div className="flex items-center gap-2 flex-wrap">
-                              <h4 className="text-sm font-semibold text-foreground truncate">
-                                {deviceLabel}
-                              </h4>
-                              {session.is_current && (
-                                <Badge variant="success" className="text-[10px] py-0 px-2">
-                                  Текущий сеанс
-                                </Badge>
-                              )}
-                            </div>
-                            <p className="text-xs text-muted-foreground mt-1">
-                              IP: <span className="font-mono text-[11px]">{ipLabel}</span>
-                              {" · "}
-                              {formatLoginMethod(session.login_method)}
-                            </p>
-                            <p className="text-[11px] text-muted-foreground/80 mt-0.5">
-                              Активность: {formatLastSeen(session.last_seen_at)}
-                              {" · "}
-                              Вход: {formatDateTime(session.created_at)}
-                            </p>
-                          </div>
-                          {!session.is_current && (
-                            <Button
-                              type="button"
-                              variant="outline"
-                              size="sm"
-                              disabled={revokingId === session.id}
-                              onClick={() => handleRevokeSession(session)}
-                              className="text-xs shrink-0 h-8 px-2.5"
-                            >
-                              {revokingId === session.id ? (
-                                <Loader2 className="h-3 w-3 animate-spin" />
-                              ) : (
-                                "Завершить"
-                              )}
-                            </Button>
-                          )}
-                        </div>
-                      )
-                    })}
-                  </div>
-                )}
-                <div className="text-xs text-muted-foreground bg-muted/20 p-3 rounded-lg border border-border/50">
-                  Примечание: при подозрении на несанкционированный доступ завершите чужие сессии выше.
+                <div className="text-[11px] text-muted-foreground truncate">
+                  @{localUser.username}
                 </div>
               </div>
-            )}
-          </div>
+            </div>
+
+            {/* Navigation Menu */}
+            <nav className="flex flex-col gap-1 flex-1">
+              <button
+                type="button"
+                onClick={() => setActiveTab("profile")}
+                className={`flex items-center px-3 py-2 text-sm font-medium rounded-lg transition-colors text-left ${
+                  activeTab === "profile"
+                    ? "bg-accent text-accent-foreground font-semibold"
+                    : "text-muted-foreground hover:bg-muted/50 hover:text-foreground"
+                }`}
+              >
+                Профиль
+              </button>
+              <button
+                type="button"
+                onClick={() => setActiveTab("appearance")}
+                className={`flex items-center px-3 py-2 text-sm font-medium rounded-lg transition-colors text-left ${
+                  activeTab === "appearance"
+                    ? "bg-accent text-accent-foreground font-semibold"
+                    : "text-muted-foreground hover:bg-muted/50 hover:text-foreground"
+                }`}
+              >
+                Оформление
+              </button>
+              <button
+                type="button"
+                onClick={() => setActiveTab("security")}
+                className={`flex items-center px-3 py-2 text-sm font-medium rounded-lg transition-colors text-left ${
+                  activeTab === "security"
+                    ? "bg-accent text-accent-foreground font-semibold"
+                    : "text-muted-foreground hover:bg-muted/50 hover:text-foreground"
+                }`}
+              >
+                Безопасность
+              </button>
+            </nav>
+
+            {/* Bottom Panel */}
+            <div className="mt-auto pt-4 border-t border-border/50 text-[11px] text-muted-foreground space-y-1">
+              <div className="truncate">
+                MES: <span className="font-medium text-foreground">{ROLE_LABELS[localUser.role] || localUser.role}</span>
+              </div>
+              <div className="truncate">Юзернейм: @{localUser.username}</div>
+            </div>
+          </aside>
+
+          {/* Header/Tabs - Mobile */}
+          <header className="flex md:hidden flex-col border-b border-border p-4 gap-3 bg-muted/10 shrink-0">
+            <div className="flex items-center gap-3">
+              <button
+                type="button"
+                className="relative group rounded-full focus:outline-none focus:ring-2 focus:ring-primary shrink-0"
+                onClick={() => setAvatarOpen(true)}
+                title="Сменить аватар"
+              >
+                <UserAvatar seed={seed} size={48} />
+                <span className="absolute inset-0 flex items-center justify-center rounded-full bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity">
+                  <Pencil className="h-3 w-3 text-white" />
+                </span>
+              </button>
+              <div className="min-w-0">
+                <div className="font-semibold truncate text-sm text-foreground">
+                  {localUser.full_name}
+                </div>
+                <div className="text-[11px] text-muted-foreground truncate">
+                  @{localUser.username} · {ROLE_LABELS[localUser.role] || localUser.role}
+                </div>
+              </div>
+            </div>
+
+            <div className="flex gap-1 overflow-x-auto pb-1 border-t border-border/50 pt-2 scrollbar-none">
+              <button
+                type="button"
+                onClick={() => setActiveTab("profile")}
+                className={`px-3 py-1.5 text-xs font-semibold rounded-full whitespace-nowrap transition-colors ${
+                  activeTab === "profile"
+                    ? "bg-primary text-primary-foreground"
+                    : "bg-muted text-muted-foreground hover:text-foreground"
+                }`}
+              >
+                Профиль
+              </button>
+              <button
+                type="button"
+                onClick={() => setActiveTab("appearance")}
+                className={`px-3 py-1.5 text-xs font-semibold rounded-full whitespace-nowrap transition-colors ${
+                  activeTab === "appearance"
+                    ? "bg-primary text-primary-foreground"
+                    : "bg-muted text-muted-foreground hover:text-foreground"
+                }`}
+              >
+                Оформление
+              </button>
+              <button
+                type="button"
+                onClick={() => setActiveTab("security")}
+                className={`px-3 py-1.5 text-xs font-semibold rounded-full whitespace-nowrap transition-colors ${
+                  activeTab === "security"
+                    ? "bg-primary text-primary-foreground"
+                    : "bg-muted text-muted-foreground hover:text-foreground"
+                }`}
+              >
+                Безопасность
+              </button>
+            </div>
+          </header>
+
+          {/* Content Pane */}
+          <main className="flex-1 overflow-y-auto p-6 md:p-8 flex flex-col min-w-0">
+            <h2 className="text-xl font-bold tracking-tight mb-6 text-foreground">
+              {activeTab === "profile" && "Настройки профиля"}
+              {activeTab === "appearance" && "Оформление"}
+              {activeTab === "security" && "Безопасность"}
+            </h2>
+
+            <div className="flex-1 min-w-0">
+              {activeTab === "profile" && (
+                <ProfileSection
+                  user={localUser}
+                  fullNameDraft={fullNameDraft}
+                  emailDraft={emailDraft}
+                  isSaving={nameSaving}
+                  isSaved={nameSaved}
+                  error={nameError}
+                  onFullNameChange={(val) => {
+                    setFullNameDraft(val)
+                    setNameError(null)
+                    setNameSaved(false)
+                  }}
+                  onEmailChange={(val) => {
+                    setEmailDraft(val)
+                    setNameError(null)
+                    setNameSaved(false)
+                  }}
+                  onSubmit={handleSaveProfile}
+                  canSubmit={
+                    fullNameDraft.trim() !== (localUser.full_name || "").trim() ||
+                    emailDraft.trim() !== (localUser.email || "").trim()
+                  }
+                  oidcEnabled={oidcEnabled}
+                  userSettingsUrl={userSettingsUrl}
+                />
+              )}
+
+              {activeTab === "appearance" && (
+                <AppearanceSection
+                  localeDraft={localeDraft}
+                  themeDraft={themeDraft}
+                  isSaving={prefsSaving}
+                  isSaved={prefsSaved}
+                  error={prefsError}
+                  onLocaleChange={(val) => {
+                    setLocaleDraft(val)
+                    setPrefsError(null)
+                    setPrefsSaved(false)
+                  }}
+                  onThemeChange={handleThemeChange}
+                  onSubmit={handleSavePrefs}
+                  canSubmit={
+                    localeDraft !== (localUser.locale || "ru") ||
+                    themeDraft !== (localUser.theme || "system")
+                  }
+                  profileSot={localUser.profile_sot ?? null}
+                />
+              )}
+
+              {activeTab === "security" && (
+                <SecuritySection
+                  oidcEnabled={oidcEnabled}
+                  userSettingsUrl={userSettingsUrl}
+                  sessions={sessions}
+                  isLoading={sessionsLoading}
+                  error={sessionsError}
+                  revokingId={revokingId}
+                  revokingOthers={revokingOthers}
+                  onRevoke={handleRevokeSession}
+                  onRevokeOthers={handleRevokeOthers}
+                />
+              )}
+            </div>
+          </main>
         </DialogContent>
       </Dialog>
 
