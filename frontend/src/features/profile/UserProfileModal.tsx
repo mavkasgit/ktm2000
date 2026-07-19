@@ -11,15 +11,8 @@ import {
 } from "@/shared/ui/Dialog"
 import { Button } from "@/shared/ui/Button"
 import { Input } from "@/shared/ui/Input"
-import { UserAvatar } from "@/shared/ui/UserAvatar"
+import { UserAvatar, getUserSeed, applyTheme, storeLocale, type ProfileLocale, type ProfileTheme } from "@user/ui"
 import { Badge } from "@/shared/ui/Badge"
-import { getUserSeed } from "@/shared/lib/avatar"
-import {
-  applyTheme,
-  storeLocale,
-  type ProfileLocale,
-  type ProfileTheme,
-} from "@/shared/lib/profile-prefs"
 import { AvatarPickerDialog } from "@/features/profile/AvatarPickerDialog"
 import {
   updateMyAvatarApi,

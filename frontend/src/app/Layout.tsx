@@ -4,8 +4,7 @@ import { Boxes, ClipboardList, Gauge, Factory, Cog, Wrench, Layers, Menu, X, Arr
 import { useAuth } from "@/features/auth/hooks/useAuth"
 import type { UserRole } from "@/features/auth/api"
 import { toast } from "@/shared/ui"
-import { UserAvatar } from "@/shared/ui/UserAvatar"
-import { getUserSeed } from "@/shared/lib/avatar"
+import { UserAvatar, getUserSeed } from "@user/ui"
 import { UserProfileModal } from "@/features/profile/UserProfileModal"
 
 /** Перевод ролей на русский */
