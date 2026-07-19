@@ -18,7 +18,14 @@ export default defineConfig({
   },
   projects: [
     {
-      name: "chromium",
+      name: "ui-e2e",
+      grep: /@ui/,
+      timeout: 120_000,
+      use: { ...devices["Desktop Chrome"] },
+    },
+    {
+      name: "smoke",
+      grep: /@smoke/,
       use: { ...devices["Desktop Chrome"] },
     },
   ],

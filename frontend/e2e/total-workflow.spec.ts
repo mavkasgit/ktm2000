@@ -1,179 +1,36 @@
 import { test, expect } from "./fixtures";
-import fs from "fs";
 import path from "path";
+import {
+  apiApplyChangeSet,
+  apiBatchAssignRoute,
+  apiGetActiveRoutes,
+  apiGetActiveTemplate,
+  apiGetOrCreateTechcard,
+  apiGetPlanPositions,
+  apiGetProductBySku,
+  apiGetSections,
+  apiGetSpgs,
+  apiImportExcel,
+  apiResetAll,
+  apiAddRemainder,
+  apiEnsureTestProducts,
+  apiEnsureTestTechcards,
+  apiSeedData,
+  BACKEND_URL,
+  E2E_SECTION,
+  E2E_SPG,
+} from "./api-helpers";
+import { confirmProductionLaunchViaUI } from "./ui-helpers";
 
-const BACKEND_URL = process.env.E2E_API_URL 
-  ? process.env.E2E_API_URL.replace(/\/api$/, '') 
-  : "http://localhost:8010";
-
-// --- API Helpers ---
-
-async function apiSeedData() {
-  const res = await fetch(`${BACKEND_URL}/api/routes-seed?force=true`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-  });
-  if (!res.ok) {
-    throw new Error(`Seed failed: ${res.statusText} (${res.status})`);
-  }
-  return res.json();
-}
-
-async function apiGetProductBySku(sku: string) {
-  const res = await fetch(`${BACKEND_URL}/api/products?q=${encodeURIComponent(sku)}`);
-  if (!res.ok) {
-    throw new Error(`Get product by SKU failed: ${res.statusText} (${res.status})`);
-  }
-  const products = await res.json();
-  const product = products.find((p: any) => p.sku === sku);
-  if (!product) {
-    throw new Error(`Product not found with SKU: ${sku}`);
-  }
-  return product;
-}
-
-async function apiCreateTechcard(productId: number) {
-  const res = await fetch(`${BACKEND_URL}/api/techcards`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      product_id: productId,
-      version: "v1",
-      processing_type: "standart_processing",
-      is_active: true,
-    }),
-  });
-  if (!res.ok) {
-    throw new Error(`Create techcard failed: ${res.statusText} (${res.status})`);
-  }
-  return res.json();
-}
-
-async function apiGetOrCreateTechcard(productId: number) {
-  const res = await fetch(`${BACKEND_URL}/api/techcards`);
-  if (!res.ok) {
-    throw new Error(`Get techcards failed: ${res.statusText} (${res.status})`);
-  }
-  const body = await res.json();
-  const techcards = Array.isArray(body) ? body : body.items ?? [];
-  const existing = techcards.find((t: any) => t.product_id === productId && t.is_active);
-  if (existing) {
-    return existing;
-  }
-  return apiCreateTechcard(productId);
-}
-
-async function apiGetSpgs() {
-  const res = await fetch(`${BACKEND_URL}/api/spg`);
-  if (!res.ok) {
-    throw new Error(`Get SPGs failed: ${res.statusText} (${res.status})`);
-  }
-  return res.json();
-}
-
-async function apiGetSections() {
-  const res = await fetch(`${BACKEND_URL}/api/sections`);
-  if (!res.ok) {
-    throw new Error(`Get sections failed: ${res.statusText} (${res.status})`);
-  }
-  return res.json();
-}
-
-async function apiGetActiveTemplate() {
-  const res = await fetch(`${BACKEND_URL}/api/import-templates`);
-  if (!res.ok) {
-    throw new Error(`Get templates failed: ${res.statusText} (${res.status})`);
-  }
-  const { items: templates } = await res.json();
-  const template = templates.find((t: any) => t.is_active);
-  if (!template) {
-    throw new Error("No active import template found");
-  }
-  return template;
-}
-
-async function apiImportExcel(templateId: number, filePath: string) {
-  const fileBuffer = fs.readFileSync(filePath);
-  const blob = new Blob([fileBuffer], { type: "application/vnd.ms-excel" });
-  
-  const formData = new FormData();
-  formData.append("file", blob, path.basename(filePath));
-  formData.append("sheet_index", "0");
-  formData.append("mode", "create_plan");
-  formData.append("normalize_hanger_quantity", "true");
-
-  const res = await fetch(`${BACKEND_URL}/api/imports/excel?template_id=${templateId}`, {
-    method: "POST",
-    body: formData,
-  });
-
-  if (!res.ok) {
-    const errText = await res.text();
-    throw new Error(`Import excel failed: ${res.statusText} (${res.status}) - ${errText}`);
-  }
-  return res.json();
-}
-
-async function apiApplyChangeSet(planId: number, changeSetId: number) {
-  const res = await fetch(`${BACKEND_URL}/api/production-plans/${planId}/change-sets/${changeSetId}/apply`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-  });
-  if (!res.ok) {
-    const errText = await res.text();
-    throw new Error(`Apply change set failed: ${res.statusText} (${res.status}) - ${errText}`);
-  }
-  return res.json();
-}
-
-async function apiGetActiveRoutes() {
-  const res = await fetch(`${BACKEND_URL}/api/routes`);
-  if (!res.ok) {
-    throw new Error(`Get routes failed: ${res.statusText} (${res.status})`);
-  }
-  const routes = await res.json();
-  return routes.filter((r: any) => r.is_active);
-}
-
-async function apiBatchAssignRoute(planId: number, positionIds: number[], routeId: number | null) {
-  const res = await fetch(`${BACKEND_URL}/api/production-plans/${planId}/positions/batch-assign-route`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      position_ids: positionIds,
-      route_id: routeId,
-    }),
-  });
-  if (!res.ok) {
-    const errText = await res.text();
-    throw new Error(`Batch assign route failed: ${res.statusText} (${res.status}) - ${errText}`);
-  }
-  return res.json();
-}
-
-async function apiGetPlanPositions(planId: number) {
-  const res = await fetch(`${BACKEND_URL}/api/production-plans/${planId}/all-positions`);
-  if (!res.ok) {
-    throw new Error(`Get plan positions failed: ${res.statusText} (${res.status})`);
-  }
-  return res.json();
-}
-
-async function apiResetAll() {
-  const res = await fetch(`${BACKEND_URL}/api/production-plans/reset-all`, {
-    method: "POST",
-  });
-  if (!res.ok && res.status !== 404) {
-    throw new Error(`Reset all failed: ${res.statusText} (${res.status})`);
-  }
-}
-
-test.describe("Total workflow E2E - Step 2: Seed & Verify Remainders", () => {
+/** @smoke — API-assisted setup; не канон E2E. См. @ui в route-workflow.spec.ts */
+test.describe("@smoke Total workflow E2E - Step 2: Seed & Verify Remainders", () => {
   test.beforeEach(async () => {
     // Reset DB before each test to guarantee environment isolation
     await apiResetAll();
     // Seed reference data via API before the test
     await apiSeedData();
+    await apiEnsureTestProducts();
+    await apiEnsureTestTechcards();
   });
 
   test("should seed, get existing product, ensure techcard, add remainders, and verify in SPG UI", async ({ authenticatedPage }) => {
@@ -212,39 +69,14 @@ test.describe("Total workflow E2E - Step 2: Seed & Verify Remainders", () => {
     expect(spgStock).toBeDefined();
     expect(spgPrep).toBeDefined();
 
-    const sectionWh = sections.find((s: any) => s.code === "WH");
-    const sectionDrill = sections.find((s: any) => s.code === "DRILL");
+    const sectionWh = sections.find((s: any) => s.code === E2E_SECTION.RAW_STOCK);
+    const sectionDrill = sections.find((s: any) => s.code === E2E_SECTION.DRILLING);
     expect(sectionWh).toBeDefined();
     expect(sectionDrill).toBeDefined();
 
     // 4. Зачисляем остатки для ЮП-3270
-    // 5000 шт в STOCK (секция WH)
-    const resRaw = await fetch(`${BACKEND_URL}/api/spg/${spgStock.id}/manual-operation`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        product_id: productYu.id,
-        section_id: sectionWh.id,
-        operation_type: "in",
-        quantity: 5000,
-        reason: "Начальный избыток сырья",
-      }),
-    });
-    expect(resRaw.ok).toBe(true);
-
-    // 20 шт в PREP (секция DRILL)
-    const resDrill = await fetch(`${BACKEND_URL}/api/spg/${spgPrep.id}/manual-operation`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        product_id: productYu.id,
-        section_id: sectionDrill.id,
-        operation_type: "in",
-        quantity: 20,
-        reason: "Задел полуфабрикатов",
-      }),
-    });
-    expect(resDrill.ok).toBe(true);
+    await apiAddRemainder(productYu.id, sectionWh.id, 5000, "Начальный избыток сырья");
+    await apiAddRemainder(productYu.id, sectionDrill.id, 20, "Задел полуфабрикатов");
 
     // 5. Переходим на страницу остатков /spg
     await authenticatedPage.goto("/spg");
@@ -355,6 +187,7 @@ test.describe("Total workflow E2E - Step 2: Seed & Verify Remainders", () => {
     const launchBtnYu = execRowYu.getByRole("button", { name: "Взять в работу" });
     await expect(launchBtnYu).toBeVisible({ timeout: 5_000 });
     await launchBtnYu.click();
+    await confirmProductionLaunchViaUI(authenticatedPage);
 
     const statusBadgeYu = execRowYu.locator("span").filter({ hasText: /^Запущен$/ });
     await expect(statusBadgeYu).toBeVisible({ timeout: 15_000 });
@@ -368,6 +201,7 @@ test.describe("Total workflow E2E - Step 2: Seed & Verify Remainders", () => {
     const launchBtn2083 = execRow2083.getByRole("button", { name: "Взять в работу" });
     await expect(launchBtn2083).toBeVisible({ timeout: 5_000 });
     await launchBtn2083.click();
+    await confirmProductionLaunchViaUI(authenticatedPage);
 
     const statusBadge2083 = execRow2083.locator("span").filter({ hasText: /^Запущен$/ });
     await expect(statusBadge2083).toBeVisible({ timeout: 15_000 });
@@ -460,13 +294,13 @@ test.describe("Total workflow E2E - Step 2: Seed & Verify Remainders", () => {
 
     const spgStock = spgs.find((s: any) => s.code === "STOCK");
     const spgPrep = spgs.find((s: any) => s.code === "PREP");
-    const spgAnod = spgs.find((s: any) => s.code === "ANOD");
-    const spgWip = spgs.find((s: any) => s.code === "WIP");
+    const spgAnod = spgs.find((s: any) => s.code === E2E_SPG.ANODIZING);
+    const spgWip = spgs.find((s: any) => s.code === E2E_SPG.ANODIZING);
 
-    const sectionWh = sections.find((s: any) => s.code === "WH");
-    const sectionDrill = sections.find((s: any) => s.code === "DRILL");
-    const sectionAnod = sections.find((s: any) => s.code === "ANOD");
-    const sectionWipWh = sections.find((s: any) => s.code === "WIP_WH");
+    const sectionWh = sections.find((s: any) => s.code === E2E_SECTION.RAW_STOCK);
+    const sectionDrill = sections.find((s: any) => s.code === E2E_SECTION.DRILLING);
+    const sectionAnod = sections.find((s: any) => s.code === E2E_SECTION.ANODIZING);
+    const sectionWipWh = sections.find((s: any) => s.code === E2E_SECTION.WIP_STOCK);
 
     expect(spgStock).toBeDefined();
     expect(spgPrep).toBeDefined();
@@ -484,25 +318,14 @@ test.describe("Total workflow E2E - Step 2: Seed & Verify Remainders", () => {
     // - ANOD: 30 шт
     // - WIP: 40 шт
     const initialRemainders = [
-      { spgId: spgStock.id, sectionId: sectionWh.id, qty: 50, comment: "STOCK E2E" },
-      { spgId: spgPrep.id, sectionId: sectionDrill.id, qty: 20, comment: "PREP E2E" },
-      { spgId: spgAnod.id, sectionId: sectionAnod.id, qty: 30, comment: "ANOD E2E" },
-      { spgId: spgWip.id, sectionId: sectionWipWh.id, qty: 40, comment: "WIP E2E" },
+      { sectionId: sectionWh.id, qty: 50, comment: "STOCK E2E" },
+      { sectionId: sectionDrill.id, qty: 20, comment: "PREP E2E" },
+      { sectionId: sectionAnod.id, qty: 30, comment: "ANOD E2E" },
+      { sectionId: sectionWipWh.id, qty: 40, comment: "WIP E2E" },
     ];
 
     for (const rem of initialRemainders) {
-      const res = await fetch(`${BACKEND_URL}/api/spg/${rem.spgId}/manual-operation`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          product_id: productYu.id,
-          section_id: rem.sectionId,
-          operation_type: "in",
-          quantity: rem.qty,
-          reason: rem.comment,
-        }),
-      });
-      expect(res.ok).toBe(true);
+      await apiAddRemainder(productYu.id, rem.sectionId, rem.qty, rem.comment);
     }
 
     // 3. Импортируем Excel-план (чтобы у нас была позиция ЮП-3270 на 60 деталей)
@@ -554,6 +377,7 @@ test.describe("Total workflow E2E - Step 2: Seed & Verify Remainders", () => {
     const launchBtnYu = execRowYu.getByRole("button", { name: "Взять в работу" });
     await expect(launchBtnYu).toBeVisible({ timeout: 5_000 });
     await launchBtnYu.click();
+    await confirmProductionLaunchViaUI(authenticatedPage);
 
     const statusBadgeYu = execRowYu.locator("span").filter({ hasText: /^Запущен$/ });
     await expect(statusBadgeYu).toBeVisible({ timeout: 15_000 });
@@ -607,18 +431,7 @@ test.describe("Total workflow E2E - Step 2: Seed & Verify Remainders", () => {
 
     // 8. Проверим FIFO-компенсацию минусового остатка:
     // Начисляем приход 500 шт на STOCK
-    const resComp = await fetch(`${BACKEND_URL}/api/spg/${spgStock.id}/manual-operation`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        product_id: productYu.id,
-        section_id: sectionWh.id,
-        operation_type: "in",
-        quantity: 500,
-        reason: "Пополнение для схлопывания",
-      }),
-    });
-    expect(resComp.ok).toBe(true);
+    await apiAddRemainder(productYu.id, sectionWh.id, 500, "Пополнение для схлопывания");
 
     // Обновим страницу остатков и проверим, что остаток стал 210 штук
     const refreshBtn = authenticatedPage.getByRole("button", { name: "Обновить" }).first();

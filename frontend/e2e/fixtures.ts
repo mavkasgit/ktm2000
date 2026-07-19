@@ -50,7 +50,7 @@ export const test = base.extend<{
     await use(async () => {
       // Use the seed API to set up test data
       const response = await page.evaluate(async () => {
-        const res = await fetch("/api/routes/seed", { method: "POST" });
+        const res = await fetch("/api/routes-seed?force=true", { method: "POST" });
         return res.json();
       });
       expect(response).toBeDefined();

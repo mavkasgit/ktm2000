@@ -1,168 +1,31 @@
 import { test, expect } from "./fixtures";
-import fs from "fs";
 import path from "path";
-
-const BACKEND_URL = process.env.E2E_API_URL 
-  ? process.env.E2E_API_URL.replace(/\/api$/, '') 
-  : "http://localhost:8082";
-
-// --- API Helpers ---
-
-async function apiSeedData() {
-  const res = await fetch(`${BACKEND_URL}/api/routes-seed?force=true`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-  });
-  if (!res.ok) {
-    throw new Error(`Seed failed: ${res.statusText} (${res.status})`);
-  }
-  return res.json();
-}
-
-async function apiGetProductBySku(sku: string) {
-  const res = await fetch(`${BACKEND_URL}/api/products?q=${encodeURIComponent(sku)}`);
-  if (!res.ok) {
-    throw new Error(`Get product by SKU failed: ${res.statusText} (${res.status})`);
-  }
-  const products = await res.json();
-  const product = products.find((p: any) => p.sku === sku);
-  if (!product) {
-    throw new Error(`Product not found with SKU: ${sku}`);
-  }
-  return product;
-}
-
-async function apiGetOrCreateTechcard(productId: number) {
-  const res = await fetch(`${BACKEND_URL}/api/techcards`);
-  if (!res.ok) {
-    throw new Error(`Get techcards failed: ${res.statusText} (${res.status})`);
-  }
-  const body = await res.json();
-  const techcards = Array.isArray(body) ? body : body.items ?? [];
-  const existing = techcards.find((t: any) => t.product_id === productId && t.is_active);
-  if (existing) {
-    return existing;
-  }
-  
-  // Create if not exists
-  const createRes = await fetch(`${BACKEND_URL}/api/techcards`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      product_id: productId,
-      version: "v1",
-      processing_type: "standart_processing",
-      is_active: true,
-    }),
-  });
-  if (!createRes.ok) {
-    throw new Error(`Create techcard failed: ${createRes.statusText} (${createRes.status})`);
-  }
-  return createRes.json();
-}
-
-async function apiGetSpgs() {
-  const res = await fetch(`${BACKEND_URL}/api/spg`);
-  if (!res.ok) {
-    throw new Error(`Get SPGs failed: ${res.statusText} (${res.status})`);
-  }
-  return res.json();
-}
-
-async function apiGetSections() {
-  const res = await fetch(`${BACKEND_URL}/api/sections`);
-  if (!res.ok) {
-    throw new Error(`Get sections failed: ${res.statusText} (${res.status})`);
-  }
-  return res.json();
-}
-
-async function apiGetActiveTemplate() {
-  const res = await fetch(`${BACKEND_URL}/api/import-templates`);
-  if (!res.ok) {
-    throw new Error(`Get templates failed: ${res.statusText} (${res.status})`);
-  }
-  const { items: templates } = await res.json();
-  const template = templates.find((t: any) => t.is_active);
-  if (!template) {
-    throw new Error("No active import template found");
-  }
-  return template;
-}
-
-async function apiImportExcel(templateId: number, filePath: string) {
-  const fileBuffer = fs.readFileSync(filePath);
-  const blob = new Blob([fileBuffer], { type: "application/vnd.ms-excel" });
-  
-  const formData = new FormData();
-  formData.append("file", blob, path.basename(filePath));
-  formData.append("sheet_index", "0");
-  formData.append("mode", "create_plan");
-  formData.append("normalize_hanger_quantity", "true");
-
-  const res = await fetch(`${BACKEND_URL}/api/imports/excel?template_id=${templateId}`, {
-    method: "POST",
-    body: formData,
-  });
-
-  if (!res.ok) {
-    const errText = await res.text();
-    throw new Error(`Import excel failed: ${res.statusText} (${res.status}) - ${errText}`);
-  }
-  return res.json();
-}
-
-async function apiApplyChangeSet(planId: number, changeSetId: number) {
-  const res = await fetch(`${BACKEND_URL}/api/production-plans/${planId}/change-sets/${changeSetId}/apply`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-  });
-  if (!res.ok) {
-    const errText = await res.text();
-    throw new Error(`Apply change set failed: ${res.statusText} (${res.status}) - ${errText}`);
-  }
-  return res.json();
-}
-
-async function apiGetPlanPositions(planId: number) {
-  const res = await fetch(`${BACKEND_URL}/api/production-plans/${planId}/all-positions`);
-  if (!res.ok) {
-    throw new Error(`Get plan positions failed: ${res.statusText} (${res.status})`);
-  }
-  return res.json();
-}
-
-async function apiGetActiveRoutes() {
-  const res = await fetch(`${BACKEND_URL}/api/routes`);
-  if (!res.ok) {
-    throw new Error(`Get routes failed: ${res.statusText} (${res.status})`);
-  }
-  const routes = await res.json();
-  return routes.filter((r: any) => r.is_active);
-}
-
-async function apiBatchAssignRoute(planId: number, positionIds: number[], routeId: number | null) {
-  const res = await fetch(`${BACKEND_URL}/api/production-plans/${planId}/positions/batch-assign-route`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      position_ids: positionIds,
-      route_id: routeId,
-    }),
-  });
-  if (!res.ok) {
-    const errText = await res.text();
-    throw new Error(`Batch assign route failed: ${res.statusText} (${res.status}) - ${errText}`);
-  }
-  return res.json();
-}
+import {
+  apiApplyChangeSet,
+  apiBatchAssignRoute,
+  apiGetActiveRoutes,
+  apiGetActiveTemplate,
+  apiGetOrCreateTechcard,
+  apiGetPlanPositions,
+  apiGetProductBySku,
+  apiGetSections,
+  apiGetSpgs,
+  apiImportExcel,
+  apiEnsureTestProducts,
+  apiEnsureTestTechcards,
+  apiSeedData,
+  E2E_SECTION,
+} from "./api-helpers";
 
 // --- Test Suite ---
 
-test.describe("Bulk operations workflow E2E", () => {
+/** @smoke — API-assisted setup; не канон E2E. См. @ui в route-workflow.spec.ts */
+test.describe("@smoke Bulk operations workflow E2E", () => {
   test.beforeEach(async () => {
     // 1. Вызвать API-эндпоинт /api/routes-seed?force=true для сброса и наполнения справочников
     await apiSeedData();
+    await apiEnsureTestProducts();
+    await apiEnsureTestTechcards();
   });
 
   test("should complete workflow using bulk operations on the shopfloor", async ({ authenticatedPage }) => {
@@ -194,7 +57,7 @@ test.describe("Bulk operations workflow E2E", () => {
     const sections = await apiGetSections();
 
     const spgStock = spgs.find((s: any) => s.code === "STOCK");
-    const sectionWh = sections.find((s: any) => s.code === "WH");
+    const sectionWh = sections.find((s: any) => s.code === E2E_SECTION.RAW_STOCK);
     expect(spgStock).toBeDefined();
     expect(sectionWh).toBeDefined();
 
@@ -206,11 +69,9 @@ test.describe("Bulk operations workflow E2E", () => {
     const spgSkladBtn = authenticatedPage.getByRole("button", { name: /^Склад/ }).first();
     await expect(spgSkladBtn).toBeVisible({ timeout: 5_000 });
     await spgSkladBtn.click();
-
-    // Переходим на вкладку "Остатки"
-    const remaindersTabBtn = authenticatedPage.getByRole("button", { name: "Остатки" }).first();
-    await expect(remaindersTabBtn).toBeVisible({ timeout: 5_000 });
-    await remaindersTabBtn.click();
+    await expect(authenticatedPage.getByRole("button", { name: "Ручная операция" })).toBeVisible({
+      timeout: 5_000,
+    });
 
     const targetSkus = ["ЮП-3270", "ЮП-2083"];
     for (const sku of targetSkus) {
