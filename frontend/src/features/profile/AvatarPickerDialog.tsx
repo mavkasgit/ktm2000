@@ -48,7 +48,7 @@ export function AvatarPickerDialog({
         <DialogHeader>
           <DialogTitle>Выберите аватар</DialogTitle>
           <DialogDescription>
-            Кликните на вариант — сохранится в единый профиль (IdP).
+            Клик сохраняет аватар в единый профиль.
           </DialogDescription>
         </DialogHeader>
         <div className="grid grid-cols-4 gap-3 py-2">
@@ -58,7 +58,7 @@ export function AvatarPickerDialog({
               type="button"
               disabled={isSaving}
               onClick={() => onPick(seed)}
-              className="group relative aspect-square overflow-hidden rounded-xl bg-muted hover:ring-2 hover:ring-primary transition-all disabled:opacity-50"
+              className="aspect-square overflow-hidden rounded-2xl bg-muted border border-border/40 hover:ring-2 hover:ring-primary transition-all disabled:opacity-50"
             >
               <UserAvatar seed={seed} size={72} fit="contain" className="!w-full !h-full !rounded-none" />
             </button>
@@ -74,17 +74,28 @@ export function AvatarPickerDialog({
             className="gap-1.5"
           >
             <Shuffle className="h-3.5 w-3.5" />
-            Другие
+            Другие варианты
           </Button>
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            disabled={isSaving || !currentSeed}
-            onClick={() => onPick(null)}
-          >
-            Сбросить
-          </Button>
+          <div className="flex gap-2">
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              disabled={isSaving || !currentSeed}
+              onClick={() => onPick(null)}
+            >
+              Сбросить
+            </Button>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              disabled={isSaving}
+              onClick={() => onOpenChange(false)}
+            >
+              Отмена
+            </Button>
+          </div>
         </div>
       </DialogContent>
     </Dialog>
