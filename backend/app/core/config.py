@@ -51,6 +51,7 @@ class Settings(BaseSettings):
     AUTHENTIK_API_URL: str | None = "auto"
     AUTHENTIK_API_TOKEN: str | None = None
     AUTHENTIK_PUBLIC_URL: str | None = "auto"
+    AUTHENTIK_PROFILE_TTL_SECONDS: int = 300
 
     model_config = {"env_file": _env_file, "env_file_encoding": "utf-8", "extra": "ignore"}
 

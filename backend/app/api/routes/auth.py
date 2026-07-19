@@ -1,3 +1,4 @@
+from datetime import datetime, timezone
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
@@ -6,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
 from app.core.database import get_db
+from app.core.config import settings
 from app.core.security import TokenError, decode_access_token, verify_password
 from app.models.user import User
 from app.models.user_session import UserSession
@@ -170,27 +172,49 @@ async def logout(
 
 @router.get("/me", response_model=MeResponse)
 async def me(
+    refresh: int = 0,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> MeResponse:
     """Current user; pulls unified profile from Authentik when linked + API configured."""
     user = current_user
     if user.authentik_sub and profile_sync_enabled():
-        try:
-            snapshot = await sync_local_from_idp(
-                authentik_sub=user.authentik_sub,
-                local_full_name=user.full_name,
-                local_avatar_seed=user.avatar_seed,
-                local_locale=user.locale,
-                local_theme=user.theme,
-                local_email=user.email,
-            )
-            if snapshot is not None and apply_profile_to_user(user, snapshot):
+        now = datetime.now(timezone.utc)
+        ttl = settings.AUTHENTIK_PROFILE_TTL_SECONDS
+
+        need_pull = True
+        if refresh != 1 and ttl > 0 and user.profile_synced_at is not None:
+            synced_at = user.profile_synced_at
+            if synced_at.tzinfo is None:
+                synced_at = synced_at.replace(tzinfo=timezone.utc)
+            if (now - synced_at).total_seconds() < ttl:
+                need_pull = False
+
+        if need_pull:
+            try:
+                snapshot = await sync_local_from_idp(
+                    authentik_sub=user.authentik_sub,
+                    local_full_name=user.full_name,
+                    local_avatar_seed=user.avatar_seed,
+                    local_locale=user.locale,
+                    local_theme=user.theme,
+                    local_email=user.email,
+                )
+                if snapshot is not None:
+                    apply_profile_to_user(user, snapshot)
+                
+                user.profile_synced_at = now
                 db.add(user)
                 await db.commit()
                 await db.refresh(user)
-        except Exception:
-            pass
+            except Exception:
+                try:
+                    user.profile_synced_at = now
+                    db.add(user)
+                    await db.commit()
+                    await db.refresh(user)
+                except Exception:
+                    pass
 
     data = MeResponse.model_validate(user)
     data.authentik_linked = bool(user.authentik_sub)
@@ -242,6 +266,7 @@ async def update_my_profile(
                 user.locale = remote.locale or want_locale
             if want_theme is not None:
                 user.theme = remote.theme or want_theme
+            user.profile_synced_at = datetime.now(timezone.utc)
         except AuthentikProfileError as exc:
             raise HTTPException(
                 status_code=exc.status_code or 502,
