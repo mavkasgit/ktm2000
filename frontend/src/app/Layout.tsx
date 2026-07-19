@@ -99,10 +99,14 @@ export function Layout() {
           >
             <Menu size={24} />
           </button>
-          <NavLink to="/" className="mobile-header-brand flex items-center gap-2 hover:opacity-80 transition-opacity">
+          <a
+            href={`${window.location.protocol}//${window.location.hostname}:9000`}
+            className="mobile-header-brand flex items-center gap-2 hover:opacity-80 transition-opacity"
+            title="Панель приложений"
+          >
             <img src="/logo.svg" alt="" className="h-7 w-7 rounded-md" width={28} height={28} />
             <span className="mobile-header-title">KTM-2000</span>
-          </NavLink>
+          </a>
         </div>
       )}
 
@@ -114,13 +118,13 @@ export function Layout() {
           <div className="sidebar-top-bar">
             <div className="sidebar-brand">
               <div className="flex items-center gap-3">
-                <NavLink
-                  to="/"
+                <a
+                  href={`${window.location.protocol}//${window.location.hostname}:9000`}
                   className="shrink-0 hover:opacity-80 transition-opacity"
-                  title="На главную"
+                  title="Панель приложений"
                 >
                   <img src="/logo.svg" alt="" className="h-10 w-10 rounded-xl" width={40} height={40} />
-                </NavLink>
+                </a>
                 <div className="min-w-0">
                   <div className="brand-title">KTM-2000</div>
                   <div className="brand-caption">Планирование производства</div>
