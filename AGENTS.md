@@ -1,5 +1,14 @@
 # AGENTS.md — KTM-2000
 
+## Workspace harness
+
+Этот репозиторий — часть multi-project workspace **VibeCoding**.
+Общая карта, порты и cross-project правила: [`../_harness/AGENTS.md`](../_harness/AGENTS.md)
+и [`../_harness/memory/structure.md`](../_harness/memory/structure.md).
+Локальные правила **этого** файла главнее harness при конфликте.
+
+---
+
 Bootstrap-инструкции для AI-агентов. Детали — в `docs/` и вложенных `AGENTS.md`.
 
 ## Проект

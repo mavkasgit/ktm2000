@@ -20,7 +20,7 @@ services:
     restart: always
 
   backend:
-    image: ghcr.io/mavkasgit/ktm2000-backend:latest
+    image: ktm2000-backend:latest
     build:
       context: ../../backend
       dockerfile: Dockerfile
@@ -60,7 +60,7 @@ services:
       retries: 3
 
   frontend:
-    image: ghcr.io/mavkasgit/ktm2000-frontend:latest
+    image: ktm2000-frontend:latest
     build:
       context: ../../frontend
       dockerfile: Dockerfile
