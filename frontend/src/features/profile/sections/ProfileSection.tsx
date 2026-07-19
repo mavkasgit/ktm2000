@@ -1,4 +1,4 @@
-import React from "react"
+import React, { useRef, useEffect } from "react"
 import { Copy, CheckCircle2, Loader2 } from "lucide-react"
 import type { User } from "@/features/auth/api"
 import { ROLE_LABELS } from "../lib/roleLabels"
@@ -35,12 +35,20 @@ export function ProfileSection({
   userSettingsUrl,
 }: ProfileSectionProps) {
   const [copied, setCopied] = React.useState(false)
+  const copyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  useEffect(() => {
+    return () => {
+      if (copyTimerRef.current) clearTimeout(copyTimerRef.current)
+    }
+  }, [])
 
   const handleCopyUsername = () => {
     if (!user.username) return
     navigator.clipboard.writeText(user.username)
     setCopied(true)
-    setTimeout(() => setCopied(false), 2000)
+    if (copyTimerRef.current) clearTimeout(copyTimerRef.current)
+    copyTimerRef.current = setTimeout(() => setCopied(false), 2000)
   }
 
   const isAuthentikLinked = user.profile_sot === "authentik" || !!user.authentik_linked

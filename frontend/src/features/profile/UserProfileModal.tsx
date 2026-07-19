@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react"
+import { useCallback, useEffect, useRef, useState } from "react"
 import { Pencil } from "lucide-react"
 
 import {
@@ -32,6 +32,21 @@ type Props = {
   onUpdated: () => void | Promise<void>
 }
 
+const getErrorMessage = (err: unknown, defaultMessage: string): string => {
+  if (typeof err === "object" && err !== null) {
+    const response = (err as any).response
+    if (response && typeof response === "object" && response.data) {
+      const detail = response.data.detail
+      if (typeof detail === "string") return detail
+    }
+    if (err instanceof Error) return err.message
+    if ("message" in err) {
+      return String((err as any).message)
+    }
+  }
+  return defaultMessage
+}
+
 export function UserProfileModal({ open, onOpenChange, currentUser, onUpdated }: Props) {
   const [localUser, setLocalUser] = useState(currentUser)
   const [fullNameDraft, setFullNameDraft] = useState(currentUser.full_name || "")
@@ -53,6 +68,16 @@ export function UserProfileModal({ open, onOpenChange, currentUser, onUpdated }:
   const [avatarOpen, setAvatarOpen] = useState(false)
   const [avatarSaving, setAvatarSaving] = useState(false)
   const [avatarError, setAvatarError] = useState<string | null>(null)
+
+  const nameTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const prefsTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  useEffect(() => {
+    return () => {
+      if (nameTimerRef.current) clearTimeout(nameTimerRef.current)
+      if (prefsTimerRef.current) clearTimeout(prefsTimerRef.current)
+    }
+  }, [])
 
   // Вкладки: profile, appearance, security
   const [activeTab, setActiveTab] = useState<"profile" | "appearance" | "security">("profile")
@@ -211,15 +236,11 @@ export function UserProfileModal({ open, onOpenChange, currentUser, onUpdated }:
         }))
         await onUpdated()
         setNameSaved(true)
-        window.setTimeout(() => setNameSaved(false), 2000)
-      } catch (err: any) {
+        if (nameTimerRef.current) clearTimeout(nameTimerRef.current)
+        nameTimerRef.current = setTimeout(() => setNameSaved(false), 2000)
+      } catch (err: unknown) {
         console.error(err)
-        const detail = err?.response?.data?.detail
-        setNameError(
-          typeof detail === "string"
-            ? detail
-            : "Не удалось сохранить профиль"
-        )
+        setNameError(getErrorMessage(err, "Не удалось сохранить профиль"))
       } finally {
         setNameSaving(false)
       }
@@ -247,15 +268,11 @@ export function UserProfileModal({ open, onOpenChange, currentUser, onUpdated }:
         if (res.locale || localeDraft) storeLocale((res.locale ?? localeDraft) as ProfileLocale)
         await onUpdated()
         setPrefsSaved(true)
-        window.setTimeout(() => setPrefsSaved(false), 2000)
-      } catch (err: any) {
+        if (prefsTimerRef.current) clearTimeout(prefsTimerRef.current)
+        prefsTimerRef.current = setTimeout(() => setPrefsSaved(false), 2000)
+      } catch (err: unknown) {
         console.error(err)
-        const detail = err?.response?.data?.detail
-        setPrefsError(
-          typeof detail === "string"
-            ? detail
-            : "Не удалось сохранить оформление",
-        )
+        setPrefsError(getErrorMessage(err, "Не удалось сохранить оформление"))
       } finally {
         setPrefsSaving(false)
       }
