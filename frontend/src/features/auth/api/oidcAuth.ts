@@ -517,7 +517,7 @@ function sha256Bytes(message: Uint8Array): Uint8Array {
 async function sha256Base64Url(plain: string): Promise<string> {
   const data = new TextEncoder().encode(plain)
   // Secure Context (https / localhost): WebCrypto. HTTP + LAN IP → pure JS.
-  if (globalThis.crypto?.subtle?.digest) {
+  if (typeof globalThis.crypto?.subtle?.digest === "function") {
     const digest = await crypto.subtle.digest("SHA-256", data)
     return base64UrlEncode(digest)
   }

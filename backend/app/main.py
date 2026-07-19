@@ -7,6 +7,7 @@ from sqlalchemy import text
 
 from app.api.health import router as health_router
 from app.api.routes.auth import router as auth_router
+from app.api.routes.sessions import router as sessions_router
 from app.api.routes.otp import router as otp_router
 from app.api.routes.products import router as products_router
 from app.api.routes.sections import router as sections_router
@@ -73,6 +74,7 @@ app.mount("/static", StaticFiles(directory=str(storage_dir)), name="static")
 
 app.include_router(health_router, prefix="/api")
 app.include_router(auth_router, prefix="/api")
+app.include_router(sessions_router, prefix="/api")
 app.include_router(otp_router, prefix="/api")
 app.include_router(products_router, prefix="/api")
 app.include_router(sections_router, prefix="/api")
