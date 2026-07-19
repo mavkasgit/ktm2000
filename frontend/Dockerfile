@@ -4,7 +4,8 @@ FROM node:20-alpine AS builder
 WORKDIR /app
 
 COPY package.json package-lock.json* ./
-RUN npm install
+COPY shared-ui ./shared-ui
+RUN npm ci
 
 COPY . .
 RUN npx vite build
