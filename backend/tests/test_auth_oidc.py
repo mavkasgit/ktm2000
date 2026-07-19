@@ -201,12 +201,26 @@ async def test_oidc_config_enabled(client, oidc_enabled) -> None:
 
 @pytest.mark.asyncio
 async def test_oidc_logout_url_enabled(client, oidc_enabled) -> None:
+    # Without id_token_hint: bare end-session (Authentik rejects post_logout alone)
     response = await client.get("/api/auth/oidc/logout-url")
     assert response.status_code == 200
     body = response.json()
     assert body["enabled"] is True
     assert body["logout_url"]
     assert "end-session" in body["logout_url"]
+    assert "post_logout_redirect_uri" not in body["logout_url"]
+    # With id_token_hint: post_logout allowed
+    response2 = await client.get(
+        "/api/auth/oidc/logout-url",
+        params={
+            "id_token_hint": "dummy.jwt.hint",
+            "post_logout_redirect_uri": "http://localhost:5180/login",
+        },
+    )
+    assert response2.status_code == 200
+    body2 = response2.json()
+    assert "id_token_hint" in body2["logout_url"]
+    assert "login" in body2["logout_url"]
 
 
 @pytest.mark.asyncio
