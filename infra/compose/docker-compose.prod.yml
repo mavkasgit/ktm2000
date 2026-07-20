@@ -27,6 +27,8 @@ services:
     container_name: ktm2000-backend-prod
     env_file:
       - ../../.env.prod
+      # Note: env_file does NOT resolve ${VAR} references.
+      # OIDC vars with ${OPS_PUBLIC_IP} are in environment: below.
     extra_hosts:
       # OIDC token/JWKS from container → host Authentik :9000
       - "host.docker.internal:host-gateway"
@@ -37,6 +39,17 @@ services:
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:8082}
       PRODUCT_PHOTO_DIR: /app/storage/products
       IMPORT_STORAGE_DIR: /app/storage/imports
+      # OIDC / Authentik SSO — vars with ${OPS_PUBLIC_IP} ARE resolved here
+      AUTH_OIDC_ENABLED: 'true'
+      AUTH_OIDC_CLIENT_ID: ktm2000
+      AUTH_OIDC_CLIENT_SECRET: ''
+      AUTH_OIDC_ISSUER: http://${OPS_PUBLIC_IP}:9000/application/o/ktm2000/
+      AUTH_OIDC_REDIRECT_URI: http://${OPS_PUBLIC_IP}:8082/auth/callback
+      AUTH_OIDC_TOKEN_URL: http://${OPS_PUBLIC_IP}:9000/application/o/token/
+      AUTH_OIDC_JWKS_URL: http://${OPS_PUBLIC_IP}:9000/application/o/ktm2000/jwks/
+      AUTH_OIDC_SCOPES: openid profile email
+      AUTH_OIDC_ALLOW_JIT: 'true'
+      AUTH_OIDC_DEFAULT_ROLE: admin
     expose:
       - "8000"
     volumes:

@@ -52,7 +52,6 @@ export function LoginPage() {
   const forceFullForm =
     searchParams.get("password") === "1" ||
     searchParams.get("logged_out") === "1" ||
-    justLoggedOut ||
     import.meta.env.VITE_SSO_STUB === "false"
   const oidcEnabled = Boolean(
     oidcConfig?.enabled &&

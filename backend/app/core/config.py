@@ -1,6 +1,9 @@
 import os
 from pathlib import Path
 
+import re
+
+from pydantic import model_validator
 from pydantic_settings import BaseSettings
 
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
@@ -52,6 +55,45 @@ class Settings(BaseSettings):
     AUTHENTIK_API_TOKEN: str | None = None
     AUTHENTIK_PUBLIC_URL: str | None = "auto"
     AUTHENTIK_PROFILE_TTL_SECONDS: int = 300
+
+    @model_validator(mode="after")
+    def _resolve_variable_interpolation(self) -> "Settings":
+        """Resolve ${VAR} references in string fields using already-loaded values.
+
+        pydantic-settings reads .env files as literal key-value pairs — shell-style
+        ``${VAR}`` syntax is NOT resolved.  This validator walks every string field
+        and replaces ``${NAME}`` with the value of an already-set field or (as
+        fallback) an OS environment variable.
+        """
+        resolved = {}
+        # Collect all current string values for lookup.
+        for name in self.model_fields:
+            val = getattr(self, name, None)
+            if isinstance(val, str):
+                resolved[name] = val
+                # Also expose under alias / env-name for robustness.
+        for name in self.model_fields:
+            raw = getattr(self, name, None)
+            if not isinstance(raw, str):
+                continue
+
+            def _replace(m: re.Match) -> str:
+                varname = m.group(1)
+                # 1. Already-set field value.
+                if varname in resolved:
+                    return resolved[varname]
+                # 2. OS environment fallback.
+                fallback = os.environ.get(varname)
+                if fallback is not None:
+                    return fallback
+                # Leave unresolved — pydantic will keep the literal text.
+                return m.group(0)
+
+            new_val = re.sub(r"\$\{(\w+)\}", _replace, raw)
+            if new_val != raw:
+                setattr(self, name, new_val)
+                resolved[name] = new_val
+        return self
 
     model_config = {"env_file": _env_file, "env_file_encoding": "utf-8", "extra": "ignore"}
 

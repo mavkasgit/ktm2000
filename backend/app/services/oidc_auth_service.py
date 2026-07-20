@@ -52,6 +52,19 @@ class OidcClaims:
     groups: tuple[str, ...] = ()
 
 
+_BACKCHANNEL_LOGOUT_EVENT = "http://schemas.openid.net/event/backchannel-logout"
+
+
+@dataclass(frozen=True)
+class LogoutClaims:
+    """Normalized claims from a validated OIDC back-channel logout_token."""
+
+    sub: str
+    sid: str | None = None
+    jti: str | None = None
+    iss: str | None = None
+
+
 class OidcAuthService:
     """Business logic for OIDC bridge (layer: service)."""
 
@@ -446,6 +459,126 @@ class OidcAuthService:
             name=claims.get("name"),
             groups=groups,
         )
+
+    async def validate_logout_token(self, logout_token: str) -> LogoutClaims:
+        """Verify OIDC back-channel logout_token (JWKS, iss, aud, events, sub).
+
+        Spec: invalid → 400. Does not match IdP ``sid`` to app session ids.
+        """
+        token = (logout_token or "").strip()
+        if not token:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="invalid_logout_token",
+            )
+
+        client_id = settings.AUTH_OIDC_CLIENT_ID
+        if not client_id:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="OIDC client_id not configured",
+            )
+
+        try:
+            header = jwt.get_unverified_header(token)
+        except JWTError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="invalid_logout_token",
+            ) from exc
+
+        alg = header.get("alg") or "RS256"
+        if alg == "none" or not isinstance(alg, str):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="invalid_logout_token",
+            )
+
+        kid = header.get("kid")
+        jwks = await self.fetch_jwks()
+        keys = jwks.get("keys") or []
+        matching = None
+        for key in keys:
+            if kid and key.get("kid") == kid:
+                matching = key
+                break
+            if not kid and key.get("kty") == "RSA":
+                matching = key
+                break
+        if matching is None and keys:
+            matching = keys[0]
+        if matching is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="invalid_logout_token",
+            )
+
+        claims: dict[str, Any] | None = None
+        last_err: Exception | None = None
+        try:
+            rsa_key = RSAKey(matching, algorithm=alg)
+        except Exception as exc:  # noqa: BLE001
+            logger.info("OIDC logout_token JWKS key load failed: %s", exc)
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="invalid_logout_token",
+            ) from exc
+
+        for issuer_candidate in self._issuer_candidates():
+            try:
+                claims = jwt.decode(
+                    token,
+                    rsa_key,
+                    algorithms=[alg],
+                    audience=client_id,
+                    issuer=issuer_candidate,
+                    options={
+                        "verify_at_hash": False,
+                        "require_exp": True,
+                        "require_iat": True,
+                        "require_nbf": False,
+                    },
+                )
+                break
+            except JWTError as exc:
+                last_err = exc
+                continue
+
+        if claims is None:
+            logger.info("OIDC logout_token validation failed: %s", last_err)
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="invalid_logout_token",
+            )
+
+        if "nonce" in claims:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="invalid_logout_token",
+            )
+
+        events = claims.get("events")
+        if not isinstance(events, dict) or _BACKCHANNEL_LOGOUT_EVENT not in events:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="invalid_logout_token",
+            )
+
+        sub = claims.get("sub")
+        if not sub or not isinstance(sub, str):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="invalid_logout_token",
+            )
+
+        sid_raw = claims.get("sid")
+        sid = str(sid_raw) if sid_raw else None
+        jti_raw = claims.get("jti")
+        jti = str(jti_raw) if jti_raw else None
+        iss_raw = claims.get("iss")
+        iss = str(iss_raw) if iss_raw else None
+
+        return LogoutClaims(sub=sub, sid=sid, jti=jti, iss=iss)
 
     # ─── user resolve / link ──────────────────────────────────────────────
 

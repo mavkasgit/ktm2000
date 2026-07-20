@@ -1,7 +1,8 @@
 from datetime import datetime, timezone
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request, Response, status
+from fastapi.responses import HTMLResponse
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -24,7 +25,7 @@ from app.schemas.oidc_auth import (
     OidcLogoutUrlResponse,
 )
 from app.services.oidc_auth_service import OidcAuthService
-from app.services.session_service import issue_app_token, revoke_session
+from app.services.session_service import issue_app_token, revoke_session, revoke_sessions_for_user
 from app.services.unified_profile_service import (
     AuthentikProfileError,
     apply_profile_to_user,
@@ -91,6 +92,51 @@ async def oidc_logout_url(
             post_logout_redirect_uri=post_logout_redirect_uri,
         ),
     )
+
+
+@router.get("/frontchannel-logout")
+async def frontchannel_logout():
+    """OIDC Front-Channel Logout (public). Authentik loads in iframe.
+
+    Same-origin (http://192.168.100.200:8082) → can clear localStorage/sessionStorage.
+    """
+    return HTMLResponse(
+        content="""<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>Logout</title></head>
+<body><script>
+for (const key of Object.keys(localStorage)) localStorage.removeItem(key);
+for (const key of Object.keys(sessionStorage)) sessionStorage.removeItem(key);
+</script></body></html>"""
+    )
+
+
+@router.post("/backchannel-logout")
+async def backchannel_logout(
+    response: Response,
+    db: AsyncSession = Depends(get_db),
+    logout_token: str | None = Form(None),
+) -> dict[str, object]:
+    """OIDC Back-Channel Logout (public). Authentik POSTs form logout_token.
+
+    Match logout_token.sub → users.authentik_sub → revoke ALL app sessions.
+    Unknown sub → 200 no-op. Invalid token → 400. Never match IdP sid to app sid.
+    """
+    response.headers["Cache-Control"] = "no-store"
+    if not logout_token or not str(logout_token).strip():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="invalid_logout_token",
+        )
+
+    service = OidcAuthService(db)
+    claims = await service.validate_logout_token(str(logout_token).strip())
+
+    user = await db.scalar(select(User).where(User.authentik_sub == claims.sub))
+    revoked = 0
+    if user is not None:
+        revoked = await revoke_sessions_for_user(db, user_id=user.id)
+
+    return {"status": "ok", "revoked": revoked}
 
 
 @router.post("/login", response_model=TokenResponse)
