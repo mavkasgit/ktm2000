@@ -30,7 +30,6 @@ def create_access_token(
     subject: str,
     role: str | None = None,
     full_name: str | None = None,
-    hrms_access_level: str | None = None,
     expires_delta: timedelta | None = None,
     session_id: UUID | str | None = None,
 ) -> str:
@@ -42,8 +41,6 @@ def create_access_token(
         payload["role"] = role
     if full_name is not None:
         payload["full_name"] = full_name
-    if hrms_access_level is not None:
-        payload["hrms_access_level"] = hrms_access_level
     if session_id is not None:
         payload["sid"] = str(session_id)
 

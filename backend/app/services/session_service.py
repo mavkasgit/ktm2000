@@ -128,7 +128,6 @@ async def issue_app_token(
         subject=user.username,
         role=role,
         full_name=user.full_name,
-        hrms_access_level=user.hrms_access_level,
         expires_delta=expires_delta,
         session_id=session.id,
     )

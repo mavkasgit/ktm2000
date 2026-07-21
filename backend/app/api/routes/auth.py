@@ -1,8 +1,12 @@
+import logging
+import socket
 from datetime import datetime, timezone
-from uuid import UUID
+from uuid import UUID, uuid4
 
+import bcrypt
 from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request, Response, status
 from fastapi.responses import HTMLResponse
+from jose import jwt
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -10,9 +14,10 @@ from app.api.deps import get_current_user
 from app.core.database import get_db
 from app.core.config import settings
 from app.core.security import TokenError, decode_access_token, verify_password
-from app.models.user import User
+from app.models.user import User, UserRole
 from app.models.user_session import UserSession
 from app.schemas.auth import (
+    BreakGlassLoginRequest,
     LoginRequest,
     MeResponse,
     ProfileUpdateRequest,
@@ -34,7 +39,54 @@ from app.services.unified_profile_service import (
     sync_local_from_idp,
 )
 
+logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/auth", tags=["auth"])
+
+
+def _request_meta(request: Request) -> tuple[str, str]:
+    ip = request.client.host if request.client else "unknown"
+    if forwarded := request.headers.get("X-Forwarded-For"):
+        ip = forwarded.split(",")[0].strip()
+    ua = request.headers.get("User-Agent", "unknown")
+    return ip, ua
+
+
+def _is_db_port_open() -> bool:
+    try:
+        from urllib.parse import urlparse
+        url_str = settings.DATABASE_URL
+        if "+asyncpg" in url_str:
+            url_str = url_str.replace("postgresql+asyncpg://", "http://")
+        elif "postgresql://" in url_str:
+            url_str = url_str.replace("postgresql://", "http://")
+        parsed = urlparse(url_str)
+        host = parsed.hostname or "127.0.0.1"
+        port = parsed.port or 5432
+        with socket.create_connection((host, port), timeout=0.1):
+            return True
+    except Exception:
+        return False
+
+
+def _record_break_glass_event(
+    event_type: str,
+    username_attempted: str,
+    ip_address: str,
+    user_agent: str,
+    session_id: UUID | None = None,
+    details: dict | None = None,
+):
+    level = logging.CRITICAL if event_type == "login_success" else logging.WARNING
+    logger.log(
+        level,
+        "Break Glass %s | user=%s ip=%s ua=%s sid=%s details=%s",
+        event_type,
+        username_attempted,
+        ip_address,
+        user_agent,
+        str(session_id) if session_id else "none",
+        details or {},
+    )
 
 
 # ─── OIDC / Authentik bridge ──────────────────────────────────────────────────
@@ -140,19 +192,87 @@ async def backchannel_logout(
 
 
 @router.post("/login", response_model=TokenResponse)
-async def login(payload: LoginRequest, db: AsyncSession = Depends(get_db)) -> TokenResponse:
-    user = await db.scalar(
-        select(User).where(
-            or_(User.username == payload.username, User.email == payload.username)
-        )
+async def login(payload: LoginRequest, request: Request) -> TokenResponse:
+    """Вход по логину и паролю отключён. Используйте единый вход (SSO) или аварийный доступ."""
+    ip, ua = _request_meta(request)
+    logger.warning("Password login attempt (blocked) | user=%s ip=%s ua=%s", payload.username, ip, ua)
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail="Вход по логину и паролю отключён. Используйте единый вход (SSO).",
     )
-    if user is None or not verify_password(payload.password, user.password_hash):
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
-    if not user.is_active:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="User is disabled")
 
-    token = await issue_app_token(db, user=user, login_method="password")
-    return TokenResponse(access_token=token)
+
+@router.post("/break-glass/login", response_model=TokenResponse)
+async def break_glass_login(
+    payload: BreakGlassLoginRequest,
+    request: Request,
+) -> TokenResponse:
+    """
+    Аварийный (Break Glass) вход по паролю.
+    Изолирован от таблицы users — используется, когда Authentik недоступен.
+    """
+    ip, ua = _request_meta(request)
+    bg_user = settings.BREAK_GLASS_USER or "emergency_admin"
+
+    if not settings.BREAK_GLASS_ENABLED:
+        _record_break_glass_event(
+            "login_disabled",
+            username_attempted=bg_user,
+            ip_address=ip,
+            user_agent=ua,
+            details={"reason": "break_glass_disabled"},
+        )
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Аварийный доступ отключен",
+        )
+
+    password_ok = False
+    if settings.BREAK_GLASS_PASSWORD:
+        password_ok = payload.password == settings.BREAK_GLASS_PASSWORD
+    elif settings.BREAK_GLASS_PASSWORD_HASH:
+        try:
+            password_ok = bcrypt.checkpw(
+                payload.password.encode("utf-8"),
+                settings.BREAK_GLASS_PASSWORD_HASH.encode("utf-8"),
+            )
+        except Exception:
+            password_ok = False
+
+    if not password_ok:
+        _record_break_glass_event(
+            "login_failure",
+            username_attempted=bg_user,
+            ip_address=ip,
+            user_agent=ua,
+            details={"reason": "invalid_credentials"},
+        )
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Неверный пароль аварийного доступа",
+        )
+
+    session_id = uuid4()
+    token_data = {
+        "sub": bg_user,
+        "username": bg_user,
+        "role": "admin",
+        "is_break_glass": True,
+        "sid": str(session_id),
+    }
+    secret_key = settings.JWT_SECRET_KEY or settings.SECRET_KEY
+    token = jwt.encode(token_data, secret_key, algorithm=settings.ALGORITHM)
+
+    _record_break_glass_event(
+        "login_success",
+        username_attempted=bg_user,
+        ip_address=ip,
+        user_agent=ua,
+        session_id=session_id,
+        details={"method": "break_glass"},
+    )
+
+    return TokenResponse(access_token=token, token_type="bearer")
 
 
 @router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)
@@ -185,6 +305,19 @@ async def logout(
             detail="Invalid or expired token",
             headers={"WWW-Authenticate": "Bearer"},
         )
+
+    # Break Glass: no session/user tables to update
+    if payload.get("is_break_glass") is True:
+        ip, ua = _request_meta(request)
+        _record_break_glass_event(
+            "logout",
+            username_attempted=payload.get("sub", "emergency_admin"),
+            ip_address=ip,
+            user_agent=ua,
+            session_id=UUID(payload["sid"]) if payload.get("sid") else None,
+            details={"source": "emergency_access", "method": "break_glass"},
+        )
+        return
 
     subject = payload.get("username") or payload.get("sub")
     if not subject:
@@ -224,6 +357,24 @@ async def me(
 ) -> MeResponse:
     """Current user; pulls unified profile from Authentik when linked + API configured."""
     user = current_user
+
+    if getattr(user, "is_break_glass", False):
+        return MeResponse(
+            id=0,
+            username=user.username,
+            email=None,
+            full_name=user.full_name or "Emergency Access Admin",
+            role=UserRole.admin,
+            section_id=None,
+            is_active=True,
+            avatar_seed="emergency",
+            locale="ru",
+            theme="system",
+            authentik_linked=False,
+            profile_sot="local",
+            is_break_glass=True,
+        )
+
     if user.authentik_sub and profile_sync_enabled():
         now = datetime.now(timezone.utc)
         ttl = settings.AUTHENTIK_PROFILE_TTL_SECONDS
@@ -278,6 +429,11 @@ async def update_my_profile(
 ) -> ProfileUpdateResponse:
     """Update display name / email / locale / theme / avatar. SoT = Authentik when linked."""
     user = current_user
+    if getattr(user, "is_break_glass", False):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Break glass users cannot update profile",
+        )
     want_name = payload.full_name.strip() if payload.full_name else None
     want_email = str(payload.email).strip() if payload.email is not None else None
     want_locale = payload.locale

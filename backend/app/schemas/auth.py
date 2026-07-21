@@ -10,6 +10,10 @@ class LoginRequest(BaseModel):
     password: str
 
 
+class BreakGlassLoginRequest(BaseModel):
+    password: str
+
+
 class TokenResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
@@ -28,12 +32,12 @@ class MeResponse(BaseModel):
     section_id: int | None
     section_ids: list[int] = []
     is_active: bool
-    hrms_access_level: str = "no_access"
     avatar_seed: str | None = None
     locale: str | None = None
     theme: str | None = None
     authentik_linked: bool = False
     profile_sot: str = "local"
+    is_break_glass: bool = False
 
 
 class ProfileUpdateRequest(BaseModel):

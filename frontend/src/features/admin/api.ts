@@ -11,7 +11,6 @@ export interface CreateUserInput {
   section_ids?: number[]
   tab_number?: string | null
   hrms_employee_id?: number | null
-  hrms_access_level?: string
 }
 
 export interface UpdateUserInput {
@@ -23,7 +22,6 @@ export interface UpdateUserInput {
   is_active?: boolean
   tab_number?: string | null
   hrms_employee_id?: number | null
-  hrms_access_level?: string
 }
 
 export interface HrmsEmployee {

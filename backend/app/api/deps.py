@@ -1,3 +1,4 @@
+from dataclasses import dataclass, field
 from fastapi import Depends, HTTPException, Request, status
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -10,11 +11,25 @@ from app.core.security import decode_access_token, TokenError
 from app.models.user import User, UserRole
 from app.services.session_service import SessionInactiveError, assert_session_active
 
-# TODO(auth): This module centralises authentication.
-# Currently get_current_user returns a fake admin user for development.
-# To restore real JWT/token auth, replace the body of get_current_user only.
-# All routes already use Depends(get_current_user) — no other changes needed.
-# See also: migration 001_sections_and_users seeds system user id=1 (system@local).
+
+@dataclass
+class _BreakGlassUser:
+    """Minimal User substitute for Break Glass emergency access — bypasses DB."""
+    id: int = 0
+    username: str = "emergency_admin"
+    role: UserRole = UserRole.admin
+    full_name: str = "Emergency Access Admin"
+    email: str | None = None
+    is_active: bool = True
+    avatar_seed: str | None = "emergency"
+    locale: str | None = "ru"
+    theme: str | None = "system"
+    authentik_sub: str | None = None
+    profile_synced_at = None
+    section_id: int | None = None
+    section_ids: list[int] = field(default_factory=list)
+    is_break_glass: bool = True
+
 
 WRITER_ROLES: frozenset[UserRole] = frozenset(
     {UserRole.admin, UserRole.section_manager, UserRole.operator}
@@ -80,7 +95,7 @@ async def _assert_sid_active(db: AsyncSession, payload: dict) -> UUID:
 async def get_current_user(
     request: Request,
     db: AsyncSession = Depends(get_db),
-) -> User:
+) -> User | _BreakGlassUser:
     auth_header = request.headers.get("Authorization")
 
     # --- DEV bypass mode: JWT if valid (sid optional), magic admin, else system@local ---
@@ -156,6 +171,16 @@ async def get_current_user(
             headers={"WWW-Authenticate": "Bearer"},
         )
 
+    # Break Glass (emergency) token: bypass users table & session assertion
+    if payload.get("is_break_glass") is True:
+        if not settings.BREAK_GLASS_ENABLED:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Break glass access is disabled",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+        return _make_break_glass_user()
+
     # Hybrid JWT + server session: claim sid required (except DEV_BYPASS / magic admin)
     await _assert_sid_active(db, payload)
 
@@ -174,3 +199,26 @@ async def get_current_user(
         )
 
     return user
+
+
+@dataclass
+class _BreakGlassUser:
+    """Minimal User substitute for Break Glass emergency access — bypasses DB."""
+    id: int = 0
+    username: str = "emergency_admin"
+    role: UserRole = UserRole.admin
+    full_name: str = "Emergency Access Admin"
+    email: str | None = None
+    is_active: bool = True
+    avatar_seed: str | None = "emergency"
+    locale: str | None = "ru"
+    theme: str | None = "system"
+    authentik_sub: str | None = None
+    profile_synced_at = None
+    section_id: int | None = None
+    section_ids: list[int] = field(default_factory=list)
+    is_break_glass: bool = True
+
+
+def _make_break_glass_user() -> _BreakGlassUser:
+    return _BreakGlassUser()

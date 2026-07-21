@@ -8,13 +8,13 @@ export type HrmsConnectionPreset = {
 /** IP сервера по умолчанию, если hostname в браузере недоступен. */
 export const HRMS_DEFAULT_SERVER_HOST = "localhost"
 
-export const HRMS_API_PORT = 8000
+export const HRMS_API_PORT = 8011
 
 export const HRMS_LOCAL_PRESET: HrmsConnectionPreset = {
   id: "local",
   label: "Локально",
-  value: "localhost:8000",
-  hint: "HRMS на этой машине (dev, порт 8000)",
+  value: "localhost:8011",
+  hint: "HRMS на этой машине (dev, порт 8011)",
 }
 
 export function resolveHrmsServerHost(): string {

@@ -57,7 +57,6 @@ class UserOut(BaseModel):
     is_active: bool
     tab_number: str | None = None
     hrms_employee_id: int | None = None
-    hrms_access_level: str = "no_access"
     created_at: datetime
     active_login_token: Optional[ActiveTokenOut] = None
 
@@ -72,7 +71,6 @@ class UserCreate(BaseModel):
     section_ids: list[int] | None = None
     tab_number: str | None = None
     hrms_employee_id: int | None = None
-    hrms_access_level: str = "no_access"
 
 
 class UserUpdate(BaseModel):
@@ -85,7 +83,6 @@ class UserUpdate(BaseModel):
     is_active: bool | None = None
     tab_number: str | None = None
     hrms_employee_id: int | None = None
-    hrms_access_level: str | None = None
 
 
 class PasswordReset(BaseModel):
@@ -398,7 +395,6 @@ async def create_user(
         existing_user.role = payload.role
         existing_user.is_active = True
         existing_user.section_id = section_ids[0] if section_ids else None
-        existing_user.hrms_access_level = payload.hrms_access_level
         if payload.hrms_employee_id is not None:
             existing_user.hrms_employee_id = payload.hrms_employee_id
         if payload.tab_number is not None:
@@ -423,7 +419,6 @@ async def create_user(
         section_id=section_ids[0] if section_ids else None,
         tab_number=payload.tab_number,
         hrms_employee_id=payload.hrms_employee_id,
-        hrms_access_level=payload.hrms_access_level,
         is_active=True,
     )
     if sections_list:
@@ -512,8 +507,6 @@ async def update_user(
         user.role = payload.role
     if payload.is_active is not None:
         user.is_active = payload.is_active
-    if payload.hrms_access_level is not None:
-        user.hrms_access_level = payload.hrms_access_level
 
     # Асинхронно подгружаем отношение sections для предотвращения MissingGreenlet
     await db.refresh(user, attribute_names=["sections"])

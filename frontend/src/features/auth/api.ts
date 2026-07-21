@@ -21,7 +21,6 @@ export interface User {
   is_active: boolean
   tab_number?: string | null
   hrms_employee_id?: number | null
-  hrms_access_level?: string
   active_login_token?: ActiveToken | null
   /** Multiavatar seed — cache of IdP attributes.profile_avatar_seed */
   avatar_seed?: string | null
