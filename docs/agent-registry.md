@@ -32,8 +32,8 @@
 |------|------------|
 | `5180` | Frontend (dev) |
 | `8010` | Backend API |
-| `5202` | Postgres (dev) |
-| `5212` | Postgres (test) |
+| `5440` | Postgres (dev) |
+| `5441` | Postgres (test) |
 | `8020` | Frontend (prod) |
 | `8082` | Nginx KTM-2000 (автономный) |
 | `9222` | Chrome CDP (E2E) |

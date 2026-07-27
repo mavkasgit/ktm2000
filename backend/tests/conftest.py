@@ -20,7 +20,7 @@ from app.main import app
 from app.models.base import Base
 
 
-DEFAULT_TEST_DATABASE_URL = "postgresql+asyncpg://ktm2000_user:ktm2000_pass_test@localhost:5212/ktm2000_test"
+DEFAULT_TEST_DATABASE_URL = "postgresql+asyncpg://ktm2000_user:ktm2000_pass_test@localhost:5441/ktm2000_test"
 DB_MODE_HYBRID = "hybrid"
 TEST_DB_PREFIX = "ktm_test_"
 TEST_SCHEMA_PREFIX = "t_"

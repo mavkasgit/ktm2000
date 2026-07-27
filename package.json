@@ -4,35 +4,31 @@
   "version": "1.0.0",
   "scripts": {
     "setup": "npm install && npm install --prefix frontend && echo 'Не забудьте установить зависимости Python!'",
-
-    "predev": "npm run db:up && npm run db:wait && npm run db:migrate",
+    "predev": "node scripts/ensure-dev-ports.js && npm run db:up && npm run db:wait && npm run db:migrate",
     "dev": "concurrently --names \"DB,BACKEND,FRONTEND\" -c \"blue,green,yellow\" \"npm run db:logs\" \"npm run backend\" \"npm run frontend\"",
-
     "frontend": "npm --prefix frontend run dev",
-    "backend": "cd backend && uvicorn app.main:app --host 0.0.0.0 --port 8010 --reload --reload-dir app",
-
-    "devkill": "npx kill-port 8010 2>nul & npx kill-port 5180 2>nul & echo Killed all dev servers",
-    "devrestart": "npm run devkill && npm run dev",
-
+    "backend": "cd backend && uvicorn app.main:app --host 0.0.0.0 --port 8012 --reload --reload-dir app",
+    "dev:ports": "node scripts/ensure-dev-ports.js --check",
+    "dev:kill": "node scripts/ensure-dev-ports.js --kill",
+    "devkill": "npm run dev:kill",
+    "devrestart": "npm run dev:kill && npm run dev",
     "db:up": "docker compose --env-file .env.dev -f infra/compose/docker-compose.dev.yml up -d",
     "db:down": "docker compose --env-file .env.dev -f infra/compose/docker-compose.dev.yml down",
     "db:logs": "docker compose --env-file .env.dev -f infra/compose/docker-compose.dev.yml logs -f",
     "db:wait": "powershell -ExecutionPolicy Bypass -File scripts/wait-for-container-health.ps1 ktm2000-postgres",
-
     "db:migrate": "cd backend && alembic upgrade head",
     "db:makemigrate": "cd backend && alembic revision --autogenerate -m",
     "db:seed": "cd backend && python scripts/seed_all.py",
-
     "test:up": "docker compose --env-file .env.test -f infra/compose/docker-compose.test.yml up -d --build",
     "test:down": "docker compose --env-file .env.test -f infra/compose/docker-compose.test.yml down",
     "test:logs": "docker compose --env-file .env.test -f infra/compose/docker-compose.test.yml logs -f",
     "test:db:up": "docker compose --env-file .env.test -f infra/compose/docker-compose.test.yml up -d postgres",
     "test:db:wait": "powershell -ExecutionPolicy Bypass -File scripts/wait-for-container-health.ps1 ktm2000-postgres-test",
     "test:db:down": "docker compose --env-file .env.test -f infra/compose/docker-compose.test.yml stop postgres",
-    "test:pytest": "npm run test:db:up && npm run test:db:wait && cd backend && pytest -q",
-    "test:pytest:fast": "npm run test:db:up && npm run test:db:wait && cd backend && pytest -n auto -q",
-    "test:pytest:mon": "npm run test:db:up && npm run test:db:wait && cd backend && pytest --testmon -q",
-    "test:pytest:lf": "npm run test:db:up && npm run test:db:wait && cd backend && pytest --lf -q",
+    "test:pytest": "npm run test:db:up && npm run test:db:wait && cd backend && cross-env TEST_DATABASE_URL=postgresql+asyncpg://ktm2000_user:ktm2000_pass_test@localhost:5441/ktm2000_test pytest -q",
+    "test:pytest:fast": "npm run test:db:up && npm run test:db:wait && cd backend && cross-env TEST_DATABASE_URL=postgresql+asyncpg://ktm2000_user:ktm2000_pass_test@localhost:5441/ktm2000_test pytest -n auto -q",
+    "test:pytest:mon": "npm run test:db:up && npm run test:db:wait && cd backend && cross-env TEST_DATABASE_URL=postgresql+asyncpg://ktm2000_user:ktm2000_pass_test@localhost:5441/ktm2000_test pytest --testmon -q",
+    "test:pytest:lf": "npm run test:db:up && npm run test:db:wait && cd backend && cross-env TEST_DATABASE_URL=postgresql+asyncpg://ktm2000_user:ktm2000_pass_test@localhost:5441/ktm2000_test pytest --lf -q",
     "test:tunnel:up": "docker compose --env-file .env.test -f infra/compose/docker-compose.test.yml --profile tunnel up -d --build",
     "prod:up": "docker compose -f infra/compose/docker-compose.prod.yml up -d --build",
     "prod:down": "docker compose -f infra/compose/docker-compose.prod.yml down",
@@ -41,6 +37,7 @@
   },
   "devDependencies": {
     "@playwright/test": "^1.59.1",
-    "concurrently": "^9.1.2"
+    "concurrently": "^9.1.2",
+    "cross-env": "^7.0.3"
   }
 }

@@ -9,7 +9,7 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-ktm2000_pass_test}
       POSTGRES_DB: ${POSTGRES_DB:-ktm2000_test}
     ports:
-      - "${POSTGRES_PORT:-5212}:5432"
+      - "127.0.0.1:${POSTGRES_PORT:-5441}:5432"
     tmpfs:
       - /var/lib/postgresql/data
     healthcheck:
