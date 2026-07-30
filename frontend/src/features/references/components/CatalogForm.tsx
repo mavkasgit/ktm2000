@@ -6,6 +6,7 @@ import { Checkbox } from "@/shared/ui/Checkbox";
 import { FullscreenPhoto } from "./FullscreenPhoto";
 import { ImageUploadModal } from "./ImageUploadModal";
 import { ProductSearchMulti } from "./ProductSearchMulti";
+import { ProductDimensionsSection } from "./ProductDimensionsSection";
 import { getPhotoUrl } from "./getPhotoUrl";
 import { uploadProductPhoto } from "@/shared/api/products";
 import type { Product, CreateProductInput, PatchProductInput } from "@/shared/api/products";
@@ -495,6 +496,10 @@ export const CatalogForm = forwardRef<CatalogFormRef, {
               disabled={readOnly}
             />
           </div>
+
+          {!isCreate && product && (
+            <ProductDimensionsSection productId={product.id} readOnly={readOnly} />
+          )}
         </div>
       </div>
 

@@ -8,6 +8,7 @@ from app.seeds.routes import ROUTES
 from app.seeds.selection_rules import SELECTION_RULES
 from app.seeds.spgs import SPGS_DATA
 from app.seeds.seeders.cleanup_seeder import clear_generated_production_data
+from app.seeds.seeders.dimension_types_seeder import seed_dimension_types
 from app.seeds.seeders.import_template_seeder import seed_import_template
 from app.seeds.seeders.route_rule_profile_seeder import seed_route_rule_profile
 from app.seeds.seeders.routes_seeder import seed_routes, seed_production_routes_from_profiles
@@ -42,6 +43,11 @@ async def run_full_seed(db: AsyncSession, force: bool = False) -> dict:
     # 1.2. Storage Production Groups (SPG)
     spgs_count = await seed_spgs(db, SPGS_DATA, sections_map)
     result["spgs"] = spgs_count
+
+    # 1.2.1. Dimension types + length_mm bindings for existing products
+    dimensions_result = await seed_dimension_types(db)
+    result["dimension_types"] = dimensions_result["dimension_types"]
+    result["product_dimensions"] = dimensions_result["product_dimensions"]
 
     # 1.3. ImportTemplate (needed by profile)
     template_data = IMPORT_TEMPLATES[0] if IMPORT_TEMPLATES else None

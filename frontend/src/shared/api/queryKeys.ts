@@ -265,6 +265,10 @@ export const queryKeys = {
   products: {
     all: () => ["products"] as const,
   },
+  dimensions: {
+    types: () => ["dimension-types"] as const,
+    product: (productId: number) => ["product-dimensions", productId] as const,
+  },
   rawMaterials: {
     all: () => ["raw-materials"] as const,
     list: (params?: Record<string, unknown>) => ["raw-materials", params ?? {}] as const,
