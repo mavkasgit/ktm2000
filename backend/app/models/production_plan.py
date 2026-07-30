@@ -116,6 +116,12 @@ class PlanPosition(Base):
     output_sku: Mapped[str] = mapped_column(String(255), nullable=False, server_default=text("''"))
     source_name: Mapped[str | None] = mapped_column(String(1000), nullable=True)
     quantity: Mapped[Decimal] = mapped_column(Numeric(14, 3), nullable=False)
+    # Операция из группы строк упаковочного плана (ADR-0003): один вход
+    # (количество заготовок + габариты) и список выходов [{quantity, dimensions}].
+    # Габариты — канонический JSONB ({"length_mm": 2700}) либо NULL (безразмерные).
+    input_quantity: Mapped[Decimal | None] = mapped_column(Numeric(14, 3), nullable=True)
+    input_dimensions: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    outputs: Mapped[list] = mapped_column(JSONB, nullable=False, server_default=text("'[]'::jsonb"), default=list)
     source_payload: Mapped[dict] = mapped_column(JSONB, nullable=False, server_default=text("'{}'::jsonb"), default=dict)
     due_date: Mapped[date | None] = mapped_column(Date, nullable=True)
     period_start: Mapped[date | None] = mapped_column(Date, nullable=True)

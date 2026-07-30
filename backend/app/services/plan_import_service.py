@@ -37,6 +37,8 @@ from app.services.excel_import import (
     validate_excel_extension,
 )
 from app.services.route_selection import load_selection_rules_for_profile, select_route_for_payload
+from app.domain.dimensions import DimensionsValidationError, canonicalize_dimensions
+from app.services.dimension_validation import MissingDimensionsError, resolve_product_dimensions
 from app.services.hanger_quantity import adjust_quantity_to_hanger
 from app.services.route_builder import build_route_from_profile
 
@@ -497,6 +499,7 @@ async def _make_change_items(
     techcard_lines_cache = {}         # techcard.id -> list[tuple[TechcardLine, Product]]
     built_route_cache = {}            # (profile.id, make_hashable(payload)) -> built_route
     existing_route_by_name_cache = {} # built_route.name -> ProductionRoute
+    typical_dimensions_cache: dict[int, dict | None] = {}  # product.id -> типовой размер либо None
 
     def make_hashable(val):
         if isinstance(val, dict):
@@ -798,6 +801,34 @@ async def _make_change_items(
                         "hanger_quantity_not_set:продукт не найден"
                     )
 
+        # Габариты операции (ADR-0003): вход без длины при габаритных выходах —
+        # подставляем типовой размер продукта из справочника измерений.
+        # Не разрешилось — warning, импорт не падает.
+        input_dimensions = row.input_dimensions
+        if (
+            input_dimensions is None
+            and product is not None
+            and any(entry.get("dimensions") for entry in row.outputs)
+        ):
+            if product.id in typical_dimensions_cache:
+                input_dimensions = typical_dimensions_cache[product.id]
+            else:
+                try:
+                    input_dimensions = canonicalize_dimensions(
+                        await resolve_product_dimensions(db, product.id, None)
+                    )
+                except (MissingDimensionsError, DimensionsValidationError):
+                    input_dimensions = None
+                typical_dimensions_cache[product.id] = input_dimensions
+            if input_dimensions is None:
+                if "input_dimensions_unresolved" not in warnings:
+                    warnings.append("input_dimensions_unresolved")
+            else:
+                input_info = dict(row.payload.get("input") or {})
+                input_info["dimensions"] = input_dimensions
+                input_info["inferred"] = True
+                row.payload["input"] = input_info
+
         after_data = {
             "product_id": product.id if product else None,
             "source_sku": row.source_sku,
@@ -806,6 +837,11 @@ async def _make_change_items(
             "original_quantity": str(original_quantity),
             "quantity_per_hanger": quantity_per_hanger,
             "hanger_count": hanger_count,
+            "input_quantity": (
+                format(row.input_quantity.normalize(), "f") if row.input_quantity is not None else None
+            ),
+            "input_dimensions": input_dimensions,
+            "outputs": row.outputs,
             "source_ref": row.source_ref,
             "source_row_numbers": row.source_row_numbers,
             "source_fingerprint": row.source_fingerprint,

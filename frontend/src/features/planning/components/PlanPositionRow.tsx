@@ -243,6 +243,11 @@ export function PositionRow({ pos, onApprove, onDelete, selected, routes, onAssi
             {qtyStr}{hangerDisplay ? ` (${hangerDisplay}П)` : ''}
           </span>
         )}
+        {pos.operation_summary && (
+          <span className="block text-xs text-muted-foreground" title={pos.operation_summary}>
+            {pos.operation_summary}
+          </span>
+        )}
       </div>
       <div className="p-2 text-sm truncate whitespace-nowrap" title={pos.source_name ?? undefined}>{pos.source_name ?? "—"}</div>
       <div className="p-2 text-sm truncate overflow-hidden">

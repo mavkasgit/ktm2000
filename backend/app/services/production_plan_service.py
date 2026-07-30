@@ -130,6 +130,9 @@ async def apply_change_set(db: AsyncSession, change_set_id: int, *, skip_invalid
                     position.source_name = after.get("source_name")
                     qty = after["quantity"]
                     position.quantity = Decimal(str(qty)) if not isinstance(qty, Decimal) else qty
+                    position.input_quantity = _decimal_from_after(after.get("input_quantity"))
+                    position.input_dimensions = after.get("input_dimensions")
+                    position.outputs = after.get("outputs") or []
                     position.source_payload = after.get("source_payload") or {}
                     position.source_ref = after.get("source_ref")
                     position.source_fingerprint = after.get("source_fingerprint")
@@ -191,6 +194,9 @@ async def apply_change_set(db: AsyncSession, change_set_id: int, *, skip_invalid
                 source_sku=after["source_sku"],
                 source_name=after.get("source_name"),
                 quantity=qty_decimal,
+                input_quantity=_decimal_from_after(after.get("input_quantity")),
+                input_dimensions=after.get("input_dimensions"),
+                outputs=after.get("outputs") or [],
                 source_payload=_enrich_source_payload(after.get("source_payload"), after),
                 period_start=_date_from_payload(after, "period_start"),
                 period_end=_date_from_payload(after, "period_end"),
@@ -615,6 +621,12 @@ def _bool_or_none(value):
     if value is None:
         return None
     return bool(value)
+
+
+def _decimal_from_after(value):
+    if value is None or value == "":
+        return None
+    return value if isinstance(value, Decimal) else Decimal(str(value))
 
 
 def _datetime_from_after(after: dict, key: str):

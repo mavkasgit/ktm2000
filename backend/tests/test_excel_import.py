@@ -107,7 +107,7 @@ def test_factory_plan_parser_groups_paired_profiles_and_continuations() -> None:
     assert parsed.header_row_number == 5
     assert parsed.period_start.isoformat() == "2026-05-01"
     assert parsed.period_end.isoformat() == "2026-05-31"
-    assert len(parsed.parsed_rows) == 3
+    assert len(parsed.parsed_rows) == 2
 
     paired = parsed.parsed_rows[0]
     assert paired.source_row_numbers == [6, 7]
@@ -122,11 +122,21 @@ def test_factory_plan_parser_groups_paired_profiles_and_continuations() -> None:
     assert paired.payload["raw_columns_meta"][7]["letter"] == "H"
     assert paired.payload["raw_columns_meta"][7]["header"] == "Пробивка/сверловка"
 
-    continuation = parsed.parsed_rows[2]
-    assert continuation.source_row_numbers == [9]
-    assert continuation.payload["context_inherited"] is True
-    assert continuation.source_name == "Стык 38 мм. 2,7 анод.серебро, матовый"
-    assert continuation.quantity == 900
+    # Строка того же SKU без собственного входа — ещё один выход той же
+    # операции (ADR-0003): группа строк 8-9 = одна позиция.
+    group = parsed.parsed_rows[1]
+    assert group.source_row_numbers == [8, 9]
+    assert group.source_ref == "rows:8-9"
+    assert group.source_name == "Стык 38 мм. 2,7 анод.серебро, матовый"
+    assert group.quantity == 2400
+    assert group.input_quantity == 1100
+    assert group.input_dimensions == {"length_mm": 2700}
+    assert [(o["quantity"], o["dimensions"]) for o in group.outputs] == [
+        ("1500", {"length_mm": 900}),
+        ("900", {"length_mm": 1800}),
+    ]
+    # Баланс группы сходится: 1100×2700 = 1500×900 + 900×1800.
+    assert not any(w.startswith("plan_group_balance_mismatch") for w in group.warnings)
 
 
 def test_parse_row_selection_csv_and_ranges() -> None:
@@ -172,9 +182,9 @@ async def test_import_excel_creates_batch_and_change_set(client, session, tmp_pa
 
     assert response.status_code == 201
     body = response.json()
-    assert body["summary"]["total_positions"] == 3
+    assert body["summary"]["total_positions"] == 2
     assert body["summary"]["paired_profile_positions"] == 1
-    assert len(body["items"]) == 3
+    assert len(body["items"]) == 2
     assert body["items"][0]["after_data"]["source_sku"] == "ЮП-2616+ЮП-2604"
     assert body["items"][0]["after_data"]["has_pack_ops"] is False
     assert body["items"][0]["warnings"] == ["paired_profile_product_unmapped"]

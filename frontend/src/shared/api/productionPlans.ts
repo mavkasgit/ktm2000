@@ -146,6 +146,11 @@ export type PlanPositionOut = {
   raw_excel_row: Record<string, unknown> | null;
   payload?: Record<string, unknown> | null;
   available_remainder_quantity?: number | null;
+  // Операция группы строк (ADR-0003): один вход, 1..N выходов.
+  input_quantity?: string | null;
+  input_dimensions?: Record<string, unknown> | null;
+  outputs?: { row_number?: number; quantity: string; dimensions: Record<string, unknown> | null }[] | null;
+  operation_summary?: string | null;
 };
 
 export async function planFiles(planId: number) {

@@ -11,6 +11,7 @@ from sqlalchemy import func as sa_func
 
 from app.api.deps import WRITER_ROLES, require_role, get_current_user
 from app.core.database import get_db
+from app.domain.dimensions import format_dimensions
 from app.models.production_plan import (
     PlanChangeItem,
     PlanChangeSet,
@@ -976,6 +977,52 @@ class PlanPositionOut(BaseModel):
     raw_excel_row: dict | None = None
     payload: dict | None = None
     available_remainder_quantity: float | None = None
+    # Операция группы строк (ADR-0003): один вход, 1..N выходов.
+    input_quantity: str | None = None
+    input_dimensions: dict | None = None
+    outputs: list | None = None
+    operation_summary: str | None = None
+
+
+def _format_position_quantity(value) -> str:
+    if isinstance(value, Decimal):
+        return format(value.normalize(), "f")
+    text_value = str(value)
+    if "." in text_value:
+        text_value = text_value.rstrip("0").rstrip(".")
+    return text_value
+
+
+def _position_operation_fields(position: PlanPosition) -> dict:
+    """Поля операции группы для PlanPositionOut, включая сводку вида
+    «150 шт × 2,7 м → 150 × 0,9 м + 150 × 1,8 м» (ADR-0003)."""
+    outputs = list(position.outputs or [])
+    input_quantity = (
+        _format_position_quantity(position.input_quantity)
+        if position.input_quantity is not None
+        else None
+    )
+    summary = None
+    has_dimensions = bool(position.input_dimensions) or any(entry.get("dimensions") for entry in outputs)
+    if outputs and has_dimensions:
+        input_parts = []
+        if input_quantity is not None:
+            input_parts.append(f"{input_quantity} шт")
+        if position.input_dimensions:
+            input_parts.append(format_dimensions(position.input_dimensions))
+        output_parts = []
+        for entry in outputs:
+            qty = _format_position_quantity(entry.get("quantity") or "0")
+            dims = entry.get("dimensions")
+            output_parts.append(f"{qty} × {format_dimensions(dims)}" if dims else f"{qty} шт")
+        outputs_text = " + ".join(output_parts)
+        summary = f"{' × '.join(input_parts)} → {outputs_text}" if input_parts else outputs_text
+    return {
+        "input_quantity": input_quantity,
+        "input_dimensions": position.input_dimensions,
+        "outputs": outputs or None,
+        "operation_summary": summary,
+    }
 
 
 def _source_row_numbers_from_position(position: PlanPosition) -> list[int] | None:
@@ -1266,6 +1313,7 @@ async def _serialize_plan_positions(
                 raw_excel_row=(p.source_payload or {}).get("raw_excel_row"),
                 payload=p.source_payload,
                 available_remainder_quantity=round(available_remainder_by_id.get(p.id, 0.0), 3),
+                **_position_operation_fields(p),
             )
         )
     return result
@@ -1421,6 +1469,7 @@ async def cancelled_positions(db: AsyncSession = Depends(get_db)) -> list[PlanPo
                 raw_excel_row=(p.source_payload or {}).get("raw_excel_row"),
                 payload=p.source_payload,
                 available_remainder_quantity=round(available_remainder_by_id.get(p.id, 0.0), 3),
+                **_position_operation_fields(p),
             )
         )
 
@@ -1501,6 +1550,7 @@ async def all_positions(production_plan_id: int, db: AsyncSession = Depends(get_
                 raw_excel_row=(p.source_payload or {}).get("raw_excel_row"),
                 payload=p.source_payload,
                 available_remainder_quantity=round(available_remainder_by_id.get(p.id, 0.0), 3),
+                **_position_operation_fields(p),
             )
         )
 
@@ -1893,4 +1943,5 @@ async def update_position_quantity(
         route_error=route_info.error,
         raw_excel_row=(position.source_payload or {}).get("raw_excel_row"),
         payload=position.source_payload,
+        **_position_operation_fields(position),
     )
