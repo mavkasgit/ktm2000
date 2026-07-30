@@ -8,6 +8,7 @@ from app.models.product import Product
 from app.models.production_plan import PlanPosition, PlanPositionStatus
 from app.models.route import ProductionRoute, RouteStage
 from app.models.section import Section
+from app.services.import_normalization import normalize_sku as _normalize_sku
 from app.services.route_matcher import resolve_position_route
 
 
@@ -45,14 +46,6 @@ def format_validation_error(error_code: str) -> str:
             return f"{message} ({detail})"
         return detail
     return VALIDATION_ERROR_MESSAGES.get(error_code, error_code)
-
-
-def _normalize_sku(value: str) -> str:
-    normalized = (value or "").strip().lower()
-    dash_variants = "\u2010\u2011\u2012\u2013\u2014\u2212\u2043\uFE58\uFE63\uFF0D"
-    for ch in dash_variants:
-        normalized = normalized.replace(ch, "-")
-    return normalized.replace(" ", "").replace("\u00A0", "")
 
 
 def _paired_component_skus(position: PlanPosition) -> list[str]:

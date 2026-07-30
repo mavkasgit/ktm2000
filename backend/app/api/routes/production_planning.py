@@ -27,6 +27,7 @@ from app.services.production_planning_rows import (
 from app.services.production_plan_service import _refresh_plan_status, restore_plan_position, soft_delete_cancelled_position
 from app.services.plan_generation import create_release_batch, release_batch
 from app.services.route_matcher import resolve_position_route, make_position_route_cache_key
+from app.services.route_storage_classifier import STOCK_TYPES
 from app.services.shopfloor_service import complete_task, final_release, transfer_send
 
 router = APIRouter(prefix="/production-planning", tags=["execution-control"])
@@ -584,7 +585,7 @@ async def _collect_task_rows_for_position(
     ).all()
 
 
-_STOCK_SECTION_TYPES = frozenset({"raw_stock", "wip_stock", "finished_stock"})
+_STOCK_SECTION_TYPES = STOCK_TYPES
 
 
 async def _find_preceding_stock_line(

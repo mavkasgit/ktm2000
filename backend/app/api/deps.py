@@ -201,24 +201,5 @@ async def get_current_user(
     return user
 
 
-@dataclass
-class _BreakGlassUser:
-    """Minimal User substitute for Break Glass emergency access — bypasses DB."""
-    id: int = 0
-    username: str = "emergency_admin"
-    role: UserRole = UserRole.admin
-    full_name: str = "Emergency Access Admin"
-    email: str | None = None
-    is_active: bool = True
-    avatar_seed: str | None = "emergency"
-    locale: str | None = "ru"
-    theme: str | None = "system"
-    authentik_sub: str | None = None
-    profile_synced_at = None
-    section_id: int | None = None
-    section_ids: list[int] = field(default_factory=list)
-    is_break_glass: bool = True
-
-
 def _make_break_glass_user() -> _BreakGlassUser:
     return _BreakGlassUser()

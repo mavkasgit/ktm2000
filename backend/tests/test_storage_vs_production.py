@@ -31,6 +31,7 @@ from app.services.route_storage_classifier import (
     infer_stage_kind,
     is_production_section,
     is_production_stage,
+    is_stock_section,
     is_storage_section,
     is_transit_stage,
     stage_display_name,
@@ -57,6 +58,18 @@ def test_is_production_section():
     assert is_production_section(_make_section("DRILLING", "production")) is True
     assert is_production_section(_make_section("RAW_STOCK", "raw_stock")) is False
     assert is_production_section(None) is False
+
+
+def test_is_stock_section_excludes_scrap():
+    # Оборачиваемый запас: raw/wip/finished — да, scrap и production — нет.
+    assert is_stock_section(_make_section("RAW_STOCK", "raw_stock")) is True
+    assert is_stock_section(_make_section("WIP", "wip_stock")) is True
+    assert is_stock_section(_make_section("FG", "finished_stock")) is True
+    assert is_stock_section(_make_section("SCRAP", "scrap")) is False
+    assert is_stock_section(_make_section("DRILLING", "production")) is False
+    assert is_stock_section(None) is False
+    # scrap — это склад-хранилище, но НЕ оборачиваемый запас.
+    assert is_storage_section(_make_section("SCRAP", "scrap")) is True
 
 
 def test_classify_section_role():

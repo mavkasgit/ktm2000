@@ -11,6 +11,17 @@
 ``plan_generation._resolve_route_stage_operation_name``, ``route_builder``,
 API ``/api/sections/all/operations``) должны звать эти функции вместо собственных
 ad-hoc эвристик.
+
+Это также единственный модуль, которому позволено знать строковые литералы
+``Section.type``.  Остальной код обязан звать предикаты (``is_production_section``,
+``is_storage_section``, ``is_stock_section``) либо ссылаться на экспортируемые
+константы/наборы — прямые сравнения ``section.type == "..."`` вне этого файла
+запрещены (см. ``tests/test_section_type_literals_arch.py``).
+
+Тип ``"quarantine"`` исключён из наборов: ни модель (``Section.type`` — простой
+``String(20)`` без CHECK/enum), ни миграции, ни сиды, ни db-триггеры
+(``app/db/triggers.py`` допускает только raw/wip/finished/scrap) не заводят такой
+участок, поэтому классификация по нему была мёртвым кодом и расхождением с триггерами.
 """
 from __future__ import annotations
 
@@ -29,7 +40,29 @@ STAGE_KIND_TRANSIT = "transit"
 OPERATION_TYPE_PRODUCTION = "production"
 OPERATION_TYPE_TRANSPORT = "transport"
 
-STORAGE_TYPES = frozenset({"raw_stock", "wip_stock", "finished_stock", "scrap"})
+# Единственное место в кодовой базе, где живут строковые литералы Section.type.
+SECTION_TYPE_PRODUCTION = "production"
+SECTION_TYPE_RAW_STOCK = "raw_stock"
+SECTION_TYPE_WIP_STOCK = "wip_stock"
+SECTION_TYPE_FINISHED_STOCK = "finished_stock"
+SECTION_TYPE_SCRAP = "scrap"
+
+# Все склады-хранилища (raw/wip/finished/scrap): участки, где остаток лежит «на
+# полке», а не обрабатывается. Это же множество проверяют db-триггеры.
+STORAGE_TYPES = frozenset({
+    SECTION_TYPE_RAW_STOCK,
+    SECTION_TYPE_WIP_STOCK,
+    SECTION_TYPE_FINISHED_STOCK,
+    SECTION_TYPE_SCRAP,
+})
+
+# Склады оборачиваемого запаса (без scrap): откуда сырьё/полуфабрикат реально
+# перетекает по маршруту через Transfer. Брак (scrap) — тупик, его сюда не включаем.
+STOCK_TYPES = frozenset({
+    SECTION_TYPE_RAW_STOCK,
+    SECTION_TYPE_WIP_STOCK,
+    SECTION_TYPE_FINISHED_STOCK,
+})
 
 
 def is_storage_section(section: Section | None) -> bool:
@@ -39,11 +72,22 @@ def is_storage_section(section: Section | None) -> bool:
     return section.type in STORAGE_TYPES
 
 
+def is_stock_section(section: Section | None) -> bool:
+    """``True`` если секция — склад оборачиваемого запаса (raw/wip/finished, без scrap).
+
+    Отличается от ``is_storage_section`` тем, что брак (``scrap``) не считается
+    источником передач по маршруту.
+    """
+    if section is None:
+        return False
+    return section.type in STOCK_TYPES
+
+
 def is_production_section(section: Section | None) -> bool:
     """``True`` если секция — это цех (место реальной работы)."""
     if section is None:
         return False
-    return section.type == "production"
+    return section.type == SECTION_TYPE_PRODUCTION
 
 
 def classify_section_role(section: Section | None) -> str:
@@ -135,8 +179,15 @@ __all__ = [
     "STAGE_KIND_TRANSIT",
     "OPERATION_TYPE_PRODUCTION",
     "OPERATION_TYPE_TRANSPORT",
+    "SECTION_TYPE_PRODUCTION",
+    "SECTION_TYPE_RAW_STOCK",
+    "SECTION_TYPE_WIP_STOCK",
+    "SECTION_TYPE_FINISHED_STOCK",
+    "SECTION_TYPE_SCRAP",
     "STORAGE_TYPES",
+    "STOCK_TYPES",
     "is_storage_section",
+    "is_stock_section",
     "is_production_section",
     "classify_section_role",
     "is_transit_stage",

@@ -190,15 +190,16 @@ async def defect_decide(
     from app.models.section import Section as _Section
 
     if decision_type == DefectDecisionType.scrap:
+        from app.services.route_storage_classifier import SECTION_TYPE_SCRAP
         from_sec_id = task.section_id if task else defect.section_id
         # Find or auto-create scrap location
         scrap_loc = await db.scalar(
-            select(_Section.id).where(_Section.type == "scrap").limit(1)
+            select(_Section.id).where(_Section.type == SECTION_TYPE_SCRAP).limit(1)
         )
         if scrap_loc is None:
             scrap_sec = _Section(
                 code="SCRAP", name="Scrap",
-                type="scrap", is_active=True, sort_order=999,
+                type=SECTION_TYPE_SCRAP, is_active=True, sort_order=999,
             )
             db.add(scrap_sec)
             await db.flush()

@@ -6,6 +6,22 @@ from typing import Any
 
 DEFAULT_IMPORT_NORMALIZATION_RULES: dict[str, Any] = {}
 
+# Варианты написания тире (unicode-дефисы, минус, широкий дефис и т.п.),
+# которые при нормализации артикула сводятся к обычному ``-``.
+_SKU_DASH_VARIANTS = "\u2010\u2011\u2012\u2013\u2014\u2212\u2043\uFE58\uFE63\uFF0D"
+
+
+def normalize_sku(value: str) -> str:
+    """Нормализация артикула для сравнения/поиска.
+
+    Приводит к нижнему регистру, срезает пробелы, унифицирует все варианты
+    тире в обычный ``-`` и убирает все пробелы (включая неразрывный).
+    """
+    normalized = (value or "").strip().lower()
+    for ch in _SKU_DASH_VARIANTS:
+        normalized = normalized.replace(ch, "-")
+    return normalized.replace(" ", "").replace("\u00A0", "")
+
 
 def default_import_normalization_rules() -> dict[str, Any]:
     return deepcopy(DEFAULT_IMPORT_NORMALIZATION_RULES)

@@ -26,6 +26,11 @@ from app.models.product import Product
 from app.models.route import RouteStage, RouteOperation
 from app.models.section import Section
 from app.models.spg import SpgSection
+from app.services.route_storage_classifier import (
+    SECTION_TYPE_PRODUCTION,
+    STOCK_TYPES,
+    is_stock_section,
+)
 from app.models.transfer import (
     Transfer,
     TransferDiscrepancy,
@@ -202,7 +207,7 @@ async def get_section_incoming_transfers(
     }
 
 
-STOCK_SECTION_TYPES = frozenset({"raw_stock", "wip_stock", "finished_stock"})
+STOCK_SECTION_TYPES = STOCK_TYPES
 
 
 def _completed_qty_subquery():
@@ -450,7 +455,7 @@ def _build_production_ready_query(
             WorkTask.status.notin_(
                 [WorkTaskStatus.cancelled, WorkTaskStatus.waiting_previous]
             ),
-            from_section.type == "production",
+            from_section.type == SECTION_TYPE_PRODUCTION,
             from_stage.is_final.is_(False),
             next_line.id.isnot(None),
             transferable_expr > 0,
@@ -526,7 +531,7 @@ async def _scope_has_stock_sections(
 ) -> bool:
     if section_id is not None:
         sec = await db.get(Section, section_id)
-        return sec is not None and sec.type in STOCK_SECTION_TYPES
+        return is_stock_section(sec)
     if spg_id is not None:
         count = await db.scalar(
             select(func.count())
@@ -642,7 +647,7 @@ async def _fetch_stock_ready_items(
     search_like = f"%{search.strip()}%" if search else None
 
     for sec in sections:
-        if sec.type not in STOCK_SECTION_TYPES:
+        if not is_stock_section(sec):
             continue
 
         sec_spg_id = await db.scalar(
@@ -694,7 +699,7 @@ async def _fetch_stock_ready_items(
             from app.services.shopfloor.common import sections_share_spg
 
             if await sections_share_spg(db, spl.section_id, next_line.section_id):
-                if next_sec.type not in STOCK_SECTION_TYPES:
+                if not is_stock_section(next_sec):
                     continue
 
             next_task = await db.scalar(
@@ -703,7 +708,7 @@ async def _fetch_stock_ready_items(
                     WorkTask.status.notin_([WorkTaskStatus.completed, WorkTaskStatus.cancelled]),
                 )
             )
-            if next_task is None and next_sec.type not in STOCK_SECTION_TYPES:
+            if next_task is None and not is_stock_section(next_sec):
                 continue
 
             if await has_active_transfer_for_plan_line(db, spl.id):
