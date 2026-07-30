@@ -9,6 +9,7 @@ from sqlalchemy import String, case, cast, exists, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
+from app.domain.dimensions import format_operation_summary, format_quantity
 from app.models.internal_plan import SectionPlanLine
 from app.models.production_plan import PlanPosition
 from app.models.product import Product
@@ -450,6 +451,15 @@ async def get_section_board(
                 operation_codes.append(op_code)
                 operation_names.append(op_name)
 
+        # Трансформирующий этап (ADR-0002): одна позиция плана = одна
+        # карточка «вход → все выходы»: «150 шт × 2,7 м → 150 × 0,9 м + …».
+        task_outputs = list(task.outputs or [])
+        operation_summary = (
+            format_operation_summary(task.input_quantity, task.input_dimensions, task_outputs)
+            if stage.transforms_dimensions
+            else None
+        )
+
         tasks_data.append({
             "id": task.id,
             "section_id": task.section_id,
@@ -491,6 +501,12 @@ async def get_section_board(
             "route_history_after_full": route_history_after_full,
             "operation_codes": operation_codes,
             "operation_names": operation_names,
+            # —— трансформация габаритов (ADR-0002) ——
+            "transforms_dimensions": stage.transforms_dimensions,
+            "input_quantity": format_quantity(task.input_quantity) if task.input_quantity is not None else None,
+            "input_dimensions": task.input_dimensions,
+            "outputs": task_outputs,
+            "operation_summary": operation_summary,
         })
 
     return {

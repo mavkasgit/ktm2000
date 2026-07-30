@@ -11,7 +11,7 @@ from sqlalchemy import func as sa_func
 
 from app.api.deps import WRITER_ROLES, require_role, get_current_user
 from app.core.database import get_db
-from app.domain.dimensions import format_dimensions
+from app.domain.dimensions import format_operation_summary
 from app.models.production_plan import (
     PlanChangeItem,
     PlanChangeSet,
@@ -1002,21 +1002,9 @@ def _position_operation_fields(position: PlanPosition) -> dict:
         if position.input_quantity is not None
         else None
     )
-    summary = None
-    has_dimensions = bool(position.input_dimensions) or any(entry.get("dimensions") for entry in outputs)
-    if outputs and has_dimensions:
-        input_parts = []
-        if input_quantity is not None:
-            input_parts.append(f"{input_quantity} шт")
-        if position.input_dimensions:
-            input_parts.append(format_dimensions(position.input_dimensions))
-        output_parts = []
-        for entry in outputs:
-            qty = _format_position_quantity(entry.get("quantity") or "0")
-            dims = entry.get("dimensions")
-            output_parts.append(f"{qty} × {format_dimensions(dims)}" if dims else f"{qty} шт")
-        outputs_text = " + ".join(output_parts)
-        summary = f"{' × '.join(input_parts)} → {outputs_text}" if input_parts else outputs_text
+    summary = format_operation_summary(
+        position.input_quantity, position.input_dimensions, outputs
+    )
     return {
         "input_quantity": input_quantity,
         "input_dimensions": position.input_dimensions,

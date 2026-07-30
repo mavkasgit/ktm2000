@@ -21,6 +21,13 @@ export interface RouteHistoryOp {
   icon_color?: string | null;
 }
 
+// Выход трансформирующей операции (ADR-0002): часть позиции плана
+export interface TaskOutputSpec {
+  row_number?: number | null;
+  quantity?: string | number | null;
+  dimensions?: Record<string, unknown> | null;
+}
+
 export type TaskStatus = "pending" | "in_work" | "done" | "partially" | "blocked";
 
 export type TaskGroup = {
@@ -79,6 +86,12 @@ export type SectionBoardTask = {
   // --- list of operations on this stage ---
   operation_codes: (string | null)[];
   operation_names: string[];
+  // --- трансформация габаритов (ADR-0002): вход → все выходы позиции ---
+  transforms_dimensions?: boolean;
+  input_quantity?: string | null;
+  input_dimensions?: Record<string, unknown> | null;
+  outputs?: TaskOutputSpec[];
+  operation_summary?: string | null;
   is_combined_primary?: boolean;
   combined_task_ids?: number[];
   combined_operation_names?: string[];

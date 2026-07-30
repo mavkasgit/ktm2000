@@ -236,6 +236,11 @@ function renderTaskRow(
         ) : (
           <span className="text-xs">{task.operation_name || "—"}</span>
         )}
+        {task.operation_summary && (
+          <span className="block text-xs text-muted-foreground" title={task.operation_summary}>
+            {task.operation_summary}
+          </span>
+        )}
       </td>
       <td className="p-2">{fmtQty(task.planned_quantity)}</td>
       <td className="p-2">{fmtQty(task.cache.issued_quantity)}</td>
@@ -318,6 +323,12 @@ function renderMobileCard(
         <div><span className="text-muted-foreground">Передано:</span> {fmtQty(task.cache.transferred_quantity)}</div>
         <div><span className="text-muted-foreground">Остаток:</span> {fmtQty(task.cache.remaining_quantity)}</div>
       </div>
+
+      {task.operation_summary ? (
+        <div className="text-xs text-muted-foreground border-t pt-2" title={task.operation_summary}>
+          {task.operation_summary}
+        </div>
+      ) : null}
 
       {task.previous_stage ? (
         <div className="text-xs text-muted-foreground border-t pt-2">

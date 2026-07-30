@@ -56,6 +56,10 @@ class RouteStage(Base):
     sequence: Mapped[int] = mapped_column(Integer, nullable=False)
     section_id: Mapped[int | None] = mapped_column(ForeignKey("sections.id"), nullable=True)
     is_significant: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default=text("false"))
+    # Этап трансформирует габариты (ADR-0002): задание несёт вход и
+    # спецификацию выходов позиции плана. Заводская специфика (какой
+    # участок «пила») задаётся сидом/справочником, не кодом.
+    transforms_dimensions: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default=text("false"))
     norm_time_minutes: Mapped[int | None] = mapped_column(Integer, nullable=True)
     requires_acceptance: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default=text("true"))
     allow_parallel: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default=text("false"))
@@ -127,6 +131,9 @@ class SectionOperation(Base):
     operation_code: Mapped[str] = mapped_column(String(100), nullable=False)
     operation_name: Mapped[str] = mapped_column(String(255), nullable=False)
     is_significant: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default=text("false"))
+    # Операция трансформирует габариты (ADR-0002) — источник правды для
+    # маркера этапа при построении маршрутов (сид помечает SAW и т.п.).
+    transforms_dimensions: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default=text("false"))
     icon: Mapped[str | None] = mapped_column(String(50), nullable=True)
     icon_color: Mapped[str | None] = mapped_column(String(7), nullable=True)
     group_code: Mapped[str | None] = mapped_column(String(100), nullable=True)

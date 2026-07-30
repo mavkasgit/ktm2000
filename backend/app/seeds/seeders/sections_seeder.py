@@ -76,6 +76,13 @@ SECTION_OPS: dict[str, list[tuple[str | None, str | None, int, str | None, str, 
     ],
 }
 
+# Заводская настройка (ADR-0002): какие операции трансформируют габариты
+# (резка: один вход → несколько выходов разной длины). Ядро читает маркер
+# из справочника/этапа маршрута, а не сравнивает код секции со строкой.
+TRANSFORMING_SECTION_OPS: set[tuple[str, str]] = {
+    ("SAWING", "SAW"),
+}
+
 
 async def seed_sections(db: AsyncSession, force: bool = False) -> dict[str, Section]:
     """Upsert all sections by code. Returns {code: section} map."""
@@ -114,6 +121,7 @@ async def seed_section_operations(db: AsyncSession, sections_map: dict[str, Sect
             if op_code is None:
                 continue
 
+            transforms = (section_code, op_code) in TRANSFORMING_SECTION_OPS
             existing = await db.scalar(
                 select(SectionOperation).where(
                     SectionOperation.section_id == section.id,
@@ -123,6 +131,7 @@ async def seed_section_operations(db: AsyncSession, sections_map: dict[str, Sect
             if existing:
                 existing.operation_name = op_name
                 existing.is_significant = is_sig
+                existing.transforms_dimensions = transforms
                 existing.icon = icon
                 existing.icon_color = icon_color
                 existing.group_code = group_code
@@ -137,6 +146,7 @@ async def seed_section_operations(db: AsyncSession, sections_map: dict[str, Sect
                     operation_code=op_code,
                     operation_name=op_name,
                     is_significant=is_sig,
+                    transforms_dimensions=transforms,
                     icon=icon,
                     icon_color=icon_color,
                     group_code=group_code,

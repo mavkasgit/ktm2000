@@ -40,6 +40,7 @@ from app.services.route_selection import load_selection_rules_for_profile, selec
 from app.domain.dimensions import DimensionsValidationError, canonicalize_dimensions
 from app.services.dimension_validation import MissingDimensionsError, resolve_product_dimensions
 from app.services.hanger_quantity import adjust_quantity_to_hanger
+from app.services.import_normalization import normalize_sku as _normalize_sku
 from app.services.route_builder import build_route_from_profile
 
 
@@ -364,15 +365,6 @@ def _sku_lookup_keys(sku: str) -> set[str]:
     except Exception:
         pass
     return {k for k in keys if k}
-
-
-def _normalize_sku(sku: str) -> str:
-    s = (sku or "").strip().lower()
-    dash_variants = "\u2010\u2011\u2012\u2013\u2014\u2212\u2043\uFE58\uFE63\uFF0D"
-    for d in dash_variants:
-        s = s.replace(d, "-")
-    s = s.replace(" ", "").replace("\u00A0", "")
-    return s
 
 
 async def _find_active_techcard_by_sku(db: AsyncSession, sku: str) -> tuple[Techcard | None, Product | None]:
@@ -1045,11 +1037,20 @@ async def _make_change_items(
                                         stage_seq = 1
                                         for group in groups:
                                             primary_step, primary_section = group[0]
+                                            # Маркер трансформации этапа (ADR-0002) —
+                                            # из справочника операций участка, не из кода.
+                                            from app.services.route_transform import resolve_stage_transforms_dimensions
+                                            stage_transforms = await resolve_stage_transforms_dimensions(
+                                                db,
+                                                section_id=primary_section.id,
+                                                operation_codes=[s[0].operation_code for s in group],
+                                            )
                                             stage = RouteStage(
                                                 route_id=created_route.id,
                                                 sequence=stage_seq,
                                                 section_id=primary_section.id,
                                                 is_significant=primary_step.is_significant,
+                                                transforms_dimensions=stage_transforms,
                                                 requires_acceptance=True,
                                                 allow_parallel=False,
                                                 is_final=any(s[0].is_final for s in group),

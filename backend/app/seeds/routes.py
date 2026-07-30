@@ -17,7 +17,7 @@ ROUTES = [
             {"section_code": "PREP_STOCK", "sequence": 5, "operation_code": None, "operation_name": ""},
             {"section_code": "ANODIZING", "sequence": 6, "operation_code": None, "operation_name": ""},
             {"section_code": "WIP_STOCK", "sequence": 7, "operation_code": None, "operation_name": ""},
-            {"section_code": "SAWING", "sequence": 8, "operation_code": None, "operation_name": ""},
+            {"section_code": "SAWING", "sequence": 8, "operation_code": None, "operation_name": "", "transforms_dimensions": True},
             {"section_code": "PACKING", "sequence": 9, "operation_code": None, "operation_name": ""},
             {"section_code": "FINISHED_STOCK", "sequence": 10, "operation_code": None, "operation_name": ""},
             {"section_code": "SHIPMENT", "sequence": 11, "operation_code": None, "operation_name": ""},

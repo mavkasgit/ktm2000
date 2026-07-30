@@ -8,6 +8,7 @@ from app.models.route import ProductionRoute, RouteRuleProfile, RouteStage, Rout
 from app.models.section import Section
 from app.models.transfer import Transfer
 from app.models.work_task import WorkTask
+from app.services.route_transform import resolve_stage_transforms_dimensions
 from app.services.route_storage_classifier import (
     is_storage_section,
     STAGE_KIND_PRODUCTION,
@@ -186,12 +187,25 @@ async def seed_routes(
                 db.add(stage)
                 await db.flush()
             else:
+                # Маркер трансформации (ADR-0002): явно из шаблона шага
+                # либо из справочника операций участка.
+                explicit_transforms = next(
+                    (s[0]["transforms_dimensions"] for s in group if s[0].get("transforms_dimensions") is not None),
+                    None,
+                )
+                if explicit_transforms is None:
+                    explicit_transforms = await resolve_stage_transforms_dimensions(
+                        db,
+                        section_id=primary_section.id,
+                        operation_codes=[s[0]["operation_code"] for s in group],
+                    )
                 stage = RouteStage(
                     route_id=route.id,
                     sequence=stage_seq,
                     section_id=primary_section.id,
                     stage_kind=STAGE_KIND_PRODUCTION,
                     is_significant=primary_is_sig,
+                    transforms_dimensions=bool(explicit_transforms),
                     norm_time_minutes=primary_step_def.get("norm_time_minutes"),
                     requires_acceptance=True,
                     allow_parallel=False,
@@ -296,6 +310,11 @@ async def seed_production_routes_from_profiles(db: AsyncSession) -> int:
                     section_id=section.id,
                     stage_kind=STAGE_KIND_PRODUCTION,
                     is_significant=True,
+                    # Операции разрешаются динамически — этап наследует
+                    # способность участка из справочника (ADR-0002).
+                    transforms_dimensions=await resolve_stage_transforms_dimensions(
+                        db, section_id=section.id
+                    ),
                     is_final=(section_code == "SHIPPED"),
                     requires_acceptance=True,
                     allow_parallel=False,

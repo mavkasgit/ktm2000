@@ -2,7 +2,8 @@ import enum
 from datetime import date, datetime
 from decimal import Decimal
 
-from sqlalchemy import BigInteger, CheckConstraint, Date, DateTime, Enum, ForeignKey, Identity, Numeric, String, func
+from sqlalchemy import BigInteger, CheckConstraint, Date, DateTime, Enum, ForeignKey, Identity, Numeric, String, func, text
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base
@@ -29,6 +30,12 @@ class WorkTask(Base):
     product_id: Mapped[int] = mapped_column(ForeignKey("products.id"), nullable=False)
     route_stage_id: Mapped[int] = mapped_column(ForeignKey("route_stages.id"), nullable=False)
     planned_quantity: Mapped[Decimal] = mapped_column(Numeric(14, 3), nullable=False)
+    # Операция трансформирующего этапа (ADR-0002): вход (количество ×
+    # входной габарит) и список выходов [{row_number, quantity, dimensions}]
+    # из позиции плана. На нетрансформирующих этапах поля пусты.
+    input_quantity: Mapped[Decimal | None] = mapped_column(Numeric(14, 3), nullable=True)
+    input_dimensions: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    outputs: Mapped[list] = mapped_column(JSONB, nullable=False, server_default=text("'[]'::jsonb"), default=list)
     status: Mapped[WorkTaskStatus] = mapped_column(Enum(WorkTaskStatus, name="work_task_status"), nullable=False)
     due_date: Mapped[date | None] = mapped_column(Date, nullable=True)
     assigned_to: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)

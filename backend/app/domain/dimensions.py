@@ -136,6 +136,49 @@ def format_dimensions(dims: Mapping[str, Any] | None) -> str:
     return ", ".join(f"{key}: {value}" for key, value in canonical.items())
 
 
+def format_quantity(value: Any) -> str:
+    """Количество для UI без хвостовых нулей: ``150.000`` → «150»."""
+    if isinstance(value, Decimal):
+        return format(value.normalize(), "f")
+    text = str(value)
+    if "." in text:
+        text = text.rstrip("0").rstrip(".")
+    return text
+
+
+def format_operation_summary(
+    input_quantity: Any | None,
+    input_dimensions: Mapping[str, Any] | None,
+    outputs: list[Mapping[str, Any]] | None,
+) -> str | None:
+    """Сводка операции «вход → все выходы» для UI (ADR-0002/0003):
+    «150 шт × 2,7 м → 150 × 0,9 м + 150 × 1,8 м».
+
+    ``None``, если выходов нет или операция полностью безразмерная —
+    показывать нечего.
+    """
+    entries = list(outputs or [])
+    has_dimensions = bool(input_dimensions) or any(
+        entry.get("dimensions") for entry in entries
+    )
+    if not entries or not has_dimensions:
+        return None
+    input_parts: list[str] = []
+    if input_quantity is not None:
+        input_parts.append(f"{format_quantity(input_quantity)} шт")
+    if input_dimensions:
+        input_parts.append(format_dimensions(input_dimensions))
+    output_parts: list[str] = []
+    for entry in entries:
+        qty = format_quantity(entry.get("quantity") or "0")
+        dims = entry.get("dimensions")
+        output_parts.append(f"{qty} × {format_dimensions(dims)}" if dims else f"{qty} шт")
+    outputs_text = " + ".join(output_parts)
+    if not input_parts:
+        return outputs_text
+    return f"{' × '.join(input_parts)} → {outputs_text}"
+
+
 def _canonicalize_value(key: str, value: Any) -> Any:
     """Нормализовать одно значение габарита (bool — не число!)."""
     if isinstance(value, bool) or value is None:

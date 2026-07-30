@@ -17,6 +17,7 @@ from app.models.section import Section
 from app.models.work_task import WorkTask, WorkTaskStatus
 from app.services.plan_validation import _find_paired_techcard, _paired_component_skus
 from app.services.production_plan_service import refresh_plan_status
+from app.services.route_transform import build_transform_spec
 
 
 async def create_release_batch(
@@ -221,8 +222,9 @@ async def release_batch(
             # WorkTask на них не создаём; сырьё перетекает через
             # Transfer / auto_consume.
             from app.models.section import Section as _Section
+            from app.services.route_storage_classifier import is_production_section
             sec_meta = await db.get(_Section, step["section_id"])
-            if sec_meta is not None and sec_meta.type != "production":
+            if sec_meta is not None and not is_production_section(sec_meta):
                 # SectionPlanLine нужен (привязка к маршруту), WorkTask — нет
                 continue
 
@@ -235,6 +237,14 @@ async def release_batch(
             else:
                 task_status = WorkTaskStatus.waiting_previous
 
+            # Трансформирующий этап (ADR-0002): задание несёт вход и
+            # спецификацию выходов позиции. Маркер читается из модели
+            # этапа — никаких сравнений кода секции со строкой.
+            transform_fields: dict = {}
+            stage_model = await db.get(RouteStage, stage_id)
+            if stage_model is not None and stage_model.transforms_dimensions:
+                transform_fields = build_transform_spec(position, planned_qty)
+
             task = WorkTask(
                 section_plan_line_id=line.id,
                 section_id=line.section_id,
@@ -243,6 +253,7 @@ async def release_batch(
                 planned_quantity=planned_qty,
                 status=task_status,
                 due_date=line.due_date,
+                **transform_fields,
             )
             db.add(task)
             await db.flush()
@@ -487,7 +498,7 @@ async def _route_snapshot(
     position: PlanPosition | None = None,
     operation_names_by_key: dict[tuple[int, str], str] | None = None,
 ) -> dict:
-    from app.services.route_storage_classifier import is_transit_stage
+    from app.services.route_storage_classifier import SECTION_TYPE_WIP_STOCK, is_transit_stage
 
     op_names = operation_names_by_key or {}
     snapshot_steps = []
@@ -504,7 +515,7 @@ async def _route_snapshot(
                 "section_id": storage_section.id if storage_section else None,
                 "section_code": storage_section.code if storage_section else None,
                 "section_name": storage_section.name if storage_section else None,
-                "section_type": storage_section.type if storage_section else "wip_stock",
+                "section_type": storage_section.type if storage_section else SECTION_TYPE_WIP_STOCK,
             }
         else:
             section_payload = {

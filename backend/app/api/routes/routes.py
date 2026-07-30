@@ -10,6 +10,7 @@ from app.models.section import Section
 from app.models.internal_plan import SectionPlanLine
 from app.models.release_batch import ReleaseBatchPosition
 from app.models.production_plan import PlanPosition, PlanChangeItem
+from app.services.route_transform import resolve_stage_transforms_dimensions
 
 router = APIRouter(prefix="/routes", tags=["routes"])
 
@@ -520,6 +521,16 @@ async def create_route_step(route_id: int, payload: StepCreate, db: AsyncSession
         requires_acceptance=payload.requires_acceptance,
         allow_parallel=payload.allow_parallel,
         is_final=payload.is_final,
+        # Маркер трансформации (ADR-0002) — из справочника операций участка
+        transforms_dimensions=(
+            await resolve_stage_transforms_dimensions(
+                db,
+                section_id=section.id,
+                operation_codes=[payload.operation_code],
+            )
+            if section is not None
+            else False
+        ),
     )
     db.add(stage)
     await db.flush()
@@ -637,6 +648,16 @@ async def replace_route_steps(route_id: int, payload: list[StepUpdate], db: Asyn
             requires_acceptance=item.requires_acceptance,
             allow_parallel=item.allow_parallel,
             is_final=item.is_final,
+            # Маркер трансформации (ADR-0002) — из справочника операций участка
+            transforms_dimensions=(
+                await resolve_stage_transforms_dimensions(
+                    db,
+                    section_id=section.id,
+                    operation_codes=[item.operation_code],
+                )
+                if section is not None
+                else False
+            ),
         )
         db.add(stage)
         await db.flush()

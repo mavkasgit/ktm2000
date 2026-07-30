@@ -215,6 +215,10 @@ class ParsedRow:
         self.source_ref = None
         self.source_fingerprint = f"{sku}_{name}_{quantity}"
         self.source_row_hash = f"hash_{sku}"
+        # Габариты операции (ADR-0003) — как у ParsedPlanRow после #6.
+        self.input_quantity = None
+        self.input_dimensions = None
+        self.outputs = []
         self.warnings = []
         self.errors = []
 

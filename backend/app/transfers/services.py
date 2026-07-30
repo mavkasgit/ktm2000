@@ -168,10 +168,11 @@ async def compute_stock_section_transferable(
 
 async def _get_task_transferable(db: AsyncSession, task: WorkTask) -> Decimal:
     from app.models.section import Section
+    from app.services.route_storage_classifier import is_stock_section
     from app.stock.services import StockProjectionManager
 
     sec = await db.get(Section, task.section_id)
-    if sec and sec.type in {"raw_stock", "wip_stock", "finished_stock"}:
+    if is_stock_section(sec):
         line = await db.get(SectionPlanLine, task.section_plan_line_id)
         planned_qty = task.planned_quantity
         if line is not None and line.planned_quantity:
@@ -399,12 +400,9 @@ async def transfer_send(
             }
 
     from_task = await _get_task_for_update(db, from_task_id)
+    from app.services.route_storage_classifier import is_stock_section
     source_section = await db.get(Section, from_task.section_id)
-    if source_section is not None and source_section.type in {
-        "raw_stock",
-        "wip_stock",
-        "finished_stock",
-    }:
+    if is_stock_section(source_section):
         has_active = await has_active_transfer_for_plan_line(
             db, from_task.section_plan_line_id
         )
@@ -443,6 +441,16 @@ async def transfer_send(
         if existing_task:
             to_task = existing_task
         else:
+            # Трансформирующий этап несёт вход/выходы позиции (ADR-0002)
+            from app.services.route_transform import transform_fields_for_task
+
+            lazy_planned_quantity = max(from_line.planned_quantity, quantity)
+            transform_fields = await transform_fields_for_task(
+                db,
+                route_stage_id=next_line.route_stage_id,
+                plan_position_id=next_line.plan_position_id,
+                task_quantity=lazy_planned_quantity,
+            )
             to_task = WorkTask(
                 section_plan_line_id=next_line.id,
                 section_id=next_line.section_id,
@@ -450,9 +458,10 @@ async def transfer_send(
                 route_stage_id=next_line.route_stage_id,
                 # If more than planned is being transferred, expand the task's plan
                 # so the receiving section can issue and complete the full quantity.
-                planned_quantity=max(from_line.planned_quantity, quantity),
+                planned_quantity=lazy_planned_quantity,
                 status=WorkTaskStatus.waiting_previous,
                 due_date=next_line.due_date,
+                **transform_fields,
             )
             db.add(to_task)
             await db.flush()

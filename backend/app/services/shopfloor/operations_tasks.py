@@ -35,10 +35,11 @@ async def _get_stock_location(session: AsyncSession, section_id: int) -> int | N
     """
     from app.models.route import RouteStage
     from app.models.section import Section
+    from app.services.route_storage_classifier import is_production_section
 
     # Check if the section itself is a stock location
     sec = await session.get(Section, section_id)
-    if sec is not None and sec.type != "production":
+    if sec is not None and not is_production_section(sec):
         return section_id
 
     # Find the preceding stock stage in the route
@@ -66,7 +67,7 @@ async def _get_stock_location(session: AsyncSession, section_id: int) -> int | N
 
     for prev in prev_lines:
         prev_sec = await session.get(Section, prev.section_id)
-        if prev_sec is not None and prev_sec.type != "production":
+        if prev_sec is not None and not is_production_section(prev_sec):
             return prev.section_id
 
     return None
@@ -184,14 +185,15 @@ async def complete_task(
     if defect_quantity > 0:
         # scrap: from production section to scrap location
         from app.models.section import Section as _Section
+        from app.services.route_storage_classifier import SECTION_TYPE_SCRAP
         scrap_loc = await db.scalar(
-            select(_Section.id).where(_Section.type == "scrap").limit(1)
+            select(_Section.id).where(_Section.type == SECTION_TYPE_SCRAP).limit(1)
         )
         if scrap_loc is None:
             scrap_sec = _Section(
                 code="SCRAP",
                 name="Scrap",
-                type="scrap",
+                type=SECTION_TYPE_SCRAP,
                 is_active=True,
                 sort_order=999,
             )
@@ -314,9 +316,10 @@ async def final_release(
 
     # Find finished stock location
     from app.models.section import Section as _FinSection
+    from app.services.route_storage_classifier import SECTION_TYPE_FINISHED_STOCK
     finished_stock = await db.scalar(
         select(_FinSection.id)
-        .where(_FinSection.type == "finished_stock")
+        .where(_FinSection.type == SECTION_TYPE_FINISHED_STOCK)
         .limit(1)
     )
 
@@ -400,8 +403,9 @@ async def prepare_section_task(
         raise ValueError("No route step found for this section in the plan position")
 
     from app.models.section import Section as _Section
+    from app.services.route_storage_classifier import is_production_section
     sec_meta = await db.get(_Section, line.section_id)
-    if sec_meta is not None and sec_meta.type != "production":
+    if sec_meta is not None and not is_production_section(sec_meta):
         return {
             "task_id": None,
             "status": "skipped_storage_section",
@@ -421,6 +425,15 @@ async def prepare_section_task(
             "idempotent_replay": True,
         }
 
+    # Трансформирующий этап несёт вход/выходы позиции (ADR-0002)
+    from app.services.route_transform import transform_fields_for_task
+
+    transform_fields = await transform_fields_for_task(
+        db,
+        route_stage_id=line.route_stage_id,
+        plan_position_id=line.plan_position_id,
+        task_quantity=quantity,
+    )
     task = WorkTask(
         section_plan_line_id=line.id,
         section_id=section_id,
@@ -429,6 +442,7 @@ async def prepare_section_task(
         planned_quantity=quantity,
         status=WorkTaskStatus.ready,
         due_date=line.due_date,
+        **transform_fields,
     )
     db.add(task)
     await db.flush()
