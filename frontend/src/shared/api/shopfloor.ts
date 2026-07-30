@@ -28,6 +28,14 @@ export interface TaskOutputSpec {
   dimensions?: Record<string, unknown> | null;
 }
 
+// Прогресс по одному выходу трансформации: оприходовано / по спецификации
+export interface TaskOutputProgress {
+  row_number?: number | null;
+  dimensions?: Record<string, unknown> | null;
+  quantity: string;
+  produced_quantity: string;
+}
+
 export type TaskStatus = "pending" | "in_work" | "done" | "partially" | "blocked";
 
 export type TaskGroup = {
@@ -92,6 +100,9 @@ export type SectionBoardTask = {
   input_dimensions?: Record<string, unknown> | null;
   outputs?: TaskOutputSpec[];
   operation_summary?: string | null;
+  // Прогресс трансформации: оприходовано по каждому выходу + списано входа
+  outputs_progress?: TaskOutputProgress[] | null;
+  input_consumed_quantity?: string | null;
   is_combined_primary?: boolean;
   combined_task_ids?: number[];
   combined_operation_names?: string[];

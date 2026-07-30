@@ -63,6 +63,7 @@ class Reason(str, enum.Enum):
     RETURN_TO_STOCK = "return_to_stock"  # production → RAW_STOCK (unused material)
     RETURN_TO_PREVIOUS = "return_to_previous"  # → previous location (defect decision)
     FINAL_RELEASE = "final_release"  # WIP_STOCK → FINISHED_STOCK
+    TRANSFORM_CONSUME = "transform_consume"  # списание входа трансформирующего этапа (ADR-0002)
     SCRAP = "scrap"  # any → SCRAP, quality_state=SCRAP
     REWORK = "rework"  # any → REWORK location, quality_state=REWORK
     ADJUSTMENT_IN = "adjustment_in"  # manual stock count correction (+)

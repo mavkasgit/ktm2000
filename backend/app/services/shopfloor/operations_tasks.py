@@ -23,6 +23,12 @@ from .common import (
     enrich_comment_with_route_operations,
 )
 from .cache import _refresh_section_plan_line_cache
+from .operations_transform import (
+    get_transform_progress,
+    record_transform_portion,
+    resolve_consume_dimensions,
+    resolve_transform_spec,
+)
 
 
 async def _get_stock_location(session: AsyncSession, section_id: int) -> int | None:
@@ -96,6 +102,12 @@ async def complete_task(
     StockTransaction(SCRAP) for defect. Creates Defect/DefectItem
     for traceability. Stock cache is updated automatically via
     StockProjectionManager.
+
+    Трансформирующий этап (ADR-0002): порция факта атомарно списывает
+    вход (TRANSFORM_CONSUME × входной габарит) и приходует все выходы
+    спецификации (COMPLETE × выходной габарит каждого) пропорционально
+    доле входа; брак заготовок — SCRAP с габаритом входа.
+    Здесь good_quantity/defect_quantity считаются во входных заготовках.
     """
     task = await _get_task(db, task_id)
 
@@ -130,9 +142,46 @@ async def complete_task(
     from app.stock.services import StockProjectionManager
     pm = StockProjectionManager()
     cache = await pm.get_task_cache(db, task.id)
-    in_work = cache["issued_quantity"] - cache["completed_quantity"] - cache["rejected_quantity"]
-    if total > in_work:
-        raise ValueError("Complete quantity exceeds issued quantity")
+
+    # Трансформация определяется маркером этапа и спецификацией задания,
+    # никогда — кодом секции (factory-agnostic core).
+    stage = None
+    if task.route_stage_id is not None:
+        from app.models.route import RouteStage as _RouteStage
+        stage = await db.get(_RouteStage, task.route_stage_id)
+    spec = resolve_transform_spec(task, stage)
+
+    transform_progress = None
+    consume_dims: dict | None = None
+    if spec is not None:
+        if auto_transfer_next:
+            raise ValueError(
+                "auto_transfer_next is not supported for dimension-transforming tasks"
+            )
+        # Порция считается во входных заготовках: нельзя раскроить
+        # больше, чем осталось нераскроенного входа по спецификации.
+        transform_progress = await get_transform_progress(db, task.id)
+        remaining_input = (
+            spec.input_quantity
+            - transform_progress.consumed_quantity
+            - transform_progress.scrapped_quantity
+        )
+        if total > remaining_input:
+            raise ValueError(
+                f"Portion exceeds remaining input quantity: "
+                f"requested {total}, remaining input {remaining_input}"
+            )
+        consume_dims = await resolve_consume_dimensions(
+            db,
+            product_id=task.product_id,
+            location_id=task.section_id,
+            dimensions=spec.input_dimensions,
+            required=total,
+        )
+    else:
+        in_work = cache["issued_quantity"] - cache["completed_quantity"] - cache["rejected_quantity"]
+        if total > in_work:
+            raise ValueError("Complete quantity exceeds issued quantity")
 
     now = datetime.now(UTC)
     eff_performed = performed_at or now
@@ -143,7 +192,35 @@ async def complete_task(
     tx_ids: list[int] = []
     defect_id: int | None = None
 
-    if good_quantity > 0:
+    if good_quantity > 0 and spec is not None:
+        # Порция трансформации: списание входа + приход всех выходов
+        # (включая годный остаток) в текущей транзакции БД.
+        complete_comment = comment
+        line = await db.get(SectionPlanLine, task.section_plan_line_id)
+        if line is not None and stage is not None:
+            complete_comment = await enrich_comment_with_route_operations(
+                db,
+                comment,
+                route_id=line.route_id,
+                through_sequence=stage.sequence,
+            )
+        tx_ids.extend(await record_transform_portion(
+            db,
+            svc=svc,
+            task=task,
+            spec=spec,
+            progress=transform_progress,
+            good_quantity=good_quantity,
+            consume_dims=consume_dims,
+            actor_id=actor_id,
+            executor_user_id=eff_executor,
+            comment=complete_comment,
+            source_ref=source_ref,
+            idempotency_key=idempotency_key,
+            performed_at=eff_performed,
+            accounted_at=eff_accounted,
+        ))
+    elif good_quantity > 0:
         # Material already on section (issued_quantity > 0): net-zero COMPLETE
         # records выпуск without duplicating balance after TRANSFER_SEND.
         # Legacy path (issued_quantity == 0): good appears from nowhere.
@@ -207,6 +284,8 @@ async def complete_task(
             to_location_id=scrap_loc,
             quantity=defect_quantity,
             reason=Reason.SCRAP,
+            # Брак заготовок трансформации уходит с габаритом входа.
+            dimensions=consume_dims if spec is not None else None,
             quality_state=QualityState.GOOD,
             to_quality_state=QualityState.SCRAP,
             task_id=task.id,

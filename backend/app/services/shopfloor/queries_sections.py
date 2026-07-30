@@ -293,6 +293,15 @@ async def get_section_board(
     all_task_ids = [row[0].id for row in rows]
     tasks_cache = await pm.get_tasks_cache_bulk(db, all_task_ids)
 
+    # Прогресс трансформации (ADR-0002) для карточек трансформирующих
+    # этапов: списано входа и оприходовано по каждому выходу.
+    from .operations_transform import build_outputs_progress, get_transform_progress_bulk
+    transform_task_ids = [
+        row[0].id for row in rows
+        if row[2].transforms_dimensions and (row[0].outputs or [])
+    ]
+    transform_progress_map = await get_transform_progress_bulk(db, transform_task_ids)
+
     from .task_status import sync_work_tasks_status_bulk
 
     board_tasks = [row[0] for row in rows]
@@ -460,6 +469,25 @@ async def get_section_board(
             else None
         )
 
+        # Прогресс по каждому выходу и списанный вход для UI пилы.
+        outputs_progress = None
+        input_consumed_quantity = None
+        if task.id in transform_progress_map or (stage.transforms_dimensions and task_outputs):
+            progress = transform_progress_map.get(task.id)
+            produced_by_group = progress.produced_by_group if progress else {}
+            outputs_progress = [
+                {
+                    "row_number": entry["row_number"],
+                    "dimensions": entry["dimensions"],
+                    "quantity": format_quantity(entry["quantity"]),
+                    "produced_quantity": format_quantity(entry["produced_quantity"]),
+                }
+                for entry in build_outputs_progress(task_outputs, produced_by_group)
+            ]
+            input_consumed_quantity = format_quantity(
+                progress.consumed_quantity if progress else Decimal("0")
+            )
+
         tasks_data.append({
             "id": task.id,
             "section_id": task.section_id,
@@ -507,6 +535,8 @@ async def get_section_board(
             "input_dimensions": task.input_dimensions,
             "outputs": task_outputs,
             "operation_summary": operation_summary,
+            "outputs_progress": outputs_progress,
+            "input_consumed_quantity": input_consumed_quantity,
         })
 
     return {

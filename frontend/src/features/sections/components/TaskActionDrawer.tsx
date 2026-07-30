@@ -1,8 +1,10 @@
 import type { Dispatch, SetStateAction } from "react";
+import { useEffect } from "react";
 import { AlertTriangle } from "lucide-react";
 import { cn } from "@/shared/utils/cn";
 
 import type { SectionBoardTask, ShortageStrategy } from "@/shared/api/shopfloor";
+import { formatDimensionsLabel } from "@/shared/api/stock";
 import {
   Badge,
   Button,
@@ -95,7 +97,24 @@ export function TaskActionDrawer({
 }: TaskActionDrawerProps) {
   const isGroup = !!tasks && tasks.length > 0;
 
-  const maxQty = isGroup
+  // Трансформирующий этап (ADR-0002): факт вводится во входных заготовках,
+  // выходы приходуются автоматически пропорционально порции.
+  const isTransform =
+    !isGroup && !!task?.transforms_dimensions && (task?.outputs?.length ?? 0) > 0;
+  const inputQty = isTransform ? toNumber(task?.input_quantity ?? "0") : 0;
+  const inputConsumed = isTransform ? toNumber(task?.input_consumed_quantity ?? "0") : 0;
+  const inputRejected = isTransform ? toNumber(task?.cache.rejected_quantity ?? "0") : 0;
+  const remainingInput = Math.max(0, inputQty - inputConsumed - inputRejected);
+
+  // Авто-передача неприменима к трансформации (выходы разных
+  // габаритов) — сбрасываем флаг, чтобы не ушёл в payload.
+  useEffect(() => {
+    if (isTransform && autoTransferNext) setAutoTransferNext(false);
+  }, [isTransform, autoTransferNext, setAutoTransferNext]);
+
+  const maxQty = isTransform
+    ? remainingInput
+    : isGroup
     ? tasks.reduce(
         (sum, t) =>
           sum +
@@ -130,7 +149,8 @@ export function TaskActionDrawer({
   const outOfRange = qtyNum > 0 && maxQty > 0 && qtyNum + defectNum > maxQty;
 
   const factTotal = qtyNum + defectNum;
-  const hasShortage = factTotal > maxQty + available;
+  // Для трансформации лимит — остаток входа, стратегии дефицита неприменимы.
+  const hasShortage = !isTransform && factTotal > maxQty + available;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -151,15 +171,57 @@ export function TaskActionDrawer({
           {(task || isGroup) && (
             <div className="rounded-lg border bg-muted/20 p-3 text-xs">
               <div className="flex flex-row flex-wrap gap-x-4 gap-y-1">
-                <div>В работе: <span className="font-medium">{maxQty}</span></div>
-                <div>Годные: <span className="font-medium">{completedQty}</span></div>
-                <div>Брак: <span className="font-medium">{rejectedQty}</span></div>
+                {isTransform ? (
+                  <>
+                    <div>
+                      Вход:{" "}
+                      <span className="font-medium">
+                        {inputQty} × {formatDimensionsLabel(task?.input_dimensions)}
+                      </span>
+                    </div>
+                    <div>Раскроено: <span className="font-medium">{inputConsumed}</span></div>
+                    <div>Брак: <span className="font-medium">{inputRejected}</span></div>
+                    <div>Осталось: <span className="font-medium">{remainingInput}</span></div>
+                  </>
+                ) : (
+                  <>
+                    <div>В работе: <span className="font-medium">{maxQty}</span></div>
+                    <div>Годные: <span className="font-medium">{completedQty}</span></div>
+                    <div>Брак: <span className="font-medium">{rejectedQty}</span></div>
+                  </>
+                )}
               </div>
               {!isGroup && task && task.operation_names && task.operation_names.length > 1 && (
                 <div className="mt-2">
                   <Badge variant="secondary">Будет выполнено: {task.operation_names.join(" + ")}</Badge>
                 </div>
               )}
+            </div>
+          )}
+
+          {isTransform && !!task?.outputs_progress?.length && (
+            <div className="rounded-lg border p-3 space-y-2">
+              <div className="text-sm font-medium">Прогресс по выходам</div>
+              {task.outputs_progress.map((row, idx) => {
+                const totalQty = parseFloat(row.quantity) || 0;
+                const producedQty = parseFloat(row.produced_quantity) || 0;
+                const pct = totalQty > 0
+                  ? Math.min(100, Math.round((producedQty / totalQty) * 100))
+                  : 0;
+                return (
+                  <div key={row.row_number ?? idx} className="space-y-1">
+                    <div className="flex justify-between text-xs">
+                      <span>{formatDimensionsLabel(row.dimensions)}</span>
+                      <span className="tabular-nums text-muted-foreground">
+                        {fmtQty(row.produced_quantity)} / {fmtQty(row.quantity)}
+                      </span>
+                    </div>
+                    <div className="h-1.5 rounded bg-muted overflow-hidden">
+                      <div className="h-full bg-primary" style={{ width: `${pct}%` }} />
+                    </div>
+                  </div>
+                );
+              })}
             </div>
           )}
 
@@ -211,7 +273,9 @@ export function TaskActionDrawer({
 
           <div className="flex flex-row flex-wrap items-end gap-3">
             <div className="flex flex-col gap-1.5">
-              <label className="text-sm font-medium">Факт (годные)</label>
+              <label className="text-sm font-medium">
+                {isTransform ? "Факт (раскроено заготовок)" : "Факт (годные)"}
+              </label>
               <Input
                 type="number"
                 step="1"
@@ -222,7 +286,9 @@ export function TaskActionDrawer({
               />
             </div>
             <div className="flex flex-col gap-1.5">
-              <label className="text-sm font-medium">Брак</label>
+              <label className="text-sm font-medium">
+                {isTransform ? "Брак (заготовок)" : "Брак"}
+              </label>
               <Input
                 type="number"
                 step="1"
@@ -235,7 +301,9 @@ export function TaskActionDrawer({
           </div>
           {outOfRange && (
             <div className="mt-1 text-xs text-red-600">
-              Сумма факта и брака больше объема в работе: {maxQty}
+              {isTransform
+                ? `Сумма факта и брака больше остатка входа: ${maxQty}`
+                : `Сумма факта и брака больше объема в работе: ${maxQty}`}
             </div>
           )}
 
@@ -244,10 +312,10 @@ export function TaskActionDrawer({
               <Button
                 type="button"
                 variant="outline"
-                onClick={() => setActionQty(String(plannedQty))}
+                onClick={() => setActionQty(String(isTransform ? inputQty : plannedQty))}
                 className="shrink-0 w-[150px] h-8"
               >
-                Плановое ({plannedQty})
+                Плановое ({isTransform ? inputQty : plannedQty})
               </Button>
             )}
             <Button
@@ -358,20 +426,22 @@ export function TaskActionDrawer({
             <Input value={actionComment} onChange={(e) => setActionComment(e.target.value)} placeholder="Опционально" />
           </div>
 
-          <label className="flex items-start gap-2 cursor-pointer select-none rounded-md border border-slate-200 bg-slate-50/50 p-3 hover:bg-slate-50">
-            <Checkbox
-              checked={autoTransferNext}
-              onCheckedChange={(v) => setAutoTransferNext(Boolean(v))}
-              className="mt-0.5"
-            />
-            <div className="flex-1">
-              <div className="text-sm font-medium">Сразу отправить на следующий участок</div>
-              <div className="text-xs text-muted-foreground mt-0.5">
-                Создаст запись в «Передачах» на нужное количество годных.
-                Снимите, если хотите управлять перемещением вручную.
+          {!isTransform && (
+            <label className="flex items-start gap-2 cursor-pointer select-none rounded-md border border-slate-200 bg-slate-50/50 p-3 hover:bg-slate-50">
+              <Checkbox
+                checked={autoTransferNext}
+                onCheckedChange={(v) => setAutoTransferNext(Boolean(v))}
+                className="mt-0.5"
+              />
+              <div className="flex-1">
+                <div className="text-sm font-medium">Сразу отправить на следующий участок</div>
+                <div className="text-xs text-muted-foreground mt-0.5">
+                  Создаст запись в «Передачах» на нужное количество годных.
+                  Снимите, если хотите управлять перемещением вручную.
+                </div>
               </div>
-            </div>
-          </label>
+            </label>
+          )}
         </div>
 
         <div className="border-t p-4 flex justify-end gap-2">

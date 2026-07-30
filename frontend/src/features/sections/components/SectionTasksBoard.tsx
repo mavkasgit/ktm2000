@@ -10,6 +10,7 @@
 import { useMemo, useState, useCallback, useEffect, useRef } from "react";
 import { ChevronDown, ChevronRight } from "lucide-react";
 import type { SectionBoardQueryParams, SectionBoardTask, TaskGroup } from "@/shared/api/shopfloor";
+import { formatDimensionsLabel } from "@/shared/api/stock";
 import {
   Badge,
   Button,
@@ -201,6 +202,19 @@ function StatusDot({ task }: { task: SectionBoardTask }) {
   );
 }
 
+/** Компактный прогресс по выходам трансформирующего задания (ADR-0002). */
+function renderOutputsProgress(task: SectionBoardTask, className: string) {
+  if (!task.transforms_dimensions || !task.outputs_progress?.length) return null;
+  const text = task.outputs_progress
+    .map((row) => `${formatDimensionsLabel(row.dimensions)}: ${fmtQty(row.produced_quantity)}/${fmtQty(row.quantity)}`)
+    .join(" · ");
+  return (
+    <span className={className} title={text}>
+      {text}
+    </span>
+  );
+}
+
 function renderTaskRow(
   task: SectionBoardTask,
   isSelected: boolean | undefined,
@@ -241,6 +255,7 @@ function renderTaskRow(
             {task.operation_summary}
           </span>
         )}
+        {renderOutputsProgress(task, "block text-xs text-muted-foreground tabular-nums")}
       </td>
       <td className="p-2">{fmtQty(task.planned_quantity)}</td>
       <td className="p-2">{fmtQty(task.cache.issued_quantity)}</td>
@@ -329,6 +344,8 @@ function renderMobileCard(
           {task.operation_summary}
         </div>
       ) : null}
+
+      {renderOutputsProgress(task, "block text-xs text-muted-foreground tabular-nums border-t pt-2")}
 
       {task.previous_stage ? (
         <div className="text-xs text-muted-foreground border-t pt-2">
