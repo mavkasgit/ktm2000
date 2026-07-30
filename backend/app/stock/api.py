@@ -35,6 +35,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import READER_ROLES, WRITER_ROLES, get_current_user, require_role
 from app.core.database import get_db
+from app.domain.dimensions import format_dimensions
 from app.models.product import Product
 from app.models.section import Section
 from app.models.transfer import Transfer
@@ -45,7 +46,7 @@ from app.stock.models import (
     StockBalance,
     StockTransaction,
 )
-from app.stock.services import StockCommand, StockCommandService
+from app.stock.services import StockCommand, StockCommandService, StockValidationError
 from app.stock.import_service import (
     ImportResult,
     RemainderItem,
@@ -122,6 +123,9 @@ class StockBalanceOut(BaseModel):
     location_name: str | None = None
     quality_state: QualityState
     balance_qty: str  # Decimal → str для стабильной сериализации
+    # Габаритная группа остатка (ADR-0001); None = legacy/безразмерные.
+    dimensions: dict | None = None
+    dimensions_label: str = "—"
     completed_stages: list[StockBalanceCompletedStageOut] = Field(default_factory=list)
     refreshed_at: str | None = None
 
@@ -151,6 +155,8 @@ class StockTransactionOut(BaseModel):
     to_location_id: int | None
     to_location_name: str | None = None
     quantity: str
+    dimensions: dict | None = None
+    dimensions_label: str = "—"
     reason: Reason
     from_quality_state: QualityState
     to_quality_state: QualityState
@@ -186,6 +192,9 @@ class StockAdjustmentIn(BaseModel):
     quantity: float = Field(gt=0)
     reason: Reason
     quality_state: QualityState = QualityState.GOOD
+    # Габарит (ADR-0001), например {"length_mm": 2700}; некорректная
+    # форма → 422 (канонизация в StockCommandService.record()).
+    dimensions: dict | None = None
     comment: str | None = None
 
 
@@ -329,6 +338,8 @@ def _serialize_balance(
         location_name=location_name,
         quality_state=row.quality_state,
         balance_qty=str(row.balance_qty),
+        dimensions=row.dimensions,
+        dimensions_label=format_dimensions(row.dimensions),
         completed_stages=completed_stages or [],
         refreshed_at=row.refreshed_at.isoformat() if row.refreshed_at else None,
     )
@@ -527,6 +538,8 @@ def _serialize_transaction(
         to_location_id=tx.to_location_id,
         to_location_name=to_location_name,
         quantity=str(tx.quantity),
+        dimensions=tx.dimensions,
+        dimensions_label=format_dimensions(tx.dimensions),
         reason=tx.reason,
         from_quality_state=tx.from_quality_state,
         to_quality_state=tx.to_quality_state,
@@ -727,7 +740,6 @@ async def create_adjustment(
     ``reason``.
     """
     if payload.reason not in _ADJUSTMENT_REASONS:
-        from fastapi import HTTPException
         raise HTTPException(
             status_code=422,
             detail=f"reason must be one of {[r.value for r in _ADJUSTMENT_REASONS]}, got {payload.reason.value}",
@@ -746,13 +758,17 @@ async def create_adjustment(
         reason=payload.reason,
         from_location_id=from_location_id,
         to_location_id=to_location_id,
+        dimensions=payload.dimensions,
         quality_state=payload.quality_state,
         comment=payload.comment,
         created_by=user.id,
         created_by_user_name=user.full_name or user.username,
     )
     service = StockCommandService()
-    tx = await service.record(db, cmd)
+    try:
+        tx = await service.record(db, cmd)
+    except StockValidationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     await db.commit()
 
     return StockAdjustmentOut(

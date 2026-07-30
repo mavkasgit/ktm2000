@@ -16,6 +16,10 @@ export type StockBalanceEntry = {
   location_name: string | null;
   quality_state: QualityState | "good" | "scrap" | "rework" | "final_scrap";
   balance_qty: string;
+  /** Габаритная группа остатка (ADR-0001), например {"length_mm": 2700}; null — безразмерные/legacy. */
+  dimensions?: Record<string, unknown> | null;
+  /** Готовая подпись габарита с бэкенда («2,7 м» / «—»). */
+  dimensions_label?: string;
   completed_stages?: ImportOperationStep[];
   refreshed_at: string | null;
 };
@@ -39,6 +43,33 @@ export function formatBalanceQtyInteger(qty: string | number): string {
   const n = typeof qty === "string" ? Number.parseFloat(qty) : qty;
   if (!Number.isFinite(n)) return "—";
   return String(Math.round(n));
+}
+
+/**
+ * Подпись габарита (ADR-0001): {"length_mm": 2700} → «2,7 м»
+ * (length_mm/1000, запятая как десятичный разделитель), null/пусто → «—».
+ * Серверная подпись (dimensions_label) имеет приоритет, локальный расчёт —
+ * fallback для мест, где ответ её не содержит.
+ */
+export function formatDimensionsLabel(
+  dims?: Record<string, unknown> | null,
+  serverLabel?: string | null,
+): string {
+  if (serverLabel) return serverLabel;
+  if (!dims) return "—";
+  const keys = Object.keys(dims);
+  if (keys.length === 0) return "—";
+  if (keys.length === 1 && keys[0] === "length_mm") {
+    const mm = Number(dims.length_mm);
+    if (Number.isFinite(mm) && mm > 0) {
+      return `${String(mm / 1000).replace(".", ",")} м`;
+    }
+  }
+  // Прочие наборы ключей — fallback «ключ: значение» в стабильном порядке.
+  return keys
+    .sort()
+    .map((key) => `${key}: ${String(dims[key])}`)
+    .join(", ");
 }
 
 export type StockReason =
@@ -112,6 +143,9 @@ export type StockTransactionEntry = {
   to_location_id: number | null;
   to_location_name: string | null;
   quantity: string;
+  /** Габарит движения (ADR-0001); null — безразмерные/legacy. */
+  dimensions?: Record<string, unknown> | null;
+  dimensions_label?: string;
   reason: StockReason | string;
   from_quality_state: QualityState;
   to_quality_state: QualityState;
@@ -226,6 +260,8 @@ export type StockAdjustmentPayload = {
   quantity: number;
   reason: "manual_in" | "manual_out" | "adjustment_in" | "adjustment_out";
   quality_state?: QualityState;
+  /** Габарит движения, например {"length_mm": 2700}; null/отсутствие — безразмерные штуки. */
+  dimensions?: Record<string, unknown> | null;
   comment?: string;
 };
 

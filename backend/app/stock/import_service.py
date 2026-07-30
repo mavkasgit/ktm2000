@@ -842,6 +842,8 @@ async def apply_remainders_import(
                     product_id=bal.product_id,
                     from_location_id=location_id,
                     quantity=bal.balance_qty,
+                    # Гасим каждую габаритную группу отдельно (ADR-0001).
+                    dimensions=bal.dimensions,
                     reason=Reason.ADJUSTMENT_OUT,
                     quality_state=bal.quality_state,
                     comment="Очистка перед импортом остатков",

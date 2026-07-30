@@ -11,8 +11,14 @@ nullable для ручных приходов/расходов из ниотку
 состоянием качества ``quality_state``.
 
 ``StockBalance`` — материализованный кэш баланса по ключу
-``(product_id, location_id, quality_state)``. Пересчитывается из
+``(product_id, location_id, quality_state, dimensions)``. Пересчитывается из
 ``StockTransaction`` через ``StockProjectionManager``. Не бизнес-сущность.
+
+``dimensions`` (ADR-0001) — вторая ось учёта: JSONB в канонической форме
+(``app.domain.dimensions.canonicalize_dimensions``), например
+``{"length_mm": 2700}``; ``NULL`` — безразмерные штуки (и legacy-записи
+до миграции 023). Остатки разных длин одного SKU на одной секции —
+разные строки баланса.
 """
 from __future__ import annotations
 
@@ -35,6 +41,7 @@ from sqlalchemy import (
     func,
     text,
 )
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base
@@ -113,6 +120,13 @@ class StockTransaction(Base):
         ForeignKey("sections.id"), nullable=True, index=True
     )
     quantity: Mapped[Decimal] = mapped_column(Numeric(14, 3), nullable=False)
+    # Габарит движения (ADR-0001): каноническая форма через
+    # canonicalize_dimensions; NULL = безразмерные штуки / legacy-записи.
+    # none_as_null: Python None → SQL NULL (не jsonb 'null'), иначе
+    # legacy-группа расщепляется на два разных ключа.
+    dimensions: Mapped[dict | None] = mapped_column(
+        JSONB(none_as_null=True), nullable=True
+    )
     reason: Mapped[Reason] = mapped_column(
         Enum(Reason, name="stock_reason", values_callable=lambda x: [e.value for e in x]),
         nullable=False, index=True,
@@ -165,7 +179,7 @@ class StockTransaction(Base):
 
 
 class StockBalance(Base):
-    """Материализованный кэш баланса по ``(product, location, quality_state)``.
+    """Материализованный кэш баланса по ``(product, location, quality_state, dimensions)``.
 
     Не источник правды — пересчитывается из ``StockTransaction`` через
     ``StockProjectionManager.refresh_balance``. Существует только для
@@ -174,11 +188,15 @@ class StockBalance(Base):
 
     __tablename__ = "stock_balances"
     __table_args__ = (
+        # NULLS NOT DISTINCT (PG15+): два NULL-габарита — одна и та же legacy-группа,
+        # дубли строк баланса по одному ключу невозможны.
         UniqueConstraint(
             "product_id",
             "location_id",
             "quality_state",
-            name="uq_stock_balances_product_location_quality",
+            "dimensions",
+            name="uq_stock_balances_product_location_quality_dims",
+            postgresql_nulls_not_distinct=True,
         ),
         CheckConstraint("balance_qty <> 0", name="nonzero"),
     )
@@ -193,6 +211,10 @@ class StockBalance(Base):
         nullable=False,
         server_default=text("'good'"),
         default=QualityState.GOOD,
+    )
+    # Габарит группы остатка (каноническая форма); NULL = legacy/безразмерные.
+    dimensions: Mapped[dict | None] = mapped_column(
+        JSONB(none_as_null=True), nullable=True
     )
     balance_qty: Mapped[Decimal] = mapped_column(Numeric(14, 3), nullable=False, default=0)
     refreshed_at: Mapped[datetime] = mapped_column(

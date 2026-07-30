@@ -4,6 +4,7 @@ import { useQuery } from "@tanstack/react-query";
 import {
   formatQualityStateLabel,
   formatBalanceQtyInteger,
+  formatDimensionsLabel,
   getStockBalances,
 } from "@/shared/api/stock";
 import type { StockBalanceEntry } from "@/shared/api/stock";
@@ -255,7 +256,7 @@ export function StockBalancesPanel({
     ),
   }), [balances]);
 
-  const columnCount = hideLocationColumn ? 6 : 7;
+  const columnCount = hideLocationColumn ? 7 : 8;
 
   const handlePanelReset = useCallback(() => {
     handleResetFilters();
@@ -308,6 +309,8 @@ export function StockBalancesPanel({
                           {...bindColumn("quantity")}
                         />
                       </th>
+                      {/* Габаритная группа (ADR-0001): разные длины одного SKU — разные строки */}
+                      <th className={`${headerCellClass} px-2`}>Габарит</th>
                       <th className={`${headerCellClass} p-0 min-w-[140px]`}>
                         <SortableFilterHeader
                           field="operations"
@@ -375,6 +378,9 @@ export function StockBalancesPanel({
                         </td>
                         <td className="p-2 font-semibold font-mono">
                           {formatBalanceQtyInteger(b.balance_qty)}
+                        </td>
+                        <td className="p-2 text-xs whitespace-nowrap">
+                          {formatDimensionsLabel(b.dimensions, b.dimensions_label)}
                         </td>
                         <td className="p-2 max-w-[280px]">
                           {b.completed_stages && b.completed_stages.length > 0 ? (

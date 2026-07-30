@@ -17,14 +17,21 @@ command→event→subscribers шиной и прямолинейными cascade
 """
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 from datetime import datetime
 from decimal import Decimal
 from typing import Any
 
-from sqlalchemy import case, func, select, update
+from sqlalchemy import case, cast, delete, func, select, update
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.domain.dimensions import (
+    DimensionsValidationError,
+    canonicalize_dimensions,
+    format_dimensions,
+)
 from app.models import Product, Section
 from app.models.work_task import WorkTask
 from app.stock.task_cache import (
@@ -48,6 +55,24 @@ class StockValidationError(ValueError):
     """
 
 
+def dimensions_match_clause(column, dims: dict | None):
+    """SQL-условие «габарит равен dims» с учётом NULL (legacy-группа).
+
+    ``dims`` ожидается в канонической форме (canonicalize_dimensions);
+    jsonb-равенство в PostgreSQL не зависит от порядка ключей.
+    """
+    if dims is None:
+        return column.is_(None)
+    return column == cast(dims, JSONB)
+
+
+def _dimensions_hash_key(dims: dict | None) -> str | None:
+    """Хешируемый ключ группировки для dict-габарита (in-memory агрегации)."""
+    if dims is None:
+        return None
+    return json.dumps(dims, sort_keys=True, ensure_ascii=False)
+
+
 @dataclass
 class StockCommand:
     """Интент записи движения материала в ledger.
@@ -63,6 +88,10 @@ class StockCommand:
     reason: Reason
     from_location_id: int | None = None
     to_location_id: int | None = None
+    # Габарит движения (ADR-0001): dict в любой форме — record()
+    # приводит к канонической через canonicalize_dimensions;
+    # None = безразмерные штуки (legacy-группа баланса).
+    dimensions: dict[str, Any] | None = None
     quality_state: QualityState = QualityState.GOOD
     # Результирующее качество (на to_location). По умолчанию = quality_state
     # (без изменения состояния). Для SCRAP: quality_state=good, to_quality_state=scrap.
@@ -109,20 +138,22 @@ class StockProjectionManager:
         """Инкрементальное обновление StockBalance для затронутых локаций.
 
         Баланс = SUM(incoming) - SUM(outgoing) по ключу
-        ``(product, location, quality_state)``. from_quality_state описывает
-        состояние материала до перехода (на исходной локации),
+        ``(product, location, quality_state, dimensions)``. from_quality_state
+        описывает состояние материала до перехода (на исходной локации),
         to_quality_state — после (на целевой). Если баланс стал 0 —
         строка удаляется (инкубатор: ck_stock_balances_nonzero).
         """
         # from_location: исходящий материал в from_quality_state
         if tx.from_location_id is not None:
             await self._recompute_balance(
-                session, tx.product_id, tx.from_location_id, tx.from_quality_state
+                session, tx.product_id, tx.from_location_id, tx.from_quality_state,
+                tx.dimensions,
             )
         # to_location: входящий материал в to_quality_state
         if tx.to_location_id is not None:
             await self._recompute_balance(
-                session, tx.product_id, tx.to_location_id, tx.to_quality_state
+                session, tx.product_id, tx.to_location_id, tx.to_quality_state,
+                tx.dimensions,
             )
 
     async def _recompute_balance(
@@ -131,10 +162,12 @@ class StockProjectionManager:
         product_id: int,
         location_id: int,
         quality_state: QualityState,
+        dimensions: dict | None,
     ) -> None:
         """Пересчёт одной строки баланса из ledger (атомарный UPSERT).
 
-        Считаем SUM(incoming) - SUM(outgoing) по ledger для данного ключа.
+        Считаем SUM(incoming) - SUM(outgoing) по ledger для данного ключа
+        (включая габарит; NULL-габарит — отдельная legacy-группа).
         Если 0 — удаляем строку; иначе UPSERT.
         """
         incoming = await session.execute(
@@ -143,6 +176,7 @@ class StockProjectionManager:
                 StockTransaction.product_id == product_id,
                 StockTransaction.to_location_id == location_id,
                 StockTransaction.to_quality_state == quality_state,
+                dimensions_match_clause(StockTransaction.dimensions, dimensions),
             )
         )
         outgoing = await session.execute(
@@ -151,6 +185,7 @@ class StockProjectionManager:
                 StockTransaction.product_id == product_id,
                 StockTransaction.from_location_id == location_id,
                 StockTransaction.from_quality_state == quality_state,
+                dimensions_match_clause(StockTransaction.dimensions, dimensions),
             )
         )
         in_sum = sum((r[0] for r in incoming), Decimal("0"))
@@ -162,6 +197,7 @@ class StockProjectionManager:
                 StockBalance.product_id == product_id,
                 StockBalance.location_id == location_id,
                 StockBalance.quality_state == quality_state,
+                dimensions_match_clause(StockBalance.dimensions, dimensions),
             )
         )
         row = existing.scalar_one_or_none()
@@ -174,6 +210,7 @@ class StockProjectionManager:
                 product_id=product_id,
                 location_id=location_id,
                 quality_state=quality_state,
+                dimensions=dimensions,
                 balance_qty=balance,
                 refreshed_at=datetime.now(),
             )
@@ -188,7 +225,9 @@ class StockProjectionManager:
         Используется в diagnostics/миграциях для сверки. Возвращает
         количество строк баланса после пересчёта.
         """
-        await session.execute(StockBalance.__table__.delete())  # wipe
+        # ORM-delete: autoflush доносит незаписанные изменения проекции,
+        # а объекты в identity map синхронизируются с удалением (wipe).
+        await session.execute(delete(StockBalance))
         result = await session.execute(
             select(
                 StockTransaction.product_id,
@@ -196,18 +235,24 @@ class StockProjectionManager:
                 StockTransaction.to_location_id,
                 StockTransaction.from_quality_state,
                 StockTransaction.to_quality_state,
+                StockTransaction.dimensions,
                 StockTransaction.quantity,
             )
         )
-        agg: dict[tuple[int, int, QualityState], Decimal] = {}
-        for product_id, from_loc, to_loc, from_qs, to_qs, qty in result:
+        # Ключ агрегата включает хешируемый слепок габарита;
+        # сам dict храним отдельно для записи в строку баланса.
+        agg: dict[tuple[int, int, QualityState, str | None], Decimal] = {}
+        dims_by_key: dict[str | None, dict | None] = {}
+        for product_id, from_loc, to_loc, from_qs, to_qs, dims, qty in result:
+            dims_key = _dimensions_hash_key(dims)
+            dims_by_key.setdefault(dims_key, dims)
             if to_loc is not None:
-                key = (product_id, to_loc, to_qs)
+                key = (product_id, to_loc, to_qs, dims_key)
                 agg[key] = agg.get(key, Decimal("0")) + qty
             if from_loc is not None:
-                key = (product_id, from_loc, from_qs)
+                key = (product_id, from_loc, from_qs, dims_key)
                 agg[key] = agg.get(key, Decimal("0")) - qty
-        for (product_id, location_id, qs), balance in agg.items():
+        for (product_id, location_id, qs, dims_key), balance in agg.items():
             if balance == 0:
                 continue
             session.add(
@@ -215,6 +260,7 @@ class StockProjectionManager:
                     product_id=product_id,
                     location_id=location_id,
                     quality_state=qs,
+                    dimensions=dims_by_key.get(dims_key),
                     balance_qty=balance,
                     refreshed_at=datetime.now(),
                 )
@@ -488,6 +534,13 @@ class StockCommandService:
             if prior is not None:
                 return prior
 
+        # Приведение габарита к канонической форме до валидации/INSERT:
+        # ledger хранит только каноническую форму ({} → None).
+        try:
+            cmd.dimensions = canonicalize_dimensions(cmd.dimensions)
+        except DimensionsValidationError as exc:
+            raise StockValidationError(f"invalid dimensions: {exc}") from exc
+
         await self._validate(session, cmd)
 
         tx = StockTransaction(
@@ -495,6 +548,7 @@ class StockCommandService:
             from_location_id=cmd.from_location_id,
             to_location_id=cmd.to_location_id,
             quantity=cmd.quantity,
+            dimensions=cmd.dimensions,
             reason=cmd.reason,
             from_quality_state=cmd.quality_state,
             to_quality_state=cmd.to_quality_state or cmd.quality_state,
@@ -585,6 +639,7 @@ class StockCommandService:
                     StockBalance.product_id == cmd.product_id,
                     StockBalance.location_id == cmd.from_location_id,
                     StockBalance.quality_state == cmd.quality_state,
+                    dimensions_match_clause(StockBalance.dimensions, cmd.dimensions),
                 )
             )
             balance_row = balance_result.scalar_one_or_none()
@@ -592,7 +647,8 @@ class StockCommandService:
             if current_balance < cmd.quantity:
                 raise StockValidationError(
                     f"Insufficient stock for product_id={cmd.product_id} at location_id={cmd.from_location_id} "
-                    f"(quality={cmd.quality_state.value}): required {cmd.quantity}, available {current_balance}"
+                    f"(quality={cmd.quality_state.value}, dimensions={format_dimensions(cmd.dimensions)}): "
+                    f"required {cmd.quantity}, available {current_balance}"
                 )
 
         # created_by mandatory at DB level — пока не enforced здесь (тесты могут

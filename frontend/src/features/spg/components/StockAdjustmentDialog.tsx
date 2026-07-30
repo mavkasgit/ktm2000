@@ -54,6 +54,7 @@ export function StockAdjustmentDialog({ open, onOpenChange }: StockAdjustmentDia
   const [operationType, setOperationType] = useState<OperationType>("manual_in");
   const [qualityState, setQualityState] = useState<QualityState>("GOOD");
   const [quantity, setQuantity] = useState("");
+  const [lengthMeters, setLengthMeters] = useState("");
   const [comment, setComment] = useState("");
   const [error, setError] = useState<string | null>(null);
 
@@ -66,6 +67,7 @@ export function StockAdjustmentDialog({ open, onOpenChange }: StockAdjustmentDia
       setOperationType("manual_in");
       setQualityState("GOOD");
       setQuantity("");
+      setLengthMeters("");
       setComment("");
       setError(null);
     }
@@ -81,16 +83,29 @@ export function StockAdjustmentDialog({ open, onOpenChange }: StockAdjustmentDia
 
   const selectedProduct = products.find((p) => p.id === selectedProductId);
 
+  // Габарит (ADR-0001): длина в метрах (запятая/точка) → {"length_mm": N};
+  // пусто — безразмерные штуки (dimensions не передаётся).
+  const parseLengthToDimensions = (): Record<string, unknown> | undefined | "invalid" => {
+    const raw = lengthMeters.trim();
+    if (!raw) return undefined;
+    const meters = Number.parseFloat(raw.replace(",", "."));
+    if (!Number.isFinite(meters) || meters <= 0) return "invalid";
+    return { length_mm: Math.round(meters * 1000) };
+  };
+
   const saveMutation = useMutation({
-    mutationFn: () =>
-      postStockAdjustment({
+    mutationFn: () => {
+      const dims = parseLengthToDimensions();
+      return postStockAdjustment({
         product_id: selectedProductId as number,
         location_id: selectedSectionId as number,
         quantity: parseFloat(quantity),
         reason: operationType,
         quality_state: qualityState,
+        dimensions: dims === "invalid" ? undefined : dims,
         comment: comment || undefined,
-      }),
+      });
+    },
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: queryKeys.stock.balancesAll() });
       void queryClient.invalidateQueries({ queryKey: queryKeys.stock.productBalance(selectedProductId!) });
@@ -117,6 +132,10 @@ export function StockAdjustmentDialog({ open, onOpenChange }: StockAdjustmentDia
     const qty = parseFloat(quantity);
     if (isNaN(qty) || qty <= 0) {
       setError("Количество должно быть положительным числом");
+      return;
+    }
+    if (parseLengthToDimensions() === "invalid") {
+      setError("Длина должна быть положительным числом в метрах (например 2,7)");
       return;
     }
     setError(null);
@@ -253,6 +272,16 @@ export function StockAdjustmentDialog({ open, onOpenChange }: StockAdjustmentDia
               value={quantity}
               onChange={(e) => setQuantity(e.target.value)}
               placeholder="Введите количество..."
+            />
+          </div>
+
+          {/* Length (dimensions, ADR-0001) */}
+          <div className="space-y-1">
+            <label className="text-sm font-medium">Длина, м (необязательно)</label>
+            <Input
+              value={lengthMeters}
+              onChange={(e) => setLengthMeters(e.target.value)}
+              placeholder="Например 2,7 — остаток будет учтён по этой длине"
             />
           </div>
 

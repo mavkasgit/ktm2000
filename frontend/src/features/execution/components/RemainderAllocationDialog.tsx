@@ -10,6 +10,7 @@ import {
 } from "@/shared/ui";
 import {
   formatBalanceQtyInteger,
+  formatDimensionsLabel,
   formatQualityStateLabel,
   getProductStockBalances,
 } from "@/shared/api/stock";
@@ -66,17 +67,19 @@ const READINESS_META: Record<
 };
 
 function groupBalances(balances: StockBalanceEntry[]) {
-  const map = new Map<string, { location: string; quality: string; qty: number }>();
+  const map = new Map<string, { location: string; quality: string; dims: string; qty: number }>();
   for (const b of balances) {
     const location = b.location_name || `Участок #${b.location_id}`;
     const quality = formatQualityStateLabel(b.quality_state);
-    const key = `${location}\0${quality}`;
+    // Габаритная группа (ADR-0001): разные длины одного SKU не смешиваются.
+    const dims = formatDimensionsLabel(b.dimensions, b.dimensions_label);
+    const key = `${location}\0${quality}\0${dims}`;
     const prev = map.get(key);
     const add = Math.round(Number.parseFloat(b.balance_qty) || 0);
     if (prev) {
       prev.qty += add;
     } else {
-      map.set(key, { location, quality, qty: add });
+      map.set(key, { location, quality, dims, qty: add });
     }
   }
   return Array.from(map.values()).sort((a, b) => b.qty - a.qty);
@@ -244,12 +247,15 @@ export function RemainderAllocationDialog({
                   </thead>
                   <tbody>
                     {groupedBalances.slice(0, 6).map((row) => (
-                      <tr key={`${row.location}-${row.quality}`} className="border-b border-border/50 last:border-0">
+                      <tr key={`${row.location}-${row.quality}-${row.dims}`} className="border-b border-border/50 last:border-0">
                         <td className="py-1 pr-2 truncate max-w-[140px]" title={row.location}>
                           {row.location}
                         </td>
-                        <td className="py-1 text-right font-mono tabular-nums">
+                        <td className="py-1 text-right font-mono tabular-nums whitespace-nowrap">
                           {formatBalanceQtyInteger(row.qty)}
+                          {row.dims !== "—" && (
+                            <span className="text-muted-foreground"> × {row.dims}</span>
+                          )}
                         </td>
                         <td className="py-1 pl-2 text-right text-muted-foreground">{row.quality}</td>
                       </tr>

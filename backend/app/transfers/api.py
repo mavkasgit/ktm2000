@@ -32,6 +32,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import READER_ROLES, TRANSFER_WRITER_ROLES, require_role
 from app.api.deps import get_current_user
 from app.core.database import get_db
+from app.domain.dimensions import DimensionsValidationError
 from app.models.transfer import Transfer
 from app.models.user import User, UserRole
 from app.models.work_task import WorkTask
@@ -124,7 +125,10 @@ async def create_transfer(
             post_factum=payload.post_factum,
             allow_over_plan=payload.allow_over_plan,
             physical_handover_at=payload.physical_handover_at,
+            dimensions=payload.dimensions,
         )
+    except DimensionsValidationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

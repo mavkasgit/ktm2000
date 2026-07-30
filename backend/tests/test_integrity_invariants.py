@@ -86,7 +86,7 @@ _STOCK_LEDGER_INVARIANT_QUERIES: list[tuple[str, str]] = [
     (
         "S1_stock_balance_equals_sum_of_transactions",
         """
-        SELECT sb.product_id, sb.location_id, sb.quality_state,
+        SELECT sb.product_id, sb.location_id, sb.quality_state, sb.dimensions,
                sb.balance_qty
                  - COALESCE(SUM(CASE WHEN st.to_location_id   = sb.location_id
                                           AND st.to_quality_state   = sb.quality_state
@@ -98,8 +98,9 @@ _STOCK_LEDGER_INVARIANT_QUERIES: list[tuple[str, str]] = [
         FROM stock_balances sb
         LEFT JOIN stock_transactions st
           ON st.product_id = sb.product_id
+         AND st.dimensions IS NOT DISTINCT FROM sb.dimensions
          AND (st.to_location_id = sb.location_id OR st.from_location_id = sb.location_id)
-        GROUP BY sb.product_id, sb.location_id, sb.quality_state, sb.balance_qty
+        GROUP BY sb.product_id, sb.location_id, sb.quality_state, sb.dimensions, sb.balance_qty
         HAVING sb.balance_qty
                  != COALESCE(SUM(CASE WHEN st.to_location_id   = sb.location_id
                                            AND st.to_quality_state   = sb.quality_state

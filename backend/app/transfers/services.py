@@ -64,6 +64,7 @@ from app.services.shopfloor.common import (
 # ``from=from_section → to=to_section``: каждая двигает баланс обеих локаций
 # на quantity. Отмена — компенсационные транзакции (append-only).
 # Коррекция — in-place изменение quantity активных транзакций.
+from app.domain.dimensions import canonicalize_dimensions
 from app.stock.models import Reason, StockTransaction
 from app.stock.services import StockCommand, StockCommandService
 
@@ -195,6 +196,7 @@ async def _record_transfer_send_stock_tx(
     from_task: WorkTask,
     to_task: WorkTask,
     quantity: Decimal,
+    dimensions: dict | None,
     actor_id: int,
     executor_user_id: int | None,
     actor_name: str | None,
@@ -225,6 +227,7 @@ async def _record_transfer_send_stock_tx(
             reason=Reason.TRANSFER_SEND,
             from_location_id=transfer.from_section_id,
             to_location_id=transfer.to_section_id,
+            dimensions=dimensions,
             task_id=from_task.id,
             transfer_id=transfer.id,
             section_plan_line_id=from_task.section_plan_line_id,
@@ -285,6 +288,8 @@ async def _compensate_transfer_stock_tx(
                 reason=orig.reason,
                 from_location_id=comp_from,
                 to_location_id=comp_to,
+                # Компенсация гасит остаток той же габаритной группы.
+                dimensions=orig.dimensions,
                 task_id=orig.task_id,
                 transfer_id=transfer.id,
                 section_plan_line_id=orig.section_plan_line_id,
@@ -352,6 +357,7 @@ async def transfer_send(
     post_factum: bool = False,
     allow_over_plan: bool = False,
     physical_handover_at: datetime | None = None,
+    dimensions: dict | None = None,
 ) -> dict:
     """Send ``quantity`` from a completed SectionTask to the next route step.
 
@@ -466,6 +472,10 @@ async def transfer_send(
 
     quantity = _to_decimal(quantity)
     _ensure_positive(quantity, "quantity")
+    # Габарит (ADR-0001): каноническая форма один раз, обе проводки
+    # (SEND/RECEIVE) несут одинаковый dims. Ошибки формата поднимаются
+    # как DimensionsValidationError до создания Transfer.
+    dimensions = canonicalize_dimensions(dimensions)
     if not post_factum and not allow_over_plan:
         transferable = await _get_task_transferable(db, from_task)
         if quantity > transferable:
@@ -523,6 +533,7 @@ async def transfer_send(
         from_task=from_task,
         to_task=to_task,
         quantity=quantity,
+        dimensions=dimensions,
         actor_id=actor_id,
         executor_user_id=eff_executor,
         actor_name=actor_name,
@@ -549,6 +560,7 @@ async def transfer_send(
             reason=Reason.TRANSFER_RECEIVE,
             from_location_id=None,
             to_location_id=None,
+            dimensions=dimensions,
             task_id=to_task.id,
             transfer_id=transfer.id,
             section_plan_line_id=to_task.section_plan_line_id,
@@ -735,21 +747,21 @@ async def correct_transfer(
     # rejected. If the operator already completed or rejected more
     # than the new sent quantity, reducing the transfer would create
     # a phantom drain.
-        from app.stock.services import StockProjectionManager
-        pm = StockProjectionManager()
-        to_cache = await pm.get_task_cache(db, to_task.id)
-        diff = new_quantity - old_quantity
-        if diff < 0:
-            in_work = (
-                to_cache["issued_quantity"]
-                - to_cache["completed_quantity"]
-                - to_cache["rejected_quantity"]
+    from app.stock.services import StockProjectionManager
+    pm = StockProjectionManager()
+    to_cache = await pm.get_task_cache(db, to_task.id)
+    diff = new_quantity - old_quantity
+    if diff < 0:
+        in_work = (
+            to_cache["issued_quantity"]
+            - to_cache["completed_quantity"]
+            - to_cache["rejected_quantity"]
+        )
+        if in_work + diff < 0:
+            raise ValueError(
+                f"Target task has already completed or rejected parts. "
+                f"Cannot reduce transfer by {abs(diff)} as target task only has {in_work} in work"
             )
-            if in_work + diff < 0:
-                raise ValueError(
-                    f"Target task has already completed or rejected parts. "
-                    f"Cannot reduce transfer by {abs(diff)} as target task only has {in_work} in work"
-                )
 
     # 3. Update Transfer
     transfer.sent_quantity = new_quantity

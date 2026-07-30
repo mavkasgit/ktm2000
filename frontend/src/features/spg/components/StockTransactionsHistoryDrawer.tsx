@@ -18,6 +18,7 @@ import { usePaginatedTableQuery } from "@/shared/hooks/usePaginatedTableQuery";
 import {
   getStockTransactions,
   formatBalanceQtyInteger,
+  formatDimensionsLabel,
   formatQualityStateLabel,
   formatStockReasonLabel,
 } from "@/shared/api/stock";
@@ -462,8 +463,13 @@ export function StockTransactionsHistoryDrawer({
                         </td>
                         <td className="p-2 text-xs">{getTxCellValue(tx, "from")}</td>
                         <td className="p-2 text-xs">{getTxCellValue(tx, "to")}</td>
-                        <td className="p-2 text-right font-mono text-xs">
+                        <td className="p-2 text-right font-mono text-xs whitespace-nowrap">
                           {getTxCellValue(tx, "quantity")}
+                          {formatDimensionsLabel(tx.dimensions, tx.dimensions_label) !== "—" && (
+                            <span className="ml-1 text-muted-foreground">
+                              × {formatDimensionsLabel(tx.dimensions, tx.dimensions_label)}
+                            </span>
+                          )}
                         </td>
                         <td className="p-2 text-xs">{getTxCellValue(tx, "quality")}</td>
                         <td className="p-2 text-xs text-muted-foreground max-w-[150px] truncate">

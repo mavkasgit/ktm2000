@@ -26,6 +26,9 @@ class CreateTransferPayload(BaseModel):
     post_factum: bool = False
     allow_over_plan: bool = False
     physical_handover_at: datetime | None = None
+    # Габарит передаваемого материала (ADR-0001), например
+    # {"length_mm": 2700}; None = безразмерные штуки.
+    dimensions: dict | None = None
 
 
 class AcceptTransferPayload(BaseModel):
