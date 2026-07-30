@@ -17,13 +17,26 @@ from typing import Literal
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.domain.dimensions import (
+    DIMENSIONLESS_LABEL,
+    LENGTH_MM,
+    DimensionsValidationError,
+    canonicalize_dimensions,
+    format_dimensions,
+    parse_length_m_to_mm,
+)
 from app.models.product import Product
 from app.models.route import SectionOperation
 from app.models.section import Section
 from app.models.user import User
 from app.stock.models import QualityState, Reason, StockBalance
 from app.stock.services import StockCommand, StockCommandService
+from app.services.dimension_validation import (
+    MissingDimensionsError,
+    resolve_product_dimensions,
+)
 from app.services.excel_import import parse_row_selection
+from app.services.route_storage_classifier import is_production_section
 
 _OPERATIONS_COMMENT_RE = re.compile(r"операции:\s*([^|]+)", re.IGNORECASE)
 
@@ -65,6 +78,12 @@ class RemainderItem:
     # Сырое значение и резолвнутый статус качества из колонки «Статус качества»
     quality_state_raw: str | None = None
     quality_state: QualityState = QualityState.GOOD
+    # NEW (ADR-0003, п. 3): сырое значение колонки «Длина» (метры, как в Excel)
+    length_raw: str | None = None
+    # NEW: габариты строки, например {"length_mm": 2700}; None = безразмерные
+    dimensions: dict | None = None
+    # NEW: подпись габарита для предпросмотра («2,7 м» / «—»)
+    dimensions_label: str = DIMENSIONLESS_LABEL
 
 
 @dataclass
@@ -110,6 +129,10 @@ _QUALITY_STATE_ALIASES = frozenset({
     "quality_state", "quality", "качество",
     "статус качества", "состояние качества", "quality status",
 })
+_LENGTH_ALIASES = frozenset({
+    "длина", "длина, м", "длина м", "длина (м)", "длина,м",
+    "length", "length_m", "length, m",
+})
 _FINAL_SCRAP_ALIASES = frozenset({
     "окончательный брак",
     "оконч брак",
@@ -139,16 +162,21 @@ def _norm_hdr(value: str) -> str:
 
 
 # Порядок столбцов в шаблоне Excel (позиционный режим без заголовков):
-# Артикул | Кол-во | Статус качества | Операции | Участок | Коммент.
+# Артикул | Кол-во | Статус качества | Операции | Участок | Коммент. | Длина
+# «Длина» добавлена последней (issue #5), чтобы не ломать позиционный
+# разбор старых шестиколоночных файлов без заголовков.
 _TEMPLATE_COL_SKU = 0
 _TEMPLATE_COL_QTY = 1
 _TEMPLATE_COL_QUALITY_STATE = 2
 _TEMPLATE_COL_COMPLETED_OPS = 3
 _TEMPLATE_COL_TARGET_SECTION = 4
 _TEMPLATE_COL_COMMENT = 5
+_TEMPLATE_COL_LENGTH = 6
 
 
-def _template_column_indices() -> tuple[int, int | None, int | None, int | None, int | None, int | None]:
+def _template_column_indices() -> tuple[
+    int, int | None, int | None, int | None, int | None, int | None, int | None
+]:
     """Fixed column indices matching the downloadable Excel template."""
     return (
         _TEMPLATE_COL_SKU,
@@ -157,6 +185,7 @@ def _template_column_indices() -> tuple[int, int | None, int | None, int | None,
         _TEMPLATE_COL_COMPLETED_OPS,
         _TEMPLATE_COL_TARGET_SECTION,
         _TEMPLATE_COL_QUALITY_STATE,
+        _TEMPLATE_COL_LENGTH,
     )
 
 
@@ -170,6 +199,7 @@ def _row_has_known_headers(row: list[str]) -> bool:
         or _TARGET_SECTION_ALIASES & normed
         or _QUALITY_STATE_ALIASES & normed
         or _COMMENT_ALIASES & normed
+        or _LENGTH_ALIASES & normed
     ):
         return True
     joined = _norm_hdr("".join(row))
@@ -178,11 +208,12 @@ def _row_has_known_headers(row: list[str]) -> bool:
 
 def _find_cols(
     headers: list[str],
-) -> tuple[int, int | None, int | None, int | None, int | None, int | None]:
-    """Find column indices for SKU, quantity, comment, completed_ops, target_section, quality.
+) -> tuple[int, int | None, int | None, int | None, int | None, int | None, int | None]:
+    """Find column indices for SKU, quantity, comment, completed_ops, target_section, quality, length.
 
     Returns
-    ``(sku_idx, qty_idx, comment_idx, completed_ops_idx, target_section_idx, quality_state_idx)``.
+    ``(sku_idx, qty_idx, comment_idx, completed_ops_idx, target_section_idx,
+    quality_state_idx, length_idx)``.
     ``sku_idx`` defaults to 0 if not found.
     Other indices default to ``None`` if not found.
     """
@@ -192,6 +223,7 @@ def _find_cols(
     completed_ops_idx: int | None = None
     target_section_idx: int | None = None
     quality_state_idx: int | None = None
+    length_idx: int | None = None
     found_sku = False
     normed = [_norm_hdr(h) for h in headers]
     for i, h in enumerate(normed):
@@ -208,9 +240,19 @@ def _find_cols(
             target_section_idx = i
         elif h in _QUALITY_STATE_ALIASES:
             quality_state_idx = i
+        elif h in _LENGTH_ALIASES:
+            length_idx = i
     if not found_sku and len(headers) == 1:
         sku_idx = 0
-    return sku_idx, qty_idx, comment_idx, completed_ops_idx, target_section_idx, quality_state_idx
+    return (
+        sku_idx,
+        qty_idx,
+        comment_idx,
+        completed_ops_idx,
+        target_section_idx,
+        quality_state_idx,
+        length_idx,
+    )
 
 
 def parse_quality_state_cell(
@@ -308,6 +350,7 @@ def _parse_remainders_grid(
             completed_ops_idx,
             target_section_idx,
             quality_state_idx,
+            length_idx,
         ) = _template_column_indices()
     else:
         headers = cell_rows[resolved_header_idx]  # type: ignore[index]
@@ -318,6 +361,7 @@ def _parse_remainders_grid(
             completed_ops_idx,
             target_section_idx,
             quality_state_idx,
+            length_idx,
         ) = _find_cols(headers)
 
     selected_rows: set[int] | None = None
@@ -376,6 +420,11 @@ def _parse_remainders_grid(
             if quality_state_idx is not None and quality_state_idx < len(row)
             else None
         ) or None
+        length_raw = (
+            row[length_idx]
+            if length_idx is not None and length_idx < len(row)
+            else None
+        ) or None
 
         sku = sku_raw.strip() if sku_raw else ""
         comment = comment_raw if comment_raw else None
@@ -404,6 +453,15 @@ def _parse_remainders_grid(
         if quality_error:
             errors.append(quality_error)
 
+        # Колонка «Длина»: метры («2,7») → мм (2700); пусто/«—» = не указана,
+        # мусор — invalid строка (ADR-0003, п. 3).
+        row_dimensions: dict | None = None
+        if length_raw is not None and length_raw.strip() not in ("", "—", "-"):
+            try:
+                row_dimensions = {LENGTH_MM: parse_length_m_to_mm(length_raw)}
+            except DimensionsValidationError as exc:
+                errors.append(str(exc))
+
         if not sku and parsed_qty is None and not comment and not has_raw_content:
             continue
 
@@ -423,6 +481,9 @@ def _parse_remainders_grid(
             target_section_id=None,
             quality_state_raw=quality_state_raw,
             quality_state=resolved_quality,
+            length_raw=length_raw,
+            dimensions=row_dimensions,
+            dimensions_label=format_dimensions(row_dimensions),
         )
 
         if errors:
@@ -604,6 +665,54 @@ async def _lookup_products(db: AsyncSession, items: list[RemainderItem]) -> None
             item.errors.append(f"SKU '{item.sku}' not found in database")
 
 
+def _missing_dimensions_message(missing_codes: list[str]) -> str:
+    """Понятная ошибка предпросмотра для обязательных измерений без значения."""
+    if missing_codes == [LENGTH_MM]:
+        return (
+            "Не указана длина: заполните колонку «Длина» "
+            "или задайте типовой размер продукта в справочнике измерений"
+        )
+    codes = ", ".join(missing_codes)
+    return (
+        f"Не указаны обязательные измерения: {codes} — заполните их в файле "
+        "или задайте типовой размер продукта в справочнике измерений"
+    )
+
+
+async def resolve_remainder_dimensions(
+    db: AsyncSession,
+    items: list[RemainderItem],
+) -> None:
+    """Резолв габаритов строк по справочнику измерений (ADR-0003, п. 3), in-place.
+
+    Три ветки для каждой valid-строки с найденным продуктом:
+    - колонка «Длина» заполнена → берём её (уже в ``item.dimensions``);
+    - пустая → типовой размер продукта (``default_value`` привязки);
+    - нет ни того, ни другого, а измерение ``is_required`` → строка invalid
+      с понятной ошибкой в предпросмотре.
+
+    Продукты без привязок (крепёж и пр.) остаются безразмерными
+    (``dimensions=None``), если длина не указана явно.
+    """
+    for item in items:
+        if item.status != "valid" or item.product_id is None:
+            continue
+        try:
+            resolved = await resolve_product_dimensions(
+                db, item.product_id, item.dimensions
+            )
+            item.dimensions = canonicalize_dimensions(resolved)
+        except MissingDimensionsError as exc:
+            item.status = "invalid"
+            item.errors.append(_missing_dimensions_message(exc.missing_codes))
+            continue
+        except DimensionsValidationError as exc:
+            item.status = "invalid"
+            item.errors.append(str(exc))
+            continue
+        item.dimensions_label = format_dimensions(item.dimensions)
+
+
 # ─── Operations & Section resolvers ──────────────────────────────────────────
 
 
@@ -697,7 +806,7 @@ async def resolve_target_section(
 
     Match is case-insensitive, trimmed.  ``production``-type sections are rejected
     (remainders cannot be imported there).  Allowed types:
-    ``raw_stock, wip_stock, finished_stock, scrap, quarantine``.
+    ``raw_stock, wip_stock, finished_stock, scrap``.
 
     Returns ``(None, None)`` if not found or type is ``production``, with
     a warning appended to ``item_errors`` (if provided).
@@ -716,7 +825,7 @@ async def resolve_target_section(
             item_errors.append(f"Участок '{norm_name}' не найден")
         return (None, None)
 
-    if section.type == "production":
+    if is_production_section(section):
         if item_errors is not None:
             item_errors.append(
                 f"Участок '{norm_name}' имеет тип production, "
@@ -752,7 +861,9 @@ async def apply_remainders_import(
 
     This function:
     1. Validates the location exists.
-    2. Looks up products by SKU (``_lookup_products``).
+    2. Looks up products by SKU (``_lookup_products``) and resolves per-row
+       dimensions against the dimension dictionary
+       (``resolve_remainder_dimensions``).
     3. If ``clear_existing=True``, zeros out current balances for
        ``(location_id, quality_state)`` with ``ADJUSTMENT_OUT``.
        **Cannot** be combined with ``target_section_overrides``.
@@ -797,6 +908,9 @@ async def apply_remainders_import(
 
     # --- Look up products ----------------------------------------------------
     await _lookup_products(db, items)
+
+    # --- Resolve dimensions (явная длина / типовой размер / invalid) ---------
+    await resolve_remainder_dimensions(db, items)
 
     valid_items = [it for it in items if it.status == "valid" and it.product_id is not None]
     invalid_items = [it for it in items if it.status == "invalid"]
@@ -886,6 +1000,8 @@ async def apply_remainders_import(
             product_id=item.product_id,  # type: ignore[arg-type]
             to_location_id=to_loc,
             quantity=Decimal(str(item.quantity)),
+            # Габаритная группа строки (ADR-0003, п. 3); None = безразмерные.
+            dimensions=item.dimensions,
             reason=Reason.MANUAL_IN,
             quality_state=row_quality,
             comment=final_comment or "Импорт остатков из Excel",
@@ -943,7 +1059,8 @@ async def generate_remainders_template_for_location(
     """Generate an Excel template (.xlsx) for remainders import.
 
     Те же примеры строк, что в UI модалки импорта остатков:
-    ``Артикул | Кол-во | Статус качества | Операции | Участок | Коммент.``
+    ``Артикул | Кол-во | Статус качества | Операции | Участок | Коммент. | Длина``
+    («Длина» — в метрах, запятая или точка: «2,7»; пусто = типовой размер).
 
     Args:
         db: Database session.
@@ -970,10 +1087,10 @@ async def generate_remainders_template_for_location(
     ws = wb.active
     ws.title = "Импорт остатков"
 
-    ws.append(["Артикул", "Кол-во", "Статус качества", "Операции", "Участок", "Коммент."])
-    ws.append(["361", 200, "Годный", "", raw_name, ""])
-    ws.append(["ALS-1289", 150, "Годный", "Дробеструй", prep_name, "Партия A"])
-    ws.append(["ЮП-2630", 80, "Окончательный брак", row3_ops, wip_name, "Срочный заказ"])
+    ws.append(["Артикул", "Кол-во", "Статус качества", "Операции", "Участок", "Коммент.", "Длина"])
+    ws.append(["361", 200, "Годный", "", raw_name, "", ""])
+    ws.append(["ALS-1289", 150, "Годный", "Дробеструй", prep_name, "Партия A", "2,7"])
+    ws.append(["ЮП-2630", 80, "Окончательный брак", row3_ops, wip_name, "Срочный заказ", "1,8"])
 
     ws.column_dimensions["A"].width = 25
     ws.column_dimensions["B"].width = 15
@@ -981,6 +1098,7 @@ async def generate_remainders_template_for_location(
     ws.column_dimensions["D"].width = 18
     ws.column_dimensions["E"].width = 40
     ws.column_dimensions["F"].width = 30
+    ws.column_dimensions["G"].width = 12
 
     buf = BytesIO()
     wb.save(buf)
@@ -994,6 +1112,7 @@ REMAINDER_PREVIEW_SORT_FIELDS = frozenset({
     "row",
     "sku",
     "quantity",
+    "length",
     "operations",
     "quality",
     "section",
@@ -1101,6 +1220,8 @@ def _preview_cell_value(
         return item.sku
     if field == "quantity":
         return "—" if item.quantity is None else str(item.quantity)
+    if field == "length":
+        return item.dimensions_label
     if field == "operations":
         return _preview_operations_label(item)
     if field == "quality":
@@ -1170,6 +1291,12 @@ def _preview_sort_key(
         return (item.source_row_number,)
     if field == "quantity":
         return (item.quantity if item.quantity is not None else -1,)
+    if field == "length":
+        # Сортируем по числовой длине; безразмерные (—) — в начале.
+        length_mm = (item.dimensions or {}).get(LENGTH_MM)
+        if isinstance(length_mm, (int, float)):
+            return (float(length_mm),)
+        return (-1.0,)
     cell = _preview_cell_value(
         item,
         field,
@@ -1214,6 +1341,7 @@ def query_remainder_preview_items(
     row: str | None = None,
     sku: str | None = None,
     quantity: str | None = None,
+    length: str | None = None,
     operations: str | None = None,
     quality: str | None = None,
     section: str | None = None,
@@ -1234,6 +1362,7 @@ def query_remainder_preview_items(
         "row": row,
         "sku": sku,
         "quantity": quantity,
+        "length": length,
         "operations": operations,
         "quality": quality,
         "section": section,

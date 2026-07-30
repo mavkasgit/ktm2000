@@ -59,6 +59,7 @@ from app.stock.import_service import (
     query_remainder_preview_items,
     resolve_completed_stages,
     resolve_operations_dictionary,
+    resolve_remainder_dimensions,
     resolve_target_section,
 )
 from app.stock.import_service import _lookup_products as _lookup_remainder_products
@@ -874,6 +875,7 @@ async def preview_remainders_excel(
     row: str | None = Form(None),
     sku: str | None = Form(None),
     quantity: str | None = Form(None),
+    length: str | None = Form(None),
     operations: str | None = Form(None),
     quality: str | None = Form(None),
     section: str | None = Form(None),
@@ -893,8 +895,8 @@ async def preview_remainders_excel(
     * ``search`` — поиск по SKU, product_name, номеру строки.
     * ``filter_status`` — ``all`` или ``invalid``.
     * ``sort_by`` / ``sort_order`` — сортировка страницы preview.
-    * ``row``, ``sku``, ``quantity``, ``operations``, ``quality``, ``section``, ``errors``
-      — column filters (partial match).
+    * ``row``, ``sku``, ``quantity``, ``length``, ``operations``, ``quality``,
+      ``section``, ``errors`` — column filters (partial match).
     """
     if location_id is not None:
         location = await db.get(Section, location_id)
@@ -924,6 +926,9 @@ async def preview_remainders_excel(
 
     # Enrich items with product info
     await _lookup_remainder_products(db, items)
+
+    # Габариты: явная длина / типовой размер / invalid (ADR-0003, п. 3)
+    await resolve_remainder_dimensions(db, items)
 
     # Resolve completed stages and target sections
     ops_dict = await resolve_operations_dictionary(db)
@@ -968,6 +973,7 @@ async def preview_remainders_excel(
         row=row,
         sku=sku,
         quantity=quantity,
+        length=length,
         operations=operations,
         quality=quality,
         section=section,

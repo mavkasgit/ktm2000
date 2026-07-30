@@ -353,6 +353,12 @@ export type RemainderImportItem = {
   target_section_id: number | null;
   quality_state_raw: string | null;
   quality_state: QualityState | "good" | "scrap" | "rework" | "final_scrap";
+  /** Сырое значение колонки «Длина» (метры, как в Excel). */
+  length_raw: string | null;
+  /** Габариты строки, например {"length_mm": 2700}; null = безразмерные. */
+  dimensions: Record<string, number> | null;
+  /** Подпись габарита для предпросмотра («2,7 м» / «—»). */
+  dimensions_label: string;
 };
 
 export const IMPORT_QUALITY_OPTIONS: { value: QualityState; label: string }[] = [
@@ -406,13 +412,14 @@ export type RemainderImportResponse = {
 export type RemainderPreviewQueryParams = {
   search?: string;
   filter_status?: "all" | "invalid";
-  sort_by?: "row" | "sku" | "quantity" | "operations" | "quality" | "section" | "errors";
+  sort_by?: "row" | "sku" | "quantity" | "length" | "operations" | "quality" | "section" | "errors";
   sort_order?: "asc" | "desc";
   limit?: number;
   offset?: number;
   row?: string;
   sku?: string;
   quantity?: string;
+  length?: string;
   operations?: string;
   quality?: string;
   section?: string;
@@ -463,6 +470,7 @@ export async function previewRemaindersExcel(
   if (opts.row) formData.append("row", opts.row);
   if (opts.sku) formData.append("sku", opts.sku);
   if (opts.quantity) formData.append("quantity", opts.quantity);
+  if (opts.length) formData.append("length", opts.length);
   if (opts.operations) formData.append("operations", opts.operations);
   if (opts.quality) formData.append("quality", opts.quality);
   if (opts.section) formData.append("section", opts.section);

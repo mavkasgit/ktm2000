@@ -93,6 +93,7 @@ function buildRemainderPreviewColumnApiParams(
     row: pickColumnApiValue(columnFilters, columnSearchQueries, "row"),
     sku: pickColumnApiValue(columnFilters, columnSearchQueries, "sku"),
     quantity: pickColumnApiValue(columnFilters, columnSearchQueries, "quantity"),
+    length: pickColumnApiValue(columnFilters, columnSearchQueries, "length"),
     operations: pickColumnApiValue(columnFilters, columnSearchQueries, "operations"),
     quality: pickColumnApiValue(columnFilters, columnSearchQueries, "quality"),
     section: pickColumnApiValue(columnFilters, columnSearchQueries, "section"),
@@ -116,6 +117,7 @@ type RemainderPreviewSortField =
   | "row"
   | "sku"
   | "quantity"
+  | "length"
   | "operations"
   | "quality"
   | "section"
@@ -174,6 +176,8 @@ function getImportItemCellValue(
       return item.sku;
     case "quantity":
       return item.quantity != null ? String(item.quantity) : "—";
+    case "length":
+      return item.dimensions_label || "—";
     case "operations":
       return getImportItemOperationsLabel(item);
     case "quality":
@@ -202,17 +206,6 @@ interface ImportRemaindersDialogProps {
   onSaved: () => void;
 }
 
-const SEED_TARGET_SECTION_CODES = ["RAW_STOCK", "PREP_STOCK", "WIP_STOCK", "FINISHED_STOCK", "SHIPMENT", "SHIPPED"] as const;
-
-const SEED_TARGET_SECTION_FALLBACKS: Record<(typeof SEED_TARGET_SECTION_CODES)[number], string> = {
-  RAW_STOCK: "Склад сырья",
-  PREP_STOCK: "Склад подготовки",
-  WIP_STOCK: "Склад полуфабриката",
-  FINISHED_STOCK: "Склад готовой продукции",
-  SHIPMENT: "К отгрузке",
-  SHIPPED: "Отправлено",
-};
-
 const headerCellClass = `${DATA_TABLE_STYLES.headerRow} ${DATA_TABLE_STYLES.headerCell}`;
 
 export function ImportRemaindersDialog({
@@ -223,56 +216,56 @@ export function ImportRemaindersDialog({
   const queryClient = useQueryClient();
 
   // ── Operations reference ──────────────────────────────────────────────
-  const { data: operations } = useQuery({
-    queryKey: ["stock-remainder-import-operations"],
+  const {
+    data: operations,
+    isLoading: operationsLoading,
+    isError: operationsError,
+  } = useQuery({
+    queryKey: queryKeys.stock.remainderImportOperations(),
     queryFn: () => getRemainderImportOperations(),
     enabled: open,
   });
 
   // ── Sections list for target selector ─────────────────────────────────
-  const { data: allSections } = useQuery({
-    queryKey: ["sections", "all"],
+  const {
+    data: allSections,
+    isLoading: sectionsLoading,
+    isError: sectionsError,
+  } = useQuery({
+    queryKey: queryKeys.sections.all(),
     queryFn: () => listSections(),
     enabled: open,
   });
+
+  // Справочники обязательны для шага upload: без них нечего показывать
+  const referencesLoading = operationsLoading || sectionsLoading;
+  const referencesError = operationsError || sectionsError;
 
   const importableSections = useMemo(() => {
     if (!allSections) return [];
     return allSections
       .filter((s) => s.is_active && s.type !== "production")
-      .sort((a, b) => a.name.localeCompare(b.name, "ru"));
+      .sort((a, b) => a.sort_order - b.sort_order || a.name.localeCompare(b.name, "ru"));
   }, [allSections]);
 
-  const seedTargetSections = useMemo(() => {
-    const byCode = new Map(importableSections.map((s) => [s.code, s]));
-    return SEED_TARGET_SECTION_CODES.map((code) => {
-      const section = byCode.get(code);
-      return {
-        code,
-        name: section?.name ?? SEED_TARGET_SECTION_FALLBACKS[code],
-        sectionId: section?.id ?? null,
-      };
-    });
+  // Примеры участков для таблицы-подсказки: первые складские участки в порядке справочника
+  const exampleTargetSections = useMemo(() => {
+    const [first, second, third] = importableSections;
+    return {
+      raw: first?.name ?? "—",
+      prep: (second ?? first)?.name ?? "—",
+      wip: (third ?? second ?? first)?.name ?? "—",
+    };
   }, [importableSections]);
 
-  const exampleTargetSections = useMemo(
-    () => ({
-      raw: seedTargetSections.find((s) => s.code === "RAW_STOCK")?.name ?? "Склад сырья",
-      prep: seedTargetSections.find((s) => s.code === "PREP_STOCK")?.name ?? "Склад подготовки",
-      wip: seedTargetSections.find((s) => s.code === "WIP_STOCK")?.name ?? "Склад полуфабриката",
-    }),
-    [seedTargetSections],
+  // Примеры операций для таблицы-подсказки: первые операции справочника.
+  // Порядок задан сервером (section.sort_order → operation.sort_order), без литералов в коде
+  const exampleOperations = useMemo(
+    () => (operations ?? []).slice(0, 3).map((op) => op.operation_name),
+    [operations],
   );
-
-  // Сид: Дробеструй (SHOT) → цвет анода (ANOD) → одна упаковка на аноде (Стрейч ИЛИ Спанбонд)
-  const exampleRow3Operations = useMemo(() => {
-    const seedOrder = ["Дробеструй", "Чёрный", "Стрейч"];
-    if (!operations?.length) return seedOrder.join(", ");
-    const resolved = seedOrder
-      .map((name) => operations.find((op) => op.operation_name === name)?.operation_name)
-      .filter((name): name is string => Boolean(name));
-    return resolved.length > 0 ? resolved.join(", ") : seedOrder.join(", ");
-  }, [operations]);
+  const exampleRow2Operations = exampleOperations[0] ?? "—";
+  const exampleRow3Operations = exampleOperations.length > 0 ? exampleOperations.join(", ") : "—";
 
   // ── State machine ─────────────────────────────────────────────────────
   const [step, setStep] = useState<"upload" | "preview" | "result">("upload");
@@ -637,6 +630,7 @@ export function ImportRemaindersDialog({
       "row",
       "sku",
       "quantity",
+      "length",
       "operations",
       "quality",
       "section",
@@ -731,7 +725,21 @@ export function ImportRemaindersDialog({
           }`}
         >
           {/* ═══════════════════════ UPLOAD STEP ═══════════════════════ */}
-          {step === "upload" && (
+          {step === "upload" && referencesLoading && (
+            <div className="flex items-center justify-center gap-2 py-10 text-xs text-muted-foreground">
+              <Loader2 className="h-4 w-4 animate-spin" />
+              Загрузка справочников участков и операций…
+            </div>
+          )}
+
+          {step === "upload" && !referencesLoading && referencesError && (
+            <ImportPreview.Error
+              message="Не удалось загрузить справочники участков и операций. Закройте диалог и повторите попытку."
+              className="p-2"
+            />
+          )}
+
+          {step === "upload" && !referencesLoading && !referencesError && (
             <div className="space-y-2">
               <p className="text-[11px] text-muted-foreground leading-snug">
                 Одна таблица для всех остатков: годный, брак или окончательный брак — статус указывается в колонке{" "}
@@ -768,7 +776,8 @@ export function ImportRemaindersDialog({
                             <th className="px-1.5 py-1.5 font-semibold border-r border-border text-foreground whitespace-nowrap">Статус качества</th>
                             <th className="px-1.5 py-1.5 font-semibold border-r border-border text-foreground whitespace-nowrap">Операции</th>
                             <th className="px-1.5 py-1.5 font-semibold border-r border-border text-foreground whitespace-nowrap">Участок</th>
-                            <th className="px-1.5 py-1.5 font-semibold text-foreground whitespace-nowrap">Коммент.</th>
+                            <th className="px-1.5 py-1.5 font-semibold border-r border-border text-foreground whitespace-nowrap">Коммент.</th>
+                            <th className="px-1.5 py-1.5 font-semibold text-foreground whitespace-nowrap">Длина</th>
                           </tr>
                         </thead>
                         <tbody>
@@ -780,15 +789,19 @@ export function ImportRemaindersDialog({
                               — <span className="text-[9px] text-muted-foreground/50">(с 1-го этапа)</span>
                             </td>
                             <td className="px-1.5 py-1.5 border-r border-border font-medium text-emerald-700 whitespace-nowrap">{exampleTargetSections.raw}</td>
-                            <td className="px-1.5 py-1.5 text-muted-foreground">—</td>
+                            <td className="px-1.5 py-1.5 border-r border-border text-muted-foreground">—</td>
+                            <td className="px-1.5 py-1.5 text-muted-foreground">
+                              — <span className="text-[9px] text-muted-foreground/50">(типовой размер)</span>
+                            </td>
                           </tr>
                           <tr className="border-b border-border bg-muted/20">
                             <td className="px-1.5 py-1.5 font-mono border-r border-border text-foreground">ALS-1289</td>
                             <td className="px-1.5 py-1.5 border-r border-border text-foreground">150</td>
                             <td className="px-1.5 py-1.5 border-r border-border font-medium text-emerald-700 whitespace-nowrap">Годный</td>
-                            <td className="px-1.5 py-1.5 border-r border-border text-muted-foreground">Дробеструй</td>
+                            <td className="px-1.5 py-1.5 border-r border-border text-muted-foreground">{exampleRow2Operations}</td>
                             <td className="px-1.5 py-1.5 border-r border-border font-medium text-emerald-700 whitespace-nowrap">{exampleTargetSections.prep}</td>
-                            <td className="px-1.5 py-1.5 text-muted-foreground">Партия A</td>
+                            <td className="px-1.5 py-1.5 border-r border-border text-muted-foreground">Партия A</td>
+                            <td className="px-1.5 py-1.5 text-foreground tabular-nums">2,7</td>
                           </tr>
                           <tr>
                             <td className="px-1.5 py-1.5 font-mono border-r border-border text-foreground">ЮП-2630</td>
@@ -796,7 +809,8 @@ export function ImportRemaindersDialog({
                             <td className="px-1.5 py-1.5 border-r border-border font-medium text-rose-700 whitespace-nowrap">Окончательный брак</td>
                             <td className="px-1.5 py-1.5 border-r border-border text-muted-foreground">{exampleRow3Operations}</td>
                             <td className="px-1.5 py-1.5 border-r border-border font-medium text-emerald-700/80 whitespace-nowrap">{exampleTargetSections.wip}</td>
-                            <td className="px-1.5 py-1.5 text-muted-foreground">Срочный заказ</td>
+                            <td className="px-1.5 py-1.5 border-r border-border text-muted-foreground">Срочный заказ</td>
+                            <td className="px-1.5 py-1.5 text-foreground tabular-nums">1,8</td>
                           </tr>
                         </tbody>
                       </table>
@@ -818,15 +832,19 @@ export function ImportRemaindersDialog({
                       Доступные участки
                     </span>
                     <div className="flex flex-wrap gap-1">
-                      {seedTargetSections.map((section) => (
-                        <SectionLocationBadge
-                          key={section.code}
-                          sections={importableSections}
-                          sectionId={section.sectionId}
-                          sectionName={section.name}
-                          size="sm"
-                        />
-                      ))}
+                      {importableSections.length === 0 ? (
+                        <span className="text-[10px] text-muted-foreground">Справочник участков пуст</span>
+                      ) : (
+                        importableSections.map((section) => (
+                          <SectionLocationBadge
+                            key={section.code}
+                            sections={importableSections}
+                            sectionId={section.id}
+                            sectionName={section.name}
+                            size="sm"
+                          />
+                        ))
+                      )}
                     </div>
                     <span className="text-[9px] leading-snug block">
                       * пусто (—) — участок выбирается в таблице предпросмотра
@@ -1051,6 +1069,16 @@ export function ImportRemaindersDialog({
                             {...bindColumn("quantity")}
                           />
                         </th>
+                        <th className={`${headerCellClass} p-0 w-16`}>
+                          <SortableFilterHeader
+                            field="length"
+                            label="Длина"
+                            currentSorts={sortConfigs}
+                            onSortChange={handleSortChange}
+                            values={uniqueValues.length}
+                            {...bindColumn("length")}
+                          />
+                        </th>
                         <th className={`${headerCellClass} p-0 min-w-[160px]`}>
                           <SortableFilterHeader
                             field="operations"
@@ -1122,6 +1150,13 @@ export function ImportRemaindersDialog({
                               <td className="px-1.5 py-0.5 font-mono font-semibold">{item.sku}</td>
                               <td className="px-1.5 py-0.5 font-semibold text-foreground tabular-nums">
                                 {item.quantity != null ? item.quantity : "—"}
+                              </td>
+                              <td
+                                className={`px-1.5 py-0.5 tabular-nums whitespace-nowrap ${
+                                  item.dimensions ? "font-medium text-foreground" : "text-muted-foreground"
+                                }`}
+                              >
+                                {item.dimensions_label || "—"}
                               </td>
                               <td className="px-1.5 py-0.5 min-w-[160px]">
                                 {item.completed_stages && item.completed_stages.length > 0 ? (
@@ -1198,7 +1233,7 @@ export function ImportRemaindersDialog({
                               <TableCornerResetCell />
                             </tr>
                             {isExpanded && hasRaw ? (
-                              <ImportRawRows.Detail colSpan={10} values={item.raw_values} />
+                              <ImportRawRows.Detail colSpan={11} values={item.raw_values} />
                             ) : null}
                           </Fragment>
                         );
