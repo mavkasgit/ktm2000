@@ -7,6 +7,8 @@ export type Section = {
   code: string;
   name: string;
   description: string | null;
+  /** Порядок в справочнике (задаётся сервером, определяет порядок отображения). */
+  sort_order: number;
   is_active: boolean;
   type: SectionType;
   icon: string | null;

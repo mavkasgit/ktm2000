@@ -9,6 +9,7 @@ const makeSection = (overrides: Partial<Section>): Section => ({
   code: "X",
   name: "X",
   description: null,
+  sort_order: 0,
   is_active: true,
   type: "production",
   icon: null,

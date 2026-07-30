@@ -1,62 +1,45 @@
 import React from "react";
+import { useQuery } from "@tanstack/react-query";
+import { Loader2 } from "lucide-react";
 import { renderIcon } from "@/shared/ui/EntityDialog";
 import { IconCalendarCode, IconCalendarClock, IconCalendarCheck, IconCalendarEvent } from "@tabler/icons-react";
-import { IconBlade, IconSpray, IconFlask2, IconAtom2, IconWashPress, IconBuildingFactory2, IconCut, IconWaveSawTool, IconWood, IconHammer, IconPick, IconAxe, IconScissors } from "@tabler/icons-react";
+import { listSections } from "@/shared/api/sections";
+import { queryKeys } from "@/shared/api/queryKeys";
+import { getErrorMessage } from "@/shared/api/client";
 
-type SectionPreview = {
-  code: string;
-  name: string;
-  icon: string;
-  color: string;
-};
+/**
+ * Таблица участков из справочника (/sections): иконки, коды, названия и цвета
+ * приходят с сервера — никаких литералов конкретного завода в коде.
+ */
+function SectionsReferenceTable() {
+  const { data: sections, isLoading, isError, error } = useQuery({
+    queryKey: queryKeys.sections.all(),
+    queryFn: () => listSections(),
+  });
 
-const PROPOSED_SECTIONS: SectionPreview[] = [
-  { code: "RAW_STOCK", name: "Склад сырья", icon: "Warehouse", color: "#F59E0B" },
-  { code: "DRILLING", name: "Сверловка", icon: "Drill", color: "#3B82F6" },
-  { code: "PRESSING", name: "Пресс", icon: "Anvil", color: "#EF4444" },
-  { code: "SHOT_BLAST", name: "Дробеструй", icon: "Fan", color: "#6B7280" },
-  { code: "ANODIZING", name: "Анодирование", icon: "FlaskConical", color: "#06B6D4" },
-  { code: "WIP_STOCK", name: "Склад полуфабриката", icon: "Boxes", color: "#84CC16" },
-  { code: "SAWING", name: "Пила", icon: "Axe", color: "#F97316" },
-  { code: "PACKING", name: "Упаковка", icon: "Package", color: "#10B981" },
-  { code: "FINISHED_STOCK", name: "Склад готовой продукции", icon: "Container", color: "#065F46" },
-];
+  if (isLoading) {
+    return (
+      <div className="flex items-center gap-2 py-6 text-sm text-muted-foreground">
+        <Loader2 className="h-4 w-4 animate-spin" />
+        Загрузка справочника участков…
+      </div>
+    );
+  }
 
-const SAW_ALTERNATIVES: SectionPreview[] = [
-  { code: "", name: "Axe (топор)", icon: "Axe", color: "#F97316" },
-  { code: "", name: "PenTool (инструмент)", icon: "PenTool", color: "#F97316" },
-  { code: "", name: "Pickaxe (кирка)", icon: "Pickaxe", color: "#F97316" },
-  { code: "", name: "Cog (шестерёнка)", icon: "Cog", color: "#F97316" },
-  { code: "", name: "Wrench (ключ)", icon: "Wrench", color: "#F97316" },
-];
+  if (isError) {
+    return (
+      <p className="py-6 text-sm text-destructive">
+        Не удалось загрузить справочник участков: {getErrorMessage(error)}
+      </p>
+    );
+  }
 
-const SHOT_ALTERNATIVES: SectionPreview[] = [
-  { code: "", name: "Fan (вентилятор)", icon: "Fan", color: "#6B7280" },
-  { code: "", name: "Cog (шестерёнка)", icon: "Cog", color: "#6B7280" },
-  { code: "", name: "Construction (стройка)", icon: "Construction", color: "#6B7280" },
-  { code: "", name: "Sparkles (искры)", icon: "Sparkles", color: "#6B7280" },
-];
+  const sorted = [...(sections ?? [])].sort((a, b) => a.sort_order - b.sort_order || a.id - b.id);
 
-const ANOD_ALTERNATIVES: SectionPreview[] = [
-  { code: "", name: "FlaskConical (колба)", icon: "FlaskConical", color: "#06B6D4" },
-  { code: "", name: "Beaker (стакан)", icon: "Beaker", color: "#06B6D4" },
-  { code: "", name: "TestTube (пробирка)", icon: "TestTube", color: "#06B6D4" },
-  { code: "", name: "Droplets (капли)", icon: "Droplets", color: "#06B6D4" },
-];
+  if (sorted.length === 0) {
+    return <p className="py-6 text-sm text-muted-foreground">Справочник участков пуст.</p>;
+  }
 
-const FINAL_SECTIONS: SectionPreview[] = [
-  { code: "RAW_STOCK", name: "Склад сырья", icon: "Warehouse", color: "#F59E0B" },
-  { code: "DRILLING", name: "Сверловка", icon: "Drill", color: "#3B82F6" },
-  { code: "PRESSING", name: "Пресс", icon: "Anvil", color: "#EF4444" },
-  { code: "SHOT_BLAST", name: "Дробеструй", icon: "SprayCan", color: "#6B7280" },
-  { code: "ANODIZING", name: "Анодирование", icon: "FlaskConical", color: "#06B6D4" },
-  { code: "WIP_STOCK", name: "Склад полуфабриката", icon: "Boxes", color: "#84CC16" },
-  { code: "SAWING", name: "Пила", icon: "Fan", color: "#F97316" },
-  { code: "PACKING", name: "Упаковка", icon: "Package", color: "#10B981" },
-  { code: "FINISHED_STOCK", name: "Склад готовой продукции", icon: "Container", color: "#065F46" },
-];
-
-function TablerIconsTable() {
   return (
     <div>
       <table className="w-full border-collapse">
@@ -66,50 +49,49 @@ function TablerIconsTable() {
             <th className="text-left px-4 py-2">Иконка</th>
             <th className="text-left px-4 py-2">Код</th>
             <th className="text-left px-4 py-2">Название</th>
+            <th className="text-left px-4 py-2">Тип</th>
             <th className="text-left px-4 py-2">Цвет</th>
+            <th className="text-left px-4 py-2">Порядок</th>
+            <th className="text-left px-4 py-2">Активен</th>
           </tr>
         </thead>
         <tbody>
-          {FINAL_SECTIONS.map((s, i) => {
-            const iconKey = s.icon.replace("tabler:", "").replace("lucide:", "");
-            const isLucide = s.icon.startsWith("lucide:");
-            const isTabler = s.icon.startsWith("tabler:");
-            const tablerMap: Record<string, React.ComponentType<any>> = { Spray: IconSpray };
-            const IconComp = isTabler ? (tablerMap[iconKey] as React.ComponentType<any> | null) : null;
-            return (
-              <tr
-                key={s.code + s.name + i}
-                className="border-b"
-                style={{ backgroundColor: s.color + "18" }}
-              >
-                <td className="px-4 py-2 text-muted-foreground">{i + 1}</td>
-                <td className="px-4 py-2">
-                  {isLucide ? (
-                    <span style={{ color: s.color, fontSize: 20 }}>
-                      {renderIcon(iconKey, "h-5 w-5")}
-                    </span>
-                  ) : isTabler && IconComp ? (
-                    <span style={{ color: s.color, fontSize: 20 }}>
-                      <IconComp size={20} />
-                    </span>
-                  ) : (
-                    <span style={{ color: s.color, fontSize: 20 }}>
-                      {renderIcon(iconKey, "h-5 w-5")}
-                    </span>
-                  )}
-                </td>
-                <td className="px-4 py-2 font-mono font-medium">{s.code}</td>
-                <td className="px-4 py-2">{s.name}</td>
-                <td className="px-4 py-2">
-                  <span
-                    className="inline-block w-6 h-6 rounded border align-middle"
-                    style={{ backgroundColor: s.color }}
-                  />
-                  <span className="ml-2 font-mono text-sm">{s.color}</span>
-                </td>
-              </tr>
-            );
-          })}
+          {sorted.map((s, i) => (
+            <tr
+              key={s.id}
+              className="border-b"
+              style={s.icon_color ? { backgroundColor: s.icon_color + "18" } : undefined}
+            >
+              <td className="px-4 py-2 text-muted-foreground">{i + 1}</td>
+              <td className="px-4 py-2">
+                {s.icon ? (
+                  <span style={{ color: s.icon_color ?? undefined, fontSize: 20 }}>
+                    {renderIcon(s.icon, "h-5 w-5")}
+                  </span>
+                ) : (
+                  <span className="text-muted-foreground">—</span>
+                )}
+              </td>
+              <td className="px-4 py-2 font-mono font-medium">{s.code}</td>
+              <td className="px-4 py-2">{s.name}</td>
+              <td className="px-4 py-2 font-mono text-sm">{s.type}</td>
+              <td className="px-4 py-2">
+                {s.icon_color ? (
+                  <>
+                    <span
+                      className="inline-block w-6 h-6 rounded border align-middle"
+                      style={{ backgroundColor: s.icon_color }}
+                    />
+                    <span className="ml-2 font-mono text-sm">{s.icon_color}</span>
+                  </>
+                ) : (
+                  <span className="text-muted-foreground">—</span>
+                )}
+              </td>
+              <td className="px-4 py-2 font-mono text-sm">{s.sort_order}</td>
+              <td className="px-4 py-2">{s.is_active ? "Да" : "Нет"}</td>
+            </tr>
+          ))}
         </tbody>
       </table>
     </div>
@@ -164,9 +146,9 @@ function FaviconCandidates() {
 
 const DEV_SECTIONS: { id: string; title: string; component: React.ReactNode }[] = [
   {
-    id: "final-sections",
-    title: "Итоговый вариант",
-    component: <TablerIconsTable />,
+    id: "sections-reference",
+    title: "Справочник участков (с сервера)",
+    component: <SectionsReferenceTable />,
   },
   {
     id: "favicon-candidates",
@@ -174,49 +156,6 @@ const DEV_SECTIONS: { id: string; title: string; component: React.ReactNode }[] 
     component: <FaviconCandidates />,
   },
 ];
-
-function SectionsIconsTable({ sections }: { sections: SectionPreview[] }) {
-  return (
-    <div>
-      <table className="w-full border-collapse">
-        <thead>
-          <tr className="bg-muted">
-            <th className="text-left px-4 py-2">#</th>
-            <th className="text-left px-4 py-2">Иконка</th>
-            <th className="text-left px-4 py-2">Код</th>
-            <th className="text-left px-4 py-2">Название</th>
-            <th className="text-left px-4 py-2">Цвет</th>
-          </tr>
-        </thead>
-        <tbody>
-          {sections.map((s, i) => (
-            <tr
-              key={s.code}
-              className="border-b"
-              style={{ backgroundColor: s.color + "18" }}
-            >
-              <td className="px-4 py-2 text-muted-foreground">{i + 1}</td>
-              <td className="px-4 py-2">
-                <span style={{ color: s.color, fontSize: 20 }}>
-                  {renderIcon(s.icon, "h-5 w-5")}
-                </span>
-              </td>
-              <td className="px-4 py-2 font-mono font-medium">{s.code}</td>
-              <td className="px-4 py-2">{s.name}</td>
-              <td className="px-4 py-2">
-                <span
-                  className="inline-block w-6 h-6 rounded border align-middle"
-                  style={{ backgroundColor: s.color }}
-                />
-                <span className="ml-2 font-mono text-sm">{s.color}</span>
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
-  );
-}
 
 export function DevPage() {
   return (

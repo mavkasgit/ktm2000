@@ -1,8 +1,11 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { Search, Image, X, Grid, List, Plus, Filter, FileUp, Check, CheckCheck } from "lucide-react";
 import { usePaginatedTableQuery } from "@/shared/hooks/usePaginatedTableQuery";
 import * as API from "@/shared/api/products";
 import type { ProductFilters } from "@/shared/api/products";
+import { listRouteSelectionRules } from "@/shared/api/routes";
+import { queryKeys } from "@/shared/api/queryKeys";
 import { pickColumnApiValue } from "@/shared/lib/columnFilterSearch";
 import { Button } from "@/shared/ui/Button";
 import { Input } from "@/shared/ui/Input";
@@ -20,6 +23,7 @@ import { usePermission } from "@/features/auth/hooks/usePermission";
 import { SortableFilterHeader } from "@/shared/ui/SortableFilterHeader";
 import { TableCornerResetCell, TableCornerResetHeader, TablePaginationFooter, DATA_TABLE_STYLES } from "@/shared/ui";
 import { useSortableColumnFilters } from "@/shared/hooks/useSortableColumnFilters";
+import { skipShotBlastSectionLabel } from "../lib/skipShotBlastLabel";
 
 type ViewMode = "grid" | "table";
 type DialogMode = "create" | "edit";
@@ -225,6 +229,17 @@ export function RawMaterialsPage() {
   const [previewData, setPreviewData] = useState<CatalogPreview | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
   const [pendingZipFile, setPendingZipFile] = useState<File | null>(null);
+
+  // Подпись колонки флага skip_shot_blast — название пропускаемого участка
+  // из правил выбора маршрута (БД), а не литерал в коде.
+  const { data: selectionRules } = useQuery({
+    queryKey: queryKeys.routes.selectionRules(),
+    queryFn: () => listRouteSelectionRules(),
+  });
+  const skipSectionLabel = useMemo(
+    () => skipShotBlastSectionLabel(selectionRules) ?? "Пропуск участка",
+    [selectionRules],
+  );
 
   useEffect(() => {
     const timer = window.setTimeout(() => setDebouncedSearch(search), 300);
@@ -589,7 +604,7 @@ export function RawMaterialsPage() {
                 <th className={`${headerCellClass} p-0 w-36`}>
                   <SortableFilterHeader<ColumnFilterField>
                     field="skip_shot_blast"
-                    label="Дробеструй"
+                    label={skipSectionLabel}
                     currentSorts={sortConfigs as { field: ColumnFilterField; order: SortOrder }[]}
                     onSortChange={(field) => handleSort(field as SortField)}
                     values={uniqueValues.skip_shot_blast}

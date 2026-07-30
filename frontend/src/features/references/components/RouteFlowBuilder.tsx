@@ -44,13 +44,7 @@ import { toast } from "@/shared/ui/use-toast";
 import { getErrorMessage } from "@/shared/api/client";
 import { renderIcon } from "@/shared/ui/EntityDialog";
 import { RouteFlowNode, type RouteFlowNodeData } from "./RouteFlowNode";
-import {
-  Select,
-  SelectTrigger,
-  SelectValue,
-  SelectContent,
-  SelectItem,
-} from "@/shared/ui";
+import { RouteStepOperationSelect } from "./RouteStepOperationSelect";
 
 type PortId = "right" | "left";
 
@@ -159,19 +153,6 @@ function relayoutNodesByOrder(
     return { ...n, position: { x: pos.x, y: pos.y } };
   });
 }
-
-const OPERATIONS = [
-  { value: "ISSUE_RAW", label: "Выдача сырья" },
-  { value: "DRILL", label: "Сверловка" },
-  { value: "PRESS_WINDOW", label: "Пресс окно" },
-  { value: "PRESS_COMB", label: "Пресс гребенка" },
-  { value: "SHOT", label: "Дробеструй" },
-  { value: "ANOD", label: "Анодирование" },
-  { value: "MOVE_TO_WIP", label: "Передача на п/ф" },
-  { value: "SAW", label: "Пила" },
-  { value: "PACK", label: "Упаковка" },
-  { value: "ACCEPT_FINISHED", label: "Приемка ГП" },
-];
 
 const nodeTypes: NodeTypes = {
   routeFlow: RouteFlowNode as any,
@@ -1033,28 +1014,18 @@ export function RouteFlowBuilder({ open, onOpenChange, route, onSave, readOnly =
               <div className="space-y-4">
                 <div>
                   <label className="text-sm font-medium">Операция</label>
-                  <Select
-                    value={(selectedNode.data as RouteFlowNodeData).operation_code || "none"}
-                    onValueChange={(val) => {
-                      const finalVal = val === "none" ? null : val;
-                      const op = OPERATIONS.find((o) => o.value === finalVal);
-                      updateNodeData(selectedNode.id, {
-                        operation_code: finalVal,
-                        operation_name: op?.label || "",
-                      });
-                    }}
+                  <RouteStepOperationSelect
+                    sectionId={(selectedNode.data as RouteFlowNodeData).section_id}
+                    operationCode={(selectedNode.data as RouteFlowNodeData).operation_code}
+                    operationName={(selectedNode.data as RouteFlowNodeData).operation_name}
                     disabled={readOnly}
-                  >
-                    <SelectTrigger className="h-9 w-full bg-background mt-1">
-                      <SelectValue placeholder="Выберите операцию" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="none">Выберите операцию</SelectItem>
-                      {OPERATIONS.map((op) => (
-                        <SelectItem key={op.value} value={op.value}>{op.label}</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+                    onChange={({ code, name }) =>
+                      updateNodeData(selectedNode.id, {
+                        operation_code: code,
+                        operation_name: name,
+                      })
+                    }
+                  />
                 </div>
 
                 <div>
