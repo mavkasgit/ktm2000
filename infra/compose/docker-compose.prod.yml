@@ -47,9 +47,11 @@ services:
       AUTH_OIDC_REDIRECT_URI: http://${OPS_PUBLIC_IP}:8082/auth/callback
       AUTH_OIDC_TOKEN_URL: http://${OPS_PUBLIC_IP}:9000/application/o/token/
       AUTH_OIDC_JWKS_URL: http://${OPS_PUBLIC_IP}:9000/application/o/ktm2000/jwks/
-      AUTH_OIDC_SCOPES: openid profile email
+      AUTH_OIDC_SCOPES: openid profile email ktm_access
       AUTH_OIDC_ALLOW_JIT: 'true'
       AUTH_OIDC_DEFAULT_ROLE: admin
+      # HRMS employee sync
+      HRMS_BASE_URL: http://host.docker.internal:8081
     expose:
       - "8000"
     volumes:
