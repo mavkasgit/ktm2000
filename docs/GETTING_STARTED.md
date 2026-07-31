@@ -29,7 +29,8 @@ pip install -r requirements.txt
 cp .env.example .env.dev
 ```
 
-Порты dev: Postgres `5202`, frontend `5180`, backend `8010`.
+Порты dev: Postgres `5440`, frontend `5180`, backend `8010`.  
+Порты test: Postgres `5441`, frontend `8100`, backend (в контейнере) `8000`.
 
 > Файл `.env` в корне — для MCP-утилит (SSH/SFTP), отдельно от `.env.dev`.
 

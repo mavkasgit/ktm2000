@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import AsyncIterator
 import os
 os.environ.setdefault("DEV_BYPASS_AUTH", "true")
+os.environ.pop("TEST_DATABASE_URL", None)
 import re
 import uuid
 
