@@ -16,7 +16,9 @@ from sqlalchemy import select
 from app.core.config import settings
 from app.core.security import get_password_hash
 from app.models.user import User, UserRole
+from app.models.user_session import UserSession
 from app.services.oidc_auth_service import OidcAuthService
+from app.services.session_service import issue_session
 
 ISSUER = "http://localhost:9000/application/o/ktm2000/"
 CLIENT_ID = "ktm2000"
@@ -62,6 +64,7 @@ def _make_id_token(
     iss: str = ISSUER.rstrip("/"),
     exp_delta: int = 3600,
     groups: list[str] | None = None,
+    ktm_role: str | None = None,
 ) -> str:
     now = int(time.time())
     claims: dict = {
@@ -77,9 +80,49 @@ def _make_id_token(
         claims["email"] = email
     if groups is not None:
         claims["groups"] = groups
+    if ktm_role is not None:
+        claims["ktm_role"] = ktm_role
     return jose_jwt.encode(
         claims,
         _PRIVATE_PEM,
+        algorithm="RS256",
+        headers={"kid": KID},
+    )
+
+
+_BACKCHANNEL_EVENTS = {"http://schemas.openid.net/event/backchannel-logout": {}}
+
+
+def _make_logout_token(
+    *,
+    sub: str = "ak-sub-bcl-1",
+    aud: str = CLIENT_ID,
+    iss: str = ISSUER.rstrip("/"),
+    exp_delta: int = 300,
+    events: dict | None = _BACKCHANNEL_EVENTS,
+    nonce: str | None = None,
+    sid: str | None = "idp-session-1",
+    private_pem: bytes = _PRIVATE_PEM,
+) -> str:
+    """OIDC back-channel logout_token (RFC: events claim, no nonce)."""
+    now = int(time.time())
+    claims: dict = {
+        "sub": sub,
+        "aud": aud,
+        "iss": iss,
+        "iat": now,
+        "exp": now + exp_delta,
+        "jti": "logout-jti-1",
+    }
+    if events is not None:
+        claims["events"] = events
+    if nonce is not None:
+        claims["nonce"] = nonce
+    if sid is not None:
+        claims["sid"] = sid
+    return jose_jwt.encode(
+        claims,
+        private_pem,
         algorithm="RS256",
         headers={"kid": KID},
     )
@@ -359,7 +402,7 @@ async def test_oidc_callback_no_local_user_403(client, session, oidc_enabled) ->
 async def test_oidc_callback_sync_role_when_flag_on(
     client, session, oidc_enabled
 ) -> None:
-    """Opt-in: AUTH_OIDC_SYNC_ROLE_FROM_IDP overwrites users.role from groups."""
+    """Opt-in: AUTH_OIDC_SYNC_ROLE_FROM_IDP overwrites users.role from ktm_role claim."""
     settings.AUTH_OIDC_SYNC_ROLE_FROM_IDP = True
     user = User(
         username="oidc_sync_role",
@@ -377,6 +420,7 @@ async def test_oidc_callback_sync_role_when_flag_on(
         sub="ak-sub-sync-role",
         preferred_username="oidc_sync_role",
         groups=["ktm-admin"],
+        ktm_role="admin",
     )
     fake = _FakeAsyncClient(token_body={"id_token": id_token, "access_token": "at"})
 
@@ -470,3 +514,367 @@ async def test_oidc_issuer_accepts_lan_iss(client, session, oidc_enabled) -> Non
         )
 
     assert response.status_code == 200, response.text
+
+
+# ─── ktm_role claim sync (fail-closed) ────────────────────────────────────────
+
+
+@pytest.fixture
+def oidc_sync_enabled(oidc_enabled):
+    """Extend oidc_enabled with AUTH_OIDC_SYNC_ROLE_FROM_IDP=True."""
+    settings.AUTH_OIDC_SYNC_ROLE_FROM_IDP = True
+    yield
+
+
+@pytest.mark.asyncio
+async def test_oidc_callback_ktm_role_claim_syncs_role(
+    client, session, oidc_sync_enabled
+) -> None:
+    """ktm_role claim overwrites local role on login (JIT sync)."""
+    user = User(
+        username="role_sync_user",
+        email="role_sync@example.com",
+        password_hash=get_password_hash("password123"),
+        full_name="Role Sync User",
+        role=UserRole.viewer,
+        is_active=True,
+        authentik_sub="ak-sub-role-sync",
+    )
+    session.add(user)
+    await session.commit()
+    user_id = user.id
+
+    id_token = _make_id_token(
+        sub="ak-sub-role-sync",
+        preferred_username="role_sync_user",
+        ktm_role="operator",
+    )
+    fake = _FakeAsyncClient(token_body={"id_token": id_token, "access_token": "at"})
+
+    with patch("app.services.oidc_auth_service.httpx.AsyncClient", return_value=fake):
+        response = await client.post(
+            "/api/auth/oidc/callback",
+            json={"code": "c", "code_verifier": "v", "redirect_uri": REDIRECT_URI},
+        )
+
+    assert response.status_code == 200, response.text
+    session.expire_all()
+    row = await session.scalar(select(User).where(User.id == user_id))
+    assert row is not None
+    assert row.role == UserRole.operator
+    assert row.is_active is True
+
+
+@pytest.mark.asyncio
+async def test_oidc_callback_ktm_role_conflict_403(
+    client, session, oidc_sync_enabled
+) -> None:
+    """ktm_role='conflict' returns 403 with descriptive message."""
+    user = User(
+        username="conflict_user",
+        email="conflict@example.com",
+        password_hash=get_password_hash("password123"),
+        full_name="Conflict User",
+        role=UserRole.viewer,
+        is_active=True,
+        authentik_sub="ak-sub-conflict",
+    )
+    session.add(user)
+    await session.commit()
+
+    id_token = _make_id_token(
+        sub="ak-sub-conflict",
+        preferred_username="conflict_user",
+        ktm_role="conflict",
+    )
+    fake = _FakeAsyncClient(token_body={"id_token": id_token, "access_token": "at"})
+
+    with patch("app.services.oidc_auth_service.httpx.AsyncClient", return_value=fake):
+        response = await client.post(
+            "/api/auth/oidc/callback",
+            json={"code": "c", "code_verifier": "v", "redirect_uri": REDIRECT_URI},
+        )
+
+    assert response.status_code == 403
+    assert "Role conflict" in response.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_oidc_callback_ktm_role_absent_fail_closed(
+    client, session, oidc_sync_enabled
+) -> None:
+    """Absent ktm_role claim -> fail-closed: 403 + user deactivated."""
+    user = User(
+        username="no_role_user",
+        email="no_role@example.com",
+        password_hash=get_password_hash("password123"),
+        full_name="No Role User",
+        role=UserRole.operator,
+        is_active=True,
+        authentik_sub="ak-sub-no-role",
+    )
+    session.add(user)
+    await session.commit()
+    user_id = user.id
+
+    # No ktm_role in token
+    id_token = _make_id_token(
+        sub="ak-sub-no-role",
+        preferred_username="no_role_user",
+    )
+    fake = _FakeAsyncClient(token_body={"id_token": id_token, "access_token": "at"})
+
+    with patch("app.services.oidc_auth_service.httpx.AsyncClient", return_value=fake):
+        response = await client.post(
+            "/api/auth/oidc/callback",
+            json={"code": "c", "code_verifier": "v", "redirect_uri": REDIRECT_URI},
+        )
+
+    assert response.status_code == 403
+    assert "No KTM role assigned" in response.json()["detail"]
+    session.expire_all()
+    row = await session.scalar(select(User).where(User.id == user_id))
+    assert row is not None
+    assert row.is_active is False
+
+
+@pytest.mark.asyncio
+async def test_oidc_callback_ktm_role_no_access_fail_closed(
+    client, session, oidc_sync_enabled
+) -> None:
+    """ktm_role='no_access' -> fail-closed: 403."""
+    user = User(
+        username="no_access_user",
+        email="no_access@example.com",
+        password_hash=get_password_hash("password123"),
+        full_name="No Access User",
+        role=UserRole.viewer,
+        is_active=True,
+        authentik_sub="ak-sub-no-access",
+    )
+    session.add(user)
+    await session.commit()
+
+    id_token = _make_id_token(
+        sub="ak-sub-no-access",
+        preferred_username="no_access_user",
+        ktm_role="no_access",
+    )
+    fake = _FakeAsyncClient(token_body={"id_token": id_token, "access_token": "at"})
+
+    with patch("app.services.oidc_auth_service.httpx.AsyncClient", return_value=fake):
+        response = await client.post(
+            "/api/auth/oidc/callback",
+            json={"code": "c", "code_verifier": "v", "redirect_uri": REDIRECT_URI},
+        )
+
+    assert response.status_code == 403
+    assert "No KTM role assigned" in response.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_update_user_role_forbidden_when_sync_enabled(
+    auth_client, session, oidc_sync_enabled
+) -> None:
+    """PATCH /api/users/{id} with role change -> 403 when SYNC enabled."""
+    target = User(
+        username="role_target",
+        email="role_target@example.com",
+        password_hash=get_password_hash("password123"),
+        full_name="Role Target",
+        role=UserRole.viewer,
+        is_active=True,
+    )
+    session.add(target)
+    await session.commit()
+
+    response = await auth_client.patch(
+        f"/api/users/{target.id}",
+        json={"role": "operator"},
+    )
+
+    assert response.status_code == 403
+    assert "Authentik" in response.json()["detail"]
+
+
+# ─── back-channel logout ──────────────────────────────────────────────────
+
+
+async def _make_linked_user_with_sessions(
+    session,
+    *,
+    authentik_sub: str = "ak-sub-bcl-1",
+    n_sessions: int = 2,
+    oidc_sid: str | None = "idp-session-1",
+) -> tuple[User, list[UserSession]]:
+    user = User(
+        username=f"bcl_{authentik_sub[-6:]}",
+        email=f"bcl_{authentik_sub[-6:]}@example.com",
+        password_hash=get_password_hash("password123"),
+        full_name="Backchannel User",
+        role=UserRole.operator,
+        is_active=True,
+        authentik_sub=authentik_sub,
+    )
+    session.add(user)
+    await session.flush()
+    sessions = [
+        await issue_session(session, user_id=user.id, login_method="oidc", ttl_minutes=60, oidc_sid=oidc_sid)
+        for _ in range(n_sessions)
+    ]
+    return user, sessions
+
+
+async def _post_backchannel(client, logout_token: str | None):
+    """Authentik POSTs application/x-www-form-urlencoded logout_token."""
+    fake = _FakeAsyncClient(token_body=None)
+    data = {} if logout_token is None else {"logout_token": logout_token}
+    with patch("app.services.oidc_auth_service.httpx.AsyncClient", return_value=fake):
+        return await client.post("/api/auth/backchannel-logout", data=data)
+
+
+@pytest.mark.asyncio
+async def test_backchannel_logout_revokes_all_user_sessions(
+    client, session, oidc_enabled
+) -> None:
+    """sub -> users.authentik_sub -> all active sessions revoked."""
+    user, sessions = await _make_linked_user_with_sessions(
+        session, authentik_sub="ak-sub-bcl-revoke", n_sessions=2
+    )
+    await session.commit()
+    user_id = user.id
+
+    token = _make_logout_token(sub="ak-sub-bcl-revoke")
+    response = await _post_backchannel(client, token)
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["status"] == "ok"
+    assert body["revoked"] == 2
+    assert response.headers["Cache-Control"] == "no-store"
+
+    session.expire_all()
+    rows = (
+        await session.scalars(
+            select(UserSession).where(UserSession.user_id == user_id)
+        )
+    ).all()
+    assert len(rows) == 2
+    assert all(row.revoked_at is not None for row in rows)
+
+
+@pytest.mark.asyncio
+async def test_backchannel_logout_idempotent_second_call_revokes_zero(
+    client, session, oidc_enabled
+) -> None:
+    await _make_linked_user_with_sessions(
+        session, authentik_sub="ak-sub-bcl-idem", n_sessions=1
+    )
+    await session.commit()
+
+    token = _make_logout_token(sub="ak-sub-bcl-idem")
+    first = await _post_backchannel(client, token)
+    assert first.status_code == 200
+    assert first.json()["revoked"] == 1
+
+    # Replay with same jti -> 400 (OIDC Back-Channel Logout replay protection)
+    second = await _post_backchannel(client, token)
+    assert second.status_code == 400
+    assert "replay" in second.text
+
+
+@pytest.mark.asyncio
+async def test_backchannel_logout_unknown_sub_200_noop(
+    client, session, oidc_enabled
+) -> None:
+    """Unknown sub -> 200 no-op (spec: do not leak user existence)."""
+    token = _make_logout_token(sub="ak-sub-nobody")
+    response = await _post_backchannel(client, token)
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok", "revoked": 0}
+
+
+@pytest.mark.asyncio
+async def test_backchannel_logout_missing_token_400(client, oidc_enabled) -> None:
+    response = await _post_backchannel(client, None)
+    assert response.status_code == 400
+    assert response.json()["detail"] == "invalid_logout_token"
+
+
+@pytest.mark.asyncio
+async def test_backchannel_logout_garbage_token_400(client, oidc_enabled) -> None:
+    response = await _post_backchannel(client, "not-a-jwt")
+    assert response.status_code == 400
+    assert response.json()["detail"] == "invalid_logout_token"
+
+
+@pytest.mark.asyncio
+async def test_backchannel_logout_wrong_signature_400(
+    client, session, oidc_enabled
+) -> None:
+    """Token signed by a foreign key must be rejected; sessions untouched."""
+    user, _ = await _make_linked_user_with_sessions(
+        session, authentik_sub="ak-sub-bcl-forged", n_sessions=1
+    )
+    await session.commit()
+    user_id = user.id
+
+    foreign_pem, _foreign_jwks = _generate_rsa_pair()
+    token = _make_logout_token(sub="ak-sub-bcl-forged", private_pem=foreign_pem)
+    response = await _post_backchannel(client, token)
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "invalid_logout_token"
+
+    session.expire_all()
+    rows = (
+        await session.scalars(
+            select(UserSession).where(UserSession.user_id == user_id)
+        )
+    ).all()
+    assert all(row.revoked_at is None for row in rows)
+
+
+@pytest.mark.asyncio
+async def test_backchannel_logout_wrong_audience_400(client, oidc_enabled) -> None:
+    token = _make_logout_token(aud="other-client")
+    response = await _post_backchannel(client, token)
+    assert response.status_code == 400
+    assert response.json()["detail"] == "invalid_logout_token"
+
+
+@pytest.mark.asyncio
+async def test_backchannel_logout_wrong_issuer_400(client, oidc_enabled) -> None:
+    token = _make_logout_token(iss="http://evil-idp:9000/application/o/ktm2000")
+    response = await _post_backchannel(client, token)
+    assert response.status_code == 400
+    assert response.json()["detail"] == "invalid_logout_token"
+
+
+@pytest.mark.asyncio
+async def test_backchannel_logout_expired_token_400(client, oidc_enabled) -> None:
+    token = _make_logout_token(exp_delta=-120)
+    response = await _post_backchannel(client, token)
+    assert response.status_code == 400
+    assert response.json()["detail"] == "invalid_logout_token"
+
+
+@pytest.mark.asyncio
+async def test_backchannel_logout_missing_events_claim_400(
+    client, oidc_enabled
+) -> None:
+    """id_token replayed as logout_token (no events claim) must be rejected."""
+    token = _make_logout_token(events=None)
+    response = await _post_backchannel(client, token)
+    assert response.status_code == 400
+    assert response.json()["detail"] == "invalid_logout_token"
+
+
+@pytest.mark.asyncio
+async def test_backchannel_logout_nonce_forbidden_400(client, oidc_enabled) -> None:
+    """Spec: logout_token MUST NOT contain nonce."""
+    token = _make_logout_token(nonce="n-123")
+    response = await _post_backchannel(client, token)
+    assert response.status_code == 400
+    assert response.json()["detail"] == "invalid_logout_token"
