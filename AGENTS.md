@@ -80,3 +80,17 @@ npx @colbymchenry/codegraph callers <method>
 npx @colbymchenry/codegraph impact <symbol>
 npx @colbymchenry/codegraph sync
 ```
+
+## Agent skills
+
+### Issue tracker
+
+Issues are tracked in GitHub Issues for `mavkasgit/ktm2000` via the `gh` CLI. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Default five-role vocabulary (needs-triage, needs-info, ready-for-agent, ready-for-human, wontfix). See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context layout — one `CONTEXT.md` + `docs/adr/` at root. See `docs/agents/domain.md`.

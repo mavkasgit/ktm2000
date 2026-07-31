@@ -58,6 +58,14 @@ Rename username/email не ломает link после первого OIDC-вх
 5. `LoginPage`: при флаге/`?logged_out=1` **нет** auto-SSO stub; форма + кнопка «Единый вход».
 6. Успешный login / SSO clear flag.
 
+## Back-Channel Logout (IdP-initiated)
+
+Authentik POSTs `logout_token` (form) на `POST /api/auth/backchannel-logout` при блокировке/логауте в IdP:
+
+1. Валидация JWT: JWKS-подпись, `iss` (все `_issuer_candidates`), `aud=client_id`, `exp`/`iat`, `events`-claim обязателен, `nonce` запрещён (spec).
+2. `sub` → `users.authentik_sub` → `revoke_sessions_for_user` (все app-сессии).
+3. Unknown sub → 200 no-op; invalid token → 400 `invalid_logout_token`. IdP `sid` **не** мапится на app `sid`.
+
 ## Endpoints
 
 | Method | Path | Auth |
@@ -65,6 +73,8 @@ Rename username/email не ломает link после первого OIDC-вх
 | GET | `/api/auth/oidc/config` | public |
 | POST | `/api/auth/oidc/callback` | public |
 | GET | `/api/auth/oidc/logout-url` | public |
+| GET | `/api/auth/frontchannel-logout` | public (iframe, clears storage) |
+| POST | `/api/auth/backchannel-logout` | public (Authentik form `logout_token`) |
 | POST | `/api/auth/login` | public |
 | POST | `/api/auth/logout` | Bearer (idempotent revoke sid) |
 | GET | `/api/auth/me` | Bearer (+ active sid in strict) |
