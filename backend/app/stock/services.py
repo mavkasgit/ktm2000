@@ -633,7 +633,18 @@ class StockCommandService:
                 f"reason=complete requires to_quality=good, got {to_qs.value}"
             )
 
-        if cmd.from_location_id is not None and cmd.compensates_tx_id is None:
+        # Net-zero operations (from == to AND качество не меняется, напр.
+        # COMPLETE на нетрансформирующем этапе) не двигают баланс: одна
+        # транзакция даёт +qty (to) и -qty (from) в одну строку баланса,
+        # поэтому negative-check для них избыточен. Если качество меняется
+        # (SCRAP/REWORK с from == to) — операция НЕ net-zero, проверка нужна.
+        to_qs_net = cmd.to_quality_state or cmd.quality_state
+        is_net_zero = (
+            cmd.from_location_id is not None
+            and cmd.from_location_id == cmd.to_location_id
+            and cmd.quality_state == to_qs_net
+        )
+        if cmd.from_location_id is not None and cmd.compensates_tx_id is None and not is_net_zero:
             balance_result = await session.execute(
                 select(StockBalance).where(
                     StockBalance.product_id == cmd.product_id,
