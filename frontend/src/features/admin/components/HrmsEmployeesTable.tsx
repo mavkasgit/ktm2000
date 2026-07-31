@@ -1,9 +1,8 @@
 import { useMemo, useState } from "react"
 import { useQuery } from "@tanstack/react-query"
-import { Link2, Loader2, Search, Users } from "lucide-react"
+import { Loader2, Search, Users } from "lucide-react"
 
 import {
-  Badge,
   DATA_TABLE_STYLES,
   Input,
   SortableFilterHeader,
@@ -15,13 +14,13 @@ import { useFilterableTable } from "@/shared/hooks/useFilterableTable"
 import { usePaginatedTableQuery } from "@/shared/hooks/usePaginatedTableQuery"
 import { pickColumnApiValue } from "@/shared/lib/columnFilterSearch"
 import { queryKeys } from "@/shared/api/queryKeys"
-import { listHrmsEmployees, type HrmsEmployee } from "../api"
+import { listEmployees, type Employee } from "../api"
 
-export type HrmsEmployeeSortField = "hrmsId" | "name" | "tabNumber" | "position" | "department" | "linked"
+export type EmployeeSortField = "hrmsId" | "name" | "tabNumber" | "position" | "department"
 
 const headerCellClass = `${DATA_TABLE_STYLES.headerRow} ${DATA_TABLE_STYLES.headerCell}`
 
-function mapSortFieldToApi(field: HrmsEmployeeSortField): string {
+function mapSortFieldToApi(field: EmployeeSortField): string {
   switch (field) {
     case "hrmsId":
       return "hrms_id"
@@ -32,24 +31,16 @@ function mapSortFieldToApi(field: HrmsEmployeeSortField): string {
   }
 }
 
-function getLinkedLabel(isLinked: boolean): string {
-  return isLinked ? "Создана" : "Нет"
-}
-
-function buildHrmsColumnApiParams(
-  columnFilters: Partial<Record<HrmsEmployeeSortField, Set<string>>>,
-  columnSearchQueries: Partial<Record<HrmsEmployeeSortField, string>>,
-): { department?: string; linked?: boolean } {
-  const params: { department?: string; linked?: boolean } = {}
+function buildColumnApiParams(
+  columnFilters: Partial<Record<EmployeeSortField, Set<string>>>,
+  columnSearchQueries: Partial<Record<EmployeeSortField, string>>,
+): { department?: string } {
+  const params: { department?: string } = {}
 
   const department = pickColumnApiValue(columnFilters, columnSearchQueries, "department", (value) =>
     value === "—" ? undefined : value,
   )
   if (department) params.department = department
-
-  const linkedLabel = pickColumnApiValue(columnFilters, columnSearchQueries, "linked")
-  if (linkedLabel === "Создана") params.linked = true
-  if (linkedLabel === "Нет") params.linked = false
 
   return params
 }
@@ -73,13 +64,13 @@ export function HrmsEmployeesTable({
     handleSort,
     resetAll,
     hasActiveFilters: hasTableFiltersActive,
-  } = useFilterableTable<HrmsEmployeeSortField>({
+  } = useFilterableTable<EmployeeSortField>({
     extraHasActive: search.trim().length > 0,
     onExtraReset: () => setSearch(""),
   })
 
   const columnApiParams = useMemo(
-    () => buildHrmsColumnApiParams(columnFilters, columnSearchQueries),
+    () => buildColumnApiParams(columnFilters, columnSearchQueries),
     [columnFilters, columnSearchQueries],
   )
 
@@ -112,8 +103,8 @@ export function HrmsEmployeesTable({
   )
 
   const { data, isLoading } = useQuery({
-    queryKey: queryKeys.hrmsEmployees.list(queryParams),
-    queryFn: () => listHrmsEmployees(queryParams),
+    queryKey: queryKeys.employees.list(queryParams),
+    queryFn: () => listEmployees(queryParams),
   })
 
   const employees = data?.employees ?? []
@@ -122,7 +113,7 @@ export function HrmsEmployeesTable({
 
   const uniqueValues = useMemo(
     () => ({
-      hrmsId: [...new Set(employees.map((e) => String(e.id)))].sort((a, b) =>
+      hrmsId: [...new Set(employees.map((e) => String(e.hrms_id)))].sort((a, b) =>
         Number(a) - Number(b),
       ),
       name: [...new Set(employees.map((e) => e.name))].sort((a, b) =>
@@ -135,9 +126,6 @@ export function HrmsEmployeesTable({
         a.localeCompare(b, "ru"),
       ),
       department: [...new Set(employees.map((e) => e.department ?? "—"))].sort((a, b) =>
-        a.localeCompare(b, "ru"),
-      ),
-      linked: [...new Set(employees.map((e) => getLinkedLabel(!!e.is_linked)))].sort((a, b) =>
         a.localeCompare(b, "ru"),
       ),
     }),
@@ -165,7 +153,14 @@ export function HrmsEmployeesTable({
             className="pl-9 h-9 bg-card text-sm"
           />
         </div>
-        <ButtonReset disabled={!hasTableFiltersActive} onReset={resetAll} />
+        <button
+          type="button"
+          onClick={resetAll}
+          disabled={!hasTableFiltersActive}
+          className="text-xs text-muted-foreground hover:text-foreground disabled:opacity-50 shrink-0"
+        >
+          Сбросить фильтры
+        </button>
       </div>
 
       <div className={`${DATA_TABLE_STYLES.container} ${maxHeightClass}`}>
@@ -173,7 +168,7 @@ export function HrmsEmployeesTable({
           <thead>
             <tr>
               <th className={`${headerCellClass} p-0 px-4 text-left w-24`}>
-                <SortableFilterHeader<HrmsEmployeeSortField>
+                <SortableFilterHeader<EmployeeSortField>
                   field="hrmsId"
                   label="HRMS ID"
                   currentSorts={sortConfigs}
@@ -183,7 +178,7 @@ export function HrmsEmployeesTable({
                 />
               </th>
               <th className={`${headerCellClass} p-0 px-4 text-left`}>
-                <SortableFilterHeader<HrmsEmployeeSortField>
+                <SortableFilterHeader<EmployeeSortField>
                   field="name"
                   label="ФИО"
                   currentSorts={sortConfigs}
@@ -193,7 +188,7 @@ export function HrmsEmployeesTable({
                 />
               </th>
               <th className={`${headerCellClass} p-0 px-4 text-left w-28`}>
-                <SortableFilterHeader<HrmsEmployeeSortField>
+                <SortableFilterHeader<EmployeeSortField>
                   field="tabNumber"
                   label="Таб. №"
                   currentSorts={sortConfigs}
@@ -203,7 +198,7 @@ export function HrmsEmployeesTable({
                 />
               </th>
               <th className={`${headerCellClass} p-0 px-4 text-left`}>
-                <SortableFilterHeader<HrmsEmployeeSortField>
+                <SortableFilterHeader<EmployeeSortField>
                   field="position"
                   label="Должность"
                   currentSorts={sortConfigs}
@@ -213,23 +208,13 @@ export function HrmsEmployeesTable({
                 />
               </th>
               <th className={`${headerCellClass} p-0 px-4 text-left`}>
-                <SortableFilterHeader<HrmsEmployeeSortField>
+                <SortableFilterHeader<EmployeeSortField>
                   field="department"
                   label="Подразделение"
                   currentSorts={sortConfigs}
                   onSortChange={handleSort}
                   values={uniqueValues.department}
                   {...bindColumn("department")}
-                />
-              </th>
-              <th className={`${headerCellClass} p-0 px-4 text-left w-36`}>
-                <SortableFilterHeader<HrmsEmployeeSortField>
-                  field="linked"
-                  label="Учётная запись"
-                  currentSorts={sortConfigs}
-                  onSortChange={handleSort}
-                  values={uniqueValues.linked}
-                  {...bindColumn("linked")}
                 />
               </th>
               <TableCornerResetHeader
@@ -242,14 +227,14 @@ export function HrmsEmployeesTable({
           <tbody className="divide-y">
             {isLoading ? (
               <tr>
-                <td colSpan={7} className="px-4 py-8 text-center text-sm text-muted-foreground">
+                <td colSpan={6} className="px-4 py-8 text-center text-sm text-muted-foreground">
                   <Loader2 className="h-5 w-5 animate-spin inline-block mr-2" />
                   Загрузка сотрудников...
                 </td>
               </tr>
             ) : employees.length === 0 ? (
               <tr>
-                <td colSpan={7} className="px-4 py-8 text-center text-sm text-muted-foreground">
+                <td colSpan={6} className="px-4 py-8 text-center text-sm text-muted-foreground">
                   Нет сотрудников по текущим фильтрам
                 </td>
               </tr>
@@ -257,7 +242,7 @@ export function HrmsEmployeesTable({
               employees.map((employee) => (
                 <tr key={employee.id} className="hover:bg-muted/30 transition-colors">
                   <td className="px-4 py-3 text-muted-foreground font-mono text-xs tabular-nums">
-                    {employee.id}
+                    {employee.hrms_id}
                   </td>
                   <td className="px-4 py-3">
                     <div className="font-medium text-foreground">{employee.name}</div>
@@ -270,19 +255,6 @@ export function HrmsEmployeesTable({
                   </td>
                   <td className="px-4 py-3 text-muted-foreground">
                     {employee.department ?? "—"}
-                  </td>
-                  <td className="px-4 py-3">
-                    {employee.is_linked ? (
-                      <Badge
-                        variant="outline"
-                        className="text-[10px] py-0.5 px-2 bg-emerald-500/10 text-emerald-600 border-emerald-500/20 font-medium"
-                      >
-                        <Link2 className="h-3 w-3 mr-1" />
-                        Создана
-                      </Badge>
-                    ) : (
-                      <span className="text-xs text-muted-foreground">Нет</span>
-                    )}
                   </td>
                   <TableCornerResetCell />
                 </tr>
@@ -303,18 +275,5 @@ export function HrmsEmployeesTable({
         rangeLabel={pagination.getRangeLabel(employees.length, total, { onPage: true })}
       />
     </div>
-  )
-}
-
-function ButtonReset({ disabled, onReset }: { disabled: boolean; onReset: () => void }) {
-  return (
-    <button
-      type="button"
-      onClick={onReset}
-      disabled={disabled}
-      className="text-xs text-muted-foreground hover:text-foreground disabled:opacity-50 shrink-0"
-    >
-      Сбросить фильтры
-    </button>
   )
 }

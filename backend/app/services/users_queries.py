@@ -124,12 +124,3 @@ async def list_users_paginated(
     stmt = stmt.limit(limit).offset(offset)
     users = list((await db.execute(stmt)).scalars().all())
     return users, total
-
-
-async def get_linked_hrms_ids(db: AsyncSession) -> list[int]:
-    result = await db.execute(
-        select(User.hrms_employee_id)
-        .where(User.hrms_employee_id.is_not(None))
-        .order_by(User.hrms_employee_id)
-    )
-    return [int(value) for value in result.scalars().all() if value is not None]

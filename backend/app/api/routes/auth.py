@@ -1,13 +1,14 @@
 import logging
 import socket
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from uuid import UUID, uuid4
 
 import bcrypt
 from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request, Response, status
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from jose import jwt
 from sqlalchemy import or_, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
@@ -30,7 +31,17 @@ from app.schemas.oidc_auth import (
     OidcLogoutUrlResponse,
 )
 from app.services.oidc_auth_service import OidcAuthService
-from app.services.session_service import issue_app_token, revoke_session, revoke_sessions_for_user
+from app.services.session_service import (
+    issue_app_token,
+    revoke_session_simple,
+    revoke_sessions_for_user,
+    revoke_by_oidc_sid,
+    revoke_all,
+    is_logout_jti_used,
+    mark_logout_jti_used,
+    cleanup_logout_jti,
+    record_login_event,
+)
 from app.services.unified_profile_service import (
     AuthentikProfileError,
     apply_profile_to_user,
@@ -104,17 +115,21 @@ async def oidc_config() -> OidcConfigResponse:
 @router.post("/oidc/callback", response_model=TokenResponse)
 async def oidc_callback(
     payload: OidcCallbackRequest,
+    request: Request,
     db: AsyncSession = Depends(get_db),
 ) -> TokenResponse:
     """
     Exchange authorization code (+ PKCE verifier), validate id_token via JWKS,
     link local User (authentik_sub → username/email → JIT), issue app JWT + sid.
     """
+    ip, ua = _request_meta(request)
     service = OidcAuthService(db)
     result = await service.handle_callback(
         code=payload.code,
         code_verifier=payload.code_verifier,
         redirect_uri=payload.redirect_uri,
+        ip=ip,
+        user_agent=ua,
     )
     return TokenResponse(
         access_token=result["access_token"],
@@ -164,31 +179,91 @@ for (const key of Object.keys(sessionStorage)) sessionStorage.removeItem(key);
 
 @router.post("/backchannel-logout")
 async def backchannel_logout(
-    response: Response,
+    logout_token: str | None = Form(default=None),
     db: AsyncSession = Depends(get_db),
-    logout_token: str | None = Form(None),
-) -> dict[str, object]:
-    """OIDC Back-Channel Logout (public). Authentik POSTs form logout_token.
+) -> JSONResponse:
+    """OIDC Back-Channel Logout (public). Authentik POSTs logout_token form field.
 
-    Match logout_token.sub → users.authentik_sub → revoke ALL app sessions.
-    Unknown sub → 200 no-op. Invalid token → 400. Never match IdP sid to app sid.
+    Phase-1 SLO:
+      - replay protection via jti (one-time use);
+      - if sid present: revoke only sessions with that IdP sid (not all user sessions);
+      - if sid absent (e.g. user deactivation): revoke all sessions by sub;
+      - audit: session_revoke event with source="authentik_backchannel".
+
+    Unknown sub is 200 no-op (no enumeration). Invalid token -> 400.
     """
-    response.headers["Cache-Control"] = "no-store"
-    if not logout_token or not str(logout_token).strip():
+    if not logout_token:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="invalid_logout_token",
         )
 
     service = OidcAuthService(db)
-    claims = await service.validate_logout_token(str(logout_token).strip())
+    try:
+        claims = await service.validate_logout_token(str(logout_token).strip())
+    except HTTPException:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="invalid_logout_token",
+        ) from exc
+
+    # Replay protection: jti is one-time use (OIDC Back-Channel Logout 1.0)
+    if claims.jti and await is_logout_jti_used(db, claims.jti):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="replay_logout_token",
+        )
 
     user = await db.scalar(select(User).where(User.authentik_sub == claims.sub))
     revoked = 0
     if user is not None:
-        revoked = await revoke_sessions_for_user(db, user_id=user.id)
+        if claims.sid:
+            revoked_ids = await revoke_by_oidc_sid(
+                db, user_id=user.id, oidc_sid=claims.sid, reason="backchannel_logout"
+            )
+            revoked = len(revoked_ids)
+        else:
+            revoked = await revoke_all(
+                db, user_id=user.id, reason="backchannel_logout"
+            )
+        await record_login_event(
+            db,
+            event_type="session_revoke",
+            success=True,
+            user_id=user.id,
+            username_attempted=user.username,
+            details={
+                "reason": "backchannel_logout",
+                "source": "authentik_backchannel",
+                "oidc_sid": claims.sid,
+                "revoked": revoked,
+            },
+        )
 
-    return {"status": "ok", "revoked": revoked}
+    # jti is recorded even for unknown sub: valid token is considered consumed.
+    # Row lives until token exp — replay after that is impossible by definition.
+    if claims.jti:
+        exp_dt = (
+            datetime.fromtimestamp(claims.exp, tz=timezone.utc)
+            if claims.exp
+            else datetime.now(timezone.utc) + timedelta(minutes=10)
+        )
+        try:
+            await mark_logout_jti_used(db, claims.jti, expires_at=exp_dt)
+        except IntegrityError as exc:
+            # Race on duplicate delivery: jti already recorded -> replay
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="replay_logout_token",
+            ) from exc
+        await cleanup_logout_jti(db)
+
+    return JSONResponse(
+        content={"status": "ok", "revoked": revoked},
+        headers={"Cache-Control": "no-store"},
+    )
 
 
 @router.post("/login", response_model=TokenResponse)
@@ -346,7 +421,7 @@ async def logout(
 
     session = await db.get(UserSession, session_id)
     if session is not None and session.user_id == user.id and session.revoked_at is None:
-        await revoke_session(db, session_id)
+        await revoke_session_simple(db, session_id)
 
 
 @router.get("/me", response_model=MeResponse)

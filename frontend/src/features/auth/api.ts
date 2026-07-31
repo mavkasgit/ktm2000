@@ -20,7 +20,6 @@ export interface User {
   section_ids: number[]
   is_active: boolean
   tab_number?: string | null
-  hrms_employee_id?: number | null
   active_login_token?: ActiveToken | null
   /** Multiavatar seed — cache of IdP attributes.profile_avatar_seed */
   avatar_seed?: string | null

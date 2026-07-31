@@ -1,4 +1,4 @@
-import { HardDrive, Database, Users, Wrench } from "lucide-react"
+import { HardDrive, Database, Users, Wrench, Contact } from "lucide-react"
 import { useNavigate } from "react-router-dom"
 import { Button } from "@/shared/ui/Button"
 import { usePermission } from "@/features/auth/hooks/usePermission"
@@ -53,6 +53,23 @@ export function SettingsPage() {
               </div>
             </div>
             <Button onClick={() => navigate("/settings/users")} className="w-full">
+              Открыть
+            </Button>
+          </div>
+        )}
+
+        {canEditSettings && (
+          <div className="rounded-lg border bg-card p-6 space-y-4">
+            <div className="flex items-center gap-3">
+              <div className="rounded-lg bg-emerald-500/10 p-2">
+                <Contact className="h-5 w-5 text-emerald-500" />
+              </div>
+              <div>
+                <h3 className="font-medium">Сотрудники</h3>
+                <p className="text-sm text-muted-foreground">Синхронизация списка сотрудников из HRMS</p>
+              </div>
+            </div>
+            <Button onClick={() => navigate("/settings/employees")} className="w-full">
               Открыть
             </Button>
           </div>

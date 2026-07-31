@@ -34,7 +34,7 @@ from contextlib import asynccontextmanager
 import asyncio
 from app.api.routes.audit_logs import router as audit_logs_router
 from app.api.routes.users import router as users_router
-from app.api.routes.integration import router as integration_router
+from app.api.routes.employees import router as employees_router
 from app.core.config import settings
 from app.core.database import async_session
 
@@ -100,7 +100,7 @@ app.include_router(transfers_router, prefix="/api")
 app.include_router(stock_router, prefix="/api")
 app.include_router(audit_logs_router, prefix="/api")
 app.include_router(users_router, prefix="/api")
-app.include_router(integration_router, prefix="/api")
+app.include_router(employees_router, prefix="/api")
 
 
 @app.get("/api/health")

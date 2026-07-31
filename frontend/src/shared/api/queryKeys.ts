@@ -94,16 +94,6 @@ type UsersListQueryKeyParams = {
   section?: string;
 };
 
-type HrmsEmployeesQueryKeyParams = {
-  limit?: number;
-  offset?: number;
-  search?: string;
-  sort_by?: string;
-  sort_order?: string;
-  department?: string;
-  linked?: boolean;
-};
-
 type SectionBoardQueryKeyParams = {
   date_from?: string;
   date_to?: string;
@@ -171,8 +161,9 @@ export const queryKeys = {
   users: {
     list: (params?: UsersListQueryKeyParams) => ["users", "list", params ?? {}] as const,
   },
-  hrmsEmployees: {
-    list: (params?: HrmsEmployeesQueryKeyParams) => ["hrms-employees", params ?? {}] as const,
+  employees: {
+    list: (params?: { limit?: number; offset?: number; search?: string; sort_by?: string; sort_order?: string; department?: string }) =>
+      ["employees", params ?? {}] as const,
   },
   stock: {
     balances: (params?: StockBalancesQueryKeyParams) =>
@@ -181,6 +172,7 @@ export const queryKeys = {
     transactions: (params?: StockTransactionsQueryKeyParams) =>
       ["stock-transactions", params ?? {}] as const,
     productBalance: (productId: number) => ["stock-product-balance", productId] as const,
+    remainderImportOperations: () => ["stock-remainder-import-operations"] as const,
   },
   shopfloor: {
     board: (sectionId: number, params?: SectionBoardQueryKeyParams) =>

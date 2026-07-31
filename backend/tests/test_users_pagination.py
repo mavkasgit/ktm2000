@@ -18,7 +18,6 @@ async def _make_user(
     role: UserRole = UserRole.viewer,
     is_active: bool = True,
     email: str | None = None,
-    hrms_employee_id: int | None = None,
 ) -> User:
     user = User(
         username=username,
@@ -27,7 +26,6 @@ async def _make_user(
         full_name=full_name,
         role=role,
         is_active=is_active,
-        hrms_employee_id=hrms_employee_id,
     )
     session.add(user)
     await session.flush()
@@ -46,7 +44,6 @@ async def _seed_users(session, count: int) -> list[User]:
                 role=roles[index % len(roles)],
                 is_active=index % 3 != 0,
                 email=f"paginated_{index:03d}@example.com",
-                hrms_employee_id=10_000 + index if index % 4 == 0 else None,
             )
         )
     await session.commit()
@@ -158,29 +155,3 @@ async def test_users_section_filter_and_sort(auth_client, session) -> None:
     assert sorted_response.status_code == 200
     sorted_names = [user["full_name"] for user in sorted_response.json()["users"]]
     assert sorted_names == sorted(sorted_names, reverse=True)
-
-
-@pytest.mark.asyncio
-async def test_users_linked_hrms_ids_metadata(auth_client, session) -> None:
-    await session.execute(User.__table__.delete().where(User.__table__.c.username != "testauth"))
-    await session.commit()
-
-    await _make_user(
-        session,
-        username="linked_one",
-        full_name="Linked One",
-        hrms_employee_id=42,
-    )
-    await _make_user(
-        session,
-        username="linked_two",
-        full_name="Linked Two",
-        hrms_employee_id=84,
-    )
-    await _make_user(session, username="plain_user", full_name="Plain User")
-    await session.commit()
-
-    response = await auth_client.get("/api/users?limit=10&offset=0")
-    assert response.status_code == 200
-    body = response.json()
-    assert set(body["linked_hrms_ids"]) == {42, 84}

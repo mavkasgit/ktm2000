@@ -15,7 +15,7 @@ import { DevSettingsPage } from "../features/settings/DevSettingsPage"
 import { LoginPage } from "../features/auth/pages/LoginPage"
 import { OidcCallbackPage } from "../features/auth/pages/OidcCallbackPage"
 import { ProtectedRoute } from "../features/auth/components/ProtectedRoute"
-import { UsersPage } from "../features/admin"
+import { UsersPage, EmployeesPage } from "../features/admin"
 
 export const router = createBrowserRouter([
   {
@@ -63,6 +63,10 @@ export const router = createBrowserRouter([
       {
         path: "settings/users",
         element: <ProtectedRoute allowedRoles={["admin"]}><UsersPage /></ProtectedRoute>,
+      },
+      {
+        path: "settings/employees",
+        element: <ProtectedRoute allowedRoles={["admin"]}><EmployeesPage /></ProtectedRoute>,
       },
       {
         path: "settings/dev",

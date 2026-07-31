@@ -13,6 +13,7 @@ from app.services.session_service import (
     list_active_sessions,
     revoke_session,
     revoke_sessions_for_user,
+    record_login_event,
 )
 
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -47,12 +48,12 @@ async def get_sessions(
     return [
         SessionOut(
             id=s.id,
-            device_label="Unknown Device",
-            ip_address=None,
-            user_agent=None,
+            device_label=s.device_label or "Unknown Device",
+            ip_address=s.ip_address,
+            user_agent=s.user_agent,
             login_method=s.login_method,
             created_at=s.created_at,
-            last_seen_at=s.created_at,
+            last_seen_at=s.last_seen_at or s.created_at,
             is_current=bool(current_sid and s.id == current_sid),
         )
         for s in sessions
@@ -70,6 +71,15 @@ async def revoke_other_sessions(
         db,
         user_id=current_user.id,
         except_id=current_sid,
+    )
+    await record_login_event(
+        db,
+        event_type="session_revoke",
+        success=True,
+        user_id=current_user.id,
+        username_attempted=current_user.username,
+        session_id=current_sid,
+        details={"reason": "user_revoke", "scope": "others"},
     )
     await db.commit()
     return {"count": count}
@@ -89,7 +99,6 @@ async def delete_session(
             detail="Session not found",
         )
 
-    # Проверим, активна ли сессия (не отозвана и не просрочена)
     now = datetime.now(UTC)
     expires = session.expires_at
     if expires.tzinfo is None:
@@ -101,6 +110,14 @@ async def delete_session(
             detail="Session not found",
         )
 
-    await revoke_session(db, session_id)
+    await revoke_session(db, user_id=current_user.id, session_id=session_id, reason="user_revoke")
+    await record_login_event(
+        db,
+        event_type="session_revoke",
+        success=True,
+        user_id=current_user.id,
+        username_attempted=current_user.username,
+        session_id=session_id,
+        details={"reason": "user_revoke", "scope": "one"},
+    )
     await db.commit()
-

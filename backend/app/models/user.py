@@ -38,7 +38,6 @@ class User(Base):
     section_id: Mapped[int | None] = mapped_column(ForeignKey("sections.id"), nullable=True)
     is_active: Mapped[bool] = mapped_column(nullable=False, default=True, server_default=text("true"))
     tab_number: Mapped[str | None] = mapped_column(String(50), nullable=True)
-    hrms_employee_id: Mapped[int | None] = mapped_column(BigInteger, unique=True, nullable=True)
     position: Mapped[str | None] = mapped_column(String(255), nullable=True)
     department: Mapped[str | None] = mapped_column(String(255), nullable=True)
     # OIDC subject from Authentik (stable link; primary match key)

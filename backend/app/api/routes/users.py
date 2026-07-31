@@ -8,26 +8,12 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user, require_role
+from app.core.config import settings
 from app.core.database import get_db
 from app.core.security import get_password_hash
 from app.models.user import User, UserRole
 from app.models.section import Section
-from app.services.hrms_employees import (
-    HrmsSyncError,
-    HrmsSyncChangeOut,
-    HrmsSyncDiffEntryOut,
-    HrmsSyncDiffOut,
-    HrmsSyncPreviewOut,
-    build_hrms_employees_url,
-    compute_hrms_sync_preview,
-    get_cached_hrms_employees,
-    get_hrms_integration_settings,
-    list_cached_hrms_employees_paginated,
-    sync_hrms_employees_cache,
-    test_hrms_connection,
-    update_hrms_integration_settings,
-)
-from app.services.users_queries import get_linked_hrms_ids, list_users_paginated
+from app.services.users_queries import list_users_paginated
 
 router = APIRouter(prefix="/users", tags=["users"])
 
@@ -56,7 +42,6 @@ class UserOut(BaseModel):
     section_ids: list[int] = []
     is_active: bool
     tab_number: str | None = None
-    hrms_employee_id: int | None = None
     created_at: datetime
     active_login_token: Optional[ActiveTokenOut] = None
 
@@ -70,7 +55,6 @@ class UserCreate(BaseModel):
     section_id: int | None = None
     section_ids: list[int] | None = None
     tab_number: str | None = None
-    hrms_employee_id: int | None = None
 
 
 class UserUpdate(BaseModel):
@@ -82,33 +66,10 @@ class UserUpdate(BaseModel):
     section_ids: list[int] | None = None
     is_active: bool | None = None
     tab_number: str | None = None
-    hrms_employee_id: int | None = None
 
 
 class PasswordReset(BaseModel):
     new_password: str | None = None
-
-
-class HrmsEmployeeOut(BaseModel):
-    id: int
-    name: str
-    tab_number: str | None = None
-    position: str | None = None
-    department: str | None = None
-    is_linked: bool = False
-
-
-class HrmsEmployeesCacheOut(BaseModel):
-    employees: list[HrmsEmployeeOut]
-    synced_at: datetime | None = None
-
-
-class HrmsEmployeesListOut(BaseModel):
-    employees: list[HrmsEmployeeOut]
-    total: int
-    limit: int
-    offset: int
-    synced_at: datetime | None = None
 
 
 class UsersListOut(BaseModel):
@@ -116,57 +77,6 @@ class UsersListOut(BaseModel):
     total: int
     limit: int
     offset: int
-    linked_hrms_ids: list[int] = []
-
-
-class HrmsIntegrationSettingsOut(BaseModel):
-    base_url: str | None = None
-    api_token: str = "admin"
-    employees_url: str | None = None
-    updated_at: datetime | None = None
-
-
-class HrmsIntegrationSettingsUpdate(BaseModel):
-    base_url: str | None = None
-    api_token: str | None = None
-
-
-class HrmsConnectionTestIn(BaseModel):
-    base_url: str | None = None
-    api_token: str | None = None
-
-
-class HrmsConnectionTestOut(BaseModel):
-    request_url: str
-    employee_count: int
-
-
-def _to_hrms_employee_out(employee, *, is_linked: bool = False) -> HrmsEmployeeOut:
-    return HrmsEmployeeOut(
-        id=employee.hrms_id,
-        name=employee.name,
-        tab_number=employee.tab_number,
-        position=employee.position,
-        department=employee.department,
-        is_linked=is_linked,
-    )
-
-
-def _to_hrms_employees_cache_out(employees, synced_at: datetime | None) -> HrmsEmployeesCacheOut:
-    return HrmsEmployeesCacheOut(
-        employees=[_to_hrms_employee_out(employee) for employee in employees],
-        synced_at=synced_at,
-    )
-
-
-def _to_hrms_settings_out(settings) -> HrmsIntegrationSettingsOut:
-    employees_url = build_hrms_employees_url(settings.base_url) if settings.base_url else None
-    return HrmsIntegrationSettingsOut(
-        base_url=settings.base_url,
-        api_token=settings.api_token,
-        employees_url=employees_url,
-        updated_at=settings.updated_at,
-    )
 
 
 # ─── Endpoints ────────────────────────────────────────────────────────
@@ -201,135 +111,12 @@ async def list_users(
         email=email,
         section=section,
     )
-    linked_hrms_ids = await get_linked_hrms_ids(db)
     return UsersListOut(
         users=[UserOut.model_validate(user) for user in users],
         total=total,
         limit=limit,
         offset=offset,
-        linked_hrms_ids=linked_hrms_ids,
     )
-
-
-@router.get("/hrms-settings", response_model=HrmsIntegrationSettingsOut)
-async def get_hrms_settings(
-    db: AsyncSession = Depends(get_db),
-    _current_user: User = Depends(require_role([UserRole.admin])),
-) -> HrmsIntegrationSettingsOut:
-    """Получить настройки подключения к HRMS."""
-    settings = await get_hrms_integration_settings(db)
-    return _to_hrms_settings_out(settings)
-
-
-@router.put("/hrms-settings", response_model=HrmsIntegrationSettingsOut)
-async def save_hrms_settings(
-    payload: HrmsIntegrationSettingsUpdate,
-    db: AsyncSession = Depends(get_db),
-    _current_user: User = Depends(require_role([UserRole.admin])),
-) -> HrmsIntegrationSettingsOut:
-    """Сохранить настройки подключения к HRMS."""
-    try:
-        settings = await update_hrms_integration_settings(
-            db,
-            base_url=payload.base_url,
-            api_token=payload.api_token,
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
-    return _to_hrms_settings_out(settings)
-
-
-@router.post("/hrms-settings/test", response_model=HrmsConnectionTestOut)
-async def test_hrms_settings(
-    payload: HrmsConnectionTestIn,
-    db: AsyncSession = Depends(get_db),
-    _current_user: User = Depends(require_role([UserRole.admin])),
-) -> HrmsConnectionTestOut:
-    """Проверить доступность HRMS по указанному или сохранённому адресу."""
-    try:
-        if payload.base_url is not None or payload.api_token is not None:
-            await update_hrms_integration_settings(
-                db,
-                base_url=payload.base_url,
-                api_token=payload.api_token,
-            )
-        result = await test_hrms_connection(
-            db,
-            base_url=payload.base_url,
-            api_token=payload.api_token,
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
-    except HrmsSyncError as exc:
-        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
-    return HrmsConnectionTestOut(**result)
-
-
-@router.get("/employees", response_model=HrmsEmployeesListOut)
-async def list_employees(
-    limit: int = Query(default=50, ge=1, le=500),
-    offset: int = Query(default=0, ge=0),
-    search: str | None = Query(default=None),
-    sort_by: str = Query(default="name"),
-    sort_order: str = Query(default="asc"),
-    department: str | None = Query(default=None),
-    linked: bool | None = Query(default=None),
-    db: AsyncSession = Depends(get_db),
-    _current_user: User = Depends(require_role([UserRole.admin])),
-) -> HrmsEmployeesListOut:
-    """Получить кешированный список сотрудников HRMS с пагинацией."""
-    rows, total, synced_at = await list_cached_hrms_employees_paginated(
-        db,
-        limit=limit,
-        offset=offset,
-        search=search,
-        sort_by=sort_by,
-        sort_order=sort_order,
-        department=department,
-        linked=linked,
-    )
-    return HrmsEmployeesListOut(
-        employees=[
-            _to_hrms_employee_out(employee, is_linked=row_is_linked)
-            for employee, row_is_linked in rows
-        ],
-        total=total,
-        limit=limit,
-        offset=offset,
-        synced_at=synced_at,
-    )
-
-
-@router.post("/employees/sync", response_model=HrmsEmployeesCacheOut)
-async def sync_employees(
-    db: AsyncSession = Depends(get_db),
-    _current_user: User = Depends(require_role([UserRole.admin])),
-) -> HrmsEmployeesCacheOut:
-    """Синхронизировать кеш сотрудников HRMS из внешнего сервиса."""
-    try:
-        employees, synced_at = await sync_hrms_employees_cache(db)
-    except HrmsSyncError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=str(exc),
-        ) from exc
-    return _to_hrms_employees_cache_out(employees, synced_at)
-
-
-@router.post("/employees/sync/preview", response_model=HrmsSyncPreviewOut)
-async def sync_employees_preview(
-    db: AsyncSession = Depends(get_db),
-    _current_user: User = Depends(require_role([UserRole.admin])),
-) -> HrmsSyncPreviewOut:
-    """Предпросмотр синхронизации HRMS: возвращает diff БЕЗ записи в БД."""
-    try:
-        preview = await compute_hrms_sync_preview(db)
-    except HrmsSyncError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=str(exc),
-        ) from exc
-    return preview
 
 
 @router.post("", response_model=UserOut, status_code=status.HTTP_201_CREATED)
@@ -339,12 +126,9 @@ async def create_user(
     _current_user: User = Depends(require_role([UserRole.admin])),
 ) -> UserOut:
     """Создать нового пользователя (только для admin)."""
-    # 1. Если передан hrms_employee_id или tab_number, проверяем, существует ли уже такой сотрудник в системе
+    # 1. Если передан tab_number, проверяем, существует ли уже такой сотрудник в системе
     existing_user = None
-    if payload.hrms_employee_id:
-        result = await db.execute(select(User).where(User.hrms_employee_id == payload.hrms_employee_id))
-        existing_user = result.scalars().first()
-    elif payload.tab_number:
+    if payload.tab_number:
         result = await db.execute(select(User).where(User.tab_number == payload.tab_number))
         existing_user = result.scalars().first()
 
@@ -395,8 +179,6 @@ async def create_user(
         existing_user.role = payload.role
         existing_user.is_active = True
         existing_user.section_id = section_ids[0] if section_ids else None
-        if payload.hrms_employee_id is not None:
-            existing_user.hrms_employee_id = payload.hrms_employee_id
         if payload.tab_number is not None:
             existing_user.tab_number = payload.tab_number
         
@@ -418,7 +200,6 @@ async def create_user(
         role=payload.role,
         section_id=section_ids[0] if section_ids else None,
         tab_number=payload.tab_number,
-        hrms_employee_id=payload.hrms_employee_id,
         is_active=True,
     )
     if sections_list:
@@ -459,6 +240,14 @@ async def update_user(
             detail="Cannot change your own role",
         )
 
+    # When role sync from IdP is active, local role changes are forbidden
+    if payload.role is not None and payload.role != user.role:
+        if settings.AUTH_OIDC_SYNC_ROLE_FROM_IDP:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Role is managed by Authentik (ktm_role claim). Local change forbidden.",
+            )
+
     if payload.username is not None and payload.username != user.username:
         existing = await db.scalar(select(User).where(User.username == payload.username))
         if existing is not None:
@@ -486,20 +275,6 @@ async def update_user(
             user.tab_number = None
         else:
             user.tab_number = payload.tab_number
-
-    # Изменение ID сотрудника HRMS
-    if "hrms_employee_id" in payload.model_fields_set:
-        if payload.hrms_employee_id is None or payload.hrms_employee_id == 0:
-            user.hrms_employee_id = None
-        elif payload.hrms_employee_id != user.hrms_employee_id:
-            # Проверяем на дубликат hrms_employee_id
-            dup = await db.scalar(select(User).where(User.hrms_employee_id == payload.hrms_employee_id))
-            if dup is not None and dup.id != user.id:
-                raise HTTPException(
-                    status_code=status.HTTP_409_CONFLICT,
-                    detail=f"Сотрудник с ID '{payload.hrms_employee_id}' уже привязан к другому пользователю",
-                )
-            user.hrms_employee_id = payload.hrms_employee_id
 
     if payload.full_name is not None:
         user.full_name = payload.full_name

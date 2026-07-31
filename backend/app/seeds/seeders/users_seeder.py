@@ -37,8 +37,11 @@ async def seed_users(db: AsyncSession) -> dict[int, User]:
         await db.flush()
         system_user = await db.scalar(select(User).where(User.email == "system@local"))
 
-    # Сбрасываем сиквенс в любом случае, так как id=1 занят вручную
-    await db.execute(text("SELECT setval(pg_get_serial_sequence('users', 'id'), 100, false)"))
+    # Сбрасываем сиквенс: next = MAX(id) + 1, но не ниже 100
+    await db.execute(text("""
+        SELECT setval(pg_get_serial_sequence('users', 'id'),
+                      GREATEST((SELECT COALESCE(MAX(id), 0) FROM users) + 1, 100), false)
+    """))
     await db.flush()
 
     result[system_user.id] = system_user
@@ -49,6 +52,14 @@ async def seed_users(db: AsyncSession) -> dict[int, User]:
 
     # Список базовых демонстрационных пользователей
     demo_users_data = [
+        {
+            "username": "akadmin",
+            "email": "akadmin",
+            "password": "akadmin-dev-local",
+            "full_name": "AK Admin",
+            "role": UserRole.admin,
+            "section_id": None,
+        },
         {
             "username": "admin",
             "email": "admin@ktm2000.local",

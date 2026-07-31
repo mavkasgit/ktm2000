@@ -123,26 +123,7 @@ export function OidcCallbackPage() {
               )}
             </div>
           </div>
-          <div className="flex flex-col gap-2 sm:flex-row">
-            <button
-              type="button"
-              className="flex w-full items-center justify-center rounded-lg bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white shadow-md transition-all hover:bg-blue-700"
-              onClick={() => {
-                window.location.href = "/login"
-              }}
-            >
-              Войти снова
-            </button>
-            <button
-              type="button"
-              className="flex w-full items-center justify-center rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 transition-all hover:bg-slate-50"
-              onClick={() => {
-                window.location.href = "/login?password=1"
-              }}
-            >
-              Вход с паролем
-            </button>
-          </div>
+          
         </div>
       </div>
     )

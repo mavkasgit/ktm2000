@@ -15,7 +15,6 @@ class Settings(BaseSettings):
     ENV: str = "dev"
 
     SECRET_KEY: str = "ktm2000-dev-secret-change-me"
-    INTEGRATION_TOKEN: str = "ktm2000-integration-token-default"
     JWT_SECRET_KEY: str | None = None
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 1440
     ALGORITHM: str = "HS256"
@@ -31,13 +30,17 @@ class Settings(BaseSettings):
     BACKUPS_PATH: str = "/app/storage/backups"
     POSTGRES_CONTAINER_NAME: str = "ktm2000-postgres"
 
+    # HRMS integration — employee sync
+    HRMS_BASE_URL: str | None = None
+    HRMS_API_TOKEN: str = "admin"
+
     # OIDC / Authentik bridge — dual-run; false = local password/OTP only
     AUTH_OIDC_ENABLED: bool = False
     AUTH_OIDC_ISSUER: str | None = None  # e.g. http://localhost:9000/application/o/ktm2000/
     AUTH_OIDC_CLIENT_ID: str | None = None
     AUTH_OIDC_CLIENT_SECRET: str | None = None  # empty for public+PKCE
     AUTH_OIDC_REDIRECT_URI: str | None = None  # e.g. http://localhost:8082/auth/callback
-    AUTH_OIDC_SCOPES: str = "openid profile email"
+    AUTH_OIDC_SCOPES: str = "openid profile email ktm_access"
     # Comma-separated extra hosts (or full URLs) accepted in id_token.iss
     AUTH_OIDC_ISSUER_ALIASES: str | None = None
     AUTH_OIDC_AUTHORIZATION_URL: str | None = None
@@ -48,6 +51,12 @@ class Settings(BaseSettings):
     AUTH_OIDC_DEFAULT_ROLE: str = "viewer"
     # When true, soft-map IdP groups → users.role on link/JIT; default false = app SoT
     AUTH_OIDC_SYNC_ROLE_FROM_IDP: bool = False
+
+    # Break Glass (emergency) access — bypass Authentik when IdP is unreachable.
+    BREAK_GLASS_ENABLED: bool = True
+    BREAK_GLASS_USER: str = "emergency_admin"
+    BREAK_GLASS_PASSWORD: str = "break-glass-dev"
+    BREAK_GLASS_PASSWORD_HASH: str = ""
 
     # Authentik Admin API — unified profile (name + avatar). Token never exposed to FE.
     # AUTHENTIK_*_URL: absolute URL or "auto" (detect host LAN IP at runtime)

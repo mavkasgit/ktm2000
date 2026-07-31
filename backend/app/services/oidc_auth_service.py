@@ -50,6 +50,9 @@ class OidcClaims:
     email: str | None
     name: str | None
     groups: tuple[str, ...] = ()
+    ktm_role: str | None = None
+    # OIDC session id — back-channel logout correlation
+    sid: str | None = None
 
 
 _BACKCHANNEL_LOGOUT_EVENT = "http://schemas.openid.net/event/backchannel-logout"
@@ -63,6 +66,8 @@ class LogoutClaims:
     sid: str | None = None
     jti: str | None = None
     iss: str | None = None
+    # exp (unix ts) — TTL for jti replay-store row
+    exp: int | None = None
 
 
 class OidcAuthService:
@@ -452,12 +457,21 @@ class OidcAuthService:
         if isinstance(raw_groups, (list, tuple)):
             groups = tuple(str(g) for g in raw_groups if g)
 
+        ktm_role_raw = claims.get("ktm_role")
+        ktm_role = str(ktm_role_raw).strip().lower() if ktm_role_raw else None
+
+        # OIDC session id for back-channel logout correlation
+        sid_raw = claims.get("sid")
+        sid = str(sid_raw) if sid_raw else None
+
         return OidcClaims(
             sub=sub,
             preferred_username=claims.get("preferred_username") or claims.get("nickname"),
             email=claims.get("email"),
             name=claims.get("name"),
             groups=groups,
+            ktm_role=ktm_role,
+            sid=sid,
         )
 
     async def validate_logout_token(self, logout_token: str) -> LogoutClaims:
@@ -577,8 +591,10 @@ class OidcAuthService:
         jti = str(jti_raw) if jti_raw else None
         iss_raw = claims.get("iss")
         iss = str(iss_raw) if iss_raw else None
+        exp_raw = claims.get("exp")
+        exp = exp_raw if isinstance(exp_raw, int) and not isinstance(exp_raw, bool) else None
 
-        return LogoutClaims(sub=sub, sid=sid, jti=jti, iss=iss)
+        return LogoutClaims(sub=sub, sid=sid, jti=jti, iss=iss, exp=exp)
 
     # ─── user resolve / link ──────────────────────────────────────────────
 
@@ -607,7 +623,7 @@ class OidcAuthService:
         """
         user = await self._get_by_authentik_sub(claims.sub)
         if user is not None:
-            await self._maybe_sync_role(user, claims)
+            await self._apply_role_sync(user, claims)
             return user
 
         candidates: list[str] = []
@@ -638,7 +654,7 @@ class OidcAuthService:
             )
             if found is not None:
                 await self._link_authentik_sub(found, claims.sub)
-                await self._maybe_sync_role(found, claims)
+                await self._apply_role_sync(found, claims)
                 return found
 
         if not settings.AUTH_OIDC_ALLOW_JIT:
@@ -648,7 +664,17 @@ class OidcAuthService:
             )
 
         username = await self._pick_username(candidates, claims.sub)
-        role = self._role_from_claims(claims)
+        # When SYNC enabled: ktm_role claim is mandatory for JIT (fail-closed)
+        if settings.AUTH_OIDC_SYNC_ROLE_FROM_IDP:
+            ktm_role = claims.ktm_role
+            if ktm_role not in _VALID_ROLES:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="No KTM role assigned. Contact admin.",
+                )
+            role = UserRole(ktm_role)
+        else:
+            role = self._role_from_claims(claims)
         full_name = (claims.name or username).strip()[:255] or username
         email = (claims.email or None)
         if email:
@@ -768,7 +794,7 @@ class OidcAuthService:
         return self._default_role()
 
     async def _maybe_sync_role(self, user: User, claims: OidcClaims) -> None:
-        """Overwrite local MES role from IdP groups only when SYNC flag is true."""
+        """Overwrite local MES role from IdP groups only when SYNC flag is true (legacy group-based)."""
         if not settings.AUTH_OIDC_SYNC_ROLE_FROM_IDP:
             return
         mapped = self._role_from_groups(claims)
@@ -779,6 +805,38 @@ class OidcAuthService:
         await self.db.commit()
         await self.db.refresh(user)
 
+    async def _sync_role_from_claim(self, user: User, claims: OidcClaims) -> None:
+        """JIT overwrite role from ktm_role claim. Fail-closed when claim absent/invalid."""
+        ktm_role = claims.ktm_role
+        if ktm_role in _VALID_ROLES:
+            if user.role != UserRole(ktm_role):
+                user.role = UserRole(ktm_role)
+            user.is_active = True
+            self.db.add(user)
+            await self.db.commit()
+            await self.db.refresh(user)
+        elif ktm_role == "conflict":
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Role conflict in IdP. Contact admin.",
+            )
+        else:
+            # absent / no_access / garbage -> fail-closed
+            user.is_active = False
+            self.db.add(user)
+            await self.db.commit()
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="No KTM role assigned. Contact admin.",
+            )
+
+    async def _apply_role_sync(self, user: User, claims: OidcClaims) -> None:
+        """Dispatch role sync: claim-based (fail-closed) when SYNC on, else legacy group-based."""
+        if settings.AUTH_OIDC_SYNC_ROLE_FROM_IDP:
+            await self._sync_role_from_claim(user, claims)
+        else:
+            await self._maybe_sync_role(user, claims)
+
 
     # ─── full callback ────────────────────────────────────────────────────
 
@@ -788,6 +846,8 @@ class OidcAuthService:
         code: str,
         code_verifier: str,
         redirect_uri: str | None = None,
+        ip: str | None = None,
+        user_agent: str | None = None,
     ) -> dict[str, Any]:
         """
         Exchange code → validate id_token → resolve user → issue app JWT.
@@ -821,7 +881,17 @@ class OidcAuthService:
                 detail="User is disabled",
             )
 
-        token = await issue_app_token(self.db, user=user, login_method="oidc")
+        # Extract oidc_sid from id_token for back-channel logout correlation
+        oidc_sid = claims.sid if hasattr(claims, "sid") else None
+
+        token = await issue_app_token(
+            self.db,
+            user=user,
+            login_method="oidc",
+            ip=ip,
+            user_agent=user_agent,
+            oidc_sid=oidc_sid,
+        )
         return {
             "access_token": token,
             "token_type": "bearer",

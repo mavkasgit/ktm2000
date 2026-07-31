@@ -1,15 +1,18 @@
 from datetime import datetime
 
-from sqlalchemy import BigInteger, DateTime, String, text
+from sqlalchemy import BigInteger, DateTime, Identity, String, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base
 
 
-class HrmsEmployeeCache(Base):
-    __tablename__ = "hrms_employee_cache"
+class HrmsEmployee(Base):
+    __tablename__ = "hrms_employees"
 
-    hrms_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    id: Mapped[int] = mapped_column(
+        BigInteger, Identity(always=True), primary_key=True, autoincrement=True
+    )
+    hrms_id: Mapped[int] = mapped_column(BigInteger, unique=True, nullable=False)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     tab_number: Mapped[str | None] = mapped_column(String(50), nullable=True)
     position: Mapped[str | None] = mapped_column(String(255), nullable=True)

@@ -5,6 +5,7 @@ import { fetchOidcLogoutUrl } from "../api/oidcAuth"
 const TOKEN_KEY = "ktm2000_token"
 /** Set before logout navigation so /login does not SSO-stub auto-redirect back into IdP. */
 export const LOGGED_OUT_KEY = "ktm2000_logged_out"
+const AUTH_ERROR_STORAGE_KEY = "ktm2000_auth_error"
 
 interface AuthContextValue {
   user: User | null
@@ -35,7 +36,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     fetchMeApi()
       .then((u) => setUser(u))
       .catch(() => {
-        // Если 401 или любая ошибка — очищаем токен
+        try {
+          sessionStorage.setItem(AUTH_ERROR_STORAGE_KEY, "Сессия истекла. Войдите снова.")
+        } catch {
+          /* ignore */
+        }
         localStorage.removeItem(TOKEN_KEY)
         document.cookie = "ktm2000_token=; path=/; max-age=0"
       })
