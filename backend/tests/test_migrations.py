@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import os
+import socket
 import subprocess
 import uuid
 from pathlib import Path
+from urllib.parse import urlparse
 
 import pytest
 from sqlalchemy import inspect, text
@@ -22,6 +24,24 @@ def _test_db_url() -> str:
         "DATABASE_URL",
         "postgresql+asyncpg://ktm2000_user:ktm2000_pass@localhost:5432/ktm2000_test",
     )
+
+
+def _db_reachable() -> bool:
+    """Check if the PostgreSQL server is reachable (host:port from DATABASE_URL)."""
+    parsed = urlparse(_test_db_url())
+    host = parsed.hostname or "localhost"
+    port = parsed.port or 5432
+    try:
+        with socket.create_connection((host, port), timeout=2):
+            return True
+    except OSError:
+        return False
+
+
+pytestmark = pytest.mark.skipif(
+    not _db_reachable(),
+    reason="PostgreSQL server not reachable for migration test",
+)
 
 
 @pytest.mark.asyncio

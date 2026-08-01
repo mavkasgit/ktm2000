@@ -245,10 +245,21 @@ async def test_otp_verify_and_setup_password(session, client) -> None:
     )
     assert response_setup_again.status_code == 400
 
-    # 8. Пробуем войти под новым пользователем обычным входом с новым паролем
+    # 8. Password login is disabled system-wide — verify OTP login works instead
+    from app.models.user_login_token import UserLoginToken as ULT
+    from datetime import UTC, datetime, timedelta
+    otp2 = ULT(
+        user_id=new_user.id,
+        token="999888",
+        expires_at=datetime.now(UTC) + timedelta(hours=1),
+        session_duration_seconds=28800,
+        is_used=False,
+    )
+    session.add(otp2)
+    await session.commit()
     response_login = await client.post(
-        "/api/auth/login",
-        json={"username": "new_user_setup", "password": "securepassword"}
+        "/api/auth/otp/login",
+        json={"token": "999888"}
     )
     assert response_login.status_code == 200
     assert "access_token" in response_login.json()
@@ -261,12 +272,12 @@ async def test_otp_verify_and_setup_password(session, client) -> None:
     )
     assert response_clear.status_code == 204
 
-    # 10. Проверяем, что теперь обычный логин НЕ РАБОТАЕТ
+    # 10. Password login is disabled system-wide (always 403)
     response_login_fail = await client.post(
         "/api/auth/login",
         json={"username": "new_user_setup", "password": "securepassword"}
     )
-    assert response_login_fail.status_code == 401
+    assert response_login_fail.status_code == 403
 
     # 11. Проверяем в базе данных, что пароль пустой
     await session.refresh(new_user)
