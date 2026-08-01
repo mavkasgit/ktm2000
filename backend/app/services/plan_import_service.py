@@ -43,7 +43,11 @@ from app.services.dimension_validation import MissingDimensionsError, resolve_pr
 from app.services.hanger_quantity import adjust_quantity_to_hanger
 from app.services.import_normalization import normalize_sku as _normalize_sku
 from app.services.route_builder import build_route_from_profile
-from app.seeds.plant_policies import PAIRED_PROCESSING_VALUE
+
+# Типизированные данные из канона (ADR-0004). Сервис не импортирует plant_policies.
+from app.seeds.canon.registry import build_plant_config as _build
+
+_PAIRED_PROCESSING_VALUE: str = _build().production.processing_flags.paired
 
 
 async def preview_excel_sheet(
@@ -415,7 +419,7 @@ async def _find_paired_techcard(
         select(Techcard)
         .where(
             Techcard.is_active.is_(True),
-            Techcard.processing_type == PAIRED_PROCESSING_VALUE,
+            Techcard.processing_type == _PAIRED_PROCESSING_VALUE,
         )
     )
     techcards = await db.execute(stmt)
@@ -624,7 +628,7 @@ async def _make_change_items(
                 if line is None:
                     errors.append("active_techcard_has_no_lines")
 
-                if techcard.processing_type == PAIRED_PROCESSING_VALUE:
+                if techcard.processing_type == _PAIRED_PROCESSING_VALUE:
                     if techcard.id in techcard_lines_cache:
                         lines = techcard_lines_cache[techcard.id]
                     else:

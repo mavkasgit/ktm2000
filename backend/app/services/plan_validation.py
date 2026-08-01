@@ -10,24 +10,33 @@ from app.models.route import ProductionRoute, RouteStage
 from app.models.section import Section
 from app.services.import_normalization import normalize_sku as _normalize_sku
 from app.services.route_matcher import resolve_position_route
-from app.seeds.plant_policies import PAIRED_PROCESSING_VALUE, VALIDATION_ERROR_MESSAGES
+
+# Типизированные данные из канона (ADR-0004). Сервис не импортирует plant_policies.
+from app.seeds.canon.registry import build_plant_config as _build
+
+_config = _build()
+_PAIRED_PROCESSING_VALUE: str = _config.production.processing_flags.paired
+_ERROR_MESSAGES: dict[str, str] = _config.display.labels.error_messages
 
 
-def format_validation_error(error_code: str) -> str:
+def format_validation_error(
+    error_code: str, error_messages: dict[str, str] | None = None
+) -> str:
     """Преобразует технический код ошибки в понятное сообщение.
 
-    Тексты читаются из данных (справочник политик завода);
+    Тексты читаются из канона заводской конфигурации (ADR-0004);
     при отсутствии кода в данных — fallback на сам код.
     """
+    messages = error_messages if error_messages is not None else _ERROR_MESSAGES
     if ":" in error_code:
         base_code, detail = error_code.split(":", 1)
         base_code = base_code.strip()
         detail = detail.strip()
-        message = VALIDATION_ERROR_MESSAGES.get(base_code)
+        message = messages.get(base_code)
         if message:
             return f"{message} ({detail})"
         return detail
-    return VALIDATION_ERROR_MESSAGES.get(error_code, error_code)
+    return messages.get(error_code, error_code)
 
 
 def _paired_component_skus(position: PlanPosition) -> list[str]:
@@ -49,7 +58,7 @@ async def _find_paired_techcard(db: AsyncSession, component_skus: list[str]) -> 
         await db.execute(
             select(Techcard).where(
                 Techcard.is_active.is_(True),
-                Techcard.processing_type == PAIRED_PROCESSING_VALUE,
+                Techcard.processing_type == _PAIRED_PROCESSING_VALUE,
             )
         )
     ).scalars().all()

@@ -9,7 +9,11 @@ from app.core.security import get_password_hash
 
 
 async def seed_users(db: AsyncSession) -> dict[int, User]:
-    """Ensure system user exists and seeds a base set of demo/dev users. Returns user map."""
+    """Ensure system + admin users exist. Returns user map.
+
+    Демо-пользователи (planner, manager, operator, viewer) убраны из
+    основного сида (ADR-0004). Используйте seed_demo_users() при необходимости.
+    """
     from sqlalchemy import text
 
     result: dict[int, User] = {}
@@ -46,12 +50,8 @@ async def seed_users(db: AsyncSession) -> dict[int, User]:
 
     result[system_user.id] = system_user
 
-    # Находим первый активный участок для привязки менеджера и оператора
-    section = await db.scalar(select(Section).where(Section.is_active == True).order_by(Section.id))
-    section_id = section.id if section else None
-
-    # Список базовых демонстрационных пользователей
-    demo_users_data = [
+    # 2. Обязательные пользователи: akadmin (authentik) + admin (break-glass)
+    essential_users_data = [
         {
             "username": "akadmin",
             "email": "akadmin",
@@ -68,6 +68,40 @@ async def seed_users(db: AsyncSession) -> dict[int, User]:
             "role": UserRole.admin,
             "section_id": None,
         },
+    ]
+
+    for data in essential_users_data:
+        user = await db.scalar(select(User).where(User.username == data["username"]))
+        if user is None:
+            user = User(
+                username=data["username"],
+                email=data["email"],
+                password_hash=get_password_hash(data["password"]),
+                full_name=data["full_name"],
+                role=data["role"],
+                section_id=data["section_id"],
+                is_active=True,
+            )
+            db.add(user)
+            await db.flush()
+            await db.refresh(user)
+        result[user.id] = user
+
+    return result
+
+
+async def seed_demo_users(db: AsyncSession) -> dict[int, User]:
+    """Seed demo/dev users (planner, manager, operator, viewer).
+
+    Отдельный вызов по необходимости (ADR-0004). Не входит в run_full_seed.
+    """
+    result: dict[int, User] = {}
+
+    # Находим первый активный участок для привязки менеджера и оператора
+    section = await db.scalar(select(Section).where(Section.is_active == True).order_by(Section.id))
+    section_id = section.id if section else None
+
+    demo_users_data = [
         {
             "username": "planner",
             "email": "planner@ktm2000.local",

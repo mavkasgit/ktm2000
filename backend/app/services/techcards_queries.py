@@ -6,7 +6,11 @@ from sqlalchemy.orm import aliased
 
 from app.models.product import Product
 from app.models.techcard import Techcard, TechcardLine
-from app.seeds.plant_policies import PAIRED_PROCESSING_VALUE
+
+# Типизированные данные из канона (ADR-0004). Сервис не импортирует plant_policies.
+from app.seeds.canon.registry import build_plant_config as _build
+
+_PAIRED_PROCESSING_VALUE: str = _build().production.processing_flags.paired
 
 TECHCARD_SORT_FIELDS = frozenset({
     "id",
@@ -157,7 +161,7 @@ async def enrich_techcard_list_items(
         return []
 
     product_ids = {tc.product_id for tc in techcards if tc.product_id is not None}
-    paired_ids = [tc.id for tc in techcards if tc.processing_type == PAIRED_PROCESSING_VALUE]
+    paired_ids = [tc.id for tc in techcards if tc.processing_type == _PAIRED_PROCESSING_VALUE]
 
     product_skus: dict[int, str] = {}
     if product_ids:
@@ -201,7 +205,7 @@ async def enrich_techcard_list_items(
             "hangers_b": item.hangers_b,
             "hangers_total": item.hangers_total,
             "product_sku": product_skus.get(item.product_id) if item.product_id else None,
-            "techcard_lines": lines_by_tc.get(item.id, []) if item.processing_type == PAIRED_PROCESSING_VALUE else [],
+            "techcard_lines": lines_by_tc.get(item.id, []) if item.processing_type == _PAIRED_PROCESSING_VALUE else [],
         }
         result.append(data)
     return result

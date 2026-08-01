@@ -1,25 +1,25 @@
 from app.seeds.import_templates import IMPORT_TEMPLATES
-from app.seeds.plant_policies import (
-    COLOR_TOKENS,
-    HANGER_ROUNDING_RULE,
-    PAIRED_PROCESSING_VALUE,
-    STANDART_PROCESSING_VALUE,
-    VALIDATION_ERROR_MESSAGES,
-)
 from app.seeds.route_rule_profiles import ROUTE_RULE_PROFILES
 from app.seeds.routes import ROUTES
 from app.seeds.selection_rules import SELECTION_RULES
 from app.seeds.spgs import SPGS_DATA
 
+# Типизированный канон (ADR-0004): сервисы импортируют отсюда, не из plant_policies.
+from app.seeds.canon import (
+    PlantConfig,
+    build_plant_config,
+    get_display_config,
+    get_plant_config,
+)
+
 __all__ = [
-    "COLOR_TOKENS",
-    "HANGER_ROUNDING_RULE",
     "IMPORT_TEMPLATES",
-    "PAIRED_PROCESSING_VALUE",
+    "PlantConfig",
     "ROUTE_RULE_PROFILES",
     "ROUTES",
     "SELECTION_RULES",
     "SPGS_DATA",
-    "STANDART_PROCESSING_VALUE",
-    "VALIDATION_ERROR_MESSAGES",
+    "build_plant_config",
+    "get_display_config",
+    "get_plant_config",
 ]

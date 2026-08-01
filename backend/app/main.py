@@ -43,7 +43,12 @@ backup_scheduler_task = None
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global backup_scheduler_task
+    from app.seeds.canon import build_plant_config
     from app.services.backup_scheduler import start_backup_scheduler
+
+    # Fail-fast: приложение не стартует с битыми seed-данными (ADR-0004)
+    app.state.plant_config = build_plant_config()
+
     backup_scheduler_task = asyncio.create_task(start_backup_scheduler())
     yield
     if backup_scheduler_task:
