@@ -315,17 +315,16 @@ async def cleanup_stale_test_dbs(db_mode: str, admin_db_url: URL) -> AsyncIterat
     yield
 
 
-@pytest_asyncio.fixture(scope="module", loop_scope="module")
-async def module_db_url(
-    request: pytest.FixtureRequest,
+@pytest_asyncio.fixture(scope="session", loop_scope="session")
+async def worker_db_url(
     run_id: str,
     base_test_db_url: URL,
     admin_db_url: URL,
 ) -> AsyncIterator[str]:
-    module_name = request.module.__name__ if request.module else "module"
-    db_name = _safe_module_db_name(module_name, run_id)
+    """One database per xdist worker (session-scoped). Modules share it via schemas."""
+    db_name = f"{TEST_DB_PREFIX}w_{run_id}"
+    _validate_ident(db_name, required_prefix=TEST_DB_PREFIX)
     await _create_database(admin_db_url, db_name)
-
     db_url = base_test_db_url.set(database=db_name).render_as_string(hide_password=False)
     try:
         yield db_url
@@ -342,39 +341,26 @@ async def module_schema_name() -> str:
 
 @pytest_asyncio.fixture(scope="module", loop_scope="module")
 async def engine(
-    module_db_url: str,
+    worker_db_url: str,
     module_schema_name: str,
-    admin_db_url: URL,
-    run_id: str,
-    request: pytest.FixtureRequest,
 ) -> AsyncIterator[AsyncEngine]:
-    """Create engine with retry: if another worker's cleanup dropped our DB, recreate it."""
-
-    async def _init_engine() -> AsyncEngine:
-        eng = create_async_engine(module_db_url, poolclass=NullPool)
-        async with eng.begin() as conn:
-            await conn.execute(text(f"CREATE SCHEMA IF NOT EXISTS {_quote_ident(module_schema_name)}"))
-            await conn.execute(text(f"SET search_path TO {_quote_ident(module_schema_name)}"))
-            await conn.run_sync(Base.metadata.create_all)
-            await _install_storage_vs_production_triggers(conn)
-        return eng
-
+    """Create engine on the shared worker DB with a fresh schema per module."""
+    eng = create_async_engine(worker_db_url, poolclass=NullPool)
+    async with eng.begin() as conn:
+        await conn.execute(text(f"CREATE SCHEMA IF NOT EXISTS {_quote_ident(module_schema_name)}"))
+        await conn.execute(text(f"SET search_path TO {_quote_ident(module_schema_name)}"))
+        await conn.run_sync(Base.metadata.create_all)
+        await _install_storage_vs_production_triggers(conn)
     try:
-        engine = await _init_engine()
-    except Exception as exc:
-        # Database may have been dropped by a parallel worker's cleanup.
-        # Recreate and retry once.
-        if "does not exist" in str(exc).lower():
-            module_name = request.module.__name__ if request.module else "module"
-            db_name = _safe_module_db_name(module_name, run_id)
-            await _create_database(admin_db_url, db_name)
-            engine = await _init_engine()
-        else:
-            raise
-    try:
-        yield engine
+        yield eng
     finally:
-        await engine.dispose()
+        # Drop the module schema to keep the shared DB clean
+        try:
+            async with eng.begin() as conn:
+                await conn.execute(text(f"DROP SCHEMA IF EXISTS {_quote_ident(module_schema_name)} CASCADE"))
+        except Exception:
+            pass
+        await eng.dispose()
 
 
 @pytest_asyncio.fixture
