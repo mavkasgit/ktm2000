@@ -1,27 +1,21 @@
 from __future__ import annotations
 
-_COLOR_TOKENS: list[tuple[str, str]] = [
-    ("анод.серебро", "серебро"),
-    ("анодсеребро", "серебро"),
-    ("анодчёрный", "черный"),
-    ("анодчерный", "черный"),
-    ("анодшампань", "шампань"),
-    ("анодтитан", "титан"),
-    ("анодзолото", "золото"),
-    ("анодбронза", "бронза"),
-    ("анодмедь", "медь"),
-    ("анодмед", "медь"),
-]
+from app.seeds.plant_policies import COLOR_TOKENS
 
 
 def extract_color_from_text(text: str) -> str | None:
-    """Extract normalized anod color token from free text (longest match wins)."""
+    """Extract normalized anod color token from free text (longest match wins).
+
+    Токены читаются из данных (справочник политик завода), не из кода.
+    """
     if not text or not text.strip():
         return None
     text_lower = text.lower()
     best: tuple[str, str] | None = None
-    for token, color in _COLOR_TOKENS:
-        if token in text_lower:
+    for item in COLOR_TOKENS:
+        token = str(item.get("token") or "")
+        color = str(item.get("color") or "")
+        if token and color and token in text_lower:
             if best is None or len(token) > len(best[0]):
                 best = (token, color)
     return best[1] if best else None

@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 
 from app.services.color_extraction import extract_color_from_text, resolve_payload_color
-from app.services.route_builder import _build_route_name_from_template
+from app.services.route_name_builder import build_route_name
 from app.models.route import RouteRuleProfile
 
 
@@ -61,6 +61,11 @@ def test_dynamic_route_name_for_anodtitan_contains_titan() -> None:
         ("ANODIZING", "ANOD"): "ANOD_08",
         ("ANODIZING", "PACK"): "PACK_STRETCH",
     }
+    resolved_names = {
+        ("PRESSING", "PRESS"): "Окно",
+        ("ANODIZING", "ANOD"): "Титан",
+        ("ANODIZING", "PACK"): "Стрейч",
+    }
     included_sections = [
         "RAW_STOCK",
         "PRESSING",
@@ -72,11 +77,12 @@ def test_dynamic_route_name_for_anodtitan_contains_titan() -> None:
         "FINISHED_STOCK",
     ]
 
-    route_name = _build_route_name_from_template(
+    route_name = build_route_name(
         profile,
         included_sections,
         set(),
         resolved_ops,
+        resolved_names,
         {"output_kind": "ГП"},
     )
 

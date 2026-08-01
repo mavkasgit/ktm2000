@@ -10,33 +10,15 @@ from app.models.route import ProductionRoute, RouteStage
 from app.models.section import Section
 from app.services.import_normalization import normalize_sku as _normalize_sku
 from app.services.route_matcher import resolve_position_route
-
-
-VALIDATION_ERROR_MESSAGES: dict[str, str] = {
-    "product_not_found": "Продукт не найден",
-    "quantity_must_be_positive": "Количество должно быть положительным",
-    "product_inactive": "Продукт неактивен",
-    "active_techcard_not_found": "Не найдена активная техкарта для продукта",
-    "active_techcard_has_no_lines": "Техкарта не содержит операций",
-    "route_not_found": "Не найден маршрут для позиции",
-    "no_route_candidate": "Не найден маршрут, удовлетворяющий правилам выбора",
-    "route_rule_conflict": "Правила выбора маршрута конфликтуют",
-    "route_contains_excluded_step": "Маршрут содержит запрещенный правилами участок",
-    "selection_rules": "Маршрут выбран правилами",
-    "route_signature_incomplete": "Сигнатура маршрута позиции неполная",
-    "active_route_has_no_steps": "Маршрут не содержит этапов",
-    "route_sequence_invalid": "Неверная последовательность этапов в маршруте",
-    "route_contains_inactive_section": "Маршрут содержит неактивный участок",
-    "duplicate_sku_due_date": "Дубликат строки Excel: такая же строка уже есть в плане.",
-    "route_not_matching_import_signature": "Маршрут не совпадает с ожидаемым",
-    "route_missing_required_step": "В маршруте отсутствует обязательный этап",
-    "route_missing_pack_additional_operation": "В маршруте нет дополнительной операции упаковки",
-    "route_primary_operation_mismatch": "Основная операция маршрута не совпадает с импортированной. Проверьте соответствие техкарты и маршрута.",
-}
+from app.seeds.plant_policies import PAIRED_PROCESSING_VALUE, VALIDATION_ERROR_MESSAGES
 
 
 def format_validation_error(error_code: str) -> str:
-    """Преобразует технический код ошибки в понятное сообщение."""
+    """Преобразует технический код ошибки в понятное сообщение.
+
+    Тексты читаются из данных (справочник политик завода);
+    при отсутствии кода в данных — fallback на сам код.
+    """
     if ":" in error_code:
         base_code, detail = error_code.split(":", 1)
         base_code = base_code.strip()
@@ -67,7 +49,7 @@ async def _find_paired_techcard(db: AsyncSession, component_skus: list[str]) -> 
         await db.execute(
             select(Techcard).where(
                 Techcard.is_active.is_(True),
-                Techcard.processing_type == "paired_processing",
+                Techcard.processing_type == PAIRED_PROCESSING_VALUE,
             )
         )
     ).scalars().all()
