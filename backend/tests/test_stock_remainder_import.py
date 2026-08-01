@@ -22,6 +22,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Product, ProductType, Section
+from app.models.import_template import ImportTemplate
 from app.models.route import SectionOperation
 from app.models.user import User, UserRole
 from app.stock.import_service import parse_operations_from_comment
@@ -1299,3 +1300,70 @@ def test_parse_operations_from_comment_extracts_names() -> None:
         "Дробеструй",
         "Чёрный",
     ]
+
+
+async def test_preview_remainders_with_custom_template_column_mapping(
+    client: AsyncClient,
+    session: AsyncSession,
+) -> None:
+    """template_id: позиции колонок берутся из column_mapping шаблона (#15).
+
+    Кастомный шаблон кладёт артикул в колонку C. Файл без строки заголовков
+    → позиционный режим по порядку колонок шаблона, а не по дефолту 0..6.
+    """
+    await _make_product(session, "CTMP-001", "Продукт кастомного шаблона")
+    template = ImportTemplate(
+        name="Custom Layout",
+        code="custom-layout",
+        is_active=True,
+        sort_order=0,
+        column_mapping={
+            "_config": {"length_required": True},
+            "quantity": {"column": "A", "header": "Количество"},
+            "comment": {"column": "B", "header": "Комментарий"},
+            "sku": {"column": "C", "header": "Артикул"},
+            "length": {"column": "D", "header": "Длина"},
+        },
+    )
+    session.add(template)
+    await session.flush()
+    await session.commit()
+
+    # Без заголовков: Кол-во | Комментарий | Артикул | Длина
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Остатки"
+    ws.append(["5", "note", "CTMP-001", "2,7"])
+    buf = BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+
+    resp = await client.post(
+        "/api/stock/import/remainders/preview",
+        files={"file": ("custom.xlsx", buf, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+        data={"template_id": str(template.id), "sheet_index": "0"},
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+
+    assert body["summary"]["valid"] == 1, body["items"]
+    item = body["items"][0]
+    assert item["sku"] == "CTMP-001"
+    assert item["quantity"] == 5.0
+    assert item["comment"] == "note"
+    assert item["length_raw"] == "2,7"
+    assert item["dimensions"] == {"length_mm": 2700}
+
+
+async def test_preview_remainders_unknown_template_id_404(
+    client: AsyncClient,
+    session: AsyncSession,
+) -> None:
+    """template_id несуществующего шаблона → 404."""
+    excel_buf = _make_excel([("IMP-404", 1, "")])
+    resp = await client.post(
+        "/api/stock/import/remainders/preview",
+        files={"file": ("test.xlsx", excel_buf, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+        data={"template_id": "999999", "sheet_index": "0"},
+    )
+    assert resp.status_code == 404, resp.text

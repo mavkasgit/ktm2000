@@ -17,6 +17,7 @@ from app.domain.dimensions import (
     parse_length_m_to_mm,
 )
 from app.services.color_extraction import resolve_payload_color
+from app.services.import_column_resolver import detect_header_row, is_reserved_key, resolve_columns
 
 SUPPORTED_EXCEL_EXTENSIONS = {".xls", ".xlsx", ".xlsm", ".xlsb", ".ods"}
 
@@ -113,17 +114,33 @@ def detect_workbook_format(content: bytes, filename: str) -> str:
     return Path(filename).suffix.lower().lstrip(".") or "unknown"
 
 
-def _normalize_column_mapping(mapping: dict[str, Any] | None) -> dict[str, str]:
-    """Normalize column_mapping to dict[str, str], supporting both old (str) and new (object) formats."""
-    if not mapping:
-        return {}
-    result = {}
-    for key, value in mapping.items():
-        if isinstance(value, dict):
-            result[key] = str(value.get("header", key))
+def _plan_resolver_mapping(column_mapping: dict[str, Any] | None) -> dict[str, Any]:
+    """Resolver-конфиг плана: базовые заголовки HEADER_ALIASES + данные шаблона.
+
+    HEADER_ALIASES остаётся fallback-дефолтом для прямых вызовов парсера без
+    шаблона (тесты); авторитетный источник заголовков/псевдонимов — сид (#15).
+    """
+    mapping = {field: {"header": header} for field, header in HEADER_ALIASES.items()}
+    for field, cfg in (column_mapping or {}).items():
+        key = str(field).strip()
+        if not key or is_reserved_key(key):
+            continue
+        if isinstance(cfg, dict):
+            mapping[key] = cfg
         else:
-            result[key] = str(value)
-    return result
+            mapping[key] = {"header": str(cfg)}
+    return mapping
+
+
+def _extract_months(column_mapping: dict[str, Any] | None) -> dict[str, int]:
+    """Месяцы из ``_config`` шаблона; fallback — ``MONTHS_RU`` (#15)."""
+    if isinstance(column_mapping, dict):
+        config = column_mapping.get("_config")
+        if isinstance(config, dict):
+            months = config.get("months")
+            if isinstance(months, dict) and months:
+                return months
+    return MONTHS_RU
 
 
 def parse_factory_plan_workbook(
@@ -150,13 +167,17 @@ def parse_factory_plan_workbook(
     if not rows:
         raise ValueError("Workbook sheet is empty")
 
-    effective_mapping = {**HEADER_ALIASES, **_normalize_column_mapping(column_mapping)}
-    header_index = _find_header_row(rows, effective_mapping)
+    resolver_mapping = _plan_resolver_mapping(column_mapping)
+    detected = detect_header_row(rows, resolver_mapping)
+    header_index = detected if detected is not None else _find_header_row(
+        rows, {k: cfg.get("header", k) for k, cfg in resolver_mapping.items() if cfg}
+    )
     headers = [_cell_text(cell) for cell in rows[header_index]]
-    column_map = _build_column_map(headers, effective_mapping)
+    column_map = resolve_columns(resolver_mapping, headers)
     _ensure_required_columns(column_map)
 
-    period_start, period_end = _parse_period(rows[:header_index], sheet.name)
+    months = _extract_months(column_mapping)
+    period_start, period_end = _parse_period(rows[:header_index], sheet.name, months)
     merged_anchors = _merged_cell_anchors(sheet)
     parsed_rows = _parse_rows(
         rows,
@@ -273,17 +294,6 @@ def _find_header_row(rows: list[list[Any]], mapping: dict[str, str]) -> int:
         f"Searched first {min(30, len(rows))} rows. "
         f"Found headers: {', '.join(sorted(all_found_headers))}"
     )
-
-
-def _build_column_map(headers: list[str], mapping: dict[str, str]) -> dict[str, int]:
-    result = {}
-    for key, header in mapping.items():
-        normalized = _normalize_header(header)
-        for index, candidate in enumerate(headers):
-            if _normalize_header(candidate) == normalized:
-                result[key] = index
-                break
-    return result
 
 
 def _ensure_required_columns(column_map: dict[str, int]) -> None:
@@ -770,11 +780,15 @@ def _join_paired_component(previous: ParsedPlanRow, current: ParsedPlanRow) -> N
     previous.source_row_hash = _hash_json({"row_numbers": previous.source_row_numbers, "payload": previous.payload})
 
 
-def _parse_period(header_rows: list[list[Any]], sheet_name: str) -> tuple[date | None, date | None]:
+def _parse_period(
+    header_rows: list[list[Any]],
+    sheet_name: str,
+    months: dict[str, int] | None = None,
+) -> tuple[date | None, date | None]:
     text = " ".join([sheet_name, *(_cell_text(cell) for row in header_rows for cell in row)])
     lower = text.lower()
     month = None
-    for token, value in MONTHS_RU.items():
+    for token, value in (months or MONTHS_RU).items():
         if token in lower:
             month = value
             break

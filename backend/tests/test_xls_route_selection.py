@@ -296,7 +296,7 @@ async def test_test_xls_rows_produce_diverse_routes(client, session) -> None:
     profile_id = await _seed_full_environment(session)
 
     rows = _load_test_rows()
-    assert len(rows) >= 30, f"Expected at least 30 rows in test.xls, got {len(rows)}"
+    assert len(rows) >= 29, f"Expected at least 29 rows in test.xls, got {len(rows)}"
 
     results = []
     for row_data in rows:

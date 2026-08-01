@@ -36,9 +36,19 @@ from app.services.dimension_validation import (
     resolve_product_dimensions,
 )
 from app.services.excel_import import parse_row_selection
+from app.services.import_column_resolver import detect_header_row, resolve_columns
 from app.services.route_storage_classifier import is_production_section
+from app.seeds.import_templates import IMPORT_TEMPLATES
 
 _OPERATIONS_COMMENT_RE = re.compile(r"операции:\s*([^|]+)", re.IGNORECASE)
+
+# Дефолтный column_mapping остатков (шаблон «ostaki_ktm» из сида) — источник
+# заголовков, псевдонимов и позиций колонок (issue #15). Используется, когда
+# вызывающий код не передал собственный mapping (старые прямые вызовы, тесты).
+_REMAINDERS_DEFAULT_MAPPING: dict = next(
+    (t["column_mapping"] for t in IMPORT_TEMPLATES if t["code"] == "ostaki_ktm"),
+    {},
+)
 
 
 def parse_operations_from_comment(comment: str | None) -> list[str]:
@@ -106,33 +116,8 @@ class ImportResult:
     transaction_ids: list[int]
 
 
-# ─── Column header aliases ─────────────────────────────────────────────────────
+# ─── Quality value aliases (не относятся к разрешению колонок) ────────────────
 
-_SKU_ALIASES = frozenset({
-    "sku", "артикул", "код", "продукт",
-    "sku/артикул", "артикул / sku", "артикул/sku",
-})
-_QTY_ALIASES = frozenset({
-    "quantity", "количество", "кол-во",
-    "кол-во, шт", "кол-во шт", "кол-во шт.", "кол-во,шт",
-})
-_COMMENT_ALIASES = frozenset({"comment", "комментарий", "примечание"})
-_COMPLETED_OPS_ALIASES = frozenset({
-    "выполненные операции", "операции", "completed_operations",
-    "пройденные операции", "этапы",
-})
-_TARGET_SECTION_ALIASES = frozenset({
-    "целевая секция", "секция", "target_section",
-    "целевой участок", "целевая участок", "участок",
-})
-_QUALITY_STATE_ALIASES = frozenset({
-    "quality_state", "quality", "качество",
-    "статус качества", "состояние качества", "quality status",
-})
-_LENGTH_ALIASES = frozenset({
-    "длина", "длина, м", "длина м", "длина (м)", "длина,м",
-    "length", "length_m", "length, m",
-})
 _FINAL_SCRAP_ALIASES = frozenset({
     "окончательный брак",
     "оконч брак",
@@ -161,97 +146,27 @@ def _norm_hdr(value: str) -> str:
     return " ".join(str(value).lower().replace("\xa0", " ").strip().split())
 
 
-# Порядок столбцов в шаблоне Excel (позиционный режим без заголовков):
-# Артикул | Кол-во | Статус качества | Операции | Участок | Коммент. | Длина
-# «Длина» добавлена последней (issue #5), чтобы не ломать позиционный
-# разбор старых шестиколоночных файлов без заголовков.
-_TEMPLATE_COL_SKU = 0
-_TEMPLATE_COL_QTY = 1
-_TEMPLATE_COL_QUALITY_STATE = 2
-_TEMPLATE_COL_COMPLETED_OPS = 3
-_TEMPLATE_COL_TARGET_SECTION = 4
-_TEMPLATE_COL_COMMENT = 5
-_TEMPLATE_COL_LENGTH = 6
-
-
-def _template_column_indices() -> tuple[
+def _resolve_remainders_indices(
+    column_mapping: dict,
+    header_row: list[str] | None,
+) -> tuple[
     int, int | None, int | None, int | None, int | None, int | None, int | None
 ]:
-    """Fixed column indices matching the downloadable Excel template."""
-    return (
-        _TEMPLATE_COL_SKU,
-        _TEMPLATE_COL_QTY,
-        _TEMPLATE_COL_COMMENT,
-        _TEMPLATE_COL_COMPLETED_OPS,
-        _TEMPLATE_COL_TARGET_SECTION,
-        _TEMPLATE_COL_QUALITY_STATE,
-        _TEMPLATE_COL_LENGTH,
-    )
+    """Field indices из column_mapping через единый резолвер (#15).
 
-
-def _row_has_known_headers(row: list[str]) -> bool:
-    """Return True if the row contains recognizable spreadsheet column headers."""
-    normed = {_norm_hdr(c) for c in row if c}
-    if (
-        _SKU_ALIASES & normed
-        or _QTY_ALIASES & normed
-        or _COMPLETED_OPS_ALIASES & normed
-        or _TARGET_SECTION_ALIASES & normed
-        or _QUALITY_STATE_ALIASES & normed
-        or _COMMENT_ALIASES & normed
-        or _LENGTH_ALIASES & normed
-    ):
-        return True
-    joined = _norm_hdr("".join(row))
-    return "артикул" in joined and ("операц" in joined or "выполнен" in joined)
-
-
-def _find_cols(
-    headers: list[str],
-) -> tuple[int, int | None, int | None, int | None, int | None, int | None, int | None]:
-    """Find column indices for SKU, quantity, comment, completed_ops, target_section, quality, length.
-
-    Returns
-    ``(sku_idx, qty_idx, comment_idx, completed_ops_idx, target_section_idx,
-    quality_state_idx, length_idx)``.
-    ``sku_idx`` defaults to 0 if not found.
-    Other indices default to ``None`` if not found.
+    Возвращает ``(sku_idx, qty_idx, comment_idx, completed_ops_idx,
+    target_section_idx, quality_state_idx, length_idx)``. ``sku_idx`` по
+    умолчанию 0, остальные — None, если колонка не найдена.
     """
-    sku_idx: int = 0
-    qty_idx: int | None = None
-    comment_idx: int | None = None
-    completed_ops_idx: int | None = None
-    target_section_idx: int | None = None
-    quality_state_idx: int | None = None
-    length_idx: int | None = None
-    found_sku = False
-    normed = [_norm_hdr(h) for h in headers]
-    for i, h in enumerate(normed):
-        if h in _SKU_ALIASES:
-            sku_idx = i
-            found_sku = True
-        elif h in _QTY_ALIASES:
-            qty_idx = i
-        elif h in _COMMENT_ALIASES:
-            comment_idx = i
-        elif h in _COMPLETED_OPS_ALIASES:
-            completed_ops_idx = i
-        elif h in _TARGET_SECTION_ALIASES:
-            target_section_idx = i
-        elif h in _QUALITY_STATE_ALIASES:
-            quality_state_idx = i
-        elif h in _LENGTH_ALIASES:
-            length_idx = i
-    if not found_sku and len(headers) == 1:
-        sku_idx = 0
+    idx_map = resolve_columns(column_mapping, header_row)
     return (
-        sku_idx,
-        qty_idx,
-        comment_idx,
-        completed_ops_idx,
-        target_section_idx,
-        quality_state_idx,
-        length_idx,
+        idx_map.get("sku", 0),
+        idx_map.get("quantity"),
+        idx_map.get("comment"),
+        idx_map.get("completed_operations"),
+        idx_map.get("target_section"),
+        idx_map.get("quality_state"),
+        idx_map.get("length"),
     )
 
 
@@ -312,34 +227,29 @@ def _rows_to_cell_grid(raw_rows: list[list]) -> list[list[str]]:
     return [[_cell_txt(c) for c in row] for row in raw_rows]
 
 
-def _detect_header_row_idx(rows: list[list[str]], scan_limit: int = 10) -> int | None:
-    """Find the header row by column aliases.
-
-    Returns ``None`` when no header row is found — caller should use the
-    template column order instead.
-    """
-    for idx, row in enumerate(rows[:scan_limit]):
-        if _row_has_known_headers(row):
-            return idx
-    return None
-
-
 def _parse_remainders_grid(
     rows: list[list],
     row_selection: str | None = None,
     *,
     header_row_idx: int | None = None,
+    column_mapping: dict | None = None,
 ) -> tuple[list[RemainderItem], SheetSummary]:
-    """Parse a 2D grid of cells into remainder items."""
+    """Parse a 2D grid of cells into remainder items.
+
+    ``column_mapping`` — ``column_mapping`` шаблона (данные): заголовки,
+    псевдонимы и позиции колонок. ``None`` → дефолт из сида «ostaki_ktm».
+    """
     cell_rows = _rows_to_cell_grid(rows)
     if not cell_rows:
         raise ValueError("Нет данных для импорта")
+
+    mapping = column_mapping if column_mapping is not None else _REMAINDERS_DEFAULT_MAPPING
 
     if header_row_idx is not None:
         resolved_header_idx: int | None = header_row_idx
         use_positional = False
     else:
-        resolved_header_idx = _detect_header_row_idx(cell_rows)
+        resolved_header_idx = detect_header_row(cell_rows, mapping)
         use_positional = resolved_header_idx is None
 
     if use_positional:
@@ -351,7 +261,7 @@ def _parse_remainders_grid(
             target_section_idx,
             quality_state_idx,
             length_idx,
-        ) = _template_column_indices()
+        ) = _resolve_remainders_indices(mapping, None)
     else:
         headers = cell_rows[resolved_header_idx]  # type: ignore[index]
         (
@@ -362,7 +272,7 @@ def _parse_remainders_grid(
             target_section_idx,
             quality_state_idx,
             length_idx,
-        ) = _find_cols(headers)
+        ) = _resolve_remainders_indices(mapping, headers)
 
     selected_rows: set[int] | None = None
     if row_selection:
@@ -595,10 +505,13 @@ def _clipboard_text_to_rows(text: str) -> list[list[str]]:
 async def parse_remainders_clipboard(
     text: str,
     row_selection: str | None = None,
+    column_mapping: dict | None = None,
 ) -> tuple[str, int, list[RemainderItem], SheetSummary]:
     """Parse tab-separated clipboard data copied from Excel or a spreadsheet."""
     rows = _clipboard_text_to_rows(text)
-    items, summary = _parse_remainders_grid(rows, row_selection)
+    items, summary = _parse_remainders_grid(
+        rows, row_selection, column_mapping=column_mapping
+    )
     return "Буфер обмена", len(rows), items, summary
 
 
@@ -606,6 +519,7 @@ async def parse_remainders_excel(
     content: bytes,
     sheet_index: int = 0,
     row_selection: str | None = None,
+    column_mapping: dict | None = None,
 ) -> tuple[str, int, list[RemainderItem], SheetSummary]:
     """Parse an Excel file with remainders data.
 
@@ -617,6 +531,8 @@ async def parse_remainders_excel(
         content: Raw bytes of the .xlsx file.
         sheet_index: 0-based sheet index.
         row_selection: Optional selection string like ``"2-10,12"``.
+        column_mapping: ``column_mapping`` шаблона (заголовки/псевдонимы/
+            позиции колонок); ``None`` → дефолт из сида «ostaki_ktm».
 
     Returns:
         ``(sheet_name, total_rows, items, summary)``.
@@ -638,7 +554,9 @@ async def parse_remainders_excel(
     if not rows:
         raise ValueError("Workbook sheet is empty")
 
-    items, summary = _parse_remainders_grid(rows, row_selection)
+    items, summary = _parse_remainders_grid(
+        rows, row_selection, column_mapping=column_mapping
+    )
     return sheet.name, len(rows), items, summary
 
 

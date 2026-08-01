@@ -309,13 +309,15 @@ function TemplateDialog(props: {
     setError(null)
 
     const mapping = props.template?.column_mapping ?? {}
-    const cols: PassportColumn[] = Object.entries(mapping).map(([key, value]) => {
-      if (typeof value === "object" && value !== null) {
-        const obj = value as Record<string, unknown>
-        return { key, header: String(obj.header ?? key), column: String(obj.column ?? "") }
-      }
-      return { key, header: typeof value === "string" ? value : key, column: "" }
-    })
+    const cols: PassportColumn[] = Object.entries(mapping)
+      .filter(([key]) => !key.startsWith("_"))
+      .map(([key, value]) => {
+        if (typeof value === "object" && value !== null) {
+          const obj = value as Record<string, unknown>
+          return { key, header: String(obj.header ?? key), column: String(obj.column ?? "") }
+        }
+        return { key, header: typeof value === "string" ? value : key, column: "" }
+      })
     cols.sort((a, b) => a.column.localeCompare(b.column, undefined, { numeric: true }))
     setPassportColumns(cols)
     // Reset file state on dialog open
@@ -448,7 +450,7 @@ function TemplateDialog(props: {
     try {
       const columnMapping: Record<string, string | { header?: string; column?: string }> = {}
       for (const col of passportColumns) {
-        if (col.key.trim()) {
+        if (col.key.trim() && !col.key.trim().startsWith("_")) {
           columnMapping[col.key.trim()] = {
             header: col.header.trim() || col.column.trim(),
             column: col.column.trim(),

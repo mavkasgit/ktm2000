@@ -36,6 +36,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import READER_ROLES, WRITER_ROLES, get_current_user, require_role
 from app.core.database import get_db
 from app.domain.dimensions import format_dimensions
+from app.models.import_template import ImportTemplate
 from app.models.product import Product
 from app.models.section import Section
 from app.models.transfer import Transfer
@@ -69,12 +70,27 @@ from io import BytesIO
 router = APIRouter(prefix="/stock", tags=["stock-ledger"])
 
 
+async def _load_template_column_mapping(
+    db: AsyncSession, template_id: int | None
+) -> dict | None:
+    """column_mapping шаблона импорта или None (→ дефолт из сида «ostaki_ktm»)."""
+    if template_id is None:
+        return None
+    template = await db.get(ImportTemplate, template_id)
+    if template is None:
+        raise HTTPException(
+            status_code=404, detail=f"ImportTemplate id={template_id} not found"
+        )
+    return dict(template.column_mapping or {})
+
+
 async def _parse_remainder_import_source(
     *,
     file: UploadFile | None,
     clipboard_text: str | None,
     sheet_index: int,
     row_selection: str | None,
+    column_mapping: dict | None = None,
 ) -> tuple[str, int, list[RemainderItem], SheetSummary]:
     """Parse remainder rows from an uploaded Excel file or clipboard text."""
     has_file = file is not None and file.filename
@@ -93,9 +109,13 @@ async def _parse_remainder_import_source(
 
     try:
         if has_clipboard:
-            return await parse_remainders_clipboard(clipboard_text or "", row_selection)
+            return await parse_remainders_clipboard(
+                clipboard_text or "", row_selection, column_mapping
+            )
         content = await file.read()  # type: ignore[union-attr]
-        return await parse_remainders_excel(content, sheet_index, row_selection)
+        return await parse_remainders_excel(
+            content, sheet_index, row_selection, column_mapping
+        )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
@@ -866,6 +886,7 @@ async def preview_remainders_excel(
     quality_state_overrides: str | None = Form(None),
     sheet_index: int = Form(0),
     row_selection: str | None = Form(None),
+    template_id: int | None = Form(None),
     search: str | None = Form(None),
     filter_status: str = Form("all"),
     sort_by: str = Form("row"),
@@ -922,6 +943,7 @@ async def preview_remainders_excel(
         clipboard_text=clipboard_text,
         sheet_index=sheet_index,
         row_selection=row_selection,
+        column_mapping=await _load_template_column_mapping(db, template_id),
     )
 
     # Enrich items with product info
@@ -1016,6 +1038,7 @@ async def import_remainders_excel(
     quality_state_overrides: str | None = Form(None),
     sheet_index: int = Form(0),
     row_selection: str | None = Form(None),
+    template_id: int | None = Form(None),
     skip_invalid: bool = Form(True),
     clear_existing: bool = Form(False),
     file: UploadFile | None = File(None),
@@ -1083,6 +1106,7 @@ async def import_remainders_excel(
         clipboard_text=clipboard_text,
         sheet_index=sheet_index,
         row_selection=row_selection,
+        column_mapping=await _load_template_column_mapping(db, template_id),
     )
 
     # Resolve completed stages and target sections before import

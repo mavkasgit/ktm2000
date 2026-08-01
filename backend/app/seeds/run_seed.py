@@ -49,12 +49,13 @@ async def run_full_seed(db: AsyncSession, force: bool = False) -> dict:
     result["dimension_types"] = dimensions_result["dimension_types"]
     result["product_dimensions"] = dimensions_result["product_dimensions"]
 
-    # 1.3. ImportTemplate (needed by profile)
-    template_data = IMPORT_TEMPLATES[0] if IMPORT_TEMPLATES else None
-    if template_data is None:
+    # 1.3. ImportTemplate (needed by profile); сеем все шаблоны (#15):
+    # план «Упаковочная карта РП» + остатки «Остатки КТМ».
+    templates = [await seed_import_template(db, template_data) for template_data in IMPORT_TEMPLATES]
+    if not templates:
         raise RuntimeError("No import templates defined")
-    template = await seed_import_template(db, template_data)
-    result["import_templates"] = 1
+    template = templates[0]
+    result["import_templates"] = len(templates)
 
     # 1.3. RouteRuleProfile (needs template.id)
     profile_data = ROUTE_RULE_PROFILES[0] if ROUTE_RULE_PROFILES else None
