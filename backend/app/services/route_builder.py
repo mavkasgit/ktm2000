@@ -23,11 +23,13 @@ from app.models.route import RouteRuleProfile, SectionOperation
 from app.models.section import Section
 from app.models.production_plan import PlanPosition
 from app.models.product import Product
+from app.services.route_name_builder import build_route_name
 from app.services.route_selection import (
     apply_normalize_to_payload,
     build_route_rule_context,
     load_selection_rules_for_profile,
     _load_rules_by_phase,
+    _evaluate_condition_with_diagnostic,
 )
 
 
@@ -161,7 +163,7 @@ async def build_route_from_profile(
                 operation_code=None,
                 operation_name=f"Хранение: {section.name}",
                 is_significant=False,
-                is_final=(section_code == "SHIPPED"),
+                is_final=False,
             ))
             continue
 
@@ -191,7 +193,7 @@ async def build_route_from_profile(
                 operation_code=first_op.operation_code,
                 operation_name=first_op.operation_name,
                 is_significant=first_op.is_significant,
-                is_final=(section_code == "SHIPPED"),
+                is_final=False,
 
             ))
         else:
@@ -239,13 +241,23 @@ async def build_route_from_profile(
                         operation_code=op.operation_code,
                         operation_name=op.operation_name,
                         is_significant=is_sig,
-                is_final=(section_code == "SHIPPED"),
+                is_final=False,
 
 
             ))
+    # Mark last step as final (determined by route structure, not section_code)
+    if steps:
+        steps[-1].is_final = True
+
+    # Phase: resolve_signatures — compute derived values (output_kind, shot_op)
+    await _resolve_signatures(db, profile.id, source_payload, product, filtered_section_codes, excluded_codes)
+
+    # Resolve operation names from SectionOperation reference
+    resolved_names = await _resolve_operation_names(db, resolved_ops, filtered_section_codes)
+
     # Generate descriptive name from profile template
-    route_name = _build_route_name_from_template(
-        profile, filtered_section_codes, excluded_codes, resolved_ops, source_payload,
+    route_name = build_route_name(
+        profile, filtered_section_codes, excluded_codes, resolved_ops, resolved_names, source_payload,
     )
 
     return BuiltRoute(
@@ -386,95 +398,72 @@ def _group_sort_key(
     return (sort_order, group_code or "")
 
 
-def _build_route_name_from_template(
-    profile: RouteRuleProfile,
+async def _resolve_signatures(
+    db: AsyncSession,
+    profile_id: int | None,
+    source_payload: dict[str, Any] | None,
+    product: Product | None,
     included_sections: list[str],
     excluded_sections: set[str],
+) -> None:
+    """Apply resolve_signatures rules to set derived values (output_kind, shot_op) in payload."""
+    if source_payload is None:
+        return
+    all_rules = await load_selection_rules_for_profile(db, profile_id=profile_id)
+    signature_rules = _load_rules_by_phase(all_rules, "resolve_signatures")
+    if not signature_rules:
+        return
+
+    context = build_route_rule_context(source_payload, product)
+    context["ctx"]["included_sections"] = included_sections
+    context["ctx"]["excluded_sections"] = list(excluded_sections)
+
+    for rule in signature_rules:
+        conditions = list(rule.conditions or [])
+        conditions_matched = True
+        for condition in conditions:
+            matched, _diagnostic = _evaluate_condition_with_diagnostic(context, condition)
+            if not matched:
+                conditions_matched = False
+                break
+        if not conditions_matched:
+            continue
+
+        for action in rule.actions or []:
+            action_kind = str(action.get("action") or "")
+            if action_kind == "set_field":
+                path = str(action.get("path") or "")
+                value = action.get("value")
+                if path.startswith("payload."):
+                    field = path[len("payload."):]
+                    source_payload[field] = value
+
+
+async def _resolve_operation_names(
+    db: AsyncSession,
     resolved_ops: dict[tuple[str, str], str],
-    payload: dict[str, Any] | None,
-) -> str:
-    """Generate route name using profile.route_name_pattern with placeholder substitution."""
-    pattern = profile.route_name_pattern or "{output_kind} - {operations}"
-    payload = payload or {}
+    included_section_codes: list[str],
+) -> dict[tuple[str, str], str]:
+    """Look up operation names from SectionOperation for resolved ops.
 
-    # Resolve placeholders
-    values: dict[str, str] = {}
+    Returns:
+        {(section_code, group_code): operation_name} for each resolved op.
+    """
+    op_codes = list(resolved_ops.values())
+    if not op_codes:
+        return {}
 
-    # output_kind: ГП or П/Ф
-    has_pack = "PACKING" in included_sections
-    has_wip = "WIP_STOCK" in included_sections
-    has_saw = "SAWING" in included_sections
-    if has_pack and has_wip and has_saw:
-        values["output_kind"] = "ГП"
-    elif not has_pack and not has_wip and not has_saw:
-        values["output_kind"] = "П/Ф"
-    else:
-        values["output_kind"] = ""
+    rows = (await db.execute(
+        select(SectionOperation)
+        .where(SectionOperation.operation_code.in_(op_codes))
+    )).scalars().all()
+    name_by_code = {r.operation_code: r.operation_name for r in rows}
 
-    # press_op: Окно, Гребёнка, or empty
-    has_press = "PRESSING" in included_sections
-    if has_press:
-        press_op = resolved_ops.get(("PRESSING", "PRESS"))
-        if press_op == "PRESS_WINDOW":
-            values["press_op"] = "Окно"
-        elif press_op == "PRESS_COMB":
-            values["press_op"] = "Гребёнка"
-        else:
-            values["press_op"] = "Пресс"
-    else:
-        values["press_op"] = ""
+    result: dict[tuple[str, str], str] = {}
+    for (section_code, group_code), op_code in resolved_ops.items():
+        result[(section_code, group_code)] = name_by_code.get(op_code, "")
 
-    # drill_op: Сверловка if section is included, empty otherwise
-    has_drill = "DRILLING" in included_sections
-    values["drill_op"] = "Сверловка" if has_drill else ""
-
-    # shot_op: "Без операций" only if SHOT section is excluded
-    has_shot = "SHOT_BLAST" in included_sections
-    values["shot_op"] = "" if has_shot else "Без операций"
-
-    # color from ANOD operation
-    anod_op = resolved_ops.get(("ANODIZING", "ANOD"))
-    color_map = {
-        "ANOD_01": "Серебро",
-        "ANOD_02": "Золото",
-        "ANOD_03": "Бронза",
-        "ANOD_05": "Чёрный",
-        "ANOD_06": "Шампань",
-        "ANOD_07": "Медь",
-        "ANOD_08": "Титан",
-    }
-    values["color"] = color_map.get(anod_op, "")
-
-    # pack_op: Стрейч or Спанбонд
-    pack_op = resolved_ops.get(("ANODIZING", "PACK"))
-    if pack_op == "PACK_STRETCH":
-        values["pack_op"] = "Стрейч"
-    elif pack_op == "PACK_SPUNBOND":
-        values["pack_op"] = "Спанбонд"
-    else:
-        values["pack_op"] = ""
-
-    # operations: combined list of significant ops
-    ops_parts = []
-    if values.get("press_op"):
-        ops_parts.append(values["press_op"])
-    if values.get("drill_op"):
-        ops_parts.append(values["drill_op"])
-    if values.get("color"):
-        ops_parts.append(values["color"])
-    values["operations"] = " - ".join(ops_parts)
-
-    # Substitute and clean up
-    name = pattern
-    for key, val in values.items():
-        name = name.replace(f"{{{key}}}", val)
-
-    import re
-    name = re.sub(r'\{\w+\}', '', name)  # remove unmatched placeholders
-    # Split by separator, filter empty parts, rejoin
-    parts = [p.strip() for p in name.split('-') if p.strip()]
-    name = ' - '.join(parts)
-    return name or "Универсальный"
+    return result
 
 
 async def build_route_steps_for_release(

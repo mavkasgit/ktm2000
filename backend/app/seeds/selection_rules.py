@@ -246,6 +246,56 @@ SELECTION_RULES = [
         ],
     },
 
+    # ===== resolve_signatures rules =====
+    {
+        "code": "output_kind_gp",
+        "name": "Вид выпуска: ГП",
+        "profile_code": "packaging_map_rp",
+        "priority": 100,
+        "is_active": True,
+        "phase": "resolve_signatures",
+        "conditions": [
+            {"source": "ctx", "field_path": "included_sections", "operator": "contains", "value": "PACKING"},
+            {"source": "ctx", "field_path": "included_sections", "operator": "contains", "value": "WIP_STOCK"},
+            {"source": "ctx", "field_path": "included_sections", "operator": "contains", "value": "SAWING"},
+        ],
+        "condition_logic": "and",
+        "actions": [
+            {"action": "set_field", "path": "payload.output_kind", "value": "ГП"},
+        ],
+    },
+    {
+        "code": "output_kind_pf",
+        "name": "Вид выпуска: П/Ф",
+        "profile_code": "packaging_map_rp",
+        "priority": 90,
+        "is_active": True,
+        "phase": "resolve_signatures",
+        "conditions": [
+            {"source": "ctx", "field_path": "included_sections", "operator": "not_contains", "value": "PACKING"},
+            {"source": "ctx", "field_path": "included_sections", "operator": "not_contains", "value": "WIP_STOCK"},
+            {"source": "ctx", "field_path": "included_sections", "operator": "not_contains", "value": "SAWING"},
+        ],
+        "condition_logic": "and",
+        "actions": [
+            {"action": "set_field", "path": "payload.output_kind", "value": "П/Ф"},
+        ],
+    },
+    {
+        "code": "shot_op_bez_operatsiy",
+        "name": "Дробеструй: без операций",
+        "profile_code": "packaging_map_rp",
+        "priority": 100,
+        "is_active": True,
+        "phase": "resolve_signatures",
+        "conditions": [
+            {"source": "ctx", "field_path": "included_sections", "operator": "not_contains", "value": "SHOT_BLAST"},
+        ],
+        "actions": [
+            {"action": "set_field", "path": "payload.shot_op", "value": "Без операций"},
+        ],
+    },
+
     # PACK operation resolution — consolidated packaging type mapping
     {
         "code": "pack_types",

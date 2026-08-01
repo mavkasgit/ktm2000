@@ -58,7 +58,7 @@ async def _seed_sections(session) -> None:
     session.add(SectionOperation(
         section_id=anod_section.id,
         operation_code="ANOD_01",
-        operation_name="Анодирование серебро",
+        operation_name="Серебро",
         group_code="ANOD",
         group_name="Анодирование",
         is_significant=True,
@@ -67,7 +67,7 @@ async def _seed_sections(session) -> None:
     session.add(SectionOperation(
         section_id=anod_section.id,
         operation_code="ANOD_05",
-        operation_name="Анодирование чёрный",
+        operation_name="Чёрный",
         group_code="ANOD",
         group_name="Анодирование",
         is_significant=True,
@@ -79,7 +79,7 @@ async def _seed_sections(session) -> None:
     session.add(SectionOperation(
         section_id=pack_section.id,
         operation_code="PACK_STRETCH",
-        operation_name="Упаковка стрейч",
+        operation_name="Стрейч",
         group_code="PACK",
         group_name="Упаковка",
         is_significant=False,
@@ -88,7 +88,7 @@ async def _seed_sections(session) -> None:
     session.add(SectionOperation(
         section_id=pack_section.id,
         operation_code="PACK_SPUNBOND",
-        operation_name="Упаковка спанбонд",
+        operation_name="Спанбонд",
         group_code="PACK",
         group_name="Упаковка",
         is_significant=False,

@@ -13,10 +13,10 @@ from app.models.section import Section
 
 router = APIRouter(prefix="/route-selection-rules", tags=["route-selection-rules"])
 
-RulePhase = Literal["normalize", "route_select", "resolve_operations"]
+RulePhase = Literal["normalize", "route_select", "resolve_operations", "resolve_signatures"]
 RuleSource = Literal["excel", "payload", "product", "ctx"]
 RuleOperator = Literal["equals", "not_equals", "contains", "not_contains", "in", "not_in", "empty", "not_empty", "regex"]
-RuleAction = Literal["require_section", "exclude_section", "set", "add", "remove", "set_operation", "set_operation_by_mapping", "resolve_by_type"]
+RuleAction = Literal["require_section", "exclude_section", "set", "add", "remove", "set_operation", "set_operation_by_mapping", "resolve_by_type", "set_field", "set_field_from_color_extraction"]
 
 
 class RouteSelectionConditionIn(BaseModel):

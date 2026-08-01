@@ -248,7 +248,9 @@ function looksLikeColumnKey(value: string): boolean {
 
 function buildPassportFromTemplateMapping(mapping: ImportTemplatesAPI.ImportTemplate["column_mapping"]): ExcelColumnSpec[] {
   const usedIndexes = new Set<number>();
-  const prepared = Object.entries(mapping ?? {}).map(([rawKey, rawValue]) => {
+  const prepared = Object.entries(mapping ?? {})
+    .filter(([rawKey]) => !rawKey.startsWith("_"))
+    .map(([rawKey, rawValue]) => {
     const key = rawKey.trim();
     if (!key) return null;
 

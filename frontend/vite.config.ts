@@ -4,7 +4,7 @@ import { fileURLToPath, URL } from "node:url"
 import react from "@vitejs/plugin-react"
 import { defineConfig, type Plugin } from "vite"
 
-const proxyTarget = process.env.VITE_PROXY_TARGET || "http://127.0.0.1:8010"
+const proxyTarget = process.env.VITE_PROXY_TARGET || "http://127.0.0.1:8012"
 
 function appVersionPlugin(): Plugin {
   let buildId = "dev"
@@ -36,7 +36,7 @@ export default defineConfig({
   },
   server: {
     host: "0.0.0.0",
-    port: 5180,
+    port: 5172,
     proxy: {
       "/api": {
         target: proxyTarget,
