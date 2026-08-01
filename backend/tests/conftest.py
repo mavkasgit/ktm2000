@@ -126,26 +126,45 @@ async def _drop_database(admin_url: URL, db_name: str) -> None:
 
 
 async def _create_database(admin_url: URL, db_name: str) -> None:
+    """Create a test database, tolerating 'already exists' from parallel workers."""
     _validate_ident(db_name, required_prefix=TEST_DB_PREFIX)
     engine = await _open_autocommit_engine(admin_url)
     try:
         async with engine.connect() as conn:
-            await conn.execute(text(f"CREATE DATABASE {_quote_ident(db_name)}"))
+            try:
+                await conn.execute(text(f"CREATE DATABASE {_quote_ident(db_name)}"))
+            except Exception as exc:
+                # asyncpg raises DuplicateDatabaseError (42P04) if another
+                # worker created it first — safe to ignore.
+                raw = getattr(exc, "sqlstate", None) or ""
+                if raw == "42P04" or "already exists" in str(exc).lower():
+                    pass
+                else:
+                    raise
     finally:
         await engine.dispose()
 
 
 async def _cleanup_stale_databases(admin_url: URL) -> None:
+    """Drop leftover test databases from previous runs.
+
+    Skips databases with active connections to avoid racing with
+    freshly created DBs from parallel xdist workers.
+    """
     engine = await _open_autocommit_engine(admin_url)
     try:
         async with engine.connect() as conn:
             rows = (
                 await conn.execute(
                     text(
-                        "SELECT datname "
-                        "FROM pg_database "
-                        "WHERE datname LIKE :prefix "
-                        "ORDER BY datname"
+                        "SELECT d.datname "
+                        "FROM pg_database d "
+                        "WHERE d.datname LIKE :prefix "
+                        "AND NOT EXISTS ("
+                        "  SELECT 1 FROM pg_stat_activity a "
+                        "  WHERE a.datname = d.datname AND a.pid <> pg_backend_pid()"
+                        ") "
+                        "ORDER BY d.datname"
                     ),
                     {"prefix": f"{TEST_DB_PREFIX}%"},
                 )
@@ -322,13 +341,36 @@ async def module_schema_name() -> str:
 
 
 @pytest_asyncio.fixture(scope="module", loop_scope="module")
-async def engine(module_db_url: str, module_schema_name: str) -> AsyncIterator[AsyncEngine]:
-    engine = create_async_engine(module_db_url, poolclass=NullPool)
-    async with engine.begin() as conn:
-        await conn.execute(text(f"CREATE SCHEMA {_quote_ident(module_schema_name)}"))
-        await conn.execute(text(f"SET search_path TO {_quote_ident(module_schema_name)}"))
-        await conn.run_sync(Base.metadata.create_all)
-        await _install_storage_vs_production_triggers(conn)
+async def engine(
+    module_db_url: str,
+    module_schema_name: str,
+    admin_db_url: URL,
+    run_id: str,
+    request: pytest.FixtureRequest,
+) -> AsyncIterator[AsyncEngine]:
+    """Create engine with retry: if another worker's cleanup dropped our DB, recreate it."""
+
+    async def _init_engine() -> AsyncEngine:
+        eng = create_async_engine(module_db_url, poolclass=NullPool)
+        async with eng.begin() as conn:
+            await conn.execute(text(f"CREATE SCHEMA IF NOT EXISTS {_quote_ident(module_schema_name)}"))
+            await conn.execute(text(f"SET search_path TO {_quote_ident(module_schema_name)}"))
+            await conn.run_sync(Base.metadata.create_all)
+            await _install_storage_vs_production_triggers(conn)
+        return eng
+
+    try:
+        engine = await _init_engine()
+    except Exception as exc:
+        # Database may have been dropped by a parallel worker's cleanup.
+        # Recreate and retry once.
+        if "does not exist" in str(exc).lower():
+            module_name = request.module.__name__ if request.module else "module"
+            db_name = _safe_module_db_name(module_name, run_id)
+            await _create_database(admin_db_url, db_name)
+            engine = await _init_engine()
+        else:
+            raise
     try:
         yield engine
     finally:
