@@ -51,22 +51,29 @@ async def run_full_seed(db: AsyncSession, force: bool = False) -> dict:
 
     # 1.3. ImportTemplate (needed by profile); сеем все шаблоны (#15):
     # план «Упаковочная карта РП» + остатки «Остатки КТМ».
-    templates = [await seed_import_template(db, template_data) for template_data in IMPORT_TEMPLATES]
-    if not templates:
+    templates_by_code: dict[str, object] = {}
+    for template_data in IMPORT_TEMPLATES:
+        tpl = await seed_import_template(db, template_data)
+        templates_by_code[tpl.code] = tpl
+    if not templates_by_code:
         raise RuntimeError("No import templates defined")
-    template = templates[0]
-    result["import_templates"] = len(templates)
+    result["import_templates"] = len(templates_by_code)
 
-    # 1.3. RouteRuleProfile (needs template.id)
-    profile_data = ROUTE_RULE_PROFILES[0] if ROUTE_RULE_PROFILES else None
-    if profile_data is None:
+    # 1.3. RouteRuleProfile (needs template.id); сеем все профили (#12):
+    # каждый профиль привязан к шаблону через import_template_code.
+    if not ROUTE_RULE_PROFILES:
         raise RuntimeError("No route rule profiles defined")
-    profile = await seed_route_rule_profile(
-        db,
-        profile_data,
-        import_template_id=template.id,
-    )
-    result["route_rule_profiles"] = 1
+    profiles_by_code: dict[str, object] = {}
+    for profile_data in ROUTE_RULE_PROFILES:
+        template_code = profile_data.get("import_template_code")
+        template_obj = templates_by_code.get(template_code) if template_code else None
+        profile = await seed_route_rule_profile(
+            db,
+            profile_data,
+            import_template_id=template_obj.id if template_obj else None,
+        )
+        profiles_by_code[profile.code] = profile
+    result["route_rule_profiles"] = len(profiles_by_code)
 
     # 1.4. ProductionRoutes from RouteRuleProfile (ONE step per section)
     # Must run AFTER profile creation so lookup by profile.code/name works for idempotency
@@ -82,8 +89,18 @@ async def run_full_seed(db: AsyncSession, force: bool = False) -> dict:
 
     # 3. Routes (static routes replaced by dynamic production routes above)
 
-    # 4. SelectionRules (needs profile)
-    rules_count = await seed_selection_rules(db, SELECTION_RULES, profile)
-    result["selection_rules"] = rules_count
+    # 4. SelectionRules (needs profile); group by profile_code (#12)
+    rules_by_profile: dict[str, list[dict]] = {}
+    for rule_def in SELECTION_RULES:
+        pcode = rule_def.get("profile_code", "")
+        rules_by_profile.setdefault(pcode, []).append(rule_def)
+
+    total_rules = 0
+    for pcode, profile_rules in rules_by_profile.items():
+        target_profile = profiles_by_code.get(pcode)
+        if target_profile is None:
+            raise RuntimeError(f"Profile '{pcode}' not found for selection rules")
+        total_rules += await seed_selection_rules(db, profile_rules, target_profile)
+    result["selection_rules"] = total_rules
 
     return result
