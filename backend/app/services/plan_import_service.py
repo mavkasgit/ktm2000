@@ -9,6 +9,7 @@ from typing import Iterable
 
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.core.config import settings
 from app.models.techcard import Techcard, TechcardLine
@@ -343,7 +344,9 @@ async def _get_or_create_import_file(
 
 
 async def _load_products_by_sku(db: AsyncSession) -> dict[str, Product]:
-    products = (await db.execute(select(Product))).scalars().all()
+    products = (await db.execute(
+        select(Product).options(selectinload(Product.processing_flags))
+    )).scalars().all()
     result: dict[str, Product] = {}
     for product in products:
         for key in _sku_lookup_keys(product.sku):

@@ -11,12 +11,24 @@ from __future__ import annotations
 import pytest
 from sqlalchemy import select
 
-from app.models.product import Product, ProductType
+from app.models.product import Product, ProductType, ProcessingFlag, ProductProcessingFlag
 from app.models.route import RouteRuleProfile, RouteSelectionRule
 from app.models.section import Section
 from app.services.route_selection import select_route_for_payload
 
 from tests.test_routes_seed import DEFAULT_SECTIONS, _seed_default_sections
+
+
+async def _add_processing_flag(session, product: Product, code: str) -> None:
+    """Add a processing flag M2M link and refresh the relationship (#17)."""
+    flag = await session.scalar(select(ProcessingFlag).where(ProcessingFlag.code == code))
+    if flag is None:
+        flag = ProcessingFlag(code=code, name=code, section_scope=None)
+        session.add(flag)
+        await session.flush()
+    session.add(ProductProcessingFlag(product_id=product.id, flag_id=flag.id))
+    await session.flush()
+    await session.refresh(product, attribute_names=["processing_flags"])
 
 
 DEFAULT_SECTIONS_CODES = {s["code"] for s in DEFAULT_SECTIONS}
@@ -275,10 +287,10 @@ async def test_product_skip_shot_excludes_shot_section(client, session) -> None:
         name="Тест без дробеструя",
         type=ProductType.finished_good,
         unit="pcs",
-        skip_shot_blast=True,
     )
     session.add(product)
     await session.flush()
+    await _add_processing_flag(session, product, "skip_shot_blast")
 
     result = await select_route_for_payload(
         session,
@@ -308,10 +320,10 @@ async def test_product_with_shot_requires_shot_section(client, session) -> None:
         name="Тест с дробеструем",
         type=ProductType.finished_good,
         unit="pcs",
-        skip_shot_blast=False,
     )
     session.add(product)
     await session.flush()
+    await session.refresh(product, attribute_names=["processing_flags"])
 
     result = await select_route_for_payload(
         session,
@@ -339,10 +351,10 @@ async def test_product_skip_shot_default_false_requires_shot(client, session) ->
         name="Тест без флага",
         type=ProductType.finished_good,
         unit="pcs",
-        # skip_shot_blast not set — defaults to None/False
     )
     session.add(product)
     await session.flush()
+    await session.refresh(product, attribute_names=["processing_flags"])
 
     result = await select_route_for_payload(
         session,
@@ -698,10 +710,10 @@ async def test_skip_shot_combined_with_gp_route(client, session) -> None:
         name="Комбо тест",
         type=ProductType.finished_good,
         unit="pcs",
-        skip_shot_blast=True,
     )
     session.add(product)
     await session.flush()
+    await _add_processing_flag(session, product, "skip_shot_blast")
 
     result = await select_route_for_payload(
         session,

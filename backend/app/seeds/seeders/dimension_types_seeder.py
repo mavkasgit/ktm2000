@@ -44,7 +44,7 @@ async def seed_dimension_types(db: AsyncSession) -> dict[str, int]:
     )
 
     products = (
-        await db.scalars(select(Product).where(Product.length_mm.is_not(None)))
+        await db.scalars(select(Product).where(Product.attributes["length_mm"].is_not(None)))
     ).all()
 
     bindings_created = 0

@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy import String, cast, exists, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from sqlalchemy import func as sa_func
 
@@ -734,7 +735,11 @@ async def route_check(
     rule_profile_id = import_batch.rule_profile_id if import_batch is not None else None
     template_id = import_batch.template_id if import_batch is not None else None
 
-    product = await db.get(Product, position.product_id) if position.product_id is not None else None
+    product = (
+        await db.execute(
+            select(Product).options(selectinload(Product.processing_flags)).where(Product.id == position.product_id)
+        )
+    ).scalar_one_or_none() if position.product_id is not None else None
     selection = await select_route_for_payload(db, position.source_payload, product, profile_id=rule_profile_id)
     expected_signature = {
         "template_id": template_id,

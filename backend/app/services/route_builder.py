@@ -18,6 +18,7 @@ from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.models.route import RouteRuleProfile, SectionOperation
 from app.models.section import Section
@@ -83,12 +84,16 @@ async def build_route_from_profile(
     # Получить product для правил (например global_product_skip_shot)
     product: Product | None = None
     if position and position.product_id:
-        product = await db.get(Product, position.product_id)
+        product = (await db.execute(
+            select(Product).options(selectinload(Product.processing_flags)).where(Product.id == position.product_id)
+        )).scalar_one_or_none()
     elif source_payload:
         # Try to resolve product from source_payload product_id (preview path)
         payload_product_id = source_payload.get("product_id")
         if payload_product_id:
-            product = await db.get(Product, int(payload_product_id))
+            product = (await db.execute(
+                select(Product).options(selectinload(Product.processing_flags)).where(Product.id == int(payload_product_id))
+            )).scalar_one_or_none()
 
     await apply_normalize_to_payload(db, profile.id, source_payload, product)
 

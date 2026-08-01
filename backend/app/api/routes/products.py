@@ -124,6 +124,9 @@ class ProductOut(BaseModel):
 
 VALID_SORT_FIELDS = {"sku", "name", "length_mm", "quantity_per_hanger", "id"}
 
+# Fields stored in JSONB attributes column (#19)
+_JSONB_SORT_FIELDS = {"length_mm", "quantity_per_hanger"}
+
 
 class ProductsListResponse(BaseModel):
     items: List[ProductOut]
@@ -154,12 +157,30 @@ async def _sync_processing_flags(db: AsyncSession, product_id: int, codes: list[
         db.add(ProductProcessingFlag(product_id=product_id, flag_id=fid))
 
 
+async def _sync_boolean_flag(db: AsyncSession, product_id: int, code: str, value: bool) -> None:
+    """Add or remove a single processing flag M2M link based on boolean value (#17)."""
+    flag = await db.scalar(select(ProcessingFlag).where(ProcessingFlag.code == code))
+    if flag is None:
+        return  # Flag not seeded yet — skip silently
+    existing = await db.scalar(
+        select(ProductProcessingFlag).where(
+            ProductProcessingFlag.product_id == product_id,
+            ProductProcessingFlag.flag_id == flag.id,
+        )
+    )
+    if value and not existing:
+        db.add(ProductProcessingFlag(product_id=product_id, flag_id=flag.id))
+    elif not value and existing:
+        await db.delete(existing)
+
+
 def _to_product_out(product: Product, has_std: bool = False, has_paired: bool = False) -> ProductOut:
     lengths = sorted([l.length_mm for l in product.lengths]) if product.lengths else []
     flags = [
         ProcessingFlagInfo(code=f.code, name=f.name, section_scope=f.section_scope)
         for f in product.processing_flags
     ]
+    flag_codes = {f.code for f in product.processing_flags}
     return ProductOut(
         id=product.id,
         sku=product.sku,
@@ -181,11 +202,11 @@ def _to_product_out(product: Product, has_std: bool = False, has_paired: bool = 
         source=product.source,
         is_catalog_item=product.is_catalog_item,
         is_paired_profile=product.is_paired_profile,
-        skip_shot_blast=product.skip_shot_blast,
+        skip_shot_blast="skip_shot_blast" in flag_codes,
         aliases=product.aliases or [],
         lengths_mm=lengths,
         processing_flags=flags,
-        is_laminated=product.is_laminated,
+        is_laminated="is_laminated" in flag_codes,
         has_standard_techcard=has_std,
         has_paired_techcard=has_paired,
     )
@@ -238,7 +259,11 @@ def _parse_sort(sort_param: str):
             raise HTTPException(status_code=400, detail=f"Invalid sort field: {field}")
         if order not in ("asc", "desc"):
             raise HTTPException(status_code=400, detail=f"Invalid sort order: {order}")
-        col = getattr(Product, field)
+        if field in _JSONB_SORT_FIELDS:
+            # Sort by JSONB attribute value (#19)
+            col = Product.attributes[field].as_float()
+        else:
+            col = getattr(Product, field)
         rules.append(col.desc() if order == "desc" else col)
     return rules
 
@@ -297,9 +322,19 @@ async def list_products(
     if is_paired_profile is not None:
         stmt = stmt.where(Product.is_paired_profile == is_paired_profile)
     if skip_shot_blast is not None:
-        stmt = stmt.where(Product.skip_shot_blast == skip_shot_blast)
+        flag_exists = exists().where(
+            ProductProcessingFlag.product_id == Product.id,
+            ProductProcessingFlag.flag_id == ProcessingFlag.id,
+            ProcessingFlag.code == "skip_shot_blast",
+        )
+        stmt = stmt.where(flag_exists if skip_shot_blast else ~flag_exists)
     if is_laminated is not None:
-        stmt = stmt.where(Product.is_laminated == is_laminated)
+        flag_exists = exists().where(
+            ProductProcessingFlag.product_id == Product.id,
+            ProductProcessingFlag.flag_id == ProcessingFlag.id,
+            ProcessingFlag.code == "is_laminated",
+        )
+        stmt = stmt.where(flag_exists if is_laminated else ~flag_exists)
     if sku:
         stmt = stmt.where(Product.sku.ilike(f"%{sku}%"))
     if name:
@@ -319,9 +354,9 @@ async def list_products(
             )
         )
     if qty_from is not None:
-        stmt = stmt.where(Product.quantity_per_hanger >= qty_from)
+        stmt = stmt.where(Product.attributes["quantity_per_hanger"].as_integer() >= qty_from)
     if qty_to is not None:
-        stmt = stmt.where(Product.quantity_per_hanger <= qty_to)
+        stmt = stmt.where(Product.attributes["quantity_per_hanger"].as_integer() <= qty_to)
 
     count_stmt = select(func.count()).select_from(stmt.subquery())
     total = (await db.execute(count_stmt)).scalar() or 0
@@ -447,15 +482,21 @@ async def create_product(
     if existing:
         raise HTTPException(status_code=409, detail="SKU already exists")
 
-    product_data = payload.model_dump(exclude={"lengths_mm", "processing_flag_codes"})
+    product_data = payload.model_dump(exclude={"lengths_mm", "processing_flag_codes", "skip_shot_blast", "is_laminated"})
     item = Product(**product_data)
     db.add(item)
     await db.flush()
 
     if payload.lengths_mm:
         await _sync_lengths(db, item.id, payload.lengths_mm)
-    if payload.processing_flag_codes:
-        await _sync_processing_flags(db, item.id, payload.processing_flag_codes)
+    # Sync boolean flags to M2M (#17)
+    flag_codes = list(payload.processing_flag_codes)
+    if payload.skip_shot_blast:
+        flag_codes.append("skip_shot_blast")
+    if payload.is_laminated:
+        flag_codes.append("is_laminated")
+    if flag_codes:
+        await _sync_processing_flags(db, item.id, list(set(flag_codes)))
 
     if payload.aliases:
         activated = await _enforce_bidirectional_aliases(db, item.id, payload.aliases, old_aliases=[])
@@ -526,7 +567,7 @@ async def patch_product(
 
     old_aliases = item.aliases if payload.aliases is not None else None
 
-    patch_data = payload.model_dump(exclude_unset=True, exclude={"lengths_mm", "processing_flag_codes"})
+    patch_data = payload.model_dump(exclude_unset=True, exclude={"lengths_mm", "processing_flag_codes", "skip_shot_blast", "is_laminated"})
     new_sku = patch_data.pop("sku", None)
     if new_sku is not None:
         normalized_sku = new_sku.strip()
@@ -554,6 +595,11 @@ async def patch_product(
         await _sync_lengths(db, product_id, payload.lengths_mm)
     if payload.processing_flag_codes is not None:
         await _sync_processing_flags(db, product_id, payload.processing_flag_codes)
+    # Sync boolean flags to M2M (#17)
+    if payload.skip_shot_blast is not None:
+        await _sync_boolean_flag(db, product_id, "skip_shot_blast", payload.skip_shot_blast)
+    if payload.is_laminated is not None:
+        await _sync_boolean_flag(db, product_id, "is_laminated", payload.is_laminated)
 
     await db.flush()
 
@@ -690,7 +736,9 @@ async def get_product_route_stages(
     product_id: int,
     db: AsyncSession = Depends(get_db),
 ) -> list[RouteStageOut]:
-    product = await db.get(Product, product_id)
+    product = (await db.execute(
+        select(Product).options(selectinload(Product.processing_flags)).where(Product.id == product_id)
+    )).scalar_one_or_none()
     if product is None:
         raise HTTPException(status_code=404, detail="Product not found")
 

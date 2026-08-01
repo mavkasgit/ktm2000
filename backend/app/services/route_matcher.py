@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.models.product import Product
 from app.models.imports import ImportBatch
@@ -240,7 +241,11 @@ async def resolve_position_route(
     import_batch = await db.get(ImportBatch, position.import_batch_id) if position.import_batch_id is not None else None
     rule_profile_id = import_batch.rule_profile_id if import_batch is not None else None
 
-    product = await db.get(Product, position.product_id) if position.product_id is not None else None
+    product = (
+        await db.execute(
+            select(Product).options(selectinload(Product.processing_flags)).where(Product.id == position.product_id)
+        )
+    ).scalar_one_or_none() if position.product_id is not None else None
     selection = await select_route_for_payload(db, position.source_payload, product, profile_id=rule_profile_id)
     if selection.route is None:
         return ResolvedRouteInfo(

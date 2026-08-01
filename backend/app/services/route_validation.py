@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.models.product import Product
 from app.models.imports import ImportBatch
@@ -72,7 +73,11 @@ async def validate_route_match(
         if template:
             template_column_mapping = template.column_mapping
 
-    product = await db.get(Product, position.product_id)
+    product = (
+        await db.execute(
+            select(Product).options(selectinload(Product.processing_flags)).where(Product.id == position.product_id)
+        )
+    ).scalar_one_or_none() if position.product_id is not None else None
 
     if select_route_cache is not None:
         payload_key = _make_hashable(position.source_payload)

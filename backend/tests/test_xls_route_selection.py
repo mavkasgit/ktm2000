@@ -486,20 +486,29 @@ async def test_test_xls_row_2256_with_skip_shot_blast_excludes_shot(client, sess
     В CRM для этого продукта установлен пропуск дробеструя (skip_shot_blast=True).
     Проверяем что SHOT исключается из маршрута.
     """
-    from app.models.product import Product, ProductType
+    from app.models.product import Product, ProductType, ProcessingFlag, ProductProcessingFlag
 
     profile_id = await _seed_full_environment(session)
 
-    # Create product matching real ЮП-2256 with skip_shot_blast=True
+    # Create product matching real ЮП-2256 with skip_shot_blast processing flag
     product = Product(
         sku="ЮП-2256",
         name="Микроплинтус 18мм 2,4м анод. черный матовый",
         type=ProductType.finished_good,
         unit="pcs",
-        skip_shot_blast=True,
     )
     session.add(product)
     await session.flush()
+
+    # Add skip_shot_blast processing flag (#17)
+    flag = await session.scalar(select(ProcessingFlag).where(ProcessingFlag.code == "skip_shot_blast"))
+    if flag is None:
+        flag = ProcessingFlag(code="skip_shot_blast", name="Пропуск дробеструя", section_scope="SHOT_BLAST")
+        session.add(flag)
+        await session.flush()
+    session.add(ProductProcessingFlag(product_id=product.id, flag_id=flag.id))
+    await session.flush()
+    await session.refresh(product, attribute_names=["processing_flags"])
 
     # Payload from test.xls row 7: color=черный, operation="", output_kind=ГП
     payload = {

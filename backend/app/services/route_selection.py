@@ -805,9 +805,24 @@ def _int_or_none(value: Any) -> int | None:
         return None
 
 
+def _product_flag_codes(product: Product) -> set[str]:
+    """Extract processing flag codes from product.
+
+    Requires the ``processing_flags`` relationship to be eagerly loaded
+    (via selectinload). Returns empty set if not loaded.
+    """
+    from sqlalchemy import inspect as sa_inspect
+
+    state = sa_inspect(product)
+    if "processing_flags" in state.unloaded:
+        return set()
+    return {f.code for f in product.processing_flags}
+
+
 def _product_context(product: Product | None) -> dict[str, Any]:
     if product is None:
         return {}
+    flag_codes = _product_flag_codes(product)
     return {
         "id": product.id,
         "sku": product.sku,
@@ -818,8 +833,8 @@ def _product_context(product: Product | None) -> dict[str, Any]:
         "alloy": product.alloy,
         "color": product.color,
         "anod_type": product.anod_type,
-        "skip_shot_blast": product.skip_shot_blast,
-        "is_laminated": product.is_laminated,
+        "skip_shot_blast": "skip_shot_blast" in flag_codes,
+        "is_laminated": "is_laminated" in flag_codes,
         "is_catalog_item": product.is_catalog_item,
         "is_paired_profile": product.is_paired_profile,
     }
