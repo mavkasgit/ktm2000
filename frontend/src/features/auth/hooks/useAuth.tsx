@@ -1,5 +1,14 @@
 import { createContext, useContext, useState, useEffect, useCallback, type ReactNode } from "react"
-import { loginApi, fetchMeApi, loginWithOTPApi, logoutApi, type User } from "../api"
+import {
+  fetchMeApi,
+  fetchRolesApi,
+  loginApi,
+  loginWithOTPApi,
+  logoutApi,
+  type RoleSections,
+  type User,
+  type UserRole,
+} from "../api"
 import { fetchOidcLogoutUrl } from "../api/oidcAuth"
 
 const TOKEN_KEY = "ktm2000_token"
@@ -9,6 +18,12 @@ const AUTH_ERROR_STORAGE_KEY = "ktm2000_auth_error"
 
 interface AuthContextValue {
   user: User | null
+  /** Справочник ролей с сервера (/auth/roles): коды, подписи, допустимые разделы. */
+  rolesCatalog: RoleSections[]
+  /** Подпись роли из справочника (fallback — сам код роли). */
+  roleLabel: (role: UserRole) => string
+  /** Допустимые разделы навигации роли из справочника (пустой список — недоступно). */
+  roleSections: (role: UserRole) => string[]
   isAuthenticated: boolean
   isLoading: boolean
   login: (username: string, password: string) => Promise<void>
@@ -23,7 +38,18 @@ const AuthContext = createContext<AuthContextValue | null>(null)
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null)
+  const [rolesCatalog, setRolesCatalog] = useState<RoleSections[]>([])
   const [isLoading, setIsLoading] = useState(true)
+
+  const loadRoles = useCallback(async () => {
+    try {
+      const { roles } = await fetchRolesApi()
+      setRolesCatalog(roles)
+    } catch {
+      // Справочник недоступен — навигация скрывает недоступные пункты (пустая допустимость).
+      setRolesCatalog([])
+    }
+  }, [])
 
   // При монтировании проверяем наличие токена и загружаем данные пользователя
   useEffect(() => {
@@ -33,6 +59,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       return
     }
 
+    void loadRoles()
     fetchMeApi()
       .then((u) => setUser(u))
       .catch(() => {
@@ -45,7 +72,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         document.cookie = "ktm2000_token=; path=/; max-age=0"
       })
       .finally(() => setIsLoading(false))
-  }, [])
+  }, [loadRoles])
 
   const clearLoggedOutFlag = () => {
     try {
@@ -62,7 +89,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     document.cookie = `ktm2000_token=${access_token}; path=/; max-age=86400; SameSite=Lax`
     const me = await fetchMeApi()
     setUser(me)
-  }, [])
+    void loadRoles()
+  }, [loadRoles])
 
   const loginWithOTP = useCallback(async (token: string) => {
     const { access_token } = await loginWithOTPApi(token)
@@ -71,7 +99,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     document.cookie = `ktm2000_token=${access_token}; path=/; max-age=86400; SameSite=Lax`
     const me = await fetchMeApi()
     setUser(me)
-  }, [])
+    void loadRoles()
+  }, [loadRoles])
 
   const loginWithToken = useCallback(async (accessToken: string) => {
     clearLoggedOutFlag()
@@ -79,12 +108,23 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     document.cookie = `ktm2000_token=${accessToken}; path=/; max-age=86400; SameSite=Lax`
     const me = await fetchMeApi()
     setUser(me)
-  }, [])
+    void loadRoles()
+  }, [loadRoles])
 
   const refreshUser = useCallback(async () => {
     const me = await fetchMeApi()
     setUser(me)
   }, [])
+
+  const roleLabel = useCallback(
+    (role: UserRole): string => rolesCatalog.find((r) => r.code === role)?.label ?? role,
+    [rolesCatalog],
+  )
+
+  const roleSections = useCallback(
+    (role: UserRole): string[] => rolesCatalog.find((r) => r.code === role)?.sections ?? [],
+    [rolesCatalog],
+  )
 
   const logout = useCallback(async () => {
     // Prevent SSO stub on /login from immediately re-entering Authentik (re-login loop).
@@ -104,6 +144,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     localStorage.removeItem(TOKEN_KEY)
     document.cookie = "ktm2000_token=; path=/; max-age=0"
     setUser(null)
+    setRolesCatalog([])
     // 3) OIDC end-session when enabled (id_token_hint + post_logout → /login)
     try {
       const { enabled, logout_url } = await fetchOidcLogoutUrl()
@@ -127,6 +168,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     <AuthContext.Provider
       value={{
         user,
+        rolesCatalog,
+        roleLabel,
+        roleSections,
         isAuthenticated: !!user,
         isLoading,
         login,

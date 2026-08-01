@@ -55,6 +55,24 @@ export async function fetchMeApi(): Promise<User> {
   return data
 }
 
+/** Роль в справочнике /auth/roles: код, подпись и допустимые разделы навигации */
+export interface RoleSections {
+  code: UserRole
+  label: string
+  sections: string[]
+}
+
+/** Ответ сервера на запрос GET /auth/roles */
+export interface RolesResponse {
+  roles: RoleSections[]
+}
+
+/** Справочник ролей: коды, подписи и допустимые разделы навигации (источник правды — сервер) */
+export async function fetchRolesApi(): Promise<RolesResponse> {
+  const { data } = await apiClient.get<RolesResponse>("/auth/roles")
+  return data
+}
+
 /** Unified profile: name / email / locale / theme / avatar → Authentik SoT when linked */
 export async function updateMyProfileApi(payload: {
   full_name?: string

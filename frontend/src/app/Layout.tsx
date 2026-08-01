@@ -7,23 +7,6 @@ import { toast } from "@/shared/ui"
 import { UserAvatar, getUserSeed } from "@user/ui"
 import { UserProfileModal } from "@/features/profile/UserProfileModal"
 
-import { ROLE_LABELS } from "@/features/profile/lib/roleLabels"
-
-/** Карта доступа: какие роли имеют доступ к каждому пункту меню */
-const NAV_ACCESS: Record<string, UserRole[]> = {
-  "/": ["admin", "planner", "section_manager", "operator", "viewer", "transporter"],
-  "/references": ["admin", "planner", "section_manager", "operator", "viewer", "transporter"],
-  "/planning": ["admin", "planner"],
-  "/execution": ["admin", "planner", "section_manager"],
-  "/section-tasks": ["admin", "planner", "section_manager", "operator", "viewer", "transporter"],
-  "/transfers": ["admin", "planner", "section_manager", "operator", "transporter"],
-  "/spg": ["admin", "planner", "section_manager", "operator", "viewer", "transporter"],
-  "/audit-logs": ["admin", "planner", "section_manager", "operator", "viewer", "transporter"],
-  "/settings": ["admin", "planner", "section_manager", "operator", "viewer", "transporter"],
-  "/settings/dev": ["admin"],
-  "/dev": ["admin", "planner", "section_manager", "operator", "viewer", "transporter"],
-}
-
 const navItems = [
   { to: "/", label: "Обзор", icon: Gauge },
   { to: "/references", label: "Справочники", icon: Boxes },
@@ -42,7 +25,7 @@ export function Layout() {
   const [profileOpen, setProfileOpen] = useState(false)
   const location = useLocation()
   const sidebarRef = useRef<HTMLDivElement>(null)
-  const { user, logout, refreshUser } = useAuth()
+  const { user, logout, refreshUser, rolesCatalog, roleLabel, roleSections } = useAuth()
   const isSingleWindowShopfloor =
     location.pathname.startsWith("/section-tasks") &&
     new URLSearchParams(location.search).get("singleWindow") === "1"
@@ -70,13 +53,14 @@ export function Layout() {
     return () => document.removeEventListener("mousedown", handleClick)
   }, [mobileMenuOpen])
 
-  /** Проверяет, разрешён ли текущему пользователю доступ к пункту меню */
+  /** Проверяет, разрешён ли текущему пользователю доступ к пункту меню.
+   *  Допустимость считается строго по списку секций из справочника ролей (/auth/roles). */
   const canAccess = (path: string): boolean => {
     if (!user) return false
-    const roles = NAV_ACCESS[path]
-    if (!roles) return true
-    return roles.includes(user.role)
+    return roleSections(user.role).includes(path)
   }
+
+  const rolesReady = rolesCatalog.length > 0
 
   return (
     <div className="app-shell">
@@ -137,9 +121,16 @@ export function Layout() {
               const Icon = item.icon
               const allowed = canAccess(item.to)
 
+              // Fallback до загрузки справочника ролей: пустая допустимость → пункт скрыт.
+              if (!allowed && !rolesReady) {
+                return null
+              }
+
               if (!allowed) {
-                const allowedRoles = NAV_ACCESS[item.to] || []
-                const roleNames = allowedRoles.map(r => ROLE_LABELS[r]).join(", ")
+                const allowedRoles: UserRole[] = rolesCatalog
+                  .filter((r) => r.sections.includes(item.to))
+                  .map((r) => r.code)
+                const roleNames = allowedRoles.map(r => roleLabel(r)).join(", ")
 
                 const handleDisabledClick = () => {
                   toast({
@@ -189,7 +180,7 @@ export function Layout() {
                   </div>
                 </div>
               </button>
-              <div className="px-2 text-xs text-muted-foreground">{ROLE_LABELS[user.role]}</div>
+              <div className="px-2 text-xs text-muted-foreground">{roleLabel(user.role)}</div>
               <button
                 type="button"
                 onClick={logout}

@@ -7,7 +7,7 @@ import {
 } from "@/shared/ui/Dialog"
 import { UserAvatar, getUserSeed, applyTheme, storeLocale, type ProfileLocale, type ProfileTheme } from "@user/ui"
 import { AvatarPickerDialog } from "@/features/profile/AvatarPickerDialog"
-import { ROLE_LABELS } from "@/features/profile/lib/roleLabels"
+import { useRoleLabel } from "@/features/profile/lib/roleLabels"
 import { idpUserSettingsUrlFromIssuer } from "@/features/profile/lib/idpUserSettingsUrl"
 import { ProfileSection } from "@/features/profile/sections/ProfileSection"
 import { AppearanceSection } from "@/features/profile/sections/AppearanceSection"
@@ -49,6 +49,7 @@ const getErrorMessage = (err: unknown, defaultMessage: string): string => {
 
 export function UserProfileModal({ open, onOpenChange, currentUser, onUpdated }: Props) {
   const [localUser, setLocalUser] = useState(currentUser)
+  const roleLabel = useRoleLabel(localUser.role)
   const [fullNameDraft, setFullNameDraft] = useState(currentUser.full_name || "")
   const [emailDraft, setEmailDraft] = useState(currentUser.email || "")
   const [localeDraft, setLocaleDraft] = useState<ProfileLocale>(
@@ -367,7 +368,7 @@ export function UserProfileModal({ open, onOpenChange, currentUser, onUpdated }:
             {/* Bottom Panel */}
             <div className="mt-auto pt-4 border-t border-border/50 text-[11px] text-muted-foreground space-y-1">
               <div className="truncate">
-                MES: <span className="font-medium text-foreground">{ROLE_LABELS[localUser.role] || localUser.role}</span>
+                MES: <span className="font-medium text-foreground">{roleLabel || localUser.role}</span>
               </div>
               <div className="truncate">Юзернейм: @{localUser.username}</div>
             </div>
@@ -392,7 +393,7 @@ export function UserProfileModal({ open, onOpenChange, currentUser, onUpdated }:
                   {localUser.full_name}
                 </div>
                 <div className="text-[11px] text-muted-foreground truncate">
-                  @{localUser.username} · {ROLE_LABELS[localUser.role] || localUser.role}
+                  @{localUser.username} · {roleLabel || localUser.role}
                 </div>
               </div>
             </div>

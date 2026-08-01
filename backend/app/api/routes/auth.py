@@ -23,8 +23,11 @@ from app.schemas.auth import (
     MeResponse,
     ProfileUpdateRequest,
     ProfileUpdateResponse,
+    RoleSections,
+    RolesResponse,
     TokenResponse,
 )
+from app.services.roles_catalog import roles_catalog
 from app.schemas.oidc_auth import (
     OidcCallbackRequest,
     OidcConfigResponse,
@@ -422,6 +425,16 @@ async def logout(
     session = await db.get(UserSession, session_id)
     if session is not None and session.user_id == user.id and session.revoked_at is None:
         await revoke_session_simple(db, session_id)
+
+
+@router.get("/roles", response_model=RolesResponse)
+async def roles() -> RolesResponse:
+    """Справочник ролей: коды, подписи и допустимые разделы навигации (публичный).
+
+    Без ``require_role`` — каталог нужен любому авторизованному для построения
+    навигации и подписей ролей на клиенте.
+    """
+    return RolesResponse(roles=[RoleSections(**entry) for entry in roles_catalog()])
 
 
 @router.get("/me", response_model=MeResponse)

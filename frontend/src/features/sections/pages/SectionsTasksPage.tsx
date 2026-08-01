@@ -4,6 +4,7 @@ import { useLocation, useNavigate, useParams, useSearchParams } from "react-rout
 
 
 import { apiClient, getErrorMessage } from "@/shared/api/client";
+import type { UserRole } from "@/features/auth/api";
 import { listSections } from "@/shared/api/sections";
 import {
   bulkCompleteTasks,
@@ -43,7 +44,7 @@ type MeResponse = {
   id: number;
   email: string;
   full_name: string;
-  role: "admin" | "planner" | "section_manager" | "operator" | "viewer";
+  role: UserRole;
   section_id: number | null;
   is_active: boolean;
 };

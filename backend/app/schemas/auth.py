@@ -55,3 +55,13 @@ class ProfileUpdateResponse(BaseModel):
     email: str | None = None
     locale: str | None = None
     theme: str | None = None
+
+
+class RoleSections(BaseModel):
+    code: UserRole
+    label: str
+    sections: list[str]
+
+
+class RolesResponse(BaseModel):
+    roles: list[RoleSections]

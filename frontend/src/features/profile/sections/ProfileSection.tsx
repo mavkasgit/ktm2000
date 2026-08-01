@@ -1,7 +1,7 @@
 import React, { useRef, useEffect } from "react"
 import { Copy, CheckCircle2, Loader2 } from "lucide-react"
 import type { User } from "@/features/auth/api"
-import { ROLE_LABELS } from "../lib/roleLabels"
+import { useRoleLabel } from "../lib/roleLabels"
 import { Button } from "@/shared/ui/Button"
 import { Input } from "@/shared/ui/Input"
 
@@ -36,6 +36,7 @@ export function ProfileSection({
 }: ProfileSectionProps) {
   const [copied, setCopied] = React.useState(false)
   const copyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const roleLabel = useRoleLabel(user.role)
 
   useEffect(() => {
     return () => {
@@ -91,7 +92,7 @@ export function ProfileSection({
           <div className="space-y-1.5 flex flex-col justify-center">
             <span className="text-xs font-semibold text-muted-foreground">Роль MES (локальная)</span>
             <div className="text-sm font-medium mt-1">
-              {ROLE_LABELS[user.role] || user.role}
+              {roleLabel || user.role}
             </div>
           </div>
         </div>

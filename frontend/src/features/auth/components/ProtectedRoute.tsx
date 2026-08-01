@@ -6,15 +6,6 @@ import { toast } from "@/shared/ui"
 import type { UserRole } from "../api"
 import type { ReactNode } from "react"
 
-const ROLE_LABELS: Record<UserRole, string> = {
-  admin: "Администратор",
-  planner: "Планировщик",
-  section_manager: "Начальник участка",
-  operator: "Оператор",
-  viewer: "Наблюдатель",
-  transporter: "Транспортировщик",
-}
-
 interface ProtectedRouteProps {
   children: ReactNode
   /** Если указано — доступ разрешён только для перечисленных ролей */
@@ -28,16 +19,16 @@ interface ProtectedRouteProps {
  * - Если роль не разрешена — перенаправляет на главную и показывает уведомление.
  */
 export function ProtectedRoute({ children, allowedRoles }: ProtectedRouteProps) {
-  const { user, isAuthenticated, isLoading } = useAuth()
+  const { user, isAuthenticated, isLoading, roleLabel } = useAuth()
 
   const hasAccess = !allowedRoles || (!!user && allowedRoles.includes(user.role))
 
   useEffect(() => {
     if (isAuthenticated && !isLoading && !hasAccess && user) {
       const allowedNames = allowedRoles
-        ? allowedRoles.map((r) => ROLE_LABELS[r]).join(", ")
+        ? allowedRoles.map((r) => roleLabel(r)).join(", ")
         : ""
-      
+
       toast({
         variant: "destructive",
         title: "Доступ ограничен",
@@ -46,7 +37,7 @@ export function ProtectedRoute({ children, allowedRoles }: ProtectedRouteProps) 
           : "У вашей роли нет доступа к этой странице.",
       })
     }
-  }, [isAuthenticated, isLoading, hasAccess, user, allowedRoles])
+  }, [isAuthenticated, isLoading, hasAccess, user, allowedRoles, roleLabel])
 
   if (isLoading) {
     return (
