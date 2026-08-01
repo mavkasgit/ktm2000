@@ -6,7 +6,7 @@ import pytest
 
 from app.services.color_extraction import extract_color_from_text, resolve_payload_color
 from app.services.route_name_builder import build_route_name
-from app.models.route import RouteRuleProfile
+from app.services.route_builder import _assemble_name_values
 
 
 @pytest.mark.parametrize(
@@ -51,16 +51,7 @@ def test_resolve_payload_color_composite_last_segment_extracted() -> None:
 
 
 def test_dynamic_route_name_for_anodtitan_contains_titan() -> None:
-    profile = RouteRuleProfile(
-        code="packaging_map_rp",
-        name="Упаковочная карта РП",
-        route_name_pattern="{output_kind} - {press_op} - {drill_op} - {shot_op} - {color} - {pack_op}",
-    )
-    resolved_ops = {
-        ("PRESSING", "PRESS"): "PRESS_WINDOW",
-        ("ANODIZING", "ANOD"): "ANOD_08",
-        ("ANODIZING", "PACK"): "PACK_STRETCH",
-    }
+    pattern = "{output_kind} - {press_op} - {drill_op} - {shot_op} - {color} - {pack_op}"
     resolved_names = {
         ("PRESSING", "PRESS"): "Окно",
         ("ANODIZING", "ANOD"): "Титан",
@@ -77,14 +68,10 @@ def test_dynamic_route_name_for_anodtitan_contains_titan() -> None:
         "FINISHED_STOCK",
     ]
 
-    route_name = build_route_name(
-        profile,
-        included_sections,
-        set(),
-        resolved_ops,
-        resolved_names,
-        {"output_kind": "ГП"},
+    values = _assemble_name_values(
+        resolved_names, included_sections, {"output_kind": "ГП"},
     )
+    route_name = build_route_name(pattern, values)
 
     assert "Титан" in route_name
     assert "Медь" not in route_name

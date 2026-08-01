@@ -255,10 +255,14 @@ async def build_route_from_profile(
     # Resolve operation names from SectionOperation reference
     resolved_names = await _resolve_operation_names(db, resolved_ops, filtered_section_codes)
 
-    # Generate descriptive name from profile template
-    route_name = build_route_name(
-        profile, filtered_section_codes, excluded_codes, resolved_ops, resolved_names, source_payload,
+    # Assemble template values from resolved names and payload
+    name_values = _assemble_name_values(
+        resolved_names, filtered_section_codes, source_payload,
     )
+
+    # Generate descriptive name from profile template
+    pattern = profile.route_name_pattern or "{output_kind} - {operations}"
+    route_name = build_route_name(pattern, name_values, fallback="Универсальный")
 
     return BuiltRoute(
         route_sections=route_section_codes,
@@ -464,6 +468,47 @@ async def _resolve_operation_names(
         result[(section_code, group_code)] = name_by_code.get(op_code, "")
 
     return result
+
+
+# Mapping from template variable to (section_code, group_code) in resolved_names.
+# This is the only place that knows which operations feed which name slots.
+_NAME_VAR_MAPPING: dict[str, tuple[str, str]] = {
+    "press_op": ("PRESSING", "PRESS"),
+    "drill_op": ("DRILLING", "DRILLING"),
+    "color": ("ANODIZING", "ANOD"),
+    "pack_op": ("ANODIZING", "PACK"),
+}
+
+
+def _assemble_name_values(
+    resolved_names: dict[tuple[str, str], str],
+    included_sections: list[str],
+    payload: dict | None,
+) -> dict[str, str]:
+    """Assemble template variables for route name from resolved names and payload.
+
+    Payload fields (output_kind, shot_op) are set by resolve_signatures rules.
+    Operation display names come from resolved_names via _NAME_VAR_MAPPING.
+    """
+    payload = payload or {}
+    values: dict[str, str] = {}
+
+    # Payload-driven values (set by resolve_signatures seed rules)
+    values["output_kind"] = payload.get("output_kind") or ""
+    values["shot_op"] = payload.get("shot_op") or ""
+
+    # Operation names from resolved_names, gated by section inclusion
+    for var_name, (section_code, group_code) in _NAME_VAR_MAPPING.items():
+        if section_code in included_sections:
+            values[var_name] = resolved_names.get((section_code, group_code), "")
+        else:
+            values[var_name] = ""
+
+    # Composite "operations" for default pattern
+    ops_parts = [v for k, v in values.items() if k in ("press_op", "drill_op", "color") and v]
+    values["operations"] = " - ".join(ops_parts)
+
+    return values
 
 
 async def build_route_steps_for_release(
