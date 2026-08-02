@@ -10,6 +10,7 @@
 
 import type { SectionBoardTask, TaskGroup } from "@/shared/api/shopfloor";
 import type { GroupingCriterion, GroupingProfile } from "./groupingProfiles";
+import { colorNameLabels, operationCodeLabels } from "@/shared/lib/generated-labels";
 
 
 // ---------------------------------------------------------------------------
@@ -99,26 +100,13 @@ function buildGroupLabel(
 
       case "operationCode":
         if (task.operation_code) {
-          const opLabels: Record<string, string> = {
-            press_window: "окно",
-            press_comb:   "гребенка",
-            anodize:      "анодирование",
-            cut:          "порезка",
-          };
-          parts.push(opLabels[task.operation_code] ?? task.operation_code);
+          parts.push(operationCodeLabels[task.operation_code] ?? task.operation_code);
         }
         break;
 
       case "outputKind":
         if (task.output_kind) {
-          const kindLabels: Record<string, string> = {
-            silver:    "серебро",
-            black:     "чёрный",
-            bronze:    "бронза",
-            champagne: "шампань",
-            natural:   "натуральный",
-          };
-          parts.push(kindLabels[task.output_kind] ?? task.output_kind);
+          parts.push(colorNameLabels[task.output_kind] ?? task.output_kind);
         }
         break;
 

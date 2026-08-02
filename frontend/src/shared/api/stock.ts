@@ -1,4 +1,5 @@
 import { apiClient } from "./client";
+import { qualityStateLabels, stockReasonLabels } from "@/shared/lib/generated-labels";
 
 export type QualityState = "GOOD" | "SCRAP" | "REWORK" | "FINAL_SCRAP";
 
@@ -24,19 +25,8 @@ export type StockBalanceEntry = {
   refreshed_at: string | null;
 };
 
-const QUALITY_STATE_LABELS: Record<string, string> = {
-  GOOD: "Годный",
-  good: "Годный",
-  SCRAP: "Брак",
-  scrap: "Брак",
-  FINAL_SCRAP: "Окончательный брак",
-  final_scrap: "Окончательный брак",
-  REWORK: "Переделка",
-  rework: "Переделка",
-};
-
 export function formatQualityStateLabel(state: string): string {
-  return QUALITY_STATE_LABELS[state] ?? state;
+  return qualityStateLabels[state] ?? state;
 }
 
 export function formatBalanceQtyInteger(qty: string | number): string {
@@ -90,35 +80,6 @@ export type StockReason =
 /** source_ref транзакций импорта остатков из Excel/буфера */
 export const IMPORT_REMAINDERS_SOURCE_REF = "import_remainders_excel";
 
-const STOCK_REASON_LABELS: Record<string, string> = {
-  ISSUE_TO_WORK: "Выдача в работу",
-  issue_to_work: "Выдача в работу",
-  COMPLETE: "Завершено",
-  complete: "Завершено",
-  TRANSFER_SEND: "Передача отправлено",
-  transfer_send: "Передача отправлено",
-  TRANSFER_RECEIVE: "Передача получено",
-  transfer_receive: "Передача получено",
-  RETURN_TO_STOCK: "Возврат на склад",
-  return_to_stock: "Возврат на склад",
-  RETURN_TO_PREVIOUS: "Возврат на предыдущий участок",
-  return_to_previous: "Возврат на предыдущий участок",
-  FINAL_RELEASE: "Финальный выпуск",
-  final_release: "Финальный выпуск",
-  SCRAP: "Списание в брак",
-  scrap: "Списание в брак",
-  REWORK: "Переделка",
-  rework: "Переделка",
-  ADJUSTMENT_IN: "Корректировка +",
-  adjustment_in: "Корректировка +",
-  ADJUSTMENT_OUT: "Корректировка −",
-  adjustment_out: "Корректировка −",
-  MANUAL_IN: "Ручной приход",
-  manual_in: "Ручной приход",
-  MANUAL_OUT: "Ручной расход",
-  manual_out: "Ручной расход",
-};
-
 /** Человекочитаемая причина движения; импорт остатков выделяется отдельно. */
 export function formatStockReasonLabel(
   reason: string,
@@ -127,7 +88,7 @@ export function formatStockReasonLabel(
   if (sourceRef === IMPORT_REMAINDERS_SOURCE_REF) {
     return "Импорт остатков";
   }
-  return STOCK_REASON_LABELS[reason] ?? STOCK_REASON_LABELS[reason.toLowerCase()] ?? reason;
+  return stockReasonLabels[reason] ?? stockReasonLabels[reason.toLowerCase()] ?? reason;
 }
 
 /** Бэкенд принимает lowercase enum values: manual_in, transfer_send, … */

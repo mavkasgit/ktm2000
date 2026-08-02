@@ -22,6 +22,7 @@ import type { EntityDialogField } from "@/shared/ui/EntityDialog";
 import type { OperationGroup, SectionOperationInfo } from "shared/api/sections";
 import { listSectionsPaginated } from "shared/api/sections";
 import { queryKeys } from "@/shared/api/queryKeys";
+import { sectionTypeLabels } from "@/shared/lib/generated-labels";
 
 type Section = {
   id?: string | number;
@@ -43,14 +44,6 @@ type Group = {
   spgIconColor: string | null;
   stocks: Section[];
   productions: Section[];
-};
-
-const TYPE_LABELS: Record<string, string> = {
-  production: "Производство",
-  raw_stock: "Склад сырья",
-  wip_stock: "Склад полуфабриката",
-  finished_stock: "Склад готовой продукции",
-  scrap: "Брак",
 };
 
 const TYPE_OPTIONS = [
@@ -652,7 +645,7 @@ export function SectionsPage() {
         toast({ title: "Сохранено", description: `Участок "${payload.name}" (код: ${payload.code}, ID: ${editingItem.id}) успешно обновлён`, variant: "success" });
       } else {
         await apiCreateSection(payload);
-        toast({ title: "Создано", description: `Участок "${payload.name}" (код: ${payload.code}, тип: ${TYPE_LABELS[payload.type] ?? payload.type}) успешно создан`, variant: "success" });
+        toast({ title: "Создано", description: `Участок "${payload.name}" (код: ${payload.code}, тип: ${sectionTypeLabels[payload.type] ?? payload.type}) успешно создан`, variant: "success" });
       }
       setDialogOpen(false);
       await load();
@@ -667,7 +660,7 @@ export function SectionsPage() {
     if (!editingItem?.id) return;
     try {
       await apiDeleteSection(Number(editingItem.id));
-      toast({ title: "Удалено", description: `Участок "${editingItem.name}" (код: ${editingItem.code}, ID: ${editingItem.id}, тип: ${TYPE_LABELS[editingItem.type ?? "production"] ?? editingItem.type}) успешно удалён`, variant: "success" });
+      toast({ title: "Удалено", description: `Участок "${editingItem.name}" (код: ${editingItem.code}, ID: ${editingItem.id}, тип: ${sectionTypeLabels[editingItem.type ?? "production"] ?? editingItem.type}) успешно удалён`, variant: "success" });
       setDialogOpen(false);
       await load();
       invalidateRelatedCaches();
@@ -908,7 +901,7 @@ export function SectionsPage() {
                   <td className="py-1.5 px-2 text-xs truncate cursor-pointer" style={{ minWidth: "112px", maxWidth: "240px", width: "25%" }} title={item.spg_links?.map(g => g.name).join(", ") || "—"} onClick={() => openEdit(item)}>
                     {item.spg_links?.map(g => g.name).join(", ") || "—"}
                   </td>
-                  <td className="py-1.5 px-2 text-xs truncate cursor-pointer" style={{ width: "104px", minWidth: "104px" }} title={TYPE_LABELS[item.type ?? "production"] ?? item.type ?? "-"} onClick={() => openEdit(item)}>{TYPE_LABELS[item.type ?? "production"] ?? item.type ?? "-"}</td>
+                  <td className="py-1.5 px-2 text-xs truncate cursor-pointer" style={{ width: "104px", minWidth: "104px" }} title={sectionTypeLabels[item.type ?? "production"] ?? item.type ?? "-"} onClick={() => openEdit(item)}>{sectionTypeLabels[item.type ?? "production"] ?? item.type ?? "-"}</td>
                   <td className="py-1.5 px-2 text-xs truncate cursor-pointer" style={{ minWidth: "96px", maxWidth: "280px", width: "25%" }} title={item.description ?? "-"} onClick={() => openEdit(item)}>{item.description ?? "-"}</td>
                   {!isStock && (
                     <td className="py-1.5 px-2 text-xs text-center">

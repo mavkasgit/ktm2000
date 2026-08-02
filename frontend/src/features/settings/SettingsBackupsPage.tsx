@@ -47,6 +47,7 @@ import type { BackupPreview } from "@/entities/backup/types"
 import { toast } from "@/shared/ui/use-toast"
 import { getErrorMessage } from "@/shared/api/client"
 import { usePermission } from "@/features/auth/hooks/usePermission"
+import { backupStageLabels, backupStorageLabels, backupTypeLabels } from "@/shared/lib/generated-labels"
 
 function formatBytes(bytes: number): string {
   if (bytes === 0) return "0 B"
@@ -62,11 +63,7 @@ function formatDate(iso: string): string {
 }
 
 function storageLabel(name: string): string {
-  const labels: Record<string, string> = {
-    imports: "Импорт",
-    products: "Продукты",
-  }
-  return labels[name] || name
+  return backupStorageLabels[name] || name
 }
 
 type BackupSortField = "filename" | "db_name" | "backup_type" | "size" | "created_at" | "comment"
@@ -114,19 +111,7 @@ function buildBackupsQueryParams(
 }
 
 function backupStageLabel(stage: string): string {
-  const labels: Record<string, string> = {
-    queued: "Очередь",
-    preparing: "Подготовка",
-    dumping_database: "База данных",
-    analyzing: "Анализ",
-    writing_dump: "Архив",
-    adding_files: "Файлы",
-    exporting_tables: "CSV-экспорт",
-    writing_manifest: "Manifest",
-    completed: "Готово",
-    failed: "Ошибка",
-  }
-  return labels[stage] || stage
+  return backupStageLabels[stage] || stage
 }
 
 const headerCellClass = `${DATA_TABLE_STYLES.headerRow} ${DATA_TABLE_STYLES.headerCell}`
@@ -800,15 +785,7 @@ export function BackupsPage() {
                   onSortChange={handleSort}
                   values={uniqueValues.backup_type}
                   {...bindColumn("backup_type")}
-                  valueLabel={(val) => {
-                    const labels: Record<string, string> = {
-                      monthly: "Ежемесячный",
-                      weekly: "Еженедельный",
-                      daily: "Ежедневный",
-                      manual: "Вручную",
-                    }
-                    return labels[val] || val
-                  }}
+                  valueLabel={(val) => backupTypeLabels[val] || val}
                 />
               </th>
               <th className={`${headerCellClass} p-0`}>

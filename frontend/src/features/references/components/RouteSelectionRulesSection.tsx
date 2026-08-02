@@ -16,6 +16,12 @@ import { SectionSelect } from "@/shared/ui/SectionSelect";
 import { Table, TableBody, TableCell, TableContainer, TableHead, TableHeader, TableRow } from "@/shared/ui/Table";
 import { toast } from "@/shared/ui/use-toast";
 import { usePermission } from "@/features/auth/hooks/usePermission";
+import {
+  actionLabels,
+  ruleOperatorLabels,
+  rulePhaseLabels,
+  ruleSourceLabels,
+} from "@/shared/lib/generated-labels";
 
 type Props = {
   refreshKey: number;
@@ -24,12 +30,6 @@ type Props = {
 type RuleScope = "global" | "profile";
 type RuleSource = RoutesAPI.RouteSelectionCondition["source"];
 type RulePhase = "normalize" | "route_select" | "resolve_operations";
-
-const phaseLabels: Record<RulePhase, string> = {
-  normalize: "Нормализация",
-  route_select: "Выбор маршрута",
-  resolve_operations: "Резолв операций",
-};
 
 type FieldOption = {
   field_path: string;
@@ -52,35 +52,6 @@ type ProfileFormState = {
   import_template_id: number | null;
   excel_column_passport: ExcelColumnSpec[];
   excel_passport_meta: Record<string, unknown>;
-};
-
-const sourceLabels: Record<RuleSource, string> = {
-  excel: "Колонки Excel",
-  payload: "Нормализованные поля",
-  product: "Поля продукта",
-  ctx: "Контекст",
-};
-
-const operatorLabels: Record<RoutesAPI.RouteSelectionCondition["operator"], string> = {
-  equals: "равно",
-  not_equals: "не равно",
-  contains: "содержит",
-  not_contains: "не содержит",
-  in: "в списке",
-  not_in: "не в списке",
-  empty: "пусто",
-  not_empty: "не пусто",
-  regex: "regex",
-};
-
-const actionLabels: Record<RoutesAPI.RouteSelectionAction["action"], string> = {
-  require_section: "Добавить",
-  exclude_section: "Исключить",
-  set: "Установить (set)",
-  add: "Добавить в список (add)",
-  remove: "Удалить из списка (remove)",
-  set_operation: "Установить операцию",
-  resolve_by_type: "Резолв по типу",
 };
 
 const isDslAction = (action: string): boolean => action === "set" || action === "add" || action === "remove";
@@ -408,7 +379,7 @@ function ConditionRow({
           <SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger>
           <SelectContent>
             {sourceOptionsForCondition(condition).map((value) => (
-              <SelectItem key={value} value={value}>{sourceLabels[value]}</SelectItem>
+              <SelectItem key={value} value={value}>{ruleSourceLabels[value]}</SelectItem>
             ))}
           </SelectContent>
         </Select>
@@ -494,8 +465,8 @@ function ConditionRow({
         >
           <SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger>
           <SelectContent>
-            {(Object.keys(operatorLabels) as RoutesAPI.RouteSelectionCondition["operator"][]).map((value) => (
-              <SelectItem key={value} value={value}>{operatorLabels[value]}</SelectItem>
+            {(Object.keys(ruleOperatorLabels) as RoutesAPI.RouteSelectionCondition["operator"][]).map((value) => (
+              <SelectItem key={value} value={value}>{ruleOperatorLabels[value]}</SelectItem>
             ))}
           </SelectContent>
         </Select>
@@ -1051,7 +1022,7 @@ export function RouteSelectionRulesSection({ refreshKey }: Props) {
   };
 
   const sourceOptionsForCondition = (condition: RoutesAPI.RouteSelectionCondition): RuleSource[] => {
-    const base = (Object.keys(sourceLabels) as RuleSource[]).filter((source) => source !== "excel" || scope === "profile");
+    const base = (Object.keys(ruleSourceLabels) as RuleSource[]).filter((source) => source !== "excel" || scope === "profile");
     if (condition.source === "excel" && !base.includes("excel")) {
       return [...base, "excel"];
     }
@@ -1146,7 +1117,7 @@ export function RouteSelectionRulesSection({ refreshKey }: Props) {
                     <div className="font-medium">{rule.name}</div>
                     <div className="flex items-center gap-1 mt-1">
                       <Badge variant={rule.phase === "normalize" ? "secondary" : "default"} className="text-[10px] px-1 py-0">
-                        {phaseLabels[rule.phase]}
+                        {rulePhaseLabels[rule.phase]}
                       </Badge>
                       {rule.code && <span className="text-xs text-muted-foreground">{rule.code}</span>}
                     </div>
@@ -1210,8 +1181,8 @@ export function RouteSelectionRulesSection({ refreshKey }: Props) {
                 <Select value={form.phase ?? "route_select"} onValueChange={(value) => setForm((current) => ({ ...current, phase: value as RulePhase }))} disabled={isReadOnly}>
                   <SelectTrigger className="h-9"><SelectValue /></SelectTrigger>
                   <SelectContent>
-                    {(Object.keys(phaseLabels) as RulePhase[]).map((phase) => (
-                      <SelectItem key={phase} value={phase}>{phaseLabels[phase]}</SelectItem>
+                    {(Object.keys(rulePhaseLabels) as RulePhase[]).map((phase) => (
+                      <SelectItem key={phase} value={phase}>{rulePhaseLabels[phase]}</SelectItem>
                     ))}
                   </SelectContent>
                 </Select>
@@ -1353,9 +1324,11 @@ export function RouteSelectionRulesSection({ refreshKey }: Props) {
                                   <SelectValue />
                                 </SelectTrigger>
                                 <SelectContent>
-                                  {(Object.keys(actionLabels) as RoutesAPI.RouteSelectionAction["action"][]).map((value) => (
-                                    <SelectItem key={value} value={value}>{actionLabels[value]}</SelectItem>
-                                  ))}
+                                  {(Object.keys(actionLabels) as RoutesAPI.RouteSelectionAction["action"][])
+                                    .filter((value) => isDslAction(value) || isSectionAction(value) || isGroupAction(value))
+                                    .map((value) => (
+                                      <SelectItem key={value} value={value}>{actionLabels[value]}</SelectItem>
+                                    ))}
                                 </SelectContent>
                               </Select>
                             </td>
