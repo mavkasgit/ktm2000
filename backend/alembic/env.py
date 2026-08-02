@@ -2,9 +2,10 @@ from logging.config import fileConfig
 from asyncio import run
 import os
 
-from sqlalchemy import pool
+from sqlalchemy import Column, MetaData, PrimaryKeyConstraint, String, Table, pool
 from sqlalchemy.ext.asyncio import async_engine_from_config
 from alembic import context
+from alembic.ddl.postgresql import PostgresqlImpl
 
 from app.models.base import Base
 import app.models  # noqa: F401
@@ -25,6 +26,39 @@ def include_object(object, name, type_, reflected, compare_to):
     if type_ == "table" and name == "alembic_version":
         return False
     return True
+
+
+class WideVersionTablePostgresqlImpl(PostgresqlImpl):
+    """Widen alembic_version.version_num to varchar(64).
+
+    Alembic creates the version column with String(32) by default
+    (alembic.ddl.impl.DefaultImpl.version_table_impl). Long descriptive
+    revision ids (e.g. "026_stock_reason_transform_consume", 34 chars) exceed
+    that limit and break `alembic upgrade` on fresh databases. Override the
+    hook so the version table is created with room for longer ids.
+    """
+
+    __dialect__ = "postgresql"
+
+    def version_table_impl(
+        self,
+        *,
+        version_table: str,
+        version_table_schema: str | None,
+        version_table_pk: bool,
+        **kw: object,
+    ) -> Table:
+        vt = Table(
+            version_table,
+            MetaData(),
+            Column("version_num", String(64), nullable=False),
+            schema=version_table_schema,
+        )
+        if version_table_pk:
+            vt.append_constraint(
+                PrimaryKeyConstraint("version_num", name=f"{version_table}_pkc")
+            )
+        return vt
 
 
 def run_migrations_offline() -> None:
