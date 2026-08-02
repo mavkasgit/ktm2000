@@ -28,8 +28,26 @@ class LabelsCanon(BaseModel):
     error_messages: dict[str, str] = Field(default_factory=dict)
     status_labels: dict[str, str] = Field(default_factory=dict)
     output_kind_labels: dict[str, str] = Field(default_factory=dict)
+    warning_labels: dict[str, str] = Field(default_factory=dict)
+    validation_labels: dict[str, str] = Field(default_factory=dict)
+    task_status_labels: dict[str, str] = Field(default_factory=dict)
+    stage_status_labels: dict[str, str] = Field(default_factory=dict)
+    bulk_status_labels: dict[str, str] = Field(default_factory=dict)
+    action_labels: dict[str, str] = Field(default_factory=dict)
+    error_phrase_translations: dict[str, str] = Field(default_factory=dict)
 
-    @field_validator("error_messages", "status_labels", "output_kind_labels")
+    @field_validator(
+        "error_messages",
+        "status_labels",
+        "output_kind_labels",
+        "warning_labels",
+        "validation_labels",
+        "task_status_labels",
+        "stage_status_labels",
+        "bulk_status_labels",
+        "action_labels",
+        "error_phrase_translations",
+    )
     @classmethod
     def _keys_non_empty(cls, v: dict[str, str]) -> dict[str, str]:
         for key in v:

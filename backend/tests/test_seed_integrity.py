@@ -423,3 +423,33 @@ class TestDisplayCanonIntegrity:
         assert len(codes) == len(set(codes))
         valid = {role.value for role in UserRole}
         assert set(codes) <= valid
+
+    def test_label_categories_populated(self) -> None:
+        """Все категории лейблов заполнены (тикет #26, расширение)."""
+        labels = build_plant_config().display.labels
+        assert labels.warning_labels
+        assert labels.validation_labels
+        assert labels.task_status_labels
+        assert labels.stage_status_labels
+        assert labels.bulk_status_labels
+        assert labels.action_labels
+        assert labels.error_phrase_translations
+
+    def test_error_phrase_translations_non_empty_values(self) -> None:
+        """Значения переводов серверных ошибок не пустые."""
+        labels = build_plant_config().display.labels
+        for key, value in labels.error_phrase_translations.items():
+            assert key.strip(), "translation key must not be blank"
+            assert value.strip(), f"translation for {key!r} must not be blank"
+
+    def test_error_phrase_translations_cover_known_templates(self) -> None:
+        """Плейсхолдеры {0}/{1} согласованы в ключе и значении."""
+        import re
+
+        labels = build_plant_config().display.labels
+        for key, value in labels.error_phrase_translations.items():
+            key_count = len(re.findall(r"\{(\d+)\}", key))
+            value_count = len(re.findall(r"\{(\d+)\}", value))
+            assert key_count == value_count, (
+                f"Placeholder mismatch for {key!r}: key={key_count} value={value_count}"
+            )

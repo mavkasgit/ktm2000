@@ -12,6 +12,7 @@ Usage:
 
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 
@@ -40,7 +41,7 @@ def _ts_dict(name: str, data: dict[str, str]) -> str:
 
 
 def _quote(value: str) -> str:
-    return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
+    return json.dumps(value, ensure_ascii=False)
 
 
 def _render(config) -> str:
@@ -56,6 +57,27 @@ def _render(config) -> str:
         "",
         "// Тексты ошибок валидации (ключи — error codes сервера)",
         _ts_dict("errorLabels", labels.error_messages),
+        "",
+        "// Лейблы предупреждений (warning codes)",
+        _ts_dict("warningLabels", labels.warning_labels),
+        "",
+        "// Лейблы статуса валидации позиции",
+        _ts_dict("validationLabels", labels.validation_labels),
+        "",
+        "// Лейблы статусов задач участка",
+        _ts_dict("taskStatusLabels", labels.task_status_labels),
+        "",
+        "// Лейблы статусов этапов выполнения",
+        _ts_dict("stageStatusLabels", labels.stage_status_labels),
+        "",
+        "// Лейблы статусов bulk-операций",
+        _ts_dict("bulkStatusLabels", labels.bulk_status_labels),
+        "",
+        "// Лейблы действий изменения плана",
+        _ts_dict("actionLabels", labels.action_labels),
+        "",
+        "// Переводы серверных ошибок (англ. фразы с плейсхолдерами {0}, {1}, ...) → RU",
+        _ts_dict("errorPhraseTranslations", labels.error_phrase_translations),
         "",
         "// Каталог ролей: code -> (label, sections)",
         "export interface RoleDef { code: string; label: string; sections: string[] }",

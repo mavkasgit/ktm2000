@@ -107,9 +107,16 @@ def _build_display_canon(
 ) -> DisplayCanon:
     """Собирает DisplayCanon (лейблы, роли) и проверяет cross-ref правила 2, 3, 6."""
     from app.seeds.canon.display_data import (
+        ACTION_LABELS,
+        BULK_STATUS_LABELS,
+        ERROR_PHRASE_TRANSLATIONS,
         OUTPUT_KIND_LABELS,
         ROLE_DEFS,
+        STAGE_STATUS_LABELS,
         STATUS_LABELS,
+        TASK_STATUS_LABELS,
+        VALIDATION_LABELS,
+        WARNING_LABELS,
     )
     from app.models.user import UserRole
 
@@ -128,6 +135,13 @@ def _build_display_canon(
             error_messages=dict(error_messages),
             status_labels=dict(STATUS_LABELS),
             output_kind_labels=dict(OUTPUT_KIND_LABELS),
+            warning_labels=dict(WARNING_LABELS),
+            validation_labels=dict(VALIDATION_LABELS),
+            task_status_labels=dict(TASK_STATUS_LABELS),
+            stage_status_labels=dict(STAGE_STATUS_LABELS),
+            bulk_status_labels=dict(BULK_STATUS_LABELS),
+            action_labels=dict(ACTION_LABELS),
+            error_phrase_translations=dict(ERROR_PHRASE_TRANSLATIONS),
         ),
         roles=RolesCanon(roles=ROLE_DEFS),
     )
