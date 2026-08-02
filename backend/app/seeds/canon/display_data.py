@@ -87,6 +87,127 @@ ACTION_LABELS = {
     "ignore_unchanged": "Без изменений",
     "cancel_draft_position": "Отменить",
     "mark_possible_duplicate": "Возможный дубль",
+    "require_section": "Добавить",
+    "exclude_section": "Исключить",
+    "set": "Установить (set)",
+    "add": "Добавить в список (add)",
+    "remove": "Удалить из списка (remove)",
+    "set_operation": "Установить операцию",
+    "resolve_by_type": "Резолв по типу",
+}
+
+QUALITY_STATE_LABELS = {
+    "GOOD": "Годный",
+    "good": "Годный",
+    "SCRAP": "Брак",
+    "scrap": "Брак",
+    "FINAL_SCRAP": "Окончательный брак",
+    "final_scrap": "Окончательный брак",
+    "REWORK": "Переделка",
+    "rework": "Переделка",
+}
+
+STOCK_REASON_LABELS = {
+    "ISSUE_TO_WORK": "Выдача в работу",
+    "issue_to_work": "Выдача в работу",
+    "COMPLETE": "Завершено",
+    "complete": "Завершено",
+    "TRANSFER_SEND": "Передача отправлено",
+    "transfer_send": "Передача отправлено",
+    "TRANSFER_RECEIVE": "Передача получено",
+    "transfer_receive": "Передача получено",
+    "RETURN_TO_STOCK": "Возврат на склад",
+    "return_to_stock": "Возврат на склад",
+    "RETURN_TO_PREVIOUS": "Возврат на предыдущий участок",
+    "return_to_previous": "Возврат на предыдущий участок",
+    "FINAL_RELEASE": "Финальный выпуск",
+    "final_release": "Финальный выпуск",
+    "SCRAP": "Списание в брак",
+    "scrap": "Списание в брак",
+    "REWORK": "Переделка",
+    "rework": "Переделка",
+    "ADJUSTMENT_IN": "Корректировка +",
+    "adjustment_in": "Корректировка +",
+    "ADJUSTMENT_OUT": "Корректировка −",
+    "adjustment_out": "Корректировка −",
+    "MANUAL_IN": "Ручной приход",
+    "manual_in": "Ручной приход",
+    "MANUAL_OUT": "Ручной расход",
+    "manual_out": "Ручной расход",
+}
+
+SECTION_TYPE_LABELS = {
+    "production": "Производство",
+    "raw_stock": "Склад сырья",
+    "wip_stock": "Склад полуфабриката",
+    "finished_stock": "Склад готовой продукции",
+    "scrap": "Брак",
+}
+
+RULE_PHASE_LABELS = {
+    "normalize": "Нормализация",
+    "route_select": "Выбор маршрута",
+    "resolve_operations": "Резолв операций",
+    "resolve_signatures": "Резолв сигнатур",
+}
+
+RULE_SOURCE_LABELS = {
+    "excel": "Колонки Excel",
+    "payload": "Нормализованные поля",
+    "product": "Поля продукта",
+    "ctx": "Контекст",
+}
+
+RULE_OPERATOR_LABELS = {
+    "equals": "равно",
+    "not_equals": "не равно",
+    "contains": "содержит",
+    "not_contains": "не содержит",
+    "in": "в списке",
+    "not_in": "не в списке",
+    "empty": "пусто",
+    "not_empty": "не пусто",
+    "regex": "regex",
+}
+
+OPERATION_CODE_LABELS = {
+    "press_window": "окно",
+    "press_comb": "гребенка",
+    "anodize": "анодирование",
+    "cut": "порезка",
+}
+
+COLOR_NAME_LABELS = {
+    "silver": "серебро",
+    "black": "чёрный",
+    "bronze": "бронза",
+    "champagne": "шампань",
+    "natural": "натуральный",
+}
+
+BACKUP_STORAGE_LABELS = {
+    "imports": "Импорт",
+    "products": "Продукты",
+}
+
+BACKUP_STAGE_LABELS = {
+    "queued": "Очередь",
+    "preparing": "Подготовка",
+    "dumping_database": "База данных",
+    "analyzing": "Анализ",
+    "writing_dump": "Архив",
+    "adding_files": "Файлы",
+    "exporting_tables": "CSV-экспорт",
+    "writing_manifest": "Manifest",
+    "completed": "Готово",
+    "failed": "Ошибка",
+}
+
+BACKUP_TYPE_LABELS = {
+    "monthly": "Ежемесячный",
+    "weekly": "Еженедельный",
+    "daily": "Ежедневный",
+    "manual": "Вручную",
 }
 
 # Переводы серверных ошибок (англ. фразы с плейсхолдерами {0}, {1}, ...) → RU.

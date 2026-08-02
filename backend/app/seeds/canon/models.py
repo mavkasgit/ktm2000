@@ -6,7 +6,7 @@ PlantConfig — корневой объект; доменные суб-моде�
 
 from __future__ import annotations
 
-from typing import Annotated, Literal
+from typing import Annotated, ClassVar, Literal
 
 from app.models.user import UserRole
 from pydantic import BaseModel, Field, field_validator
@@ -35,8 +35,19 @@ class LabelsCanon(BaseModel):
     bulk_status_labels: dict[str, str] = Field(default_factory=dict)
     action_labels: dict[str, str] = Field(default_factory=dict)
     error_phrase_translations: dict[str, str] = Field(default_factory=dict)
+    quality_state_labels: dict[str, str] = Field(default_factory=dict)
+    stock_reason_labels: dict[str, str] = Field(default_factory=dict)
+    section_type_labels: dict[str, str] = Field(default_factory=dict)
+    rule_phase_labels: dict[str, str] = Field(default_factory=dict)
+    rule_source_labels: dict[str, str] = Field(default_factory=dict)
+    rule_operator_labels: dict[str, str] = Field(default_factory=dict)
+    operation_code_labels: dict[str, str] = Field(default_factory=dict)
+    color_name_labels: dict[str, str] = Field(default_factory=dict)
+    backup_storage_labels: dict[str, str] = Field(default_factory=dict)
+    backup_stage_labels: dict[str, str] = Field(default_factory=dict)
+    backup_type_labels: dict[str, str] = Field(default_factory=dict)
 
-    @field_validator(
+    _label_fields: ClassVar[tuple[str, ...]] = (
         "error_messages",
         "status_labels",
         "output_kind_labels",
@@ -47,7 +58,20 @@ class LabelsCanon(BaseModel):
         "bulk_status_labels",
         "action_labels",
         "error_phrase_translations",
+        "quality_state_labels",
+        "stock_reason_labels",
+        "section_type_labels",
+        "rule_phase_labels",
+        "rule_source_labels",
+        "rule_operator_labels",
+        "operation_code_labels",
+        "color_name_labels",
+        "backup_storage_labels",
+        "backup_stage_labels",
+        "backup_type_labels",
     )
+
+    @field_validator(*_label_fields)
     @classmethod
     def _keys_non_empty(cls, v: dict[str, str]) -> dict[str, str]:
         for key in v:

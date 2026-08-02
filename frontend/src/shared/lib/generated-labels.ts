@@ -107,10 +107,17 @@ export const bulkStatusLabels: Record<string, string> = {
 
 // Лейблы действий изменения плана
 export const actionLabels: Record<string, string> = {
+  "add": "Добавить в список (add)",
   "cancel_draft_position": "Отменить",
   "create_position": "Создать",
+  "exclude_section": "Исключить",
   "ignore_unchanged": "Без изменений",
   "mark_possible_duplicate": "Возможный дубль",
+  "remove": "Удалить из списка (remove)",
+  "require_section": "Добавить",
+  "resolve_by_type": "Резолв по типу",
+  "set": "Установить (set)",
+  "set_operation": "Установить операцию",
   "update_draft_position": "Обновить",
 }
 
@@ -322,6 +329,131 @@ export const errorPhraseTranslations: Record<string, string> = {
   "{0} requires section_id": "{0} требует section_id",
   "Буфер обмена пуст": "Буфер обмена пуст",
   "Нет данных для импорта": "Нет данных для импорта",
+}
+
+// Лейблы качества остатков
+export const qualityStateLabels: Record<string, string> = {
+  "FINAL_SCRAP": "Окончательный брак",
+  "GOOD": "Годный",
+  "REWORK": "Переделка",
+  "SCRAP": "Брак",
+  "final_scrap": "Окончательный брак",
+  "good": "Годный",
+  "rework": "Переделка",
+  "scrap": "Брак",
+}
+
+// Лейблы причин движения складских операций
+export const stockReasonLabels: Record<string, string> = {
+  "ADJUSTMENT_IN": "Корректировка +",
+  "ADJUSTMENT_OUT": "Корректировка −",
+  "COMPLETE": "Завершено",
+  "FINAL_RELEASE": "Финальный выпуск",
+  "ISSUE_TO_WORK": "Выдача в работу",
+  "MANUAL_IN": "Ручной приход",
+  "MANUAL_OUT": "Ручной расход",
+  "RETURN_TO_PREVIOUS": "Возврат на предыдущий участок",
+  "RETURN_TO_STOCK": "Возврат на склад",
+  "REWORK": "Переделка",
+  "SCRAP": "Списание в брак",
+  "TRANSFER_RECEIVE": "Передача получено",
+  "TRANSFER_SEND": "Передача отправлено",
+  "adjustment_in": "Корректировка +",
+  "adjustment_out": "Корректировка −",
+  "complete": "Завершено",
+  "final_release": "Финальный выпуск",
+  "issue_to_work": "Выдача в работу",
+  "manual_in": "Ручной приход",
+  "manual_out": "Ручной расход",
+  "return_to_previous": "Возврат на предыдущий участок",
+  "return_to_stock": "Возврат на склад",
+  "rework": "Переделка",
+  "scrap": "Списание в брак",
+  "transfer_receive": "Передача получено",
+  "transfer_send": "Передача отправлено",
+}
+
+// Лейблы типов участков
+export const sectionTypeLabels: Record<string, string> = {
+  "finished_stock": "Склад готовой продукции",
+  "production": "Производство",
+  "raw_stock": "Склад сырья",
+  "scrap": "Брак",
+  "wip_stock": "Склад полуфабриката",
+}
+
+// Лейблы фаз правил выбора маршрута
+export const rulePhaseLabels: Record<string, string> = {
+  "normalize": "Нормализация",
+  "resolve_operations": "Резолв операций",
+  "resolve_signatures": "Резолв сигнатур",
+  "route_select": "Выбор маршрута",
+}
+
+// Лейблы источников условий правил
+export const ruleSourceLabels: Record<string, string> = {
+  "ctx": "Контекст",
+  "excel": "Колонки Excel",
+  "payload": "Нормализованные поля",
+  "product": "Поля продукта",
+}
+
+// Лейблы операторов условий правил
+export const ruleOperatorLabels: Record<string, string> = {
+  "contains": "содержит",
+  "empty": "пусто",
+  "equals": "равно",
+  "in": "в списке",
+  "not_contains": "не содержит",
+  "not_empty": "не пусто",
+  "not_equals": "не равно",
+  "not_in": "не в списке",
+  "regex": "regex",
+}
+
+// Лейблы кодов операций
+export const operationCodeLabels: Record<string, string> = {
+  "anodize": "анодирование",
+  "cut": "порезка",
+  "press_comb": "гребенка",
+  "press_window": "окно",
+}
+
+// Лейблы названий цветов
+export const colorNameLabels: Record<string, string> = {
+  "black": "чёрный",
+  "bronze": "бронза",
+  "champagne": "шампань",
+  "natural": "натуральный",
+  "silver": "серебро",
+}
+
+// Лейблы хранилищ бэкапов
+export const backupStorageLabels: Record<string, string> = {
+  "imports": "Импорт",
+  "products": "Продукты",
+}
+
+// Лейблы стадий бэкапа
+export const backupStageLabels: Record<string, string> = {
+  "adding_files": "Файлы",
+  "analyzing": "Анализ",
+  "completed": "Готово",
+  "dumping_database": "База данных",
+  "exporting_tables": "CSV-экспорт",
+  "failed": "Ошибка",
+  "preparing": "Подготовка",
+  "queued": "Очередь",
+  "writing_dump": "Архив",
+  "writing_manifest": "Manifest",
+}
+
+// Лейблы типов бэкапов
+export const backupTypeLabels: Record<string, string> = {
+  "daily": "Ежедневный",
+  "manual": "Вручную",
+  "monthly": "Ежемесячный",
+  "weekly": "Еженедельный",
 }
 
 // Каталог ролей: code -> (label, sections)
