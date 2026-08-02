@@ -30,6 +30,7 @@ class SeedSummary(BaseModel):
     selection_rules: int
     sections: int
     section_operations: int
+    defect_types: int
 
 
 class SeedPreview(BaseModel):
@@ -40,6 +41,14 @@ class SeedPreview(BaseModel):
     selection_rules: int
     sections: int
     section_operations: int
+    defect_types: int
+
+
+def _defect_types() -> list:
+    """Справочник типов брака из канона (тикет #25)."""
+    from app.seeds.canon.quality_data import DEFECT_TYPES
+
+    return DEFECT_TYPES
 
 
 @router.get("/preview", response_model=SeedPreview)
@@ -68,6 +77,7 @@ async def seed_preview() -> SeedPreview:
         selection_rules=len(SELECTION_RULES),
         sections=len(SECTIONS_DATA),
         section_operations=total_ops,
+        defect_types=len(_defect_types()),
     )
 
 
@@ -89,6 +99,7 @@ async def seed_all(
             selection_rules=result["selection_rules"],
             sections=result["sections"],
             section_operations=result["section_operations"],
+            defect_types=result["defect_types"],
         )
     except RuntimeError as e:
         await db.rollback()

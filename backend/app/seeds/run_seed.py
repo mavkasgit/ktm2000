@@ -7,6 +7,7 @@ from app.seeds.canon.registry import build_plant_config
 from app.seeds.import_templates import IMPORT_TEMPLATES
 from app.seeds.routes import ROUTES
 from app.seeds.seeders.cleanup_seeder import clear_generated_production_data
+from app.seeds.seeders.defect_types_seeder import seed_defect_types
 from app.seeds.seeders.dimension_types_seeder import seed_dimension_types
 from app.seeds.seeders.processing_flags_seeder import seed_processing_flags
 from app.seeds.seeders.import_template_seeder import seed_import_template
@@ -49,6 +50,10 @@ async def run_full_seed(
     # 1.1.1. Processing flags reference catalog (#17)
     flags_map = await seed_processing_flags(db)
     result["processing_flags"] = len(flags_map)
+
+    # 1.1.2. Defect types reference catalog (#25)
+    defect_types_count = await seed_defect_types(db, config.quality.defect_types)
+    result["defect_types"] = defect_types_count
 
     # 1.2. Storage Production Groups (SPG)
     spgs_count = await seed_spgs(db, config.routing.spgs, sections_map)

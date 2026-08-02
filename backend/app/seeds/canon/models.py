@@ -341,13 +341,39 @@ class RoutingCanon(BaseModel):
     spgs: list[SPGDef] = Field(default_factory=list)
 
 
-# ─── Quality canon (заглушка для #25) ────────────────────────────────────────
+# ─── Quality canon (тикет #25) ────────────────────────────────────────────────
+
+
+class DefectDecisionDef(BaseModel):
+    """Решение по браку → итоговый статус и причина stock-операции."""
+
+    status: str = Field(min_length=1)
+    reason: str | None = None
+
+
+class DefectDecisionMap(BaseModel):
+    """Карта решений по браку: decision_code → (status, reason)."""
+
+    mapping: dict[str, DefectDecisionDef] = Field(default_factory=dict)
+
+
+class DefectTypeDef(BaseModel):
+    """Определение типа брака (тикет #25)."""
+
+    code: str = Field(min_length=1)
+    name: str = Field(min_length=1)
+    category: str | None = None
+    severity: int = Field(ge=1, default=1)
+    requires_quality_decision: bool = False
+    is_active: bool = True
+    description: str | None = None
 
 
 class QualityCanon(BaseModel):
     """Карта брака и решения по дефектам."""
 
-    defect_decision_map: dict[str, str] = Field(default_factory=dict)
+    defect_decision_map: DefectDecisionMap = Field(default_factory=DefectDecisionMap)
+    defect_types: list[DefectTypeDef] = Field(default_factory=list)
 
 
 # ─── Root ─────────────────────────────────────────────────────────────────────

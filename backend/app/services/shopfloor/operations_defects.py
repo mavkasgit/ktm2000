@@ -7,10 +7,21 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.defect import Defect, DefectDecision, DefectDecisionType, DefectItem, DefectStatus, DefectType
 from app.models.rework_task import ReworkTask, ReworkTaskStatus
+from app.seeds.canon.models import DefectDecisionDef
 from app.stock import QualityState, Reason, StockCommand, StockCommandService
 
 from .cache import _refresh_section_plan_line_cache
 from .common import _check_idempotency, _ensure_positive, _get_defect, _get_task, _to_decimal
+
+
+def resolve_defect_status(decision: DefectDecisionType, config) -> DefectDecisionDef | None:
+    """Данные решения по браку из QualityCanon (ADR-0004, тикет #25).
+
+    Оператор (диспетчеризация stock-операций) остаётся в сервисе; конкретная
+    пара (status, reason) — данные конфигурации завода. Неизвестное решение
+    возвращает None → сервис оставляет defect в decision_required.
+    """
+    return config.quality.defect_decision_map.mapping.get(decision.value)
 
 async def create_defect(
     db: AsyncSession,
@@ -189,10 +200,20 @@ async def defect_decide(
     rework_task_id: int | None = None
     from app.models.section import Section as _Section
 
+    # ADR-0004: карта решений (status, reason) — данные канона, не код
+    from app.seeds.canon.registry import build_plant_config as _build_cfg
+    _cfg = _build_cfg()
+    _decision_def = resolve_defect_status(decision_type, _cfg)
+    if _decision_def is not None:
+        _decision_status = DefectStatus(_decision_def.status)
+        _decision_reason = Reason(_decision_def.reason) if _decision_def.reason else None
+    else:
+        _decision_status = DefectStatus.decision_required
+        _decision_reason = None
+
     if decision_type == DefectDecisionType.scrap:
         # ADR-0004: данные SCRAP-секции из канона
-        from app.seeds.canon.registry import build_plant_config as _build_cfg
-        _scrap = _build_cfg().production.scrap_policy
+        _scrap = _cfg.production.scrap_policy
         from_sec_id = task.section_id if task else defect.section_id
         # Find or auto-create scrap location
         scrap_loc = await db.scalar(
@@ -213,7 +234,7 @@ async def defect_decide(
             from_location_id=from_sec_id,
             to_location_id=to_sec_id,
             quantity=quantity,
-            reason=Reason.SCRAP,
+            reason=_decision_reason or Reason.SCRAP,
             quality_state=QualityState.GOOD,
             to_quality_state=QualityState.SCRAP,
             task_id=task.id if task else None,
@@ -223,7 +244,7 @@ async def defect_decide(
             created_by=actor_id,
         ))
         defect.stock_transaction_id = tx.id
-        defect.status = DefectStatus.scrapped
+        defect.status = _decision_status
 
     elif decision_type in {DefectDecisionType.rework_current, DefectDecisionType.return_previous}:
         assert task is not None
@@ -250,7 +271,7 @@ async def defect_decide(
                 from_location_id=task.section_id,
                 to_location_id=to_loc,
                 quantity=quantity,
-                reason=Reason.REWORK,
+                reason=_decision_reason or Reason.REWORK,
                 quality_state=QualityState.GOOD,
                 to_quality_state=QualityState.REWORK,
                 task_id=task.id,
@@ -288,7 +309,7 @@ async def defect_decide(
                 from_location_id=task.section_id,
                 to_location_id=to_loc,
                 quantity=quantity,
-                reason=Reason.RETURN_TO_PREVIOUS,
+                reason=_decision_reason or Reason.RETURN_TO_PREVIOUS,
                 task_id=task.id,
                 source_ref=f"defect:{defect.id}:decision:return_previous",
                 idempotency_key=f"{idempotency_key}:return" if idempotency_key else None,
@@ -297,7 +318,7 @@ async def defect_decide(
             ))
             defect.stock_transaction_id = tx.id
 
-        defect.status = DefectStatus.rework_task_created
+        defect.status = _decision_status
 
     elif decision_type == DefectDecisionType.accept_with_deviation:
         if task:
@@ -306,7 +327,7 @@ async def defect_decide(
                 from_location_id=None,
                 to_location_id=task.section_id,
                 quantity=quantity,
-                reason=Reason.COMPLETE,
+                reason=_decision_reason or Reason.COMPLETE,
                 quality_state=QualityState.GOOD,
                 task_id=task.id,
                 source_ref=f"defect:{defect.id}:decision:accept_deviation",
@@ -315,10 +336,10 @@ async def defect_decide(
                 created_by=actor_id,
             ))
             defect.stock_transaction_id = tx.id
-        defect.status = DefectStatus.accepted_with_deviation
+        defect.status = _decision_status
 
     else:
-        defect.status = DefectStatus.decision_required
+        defect.status = _decision_status
 
     if task:
         await _refresh_section_plan_line_cache(db, task.section_plan_line_id)

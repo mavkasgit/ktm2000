@@ -77,6 +77,8 @@ def build_plant_config() -> PlantConfig:
         section_codes=[s.code for s in sections],
     )
 
+    quality = _build_quality_canon()
+
     # Cross-ref валидация
     _validate_no_duplicate_color_tokens(color_tokens)
     _validate_required_fields_non_empty(color_tokens)
@@ -92,11 +94,56 @@ def build_plant_config() -> PlantConfig:
             transforming_ops=transforming_ops,
         ),
         routing=routing,
-        quality=QualityCanon(),
+        quality=quality,
         display=DisplayCanon(
             colors=ColorsCanon(tokens=color_tokens),
             labels=LabelsCanon(error_messages=dict(VALIDATION_ERROR_MESSAGES)),
         ),
+    )
+
+
+def _build_quality_canon() -> QualityCanon:
+    """Собирает QualityCanon и проверяет cross-ref правила 2, 3, 6."""
+    from app.seeds.canon.quality_data import DEFECT_DECISION_MAP, DEFECT_TYPES
+
+    defect_type_codes = [t.code for t in DEFECT_TYPES]
+    _validate_unique_codes(defect_type_codes, "defect type")
+
+    # Правило 6: enum-поля (decision key, status, reason) — допустимые значения
+    decision_keys = {
+        "scrap",
+        "rework_current",
+        "return_previous",
+        "accept_with_deviation",
+    }
+    statuses = {
+        "open",
+        "decision_required",
+        "rework_task_created",
+        "scrapped",
+        "returned",
+        "accepted_with_deviation",
+        "closed",
+    }
+    reasons = {"complete", "return_to_previous", "scrap", "rework"}
+    for decision, entry in DEFECT_DECISION_MAP.mapping.items():
+        if decision not in decision_keys:
+            raise ValueError(f"Unknown defect decision code: {decision!r}")
+        if entry.status not in statuses:
+            raise ValueError(
+                f"Defect decision '{decision}' maps to unknown status {entry.status!r}"
+            )
+        if entry.reason is not None and entry.reason not in reasons:
+            raise ValueError(
+                f"Defect decision '{decision}' maps to unknown reason {entry.reason!r}"
+            )
+        # Правило 3: обязательные поля не пустые
+        if not entry.status.strip():
+            raise ValueError(f"Defect decision '{decision}' has blank status")
+
+    return QualityCanon(
+        defect_decision_map=DEFECT_DECISION_MAP,
+        defect_types=DEFECT_TYPES,
     )
 
 

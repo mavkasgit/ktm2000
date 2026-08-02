@@ -325,3 +325,60 @@ class TestRoutingCanonFailFast:
                 priority=1,
                 phase="not_a_phase",
             )
+
+
+class TestQualityCanonIntegrity:
+    """Quality canon (тикет #25): карта брака и типы дефектов."""
+
+    def test_defect_decision_map_loaded(self) -> None:
+        """Карта решений по браку заполнена."""
+        config = build_plant_config()
+        assert len(config.quality.defect_decision_map.mapping) >= 4
+
+    def test_defect_decision_keys_valid(self) -> None:
+        """Правило 6: ключи карты — допустимые DefectDecisionType."""
+        config = build_plant_config()
+        allowed = {"scrap", "rework_current", "return_previous", "accept_with_deviation"}
+        for decision in config.quality.defect_decision_map.mapping:
+            assert decision in allowed, f"Unknown defect decision: {decision}"
+
+    def test_defect_decision_statuses_valid(self) -> None:
+        """Правило 6: статусы решений — допустимые DefectStatus."""
+        config = build_plant_config()
+        allowed = {
+            "open",
+            "decision_required",
+            "rework_task_created",
+            "scrapped",
+            "returned",
+            "accepted_with_deviation",
+            "closed",
+        }
+        for decision, entry in config.quality.defect_decision_map.mapping.items():
+            assert entry.status in allowed, (
+                f"Decision '{decision}' maps to unknown status '{entry.status}'"
+            )
+
+    def test_defect_decision_reasons_valid(self) -> None:
+        """Правило 6: причины stock-операций — допустимые Reason."""
+        config = build_plant_config()
+        allowed = {"complete", "return_to_previous", "scrap", "rework"}
+        for decision, entry in config.quality.defect_decision_map.mapping.items():
+            if entry.reason is not None:
+                assert entry.reason in allowed, (
+                    f"Decision '{decision}' maps to unknown reason '{entry.reason}'"
+                )
+
+    def test_defect_types_loaded_and_unique(self) -> None:
+        """Правило 2: типы брака есть и коды уникальны."""
+        config = build_plant_config()
+        codes = [t.code for t in config.quality.defect_types]
+        assert len(codes) > 0
+        assert len(codes) == len(set(codes))
+
+    def test_defect_types_required_fields(self) -> None:
+        """Правило 3: code/name типов брака не пустые."""
+        config = build_plant_config()
+        for t in config.quality.defect_types:
+            assert t.code.strip()
+            assert t.name.strip()
