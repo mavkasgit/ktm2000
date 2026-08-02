@@ -8,6 +8,12 @@ from app.models.section import Section
 from app.models.spg import SpgSection, SpgStorageKind, StorageProductionGroup
 from app.seeds.spgs import SPGS_DATA
 from app.seeds.seeders.spgs_seeder import seed_spgs
+from app.seeds.canon.models import SPGDef
+
+
+def _spg_defs() -> list[SPGDef]:
+    """SPGS_DATA в виде типизированных моделей canon."""
+    return [SPGDef.model_validate(item) for item in SPGS_DATA]
 
 
 DEFAULT_SECTIONS = [
@@ -61,7 +67,7 @@ async def test_wip_wh_is_bound_only_to_anod(session):
     """WIP_WH секция должна быть привязана только к ANOD (как склад
     полуфабриката после анодирования)."""
     sections_map = await _seed_default_sections(session)
-    await seed_spgs(session, SPGS_DATA, sections_map)
+    await seed_spgs(session, _spg_defs(), sections_map)
     await session.commit()
 
     wip_wh = sections_map["WIP_STOCK"]
@@ -83,7 +89,7 @@ async def test_wip_wh_section_still_exists_after_seed(session):
     """Секция WIP_WH должна по-прежнему существовать в БД после пересева
     (она нужна для маршрутов и selection rules)."""
     sections_map = await _seed_default_sections(session)
-    await seed_spgs(session, SPGS_DATA, sections_map)
+    await seed_spgs(session, _spg_defs(), sections_map)
     await session.commit()
 
     wip_wh = await session.scalar(select(Section).where(Section.code == "WIP_STOCK"))
@@ -96,7 +102,7 @@ async def test_wip_wh_section_still_exists_after_seed(session):
 async def test_other_spgs_keep_their_sections_after_seed(session):
     """STOCK, PREP, ANOD, PACK и FG должны сохранять свои секции после пересева."""
     sections_map = await _seed_default_sections(session)
-    await seed_spgs(session, SPGS_DATA, sections_map)
+    await seed_spgs(session, _spg_defs(), sections_map)
     await session.commit()
 
     expectations: list[tuple[str, list[str]]] = [
@@ -126,7 +132,7 @@ async def test_other_spgs_keep_their_sections_after_seed(session):
 async def test_anod_storage_kind_persists_to_db(session):
     """ANOD должен сохранить storage_kind=wip после seed_spgs (через БД)."""
     sections_map = await _seed_default_sections(session)
-    await seed_spgs(session, SPGS_DATA, sections_map)
+    await seed_spgs(session, _spg_defs(), sections_map)
     await session.commit()
 
     anod = await session.scalar(
@@ -142,7 +148,7 @@ async def test_anod_storage_kind_persists_to_db(session):
 async def test_list_spgs_includes_anod_with_wip_wh_and_excludes_wip(client, session):
     """GET /api/spg возвращает ANOD с секцией WIP_WH, и WIP как SPG отсутствует в списке."""
     sections_map = await _seed_default_sections(session)
-    await seed_spgs(session, SPGS_DATA, sections_map)
+    await seed_spgs(session, _spg_defs(), sections_map)
     await session.commit()
 
     resp = await client.get("/api/spg")

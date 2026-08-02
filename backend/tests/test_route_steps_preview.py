@@ -14,6 +14,7 @@ from app.models.section import Section
 from app.models.techcard import Techcard, TechcardLine
 from app.seeds.selection_rules import SELECTION_RULES
 from app.seeds.seeders.selection_rules_seeder import seed_selection_rules
+from app.seeds.canon.models import SelectionRuleDef
 
 
 def _workbook_with_row(
@@ -154,7 +155,9 @@ async def _seed_infrastructure(session, profile: RouteRuleProfile):
     )
     
     # Seed selection rules
-    await seed_selection_rules(session, SELECTION_RULES, profile)
+    await seed_selection_rules(
+        session, [SelectionRuleDef.model_validate(d) for d in SELECTION_RULES], profile
+    )
     
     # Create product + techcard + route so route resolution works
     product = Product(sku="TEST-001", name="Test Product", type=ProductType.finished_good, unit="pcs")
