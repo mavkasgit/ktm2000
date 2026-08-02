@@ -12,6 +12,7 @@ from app.models.route import (
 )
 from app.models.section import Section
 from app.models.spg import SpgSection, SpgStorageKind, StorageProductionGroup
+from app.seeds.canon.models import SPGDef
 from app.seeds.spgs import SPGS_DATA
 from app.seeds.seeders.spgs_seeder import _resolve_storage_kind, seed_spgs
 from app.services.route_storage_classifier import (
@@ -56,6 +57,11 @@ async def _seed_default_sections(session) -> dict[str, Section]:
     return sections
 
 
+def _spg_defs() -> list[SPGDef]:
+    """SPGS_DATA в виде типизированных моделей canon."""
+    return [SPGDef.model_validate(item) for item in SPGS_DATA]
+
+
 def test_prep_present_in_spgs_data():
     """PREP должен быть в списке SPGS_DATA."""
     codes = {item["code"] for item in SPGS_DATA}
@@ -98,7 +104,7 @@ async def test_seed_spgs_creates_prep_with_all_sections_and_storage(session):
     storage_kind=wip."""
     sections_map = await _seed_default_sections(session)
 
-    count = await seed_spgs(session, SPGS_DATA, sections_map)
+    count = await seed_spgs(session, _spg_defs(), sections_map)
     await session.commit()
 
     assert count == len(SPGS_DATA)
@@ -124,9 +130,9 @@ async def test_seed_spgs_is_idempotent_for_prep(session):
     """Повторный запуск seed_spgs не дублирует PREP и сохраняет настройки."""
     sections_map = await _seed_default_sections(session)
 
-    await seed_spgs(session, SPGS_DATA, sections_map)
+    await seed_spgs(session, _spg_defs(), sections_map)
     await session.commit()
-    await seed_spgs(session, SPGS_DATA, sections_map)
+    await seed_spgs(session, _spg_defs(), sections_map)
     await session.commit()
 
     all_prep = (
@@ -151,7 +157,7 @@ async def test_seed_spgs_is_idempotent_for_prep(session):
 async def test_prep_binds_only_prep_sections(session):
     """PREP не должен привязывать секции других ГХП (ANOD, FG, и т.д.)."""
     sections_map = await _seed_default_sections(session)
-    await seed_spgs(session, SPGS_DATA, sections_map)
+    await seed_spgs(session, _spg_defs(), sections_map)
     await session.commit()
 
     for code in ("DRILLING", "PRESSING", "SHOT_BLAST", "PREP_STOCK"):
@@ -177,7 +183,9 @@ async def test_prep_stock_section_codes_missing_key_is_treated_as_empty(session)
             "icon_color": "#000000",
         }
     ]
-    count = await seed_spgs(session, custom_data, sections_map)
+    count = await seed_spgs(
+        session, [SPGDef.model_validate(d) for d in custom_data], sections_map
+    )
     await session.commit()
 
     assert count == 1
@@ -210,7 +218,7 @@ async def test_demo_production_seeder_finds_prep_via_section(session, monkeypatc
     await session.commit()
 
     sections_map = await _seed_default_sections(session)
-    await seed_spgs(session, SPGS_DATA, sections_map)
+    await seed_spgs(session, _spg_defs(), sections_map)
     await session.commit()
 
     # Вызываем сидер; в отсутствие route он вернётся рано, но не упадёт
@@ -467,7 +475,7 @@ async def test_demo_production_seeder_omits_non_significant_stages(session, monk
 
     # Подготовим полный сценарий: секции, SPGs, маршрут с WH/DRILLING/PRESSING/SHOT_BLAST/WIP_WH
     sections_map = await _seed_default_sections(session)
-    await seed_spgs(session, SPGS_DATA, sections_map)
+    await seed_spgs(session, _spg_defs(), sections_map)
     await session.commit()
 
     _route, _stages = await _build_route_with_sections(

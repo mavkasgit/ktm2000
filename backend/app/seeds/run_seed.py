@@ -5,10 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.seeds.canon.models import PlantConfig
 from app.seeds.canon.registry import build_plant_config
 from app.seeds.import_templates import IMPORT_TEMPLATES
-from app.seeds.route_rule_profiles import ROUTE_RULE_PROFILES
 from app.seeds.routes import ROUTES
-from app.seeds.selection_rules import SELECTION_RULES
-from app.seeds.spgs import SPGS_DATA
 from app.seeds.seeders.cleanup_seeder import clear_generated_production_data
 from app.seeds.seeders.dimension_types_seeder import seed_dimension_types
 from app.seeds.seeders.processing_flags_seeder import seed_processing_flags
@@ -54,7 +51,7 @@ async def run_full_seed(
     result["processing_flags"] = len(flags_map)
 
     # 1.2. Storage Production Groups (SPG)
-    spgs_count = await seed_spgs(db, SPGS_DATA, sections_map)
+    spgs_count = await seed_spgs(db, config.routing.spgs, sections_map)
     result["spgs"] = spgs_count
 
     # 1.2.1. Dimension types + length_mm bindings for existing products
@@ -74,15 +71,18 @@ async def run_full_seed(
 
     # 1.3. RouteRuleProfile (needs template.id); сеем все профили (#12):
     # каждый профиль привязан к шаблону через import_template_code.
-    if not ROUTE_RULE_PROFILES:
+    if not config.routing.route_rule_profiles:
         raise RuntimeError("No route rule profiles defined")
     profiles_by_code: dict[str, object] = {}
-    for profile_data in ROUTE_RULE_PROFILES:
-        template_code = profile_data.get("import_template_code")
-        template_obj = templates_by_code.get(template_code) if template_code else None
+    for profile_def in config.routing.route_rule_profiles:
+        template_obj = (
+            templates_by_code.get(profile_def.import_template_code)
+            if profile_def.import_template_code
+            else None
+        )
         profile = await seed_route_rule_profile(
             db,
-            profile_data,
+            profile_def,
             import_template_id=template_obj.id if template_obj else None,
         )
         profiles_by_code[profile.code] = profile
@@ -103,10 +103,9 @@ async def run_full_seed(
     # 3. Routes (static routes replaced by dynamic production routes above)
 
     # 4. SelectionRules (needs profile); group by profile_code (#12)
-    rules_by_profile: dict[str, list[dict]] = {}
-    for rule_def in SELECTION_RULES:
-        pcode = rule_def.get("profile_code", "")
-        rules_by_profile.setdefault(pcode, []).append(rule_def)
+    rules_by_profile: dict[str, list[object]] = {}
+    for rule_def in config.routing.selection_rules:
+        rules_by_profile.setdefault(rule_def.profile_code, []).append(rule_def)
 
     total_rules = 0
     for pcode, profile_rules in rules_by_profile.items():

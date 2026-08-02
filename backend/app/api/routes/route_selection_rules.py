@@ -10,13 +10,18 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import get_db
 from app.models.route import RouteRuleProfile, RouteSelectionRule
 from app.models.section import Section
+from app.seeds.canon.models import (
+    ConditionOperator,
+    ConditionSource,
+    RuleActionKind,
+    RulePhase,
+)
 
 router = APIRouter(prefix="/route-selection-rules", tags=["route-selection-rules"])
 
-RulePhase = Literal["normalize", "route_select", "resolve_operations", "resolve_signatures"]
-RuleSource = Literal["excel", "payload", "product", "ctx"]
-RuleOperator = Literal["equals", "not_equals", "contains", "not_contains", "in", "not_in", "empty", "not_empty", "regex"]
-RuleAction = Literal["require_section", "exclude_section", "set", "add", "remove", "set_operation", "set_operation_by_mapping", "resolve_by_type", "set_field", "set_field_from_color_extraction"]
+RuleSource = ConditionSource
+RuleOperator = ConditionOperator
+RuleAction = RuleActionKind
 
 
 class RouteSelectionConditionIn(BaseModel):
@@ -112,7 +117,7 @@ async def create_route_selection_rule(payload: RouteSelectionRuleIn, db: AsyncSe
     if payload.profile_id is not None:
         profile = await db.get(RouteRuleProfile, payload.profile_id)
         if profile is None:
-            raise HTTPException(status_code=400, detail="Invalid profile_id")
+            raise HTTPException(status_code=422, detail="Invalid profile_id")
 
     rule = RouteSelectionRule(
         code=_clean_code(payload.code),
@@ -149,7 +154,7 @@ async def update_route_selection_rule(
     if payload.profile_id is not None:
         profile = await db.get(RouteRuleProfile, payload.profile_id)
         if profile is None:
-            raise HTTPException(status_code=400, detail="Invalid profile_id")
+            raise HTTPException(status_code=422, detail="Invalid profile_id")
 
     rule.code = clean_code
     rule.name = payload.name.strip()
@@ -221,12 +226,12 @@ async def _validate_payload(db: AsyncSession, payload: RouteSelectionRuleIn) -> 
     if section_ids:
         count = len((await db.execute(select(Section.id).where(Section.id.in_(section_ids)))).scalars().all())
         if count != len(section_ids):
-            raise HTTPException(status_code=400, detail="Action references unknown section")
+            raise HTTPException(status_code=422, detail="Action references unknown section")
 
     if section_codes:
         count = len((await db.execute(select(Section.code).where(Section.code.in_(section_codes)))).scalars().all())
         if count != len(section_codes):
-            raise HTTPException(status_code=400, detail="Action references unknown section_code")
+            raise HTTPException(status_code=422, detail="Action references unknown section_code")
 
 
 async def _rule_out(db: AsyncSession, rule: RouteSelectionRule) -> RouteSelectionRuleOut:

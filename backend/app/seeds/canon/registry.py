@@ -17,8 +17,11 @@ from app.seeds.canon.models import (
     ProcessingFlags,
     ProductionCanon,
     QualityCanon,
+    RouteRuleProfileDef,
     RoutingCanon,
+    SPGDef,
     SectionDef,
+    SelectionRuleDef,
     TransformingOpRef,
 )
 
@@ -42,11 +45,15 @@ def build_plant_config() -> PlantConfig:
         STANDART_PROCESSING_VALUE,
         VALIDATION_ERROR_MESSAGES,
     )
+    from app.seeds.import_templates import IMPORT_TEMPLATES
+    from app.seeds.route_rule_profiles import ROUTE_RULE_PROFILES
+    from app.seeds.selection_rules import SELECTION_RULES
     from app.seeds.seeders.sections_seeder import (
         SECTIONS_DATA,
         SECTION_OPS,
         TRANSFORMING_SECTION_OPS,
     )
+    from app.seeds.spgs import SPGS_DATA
 
     # Конвертация в typed-модели
     color_tokens = [ColorToken.model_validate(d) for d in COLOR_TOKENS]
@@ -62,6 +69,14 @@ def build_plant_config() -> PlantConfig:
         for sc, oc in TRANSFORMING_SECTION_OPS
     ]
 
+    routing = _build_routing_canon(
+        selection_rules=[SelectionRuleDef.model_validate(d) for d in SELECTION_RULES],
+        route_rule_profiles=[RouteRuleProfileDef.model_validate(d) for d in ROUTE_RULE_PROFILES],
+        spgs=[SPGDef.model_validate(d) for d in SPGS_DATA],
+        import_template_codes=[t["code"] for t in IMPORT_TEMPLATES],
+        section_codes=[s.code for s in sections],
+    )
+
     # Cross-ref валидация
     _validate_no_duplicate_color_tokens(color_tokens)
     _validate_required_fields_non_empty(color_tokens)
@@ -76,13 +91,87 @@ def build_plant_config() -> PlantConfig:
             ops=ops,
             transforming_ops=transforming_ops,
         ),
-        routing=RoutingCanon(),
+        routing=routing,
         quality=QualityCanon(),
         display=DisplayCanon(
             colors=ColorsCanon(tokens=color_tokens),
             labels=LabelsCanon(error_messages=dict(VALIDATION_ERROR_MESSAGES)),
         ),
     )
+
+
+def _build_routing_canon(
+    *,
+    selection_rules: list[SelectionRuleDef],
+    route_rule_profiles: list[RouteRuleProfileDef],
+    spgs: list[SPGDef],
+    import_template_codes: list[str],
+    section_codes: list[str],
+) -> RoutingCanon:
+    """Собирает RoutingCanon и проверяет cross-ref правила 1, 2, 5, 6, 7."""
+    section_set = set(section_codes)
+
+    # Правило 2: нет дублей code в каждом наборе
+    _validate_unique_codes([r.code for r in selection_rules], "selection rule")
+    _validate_unique_codes([p.code for p in route_rule_profiles], "route rule profile")
+    _validate_unique_codes([s.code for s in spgs], "SPG")
+
+    profile_codes = {p.code for p in route_rule_profiles}
+    template_codes = set(import_template_codes)
+
+    # Правило 5: import_template_code в профиле существует в IMPORT_TEMPLATES
+    for profile in route_rule_profiles:
+        if profile.import_template_code and profile.import_template_code not in template_codes:
+            raise ValueError(
+                f"Profile '{profile.code}' references unknown import template "
+                f"'{profile.import_template_code}'"
+            )
+        for section_code in profile.route_sections:
+            if section_code not in section_set:
+                raise ValueError(
+                    f"Profile '{profile.code}' references unknown section "
+                    f"'{section_code}' in route_sections"
+                )
+
+    # Правило 1: profile_code в rules существует в profiles;
+    # section_code в actions существует в sections
+    for rule in selection_rules:
+        if rule.profile_code not in profile_codes:
+            raise ValueError(
+                f"Selection rule '{rule.code}' references unknown profile "
+                f"'{rule.profile_code}'"
+            )
+        for action in rule.actions:
+            section_code = getattr(action, "section_code", None)
+            if section_code and section_code not in section_set:
+                raise ValueError(
+                    f"Selection rule '{rule.code}' action '{action.action}' "
+                    f"references unknown section '{section_code}'"
+                )
+
+    # SPG: section_codes существуют в sections
+    for spg in spgs:
+        for section_code in spg.section_codes:
+            if section_code not in section_set:
+                raise ValueError(
+                    f"SPG '{spg.code}' references unknown section '{section_code}'"
+                )
+
+    return RoutingCanon(
+        selection_rules=selection_rules,
+        route_rule_profiles=route_rule_profiles,
+        spgs=spgs,
+    )
+
+
+def _validate_unique_codes(codes: list[str], kind: str) -> None:
+    """Правило 2: нет дублей code в наборе."""
+    if len(codes) != len(set(codes)):
+        seen: set[str] = set()
+        for code in codes:
+            if code in seen:
+                raise ValueError(f"Duplicate {kind} code: {code!r}")
+            seen.add(code)
 
 
 def _convert_section_ops(

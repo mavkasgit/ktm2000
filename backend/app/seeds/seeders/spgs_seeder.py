@@ -5,6 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.section import Section
 from app.models.spg import SpgSection, SpgStorageKind, StorageProductionGroup
+from app.seeds.canon.models import SPGDef
 
 
 def _resolve_storage_kind(value: object) -> SpgStorageKind:
@@ -18,7 +19,7 @@ def _resolve_storage_kind(value: object) -> SpgStorageKind:
 
 async def seed_spgs(
     db: AsyncSession,
-    spgs_data: list[dict],
+    spgs_data: list[SPGDef],
     sections_map: dict[str, Section],
 ) -> int:
     """Upsert StorageProductionGroup records by code and bind sections.
@@ -27,34 +28,34 @@ async def seed_spgs(
     """
     count = 0
 
-    for data in spgs_data:
-        section_codes = data.get("section_codes", []) or []
-        storage_kind = _resolve_storage_kind(data.get("storage_kind"))
+    for spg_def in spgs_data:
+        section_codes = spg_def.section_codes or []
+        storage_kind = _resolve_storage_kind(spg_def.storage_kind)
 
         spg = await db.scalar(
-            select(StorageProductionGroup).where(StorageProductionGroup.code == data["code"])
+            select(StorageProductionGroup).where(StorageProductionGroup.code == spg_def.code)
         )
         if spg is None:
             spg = StorageProductionGroup(
-                code=data["code"],
-                name=data["name"],
-                description=data.get("description"),
+                code=spg_def.code,
+                name=spg_def.name,
+                description=spg_def.description,
                 storage_kind=storage_kind,
-                sort_order=data.get("sort_order", 0),
+                sort_order=spg_def.sort_order,
                 is_active=True,
-                icon=data.get("icon"),
-                icon_color=data.get("icon_color"),
+                icon=spg_def.icon,
+                icon_color=spg_def.icon_color,
             )
             db.add(spg)
             await db.flush()
         else:
-            spg.name = data["name"]
-            spg.description = data.get("description")
+            spg.name = spg_def.name
+            spg.description = spg_def.description
             spg.storage_kind = storage_kind
-            spg.sort_order = data.get("sort_order", 0)
+            spg.sort_order = spg_def.sort_order
             spg.is_active = True
-            spg.icon = data.get("icon")
-            spg.icon_color = data.get("icon_color")
+            spg.icon = spg_def.icon
+            spg.icon_color = spg_def.icon_color
             await db.flush()
 
         # Load existing bindings for this SPG, keyed by section_id

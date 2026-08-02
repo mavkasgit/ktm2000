@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import get_db
 from app.models.import_template import ImportTemplate
 from app.models.route import RouteRuleProfile, RouteSelectionRule
+from app.models.section import Section
 from app.services.route_builder import build_route_from_profile
 
 router = APIRouter(prefix="/route-rule-profiles", tags=["route-rule-profiles"])
@@ -79,7 +80,8 @@ async def create_route_rule_profile(
     if payload.import_template_id is not None:
         template = await db.get(ImportTemplate, payload.import_template_id)
         if template is None:
-            raise HTTPException(status_code=400, detail="Invalid import_template_id")
+            raise HTTPException(status_code=422, detail="Invalid import_template_id")
+    await _validate_route_sections(db, payload.route_sections)
 
     profile = RouteRuleProfile(
         code=payload.code.strip(),
@@ -124,7 +126,8 @@ async def update_route_rule_profile(
     if payload.import_template_id is not None:
         template = await db.get(ImportTemplate, payload.import_template_id)
         if template is None:
-            raise HTTPException(status_code=400, detail="Invalid import_template_id")
+            raise HTTPException(status_code=422, detail="Invalid import_template_id")
+    await _validate_route_sections(db, payload.route_sections)
 
     profile.code = clean_code
     profile.name = payload.name.strip()
@@ -155,6 +158,22 @@ async def delete_route_rule_profile(profile_id: int, db: AsyncSession = Depends(
 
     await db.delete(profile)
     await db.flush()
+
+
+async def _validate_route_sections(
+    db: AsyncSession,
+    route_sections: list[str],
+) -> None:
+    """Cross-ref: все коды route_sections существуют в таблице sections."""
+    codes = [c.strip() for c in (route_sections or []) if c.strip()]
+    if not codes:
+        return
+    found = set(
+        (await db.execute(select(Section.code).where(Section.code.in_(codes)))).scalars().all()
+    )
+    missing = [c for c in dict.fromkeys(codes) if c not in found]
+    if missing:
+        raise HTTPException(status_code=422, detail=f"Route sections reference unknown sections: {missing}")
 
 
 class RouteStepPreview(BaseModel):

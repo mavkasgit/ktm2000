@@ -6,11 +6,12 @@ from sqlalchemy.orm.attributes import flag_modified
 
 from app.models.route import RouteRuleProfile, RouteSelectionRule
 from app.models.section import Section
+from app.seeds.canon.models import SelectionRuleDef
 
 
 async def seed_selection_rules(
     db: AsyncSession,
-    rules_data: list[dict],
+    rules_data: list[SelectionRuleDef],
     profile: RouteRuleProfile,
 ) -> int:
     """Upsert selection rules by code. Resolves section_code → section_id. Returns count."""
@@ -20,53 +21,41 @@ async def seed_selection_rules(
 
     count = 0
     for rule_def in rules_data:
-        # Build conditions
+        # Build conditions from typed models
         conditions = []
-        for cond in rule_def.get("conditions", []):
+        for cond in rule_def.conditions:
             conditions.append({
-                "source": cond.get("source", "payload"),
-                "field_path": cond.get("field_path", ""),
-                "operator": cond.get("operator", ""),
-                "value": cond.get("value"),
-                "case_sensitive": False,
+                "source": cond.source,
+                "field_path": cond.field_path,
+                "operator": cond.operator,
+                "value": cond.value,
+                "case_sensitive": cond.case_sensitive,
             })
 
         # Build actions — resolve section_code to section_id
         actions = []
-        for action_def in rule_def.get("actions", []):
-            section_code = action_def.get("section_code")
+        for action_def in rule_def.actions:
+            section_code = getattr(action_def, "section_code", None)
             if section_code and section_code not in sections_by_code:
-                raise RuntimeError(f"Section '{section_code}' not found for rule '{rule_def['code']}'")
+                raise RuntimeError(f"Section '{section_code}' not found for rule '{rule_def.code}'")
 
-            action_dict = {
-                "action": action_def["action"],
-                "section_id": sections_by_code[section_code].id if section_code else None,
-            }
-            # Preserve section_code and group_code for set_operation actions
-            if "section_code" in action_def:
-                action_dict["section_code"] = action_def["section_code"]
-            if "group_code" in action_def:
-                action_dict["group_code"] = action_def["group_code"]
-            if "operation_code" in action_def:
-                action_dict["operation_code"] = action_def["operation_code"]
-            # Preserve mapping and lookup_field for set_operation_by_mapping actions
-            if "lookup_field" in action_def:
-                action_dict["lookup_field"] = action_def["lookup_field"]
-            if "mapping" in action_def:
-                action_dict["mapping"] = action_def["mapping"]
+            action_dict = action_def.model_dump()
+            action_dict["section_id"] = (
+                sections_by_code[section_code].id if section_code else None
+            )
             actions.append(action_dict)
 
         # Upsert by code
-        rule = await db.scalar(select(RouteSelectionRule).where(RouteSelectionRule.code == rule_def["code"]))
+        rule = await db.scalar(select(RouteSelectionRule).where(RouteSelectionRule.code == rule_def.code))
         if rule is None:
-            rule = RouteSelectionRule(code=rule_def["code"])
+            rule = RouteSelectionRule(code=rule_def.code)
             db.add(rule)
 
         rule.profile_id = profile.id
-        rule.name = rule_def["name"]
-        rule.priority = rule_def["priority"]
-        rule.is_active = rule_def.get("is_active", True)
-        rule.phase = rule_def.get("phase", "route_select")
+        rule.name = rule_def.name
+        rule.priority = rule_def.priority
+        rule.is_active = rule_def.is_active
+        rule.phase = rule_def.phase
         rule.conditions = conditions
         rule.actions = actions
         flag_modified(rule, "conditions")

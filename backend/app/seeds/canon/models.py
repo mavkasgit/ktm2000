@@ -6,7 +6,7 @@ PlantConfig — корневой объект; доменные суб-моде�
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -159,15 +159,186 @@ class ProductionCanon(BaseModel):
     stock_location_types: StockLocationTypes = Field(default_factory=StockLocationTypes)
 
 
-# ─── Routing canon (заглушка для #24) ────────────────────────────────────────
+# ─── Routing canon (тикет #24) ────────────────────────────────────────────────
+
+ConditionSource = Literal["excel", "payload", "product", "ctx"]
+ConditionOperator = Literal[
+    "equals",
+    "not_equals",
+    "contains",
+    "not_contains",
+    "in",
+    "not_in",
+    "empty",
+    "not_empty",
+    "regex",
+]
+RulePhase = Literal["normalize", "route_select", "resolve_operations", "resolve_signatures"]
+RuleActionKind = Literal[
+    "require_section",
+    "exclude_section",
+    "set_operation",
+    "set_operation_by_mapping",
+    "resolve_by_type",
+    "set_field",
+    "set_field_from_color_extraction",
+    "set",
+    "add",
+    "remove",
+]
+
+
+class RuleCondition(BaseModel):
+    """Условие правила выбора маршрута (тикет #24)."""
+
+    source: ConditionSource = "payload"
+    field_path: str = Field(min_length=1)
+    excel_column_index: int | None = None
+    excel_column_letter: str | None = None
+    excel_header: str | None = None
+    operator: ConditionOperator
+    value: str | bool | None = None
+    case_sensitive: bool = False
+
+
+class SectionActionBase(BaseModel):
+    """База действий, ссылающихся на участок по section_code."""
+
+    section_code: str = Field(min_length=1)
+
+
+class RequireSectionAction(SectionActionBase):
+    """Требовать участок в маршруте."""
+
+    action: Literal["require_section"] = "require_section"
+
+
+class ExcludeSectionAction(SectionActionBase):
+    """Исключить участок из маршрута."""
+
+    action: Literal["exclude_section"] = "exclude_section"
+
+
+class SetOperationAction(BaseModel):
+    """Задать конкретную операцию группе участка."""
+
+    action: Literal["set_operation"] = "set_operation"
+    section_code: str = Field(min_length=1)
+    group_code: str = Field(min_length=1)
+    operation_code: str = Field(min_length=1)
+
+
+class SetOperationByMappingAction(BaseModel):
+    """Разрешить операцию по keyword-маппингу из значения поля."""
+
+    action: Literal["set_operation_by_mapping"] = "set_operation_by_mapping"
+    section_code: str = Field(min_length=1)
+    group_code: str = Field(min_length=1)
+    lookup_field: str = Field(min_length=1)
+    mapping: list[dict[str, str]] = Field(default_factory=list)
+
+
+class ResolveByTypeAction(BaseModel):
+    """Разрешить операцию по типу позиции."""
+
+    action: Literal["resolve_by_type"] = "resolve_by_type"
+    section_code: str = Field(min_length=1)
+    group_code: str = Field(min_length=1)
+
+
+class SetFieldAction(BaseModel):
+    """Установить значение поля в payload/ctx."""
+
+    action: Literal["set_field"] = "set_field"
+    path: str = Field(min_length=1)
+    value: str | bool | None = None
+
+
+class SetFieldFromColorExtractionAction(BaseModel):
+    """Извлечь цвет из source_field и записать в target_field."""
+
+    action: Literal["set_field_from_color_extraction"] = "set_field_from_color_extraction"
+    target_field: str = Field(min_length=1)
+    source_field: str = Field(min_length=1)
+
+
+class DslAction(BaseModel):
+    """DSL-действие над контекстом (set/add/remove по пути ctx.*)."""
+
+    action: Literal["set", "add", "remove"]
+    path: str = Field(min_length=1)
+    value: str | bool | None = None
+
+
+RuleAction = Annotated[
+    RequireSectionAction
+    | ExcludeSectionAction
+    | SetOperationAction
+    | SetOperationByMappingAction
+    | ResolveByTypeAction
+    | SetFieldAction
+    | SetFieldFromColorExtractionAction
+    | DslAction,
+    Field(discriminator="action"),
+]
+
+
+class SelectionRuleDef(BaseModel):
+    """Определение правила выбора маршрута (тикет #24)."""
+
+    code: str = Field(min_length=1)
+    name: str = Field(min_length=1)
+    profile_code: str = Field(min_length=1)
+    priority: int = Field(ge=0)
+    is_active: bool = True
+    phase: RulePhase = "route_select"
+    conditions: list[RuleCondition] = Field(default_factory=list)
+    condition_logic: Literal["and", "or"] = "and"
+    actions: list[RuleAction] = Field(default_factory=list)
+
+
+class ExcelColumnDef(BaseModel):
+    """Определение колонки Excel-паспорта."""
+
+    index: int = Field(gt=0)
+    header: str = Field(min_length=1)
+    letter: str = Field(min_length=1)
+    field_path: str = Field(min_length=1)
+
+
+class RouteRuleProfileDef(BaseModel):
+    """Определение профиля правил маршрутизации (тикет #24)."""
+
+    code: str = Field(min_length=1)
+    name: str = Field(min_length=1)
+    is_active: bool = True
+    priority: int = Field(ge=0, default=0)
+    route_name_pattern: str | None = None
+    import_template_code: str | None = None
+    route_sections: list[str] = Field(default_factory=list)
+    excel_column_passport: list[ExcelColumnDef] = Field(default_factory=list)
+    excel_passport_meta: dict = Field(default_factory=dict)
+
+
+class SPGDef(BaseModel):
+    """Определение Storage Production Group (тикет #24)."""
+
+    code: str = Field(min_length=1)
+    name: str = Field(min_length=1)
+    description: str = ""
+    storage_kind: str | None = None
+    sort_order: int = 0
+    icon: str | None = None
+    icon_color: str | None = None
+    section_codes: list[str] = Field(default_factory=list)
 
 
 class RoutingCanon(BaseModel):
     """Правила выбора маршрутов, профили, SPG."""
 
-    selection_rules: list[dict] = Field(default_factory=list)
-    route_rule_profiles: list[dict] = Field(default_factory=list)
-    spgs: list[dict] = Field(default_factory=list)
+    selection_rules: list[SelectionRuleDef] = Field(default_factory=list)
+    route_rule_profiles: list[RouteRuleProfileDef] = Field(default_factory=list)
+    spgs: list[SPGDef] = Field(default_factory=list)
 
 
 # ─── Quality canon (заглушка для #25) ────────────────────────────────────────
