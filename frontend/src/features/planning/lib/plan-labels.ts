@@ -1,16 +1,10 @@
 import { PlanPositionOut } from "@/shared/api/productionPlans"
+import { errorLabels, statusLabels } from "@/shared/lib/generated-labels"
 
-export const statusLabels: Record<string, string> = {
-  parsed: "Распознан",
-  failed: "Ошибка",
-  applied: "Применён",
-  cancelled: "Отменён",
-  draft: "Черновик",
-  valid: "Валиден",
-  invalid: "Ошибка",
-  approved: "Утверждён",
-  released: "Запущен",
-}
+export { errorLabels, statusLabels }
+export { errorLabels as routeErrorLabels } from "@/shared/lib/generated-labels"
+
+export const planStatusLabels = statusLabels
 
 export const statusVariant: Record<string, string> = {
   parsed: "secondary",
@@ -22,49 +16,6 @@ export const statusVariant: Record<string, string> = {
   invalid: "destructive",
   approved: "default",
   released: "default",
-}
-
-export const routeErrorLabels: Record<string, string> = {
-  route_signature_incomplete: "Сигнатура маршрута неполная",
-  route_not_found: "Маршрут не найден",
-  no_route_candidate: "Нет маршрута под правила выбора",
-  route_rule_conflict: "Конфликт правил выбора маршрута",
-  route_contains_excluded_step: "Маршрут содержит исключённый участок",
-  selection_rules: "Маршрут выбран правилами",
-  active_route_not_found: "Активный маршрут не найден",
-  active_route_has_no_steps: "Маршрут без этапов",
-  route_sequence_invalid: "Неверная последовательность маршрута",
-  route_contains_inactive_section: "Маршрут содержит неактивный участок",
-  route_not_matching_import_signature: "Маршрут не совпадает с импортом",
-  route_missing_required_step: "Отсутствует обязательный этап",
-  route_missing_pack_additional_operation: "Отсутствует доп. упаковочная операция",
-  route_primary_operation_mismatch: "Основная операция маршрута не совпадает",
-  manual_route_not_found: "Ручной маршрут не найден",
-  manual_route_inactive: "Ручной маршрут неактивен",
-  auto_fallback: "Маршрут скорректирован автоматически — проверьте",
-}
-
-export const errorLabels: Record<string, string> = {
-  product_not_found: "Изделие не найдено",
-  product_inactive: "Изделие неактивно",
-  active_techcard_not_found: "Нет активной техкарты",
-  active_techcard_has_no_lines: "Техкарта пустая",
-  active_route_not_found: "Нет активного маршрута",
-  active_route_has_no_steps: "Маршрут без этапов",
-  route_sequence_invalid: "Неверная последовательность маршрута",
-  route_contains_inactive_section: "Неактивный участок в маршруте",
-  duplicate_sku_due_date: "Дубликат строки Excel: такая же строка уже есть",
-  route_primary_operation_mismatch: "Основная операция маршрута не совпадает",
-  route_not_matching_import_signature: "Маршрут не совпадает с ожидаемым",
-  route_missing_required_step: "Отсутствует обязательный этап в маршруте",
-  route_missing_pack_additional_operation: "Отсутствует доп. упаковочная операция",
-  quantity_must_be_positive: "Количество должно быть > 0",
-  route_signature_incomplete: "Сигнатура маршрута неполная",
-  route_not_found: "Маршрут не найден",
-  no_route_candidate: "Нет маршрута под правила выбора",
-  route_rule_conflict: "Конфликт правил выбора маршрута",
-  route_contains_excluded_step: "Маршрут содержит исключённый участок",
-  selection_rules: "Маршрут выбран правилами",
 }
 
 export const warningLabels: Record<string, string> = {
@@ -130,14 +81,6 @@ export function isRiskyForApprove(pos: PlanPositionOut, duplicateConflict?: Dupl
 }
 
 export type PlanSortField = "id" | "rowNum" | "sku" | "name" | "qty" | "route" | "status" | "validation" | "errors" | "warnings"
-
-export const planStatusLabels: Record<string, string> = {
-  draft: "Черновик",
-  valid: "Валиден",
-  invalid: "Ошибка",
-  approved: "Утверждён",
-  released: "Запущен",
-}
 
 export const planValidationLabels: Record<string, string> = {
   valid: "Пройдена",

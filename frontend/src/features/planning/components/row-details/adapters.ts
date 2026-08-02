@@ -1,50 +1,8 @@
 import { type PlanPositionOut, type ProductionPlanningRowDetail, type ProductionPlanningStage } from "@/shared/api/productionPlans"
 import { type RowDetailsData } from "./types"
+import { errorLabels } from "@/shared/lib/generated-labels"
 
 // ─── Label maps ──────────────────────────────────────────────────────────────
-
-const routeErrorLabels: Record<string, string> = {
-  route_signature_incomplete: "Сигнатура маршрута неполная",
-  route_not_found: "Маршрут не найден",
-  no_route_candidate: "Нет маршрута под правила выбора",
-  route_rule_conflict: "Конфликт правил выбора маршрута",
-  route_contains_excluded_step: "Маршрут содержит исключённый участок",
-  selection_rules: "Маршрут выбран правилами",
-  active_route_not_found: "Активный маршрут не найден",
-  active_route_has_no_steps: "Маршрут без этапов",
-  route_sequence_invalid: "Неверная последовательность маршрута",
-  route_contains_inactive_section: "Маршрут содержит неактивный участок",
-  route_not_matching_import_signature: "Маршрут не совпадает с импортом",
-  route_missing_required_step: "Отсутствует обязательный этап",
-  route_missing_pack_additional_operation: "Отсутствует доп. упаковочная операция",
-  route_primary_operation_mismatch: "Основная операция маршрута не совпадает",
-  manual_route_not_found: "Ручной маршрут не найден",
-  manual_route_inactive: "Ручной маршрут неактивен",
-  auto_fallback: "Маршрут скорректирован автоматически — проверьте",
-}
-
-const errorLabelsRaw: Record<string, string> = {
-  product_not_found: "Изделие не найдено",
-  product_inactive: "Изделие неактивно",
-  active_techcard_not_found: "Нет активной техкарты",
-  active_techcard_has_no_lines: "Техкарта пустая",
-  active_route_not_found: "Нет активного маршрута",
-  active_route_has_no_steps: "Маршрут без этапов",
-  route_sequence_invalid: "Неверная последовательность маршрута",
-  route_contains_inactive_section: "Неактивный участок в маршруте",
-  duplicate_sku_due_date: "Дубликат строки",
-  route_primary_operation_mismatch: "Основная операция маршрута не совпадает",
-  route_not_matching_import_signature: "Маршрут не совпадает с ожидаемым",
-  route_missing_required_step: "Отсутствует обязательный этап в маршруте",
-  route_missing_pack_additional_operation: "Отсутствует доп. упаковочная операция",
-  quantity_must_be_positive: "Количество должно быть > 0",
-  route_signature_incomplete: "Сигнатура маршрута неполная",
-  route_not_found: "Маршрут не найден",
-  no_route_candidate: "Нет маршрута под правила выбора",
-  route_rule_conflict: "Конфликт правил выбора маршрута",
-  route_contains_excluded_step: "Маршрут содержит исключённый участок",
-  selection_rules: "Маршрут выбран правилами",
-}
 
 const warningLabelsRaw: Record<string, string> = {
   paired_profile_product_unmapped: "Парный профиль не сопоставлен",
@@ -139,14 +97,14 @@ export function adaptPlanPositionOut(pos: PlanPositionOut): RowDetailsData {
     quantity: pos.quantity,
     status: pos.status,
     routeName: pos.route_name,
-    routeError: pos.route_error ? translateLabel(pos.route_error, routeErrorLabels) : null,
+    routeError: pos.route_error ? translateLabel(pos.route_error, errorLabels) : null,
     routeMeta: buildRouteMetaLabel({
       route_source: pos.route_source,
       route_origin: pos.route_origin,
       route_match_quality: pos.route_match_quality,
       route_assigned_at: pos.route_assigned_at,
     }),
-    errors: translateLabels(pos.errors, errorLabelsRaw),
+    errors: translateLabels(pos.errors, errorLabels),
     warnings: translateLabels(pos.warnings, warningLabelsRaw),
     productionPlanId: pos.production_plan_id,
     routeCheckIssues: [],
@@ -221,7 +179,7 @@ export function adaptRawImportRow(row: Record<string, unknown>): RowDetailsData 
       route_match_quality: (row.route_match_quality as string | null) ?? null,
       route_assigned_at: (row.route_assigned_at as string | null) ?? null,
     }),
-    errors: translateLabels(rawErrors, errorLabelsRaw),
+    errors: translateLabels(rawErrors, errorLabels),
     warnings: translateLabels(rawWarnings, warningLabelsRaw),
     productionPlanId: 0,
     rawExcelRows,

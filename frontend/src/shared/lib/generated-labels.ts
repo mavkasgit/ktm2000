@@ -2,12 +2,18 @@
 
 // Лейблы статусов позиции плана
 export const statusLabels: Record<string, string> = {
+  "applied": "Применён",
   "approved": "Утверждён",
   "cancelled": "Отменён",
+  "completed": "Завершён",
   "draft": "Черновик",
+  "failed": "Ошибка",
   "invalid": "Ошибка",
+  "parsed": "Распознан",
+  "pending": "Ожидает",
   "released": "Запущен",
   "valid": "Валиден",
+  "warning": "Предупреждение",
 }
 
 // Лейблы видов выпуска
@@ -21,9 +27,13 @@ export const outputKindLabels: Record<string, string> = {
 // Тексты ошибок валидации (ключи — error codes сервера)
 export const errorLabels: Record<string, string> = {
   "active_route_has_no_steps": "Маршрут не содержит этапов",
+  "active_route_not_found": "Не найден активный маршрут",
   "active_techcard_has_no_lines": "Техкарта не содержит операций",
   "active_techcard_not_found": "Не найдена активная техкарта для продукта",
+  "auto_fallback": "Маршрут скорректирован автоматически — проверьте корректность",
   "duplicate_sku_due_date": "Дубликат строки Excel: такая же строка уже есть в плане.",
+  "manual_route_inactive": "Ручной маршрут неактивен",
+  "manual_route_not_found": "Ручной маршрут не найден",
   "no_route_candidate": "Не найден маршрут, удовлетворяющий правилам выбора",
   "product_inactive": "Продукт неактивен",
   "product_not_found": "Продукт не найден",

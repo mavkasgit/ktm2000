@@ -1,15 +1,8 @@
 import type { ProductionPlanningRow } from "@/shared/api/productionPlans";
 import { fmtQty } from "@/shared/utils/fmtQty";
+import { statusLabels } from "@/shared/lib/generated-labels";
 
-export const positionStatusLabels: Record<string, string> = {
-  draft: "Черновик",
-  invalid: "Ошибка",
-  valid: "Валиден",
-  approved: "Утвержден",
-  released: "Запущен",
-  cancelled: "Отменен",
-  completed: "Завершён",
-};
+export { statusLabels as positionStatusLabels };
 
 export const positionStatusColor: Record<string, string> = {
   draft: "bg-gray-100 text-gray-700",
@@ -66,28 +59,28 @@ export function planPreviewUrl(planId: number): string {
 export function getLaunchBlockReason(row: ProductionPlanningRow): string | null {
   if (row.is_completed) return "Уже завершено";
   if (row.has_tasks || row.is_released) return "Уже запущено";
-  if (row.position_status !== "approved") return `Статус "${positionStatusLabels[row.position_status] || row.position_status}"`;
+  if (row.position_status !== "approved") return `Статус "${statusLabels[row.position_status] || row.position_status}"`;
   if (!row.route_id) return row.route_error || "Нет маршрута";
   return null;
 }
 
 export function getCancelBlockReason(row: ProductionPlanningRow): string | null {
   if (!["approved", "released"].includes(row.position_status)) {
-    return `Статус "${positionStatusLabels[row.position_status] || row.position_status}"`;
+    return `Статус "${statusLabels[row.position_status] || row.position_status}"`;
   }
   return null;
 }
 
 export function getRestoreBlockReason(row: ProductionPlanningRow): string | null {
   if (row.position_status !== "cancelled") {
-    return `Статус "${positionStatusLabels[row.position_status] || row.position_status}"`;
+    return `Статус "${statusLabels[row.position_status] || row.position_status}"`;
   }
   return null;
 }
 
 export function getSoftDeleteBlockReason(row: ProductionPlanningRow): string | null {
   if (row.position_status !== "cancelled") {
-    return `Статус "${positionStatusLabels[row.position_status] || row.position_status}"`;
+    return `Статус "${statusLabels[row.position_status] || row.position_status}"`;
   }
   return null;
 }
@@ -95,7 +88,7 @@ export function getSoftDeleteBlockReason(row: ProductionPlanningRow): string | n
 export function getManualPassBlockReason(row: ProductionPlanningRow): string | null {
   if (!row.route_id) return "Нет маршрута";
   if (!["approved", "released"].includes(row.position_status)) {
-    return `Статус "${positionStatusLabels[row.position_status] || row.position_status}"`;
+    return `Статус "${statusLabels[row.position_status] || row.position_status}"`;
   }
   if (row.is_completed) return "Уже завершено";
   return null;

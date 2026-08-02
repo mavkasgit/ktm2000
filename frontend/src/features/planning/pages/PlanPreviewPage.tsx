@@ -2,6 +2,7 @@ import { Link, useParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { previewProductionPlan } from "@/shared/api/productionPlans";
 import { queryKeys } from "@/shared/api/queryKeys";
+import { statusLabels } from "@/shared/lib/generated-labels";
 
 type PreviewPosition = {
   id: number;
@@ -11,15 +12,6 @@ type PreviewPosition = {
   status: string;
   validation_status: string;
   validation_errors: string[] | null;
-};
-
-const statusLabels: Record<string, string> = {
-  draft: "Черновик",
-  invalid: "Ошибка",
-  valid: "Валиден",
-  approved: "Утвержден",
-  released: "Запущен",
-  cancelled: "Отменен",
 };
 
 function formatQuantity(value: string): string {

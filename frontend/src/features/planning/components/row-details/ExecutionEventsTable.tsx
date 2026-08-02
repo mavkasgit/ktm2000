@@ -4,20 +4,11 @@ import { useFilterableTable } from "@/shared/hooks/useFilterableTable";
 import { fmtQty } from "@/shared/utils/fmtQty";
 import { type ProductionPlanningStage, type StatusHistoryEntry } from "@/shared/api/productionPlans";
 import { translateStatusHistoryReason } from "@/features/planning/lib/plan-labels";
+import { statusLabels } from "@/shared/lib/generated-labels";
 import {
   useTableQueryEngine,
   type ColumnSortDef,
 } from "@/shared/hooks/useTableQueryEngine";
-
-const positionStatusLabels: Record<string, string> = {
-  draft: "Черновик",
-  invalid: "Ошибка",
-  valid: "Валиден",
-  approved: "Утверждён",
-  released: "Запущен",
-  cancelled: "Отменён",
-  completed: "Завершён",
-};
 
 type EventSortField = "date" | "type" | "event" | "from" | "to" | "quantity";
 
@@ -58,8 +49,8 @@ function buildEventRows(
   const rows: ExecutionEventRow[] = [];
 
   for (const entry of statusHistory) {
-    const fromLabel = positionStatusLabels[entry.from_status] || entry.from_status;
-    const toLabel = positionStatusLabels[entry.to_status] || entry.to_status;
+    const fromLabel = statusLabels[entry.from_status] || entry.from_status;
+    const toLabel = statusLabels[entry.to_status] || entry.to_status;
     rows.push({
       id: `status-${entry.id}`,
       event_at: entry.changed_at,

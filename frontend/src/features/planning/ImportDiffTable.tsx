@@ -1,3 +1,5 @@
+import { errorLabels, statusLabels } from "@/shared/lib/generated-labels";
+
 type UnknownRecord = Record<string, unknown>;
 
 const actionLabels: Record<string, string> = {
@@ -6,33 +8,6 @@ const actionLabels: Record<string, string> = {
   ignore_unchanged: "Без изменений",
   cancel_draft_position: "Отменить",
   mark_possible_duplicate: "Возможный дубль",
-};
-
-const statusLabels: Record<string, string> = {
-  pending: "Ожидает",
-  warning: "Предупреждение",
-  invalid: "Ошибка",
-  applied: "Применено",
-};
-
-const errorLabels: Record<string, string> = {
-  product_not_found: "Изделие не найдено",
-  product_inactive: "Изделие неактивно",
-  active_techcard_not_found: "Нет активной техкарты",
-  active_techcard_has_no_lines: "Техкарта пустая",
-  active_route_not_found: "Нет активного маршрута",
-  active_route_has_no_steps: "Маршрут без этапов",
-  route_sequence_invalid: "Неверная последовательность маршрута",
-  route_contains_inactive_section: "Неактивный участок в маршруте",
-  duplicate_sku_due_date: "Дубликат строки",
-  route_primary_operation_mismatch: "Основная операция маршрута не совпадает",
-  route_not_matching_import_signature: "Маршрут не совпадает с ожидаемым",
-  route_missing_required_step: "Отсутствует обязательный этап в маршруте",
-  no_route_candidate: "Нет маршрута под правила выбора",
-  route_rule_conflict: "Конфликт правил выбора маршрута",
-  route_contains_excluded_step: "Маршрут содержит исключённый участок",
-  selection_rules: "Маршрут выбран правилами",
-  quantity_must_be_positive: "Количество должно быть > 0",
 };
 
 const warningLabels: Record<string, string> = {

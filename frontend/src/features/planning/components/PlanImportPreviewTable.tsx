@@ -9,25 +9,8 @@ import {
   type ImportRowExpansion,
 } from "@/shared/ui/import-utils";
 
-export const PLAN_IMPORT_ERROR_LABELS: Record<string, string> = {
-  product_not_found: "Изделие не найдено",
-  product_inactive: "Изделие неактивно",
-  active_techcard_not_found: "Нет активной техкарты",
-  active_techcard_has_no_lines: "Техкарта пустая",
-  active_route_not_found: "Нет активного маршрута",
-  active_route_has_no_steps: "Маршрут без этапов",
-  route_sequence_invalid: "Неверная последовательность маршрута",
-  route_contains_inactive_section: "Неактивный участок",
-  duplicate_sku_due_date: "Дубликат строки",
-  route_primary_operation_mismatch: "Основная операция маршрута не совпадает",
-  route_not_matching_import_signature: "Маршрут не совпадает",
-  route_missing_required_step: "Отсутствует обязательный этап",
-  no_route_candidate: "Нет маршрута под правила выбора",
-  route_rule_conflict: "Конфликт правил выбора маршрута",
-  route_contains_excluded_step: "Маршрут содержит исключённый участок",
-  selection_rules: "Маршрут выбран правилами",
-  quantity_must_be_positive: "Количество должно быть > 0",
-};
+import { errorLabels as PLAN_IMPORT_ERROR_LABELS } from "@/shared/lib/generated-labels";
+export { PLAN_IMPORT_ERROR_LABELS };
 
 const warningLabelsRaw: Record<string, string> = {
   paired_profile_product_unmapped: "Парный профиль не сопоставлен",

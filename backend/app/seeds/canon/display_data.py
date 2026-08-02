@@ -16,6 +16,13 @@ STATUS_LABELS = {
     "approved": "Утверждён",
     "released": "Запущен",
     "cancelled": "Отменён",
+    # Импорт-статусы позиций/файлов и UI-псевдостатусы, востребованные фронтом
+    "parsed": "Распознан",
+    "failed": "Ошибка",
+    "applied": "Применён",
+    "completed": "Завершён",
+    "warning": "Предупреждение",
+    "pending": "Ожидает",
 }
 
 OUTPUT_KIND_LABELS = {

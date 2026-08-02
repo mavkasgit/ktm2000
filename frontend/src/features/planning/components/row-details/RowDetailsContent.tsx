@@ -7,23 +7,9 @@ import { updatePositionQuantity } from "@/shared/api/productionPlans"
 import { toast } from "@/shared/ui"
 import { getErrorMessage } from "@/shared/api/client"
 import { queryKeys } from "@/shared/api/queryKeys"
+import { statusLabels } from "@/shared/lib/generated-labels"
 import { ExecutionStagesTable } from "./ExecutionStagesTable"
 import { ExecutionEventsTable } from "./ExecutionEventsTable"
-
-const statusLabels: Record<string, string> = {
-  draft: "Черновик",
-  invalid: "Ошибка",
-  valid: "Валиден",
-  approved: "Утверждён",
-  released: "Запущен",
-  completed: "Завершён",
-  cancelled: "Отменён",
-  parsed: "Распознан",
-  failed: "Ошибка",
-  applied: "Применён",
-  warning: "Предупреждение",
-  pending: "Ожидает",
-}
 
 function planPreviewUrl(planId: number): string {
   return `/plans/${planId}/preview`
