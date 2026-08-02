@@ -17,8 +17,6 @@ export function formatLoginMethod(method: string | null | undefined): string {
       return "Пароль"
     case "invite":
       return "Инвайт"
-    case "otp":
-      return "Одноразовый код"
     case "oidc":
       return "Единый вход"
     default:

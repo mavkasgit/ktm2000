@@ -3,7 +3,6 @@ import {
   fetchMeApi,
   fetchRolesApi,
   loginApi,
-  loginWithOTPApi,
   logoutApi,
   type RoleSections,
   type User,
@@ -27,7 +26,6 @@ interface AuthContextValue {
   isAuthenticated: boolean
   isLoading: boolean
   login: (username: string, password: string) => Promise<void>
-  loginWithOTP: (token: string) => Promise<void>
   loginWithToken: (accessToken: string) => Promise<void>
   logout: () => void | Promise<void>
   /** Re-fetch /auth/me (unified profile pull). */
@@ -84,16 +82,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const login = useCallback(async (username: string, password: string) => {
     const { access_token } = await loginApi(username, password)
-    clearLoggedOutFlag()
-    localStorage.setItem(TOKEN_KEY, access_token)
-    document.cookie = `ktm2000_token=${access_token}; path=/; max-age=86400; SameSite=Lax`
-    const me = await fetchMeApi()
-    setUser(me)
-    void loadRoles()
-  }, [loadRoles])
-
-  const loginWithOTP = useCallback(async (token: string) => {
-    const { access_token } = await loginWithOTPApi(token)
     clearLoggedOutFlag()
     localStorage.setItem(TOKEN_KEY, access_token)
     document.cookie = `ktm2000_token=${access_token}; path=/; max-age=86400; SameSite=Lax`
@@ -174,7 +162,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         isAuthenticated: !!user,
         isLoading,
         login,
-        loginWithOTP,
         loginWithToken,
         logout,
         refreshUser,

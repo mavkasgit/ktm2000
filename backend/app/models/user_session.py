@@ -52,7 +52,7 @@ class UserSession(Base):
     user_agent: Mapped[str | None] = mapped_column(Text, nullable=True)
     # e.g. "Google Chrome (Windows)" — server-side UA parse
     device_label: Mapped[str | None] = mapped_column(String(128), nullable=True)
-    # password | otp | oidc | setup_password
+    # login method: oidc (legacy rows may hold removed methods)
     login_method: Mapped[str] = mapped_column(String(32), nullable=False)
     # sid claim from id_token (OIDC Back-Channel Logout correlation); NULL for non-OIDC logins
     oidc_sid: Mapped[str | None] = mapped_column(String(255), nullable=True)

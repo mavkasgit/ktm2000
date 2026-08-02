@@ -17,7 +17,7 @@ from app.repositories.session_repository import SessionRepository
 
 # --- string constants (validation / storage; not DB enums) ---
 
-LOGIN_METHODS = frozenset({"password", "otp", "oidc", "setup_password"})
+LOGIN_METHODS = frozenset({"oidc"})
 EVENT_TYPES = frozenset({"login_success", "login_failure", "logout", "session_revoke"})
 REVOKE_REASONS = frozenset(
     {"logout", "user_revoke", "password_change", "admin", "expired", "backchannel_logout"}

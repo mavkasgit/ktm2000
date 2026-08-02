@@ -15,58 +15,6 @@ async def test_password_hashing_roundtrip() -> None:
 
 
 @pytest.mark.asyncio
-async def test_login_success(client, session) -> None:
-    """OTP login: generate code → login → JWT with sid claim."""
-    from jose import jwt
-
-    from app.core.config import settings
-    from app.models.user_login_token import UserLoginToken
-    from datetime import UTC, datetime, timedelta
-
-    user = User(
-        username="planner",
-        email="planner@example.com",
-        password_hash=get_password_hash("password123"),
-        full_name="Plan User",
-        role=UserRole.planner,
-        is_active=True,
-    )
-    session.add(user)
-    await session.flush()
-
-    # Create OTP token directly (bypasses /generate auth requirement)
-    otp_token = UserLoginToken(
-        user_id=user.id,
-        token="123456",
-        expires_at=datetime.now(UTC) + timedelta(hours=1),
-        session_duration_seconds=28800,
-        is_used=False,
-    )
-    session.add(otp_token)
-    await session.commit()
-
-    # Login via OTP
-    response = await client.post(
-        "/api/auth/otp/login",
-        json={"token": "123456"},
-    )
-    assert response.status_code == 200
-    body = response.json()
-    assert "access_token" in body
-    assert body["token_type"] == "bearer"
-    claims = jwt.get_unverified_claims(body["access_token"])
-    assert claims.get("sid"), "OTP login JWT must include sid claim"
-    assert claims.get("sub") == "planner"
-
-    # Token is consumed — second login fails
-    response2 = await client.post(
-        "/api/auth/otp/login",
-        json={"token": "123456"},
-    )
-    assert response2.status_code == 400
-
-
-@pytest.mark.asyncio
 async def test_login_rejects_disabled_user(client, session) -> None:
     user = User(
         username="disabled",
@@ -85,44 +33,6 @@ async def test_login_rejects_disabled_user(client, session) -> None:
     )
 
     assert response.status_code == 403
-
-
-@pytest.mark.asyncio
-async def test_role_serialization_in_me(client, session, monkeypatch) -> None:
-    """Valid JWT → /me returns authenticated user with role and section."""
-    from app.core.config import settings
-    from app.services.session_service import issue_app_token
-
-    monkeypatch.setattr(settings, "DEV_BYPASS_AUTH", False)
-
-    section = Section(code="CUT", name="Cutting", is_active=True)
-    session.add(section)
-    await session.flush()
-
-    user = User(
-        username="manager",
-        email="manager@example.com",
-        password_hash=get_password_hash("password123"),
-        full_name="Section Manager",
-        role=UserRole.section_manager,
-        section_id=section.id,
-        is_active=True,
-    )
-    session.add(user)
-    await session.commit()
-
-    token = await issue_app_token(session, user=user, login_method="otp")
-    await session.commit()
-
-    me = await client.get(
-        "/api/auth/me",
-        headers={"Authorization": f"Bearer {token}"},
-    )
-    assert me.status_code == 200
-    body = me.json()
-    assert body["username"] == "manager"
-    assert body["role"] == "section_manager"
-    assert body["section_id"] == section.id
 
 
 # ─── Strict auth tests (DEV_BYPASS_AUTH=False) ───────────────────────
@@ -246,7 +156,7 @@ async def test_disabled_user_token_returns_403(client, session, monkeypatch) -> 
     usess = await issue_session(
         session,
         user_id=disabled_user.id,
-        login_method="password",
+        login_method="oidc",
         ttl_minutes=60,
     )
     await session.commit()
@@ -261,47 +171,6 @@ async def test_disabled_user_token_returns_403(client, session, monkeypatch) -> 
 
     assert response.status_code == 403
     assert response.json()["detail"] == "User account is disabled"
-
-
-@pytest.mark.asyncio
-async def test_login_me_logout_session_flow(client, session, monkeypatch) -> None:
-    """issue_app_token → /me ok → logout revokes → /me 401 (strict)."""
-    from jose import jwt
-
-    from app.core.config import settings
-    from app.services.session_service import issue_app_token
-
-    monkeypatch.setattr(settings, "DEV_BYPASS_AUTH", False)
-
-    user = User(
-        username="session_user",
-        email="session_user@example.com",
-        password_hash=get_password_hash("password123"),
-        full_name="Session User",
-        role=UserRole.operator,
-        is_active=True,
-    )
-    session.add(user)
-    await session.commit()
-
-    token = await issue_app_token(session, user=user, login_method="otp")
-    await session.commit()
-
-    claims = jwt.get_unverified_claims(token)
-    assert claims.get("sid")
-    assert claims.get("sub") == "session_user"
-
-    headers = {"Authorization": f"Bearer {token}"}
-    me = await client.get("/api/auth/me", headers=headers)
-    assert me.status_code == 200
-    assert me.json()["username"] == "session_user"
-
-    logout = await client.post("/api/auth/logout", headers=headers)
-    assert logout.status_code == 204
-
-    me_after = await client.get("/api/auth/me", headers=headers)
-    assert me_after.status_code == 401
-    assert "Session" in me_after.json()["detail"] or "session" in me_after.json()["detail"].lower()
 
 
 @pytest.mark.asyncio

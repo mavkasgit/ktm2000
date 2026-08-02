@@ -36,7 +36,6 @@ from app.schemas.oidc_auth import (
 )
 from app.services.oidc_auth_service import OidcAuthService
 from app.services.session_service import (
-    issue_app_token,
     revoke_session_simple,
     revoke_sessions_for_user,
     revoke_by_oidc_sid,
@@ -111,7 +110,7 @@ def _record_break_glass_event(
 async def oidc_config() -> OidcConfigResponse:
     """
     Public OIDC client config for FE (authorize URL + PKCE params).
-    When disabled: ``enabled=false`` and null fields (password/OTP login unchanged).
+    When disabled: ``enabled=false`` and null fields (break-glass login still available).
     """
     return OidcConfigResponse(**OidcAuthService.public_config())
 

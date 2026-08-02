@@ -34,7 +34,7 @@ class Settings(BaseSettings):
     HRMS_BASE_URL: str | None = None
     HRMS_API_TOKEN: str = "admin"
 
-    # OIDC / Authentik bridge — dual-run; false = local password/OTP only
+    # OIDC / Authentik bridge — false = break-glass login only
     AUTH_OIDC_ENABLED: bool = False
     AUTH_OIDC_ISSUER: str | None = None  # e.g. http://localhost:9000/application/o/ktm2000/
     AUTH_OIDC_CLIENT_ID: str | None = None

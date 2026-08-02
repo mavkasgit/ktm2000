@@ -33,7 +33,7 @@ async def test_sessions_list_returns_active_sessions(client, session, monkeypatc
     session.add(user)
     await session.commit()
 
-    token = await issue_app_token(session, user=user, login_method="password")
+    token = await issue_app_token(session, user=user, login_method="oidc")
 
     response = await client.get(
         "/api/auth/sessions",
@@ -43,7 +43,7 @@ async def test_sessions_list_returns_active_sessions(client, session, monkeypatc
     body = response.json()
     assert len(body) == 1
     assert body[0]["is_current"] is True
-    assert body[0]["login_method"] == "password"
+    assert body[0]["login_method"] == "oidc"
 
 
 @pytest.mark.asyncio
@@ -61,7 +61,7 @@ async def test_revoke_session_success(client, session, monkeypatch) -> None:
     session.add(user)
     await session.commit()
 
-    token = await issue_app_token(session, user=user, login_method="password")
+    token = await issue_app_token(session, user=user, login_method="oidc")
     
     # Получим список сессий
     list_res = await client.get(
@@ -103,11 +103,11 @@ async def test_revoke_other_sessions_success(client, session, monkeypatch) -> No
 
     # Создаем 3 сессии для пользователя
     # 1. С помощью issue_app_token (будет current)
-    token = await issue_app_token(session, user=user, login_method="password")
+    token = await issue_app_token(session, user=user, login_method="oidc")
     
     # 2. Еще две сессии
-    s2 = await issue_session(session, user_id=user.id, login_method="password", ttl_minutes=60)
-    s3 = await issue_session(session, user_id=user.id, login_method="password", ttl_minutes=60)
+    s2 = await issue_session(session, user_id=user.id, login_method="oidc", ttl_minutes=60)
+    s3 = await issue_session(session, user_id=user.id, login_method="oidc", ttl_minutes=60)
     await session.commit()
 
     # Проверяем, что в списке 3 активных сессии
@@ -161,8 +161,8 @@ async def test_revoke_nonexistent_or_foreign_session_returns_404(client, session
     session.add(user2)
     await session.commit()
 
-    token1 = await issue_app_token(session, user=user1, login_method="password")
-    token2 = await issue_app_token(session, user=user2, login_method="password")
+    token1 = await issue_app_token(session, user=user1, login_method="oidc")
+    token2 = await issue_app_token(session, user=user2, login_method="oidc")
 
     # Получим ID сессии пользователя 2
     list_res2 = await client.get(
