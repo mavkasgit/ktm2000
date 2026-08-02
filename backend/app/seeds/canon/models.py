@@ -129,6 +129,24 @@ class TransformingOpRef(BaseModel):
         )
 
 
+class ScrapPolicy(BaseModel):
+    """Политика брака: параметры SCRAP-секции (тикет #25)."""
+
+    code: str = "SCRAP"
+    name: str = "Scrap"
+    section_type: str = "scrap"
+    sort_order: int = 999
+
+
+class StockLocationTypes(BaseModel):
+    """Типы складских секций (тикет #25)."""
+
+    raw_stock: str = "raw_stock"
+    wip_stock: str = "wip_stock"
+    finished_stock: str = "finished_stock"
+    scrap: str = "scrap"
+
+
 class ProductionCanon(BaseModel):
     """Производственные политики: участки, операции, подвески, обработка."""
 
@@ -137,6 +155,8 @@ class ProductionCanon(BaseModel):
     sections: list[SectionDef] = Field(default_factory=list)
     ops: list[OperationDef] = Field(default_factory=list)
     transforming_ops: list[TransformingOpRef] = Field(default_factory=list)
+    scrap_policy: ScrapPolicy = Field(default_factory=ScrapPolicy)
+    stock_location_types: StockLocationTypes = Field(default_factory=StockLocationTypes)
 
 
 # ─── Routing canon (заглушка для #24) ────────────────────────────────────────

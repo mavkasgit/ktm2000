@@ -12,16 +12,15 @@ from app.models.section import Section
 from app.services.route_matcher import resolve_position_route
 from app.services.route_selection import select_route_for_payload
 
+# Derived из LabelsCanon (ADR-0004): ключи с префиксом "route_" + route-специфичные.
+# Устраняет мёртвый дубль ключей plant_policies.
+from app.seeds.canon.registry import build_plant_config as _build
 
-ROUTE_ERROR_CODES = {
-    "route_not_matching_import_signature",
-    "route_missing_required_step",
-    "route_missing_pack_additional_operation",
-    "route_primary_operation_mismatch",
-    "route_contains_excluded_step",
-    "route_rule_conflict",
-    "no_route_candidate",
-}
+_ROUTE_PREFIXES = ("route_", "no_route_")
+ROUTE_ERROR_CODES: frozenset[str] = frozenset(
+    k for k in _build().display.labels.error_messages
+    if any(k.startswith(p) for p in _ROUTE_PREFIXES)
+)
 
 
 def _make_hashable(val):

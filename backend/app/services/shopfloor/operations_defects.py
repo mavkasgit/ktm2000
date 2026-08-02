@@ -190,16 +190,18 @@ async def defect_decide(
     from app.models.section import Section as _Section
 
     if decision_type == DefectDecisionType.scrap:
-        from app.services.route_storage_classifier import SECTION_TYPE_SCRAP
+        # ADR-0004: данные SCRAP-секции из канона
+        from app.seeds.canon.registry import build_plant_config as _build_cfg
+        _scrap = _build_cfg().production.scrap_policy
         from_sec_id = task.section_id if task else defect.section_id
         # Find or auto-create scrap location
         scrap_loc = await db.scalar(
-            select(_Section.id).where(_Section.type == SECTION_TYPE_SCRAP).limit(1)
+            select(_Section.id).where(_Section.type == _scrap.section_type).limit(1)
         )
         if scrap_loc is None:
             scrap_sec = _Section(
-                code="SCRAP", name="Scrap",
-                type=SECTION_TYPE_SCRAP, is_active=True, sort_order=999,
+                code=_scrap.code, name=_scrap.name,
+                type=_scrap.section_type, is_active=True, sort_order=_scrap.sort_order,
             )
             db.add(scrap_sec)
             await db.flush()
