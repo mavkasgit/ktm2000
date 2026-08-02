@@ -456,6 +456,47 @@ export const backupTypeLabels: Record<string, string> = {
   "weekly": "Еженедельный",
 }
 
+// Лейблы типов продуктов
+export const productTypeLabels: Record<string, string> = {
+  "component": "Сырье",
+  "finished_good": "ГП",
+  "material": "Материал",
+  "semi_finished": "П/ф",
+}
+
+// Лейблы колонок печати плана
+export const printColumnLabels: Record<string, string> = {
+  "operationName": "Операция",
+  "productSku": "Артикул",
+  "qtyBalance": "Остаток",
+  "qtyPlan": "План",
+  "qtyRemaining": "Осталось выдать",
+  "qtyTransferred": "Передано",
+}
+
+// Лейблы критериев группировки
+export const groupingCriterionLabels: Record<string, string> = {
+  "customField": "Поля из source_payload",
+  "fingerprint": "Полная сигнатура",
+  "operationCode": "Код операции",
+  "outputKind": "Цвет / тип выхода",
+  "productSku": "Артикул (output)",
+  "routeHistory": "История до",
+  "routeHistoryAfter": "История после",
+  "routeStepId": "Шаг маршрута",
+  "sourceRef": "Ссылка на заказ",
+}
+
+// Короткие лейблы фильтров
+export const filterShortLabels: Record<string, string> = {
+  "has_duplicates": "Дубликаты",
+  "has_errors": "Ошибки",
+  "has_route": "Маршрут",
+  "has_warnings": "Предупр.",
+  "status": "Статус",
+  "validation_status": "Валидация",
+}
+
 // Каталог ролей: code -> (label, sections)
 export interface RoleDef { code: string; label: string; sections: string[] }
 export const roles: RoleDef[] = [

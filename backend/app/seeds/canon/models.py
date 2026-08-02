@@ -46,6 +46,10 @@ class LabelsCanon(BaseModel):
     backup_storage_labels: dict[str, str] = Field(default_factory=dict)
     backup_stage_labels: dict[str, str] = Field(default_factory=dict)
     backup_type_labels: dict[str, str] = Field(default_factory=dict)
+    product_type_labels: dict[str, str] = Field(default_factory=dict)
+    print_column_labels: dict[str, str] = Field(default_factory=dict)
+    grouping_criterion_labels: dict[str, str] = Field(default_factory=dict)
+    filter_short_labels: dict[str, str] = Field(default_factory=dict)
 
     _label_fields: ClassVar[tuple[str, ...]] = (
         "error_messages",
@@ -69,6 +73,10 @@ class LabelsCanon(BaseModel):
         "backup_storage_labels",
         "backup_stage_labels",
         "backup_type_labels",
+        "product_type_labels",
+        "print_column_labels",
+        "grouping_criterion_labels",
+        "filter_short_labels",
     )
 
     @field_validator(*_label_fields)

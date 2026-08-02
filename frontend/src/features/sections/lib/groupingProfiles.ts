@@ -179,17 +179,7 @@ export function resetSectionProfile(sectionId: number): void {
 // Утилиты для UI
 // ---------------------------------------------------------------------------
 
-export const CRITERION_LABELS: Record<GroupingCriterion, string> = {
-  productSku:    "Артикул (output)",
-  routeStepId:   "Шаг маршрута",
-  operationCode: "Код операции",
-  outputKind:    "Цвет / тип выхода",
-  sourceRef:     "Ссылка на заказ",
-  fingerprint:   "Полная сигнатура",
-  customField:   "Поля из source_payload",
-  routeHistory:  "История до",
-  routeHistoryAfter: "История после",
-};
+export { groupingCriterionLabels as CRITERION_LABELS } from "@/shared/lib/generated-labels";
 
 
 export function getProfilePreview(profile: GroupingProfile): string {

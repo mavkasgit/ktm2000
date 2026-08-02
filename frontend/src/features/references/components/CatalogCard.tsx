@@ -3,14 +3,8 @@ import { Image, Check, CheckCheck } from "lucide-react";
 import { Card, CardContent } from "@/shared/ui/Card";
 import { Badge } from "@/shared/ui/Badge";
 import { getPhotoUrl } from "./getPhotoUrl";
-import type { Product, ProductType } from "@/shared/api/products";
-
-const TYPE_LABELS: Record<ProductType, string> = {
-  finished_good: "ГП",
-  semi_finished: "П/ф",
-  component: "Сырье",
-  material: "Материал",
-};
+import type { Product } from "@/shared/api/products";
+import { productTypeLabels } from "@/shared/lib/generated-labels";
 
 function getProductLengths(product: Product): number[] {
   return [...new Set([...(product.lengths_mm ?? []), product.length_mm ?? undefined].filter((v): v is number => typeof v === "number" && Number.isFinite(v) && v > 0))]
@@ -58,7 +52,7 @@ export function CatalogCard({
               </div>
             </div>
             <div className="flex gap-1 mt-2 flex-wrap">
-              <Badge variant="outline" className="text-xs">{TYPE_LABELS[product.type]}</Badge>
+              <Badge variant="outline" className="text-xs">{productTypeLabels[product.type]}</Badge>
               {product.profile_type && <Badge variant="secondary" className="text-xs">{product.profile_type}</Badge>}
               {product.color && <Badge variant="secondary" className="text-xs">{product.color}</Badge>}
               {(() => {

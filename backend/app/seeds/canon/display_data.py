@@ -210,6 +210,43 @@ BACKUP_TYPE_LABELS = {
     "manual": "Вручную",
 }
 
+PRODUCT_TYPE_LABELS = {
+    "finished_good": "ГП",
+    "semi_finished": "П/ф",
+    "component": "Сырье",
+    "material": "Материал",
+}
+
+PRINT_COLUMN_LABELS = {
+    "productSku": "Артикул",
+    "operationName": "Операция",
+    "qtyPlan": "План",
+    "qtyRemaining": "Осталось выдать",
+    "qtyTransferred": "Передано",
+    "qtyBalance": "Остаток",
+}
+
+GROUPING_CRITERION_LABELS = {
+    "productSku": "Артикул (output)",
+    "routeStepId": "Шаг маршрута",
+    "operationCode": "Код операции",
+    "outputKind": "Цвет / тип выхода",
+    "sourceRef": "Ссылка на заказ",
+    "fingerprint": "Полная сигнатура",
+    "customField": "Поля из source_payload",
+    "routeHistory": "История до",
+    "routeHistoryAfter": "История после",
+}
+
+FILTER_SHORT_LABELS = {
+    "status": "Статус",
+    "validation_status": "Валидация",
+    "has_route": "Маршрут",
+    "has_errors": "Ошибки",
+    "has_warnings": "Предупр.",
+    "has_duplicates": "Дубликаты",
+}
+
 # Переводы серверных ошибок (англ. фразы с плейсхолдерами {0}, {1}, ...) → RU.
 # Ключи — точные английские строки бэкенда; фронт сохраняет логику
 # нормализации (toTemplate) и подстановки значений.

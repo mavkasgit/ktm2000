@@ -55,14 +55,7 @@ export const ALL_PRINT_COLUMNS: PrintColumn[] = [
   "qtyBalance",
 ];
 
-export const PRINT_COLUMN_LABELS: Record<PrintColumn, string> = {
-  productSku: "Артикул",
-  operationName: "Операция",
-  qtyPlan: "План",
-  qtyRemaining: "Осталось выдать",
-  qtyTransferred: "Передано",
-  qtyBalance: "Остаток",
-};
+export { printColumnLabels as PRINT_COLUMN_LABELS } from "@/shared/lib/generated-labels";
 
 // ---------------------------------------------------------------------------
 // PrintPreviewTable

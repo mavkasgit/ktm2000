@@ -1,16 +1,9 @@
+import { filterShortLabels } from "@/shared/lib/generated-labels";
+
 export interface ActiveFilterSummary {
   count: number;
   labels: string[];
 }
-
-const FILTER_SHORT_LABELS: Record<string, string> = {
-  status: "Статус",
-  validation_status: "Валидация",
-  has_route: "Маршрут",
-  has_errors: "Ошибки",
-  has_warnings: "Предупр.",
-  has_duplicates: "Дубликаты",
-};
 
 export interface BuildActiveFilterSummaryOptions {
   columnFilters?: Partial<Record<string, Set<string>>>;
@@ -36,7 +29,7 @@ export function buildActiveFilterSummary(
 
   for (const [key, value] of Object.entries(filters)) {
     if (typeof value === "string" && value !== "all") {
-      const shortLabel = FILTER_SHORT_LABELS[key] ?? key;
+      const shortLabel = filterShortLabels[key] ?? key;
       labels.push(shortLabel);
     }
   }
