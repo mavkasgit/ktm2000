@@ -382,3 +382,44 @@ class TestQualityCanonIntegrity:
         for t in config.quality.defect_types:
             assert t.code.strip()
             assert t.name.strip()
+
+
+class TestDisplayCanonIntegrity:
+    """Display canon (тикет #26): лейблы и роли."""
+
+    def test_status_labels_cover_position_statuses(self) -> None:
+        """status_labels покрывают ключевые статусы позиции плана."""
+        config = build_plant_config()
+        labels = config.display.labels.status_labels
+        for status in ("draft", "invalid", "valid", "approved", "released", "cancelled"):
+            assert labels.get(status), f"Missing status label: {status}"
+
+    def test_output_kind_labels_cover_known_kinds(self) -> None:
+        """output_kind_labels покрывают известные виды выпуска."""
+        config = build_plant_config()
+        labels = config.display.labels.output_kind_labels
+        assert "ГП" in labels
+        assert "П/ф" in labels
+
+    def test_error_messages_still_populated(self) -> None:
+        """error_messages не потерялись при расширении LabelsCanon."""
+        config = build_plant_config()
+        assert len(config.display.labels.error_messages) > 0
+
+    def test_roles_loaded_six_roles(self) -> None:
+        """Каталог ролей содержит 6 ролей с подписями."""
+        config = build_plant_config()
+        assert len(config.display.roles.roles) == 6
+        for role in config.display.roles.roles:
+            assert role.label.strip()
+            assert role.sections
+
+    def test_role_codes_unique_and_valid(self) -> None:
+        """Правило 2: коды ролей уникальны и допустимы."""
+        from app.models.user import UserRole
+
+        config = build_plant_config()
+        codes = [role.code.value for role in config.display.roles.roles]
+        assert len(codes) == len(set(codes))
+        valid = {role.value for role in UserRole}
+        assert set(codes) <= valid

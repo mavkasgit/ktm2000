@@ -27,7 +27,8 @@ from app.schemas.auth import (
     RolesResponse,
     TokenResponse,
 )
-from app.services.roles_catalog import roles_catalog
+from app.seeds.canon.dependencies import get_plant_config
+from app.seeds.canon.models import PlantConfig
 from app.schemas.oidc_auth import (
     OidcCallbackRequest,
     OidcConfigResponse,
@@ -428,13 +429,19 @@ async def logout(
 
 
 @router.get("/roles", response_model=RolesResponse)
-async def roles() -> RolesResponse:
+async def roles(config: PlantConfig = Depends(get_plant_config)) -> RolesResponse:
     """Справочник ролей: коды, подписи и допустимые разделы навигации (публичный).
 
     Без ``require_role`` — каталог нужен любому авторизованному для построения
     навигации и подписей ролей на клиенте.
+    Данные — DisplayCanon.roles из PlantConfig (ADR-0004, тикет #26).
     """
-    return RolesResponse(roles=[RoleSections(**entry) for entry in roles_catalog()])
+    return RolesResponse(
+        roles=[
+            RoleSections(code=entry.code, label=entry.label, sections=entry.sections)
+            for entry in config.display.roles.roles
+        ]
+    )
 
 
 @router.get("/me", response_model=MeResponse)

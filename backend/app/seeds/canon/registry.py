@@ -17,6 +17,7 @@ from app.seeds.canon.models import (
     ProcessingFlags,
     ProductionCanon,
     QualityCanon,
+    RolesCanon,
     RouteRuleProfileDef,
     RoutingCanon,
     SPGDef,
@@ -78,6 +79,7 @@ def build_plant_config() -> PlantConfig:
     )
 
     quality = _build_quality_canon()
+    display = _build_display_canon(color_tokens, VALIDATION_ERROR_MESSAGES)
 
     # Cross-ref валидация
     _validate_no_duplicate_color_tokens(color_tokens)
@@ -95,10 +97,39 @@ def build_plant_config() -> PlantConfig:
         ),
         routing=routing,
         quality=quality,
-        display=DisplayCanon(
-            colors=ColorsCanon(tokens=color_tokens),
-            labels=LabelsCanon(error_messages=dict(VALIDATION_ERROR_MESSAGES)),
+        display=display,
+    )
+
+
+def _build_display_canon(
+    color_tokens: list[ColorToken],
+    error_messages: dict[str, str],
+) -> DisplayCanon:
+    """Собирает DisplayCanon (лейблы, роли) и проверяет cross-ref правила 2, 3, 6."""
+    from app.seeds.canon.display_data import (
+        OUTPUT_KIND_LABELS,
+        ROLE_DEFS,
+        STATUS_LABELS,
+    )
+    from app.models.user import UserRole
+
+    role_codes = [r.code.value for r in ROLE_DEFS]
+    _validate_unique_codes(role_codes, "role")
+    valid_role_codes = {role.value for role in UserRole}
+    for role in ROLE_DEFS:
+        if role.code.value not in valid_role_codes:
+            raise ValueError(f"Unknown role code: {role.code!r}")
+        if not role.label.strip():
+            raise ValueError(f"Role '{role.code}' has blank label")
+
+    return DisplayCanon(
+        colors=ColorsCanon(tokens=color_tokens),
+        labels=LabelsCanon(
+            error_messages=dict(error_messages),
+            status_labels=dict(STATUS_LABELS),
+            output_kind_labels=dict(OUTPUT_KIND_LABELS),
         ),
+        roles=RolesCanon(roles=ROLE_DEFS),
     )
 
 

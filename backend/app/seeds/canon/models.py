@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from typing import Annotated, Literal
 
+from app.models.user import UserRole
 from pydantic import BaseModel, Field, field_validator
 
 
@@ -25,13 +26,15 @@ class LabelsCanon(BaseModel):
     """Тексты ошибок валидации и прочие UI-лейблы."""
 
     error_messages: dict[str, str] = Field(default_factory=dict)
+    status_labels: dict[str, str] = Field(default_factory=dict)
+    output_kind_labels: dict[str, str] = Field(default_factory=dict)
 
-    @field_validator("error_messages")
+    @field_validator("error_messages", "status_labels", "output_kind_labels")
     @classmethod
     def _keys_non_empty(cls, v: dict[str, str]) -> dict[str, str]:
         for key in v:
             if not key.strip():
-                raise ValueError("error_messages key must not be blank")
+                raise ValueError("label key must not be blank")
         return v
 
 
@@ -51,10 +54,18 @@ class ColorsCanon(BaseModel):
         return v
 
 
-class RolesCanon(BaseModel):
-    """Каталог ролей (заглушка для тикета #26)."""
+class RoleDef(BaseModel):
+    """Определение роли: код, подпись, разделы навигации (тикет #26)."""
 
-    catalog: dict[str, str] = Field(default_factory=dict)
+    code: UserRole
+    label: str = Field(min_length=1)
+    sections: list[str] = Field(default_factory=list)
+
+
+class RolesCanon(BaseModel):
+    """Каталог ролей (тикет #26)."""
+
+    roles: list[RoleDef] = Field(default_factory=list)
 
 
 class DisplayCanon(BaseModel):
