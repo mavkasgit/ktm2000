@@ -82,14 +82,61 @@ class ProcessingFlags(BaseModel):
     standart: str = Field(min_length=1)
 
 
+class SectionDef(BaseModel):
+    """Определение участка (тикет #23)."""
+
+    code: str = Field(min_length=1)
+    name: str = Field(min_length=1)
+    sort_order: int = 0
+    type: str = Field(min_length=1)
+    icon: str | None = None
+    icon_color: str | None = None
+    is_active: bool = True
+
+
+class OperationDef(BaseModel):
+    """Определение операции участка (тикет #23)."""
+
+    section_code: str = Field(min_length=1)
+    group_code: str | None = None
+    group_name: str | None = None
+    sort_order: int = 0
+    operation_code: str | None = None
+    operation_name: str = Field(min_length=1)
+    is_significant: bool = False
+    icon: str | None = None
+    icon_color: str | None = None
+    resolver_type: str | None = None
+    resolver_config: dict = Field(default_factory=dict)
+    operation_type: Literal["production", "transport"] = "production"
+
+
+class TransformingOpRef(BaseModel):
+    """Ссылка на операцию, трансформирующую габариты (тикет #23)."""
+
+    section_code: str = Field(min_length=1)
+    operation_code: str = Field(min_length=1)
+
+    def __hash__(self) -> int:
+        return hash((self.section_code, self.operation_code))
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, TransformingOpRef):
+            return NotImplemented
+        return (self.section_code, self.operation_code) == (
+            other.section_code,
+            other.operation_code,
+        )
+
+
 class ProductionCanon(BaseModel):
     """Производственные политики: участки, операции, подвески, обработка."""
 
     hanger_rounding: HangerRoundingRule = Field(default_factory=HangerRoundingRule)
     processing_flags: ProcessingFlags
-    # sections, ops, scrap_policy, stock_locations — заглушки для #23/#25
-    sections: list[dict] = Field(default_factory=list)
-    ops: list[dict] = Field(default_factory=list)
+    sections: list[SectionDef] = Field(default_factory=list)
+    ops: list[OperationDef] = Field(default_factory=list)
+    transforming_ops: list[TransformingOpRef] = Field(default_factory=list)
 
 
 # ─── Routing canon (заглушка для #24) ────────────────────────────────────────

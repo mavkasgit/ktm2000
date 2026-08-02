@@ -5,6 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.route import SectionOperation
 from app.models.section import Section
+from app.seeds.canon.models import OperationDef, ProductionCanon, SectionDef, TransformingOpRef
 
 SECTIONS_DATA = [
     {"code": "RAW_STOCK", "name": "Склад сырья", "sort_order": 10, "type": "raw_stock", "icon": "Warehouse", "icon_color": "#F59E0B"},
@@ -84,79 +85,140 @@ TRANSFORMING_SECTION_OPS: set[tuple[str, str]] = {
 }
 
 
-async def seed_sections(db: AsyncSession, force: bool = False) -> dict[str, Section]:
-    """Upsert all sections by code. Returns {code: section} map."""
+async def seed_sections(
+    db: AsyncSession,
+    sections: list[SectionDef] | None = None,
+    force: bool = False,
+) -> dict[str, Section]:
+    """Upsert all sections by code. Returns {code: section} map.
+
+    Принимает typed-модели из PlantConfig (ADR-0004).
+    Если sections=None — использует RAW-данные (backward compat).
+    """
+    if sections is None:
+        sections = [SectionDef.model_validate(d) for d in SECTIONS_DATA]
+
     result: dict[str, Section] = {}
 
-    for data in SECTIONS_DATA:
-        section = await db.scalar(select(Section).where(Section.code == data["code"]))
+    for sdef in sections:
+        section = await db.scalar(select(Section).where(Section.code == sdef.code))
         if section is None:
-            section = Section(**data, is_active=True)
+            section = Section(
+                code=sdef.code,
+                name=sdef.name,
+                sort_order=sdef.sort_order,
+                type=sdef.type,
+                icon=sdef.icon,
+                icon_color=sdef.icon_color,
+                is_active=sdef.is_active,
+            )
             db.add(section)
             await db.flush()
         else:
-            for key, value in data.items():
-                setattr(section, key, value)
-            section.is_active = True
+            section.name = sdef.name
+            section.sort_order = sdef.sort_order
+            section.type = sdef.type
+            section.icon = sdef.icon
+            section.icon_color = sdef.icon_color
+            section.is_active = sdef.is_active
 
-        result[data["code"]] = section
+        result[sdef.code] = section
 
     return result
 
 
-async def seed_section_operations(db: AsyncSession, sections_map: dict[str, Section]) -> int:
-    """Upsert SectionOperation records for each section. Returns count of operations."""
+async def seed_section_operations(
+    db: AsyncSession,
+    sections_map: dict[str, Section],
+    production: ProductionCanon | None = None,
+) -> int:
+    """Upsert SectionOperation records for each section. Returns count.
+
+    Принимает typed-модели из PlantConfig (ADR-0004).
+    Если production=None — использует RAW-данные (backward compat).
+    """
+    if production is not None:
+        ops_list = production.ops
+        transforming_set = {
+            (ref.section_code, ref.operation_code)
+            for ref in production.transforming_ops
+        }
+    else:
+        ops_list = _convert_raw_ops()
+        transforming_set = TRANSFORMING_SECTION_OPS
+
     count = 0
 
-    for section_code, ops in SECTION_OPS.items():
-        section = sections_map.get(section_code)
+    for op in ops_list:
+        section = sections_map.get(op.section_code)
         if not section:
             continue
 
-        for group_code, group_name, sort_order, op_code, op_name, is_sig, icon, icon_color, resolver_type, resolver_config, operation_type in ops:
-            # Skip placeholder operations with None operation_code — they can't be
-            # stored in SectionOperation (operation_code is NOT NULL).
-            # Resolver info for placeholders is stored on the first non-None operation
-            # of the same group.
-            if op_code is None:
-                continue
+        # Skip placeholder operations with None operation_code
+        if op.operation_code is None:
+            continue
 
-            transforms = (section_code, op_code) in TRANSFORMING_SECTION_OPS
-            existing = await db.scalar(
-                select(SectionOperation).where(
-                    SectionOperation.section_id == section.id,
-                    SectionOperation.operation_code == op_code,
-                )
+        transforms = (op.section_code, op.operation_code) in transforming_set
+        existing = await db.scalar(
+            select(SectionOperation).where(
+                SectionOperation.section_id == section.id,
+                SectionOperation.operation_code == op.operation_code,
             )
-            if existing:
-                existing.operation_name = op_name
-                existing.is_significant = is_sig
-                existing.transforms_dimensions = transforms
-                existing.icon = icon
-                existing.icon_color = icon_color
-                existing.group_code = group_code
-                existing.group_name = group_name
-                existing.sort_order = sort_order
-                existing.resolver_type = resolver_type
-                existing.resolver_config = resolver_config
-                existing.operation_type = operation_type
-            else:
-                db.add(SectionOperation(
-                    section_id=section.id,
-                    operation_code=op_code,
-                    operation_name=op_name,
-                    is_significant=is_sig,
-                    transforms_dimensions=transforms,
-                    icon=icon,
-                    icon_color=icon_color,
-                    group_code=group_code,
-                    group_name=group_name,
-                    sort_order=sort_order,
-                    resolver_type=resolver_type,
-                    resolver_config=resolver_config,
-                    operation_type=operation_type,
-                ))
-            count += 1
+        )
+        if existing:
+            existing.operation_name = op.operation_name
+            existing.is_significant = op.is_significant
+            existing.transforms_dimensions = transforms
+            existing.icon = op.icon
+            existing.icon_color = op.icon_color
+            existing.group_code = op.group_code
+            existing.group_name = op.group_name
+            existing.sort_order = op.sort_order
+            existing.resolver_type = op.resolver_type
+            existing.resolver_config = op.resolver_config
+            existing.operation_type = op.operation_type
+        else:
+            db.add(SectionOperation(
+                section_id=section.id,
+                operation_code=op.operation_code,
+                operation_name=op.operation_name,
+                is_significant=op.is_significant,
+                transforms_dimensions=transforms,
+                icon=op.icon,
+                icon_color=op.icon_color,
+                group_code=op.group_code,
+                group_name=op.group_name,
+                sort_order=op.sort_order,
+                resolver_type=op.resolver_type,
+                resolver_config=op.resolver_config,
+                operation_type=op.operation_type,
+            ))
+        count += 1
 
     await db.flush()
     return count
+
+
+def _convert_raw_ops() -> list[OperationDef]:
+    """Конвертирует RAW SECTION_OPS в OperationDef (backward compat)."""
+    result: list[OperationDef] = []
+    for section_code, ops in SECTION_OPS.items():
+        for tup in ops:
+            (group_code, group_name, sort_order, op_code, op_name,
+             is_sig, icon, icon_color, resolver_type, resolver_config,
+             operation_type) = tup
+            result.append(OperationDef(
+                section_code=section_code,
+                group_code=group_code,
+                group_name=group_name,
+                sort_order=sort_order,
+                operation_code=op_code,
+                operation_name=op_name,
+                is_significant=is_sig,
+                icon=icon,
+                icon_color=icon_color,
+                resolver_type=resolver_type,
+                resolver_config=resolver_config or {},
+                operation_type=operation_type,
+            ))
+    return result

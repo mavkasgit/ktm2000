@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.seeds.canon.models import PlantConfig
+from app.seeds.canon.registry import build_plant_config
 from app.seeds.import_templates import IMPORT_TEMPLATES
 from app.seeds.route_rule_profiles import ROUTE_RULE_PROFILES
 from app.seeds.routes import ROUTES
@@ -19,11 +21,17 @@ from app.seeds.seeders.spgs_seeder import seed_spgs
 from app.seeds.seeders.users_seeder import seed_users
 
 
-async def run_full_seed(db: AsyncSession, force: bool = False) -> dict:
+async def run_full_seed(
+    db: AsyncSession, force: bool = False, config: PlantConfig | None = None
+) -> dict:
     """Seed all reference data in one transaction.
 
-    Returns counters for each entity type.
+    Принимает typed PlantConfig (ADR-0004). Если config=None — строит
+    из RAW-данных. Returns counters for each entity type.
     """
+    if config is None:
+        config = build_plant_config()
+
     result: dict = {}
 
     if force:
@@ -33,12 +41,12 @@ async def run_full_seed(db: AsyncSession, force: bool = False) -> dict:
     users_map = await seed_users(db)
     result["users"] = len(users_map)
 
-    # 1. Sections (required by routes)
-    sections_map = await seed_sections(db)
+    # 1. Sections (required by routes) — typed из PlantConfig
+    sections_map = await seed_sections(db, config.production.sections)
     result["sections"] = len(sections_map)
 
-    # 1.1. Section operations
-    ops_count = await seed_section_operations(db, sections_map)
+    # 1.1. Section operations — typed из PlantConfig
+    ops_count = await seed_section_operations(db, sections_map, config.production)
     result["section_operations"] = ops_count
 
     # 1.1.1. Processing flags reference catalog (#17)
