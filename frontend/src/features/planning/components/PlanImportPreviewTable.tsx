@@ -9,22 +9,8 @@ import {
   type ImportRowExpansion,
 } from "@/shared/ui/import-utils";
 
-import { errorLabels as PLAN_IMPORT_ERROR_LABELS } from "@/shared/lib/generated-labels";
+import { errorLabels as PLAN_IMPORT_ERROR_LABELS, warningLabels } from "@/shared/lib/generated-labels";
 export { PLAN_IMPORT_ERROR_LABELS };
-
-const warningLabelsRaw: Record<string, string> = {
-  paired_profile_product_unmapped: "Парный профиль не сопоставлен",
-  techcard_pair_not_resolved: "Не выбран парный профиль",
-  product_name_missing: "Отсутствует наименование",
-  period_not_detected: "не определен",
-  row_selection_applied: "Применён фильтр строк",
-  row_selection_auto_included: "Автодобавлены парные строки",
-  paired_row_auto_included: "Автодобавлена парная строка",
-  route_auto_fallback: "Маршрут скорректирован автоматически — проверьте корректность",
-  paired_hanger_adjusted: "Округлено для компонента парной техкарты",
-  paired_hanger_mismatch: "Разное кол-во на подвес у компонентов парной техкарты",
-  hanger_quantity_not_set: "quantity_per_hanger не задан — количество не округлено",
-};
 
 function translateLabels(
   codes: string[] | unknown,
@@ -178,7 +164,7 @@ export function PlanImportPreviewTable({
           const afterData = (row.after_data as Record<string, unknown> | undefined) ?? {};
           const status = String(row.status ?? "");
           const errors = translateLabels(row.errors as string[] | undefined, PLAN_IMPORT_ERROR_LABELS, afterData);
-          const warnings = translateLabels(row.warnings as string[] | undefined, warningLabelsRaw);
+          const warnings = translateLabels(row.warnings as string[] | undefined, warningLabels);
           const noErrors = errors === "—";
           const noWarnings = warnings === "—";
           const routeColSpan = noErrors && noWarnings ? 3 : noWarnings ? 2 : 1;

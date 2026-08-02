@@ -1,24 +1,6 @@
-import { errorLabels, statusLabels } from "@/shared/lib/generated-labels";
+import { actionLabels, errorLabels, statusLabels, warningLabels } from "@/shared/lib/generated-labels";
 
 type UnknownRecord = Record<string, unknown>;
-
-const actionLabels: Record<string, string> = {
-  create_position: "Создать",
-  update_draft_position: "Обновить",
-  ignore_unchanged: "Без изменений",
-  cancel_draft_position: "Отменить",
-  mark_possible_duplicate: "Возможный дубль",
-};
-
-const warningLabels: Record<string, string> = {
-  paired_profile_product_unmapped: "Парный профиль не сопоставлен",
-  techcard_pair_not_resolved: "Не выбран парный профиль техкарты",
-  product_name_missing: "Отсутствует наименование",
-  period_not_detected: "не определен",
-  paired_hanger_adjusted: "Округлено для компонента парной техкарты",
-  paired_hanger_mismatch: "Разное кол-во на подвес у компонентов парной техкарты",
-  hanger_quantity_not_set: "quantity_per_hanger не задан — количество не округлено",
-};
 
 function translateCodes(codes: string[] | unknown, labels: Record<string, string>): string {
   if (!Array.isArray(codes)) return String(codes ?? "");

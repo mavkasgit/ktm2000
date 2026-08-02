@@ -1,10 +1,11 @@
 import { PlanPositionOut } from "@/shared/api/productionPlans"
-import { errorLabels, statusLabels } from "@/shared/lib/generated-labels"
+import { errorLabels, statusLabels, validationLabels, warningLabels } from "@/shared/lib/generated-labels"
 
-export { errorLabels, statusLabels }
+export { errorLabels, statusLabels, validationLabels, warningLabels }
 export { errorLabels as routeErrorLabels } from "@/shared/lib/generated-labels"
 
 export const planStatusLabels = statusLabels
+export const planValidationLabels = validationLabels
 
 export const statusVariant: Record<string, string> = {
   parsed: "secondary",
@@ -16,14 +17,6 @@ export const statusVariant: Record<string, string> = {
   invalid: "destructive",
   approved: "default",
   released: "default",
-}
-
-export const warningLabels: Record<string, string> = {
-  paired_profile_product_unmapped: "Парный профиль не сопоставлен",
-  techcard_pair_not_resolved: "Не выбран парный профиль техкарты",
-  product_name_missing: "Отсутствует наименование",
-  period_not_detected: "не определен",
-  route_auto_fallback: "Маршрут скорректирован автоматически — проверьте корректность",
 }
 
 export function translateLabel(code: string, labels: Record<string, string>): string {
@@ -81,12 +74,6 @@ export function isRiskyForApprove(pos: PlanPositionOut, duplicateConflict?: Dupl
 }
 
 export type PlanSortField = "id" | "rowNum" | "sku" | "name" | "qty" | "route" | "status" | "validation" | "errors" | "warnings"
-
-export const planValidationLabels: Record<string, string> = {
-  valid: "Пройдена",
-  invalid: "Ошибка",
-  pending: "Ожидает",
-}
 
 export interface PlanFiltersState {
   status: "all" | "draft" | "valid" | "invalid"

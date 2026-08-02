@@ -1,4 +1,7 @@
 import type { SectionBoardTask } from "@/shared/api/shopfloor";
+import { taskStatusLabels } from "@/shared/lib/generated-labels";
+
+export { taskStatusLabels };
 
 const ACTIVE_STATUSES = new Set([
   "ready",
@@ -25,23 +28,6 @@ export function getTaskViewCategory(task: SectionBoardTask): TaskViewCategory {
   if (ACTIVE_STATUSES.has(task.status)) return "active";
   return "active";
 }
-
-export const taskStatusLabels: Record<string, string> = {
-  waiting_previous: "Ожидает",
-  in_progress: "В работе",
-  partially_completed: "Частично",
-  completed: "Завершен",
-  cancelled: "Отменен",
-  // Новые статусы
-  pending: "Ожидает",
-  in_work: "В работе",
-  done: "Завершен",
-  partially: "Частично",
-  blocked: "Блокировка",
-  // "ready" намеренно отсутствует: для этого статуса показываем
-  // "Передано"/"Не передано" через getReadyStatusLabel (зависит от
-  // previous_stage.transferred_quantity).
-};
 
 export const taskStatusColor: Record<string, string> = {
   waiting_previous: "bg-gray-100 text-gray-600",

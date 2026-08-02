@@ -1,12 +1,7 @@
 import { Badge, Button, Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/shared/ui";
+import { bulkStatusLabels } from "@/shared/lib/generated-labels";
 import type { BulkActionResultItem, BulkActionSummary } from "./bulkRunner";
 import type { BulkId } from "./selection";
-
-const statusLabels = {
-  success: "Успешно",
-  skipped: "Пропущено",
-  failed: "Ошибка",
-} as const;
 
 interface BulkResultsDialogProps<TId extends BulkId> {
   open: boolean;
@@ -40,7 +35,7 @@ export function BulkResultsDialog<TId extends BulkId>({
               <div className="flex items-center justify-between gap-3">
                 <span className="font-medium">{result.label ?? `Позиция #${result.id}`}</span>
                 <Badge variant={result.status === "success" ? "default" : result.status === "skipped" ? "secondary" : "destructive"}>
-                  {statusLabels[result.status]}
+                  {bulkStatusLabels[result.status]}
                 </Badge>
               </div>
               {result.reason && <div className="mt-1 text-xs text-muted-foreground">{result.reason}</div>}

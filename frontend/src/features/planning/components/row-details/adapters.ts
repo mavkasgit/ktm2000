@@ -1,19 +1,6 @@
 import { type PlanPositionOut, type ProductionPlanningRowDetail, type ProductionPlanningStage } from "@/shared/api/productionPlans"
 import { type RowDetailsData } from "./types"
-import { errorLabels } from "@/shared/lib/generated-labels"
-
-// ─── Label maps ──────────────────────────────────────────────────────────────
-
-const warningLabelsRaw: Record<string, string> = {
-  paired_profile_product_unmapped: "Парный профиль не сопоставлен",
-  techcard_pair_not_resolved: "Не выбран парный профиль техкарты",
-  product_name_missing: "Отсутствует наименование",
-  period_not_detected: "не определен",
-  route_auto_fallback: "Маршрут скорректирован автоматически — проверьте корректность",
-  row_selection_applied: "Применён фильтр строк",
-  row_selection_auto_included: "Автодобавлены парные строки",
-  paired_row_auto_included: "Автодобавлена парная строка",
-}
+import { errorLabels, warningLabels } from "@/shared/lib/generated-labels"
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -105,7 +92,7 @@ export function adaptPlanPositionOut(pos: PlanPositionOut): RowDetailsData {
       route_assigned_at: pos.route_assigned_at,
     }),
     errors: translateLabels(pos.errors, errorLabels),
-    warnings: translateLabels(pos.warnings, warningLabelsRaw),
+    warnings: translateLabels(pos.warnings, warningLabels),
     productionPlanId: pos.production_plan_id,
     routeCheckIssues: [],
     rawExcelRows: buildRawExcelRows(pos.raw_excel_row, pos.payload),
@@ -180,7 +167,7 @@ export function adaptRawImportRow(row: Record<string, unknown>): RowDetailsData 
       route_assigned_at: (row.route_assigned_at as string | null) ?? null,
     }),
     errors: translateLabels(rawErrors, errorLabels),
-    warnings: translateLabels(rawWarnings, warningLabelsRaw),
+    warnings: translateLabels(rawWarnings, warningLabels),
     productionPlanId: 0,
     rawExcelRows,
   }

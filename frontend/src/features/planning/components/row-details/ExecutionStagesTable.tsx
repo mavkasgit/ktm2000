@@ -8,20 +8,11 @@ import { queryKeys } from "@/shared/api/queryKeys";
 import { fmtQty } from "@/shared/utils/fmtQty";
 import { isStorageType } from "@/shared/lib/routeStageClassifier";
 import { type ProductionPlanningStage } from "@/shared/api/productionPlans";
+import { stageStatusLabels } from "@/shared/lib/generated-labels";
 import {
   useTableQueryEngine,
   type ColumnSortDef,
 } from "@/shared/hooks/useTableQueryEngine";
-
-const taskStatusLabels: Record<string, string> = {
-  waiting_previous: "Ожидает этап",
-  ready: "Готов",
-  in_progress: "В работе",
-  partially_completed: "Частично выполнен",
-  completed: "Выполнен",
-  cancelled: "Отменён",
-  not_started: "Не начат",
-};
 
 type StageSortField = "section" | "status";
 type StageRowTone = "current" | "completed" | "partial" | "default";
@@ -44,7 +35,7 @@ function getStageSectionLabel(stage: ProductionPlanningStage): string {
 }
 
 function getStageStatusLabel(stage: ProductionPlanningStage, isFinalStage: boolean): string {
-  const base = taskStatusLabels[stage.task_status] || stage.task_status;
+  const base = stageStatusLabels[stage.task_status] || stage.task_status;
   return isFinalStage ? `${base} (финальный этап)` : base;
 }
 
