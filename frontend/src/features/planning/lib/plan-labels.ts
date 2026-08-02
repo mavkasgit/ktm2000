@@ -1,5 +1,5 @@
 import { PlanPositionOut } from "@/shared/api/productionPlans"
-import { errorLabels, statusLabels, validationLabels, warningLabels } from "@/shared/lib/generated-labels"
+import { errorLabels, errorPhraseTranslations, statusLabels, validationLabels, warningLabels } from "@/shared/lib/generated-labels"
 
 export { errorLabels, statusLabels, validationLabels, warningLabels }
 export { errorLabels as routeErrorLabels } from "@/shared/lib/generated-labels"
@@ -84,10 +84,8 @@ export interface PlanFiltersState {
   has_duplicates: "all" | "yes" | "no"
 }
 
-const STATUS_HISTORY_REASON_EXACT: Record<string, string> = {
-  "Auto-released when fully covered by release batches":
-    "Автозапуск при полном покрытии партиями выпуска",
-}
+const STATUS_HISTORY_REASON_EXACT: Record<string, string> =
+  errorPhraseTranslations
 
 const STATUS_TOKEN_IN_QUOTES_RE = /'([a-z_]+)'/gi
 

@@ -128,6 +128,7 @@ export const errorPhraseTranslations: Record<string, string> = {
   "Approve failed: {0}": "Сбой утверждения: {0}",
   "At least one action is required": "Требуется хотя бы одно действие",
   "Attachment not found": "Вложение не найдено",
+  "Auto-released when fully covered by release batches": "Автозапуск при полном покрытии партиями выпуска",
   "Cancelled release batch cannot be released": "Отменённая партия не может быть выпущена",
   "Cannot delete profile: it is used by route selection rules": "Нельзя удалить профиль: он используется правилами выбора маршрута",
   "Cannot rollback: position already released": "Нельзя откатить: позиция уже выпущена",
