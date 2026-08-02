@@ -29,7 +29,6 @@ from app.models.user import User, UserRole
 async def _make_user(session, email: str = "bulk-planner@test.local") -> User:
     user = User(
         email=email,
-        password_hash="x",
         full_name="Bulk Planner",
         role=UserRole.admin,
         is_active=True,

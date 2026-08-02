@@ -5,7 +5,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.user import User, UserRole
 from app.models.section import Section
-from app.core.security import get_password_hash
 
 
 async def seed_users(db: AsyncSession) -> dict[int, User]:
@@ -22,9 +21,9 @@ async def seed_users(db: AsyncSession) -> dict[int, User]:
     system_user = await db.scalar(select(User).where(User.email == "system@local"))
     if system_user is None:
         await db.execute(text("""
-            INSERT INTO users (id, username, email, password_hash, full_name, role, is_active)
+            INSERT INTO users (id, username, email, full_name, role, is_active)
             OVERRIDING SYSTEM VALUE
-            VALUES (1, 'system', 'system@local', '', 'System User', 'admin', true)
+            VALUES (1, 'system', 'system@local', 'System User', 'admin', true)
         """))
         await db.flush()
         system_user = await db.scalar(select(User).where(User.email == "system@local"))
@@ -34,9 +33,9 @@ async def seed_users(db: AsyncSession) -> dict[int, User]:
         await db.flush()
 
         await db.execute(text("""
-            INSERT INTO users (id, username, email, password_hash, full_name, role, is_active)
+            INSERT INTO users (id, username, email, full_name, role, is_active)
             OVERRIDING SYSTEM VALUE
-            VALUES (1, 'system', 'system@local', '', 'System User', 'admin', true)
+            VALUES (1, 'system', 'system@local', 'System User', 'admin', true)
         """))
         await db.flush()
         system_user = await db.scalar(select(User).where(User.email == "system@local"))
@@ -55,7 +54,6 @@ async def seed_users(db: AsyncSession) -> dict[int, User]:
         {
             "username": "akadmin",
             "email": "akadmin",
-            "password": "akadmin-dev-local",
             "full_name": "AK Admin",
             "role": UserRole.admin,
             "section_id": None,
@@ -63,7 +61,6 @@ async def seed_users(db: AsyncSession) -> dict[int, User]:
         {
             "username": "admin",
             "email": "admin@ktm2000.local",
-            "password": "admin",
             "full_name": "Администратор",
             "role": UserRole.admin,
             "section_id": None,
@@ -76,7 +73,6 @@ async def seed_users(db: AsyncSession) -> dict[int, User]:
             user = User(
                 username=data["username"],
                 email=data["email"],
-                password_hash=get_password_hash(data["password"]),
                 full_name=data["full_name"],
                 role=data["role"],
                 section_id=data["section_id"],
@@ -105,7 +101,6 @@ async def seed_demo_users(db: AsyncSession) -> dict[int, User]:
         {
             "username": "planner",
             "email": "planner@ktm2000.local",
-            "password": "planner",
             "full_name": "Планировщик Главный",
             "role": UserRole.planner,
             "section_id": None,
@@ -113,7 +108,6 @@ async def seed_demo_users(db: AsyncSession) -> dict[int, User]:
         {
             "username": "manager",
             "email": "manager@ktm2000.local",
-            "password": "manager",
             "full_name": "Начальник Участка",
             "role": UserRole.section_manager,
             "section_id": section_id,
@@ -121,7 +115,6 @@ async def seed_demo_users(db: AsyncSession) -> dict[int, User]:
         {
             "username": "operator",
             "email": "operator@ktm2000.local",
-            "password": "operator",
             "full_name": "Оператор Цеха",
             "role": UserRole.operator,
             "section_id": section_id,
@@ -129,7 +122,6 @@ async def seed_demo_users(db: AsyncSession) -> dict[int, User]:
         {
             "username": "viewer",
             "email": "viewer@ktm2000.local",
-            "password": "viewer",
             "full_name": "Наблюдатель",
             "role": UserRole.viewer,
             "section_id": None,
@@ -142,7 +134,6 @@ async def seed_demo_users(db: AsyncSession) -> dict[int, User]:
             user = User(
                 username=data["username"],
                 email=data["email"],
-                password_hash=get_password_hash(data["password"]),
                 full_name=data["full_name"],
                 role=data["role"],
                 section_id=data["section_id"],

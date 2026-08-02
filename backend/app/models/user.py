@@ -32,7 +32,6 @@ class User(Base):
     )
     email: Mapped[str | None] = mapped_column(String(255), unique=True, nullable=True)
     username: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
-    password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
     full_name: Mapped[str] = mapped_column(String(255), nullable=False)
     role: Mapped[UserRole] = mapped_column(Enum(UserRole, name="user_role"), nullable=False)
     section_id: Mapped[int | None] = mapped_column(ForeignKey("sections.id"), nullable=True)

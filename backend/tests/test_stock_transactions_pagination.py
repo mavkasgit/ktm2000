@@ -15,7 +15,6 @@ async def _make_user(session: AsyncSession) -> User:
     user = User(
         username="tx-page-tester",
         email="tx-page-tester@local",
-        password_hash="x",
         full_name="Tx Page Tester",
         role=UserRole.operator,
         is_active=True,

@@ -5,11 +5,6 @@ from pydantic import BaseModel, ConfigDict, EmailStr
 from app.models.user import UserRole
 
 
-class LoginRequest(BaseModel):
-    username: str
-    password: str
-
-
 class BreakGlassLoginRequest(BaseModel):
     password: str
 

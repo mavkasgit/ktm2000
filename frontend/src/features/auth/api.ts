@@ -37,18 +37,6 @@ export interface ProfileUpdateResponse {
   theme?: string | null
 }
 
-/** Ответ сервера на запрос /auth/login */
-export interface TokenResponse {
-  access_token: string
-  token_type: string
-}
-
-/** Авторизация пользователя по email/password */
-export async function loginApi(username: string, password: string): Promise<TokenResponse> {
-  const { data } = await apiClient.post<TokenResponse>("/auth/login", { username, password })
-  return data
-}
-
 /** Получение данных текущего авторизованного пользователя */
 export async function fetchMeApi(): Promise<User> {
   const { data } = await apiClient.get<User>("/auth/me")

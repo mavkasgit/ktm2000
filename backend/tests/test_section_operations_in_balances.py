@@ -32,7 +32,6 @@ async def _make_user(session: AsyncSession, email: str) -> User:
     user = User(
         username=email.split("@")[0],
         email=email,
-        password_hash="x",
         full_name="Ops Tester",
         role=UserRole.operator,
         is_active=True,

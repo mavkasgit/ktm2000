@@ -708,7 +708,7 @@ export async function startOidcLogin(
 
 /**
  * Exchange authorization code for app JWT via backend bridge.
- * Stores token under ktm2000_token (same key as password login).
+ * Stores token under ktm2000_token (same key as break-glass login).
  */
 export async function completeOidcCallback(params: {
   code: string

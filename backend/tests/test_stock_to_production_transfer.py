@@ -28,7 +28,6 @@ from app.stock.services import StockCommand, StockCommandService
 async def _make_user(session, email: str = "raw@local") -> User:
     user = User(
         email=email,
-        password_hash="x",
         full_name="Raw Tester",
         role=UserRole.operator,
         is_active=True,

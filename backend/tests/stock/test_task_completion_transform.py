@@ -87,7 +87,6 @@ async def _make_transform_setup(
     user = User(
         username=f"{sku}-op",
         email=f"{sku}-op@local",
-        password_hash="x",
         full_name="Saw Operator",
         role=UserRole.operator,
         is_active=True,

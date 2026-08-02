@@ -57,7 +57,6 @@ async def _make_user(session: AsyncSession, username: str = "dims-tester") -> Us
     user = User(
         username=username,
         email=f"{username}@local",
-        password_hash="x",
         full_name="Dims Tester",
         role=UserRole.operator,
         is_active=True,

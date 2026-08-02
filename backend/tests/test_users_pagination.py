@@ -7,7 +7,6 @@ from sqlalchemy import select
 
 from app.models.section import Section
 from app.models.user import User, UserRole, user_sections
-from app.core.security import get_password_hash
 
 
 async def _make_user(
@@ -22,7 +21,6 @@ async def _make_user(
     user = User(
         username=username,
         email=email or f"{username}@example.com",
-        password_hash=get_password_hash("pass"),
         full_name=full_name,
         role=role,
         is_active=is_active,

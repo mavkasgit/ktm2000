@@ -381,7 +381,6 @@ async def session(engine: AsyncEngine, module_schema_name: str) -> AsyncIterator
             system_user = User(
                 username="system",
                 email="system@local",
-                password_hash="",
                 role=UserRole.admin,
                 full_name="System User",
                 is_active=True,
@@ -419,14 +418,12 @@ async def auth_client(session: AsyncSession) -> AsyncIterator[AsyncClient]:
     from sqlalchemy import select
     from sqlalchemy.orm import selectinload
 
-    from app.core.security import create_access_token, get_password_hash
+    from app.core.security import create_access_token
     from app.models.user import User, UserRole
 
-    # Create a test user with hashed password
     test_user = User(
         username="testauth",
         email="testauth@example.com",
-        password_hash=get_password_hash("testpass123"),
         full_name="Test Auth User",
         role=UserRole.admin,
         is_active=True,

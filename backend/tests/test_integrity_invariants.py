@@ -57,7 +57,6 @@ from app.models.work_task import WorkTask
 async def _make_user(session: AsyncSession, email: str) -> User:
     user = User(
         email=email,
-        password_hash="x",
         full_name="Inv Tester",
         role=UserRole.operator,
         is_active=True,

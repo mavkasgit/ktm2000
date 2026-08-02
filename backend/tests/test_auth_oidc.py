@@ -14,7 +14,6 @@ from jose.utils import base64url_encode
 from sqlalchemy import select
 
 from app.core.config import settings
-from app.core.security import get_password_hash
 from app.models.user import User, UserRole
 from app.models.user_session import UserSession
 from app.services.oidc_auth_service import OidcAuthService
@@ -296,7 +295,6 @@ async def test_oidc_callback_links_by_username_and_persists_sub(
     user = User(
         username="oidc_user",
         email="oidc_user@example.com",
-        password_hash=get_password_hash("password123"),
         full_name="OIDC Local User",
         role=UserRole.planner,
         is_active=True,
@@ -348,7 +346,6 @@ async def test_oidc_callback_links_by_authentik_sub(
     user = User(
         username="linked_already",
         email="linked@example.com",
-        password_hash=get_password_hash("password123"),
         full_name="Linked User",
         role=UserRole.viewer,
         is_active=True,
@@ -407,7 +404,6 @@ async def test_oidc_callback_sync_role_when_flag_on(
     user = User(
         username="oidc_sync_role",
         email="oidc_sync@example.com",
-        password_hash=get_password_hash("password123"),
         full_name="Sync Role User",
         role=UserRole.viewer,
         is_active=True,
@@ -486,7 +482,6 @@ async def test_oidc_issuer_accepts_lan_iss(client, session, oidc_enabled) -> Non
     user = User(
         username="lan_iss_user",
         email="lan_iss@example.com",
-        password_hash=get_password_hash("password123"),
         full_name="LAN ISS",
         role=UserRole.viewer,
         is_active=True,
@@ -534,7 +529,6 @@ async def test_oidc_callback_ktm_role_claim_syncs_role(
     user = User(
         username="role_sync_user",
         email="role_sync@example.com",
-        password_hash=get_password_hash("password123"),
         full_name="Role Sync User",
         role=UserRole.viewer,
         is_active=True,
@@ -573,7 +567,6 @@ async def test_oidc_callback_ktm_role_conflict_403(
     user = User(
         username="conflict_user",
         email="conflict@example.com",
-        password_hash=get_password_hash("password123"),
         full_name="Conflict User",
         role=UserRole.viewer,
         is_active=True,
@@ -607,7 +600,6 @@ async def test_oidc_callback_ktm_role_absent_fail_closed(
     user = User(
         username="no_role_user",
         email="no_role@example.com",
-        password_hash=get_password_hash("password123"),
         full_name="No Role User",
         role=UserRole.operator,
         is_active=True,
@@ -646,7 +638,6 @@ async def test_oidc_callback_ktm_role_no_access_fail_closed(
     user = User(
         username="no_access_user",
         email="no_access@example.com",
-        password_hash=get_password_hash("password123"),
         full_name="No Access User",
         role=UserRole.viewer,
         is_active=True,
@@ -680,7 +671,6 @@ async def test_update_user_role_forbidden_when_sync_enabled(
     target = User(
         username="role_target",
         email="role_target@example.com",
-        password_hash=get_password_hash("password123"),
         full_name="Role Target",
         role=UserRole.viewer,
         is_active=True,
@@ -710,7 +700,6 @@ async def _make_linked_user_with_sessions(
     user = User(
         username=f"bcl_{authentik_sub[-6:]}",
         email=f"bcl_{authentik_sub[-6:]}@example.com",
-        password_hash=get_password_hash("password123"),
         full_name="Backchannel User",
         role=UserRole.operator,
         is_active=True,

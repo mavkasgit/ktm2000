@@ -1,14 +1,12 @@
 import pytest
 from sqlalchemy import select
 from app.models.user import User, UserRole
-from app.core.security import get_password_hash
 
 
 async def _make_user(session, username: str, role: UserRole, tab_number: str | None = None) -> User:
     user = User(
         username=username,
         email=f"{username}@example.com",
-        password_hash=get_password_hash("pass"),
         full_name=f"Full Name {username}",
         role=role,
         is_active=True,
@@ -26,7 +24,6 @@ async def test_create_user_success(auth_client, session) -> None:
         json={
             "username": "new_user_1",
             "email": "new_1@example.com",
-            "password": "password123",
             "full_name": "New Employee 1",
             "role": "operator",
             "tab_number": "T-12345",
@@ -51,7 +48,6 @@ async def test_create_and_update_user_without_email(auth_client, session) -> Non
         "/api/users",
         json={
             "username": "no_email_user",
-            "password": "password123",
             "full_name": "No Email User",
             "role": "operator",
         },

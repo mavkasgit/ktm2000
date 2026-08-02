@@ -31,7 +31,6 @@ async def _make_user(session: AsyncSession) -> User:
     user = User(
         username="rem-tester",
         email="rem-tester@local",
-        password_hash="x",
         full_name="Remainder Tester",
         role=UserRole.operator,
         is_active=True,

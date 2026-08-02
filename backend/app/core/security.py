@@ -2,28 +2,12 @@ from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
 from jose import JWTError, jwt
-from passlib.context import CryptContext
 
 from app.core.config import settings
-
-pwd_context = CryptContext(schemes=["pbkdf2_sha256"], deprecated="auto")
 
 
 class TokenError(Exception):
     pass
-
-
-def verify_password(plain_password: str, hashed_password: str) -> bool:
-    if not hashed_password or not hashed_password.strip():
-        return False
-    try:
-        return pwd_context.verify(plain_password, hashed_password)
-    except Exception:
-        return False
-
-
-def get_password_hash(password: str) -> str:
-    return pwd_context.hash(password)
 
 
 def create_access_token(

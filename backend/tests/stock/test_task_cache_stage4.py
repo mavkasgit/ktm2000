@@ -43,7 +43,7 @@ pytestmark = pytest.mark.asyncio
 
 
 async def _make_user(session: AsyncSession, sku: str = "stg4") -> User:
-    user = User(username=sku, email=f"{sku}@local", password_hash="x", full_name="Stage4", role=UserRole.operator, is_active=True)
+    user = User(username=sku, email=f"{sku}@local", full_name="Stage4", role=UserRole.operator, is_active=True)
     session.add(user)
     await session.flush()
     return user

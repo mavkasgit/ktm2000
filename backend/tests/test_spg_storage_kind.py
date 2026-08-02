@@ -33,7 +33,7 @@ async def test_spg_storage_kind_round_trip(session):
 
 
 async def _make_admin(session, email: str = "lot-admin@test.local") -> User:
-    user = User(email=email, password_hash="x", full_name="Lot Admin", role=UserRole.admin, is_active=True)
+    user = User(email=email, full_name="Lot Admin", role=UserRole.admin, is_active=True)
     session.add(user)
     await session.flush()
     return user

@@ -14,12 +14,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import get_current_user
 from app.core.database import get_db
 from app.core.config import settings
-from app.core.security import TokenError, decode_access_token, verify_password
+from app.core.security import TokenError, decode_access_token
 from app.models.user import User, UserRole
 from app.models.user_session import UserSession
 from app.schemas.auth import (
     BreakGlassLoginRequest,
-    LoginRequest,
     MeResponse,
     ProfileUpdateRequest,
     ProfileUpdateResponse,
@@ -266,17 +265,6 @@ async def backchannel_logout(
     return JSONResponse(
         content={"status": "ok", "revoked": revoked},
         headers={"Cache-Control": "no-store"},
-    )
-
-
-@router.post("/login", response_model=TokenResponse)
-async def login(payload: LoginRequest, request: Request) -> TokenResponse:
-    """Вход по логину и паролю отключён. Используйте единый вход (SSO) или аварийный доступ."""
-    ip, ua = _request_meta(request)
-    logger.warning("Password login attempt (blocked) | user=%s ip=%s ua=%s", payload.username, ip, ua)
-    raise HTTPException(
-        status_code=status.HTTP_403_FORBIDDEN,
-        detail="Вход по логину и паролю отключён. Используйте единый вход (SSO).",
     )
 
 

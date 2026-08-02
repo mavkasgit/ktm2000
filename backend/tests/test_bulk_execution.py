@@ -36,7 +36,6 @@ from app.models.work_task import WorkTask
 async def _make_user(session, email: str = "bulk-exec@test.local") -> User:
     user = User(
         email=email,
-        password_hash="x",
         full_name="Bulk Operator",
         role=UserRole.operator,
         is_active=True,

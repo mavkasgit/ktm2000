@@ -57,7 +57,6 @@ XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 async def _make_user(session: AsyncSession, email: str = "dim-e2e@local") -> User:
     user = User(
         email=email,
-        password_hash="x",
         full_name="Dim E2E",
         role=UserRole.operator,
         is_active=True,

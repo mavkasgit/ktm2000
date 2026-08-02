@@ -50,7 +50,6 @@ async def _make_user(session: AsyncSession, username: str = "def5") -> User:
     user = User(
         username=username,
         email=f"{username}@local",
-        password_hash="x",
         full_name="Defect Stage5",
         role=UserRole.operator,
         is_active=True,

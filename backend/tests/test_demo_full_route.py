@@ -14,7 +14,7 @@ from app.models.user import User, UserRole
 
 
 async def _make_user(session, email: str = "demo@test.local") -> User:
-    user = User(email=email, password_hash="x", full_name="Demo Operator", role=UserRole.operator, is_active=True)
+    user = User(email=email, full_name="Demo Operator", role=UserRole.operator, is_active=True)
     session.add(user)
     await session.flush()
     return user

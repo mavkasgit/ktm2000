@@ -4,7 +4,6 @@ from datetime import UTC, datetime, timedelta
 from jose import jwt
 
 from app.core.config import settings
-from app.core.security import get_password_hash
 from app.models.user import User, UserRole
 from app.models.user_session import UserSession
 from app.services.session_service import issue_app_token, issue_session, get_session_by_id
@@ -25,7 +24,6 @@ async def test_sessions_list_returns_active_sessions(client, session, monkeypatc
     user = User(
         username="testuser",
         email="testuser@example.com",
-        password_hash=get_password_hash("password123"),
         full_name="Test User",
         role=UserRole.planner,
         is_active=True,
@@ -53,7 +51,6 @@ async def test_revoke_session_success(client, session, monkeypatch) -> None:
     user = User(
         username="testuser2",
         email="testuser2@example.com",
-        password_hash=get_password_hash("password123"),
         full_name="Test User 2",
         role=UserRole.planner,
         is_active=True,
@@ -93,7 +90,6 @@ async def test_revoke_other_sessions_success(client, session, monkeypatch) -> No
     user = User(
         username="testuser3",
         email="testuser3@example.com",
-        password_hash=get_password_hash("password123"),
         full_name="Test User 3",
         role=UserRole.planner,
         is_active=True,
@@ -144,7 +140,6 @@ async def test_revoke_nonexistent_or_foreign_session_returns_404(client, session
     user1 = User(
         username="user1",
         email="user1@example.com",
-        password_hash=get_password_hash("password123"),
         full_name="User 1",
         role=UserRole.planner,
         is_active=True,
@@ -152,7 +147,6 @@ async def test_revoke_nonexistent_or_foreign_session_returns_404(client, session
     user2 = User(
         username="user2",
         email="user2@example.com",
-        password_hash=get_password_hash("password123"),
         full_name="User 2",
         role=UserRole.planner,
         is_active=True,

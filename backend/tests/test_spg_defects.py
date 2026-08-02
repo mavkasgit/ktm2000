@@ -14,7 +14,6 @@ from app.stock import Reason, StockCommand, StockCommandService, StockTransactio
 async def _make_admin(session, email: str = "admin-def@test.local") -> User:
     user = User(
         email=email,
-        password_hash="x",
         full_name="Defect Admin",
         role=UserRole.admin,
         is_active=True,

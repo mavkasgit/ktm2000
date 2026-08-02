@@ -10,7 +10,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import get_current_user, require_role
 from app.core.config import settings
 from app.core.database import get_db
-from app.core.security import get_password_hash
 from app.models.user import User, UserRole
 from app.models.section import Section
 from app.services.users_queries import list_users_paginated
@@ -49,7 +48,6 @@ class UserOut(BaseModel):
 class UserCreate(BaseModel):
     username: str
     email: EmailStr | None = None
-    password: str | None = None
     full_name: str
     role: UserRole
     section_id: int | None = None
@@ -66,10 +64,6 @@ class UserUpdate(BaseModel):
     section_ids: list[int] | None = None
     is_active: bool | None = None
     tab_number: str | None = None
-
-
-class PasswordReset(BaseModel):
-    new_password: str | None = None
 
 
 class UsersListOut(BaseModel):
@@ -174,7 +168,6 @@ async def create_user(
         # Слияние/продвижение: обновляем существующего synced operator пользователя
         existing_user.username = payload.username
         existing_user.email = payload.email
-        existing_user.password_hash = get_password_hash(payload.password) if payload.password else ""
         existing_user.full_name = payload.full_name
         existing_user.role = payload.role
         existing_user.is_active = True
@@ -195,7 +188,6 @@ async def create_user(
     user = User(
         username=payload.username,
         email=payload.email,
-        password_hash=get_password_hash(payload.password) if payload.password else "",
         full_name=payload.full_name,
         role=payload.role,
         section_id=section_ids[0] if section_ids else None,
@@ -302,22 +294,3 @@ async def update_user(
     await db.commit()
     await db.refresh(user)
     return UserOut.model_validate(user)
-
-
-@router.post("/{user_id}/reset-password", status_code=status.HTTP_204_NO_CONTENT)
-async def reset_password(
-    user_id: int,
-    payload: PasswordReset,
-    db: AsyncSession = Depends(get_db),
-    _current_user: User = Depends(require_role([UserRole.admin])),
-) -> None:
-    """Сброс пароля пользователя администратором."""
-    user = await db.get(User, user_id)
-    if user is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="User not found",
-        )
-
-    user.password_hash = get_password_hash(payload.new_password) if payload.new_password else ""
-    await db.commit()

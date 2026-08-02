@@ -683,7 +683,6 @@ class OidcAuthService:
         user = User(
             username=username[:255],
             email=email,
-            password_hash="",  # SSO-only; password login will fail verify
             full_name=full_name,
             role=role,
             is_active=True,
@@ -733,7 +732,6 @@ class OidcAuthService:
             user2 = User(
                 username=username[:255],
                 email=email,
-                password_hash="",
                 full_name=full_name,
                 role=role,
                 is_active=True,

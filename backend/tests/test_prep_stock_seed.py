@@ -209,7 +209,6 @@ async def test_demo_production_seeder_finds_prep_via_section(session, monkeypatc
     actor = User(
         username="seed-actor",
         email="seed-actor@local",
-        password_hash="x",
         full_name="Seed Actor",
         role=UserRole.admin,
         is_active=True,
@@ -465,7 +464,6 @@ async def test_demo_production_seeder_omits_non_significant_stages(session, monk
     actor = User(
         username="filter-actor",
         email="filter-actor@local",
-        password_hash="x",
         full_name="Filter Actor",
         role=UserRole.admin,
         is_active=True,

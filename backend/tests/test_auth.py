@@ -1,38 +1,8 @@
 import pytest
 
-from app.core.security import get_password_hash, verify_password, create_access_token
+from app.core.security import create_access_token
 from app.models.section import Section
 from app.models.user import User, UserRole
-
-
-@pytest.mark.asyncio
-async def test_password_hashing_roundtrip() -> None:
-    password = "S3curePass!"
-    hashed = get_password_hash(password)
-
-    assert hashed != password
-    assert verify_password(password, hashed)
-
-
-@pytest.mark.asyncio
-async def test_login_rejects_disabled_user(client, session) -> None:
-    user = User(
-        username="disabled",
-        email="disabled@example.com",
-        password_hash=get_password_hash("password123"),
-        full_name="Disabled User",
-        role=UserRole.viewer,
-        is_active=False,
-    )
-    session.add(user)
-    await session.commit()
-
-    response = await client.post(
-        "/api/auth/login",
-        json={"username": "disabled", "password": "password123"},
-    )
-
-    assert response.status_code == 403
 
 
 # ─── Strict auth tests (DEV_BYPASS_AUTH=False) ───────────────────────
@@ -61,7 +31,6 @@ async def test_magic_admin_rejected_when_strict(client, session, monkeypatch) ->
     admin = User(
         username="admin",
         email="admin@example.com",
-        password_hash=get_password_hash("admin"),
         full_name="Admin",
         role=UserRole.admin,
         is_active=True,
@@ -90,7 +59,6 @@ async def test_magic_admin_allowed_when_dev_bypass(client, session, monkeypatch)
         admin = User(
             username="admin",
             email="admin_magic@example.com",
-            password_hash=get_password_hash("admin"),
             full_name="Admin",
             role=UserRole.admin,
             is_active=True,
@@ -144,7 +112,6 @@ async def test_disabled_user_token_returns_403(client, session, monkeypatch) -> 
     disabled_user = User(
         username="disabled_strict",
         email="disabled_strict@example.com",
-        password_hash=get_password_hash("password123"),
         full_name="Disabled Strict User",
         role=UserRole.viewer,
         is_active=False,
@@ -183,7 +150,6 @@ async def test_strict_jwt_without_sid_returns_401(client, session, monkeypatch) 
     user = User(
         username="nosid",
         email="nosid@example.com",
-        password_hash=get_password_hash("password123"),
         full_name="No Sid",
         role=UserRole.viewer,
         is_active=True,
@@ -230,7 +196,6 @@ async def test_create_user_with_multiple_sections(auth_client, session) -> None:
         json={
             "username": "multisecuser",
             "email": "multisecuser@example.com",
-            "password": "testpassword",
             "full_name": "Multi Section User",
             "role": "section_manager",
             "section_ids": [s1.id, s2.id]
@@ -253,7 +218,6 @@ async def test_update_user_sections(auth_client, session) -> None:
     user = User(
         username="updatesecuser",
         email="updatesecuser@example.com",
-        password_hash=get_password_hash("pass"),
         full_name="Update Sec User",
         role=UserRole.operator,
         is_active=True,
@@ -300,7 +264,6 @@ async def test_transporter_can_manage_transfers_globally_but_not_shopfloor_tasks
     transporter = User(
         username="transporter_user",
         email="transporter@example.com",
-        password_hash=get_password_hash("pass"),
         full_name="Transporter User",
         role=UserRole.transporter,
         is_active=True,
@@ -335,7 +298,6 @@ async def test_transporter_can_manage_transfers_globally_but_not_shopfloor_tasks
     admin_user = User(
         username="admin_test_t",
         email="admin_t@example.com",
-        password_hash=get_password_hash("pass"),
         full_name="Admin T",
         role=UserRole.admin,
         is_active=True,

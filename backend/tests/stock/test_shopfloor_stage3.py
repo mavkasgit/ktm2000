@@ -52,7 +52,6 @@ async def _make_user(session: AsyncSession, username: str = "shop3") -> User:
     user = User(
         username=username,
         email=f"{username}@local",
-        password_hash="x",
         full_name="Shop Stage3",
         role=UserRole.operator,
         is_active=True,

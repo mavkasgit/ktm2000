@@ -161,7 +161,7 @@ async def test_apply_change_set_and_approve_position(client, session, tmp_path, 
     from app.core.security import create_access_token
     from app.models.user import User, UserRole
 
-    user = User(email="apply@test.local", password_hash="x", full_name="Apply User", role=UserRole.operator, is_active=True)
+    user = User(email="apply@test.local", full_name="Apply User", role=UserRole.operator, is_active=True)
     session.add(user)
     await session.flush()
     headers = {"Authorization": f"Bearer {create_access_token(subject=user.email)}"}
