@@ -55,16 +55,6 @@ class User(Base):
 
     section = relationship("Section", back_populates="legacy_users")
     sections = relationship("Section", secondary=user_sections, back_populates="users", lazy="selectin")
-    login_tokens = relationship("UserLoginToken", back_populates="user", lazy="selectin", cascade="all, delete-orphan")
-
-    @property
-    def active_login_token(self):
-        from datetime import datetime, timezone
-        now_time = datetime.now(timezone.utc)
-        for t in self.login_tokens:
-            if not t.is_used and t.expires_at > now_time:
-                return t
-        return None
 
     @property
     def section_ids(self) -> list[int]:

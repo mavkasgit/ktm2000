@@ -13,10 +13,6 @@ export type SessionDto = {
 
 export function formatLoginMethod(method: string | null | undefined): string {
   switch (method) {
-    case "password":
-      return "Пароль"
-    case "invite":
-      return "Инвайт"
     case "oidc":
       return "Единый вход"
     default:

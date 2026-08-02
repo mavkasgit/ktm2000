@@ -46,7 +46,7 @@ class UserSession(Base):
     revoked_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
-    # logout | user_revoke | password_change | admin | expired | backchannel_logout
+    # logout | user_revoke | admin | expired | backchannel_logout
     revoke_reason: Mapped[str | None] = mapped_column(String(32), nullable=True)
     ip_address: Mapped[str | None] = mapped_column(String(45), nullable=True)
     user_agent: Mapped[str | None] = mapped_column(Text, nullable=True)

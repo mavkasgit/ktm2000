@@ -3,12 +3,6 @@ import { apiClient } from "@/shared/api/client"
 /** Роли пользователей в системе */
 export type UserRole = "admin" | "planner" | "section_manager" | "operator" | "viewer" | "transporter"
 
-export interface ActiveToken {
-  token: string
-  session_duration_seconds: number | null
-  created_at: string
-}
-
 /** Данные пользователя, получаемые из /auth/me */
 export interface User {
   id: number
@@ -20,7 +14,6 @@ export interface User {
   section_ids: number[]
   is_active: boolean
   tab_number?: string | null
-  active_login_token?: ActiveToken | null
   /** Multiavatar seed — cache of IdP attributes.profile_avatar_seed */
   avatar_seed?: string | null
   locale?: string | null

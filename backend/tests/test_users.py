@@ -73,3 +73,33 @@ async def test_create_and_update_user_without_email(auth_client, session) -> Non
     )
     assert response.status_code == 200
     assert response.json()["email"] == "new_email@example.com"
+
+
+@pytest.mark.asyncio
+async def test_user_response_has_no_login_token_fields(auth_client, session) -> None:
+    """SSO-only: в ответах /api/users не должно быть полей мёртвого OTP-флоу."""
+    response = await auth_client.post(
+        "/api/users",
+        json={
+            "username": "no_token_user",
+            "full_name": "No Token User",
+            "role": "viewer",
+        },
+    )
+    assert response.status_code == 201
+    data = response.json()
+    assert "active_login_token" not in data
+
+    listing = await auth_client.get("/api/users?search=no_token_user&limit=10&offset=0")
+    assert listing.status_code == 200
+    for user in listing.json()["users"]:
+        assert "active_login_token" not in user
+
+
+@pytest.mark.asyncio
+async def test_user_login_token_model_removed(auth_client, session) -> None:
+    """SSO-only: модель UserLoginToken удалена из реестра моделей."""
+    import app.models as models_pkg
+
+    assert "UserLoginToken" not in models_pkg.__all__
+    assert "user_login_tokens" not in models_pkg.Base.metadata.tables

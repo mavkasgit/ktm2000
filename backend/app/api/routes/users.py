@@ -1,5 +1,4 @@
 from datetime import datetime
-from typing import Optional
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -21,14 +20,6 @@ logger = logging.getLogger(__name__)
 # ─── Pydantic schemas ────────────────────────────────────────────────
 
 
-class ActiveTokenOut(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
-
-    token: str
-    session_duration_seconds: int | None
-    created_at: datetime
-
-
 class UserOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -42,7 +33,6 @@ class UserOut(BaseModel):
     is_active: bool
     tab_number: str | None = None
     created_at: datetime
-    active_login_token: Optional[ActiveTokenOut] = None
 
 
 class UserCreate(BaseModel):

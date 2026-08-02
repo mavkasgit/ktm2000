@@ -20,7 +20,7 @@ from app.repositories.session_repository import SessionRepository
 LOGIN_METHODS = frozenset({"oidc"})
 EVENT_TYPES = frozenset({"login_success", "login_failure", "logout", "session_revoke"})
 REVOKE_REASONS = frozenset(
-    {"logout", "user_revoke", "password_change", "admin", "expired", "backchannel_logout"}
+    {"logout", "user_revoke", "admin", "expired", "backchannel_logout"}
 )
 
 session_repo = SessionRepository()
