@@ -64,3 +64,6 @@ jobs:
 
       - name: Run migration tests
         run: cd backend && pytest tests/test_migrations.py -v
+
+      - name: Validate seeds and generated labels
+        run: cd backend && python scripts/validate_seeds.py && python scripts/generate_frontend_labels.py --check
