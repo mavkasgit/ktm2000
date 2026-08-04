@@ -8,7 +8,7 @@ from app.core.database import get_db
 from app.core.security import decode_access_token
 from app.models.user import User
 from app.models.user_session import UserSession
-from app.schemas.session import SessionOut
+from app.schemas.session import MAX_SESSIONS_SHOWN, SessionListOut, SessionOut
 from app.services.session_service import (
     list_active_sessions,
     revoke_session,
@@ -36,16 +36,22 @@ def get_current_session_id(request: Request) -> UUID | None:
     return None
 
 
-@router.get("/sessions", response_model=list[SessionOut])
+@router.get("/sessions", response_model=SessionListOut)
 async def get_sessions(
     request: Request,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    """Активные сессии текущего пользователя (канон 2.0.0).
+
+    Контракт: ``{sessions: [...последние MAX_SESSIONS_SHOWN по last_seen_at
+    DESC], total: N}``. Список не раздувается; остальные сессии по-прежнему
+    отзываются через DELETE /auth/sessions/others.
+    """
     sessions = await list_active_sessions(db, user_id=current_user.id)
     current_sid = get_current_session_id(request)
 
-    return [
+    out = [
         SessionOut(
             id=s.id,
             device_label=s.device_label or "Unknown Device",
@@ -58,6 +64,7 @@ async def get_sessions(
         )
         for s in sessions
     ]
+    return SessionListOut(sessions=out[:MAX_SESSIONS_SHOWN], total=len(out))
 
 
 @router.delete("/sessions/others")

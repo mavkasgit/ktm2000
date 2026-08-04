@@ -34,7 +34,7 @@ const ICON_LIST = [
   "Store","Warehouse","Landmark","Hotel","Home","BriefcaseBusiness",
   "Users","User","UserCog","UserCheck","UserPlus","UsersRound","UserRound",
   "IdCard","Contact","GraduationCap","Target","Award","Shield","ShieldCheck",
-  "Verified","BadgeCheck","Medal","Trophy","Crown","Gem","Star",
+  "Verified","BadgeCheck","CheckCircle","Medal","Trophy","Crown","Gem","Star",
   "ChartBar","ChartLine","ChartPie","BarChart3","TrendingUp","TrendingDown",
   "Activity","PieChart","Percent","FileText","FileCheck","FileCode",
   "FileBarChart","Folder","FolderOpen","Archive","Notebook","BookOpen",

@@ -1,6 +1,6 @@
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, EmailStr
+from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
 from app.models.user import UserRole
 
@@ -35,10 +35,22 @@ class MeResponse(BaseModel):
     is_break_glass: bool = False
 
 
+class AvatarSeedUpdate(BaseModel):
+    """Payload для PATCH /auth/me/avatar. NULL = сбросить (пустая заглушка на UI)."""
+    avatar_seed: str | None = Field(None, max_length=64)
+
+
 class ProfileUpdateRequest(BaseModel):
-    full_name: str | None = None
-    avatar_seed: str | None = None
-    clear_avatar: bool = False
+    """Human-profile патч (SoT Authentik при наличии sub + API token).
+
+    Канон user-settings 2.0.0: здесь только предпочтения theme/locale.
+    ФИО/email остаются в схеме намеренно — чтобы попытка их изменить
+    давала понятный 403 (а не 422 «неизвестное поле»). Аватар меняется
+    только через отдельный ``PATCH /auth/me/avatar`` (AvatarSeedUpdate).
+    """
+    model_config = ConfigDict(extra="forbid")
+
+    full_name: str | None = Field(None, min_length=1, max_length=255)
     email: EmailStr | None = None
     locale: Literal["ru", "en"] | None = None
     theme: Literal["system", "light", "dark"] | None = None

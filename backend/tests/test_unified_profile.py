@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
 from app.core.config import settings
 from app.services import unified_profile_service as ups
+from app.services.unified_profile_service import UnifiedProfile
 
 
 @pytest.fixture
@@ -94,6 +95,58 @@ async def test_profile_from_ak_user_reads_attrs():
     assert profile.locale == "ru"
     assert profile.theme == "system"
     assert profile.avatar_seed == "seed1"
+
+
+@pytest.mark.asyncio
+async def test_sync_local_from_idp_no_name_email_push(idp_on):
+    """Канон 2.0.0: bootstrap-push ФИО/email удалён — при пустом удалённом
+    full_name/email НЕ пишутся в Authentik (только avatar_seed)."""
+    import uuid as uuid_mod
+
+    sub = f"sub-{uuid_mod.uuid4().hex}"
+    remote = UnifiedProfile(
+        full_name=None,
+        avatar_seed=None,
+        email=None,
+        authentik_pk=1,
+        source="idp",
+    )
+    bootstrapped = UnifiedProfile(
+        full_name=None,
+        avatar_seed="aabbccdd",
+        email=None,
+        authentik_pk=1,
+        source="bootstrap",
+    )
+
+    with (
+        patch(
+            "app.services.unified_profile_service.fetch_profile_by_sub",
+            new_callable=AsyncMock,
+            return_value=remote,
+        ),
+        patch(
+            "app.services.unified_profile_service.push_profile_by_sub",
+            new_callable=AsyncMock,
+            return_value=bootstrapped,
+        ) as push,
+    ):
+        snapshot = await ups.sync_local_from_idp(
+            authentik_sub=sub,
+            local_full_name="Local Name",
+            local_avatar_seed="aabbccdd",
+            local_email="local@example.com",
+        )
+
+    assert snapshot is not None
+    assert snapshot.avatar_seed == "aabbccdd"
+    assert snapshot.source == "bootstrap"
+    push.assert_awaited_once()
+    assert push.await_args is not None
+    assert push.await_args.args[0] == sub
+    assert push.await_args.kwargs.get("avatar_seed") == "aabbccdd"
+    assert "full_name" not in push.await_args.kwargs
+    assert "email" not in push.await_args.kwargs
 
 
 @pytest.mark.asyncio

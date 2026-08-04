@@ -2,7 +2,7 @@ import { apiClient } from "@/shared/api/client"
 import type {
   IdpLinks,
   LoginEvent,
-  SessionInfo,
+  SessionListResult,
   UserProfile,
   UserSettingsApi,
 } from "@/modules/user-settings"
@@ -44,8 +44,8 @@ export const ktmUserSettingsApi: UserSettingsApi = {
     return data
   },
 
-  async listSessions(): Promise<SessionInfo[]> {
-    const { data } = await apiClient.get<SessionInfo[]>("/auth/sessions")
+  async listSessions(): Promise<SessionListResult> {
+    const { data } = await apiClient.get<SessionListResult>("/auth/sessions")
     return data
   },
 

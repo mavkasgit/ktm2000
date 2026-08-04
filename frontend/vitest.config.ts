@@ -8,6 +8,12 @@ export default defineConfig({
       "@": fileURLToPath(new URL("./src", import.meta.url)),
     },
   },
+  server: {
+    fs: {
+      // Сквозная проверка иконок читает backend-сиды (../../backend/...) — разрешаем.
+      allow: [fileURLToPath(new URL("..", import.meta.url))],
+    },
+  },
   test: {
     globals: true,
     environment: "happy-dom",

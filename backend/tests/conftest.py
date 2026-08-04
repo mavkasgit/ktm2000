@@ -35,6 +35,19 @@ DB_MODE_HYBRID = "hybrid"
 TEST_DB_PREFIX = "ktm_test_"
 TEST_SCHEMA_PREFIX = "t_"
 IDENT_RE = re.compile(r"^[a-zA-Z0-9_]+$")
+_RUN_ID_ENV = "KTM_PYTEST_RUN_ID"
+
+
+def pytest_sessionstart(session: pytest.Session) -> None:
+    """Stamp one run_id in the master env so every xdist worker shares it.
+
+    Each worker's session-autouse DB cleanup would otherwise drop its
+    siblings' freshly created test DBs (NullPool closes connections between
+    tests, so a sibling DB can look stale), causing InvalidCatalogNameError
+    mid-run. A shared run_id lets cleanup exclude the current run's DB and
+    only drop leftovers from previous runs.
+    """
+    os.environ.setdefault(_RUN_ID_ENV, uuid.uuid4().hex[:8])
 
 
 def _quote_ident(name: str) -> str:
@@ -154,8 +167,12 @@ async def _create_database(admin_url: URL, db_name: str) -> None:
         await engine.dispose()
 
 
-async def _cleanup_stale_databases(admin_url: URL) -> None:
+async def _cleanup_stale_databases(admin_url: URL, *, exclude: str | None = None) -> None:
     """Drop leftover test databases from previous runs.
+
+    ``exclude`` is the current run's shared worker DB name — without it,
+    parallel xdist workers would drop each other's freshly created databases
+    (their NullPool connections close between tests, making the DB look stale).
 
     Skips databases with active connections to avoid racing with
     freshly created DBs from parallel xdist workers.
@@ -181,6 +198,8 @@ async def _cleanup_stale_databases(admin_url: URL) -> None:
 
         for row in rows:
             db_name = row[0]
+            if exclude and db_name == exclude:
+                continue
             try:
                 _validate_ident(db_name, required_prefix=TEST_DB_PREFIX)
             except RuntimeError:
@@ -302,7 +321,7 @@ def db_mode() -> str:
 @pytest.fixture(scope="session")
 def run_id(db_mode: str) -> str:
     _ = db_mode
-    return uuid.uuid4().hex[:8]
+    return os.environ.get(_RUN_ID_ENV) or uuid.uuid4().hex[:8]
 
 
 @pytest.fixture(scope="session")
@@ -317,10 +336,10 @@ def admin_db_url(base_test_db_url: URL) -> URL:
 
 
 @pytest_asyncio.fixture(scope="session", autouse=True, loop_scope="session")
-async def cleanup_stale_test_dbs(db_mode: str, admin_db_url: URL) -> AsyncIterator[None]:
+async def cleanup_stale_test_dbs(db_mode: str, admin_db_url: URL, run_id: str) -> AsyncIterator[None]:
     _ = db_mode
     await _ensure_createdb_privilege(admin_db_url)
-    await _cleanup_stale_databases(admin_db_url)
+    await _cleanup_stale_databases(admin_db_url, exclude=f"{TEST_DB_PREFIX}w_{run_id}")
     yield
 
 

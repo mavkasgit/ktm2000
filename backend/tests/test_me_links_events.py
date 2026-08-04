@@ -18,7 +18,8 @@ async def test_me_links_returns_idp_deep_links(auth_client, monkeypatch):
     assert response.status_code == 200
     body = response.json()
     assert body["oidc_enabled"] is True
-    assert body["user_settings_url"] == "http://localhost:9000/if/user/"
+    assert body["user_settings_url"] == "http://localhost:9000/if/user/#/settings"
+    assert body["sso_dashboard_url"] == "http://localhost:9000/if/user/"
 
 
 @pytest.mark.asyncio

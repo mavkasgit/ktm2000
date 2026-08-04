@@ -339,6 +339,52 @@ async def test_oidc_callback_links_by_username_and_persists_sub(
 
 
 @pytest.mark.asyncio
+async def test_oidc_callback_refreshes_stale_authentik_sub(
+    client, session, oidc_enabled
+) -> None:
+    """Re-created Authentik rotates user uuid → secondary link refreshes stale sub.
+
+    Regression: _link_authentik_sub persisted sub only when empty; a stale uuid
+    survived re-link and silently broke back-channel SLO (revoke lookup missed).
+    """
+    user = User(
+        username="oidc_user",
+        email="oidc_user@example.com",
+        full_name="OIDC Local User",
+        role=UserRole.viewer,
+        is_active=True,
+        authentik_sub="ak-sub-stale-old-uuid",
+    )
+    session.add(user)
+    await session.commit()
+    user_id = user.id
+
+    id_token = _make_id_token(
+        sub="ak-sub-new-uuid",
+        preferred_username="oidc_user",
+        groups=[],
+    )
+    fake = _FakeAsyncClient(token_body={"id_token": id_token, "access_token": "at"})
+
+    with patch("app.services.oidc_auth_service.httpx.AsyncClient", return_value=fake):
+        response = await client.post(
+            "/api/auth/oidc/callback",
+            json={
+                "code": "auth-code",
+                "code_verifier": "verifier",
+                "redirect_uri": REDIRECT_URI,
+            },
+        )
+
+    assert response.status_code == 200, response.text
+
+    session.expire_all()
+    row = await session.scalar(select(User).where(User.id == user_id))
+    assert row is not None
+    assert row.authentik_sub == "ak-sub-new-uuid"
+
+
+@pytest.mark.asyncio
 async def test_oidc_callback_links_by_authentik_sub(
     client, session, oidc_enabled
 ) -> None:

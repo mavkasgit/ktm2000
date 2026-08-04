@@ -39,9 +39,45 @@ async def test_sessions_list_returns_active_sessions(client, session, monkeypatc
     )
     assert response.status_code == 200
     body = response.json()
-    assert len(body) == 1
-    assert body[0]["is_current"] is True
-    assert body[0]["login_method"] == "oidc"
+    assert body["total"] == 1
+    assert len(body["sessions"]) == 1
+    assert body["sessions"][0]["is_current"] is True
+    assert body["sessions"][0]["login_method"] == "oidc"
+
+
+@pytest.mark.asyncio
+async def test_sessions_capped_at_10_with_total(client, session, monkeypatch) -> None:
+    """Канон 2.0.0: GET /auth/sessions отдаёт максимум 10 + total (общее число)."""
+    monkeypatch.setattr(settings, "DEV_BYPASS_AUTH", False)
+
+    user = User(
+        username="capuser",
+        email="capuser@example.com",
+        full_name="Cap User",
+        role=UserRole.planner,
+        is_active=True,
+    )
+    session.add(user)
+    await session.commit()
+
+    # 11 сессий без токена, затем вход → 12-я (текущая) сессия самая свежая.
+    for _ in range(11):
+        await issue_session(session, user_id=user.id, login_method="oidc", ttl_minutes=60)
+    await session.commit()
+    token = await issue_app_token(session, user=user, login_method="oidc")
+    await session.commit()
+
+    response = await client.get(
+        "/api/auth/sessions",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert data["total"] == 12
+    assert len(data["sessions"]) == 10
+
+    # Порядок по last_seen_at DESC: самая свежая (текущая) сессия — первая.
+    assert data["sessions"][0]["is_current"] is True
 
 
 @pytest.mark.asyncio
@@ -66,7 +102,7 @@ async def test_revoke_session_success(client, session, monkeypatch) -> None:
         headers={"Authorization": f"Bearer {token}"},
     )
     assert list_res.status_code == 200
-    sessions_list = list_res.json()
+    sessions_list = list_res.json()["sessions"]
     assert len(sessions_list) == 1
     session_id = sessions_list[0]["id"]
 
@@ -112,7 +148,7 @@ async def test_revoke_other_sessions_success(client, session, monkeypatch) -> No
         headers={"Authorization": f"Bearer {token}"},
     )
     assert list_res.status_code == 200
-    assert len(list_res.json()) == 3
+    assert list_res.json()["total"] == 3
 
     # Отзываем others
     revoke_res = await client.delete(
@@ -128,7 +164,7 @@ async def test_revoke_other_sessions_success(client, session, monkeypatch) -> No
         headers={"Authorization": f"Bearer {token}"},
     )
     assert list_res2.status_code == 200
-    active_sessions = list_res2.json()
+    active_sessions = list_res2.json()["sessions"]
     assert len(active_sessions) == 1
     assert active_sessions[0]["is_current"] is True
 
@@ -163,7 +199,7 @@ async def test_revoke_nonexistent_or_foreign_session_returns_404(client, session
         "/api/auth/sessions",
         headers={"Authorization": f"Bearer {token2}"},
     )
-    session2_id = list_res2.json()[0]["id"]
+    session2_id = list_res2.json()["sessions"][0]["id"]
 
     # Пытаемся отозвать её от имени пользователя 1
     revoke_res = await client.delete(

@@ -18,6 +18,7 @@ from app.core.security import TokenError, decode_access_token
 from app.models.user import User, UserRole
 from app.models.user_session import UserSession
 from app.schemas.auth import (
+    AvatarSeedUpdate,
     BreakGlassLoginRequest,
     MeResponse,
     ProfileUpdateRequest,
@@ -512,47 +513,54 @@ async def update_my_profile(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> ProfileUpdateResponse:
-    """Update display name / email / locale / theme / avatar. SoT = Authentik when linked."""
+    """Обновить display-профиль (locale / theme). SoT = Authentik.
+
+    ФИО и email — read-only для пользователя (канон user-settings 2.0.0):
+    они задаются администратором IdP, приложение только читает и кэширует.
+    Попытка изменить → 403. Аватар редактируется через отдельный
+    ``PATCH /auth/me/avatar``.
+    """
     user = current_user
     if getattr(user, "is_break_glass", False):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Break glass users cannot update profile",
         )
-    want_name = payload.full_name.strip() if payload.full_name else None
-    want_email = str(payload.email).strip() if payload.email is not None else None
+
+    if payload.full_name is not None or payload.email is not None:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Изменение ФИО/email недоступно, обратитесь к администратору",
+        )
+
+    has_any = payload.locale is not None or payload.theme is not None
+    if not has_any:
+        return ProfileUpdateResponse(
+            full_name=user.full_name,
+            avatar_seed=user.avatar_seed,
+            email=user.email,
+            locale=user.locale,
+            theme=user.theme,
+        )
+
     want_locale = payload.locale
     want_theme = payload.theme
-
-    if payload.clear_avatar:
-        avatar_arg: object = None
-    elif payload.avatar_seed is not None:
-        avatar_arg = payload.avatar_seed
-    else:
-        avatar_arg = ...
+    email_out: str | None = user.email
 
     if user.authentik_sub and profile_sync_enabled():
         try:
             remote = await push_profile_by_sub(
                 user.authentik_sub,
-                full_name=want_name,
-                avatar_seed=avatar_arg,
-                email=want_email,
                 locale=want_locale,
                 theme=want_theme,
             )
-            if want_name:
-                user.full_name = remote.full_name or want_name
-            if avatar_arg is not ...:
-                user.avatar_seed = remote.avatar_seed
-            elif remote.full_name:
+            if remote.full_name:
                 user.full_name = remote.full_name
-            if want_email is not None:
-                user.email = remote.email or want_email
             if want_locale is not None:
                 user.locale = remote.locale or want_locale
             if want_theme is not None:
                 user.theme = remote.theme or want_theme
+            email_out = remote.email or user.email
             user.profile_synced_at = datetime.now(timezone.utc)
         except AuthentikAdminError as exc:
             raise HTTPException(
@@ -560,14 +568,6 @@ async def update_my_profile(
                 detail=exc.message,
             ) from exc
     else:
-        if want_name:
-            user.full_name = want_name
-        if payload.clear_avatar:
-            user.avatar_seed = None
-        elif payload.avatar_seed is not None:
-            user.avatar_seed = payload.avatar_seed
-        if want_email is not None:
-            user.email = want_email
         if want_locale is not None:
             user.locale = want_locale
         if want_theme is not None:
@@ -579,7 +579,7 @@ async def update_my_profile(
     return ProfileUpdateResponse(
         full_name=user.full_name,
         avatar_seed=user.avatar_seed,
-        email=user.email,
+        email=email_out,
         locale=user.locale,
         theme=user.theme,
     )
@@ -587,19 +587,45 @@ async def update_my_profile(
 
 @router.patch("/me/avatar", response_model=ProfileUpdateResponse)
 async def update_my_avatar(
-    payload: ProfileUpdateRequest,
+    payload: AvatarSeedUpdate,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> ProfileUpdateResponse:
-    """Shortcut: set/clear avatar_seed (null seed or clear_avatar → reset)."""
-    clear = bool(payload.clear_avatar or payload.avatar_seed is None)
-    return await update_my_profile(
-        ProfileUpdateRequest(
-            avatar_seed=None if clear else payload.avatar_seed,
-            clear_avatar=clear,
-        ),
-        current_user,
-        db,
+    """Установить или сбросить avatar_seed. При SSO — пишет в Authentik attributes."""
+    user = current_user
+    if getattr(user, "is_break_glass", False):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Break glass users cannot update profile",
+        )
+
+    if user.authentik_sub and profile_sync_enabled():
+        try:
+            remote = await push_profile_by_sub(
+                user.authentik_sub,
+                avatar_seed=payload.avatar_seed,
+            )
+            user.avatar_seed = remote.avatar_seed
+            if remote.full_name:
+                user.full_name = remote.full_name
+            user.profile_synced_at = datetime.now(timezone.utc)
+        except AuthentikAdminError as exc:
+            raise HTTPException(
+                status_code=exc.status_code or 502,
+                detail=exc.message,
+            ) from exc
+    else:
+        user.avatar_seed = payload.avatar_seed
+
+    db.add(user)
+    await db.commit()
+    await db.refresh(user)
+    return ProfileUpdateResponse(
+        full_name=user.full_name,
+        avatar_seed=user.avatar_seed,
+        email=user.email,
+        locale=user.locale,
+        theme=user.theme,
     )
 
 

@@ -604,9 +604,12 @@ class OidcAuthService:
         )
 
     async def _link_authentik_sub(self, user: User, authentik_sub: str) -> User:
-        """Persist Authentik subject on local user when empty (first successful link)."""
-        if user.authentik_sub:
-            return user
+        """Persist/refresh Authentik subject on local user (always overwrite — IdP-authoritative).
+
+        Authentik re-creation rotates user uuids; keeping the stale sub would silently
+        break back-channel SLO (revoke lookup misses). Column is non-unique, so overwrite
+        is safe — mirrors HRMS behaviour.
+        """
         user.authentik_sub = authentik_sub
         self.db.add(user)
         await self.db.commit()
@@ -617,7 +620,7 @@ class OidcAuthService:
         """
         Link order (canon R2):
         1. by authentik_sub == id_token.sub
-        2. by preferred_username / email / email local-part → write sub if empty
+        2. by preferred_username / email / email local-part → write/refresh sub (always)
         3. if AUTH_OIDC_ALLOW_JIT: create with authentik_sub
         4. else 403 oidc_user_not_linked
         """
