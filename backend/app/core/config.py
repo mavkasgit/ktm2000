@@ -65,6 +65,9 @@ class Settings(BaseSettings):
     AUTHENTIK_PUBLIC_URL: str | None = "auto"
     AUTHENTIK_PROFILE_TTL_SECONDS: int = 300
 
+    # Login history window for /auth/me/login-events (days).
+    LOGIN_EVENTS_RETENTION_DAYS: int = 90
+
     @model_validator(mode="after")
     def _resolve_variable_interpolation(self) -> "Settings":
         """Resolve ${VAR} references in string fields using already-loaded values.

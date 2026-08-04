@@ -15,3 +15,17 @@ class SessionOut(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+class LoginEventOut(BaseModel):
+    id: int
+    event_type: str
+    success: bool
+    ip_address: str | None = None
+    device_label: str | None = None
+    login_method: str | None = None
+    created_at: datetime
+    failure_reason: str | None = None
+
+    class Config:
+        from_attributes = True

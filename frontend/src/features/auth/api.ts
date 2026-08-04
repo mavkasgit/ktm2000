@@ -22,14 +22,6 @@ export interface User {
   profile_sot?: "authentik" | "local" | string
 }
 
-export interface ProfileUpdateResponse {
-  full_name: string
-  avatar_seed?: string | null
-  email?: string | null
-  locale?: string | null
-  theme?: string | null
-}
-
 /** Получение данных текущего авторизованного пользователя */
 export async function fetchMeApi(): Promise<User> {
   const { data } = await apiClient.get<User>("/auth/me")
@@ -51,27 +43,6 @@ export interface RolesResponse {
 /** Справочник ролей: коды, подписи и допустимые разделы навигации (источник правды — сервер) */
 export async function fetchRolesApi(): Promise<RolesResponse> {
   const { data } = await apiClient.get<RolesResponse>("/auth/roles")
-  return data
-}
-
-/** Unified profile: name / email / locale / theme / avatar → Authentik SoT when linked */
-export async function updateMyProfileApi(payload: {
-  full_name?: string
-  avatar_seed?: string | null
-  clear_avatar?: boolean
-  email?: string
-  locale?: "ru" | "en"
-  theme?: "system" | "light" | "dark"
-}): Promise<ProfileUpdateResponse> {
-  const { data } = await apiClient.patch<ProfileUpdateResponse>("/auth/me/profile", payload)
-  return data
-}
-
-export async function updateMyAvatarApi(avatar_seed: string | null): Promise<ProfileUpdateResponse> {
-  const { data } = await apiClient.patch<ProfileUpdateResponse>("/auth/me/avatar", {
-    avatar_seed,
-    clear_avatar: avatar_seed == null,
-  })
   return data
 }
 

@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import settings
 from app.core.security import create_access_token
 from app.models.user import User
+from app.models.user_login_event import UserLoginEvent
 from app.models.user_session import UserSession
 from app.repositories.login_event_repository import LoginEventRepository
 from app.repositories.logout_jti_repository import LogoutJtiRepository
@@ -53,7 +54,7 @@ async def issue_session(
     now = datetime.now(timezone.utc)
     expires_at = now + timedelta(minutes=max(1, int(ttl_minutes)))
     # Device label from UA (simple heuristic)
-    device_label = _device_label_from_ua(user_agent)
+    device_label = device_label_from_ua(user_agent)
     return await session_repo.create_session(
         db,
         user_id=user_id,
@@ -207,6 +208,18 @@ async def list_active_sessions(db: AsyncSession, *, user_id: int) -> list[UserSe
     return await session_repo.list_active_for_user(db, user_id)
 
 
+async def list_login_events(
+    db: AsyncSession,
+    *,
+    user_id: int,
+    limit: int = 50,
+) -> list[UserLoginEvent]:
+    """Login history window (retention days) for the user, newest first."""
+    since = datetime.now(timezone.utc) - timedelta(days=settings.LOGIN_EVENTS_RETENTION_DAYS)
+    safe_limit = max(1, min(int(limit), 200))
+    return await login_event_repo.list_for_user(db, user_id, since=since, limit=safe_limit)
+
+
 # --- Issue app token ---
 
 def _ttl_minutes_from_delta(expires_delta: timedelta | None) -> int:
@@ -252,7 +265,7 @@ async def issue_app_token(
 
 # --- Helpers ---
 
-def _device_label_from_ua(ua: str | None) -> str | None:
+def device_label_from_ua(ua: str | None) -> str | None:
     """Simple heuristic: extract browser + OS from User-Agent."""
     if not ua:
         return None

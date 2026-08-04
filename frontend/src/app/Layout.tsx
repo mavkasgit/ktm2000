@@ -5,7 +5,7 @@ import { useAuth } from "@/features/auth/hooks/useAuth"
 import type { UserRole } from "@/features/auth/api"
 import { toast } from "@/shared/ui"
 import { UserAvatar, getUserSeed } from "@user/ui"
-import { UserProfileModal } from "@/features/profile/UserProfileModal"
+import { KtmUserSettingsDialog } from "@/features/user-settings/KtmUserSettingsDialog"
 
 const navItems = [
   { to: "/", label: "Обзор", icon: Gauge },
@@ -189,11 +189,11 @@ export function Layout() {
                 <LogOut className="h-4 w-4" />
                 Выход
               </button>
-              <UserProfileModal
+              <KtmUserSettingsDialog
                 open={profileOpen}
                 onOpenChange={setProfileOpen}
-                currentUser={user}
-                onUpdated={refreshUser}
+                onProfileUpdated={refreshUser}
+                onLogoutRequest={logout}
               />
             </div>
           )}

@@ -1,14 +1,15 @@
 """
-Unified human profile — Authentik SoT, app DB cache.
+Unified human profile — Authentik is source of truth, app DB is cache.
 
 Fields:
-  full_name   → user.name
-  email       → user.email
-  avatar_seed → attributes.profile_avatar_seed
-  locale      → attributes.profile_locale
-  theme       → attributes.profile_theme
+  full_name   → Authentik user.name
+  email       → Authentik user.email (HRMS: no DB column, IdP merge only)
+  avatar_seed → Authentik user.attributes.profile_avatar_seed
+  locale      → Authentik user.attributes.profile_locale
+  theme       → Authentik user.attributes.profile_theme
 
-Link: users.authentik_sub == Authentik user.uuid
+Link key: local users.authentik_sub == Authentik user.uuid (OIDC sub).
+When AUTHENTIK_API_TOKEN is missing or user has no sub → local-only mode.
 """
 
 from __future__ import annotations
@@ -17,10 +18,8 @@ import logging
 from dataclasses import dataclass
 from typing import Any
 
-import httpx
-
 from app.core.config import settings
-from app.core.host_net import resolve_authentik_origin
+from app.services.authentik_client import AuthentikAdminError, _request, is_idp_admin_enabled
 
 logger = logging.getLogger(__name__)
 
@@ -40,104 +39,35 @@ class UnifiedProfile:
     locale: str | None = None
     theme: str | None = None
     authentik_pk: int | None = None
-    source: str = "local"
-
-
-class AuthentikProfileError(Exception):
-    def __init__(self, message: str, *, status_code: int | None = None):
-        super().__init__(message)
-        self.message = message
-        self.status_code = status_code
-
-
-def _resolved_api_origin() -> str | None:
-    return resolve_authentik_origin(
-        settings.AUTHENTIK_API_URL,
-        fallback_issuer=settings.AUTH_OIDC_ISSUER,
-    )
+    source: str = "local"  # local | idp | bootstrap
 
 
 def profile_sync_enabled() -> bool:
-    if not settings.AUTH_OIDC_ENABLED:
-        return False
-    url = _resolved_api_origin()
-    token = (settings.AUTHENTIK_API_TOKEN or "").strip()
-    return bool(url and token)
-
-
-def _api_base() -> str:
-    raw = _resolved_api_origin()
-    if not raw:
-        raise AuthentikProfileError(
-            "AUTHENTIK_API_URL is not configured and LAN IP could not be detected",
-            status_code=503,
-        )
-    raw = raw.rstrip("/")
-    if raw.endswith("/api/v3"):
-        return raw
-    return f"{raw}/api/v3"
-
-
-def _headers() -> dict[str, str]:
-    token = (settings.AUTHENTIK_API_TOKEN or "").strip()
-    if not token:
-        raise AuthentikProfileError("AUTHENTIK_API_TOKEN is not configured", status_code=503)
-    return {
-        "Authorization": f"Bearer {token}",
-        "Accept": "application/json",
-        "Content-Type": "application/json",
-    }
-
-
-async def _request(
-    method: str,
-    path: str,
-    *,
-    params: dict[str, Any] | None = None,
-    json_body: dict[str, Any] | None = None,
-) -> Any:
-    base = _api_base()
-    url = f"{base}{path}" if path.startswith("/") else f"{base}/{path}"
-    try:
-        async with httpx.AsyncClient(timeout=20.0) as client:
-            resp = await client.request(
-                method,
-                url,
-                headers=_headers(),
-                params=params,
-                json=json_body,
-            )
-    except httpx.HTTPError as exc:
-        raise AuthentikProfileError(f"Authentik unreachable: {exc}", status_code=502) from exc
-
-    if resp.status_code >= 400:
-        detail = resp.text[:500] if resp.text else resp.reason_phrase
-        # Pass through 4xx (email uniqueness etc.) so API can surface clear errors
-        code = resp.status_code if 400 <= resp.status_code < 500 else 502
-        raise AuthentikProfileError(
-            f"Authentik API error {resp.status_code}: {detail}",
-            status_code=code,
-        )
-    if resp.status_code == 204 or not resp.content:
-        return None
-    try:
-        return resp.json()
-    except ValueError as exc:
-        raise AuthentikProfileError("Invalid JSON from Authentik", status_code=502) from exc
+    """True when backend can call Authentik Admin API (token + URL + OIDC flag)."""
+    return is_idp_admin_enabled()
 
 
 async def _find_user_by_sub(authentik_sub: str) -> dict[str, Any] | None:
+    """Resolve Authentik user by uuid (OIDC sub)."""
     sub = (authentik_sub or "").strip()
     if not sub:
         return None
-    data = await _request("GET", "/core/users/", params={"uuid": sub, "page_size": 5})
+    data = await _request(
+        "GET",
+        "/core/users/",
+        params={"uuid": sub, "page_size": 5},
+    )
     results = data.get("results") if isinstance(data, dict) else None
     if results:
         for u in results:
             if str(u.get("uuid") or "") == sub:
                 return u
         return results[0]
-    data = await _request("GET", "/core/users/", params={"search": sub, "page_size": 20})
+    data = await _request(
+        "GET",
+        "/core/users/",
+        params={"search": sub, "page_size": 20},
+    )
     results = data.get("results") if isinstance(data, dict) else None
     if not results:
         return None
@@ -189,11 +119,12 @@ def profile_from_ak_user(user: dict[str, Any]) -> UnifiedProfile:
 
 
 async def fetch_profile_by_sub(authentik_sub: str) -> UnifiedProfile | None:
+    """Load profile from Authentik. None if not found / API off."""
     if not profile_sync_enabled():
         return None
     try:
         user = await _find_user_by_sub(authentik_sub)
-    except AuthentikProfileError as exc:
+    except AuthentikAdminError as exc:
         logger.warning("unified profile fetch failed: %s", exc.message)
         return None
     if not user:
@@ -217,20 +148,31 @@ async def push_profile_by_sub(
     locale: str | None = None,
     theme: str | None = None,
 ) -> UnifiedProfile:
+    """
+    Write profile fields to Authentik.
+
+    avatar_seed:
+      - Ellipsis (...) → leave unchanged
+      - None → clear attribute
+      - str → set
+    full_name / email / locale / theme:
+      - None → leave unchanged
+      - str → set
+    """
     if not profile_sync_enabled():
-        raise AuthentikProfileError(
+        raise AuthentikAdminError(
             "IdP profile sync is not configured (AUTHENTIK_API_*)",
             status_code=503,
         )
     user = await _find_user_by_sub(authentik_sub)
     if not user:
-        raise AuthentikProfileError(
+        raise AuthentikAdminError(
             f"Authentik user not found for sub={authentik_sub!r}",
             status_code=404,
         )
     pk = user.get("pk")
     if pk is None:
-        raise AuthentikProfileError("Authentik user missing pk", status_code=502)
+        raise AuthentikAdminError("Authentik user missing pk", status_code=502)
 
     body: dict[str, Any] = {}
     if full_name is not None:
@@ -256,13 +198,13 @@ async def push_profile_by_sub(
                 a.pop(ATTR_AVATAR_SEED, None)
             else:
                 if len(seed_s) > 64:
-                    raise AuthentikProfileError("avatar_seed max length 64", status_code=400)
+                    raise AuthentikAdminError("avatar_seed max length 64", status_code=400)
                 a[ATTR_AVATAR_SEED] = seed_s
 
     if locale is not None:
         loc = locale.strip()
         if loc not in ALLOWED_LOCALES:
-            raise AuthentikProfileError(
+            raise AuthentikAdminError(
                 f"locale must be one of {sorted(ALLOWED_LOCALES)}",
                 status_code=400,
             )
@@ -271,7 +213,7 @@ async def push_profile_by_sub(
     if theme is not None:
         th = theme.strip()
         if th not in ALLOWED_THEMES:
-            raise AuthentikProfileError(
+            raise AuthentikAdminError(
                 f"theme must be one of {sorted(ALLOWED_THEMES)}",
                 status_code=400,
             )
@@ -288,7 +230,7 @@ async def push_profile_by_sub(
         return profile_from_ak_user(updated)
     refreshed = await _request("GET", f"/core/users/{pk}/")
     if not isinstance(refreshed, dict):
-        raise AuthentikProfileError("Empty response after profile PATCH", status_code=502)
+        raise AuthentikAdminError("Empty response after profile PATCH", status_code=502)
     return profile_from_ak_user(refreshed)
 
 
@@ -301,6 +243,11 @@ async def sync_local_from_idp(
     local_theme: str | None = None,
     local_email: str | None = None,
 ) -> UnifiedProfile | None:
+    """
+    Pull IdP profile; if IdP avatar empty and local has seed — bootstrap push.
+
+    Returns merged snapshot to apply to local cache, or None if no IdP.
+    """
     if not authentik_sub or not profile_sync_enabled():
         return None
     remote = await fetch_profile_by_sub(authentik_sub)
@@ -314,7 +261,8 @@ async def sync_local_from_idp(
                 avatar_seed=local_avatar_seed,
             )
             remote.source = "bootstrap"
-        except AuthentikProfileError as exc:
+            logger.info("Bootstrapped profile_avatar_seed to IdP for sub=%s", authentik_sub[:8])
+        except AuthentikAdminError as exc:
             logger.warning("avatar bootstrap push failed: %s", exc.message)
             return UnifiedProfile(
                 full_name=remote.full_name or local_full_name,
@@ -338,6 +286,7 @@ async def sync_local_from_idp(
 
 
 def apply_profile_to_user(user: Any, profile: UnifiedProfile) -> bool:
+    """Mutate ORM user cache fields. Returns True if any field changed."""
     changed = False
     if profile.full_name and profile.full_name != (user.full_name or ""):
         user.full_name = profile.full_name
@@ -353,7 +302,9 @@ def apply_profile_to_user(user: Any, profile: UnifiedProfile) -> bool:
         if profile.theme != getattr(user, "theme", None):
             user.theme = profile.theme
             changed = True
-    if profile.email is not None and hasattr(user, "email"):
+    # Email: only when ORM table has the column (KTM); HRMS User has no email.
+    table = getattr(type(user), "__table__", None)
+    if table is not None and "email" in table.c and profile.email is not None:
         if profile.email != getattr(user, "email", None):
             user.email = profile.email
             changed = True

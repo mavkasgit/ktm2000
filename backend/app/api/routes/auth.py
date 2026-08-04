@@ -33,6 +33,7 @@ from app.schemas.oidc_auth import (
     OidcConfigResponse,
     OidcLogoutUrlResponse,
 )
+from app.schemas.session import LoginEventOut
 from app.services.oidc_auth_service import OidcAuthService
 from app.services.session_service import (
     revoke_session_simple,
@@ -43,14 +44,16 @@ from app.services.session_service import (
     mark_logout_jti_used,
     cleanup_logout_jti,
     record_login_event,
+    list_login_events,
+    device_label_from_ua,
 )
 from app.services.unified_profile_service import (
-    AuthentikProfileError,
     apply_profile_to_user,
     profile_sync_enabled,
     push_profile_by_sub,
     sync_local_from_idp,
 )
+from app.services.authentik_client import AuthentikAdminError
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -551,7 +554,7 @@ async def update_my_profile(
             if want_theme is not None:
                 user.theme = remote.theme or want_theme
             user.profile_synced_at = datetime.now(timezone.utc)
-        except AuthentikProfileError as exc:
+        except AuthentikAdminError as exc:
             raise HTTPException(
                 status_code=exc.status_code or 502,
                 detail=exc.message,
@@ -598,3 +601,36 @@ async def update_my_avatar(
         current_user,
         db,
     )
+
+
+@router.get("/me/links")
+async def get_me_links(
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    """IdP deep-links для профиля (каноничный путь). Любой авторизованный пользователь."""
+    from app.services.authentik_admin_service import idp_links_data
+
+    return idp_links_data()
+
+
+@router.get("/me/login-events", response_model=list[LoginEventOut])
+async def list_me_login_events(
+    limit: int = Query(default=50, ge=1, le=200),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> list[LoginEventOut]:
+    """История входов текущего пользователя (каноничный путь /auth/me/*)."""
+    events = await list_login_events(db, user_id=current_user.id, limit=limit)
+    return [
+        LoginEventOut(
+            id=e.id,
+            event_type=e.event_type,
+            success=e.success,
+            ip_address=e.ip_address,
+            device_label=device_label_from_ua(e.user_agent),
+            login_method=(e.details or {}).get("method") if e.details else None,
+            created_at=e.created_at,
+            failure_reason=(e.details or {}).get("reason") if e.details else None,
+        )
+        for e in events
+    ]
