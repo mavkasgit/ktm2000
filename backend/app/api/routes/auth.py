@@ -34,7 +34,11 @@ from app.schemas.oidc_auth import (
     OidcConfigResponse,
     OidcLogoutUrlResponse,
 )
-from app.schemas.session import LoginEventOut
+from app.schemas.session import (
+    LoginEventListOut,
+    LoginEventOut,
+    MAX_LOGIN_EVENTS_SHOWN,
+)
 from app.services.oidc_auth_service import OidcAuthService
 from app.services.session_service import (
     revoke_session_simple,
@@ -639,15 +643,18 @@ async def get_me_links(
     return idp_links_data()
 
 
-@router.get("/me/login-events", response_model=list[LoginEventOut])
+@router.get("/me/login-events", response_model=LoginEventListOut)
 async def list_me_login_events(
-    limit: int = Query(default=50, ge=1, le=200),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
-) -> list[LoginEventOut]:
-    """История входов текущего пользователя (каноничный путь /auth/me/*)."""
-    events = await list_login_events(db, user_id=current_user.id, limit=limit)
-    return [
+) -> LoginEventListOut:
+    """История входов текущего пользователя (каноничный путь /auth/me/*).
+
+    Контракт канона user-settings 2.1.0: {events: [...последние 10 по
+    created_at DESC], total: N} — паритет с GET /auth/sessions.
+    """
+    events = await list_login_events(db, user_id=current_user.id)
+    out = [
         LoginEventOut(
             id=e.id,
             event_type=e.event_type,
@@ -660,3 +667,7 @@ async def list_me_login_events(
         )
         for e in events
     ]
+    return LoginEventListOut(
+        events=out[:MAX_LOGIN_EVENTS_SHOWN],
+        total=len(out),
+    )

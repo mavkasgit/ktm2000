@@ -212,12 +212,10 @@ async def list_login_events(
     db: AsyncSession,
     *,
     user_id: int,
-    limit: int = 50,
 ) -> list[UserLoginEvent]:
     """Login history window (retention days) for the user, newest first."""
     since = datetime.now(timezone.utc) - timedelta(days=settings.LOGIN_EVENTS_RETENTION_DAYS)
-    safe_limit = max(1, min(int(limit), 200))
-    return await login_event_repo.list_for_user(db, user_id, since=since, limit=safe_limit)
+    return await login_event_repo.list_for_user(db, user_id, since=since)
 
 
 # --- Issue app token ---

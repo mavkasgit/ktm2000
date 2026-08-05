@@ -57,3 +57,32 @@ async def test_me_avatar_null_resets_seed(auth_client) -> None:
     res = await auth_client.patch("/api/auth/me/avatar", json={"avatar_seed": None})
     assert res.status_code == 200
     assert res.json()["avatar_seed"] is None
+
+
+async def test_me_login_events_capped_at_10_with_total(auth_client, session) -> None:
+    """Канон 2.1.0: /auth/me/login-events отдаёт максимум 10 + total (окно 90 дней)."""
+    from sqlalchemy import select
+
+    from app.models.user import User
+    from app.services.session_service import record_login_event
+
+    res = await session.execute(select(User).where(User.username == "testauth"))
+    user = res.scalar_one()
+    for _ in range(12):
+        await record_login_event(
+            session,
+            event_type="login_success",
+            success=True,
+            user_id=user.id,
+            username_attempted=user.username,
+        )
+    await session.commit()
+
+    res = await auth_client.get("/api/auth/me/login-events")
+    assert res.status_code == 200
+    body = res.json()
+    assert body["total"] == 12
+    assert len(body["events"]) == 10
+    # Самые свежие сверху: id убывают (created_at DESC, tiebreaker id DESC).
+    ids = [e["id"] for e in body["events"]]
+    assert ids == sorted(ids, reverse=True)

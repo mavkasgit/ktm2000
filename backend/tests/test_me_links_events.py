@@ -51,9 +51,9 @@ async def test_me_login_events_returns_history(auth_client, session):
     response = await auth_client.get("/api/auth/me/login-events")
     assert response.status_code == 200
     body = response.json()
-    assert isinstance(body, list)
-    assert len(body) == 1
-    event = body[0]
+    assert body["total"] == 1
+    assert len(body["events"]) == 1
+    event = body["events"][0]
     assert event["success"] is True
     assert event["event_type"] == "login_success"
     assert event["ip_address"] == "10.0.0.1"
@@ -64,6 +64,6 @@ async def test_me_login_events_returns_history(auth_client, session):
 
 @pytest.mark.asyncio
 async def test_me_login_events_empty(auth_client):
-    response = await auth_client.get("/api/auth/me/login-events?limit=10")
+    response = await auth_client.get("/api/auth/me/login-events")
     assert response.status_code == 200
-    assert response.json() == []
+    assert response.json() == {"events": [], "total": 0}

@@ -1,7 +1,7 @@
 import { apiClient } from "@/shared/api/client"
 import type {
   IdpLinks,
-  LoginEvent,
+  LoginEventListResult,
   SessionListResult,
   UserProfile,
   UserSettingsApi,
@@ -57,10 +57,10 @@ export const ktmUserSettingsApi: UserSettingsApi = {
     await apiClient.delete("/auth/sessions/others")
   },
 
-  async listLoginEvents(limit = 50): Promise<LoginEvent[]> {
-    const { data } = await apiClient.get<LoginEvent[]>("/auth/me/login-events", {
-      params: { limit },
-    })
+  async listLoginEvents(): Promise<LoginEventListResult> {
+    const { data } = await apiClient.get<LoginEventListResult>(
+      "/auth/me/login-events",
+    )
     return data
   },
 }
