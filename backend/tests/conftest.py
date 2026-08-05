@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 import os
+import sys
 os.environ.setdefault("DEV_BYPASS_AUTH", "true")
-os.environ.pop("TEST_DATABASE_URL", None)
 
 import tempfile
 
@@ -41,13 +41,61 @@ _RUN_ID_ENV = "KTM_PYTEST_RUN_ID"
 def pytest_sessionstart(session: pytest.Session) -> None:
     """Stamp one run_id in the master env so every xdist worker shares it.
 
-    Each worker's session-autouse DB cleanup would otherwise drop its
-    siblings' freshly created test DBs (NullPool closes connections between
-    tests, so a sibling DB can look stale), causing InvalidCatalogNameError
-    mid-run. A shared run_id lets cleanup exclude the current run's DB and
-    only drop leftovers from previous runs.
+    The controller additionally runs the once-per-run DB hygiene — CREATEDB
+    privilege gate, sweep of leftover ktm_test_* databases and a fresh shared
+    run-DB (DROP IF EXISTS + CREATE) so a retried attempt with the same
+    run_id (e.g. CI pinning KTM_PYTEST_RUN_ID to a commit SHA) starts clean
+    instead of reusing a leftover. Only the controller runs this: it executes
+    before xdist spawns workers, so there is no create/drop race with workers.
     """
     os.environ.setdefault(_RUN_ID_ENV, uuid.uuid4().hex[:8])
+    if not hasattr(session.config, "workerinput"):
+        _controller_db_hygiene()
+
+
+def _controller_db_hygiene() -> None:
+    """Controller-only DB setup: privilege check, stale-DB sweep, fresh run-DB.
+
+    Runs once on the master before xdist spawns workers, so the once-per-run
+    work (CREATEDB gate, sweep of leftover ktm_test_* DBs, DROP+CREATE of the
+    shared run-DB) is not duplicated N times by every worker. The privilege
+    check is fatal — a misconfigured DB user aborts the run immediately with
+    a clear message instead of failing on the first CREATE DATABASE. The
+    sweep and reset stay best-effort so a leftover/hung DB never blocks the
+    session.
+    """
+    import asyncio
+
+    run_id = os.environ.get(_RUN_ID_ENV)
+    if not run_id:
+        return
+    db_name = f"{TEST_DB_PREFIX}w_{run_id}"
+    try:
+        _validate_ident(db_name, required_prefix=TEST_DB_PREFIX)
+        admin_url = _admin_db_url(_base_test_db_url())
+    except RuntimeError:
+        return
+
+    async def _hygiene() -> None:
+        await _ensure_createdb_privilege(admin_url)
+        try:
+            await _cleanup_stale_databases(admin_url, exclude=db_name)
+        except Exception as exc:
+            # Best-effort: a failed sweep must not abort the session before the
+            # first test. Stale DBs are hygiene, not correctness.
+            print(f"[conftest] stale run-DB sweep skipped: {exc}", file=sys.stderr)
+        try:
+            await _reset_run_database(admin_url, db_name)
+        except Exception as exc:
+            print(f"[conftest] best-effort reset of {db_name} skipped: {exc}", file=sys.stderr)
+
+    asyncio.run(_hygiene())
+
+
+async def _reset_run_database(admin_url: URL, db_name: str) -> None:
+    """Idempotent fresh start for the shared run-DB."""
+    await _drop_database(admin_url, db_name)
+    await _create_database(admin_url, db_name)
 
 
 def _quote_ident(name: str) -> str:
@@ -204,7 +252,11 @@ async def _cleanup_stale_databases(admin_url: URL, *, exclude: str | None = None
                 _validate_ident(db_name, required_prefix=TEST_DB_PREFIX)
             except RuntimeError:
                 continue
-            await _drop_database(admin_url, db_name)
+            try:
+                await _drop_database(admin_url, db_name)
+            except Exception as exc:
+                # One bad DB must not abort the whole sweep.
+                print(f"[conftest] drop of stale DB {db_name} skipped: {exc}", file=sys.stderr)
     finally:
         await engine.dispose()
 
@@ -335,33 +387,30 @@ def admin_db_url(base_test_db_url: URL) -> URL:
     return _admin_db_url(base_test_db_url)
 
 
-@pytest_asyncio.fixture(scope="session", autouse=True, loop_scope="session")
-async def cleanup_stale_test_dbs(db_mode: str, admin_db_url: URL, run_id: str) -> AsyncIterator[None]:
-    _ = db_mode
-    await _ensure_createdb_privilege(admin_db_url)
-    await _cleanup_stale_databases(admin_db_url, exclude=f"{TEST_DB_PREFIX}w_{run_id}")
-    yield
-
-
 @pytest_asyncio.fixture(scope="session", loop_scope="session")
 async def worker_db_url(
     run_id: str,
     base_test_db_url: URL,
     admin_db_url: URL,
 ) -> AsyncIterator[str]:
-    """One database per xdist worker (session-scoped). Modules share it via schemas."""
+    """One shared run-DB for the whole run; every xdist worker points at it.
+
+    The DB is deliberately NOT dropped in this fixture's teardown: it is
+    shared by all workers, so the first worker to finish would drop it out
+    from under its still-running siblings (the InvalidCatalogNameError this
+    file exists to prevent). Per-module schemas are dropped by the ``engine``
+    fixture teardown (t_<uuid8>); the run-DB itself is reaped best-effort by
+    the next run's stale-DB sweep and by the controller's sessionstart hygiene
+    (which also gives retried runs with the same run_id a clean start).
+    """
     db_name = f"{TEST_DB_PREFIX}w_{run_id}"
     _validate_ident(db_name, required_prefix=TEST_DB_PREFIX)
     await _create_database(admin_db_url, db_name)
-    db_url = base_test_db_url.set(database=db_name).render_as_string(hide_password=False)
-    try:
-        yield db_url
-    finally:
-        await _drop_database(admin_db_url, db_name)
+    yield base_test_db_url.set(database=db_name).render_as_string(hide_password=False)
 
 
-@pytest_asyncio.fixture(scope="module", loop_scope="module")
-async def module_schema_name() -> str:
+@pytest.fixture(scope="module")
+def module_schema_name() -> str:
     schema_name = f"{TEST_SCHEMA_PREFIX}{uuid.uuid4().hex[:8]}"
     _validate_ident(schema_name, required_prefix=TEST_SCHEMA_PREFIX)
     return schema_name

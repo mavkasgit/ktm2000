@@ -20,9 +20,15 @@ BACKEND_DIR = Path(__file__).resolve().parents[1]
 
 
 def _test_db_url() -> str:
+    """The pytest postgres (localhost:5441) — not the stale dev default (5432).
+
+    Honors TEST_DATABASE_URL set by the npm scripts; falls back to the test
+    compose contract (port 5441 / ktm2000_pass_test) so the migration test
+    runs against the same server conftest targets.
+    """
     return os.getenv(
-        "DATABASE_URL",
-        "postgresql+asyncpg://ktm2000_user:ktm2000_pass@localhost:5432/ktm2000_test",
+        "TEST_DATABASE_URL",
+        "postgresql+asyncpg://ktm2000_user:ktm2000_pass_test@localhost:5441/ktm2000_test",
     )
 
 
