@@ -32,7 +32,7 @@ import {
   AlertDialogFooter,
   AlertDialogAction,
   AlertDialogCancel,
-} from "@/shared/ui/AlertDialog"
+} from "@/shared/ui/alert-dialog"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/shared/ui/Select"
 import { Badge } from "@/shared/ui/Badge"
 import { toast } from "@/shared/ui/use-toast"

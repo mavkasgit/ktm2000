@@ -13,7 +13,7 @@ import { EntityDialog, renderIcon } from "@/shared/ui/EntityDialog";
 import { SpgSelect } from "@/shared/ui/SpgSelect";
 import { cn } from "@/shared/utils/cn";
 import { Popover, PopoverTrigger, PopoverContent } from "@/shared/ui/Popover";
-import { AlertDialog, AlertDialogContent, AlertDialogHeader, AlertDialogTitle, AlertDialogDescription, AlertDialogFooter, AlertDialogCancel, AlertDialogAction } from "@/shared/ui/AlertDialog";
+import { AlertDialog, AlertDialogContent, AlertDialogHeader, AlertDialogTitle, AlertDialogDescription, AlertDialogFooter, AlertDialogCancel, AlertDialogAction } from "@/shared/ui/alert-dialog";
 import { toast } from "@/shared/ui/use-toast";
 import { Input } from "@/shared/ui/Input";
 import { TablePaginationFooter } from "@/shared/ui/TablePaginationFooter";

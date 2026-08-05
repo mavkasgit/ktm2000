@@ -12,7 +12,7 @@ import { Input } from "@/shared/ui/Input";
 import { Card } from "@/shared/ui/Card";
 import { Badge } from "@/shared/ui/Badge";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/shared/ui/Dialog";
-import { AlertDialog, AlertDialogContent, AlertDialogHeader, AlertDialogTitle, AlertDialogDescription, AlertDialogFooter, AlertDialogAction, AlertDialogCancel } from "@/shared/ui/AlertDialog";
+import { AlertDialog, AlertDialogContent, AlertDialogHeader, AlertDialogTitle, AlertDialogDescription, AlertDialogFooter, AlertDialogAction, AlertDialogCancel } from "@/shared/ui/alert-dialog";
 import { toast } from "@/shared/ui/use-toast";
 import { ImportPreviewDialog } from "../ImportPreviewDialog";
 import { CatalogForm, type CatalogFormRef, type FieldChange } from "../components/CatalogForm";

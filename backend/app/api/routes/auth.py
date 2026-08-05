@@ -459,7 +459,7 @@ async def me(
             is_active=True,
             avatar_seed="emergency",
             locale="ru",
-            theme="system",
+            theme="light",
             authentik_linked=False,
             profile_sot="local",
             is_break_glass=True,

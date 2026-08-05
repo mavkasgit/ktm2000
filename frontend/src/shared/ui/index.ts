@@ -6,7 +6,7 @@ export * from "./Card";
 export * from "./Table";
 export * from "./Feedback";
 export * from "./Dialog";
-export * from "./AlertDialog";
+export * from "./alert-dialog";
 export * from "./Checkbox";
 export * from "./Popover";
 export { EntityDialog, renderIcon } from "./EntityDialog";

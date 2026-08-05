@@ -20,11 +20,17 @@ export interface User {
   theme?: string | null
   authentik_linked?: boolean
   profile_sot?: "authentik" | "local" | string
+  /** Аварийный (Break Glass) вход — эфемерная учётка без записи в БД. */
+  is_break_glass?: boolean
 }
 
-/** Получение данных текущего авторизованного пользователя */
-export async function fetchMeApi(): Promise<User> {
-  const { data } = await apiClient.get<User>("/auth/me")
+/**
+ * Получение данных текущего авторизованного пользователя.
+ * `force=true` → ?refresh=1 — принудительный pull из IdP, обходя TTL-кэш
+ * бэкенда (аватар/ФИО/email из Authentik обновляются мгновенно).
+ */
+export async function fetchMeApi(force = false): Promise<User> {
+  const { data } = await apiClient.get<User>(force ? "/auth/me?refresh=1" : "/auth/me")
   return data
 }
 

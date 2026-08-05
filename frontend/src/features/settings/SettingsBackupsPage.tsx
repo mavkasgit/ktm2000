@@ -26,7 +26,7 @@ import {
   AlertDialogFooter,
   AlertDialogHeader,
   AlertDialogTitle,
-} from "@/shared/ui/AlertDialog"
+} from "@/shared/ui/alert-dialog"
 import {
   useBackups,
   useBackupConfig,
