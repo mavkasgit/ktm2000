@@ -165,29 +165,30 @@ export function Layout() {
 
           {/* Блок пользователя + единый профиль */}
           {user && (
-            <div className="mt-auto border-t px-4 py-4 space-y-2">
+            <div className="mt-auto p-3 border-t flex flex-col gap-2">
               <button
                 type="button"
                 onClick={() => setProfileOpen(true)}
-                className="flex w-full items-center gap-3 rounded-md px-2 py-2 text-left transition-colors hover:bg-accent"
+                className="flex w-full items-center gap-3 px-3 py-2 rounded-xl text-left hover:bg-accent transition-all group"
                 title="Настройки профиля"
               >
-                <UserAvatar seed={getUserSeed(user)} size={36} />
-                <div className="min-w-0 flex-1">
-                  <div className="truncate text-sm font-medium">{user.full_name}</div>
+                <UserAvatar seed={getUserSeed(user)} size={32} className="group-hover:scale-105 transition-transform" />
+                <div className="flex-1 min-w-0">
+                  <div className="font-semibold text-foreground text-sm truncate group-hover:text-primary transition-colors">
+                    {user.full_name}
+                  </div>
                   <div className="text-[10px] text-muted-foreground truncate">
                     Настройки профиля
                   </div>
                 </div>
               </button>
-              <div className="px-2 text-xs text-muted-foreground">{roleLabel(user.role)}</div>
               <button
                 type="button"
                 onClick={logout}
-                className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                className="flex w-full items-center gap-3 px-3 py-2 rounded-md text-sm text-destructive hover:bg-destructive/10 transition-colors"
               >
                 <LogOut className="h-4 w-4" />
-                Выход
+                Выйти
               </button>
               <KtmUserSettingsDialog
                 open={profileOpen}
