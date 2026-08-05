@@ -6,6 +6,7 @@ import type { UserRole } from "@/features/auth/api"
 import { toast } from "@/shared/ui"
 import { UserAvatar, getUserSeed } from "@user/ui"
 import { KtmUserSettingsDialog } from "@/features/user-settings/KtmUserSettingsDialog"
+import { KtmNotificationBell } from "@/features/notifications"
 
 const navItems = [
   { to: "/", label: "Обзор", icon: Gauge },
@@ -166,13 +167,23 @@ export function Layout() {
           {/* Блок пользователя + единый профиль */}
           {user && (
             <div className="mt-auto p-3 border-t flex flex-col gap-2">
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setProfileOpen(true)}
+                  className="flex flex-1 min-w-0 items-center gap-3 px-3 py-2 rounded-xl text-left hover:bg-accent transition-all group"
+                  title="Настройки профиля"
+                >
+                  <UserAvatar seed={getUserSeed(user)} size={32} className="group-hover:scale-105 transition-transform" />
+                </button>
+                <KtmNotificationBell />
+              </div>
               <button
                 type="button"
                 onClick={() => setProfileOpen(true)}
-                className="flex w-full items-center gap-3 px-3 py-2 rounded-xl text-left hover:bg-accent transition-all group"
+                className="flex w-full items-center gap-3 px-3 py-1.5 rounded-xl text-left hover:bg-accent transition-all group"
                 title="Настройки профиля"
               >
-                <UserAvatar seed={getUserSeed(user)} size={32} className="group-hover:scale-105 transition-transform" />
                 <div className="flex-1 min-w-0">
                   <div className="font-semibold text-foreground text-sm truncate group-hover:text-primary transition-colors">
                     {user.full_name}
