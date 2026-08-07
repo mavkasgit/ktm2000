@@ -51,6 +51,9 @@ class Settings(BaseSettings):
     AUTH_OIDC_DEFAULT_ROLE: str = "viewer"
     # When true, soft-map IdP groups → users.role on link/JIT; default false = app SoT
     AUTH_OIDC_SYNC_ROLE_FROM_IDP: bool = False
+    # SSO-only mode (informational flag in /auth/oidc/config): password paths removed
+    AUTH_SSO_ONLY: bool = False
+    AUTH_OIDC_LOGIN_HINT_ENABLED: bool = True
 
     # Break Glass (emergency) access — bypass Authentik when IdP is unreachable.
     BREAK_GLASS_ENABLED: bool = True

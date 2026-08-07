@@ -1,8 +1,14 @@
-"""OIDC / Authentik bridge: token exchange, id_token JWKS verify, user link → app JWT.
+"""OIDC / Authentik bridge — KTM host adapter over the shared OIDC core.
 
 Flow (public SPA + PKCE):
   FE authorize → Authentik → FE /auth/callback → POST /api/auth/oidc/callback
-  → exchange code → validate id_token → resolve User → issue_app_token (JWT+sid)
+  → core.exchange_code → core.validate_id_token → resolve User → issue_app_token
+
+The protocol machinery (issuer candidates, JWKS + TTL cache, exchange_code,
+validate_id_token, validate_logout_token, logout_url, public_config) lives in
+the must-match module app/services/oidc_core.py. This file wires the KTM
+domain: role-mapping (ktm_role claim / groups), user-provisioning, session
+issuance via the shared session-core, and the RU error dictionary.
 
 Link order (canon R2):
   1. users.authentik_sub == id_token.sub
@@ -17,224 +23,118 @@ from __future__ import annotations
 
 import logging
 import time
-from dataclasses import dataclass
 from typing import Any
-from urllib.parse import urlencode, urljoin, urlparse, urlunparse
 
 import httpx
 from fastapi import HTTPException, status
-from jose import JWTError, jwt
-from jose.backends import RSAKey
 from sqlalchemy import or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.models.user import User, UserRole
-from app.services.session_service import issue_app_token
+from app.services import session_service
+from app.services.oidc_core import (
+    LogoutClaims,
+    OidcClaims,
+    OidcCore,
+    OidcCoreConfig,
+    OidcHooks,
+)
+from app.services.session_service import record_login_event
 
 logger = logging.getLogger(__name__)
-
-# In-process JWKS cache: {url: (fetched_at_monotonic, jwks_dict)}
-_JWKS_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
-_JWKS_TTL_SECONDS = 3600
 
 _VALID_ROLES = frozenset(r.value for r in UserRole)
 
 
-@dataclass(frozen=True)
-class OidcClaims:
-    """Normalized claims extracted from validated id_token."""
-
-    sub: str
-    preferred_username: str | None
-    email: str | None
-    name: str | None
-    groups: tuple[str, ...] = ()
-    ktm_role: str | None = None
-    # OIDC session id — back-channel logout correlation
-    sid: str | None = None
-
-
-_BACKCHANNEL_LOGOUT_EVENT = "http://schemas.openid.net/event/backchannel-logout"
-
-
-@dataclass(frozen=True)
-class LogoutClaims:
-    """Normalized claims from a validated OIDC back-channel logout_token."""
-
-    sub: str
-    sid: str | None = None
-    jti: str | None = None
-    iss: str | None = None
-    # exp (unix ts) — TTL for jti replay-store row
-    exp: int | None = None
+def _ktm_role_from_claims(claims: OidcClaims) -> str | None:
+    """Extract the KTM-specific role claim from the raw validated id_token claims."""
+    raw = claims.raw.get("ktm_role")
+    return str(raw).strip().lower() if raw else None
 
 
 class OidcAuthService:
-    """Business logic for OIDC bridge (layer: service)."""
+    """Business logic for the OIDC bridge — KTM host adapter (layer: service)."""
 
     def __init__(self, db: AsyncSession) -> None:
         self.db = db
+        self._oidc_core = OidcCore(self._core_config(), self._core_hooks())
 
-    # ─── config helpers ───────────────────────────────────────────────────
-
-    @staticmethod
-    def is_enabled() -> bool:
-        return bool(settings.AUTH_OIDC_ENABLED)
+    # ─── shared core wiring ───────────────────────────────────────────────
 
     @classmethod
-    def _issuer(cls) -> str:
-        issuer = (settings.AUTH_OIDC_ISSUER or "").strip()
-        if not issuer or issuer.lower() == "auto":
-            from app.core.host_net import resolve_authentik_origin
-            origin = resolve_authentik_origin(None) or "http://localhost:9000"
-            client_id = settings.AUTH_OIDC_CLIENT_ID or "ktm2000"
-            issuer = f"{origin}/application/o/{client_id}/"
-        return issuer if issuer.endswith("/") else issuer + "/"
+    def _core_config(cls) -> OidcCoreConfig:
+        lan: str | None = None
+        try:
+            from app.core.host_net import detect_lan_ip, env_lan_ip
+
+            lan = env_lan_ip() or detect_lan_ip()
+        except Exception:  # noqa: BLE001
+            lan = None
+
+        def resolve_auto_origin() -> str | None:
+            try:
+                from app.core.host_net import resolve_authentik_origin
+
+                return resolve_authentik_origin(None)
+            except Exception:  # noqa: BLE001
+                return None
+
+        return OidcCoreConfig(
+            enabled=bool(settings.AUTH_OIDC_ENABLED),
+            issuer=settings.AUTH_OIDC_ISSUER,
+            client_id=settings.AUTH_OIDC_CLIENT_ID,
+            client_secret=settings.AUTH_OIDC_CLIENT_SECRET,
+            redirect_uri=settings.AUTH_OIDC_REDIRECT_URI,
+            scopes=settings.AUTH_OIDC_SCOPES,
+            issuer_aliases=settings.AUTH_OIDC_ISSUER_ALIASES,
+            authorization_url=settings.AUTH_OIDC_AUTHORIZATION_URL,
+            token_url=settings.AUTH_OIDC_TOKEN_URL,
+            jwks_url=settings.AUTH_OIDC_JWKS_URL,
+            end_session_url=settings.AUTH_OIDC_END_SESSION_URL,
+            auto_issuer_client_id="ktm2000",
+            resolve_auto_origin=resolve_auto_origin,
+            extra_alt_hosts=(lan,) if lan else (),
+            login_hint_enabled=bool(settings.AUTH_OIDC_LOGIN_HINT_ENABLED),
+            sso_only=bool(settings.AUTH_SSO_ONLY),
+        )
+
+    def _core_hooks(self) -> OidcHooks:
+        return OidcHooks(
+            resolve_or_provision=self.resolve_or_provision_user,
+            issue_token=self._issue_token,
+            record_failed_login=self._record_failed_login,
+        )
 
     @classmethod
-    def _alt_issuer_hosts(cls) -> list[str]:
-        """Hostnames that may appear in id_token.iss (LAN IP, localhost, docker)."""
-        hosts: list[str] = []
-        seen: set[str] = set()
+    def _core(cls) -> OidcCore:
+        return OidcCore(cls._core_config())
 
-        def add_host(h: str | None) -> None:
-            if not h:
-                return
-            h = h.strip().lower().split("%")[0]
-            if not h or h in seen:
-                return
-            seen.add(h)
-            hosts.append(h)
-
-        for fixed in ("localhost", "127.0.0.1", "host.docker.internal"):
-            add_host(fixed)
-
-        from app.core.host_net import env_lan_ip, detect_lan_ip
-        lan = env_lan_ip() or detect_lan_ip()
-        if lan:
-            add_host(lan)
-
-        raw_issuer = (settings.AUTH_OIDC_ISSUER or "").strip()
-        if raw_issuer:
-            parsed = urlparse(raw_issuer if "://" in raw_issuer else f"http://{raw_issuer}")
-            add_host(parsed.hostname)
-
-        aliases = (settings.AUTH_OIDC_ISSUER_ALIASES or "").strip()
-        for part in aliases.split(","):
-            part = part.strip()
-            if not part:
-                continue
-            if "://" in part:
-                add_host(urlparse(part).hostname)
-            else:
-                # host or host:port
-                add_host(part.split("/")[0].split(":")[0])
-
-        return hosts
+    # ─── config-only delegates (no db) ────────────────────────────────────
 
     @classmethod
-    def _issuer_candidates(cls) -> list[str]:
-        """Accept iss from browser host, LAN IP, Docker host-gateway, and aliases.
-
-        Authentik sets id_token ``iss`` from the authorize request Host.
-        SPA may open IdP as localhost:9000 or http://<LAN-IP>:9000 — both valid.
-        """
-        primary = cls._issuer()
-        bare = primary.rstrip("/")
-        out: list[str] = []
-        seen: set[str] = set()
-
-        def add(value: str) -> None:
-            if value and value not in seen:
-                seen.add(value)
-                out.append(value)
-
-        add(primary)
-        add(bare)
-
-        for base in (primary, bare):
-            parsed = urlparse(base if "://" in base else f"http://{base}")
-            if not parsed.hostname:
-                continue
-            path = parsed.path or ""
-            for host in cls._alt_issuer_hosts():
-                port = parsed.port
-                netloc = f"{host}:{port}" if port else host
-                rebuilt = urlunparse(
-                    (parsed.scheme or "http", netloc, path, "", "", "")
-                )
-                add(rebuilt)
-                add(rebuilt.rstrip("/"))
-                if not rebuilt.endswith("/"):
-                    add(rebuilt + "/")
-        return out
+    def is_enabled(cls) -> bool:
+        return cls._core().is_enabled()
 
     @classmethod
     def resolve_authorization_url(cls) -> str:
-        if settings.AUTH_OIDC_AUTHORIZATION_URL:
-            return settings.AUTH_OIDC_AUTHORIZATION_URL.rstrip("/")
-        issuer = cls._issuer()
-        # issuer = …/application/o/ktm2000/ → …/application/o/authorize/
-        base = issuer.rsplit("/", 2)[0] + "/"
-        return urljoin(base, "authorize/")
+        return cls._core().resolve_authorization_url()
 
     @classmethod
     def resolve_token_url(cls) -> str:
-        if settings.AUTH_OIDC_TOKEN_URL:
-            return settings.AUTH_OIDC_TOKEN_URL
-        issuer = cls._issuer()
-        base = issuer.rsplit("/", 2)[0] + "/"
-        return urljoin(base, "token/")
+        return cls._core().resolve_token_url()
 
     @classmethod
     def resolve_jwks_url(cls) -> str:
-        if settings.AUTH_OIDC_JWKS_URL:
-            return settings.AUTH_OIDC_JWKS_URL
-        return urljoin(cls._issuer(), "jwks/")
+        return cls._core().resolve_jwks_url()
 
     @classmethod
     def resolve_end_session_url(cls) -> str:
-        if settings.AUTH_OIDC_END_SESSION_URL:
-            return settings.AUTH_OIDC_END_SESSION_URL
-        return urljoin(cls._issuer(), "end-session/")
+        return cls._core().resolve_end_session_url()
 
     @classmethod
     def public_config(cls) -> dict[str, Any]:
-        """Payload for GET /auth/oidc/config (no secrets)."""
-        if not cls.is_enabled():
-            return {
-                "enabled": False,
-                "authorization_url": None,
-                "client_id": None,
-                "redirect_uri": None,
-                "scopes": None,
-                "issuer": None,
-                "token_url": None,
-            }
-        try:
-            auth_url = cls.resolve_authorization_url()
-            token_url = cls.resolve_token_url()
-            issuer = cls._issuer()
-        except HTTPException:
-            return {
-                "enabled": True,
-                "authorization_url": None,
-                "client_id": settings.AUTH_OIDC_CLIENT_ID,
-                "redirect_uri": settings.AUTH_OIDC_REDIRECT_URI,
-                "scopes": settings.AUTH_OIDC_SCOPES,
-                "issuer": settings.AUTH_OIDC_ISSUER,
-                "token_url": settings.AUTH_OIDC_TOKEN_URL,
-            }
-        return {
-            "enabled": True,
-            "authorization_url": auth_url,
-            "client_id": settings.AUTH_OIDC_CLIENT_ID,
-            "redirect_uri": settings.AUTH_OIDC_REDIRECT_URI,
-            "scopes": settings.AUTH_OIDC_SCOPES,
-            "issuer": issuer.rstrip("/"),
-            "token_url": token_url,
-        }
+        return cls._core().public_config()
 
     @classmethod
     def logout_url(
@@ -243,36 +143,20 @@ class OidcAuthService:
         id_token_hint: str | None = None,
         post_logout_redirect_uri: str | None = None,
     ) -> str | None:
-        """Build Authentik RP-initiated logout URL.
+        return cls._core().logout_url(
+            id_token_hint=id_token_hint,
+            post_logout_redirect_uri=post_logout_redirect_uri,
+        )
 
-        Authentik requires ``id_token_hint`` when ``post_logout_redirect_uri`` is
-        used and the provider has registered logout redirect URIs. Sending
-        post_logout alone yields 400 «The request is otherwise malformed».
-        """
-        if not cls.is_enabled():
-            return None
-        try:
-            base = cls.resolve_end_session_url()
-        except HTTPException:
-            return None
-        params: dict[str, str] = {}
-        hint = (id_token_hint or "").strip()
-        if hint:
-            params["id_token_hint"] = hint
-            if post_logout_redirect_uri:
-                params["post_logout_redirect_uri"] = post_logout_redirect_uri
-            elif settings.AUTH_OIDC_REDIRECT_URI:
-                redirect = settings.AUTH_OIDC_REDIRECT_URI
-                if "/auth/callback" in redirect:
-                    params["post_logout_redirect_uri"] = redirect.replace(
-                        "/auth/callback", "/login"
-                    )
-        if params:
-            sep = "&" if "?" in base else "?"
-            return f"{base}{sep}{urlencode(params)}"
-        return base
+    @classmethod
+    def _issuer_candidates(cls) -> list[str]:
+        return cls._core()._issuer_candidates()
 
-    # ─── HTTP: token + JWKS ───────────────────────────────────────────────
+    @classmethod
+    def clear_jwks_cache(cls) -> None:
+        OidcCore.clear_jwks_cache()
+
+    # ─── instance delegates ───────────────────────────────────────────────
 
     async def exchange_code(
         self,
@@ -281,320 +165,66 @@ class OidcAuthService:
         code_verifier: str,
         redirect_uri: str,
     ) -> dict[str, Any]:
-        """POST token_endpoint with authorization_code + PKCE."""
-        token_url = self.resolve_token_url()
-        client_id = settings.AUTH_OIDC_CLIENT_ID
-        if not client_id:
-            raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail="OIDC client_id not configured",
-            )
-        data: dict[str, str] = {
-            "grant_type": "authorization_code",
-            "code": code,
-            "redirect_uri": redirect_uri,
-            "client_id": client_id,
-            "code_verifier": code_verifier,
-        }
-        secret = (settings.AUTH_OIDC_CLIENT_SECRET or "").strip()
-        if secret:
-            data["client_secret"] = secret
-
-        try:
-            async with httpx.AsyncClient(timeout=15.0) as client:
-                resp = await client.post(
-                    token_url,
-                    data=data,
-                    headers={"Accept": "application/json"},
-                )
-        except httpx.HTTPError as exc:
-            logger.warning("OIDC token exchange network error: %s", exc)
-            raise HTTPException(
-                status_code=status.HTTP_502_BAD_GATEWAY,
-                detail="OIDC token endpoint unreachable",
-            ) from exc
-
-        if resp.status_code >= 400:
-            logger.warning(
-                "OIDC token exchange failed status=%s body=%s",
-                resp.status_code,
-                resp.text[:500],
-            )
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="invalid_oidc_code",
-            )
-
-        try:
-            body = resp.json()
-        except Exception as exc:  # noqa: BLE001
-            raise HTTPException(
-                status_code=status.HTTP_502_BAD_GATEWAY,
-                detail="OIDC token response invalid",
-            ) from exc
-
-        if "id_token" not in body:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="invalid_oidc_token_response",
-            )
-        return body
-
-    async def fetch_jwks(self) -> dict[str, Any]:
-        """Fetch JWKS with simple TTL cache."""
-        url = self.resolve_jwks_url()
-        now = time.monotonic()
-        cached = _JWKS_CACHE.get(url)
-        if cached and (now - cached[0]) < _JWKS_TTL_SECONDS:
-            return cached[1]
-
-        try:
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                resp = await client.get(url, headers={"Accept": "application/json"})
-                resp.raise_for_status()
-                jwks = resp.json()
-        except (httpx.HTTPError, ValueError) as exc:
-            logger.warning("OIDC JWKS fetch failed: %s", exc)
-            if cached:
-                return cached[1]
-            raise HTTPException(
-                status_code=status.HTTP_502_BAD_GATEWAY,
-                detail="OIDC JWKS unavailable",
-            ) from exc
-
-        _JWKS_CACHE[url] = (now, jwks)
-        return jwks
-
-    @staticmethod
-    def clear_jwks_cache() -> None:
-        """Test helper / ops."""
-        _JWKS_CACHE.clear()
-
-    async def validate_id_token(self, id_token: str) -> OidcClaims:
-        """Verify signature (JWKS), iss, aud, exp; return normalized claims."""
-        client_id = settings.AUTH_OIDC_CLIENT_ID
-        if not client_id:
-            raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail="OIDC client_id not configured",
-            )
-
-        try:
-            header = jwt.get_unverified_header(id_token)
-        except JWTError as exc:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="invalid_id_token",
-            ) from exc
-
-        kid = header.get("kid")
-        alg = header.get("alg", "RS256")
-        jwks = await self.fetch_jwks()
-        keys = jwks.get("keys") or []
-        matching = None
-        for key in keys:
-            if kid and key.get("kid") == kid:
-                matching = key
-                break
-            if not kid and key.get("kty") == "RSA":
-                matching = key
-                break
-        if matching is None and keys:
-            matching = keys[0]
-        if matching is None:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="invalid_id_token_key",
-            )
-
-        claims: dict[str, Any] | None = None
-        last_err: Exception | None = None
-        try:
-            rsa_key = RSAKey(matching, algorithm=alg)
-        except Exception as exc:  # noqa: BLE001
-            logger.info("OIDC JWKS key load failed: %s", exc)
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="invalid_id_token_key",
-            ) from exc
-
-        for issuer_candidate in self._issuer_candidates():
-            try:
-                claims = jwt.decode(
-                    id_token,
-                    rsa_key,
-                    algorithms=[alg],
-                    audience=client_id,
-                    issuer=issuer_candidate,
-                    options={
-                        "verify_at_hash": False,
-                        "require_exp": True,
-                        "require_iat": False,
-                        "require_nbf": False,
-                    },
-                )
-                break
-            except JWTError as exc:
-                last_err = exc
-                continue
-
-        if claims is None:
-            logger.info("OIDC id_token validation failed: %s", last_err)
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="invalid_id_token",
-            )
-
-        sub = claims.get("sub")
-        if not sub or not isinstance(sub, str):
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="invalid_id_token_sub",
-            )
-
-        raw_groups = claims.get("groups") or claims.get("groups_list") or []
-        groups: tuple[str, ...] = ()
-        if isinstance(raw_groups, (list, tuple)):
-            groups = tuple(str(g) for g in raw_groups if g)
-
-        ktm_role_raw = claims.get("ktm_role")
-        ktm_role = str(ktm_role_raw).strip().lower() if ktm_role_raw else None
-
-        # OIDC session id for back-channel logout correlation
-        sid_raw = claims.get("sid")
-        sid = str(sid_raw) if sid_raw else None
-
-        return OidcClaims(
-            sub=sub,
-            preferred_username=claims.get("preferred_username") or claims.get("nickname"),
-            email=claims.get("email"),
-            name=claims.get("name"),
-            groups=groups,
-            ktm_role=ktm_role,
-            sid=sid,
+        return await self._oidc_core.exchange_code(
+            code=code,
+            code_verifier=code_verifier,
+            redirect_uri=redirect_uri,
         )
 
+    async def fetch_jwks(self) -> dict[str, Any]:
+        return await self._oidc_core.fetch_jwks()
+
+    async def validate_id_token(self, id_token: str) -> OidcClaims:
+        return await self._oidc_core.validate_id_token(id_token)
+
     async def validate_logout_token(self, logout_token: str) -> LogoutClaims:
-        """Verify OIDC back-channel logout_token (JWKS, iss, aud, events, sub).
+        return await self._oidc_core.validate_logout_token(logout_token)
 
-        Spec: invalid → 400. Does not match IdP ``sid`` to app session ids.
-        """
-        token = (logout_token or "").strip()
-        if not token:
+    # ─── hooks (host domain, wired into the shared core) ──────────────────
+
+    async def _issue_token(
+        self,
+        user: User,
+        claims: OidcClaims,
+        *,
+        ip: str | None,
+        user_agent: str | None,
+    ) -> str:
+        if not user.is_active:
             raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="invalid_logout_token",
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="User is disabled",
             )
+        return await session_service.issue_app_token(
+            self.db,
+            user=user,
+            login_method="oidc",
+            ip=ip,
+            user_agent=user_agent,
+            oidc_sid=claims.sid,
+        )
 
-        client_id = settings.AUTH_OIDC_CLIENT_ID
-        if not client_id:
-            raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail="OIDC client_id not configured",
-            )
-
+    async def _record_failed_login(
+        self,
+        *,
+        reason: str,
+        username_attempted: str | None,
+        ip: str | None,
+        user_agent: str | None,
+    ) -> None:
         try:
-            header = jwt.get_unverified_header(token)
-        except JWTError as exc:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="invalid_logout_token",
-            ) from exc
-
-        alg = header.get("alg") or "RS256"
-        if alg == "none" or not isinstance(alg, str):
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="invalid_logout_token",
+            await record_login_event(
+                self.db,
+                event_type="login_failure",
+                success=False,
+                user_id=None,
+                username_attempted=username_attempted,
+                ip_address=ip,
+                user_agent=user_agent,
+                details={"reason": reason, "method": "oidc"},
             )
-
-        kid = header.get("kid")
-        jwks = await self.fetch_jwks()
-        keys = jwks.get("keys") or []
-        matching = None
-        for key in keys:
-            if kid and key.get("kid") == kid:
-                matching = key
-                break
-            if not kid and key.get("kty") == "RSA":
-                matching = key
-                break
-        if matching is None and keys:
-            matching = keys[0]
-        if matching is None:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="invalid_logout_token",
-            )
-
-        claims: dict[str, Any] | None = None
-        last_err: Exception | None = None
-        try:
-            rsa_key = RSAKey(matching, algorithm=alg)
-        except Exception as exc:  # noqa: BLE001
-            logger.info("OIDC logout_token JWKS key load failed: %s", exc)
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="invalid_logout_token",
-            ) from exc
-
-        for issuer_candidate in self._issuer_candidates():
-            try:
-                claims = jwt.decode(
-                    token,
-                    rsa_key,
-                    algorithms=[alg],
-                    audience=client_id,
-                    issuer=issuer_candidate,
-                    options={
-                        "verify_at_hash": False,
-                        "require_exp": True,
-                        "require_iat": True,
-                        "require_nbf": False,
-                    },
-                )
-                break
-            except JWTError as exc:
-                last_err = exc
-                continue
-
-        if claims is None:
-            logger.info("OIDC logout_token validation failed: %s", last_err)
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="invalid_logout_token",
-            )
-
-        if "nonce" in claims:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="invalid_logout_token",
-            )
-
-        events = claims.get("events")
-        if not isinstance(events, dict) or _BACKCHANNEL_LOGOUT_EVENT not in events:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="invalid_logout_token",
-            )
-
-        sub = claims.get("sub")
-        if not sub or not isinstance(sub, str):
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="invalid_logout_token",
-            )
-
-        sid_raw = claims.get("sid")
-        sid = str(sid_raw) if sid_raw else None
-        jti_raw = claims.get("jti")
-        jti = str(jti_raw) if jti_raw else None
-        iss_raw = claims.get("iss")
-        iss = str(iss_raw) if iss_raw else None
-        exp_raw = claims.get("exp")
-        exp = exp_raw if isinstance(exp_raw, int) and not isinstance(exp_raw, bool) else None
-
-        return LogoutClaims(sub=sub, sid=sid, jti=jti, iss=iss, exp=exp)
+        except Exception:  # noqa: BLE001 — audit must never break auth flow
+            logger.warning("OIDC failed-login audit record failed", exc_info=True)
 
     # ─── user resolve / link ──────────────────────────────────────────────
 
@@ -669,7 +299,7 @@ class OidcAuthService:
         username = await self._pick_username(candidates, claims.sub)
         # When SYNC enabled: ktm_role claim is mandatory for JIT (fail-closed)
         if settings.AUTH_OIDC_SYNC_ROLE_FROM_IDP:
-            ktm_role = claims.ktm_role
+            ktm_role = _ktm_role_from_claims(claims)
             if ktm_role not in _VALID_ROLES:
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN,
@@ -808,7 +438,7 @@ class OidcAuthService:
 
     async def _sync_role_from_claim(self, user: User, claims: OidcClaims) -> None:
         """JIT overwrite role from ktm_role claim. Fail-closed when claim absent/invalid."""
-        ktm_role = claims.ktm_role
+        ktm_role = _ktm_role_from_claims(claims)
         if ktm_role in _VALID_ROLES:
             if user.role != UserRole(ktm_role):
                 user.role = UserRole(ktm_role)
@@ -838,7 +468,6 @@ class OidcAuthService:
         else:
             await self._maybe_sync_role(user, claims)
 
-
     # ─── full callback ────────────────────────────────────────────────────
 
     async def handle_callback(
@@ -854,51 +483,20 @@ class OidcAuthService:
         Exchange code → validate id_token → resolve user → issue app JWT.
         Returns TokenResponse-compatible dict (access_token, token_type).
         """
-        if not self.is_enabled():
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="OIDC login disabled",
-            )
-
-        redir = (redirect_uri or settings.AUTH_OIDC_REDIRECT_URI or "").strip()
-        if not redir:
-            raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail="OIDC redirect_uri not configured",
-            )
-
-        token_body = await self.exchange_code(
+        result = await self._oidc_core.handle_callback(
             code=code,
             code_verifier=code_verifier,
-            redirect_uri=redir,
-        )
-        id_token = token_body["id_token"]
-        claims = await self.validate_id_token(id_token)
-        user = await self.resolve_or_provision_user(claims)
-
-        if not user.is_active:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="User is disabled",
-            )
-
-        # Extract oidc_sid from id_token for back-channel logout correlation
-        oidc_sid = claims.sid if hasattr(claims, "sid") else None
-
-        token = await issue_app_token(
-            self.db,
-            user=user,
-            login_method="oidc",
+            redirect_uri=redirect_uri,
             ip=ip,
             user_agent=user_agent,
-            oidc_sid=oidc_sid,
         )
+        user = result["user"]
         return {
-            "access_token": token,
-            "token_type": "bearer",
+            "access_token": result["access_token"],
+            "token_type": result["token_type"],
             "username": user.username,
             "role": user.role.value if hasattr(user.role, "value") else str(user.role),
             "full_name": user.full_name or user.username,
             # For Authentik RP-initiated logout (id_token_hint + post_logout_redirect_uri)
-            "id_token": id_token,
+            "id_token": result["id_token"],
         }
