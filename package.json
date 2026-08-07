@@ -4,7 +4,9 @@
   "version": "1.0.0",
   "scripts": {
     "setup": "npm install && npm install --prefix frontend && echo 'Не забудьте установить зависимости Python!'",
-    "predev": "node scripts/ensure-dev-ports.js && npm run db:up && npm run db:wait && npm run db:migrate",
+    "verify:sync": "node scripts/verify-sync.mjs --other ../hrms",
+    "predev": "npm run verify:sync && node scripts/ensure-dev-ports.js && npm run db:up && npm run db:wait && npm run db:migrate",
+    "prebuild": "npm run verify:sync",
     "dev": "concurrently --names \"DB,BACKEND,FRONTEND\" -c \"blue,green,yellow\" \"npm run db:logs\" \"npm run backend\" \"npm run frontend\"",
     "frontend": "npm --prefix frontend run dev",
     "backend": "cd backend && uvicorn app.main:app --host 0.0.0.0 --port 8012 --reload --reload-dir app",

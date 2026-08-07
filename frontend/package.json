@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
+    "prebuild": "node ../scripts/verify-sync.mjs --other ../hrms",
     "preview": "vite preview",
     "test": "vitest run",
     "check:modules": "node scripts/check-modules.mjs --other ../../hrms/frontend",
