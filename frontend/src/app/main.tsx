@@ -5,7 +5,11 @@ import { router } from "./Router"
 import { Toaster } from "@/shared/ui"
 import { AuthProvider } from "@/features/auth/hooks/useAuth"
 import { startAppVersionWatch } from "@/shared/lib/appVersionWatch"
+import { applyTheme, readStoredTheme } from "@user/ui"
 import "./styles.css"
+
+
+applyTheme(readStoredTheme())
 
 startAppVersionWatch()
 
