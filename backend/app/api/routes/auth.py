@@ -14,7 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import get_current_user
 from app.core.database import get_db
 from app.core.config import settings
-from app.core.security import TokenError, create_access_token, decode_access_token
+from app.core.security import TokenError, create_break_glass_token, decode_access_token
 from app.models.user import User, UserRole
 from app.models.user_session import UserSession
 from app.schemas.auth import (
@@ -94,18 +94,18 @@ def _record_break_glass_event(
     username_attempted: str,
     ip_address: str,
     user_agent: str,
-    session_id: UUID | None = None,
+    corr_id: str | None = None,
     details: dict | None = None,
 ):
     level = logging.CRITICAL if event_type == "login_success" else logging.WARNING
     logger.log(
         level,
-        "Break Glass %s | user=%s ip=%s ua=%s sid=%s details=%s",
+        "Break Glass %s | user=%s ip=%s ua=%s corr_id=%s details=%s",
         event_type,
         username_attempted,
         ip_address,
         user_agent,
-        str(session_id) if session_id else "none",
+        corr_id or "none",
         details or {},
     )
 
@@ -326,20 +326,15 @@ async def break_glass_login(
             detail="Неверный пароль аварийного доступа",
         )
 
-    session_id = uuid4()
-    token = create_access_token(
-        bg_user,
-        role="admin",
-        claims={"is_break_glass": True},
-        session_id=session_id,
-    )
+    corr_id = str(uuid4())
+    token = create_break_glass_token(bg_user, corr_id=corr_id)
 
     _record_break_glass_event(
         "login_success",
         username_attempted=bg_user,
         ip_address=ip,
         user_agent=ua,
-        session_id=session_id,
+        corr_id=corr_id,
         details={"method": "break_glass"},
     )
 
@@ -385,7 +380,7 @@ async def logout(
             username_attempted=payload.get("sub", "emergency_admin"),
             ip_address=ip,
             user_agent=ua,
-            session_id=UUID(payload["sid"]) if payload.get("sid") else None,
+            corr_id=payload.get("corr_id"),
             details={"source": "emergency_access", "method": "break_glass"},
         )
         return

@@ -9,6 +9,7 @@ from app.core.config import settings
 from app.core.database import get_db
 from app.core.security import decode_access_token, TokenError
 from app.models.user import User, UserRole
+from app.models.user_session import UserSession
 from app.services.session_service import SessionInactiveError, assert_session_active
 
 
@@ -64,9 +65,19 @@ async def _load_user_by_subject(db: AsyncSession, subject: str) -> User | None:
     )
 
 
-async def _assert_sid_active(db: AsyncSession, payload: dict) -> UUID:
-    """Require JWT claim sid and active server session (strict/prod)."""
-    sid_raw = payload.get("sid")
+def _sid_claim(payload: dict) -> str | None:
+    """The ``sid`` claim as a non-empty string, else None (single presence shape)."""
+    return payload.get("sid") or None
+
+
+async def _require_sid_active(db: AsyncSession, payload: dict) -> UserSession:
+    """Require JWT claim sid naming an ACTIVE server session (regular kind).
+
+    The ONLY sid validation in the auth gate — structurally unreachable from
+    the break-glass path (ADR-0006). Returns the session so the caller can
+    cross-check ownership against ``sub``.
+    """
+    sid_raw = _sid_claim(payload)
     if not sid_raw:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -82,68 +93,24 @@ async def _assert_sid_active(db: AsyncSession, payload: dict) -> UUID:
             headers={"WWW-Authenticate": "Bearer"},
         )
     try:
-        await assert_session_active(db, session_id)
+        return await assert_session_active(db, session_id)
     except SessionInactiveError:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Session revoked or expired",
             headers={"WWW-Authenticate": "Bearer"},
         )
-    return session_id
 
 
-async def get_current_user(
-    request: Request,
-    db: AsyncSession = Depends(get_db),
-) -> User | _BreakGlassUser:
+async def _decode_bearer_payload(request: Request) -> dict:
+    """Strict-mode token extraction + verification (no sid semantics here)."""
     auth_header = request.headers.get("Authorization")
-
-    # --- DEV bypass mode: JWT if valid (sid optional), magic admin, else system@local ---
-    if settings.DEV_BYPASS_AUTH:
-        if auth_header and auth_header.startswith("Bearer "):
-            token = auth_header[7:]
-            # Magic bearer (dev/test tools) — gated by DEV_BYPASS_AUTH
-            if token == "admin":
-                admin = await _resolve_magic_admin(db)
-                if admin:
-                    return admin
-                raise HTTPException(
-                    status_code=status.HTTP_401_UNAUTHORIZED,
-                    detail="Admin user not found in database",
-                    headers={"WWW-Authenticate": "Bearer"},
-                )
-            try:
-                payload = decode_access_token(token)
-                subject = payload.get("sub")
-                if subject:
-                    user = await _load_user_by_subject(db, subject)
-                    if user:
-                        return user
-            except (TokenError, Exception):
-                pass
-
-        # Fallback to globally seeded system@local user if present in DB
-        user = await db.scalar(
-            select(User).where(
-                or_(User.username == "system", User.email == "system@local")
-            )
-        )
-        if user:
-            return user
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="System user not found in database",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-
-    # --- Strict JWT auth mode (prod): require sid + active session ---
     if not auth_header or not auth_header.startswith("Bearer "):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Missing authentication token",
             headers={"WWW-Authenticate": "Bearer"},
         )
-
     token = auth_header[7:]
 
     # Magic Bearer "admin" is dev-only; reject in strict/prod
@@ -155,13 +122,81 @@ async def get_current_user(
         )
 
     try:
-        payload = decode_access_token(token)
+        return decode_access_token(token)
     except TokenError:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid or expired token",
             headers={"WWW-Authenticate": "Bearer"},
         )
+
+
+async def get_current_user(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+) -> User | _BreakGlassUser:
+    """Classify the token kind and apply its per-kind identity rules (ADR-0006).
+
+    dev (DEV_BYPASS_AUTH) — escape hatch: sid optional, magic ``admin`` /
+    ``system@local``. break glass — no sid, no session lookup. regular — the
+    only path that requires an ACTIVE session and cross-checks ``sub`` vs
+    the session owner.
+    """
+    if settings.DEV_BYPASS_AUTH:
+        return await _get_current_user_dev(request, db)
+    return await _get_current_user_strict(request, db)
+
+
+async def _get_current_user_dev(
+    request: Request,
+    db: AsyncSession,
+) -> User | _BreakGlassUser:
+    """Dev/test escape hatch: JWT if valid (sid optional), magic admin, else system@local."""
+    auth_header = request.headers.get("Authorization")
+
+    if auth_header and auth_header.startswith("Bearer "):
+        token = auth_header[7:]
+        # Magic bearer (dev/test tools) — gated by DEV_BYPASS_AUTH
+        if token == "admin":
+            admin = await _resolve_magic_admin(db)
+            if admin:
+                return admin
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Admin user not found in database",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+        try:
+            payload = decode_access_token(token)
+            subject = payload.get("sub")
+            if subject:
+                user = await _load_user_by_subject(db, subject)
+                if user:
+                    return user
+        except (TokenError, Exception):
+            pass
+
+    # Fallback to globally seeded system@local user if present in DB
+    user = await db.scalar(
+        select(User).where(
+            or_(User.username == "system", User.email == "system@local")
+        )
+    )
+    if user:
+        return user
+    raise HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="System user not found in database",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+
+
+async def _get_current_user_strict(
+    request: Request,
+    db: AsyncSession,
+) -> User | _BreakGlassUser:
+    """Prod auth: decode, classify kind, then apply per-kind identity rules."""
+    payload = await _decode_bearer_payload(request)
 
     subject: str | None = payload.get("sub")
     if not subject:
@@ -171,18 +206,38 @@ async def get_current_user(
             headers={"WWW-Authenticate": "Bearer"},
         )
 
-    # Break Glass (emergency) token: bypass users table & session assertion
+    # Break Glass (emergency) token: no sid, bypasses users table & session assertion
     if payload.get("is_break_glass") is True:
-        if not settings.BREAK_GLASS_ENABLED:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Break glass access is disabled",
-                headers={"WWW-Authenticate": "Bearer"},
-            )
-        return _make_break_glass_user()
+        return await _strict_break_glass_identity(payload)
 
-    # Hybrid JWT + server session: claim sid required (except DEV_BYPASS / magic admin)
-    await _assert_sid_active(db, payload)
+    return await _strict_regular_identity(db, payload, subject)
+
+
+async def _strict_break_glass_identity(payload: dict) -> _BreakGlassUser:
+    """Break-glass identity: gate on flag + config only; sid must be absent."""
+    if not settings.BREAK_GLASS_ENABLED:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Break glass access is disabled",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    # Hybrid is_break_glass + sid is an anomaly: reject, never mask it (ADR-0006)
+    if _sid_claim(payload):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid token payload",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    return _make_break_glass_user()
+
+
+async def _strict_regular_identity(
+    db: AsyncSession,
+    payload: dict,
+    subject: str,
+) -> User:
+    """Regular identity: the ONLY path that validates sid (active + owned by sub)."""
+    session = await _require_sid_active(db, payload)
 
     user = await _load_user_by_subject(db, subject)
     if user is None:
@@ -191,7 +246,12 @@ async def get_current_user(
             detail="User not found",
             headers={"WWW-Authenticate": "Bearer"},
         )
-
+    if session.user_id != user.id:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid token payload",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
     if not user.is_active:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,

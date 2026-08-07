@@ -364,3 +364,196 @@ async def test_transporter_can_manage_transfers_globally_but_not_shopfloor_tasks
         headers={"Authorization": transporter_headers["Authorization"]},
     )
     assert forbidden_response.status_code == 403
+
+
+# ─── Break Glass contract (strict mode, DEV_BYPASS_AUTH=False) ────────
+
+
+def test_create_break_glass_token_has_no_sid() -> None:
+    """The dedicated break-glass minter structurally never emits a sid claim."""
+    from uuid import uuid4
+
+    from app.core.security import create_break_glass_token, decode_access_token
+
+    token = create_break_glass_token("emergency_admin", corr_id=uuid4())
+    payload = decode_access_token(token)
+
+    assert "sid" not in payload
+    assert payload.get("is_break_glass") is True
+    assert payload.get("corr_id")
+    assert payload.get("role") == "admin"
+    assert payload.get("sub") == "emergency_admin"
+
+
+@pytest.mark.asyncio
+async def test_break_glass_login_token_has_no_sid(client, monkeypatch) -> None:
+    """Break-glass login emits a token without sid but with corr_id."""
+    from app.core.config import settings
+    from app.core.security import decode_access_token
+
+    monkeypatch.setattr(settings, "DEV_BYPASS_AUTH", False)
+
+    response = await client.post(
+        "/api/auth/break-glass/login",
+        json={"password": settings.BREAK_GLASS_PASSWORD},
+    )
+    assert response.status_code == 200
+
+    payload = decode_access_token(response.json()["access_token"])
+    assert "sid" not in payload
+    assert payload.get("is_break_glass") is True
+    assert payload.get("corr_id")
+
+
+@pytest.mark.asyncio
+async def test_break_glass_logout_records_corr_id(client, caplog, monkeypatch) -> None:
+    """Logout of a break-glass session logs corr_id (no sid, no session row)."""
+    import logging
+
+    from app.core.config import settings
+    from app.core.security import decode_access_token
+
+    monkeypatch.setattr(settings, "DEV_BYPASS_AUTH", False)
+
+    login = await client.post(
+        "/api/auth/break-glass/login",
+        json={"password": settings.BREAK_GLASS_PASSWORD},
+    )
+    assert login.status_code == 200
+    token = login.json()["access_token"]
+    corr_id = decode_access_token(token)["corr_id"]
+
+    with caplog.at_level(logging.WARNING, logger="app.api.routes.auth"):
+        logout = await client.post(
+            "/api/auth/logout",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+    assert logout.status_code == 204
+    assert f"corr_id={corr_id}" in caplog.text
+    assert "sid=" not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_break_glass_accepted_without_db_session(client, monkeypatch) -> None:
+    """Strict mode accepts a break-glass token with no session row at all."""
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "DEV_BYPASS_AUTH", False)
+
+    login = await client.post(
+        "/api/auth/break-glass/login",
+        json={"password": settings.BREAK_GLASS_PASSWORD},
+    )
+    assert login.status_code == 200
+
+    response = await client.get(
+        "/api/auth/me",
+        headers={"Authorization": f"Bearer {login.json()['access_token']}"},
+    )
+    assert response.status_code == 200
+    assert response.json()["is_break_glass"] is True
+
+
+@pytest.mark.asyncio
+async def test_hybrid_break_glass_with_sid_rejected(client, monkeypatch) -> None:
+    """A break-glass token carrying a sid claim is an anomaly and must 401."""
+    from uuid import uuid4
+
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "DEV_BYPASS_AUTH", False)
+
+    token = create_access_token(
+        "emergency_admin",
+        claims={"is_break_glass": True},
+        session_id=uuid4(),
+    )
+    response = await client.get(
+        "/api/auth/me",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert response.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_regular_token_fake_sid_rejected(client, session, monkeypatch) -> None:
+    """A regular token whose sid does not name a session row must 401."""
+    from uuid import uuid4
+
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "DEV_BYPASS_AUTH", False)
+
+    user = User(
+        username="fakesid",
+        email="fakesid@example.com",
+        full_name="Fake Sid",
+        role=UserRole.viewer,
+        is_active=True,
+    )
+    session.add(user)
+    await session.commit()
+
+    token = create_access_token(subject=user.username, session_id=uuid4())
+    response = await client.get(
+        "/api/auth/me",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert response.status_code == 401
+    assert response.json()["detail"] == "Session revoked or expired"
+
+
+@pytest.mark.asyncio
+async def test_regular_token_sid_of_other_user_rejected(client, session, monkeypatch) -> None:
+    """sid naming an active session of ANOTHER user must 401 (sub<->sid cross-check)."""
+    from app.core.config import settings
+    from app.services.session_service import issue_session
+
+    monkeypatch.setattr(settings, "DEV_BYPASS_AUTH", False)
+
+    alice = User(
+        username="alice_x",
+        email="alice_x@example.com",
+        full_name="Alice X",
+        role=UserRole.viewer,
+        is_active=True,
+    )
+    bob = User(
+        username="bob_x",
+        email="bob_x@example.com",
+        full_name="Bob X",
+        role=UserRole.viewer,
+        is_active=True,
+    )
+    session.add_all([alice, bob])
+    await session.commit()
+
+    bob_session = await issue_session(
+        session,
+        user_id=bob.id,
+        login_method="oidc",
+        ttl_minutes=60,
+    )
+    await session.commit()
+
+    token = create_access_token(subject=alice.username, session_id=bob_session.id)
+    response = await client.get(
+        "/api/auth/me",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert response.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_break_glass_disabled_rejected(client, monkeypatch) -> None:
+    """Strict mode rejects break-glass access when BREAK_GLASS_ENABLED is false."""
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "DEV_BYPASS_AUTH", False)
+    monkeypatch.setattr(settings, "BREAK_GLASS_ENABLED", False)
+
+    response = await client.post(
+        "/api/auth/break-glass/login",
+        json={"password": settings.BREAK_GLASS_PASSWORD},
+    )
+    assert response.status_code == 401

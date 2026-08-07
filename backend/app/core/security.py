@@ -50,5 +50,23 @@ def create_access_token(
     )
 
 
+def create_break_glass_token(
+    subject: str,
+    *,
+    corr_id: str | UUID,
+) -> str:
+    """Break-glass JWT: is_break_glass + corr_id, structurally never a sid.
+
+    The only emitter of break-glass tokens (ADR-0006). Deliberately has no
+    ``session_id`` parameter — break glass must never carry a ``sid`` claim.
+    Role is fixed to ``admin`` (emergency access).
+    """
+    return create_access_token(
+        subject,
+        role="admin",
+        claims={"is_break_glass": True, "corr_id": str(corr_id)},
+    )
+
+
 def decode_access_token(token: str) -> dict:
     return _core_decode_access_token(_jwt_config(), token)
