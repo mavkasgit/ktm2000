@@ -14,7 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import get_current_user
 from app.core.database import get_db
 from app.core.config import settings
-from app.core.security import TokenError, decode_access_token
+from app.core.security import TokenError, create_access_token, decode_access_token
 from app.models.user import User, UserRole
 from app.models.user_session import UserSession
 from app.schemas.auth import (
@@ -327,15 +327,12 @@ async def break_glass_login(
         )
 
     session_id = uuid4()
-    token_data = {
-        "sub": bg_user,
-        "username": bg_user,
-        "role": "admin",
-        "is_break_glass": True,
-        "sid": str(session_id),
-    }
-    secret_key = settings.JWT_SECRET_KEY or settings.SECRET_KEY
-    token = jwt.encode(token_data, secret_key, algorithm=settings.ALGORITHM)
+    token = create_access_token(
+        bg_user,
+        role="admin",
+        claims={"is_break_glass": True},
+        session_id=session_id,
+    )
 
     _record_break_glass_event(
         "login_success",
