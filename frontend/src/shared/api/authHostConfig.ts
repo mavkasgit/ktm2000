@@ -16,7 +16,7 @@ import { translateError } from "./errorMessages"
 import type { AuthShellRoleCatalogEntry } from "./client"
 
 /** Версия auth-shell-модуля — синхронизируется verify-sync (режим content + version). */
-export const AUTH_SHELL_VERSION = "1.0.0"
+export const AUTH_SHELL_VERSION = "1.1.0"
 
 export type AuthErrorText = {
   title: string
