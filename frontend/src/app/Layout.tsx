@@ -2,7 +2,6 @@ import { useState, useEffect, useRef } from "react"
 import { NavLink, Outlet, useLocation } from "react-router-dom"
 import { Boxes, ClipboardList, Gauge, Factory, Cog, Wrench, Layers, Menu, X, ArrowRightLeft, History, LogOut, Terminal } from "lucide-react"
 import { useAuth } from "@/features/auth/hooks/useAuth"
-import type { UserRole } from "@/features/auth/api"
 import { toast } from "@/shared/ui"
 import { UserAvatar, getUserSeed } from "@user/ui"
 import { KtmUserSettingsDialog } from "@/features/user-settings/KtmUserSettingsDialog"
@@ -128,7 +127,7 @@ export function Layout() {
               }
 
               if (!allowed) {
-                const allowedRoles: UserRole[] = rolesCatalog
+                const allowedRoles: string[] = rolesCatalog
                   .filter((r) => r.sections.includes(item.to))
                   .map((r) => r.code)
                 const roleNames = allowedRoles.map(r => roleLabel(r)).join(", ")
@@ -167,11 +166,11 @@ export function Layout() {
           {/* Блок пользователя + единый профиль */}
           {user && (
             <div className="mt-auto p-3 border-t flex flex-col gap-2">
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-1">
                 <button
                   type="button"
                   onClick={() => setProfileOpen(true)}
-                  className="flex flex-1 min-w-0 items-center gap-3 px-3 py-2 rounded-xl text-left hover:bg-accent transition-all group"
+                  className="flex items-center justify-center p-1.5 rounded-xl hover:bg-accent transition-all group"
                   title="Настройки профиля"
                 >
                   <UserAvatar seed={getUserSeed(user)} size={32} className="group-hover:scale-105 transition-transform" />

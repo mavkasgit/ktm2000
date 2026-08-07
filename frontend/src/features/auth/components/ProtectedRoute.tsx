@@ -3,13 +3,12 @@ import { Navigate } from "react-router-dom"
 import { Loader2 } from "lucide-react"
 import { useAuth } from "../hooks/useAuth"
 import { toast } from "@/shared/ui"
-import type { UserRole } from "../api"
 import type { ReactNode } from "react"
 
 interface ProtectedRouteProps {
   children: ReactNode
   /** Если указано — доступ разрешён только для перечисленных ролей */
-  allowedRoles?: UserRole[]
+  allowedRoles?: string[]
 }
 
 /**

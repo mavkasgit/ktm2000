@@ -1,40 +1,37 @@
+/**
+ * Единая страница входа auth-shell (OIDC + break-glass).
+ *
+ * ОБЩИЙ МОДУЛЬ: не содержит бренд-значений. Имя приложения, подзаголовок,
+ * пути и словарь RU-текстов ошибок заданы в хостовом файле
+ * `@/shared/api/authHostConfig`. Файл байт-идентичен в HRMS и KTM
+ * (сверяется scripts/verify-sync.mjs, режим content + version).
+ */
 import { useState, useEffect, useRef, type FormEvent } from "react"
 import { Navigate } from "react-router-dom"
 import { Loader2, LogIn, Shield } from "lucide-react"
-import { LOGGED_OUT_KEY, useAuth } from "../hooks/useAuth"
-import { API_BASE_URL } from "@/shared/api/client"
+import { useAuth } from "../hooks/useAuth"
+import {
+  API_BASE_URL,
+  AUTH_ERROR_CODES,
+  consumeAuthErrorForLogin,
+  resolveAuthShellError,
+} from "@/shared/api/client"
+import { authHostConfig } from "@/shared/api/authHostConfig"
 import {
   fetchOidcConfig,
   startOidcLogin,
   type OidcConfig,
 } from "../api/oidcAuth"
 
-const AUTH_ERROR_STORAGE_KEY = "ktm2000_auth_error"
-
-function readLoggedOut(): boolean {
-  try {
-    return sessionStorage.getItem(LOGGED_OUT_KEY) === "1"
-  } catch {
-    return false
-  }
-}
-
-function consumeAuthError(): string | null {
-  try {
-    const err = sessionStorage.getItem(AUTH_ERROR_STORAGE_KEY)
-    if (err) sessionStorage.removeItem(AUTH_ERROR_STORAGE_KEY)
-    return err
-  } catch {
-    return null
-  }
-}
+/** Версия auth-shell-модуля — синхронизируется verify-sync (режим content + version). */
+export const AUTH_SHELL_VERSION = "1.0.0"
 
 export function LoginPage() {
   const { loginWithToken, isAuthenticated, isLoading: authLoading } = useAuth()
 
   const [breakGlassPassword, setBreakGlassPassword] = useState("")
   const [loading, setLoading] = useState(false)
-  const [error, setError] = useState<string | null>(() => consumeAuthError())
+  const [error, setError] = useState<string | null>(() => consumeAuthErrorForLogin())
 
   const [oidcConfig, setOidcConfig] = useState<OidcConfig | null>(null)
   const [oidcLoaded, setOidcLoaded] = useState(false)
@@ -86,11 +83,6 @@ export function LoginPage() {
     setError(null)
     setOidcStarting(true)
     try {
-      sessionStorage.removeItem(LOGGED_OUT_KEY)
-    } catch {
-      /* ignore */
-    }
-    try {
       await startOidcLogin(oidcConfig)
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Ошибка входа через единый вход")
@@ -101,8 +93,6 @@ export function LoginPage() {
   useEffect(() => {
     if (!oidcLoaded || !oidcEnabled || oidcUnreachable || oidcAutoStartedRef.current) return
     if (authLoading || isAuthenticated) return
-    // After logout: don't auto-redirect — show break glass form instead
-    if (readLoggedOut()) return
     oidcAutoStartedRef.current = true
     void handleOidcLogin()
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -124,7 +114,11 @@ export function LoginPage() {
         return
       }
       const errData = await resp.json().catch(() => ({}))
-      throw new Error(errData.detail || "Неверный пароль аварийного доступа")
+      const display = resolveAuthShellError(
+        { response: { status: resp.status, data: errData } },
+        AUTH_ERROR_CODES.BREAK_GLASS_FAILED,
+      )
+      throw new Error(display.message)
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Ошибка аварийного входа")
     } finally {
@@ -141,7 +135,7 @@ export function LoginPage() {
   }
 
   if (isAuthenticated) {
-    return <Navigate to="/" replace />
+    return <Navigate to={authHostConfig.rootPath} replace />
   }
 
   if (!oidcLoaded || (oidcEnabled && !oidcUnreachable)) {
@@ -149,7 +143,7 @@ export function LoginPage() {
       <div className="flex min-h-screen flex-col items-center justify-center gap-4 bg-slate-50 p-4">
         <img
           src="/logo.svg"
-          alt="KTM-2000"
+          alt={authHostConfig.appName}
           className="h-14 w-14 rounded-2xl shadow-lg shadow-slate-900/15"
           width={56}
           height={56}
@@ -157,7 +151,7 @@ export function LoginPage() {
         <div className="flex items-center gap-2 text-slate-600">
           <Loader2 className="h-5 w-5 animate-spin text-slate-500" />
           <p className="text-sm">
-            {!oidcLoaded
+            {!oidcLoaded || !oidcStarting
               ? "Проверка настроек входа…"
               : "Переход к единому входу…"}
           </p>
@@ -190,14 +184,14 @@ export function LoginPage() {
           <div className="mb-8 flex flex-col items-center gap-3">
             <img
               src="/logo.svg"
-              alt="KTM-2000"
+              alt={authHostConfig.appName}
               className="h-14 w-14 rounded-2xl shadow-lg shadow-slate-900/15"
               width={56}
               height={56}
             />
             <div className="text-center">
-              <h1 className="text-2xl font-bold tracking-tight text-slate-900">KTM-2000</h1>
-              <p className="mt-1 text-sm text-slate-500">Система планирования производства</p>
+              <h1 className="text-2xl font-bold tracking-tight text-slate-900">{authHostConfig.appName}</h1>
+              <p className="mt-1 text-sm text-slate-500">{authHostConfig.appTagline}</p>
             </div>
           </div>
 
@@ -256,7 +250,7 @@ export function LoginPage() {
         </div>
 
         <p className="mt-6 text-center text-xs text-slate-400">
-          KTM-2000 · Планирование производства
+          {authHostConfig.appName} · {authHostConfig.appTagline}
         </p>
       </div>
     </div>
