@@ -1,17 +1,28 @@
 /**
  * Authentik / OIDC login client (public SPA + PKCE).
  * Dual-run: when GET /auth/oidc/config returns enabled=false, callers hide SSO UI.
+ *
+ * ОБЩИЙ МОДУЛЬ: не содержит бренд-значений. Storage-префикс, token-ключ,
+ * cookie-ключ, scope, имя приложения, apiBase и словарь RU-текстов ошибок
+ * заданы в хостовом файле `./oidcHostConfig`. Файл байт-идентичен в HRMS и KTM
+ * (сверяется scripts/verify-sync.mjs, режим content + version).
  */
 
-import { API_BASE_URL } from "@/shared/api/client"
+import { oidcHostConfig } from "./oidcHostConfig"
 
-const TOKEN_KEY = "ktm2000_token"
+/** Версия OIDC-модуля — синхронизируется verify-sync (режим content + version). */
+export const OIDC_MODULE_VERSION = "1.0.0"
 
-const PKCE_VERIFIER_KEY = "ktm2000_oidc_code_verifier"
-const PKCE_STATE_KEY = "ktm2000_oidc_state"
-const PKCE_REDIRECT_URI_KEY = "ktm2000_oidc_redirect_uri"
+/** Storage-ключ с бренд-префиксом (префикс — из хостового конфига). */
+const storageKey = (suffix: string): string => `${oidcHostConfig.storagePrefix}_${suffix}`
+
+const PKCE_VERIFIER_KEY = storageKey("oidc_code_verifier")
+const PKCE_STATE_KEY = storageKey("oidc_state")
+const PKCE_REDIRECT_URI_KEY = storageKey("oidc_redirect_uri")
 /** Loop guard: at most one auto re-authorize after recoverable callback failure */
-const OIDC_RELOGIN_ONCE_KEY = "ktm2000_oidc_relogin_once"
+const OIDC_RELOGIN_ONCE_KEY = storageKey("oidc_relogin_once")
+/** App JWT storage key (бренд-специфичен — из хостового конфига). */
+const TOKEN_KEY = oidcHostConfig.tokenKey
 
 export type OidcConfig = {
   enabled: boolean
@@ -21,6 +32,8 @@ export type OidcConfig = {
   scopes: string | null
   issuer: string | null
   token_url?: string | null
+  login_hint_enabled?: boolean
+  sso_only?: boolean
 }
 
 export type OidcLoginResponse = {
@@ -28,6 +41,9 @@ export type OidcLoginResponse = {
   token_type: string
   /** For Authentik end-session id_token_hint (optional, OIDC callback only). */
   id_token?: string | null
+  username?: string
+  role?: string
+  full_name?: string
 }
 
 export type OidcLogoutUrlResponse = {
@@ -35,29 +51,69 @@ export type OidcLogoutUrlResponse = {
   logout_url: string | null
 }
 
-/** Structured OIDC/SSO error for UI (title + plain-language message). */
+/** Машинный код ошибки OIDC — ключ словаря oidcHostConfig.errorText. */
 export type OidcErrorInfo = {
+  code: string
+  httpStatus?: number
+  /** Сырой detail бэкенда / IdP (для fallback-текста хостового словаря). */
+  detail?: string
+}
+
+/** RU-текст ошибки, собранный из хостового словаря. */
+export type OidcDisplayInfo = {
   title: string
   message: string
   code?: string
   httpStatus?: number
 }
 
+/** Машинные коды ошибок OIDC-модуля (бэкенд-коды приходят как есть). */
+export const OIDC_ERROR_CODES = {
+  OIDC_LOGIN_UNAVAILABLE: "OIDC_LOGIN_UNAVAILABLE",
+  OIDC_PKCE_MISSING: "OIDC_PKCE_MISSING",
+  OIDC_INVALID_STATE: "OIDC_INVALID_STATE",
+  OIDC_MISSING_CODE: "OIDC_MISSING_CODE",
+  OIDC_MISSING_ACCESS_TOKEN: "OIDC_MISSING_ACCESS_TOKEN",
+  OIDC_EXCHANGE_FAILED: "OIDC_EXCHANGE_FAILED",
+  OIDC_UNKNOWN: "OIDC_UNKNOWN",
+} as const
+
 export class OidcAuthError extends Error {
-  readonly title: string
-  readonly code?: string
+  readonly code: string
   readonly httpStatus?: number
+  readonly detail?: string
 
   constructor(info: OidcErrorInfo) {
-    super(info.message)
+    super(info.code)
     this.name = "OidcAuthError"
-    this.title = info.title
     this.code = info.code
     this.httpStatus = info.httpStatus
+    this.detail = info.detail
   }
 
   static fromInfo(info: OidcErrorInfo): OidcAuthError {
     return new OidcAuthError(info)
+  }
+}
+
+/** Превратить машинный код ошибки OIDC в RU-текст через хостовый словарь. */
+export function resolveOidcErrorText(info: OidcErrorInfo): OidcDisplayInfo {
+  const fallbackKey =
+    info.httpStatus != null
+      ? info.httpStatus >= 500
+        ? "HTTP_5XX"
+        : `HTTP_${info.httpStatus}`
+      : undefined
+  const entry =
+    oidcHostConfig.errorText[info.code] ??
+    (fallbackKey ? oidcHostConfig.errorText[fallbackKey] : undefined) ??
+    oidcHostConfig.errorText.OIDC_UNKNOWN
+  const message = entry.withDetail && info.detail ? `${entry.message} ${info.detail}` : entry.message
+  return {
+    title: entry.title,
+    message,
+    code: info.code,
+    httpStatus: info.httpStatus,
   }
 }
 
@@ -94,201 +150,103 @@ export function extractOidcDetail(detail: unknown): string {
 }
 
 /**
- * User-facing RU errors for known OIDC bridge / IdP failures.
+ * Сопоставить статус/деталь ошибки обмена кода с машинным кодом OIDC.
+ * RU-текст по коду отдаёт хостовый словарь (resolveOidcErrorText).
  */
 export function mapOidcError(status: number, detail: unknown): OidcErrorInfo {
   const text = extractOidcDetail(detail)
   const lower = text.toLowerCase()
-  const code = text || undefined
 
-  const known: Array<{ match: (t: string) => boolean; info: Omit<OidcErrorInfo, "httpStatus"> }> = [
+  const known: Array<{ match: (t: string) => boolean; code: string }> = [
     {
       match: (t) => t === "oidc_user_not_linked" || t.includes("oidc_user_not_linked"),
-      info: {
-        title: "Нет учётной записи в KTM-2000",
-        message:
-          "Вход в единый IdP прошёл успешно, но этот пользователь не привязан к KTM-2000. " +
-          "Обратитесь к администратору: нужно создать пользователя с тем же логином/email " +
-          "либо включить автосоздание (JIT).",
-        code: "oidc_user_not_linked",
-      },
+      code: "oidc_user_not_linked",
+    },
+    {
+      match: (t) => t === "no_access" || t.includes("no_access"),
+      code: "no_access",
     },
     {
       match: (t) => t === "invalid_oidc_code" || t.includes("invalid_oidc_code"),
-      info: {
-        title: "Код входа недействителен",
-        message:
-          "Код авторизации от IdP истёк или уже использован. Закройте вкладку и начните вход заново.",
-        code: "invalid_oidc_code",
-      },
+      code: "invalid_oidc_code",
     },
     {
       match: (t) =>
         t.includes("invalid_id_token") ||
         t === "invalid_id_token_key" ||
         t === "invalid_id_token_sub",
-      info: {
-        title: "Ошибка проверки токена IdP",
-        message:
-          "Не удалось проверить id_token (ключ, подпись или срок). Проверьте issuer/JWKS и время на серверах.",
-        code: text || "invalid_id_token",
-      },
+      code: "invalid_id_token",
     },
     {
       match: (t) => t.includes("token endpoint") || t.includes("token response"),
-      info: {
-        title: "IdP не выдал токен",
-        message:
-          "Обмен кода на токен не удался. Проверьте client_id, redirect_uri, PKCE и grant_types у приложения OIDC.",
-        code: text || "oidc_token_error",
-      },
+      code: "oidc_token_error",
     },
     {
       match: (t) => t.includes("disabled") || t.includes("OIDC login disabled"),
-      info: {
-        title: "Единый вход выключен",
-        message: "OIDC отключён на сервере (AUTH_OIDC_ENABLED). Войдите с паролем или кодом.",
-        code: "oidc_disabled",
-      },
+      code: "oidc_disabled",
     },
     {
       match: (t) => t.includes("redirect_uri"),
-      info: {
-        title: "Неверный адрес возврата",
-        message:
-          "redirect_uri не совпадает с allow-list в IdP. Должен быть точный URL, например http://localhost:8082/auth/callback.",
-        code: text || "redirect_uri",
-      },
+      code: "redirect_uri",
     },
     {
       match: (t) => t.includes("issuer not configured") || t.includes("client_id not configured"),
-      info: {
-        title: "SSO не настроен",
-        message: "На сервере KTM не заданы параметры OIDC (issuer / client_id). Проверьте .env.",
-        code: text || "oidc_config",
-      },
+      code: "oidc_config",
     },
     {
       match: (t) => t.includes("user is disabled") || t.includes("disabled"),
-      info: {
-        title: "Пользователь заблокирован",
-        message: "Учётная запись в KTM-2000 отключена. Обратитесь к администратору.",
-        code: "user_disabled",
-      },
+      code: "user_disabled",
     },
   ]
 
   for (const row of known) {
     if (row.match(lower) || row.match(text)) {
-      return { ...row.info, httpStatus: status }
+      return { code: row.code, httpStatus: status, detail: text || undefined }
     }
   }
 
-  if (status === 403) {
-    return {
-      title: "Доступ запрещён",
-      message: text
-        ? `Сервер отклонил вход: ${text}`
-        : "Сервер отклонил вход (403). Обратитесь к администратору.",
-      code,
-      httpStatus: status,
-    }
-  }
-  if (status === 401) {
-    return {
-      title: "Ошибка авторизации",
-      message: text
-        ? `Не удалось завершить вход: ${text}. Попробуйте снова.`
-        : "Не удалось завершить вход через единый вход. Попробуйте снова.",
-      code,
-      httpStatus: status,
-    }
+  if (status === 403 || status === 401) {
+    return { code: `HTTP_${status}`, httpStatus: status, detail: text || undefined }
   }
   if (status === 404) {
-    return {
-      title: "Единый вход недоступен",
-      message: "Эндпоинт OIDC не найден или вход через IdP отключён.",
-      code: "oidc_not_found",
-      httpStatus: status,
-    }
+    return { code: "oidc_not_found", httpStatus: status, detail: text || undefined }
   }
   if (status === 503 || status === 502) {
-    return {
-      title: "Сервис недоступен",
-      message: "IdP или API временно недоступны. Подождите и попробуйте снова.",
-      code,
-      httpStatus: status,
-    }
+    return { code: "HTTP_5XX", httpStatus: status, detail: text || undefined }
   }
-
-  return {
-    title: "Не удалось войти",
-    message: text || `Ошибка входа через единый вход (HTTP ${status || "?"}).`,
-    code,
-    httpStatus: status,
-  }
+  return { code: OIDC_ERROR_CODES.OIDC_EXCHANGE_FAILED, httpStatus: status, detail: text || undefined }
 }
 
-/** Map IdP redirect query ?error=&error_description= to RU. */
+/** Map IdP redirect query ?error=&error_description= to a machine code. */
 export function mapIdpRedirectError(error: string, description: string | null): OidcErrorInfo {
   const err = (error || "").toLowerCase()
   const desc = (description || "").trim()
   const descLower = desc.toLowerCase()
 
   if (err === "access_denied") {
-    return {
-      title: "Вход отменён",
-      message: desc || "Вы отменили вход в IdP или доступ к приложению запрещён политикой.",
-      code: error,
-    }
+    return { code: error || "access_denied", detail: desc || undefined }
   }
   if (
     err === "invalid_request" ||
     descLower.includes("malformed") ||
     descLower.includes("otherwise malformed")
   ) {
-    return {
-      title: "Некорректный запрос к IdP",
-      message:
-        (desc ? `${desc}. ` : "") +
-        "Частые причины: у OAuth-провайдера не включён grant authorization_code, " +
-        "неверный redirect_uri или client_id. Проверьте настройки приложения ktm2000 в Authentik.",
-      code: error || "invalid_request",
-    }
+    return { code: error || "invalid_request", detail: desc || undefined }
   }
   if (err === "unauthorized_client") {
-    return {
-      title: "Клиент не разрешён",
-      message:
-        desc ||
-        "IdP отклонил client_id (тип клиента, grant types или redirect). Проверьте provider KTM-2000.",
-      code: error,
-    }
+    return { code: error || "unauthorized_client", detail: desc || undefined }
   }
   if (err === "login_required" || err === "interaction_required") {
-    return {
-      title: "Нужен повторный вход",
-      message: desc || "Сессия IdP истекла. Начните вход заново.",
-      code: error,
-    }
+    return { code: error || err, detail: desc || undefined }
   }
   if (err === "server_error" || err === "temporarily_unavailable") {
-    return {
-      title: "Ошибка IdP",
-      message: desc || "Сервер единого входа временно недоступен. Попробуйте позже.",
-      code: error,
-    }
+    return { code: error || err, detail: desc || undefined }
   }
-
-  return {
-    title: "Ошибка IdP",
-    message: desc || `IdP вернул ошибку: ${error}`,
-    code: error,
-  }
+  return { code: error || "oidc_idp_error", detail: desc || undefined }
 }
 
 export async function fetchOidcConfig(): Promise<OidcConfig> {
-  const response = await fetch(`${API_BASE_URL}/auth/oidc/config`)
+  const response = await fetch(`${oidcHostConfig.apiBase}/auth/oidc/config`)
   if (!response.ok) {
     return {
       enabled: false,
@@ -303,13 +261,13 @@ export async function fetchOidcConfig(): Promise<OidcConfig> {
   return response.json()
 }
 
-/** localStorage: OIDC id_token for Authentik end-session (id_token_hint).
+/** localStorage key: OIDC id_token for Authentik end-session (id_token_hint).
  *  localStorage (not sessionStorage): id_token must be readable from any tab,
  *  e.g. when the app is opened in a new tab via the Authentik dashboard tile —
  *  sessionStorage is per-tab, so logout there would lose the hint and land on
  *  Authentik's own "Logout successful" page instead of the app /login.
  */
-export const OIDC_ID_TOKEN_KEY = "ktm2000_oidc_id_token"
+export const OIDC_ID_TOKEN_KEY = storageKey("oidc_id_token")
 
 export function storeOidcIdToken(idToken: string | null | undefined): void {
   try {
@@ -319,7 +277,7 @@ export function storeOidcIdToken(idToken: string | null | undefined): void {
       localStorage.removeItem(OIDC_ID_TOKEN_KEY)
     }
   } catch {
-    /* ignore */
+    /* ignore quota / private mode */
   }
 }
 
@@ -329,8 +287,8 @@ export function clearOidcIdToken(): void {
 
 export async function fetchOidcLogoutUrl(): Promise<OidcLogoutUrlResponse> {
   try {
-    // Authentik requires id_token_hint with post_logout_redirect_uri when
-    // logout redirect URIs are registered — otherwise 400 malformed.
+    // Authentik requires id_token_hint together with post_logout_redirect_uri
+    // when logout redirect URIs are registered on the provider.
     let idToken: string | null = null
     try {
       idToken = localStorage.getItem(OIDC_ID_TOKEN_KEY)
@@ -341,19 +299,22 @@ export async function fetchOidcLogoutUrl(): Promise<OidcLogoutUrlResponse> {
     if (idToken) {
       qs.set("id_token_hint", idToken)
       try {
-        qs.set("post_logout_redirect_uri", `${window.location.origin}/login`)
+        if (typeof window !== "undefined" && window.location?.origin) {
+          qs.set("post_logout_redirect_uri", `${window.location.origin}/login`)
+        }
       } catch {
         /* ignore */
       }
     }
     const q = qs.toString()
     const response = await fetch(
-      `${API_BASE_URL}/auth/oidc/logout-url${q ? `?${q}` : ""}`,
+      `${oidcHostConfig.apiBase}/auth/oidc/logout-url${q ? `?${q}` : ""}`,
     )
     if (!response.ok) {
       return { enabled: false, logout_url: null }
     }
     const data = (await response.json()) as OidcLogoutUrlResponse
+    // Consume hint after building URL (one-shot logout)
     if (idToken) {
       clearOidcIdToken()
     }
@@ -559,6 +520,8 @@ export type StartOidcLoginOptions = {
    * Uses OIDC `prompt=login` + `max_age=0` (MSAL / Auth0 / oidc-client pattern).
    */
   forceReauth?: boolean
+  /** Optional pre-filled username/email for Authentik identification step */
+  loginHint?: string
 }
 
 /** Policy / config failures — show error card, do not auto-retry. */
@@ -572,6 +535,7 @@ const NON_RECOVERABLE_OIDC_CODES = new Set([
   "oidc_disabled",
   "oidc_not_found",
   "oidc_config",
+  OIDC_ERROR_CODES.OIDC_LOGIN_UNAVAILABLE,
 ])
 
 /**
@@ -595,6 +559,11 @@ export function isRecoverableOidcFailure(
     "state_mismatch",
     "missing_code",
     "oidc_token_error",
+    OIDC_ERROR_CODES.OIDC_PKCE_MISSING,
+    OIDC_ERROR_CODES.OIDC_INVALID_STATE,
+    OIDC_ERROR_CODES.OIDC_MISSING_CODE,
+    OIDC_ERROR_CODES.OIDC_MISSING_ACCESS_TOKEN,
+    OIDC_ERROR_CODES.OIDC_EXCHANGE_FAILED,
   ])
   if (code) {
     const c = code.toLowerCase()
@@ -613,15 +582,15 @@ export function isRecoverableOidcFailure(
 export function clearAppAuthTokens(): void {
   try {
     localStorage.removeItem(TOKEN_KEY)
-    localStorage.removeItem("token")
   } catch {
     /* ignore */
   }
-  try {
-    document.cookie = "ktm2000_token=; path=/; max-age=0"
-    document.cookie = "token=; path=/; max-age=0"
-  } catch {
-    /* ignore */
+  if (oidcHostConfig.cookieKey) {
+    try {
+      document.cookie = `${oidcHostConfig.cookieKey}=; path=/; max-age=0`
+    } catch {
+      /* ignore */
+    }
   }
 }
 
@@ -660,6 +629,7 @@ export async function tryForceOidcRelogin(info: {
   clearPkce()
   clearAppAuthTokens()
 
+  // Process callback once: drop code/state/error from URL (next-auth / MSAL style)
   try {
     window.history.replaceState({}, document.title, "/auth/callback")
   } catch {
@@ -684,14 +654,14 @@ export async function startOidcLogin(
   options: StartOidcLoginOptions = {},
 ): Promise<void> {
   if (!config.enabled || !config.authorization_url || !config.client_id) {
-    throw new Error("Вход через единый вход недоступен")
+    throw new Error(resolveOidcErrorText({ code: OIDC_ERROR_CODES.OIDC_LOGIN_UNAVAILABLE }).message)
   }
 
   const redirectUri = resolveOidcRedirectUri(config)
   const codeVerifier = randomString(32)
   const codeChallenge = await sha256Base64Url(codeVerifier)
   const state = randomString(16)
-  const scopes = (config.scopes || "openid profile email").trim()
+  const scopes = (config.scopes || oidcHostConfig.scope).trim()
 
   storePkce(codeVerifier, state, redirectUri)
 
@@ -703,6 +673,9 @@ export async function startOidcLogin(
   url.searchParams.set("state", state)
   url.searchParams.set("code_challenge", codeChallenge)
   url.searchParams.set("code_challenge_method", "S256")
+  if (config.login_hint_enabled !== false && options.loginHint) {
+    url.searchParams.set("login_hint", options.loginHint)
+  }
   if (options.forceReauth) {
     url.searchParams.set("prompt", "login")
     url.searchParams.set("max_age", "0")
@@ -713,7 +686,7 @@ export async function startOidcLogin(
 
 /**
  * Exchange authorization code for app JWT via backend bridge.
- * Stores token under ktm2000_token (same key as break-glass login).
+ * Stores token under the host tokenKey (same key as break-glass login).
  */
 export async function completeOidcCallback(params: {
   code: string
@@ -722,24 +695,16 @@ export async function completeOidcCallback(params: {
   const { codeVerifier, state: storedState, redirectUri } = takePkce()
   if (!codeVerifier) {
     throw OidcAuthError.fromInfo({
-      title: "Сессия входа истекла",
-      message:
-        "Не найден code_verifier (PKCE). Так бывает, если закрыли вкладку, сменили браузер " +
-        "или открыли callback без старта с /login. Начните вход заново с страницы входа KTM-2000.",
-      code: "pkce_missing",
+      code: OIDC_ERROR_CODES.OIDC_PKCE_MISSING,
     })
   }
   if (params.state && storedState && params.state !== storedState) {
     throw OidcAuthError.fromInfo({
-      title: "Ошибка проверки state",
-      message:
-        "Параметр state не совпал с сохранённым — возможна подмена или устаревшая вкладка. " +
-        "Начните вход заново.",
-      code: "state_mismatch",
+      code: OIDC_ERROR_CODES.OIDC_INVALID_STATE,
     })
   }
 
-  const response = await fetch(`${API_BASE_URL}/auth/oidc/callback`, {
+  const response = await fetch(`${oidcHostConfig.apiBase}/auth/oidc/callback`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -759,19 +724,14 @@ export async function completeOidcCallback(params: {
   const data = (await response.json()) as OidcLoginResponse
   if (!data.access_token) {
     throw OidcAuthError.fromInfo({
-      title: "Нет токена доступа",
-      message: "Сервер KTM не вернул access_token после обмена кода. Попробуйте войти снова.",
-      code: "missing_access_token",
+      code: OIDC_ERROR_CODES.OIDC_MISSING_ACCESS_TOKEN,
     })
   }
   clearOidcReloginGuard()
-  try {
-    sessionStorage.removeItem("ktm2000_logged_out")
-  } catch {
-    /* ignore */
-  }
   localStorage.setItem(TOKEN_KEY, data.access_token)
-  document.cookie = `ktm2000_token=${data.access_token}; path=/; max-age=86400; SameSite=Lax`
+  if (oidcHostConfig.cookieKey) {
+    document.cookie = `${oidcHostConfig.cookieKey}=${data.access_token}; path=/; max-age=86400; SameSite=Lax`
+  }
   storeOidcIdToken(data.id_token)
   return data
 }

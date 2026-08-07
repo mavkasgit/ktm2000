@@ -4,20 +4,31 @@ import {
   completeOidcCallback,
   clearPkce,
   mapIdpRedirectError,
+  OIDC_ERROR_CODES,
   OidcAuthError,
+  resolveOidcErrorText,
   tryForceOidcRelogin,
+  type OidcDisplayInfo,
   type OidcErrorInfo,
 } from "../api/oidcAuth"
+import { oidcHostConfig } from "../api/oidcHostConfig"
+
+/** Версия OIDC-модуля — синхронизируется verify-sync (режим content + version). */
+export const OIDC_MODULE_VERSION = "1.0.0"
 
 /**
  * OIDC redirect target: /auth/callback?code=...&state=...
  * Exchanges code + PKCE verifier via backend, stores app JWT, redirects home.
  *
- * Recoverable token failures: clear local session and force IdP re-login once
- * (prompt=login) instead of a permanent error card — SPA SDK pattern.
+ * Recoverable token failures (invalid_id_token, invalid_grant, 502, …):
+ * clear local session and force IdP re-login once (prompt=login) instead of
+ * a permanent error card — SPA SDK / MSAL / Auth0 pattern.
+ *
+ * RU-тексты ошибок живут в хостовом словаре (oidcHostConfig.errorText) —
+ * общий компонент работает только с машинными кодами.
  */
 export function OidcCallbackPage() {
-  const [error, setError] = useState<OidcErrorInfo | null>(null)
+  const [error, setError] = useState<OidcDisplayInfo | null>(null)
   const [reloginPending, setReloginPending] = useState(false)
   const started = useRef(false)
 
@@ -32,15 +43,17 @@ export function OidcCallbackPage() {
       if (err) {
         clearPkce()
         const mapped = mapIdpRedirectError(err, errDesc)
+        // login_required / interaction_required / consent → non-recoverable, error card;
+        // recoverable token-exchange failures (invalid_grant, 502, …) → one re-auth
         const navigated = await tryForceOidcRelogin({
-          code: err,
-          httpStatus: undefined,
+          code: mapped.code,
+          httpStatus: mapped.httpStatus,
         })
         if (navigated) {
           setReloginPending(true)
           return
         }
-        setError(mapped)
+        setError(resolveOidcErrorText(mapped))
         return
       }
 
@@ -49,18 +62,14 @@ export function OidcCallbackPage() {
       if (!code) {
         clearPkce()
         const missing: OidcErrorInfo = {
-          title: "Нет кода авторизации",
-          message:
-            "В адресе возврата нет параметра code. Начните вход с страницы входа KTM-2000 заново " +
-            "(не открывайте /auth/callback вручную).",
-          code: "missing_code",
+          code: OIDC_ERROR_CODES.OIDC_MISSING_CODE,
         }
         const navigated = await tryForceOidcRelogin(missing)
         if (navigated) {
           setReloginPending(true)
           return
         }
-        setError(missing)
+        setError(resolveOidcErrorText(missing))
         return
       }
 
@@ -72,20 +81,18 @@ export function OidcCallbackPage() {
         let info: OidcErrorInfo
         if (e instanceof OidcAuthError) {
           info = {
-            title: e.title,
-            message: e.message,
             code: e.code,
             httpStatus: e.httpStatus,
+            detail: e.detail,
           }
         } else if (e instanceof Error) {
           info = {
-            title: "Не удалось войти",
-            message: e.message,
+            code: OIDC_ERROR_CODES.OIDC_UNKNOWN,
+            detail: e.message,
           }
         } else {
           info = {
-            title: "Не удалось войти",
-            message: "Неизвестная ошибка при завершении единого входа.",
+            code: OIDC_ERROR_CODES.OIDC_UNKNOWN,
           }
         }
 
@@ -94,7 +101,7 @@ export function OidcCallbackPage() {
           setReloginPending(true)
           return
         }
-        setError(info)
+        setError(resolveOidcErrorText(info))
       }
     }
 
@@ -123,7 +130,6 @@ export function OidcCallbackPage() {
               )}
             </div>
           </div>
-          
         </div>
       </div>
     )
@@ -133,7 +139,7 @@ export function OidcCallbackPage() {
     <div className="flex min-h-screen flex-col items-center justify-center gap-4 bg-slate-50 text-slate-600">
       <img
         src="/logo.svg"
-        alt="KTM-2000"
+        alt={oidcHostConfig.appName}
         className="h-14 w-14 rounded-2xl shadow-lg shadow-slate-900/15"
         width={56}
         height={56}
