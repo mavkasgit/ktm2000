@@ -1,7 +1,7 @@
 import { useState, useEffect, useId } from "react"
 import { Calendar } from "lucide-react"
-import { Button } from "./Button"
-import { Popover, PopoverTrigger, PopoverContent } from "./Popover"
+import { Button } from "./button"
+import { Popover, PopoverTrigger, PopoverContent } from "./popover"
 import { cn } from "@/shared/utils/cn"
 
 export interface DatePickerProps {

@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
 import { Upload, X, Image as ImageIcon } from "lucide-react";
-import { Button } from "@/shared/ui/Button";
+import { Button } from "@/shared/ui/button";
 
 interface ImageUploadModalProps {
   open: boolean;

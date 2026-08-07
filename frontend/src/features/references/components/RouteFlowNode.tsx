@@ -1,7 +1,7 @@
 import { memo } from "react";
 import { Handle, Position } from "@xyflow/react";
 import type { Node, NodeProps } from "@xyflow/react";
-import { Badge } from "@/shared/ui/Badge";
+import { Badge } from "@/shared/ui/badge";
 import { renderIcon } from "@/shared/ui/EntityDialog";
 import { CheckCircle, GitBranch } from "lucide-react";
 import type { SectionType } from "@/shared/api/sections";

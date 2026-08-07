@@ -2,7 +2,7 @@ import { useCallback, useRef, useState } from "react";
 import { Plus } from "lucide-react";
 import * as API from "@/shared/api/routes";
 import { getErrorMessage } from "@/shared/api/client";
-import { Button } from "@/shared/ui/Button";
+import { Button } from "@/shared/ui/button";
 import { toast } from "@/shared/ui/use-toast";
 import { RouteFlowBuilder } from "../components/RouteFlowBuilder";
 import { RouteSelectionRulesSection } from "../components/RouteSelectionRulesSection";

@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { CheckCircle, AlertCircle, SkipForward, Image } from "lucide-react";
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/shared/ui/Dialog";
-import { Button } from "@/shared/ui/Button";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/shared/ui/dialog";
+import { Button } from "@/shared/ui/button";
 import type { CatalogPreview } from "@/shared/api/products";
 import { getPhotoUrl } from "@/features/references/components/getPhotoUrl";
 

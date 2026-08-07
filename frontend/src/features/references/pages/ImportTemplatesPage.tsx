@@ -13,8 +13,8 @@ import { queryKeys } from "@/shared/api/queryKeys"
 import { usePaginatedTableQuery } from "@/shared/hooks/usePaginatedTableQuery"
 import { TablePaginationFooter } from "@/shared/ui"
 import { getExcelSheetNames, previewExcelSheet } from "@/shared/api/imports"
-import { Button } from "@/shared/ui/Button"
-import { Input } from "@/shared/ui/Input"
+import { Button } from "@/shared/ui/button"
+import { Input } from "@/shared/ui/input"
 import {
   Dialog,
   DialogContent,
@@ -22,7 +22,7 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-} from "@/shared/ui/Dialog"
+} from "@/shared/ui/dialog"
 import {
   AlertDialog,
   AlertDialogContent,
@@ -33,8 +33,8 @@ import {
   AlertDialogAction,
   AlertDialogCancel,
 } from "@/shared/ui/alert-dialog"
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/shared/ui/Select"
-import { Badge } from "@/shared/ui/Badge"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/shared/ui/select"
+import { Badge } from "@/shared/ui/badge"
 import { toast } from "@/shared/ui/use-toast"
 import { getErrorMessage } from "@/shared/api/client"
 import { usePermission } from "@/features/auth/hooks/usePermission";

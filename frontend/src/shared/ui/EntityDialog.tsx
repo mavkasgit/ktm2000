@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef, type ReactNode } from "react"
-import { Button } from "./Button"
-import { Input } from "./Input"
+import { Button } from "./button"
+import { Input } from "./input"
 import { cn } from "@/shared/utils/cn"
 import {
   Dialog,
@@ -9,19 +9,19 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-} from "./Dialog"
+} from "./dialog"
 import {
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
   SelectValue,
-} from "./Select"
+} from "./select"
 import {
   Popover,
   PopoverContent,
   PopoverTrigger,
-} from "./Popover"
+} from "./popover"
 import * as L from "lucide-react"
 
 const COLOR_PRESETS = [

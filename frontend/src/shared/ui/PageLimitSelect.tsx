@@ -5,7 +5,7 @@ import {
   SelectItem,
   SelectTrigger,
   SelectValue,
-} from "@/shared/ui/Select";
+} from "@/shared/ui/select";
 
 const DEFAULT_PAGE_LIMIT_OPTIONS: PageLimitOption[] = [50, 100, 200, 500];
 

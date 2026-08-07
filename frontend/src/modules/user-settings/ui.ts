@@ -6,10 +6,10 @@
  */
 
 export { cn } from "@/shared/utils/cn"
-export { Button } from "@/shared/ui/Button"
-export { Input } from "@/shared/ui/Input"
-export { Badge } from "@/shared/ui/Badge"
-export { Skeleton } from "@/shared/ui/Skeleton"
+export { Button } from "@/shared/ui/button"
+export { Input } from "@/shared/ui/input"
+export { Badge } from "@/shared/ui/badge"
+export { Skeleton } from "@/shared/ui/skeleton"
 export {
   Dialog,
   DialogContent,
@@ -17,7 +17,7 @@ export {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-} from "@/shared/ui/Dialog"
+} from "@/shared/ui/dialog"
 export {
   AlertDialog,
   AlertDialogAction,
@@ -33,4 +33,4 @@ export {
   TooltipContent,
   TooltipProvider,
   TooltipTrigger,
-} from "@/shared/ui/Tooltip"
+} from "@/shared/ui/tooltip"

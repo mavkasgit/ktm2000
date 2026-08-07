@@ -1,9 +1,9 @@
 import { useEffect, useState, useCallback, forwardRef, useImperativeHandle } from "react";
 import * as API from "@/shared/api/routes";
 import { listSections, type Section } from "@/shared/api/sections";
-import { Badge } from "@/shared/ui/Badge";
-import { Input } from "@/shared/ui/Input";
-import { Card, CardContent } from "@/shared/ui/Card";
+import { Badge } from "@/shared/ui/badge";
+import { Input } from "@/shared/ui/input";
+import { Card, CardContent } from "@/shared/ui/card";
 import { getErrorMessage } from "@/shared/api/client";
 import { renderIcon } from "@/shared/ui/EntityDialog";
 import { ArrowUp, ArrowDown, GripVertical } from "lucide-react";

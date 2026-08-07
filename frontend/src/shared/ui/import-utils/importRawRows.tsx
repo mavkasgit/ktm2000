@@ -2,8 +2,8 @@ import { useCallback, useState } from "react";
 import { ChevronDown, ChevronRight } from "lucide-react";
 
 import { cn } from "@/shared/utils/cn";
-import { Badge } from "../Badge";
-import { Button } from "../Button";
+import { Badge } from "../badge";
+import { Button } from "../button";
 import type { ImportRawSegment } from "./importRawData";
 
 export function useImportRowExpansion() {

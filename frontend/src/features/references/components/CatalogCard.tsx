@@ -1,7 +1,7 @@
 import React from "react";
 import { Image, Check, CheckCheck } from "lucide-react";
-import { Card, CardContent } from "@/shared/ui/Card";
-import { Badge } from "@/shared/ui/Badge";
+import { Card, CardContent } from "@/shared/ui/card";
+import { Badge } from "@/shared/ui/badge";
 import { getPhotoUrl } from "./getPhotoUrl";
 import type { Product } from "@/shared/api/products";
 import { productTypeLabels } from "@/shared/lib/generated-labels";

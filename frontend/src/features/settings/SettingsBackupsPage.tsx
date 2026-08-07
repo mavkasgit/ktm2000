@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, useMemo } from "react"
 import { Download, RotateCcw, Eye, Database, Upload, AlertTriangle, Loader2, CheckCircle2, Trash2, X, ArrowLeft, Clock, Save } from "lucide-react"
-import { Button } from "@/shared/ui/Button"
-import { Input } from "@/shared/ui/Input"
+import { Button } from "@/shared/ui/button"
+import { Input } from "@/shared/ui/input"
 import { cn } from "@/shared/utils/cn"
 import { SortableFilterHeader, TableCornerResetCell, TableCornerResetHeader, TablePaginationFooter, DATA_TABLE_STYLES } from "@/shared/ui"
 import { useFilterableTable } from "@/shared/hooks/useFilterableTable"
@@ -16,7 +16,7 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-} from "@/shared/ui/Dialog"
+} from "@/shared/ui/dialog"
 import {
   AlertDialog,
   AlertDialogAction,

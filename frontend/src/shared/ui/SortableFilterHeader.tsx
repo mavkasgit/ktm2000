@@ -2,9 +2,9 @@ import React, { useState, useMemo, useCallback } from "react";
 import { IconArrowUp, IconArrowDown, IconSelector } from "@tabler/icons-react";
 import { Search, X } from "lucide-react";
 import { cn } from "@/shared/utils/cn";
-import { Popover, PopoverTrigger, PopoverContent } from "./Popover";
-import { Input } from "./Input";
-import { Button } from "./Button";
+import { Popover, PopoverTrigger, PopoverContent } from "./popover";
+import { Input } from "./input";
+import { Button } from "./button";
 import type { SortConfig } from "@/shared/hooks/useTableQueryEngine";
 import { sortByPartialSearchMatch } from "@/shared/lib/columnFilterSearch";
 

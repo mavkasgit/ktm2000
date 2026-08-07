@@ -1,8 +1,8 @@
 import { Loader2, Search, AlertCircle } from "lucide-react";
 
 import { cn } from "@/shared/utils/cn";
-import { Badge } from "../Badge";
-import { Input } from "../Input";
+import { Badge } from "../badge";
+import { Input } from "../input";
 
 import type { ImportRowExpansion } from "./importRawRows";
 import { ImportRawRowsToggle } from "./importRawRows";

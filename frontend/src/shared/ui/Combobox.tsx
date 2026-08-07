@@ -1,7 +1,7 @@
 import * as React from "react"
 import { Check, Search } from "lucide-react"
-import { Popover, PopoverContent, PopoverTrigger } from "./Popover"
-import { Input } from "./Input"
+import { Popover, PopoverContent, PopoverTrigger } from "./popover"
+import { Input } from "./input"
 import { cn } from "@/shared/utils/cn"
 
 export type ComboboxOption = {

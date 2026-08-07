@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { Plus, Trash2, Search, X } from "lucide-react";
 import * as API from "shared/api";
 import * as UI from "shared/ui";
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/shared/ui/Dialog";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/shared/ui/dialog";
 import { AlertDialog, AlertDialogContent, AlertDialogHeader, AlertDialogTitle, AlertDialogDescription, AlertDialogFooter, AlertDialogCancel, AlertDialogAction } from "@/shared/ui/alert-dialog";
 import { ProductSearchMulti } from "../components/ProductSearchMulti";
 import { SortableFilterHeader } from "@/shared/ui/SortableFilterHeader";

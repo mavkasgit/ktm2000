@@ -1,8 +1,8 @@
 import React, { useEffect, useImperativeHandle, useState, forwardRef, useCallback, useMemo } from "react";
 import { Image, Maximize2, Camera, Trash2, Plus, Minus } from "lucide-react";
-import { Button } from "@/shared/ui/Button";
-import { Input } from "@/shared/ui/Input";
-import { Checkbox } from "@/shared/ui/Checkbox";
+import { Button } from "@/shared/ui/button";
+import { Input } from "@/shared/ui/input";
+import { Checkbox } from "@/shared/ui/checkbox";
 import { FullscreenPhoto } from "./FullscreenPhoto";
 import { ImageUploadModal } from "./ImageUploadModal";
 import { ProductSearchMulti } from "./ProductSearchMulti";

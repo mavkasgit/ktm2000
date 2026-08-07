@@ -1,6 +1,6 @@
 import { HardDrive, Database, Users, Wrench, Contact } from "lucide-react"
 import { useNavigate } from "react-router-dom"
-import { Button } from "@/shared/ui/Button"
+import { Button } from "@/shared/ui/button"
 import { usePermission } from "@/features/auth/hooks/usePermission"
 
 export function SettingsPage() {

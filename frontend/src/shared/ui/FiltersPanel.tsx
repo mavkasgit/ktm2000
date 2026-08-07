@@ -1,8 +1,8 @@
 import { Search, X, Eye, EyeOff, ListChecks } from "lucide-react";
 import type { ReactNode } from "react";
-import { Button } from "./Button";
-import { Input } from "./Input";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./Select";
+import { Button } from "./button";
+import { Input } from "./input";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./select";
 import { cn } from "@/shared/utils/cn";
 
 function renderToggleField(field: Extract<FiltersPanelField, { kind: "toggle" }>) {

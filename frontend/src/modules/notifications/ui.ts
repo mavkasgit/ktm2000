@@ -6,5 +6,5 @@
  */
 
 export { cn } from "@/shared/utils/cn"
-export { Button } from "@/shared/ui/Button"
-export { Popover, PopoverTrigger, PopoverContent } from "@/shared/ui/Popover"
+export { Button } from "@/shared/ui/button"
+export { Popover, PopoverTrigger, PopoverContent } from "@/shared/ui/popover"

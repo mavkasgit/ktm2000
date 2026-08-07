@@ -30,8 +30,8 @@ import { X, Plus, Trash2, AlertTriangle, Info } from "lucide-react";
 import * as API from "@/shared/api/routes";
 import type { RouteStep } from "@/shared/api/routes";
 import { listSections, type Section, type SectionType } from "@/shared/api/sections";
-import { Button } from "@/shared/ui/Button";
-import { Input } from "@/shared/ui/Input";
+import { Button } from "@/shared/ui/button";
+import { Input } from "@/shared/ui/input";
 import { cn } from "@/shared/utils/cn";
 import {
   Dialog,
@@ -39,7 +39,7 @@ import {
   DialogHeader,
   DialogTitle,
   DialogDescription,
-} from "@/shared/ui/Dialog";
+} from "@/shared/ui/dialog";
 import { toast } from "@/shared/ui/use-toast";
 import { getErrorMessage } from "@/shared/api/client";
 import { renderIcon } from "@/shared/ui/EntityDialog";

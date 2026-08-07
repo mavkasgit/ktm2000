@@ -1,6 +1,6 @@
 import React from "react";
 import { IconSearch } from "@tabler/icons-react";
-import { Input } from "./Input";
+import { Input } from "./input";
 import { cn } from "@/shared/utils/cn";
 
 export interface TableToolbarProps {

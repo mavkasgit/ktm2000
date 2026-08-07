@@ -2,7 +2,7 @@ import { useCallback, useEffect } from "react";
 import { Upload } from "lucide-react";
 
 import { cn } from "@/shared/utils/cn";
-import { Badge } from "../Badge";
+import { Badge } from "../badge";
 
 export function useImportClipboardPaste(options: {
   enabled: boolean;
