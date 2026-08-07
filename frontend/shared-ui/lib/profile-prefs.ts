@@ -6,9 +6,12 @@ export type ProfileTheme = "system" | "light" | "dark"
 const LOCALE_KEY = "profile_locale"
 const THEME_KEY = "profile_theme"
 
+/** Тема по умолчанию — единственный источник правды для дефолта на FE. */
+export const DEFAULT_THEME: ProfileTheme = "light"
+
 export function applyTheme(theme: ProfileTheme | string | null | undefined): void {
   if (typeof document === "undefined") return
-  const t = (theme || "light") as ProfileTheme
+  const t = (theme || DEFAULT_THEME) as ProfileTheme
   const root = document.documentElement
   const prefersDark =
     typeof window !== "undefined" &&
