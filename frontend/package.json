@@ -9,7 +9,6 @@
     "prebuild": "node ../scripts/verify-sync.mjs --other ../hrms",
     "preview": "vite preview",
     "test": "vitest run",
-    "check:modules": "node scripts/check-modules.mjs --other ../../hrms/frontend",
     "test:e2e": "playwright test",
     "test:e2e:ui": "playwright test --project=ui-e2e",
     "test:e2e:smoke": "playwright test --project=smoke",

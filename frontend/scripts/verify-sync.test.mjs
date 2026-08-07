@@ -42,6 +42,7 @@ function manifest(files) {
 const BASE_MANIFEST = manifest([
   { path: "shared/file.txt", mode: "content" },
   { path: "mod/index.ts", mode: "version" },
+  { path: "host/ui.ts", mode: "presence" },
   { path: "scripts/verify-sync.mjs", mode: "content", version: true },
   { path: "scripts/sync-manifest.json", mode: "content", version: true },
 ])
@@ -50,6 +51,7 @@ function baseTree() {
   return {
     "shared/file.txt": "общий файл\n",
     "mod/index.ts": HOST,
+    "host/ui.ts": "хост: содержимое может отличаться\n",
     "scripts/verify-sync.mjs": SELF,
     "scripts/sync-manifest.json": BASE_MANIFEST,
   }
@@ -86,7 +88,7 @@ describe("verify-sync.mjs", () => {
     const result = run({ root, otherRoot: other })
     expect(result.ok).toBe(true)
     expect(result.errors).toEqual([])
-    expect(result.checked).toBe(4)
+    expect(result.checked).toBe(5)
 
     const spawned = spawnSync(process.execPath, [SCRIPT, "--root", root, "--other", other], { cwd: root })
     expect(spawned.status).toBe(0)
@@ -196,5 +198,39 @@ describe("verify-sync.mjs", () => {
     const result = run({ root, otherRoot: other })
     expect(result.ok).toBe(false)
     expect(result.errors.join("\n")).toContain("отсутствует у соседа")
+  })
+
+  it("presence mode: содержимое может различаться, файл обязан существовать", () => {
+    const root = makeTree(baseTree())
+    const otherTree = baseTree()
+    otherTree["host/ui.ts"] = "другой хост: свои импорты\n"
+    const other = makeTree(otherTree)
+
+    const result = run({ root, otherRoot: other })
+    expect(result.ok).toBe(true)
+    expect(result.errors).toEqual([])
+    expect(result.checked).toBe(5)
+  })
+
+  it("presence mode: отсутствующий файл → fail", () => {
+    const root = makeTree(baseTree())
+    const otherTree = baseTree()
+    delete otherTree["host/ui.ts"]
+    const other = makeTree(otherTree)
+
+    const result = run({ root, otherRoot: other })
+    expect(result.ok).toBe(false)
+    expect(result.errors.join("\n")).toContain("файл есть здесь, но отсутствует у соседа")
+  })
+
+  it("presence mode: файл есть у соседа, но отсутствует здесь → fail", () => {
+    const root = makeTree(baseTree())
+    const otherTree = baseTree()
+    const other = makeTree(otherTree)
+    fs.unlinkSync(path.join(root, "host/ui.ts"))
+
+    const result = run({ root, otherRoot: other })
+    expect(result.ok).toBe(false)
+    expect(result.errors.join("\n")).toContain("файл есть у соседа, но отсутствует здесь")
   })
 })
