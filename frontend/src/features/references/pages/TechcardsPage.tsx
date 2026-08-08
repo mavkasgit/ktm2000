@@ -13,6 +13,7 @@ import { toast } from "@/shared/ui/use-toast";
 import { getErrorMessage } from "@/shared/api/client";
 import { usePermission } from "@/features/auth/hooks/usePermission";
 import { cn } from "@/shared/utils/cn";
+import { primaryHangerValue } from "@/shared/lib/hangerQuantity";
 import type { Techcard, TechcardListParams } from "@/shared/api/techcards";
 
 type ProcessingType = "standart_processing" | "paired_processing";
@@ -360,7 +361,7 @@ export function TechcardsPage() {
       for (const productId of selectedIds) {
         const existing = techcardByProductId.get(productId);
         const product = rawItems.find((item) => Number(item.id) === productId);
-        const qty = product?.quantity_per_hanger || 1;
+        const qty = (product ? primaryHangerValue(product)?.value : null) ?? 1;
         if (!existing) {
           await api.createTechcard({
             product_id: productId,

@@ -40,11 +40,18 @@ class ProductType(str, enum.Enum):
     material = "material"
 
 
+class DimensionState(str, enum.Enum):
+    length = "length"
+    area = "area"
+    volume = "volume"
+
+
 class Product(Base):
     __tablename__ = "products"
 
     id: Mapped[int] = mapped_column(BigInteger, Identity(always=True), primary_key=True)
     sku: Mapped[str] = mapped_column(String(100), unique=True, nullable=False, index=True)
+    code: Mapped[str | None] = mapped_column(String(100), unique=True, nullable=True, index=True)
     name: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
     type: Mapped[ProductType] = mapped_column(Enum(ProductType, name="product_type"), nullable=False)
     unit: Mapped[str] = mapped_column(String(50), nullable=False, server_default=text("'pcs'"), default="pcs")
@@ -61,6 +68,12 @@ class Product(Base):
     source: Mapped[str | None] = mapped_column(String(50), nullable=True, index=True)
     is_catalog_item: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"), default=False)
     is_paired_profile: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"), default=False)
+    dimension_state: Mapped[DimensionState] = mapped_column(
+        Enum(DimensionState, name="product_dimension_state"),
+        nullable=False,
+        server_default=text("'length'"),
+        default=DimensionState.length,
+    )
 
     # Flexible attributes JSONB (#19): length_mm, weight_per_meter, quantity_per_hanger, cross_section
     # quantity_per_hanger (#60) — dict {length_mm: {"auto": int|null, "manual": int|null}}

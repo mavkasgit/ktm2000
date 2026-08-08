@@ -26,11 +26,16 @@ const backendRaw = import.meta.glob(
 
 function backendIconNames(): Set<string> {
   const re =
-    /"(?:icon|op_icon|section_icon|spg_icon)"\s*:\s*"([A-Za-z][A-Za-z0-9]*)"/g
+    /"(icon|op_icon|section_icon|spg_icon)"\s*:\s*"([A-Za-z][A-Za-z0-9]*)"/g
   const out = new Set<string>()
   for (const text of Object.values(backendRaw)) {
     let m: RegExpExecArray | null
-    while ((m = re.exec(text)) !== null) out.add(m[1])
+    while ((m = re.exec(text)) !== null) {
+      // Self-reference из field_map (например, "icon": "icon" в
+      // seeds/sections.py) — это маппинг ORM-атрибут → ключ данных,
+      // а не имя иконки. Пропускаем, чтобы не давать ложный позитив.
+      if (m[1] !== m[2]) out.add(m[2])
+    }
   }
   return out
 }

@@ -140,7 +140,7 @@ export function ImportPreviewDialog({
                       : null;
                 const quantitiesText =
                   item.quantities_per_hanger && item.quantities_per_hanger.length > 0
-                    ? item.quantities_per_hanger.join(", ")
+                    ? item.quantities_per_hanger.map((q) => q ?? "—").join(", ")
                     : item.quantity_per_hanger ?? null;
                 return (
                   <tr key={item.sku} className="hover:bg-muted/50">

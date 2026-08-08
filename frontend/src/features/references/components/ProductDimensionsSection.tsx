@@ -1,210 +1,220 @@
-import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Plus, Ruler, Trash2 } from "lucide-react";
-import { Button } from "@/shared/ui/button";
+import { Ruler } from "lucide-react";
+import { useState, useEffect, useRef, useImperativeHandle, forwardRef } from "react";
 import { Input } from "@/shared/ui/input";
-import { Checkbox } from "@/shared/ui/checkbox";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/shared/ui/select";
 import { toast } from "@/shared/ui/use-toast";
 import { getErrorMessage } from "@/shared/api/client";
 import { queryKeys } from "@/shared/api/queryKeys";
 import {
-  createProductDimension,
-  deleteProductDimension,
-  listDimensionTypes,
   listProductDimensions,
   patchProductDimension,
+  createProductDimension,
   type ProductDimension,
 } from "../api";
+import { cn } from "@/shared/utils/cn";
+import type { DimensionState } from "@/shared/api/products";
+
+const MODES: { value: DimensionState; label: string }[] = [
+  { value: "length", label: "Длина" },
+  { value: "area", label: "2D" },
+  { value: "volume", label: "3D" },
+];
+
+const DIMENSION_FIELDS: Record<Exclude<DimensionState, "length">, { code: string; label: string }[]> = {
+  "area": [
+    { code: "length_mm", label: "Длина, мм" },
+    { code: "width_mm", label: "Ширина, мм" },
+    { code: "thickness_mm", label: "Толщина, мм" },
+  ],
+  "volume": [
+    { code: "length_mm", label: "Длина, мм" },
+    { code: "width_mm", label: "Ширина, мм" },
+    { code: "height_mm", label: "Высота, мм" },
+  ],
+};
 
 /**
- * Секция «Измерения» карточки продукта: привязанные измерения с типовым
- * размером (default_value), добавление/изменение/удаление (ADR-0001, п. 3).
+ * Секция «Измерения» карточки продукта.
+ *
+ * Табы переключают dimension_state (1D / 2D / 3D).
+ * 2D/3D поля — локальный state, сохраняется в product_dimensions.
  */
-export function ProductDimensionsSection({
-  productId,
-  readOnly = false,
-}: {
-  productId: number;
-  readOnly?: boolean;
-}) {
+export type ProductDimensionsSectionHandle = {
+  flushPending: () => Promise<void>;
+};
+
+export const ProductDimensionsSection = forwardRef<
+  ProductDimensionsSectionHandle,
+  {
+    productId?: number;
+    dimensionState: DimensionState;
+    onDimensionStateChange: (state: DimensionState) => void;
+    dimensionTypes: { id: number; code: string }[];
+    readOnly?: boolean;
+  }
+>(function ProductDimensionsSection(
+  { productId, dimensionState, onDimensionStateChange, dimensionTypes, readOnly = false },
+  ref,
+) {
   const queryClient = useQueryClient();
-  const [addTypeId, setAddTypeId] = useState<string>("");
-  const [addDefaultValue, setAddDefaultValue] = useState("");
-  const [addIsRequired, setAddIsRequired] = useState(true);
 
-  const { data: types = [] } = useQuery({
-    queryKey: queryKeys.dimensions.types(),
-    queryFn: listDimensionTypes,
+  const { data: links = [] } = useQuery({
+    queryKey: queryKeys.dimensions.product(productId!),
+    queryFn: () => listProductDimensions(productId!),
+    enabled: !!productId,
   });
 
-  const { data: links = [], isLoading } = useQuery({
-    queryKey: queryKeys.dimensions.product(productId),
-    queryFn: () => listProductDimensions(productId),
-  });
+  // Локальный state для 2D/3D — code → value
+  const [multiValues, setMultiValues] = useState<Record<string, string>>({});
+  const dirtyRef = useRef(new Set<string>());
 
-  const availableTypes = useMemo(
-    () => types.filter((t) => !links.some((l) => l.dimension_type_id === t.id)),
-    [types, links],
-  );
+  // Синхронизация из server → local state (только для чистых полей)
+  useEffect(() => {
+    if (dimensionState === "length") return;
+    const codes = DIMENSION_FIELDS[dimensionState].map((f) => f.code);
+    setMultiValues((prev) => {
+      const next = { ...prev };
+      for (const code of codes) {
+        if (dirtyRef.current.has(code)) continue;
+        const link = links.find((l) => l.dimension_type.code === code);
+        next[code] = link?.default_value != null ? String(link.default_value) : "";
+      }
+      return next;
+    });
+  }, [links, dimensionState]);
 
   const invalidate = () => {
-    queryClient.invalidateQueries({ queryKey: queryKeys.dimensions.product(productId) });
+    if (productId) queryClient.invalidateQueries({ queryKey: queryKeys.dimensions.product(productId) });
   };
 
   const onError = (error: unknown, action: string) => {
     toast({ title: `Ошибка: ${action}`, description: getErrorMessage(error), variant: "destructive" });
   };
 
-  const createMutation = useMutation({
-    mutationFn: () =>
-      createProductDimension(productId, {
-        dimension_type_id: Number(addTypeId),
-        is_required: addIsRequired,
-        default_value: addDefaultValue.trim() ? parseFloat(addDefaultValue) : null,
-      }),
-    onSuccess: () => {
-      setAddTypeId("");
-      setAddDefaultValue("");
-      setAddIsRequired(true);
-      invalidate();
-    },
-    onError: (error) => onError(error, "добавление измерения"),
-  });
-
   const patchMutation = useMutation({
-    mutationFn: ({ linkId, payload }: { linkId: number; payload: { is_required?: boolean; default_value?: number | null } }) =>
-      patchProductDimension(productId, linkId, payload),
+    mutationFn: ({ linkId, payload }: { linkId: number; payload: { default_value: number | null } }) =>
+      patchProductDimension(productId!, linkId, payload),
     onSuccess: invalidate,
     onError: (error) => onError(error, "изменение измерения"),
   });
 
-  const deleteMutation = useMutation({
-    mutationFn: (linkId: number) => deleteProductDimension(productId, linkId),
+  const createMutation = useMutation({
+    mutationFn: (payload: { dimension_type_id: number; default_value: number | null }) =>
+      createProductDimension(productId!, payload),
     onSuccess: invalidate,
-    onError: (error) => onError(error, "удаление измерения"),
+    onError: (error) => onError(error, "создание измерения"),
   });
 
-  const commitDefaultValue = (link: ProductDimension, raw: string) => {
-    const trimmed = raw.trim();
+  const flushPending = async () => {
+    if (readOnly || !productId || dimensionState === "length") return;
+    const codes = DIMENSION_FIELDS[dimensionState].map((f) => f.code);
+    const promises: Promise<unknown>[] = [];
+    for (const code of codes) {
+      if (!dirtyRef.current.has(code)) continue;
+      dirtyRef.current.delete(code);
+      const value = multiValues[code] ?? "";
+      const parsed = toNumber(value);
+      const link = links.find((l) => l.dimension_type.code === code);
+      if (link) {
+        promises.push(patchMutation.mutateAsync({ linkId: link.id, payload: { default_value: parsed } }));
+      } else {
+        const dimType = dimensionTypes.find((dt) => dt.code === code);
+        if (dimType) {
+          promises.push(createMutation.mutateAsync({ dimension_type_id: dimType.id, default_value: parsed }));
+        }
+      }
+    }
+    if (promises.length) await Promise.all(promises);
+  };
+
+  useImperativeHandle(ref, () => ({ flushPending }), [flushPending]);
+
+  const toNumber = (v: string): number | null => {
+    const trimmed = v.trim();
     const parsed = trimmed ? parseFloat(trimmed) : null;
-    if (parsed !== null && !Number.isFinite(parsed)) return;
-    if (parsed === (link.default_value ?? null)) return;
-    patchMutation.mutate({ linkId: link.id, payload: { default_value: parsed } });
+    return parsed !== null && Number.isFinite(parsed) ? parsed : null;
+  };
+
+  const handleMultiChange = (code: string, value: string) => {
+    if (readOnly) return;
+    setMultiValues((prev) => ({ ...prev, [code]: value }));
+    dirtyRef.current.add(code);
+  };
+
+  const handleMultiSave = (code: string) => {
+    if (readOnly || !productId) return;
+    if (!dirtyRef.current.has(code)) return;
+    dirtyRef.current.delete(code);
+    const value = multiValues[code] ?? "";
+    const parsed = toNumber(value);
+    const link = links.find((l) => l.dimension_type.code === code);
+    if (link) {
+      patchMutation.mutate({ linkId: link.id, payload: { default_value: parsed } });
+    } else {
+      const dimType = dimensionTypes.find((dt) => dt.code === code);
+      if (dimType) {
+        createMutation.mutate({ dimension_type_id: dimType.id, default_value: parsed });
+      }
+    }
   };
 
   return (
     <div className="space-y-2">
-      <label className="text-sm font-medium flex items-center gap-1.5">
-        <Ruler className="w-4 h-4" />
-        Измерения
-      </label>
+      <div className="flex items-center gap-1.5">
+        <Ruler className="w-4 h-4 text-muted-foreground" />
+        <div className="flex items-center rounded-md border border-input p-0.5">
+          {MODES.map((m) => (
+            <button
+              key={m.value}
+              type="button"
+              disabled={readOnly}
+              onClick={() => onDimensionStateChange(m.value)}
+              className={cn(
+                "px-3 py-1 text-sm rounded-md transition-colors",
+                m.value === dimensionState
+                  ? "bg-primary text-primary-foreground cursor-default"
+                  : "text-muted-foreground hover:bg-muted cursor-pointer",
+              )}
+            >
+              {m.label}
+            </button>
+          ))}
+        </div>
+      </div>
 
-      {isLoading ? (
-        <p className="text-xs text-muted-foreground">Загрузка измерений…</p>
-      ) : links.length === 0 ? (
-        <p className="text-xs text-muted-foreground">Измерения не привязаны — безразмерные штуки.</p>
-      ) : (
-        <div className="space-y-1.5">
-          {links.map((link) => (
-            <div key={link.id} className="flex items-center gap-3 rounded-md border border-input px-3 py-2 text-sm">
-              <span className="min-w-32 font-medium">
-                {link.dimension_type.name}
-                <span className="text-muted-foreground font-normal"> ({link.dimension_type.code})</span>
-              </span>
-              <div className="flex items-center gap-1.5">
+      {dimensionState !== "length" && (
+        <div className="flex flex-wrap gap-3">
+          {DIMENSION_FIELDS[dimensionState].map((field) => {
+            const value = multiValues[field.code] ?? "";
+            const hasValue = value !== "";
+            return (
+              <div key={field.code} className="space-y-1 shrink-0">
+                <label className="text-sm font-medium">{field.label}</label>
                 <Input
                   type="number"
-                  className="w-28 h-8"
-                  placeholder="Типовой размер"
-                  defaultValue={link.default_value ?? ""}
-                  disabled={readOnly || patchMutation.isPending}
-                  onBlur={(e) => commitDefaultValue(link, e.target.value)}
+                  step="0.1"
+                  className={cn(
+                    "w-[100px]",
+                    !hasValue && "bg-amber-50 border-amber-300",
+                    hasValue && "bg-emerald-50 border-emerald-300",
+                  )}
+                  placeholder="—"
+                  value={value}
+                  disabled={readOnly || patchMutation.isPending || createMutation.isPending}
+                  onChange={(e) => handleMultiChange(field.code, e.target.value)}
+                  onBlur={() => handleMultiSave(field.code)}
                   onKeyDown={(e) => {
                     if (e.key === "Enter") {
                       e.preventDefault();
-                      commitDefaultValue(link, (e.target as HTMLInputElement).value);
+                      handleMultiSave(field.code);
                     }
                   }}
                 />
-                <span className="text-muted-foreground">{link.dimension_type.unit}</span>
               </div>
-              <div className="flex items-center gap-1.5">
-                <Checkbox
-                  id={`dim-required-${link.id}`}
-                  checked={link.is_required}
-                  disabled={readOnly || patchMutation.isPending}
-                  onCheckedChange={(checked) =>
-                    patchMutation.mutate({ linkId: link.id, payload: { is_required: checked === true } })
-                  }
-                />
-                <label htmlFor={`dim-required-${link.id}`} className="text-xs cursor-pointer">
-                  Обязательное
-                </label>
-              </div>
-              {!readOnly && (
-                <button
-                  type="button"
-                  className="ml-auto text-muted-foreground hover:text-destructive"
-                  disabled={deleteMutation.isPending}
-                  onClick={() => deleteMutation.mutate(link.id)}
-                  title="Удалить привязку"
-                >
-                  <Trash2 className="w-4 h-4" />
-                </button>
-              )}
-            </div>
-          ))}
-        </div>
-      )}
-
-      {!readOnly && (
-        <div className="flex items-center gap-2">
-          <Select value={addTypeId} onValueChange={setAddTypeId}>
-            <SelectTrigger className="w-48 h-9">
-              <SelectValue placeholder="Тип измерения" />
-            </SelectTrigger>
-            <SelectContent>
-              {availableTypes.length === 0 ? (
-                <div className="px-3 py-2 text-xs text-muted-foreground">Нет доступных типов</div>
-              ) : (
-                availableTypes.map((t) => (
-                  <SelectItem key={t.id} value={String(t.id)}>
-                    {t.name} ({t.code}, {t.unit})
-                  </SelectItem>
-                ))
-              )}
-            </SelectContent>
-          </Select>
-          <Input
-            type="number"
-            className="w-32 h-9"
-            placeholder="Типовой размер"
-            value={addDefaultValue}
-            onChange={(e) => setAddDefaultValue(e.target.value)}
-          />
-          <div className="flex items-center gap-1.5">
-            <Checkbox
-              id="dim-add-required"
-              checked={addIsRequired}
-              onCheckedChange={(checked) => setAddIsRequired(checked === true)}
-            />
-            <label htmlFor="dim-add-required" className="text-xs cursor-pointer">
-              Обязательное
-            </label>
-          </div>
-          <Button
-            type="button"
-            size="sm"
-            className="h-9"
-            disabled={!addTypeId || createMutation.isPending}
-            onClick={() => createMutation.mutate()}
-          >
-            <Plus className="w-3 h-3 mr-1" />
-            Добавить
-          </Button>
+            );
+          })}
         </div>
       )}
     </div>
   );
-}
+});

@@ -1,5 +1,6 @@
 export * from "./client";
 export * from "./errorMessages";
+export * from "./hangerCalc";
 export * from "./products";
 export * from "./sections";
 export * from "./techcards";

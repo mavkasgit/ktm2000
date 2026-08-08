@@ -29,6 +29,7 @@ export function ProductSearchMulti({
   const [loading, setLoading] = useState(false);
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
   const timer = useRef<ReturnType<typeof setTimeout>>();
 
   const doSearch = useCallback(
@@ -86,34 +87,12 @@ export function ProductSearchMulti({
   }, []);
 
   return (
-    <div className="space-y-2" ref={ref}>
-      {values.length > 0 && (
-        <div className="flex flex-wrap gap-1">
-          {values.map((val, i) => (
-            <span
-              key={i}
-              className={`inline-flex items-center gap-1 px-2 py-0.5 rounded border border-transparent text-xs transition-colors ${onAliasClick ? "cursor-pointer hover:border-primary hover:bg-secondary" : "bg-secondary text-secondary-foreground"}`}
-              onClick={() => onAliasClick?.(val)}
-              title={onAliasClick ? "Перейти к профилю" : undefined}
-            >
-              {val}
-              {!disabled && (
-                <button
-                  type="button"
-                  className="ml-0.5 hover:text-destructive cursor-pointer opacity-60 hover:opacity-100 transition-opacity"
-                  onClick={(e) => { e.stopPropagation(); remove(i); }}
-                >
-                  <X className="w-3 h-3" />
-                </button>
-              )}
-            </span>
-          ))}
-        </div>
-      )}
+    <div ref={ref} className="space-y-1.5">
       {!disabled && (
         <div className="relative">
           <input
-            className="w-48 h-10 rounded-md border border-input bg-background px-3 text-sm outline-none placeholder:text-muted-foreground"
+            ref={inputRef}
+            className="w-full h-9 rounded-md border border-input bg-background px-3 text-sm outline-none placeholder:text-muted-foreground"
             placeholder={placeholder}
             value={search}
             onChange={(e) => handleSearchChange(e.target.value)}
@@ -130,7 +109,7 @@ export function ProductSearchMulti({
           />
 
           {dropdownOpen && (
-            <div className="absolute z-50 w-48 left-0 mt-1 bg-popover border rounded-md shadow-lg max-h-48 overflow-y-auto">
+            <div className="absolute z-50 w-full left-0 mt-1 bg-popover border rounded-md shadow-lg max-h-48 overflow-y-auto">
               {loading && (
                 <div className="px-3 py-1 text-sm text-muted-foreground">Поиск...</div>
               )}
@@ -155,6 +134,33 @@ export function ProductSearchMulti({
               ))}
             </div>
           )}
+        </div>
+      )}
+      {values.length > 0 && (
+        <div className="grid grid-cols-2 gap-1.5">
+          {values.map((val, i) => (
+            <div
+              key={i}
+              className="h-8 inline-flex items-center gap-1 px-2 rounded-md border border-transparent bg-secondary text-secondary-foreground text-xs transition-colors"
+            >
+              <span
+                className={`flex-1 min-w-0 truncate ${onAliasClick ? "cursor-pointer hover:text-primary" : ""}`}
+                onClick={() => onAliasClick?.(val)}
+                title={onAliasClick ? "Перейти к профилю" : undefined}
+              >
+                {val}
+              </span>
+              {!disabled && (
+                <button
+                  type="button"
+                  className="ml-0.5 hover:text-destructive cursor-pointer opacity-60 hover:opacity-100 transition-opacity shrink-0"
+                  onClick={(e) => { e.stopPropagation(); remove(i); }}
+                >
+                  <X className="w-3 h-3" />
+                </button>
+              )}
+            </div>
+          ))}
         </div>
       )}
     </div>

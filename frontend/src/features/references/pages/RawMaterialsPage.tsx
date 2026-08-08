@@ -10,7 +10,7 @@ import { Button } from "@/shared/ui/button";
 import { Input } from "@/shared/ui/input";
 import { Card } from "@/shared/ui/card";
 import { Badge } from "@/shared/ui/badge";
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/shared/ui/dialog";
+import { Dialog, DialogContent } from "@/shared/ui/dialog";
 import { AlertDialog, AlertDialogContent, AlertDialogHeader, AlertDialogTitle, AlertDialogDescription, AlertDialogFooter, AlertDialogAction, AlertDialogCancel } from "@/shared/ui/alert-dialog";
 import { toast } from "@/shared/ui/use-toast";
 import { ImportPreviewDialog } from "../ImportPreviewDialog";
@@ -23,8 +23,11 @@ import { SortableFilterHeader } from "@/shared/ui/SortableFilterHeader";
 import { TableCornerResetCell, TableCornerResetHeader, DATA_TABLE_STYLES } from "@/shared/ui";
 import { useSortableColumnFilters } from "@/shared/hooks/useSortableColumnFilters";
 import { skipShotBlastSectionLabel } from "../lib/skipShotBlastLabel";
+import { HangerCalcTable } from "../components/HangerCalcTable";
+import { primaryHangerValue, effectiveForLength } from "@/shared/lib/hangerQuantity";
+import { cn } from "@/shared/utils/cn";
 
-type ViewMode = "grid" | "table";
+type ViewMode = "grid" | "table" | "calc";
 type DialogMode = "create" | "edit";
 type SortField = "sku" | "name" | "length_mm" | "quantity_per_hanger" | "id" | "is_paired_profile" | "skip_shot_blast" | "aliases" | "is_laminated";
 type ColumnFilterField = "sku" | "quantity_per_hanger" | "length_mm" | "is_paired_profile" | "skip_shot_blast" | "is_laminated";
@@ -143,6 +146,42 @@ function buildRawMaterialsApiParams(
 }
 
 const headerCellClass = `${DATA_TABLE_STYLES.headerRow} ${DATA_TABLE_STYLES.headerCell}`;
+
+/** Колонка «Кол-во на подвесе» в списке сырья (#65): значение основной длины, подпись, бейдж «авто». */
+function QuantityPerHangerCell({ product }: { product: Product }) {
+  const primary = primaryHangerValue(product);
+  const lengths = getProductLengths(product);
+  const entries = lengths
+    .map((len) => ({ len, eff: effectiveForLength(product.quantity_per_hanger, len) }))
+    .filter(({ eff }) => eff.value != null);
+  if (entries.length === 0) return <span className="text-muted-foreground">—</span>;
+  const groups = new Map<number, typeof entries>();
+  for (const entry of entries) {
+    const group = groups.get(entry.eff.value!) ?? [];
+    group.push(entry);
+    groups.set(entry.eff.value!, group);
+  }
+  return (
+    <div className="flex flex-wrap gap-1">
+      {[...groups.entries()].map(([value, groupEntries]) => {
+        const isPrimary = groupEntries.some(({ len }) => primary?.lengthMm === len);
+        const multipleLengths = groupEntries.length > 1;
+        return (
+          <span
+            key={value}
+            className={cn(
+              "inline-flex items-center gap-1 rounded bg-secondary px-1.5 py-0.5 text-xs text-secondary-foreground",
+              isPrimary && "font-medium",
+            )}
+            title={groupEntries.map(({ len, eff }) => `${len} мм: ${eff.value} шт (${eff.source === "auto" ? "авто" : "ручное"})`).join("\n")}
+          >
+            {value} шт{!multipleLengths && ` → ${groupEntries[0].len} мм`}
+          </span>
+        );
+      })}
+    </div>
+  );
+}
 
 export function RawMaterialsPage() {
   const { canEditReferences } = usePermission();
@@ -328,7 +367,8 @@ export function RawMaterialsPage() {
       await API.deleteProduct(selectedProduct.id);
       const lengths = getProductLengths(selectedProduct);
       const lengthsText = lengths.length ? `${lengths.join(", ")} мм` : "—";
-      toast({ title: "Удалено", description: `Сырьё "${selectedProduct.sku}" (артикул: ${selectedProduct.sku}, ID: ${selectedProduct.id}, длины: ${lengthsText}, кол-во на подвесе: ${selectedProduct.quantity_per_hanger ?? "—"}) успешно удалено`, variant: "success" });
+      const qtyText = primaryHangerValue(selectedProduct)?.value ?? "—";
+      toast({ title: "Удалено", description: `Сырьё "${selectedProduct.sku}" (артикул: ${selectedProduct.sku}, ID: ${selectedProduct.id}, длины: ${lengthsText}, кол-во на подвесе: ${qtyText}) успешно удалено`, variant: "success" });
       setDialogOpen(false);
       setFormDirty(false);
       await load();
@@ -418,7 +458,10 @@ export function RawMaterialsPage() {
   const uniqueValues = useMemo(() => {
     return {
       sku: [...new Set(items.map((p) => p.sku))].sort(),
-      quantity_per_hanger: [...new Set(items.map((p) => p.quantity_per_hanger !== null && p.quantity_per_hanger !== undefined ? String(p.quantity_per_hanger) : "—"))]
+      quantity_per_hanger: [...new Set(items.map((p) => {
+        const value = primaryHangerValue(p)?.value;
+        return value != null ? String(value) : "—";
+      }))]
         .sort((a, b) => {
           if (a === "—") return 1;
           if (b === "—") return -1;
@@ -466,9 +509,28 @@ export function RawMaterialsPage() {
       <div className="flex items-center justify-between">
         <h2 className="text-xl font-semibold">Справочник сырья</h2>
         <div className="flex items-center gap-2">
-          <Button variant="outline" size="sm" onClick={() => setViewMode(viewMode === "grid" ? "table" : "grid")}>
-            {viewMode === "grid" ? <List className="h-4 w-4" /> : <Grid className="h-4 w-4" />}
-          </Button>
+          <div className="inline-flex items-center rounded-lg border overflow-hidden">
+            {([
+              ["grid", "Сетка", Grid],
+              ["table", "Список", List],
+              ["calc", "Расчёт подвесов", null],
+            ] as [ViewMode, string, typeof Grid | null][]).map(([mode, label, Icon]) => (
+              <button
+                key={mode}
+                type="button"
+                onClick={() => setViewMode(mode)}
+                className={cn(
+                  "inline-flex items-center gap-1 px-3 h-9 text-sm transition-colors",
+                  viewMode === mode
+                    ? "bg-primary text-primary-foreground"
+                    : "hover:bg-muted text-foreground",
+                )}
+              >
+                {Icon && <Icon className="h-4 w-4" />}
+                {label}
+              </button>
+            ))}
+          </div>
           {!isReadOnly && (
             <>
               <label>
@@ -496,54 +558,60 @@ export function RawMaterialsPage() {
         </div>
       </div>
 
-      <div className="flex flex-col sm:flex-row gap-2">
-        <div className="relative w-52">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-          <Input placeholder="Поиск" value={search} onChange={(e) => setSearch(e.target.value)} className="pl-9" />
-          {search && (
-            <button onClick={() => setSearch("")} className="absolute right-3 top-1/2 -translate-y-1/2">
-              <X className="h-4 w-4 text-muted-foreground" />
-            </button>
-          )}
-        </div>
-        <Button variant={filtersOpen ? "default" : "outline"} size="sm" onClick={() => setFiltersOpen(!filtersOpen)} className="relative">
-          <Filter className="h-4 w-4 mr-1" />
-          Фильтры
-          {activeFiltersCount > 0 && (
-            <Badge variant="secondary" className="ml-1 h-5 min-w-[1.25rem] px-1 text-xs">{activeFiltersCount}</Badge>
-          )}
-        </Button>
-        <Button variant={groupByAliases ? "default" : "outline"} size="sm" onClick={() => setGroupByAliases(!groupByAliases)}>
-          Сгруппировать одинаковые
-        </Button>
-      </div>
-
-      {filtersOpen && (
-        <Card className="p-4">
-          <div className="flex flex-wrap gap-3">
-            <div>
-              <label className="text-sm font-medium mb-1 block">Длина от, мм</label>
-              <Input type="number" placeholder="0" value={lengthFrom} onChange={(e) => setLengthFrom(e.target.value)} className="w-40" />
+      {viewMode !== "calc" && (
+        <>
+          <div className="flex flex-col sm:flex-row gap-2">
+            <div className="relative w-52">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+              <Input placeholder="Поиск" value={search} onChange={(e) => setSearch(e.target.value)} className="pl-9" />
+              {search && (
+                <button onClick={() => setSearch("")} className="absolute right-3 top-1/2 -translate-y-1/2">
+                  <X className="h-4 w-4 text-muted-foreground" />
+                </button>
+              )}
             </div>
-            <div>
-              <label className="text-sm font-medium mb-1 block">Длина до, мм</label>
-              <Input type="number" placeholder="6000" value={lengthTo} onChange={(e) => setLengthTo(e.target.value)} className="w-40" />
-            </div>
-            <div>
-              <label className="text-sm font-medium mb-1 block">Кол-во от</label>
-              <Input type="number" placeholder="0" value={qtyFrom} onChange={(e) => setQtyFrom(e.target.value)} className="w-40" />
-            </div>
-            <div>
-              <label className="text-sm font-medium mb-1 block">Кол-во до</label>
-              <Input type="number" placeholder="100" value={qtyTo} onChange={(e) => setQtyTo(e.target.value)} className="w-40" />
-            </div>
+            <Button variant={filtersOpen ? "default" : "outline"} size="sm" onClick={() => setFiltersOpen(!filtersOpen)} className="relative">
+              <Filter className="h-4 w-4 mr-1" />
+              Фильтры
+              {activeFiltersCount > 0 && (
+                <Badge variant="secondary" className="ml-1 h-5 min-w-[1.25rem] px-1 text-xs">{activeFiltersCount}</Badge>
+              )}
+            </Button>
+            <Button variant={groupByAliases ? "default" : "outline"} size="sm" onClick={() => setGroupByAliases(!groupByAliases)}>
+              Сгруппировать одинаковые
+            </Button>
           </div>
-        </Card>
+
+          {filtersOpen && (
+            <Card className="p-4">
+              <div className="flex flex-wrap gap-3">
+                <div>
+                  <label className="text-sm font-medium mb-1 block">Длина от, мм</label>
+                  <Input type="number" placeholder="0" value={lengthFrom} onChange={(e) => setLengthFrom(e.target.value)} className="w-40" />
+                </div>
+                <div>
+                  <label className="text-sm font-medium mb-1 block">Длина до, мм</label>
+                  <Input type="number" placeholder="6000" value={lengthTo} onChange={(e) => setLengthTo(e.target.value)} className="w-40" />
+                </div>
+                <div>
+                  <label className="text-sm font-medium mb-1 block">Кол-во от</label>
+                  <Input type="number" placeholder="0" value={qtyFrom} onChange={(e) => setQtyFrom(e.target.value)} className="w-40" />
+                </div>
+                <div>
+                  <label className="text-sm font-medium mb-1 block">Кол-во до</label>
+                  <Input type="number" placeholder="100" value={qtyTo} onChange={(e) => setQtyTo(e.target.value)} className="w-40" />
+                </div>
+              </div>
+            </Card>
+          )}
+        </>
       )}
 
       {error && <div className="text-sm text-destructive bg-destructive/10 p-3 rounded-md">{error}</div>}
 
-      {loading ? (
+      {viewMode === "calc" ? (
+        <HangerCalcTable readOnly={isReadOnly} onEdit={openEdit} />
+      ) : loading ? (
         <div className="text-muted-foreground py-8 text-center">Загрузка...</div>
       ) : items.length === 0 ? (
         <div className="text-muted-foreground py-8 text-center">Ничего не найдено</div>
@@ -582,7 +650,7 @@ export function RawMaterialsPage() {
                 <th className={`${headerCellClass} p-0 w-40`}>
                   <SortableFilterHeader<ColumnFilterField>
                     field="length_mm"
-                    label="Длина"
+                    label="Размеры"
                     currentSorts={sortConfigs as { field: ColumnFilterField; order: SortOrder }[]}
                     onSortChange={(field) => handleSort(field as SortField)}
                     values={uniqueValues.length_mm}
@@ -674,11 +742,35 @@ export function RawMaterialsPage() {
                       )}
                     </div>
                   </td>
-                  <td className="px-4 py-2 text-muted-foreground">{product.quantity_per_hanger ?? "—"}</td>
+                  <td className="px-4 py-2"><QuantityPerHangerCell product={product} /></td>
                   <td className="px-4 py-2 text-muted-foreground">
                     {(() => {
-                      const lengths = getProductLengths(product);
-                      return lengths.length ? lengths.join(", ") + " мм" : "—";
+                      const state = product.dimension_state ?? "length";
+                      if (state === "length") {
+                        const lengths = getProductLengths(product);
+                        return lengths.length ? lengths.join(", ") + " мм" : "—";
+                      }
+                      if (state === "area") {
+                        const dims = product.dimensions;
+                        if (!dims) return "—";
+                        const parts = [dims.length_mm, dims.width_mm, dims.thickness_mm]
+                          .filter((v): v is number => v != null)
+                          .map(String);
+                        return parts.length ? parts.join("×") + " мм" : "—";
+                      }
+                      // 3D
+                      const dims3 = product.dimensions;
+                      const parts3 = dims3
+                        ? [dims3.length_mm, dims3.width_mm, dims3.height_mm]
+                            .filter((v): v is number => v != null)
+                            .map(String)
+                        : [];
+                      return (
+                        <span className="flex items-center gap-1.5">
+                          <Badge variant="secondary" className="text-xs">3D</Badge>
+                          {parts3.length > 0 && <span>{parts3.join("×")} мм</span>}
+                        </span>
+                      );
                     })()}
                   </td>
                   <td className="px-4 py-2">
@@ -714,10 +806,7 @@ export function RawMaterialsPage() {
         }
         setDialogOpen(open);
       }}>
-        <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
-          <DialogHeader>
-            <DialogTitle>{dialogMode === "create" ? "Новое сырье" : "Редактирование"}</DialogTitle>
-          </DialogHeader>
+        <DialogContent className="max-w-6xl max-h-[90vh] overflow-y-auto">
           <CatalogForm
             key={`${dialogMode}-${selectedProduct?.id ?? "new"}`}
             ref={formRef}

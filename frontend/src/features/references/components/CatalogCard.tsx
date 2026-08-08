@@ -35,6 +35,11 @@ export function CatalogCard({
             <div className="flex items-center gap-1.5 justify-between">
               <div className="flex items-center gap-1.5 min-w-0">
                 <h3 className="font-medium truncate text-sm">{product.sku}</h3>
+                {product.code && (
+                  <span className="text-xs text-muted-foreground bg-muted rounded px-1.5 py-0.5 shrink-0" title="Уникальный код">
+                    {product.code}
+                  </span>
+                )}
                 {product.has_standard_techcard && (
                   <span title="Есть стандартная техкарта">
                     <Check

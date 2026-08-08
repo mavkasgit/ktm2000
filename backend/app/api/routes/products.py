@@ -11,7 +11,8 @@ from sqlalchemy.orm import selectinload
 
 from app.core.config import settings
 from app.core.database import get_db
-from app.models.product import Product, ProductType, ProductLength, ProcessingFlag, ProductProcessingFlag, _length_key
+from app.models.product import Product, ProductType, DimensionState, ProductLength, ProcessingFlag, ProductProcessingFlag, _length_key
+from app.models.dimension import ProductDimension, DimensionType
 from app.models.techcard import Techcard, TechcardLine
 from app.models.production_plan import PlanPosition
 from app.models.work_task import WorkTask
@@ -52,6 +53,7 @@ class HangerQuantityValue(BaseModel):
 
 class ProductIn(BaseModel):
     sku: str
+    code: str | None = None
     name: str
     type: ProductType
     unit: str = "pcs"
@@ -73,6 +75,7 @@ class ProductIn(BaseModel):
     is_catalog_item: bool = False
     is_paired_profile: bool = False
     skip_shot_blast: bool = False
+    dimension_state: DimensionState = DimensionState.length
     aliases: List[str] = []
     lengths_mm: List[float] = []
     processing_flag_codes: List[str] = []
@@ -81,6 +84,7 @@ class ProductIn(BaseModel):
 
 class ProductPatch(BaseModel):
     sku: str | None = None
+    code: str | None = None
     name: str | None = None
     type: ProductType | None = None
     unit: str | None = None
@@ -102,6 +106,7 @@ class ProductPatch(BaseModel):
     is_catalog_item: bool | None = None
     is_paired_profile: bool | None = None
     skip_shot_blast: bool | None = None
+    dimension_state: DimensionState | None = None
     aliases: List[str] | None = None
     lengths_mm: List[float] | None = None
     processing_flag_codes: List[str] | None = None
@@ -111,6 +116,7 @@ class ProductPatch(BaseModel):
 class ProductOut(BaseModel):
     id: int
     sku: str
+    code: str | None
     name: str
     type: ProductType
     unit: str
@@ -132,12 +138,14 @@ class ProductOut(BaseModel):
     is_catalog_item: bool
     is_paired_profile: bool
     skip_shot_blast: bool
+    dimension_state: DimensionState
     aliases: List[str]
     lengths_mm: List[float]
     processing_flags: List[ProcessingFlagInfo]
     is_laminated: bool
     has_standard_techcard: bool = False
     has_paired_techcard: bool = False
+    dimensions: dict[str, float] | None = None
 
 
 VALID_SORT_FIELDS = {"sku", "name", "length_mm", "quantity_per_hanger", "id"}
@@ -284,7 +292,7 @@ async def _sync_boolean_flag(db: AsyncSession, product_id: int, code: str, value
         await db.delete(existing)
 
 
-def _to_product_out(product: Product, has_std: bool = False, has_paired: bool = False) -> ProductOut:
+def _to_product_out(product: Product, has_std: bool = False, has_paired: bool = False, dimensions: dict[str, float] | None = None) -> ProductOut:
     lengths = sorted([l.length_mm for l in product.lengths]) if product.lengths else []
     flags = [
         ProcessingFlagInfo(code=f.code, name=f.name, section_scope=f.section_scope)
@@ -304,6 +312,7 @@ def _to_product_out(product: Product, has_std: bool = False, has_paired: bool = 
     return ProductOut(
         id=product.id,
         sku=product.sku,
+        code=product.code,
         name=product.name,
         type=product.type,
         unit=product.unit,
@@ -325,12 +334,14 @@ def _to_product_out(product: Product, has_std: bool = False, has_paired: bool = 
         is_catalog_item=product.is_catalog_item,
         is_paired_profile=product.is_paired_profile,
         skip_shot_blast="skip_shot_blast" in flag_codes,
+        dimension_state=product.dimension_state,
         aliases=product.aliases or [],
         lengths_mm=lengths,
         processing_flags=flags,
         is_laminated="is_laminated" in flag_codes,
         has_standard_techcard=has_std,
         has_paired_techcard=has_paired,
+        dimensions=dimensions,
     )
 
 
@@ -520,8 +531,21 @@ async def list_products(
     )
     has_paired_ids = set((await db.execute(paired_line_stmt)).scalars().all())
 
+    # Batch-load product dimensions for listed items
+    product_ids = [i.id for i in items]
+    dims_by_product: dict[int, dict[str, float]] = {}
+    if product_ids:
+        dim_stmt = (
+            select(ProductDimension)
+            .options(selectinload(ProductDimension.dimension_type))
+            .where(ProductDimension.product_id.in_(product_ids))
+        )
+        for link in (await db.execute(dim_stmt)).scalars().all():
+            if link.default_value is not None:
+                dims_by_product.setdefault(link.product_id, {})[link.dimension_type.code] = link.default_value
+
     return ProductsListResponse(
-        items=[_to_product_out(i, i.id in has_std_ids, i.id in has_paired_ids) for i in items],
+        items=[_to_product_out(i, i.id in has_std_ids, i.id in has_paired_ids, dims_by_product.get(i.id) or None) for i in items],
         total=total,
     )
 
@@ -606,6 +630,10 @@ async def create_product(
     existing = await db.scalar(select(Product).where(Product.sku == payload.sku))
     if existing:
         raise HTTPException(status_code=409, detail="SKU already exists")
+    if payload.code:
+        existing_code = await db.scalar(select(Product).where(Product.code == payload.code))
+        if existing_code:
+            raise HTTPException(status_code=409, detail="Code already exists")
 
     product_data = payload.model_dump(exclude={"lengths_mm", "processing_flag_codes", "skip_shot_blast", "is_laminated", "quantity_per_hanger"})
     item = Product(**product_data)
@@ -703,6 +731,13 @@ async def patch_product(
     old_aliases = item.aliases if payload.aliases is not None else None
 
     patch_data = payload.model_dump(exclude_unset=True, exclude={"lengths_mm", "processing_flag_codes", "skip_shot_blast", "is_laminated", "quantity_per_hanger"})
+    new_code = patch_data.get("code")
+    if new_code:
+        duplicate_code = await db.scalar(
+            select(Product).where(Product.code == new_code, Product.id != product_id)
+        )
+        if duplicate_code:
+            raise HTTPException(status_code=409, detail="Code already exists")
     new_sku = patch_data.pop("sku", None)
     if new_sku is not None:
         normalized_sku = new_sku.strip()

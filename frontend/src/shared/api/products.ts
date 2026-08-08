@@ -4,15 +4,27 @@ export { getErrorMessage };
 
 export type ProductType = "finished_good" | "semi_finished" | "component" | "material";
 
+export type DimensionState = "length" | "area" | "volume";
+
 export type ProcessingFlag = {
   code: string;
   name: string;
   section_scope: string | null;
 };
 
+/** Значение «кол-во на подвес» для одной длины (#60): авто и ручное раздельно. */
+export type HangerQuantityValue = {
+  auto: number | null;
+  manual: number | null;
+};
+
+/** Per-length словарь: ключ — длина в мм ("2780"), значение — {auto, manual} (#60). */
+export type QuantityPerHangerDict = Record<string, HangerQuantityValue>;
+
 export type Product = {
   id: number;
   sku: string;
+  code: string | null;
   name: string;
   type: ProductType;
   unit: string;
@@ -24,13 +36,16 @@ export type Product = {
   anod_type: string | null;
   length_mm: number | null;
   weight_per_meter: number | null;
-  quantity_per_hanger: number | null;
+  perimeter_mm: number | null;
+  mount_width_mm: number | null;
+  quantity_per_hanger: QuantityPerHangerDict | null;
   cross_section: string | null;
   photo_thumb: string | null;
   photo_full: string | null;
   source: string | null;
   is_catalog_item: boolean;
   is_paired_profile: boolean;
+  dimension_state: DimensionState;
   skip_shot_blast: boolean;
   aliases: string[];
   lengths_mm: number[];
@@ -38,10 +53,12 @@ export type Product = {
   is_laminated: boolean;
   has_standard_techcard?: boolean;
   has_paired_techcard?: boolean;
+  dimensions?: Record<string, number> | null;
 };
 
 export type CreateProductInput = {
   sku: string;
+  code?: string | null;
   name: string;
   type: ProductType;
   unit?: string;
@@ -53,12 +70,15 @@ export type CreateProductInput = {
   anod_type?: string | null;
   length_mm?: number | null;
   weight_per_meter?: number | null;
-  quantity_per_hanger?: number | null;
+  perimeter_mm?: number | null;
+  mount_width_mm?: number | null;
+  quantity_per_hanger?: QuantityPerHangerDict | null;
   cross_section?: string | null;
   source?: string | null;
   is_catalog_item?: boolean;
   is_paired_profile?: boolean;
   skip_shot_blast?: boolean;
+  dimension_state?: DimensionState;
   aliases?: string[];
   lengths_mm?: number[];
   processing_flag_codes?: string[];
