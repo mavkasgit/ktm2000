@@ -79,14 +79,11 @@ async def list_internal_notifications(
     """
     scope = _scoped_user_filter(current_user.id)
 
-    count_stmt = select(func.count()).select_from(InternalNotification).where(scope)
-    items_stmt = select(InternalNotification).where(scope)
-
+    base = select(InternalNotification).where(scope)
     if only_unclosed:
-        count_stmt = count_stmt.where(InternalNotification.closed_at.is_(None))
-        items_stmt = items_stmt.where(InternalNotification.closed_at.is_(None))
+        base = base.where(InternalNotification.closed_at.is_(None))
 
-    total = (await db.execute(count_stmt)).scalar() or 0
+    total = (await db.execute(select(func.count()).select_from(base.subquery()))).scalar() or 0
 
     # unread_count — непрочитанные (read_at IS NULL) среди активных (closed_at IS NULL)
     unread_stmt = (
@@ -98,7 +95,7 @@ async def list_internal_notifications(
     )
     unread_count = (await db.execute(unread_stmt)).scalar() or 0
 
-    items_stmt = items_stmt.order_by(
+    items_stmt = base.order_by(
         InternalNotification.created_at.desc(),
         InternalNotification.id.desc(),
     )
