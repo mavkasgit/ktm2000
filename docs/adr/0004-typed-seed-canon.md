@@ -95,6 +95,11 @@ Accessor всегда возвращает модели — это «едины�
 - Правило: только composition root строит/резолвит PlantConfig. Ничто
   в середине стека не импортирует accessor напрямую.
 - Multi-plant отложен: `build_plant_config()` без параметров, один завод.
+- **Уточнение ADR-0008:** разрешён eagerly resolved immutable snapshot
+  (module-level `DEFAULT = _build().x`) для leaf-функций и snapshot-констант
+  при соблюдении критериев ADR-0008. Запрет на `build_plant_config()` внутри
+  тела функции вне composition root — сохранён и кодифицирован gate-тестом
+  (`tests/test_canon_access_gate.py`).
 
 ### 6. Сидеры потребляют PlantConfig
 

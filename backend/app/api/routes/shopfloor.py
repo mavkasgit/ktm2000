@@ -24,6 +24,8 @@ from app.models.route import SectionOperation
 from app.models.transfer import Transfer
 from app.models.user import User, UserRole
 from app.models.work_task import WorkTask
+from app.seeds.canon.dependencies import get_plant_config
+from app.seeds.canon.models import PlantConfig
 from app.services.shopfloor_service import (
     add_defect_item,
     complete_task,
@@ -236,9 +238,11 @@ async def complete_task_endpoint(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
     locked_section_id: int | None = Depends(get_single_window_locked_section_id),
+    plant_config: PlantConfig = Depends(get_plant_config),
 ) -> dict:
     await _ensure_task_lock(db, task_id, locked_section_id)
     try:
+        scrap = plant_config.production.scrap_policy
         res = await complete_task(
             db,
             task_id=task_id,
@@ -253,6 +257,10 @@ async def complete_task_endpoint(
             accounted_at=payload.accounted_at,
             shortage_strategy=payload.shortage_strategy,
             auto_transfer_next=payload.auto_transfer_next,
+            scrap_section_type=scrap.section_type,
+            scrap_code=scrap.code,
+            scrap_name=scrap.name,
+            scrap_sort_order=scrap.sort_order,
         )
 
         # Запись лога аудита
@@ -349,6 +357,7 @@ async def bulk_complete_tasks(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
     locked_section_id: int | None = Depends(get_single_window_locked_section_id),
+    plant_config: PlantConfig = Depends(get_plant_config),
 ) -> BulkActionResponse:
     """Complete many tasks in a single request with savepoint isolation per item."""
     import logging
@@ -366,6 +375,7 @@ async def bulk_complete_tasks(
         try:
             async with db.begin_nested():
                 await _ensure_task_lock(db, entry.task_id, locked_section_id)
+                scrap = plant_config.production.scrap_policy
                 await complete_task(
                     db,
                     task_id=entry.task_id,
@@ -380,6 +390,10 @@ async def bulk_complete_tasks(
                     accounted_at=entry.accounted_at,
                     shortage_strategy=entry.shortage_strategy,
                     auto_transfer_next=entry.auto_transfer_next,
+                    scrap_section_type=scrap.section_type,
+                    scrap_code=scrap.code,
+                    scrap_name=scrap.name,
+                    scrap_sort_order=scrap.sort_order,
                 )
             results.append(BulkActionResultItem(id=entry.task_id, status="success"))
         except HTTPException as exc:
@@ -625,8 +639,10 @@ async def defect_decision_endpoint(
     payload: DefectDecisionPayload,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
+    plant_config: PlantConfig = Depends(get_plant_config),
 ) -> dict:
     try:
+        scrap = plant_config.production.scrap_policy
         return await defect_decide(
             db,
             defect_id=defect_id,
@@ -637,6 +653,11 @@ async def defect_decision_endpoint(
             reason=payload.reason,
             comment=payload.comment,
             idempotency_key=payload.idempotency_key,
+            defect_decision_map=plant_config.quality.defect_decision_map.mapping,
+            scrap_section_type=scrap.section_type,
+            scrap_code=scrap.code,
+            scrap_name=scrap.name,
+            scrap_sort_order=scrap.sort_order,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

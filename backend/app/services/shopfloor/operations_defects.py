@@ -14,14 +14,21 @@ from .cache import _refresh_section_plan_line_cache
 from .common import _check_idempotency, _ensure_positive, _get_defect, _get_task, _to_decimal
 
 
-def resolve_defect_status(decision: DefectDecisionType, config) -> DefectDecisionDef | None:
+def resolve_defect_status(
+    decision: DefectDecisionType, defect_decision_map: dict[str, DefectDecisionDef] | None
+) -> DefectDecisionDef | None:
     """Данные решения по браку из QualityCanon (ADR-0004, тикет #25).
 
     Оператор (диспетчеризация stock-операций) остаётся в сервисе; конкретная
     пара (status, reason) — данные конфигурации завода. Неизвестное решение
     возвращает None → сервис оставляет defect в decision_required.
+
+    Карта решений передаётся из composition root (ADR-0007); сервис не
+    резолвит PlantConfig сам.
     """
-    return config.quality.defect_decision_map.mapping.get(decision.value)
+    if defect_decision_map is None:
+        return None
+    return defect_decision_map.get(decision.value)
 
 async def create_defect(
     db: AsyncSession,
@@ -159,6 +166,11 @@ async def defect_decide(
     reason: str | None = None,
     comment: str | None = None,
     idempotency_key: str | None = None,
+    defect_decision_map: dict[str, DefectDecisionDef] | None = None,
+    scrap_section_type: str | None = None,
+    scrap_code: str | None = None,
+    scrap_name: str | None = None,
+    scrap_sort_order: int | None = None,
 ) -> dict:
     defect = await _get_defect(db, defect_id)
     task = await _get_task(db, defect.task_id) if defect.task_id is not None else None
@@ -200,10 +212,9 @@ async def defect_decide(
     rework_task_id: int | None = None
     from app.models.section import Section as _Section
 
-    # ADR-0004: карта решений (status, reason) — данные канона, не код
-    from app.seeds.canon.registry import build_plant_config as _build_cfg
-    _cfg = _build_cfg()
-    _decision_def = resolve_defect_status(decision_type, _cfg)
+    # ADR-0004/0007: карта решений (status, reason) — данные канона, передаются
+    # из composition root; сервис не резолвит PlantConfig сам.
+    _decision_def = resolve_defect_status(decision_type, defect_decision_map)
     if _decision_def is not None:
         _decision_status = DefectStatus(_decision_def.status)
         _decision_reason = Reason(_decision_def.reason) if _decision_def.reason else None
@@ -212,17 +223,18 @@ async def defect_decide(
         _decision_reason = None
 
     if decision_type == DefectDecisionType.scrap:
-        # ADR-0004: данные SCRAP-секции из канона
-        _scrap = _cfg.production.scrap_policy
+        # ADR-0007: данные SCRAP-секции из composition root
+        if scrap_section_type is None or scrap_code is None or scrap_name is None or scrap_sort_order is None:
+            raise ValueError("scrap policy data is required for scrap decision")
         from_sec_id = task.section_id if task else defect.section_id
         # Find or auto-create scrap location
         scrap_loc = await db.scalar(
-            select(_Section.id).where(_Section.type == _scrap.section_type).limit(1)
+            select(_Section.id).where(_Section.type == scrap_section_type).limit(1)
         )
         if scrap_loc is None:
             scrap_sec = _Section(
-                code=_scrap.code, name=_scrap.name,
-                type=_scrap.section_type, is_active=True, sort_order=_scrap.sort_order,
+                code=scrap_code, name=scrap_name,
+                type=scrap_section_type, is_active=True, sort_order=scrap_sort_order,
             )
             db.add(scrap_sec)
             await db.flush()

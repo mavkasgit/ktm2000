@@ -370,6 +370,7 @@ async def test_complete_task_with_scrap(session: AsyncSession):
     await session.commit()
 
     from app.services.shopfloor.operations_tasks import complete_task
+    from tests.stock.helpers import FAKE_SCRAP_KWARGS
     result = await complete_task(
         session,
         task_id=task.id,
@@ -377,6 +378,7 @@ async def test_complete_task_with_scrap(session: AsyncSession):
         defect_quantity=Decimal("3"),
         actor_id=fx["user"].id,
         defect_reason="test_scrap",
+        **FAKE_SCRAP_KWARGS,
     )
     await session.commit()
 

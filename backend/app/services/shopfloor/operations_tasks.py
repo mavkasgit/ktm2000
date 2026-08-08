@@ -95,6 +95,10 @@ async def complete_task(
     accounted_at: datetime | None = None,
     shortage_strategy: Literal["fail", "partial"] = "partial",
     auto_transfer_next: bool = False,
+    scrap_section_type: str | None = None,
+    scrap_code: str | None = None,
+    scrap_name: str | None = None,
+    scrap_sort_order: int | None = None,
 ) -> dict:
     """Complete (good + defect) quantity on a SectionTask.
 
@@ -260,20 +264,22 @@ async def complete_task(
         tx_ids.append(tx_good.id)
 
     if defect_quantity > 0:
-        # scrap: from production section to scrap location (ADR-0004: данные из канона)
+        # scrap: from production section to scrap location.
+        # Данные SCRAP-секции приходят из composition root (ADR-0004 §5,
+        # ADR-0007); сервис не резолвит PlantConfig сам.
         from app.models.section import Section as _Section
-        from app.seeds.canon.registry import build_plant_config as _build_cfg
-        _scrap = _build_cfg().production.scrap_policy
+        if scrap_section_type is None or scrap_code is None or scrap_name is None or scrap_sort_order is None:
+            raise ValueError("scrap policy data is required when registering scrap")
         scrap_loc = await db.scalar(
-            select(_Section.id).where(_Section.type == _scrap.section_type).limit(1)
+            select(_Section.id).where(_Section.type == scrap_section_type).limit(1)
         )
         if scrap_loc is None:
             scrap_sec = _Section(
-                code=_scrap.code,
-                name=_scrap.name,
-                type=_scrap.section_type,
+                code=scrap_code,
+                name=scrap_name,
+                type=scrap_section_type,
                 is_active=True,
-                sort_order=_scrap.sort_order,
+                sort_order=scrap_sort_order,
             )
             db.add(scrap_sec)
             await db.flush()

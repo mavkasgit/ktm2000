@@ -19,6 +19,8 @@ from app.models.section import Section
 from app.models.user import User
 from app.models.product import Product
 from app.models.spg import SpgSection, StorageProductionGroup
+from app.seeds.canon.dependencies import get_plant_config
+from app.seeds.canon.models import PlantConfig
 from app.services.production_planning_rows import (
     PlanningRowsQueryParams,
     get_production_planning_row_detail,
@@ -820,8 +822,9 @@ async def manual_pass_to_stage(
     payload: ManualPassRequest,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
+    plant_config: PlantConfig = Depends(get_plant_config),
 ) -> ManualPassResponse:
-    return await _do_manual_pass(db, position_id, payload, current_user)
+    return await _do_manual_pass(db, position_id, payload, current_user, plant_config=plant_config)
 
 
 async def _do_manual_pass(
@@ -829,6 +832,8 @@ async def _do_manual_pass(
     position_id: int,
     payload: ManualPassRequest,
     current_user: User,
+    *,
+    plant_config: PlantConfig,
 ) -> ManualPassResponse:
     pos = await db.get(PlanPosition, position_id)
     if pos is None or pos.deleted_at is not None:
@@ -919,6 +924,7 @@ async def _do_manual_pass(
                 completed_qty = task_cache["completed_quantity"] + task_cache["rejected_quantity"]
                 to_complete = quantity - completed_qty
                 if to_complete > 0:
+                    scrap = plant_config.production.scrap_policy
                     await complete_task(
                         db,
                         task_id=task.id,
@@ -931,6 +937,10 @@ async def _do_manual_pass(
                         executor_user_id=current_user.id,
                         performed_at=now,
                         accounted_at=now,
+                        scrap_section_type=scrap.section_type,
+                        scrap_code=scrap.code,
+                        scrap_name=scrap.name,
+                        scrap_sort_order=scrap.sort_order,
                     )
                 if next_task is not None:
                     from app.services.shopfloor.common import sections_share_spg
@@ -1481,6 +1491,7 @@ async def manual_pass_positions_batch(
     payload: ManualPassBatchRequest,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
+    plant_config: PlantConfig = Depends(get_plant_config),
 ) -> ManualPassBatchResponse:
     """Run a manual through-pass for many positions in a single request.
 
@@ -1507,6 +1518,7 @@ async def manual_pass_positions_batch(
                         idempotency_key=per_position_key,
                     ),
                     current_user,
+                    plant_config=plant_config,
                 )
                 results.append(
                     ManualPassBatchResult(

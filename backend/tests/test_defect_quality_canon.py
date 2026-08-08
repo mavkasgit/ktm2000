@@ -37,21 +37,21 @@ class TestResolveDefectStatusWithFakeConfig:
 
     def test_scrap_resolves_to_fake_entry(self) -> None:
         cfg = self._fake_config()
-        entry = resolve_defect_status(DefectDecisionType.scrap, cfg)
+        entry = resolve_defect_status(DefectDecisionType.scrap, cfg.quality.defect_decision_map.mapping)
         assert entry is not None
         assert entry.status == "returned"
         assert entry.reason == "return_to_previous"
 
     def test_rework_current_resolves_to_fake_entry(self) -> None:
         cfg = self._fake_config()
-        entry = resolve_defect_status(DefectDecisionType.rework_current, cfg)
+        entry = resolve_defect_status(DefectDecisionType.rework_current, cfg.quality.defect_decision_map.mapping)
         assert entry is not None
         assert entry.status == "closed"
         assert entry.reason == "complete"
 
     def test_unknown_decision_returns_none(self) -> None:
         cfg = self._fake_config()
-        entry = resolve_defect_status(DefectDecisionType.accept_with_deviation, cfg)
+        entry = resolve_defect_status(DefectDecisionType.accept_with_deviation, cfg.quality.defect_decision_map.mapping)
         assert entry is None
 
     def test_prod_map_differs_from_fake(self) -> None:

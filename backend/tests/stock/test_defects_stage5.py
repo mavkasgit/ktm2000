@@ -204,6 +204,7 @@ async def test_complete_task_scrap_links_defect_to_stock_tx(session: AsyncSessio
     await session.commit()
 
     from app.services.shopfloor.operations_tasks import complete_task
+    from tests.stock.helpers import FAKE_SCRAP_KWARGS
     result = await complete_task(
         session,
         task_id=task.id,
@@ -211,6 +212,7 @@ async def test_complete_task_scrap_links_defect_to_stock_tx(session: AsyncSessio
         defect_quantity=Decimal("3"),
         actor_id=fx["user"].id,
         defect_reason="test_scrap",
+        **FAKE_SCRAP_KWARGS,
     )
     await session.commit()
 
@@ -277,6 +279,7 @@ async def test_defect_decide_scrap_creates_stock_tx(session: AsyncSession):
     defect_id = defect_resp["defect_id"]
 
     # Decide scrap
+    from tests.stock.helpers import FAKE_DEFECT_DECISION_MAP, FAKE_SCRAP_KWARGS
     dec_resp = await defect_decide(
         session,
         defect_id=defect_id,
@@ -285,6 +288,8 @@ async def test_defect_decide_scrap_creates_stock_tx(session: AsyncSession):
         actor_id=fx["user"].id,
         comment="scrap it",
         idempotency_key="scrap-test-1",
+        defect_decision_map=FAKE_DEFECT_DECISION_MAP,
+        **FAKE_SCRAP_KWARGS,
     )
     await session.commit()
 
@@ -353,6 +358,7 @@ async def test_defect_decide_rework_creates_stock_tx(session: AsyncSession):
     defect_id = defect_resp["defect_id"]
 
     # Decide rework_current — target a different section for rework
+    from tests.stock.helpers import FAKE_DEFECT_DECISION_MAP, FAKE_SCRAP_KWARGS
     dec_resp = await defect_decide(
         session,
         defect_id=defect_id,
@@ -361,6 +367,8 @@ async def test_defect_decide_rework_creates_stock_tx(session: AsyncSession):
         actor_id=fx["user"].id,
         target_section_id=fx["raw"].id,
         idempotency_key="rework-test-1",
+        defect_decision_map=FAKE_DEFECT_DECISION_MAP,
+        **FAKE_SCRAP_KWARGS,
     )
     await session.commit()
 
@@ -431,6 +439,7 @@ async def test_defect_decide_return_previous_creates_stock_tx(session: AsyncSess
     defect_id = defect_resp["defect_id"]
 
     # Decide return_previous (target_section_id = task.section_id for now)
+    from tests.stock.helpers import FAKE_DEFECT_DECISION_MAP, FAKE_SCRAP_KWARGS
     dec_resp = await defect_decide(
         session,
         defect_id=defect_id,
@@ -439,6 +448,8 @@ async def test_defect_decide_return_previous_creates_stock_tx(session: AsyncSess
         actor_id=fx["user"].id,
         target_section_id=fx["raw"].id,
         idempotency_key="return-test-1",
+        defect_decision_map=FAKE_DEFECT_DECISION_MAP,
+        **FAKE_SCRAP_KWARGS,
     )
     await session.commit()
 
@@ -499,6 +510,7 @@ async def test_defect_decide_accept_deviation_creates_complete_tx(session: Async
     defect_id = defect_resp["defect_id"]
 
     # Decide accept_with_deviation
+    from tests.stock.helpers import FAKE_DEFECT_DECISION_MAP, FAKE_SCRAP_KWARGS
     dec_resp = await defect_decide(
         session,
         defect_id=defect_id,
@@ -506,6 +518,8 @@ async def test_defect_decide_accept_deviation_creates_complete_tx(session: Async
         quantity=Decimal("3"),
         actor_id=fx["user"].id,
         idempotency_key="accept-test-1",
+        defect_decision_map=FAKE_DEFECT_DECISION_MAP,
+        **FAKE_SCRAP_KWARGS,
     )
     await session.commit()
 
@@ -567,6 +581,7 @@ async def test_defect_decide_idempotent(session: AsyncSession):
     defect_id = defect_resp["defect_id"]
 
     # First call
+    from tests.stock.helpers import FAKE_DEFECT_DECISION_MAP, FAKE_SCRAP_KWARGS
     resp1 = await defect_decide(
         session,
         defect_id=defect_id,
@@ -574,6 +589,8 @@ async def test_defect_decide_idempotent(session: AsyncSession):
         quantity=Decimal("5"),
         actor_id=fx["user"].id,
         idempotency_key="idemp-test-scrap-1",
+        defect_decision_map=FAKE_DEFECT_DECISION_MAP,
+        **FAKE_SCRAP_KWARGS,
     )
     await session.commit()
     assert resp1["defect_status"] == DefectStatus.scrapped.value
@@ -595,6 +612,8 @@ async def test_defect_decide_idempotent(session: AsyncSession):
         quantity=Decimal("5"),
         actor_id=fx["user"].id,
         idempotency_key="idemp-test-scrap-1",
+        defect_decision_map=FAKE_DEFECT_DECISION_MAP,
+        **FAKE_SCRAP_KWARGS,
     )
     await session.commit()
     assert resp2["idempotent_replay"] is True

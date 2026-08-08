@@ -31,6 +31,8 @@ from app.models.section import Section
 from app.models.techcard import Techcard
 from app.models.user import User
 from app.models.work_task import WorkTask
+from app.seeds.canon.dependencies import get_plant_config
+from app.seeds.canon.models import PlantConfig
 from app.services.plan_generation import create_release_batch, release_batch
 from app.services.plan_import_service import create_excel_import_change_set
 from app.services.production_plan_service import apply_change_set, approve_plan_position
@@ -244,6 +246,7 @@ async def run_full_route_test(
     payload: FullRouteRunRequest,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
+    plant_config: PlantConfig = Depends(get_plant_config),
 ) -> FullRouteRunResponse:
     if payload.initial_quantity <= 0:
         raise HTTPException(status_code=400, detail="initial_quantity must be > 0")
@@ -471,6 +474,7 @@ async def run_full_route_test(
                 performed_at=performed_at,
                 accounted_at=accounted_at,
             )
+            scrap = plant_config.production.scrap_policy
             await complete_task(
                 db,
                 task_id=task.id,
@@ -483,6 +487,10 @@ async def run_full_route_test(
                 executor_user_id=current_user.id,
                 performed_at=performed_at,
                 accounted_at=accounted_at,
+                scrap_section_type=scrap.section_type,
+                scrap_code=scrap.code,
+                scrap_name=scrap.name,
+                scrap_sort_order=scrap.sort_order,
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=f"Task execution failed at step {step.sequence}: {exc}") from exc
