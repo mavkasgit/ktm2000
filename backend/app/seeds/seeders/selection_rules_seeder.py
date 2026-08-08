@@ -13,17 +13,12 @@ async def seed_selection_rules(
     db: AsyncSession,
     rules_data: list[SelectionRuleDef],
     profile: RouteRuleProfile,
-    sections_map: dict[str, Section] | None = None,
+    sections_map: dict[str, Section],
 ) -> int:
     """Upsert selection rules by code. Resolves section_code → section_id. Returns count.
 
-    sections_map (code → Section) — из run_seed (single source); если не передан,
-    грузится из БД (backward-compat для прямых вызовов).
+    sections_map (code → Section) — из run_seed (single source), всегда обязателен.
     """
-    if sections_map is None:
-        sections_result = await db.execute(select(Section).where(Section.is_active.is_(True)))
-        sections_map = {s.code: s for s in sections_result.scalars().all()}
-
     count = 0
     for rule_def in rules_data:
         # Build conditions from typed models

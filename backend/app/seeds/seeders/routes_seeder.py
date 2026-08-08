@@ -29,24 +29,19 @@ def _is_significant(operation_code: str | None) -> bool:
 async def seed_routes(
     db: AsyncSession,
     routes_data: list[dict],
+    sections_map: dict[str, Section],
     force: bool = False,
-    sections_map: dict[str, Section] | None = None,
 ) -> dict[str, ProductionRoute]:
     """Upsert all routes by code. Replace stages entirely. Returns {code: route} map.
 
     Note: Old static routes are replaced by dynamic route building.
     If routes_data is empty, return empty dict without errors.
 
-    sections_map (code → Section) — из run_seed (single source); если не передан,
-    грузится из БД (backward-compat для прямых вызовов).
+    sections_map (code → Section) — из run_seed (single source), всегда обязателен.
     """
     if not routes_data:
         return {}
 
-    # Load sections
-    if sections_map is None:
-        sections_result = await db.execute(select(Section).where(Section.is_active.is_(True)))
-        sections_map = {s.code: s for s in sections_result.scalars().all()}
     sections_by_code = sections_map
 
     required_codes = sorted({
@@ -238,25 +233,19 @@ async def seed_routes(
 
 async def seed_production_routes_from_profiles(
     db: AsyncSession,
-    sections_map: dict[str, Section] | None = None,
+    sections_map: dict[str, Section],
 ) -> int:
     """Create ProductionRoute for each RouteRuleProfile that has route_sections.
 
     This ensures the frontend sees routes after seeding.
     Each section gets ONE RouteStep (operation_code=None) - operations resolved at runtime.
 
-    sections_map (code → Section) — из run_seed (single source); если не передан,
-    грузится из БД (backward-compat для прямых вызовов).
+    sections_map (code → Section) — из run_seed (single source), всегда обязателен.
     """
     profiles = (await db.execute(
         select(RouteRuleProfile).where(RouteRuleProfile.is_active.is_(True))
     )).scalars().all()
 
-    if sections_map is None:
-        sections = (await db.execute(
-            select(Section).where(Section.is_active.is_(True))
-        )).scalars().all()
-        sections_map = {s.code: s for s in sections}
     sections_by_code = sections_map
 
     created_count = 0

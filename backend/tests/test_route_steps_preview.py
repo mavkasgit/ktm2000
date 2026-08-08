@@ -156,7 +156,7 @@ async def _seed_infrastructure(session, profile: RouteRuleProfile):
     
     # Seed selection rules
     await seed_selection_rules(
-        session, [SelectionRuleDef.model_validate(d) for d in SELECTION_RULES], profile
+        session, [SelectionRuleDef.model_validate(d) for d in SELECTION_RULES], profile, section_map
     )
     
     # Create product + techcard + route so route resolution works

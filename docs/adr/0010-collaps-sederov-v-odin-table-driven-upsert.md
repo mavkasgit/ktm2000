@@ -16,13 +16,13 @@ import_template/routes.
 Один модуль `upsert_by_key(db, Model, rows, key_field, field_map, resolve=...)`,
 возвращающий `dict[key, Model]`. Скалярные седеры (sections, defect_types,
 route_rule_profile, import_template, processing_flags, dimension_types) становятся
-тонкими обёртками над хелпером, `field_map`/UPSERT_SPEC живёт рядом с моделью.
-Сложные седеры (spgs, selection_rules, routes, users, cleanup, demo) остаются
-bespoke-функциями, но section-code→id резолв single-sourced в run_seed и
-передаётся параметром. SectionOperation upsertится через хелпер по составному
-ключу `(section_id, operation_code)`, `transforms_dimensions` вычисляется до
-вызова. Все данные переезжают в authoring-модули, raw-dict backward-compat
-умирает, конвертер остаётся один (registry).
+тонкими обёртками над хелпером, `field_map` живёт рядом с данными в
+authoring-модулях. Сложные седеры (spgs, selection_rules, routes, users, cleanup,
+demo) остаются bespoke-функциями, но section-code→id резолв single-sourced в
+run_seed и передаётся параметром. SectionOperation upsertится через хелпер по
+составному ключу `(section_id, operation_code)`, `transforms_dimensions`
+вычисляется до вызова. Все данные переезжают в authoring-модули, raw-dict
+backward-compat умирает, конвертер остаётся один (registry).
 
 ## Considered Options
 
@@ -43,5 +43,10 @@ bespoke-функциями, но section-code→id резолв single-sourced �
 - Новый справочник = данные в authoring-модуле + запись в canon, а не 4 файла.
 - Дубли `_convert_*` и section-code→id резолв физически исчезают.
 - `run_seed` остаётся оркестрацией (порядок, зависимость map), не несёт field_map.
-- Удаляются raw-dict ветки `sections=None`/`production=None` и файлы-данные в седерах.
-- Сигнатуры седеров стабильны → существующие тесты сидов почти не меняются.
+- Седеры — чистые функции с обязательными параметрами: никаких скрытых
+  дефолтов (`sections=None`/`production=None`/`sections_map=None`) и DB-load
+  fallback-резолвов; `_DEFAULT_PRODUCTION` на импорте не существует. Данные
+  для сида приходят всегда явно из run_seed.
+- Тесты сидов обновлены осознанно: прямые вызовы седеров передают канон
+  (`build_plant_config()`) или локальный section_map явно — не полагаются
+  на дефолты.

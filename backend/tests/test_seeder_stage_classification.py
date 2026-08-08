@@ -20,6 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.route import ProductionRoute, RouteOperation, RouteStage
 from app.models.section import Section
+from app.seeds.canon.registry import build_plant_config
 from app.seeds.routes import ROUTES
 from app.seeds.seeders.demo_production_seeder import seed_demo_production
 from app.seeds.seeders.routes_seeder import (
@@ -38,7 +39,7 @@ from app.services.shopfloor.common import build_completed_stages_json
 async def _seed_sections_only(session: AsyncSession) -> dict[str, Section]:
     """Seed the 11 default sections without their SectionOperations — those
     are not needed for the route shape checks below."""
-    sections_map = await seed_sections(session)
+    sections_map = await seed_sections(session, build_plant_config().production.sections)
     return sections_map
 
 
@@ -49,7 +50,7 @@ async def _seed_sections_only(session: AsyncSession) -> dict[str, Section]:
 async def test_seed_routes_marks_storage_sections_as_transit(session: AsyncSession):
     sections_map = await _seed_sections_only(session)
 
-    await seed_routes(session, ROUTES, force=True)
+    await seed_routes(session, ROUTES, sections_map, force=True)
 
     route = await session.scalar(
         select(ProductionRoute).where(ProductionRoute.code == "universal_rp")
@@ -108,8 +109,8 @@ async def test_seed_routes_marks_storage_sections_as_transit(session: AsyncSessi
 
 @pytest.mark.asyncio
 async def test_seed_routes_creates_one_stage_per_step(session: AsyncSession):
-    await _seed_sections_only(session)
-    await seed_routes(session, ROUTES, force=True)
+    sections_map = await _seed_sections_only(session)
+    await seed_routes(session, ROUTES, sections_map, force=True)
     route = await session.scalar(
         select(ProductionRoute).where(ProductionRoute.code == "universal_rp")
     )
@@ -138,14 +139,14 @@ async def test_seed_routes_from_profile_marks_storage_as_transit(session: AsyncS
     )
     session.add(profile)
     await session.flush()
-    await _seed_sections_only(session)
+    sections_map = await _seed_sections_only(session)
     await session.commit()
     # Re-fetch profile in this transaction
     profile = await session.scalar(
         select(RouteRuleProfile).where(RouteRuleProfile.code == "test_profile")
     )
 
-    count = await seed_production_routes_from_profiles(session)
+    count = await seed_production_routes_from_profiles(session, sections_map)
     assert count >= 1
 
     route = await session.scalar(
