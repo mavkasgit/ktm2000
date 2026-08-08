@@ -776,20 +776,22 @@ async def _make_change_items(
                             sku: str(qty) for sku, qty in adjusted_quantities.items()
                         }
         else:
-            # Стандартная техкарта — берём quantity_per_hanger из каталога продукта
-            if product and product.quantity_per_hanger and product.quantity_per_hanger > 0:
-                quantity_per_hanger = product.quantity_per_hanger
+            # Стандартная техкарта — берём quantity_per_hanger из каталога продукта.
+            # Per-length dict (#60): используем значение для основной длины.
+            product_hanger_qty = product.main_quantity_per_hanger() if product else None
+            if product_hanger_qty is not None and product_hanger_qty > 0:
+                quantity_per_hanger = product_hanger_qty
 
                 if normalize_hanger_quantity:
-                    adjusted = adjust_quantity_to_hanger(row.quantity, product.quantity_per_hanger)
+                    adjusted = adjust_quantity_to_hanger(row.quantity, product_hanger_qty)
                     if adjusted is not None:
                         effective_quantity = adjusted
-                        hanger_count = math.ceil(effective_quantity / product.quantity_per_hanger)
+                        hanger_count = math.ceil(effective_quantity / product_hanger_qty)
                     else:
-                        hanger_count = math.ceil(effective_quantity / product.quantity_per_hanger)
+                        hanger_count = math.ceil(effective_quantity / product_hanger_qty)
                 else:
                     # Округление отключено — считаем подвесы как дробное число
-                    hanger_count = float(effective_quantity / product.quantity_per_hanger)
+                    hanger_count = float(effective_quantity / product_hanger_qty)
             elif normalize_hanger_quantity:
                 # Warning если quantity_per_hanger не задан
                 if product:

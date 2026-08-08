@@ -99,3 +99,80 @@ async def test_alembic_upgrade_head_creates_full_schema():
         async with admin_engine.connect() as conn:
             await conn.execute(text(f'DROP DATABASE IF EXISTS "{db_name}" WITH (FORCE)'))
         await admin_engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_migration_032_scalar_quantity_per_hanger_to_per_length():
+    """#60: скаляр quantity_per_hanger в attributes → {первая_длина: {auto, manual}}."""
+    db_name = f"ktm_mig_{uuid.uuid4().hex[:10]}"
+    admin_url = _test_db_url().rsplit("/", 1)[0] + "/postgres"
+    target_url = _test_db_url().rsplit("/", 1)[0] + f"/{db_name}"
+
+    admin_engine = create_async_engine(admin_url, isolation_level="AUTOCOMMIT")
+    async with admin_engine.connect() as conn:
+        await conn.execute(text(f'CREATE DATABASE "{db_name}"'))
+    await admin_engine.dispose()
+
+    env = {**os.environ, "DATABASE_URL": target_url}
+    try:
+        # 1. До нужной ревизии (031) — скалярная форма ещё актуальна.
+        result = subprocess.run(
+            ["alembic", "upgrade", "031_users_profile_sync_failed_at"],
+            cwd=BACKEND_DIR,
+            env=env,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert result.returncode == 0, result.stderr or result.stdout
+
+        # 2. Вставляем продукт со скаляром quantity_per_hanger и двумя длинами.
+        engine = create_async_engine(target_url)
+        async with engine.begin() as conn:
+            product_id = (
+                await conn.execute(
+                    text(
+                        "INSERT INTO products (sku, name, type, unit, is_active, attributes) "
+                        "VALUES ('RAW-LEGACY', 'Legacy', 'component', 'pcs', true, "
+                        "'{\"quantity_per_hanger\": 25}'::jsonb) RETURNING id"
+                    )
+                )
+            ).scalar_one()
+            await conn.execute(
+                text(
+                    "INSERT INTO product_lengths (product_id, length_mm) VALUES "
+                    "(:pid, 3500), (:pid, 2800)"
+                ),
+                {"pid": product_id},
+            )
+        await engine.dispose()
+
+        # 3. Upgrade до head → скаляр мигрируется в {первая_длина: {auto, manual}}.
+        result = subprocess.run(
+            ["alembic", "upgrade", "head"],
+            cwd=BACKEND_DIR,
+            env=env,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert result.returncode == 0, result.stderr or result.stdout
+
+        engine = create_async_engine(target_url)
+        async with engine.connect() as conn:
+            attrs = (
+                await conn.execute(
+                    text("SELECT attributes FROM products WHERE id = :pid"),
+                    {"pid": product_id},
+                )
+            ).scalar_one()
+        await engine.dispose()
+
+        qph = attrs["quantity_per_hanger"]
+        # Первая длина по возрастанию = 2800 → ручной fallback туда.
+        assert qph == {"2800": {"auto": None, "manual": 25}}
+    finally:
+        admin_engine = create_async_engine(admin_url, isolation_level="AUTOCOMMIT")
+        async with admin_engine.connect() as conn:
+            await conn.execute(text(f'DROP DATABASE IF EXISTS "{db_name}" WITH (FORCE)'))
+        await admin_engine.dispose()

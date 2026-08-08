@@ -3,15 +3,15 @@ from pathlib import Path
 
 from typing import List
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status, Response
-from pydantic import BaseModel
-from sqlalchemy import exists, func, or_, select, type_coerce, delete
+from pydantic import BaseModel, Field
+from sqlalchemy import cast, exists, func, or_, select, type_coerce, delete, Integer, Float
 from sqlalchemy.types import ARRAY, String
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.core.config import settings
 from app.core.database import get_db
-from app.models.product import Product, ProductType, ProductLength, ProcessingFlag, ProductProcessingFlag
+from app.models.product import Product, ProductType, ProductLength, ProcessingFlag, ProductProcessingFlag, _length_key
 from app.models.techcard import Techcard, TechcardLine
 from app.models.production_plan import PlanPosition
 from app.models.work_task import WorkTask
@@ -22,6 +22,11 @@ from app.services.route_selection import select_route_for_payload
 from app.models.transfer import Transfer
 from app.models.defect import Defect
 from app.models.rework_task import ReworkTask
+from app.services.hanger_quantity_calc import (
+    DEFAULT_HANGER_SETTINGS,
+    HangerConfigError,
+    compute_hanger_quantity,
+)
 
 router = APIRouter(prefix="/products", tags=["products"])
 
@@ -38,6 +43,13 @@ class ProcessingFlagInfo(BaseModel):
     section_scope: str | None
 
 
+class HangerQuantityValue(BaseModel):
+    """Значение «кол-во на подвес» для одной длины (#60): авто и ручное раздельно."""
+
+    auto: int | None = None
+    manual: int | None = None
+
+
 class ProductIn(BaseModel):
     sku: str
     name: str
@@ -51,7 +63,9 @@ class ProductIn(BaseModel):
     anod_type: str | None = None
     length_mm: float | None = None
     weight_per_meter: float | None = None
-    quantity_per_hanger: int | None = None
+    perimeter_mm: float | None = Field(default=None, gt=0, description="Периметр сечения, мм (>0)")
+    mount_width_mm: float | None = Field(default=None, gt=0, description="Габарит профиля, мм (>0)")
+    quantity_per_hanger: dict[str, HangerQuantityValue] | None = None
     cross_section: str | None = None
     photo_thumb: str | None = None
     photo_full: str | None = None
@@ -78,7 +92,9 @@ class ProductPatch(BaseModel):
     anod_type: str | None = None
     length_mm: float | None = None
     weight_per_meter: float | None = None
-    quantity_per_hanger: int | None = None
+    perimeter_mm: float | None = Field(default=None, gt=0, description="Периметр сечения, мм (>0)")
+    mount_width_mm: float | None = Field(default=None, gt=0, description="Габарит профиля, мм (>0)")
+    quantity_per_hanger: dict[str, HangerQuantityValue] | None = None
     cross_section: str | None = None
     photo_thumb: str | None = None
     photo_full: str | None = None
@@ -106,7 +122,9 @@ class ProductOut(BaseModel):
     anod_type: str | None
     length_mm: float | None
     weight_per_meter: float | None
-    quantity_per_hanger: int | None
+    perimeter_mm: float | None
+    mount_width_mm: float | None
+    quantity_per_hanger: dict[str, HangerQuantityValue] | None
     cross_section: str | None
     photo_thumb: str | None
     photo_full: str | None
@@ -125,7 +143,45 @@ class ProductOut(BaseModel):
 VALID_SORT_FIELDS = {"sku", "name", "length_mm", "quantity_per_hanger", "id"}
 
 # Fields stored in JSONB attributes column (#19)
-_JSONB_SORT_FIELDS = {"length_mm", "quantity_per_hanger"}
+_JSONB_SORT_FIELDS = {"length_mm"}
+
+
+def _quantity_effective_expr(entry_value):
+    """Эффективное значение длины: COALESCE(auto, manual) — приоритет авто > ручное (#60)."""
+    auto = entry_value.op("->>")("auto")
+    manual = entry_value.op("->>")("manual")
+    return cast(func.coalesce(auto, manual), Integer)
+
+
+def _primary_length_quantity_expr():
+    """SQL-выражение: эффективное значение для основной (минимальной) длины per-length dict.
+
+    quantity_per_hanger (#60) — dict {length_mm: {"auto", "manual"}}. Для
+    сортировки/фильтра берём значение основной длины (минимальный ключ)
+    с приоритетом авто > ручное.
+    """
+    each = func.jsonb_each(Product.attributes["quantity_per_hanger"]).table_valued("key", "value")
+    return (
+        select(_quantity_effective_expr(each.c.value))
+        .select_from(each)
+        .order_by(cast(each.c.key, Float))
+        .limit(1)
+        .scalar_subquery()
+    )
+
+
+def _any_quantity_in_range(qty_from: int | None, qty_to: int | None):
+    """exists-подзапрос: хоть одна длина в per-length dict имеет эффективное значение в диапазоне."""
+    each = func.jsonb_each(Product.attributes["quantity_per_hanger"]).table_valued("key", "value")
+    value_expr = _quantity_effective_expr(each.c.value)
+    conds = []
+    if qty_from is not None:
+        conds.append(value_expr >= qty_from)
+    if qty_to is not None:
+        conds.append(value_expr <= qty_to)
+    if not conds:
+        return None
+    return exists(select(1).select_from(each).where(*conds))
 
 
 class ProductsListResponse(BaseModel):
@@ -157,6 +213,60 @@ async def _sync_processing_flags(db: AsyncSession, product_id: int, codes: list[
         db.add(ProductProcessingFlag(product_id=product_id, flag_id=fid))
 
 
+def _build_hanger_quantity_dict(
+    lengths_mm: list[float],
+    perimeter_mm: float | None,
+    mount_width_mm: float | None,
+    manual_by_length: dict[str, int | None] | None,
+    existing: dict[str, dict[str, int | None]] | None = None,
+) -> dict[str, dict[str, int | None]]:
+    """Построить per-length dict {length: {auto, manual}} для артикула (#60).
+
+    Авто-режим data-driven: оба поля ``perimeter_mm`` И ``mount_width_mm``
+    заполнены → для каждой длины считается ``auto`` через движок (#62),
+    ``manual`` сохраняется отдельно и не затирается. Если поле стёрто
+    (None) — авто-режим выключен, ``auto`` уходит в None, ручное остаётся
+    fallback'ом. Несовместимость ``mount_width + gap > rod_length`` → 422.
+    """
+    auto_mode = perimeter_mm is not None and mount_width_mm is not None
+    existing = existing or {}
+    result: dict[str, dict[str, int | None]] = {}
+    for length in sorted(lengths_mm):
+        key = _length_key(length)
+        manual = manual_by_length.get(key) if manual_by_length else None
+        if manual is None:
+            prev = existing.get(key)
+            if isinstance(prev, dict):
+                manual = prev.get("manual")
+        auto = None
+        if auto_mode:
+            try:
+                calc = compute_hanger_quantity(
+                    perimeter_mm=perimeter_mm,
+                    mount_width_mm=mount_width_mm,
+                    length_mm=length,
+                    hanger=DEFAULT_HANGER_SETTINGS,
+                )
+            except HangerConfigError as exc:
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
+            auto = calc.total if calc.is_calculable else None
+        result[key] = {"auto": auto, "manual": manual}
+    return result
+
+
+def _manual_by_length_from_payload(
+    quantity_per_hanger: dict[str, HangerQuantityValue] | None,
+) -> dict[str, int | None] | None:
+    """Извлечь manual per length из payload (auto игнорируется — считается сервером)."""
+    if quantity_per_hanger is None:
+        return None
+    return {
+        _length_key(float(k)): v.manual
+        for k, v in quantity_per_hanger.items()
+        if isinstance(v, HangerQuantityValue)
+    }
+
+
 async def _sync_boolean_flag(db: AsyncSession, product_id: int, code: str, value: bool) -> None:
     """Add or remove a single processing flag M2M link based on boolean value (#17)."""
     flag = await db.scalar(select(ProcessingFlag).where(ProcessingFlag.code == code))
@@ -181,6 +291,16 @@ def _to_product_out(product: Product, has_std: bool = False, has_paired: bool = 
         for f in product.processing_flags
     ]
     flag_codes = {f.code for f in product.processing_flags}
+    by_length = product.quantity_per_hanger_by_length
+    quantity_per_hanger = None
+    if by_length:
+        quantity_per_hanger = {
+            length: HangerQuantityValue(
+                auto=entry.get("auto"),
+                manual=entry.get("manual"),
+            )
+            for length, entry in by_length.items()
+        }
     return ProductOut(
         id=product.id,
         sku=product.sku,
@@ -195,7 +315,9 @@ def _to_product_out(product: Product, has_std: bool = False, has_paired: bool = 
         anod_type=product.anod_type,
         length_mm=product.length_mm,
         weight_per_meter=product.weight_per_meter,
-        quantity_per_hanger=product.quantity_per_hanger,
+        perimeter_mm=product.perimeter_mm,
+        mount_width_mm=product.mount_width_mm,
+        quantity_per_hanger=quantity_per_hanger,
         cross_section=product.cross_section,
         photo_thumb=product.photo_thumb,
         photo_full=product.photo_full,
@@ -259,7 +381,10 @@ def _parse_sort(sort_param: str):
             raise HTTPException(status_code=400, detail=f"Invalid sort field: {field}")
         if order not in ("asc", "desc"):
             raise HTTPException(status_code=400, detail=f"Invalid sort order: {order}")
-        if field in _JSONB_SORT_FIELDS:
+        if field == "quantity_per_hanger":
+            # Per-length dict (#60): сортируем по manual основной длины.
+            col = _primary_length_quantity_expr()
+        elif field in _JSONB_SORT_FIELDS:
             # Sort by JSONB attribute value (#19)
             col = Product.attributes[field].as_float()
         else:
@@ -353,10 +478,10 @@ async def list_products(
                 ProductLength.length_mm <= length_to,
             )
         )
-    if qty_from is not None:
-        stmt = stmt.where(Product.attributes["quantity_per_hanger"].as_integer() >= qty_from)
-    if qty_to is not None:
-        stmt = stmt.where(Product.attributes["quantity_per_hanger"].as_integer() <= qty_to)
+    if qty_from is not None or qty_to is not None:
+        qty_exists = _any_quantity_in_range(qty_from, qty_to)
+        if qty_exists is not None:
+            stmt = stmt.where(qty_exists)
 
     count_stmt = select(func.count()).select_from(stmt.subquery())
     total = (await db.execute(count_stmt)).scalar() or 0
@@ -482,7 +607,7 @@ async def create_product(
     if existing:
         raise HTTPException(status_code=409, detail="SKU already exists")
 
-    product_data = payload.model_dump(exclude={"lengths_mm", "processing_flag_codes", "skip_shot_blast", "is_laminated"})
+    product_data = payload.model_dump(exclude={"lengths_mm", "processing_flag_codes", "skip_shot_blast", "is_laminated", "quantity_per_hanger"})
     item = Product(**product_data)
     db.add(item)
     await db.flush()
@@ -497,6 +622,16 @@ async def create_product(
         flag_codes.append("is_laminated")
     if flag_codes:
         await _sync_processing_flags(db, item.id, list(set(flag_codes)))
+
+    # Авто-расчёт per-length dict (#60): auto из движка при заполненных
+    # perimeter_mm И mount_width_mm, manual из payload — раздельно.
+    manual_by_length = _manual_by_length_from_payload(payload.quantity_per_hanger)
+    item.quantity_per_hanger = _build_hanger_quantity_dict(
+        payload.lengths_mm or [],
+        payload.perimeter_mm,
+        payload.mount_width_mm,
+        manual_by_length,
+    )
 
     if payload.aliases:
         activated = await _enforce_bidirectional_aliases(db, item.id, payload.aliases, old_aliases=[])
@@ -567,7 +702,7 @@ async def patch_product(
 
     old_aliases = item.aliases if payload.aliases is not None else None
 
-    patch_data = payload.model_dump(exclude_unset=True, exclude={"lengths_mm", "processing_flag_codes", "skip_shot_blast", "is_laminated"})
+    patch_data = payload.model_dump(exclude_unset=True, exclude={"lengths_mm", "processing_flag_codes", "skip_shot_blast", "is_laminated", "quantity_per_hanger"})
     new_sku = patch_data.pop("sku", None)
     if new_sku is not None:
         normalized_sku = new_sku.strip()
@@ -600,6 +735,24 @@ async def patch_product(
         await _sync_boolean_flag(db, product_id, "skip_shot_blast", payload.skip_shot_blast)
     if payload.is_laminated is not None:
         await _sync_boolean_flag(db, product_id, "is_laminated", payload.is_laminated)
+
+    # Авто-расчёт per-length dict (#60): авто из движка при заполненных
+    # perimeter_mm И mount_width_mm; manual из payload (или сохранённый).
+    current_lengths = (
+        await db.scalars(
+            select(ProductLength.length_mm).where(ProductLength.product_id == product_id)
+        )
+    ).all()
+    lengths_mm = sorted(current_lengths)
+    manual_by_length = _manual_by_length_from_payload(payload.quantity_per_hanger)
+    existing = item.quantity_per_hanger_by_length or {}
+    item.quantity_per_hanger = _build_hanger_quantity_dict(
+        lengths_mm,
+        item.perimeter_mm,
+        item.mount_width_mm,
+        manual_by_length,
+        existing,
+    )
 
     await db.flush()
 
