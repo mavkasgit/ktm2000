@@ -13,7 +13,7 @@ export function UsersPage() {
         if (config.enabled && config.issuer) {
           try {
             const url = new URL(config.issuer)
-            setAdminUrl(`${url.origin}/if/admin/#/core/users`)
+            setAdminUrl(`${url.origin}/if/admin/#/identity/users`)
           } catch {
             setAdminUrl(null)
           }
