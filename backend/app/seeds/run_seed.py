@@ -95,12 +95,12 @@ async def run_full_seed(
 
     # 1.4. ProductionRoutes from RouteRuleProfile (ONE step per section)
     # Must run AFTER profile creation so lookup by profile.code/name works for idempotency
-    dynamic_routes_count = await seed_production_routes_from_profiles(db)
+    dynamic_routes_count = await seed_production_routes_from_profiles(db, sections_map)
     result["routes"] = dynamic_routes_count
 
     # 1.5. Static universal route (contains all sections, filtered by rules)
     if ROUTES:
-        static_routes = await seed_routes(db, ROUTES, force=force)
+        static_routes = await seed_routes(db, ROUTES, force=force, sections_map=sections_map)
         result["routes"] += len(static_routes)
 
     # 2. ImportTemplate and profile already seeded above (moved up for dependency order)
@@ -117,7 +117,7 @@ async def run_full_seed(
         target_profile = profiles_by_code.get(pcode)
         if target_profile is None:
             raise RuntimeError(f"Profile '{pcode}' not found for selection rules")
-        total_rules += await seed_selection_rules(db, profile_rules, target_profile)
+        total_rules += await seed_selection_rules(db, profile_rules, target_profile, sections_map)
     result["selection_rules"] = total_rules
 
     return result

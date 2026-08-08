@@ -48,12 +48,12 @@ def build_plant_config() -> PlantConfig:
     )
     from app.seeds.import_templates import IMPORT_TEMPLATES
     from app.seeds.route_rule_profiles import ROUTE_RULE_PROFILES
-    from app.seeds.selection_rules import SELECTION_RULES
-    from app.seeds.seeders.sections_seeder import (
+    from app.seeds.sections import (
         SECTIONS_DATA,
         SECTION_OPS,
         TRANSFORMING_SECTION_OPS,
     )
+    from app.seeds.selection_rules import SELECTION_RULES
     from app.seeds.spgs import SPGS_DATA
 
     # Конвертация в typed-модели

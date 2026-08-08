@@ -5,11 +5,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.dimension import DimensionType, ProductDimension
 from app.models.product import Product
+from app.seeds.dimension_types import DIMENSION_TYPES_DATA
+from app.seeds.upsert import upsert_by_code
 
-# Базовые типы измерений. Новый тип размера = строка здесь, без миграции схемы.
-DIMENSION_TYPES_DATA = [
-    {"code": "length_mm", "name": "Длина", "unit": "мм", "value_type": "number"},
-]
+DIMENSION_TYPES_FIELD_MAP = {
+    "code": "code",
+    "name": "name",
+    "unit": "unit",
+    "value_type": "value_type",
+}
 
 
 async def seed_dimension_types(db: AsyncSession) -> dict[str, int]:
@@ -18,18 +22,17 @@ async def seed_dimension_types(db: AsyncSession) -> dict[str, int]:
     Product.length_mm хранится в миллиметрах (см. catalog_import / фронт «мм») —
     конвертация не нужна. Идемпотентно: тип обновляется по code, существующие
     привязки не перезаписываются (ручные правки сохраняются).
+
+    Основная часть (DimensionType) — через table-driven upsert; хвост
+    (ProductDimension биндинги) — bespoke-блок вне хелпера (cross-entity).
     """
-    types_map: dict[str, DimensionType] = {}
-    for data in DIMENSION_TYPES_DATA:
-        dim_type = await db.scalar(select(DimensionType).where(DimensionType.code == data["code"]))
-        if dim_type is None:
-            dim_type = DimensionType(**data)
-            db.add(dim_type)
-            await db.flush()
-        else:
-            for key, value in data.items():
-                setattr(dim_type, key, value)
-        types_map[data["code"]] = dim_type
+    types_map = await upsert_by_code(
+        db,
+        DimensionType,
+        DIMENSION_TYPES_DATA,
+        key_field="code",
+        field_map=DIMENSION_TYPES_FIELD_MAP,
+    )
 
     length_type = types_map["length_mm"]
 

@@ -1,30 +1,38 @@
 from __future__ import annotations
 
-from sqlalchemy import select
+from typing import Any
+
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.import_template import ImportTemplate
+from app.seeds.upsert import upsert_by_code
+
+IMPORT_TEMPLATE_FIELD_MAP = {
+    "code": "code",
+    "name": "name",
+    "is_active": "is_active",
+    "sort_order": "sort_order",
+    "column_mapping": "column_mapping",
+}
+
+
+def _resolve_import_template(data: dict[str, Any]) -> dict[str, Any]:
+    """Optional-поля шаблона: button_label/description только если заданы."""
+    values: dict[str, Any] = {}
+    for key in ("button_label", "description"):
+        if data.get(key) is not None:
+            values[key] = data[key]
+    return values
 
 
 async def seed_import_template(db: AsyncSession, data: dict) -> ImportTemplate:
     """Upsert ImportTemplate by code. Returns the object with id set."""
-    obj = await db.scalar(select(ImportTemplate).where(ImportTemplate.code == data["code"]))
-    if obj is None:
-        obj = ImportTemplate(
-            code=data["code"],
-            name=data["name"],
-        )
-        db.add(obj)
-    else:
-        obj.name = data["name"]
-
-    obj.is_active = data.get("is_active", True)
-    obj.sort_order = data.get("sort_order", 0)
-    obj.column_mapping = data.get("column_mapping", {})
-    if "button_label" in data:
-        obj.button_label = data["button_label"]
-    if "description" in data:
-        obj.description = data["description"]
-
-    await db.flush()
-    return obj
+    result = await upsert_by_code(
+        db,
+        ImportTemplate,
+        [data],
+        key_field="code",
+        field_map=IMPORT_TEMPLATE_FIELD_MAP,
+        resolve=_resolve_import_template,
+    )
+    return result[data["code"]]

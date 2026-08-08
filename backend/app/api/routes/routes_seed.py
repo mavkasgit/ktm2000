@@ -59,8 +59,8 @@ async def seed_preview() -> SeedPreview:
     from app.seeds.routes import ROUTES
     from app.seeds.selection_rules import SELECTION_RULES
 
-    # Sections and operations are defined in the seeder itself
-    from app.seeds.seeders.sections_seeder import SECTIONS_DATA, SECTION_OPS
+    # Sections and operations are defined in the authoring module (ADR-0010)
+    from app.seeds.sections import SECTIONS_DATA, SECTION_OPS
 
     # Count total operations (skip None placeholders)
     total_ops = sum(

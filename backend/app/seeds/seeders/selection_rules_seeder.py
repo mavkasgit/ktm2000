@@ -13,11 +13,16 @@ async def seed_selection_rules(
     db: AsyncSession,
     rules_data: list[SelectionRuleDef],
     profile: RouteRuleProfile,
+    sections_map: dict[str, Section] | None = None,
 ) -> int:
-    """Upsert selection rules by code. Resolves section_code → section_id. Returns count."""
-    # Load sections for code → id mapping
-    sections_result = await db.execute(select(Section).where(Section.is_active.is_(True)))
-    sections_by_code = {s.code: s for s in sections_result.scalars().all()}
+    """Upsert selection rules by code. Resolves section_code → section_id. Returns count.
+
+    sections_map (code → Section) — из run_seed (single source); если не передан,
+    грузится из БД (backward-compat для прямых вызовов).
+    """
+    if sections_map is None:
+        sections_result = await db.execute(select(Section).where(Section.is_active.is_(True)))
+        sections_map = {s.code: s for s in sections_result.scalars().all()}
 
     count = 0
     for rule_def in rules_data:
@@ -36,12 +41,12 @@ async def seed_selection_rules(
         actions = []
         for action_def in rule_def.actions:
             section_code = getattr(action_def, "section_code", None)
-            if section_code and section_code not in sections_by_code:
+            if section_code and section_code not in sections_map:
                 raise RuntimeError(f"Section '{section_code}' not found for rule '{rule_def.code}'")
 
             action_dict = action_def.model_dump()
             action_dict["section_id"] = (
-                sections_by_code[section_code].id if section_code else None
+                sections_map[section_code].id if section_code else None
             )
             actions.append(action_dict)
 
