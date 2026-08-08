@@ -5,15 +5,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.dimension import DimensionType, ProductDimension
 from app.models.product import Product
-from app.seeds.dimension_types import DIMENSION_TYPES_DATA
+from app.seeds.dimension_types import DIMENSION_TYPES_DATA, DIMENSION_TYPES_FIELD_MAP
 from app.seeds.upsert import upsert_by_key
-
-DIMENSION_TYPES_FIELD_MAP = {
-    "code": "code",
-    "name": "name",
-    "unit": "unit",
-    "value_type": "value_type",
-}
 
 
 async def seed_dimension_types(db: AsyncSession) -> dict[str, int]:

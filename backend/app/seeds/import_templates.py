@@ -128,3 +128,9 @@ IMPORT_TEMPLATES = [
         },
     },
 ]
+
+# field_map для table-driven upsert (ADR-0010): ORM-атрибут → ключ в строке.
+IMPORT_TEMPLATE_FIELD_MAP = {
+    "code": "code",
+    "name": "name",
+}

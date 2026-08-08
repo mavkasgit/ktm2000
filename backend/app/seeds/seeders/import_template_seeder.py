@@ -5,12 +5,8 @@ from typing import Any
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.import_template import ImportTemplate
+from app.seeds.import_templates import IMPORT_TEMPLATE_FIELD_MAP
 from app.seeds.upsert import upsert_by_key
-
-IMPORT_TEMPLATE_FIELD_MAP = {
-    "code": "code",
-    "name": "name",
-}
 
 
 def _resolve_import_template(data: dict[str, Any]) -> dict[str, Any]:

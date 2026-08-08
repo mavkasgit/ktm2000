@@ -8,14 +8,8 @@ from __future__ import annotations
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.product import ProcessingFlag
-from app.seeds.processing_flags import PROCESSING_FLAGS_DATA
+from app.seeds.processing_flags import PROCESSING_FLAGS_DATA, PROCESSING_FLAGS_FIELD_MAP
 from app.seeds.upsert import upsert_by_key
-
-PROCESSING_FLAGS_FIELD_MAP = {
-    "code": "code",
-    "name": "name",
-    "section_scope": "section_scope",
-}
 
 
 async def seed_processing_flags(db: AsyncSession) -> dict[str, ProcessingFlag]:

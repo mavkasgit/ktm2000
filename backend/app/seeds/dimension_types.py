@@ -5,3 +5,11 @@ from __future__ import annotations
 DIMENSION_TYPES_DATA = [
     {"code": "length_mm", "name": "Длина", "unit": "мм", "value_type": "number"},
 ]
+
+# field_map для table-driven upsert (ADR-0010): ORM-атрибут → ключ в строке.
+DIMENSION_TYPES_FIELD_MAP = {
+    "code": "code",
+    "name": "name",
+    "unit": "unit",
+    "value_type": "value_type",
+}

@@ -34,3 +34,13 @@ ROUTE_RULE_PROFILES = [
         },
     },
 ]
+
+# field_map для table-driven upsert (ADR-0010): ORM-атрибут → ключ в строке.
+ROUTE_RULE_PROFILE_FIELD_MAP = {
+    "code": "code",
+    "name": "name",
+    "is_active": "is_active",
+    "priority": "priority",
+    "excel_passport_meta": "excel_passport_meta",
+    "route_sections": "route_sections",
+}

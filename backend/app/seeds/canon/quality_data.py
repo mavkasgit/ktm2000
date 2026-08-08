@@ -77,3 +77,14 @@ DEFECT_TYPES = [
         description="Прочие дефекты поверхности",
     ),
 ]
+
+# field_map для table-driven upsert (ADR-0010): ORM-атрибут → ключ в строке.
+DEFECT_TYPES_FIELD_MAP = {
+    "code": "code",
+    "name": "name",
+    "category": "category",
+    "severity": "severity",
+    "requires_quality_decision": "requires_quality_decision",
+    "is_active": "is_active",
+    "description": "description",
+}

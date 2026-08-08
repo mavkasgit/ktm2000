@@ -80,3 +80,29 @@ SECTION_OPS: dict[str, list[tuple[str | None, str | None, int, str | None, str, 
 TRANSFORMING_SECTION_OPS: set[tuple[str, str]] = {
     ("SAWING", "SAW"),
 }
+
+# field_map для table-driven upsert (ADR-0010): живут рядом с данными,
+# которые описывают. ORM-атрибут → ключ в строке данных.
+SECTIONS_FIELD_MAP = {
+    "code": "code",
+    "name": "name",
+    "sort_order": "sort_order",
+    "type": "type",
+    "icon": "icon",
+    "icon_color": "icon_color",
+    "is_active": "is_active",
+}
+
+SECTION_OPERATIONS_FIELD_MAP = {
+    "operation_code": "operation_code",
+    "operation_name": "operation_name",
+    "is_significant": "is_significant",
+    "icon": "icon",
+    "icon_color": "icon_color",
+    "group_code": "group_code",
+    "group_name": "group_name",
+    "sort_order": "sort_order",
+    "resolver_type": "resolver_type",
+    "resolver_config": "resolver_config",
+    "operation_type": "operation_type",
+}

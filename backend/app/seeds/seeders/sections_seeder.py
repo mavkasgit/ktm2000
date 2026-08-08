@@ -6,36 +6,13 @@ from app.models.route import SectionOperation
 from app.models.section import Section
 from app.seeds.canon.models import OperationDef, ProductionCanon, SectionDef
 from app.seeds.canon.registry import build_plant_config
+from app.seeds.sections import SECTION_OPERATIONS_FIELD_MAP, SECTIONS_FIELD_MAP
 from app.seeds.upsert import upsert_by_key
 
 # Типизированный канон (ADR-0004/0008 carve-out): единственный конвертер
 # сырых данных → моделей живёт в registry; седер использует его результат
 # для дефолтного значения (backward-compat для прямых вызовов седера).
 _DEFAULT_PRODUCTION = build_plant_config().production
-
-SECTIONS_FIELD_MAP = {
-    "code": "code",
-    "name": "name",
-    "sort_order": "sort_order",
-    "type": "type",
-    "icon": "icon",
-    "icon_color": "icon_color",
-    "is_active": "is_active",
-}
-
-SECTION_OPERATIONS_FIELD_MAP = {
-    "operation_code": "operation_code",
-    "operation_name": "operation_name",
-    "is_significant": "is_significant",
-    "icon": "icon",
-    "icon_color": "icon_color",
-    "group_code": "group_code",
-    "group_name": "group_name",
-    "sort_order": "sort_order",
-    "resolver_type": "resolver_type",
-    "resolver_config": "resolver_config",
-    "operation_type": "operation_type",
-}
 
 
 async def seed_sections(
