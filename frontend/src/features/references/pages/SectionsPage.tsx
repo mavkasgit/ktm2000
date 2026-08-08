@@ -16,11 +16,9 @@ import { Popover, PopoverTrigger, PopoverContent } from "@/shared/ui/popover";
 import { AlertDialog, AlertDialogContent, AlertDialogHeader, AlertDialogTitle, AlertDialogDescription, AlertDialogFooter, AlertDialogCancel, AlertDialogAction } from "@/shared/ui/alert-dialog";
 import { toast } from "@/shared/ui/use-toast";
 import { Input } from "@/shared/ui/input";
-import { TablePaginationFooter } from "@/shared/ui/TablePaginationFooter";
-import { usePaginatedTableQuery } from "@/shared/hooks/usePaginatedTableQuery";
 import type { EntityDialogField } from "@/shared/ui/EntityDialog";
 import type { OperationGroup, SectionOperationInfo } from "shared/api/sections";
-import { listSectionsPaginated } from "shared/api/sections";
+import { fetchAllSections } from "shared/api/sections";
 import { queryKeys } from "@/shared/api/queryKeys";
 import { sectionTypeLabels } from "@/shared/lib/generated-labels";
 
@@ -90,14 +88,12 @@ const SPG_FIELDS: Record<string, EntityDialogField> = {
 };
 
 async function apiListSections(params: {
-  limit: number;
-  offset: number;
   search?: string;
   sort_by?: string;
   sort_order?: "asc" | "desc";
-}): Promise<{ items: Section[]; total: number }> {
-  const data = await listSectionsPaginated(params);
-  return { items: data.items as Section[], total: data.total };
+}): Promise<Section[]> {
+  const data = await fetchAllSections(params);
+  return data as Section[];
 }
 
 async function apiCreateSection(payload: Partial<Section>): Promise<void> {
@@ -150,23 +146,10 @@ export function SectionsPage() {
   const isReadOnly = !canEditReferences;
   const queryClient = useQueryClient();
   const [items, setItems] = useState<Section[]>([]);
-  const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string>("");
   const [search, setSearch] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
-  const {
-    page,
-    setPage,
-    limit,
-    setLimit,
-    offset,
-    getTotalPages,
-    getRangeLabel,
-  } = usePaginatedTableQuery({
-    resetPageDeps: [debouncedSearch],
-  });
-  const totalPages = getTotalPages(total);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [dialogMode, setDialogMode] = useState<"add" | "edit">("add");
   const [editingItem, setEditingItem] = useState<Section | null>(null);
@@ -487,15 +470,12 @@ export function SectionsPage() {
     setLoading(true);
     setError("");
     try {
-      const { items: sections, total: sectionsTotal } = await apiListSections({
-        limit,
-        offset,
+      const sections = await apiListSections({
         search: debouncedSearch || undefined,
         sort_by: "sort_order",
         sort_order: "asc",
       });
       setItems(sections);
-      setTotal(sectionsTotal);
       setOpsCountById((prev) => {
         const next = { ...prev };
         sections.forEach((s) => {
@@ -510,7 +490,7 @@ export function SectionsPage() {
     } finally {
       setLoading(false);
     }
-  }, [limit, offset, debouncedSearch]);
+  }, [debouncedSearch]);
 
   const commitReorder = useCallback(async () => {
     try {
@@ -1168,16 +1148,6 @@ export function SectionsPage() {
             className="pl-9"
           />
         </div>
-        <TablePaginationFooter
-          page={page}
-          totalPages={totalPages}
-          total={total}
-          shownCount={items.length}
-          limit={limit}
-          onPageChange={setPage}
-          onLimitChange={setLimit}
-          rangeLabel={getRangeLabel(items.length, total, { onPage: true })}
-        />
       </div>
 
       {error ? <div role="alert">{error}</div> : null}

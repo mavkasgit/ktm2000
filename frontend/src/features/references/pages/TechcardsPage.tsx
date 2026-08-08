@@ -6,9 +6,8 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "
 import { AlertDialog, AlertDialogContent, AlertDialogHeader, AlertDialogTitle, AlertDialogDescription, AlertDialogFooter, AlertDialogCancel, AlertDialogAction } from "@/shared/ui/alert-dialog";
 import { ProductSearchMulti } from "../components/ProductSearchMulti";
 import { SortableFilterHeader } from "@/shared/ui/SortableFilterHeader";
-import { TableCornerResetCell, TableCornerResetHeader, TablePaginationFooter, DATA_TABLE_STYLES } from "@/shared/ui";
+import { TableCornerResetCell, TableCornerResetHeader, DATA_TABLE_STYLES } from "@/shared/ui";
 import { useSortableColumnFilters } from "@/shared/hooks/useSortableColumnFilters";
-import { usePaginatedTableQuery } from "@/shared/hooks/usePaginatedTableQuery";
 import { pickColumnApiValue } from "@/shared/lib/columnFilterSearch";
 import { toast } from "@/shared/ui/use-toast";
 import { getErrorMessage } from "@/shared/api/client";
@@ -69,9 +68,7 @@ export function TechcardsPage() {
   const api = API as Record<string, any>;
   const [rawItems, setRawItems] = useState<any[]>([]);
   const [pairedTechcards, setPairedTechcards] = useState<Techcard[]>([]);
-  const [pairedTotal, setPairedTotal] = useState(0);
   const [standardTechcards, setStandardTechcards] = useState<Techcard[]>([]);
-  const [standardTotal, setStandardTotal] = useState(0);
   const [techcardByProductId, setTechcardByProductId] = useState<Map<number, Techcard>>(new Map());
   const [loading, setLoading] = useState(false);
   const [status, setStatus] = useState("");
@@ -93,12 +90,6 @@ export function TechcardsPage() {
     hasActiveColumnFilters: hasStandardColumnFilters,
     resetColumnFilters: resetStandardColumnFilters,
   } = useSortableColumnFilters<TechcardFilterField>();
-  const pairedPagination = usePaginatedTableQuery({
-    resetPageDeps: [debouncedPageSearch, pairedColumnFilters, pairedColumnSearchQueries, pairedSorts],
-  });
-  const standardPagination = usePaginatedTableQuery({
-    resetPageDeps: [debouncedPageSearch, standardColumnFilters, standardColumnSearchQueries, standardSorts],
-  });
   // Bulk dialog
   const [bulkDialogOpen, setBulkDialogOpen] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
@@ -168,22 +159,18 @@ export function TechcardsPage() {
     () => ({
       processing_type: "paired_processing" as const,
       search: debouncedPageSearch || undefined,
-      limit: pairedPagination.limit,
-      offset: pairedPagination.offset,
       ...pairedApiParams,
     }),
-    [debouncedPageSearch, pairedPagination.limit, pairedPagination.offset, pairedApiParams],
+    [debouncedPageSearch, pairedApiParams],
   );
 
   const standardQueryParams = useMemo(
     () => ({
       processing_type: "standart_processing" as const,
       search: debouncedPageSearch || undefined,
-      limit: standardPagination.limit,
-      offset: standardPagination.offset,
       ...standardApiParams,
     }),
-    [debouncedPageSearch, standardPagination.limit, standardPagination.offset, standardApiParams],
+    [debouncedPageSearch, standardApiParams],
   );
 
   const rows = useMemo(() => {
@@ -232,9 +219,8 @@ export function TechcardsPage() {
   const loadPairedTechcards = useCallback(async () => {
     setLoading(true);
     try {
-      const data = await api.listTechcardsPaginated(pairedQueryParams);
-      setPairedTechcards(data.items);
-      setPairedTotal(data.total);
+      const items = await api.fetchAllTechcards(pairedQueryParams);
+      setPairedTechcards(items);
       setStatus("");
     } catch (e) {
       setStatus(e instanceof Error ? e.message : "Ошибка загрузки парных техкарт");
@@ -246,9 +232,8 @@ export function TechcardsPage() {
   const loadStandardTechcards = useCallback(async () => {
     setLoading(true);
     try {
-      const data = await api.listTechcardsPaginated(standardQueryParams);
-      setStandardTechcards(data.items);
-      setStandardTotal(data.total);
+      const items = await api.fetchAllTechcards(standardQueryParams);
+      setStandardTechcards(items);
       setStatus("");
     } catch (e) {
       setStatus(e instanceof Error ? e.message : "Ошибка загрузки стандартных техкарт");
@@ -576,16 +561,6 @@ export function TechcardsPage() {
               )}
             </tbody>
           </table>
-          <TablePaginationFooter
-            page={pairedPagination.page}
-            totalPages={pairedPagination.getTotalPages(pairedTotal)}
-            total={pairedTotal}
-            shownCount={pairedTechcards.length}
-            limit={pairedPagination.limit}
-            onPageChange={pairedPagination.setPage}
-            onLimitChange={pairedPagination.setLimit}
-            rangeLabel={pairedPagination.getRangeLabel(pairedTechcards.length, pairedTotal, { onPage: true })}
-          />
         </div>
       </div>
 
@@ -654,16 +629,6 @@ export function TechcardsPage() {
               )}
             </tbody>
           </table>
-          <TablePaginationFooter
-            page={standardPagination.page}
-            totalPages={standardPagination.getTotalPages(standardTotal)}
-            total={standardTotal}
-            shownCount={standardTechcards.length}
-            limit={standardPagination.limit}
-            onPageChange={standardPagination.setPage}
-            onLimitChange={standardPagination.setLimit}
-            rangeLabel={standardPagination.getRangeLabel(standardTechcards.length, standardTotal, { onPage: true })}
-          />
         </div>
       </div>
 

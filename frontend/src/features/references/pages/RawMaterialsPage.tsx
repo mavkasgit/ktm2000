@@ -1,7 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Search, Image, X, Grid, List, Plus, Filter, FileUp, Check, CheckCheck } from "lucide-react";
-import { usePaginatedTableQuery } from "@/shared/hooks/usePaginatedTableQuery";
 import * as API from "@/shared/api/products";
 import type { ProductFilters } from "@/shared/api/products";
 import { listRouteSelectionRules } from "@/shared/api/routes";
@@ -21,7 +20,7 @@ import { getPhotoUrl } from "../components/getPhotoUrl";
 import type { Product, CreateProductInput, PatchProductInput, CatalogPreview } from "@/shared/api/products";
 import { usePermission } from "@/features/auth/hooks/usePermission";
 import { SortableFilterHeader } from "@/shared/ui/SortableFilterHeader";
-import { TableCornerResetCell, TableCornerResetHeader, TablePaginationFooter, DATA_TABLE_STYLES } from "@/shared/ui";
+import { TableCornerResetCell, TableCornerResetHeader, DATA_TABLE_STYLES } from "@/shared/ui";
 import { useSortableColumnFilters } from "@/shared/hooks/useSortableColumnFilters";
 import { skipShotBlastSectionLabel } from "../lib/skipShotBlastLabel";
 
@@ -149,7 +148,6 @@ export function RawMaterialsPage() {
   const { canEditReferences } = usePermission();
   const isReadOnly = !canEditReferences;
   const [items, setItems] = useState<Product[]>([]);
-  const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [viewMode, setViewMode] = useState<ViewMode>("table");
@@ -169,28 +167,6 @@ export function RawMaterialsPage() {
     resetColumnFilters,
   } = useSortableColumnFilters<ColumnFilterField>();
   const [groupByAliases, setGroupByAliases] = useState(false);
-  const {
-    page,
-    setPage,
-    limit,
-    setLimit,
-    offset,
-    getTotalPages,
-    getRangeLabel,
-    resetPage,
-  } = usePaginatedTableQuery({
-    resetPageDeps: [
-      debouncedSearch,
-      lengthFrom,
-      lengthTo,
-      qtyFrom,
-      qtyTo,
-      columnFilters,
-      columnSearchQueries,
-      sortConfigs,
-    ],
-  });
-  const totalPages = getTotalPages(total);
 
   const [dialogOpen, setDialogOpen] = useState(false);
   const [dialogMode, setDialogMode] = useState<DialogMode>("create");
@@ -264,20 +240,17 @@ export function RawMaterialsPage() {
     () => ({
       q: debouncedSearch || undefined,
       type: "component" as const,
-      limit,
-      offset,
       ...filterApiParams,
     }),
-    [debouncedSearch, limit, offset, filterApiParams],
+    [debouncedSearch, filterApiParams],
   );
 
   const load = useCallback(async () => {
     setLoading(true);
     setError("");
     try {
-      const data = await API.listProductsPaginated(productsQueryParams);
-      setItems(data.items);
-      setTotal(data.total);
+      const data = await API.fetchAllProducts(productsQueryParams);
+      setItems(data);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Ошибка загрузки");
     } finally {
@@ -453,7 +426,6 @@ export function RawMaterialsPage() {
     setQtyTo("");
     setSortConfigs([]);
     resetColumnFilters();
-    resetPage();
   };
 
   return (
@@ -530,29 +502,13 @@ export function RawMaterialsPage() {
 
       {loading ? (
         <div className="text-muted-foreground py-8 text-center">Загрузка...</div>
-      ) : total === 0 ? (
+      ) : items.length === 0 ? (
         <div className="text-muted-foreground py-8 text-center">Ничего не найдено</div>
       ) : viewMode === "grid" ? (
-        <div className="space-y-0">
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-            {displayedItems.map((product) => (
-              <CatalogCard key={product.id} product={product} onClick={() => openEdit(product)} />
-            ))}
-          </div>
-          <TablePaginationFooter
-            page={page}
-            totalPages={totalPages}
-            total={total}
-            shownCount={displayedItems.length}
-            limit={limit}
-            onPageChange={setPage}
-            onLimitChange={setLimit}
-            rangeLabel={
-              displayedItems.length === items.length
-                ? getRangeLabel(displayedItems.length, total)
-                : getRangeLabel(displayedItems.length, total, { onPage: true })
-            }
-          />
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+          {displayedItems.map((product) => (
+            <CatalogCard key={product.id} product={product} onClick={() => openEdit(product)} />
+          ))}
         </div>
       ) : (
         <div className={DATA_TABLE_STYLES.container}>
@@ -702,20 +658,6 @@ export function RawMaterialsPage() {
               ))}
             </tbody>
           </table>
-          <TablePaginationFooter
-            page={page}
-            totalPages={totalPages}
-            total={total}
-            shownCount={displayedItems.length}
-            limit={limit}
-            onPageChange={setPage}
-            onLimitChange={setLimit}
-            rangeLabel={
-              displayedItems.length === items.length
-                ? getRangeLabel(displayedItems.length, total)
-                : getRangeLabel(displayedItems.length, total, { onPage: true })
-            }
-          />
         </div>
       )}
 
