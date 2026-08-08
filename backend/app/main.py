@@ -32,11 +32,14 @@ from app.transfers.api import router as transfers_router
 from app.stock.api import router as stock_router
 from contextlib import asynccontextmanager
 import asyncio
+from typing import Any, cast
 from app.api.routes.audit_logs import router as audit_logs_router
 from app.api.routes.users import router as users_router
 from app.api.routes.employees import router as employees_router
 from app.core.config import settings
 from app.core.database import async_session
+from app.core.exceptions import KTMException
+from app.api.exception_handlers import ktm_exception_handler
 
 backup_scheduler_task = None
 
@@ -72,6 +75,10 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# FastAPI регистрирует handler по классу исключения (KTMException),
+# но сигнатура типа ожидает Exception — расширяем тип без изменения поведения.
+app.add_exception_handler(KTMException, cast(Any, ktm_exception_handler))
 
 # Serve static files (product photos, imports)
 storage_dir = Path(settings.PRODUCT_PHOTO_DIR).parent

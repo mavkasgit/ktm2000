@@ -423,7 +423,7 @@ async def test_break_glass_logout_records_corr_id(client, caplog, monkeypatch) -
     token = login.json()["access_token"]
     corr_id = decode_access_token(token)["corr_id"]
 
-    with caplog.at_level(logging.WARNING, logger="app.api.routes.auth"):
+    with caplog.at_level(logging.WARNING, logger="app.services.break_glass_service"):
         logout = await client.post(
             "/api/auth/logout",
             headers={"Authorization": f"Bearer {token}"},

@@ -10,16 +10,25 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from uuid import UUID
 
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
+from app.core.exceptions import KTMException
+from app.core.security import TokenError, decode_access_token
 from app.models.user import User
 from app.models.user_login_event import UserLoginEvent
 from app.models.user_session import UserSession
 from app.repositories.login_event_repository import LoginEventRepository
 from app.repositories.logout_jti_repository import LogoutJtiRepository
 from app.repositories.session_repository import SessionRepository
+from app.schemas.session import (
+    LoginEventListOut,
+    LoginEventOut,
+    MAX_LOGIN_EVENTS_SHOWN,
+)
 from app.services import session_core
+from app.services.break_glass_service import record_break_glass_event
 from app.services.session_core import JwtConfig, SessionCoreConfig, SessionCoreError
 
 # --- string constants (validation / storage; not DB enums) ---
@@ -301,3 +310,108 @@ def device_label_from_ua(ua: str | None) -> str | None:
     if "linux" in ua_lower:
         return "Linux"
     return None
+
+
+async def logout(
+    db: AsyncSession,
+    *,
+    token: str | None,
+    ip: str | None = None,
+    user_agent: str | None = None,
+) -> None:
+    """Отозвать текущую сессию по JWT sid (Bearer токен передаёт роутер).
+
+    Idempotent 204: already-revoked / missing sid / break-glass — no-op.
+    Missing or invalid token → 401 (KTMException + WWW-Authenticate).
+    Magic ``admin`` под DEV_BYPASS_AUTH → 204 no-op.
+    """
+    if not token:
+        raise KTMException(
+            "Missing authentication token",
+            error_code="missing_token",
+            status_code=401,
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    # Magic Bearer "admin" — dev/test only; nothing to revoke
+    if token == "admin":
+        return
+
+    try:
+        payload = decode_access_token(token)
+    except TokenError:
+        raise KTMException(
+            "Invalid or expired token",
+            error_code="invalid_token",
+            status_code=401,
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    # Break Glass: no session/user tables to update
+    if payload.get("is_break_glass") is True:
+        record_break_glass_event(
+            "logout",
+            username_attempted=payload.get("sub", "emergency_admin"),
+            ip_address=ip or "unknown",
+            user_agent=user_agent or "unknown",
+            corr_id=payload.get("corr_id"),
+            details={"source": "emergency_access", "method": "break_glass"},
+        )
+        return
+
+    subject = payload.get("username") or payload.get("sub")
+    if not subject:
+        raise KTMException(
+            "Invalid token payload",
+            error_code="invalid_token_payload",
+            status_code=401,
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    sid_raw = payload.get("sid")
+    session_id: UUID | None = None
+    if sid_raw:
+        try:
+            session_id = UUID(str(sid_raw))
+        except (ValueError, TypeError):
+            session_id = None
+
+    if session_id is None:
+        return
+
+    user = await db.scalar(
+        select(User).where(or_(User.username == subject, User.email == subject))
+    )
+    if user is None:
+        return
+
+    session = await db.get(UserSession, session_id)
+    if session is not None and session.user_id == user.id and session.revoked_at is None:
+        await revoke_session_simple(db, session_id)
+
+
+async def list_my_login_events(
+    db: AsyncSession,
+    *,
+    user_id: int,
+) -> LoginEventListOut:
+    """История входов пользователя: последние MAX_LOGIN_EVENTS_SHOWN + total.
+
+    Контракт канона user-settings 2.1.0: ``{events: [...последние 10 по
+    created_at DESC], total: N}`` — паритет с GET /auth/sessions.
+    """
+    events = await list_login_events(db, user_id=user_id)
+    out = [
+        LoginEventOut(
+            id=e.id,
+            event_type=e.event_type,
+            success=e.success,
+            ip_address=e.ip_address,
+            device_label=device_label_from_ua(e.user_agent),
+            login_method=(e.details or {}).get("method") if e.details else None,
+            created_at=e.created_at,
+            failure_reason=(e.details or {}).get("reason") if e.details else None,
+        )
+        for e in events
+    ]
+    return LoginEventListOut(events=out[:MAX_LOGIN_EVENTS_SHOWN], total=len(out))
