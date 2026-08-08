@@ -28,15 +28,21 @@ export function isHangerAutoMode(fields: {
   );
 }
 
+/**
+ * Нормализовать массив длин: фильтр мусора, дедуп, сортировка по возрастанию.
+ * Базовая функция для всех вариантов (мерж lengths_mm + legacy, raw array).
+ */
+export function normalizeLengths(values: Array<number | null | undefined>): number[] {
+  return [...new Set(values.filter((v): v is number => typeof v === "number" && Number.isFinite(v) && v > 0))]
+    .sort((a, b) => a - b);
+}
+
 /** Длины артикула по возрастанию (lengths_mm + legacy length_mm); первая — основная. */
 export function productLengths(product: {
   lengths_mm?: number[] | null;
   length_mm?: number | null;
 }): number[] {
-  const merged = [...(product.lengths_mm ?? []), product.length_mm ?? undefined].filter(
-    (v): v is number => typeof v === "number" && Number.isFinite(v) && v > 0,
-  );
-  return [...new Set(merged)].sort((a, b) => a - b);
+  return normalizeLengths([...(product.lengths_mm ?? []), product.length_mm ?? undefined]);
 }
 
 export function entryForLength(

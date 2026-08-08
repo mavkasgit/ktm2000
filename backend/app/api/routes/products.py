@@ -48,7 +48,7 @@ class HangerQuantityValue(BaseModel):
     """Значение «кол-во на подвес» для одной длины (#60): авто и ручное раздельно."""
 
     auto: int | None = None
-    manual: int | None = None
+    manual: int | None = Field(default=None, gt=0, description="Ручное значение «кол-во на подвес» (>0)")
 
 
 class ProductIn(BaseModel):

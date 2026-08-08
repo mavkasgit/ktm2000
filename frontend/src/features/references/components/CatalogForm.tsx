@@ -13,7 +13,7 @@ import { uploadProductPhoto, getErrorMessage } from "@/shared/api/products";
 import { listDimensionTypes } from "../api";
 import { queryKeys } from "@/shared/api/queryKeys";
 import { calcHanger, type HangerCalcResult } from "@/shared/api/hangerCalc";
-import { isHangerAutoMode, lengthKey, manualByLength } from "@/shared/lib/hangerQuantity";
+import { isHangerAutoMode, lengthKey, manualByLength, normalizeLengths, productLengths } from "@/shared/lib/hangerQuantity";
 import { cn } from "@/shared/utils/cn";
 import type { Product, CreateProductInput, PatchProductInput, QuantityPerHangerDict, DimensionState } from "@/shared/api/products";
 
@@ -21,14 +21,9 @@ export type DialogMode = "create" | "edit";
 
 export type FieldChange = { field: string; label: string; from: string | number | boolean | null; to: string | number | boolean | null };
 
-function normalizeLengths(lengths: Array<number | null | undefined>): number[] {
-  return [...new Set(lengths.filter((v): v is number => typeof v === "number" && Number.isFinite(v) && v > 0))]
-    .sort((a, b) => a - b);
-}
-
-function getProductLengths(product: Product | null): number[] {
-  if (!product) return [];
-  return normalizeLengths([...(product.lengths_mm ?? []), product.length_mm ?? undefined]);
+/** Сравнение значений для diff/patch (JSON-нормализация). */
+function eq(a: unknown, b: unknown): boolean {
+  return JSON.stringify(a) === JSON.stringify(b);
 }
 
 /** Словарь формы: только manual-значения (auto считается сервером, #60). */
@@ -42,17 +37,17 @@ function manualDictFromProduct(product: Product | null): QuantityPerHangerDict |
 }
 
 /**
- * Мерж manual-значений формы с продуктовыми: backend интерпретирует
- * null в payload как «не трогать» (очистить manual нельзя, #60),
- * поэтому пустой инпут формы = сохранённое значение продукта.
+ * Мерж manual-значений формы с продуктовыми: форма явно задаёт ключ —
+ * берём её manual (в т.ч. null = очистить). Ключи, которых нет в форме,
+ * берутся из продукта (#65: очистка manual в ручном режиме работает).
  */
 function mergedManuals(
   formDict: QuantityPerHangerDict | null,
   productDict: QuantityPerHangerDict | null,
-): Record<string, number> {
-  const merged: Record<string, number> = { ...manualByLength(productDict) };
+): Record<string, number | null> {
+  const merged: Record<string, number | null> = { ...manualByLength(productDict) };
   for (const [key, entry] of Object.entries(formDict ?? {})) {
-    if (entry?.manual != null) merged[key] = entry.manual;
+    merged[key] = entry?.manual ?? null;
   }
   return merged;
 }
@@ -68,7 +63,7 @@ function manualChangeTexts(
     .sort((a, b) => Number(a) - Number(b));
   const changed = keys.filter((k) => (productManuals[k] ?? null) !== (merged[k] ?? null));
   if (changed.length === 0) return null;
-  const fmt = (m: Record<string, number>) =>
+  const fmt = (m: Record<string, number | null>) =>
     changed.map((k) => `${k} мм: ${m[k] ?? "—"}`).join("; ");
   return { from: fmt(productManuals), to: fmt(merged) };
 }
@@ -76,7 +71,7 @@ function manualChangeTexts(
 /** Payload-словарь {length: {auto: null, manual}} для всех длин формы. */
 function buildManualPayloadDict(
   lengths: number[],
-  merged: Record<string, number>,
+  merged: Record<string, number | null>,
 ): QuantityPerHangerDict {
   const dict: QuantityPerHangerDict = {};
   for (const length of lengths) {
@@ -87,7 +82,7 @@ function buildManualPayloadDict(
 }
 
 function buildInitialForm(product: Product | null, mode: DialogMode): CreateProductInput {
-  const lengths = getProductLengths(product);
+  const lengths = productLengths(product ?? {});
   return {
     sku: product?.sku ?? "",
     code: product?.code ?? null,
@@ -118,9 +113,8 @@ function buildInitialForm(product: Product | null, mode: DialogMode): CreateProd
 function getChanges(form: CreateProductInput, product: Product | null, isCreate: boolean): FieldChange[] {
   if (isCreate || !product) return [];
   const changes: FieldChange[] = [];
-  const eq = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
   const formLengths = normalizeLengths(form.lengths_mm ?? []);
-  const productLengths = getProductLengths(product);
+  const productLens = productLengths(product);
 
   if (!eq(form.sku, product.sku)) changes.push({ field: "sku", label: "Артикул", from: product.sku, to: form.sku ?? "" });
   if (!eq(form.code, product.code)) changes.push({ field: "code", label: "Уникальный код", from: product.code ?? "—", to: form.code ?? "—" });
@@ -142,7 +136,7 @@ function getChanges(form: CreateProductInput, product: Product | null, isCreate:
   if (!eq(form.is_paired_profile, product.is_paired_profile)) changes.push({ field: "is_paired_profile", label: "Парный профиль", from: product.is_paired_profile ? "Да" : "Нет", to: form.is_paired_profile ? "Да" : "Нет" });
   if (!eq(form.skip_shot_blast, product.skip_shot_blast)) changes.push({ field: "skip_shot_blast", label: "Не дробеструится", from: product.skip_shot_blast ? "Да" : "Нет", to: form.skip_shot_blast ? "Да" : "Нет" });
   if (!eq(form.aliases ?? [], product.aliases ?? [])) changes.push({ field: "aliases", label: "Эквиваленты", from: (product.aliases ?? []).join(", ") || "—", to: (form.aliases ?? []).join(", ") || "—" });
-  if (!eq(formLengths, productLengths)) changes.push({ field: "lengths_mm", label: "Длины", from: productLengths.join(", ") || "—", to: formLengths.join(", ") || "—" });
+  if (!eq(formLengths, productLens)) changes.push({ field: "lengths_mm", label: "Длины", from: productLens.join(", ") || "—", to: formLengths.join(", ") || "—" });
   if (!eq(form.is_laminated ?? false, product.is_laminated)) changes.push({ field: "is_laminated", label: "Ламинируется", from: product.is_laminated ? "Да" : "Нет", to: form.is_laminated ? "Да" : "Нет" });
   if (!eq(form.dimension_state ?? "length", product.dimension_state ?? "length")) changes.push({ field: "dimension_state", label: "Размерность", from: product.dimension_state ?? "length", to: form.dimension_state ?? "length" });
   return changes;
@@ -306,11 +300,10 @@ export const CatalogForm = forwardRef<CatalogFormRef, {
   const buildPatch = useCallback((): PatchProductInput => {
     if (!product) return {};
     const patch: PatchProductInput = {};
-    const eq = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
     const formLengths = normalizeLengths(form.lengths_mm ?? []);
-    const productLengths = getProductLengths(product);
+    const productLens = productLengths(product);
     const formPrimaryLength = formLengths[0] ?? null;
-    const productPrimaryLength = productLengths[0] ?? (product.length_mm ?? null);
+    const productPrimaryLength = productLens[0] ?? (product.length_mm ?? null);
 
     if (!eq(form.sku, product.sku)) patch.sku = form.sku.trim();
     if (!eq(form.code, product.code)) patch.code = form.code?.trim() || null;
@@ -335,7 +328,7 @@ export const CatalogForm = forwardRef<CatalogFormRef, {
     if (!eq(form.is_paired_profile, product.is_paired_profile)) patch.is_paired_profile = form.is_paired_profile;
     if (!eq(form.skip_shot_blast, product.skip_shot_blast)) patch.skip_shot_blast = form.skip_shot_blast;
     if (!eq(form.aliases ?? [], product.aliases ?? [])) patch.aliases = form.aliases;
-    if (!eq(formLengths, productLengths)) patch.lengths_mm = formLengths;
+    if (!eq(formLengths, productLens)) patch.lengths_mm = formLengths;
     if (!eq(form.is_laminated ?? false, product.is_laminated)) patch.is_laminated = form.is_laminated;
     if (!eq(form.dimension_state ?? "length", product.dimension_state ?? "length")) patch.dimension_state = form.dimension_state;
     return patch;
@@ -739,6 +732,11 @@ export const CatalogForm = forwardRef<CatalogFormRef, {
                   <p className="text-xs text-destructive">{hangerPreview.message}</p>
                 ) : autoMode && hangerPreview.status === "loading" ? (
                   <p className="text-xs text-muted-foreground">Расчёт…</p>
+                ) : autoMode && hangerPreview.status === "ready" ? (
+                  <p className="text-xs text-muted-foreground">
+                    Значения рассчитаны из периметра и габарита.
+                    {formLengths.length > 0 && ` Основная длина ${formLengths[0]} мм → ${autoQuantityFor(formLengths[0]) ?? "—"} шт.`}
+                  </p>
                 ) : autoMode ? (
                   <p className="text-xs text-muted-foreground">
                     Значения рассчитаны из периметра и габарита.
@@ -749,17 +747,9 @@ export const CatalogForm = forwardRef<CatalogFormRef, {
                 )}
               </>
             ) : (
-              <div className="flex items-end gap-3">
-                <div className="space-y-1">
-                  <label className="text-sm font-medium">Кол-во на подвесе, шт</label>
-                  <Input
-                    type="number"
-                    className="h-10 w-[120px]"
-                    placeholder="—"
-                    disabled={readOnly}
-                  />
-                </div>
-              </div>
+              <p className="text-xs text-muted-foreground">
+                Кол-во на подвесе не настраивается для 2D/3D-размерности.
+              </p>
             )}
           </div>
 

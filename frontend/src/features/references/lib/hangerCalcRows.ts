@@ -5,7 +5,6 @@
 import type { Product } from "@/shared/api/products";
 import type { HangerCalcItem, HangerCalcResult, HangerSettings } from "@/shared/api/hangerCalc";
 import {
-  effectiveValue,
   entryForLength,
   isHangerAutoMode,
   lengthKey,
@@ -95,8 +94,7 @@ export type HangerCalcRow = {
   auto: boolean;
   incompatibleReason: string | null;
   primaryResult: HangerCalcResult | null;
-  primaryManual: number | null;
-  /** Итог основной длины: авто-итог, иначе ручное значение. */
+  /** Итог основной длины: авто-итог, иначе ручное значение (без авто-приоритета). */
   total: number | null;
   limiter: "area" | "size" | null;
   areaM2: number | null;
@@ -124,13 +122,14 @@ export function buildHangerCalcRows(
     const primaryEntry = primaryLength != null
       ? entryForLength(product.quantity_per_hanger, primaryLength)
       : null;
-    const primaryManual = primaryEntry?.manual ?? null;
 
     let total: number | null = null;
     if (auto && primaryResult?.is_calculable) {
       total = primaryResult.total;
     } else if (!auto) {
-      total = effectiveValue(primaryEntry).value;
+      // Ручной режим: итог — только manual (без приоритета auto>manual,
+      // потому что устаревший auto в ручной строке не должен давать итог).
+      total = primaryEntry?.manual ?? null;
     }
 
     return {
@@ -140,7 +139,6 @@ export function buildHangerCalcRows(
       auto,
       incompatibleReason,
       primaryResult,
-      primaryManual,
       total,
       limiter: primaryResult?.limiter ?? null,
       areaM2: primaryResult?.area_m2 ?? null,

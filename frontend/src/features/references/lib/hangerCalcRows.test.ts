@@ -186,7 +186,18 @@ describe("buildHangerCalcRows", () => {
     expect(row.auto).toBe(false);
     expect(row.primaryResult).toBeNull();
     expect(row.total).toBe(40);
-    expect(row.primaryManual).toBe(40);
+  });
+
+  it("ручной артикул с устаревшим auto: итог — только manual (#64)", () => {
+    const product = makeProduct({
+      id: 6,
+      lengths_mm: [2780],
+      // Stale auto from previous auto-mode — should NOT affect total.
+      quantity_per_hanger: { "2780": { auto: 72, manual: 40 } },
+    });
+    const [row] = buildHangerCalcRows([product], new Map(), new Map());
+    expect(row.auto).toBe(false);
+    expect(row.total).toBe(40);
   });
 
   it("несовместимый артикул помечается причиной, итоги не считаются", () => {

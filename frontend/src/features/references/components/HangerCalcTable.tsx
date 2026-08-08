@@ -16,10 +16,11 @@ import { listProductsPaginated, patchProduct, getErrorMessage } from "@/shared/a
 import type { Product } from "@/shared/api/products";
 import { calcHanger } from "@/shared/api/hangerCalc";
 import type { HangerCalcResult, HangerSettings } from "@/shared/api/hangerCalc";
-import { entryForLength, lengthKey, productLengths } from "@/shared/lib/hangerQuantity";
+import { entryForLength, isHangerAutoMode, lengthKey, productLengths } from "@/shared/lib/hangerQuantity";
 import {
   buildCalcItems,
   buildHangerCalcRows,
+  incompatibilityReason,
   resultsToCalcMap,
   LIMITER_LABELS,
   type CalcMap,
@@ -88,7 +89,14 @@ function HangerFieldCell({
   }, [draft, dirty, parsed.ok]);
 
   const handleBlur = () => {
-    if (!dirty || !parsed.ok || committing.current) return;
+    if (committing.current) return;
+    if (!dirty) return;
+    if (!parsed.ok) {
+      // Инвалидный draft (≤0) откатывается к сохранённому значению (#64).
+      setDraft(savedText);
+      setInvalid(false);
+      return;
+    }
     committing.current = true;
     void onCommit(parsed.value).finally(() => {
       committing.current = false;
@@ -235,6 +243,8 @@ export function HangerCalcTable({
   const [incompatible, setIncompatible] = useState<Map<number, string>>(new Map());
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [truncated, setTruncated] = useState(false);
+  const [totalCount, setTotalCount] = useState(0);
   const [rowStates, setRowStates] = useState<Record<number, RowSaveState | undefined>>({});
   const savedTimers = useRef<Map<number, number>>(new Map());
 
@@ -259,6 +269,8 @@ export function HangerCalcTable({
         listProductsPaginated({ type: "component", limit: 2000 }),
         calcHanger([]),
       ]);
+      setTruncated(list.total > list.items.length);
+      setTotalCount(list.total);
       const { items, refs, incompatible: incompatibles } = buildCalcItems(list.items, constants.hanger);
       let map: CalcMap = new Map();
       if (items.length > 0) {
@@ -286,50 +298,38 @@ export function HangerCalcTable({
   }, [load]);
 
   const recalcRow = useCallback(async (product: Product, settings: HangerSettings) => {
-    if (!isHangerAutoRow(product)) {
-      setCalcMap((prev) => {
-        const next = new Map(prev);
-        next.delete(product.id);
-        return next;
-      });
-      setIncompatible((prev) => {
-        if (!prev.has(product.id)) return prev;
-        const next = new Map(prev);
-        next.delete(product.id);
-        return next;
-      });
-      return;
-    }
-    const mountWidth = product.mount_width_mm ?? 0;
-    if (mountWidth + settings.gap_mm > settings.rod_length_mm) {
-      setIncompatible((prev) => {
-        const next = new Map(prev);
-        next.set(
-          product.id,
-          `Габарит ${mountWidth} мм + зазор ${settings.gap_mm} мм превышает рабочую длину клюшки ${settings.rod_length_mm} мм`,
-        );
-        return next;
-      });
-      setCalcMap((prev) => {
-        const next = new Map(prev);
-        next.delete(product.id);
-        return next;
-      });
-      return;
-    }
-    setIncompatible((prev) => {
+    const removeFromCalc = (prev: CalcMap): CalcMap => {
       if (!prev.has(product.id)) return prev;
       const next = new Map(prev);
       next.delete(product.id);
       return next;
-    });
-    const lengths = productLengths(product);
-    if (lengths.length === 0) {
-      setCalcMap((prev) => {
+    };
+    const removeFromIncompatible = (prev: Map<number, string>): Map<number, string> => {
+      if (!prev.has(product.id)) return prev;
+      const next = new Map(prev);
+      next.delete(product.id);
+      return next;
+    };
+
+    if (!isHangerAutoMode(product)) {
+      setCalcMap(removeFromCalc);
+      setIncompatible(removeFromIncompatible);
+      return;
+    }
+    const reason = incompatibilityReason(product.mount_width_mm, settings);
+    if (reason) {
+      setIncompatible((prev) => {
         const next = new Map(prev);
-        next.delete(product.id);
+        next.set(product.id, reason);
         return next;
       });
+      setCalcMap(removeFromCalc);
+      return;
+    }
+    setIncompatible(removeFromIncompatible);
+    const lengths = productLengths(product);
+    if (lengths.length === 0) {
+      setCalcMap(removeFromCalc);
       return;
     }
     const resp = await calcHanger(
@@ -371,6 +371,24 @@ export function HangerCalcTable({
         );
       } catch (e) {
         const message = getErrorMessage(e);
+        // 422 при inline-правке габарита → помечаем строку как несовместимую,
+        // чтобы пользователь видел красную строку с причиной, а не только тост (#64).
+        if (hanger && field === "mount_width_mm" && value != null) {
+          const reason = incompatibilityReason(value, hanger);
+          if (reason) {
+            setIncompatible((prev) => {
+              const next = new Map(prev);
+              next.set(product.id, reason);
+              return next;
+            });
+            setCalcMap((prev) => {
+              if (!prev.has(product.id)) return prev;
+              const next = new Map(prev);
+              next.delete(product.id);
+              return next;
+            });
+          }
+        }
         setRowState(product.id, { status: "error", message });
         toast({
           variant: "destructive",
@@ -473,6 +491,12 @@ export function HangerCalcTable({
 
         {error && <div className="text-sm text-destructive bg-destructive/10 p-3 rounded-md">{error}</div>}
 
+        {truncated && (
+          <div className="text-sm text-amber-700 bg-amber-50 border border-amber-200 p-2 rounded-md">
+            Показано {products.length} из {totalCount} артикулов. Используйте поиск для фильтрации.
+          </div>
+        )}
+
         {loading ? (
           <div className="text-muted-foreground py-8 text-center">Загрузка...</div>
         ) : rows.length === 0 ? (
@@ -546,13 +570,6 @@ export function HangerCalcTable({
   );
 }
 
-function isHangerAutoRow(product: Product): boolean {
-  return (
-    typeof product.perimeter_mm === "number" && product.perimeter_mm > 0 &&
-    typeof product.mount_width_mm === "number" && product.mount_width_mm > 0
-  );
-}
-
 function sortAccessor(row: HangerCalcRow, field: CalcFilterField): string | number | null {
   if (field === "sku") return row.product.sku;
   if (field === "total") return row.total;
@@ -587,24 +604,29 @@ function HangerCalcRowView({
           ? "Расчёт невозможен: не хватает данных"
           : null);
 
+  // Единый guard для ячеек разбивки: авто, не инвалид, есть расчёт (#64 — dedup).
+  const showBreakdown = row.auto && !rowInvalid && !!primary?.is_calculable;
+  const isZeroTotal = showBreakdown && primary!.total === 0;
+  const dashCell = <DashCell reason={breakdownReason} danger={rowInvalid} />;
+
   const totalCell = (() => {
-    if (row.auto && !rowInvalid && primary?.is_calculable) {
-      if (primary.total === 0) {
-        return (
-          <DashCell
-            reason="Итог 0: профиль не помещается по лимитам — проверьте периметр и габарит"
-            danger
-          />
-        );
-      }
-      return <span className="font-medium">{primary.total}</span>;
+    if (isZeroTotal) {
+      return (
+        <DashCell
+          reason="Итог 0: профиль не помещается по лимитам — проверьте периметр и габарит"
+          danger
+        />
+      );
+    }
+    if (showBreakdown) {
+      return <span className="font-medium">{primary!.total}</span>;
     }
     if (!row.auto) {
       return row.total != null
         ? <span className="text-muted-foreground">{row.total}</span>
         : <DashCell reason={breakdownReason} />;
     }
-    return <DashCell reason={breakdownReason} danger={rowInvalid} />;
+    return dashCell;
   })();
 
   return (
@@ -665,25 +687,22 @@ function HangerCalcRowView({
         <LengthChips row={row} byLength={byLength} />
       </td>
       <td className="px-4 py-2">
-        {row.auto && !rowInvalid && primary?.is_calculable
-          ? primary.by_area
-          : <DashCell reason={breakdownReason} danger={rowInvalid} />}
+        {showBreakdown ? primary!.by_area : dashCell}
       </td>
       <td className="px-4 py-2">
-        {row.auto && !rowInvalid && primary?.is_calculable
-          ? primary.by_size
-          : <DashCell reason={breakdownReason} danger={rowInvalid} />}
+        {showBreakdown ? primary!.by_size : dashCell}
       </td>
       <td className="px-4 py-2">{totalCell}</td>
       <td className="px-4 py-2">
-        {row.auto && !rowInvalid && primary?.is_calculable && primary.limiter
-          ? LIMITER_LABELS[primary.limiter]
-          : <DashCell reason={breakdownReason} danger={rowInvalid} />}
+        {/* Итог 0: лимитер не печатается — противоречиво (#64). */}
+        {showBreakdown && !isZeroTotal && primary!.limiter
+          ? LIMITER_LABELS[primary!.limiter]
+          : dashCell}
       </td>
       <td className="px-4 py-2">
-        {row.auto && !rowInvalid && primary?.is_calculable && primary.area_m2 != null
-          ? primary.area_m2.toFixed(3)
-          : <DashCell reason={breakdownReason} danger={rowInvalid} />}
+        {showBreakdown && !isZeroTotal && primary!.area_m2 != null
+          ? primary!.area_m2.toFixed(3)
+          : dashCell}
       </td>
       <TableCornerResetCell />
     </tr>

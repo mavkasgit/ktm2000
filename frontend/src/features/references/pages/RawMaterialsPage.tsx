@@ -24,7 +24,7 @@ import { TableCornerResetCell, TableCornerResetHeader, DATA_TABLE_STYLES } from 
 import { useSortableColumnFilters } from "@/shared/hooks/useSortableColumnFilters";
 import { skipShotBlastSectionLabel } from "../lib/skipShotBlastLabel";
 import { HangerCalcTable } from "../components/HangerCalcTable";
-import { primaryHangerValue, effectiveForLength } from "@/shared/lib/hangerQuantity";
+import { primaryHangerValue, effectiveForLength, productLengths } from "@/shared/lib/hangerQuantity";
 import { cn } from "@/shared/utils/cn";
 
 type ViewMode = "grid" | "table" | "calc";
@@ -36,11 +36,6 @@ type SortOrder = "asc" | "desc";
 interface SortConfig {
   field: SortField;
   order: SortOrder;
-}
-
-function getProductLengths(product: Product): number[] {
-  return [...new Set([...(product.lengths_mm ?? []), product.length_mm ?? undefined].filter((v): v is number => typeof v === "number" && Number.isFinite(v) && v > 0))]
-    .sort((a, b) => a - b);
 }
 
 function boolFromYesNo(value: string | undefined): boolean | undefined {
@@ -150,7 +145,7 @@ const headerCellClass = `${DATA_TABLE_STYLES.headerRow} ${DATA_TABLE_STYLES.head
 /** Колонка «Кол-во на подвесе» в списке сырья (#65): значение основной длины, подпись, бейдж «авто». */
 function QuantityPerHangerCell({ product }: { product: Product }) {
   const primary = primaryHangerValue(product);
-  const lengths = getProductLengths(product);
+  const lengths = productLengths(product);
   const entries = lengths
     .map((len) => ({ len, eff: effectiveForLength(product.quantity_per_hanger, len) }))
     .filter(({ eff }) => eff.value != null);
@@ -365,7 +360,7 @@ export function RawMaterialsPage() {
     if (!selectedProduct) return;
     try {
       await API.deleteProduct(selectedProduct.id);
-      const lengths = getProductLengths(selectedProduct);
+      const lengths = productLengths(selectedProduct);
       const lengthsText = lengths.length ? `${lengths.join(", ")} мм` : "—";
       const qtyText = primaryHangerValue(selectedProduct)?.value ?? "—";
       toast({ title: "Удалено", description: `Сырьё "${selectedProduct.sku}" (артикул: ${selectedProduct.sku}, ID: ${selectedProduct.id}, длины: ${lengthsText}, кол-во на подвесе: ${qtyText}) успешно удалено`, variant: "success" });
@@ -467,7 +462,7 @@ export function RawMaterialsPage() {
           if (b === "—") return -1;
           return Number(a) - Number(b);
         }),
-      length_mm: [...new Set(items.flatMap((p) => getProductLengths(p).map(String)))]
+      length_mm: [...new Set(items.flatMap((p) => productLengths(p).map(String)))]
         .sort((a, b) => Number(a) - Number(b)),
       is_paired_profile: ["Да", "Нет"],
       skip_shot_blast: ["Да", "Нет"],
@@ -747,7 +742,7 @@ export function RawMaterialsPage() {
                     {(() => {
                       const state = product.dimension_state ?? "length";
                       if (state === "length") {
-                        const lengths = getProductLengths(product);
+                        const lengths = productLengths(product);
                         return lengths.length ? lengths.join(", ") + " мм" : "—";
                       }
                       if (state === "area") {

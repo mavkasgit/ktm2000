@@ -17,11 +17,9 @@ depends_on: Union[str, Sequence[str], None] = None
 
 def upgrade() -> None:
     op.add_column("products", sa.Column("code", sa.String(length=100), nullable=True))
-    op.create_index("ix_products_code", "products", ["code"], unique=False)
     op.create_unique_constraint("uq_products_code", "products", ["code"])
 
 
 def downgrade() -> None:
     op.drop_constraint("uq_products_code", "products", type_="unique")
-    op.drop_index("ix_products_code", table_name="products")
     op.drop_column("products", "code")

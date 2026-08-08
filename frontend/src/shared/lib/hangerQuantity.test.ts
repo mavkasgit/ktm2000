@@ -8,6 +8,7 @@ import {
   isHangerAutoMode,
   lengthKey,
   manualByLength,
+  normalizeLengths,
   primaryHangerValue,
   productLengths,
 } from "./hangerQuantity";
@@ -37,6 +38,17 @@ describe("isHangerAutoMode", () => {
   it("нули и отрицательные значения — не авто-режим", () => {
     expect(isHangerAutoMode({ perimeter_mm: 0, mount_width_mm: 19.35 })).toBe(false);
     expect(isHangerAutoMode({ perimeter_mm: 64.2, mount_width_mm: -1 })).toBe(false);
+  });
+});
+
+describe("normalizeLengths", () => {
+  it("фильтрует мусор, дедуп и сортировка", () => {
+    expect(normalizeLengths([3000, 2780, 3000, -5, NaN, null, undefined])).toEqual([2780, 3000]);
+  });
+
+  it("пусто — пустой список", () => {
+    expect(normalizeLengths([])).toEqual([]);
+    expect(normalizeLengths([null, undefined])).toEqual([]);
   });
 });
 
