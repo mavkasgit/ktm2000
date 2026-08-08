@@ -4,6 +4,8 @@
 
 export interface InternalNotification {
   id: number
+  /** null — общее уведомление, заполнено — персональное текущему пользователю */
+  user_id: number | null
   notification_type: string
   title: string
   text: string | null

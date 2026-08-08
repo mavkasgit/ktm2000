@@ -22,6 +22,7 @@ function mockFetch() {
 
 const notif: InternalNotification = {
   id: 1,
+  user_id: null,
   notification_type: "hire",
   title: "Привет",
   text: null,
