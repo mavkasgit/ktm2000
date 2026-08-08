@@ -4,6 +4,7 @@ from unittest.mock import AsyncMock, patch
 from sqlalchemy import select
 from app.core.config import settings
 from app.models.user import User
+from app.services.authentik_client import AuthentikAdminError
 from app.services.unified_profile_service import UnifiedProfile
 
 
@@ -33,7 +34,7 @@ async def test_me_second_call_within_ttl_skips_pull(auth_client, session, idp_en
     )
 
     with patch(
-        "app.api.routes.auth.sync_local_from_idp",
+        "app.services.unified_profile_service.sync_local_from_idp",
         new_callable=AsyncMock,
         return_value=mock_profile,
     ) as mock_sync:
@@ -68,7 +69,7 @@ async def test_me_refresh_forces_pull(auth_client, session, idp_enabled):
     )
 
     with patch(
-        "app.api.routes.auth.sync_local_from_idp",
+        "app.services.unified_profile_service.sync_local_from_idp",
         new_callable=AsyncMock,
         return_value=mock_profile,
     ) as mock_sync:
@@ -104,7 +105,7 @@ async def test_me_ttl_zero_always_pulls(auth_client, session, idp_enabled, monke
     )
 
     with patch(
-        "app.api.routes.auth.sync_local_from_idp",
+        "app.services.unified_profile_service.sync_local_from_idp",
         new_callable=AsyncMock,
         return_value=mock_profile,
     ) as mock_sync:
@@ -139,10 +140,143 @@ async def test_me_stale_cache_pulls(auth_client, session, idp_enabled):
     )
 
     with patch(
-        "app.api.routes.auth.sync_local_from_idp",
+        "app.services.unified_profile_service.sync_local_from_idp",
         new_callable=AsyncMock,
         return_value=mock_profile,
     ) as mock_sync:
         res = await auth_client.get("/api/auth/me")
         assert res.status_code == 200
         assert mock_sync.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_me_pull_failure_keeps_cache_and_marks_failed_at(
+    auth_client, session, idp_enabled
+):
+    """IdP failure → 200 with cache; profile_synced_at untouched, failed_at set."""
+    stmt = select(User).where(User.username == "testauth")
+    res = await session.execute(stmt)
+    user = res.scalar_one()
+    user.authentik_sub = "sub-fail-1"
+    user.full_name = "Cached Name"
+    user.profile_synced_at = datetime.now(timezone.utc) - timedelta(minutes=30)
+    synced_before = user.profile_synced_at
+    await session.commit()
+
+    with patch(
+        "app.services.unified_profile_service.sync_local_from_idp",
+        new_callable=AsyncMock,
+        side_effect=AuthentikAdminError("IdP down", status_code=502),
+    ) as mock_sync:
+        res1 = await auth_client.get("/api/auth/me")
+        assert res1.status_code == 200
+        assert res1.json()["full_name"] == "Cached Name"
+        assert mock_sync.call_count == 1
+
+    session.expire_all()
+    updated = (
+        await session.execute(select(User).where(User.username == "testauth"))
+    ).scalar_one()
+    assert updated.full_name == "Cached Name"
+    assert updated.profile_synced_at == synced_before
+    assert updated.profile_sync_failed_at is not None
+
+
+@pytest.mark.asyncio
+async def test_me_failure_cooldown_skips_second_pull(auth_client, session, idp_enabled):
+    """After a failed pull the TTL cooldown prevents hammering the IdP."""
+    stmt = select(User).where(User.username == "testauth")
+    res = await session.execute(stmt)
+    user = res.scalar_one()
+    user.authentik_sub = "sub-fail-2"
+    user.profile_synced_at = datetime.now(timezone.utc) - timedelta(minutes=30)
+    await session.commit()
+
+    with patch(
+        "app.services.unified_profile_service.sync_local_from_idp",
+        new_callable=AsyncMock,
+        side_effect=AuthentikAdminError("IdP down", status_code=503),
+    ) as mock_sync:
+        res1 = await auth_client.get("/api/auth/me")
+        assert res1.status_code == 200
+        assert mock_sync.call_count == 1
+
+        res2 = await auth_client.get("/api/auth/me")
+        assert res2.status_code == 200
+        assert mock_sync.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_me_not_found_sets_synced_at_and_skips_second_pull(
+    auth_client, session, idp_enabled
+):
+    """not_found is an authoritative answer: synced_at=now, no failed_at, TTL skip."""
+    stmt = select(User).where(User.username == "testauth")
+    res = await session.execute(stmt)
+    user = res.scalar_one()
+    user.authentik_sub = "sub-notfound-1"
+    user.profile_synced_at = datetime.now(timezone.utc) - timedelta(minutes=30)
+    await session.commit()
+
+    with patch(
+        "app.services.unified_profile_service.sync_local_from_idp",
+        new_callable=AsyncMock,
+        return_value=None,
+    ) as mock_sync:
+        res1 = await auth_client.get("/api/auth/me")
+        assert res1.status_code == 200
+        assert mock_sync.call_count == 1
+
+        session.expire_all()
+        updated = (
+            await session.execute(select(User).where(User.username == "testauth"))
+        ).scalar_one()
+        assert updated.profile_sync_failed_at is None
+        assert updated.profile_synced_at is not None
+
+        res2 = await auth_client.get("/api/auth/me")
+        assert res2.status_code == 200
+        assert mock_sync.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_me_refresh_recovers_after_failure(auth_client, session, idp_enabled):
+    """refresh=1 forces a pull; success clears failed_at and refreshes the cache."""
+    stmt = select(User).where(User.username == "testauth")
+    res = await session.execute(stmt)
+    user = res.scalar_one()
+    user.authentik_sub = "sub-recover-1"
+    user.profile_synced_at = datetime.now(timezone.utc) - timedelta(minutes=30)
+    await session.commit()
+
+    mock_profile = UnifiedProfile(
+        full_name="Recovered Name",
+        avatar_seed="recovseed",
+        email="testauth@example.com",
+        locale="ru",
+        theme="dark",
+        authentik_pk=13,
+        source="idp",
+    )
+
+    with patch(
+        "app.services.unified_profile_service.sync_local_from_idp",
+        new_callable=AsyncMock,
+        side_effect=[AuthentikAdminError("down", status_code=502), mock_profile],
+    ) as mock_sync:
+        res1 = await auth_client.get("/api/auth/me")
+        assert res1.status_code == 200
+        assert mock_sync.call_count == 1
+
+        res2 = await auth_client.get("/api/auth/me?refresh=1")
+        assert res2.status_code == 200
+        assert res2.json()["full_name"] == "Recovered Name"
+        assert mock_sync.call_count == 2
+
+    session.expire_all()
+    updated = (
+        await session.execute(select(User).where(User.username == "testauth"))
+    ).scalar_one()
+    assert updated.full_name == "Recovered Name"
+    assert updated.profile_sync_failed_at is None
+    assert updated.profile_synced_at is not None

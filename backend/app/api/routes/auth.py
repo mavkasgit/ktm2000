@@ -1,6 +1,6 @@
 import logging
 import socket
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from uuid import UUID, uuid4
 
 import bcrypt
@@ -8,7 +8,6 @@ from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request, Res
 from fastapi.responses import HTMLResponse, JSONResponse
 from jose import jwt
 from sqlalchemy import or_, select
-from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
@@ -42,21 +41,14 @@ from app.schemas.session import (
 from app.services.oidc_auth_service import OidcAuthService
 from app.services.session_service import (
     revoke_session_simple,
-    revoke_sessions_for_user,
-    revoke_by_oidc_sid,
-    revoke_all,
-    is_logout_jti_used,
-    mark_logout_jti_used,
-    cleanup_logout_jti,
-    record_login_event,
     list_login_events,
     device_label_from_ua,
 )
 from app.services.unified_profile_service import (
     apply_profile_to_user,
+    ensure_profile_fresh,
     profile_sync_enabled,
     push_profile_by_sub,
-    sync_local_from_idp,
 )
 from app.services.authentik_client import AuthentikAdminError
 
@@ -194,7 +186,7 @@ async def backchannel_logout(
 ) -> JSONResponse:
     """OIDC Back-Channel Logout (public). Authentik POSTs logout_token form field.
 
-    Phase-1 SLO:
+    Phase-1 SLO orchestrated in ``OidcAuthService.handle_backchannel_logout``:
       - replay protection via jti (one-time use);
       - if sid present: revoke only sessions with that IdP sid (not all user sessions);
       - if sid absent (e.g. user deactivation): revoke all sessions by sub;
@@ -209,69 +201,9 @@ async def backchannel_logout(
         )
 
     service = OidcAuthService(db)
-    try:
-        claims = await service.validate_logout_token(str(logout_token).strip())
-    except HTTPException:
-        raise
-    except Exception as exc:  # noqa: BLE001
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="invalid_logout_token",
-        ) from exc
-
-    # Replay protection: jti is one-time use (OIDC Back-Channel Logout 1.0)
-    if claims.jti and await is_logout_jti_used(db, claims.jti):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="replay_logout_token",
-        )
-
-    user = await db.scalar(select(User).where(User.authentik_sub == claims.sub))
-    revoked = 0
-    if user is not None:
-        if claims.sid:
-            revoked_ids = await revoke_by_oidc_sid(
-                db, user_id=user.id, oidc_sid=claims.sid, reason="backchannel_logout"
-            )
-            revoked = len(revoked_ids)
-        else:
-            revoked = await revoke_all(
-                db, user_id=user.id, reason="backchannel_logout"
-            )
-        await record_login_event(
-            db,
-            event_type="session_revoke",
-            success=True,
-            user_id=user.id,
-            username_attempted=user.username,
-            details={
-                "reason": "backchannel_logout",
-                "source": "authentik_backchannel",
-                "oidc_sid": claims.sid,
-                "revoked": revoked,
-            },
-        )
-
-    # jti is recorded even for unknown sub: valid token is considered consumed.
-    # Row lives until token exp — replay after that is impossible by definition.
-    if claims.jti:
-        exp_dt = (
-            datetime.fromtimestamp(claims.exp, tz=timezone.utc)
-            if claims.exp
-            else datetime.now(timezone.utc) + timedelta(minutes=10)
-        )
-        try:
-            await mark_logout_jti_used(db, claims.jti, expires_at=exp_dt)
-        except IntegrityError as exc:
-            # Race on duplicate delivery: jti already recorded -> replay
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="replay_logout_token",
-            ) from exc
-        await cleanup_logout_jti(db)
-
+    result = await service.handle_backchannel_logout(str(logout_token).strip())
     return JSONResponse(
-        content={"status": "ok", "revoked": revoked},
+        content=result,
         headers={"Cache-Control": "no-store"},
     )
 
@@ -457,43 +389,7 @@ async def me(
             is_break_glass=True,
         )
 
-    if user.authentik_sub and profile_sync_enabled():
-        now = datetime.now(timezone.utc)
-        ttl = settings.AUTHENTIK_PROFILE_TTL_SECONDS
-
-        need_pull = True
-        if refresh != 1 and ttl > 0 and user.profile_synced_at is not None:
-            synced_at = user.profile_synced_at
-            if synced_at.tzinfo is None:
-                synced_at = synced_at.replace(tzinfo=timezone.utc)
-            if (now - synced_at).total_seconds() < ttl:
-                need_pull = False
-
-        if need_pull:
-            try:
-                snapshot = await sync_local_from_idp(
-                    authentik_sub=user.authentik_sub,
-                    local_full_name=user.full_name,
-                    local_avatar_seed=user.avatar_seed,
-                    local_locale=user.locale,
-                    local_theme=user.theme,
-                    local_email=user.email,
-                )
-                if snapshot is not None:
-                    apply_profile_to_user(user, snapshot)
-                
-                user.profile_synced_at = now
-                db.add(user)
-                await db.commit()
-                await db.refresh(user)
-            except Exception:
-                try:
-                    user.profile_synced_at = now
-                    db.add(user)
-                    await db.commit()
-                    await db.refresh(user)
-                except Exception:
-                    pass
+    await ensure_profile_fresh(db, user, refresh=(refresh == 1))
 
     data = MeResponse.model_validate(user)
     data.authentik_linked = bool(user.authentik_sub)

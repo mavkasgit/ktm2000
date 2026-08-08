@@ -23,11 +23,13 @@ from __future__ import annotations
 
 import logging
 import time
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import httpx
 from fastapi import HTTPException, status
 from sqlalchemy import or_, select, text
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
@@ -40,7 +42,14 @@ from app.services.oidc_core import (
     OidcCoreConfig,
     OidcHooks,
 )
-from app.services.session_service import record_login_event
+from app.services.session_service import (
+    cleanup_logout_jti,
+    is_logout_jti_used,
+    mark_logout_jti_used,
+    record_login_event,
+    revoke_all,
+    revoke_by_oidc_sid,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -500,3 +509,87 @@ class OidcAuthService:
             # For Authentik RP-initiated logout (id_token_hint + post_logout_redirect_uri)
             "id_token": result["id_token"],
         }
+
+    # ─── back-channel logout (thin-route boundary) ────────────────────────
+
+    async def handle_backchannel_logout(self, logout_token: str) -> dict[str, Any]:
+        """OIDC Back-Channel Logout orchestration.
+
+        Phase-1 SLO:
+          - replay protection via jti (one-time use);
+          - sid present → revoke only sessions with that IdP sid;
+          - sid absent (e.g. user deactivation) → revoke all sessions by sub;
+          - audit: session_revoke event with source="authentik_backchannel";
+          - jti consumed even for unknown sub (no enumeration).
+
+        Invalid token → HTTPException 400 invalid_logout_token;
+        replayed jti → HTTPException 400 replay_logout_token.
+        Returns {"status": "ok", "revoked": N}.
+        """
+        try:
+            claims = await self.validate_logout_token(str(logout_token).strip())
+        except HTTPException:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="invalid_logout_token",
+            ) from exc
+
+        # Replay protection: jti is one-time use (OIDC Back-Channel Logout 1.0)
+        if claims.jti and await is_logout_jti_used(self.db, claims.jti):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="replay_logout_token",
+            )
+
+        user = await self.db.scalar(select(User).where(User.authentik_sub == claims.sub))
+        revoked = 0
+        if user is not None:
+            if claims.sid:
+                revoked_ids = await revoke_by_oidc_sid(
+                    self.db,
+                    user_id=user.id,
+                    oidc_sid=claims.sid,
+                    reason="backchannel_logout",
+                )
+                revoked = len(revoked_ids)
+            else:
+                revoked = await revoke_all(
+                    self.db,
+                    user_id=user.id,
+                    reason="backchannel_logout",
+                )
+            await record_login_event(
+                self.db,
+                event_type="session_revoke",
+                success=True,
+                user_id=user.id,
+                username_attempted=user.username,
+                details={
+                    "reason": "backchannel_logout",
+                    "source": "authentik_backchannel",
+                    "oidc_sid": claims.sid,
+                    "revoked": revoked,
+                },
+            )
+
+        # jti is recorded even for unknown sub: valid token is considered consumed.
+        # Row lives until token exp — replay after that is impossible by definition.
+        if claims.jti:
+            exp_dt = (
+                datetime.fromtimestamp(claims.exp, tz=timezone.utc)
+                if claims.exp
+                else datetime.now(timezone.utc) + timedelta(minutes=10)
+            )
+            try:
+                await mark_logout_jti_used(self.db, claims.jti, expires_at=exp_dt)
+            except IntegrityError as exc:
+                # Race on duplicate delivery: jti already recorded -> replay
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="replay_logout_token",
+                ) from exc
+            await cleanup_logout_jti(self.db)
+
+        return {"status": "ok", "revoked": revoked}
