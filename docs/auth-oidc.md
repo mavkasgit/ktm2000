@@ -88,7 +88,7 @@ Authentik POSTs `logout_token` (form) на `POST /api/auth/backchannel-logout` �
 | `AUTH_OIDC_ENABLED` | `false` | dual-run switch |
 | `AUTH_OIDC_ISSUER` | — | `…/application/o/ktm2000/` |
 | `AUTH_OIDC_CLIENT_ID` | — | public client `ktm2000` |
-| `AUTH_OIDC_REDIRECT_URI` | — | :5180 / :8082 `/auth/callback` |
+| `AUTH_OIDC_REDIRECT_URI` | — | :5172 / :8082 `/auth/callback` |
 | `AUTH_OIDC_ISSUER_ALIASES` | — | comma hosts for multi-host `iss` |
 | `AUTH_OIDC_ALLOW_JIT` | `false` | auto-create User |
 | `AUTH_OIDC_DEFAULT_ROLE` | `viewer` | JIT / no group |

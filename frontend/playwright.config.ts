@@ -1,6 +1,6 @@
 import { defineConfig, devices } from "@playwright/test";
 
-const PORT = 5180;
+const PORT = 5172;
 const BACKEND_PORT = 8010;
 
 export default defineConfig({
@@ -11,7 +11,7 @@ export default defineConfig({
   workers: 1,
   reporter: [["html", { outputFolder: "playwright-report" }], ["list"]],
   use: {
-    baseURL: process.env.PLAYWRIGHT_TEST_BASE_URL || `http://localhost:5180`,
+    baseURL: process.env.PLAYWRIGHT_TEST_BASE_URL || `http://localhost:5172`,
     trace: "on-first-retry",
     screenshot: "only-on-failure",
     video: "retain-on-failure",

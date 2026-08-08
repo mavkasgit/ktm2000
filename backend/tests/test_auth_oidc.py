@@ -256,7 +256,7 @@ async def test_oidc_logout_url_enabled(client, oidc_enabled) -> None:
         "/api/auth/oidc/logout-url",
         params={
             "id_token_hint": "dummy.jwt.hint",
-            "post_logout_redirect_uri": "http://localhost:5180/login",
+            "post_logout_redirect_uri": "http://localhost:5172/login",
         },
     )
     assert response2.status_code == 200

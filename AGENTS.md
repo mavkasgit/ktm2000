@@ -19,7 +19,7 @@ Bootstrap-инструкции для AI-агентов. Детали — в `do
 ## Команды (из корня)
 
 ```bash
-npm run dev                    # Postgres + migrate + backend :8010 + frontend :5180
+npm run dev                    # Postgres + migrate + backend :8010 + frontend :5172
 npm run db:makemigrate -- "…"  # Новая миграция Alembic
 npm run db:migrate             # Применить миграции
 npm run db:seed                # Демо-данные

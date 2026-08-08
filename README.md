@@ -44,7 +44,7 @@ cp .env.example .env.dev
 npm run dev
 ```
 
-- Frontend: [http://localhost:5180](http://localhost:5180)
+- Frontend: [http://localhost:5172](http://localhost:5172)
 - API (Swagger): [http://localhost:8010/docs](http://localhost:8010/docs)
 
 > [!NOTE]
@@ -55,7 +55,7 @@ npm run dev
 | Команда | Назначение |
 |---------|------------|
 | `npm run dev` | Postgres + миграции + backend + frontend |
-| `npm run devkill` | Остановить dev-серверы (8010, 5180) |
+| `npm run devkill` | Остановить dev-серверы (8010, 5172) |
 | `npm run devrestart` | Перезапустить dev-окружение |
 | `npm run db:makemigrate -- "описание"` | Создать миграцию |
 | `npm run db:migrate` | Применить миграции |

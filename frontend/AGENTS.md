@@ -13,7 +13,7 @@ React 19 + TypeScript + Vite + Tailwind CSS + shadcn/ui + TanStack Table/Query.
 ## Команды
 
 ```bash
-npm --prefix frontend run dev       # :5180
+npm --prefix frontend run dev       # :5172
 npm --prefix frontend run build
 npm --prefix frontend run test      # Vitest unit-тесты
 npm --prefix frontend run test:e2e  # Playwright E2E

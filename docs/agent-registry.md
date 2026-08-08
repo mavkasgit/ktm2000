@@ -30,7 +30,7 @@
 
 | Порт | Назначение |
 |------|------------|
-| `5180` | Frontend (dev) |
+| `5172` | Frontend (dev) |
 | `8010` | Backend API |
 | `5440` | Postgres (dev) |
 | `5441` | Postgres (test) |

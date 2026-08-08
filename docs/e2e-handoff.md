@@ -26,14 +26,14 @@
 Playwright **не поднимает** серверы сам (`webServer` закомментирован в config). Перед прогоном:
 
 ```bash
-npm run dev   # из корня: Postgres + backend :8010 + frontend :5180
+npm run dev   # из корня: Postgres + backend :8010 + frontend :5172
 ```
 
 Запуск (Windows cmd):
 
 ```cmd
 set E2E_API_URL=http://localhost:8010/api
-set PLAYWRIGHT_TEST_BASE_URL=http://localhost:5180
+set PLAYWRIGHT_TEST_BASE_URL=http://localhost:5172
 cd frontend
 npx playwright test
 ```
@@ -185,7 +185,7 @@ Approvable positions: 0
 
 ```cmd
 set E2E_API_URL=http://localhost:8010/api
-set PLAYWRIGHT_TEST_BASE_URL=http://localhost:5180
+set PLAYWRIGHT_TEST_BASE_URL=http://localhost:5172
 cd frontend && npx playwright test
 ```
 

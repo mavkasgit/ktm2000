@@ -5,7 +5,7 @@
   "scripts": {
     "setup": "npm install && npm install --prefix frontend && echo 'Не забудьте установить зависимости Python!'",
     "verify:sync": "node scripts/verify-sync.mjs --other ../hrms",
-    "predev": "npm run verify:sync && node scripts/ensure-dev-ports.js && npm run db:up && npm run db:wait && npm run db:migrate",
+    "predev": "npm run verify:sync && node scripts/ensure-dev-ports.js --kill && npm run db:up && npm run db:wait && npm run db:migrate",
     "prebuild": "npm run verify:sync",
     "dev": "concurrently --names \"DB,BACKEND,FRONTEND\" -c \"blue,green,yellow\" \"npm run db:logs\" \"npm run backend\" \"npm run frontend\"",
     "frontend": "npm --prefix frontend run dev",

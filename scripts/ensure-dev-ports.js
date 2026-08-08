@@ -1,7 +1,7 @@
 /**
  * Ensure KTM2000 local dev ports are free before npm run dev.
  *
- * Ports: 8012 (backend), 5180 (Vite frontend).
+ * Ports: 8012 (backend), 5172 (Vite frontend).
  *
  * Usage:
  *   node scripts/ensure-dev-ports.js           # interactive if TTY; else fail if busy
@@ -18,7 +18,7 @@ const { execFileSync, spawnSync } = require("child_process");
 const readline = require("readline");
 const os = require("os");
 
-const DEFAULT_PORTS = [8012, 5180];
+const DEFAULT_PORTS = [8012, 5172];
 const isWin = process.platform === "win32";
 
 function parseArgs(argv) {
