@@ -669,10 +669,6 @@ export function ImportWizard(props: {
                     }
                     return null;
                   })()}
-                  <span>
-                    <strong>Период:</strong>{" "}
-                    {String(((currentPreview.summary as Record<string, unknown>)?.period_label ?? "не определен"))}
-                  </span>
                   {summary.invalid > 0 && <span className="text-red-600"><strong>Ошибок:</strong> {summary.invalid}</span>}
                   {summary.warning > 0 && <span className="text-amber-600"><strong>Предупр.:</strong> {summary.warning}</span>}
                   {summary.invalid === 0 && summary.warning === 0 && <span className="text-green-600 text-xs">Без ошибок</span>}

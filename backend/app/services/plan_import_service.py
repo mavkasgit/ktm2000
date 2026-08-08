@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import math
 from collections import Counter
-from datetime import UTC, date, datetime
+from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
 from typing import Iterable
@@ -134,8 +134,6 @@ async def create_excel_import_change_set(
     sheet_index: int = 0,
     mode: ImportBatchMode = ImportBatchMode.create_plan,
     production_plan_id: int | None = None,
-    plan_month: str | None = None,
-    plan_version: str | None = None,
     column_mapping: dict | None = None,
     row_selection: str | None = None,
     template_id: int | None = None,
@@ -178,35 +176,9 @@ async def create_excel_import_change_set(
             .limit(1)
         )
         if production_plan is None:
-            plan_no, plan_name = _compose_plan_identity(
-                parsed.sheet_name,
-                parsed.period_start,
-                plan_month=plan_month,
-                plan_version=plan_version,
-            )
-            production_plan = ProductionPlan(
-                plan_no=plan_no,
-                name=plan_name,
-                period_start=parsed.period_start,
-                period_end=parsed.period_end,
-            )
-            db.add(production_plan)
-            await db.flush()
+            production_plan = await _create_import_plan(db, parsed.sheet_name)
     else:
-        plan_no, plan_name = _compose_plan_identity(
-            parsed.sheet_name,
-            parsed.period_start,
-            plan_month=plan_month,
-            plan_version=plan_version,
-        )
-        production_plan = ProductionPlan(
-            plan_no=plan_no,
-            name=plan_name,
-            period_start=parsed.period_start,
-            period_end=parsed.period_end,
-        )
-        db.add(production_plan)
-        await db.flush()
+        production_plan = await _create_import_plan(db, parsed.sheet_name)
 
     summary = _summary(parsed.parsed_rows, parsed.warnings, parsed)
     import_batch = ImportBatch(
@@ -1338,13 +1310,6 @@ def _summary(
         summary["row_selection"] = parsed_workbook.row_selection
         summary["selected_row_numbers"] = parsed_workbook.selected_row_numbers
         summary["auto_included_row_numbers"] = parsed_workbook.auto_included_row_numbers
-        summary["period_start"] = parsed_workbook.period_start.isoformat() if parsed_workbook.period_start else None
-        summary["period_end"] = parsed_workbook.period_end.isoformat() if parsed_workbook.period_end else None
-        summary["period_label"] = (
-            f"{summary['period_start']} - {summary['period_end']}"
-            if summary["period_start"] and summary["period_end"]
-            else "не определен"
-        )
     return summary
 
 
@@ -1374,26 +1339,11 @@ def _make_plan_no(sheet_name: str) -> str:
     return f"План-{safe_sheet}-{stamp}"
 
 
-def _compose_plan_identity(
-    sheet_name: str,
-    period_start: date | None,
-    *,
-    plan_month: str | None,
-    plan_version: str | None,
-) -> tuple[str, str]:
-    month_label = (plan_month or "").strip()
-    if not month_label and period_start is not None:
-        month_label = period_start.strftime("%Y-%m")
-
-    version_label = (plan_version or "").strip()
-    version_suffix = f" v{version_label}" if version_label else ""
-
-    if month_label:
-        plan_name = f"План {month_label}{version_suffix}"
-        safe_month = "".join(ch for ch in month_label if ch.isalnum() or ch in "-_") or "month"
-        safe_ver = "".join(ch for ch in version_label if ch.isalnum() or ch in "-_") or "v1"
-        stamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
-        plan_no = f"PLAN-{safe_month}-{safe_ver}-{stamp}" if version_label else f"PLAN-{safe_month}-{stamp}"
-        return plan_no, plan_name
-
-    return _make_plan_no(sheet_name), f"Import {sheet_name}"
+async def _create_import_plan(db: AsyncSession, sheet_name: str) -> ProductionPlan:
+    """Новый план импорта: имя всегда «Import {лист}»."""
+    plan_no = _make_plan_no(sheet_name)
+    plan_name = f"Import {sheet_name}"
+    production_plan = ProductionPlan(plan_no=plan_no, name=plan_name)
+    db.add(production_plan)
+    await db.flush()
+    return production_plan

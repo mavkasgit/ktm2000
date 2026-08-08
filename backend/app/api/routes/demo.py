@@ -60,8 +60,6 @@ class FullRouteRunRequest(BaseModel):
     production_plan_id: int | None = None
     run_id: str | None = None
     start_performed_at: datetime | None = None
-    plan_month: str | None = None
-    plan_version: str | None = None
     stage_preset: StagePreset = StagePreset.before_approve
     target_route_stage_id: int | None = None
     scenario_id: str | None = None
@@ -321,8 +319,6 @@ async def run_full_route_test(
         sheet_index=0,
         production_plan_id=target_plan_id,
         mode=ImportBatchMode.append_to_plan if target_plan_id else ImportBatchMode.create_plan,
-        plan_month=payload.plan_month,
-        plan_version=payload.plan_version,
         column_mapping=None,
     )
 

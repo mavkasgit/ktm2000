@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import hashlib
-from calendar import monthrange
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
@@ -46,22 +45,6 @@ HEADER_ALIASES = {
     "order_ref": "Заказ",
 }
 
-MONTHS_RU = {
-    "январ": 1,
-    "феврал": 2,
-    "март": 3,
-    "апрел": 4,
-    "ма": 5,
-    "июн": 6,
-    "июл": 7,
-    "август": 8,
-    "сентябр": 9,
-    "октябр": 10,
-    "ноябр": 11,
-    "декабр": 12,
-}
-
-
 @dataclass(slots=True)
 class ParsedPlanRow:
     source_row_numbers: list[int]
@@ -86,8 +69,6 @@ class ParsedWorkbook:
     header_row_number: int
     total_rows: int
     parsed_rows: list[ParsedPlanRow]
-    period_start: date | None
-    period_end: date | None
     warnings: list[str]
     row_selection: str | None = None
     selected_row_numbers: list[int] | None = None
@@ -132,17 +113,6 @@ def _plan_resolver_mapping(column_mapping: dict[str, Any] | None) -> dict[str, A
     return mapping
 
 
-def _extract_months(column_mapping: dict[str, Any] | None) -> dict[str, int]:
-    """Месяцы из ``_config`` шаблона; fallback — ``MONTHS_RU`` (#15)."""
-    if isinstance(column_mapping, dict):
-        config = column_mapping.get("_config")
-        if isinstance(config, dict):
-            months = config.get("months")
-            if isinstance(months, dict) and months:
-                return months
-    return MONTHS_RU
-
-
 def parse_factory_plan_workbook(
     content: bytes,
     filename: str,
@@ -176,16 +146,12 @@ def parse_factory_plan_workbook(
     column_map = resolve_columns(resolver_mapping, headers)
     _ensure_required_columns(column_map)
 
-    months = _extract_months(column_mapping)
-    period_start, period_end = _parse_period(rows[:header_index], sheet.name, months)
     merged_anchors = _merged_cell_anchors(sheet)
     parsed_rows = _parse_rows(
         rows,
         header_index,
         headers,
         column_map,
-        period_start,
-        period_end,
         merged_anchors,
     )
     selected_rows = parse_row_selection(row_selection) if row_selection else None
@@ -217,8 +183,6 @@ def parse_factory_plan_workbook(
         header_row_number=header_index + 1,
         total_rows=len(rows),
         parsed_rows=parsed_rows,
-        period_start=period_start,
-        period_end=period_end,
         warnings=warnings,
         row_selection=row_selection.strip() if row_selection else None,
         selected_row_numbers=sorted(selected_rows) if selected_rows is not None else None,
@@ -309,8 +273,6 @@ def _parse_rows(
     header_index: int,
     headers: list[str],
     column_map: dict[str, int],
-    period_start: date | None,
-    period_end: date | None,
     merged_anchors: dict[tuple[int, int], int] | None = None,
 ) -> list[ParsedPlanRow]:
     parsed: list[ParsedPlanRow] = []
@@ -379,8 +341,6 @@ def _parse_rows(
             raw_columns,
             raw_columns_meta,
             quantity,
-            period_start,
-            period_end,
             inherited,
         )
 
@@ -597,8 +557,6 @@ def _make_plan_row(
     raw_columns: dict[str, str],
     raw_columns_meta: list[dict[str, Any]],
     quantity: Decimal,
-    period_start: date | None,
-    period_end: date | None,
     inherited: bool,
 ) -> ParsedPlanRow:
     component = _component_from_raw(row_number, raw)
@@ -650,8 +608,6 @@ def _make_plan_row(
         "customer": _cell_text(raw.get("customer")) or None,
         "priority": _int_or_none(raw.get("priority")),
         "order_ref": _cell_text(raw.get("order_ref")) or None,
-        "period_start": period_start.isoformat() if period_start else None,
-        "period_end": period_end.isoformat() if period_end else None,
         "context_inherited": inherited,
         "paired_profile": False,
         "input": {
@@ -780,32 +736,6 @@ def _join_paired_component(previous: ParsedPlanRow, current: ParsedPlanRow) -> N
     previous.source_row_hash = _hash_json({"row_numbers": previous.source_row_numbers, "payload": previous.payload})
 
 
-def _parse_period(
-    header_rows: list[list[Any]],
-    sheet_name: str,
-    months: dict[str, int] | None = None,
-) -> tuple[date | None, date | None]:
-    text = " ".join([sheet_name, *(_cell_text(cell) for row in header_rows for cell in row)])
-    lower = text.lower()
-    month = None
-    for token, value in (months or MONTHS_RU).items():
-        if token in lower:
-            month = value
-            break
-    if month is None:
-        return None, None
-
-    year = 2026
-    for candidate in ("2026", "26"):
-        if candidate in lower:
-            year = 2000 + int(candidate) if len(candidate) == 2 else int(candidate)
-            break
-
-    start = date(year, month, 1)
-    end = date(year, month, monthrange(year, month)[1])
-    return start, end
-
-
 def _cell(row: list[Any], index: int) -> Any:
     return row[index] if index < len(row) else None
 
@@ -894,6 +824,8 @@ def _fingerprint_payload(source_sku: str, quantity: Decimal, payload: dict[str, 
         "packaging": payload.get("packaging"),
         "output_length": payload.get("output_length"),
         "output_kind": payload.get("output_kind"),
+        # Ключи остаются для стабильности хэша ранее импортированных позиций:
+        # период больше не парсится, значения всегда None.
         "period_start": payload.get("period_start"),
         "period_end": payload.get("period_end"),
     }

@@ -1129,7 +1129,6 @@ ALL_POSITIONS_SORT_FIELDS = frozenset({
     "quantity",
     "status",
     "validation_status",
-    "period_start",
 })
 
 
@@ -1229,8 +1228,6 @@ def _all_positions_order_columns(sort_by: str, sort_order: str):
         order_column = cast(PlanPosition.status, String)
     elif resolved_sort_by == "validation_status":
         order_column = cast(PlanPosition.validation_status, String)
-    elif resolved_sort_by == "period_start":
-        order_column = PlanPosition.period_start
     else:
         order_column = PlanPosition.source_row_number
 

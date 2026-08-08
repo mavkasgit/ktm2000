@@ -1,23 +1,5 @@
 from __future__ import annotations
 
-# Месяцы (русские токены для поиска периода в имени листа/заголовках) —
-# данные шаблона плана, а не код (issue #15). Раньше жили в
-# ``app.services.excel_import.MONTHS_RU``.
-PLAN_MONTHS_RU = {
-    "январ": 1,
-    "феврал": 2,
-    "март": 3,
-    "апрел": 4,
-    "ма": 5,
-    "июн": 6,
-    "июл": 7,
-    "август": 8,
-    "сентябр": 9,
-    "октябр": 10,
-    "ноябр": 11,
-    "декабр": 12,
-}
-
 # column_mapping каждого шаблона хранит заголовки, псевдонимы (aliases),
 # позиции колонок (column) и служебный ключ ``_config`` (метаданные шаблона).
 # Резолвер колонок (app/services/import_column_resolver.py) — единый
@@ -29,7 +11,6 @@ IMPORT_TEMPLATES = [
         "is_active": True,
         "sort_order": 0,
         "column_mapping": {
-            "_config": {"months": PLAN_MONTHS_RU},
             "sku": {"column": "A", "header": "Артикул"},
             "replenishment": {"column": "B", "header": "пополнение"},
             "product_name": {"column": "C", "header": "Наименование"},

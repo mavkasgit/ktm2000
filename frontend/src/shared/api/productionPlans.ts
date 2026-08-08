@@ -36,8 +36,6 @@ export type PlanSummary = {
   plan_no: string;
   name: string;
   status: PlanStatus;
-  period_start: string | null;
-  period_end: string | null;
   total_positions: number;
   draft_positions: number;
   approved_positions: number;

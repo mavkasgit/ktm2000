@@ -151,10 +151,7 @@ def test_is_reserved_key() -> None:
     assert not is_reserved_key("quantity")
 
 
-def test_reserved_config_carries_months() -> None:
-    """Месяцы живут в ``_config.months`` сида (данные, не код)."""
-    config = PLAN_MAPPING["_config"]
-    assert isinstance(config, dict)
-    months = config["months"]
-    assert months["январ"] == 1
-    assert months["ма"] == 5
+def test_plan_config_has_no_months() -> None:
+    """Месяцы убраны из сида: автодетект периода больше не используется."""
+    config = PLAN_MAPPING.get("_config")
+    assert config is None or "months" not in config

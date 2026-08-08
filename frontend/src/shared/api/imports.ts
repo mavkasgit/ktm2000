@@ -22,8 +22,6 @@ export type ImportExcelInput = {
   sheet_index?: number;
   mode?: ImportBatchMode;
   production_plan_id?: number;
-  plan_month?: string;
-  plan_version?: string;
   row_selection?: string;
   template_id?: number;
   column_mapping?: Record<string, string | { header: string; column: string }>;
@@ -106,12 +104,6 @@ export async function importExcel(input: ImportExcelInput) {
   formData.append("mode", input.mode ?? "create_plan");
   if (input.production_plan_id != null) {
     formData.append("production_plan_id", String(input.production_plan_id));
-  }
-  if (input.plan_month) {
-    formData.append("plan_month", input.plan_month);
-  }
-  if (input.plan_version) {
-    formData.append("plan_version", input.plan_version);
   }
   if (input.row_selection && input.row_selection.trim()) {
     formData.append("row_selection", input.row_selection.trim());

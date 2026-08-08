@@ -105,9 +105,13 @@ def test_factory_plan_parser_groups_paired_profiles_and_continuations() -> None:
 
     assert parsed.sheet_name == "План май 26 05"
     assert parsed.header_row_number == 5
-    assert parsed.period_start.isoformat() == "2026-05-01"
-    assert parsed.period_end.isoformat() == "2026-05-31"
+    # Период больше не парсится: ParsedWorkbook и строки не несут period_start/end.
+    assert not hasattr(parsed, "period_start")
+    assert not hasattr(parsed, "period_end")
     assert len(parsed.parsed_rows) == 2
+    for row in parsed.parsed_rows:
+        assert "period_start" not in row.payload
+        assert "period_end" not in row.payload
 
     paired = parsed.parsed_rows[0]
     assert paired.source_row_numbers == [6, 7]
