@@ -22,6 +22,7 @@ from app.api.routes.route_rule_profiles import router as route_rule_profiles_rou
 from app.api.routes.routes_seed import router as routes_seed_router
 from app.api.routes.import_templates import router as import_templates_router
 from app.api.routes.catalog_import import router as catalog_import_router
+from app.api.routes.hanger_calc import router as hanger_calc_router
 from app.api.routes.shopfloor import router as shopfloor_router
 from app.api.routes.shopfloor_operations import router as shopfloor_ops_router
 from app.api.routes.spg import router as spg_router
@@ -94,6 +95,7 @@ app.include_router(production_planning_router, prefix="/api")
 app.include_router(release_batches_router, prefix="/api")
 app.include_router(import_templates_router, prefix="/api")
 app.include_router(catalog_import_router, prefix="/api")
+app.include_router(hanger_calc_router, prefix="/api")
 app.include_router(shopfloor_router, prefix="/api")
 app.include_router(shopfloor_ops_router, prefix="/api")
 app.include_router(spg_router, prefix="/api")
