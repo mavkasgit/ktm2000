@@ -25,7 +25,7 @@ def _get_value(row: Any, key: str) -> Any:
     return getattr(row, key)
 
 
-async def upsert_by_code(
+async def upsert_by_key(
     db: AsyncSession,
     Model: type[ModelT],
     rows: Iterable[Any],

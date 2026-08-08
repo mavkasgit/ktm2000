@@ -13,7 +13,7 @@ import_template/routes.
 
 ## Решение
 
-Один модуль `upsert_by_code(db, Model, rows, key_field, field_map, resolve=...)`,
+Один модуль `upsert_by_key(db, Model, rows, key_field, field_map, resolve=...)`,
 возвращающий `dict[key, Model]`. Скалярные седеры (sections, defect_types,
 route_rule_profile, import_template, processing_flags, dimension_types) становятся
 тонкими обёртками над хелпером, `field_map`/UPSERT_SPEC живёт рядом с моделью.

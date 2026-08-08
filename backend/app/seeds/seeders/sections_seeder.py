@@ -6,7 +6,7 @@ from app.models.route import SectionOperation
 from app.models.section import Section
 from app.seeds.canon.models import OperationDef, ProductionCanon, SectionDef
 from app.seeds.canon.registry import build_plant_config
-from app.seeds.upsert import upsert_by_code
+from app.seeds.upsert import upsert_by_key
 
 # Типизированный канон (ADR-0004/0008 carve-out): единственный конвертер
 # сырых данных → моделей живёт в registry; седер использует его результат
@@ -47,7 +47,7 @@ async def seed_sections(
     if sections is None:
         sections = _DEFAULT_PRODUCTION.sections
 
-    return await upsert_by_code(
+    return await upsert_by_key(
         db,
         Section,
         sections,
@@ -88,7 +88,7 @@ async def seed_section_operations(
         if op.operation_code is not None and op.section_code in sections_map
     ]
 
-    result = await upsert_by_code(
+    result = await upsert_by_key(
         db,
         SectionOperation,
         rows,

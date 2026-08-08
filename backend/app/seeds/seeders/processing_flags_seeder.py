@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.product import ProcessingFlag
 from app.seeds.processing_flags import PROCESSING_FLAGS_DATA
-from app.seeds.upsert import upsert_by_code
+from app.seeds.upsert import upsert_by_key
 
 PROCESSING_FLAGS_FIELD_MAP = {
     "code": "code",
@@ -24,7 +24,7 @@ async def seed_processing_flags(db: AsyncSession) -> dict[str, ProcessingFlag]:
     is_active всегда True (данные справочника не несут флаг; исходный седер
     принудительно активировал строку при update).
     """
-    return await upsert_by_code(
+    return await upsert_by_key(
         db,
         ProcessingFlag,
         PROCESSING_FLAGS_DATA,

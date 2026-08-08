@@ -1,6 +1,6 @@
 """Юнит-тесты table-driven upsert хелпера (ADR-0010, Seam 2).
 
-Проверяют внешний контракт `upsert_by_code`:
+Проверяют внешний контракт `upsert_by_key`:
 - insert новой строки и update существующей;
 - `field_map` (передача полей из данных в ORM-модель);
 - `resolve=`-хук для FK-резолва и производных полей;
@@ -16,7 +16,7 @@ from sqlalchemy import func, select
 from app.models.route import SectionOperation
 from app.models.section import Section
 from app.seeds.canon.models import SectionDef
-from app.seeds.upsert import upsert_by_code
+from app.seeds.upsert import upsert_by_key
 
 
 async def _count(session, model) -> int:
@@ -31,7 +31,7 @@ async def test_insert_new_and_update_existing(session) -> None:
     ]
     field_map = {"code": "code", "name": "name", "sort_order": "sort_order", "type": "type"}
 
-    result = await upsert_by_code(session, Section, rows, key_field="code", field_map=field_map)
+    result = await upsert_by_key(session, Section, rows, key_field="code", field_map=field_map)
 
     assert set(result) == {"SEC-A", "SEC-B"}
     assert await _count(session, Section) == 2
@@ -41,7 +41,7 @@ async def test_insert_new_and_update_existing(session) -> None:
         {"code": "SEC-A", "name": "Секция A v2", "sort_order": 15, "type": "production"},
         {"code": "SEC-C", "name": "Секция C", "sort_order": 30, "type": "production"},
     ]
-    result2 = await upsert_by_code(session, Section, rows2, key_field="code", field_map=field_map)
+    result2 = await upsert_by_key(session, Section, rows2, key_field="code", field_map=field_map)
 
     assert set(result2) == {"SEC-A", "SEC-C"}
     assert await _count(session, Section) == 3
@@ -57,7 +57,7 @@ async def test_field_map_passes_selected_fields(session) -> None:
     rows = [{"code": "SEC-D", "name": "Секция D", "sort_order": 40, "type": "production"}]
     field_map = {"code": "code", "name": "name"}
 
-    result = await upsert_by_code(session, Section, rows, key_field="code", field_map=field_map)
+    result = await upsert_by_key(session, Section, rows, key_field="code", field_map=field_map)
 
     d = result["SEC-D"]
     # Не-mapped поля остаются дефолтными
@@ -79,7 +79,7 @@ async def test_resolve_hook_for_fk(session) -> None:
     def resolve(_row) -> dict:
         return {"section_id": section.id}
 
-    result = await upsert_by_code(
+    result = await upsert_by_key(
         session,
         SectionOperation,
         op_rows,
@@ -111,7 +111,7 @@ async def test_composite_key_and_transforms_dimensions(session) -> None:
             "transforms_dimensions": row["operation_code"] == "SAW",
         }
 
-    result = await upsert_by_code(
+    result = await upsert_by_key(
         session,
         SectionOperation,
         op_rows,
@@ -133,7 +133,7 @@ async def test_object_rows_with_attributes(session) -> None:
     ]
     field_map = {"code": "code", "name": "name", "sort_order": "sort_order", "type": "type"}
 
-    result = await upsert_by_code(session, Section, rows, key_field="code", field_map=field_map)
+    result = await upsert_by_key(session, Section, rows, key_field="code", field_map=field_map)
 
     assert set(result) == {"SEC-OBJ"}
     obj = await session.scalar(select(Section).where(Section.code == "SEC-OBJ"))
@@ -149,8 +149,8 @@ async def test_idempotent_second_call_no_duplicates(session) -> None:
     ]
     field_map = {"code": "code", "name": "name", "sort_order": "sort_order", "type": "type"}
 
-    await upsert_by_code(session, Section, rows, key_field="code", field_map=field_map)
-    result2 = await upsert_by_code(session, Section, rows, key_field="code", field_map=field_map)
+    await upsert_by_key(session, Section, rows, key_field="code", field_map=field_map)
+    result2 = await upsert_by_key(session, Section, rows, key_field="code", field_map=field_map)
 
     assert await _count(session, Section) == 1
     assert set(result2) == {"SEC-I"}

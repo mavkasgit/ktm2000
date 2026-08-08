@@ -5,7 +5,7 @@ from typing import Any
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.import_template import ImportTemplate
-from app.seeds.upsert import upsert_by_code
+from app.seeds.upsert import upsert_by_key
 
 IMPORT_TEMPLATE_FIELD_MAP = {
     "code": "code",
@@ -32,7 +32,7 @@ def _resolve_import_template(data: dict[str, Any]) -> dict[str, Any]:
 
 async def seed_import_template(db: AsyncSession, data: dict) -> ImportTemplate:
     """Upsert ImportTemplate by code. Returns the object with id set."""
-    result = await upsert_by_code(
+    result = await upsert_by_key(
         db,
         ImportTemplate,
         [data],

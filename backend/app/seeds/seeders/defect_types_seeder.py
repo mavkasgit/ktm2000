@@ -4,7 +4,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.defect import DefectType
 from app.seeds.canon.models import DefectTypeDef
-from app.seeds.upsert import upsert_by_code
+from app.seeds.upsert import upsert_by_key
 
 DEFECT_TYPES_FIELD_MAP = {
     "code": "code",
@@ -22,7 +22,7 @@ async def seed_defect_types(
     defect_types: list[DefectTypeDef],
 ) -> int:
     """Upsert DefectType records by code. Returns count of types upserted."""
-    result = await upsert_by_code(
+    result = await upsert_by_key(
         db,
         DefectType,
         defect_types,

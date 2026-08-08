@@ -4,7 +4,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.route import RouteRuleProfile
 from app.seeds.canon.models import RouteRuleProfileDef
-from app.seeds.upsert import upsert_by_code
+from app.seeds.upsert import upsert_by_key
 
 ROUTE_RULE_PROFILE_FIELD_MAP = {
     "code": "code",
@@ -34,7 +34,7 @@ async def seed_route_rule_profile(
         ]
         return values
 
-    result = await upsert_by_code(
+    result = await upsert_by_key(
         db,
         RouteRuleProfile,
         [profile_def],

@@ -6,7 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.dimension import DimensionType, ProductDimension
 from app.models.product import Product
 from app.seeds.dimension_types import DIMENSION_TYPES_DATA
-from app.seeds.upsert import upsert_by_code
+from app.seeds.upsert import upsert_by_key
 
 DIMENSION_TYPES_FIELD_MAP = {
     "code": "code",
@@ -26,7 +26,7 @@ async def seed_dimension_types(db: AsyncSession) -> dict[str, int]:
     Основная часть (DimensionType) — через table-driven upsert; хвост
     (ProductDimension биндинги) — bespoke-блок вне хелпера (cross-entity).
     """
-    types_map = await upsert_by_code(
+    types_map = await upsert_by_key(
         db,
         DimensionType,
         DIMENSION_TYPES_DATA,
