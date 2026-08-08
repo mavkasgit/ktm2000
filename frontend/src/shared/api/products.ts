@@ -203,16 +203,26 @@ export async function uploadCatalogZip(file: File) {
 export type CatalogPreviewItem = {
   sku: string;
   name: string;
-  profile_type: string | null;
   length_mm: number | null;
   quantity_per_hanger: number | null;
   has_photo: boolean;
   action: "create" | "update" | "skip";
+  row?: number;
+  lengths_mm?: number[];
+  quantities_per_hanger?: number[] | null;
+  warnings?: string[];
+};
+
+export type CatalogImportError = {
+  row: number;
+  sku: string;
+  message: string;
 };
 
 export type CatalogPreview = {
   items: CatalogPreviewItem[];
-  stats: { total: number; create: number; update: number; skip: number };
+  stats: { total: number; create: number; update: number; skip: number; errors?: number };
+  errors?: CatalogImportError[];
 };
 
 export async function previewCatalogZip(file: File) {
@@ -224,6 +234,49 @@ export async function previewCatalogZip(file: File) {
     { headers: { "Content-Type": "multipart/form-data" } }
   );
   return data;
+}
+
+export async function previewCatalogExcel(file: File) {
+  const formData = new FormData();
+  formData.append("file", file);
+  const { data } = await apiClient.post<CatalogPreview>(
+    "/catalog-import/preview-excel",
+    formData,
+    { headers: { "Content-Type": "multipart/form-data" } }
+  );
+  return data;
+}
+
+export type CatalogExcelApplyResult = {
+  imported: number;
+  updated: number;
+  skipped: number;
+  errors: CatalogImportError[];
+};
+
+export async function applyCatalogExcel(file: File) {
+  const formData = new FormData();
+  formData.append("file", file);
+  const { data } = await apiClient.post<CatalogExcelApplyResult>(
+    "/catalog-import/apply-excel",
+    formData,
+    { headers: { "Content-Type": "multipart/form-data" } }
+  );
+  return data;
+}
+
+export async function downloadCatalogTemplate() {
+  const { data } = await apiClient.get<Blob>("/catalog-import/template-excel", {
+    responseType: "blob",
+  });
+  const url = URL.createObjectURL(data);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = "catalog_template.xlsx";
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
 }
 
 export type AliasSuggestion = {

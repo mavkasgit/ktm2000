@@ -1,17 +1,35 @@
 import shutil
 import sqlite3
 import zipfile
+from io import BytesIO
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from fastapi.responses import Response
+from openpyxl import Workbook
 from sqlalchemy import String, cast, select
 from sqlalchemy.dialects.postgresql import ARRAY as pg_ARRAY
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
+from app.api.routes.products import (
+    _enforce_bidirectional_aliases,
+    _sync_boolean_flag,
+    _sync_lengths,
+)
 from app.core.config import settings
 from app.core.database import get_db
-from app.models.product import Product, ProductType
+from app.models.product import Product, ProductLength, ProductType
+from app.services.catalog_excel_import import (
+    TEMPLATE_HEADERS,
+    ParsedCatalogRow,
+    build_quantity_dict,
+    diff_catalog_row,
+    effective_lengths,
+    parse_catalog_excel,
+    validate_row_counts,
+)
 
 router = APIRouter(prefix="/catalog-import", tags=["catalog-import"])
 
@@ -290,3 +308,196 @@ async def preview_catalog_from_zip(
             })
 
         return {"items": items, "stats": stats}
+
+
+# ─── Импорт справочника сырья из Excel (#63) ────────────────────────────────
+
+
+async def _load_products_by_sku(db: AsyncSession, skus: list[str]) -> dict[str, Product]:
+    if not skus:
+        return {}
+    stmt = (
+        select(Product)
+        .options(selectinload(Product.lengths), selectinload(Product.processing_flags))
+        .where(Product.sku.in_(skus))
+    )
+    items = (await db.execute(stmt)).scalars().all()
+    return {product.sku: product for product in items}
+
+
+def _row_count_errors(row: ParsedCatalogRow, existing_lengths: list[float] | None) -> list[dict]:
+    return [
+        {"row": row.row, "sku": row.sku, "message": message}
+        for message in validate_row_counts(row, existing_lengths)
+    ]
+
+
+async def _create_product_from_row(db: AsyncSession, row: ParsedCatalogRow) -> None:
+    fields = row.fields
+    lengths = fields.get("lengths_mm") or []
+    quantities = fields.get("quantities")
+    product = Product(
+        sku=row.sku,
+        name=fields.get("name") or row.sku,
+        type=ProductType.component,
+        unit="шт",
+        is_active=True,
+        notes=fields.get("notes"),
+        is_paired_profile=bool(fields.get("is_paired_profile")),
+        aliases=list(fields.get("aliases") or []),
+        source="excel_catalog_import",
+    )
+    if fields.get("perimeter_mm") is not None:
+        product.perimeter_mm = fields["perimeter_mm"]
+    if fields.get("mount_width_mm") is not None:
+        product.mount_width_mm = fields["mount_width_mm"]
+    if lengths and quantities is not None:
+        product.quantity_per_hanger = build_quantity_dict(lengths, quantities)
+    db.add(product)
+    await db.flush()
+
+    for length in lengths:
+        db.add(ProductLength(product_id=product.id, length_mm=length))
+    if fields.get("skip_shot_blast") is not None:
+        await _sync_boolean_flag(db, product.id, "skip_shot_blast", fields["skip_shot_blast"])
+    if fields.get("is_laminated") is not None:
+        await _sync_boolean_flag(db, product.id, "is_laminated", fields["is_laminated"])
+    if fields.get("aliases"):
+        await _enforce_bidirectional_aliases(db, product.id, fields["aliases"], old_aliases=[])
+    await db.flush()
+
+
+async def _update_product_from_row(db: AsyncSession, product: Product, row: ParsedCatalogRow) -> bool:
+    changes = diff_catalog_row(product, row)
+    if not changes:
+        return False
+
+    for key in ("name", "notes", "is_paired_profile"):
+        if key in changes:
+            setattr(product, key, changes[key])
+    if "type" in changes:
+        product.type = changes["type"]
+    if "is_active" in changes:
+        product.is_active = changes["is_active"]
+    for key in ("perimeter_mm", "mount_width_mm"):
+        if key in changes:
+            setattr(product, key, changes[key])
+    if "lengths_mm" in changes:
+        await _sync_lengths(db, product.id, changes["lengths_mm"])
+    if "quantity_per_hanger" in changes:
+        product.quantity_per_hanger = changes["quantity_per_hanger"]
+    if "skip_shot_blast" in changes:
+        await _sync_boolean_flag(db, product.id, "skip_shot_blast", changes["skip_shot_blast"])
+    if "is_laminated" in changes:
+        await _sync_boolean_flag(db, product.id, "is_laminated", changes["is_laminated"])
+    if "aliases" in changes:
+        old_aliases = list(product.aliases or [])
+        product.aliases = changes["aliases"]
+        await _enforce_bidirectional_aliases(db, product.id, changes["aliases"], old_aliases=old_aliases)
+    await db.flush()
+    return True
+
+
+async def _prepare_excel_import(
+    file: UploadFile, db: AsyncSession
+) -> tuple[list[ParsedCatalogRow], list[dict], dict[str, Product], int]:
+    """Общая часть preview/apply: парсинг файла + загрузка артикулов по SKU."""
+    content = await file.read()
+    try:
+        rows, errors, total_data_rows = parse_catalog_excel(content, file.filename or "")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    products = await _load_products_by_sku(db, [row.sku for row in rows])
+    return rows, errors, products, total_data_rows
+
+
+@router.post("/preview-excel")
+async def preview_catalog_from_excel(
+    file: UploadFile = File(...),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Предпросмотр импорта справочника сырья из Excel без записи в БД (#63)."""
+    rows, errors, products, total_data_rows = await _prepare_excel_import(file, db)
+    items = []
+    stats = {"total": total_data_rows, "create": 0, "update": 0, "skip": 0}
+    error_rows: set[int] = {err["row"] for err in errors}
+
+    for row in rows:
+        product = products.get(row.sku)
+        existing_lengths = sorted(length.length_mm for length in product.lengths) if product else None
+        count_errors = _row_count_errors(row, existing_lengths)
+        if count_errors:
+            errors.extend(count_errors)
+            error_rows.add(row.row)
+            continue
+
+        if product is None:
+            action = "create"
+        else:
+            action = "update" if diff_catalog_row(product, row) else "skip"
+        stats[action] += 1
+
+        lengths = effective_lengths(row, existing_lengths)
+        quantities = row.fields.get("quantities")
+        items.append({
+            "row": row.row,
+            "sku": row.sku,
+            "name": row.fields.get("name") or (product.name if product else row.sku),
+            "length_mm": lengths[0] if lengths else None,
+            "lengths_mm": lengths or [],
+            "quantity_per_hanger": quantities[0] if quantities else (product.quantity_per_hanger if product else None),
+            "quantities_per_hanger": quantities,
+            "has_photo": False,
+            "action": action,
+            "warnings": row.warnings,
+        })
+
+    stats["errors"] = len(error_rows)
+    return {"items": items, "errors": errors, "stats": stats}
+
+
+@router.post("/apply-excel")
+async def apply_catalog_from_excel(
+    file: UploadFile = File(...),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Применение импорта справочника сырья из Excel (#63). Файл загружается повторно."""
+    rows, errors, products, _total = await _prepare_excel_import(file, db)
+    imported = 0
+    updated = 0
+    skipped = 0
+
+    for row in rows:
+        product = products.get(row.sku)
+        existing_lengths = sorted(length.length_mm for length in product.lengths) if product else None
+        count_errors = _row_count_errors(row, existing_lengths)
+        if count_errors:
+            errors.extend(count_errors)
+            continue
+
+        if product is None:
+            await _create_product_from_row(db, row)
+            imported += 1
+        elif await _update_product_from_row(db, product, row):
+            updated += 1
+        else:
+            skipped += 1
+
+    await db.commit()
+    return {"imported": imported, "updated": updated, "skipped": skipped, "errors": errors}
+
+
+@router.get("/template-excel")
+async def catalog_template_excel() -> Response:
+    """Скачиваемый шаблон справочника сырья: только заголовки колонок (#63)."""
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "Справочник сырья"
+    sheet.append(list(TEMPLATE_HEADERS))
+    buffer = BytesIO()
+    workbook.save(buffer)
+    return Response(
+        content=buffer.getvalue(),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": 'attachment; filename="catalog_template.xlsx"'},
+    )

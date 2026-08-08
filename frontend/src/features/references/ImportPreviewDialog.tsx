@@ -66,7 +66,26 @@ export function ImportPreviewDialog({
           <span className="text-green-700 font-medium">{stats.create} создать</span>
           <span className="text-blue-700 font-medium">{stats.update} обновить</span>
           <span className="text-muted-foreground">{stats.skip} пропустить</span>
+          {preview.errors && preview.errors.length > 0 && (
+            <span className="text-red-700 font-medium">
+              {stats.errors ?? preview.errors.length} строк с ошибками
+            </span>
+          )}
         </div>
+
+        {/* Row errors report (#63) */}
+        {preview.errors && preview.errors.length > 0 && (
+          <div className="border border-red-200 bg-red-50 rounded-lg max-h-32 overflow-auto px-3 py-2 text-sm">
+            <div className="font-medium text-red-800 mb-1">Ошибки строк (строки пропущены):</div>
+            <ul className="list-disc list-inside space-y-0.5 text-red-700">
+              {preview.errors.map((err, idx) => (
+                <li key={idx}>
+                  Строка {err.row}{err.sku ? ` — ${err.sku}` : ""}: {err.message}
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
 
         {/* Filter buttons */}
         <div className="flex gap-1">
@@ -104,8 +123,7 @@ export function ImportPreviewDialog({
             <thead className="bg-muted sticky top-0">
               <tr>
                 <th className="px-4 py-3 text-left font-medium">Артикул</th>
-                <th className="px-4 py-3 text-left font-medium">Тип профиля</th>
-                <th className="px-4 py-3 text-left font-medium">Длина, мм</th>
+                <th className="px-4 py-3 text-left font-medium">Длины, мм</th>
                 <th className="px-4 py-3 text-left font-medium">Кол-во на подвесе</th>
                 <th className="px-4 py-3 text-left font-medium">Фото</th>
                 <th className="px-4 py-3 text-left font-medium">Действие</th>
@@ -114,12 +132,21 @@ export function ImportPreviewDialog({
             <tbody className="divide-y">
               {filteredItems.map((item) => {
                 const cfg = ACTION_CONFIG[item.action as keyof typeof ACTION_CONFIG];
+                const lengthsText =
+                  item.lengths_mm && item.lengths_mm.length > 0
+                    ? item.lengths_mm.join(", ")
+                    : item.length_mm
+                      ? `${item.length_mm}`
+                      : null;
+                const quantitiesText =
+                  item.quantities_per_hanger && item.quantities_per_hanger.length > 0
+                    ? item.quantities_per_hanger.join(", ")
+                    : item.quantity_per_hanger ?? null;
                 return (
                   <tr key={item.sku} className="hover:bg-muted/50">
                     <td className="px-4 py-2 font-medium">{item.sku}</td>
-                    <td className="px-4 py-2">{item.profile_type ?? "—"}</td>
-                    <td className="px-4 py-2">{item.length_mm ? `${item.length_mm} мм` : "—"}</td>
-                    <td className="px-4 py-2">{item.quantity_per_hanger ?? "—"}</td>
+                    <td className="px-4 py-2">{lengthsText ?? "—"}</td>
+                    <td className="px-4 py-2">{quantitiesText ?? "—"}</td>
                     <td className="px-4 py-2">
                       {item.has_photo ? (
                         <span className="text-green-600 flex items-center gap-1">
