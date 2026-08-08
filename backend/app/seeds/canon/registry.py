@@ -30,8 +30,8 @@ from app.seeds.canon.models import (
 def build_plant_config() -> PlantConfig:
     """Собирает и валидирует PlantConfig из RAW-данных завода.
 
-    Импортирует dict-литералы из plant_policies и sections_seeder
-    (authoring format), конвертирует в typed-модели, запускает
+    Импортирует dict-литералы из authoring-модулей (app/seeds/*.py,
+    включая sections.py) и конвертирует в typed-модели, затем запускает
     cross-ref проверки. Объект не может существовать в невалидном виде.
 
     Raises:

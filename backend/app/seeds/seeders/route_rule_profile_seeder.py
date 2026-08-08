@@ -11,7 +11,6 @@ ROUTE_RULE_PROFILE_FIELD_MAP = {
     "name": "name",
     "is_active": "is_active",
     "priority": "priority",
-    "excel_column_passport": "excel_column_passport",
     "excel_passport_meta": "excel_passport_meta",
     "route_sections": "route_sections",
 }

@@ -10,15 +10,20 @@ from app.seeds.upsert import upsert_by_code
 IMPORT_TEMPLATE_FIELD_MAP = {
     "code": "code",
     "name": "name",
-    "is_active": "is_active",
-    "sort_order": "sort_order",
-    "column_mapping": "column_mapping",
 }
 
 
 def _resolve_import_template(data: dict[str, Any]) -> dict[str, Any]:
-    """Optional-поля шаблона: button_label/description только если заданы."""
-    values: dict[str, Any] = {}
+    """Необязательные и дефолтные поля шаблона.
+
+    is_active/sort_order/column_mapping имеют дефолты (как в исходном седере);
+    button_label/description задаются только если присутствуют в данных.
+    """
+    values: dict[str, Any] = {
+        "is_active": data.get("is_active", True),
+        "sort_order": data.get("sort_order", 0),
+        "column_mapping": data.get("column_mapping", {}),
+    }
     for key in ("button_label", "description"):
         if data.get(key) is not None:
             values[key] = data[key]

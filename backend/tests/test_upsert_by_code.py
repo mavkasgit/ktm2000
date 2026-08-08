@@ -15,6 +15,7 @@ from sqlalchemy import func, select
 
 from app.models.route import SectionOperation
 from app.models.section import Section
+from app.seeds.canon.models import SectionDef
 from app.seeds.upsert import upsert_by_code
 
 
@@ -122,6 +123,23 @@ async def test_composite_key_and_transforms_dimensions(session) -> None:
     assert set(result) == {(section.id, "SAW"), (section.id, "PACK")}
     assert result[(section.id, "SAW")].transforms_dimensions is True
     assert result[(section.id, "PACK")].transforms_dimensions is False
+
+
+@pytest.mark.asyncio
+async def test_object_rows_with_attributes(session) -> None:
+    """Ветка getattr: строки — объекты с атрибутами (типизированные модели)."""
+    rows = [
+        SectionDef(code="SEC-OBJ", name="Секция OBJ", sort_order=50, type="production"),
+    ]
+    field_map = {"code": "code", "name": "name", "sort_order": "sort_order", "type": "type"}
+
+    result = await upsert_by_code(session, Section, rows, key_field="code", field_map=field_map)
+
+    assert set(result) == {"SEC-OBJ"}
+    obj = await session.scalar(select(Section).where(Section.code == "SEC-OBJ"))
+    assert obj is not None
+    assert obj.name == "Секция OBJ"
+    assert obj.sort_order == 50
 
 
 @pytest.mark.asyncio
