@@ -74,6 +74,10 @@ class HangerCalcResponse(BaseModel):
 @router.post("", response_model=HangerCalcResponse)
 async def hanger_calc(payload: HangerCalcRequest) -> HangerCalcResponse:
     settings = HangerSettings(**payload.hanger.model_dump())
+    try:
+        settings.validate()
+    except HangerConfigError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     results: list[HangerCalcResultOut] = []
     for item in payload.items:

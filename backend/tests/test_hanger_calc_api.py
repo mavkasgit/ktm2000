@@ -187,3 +187,12 @@ async def test_empty_items_returns_default_constants(client):
     body = resp.json()
     assert body["results"] == []
     assert body["hanger"] == {"area_limit_m2": 13.0, "rod_length_mm": 1450.0, "gap_mm": 20.0, "rod_count": 2}
+
+
+@pytest.mark.asyncio
+async def test_invalid_constants_return_422_even_with_empty_items(client):
+    resp = await client.post(
+        "/api/hanger-calc",
+        json={"items": [], "hanger": {"area_limit_m2": 0}},
+    )
+    assert resp.status_code == 422
