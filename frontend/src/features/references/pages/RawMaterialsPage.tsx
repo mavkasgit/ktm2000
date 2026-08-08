@@ -29,7 +29,7 @@ import { cn } from "@/shared/utils/cn";
 
 type ViewMode = "grid" | "table" | "calc";
 type DialogMode = "create" | "edit";
-type SortField = "sku" | "name" | "length_mm" | "quantity_per_hanger" | "id" | "is_paired_profile" | "skip_shot_blast" | "aliases" | "is_laminated";
+type SortField = "sku" | "name" | "length_mm" | "quantity_per_hanger" | "id" | "is_paired_profile" | "skip_shot_blast" | "is_laminated";
 type ColumnFilterField = "sku" | "quantity_per_hanger" | "length_mm" | "is_paired_profile" | "skip_shot_blast" | "is_laminated";
 type SortOrder = "asc" | "desc";
 

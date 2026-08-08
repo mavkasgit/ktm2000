@@ -148,10 +148,33 @@ class ProductOut(BaseModel):
     dimensions: dict[str, float] | None = None
 
 
-VALID_SORT_FIELDS = {"sku", "name", "length_mm", "quantity_per_hanger", "id"}
+# Курируемый набор полей сортировки справочника сырья (#76): прямые колонки,
+# JSONB-атрибуты, quantity_per_hanger (per-length), aliases (объединённый текст),
+# флаги обработки (булевская сортировка).
+_DIRECT_SORT_FIELDS = frozenset({
+    "sku", "code", "name", "type", "unit", "is_active", "is_catalog_item",
+    "is_paired_profile", "profile_type", "alloy", "color", "anod_type",
+    "source", "dimension_state", "id",
+})
 
-# Fields stored in JSONB attributes column (#19)
-_JSONB_SORT_FIELDS = {"length_mm"}
+# Числовые атрибуты из JSONB-колонки attributes (#19)
+_JSONB_NUMERIC_SORT_FIELDS = frozenset({
+    "length_mm", "weight_per_meter", "perimeter_mm", "mount_width_mm",
+})
+
+# Текстовые атрибуты из JSONB-колонки attributes
+_JSONB_TEXT_SORT_FIELDS = frozenset({"cross_section"})
+
+# Флаги обработки (M2M product_processing_flags) — сортируются как boolean
+_FLAG_SORT_FIELDS = frozenset({"skip_shot_blast", "is_laminated"})
+
+VALID_SORT_FIELDS = (
+    _DIRECT_SORT_FIELDS
+    | _JSONB_NUMERIC_SORT_FIELDS
+    | _JSONB_TEXT_SORT_FIELDS
+    | _FLAG_SORT_FIELDS
+    | {"quantity_per_hanger", "aliases"}
+)
 
 
 def _quantity_effective_expr(entry_value):
@@ -376,8 +399,22 @@ async def _enforce_bidirectional_aliases(
     return activated
 
 
+def _flag_exists_expr(code: str):
+    """Коррелированный exists-подзапрос: у продукта установлен processing flag `code`."""
+    return exists().where(
+        ProductProcessingFlag.product_id == Product.id,
+        ProductProcessingFlag.flag_id == ProcessingFlag.id,
+        ProcessingFlag.code == code,
+    )
+
+
 def _parse_sort(sort_param: str):
-    """Parse sort parameter like 'sku:asc,length_mm:desc' into list of (column_attr, is_desc)."""
+    """Parse sort parameter like 'sku:asc,length_mm:desc' into list of order clauses.
+
+    Поддерживаются (#76): прямые колонки Product, числовые/текстовые
+    JSONB-атрибуты, quantity_per_hanger (по эффективному значению основной
+    длины), aliases (по объединённому тексту) и флаги обработки (boolean).
+    """
     rules = []
     for part in sort_param.split(","):
         part = part.strip()
@@ -393,11 +430,19 @@ def _parse_sort(sort_param: str):
         if order not in ("asc", "desc"):
             raise HTTPException(status_code=400, detail=f"Invalid sort order: {order}")
         if field == "quantity_per_hanger":
-            # Per-length dict (#60): сортируем по manual основной длины.
+            # Per-length dict (#60): сортируем по эффективному значению основной длины.
             col = _primary_length_quantity_expr()
-        elif field in _JSONB_SORT_FIELDS:
-            # Sort by JSONB attribute value (#19)
+        elif field == "aliases":
+            # Сортировка по объединённому тексту массива алиасов (#76).
+            col = func.coalesce(func.array_to_string(Product.aliases, ","), "")
+        elif field in _JSONB_NUMERIC_SORT_FIELDS:
+            # JSONB-атрибут (#19): сортировка по числовому значению.
             col = Product.attributes[field].as_float()
+        elif field in _JSONB_TEXT_SORT_FIELDS:
+            col = Product.attributes[field].astext
+        elif field in _FLAG_SORT_FIELDS:
+            # Флаг обработки (M2M): булевская сортировка — desc ставит с флагом первыми.
+            col = _flag_exists_expr(field)
         else:
             col = getattr(Product, field)
         rules.append(col.desc() if order == "desc" else col)
@@ -458,18 +503,10 @@ async def list_products(
     if is_paired_profile is not None:
         stmt = stmt.where(Product.is_paired_profile == is_paired_profile)
     if skip_shot_blast is not None:
-        flag_exists = exists().where(
-            ProductProcessingFlag.product_id == Product.id,
-            ProductProcessingFlag.flag_id == ProcessingFlag.id,
-            ProcessingFlag.code == "skip_shot_blast",
-        )
+        flag_exists = _flag_exists_expr("skip_shot_blast")
         stmt = stmt.where(flag_exists if skip_shot_blast else ~flag_exists)
     if is_laminated is not None:
-        flag_exists = exists().where(
-            ProductProcessingFlag.product_id == Product.id,
-            ProductProcessingFlag.flag_id == ProcessingFlag.id,
-            ProcessingFlag.code == "is_laminated",
-        )
+        flag_exists = _flag_exists_expr("is_laminated")
         stmt = stmt.where(flag_exists if is_laminated else ~flag_exists)
     if sku:
         stmt = stmt.where(Product.sku.ilike(f"%{sku}%"))
