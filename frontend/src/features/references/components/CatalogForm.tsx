@@ -14,6 +14,7 @@ import { listDimensionTypes } from "../api";
 import { queryKeys } from "@/shared/api/queryKeys";
 import { calcHanger, type HangerCalcResult } from "@/shared/api/hangerCalc";
 import { isHangerAutoMode, lengthKey, manualByLength, normalizeLengths, productLengths } from "@/shared/lib/hangerQuantity";
+import { parseNumericInput } from "@/shared/lib/parseNumericInput";
 import { cn } from "@/shared/utils/cn";
 import type { Product, CreateProductInput, PatchProductInput, QuantityPerHangerDict, DimensionState } from "@/shared/api/products";
 
@@ -151,18 +152,6 @@ type HangerPreviewState =
   | { status: "loading" }
   | { status: "ready"; results: HangerCalcResult[] | null }
   | { status: "error"; message: string };
-
-function parseDecimalInput(text: string): number | null {
-  if (!text) return null;
-  const parsed = Number.parseFloat(text);
-  return Number.isFinite(parsed) ? parsed : null;
-}
-
-function parseQuantityInput(text: string): number | null {
-  if (!text) return null;
-  const parsed = Number.parseInt(text, 10);
-  return Number.isFinite(parsed) ? parsed : null;
-}
 
 export const CatalogForm = forwardRef<CatalogFormRef, {
   product: Product | null;
@@ -628,7 +617,7 @@ export const CatalogForm = forwardRef<CatalogFormRef, {
                         !perimeterInvalid && (form.perimeter_mm ?? null) != null && "bg-emerald-50 border-emerald-300",
                       )}
                       value={form.perimeter_mm ?? ""}
-                      onChange={(e) => update("perimeter_mm", parseDecimalInput(e.target.value))}
+                      onChange={(e) => update("perimeter_mm", parseNumericInput(e.target.value))}
                       disabled={readOnly}
                     />
                     {perimeterInvalid && (
@@ -647,7 +636,7 @@ export const CatalogForm = forwardRef<CatalogFormRef, {
                         !mountWidthInvalid && (form.mount_width_mm ?? null) != null && "bg-emerald-50 border-emerald-300",
                       )}
                       value={form.mount_width_mm ?? ""}
-                      onChange={(e) => update("mount_width_mm", parseDecimalInput(e.target.value))}
+                      onChange={(e) => update("mount_width_mm", parseNumericInput(e.target.value))}
                       disabled={readOnly}
                     />
                     {mountWidthInvalid && (
@@ -688,7 +677,10 @@ export const CatalogForm = forwardRef<CatalogFormRef, {
                                     value={autoMode ? autoQuantityFor(len) ?? "" : rowManual ?? ""}
                                     placeholder={autoMode ? "—" : ""}
                                     readOnly={autoMode}
-                                    onChange={(e) => updateManualForLength(len, parseQuantityInput(e.target.value))}
+                                    onChange={(e) => {
+                                      const parsed = parseNumericInput(e.target.value);
+                                      updateManualForLength(len, parsed == null ? null : Math.trunc(parsed));
+                                    }}
                                     disabled={readOnly}
                                     title={autoMode ? "В авто-режиме значение считается из периметра и габарита" : undefined}
                                   />

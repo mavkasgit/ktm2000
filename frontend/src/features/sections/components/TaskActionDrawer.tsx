@@ -2,6 +2,7 @@ import type { Dispatch, SetStateAction } from "react";
 import { useEffect } from "react";
 import { AlertTriangle } from "lucide-react";
 import { cn } from "@/shared/utils/cn";
+import { parseNumericInput } from "@/shared/lib/parseNumericInput";
 
 import type { SectionBoardTask, ShortageStrategy } from "@/shared/api/shopfloor";
 import { formatDimensionsLabel } from "@/shared/api/stock";
@@ -29,8 +30,8 @@ function fmtQty(value: string): string {
 }
 
 function toNumber(value: string): number {
-  const n = parseFloat(value);
-  return Number.isFinite(n) ? Math.round(n) : 0;
+  const n = parseNumericInput(value);
+  return n == null ? 0 : Math.round(n);
 }
 
 function normalizeIntegerInput(value: string): string {

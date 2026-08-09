@@ -12,6 +12,7 @@ import {
   type ProductDimension,
 } from "../api";
 import { cn } from "@/shared/utils/cn";
+import { parseNumericInput } from "@/shared/lib/parseNumericInput";
 import type { DimensionState } from "@/shared/api/products";
 
 const MODES: { value: DimensionState; label: string }[] = [
@@ -67,19 +68,26 @@ export const ProductDimensionsSection = forwardRef<
   // Локальный state для 2D/3D — code → value
   const [multiValues, setMultiValues] = useState<Record<string, string>>({});
   const dirtyRef = useRef(new Set<string>());
+  // In-flight сохранения code → promise (blur-сохранения + flushPending делят их)
+  const pendingRef = useRef(new Map<string, Promise<unknown>>());
 
   // Синхронизация из server → local state (только для чистых полей)
   useEffect(() => {
     if (dimensionState === "length") return;
     const codes = DIMENSION_FIELDS[dimensionState].map((f) => f.code);
     setMultiValues((prev) => {
+      let changed = false;
       const next = { ...prev };
       for (const code of codes) {
         if (dirtyRef.current.has(code)) continue;
         const link = links.find((l) => l.dimension_type.code === code);
-        next[code] = link?.default_value != null ? String(link.default_value) : "";
+        const serverValue = link?.default_value != null ? String(link.default_value) : "";
+        if (next[code] !== serverValue) {
+          next[code] = serverValue;
+          changed = true;
+        }
       }
-      return next;
+      return changed ? next : prev;
     });
   }, [links, dimensionState]);
 
@@ -108,32 +116,13 @@ export const ProductDimensionsSection = forwardRef<
   const flushPending = async () => {
     if (readOnly || !productId || dimensionState === "length") return;
     const codes = DIMENSION_FIELDS[dimensionState].map((f) => f.code);
-    const promises: Promise<unknown>[] = [];
-    for (const code of codes) {
-      if (!dirtyRef.current.has(code)) continue;
-      dirtyRef.current.delete(code);
-      const value = multiValues[code] ?? "";
-      const parsed = toNumber(value);
-      const link = links.find((l) => l.dimension_type.code === code);
-      if (link) {
-        promises.push(patchMutation.mutateAsync({ linkId: link.id, payload: { default_value: parsed } }));
-      } else {
-        const dimType = dimensionTypes.find((dt) => dt.code === code);
-        if (dimType) {
-          promises.push(createMutation.mutateAsync({ dimension_type_id: dimType.id, default_value: parsed }));
-        }
-      }
-    }
-    if (promises.length) await Promise.all(promises);
+    // Сохраняем ВСЕ поля текущей размерности (детерминированно): для кода,
+    // который уже сохраняется по blur — ждём его промис, иначе сохраняем сейчас.
+    const promises = codes.map((code) => pendingRef.current.get(code) ?? saveCode(code));
+    await Promise.all(promises);
   };
 
   useImperativeHandle(ref, () => ({ flushPending }), [flushPending]);
-
-  const toNumber = (v: string): number | null => {
-    const trimmed = v.trim();
-    const parsed = trimmed ? parseFloat(trimmed) : null;
-    return parsed !== null && Number.isFinite(parsed) ? parsed : null;
-  };
 
   const handleMultiChange = (code: string, value: string) => {
     if (readOnly) return;
@@ -141,21 +130,30 @@ export const ProductDimensionsSection = forwardRef<
     dirtyRef.current.add(code);
   };
 
+  /** Сохранить одно поле (2D/3D). Промис отслеживается в pendingRef, чтобы
+   *  flushPending мог дождаться и blur-сохранений перед закрытием диалога. */
+  const saveCode = (code: string): Promise<unknown> => {
+    const value = multiValues[code] ?? "";
+    const parsed = parseNumericInput(value);
+    const link = links.find((l) => l.dimension_type.code === code);
+    const dimType = dimensionTypes.find((dt) => dt.code === code);
+    if (!dimType) return Promise.resolve();
+    const promise = (link
+      ? patchMutation.mutateAsync({ linkId: link.id, payload: { default_value: parsed } })
+      : createMutation.mutateAsync({ dimension_type_id: dimType.id, default_value: parsed })
+    ).catch(() => undefined);
+    pendingRef.current.set(code, promise);
+    void promise.finally(() => {
+      if (pendingRef.current.get(code) === promise) pendingRef.current.delete(code);
+    });
+    return promise;
+  };
+
   const handleMultiSave = (code: string) => {
     if (readOnly || !productId) return;
     if (!dirtyRef.current.has(code)) return;
     dirtyRef.current.delete(code);
-    const value = multiValues[code] ?? "";
-    const parsed = toNumber(value);
-    const link = links.find((l) => l.dimension_type.code === code);
-    if (link) {
-      patchMutation.mutate({ linkId: link.id, payload: { default_value: parsed } });
-    } else {
-      const dimType = dimensionTypes.find((dt) => dt.code === code);
-      if (dimType) {
-        createMutation.mutate({ dimension_type_id: dimType.id, default_value: parsed });
-      }
-    }
+    void saveCode(code);
   };
 
   return (
@@ -200,7 +198,7 @@ export const ProductDimensionsSection = forwardRef<
                   )}
                   placeholder="—"
                   value={value}
-                  disabled={readOnly || patchMutation.isPending || createMutation.isPending}
+                  disabled={readOnly}
                   onChange={(e) => handleMultiChange(field.code, e.target.value)}
                   onBlur={() => handleMultiSave(field.code)}
                   onKeyDown={(e) => {
