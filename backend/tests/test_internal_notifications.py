@@ -2,6 +2,7 @@
 
 Контракт: {items, total, unread_count}, скоуп user_id IS NULL OR user_id = текущий,
 фильтр only_unclosed, сортировка created_at DESC, пагинация limit/offset.
+Состояние (read/close) — в UserNotificationState (лениво, per-user).
 """
 
 from __future__ import annotations
@@ -12,7 +13,7 @@ import pytest
 from sqlalchemy import select
 
 from app.core.security import create_access_token
-from app.models.internal_notification import InternalNotification
+from app.models.notification import Notification, UserNotificationState
 from app.models.user import User, UserRole
 
 NOTIFICATION_FIELDS = {
@@ -56,10 +57,8 @@ async def _make_notification(
     entity_type: str | None = None,
     entity_id: int | None = None,
     created_at: datetime | None = None,
-    read_at: datetime | None = None,
-    closed_at: datetime | None = None,
-) -> InternalNotification:
-    notification = InternalNotification(
+) -> Notification:
+    notification = Notification(
         user_id=user_id,
         notification_type=notification_type,
         title=title,
@@ -67,18 +66,39 @@ async def _make_notification(
         entity_type=entity_type,
         entity_id=entity_id,
         created_at=created_at or _dt(),
-        read_at=read_at,
-        closed_at=closed_at,
     )
     session.add(notification)
     await session.flush()
     return notification
 
 
+async def _make_state(
+    session,
+    notification_id: int,
+    user_id: int,
+    *,
+    read_at: datetime | None = None,
+    closed_at: datetime | None = None,
+) -> UserNotificationState:
+    state = UserNotificationState(
+        notification_id=notification_id,
+        user_id=user_id,
+        read_at=read_at,
+        closed_at=closed_at,
+    )
+    session.add(state)
+    await session.flush()
+    return state
+
+
 async def _testauth_id(session) -> int:
     user = await session.scalar(select(User).where(User.username == "testauth"))
     assert user is not None
     return user.id
+
+
+async def _as(client, username: str) -> None:
+    client.headers["Authorization"] = f"Bearer {create_access_token(subject=username)}"
 
 
 @pytest.mark.asyncio
@@ -138,9 +158,10 @@ async def test_notifications_scope_includes_general_and_own(auth_client, session
 
 @pytest.mark.asyncio
 async def test_notifications_only_unclosed_excludes_closed_by_default(auth_client, session) -> None:
-    await _make_notification(session, user_id=None, title="Открытое")
+    current_user_id = await _testauth_id(session)
+    notification = await _make_notification(session, user_id=None, title="Открытое")
     closed = await _make_notification(session, user_id=None, title="Закрытое")
-    closed.closed_at = _dt()
+    await _make_state(session, closed.id, current_user_id, read_at=_dt(), closed_at=_dt())
     await session.commit()
 
     response = await auth_client.get("/api/internal-notifications")
@@ -207,9 +228,9 @@ async def test_notifications_unread_count_only_active_unread(auth_client, sessio
     other = await _make_user(session, username="notif_other_unread")
     await _make_notification(session, user_id=None, title="Активное непрочитанное")
     read = await _make_notification(session, user_id=None, title="Активное прочитанное")
-    read.read_at = _dt()
+    await _make_state(session, read.id, current_user_id, read_at=_dt())
     closed = await _make_notification(session, user_id=None, title="Закрытое непрочитанное")
-    closed.closed_at = _dt()
+    await _make_state(session, closed.id, current_user_id, read_at=_dt(), closed_at=_dt())
     await _make_notification(session, user_id=current_user_id, title="Своё непрочитанное")
     await _make_notification(session, user_id=other.id, title="Чужое непрочитанное")
     await session.commit()
@@ -255,9 +276,15 @@ async def test_mark_read_sets_read_at(auth_client, session) -> None:
     assert body["read_at"] is not None
     assert body["closed_at"] is None
 
-    await session.refresh(notification)
-    assert notification.read_at is not None
-    assert notification.closed_at is None
+    state = await session.scalar(
+        select(UserNotificationState).where(
+            UserNotificationState.notification_id == notification.id,
+            UserNotificationState.user_id == current_user_id,
+        )
+    )
+    assert state is not None
+    assert state.read_at is not None
+    assert state.closed_at is None
 
 
 @pytest.mark.asyncio
@@ -267,26 +294,51 @@ async def test_mark_read_is_idempotent(auth_client, session) -> None:
     await session.commit()
 
     first = await auth_client.post(f"/api/internal-notifications/{notification.id}/read")
-    await session.refresh(notification)
-    first_read_at = notification.read_at
+    first_read_at = first.json()["read_at"]
     assert first_read_at is not None
+
+    first_state = await session.scalar(
+        select(UserNotificationState).where(
+            UserNotificationState.notification_id == notification.id,
+            UserNotificationState.user_id == current_user_id,
+        )
+    )
+    assert first_state is not None
+    db_read_at = first_state.read_at
 
     second = await auth_client.post(f"/api/internal-notifications/{notification.id}/read")
     assert second.status_code == 200
-    assert second.json()["read_at"] == first.json()["read_at"]
+    assert second.json()["read_at"] == first_read_at
 
-    await session.refresh(notification)
-    assert notification.read_at == first_read_at
+    state = await session.scalar(
+        select(UserNotificationState).where(
+            UserNotificationState.notification_id == notification.id,
+            UserNotificationState.user_id == current_user_id,
+        )
+    )
+    assert state is not None
+    assert state.read_at == db_read_at
+    assert state.closed_at is None
 
 
 @pytest.mark.asyncio
 async def test_mark_read_general_notification_allowed(auth_client, session) -> None:
+    current_user_id = await _testauth_id(session)
     notification = await _make_notification(session, user_id=None)
     await session.commit()
 
     response = await auth_client.post(f"/api/internal-notifications/{notification.id}/read")
     assert response.status_code == 200
     assert response.json()["read_at"] is not None
+
+    state = await session.scalar(
+        select(UserNotificationState).where(
+            UserNotificationState.notification_id == notification.id,
+            UserNotificationState.user_id == current_user_id,
+        )
+    )
+    assert state is not None
+    assert state.read_at is not None
 
 
 @pytest.mark.asyncio
@@ -299,8 +351,12 @@ async def test_mark_read_foreign_personal_notification_404(auth_client, session)
     assert response.status_code == 404
     assert response.json()["detail"] == "Уведомление не найдено"
 
-    await session.refresh(foreign)
-    assert foreign.read_at is None
+    state = await session.scalar(
+        select(UserNotificationState).where(
+            UserNotificationState.notification_id == foreign.id,
+        )
+    )
+    assert state is None
 
 
 @pytest.mark.asyncio
@@ -321,9 +377,15 @@ async def test_close_sets_read_at_and_closed_at(auth_client, session) -> None:
     assert body["read_at"] is not None
     assert body["closed_at"] is not None
 
-    await session.refresh(notification)
-    assert notification.read_at is not None
-    assert notification.closed_at is not None
+    state = await session.scalar(
+        select(UserNotificationState).where(
+            UserNotificationState.notification_id == notification.id,
+            UserNotificationState.user_id == current_user_id,
+        )
+    )
+    assert state is not None
+    assert state.read_at is not None
+    assert state.closed_at is not None
 
 
 @pytest.mark.asyncio
@@ -333,16 +395,31 @@ async def test_close_is_idempotent(auth_client, session) -> None:
     await session.commit()
 
     first = await auth_client.post(f"/api/internal-notifications/{notification.id}/close")
-    await session.refresh(notification)
-    first_closed_at = notification.closed_at
+    first_closed_at = first.json()["closed_at"]
     assert first_closed_at is not None
+
+    first_state = await session.scalar(
+        select(UserNotificationState).where(
+            UserNotificationState.notification_id == notification.id,
+            UserNotificationState.user_id == current_user_id,
+        )
+    )
+    assert first_state is not None
+    db_closed_at = first_state.closed_at
 
     second = await auth_client.post(f"/api/internal-notifications/{notification.id}/close")
     assert second.status_code == 200
-    assert second.json()["closed_at"] == first.json()["closed_at"]
+    assert second.json()["closed_at"] == first_closed_at
 
-    await session.refresh(notification)
-    assert notification.closed_at == first_closed_at
+    state = await session.scalar(
+        select(UserNotificationState).where(
+            UserNotificationState.notification_id == notification.id,
+            UserNotificationState.user_id == current_user_id,
+        )
+    )
+    assert state is not None
+    assert state.read_at is not None
+    assert state.closed_at == db_closed_at
 
 
 @pytest.mark.asyncio
@@ -370,11 +447,109 @@ async def test_close_foreign_personal_notification_404(auth_client, session) -> 
     response = await auth_client.post(f"/api/internal-notifications/{foreign.id}/close")
     assert response.status_code == 404
 
-    await session.refresh(foreign)
-    assert foreign.closed_at is None
+    state = await session.scalar(
+        select(UserNotificationState).where(
+            UserNotificationState.notification_id == foreign.id,
+        )
+    )
+    assert state is None
 
 
 @pytest.mark.asyncio
 async def test_close_missing_notification_404(auth_client) -> None:
     response = await auth_client.post("/api/internal-notifications/999999/close")
     assert response.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_multi_user_read_broadcast_does_not_affect_others(client, session) -> None:
+    """AC #86: прочтение общего уведомления первым не меняет unread второго."""
+    user_a = await _make_user(session, username="notif_user_a_read")
+    user_b = await _make_user(session, username="notif_user_b_read")
+    await session.commit()
+
+    notification = await _make_notification(session, user_id=None, title="Общее для всех")
+    await session.commit()
+
+    await _as(client, user_a.username)
+    list_a_before = await client.get("/api/internal-notifications")
+    assert list_a_before.status_code == 200
+    assert list_a_before.json()["unread_count"] == 1
+
+    await _as(client, user_b.username)
+    list_b_before = await client.get("/api/internal-notifications")
+    assert list_b_before.status_code == 200
+    assert list_b_before.json()["unread_count"] == 1
+    assert len(list_b_before.json()["items"]) == 1
+
+    # Первый пользователь читает — у второго unread_count не меняется.
+    await _as(client, user_a.username)
+    read = await client.post(f"/api/internal-notifications/{notification.id}/read")
+    assert read.status_code == 200
+    assert read.json()["read_at"] is not None
+
+    list_a_after = await client.get("/api/internal-notifications")
+    assert list_a_after.json()["unread_count"] == 0
+    assert list_a_after.json()["items"][0]["read_at"] is not None
+
+    await _as(client, user_b.username)
+    list_b_after = await client.get("/api/internal-notifications")
+    assert list_b_after.status_code == 200
+    assert list_b_after.json()["unread_count"] == 1
+    assert list_b_after.json()["items"][0]["read_at"] is None
+    assert list_b_after.json()["items"][0]["closed_at"] is None
+
+
+@pytest.mark.asyncio
+async def test_multi_user_close_broadcast_does_not_affect_others(client, session) -> None:
+    """AC #86: закрытие общего уведомления первым не прячет его у второго."""
+    user_a = await _make_user(session, username="notif_user_a_close")
+    user_b = await _make_user(session, username="notif_user_b_close")
+    await session.commit()
+
+    notification = await _make_notification(session, user_id=None, title="Общее для всех")
+    await session.commit()
+
+    await _as(client, user_a.username)
+    close = await client.post(f"/api/internal-notifications/{notification.id}/close")
+    assert close.status_code == 200
+    assert close.json()["closed_at"] is not None
+
+    # У первого пользователя закрытое пропадает из активных.
+    list_a = await client.get("/api/internal-notifications")
+    assert list_a.status_code == 200
+    assert list_a.json()["total"] == 0
+
+    # У второго всё ещё активно: закрытие первого не влияет на него.
+    await _as(client, user_b.username)
+    list_b = await client.get("/api/internal-notifications")
+    assert list_b.status_code == 200
+    assert list_b.json()["total"] == 1
+    assert list_b.json()["unread_count"] == 1
+    assert list_b.json()["items"][0]["closed_at"] is None
+
+
+@pytest.mark.asyncio
+async def test_multi_user_states_are_independent_broadcast(client, session) -> None:
+    """У каждого пользователя своё состояние на одном общем уведомлении."""
+    user_a = await _make_user(session, username="notif_user_a_independent")
+    user_b = await _make_user(session, username="notif_user_b_independent")
+    await session.commit()
+
+    notification = await _make_notification(session, user_id=None, title="Общее")
+    await session.commit()
+
+    # A закрывает, B только читает.
+    await _as(client, user_a.username)
+    await client.post(f"/api/internal-notifications/{notification.id}/close")
+
+    await _as(client, user_b.username)
+    await client.post(f"/api/internal-notifications/{notification.id}/read")
+
+    states = (await session.execute(select(UserNotificationState))).scalars().all()
+    assert len(states) == 2
+    by_user = {st.user_id: st for st in states}
+    assert by_user[user_a.id].closed_at is not None
+    assert by_user[user_a.id].read_at is not None
+    assert by_user[user_b.id].closed_at is None
+    assert by_user[user_b.id].read_at is not None

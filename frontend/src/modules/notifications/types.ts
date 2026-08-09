@@ -2,7 +2,7 @@
  * Контракты данных модуля уведомлений — зеркало бэкенда семейства HRMS/KTM.
  */
 
-export interface InternalNotification {
+export interface Notification {
   id: number
   /** null — общее уведомление, заполнено — персональное текущему пользователю */
   user_id: number | null
@@ -16,8 +16,8 @@ export interface InternalNotification {
   closed_at: string | null
 }
 
-export interface InternalNotificationList {
-  items: InternalNotification[]
+export interface NotificationList {
+  items: Notification[]
   total: number
   unread_count: number
 }

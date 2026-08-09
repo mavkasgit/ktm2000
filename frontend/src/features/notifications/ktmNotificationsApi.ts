@@ -1,7 +1,7 @@
 import { apiClient } from "@/shared/api/client"
 import type {
-  InternalNotification,
-  InternalNotificationList,
+  Notification,
+  NotificationList,
   NotificationsApi,
 } from "@/modules/notifications"
 
@@ -15,23 +15,23 @@ import type {
  * используют тот же каноничный контракт /internal-notifications.
  */
 export const ktmNotificationsApi: NotificationsApi = {
-  async list(limit = 50): Promise<InternalNotificationList> {
-    const { data } = await apiClient.get<InternalNotificationList>(
+  async list(limit = 50): Promise<NotificationList> {
+    const { data } = await apiClient.get<NotificationList>(
       "/internal-notifications",
       { params: { limit, only_unclosed: true } },
     )
     return data
   },
 
-  async markRead(id): Promise<InternalNotification> {
-    const { data } = await apiClient.post<InternalNotification>(
+  async markRead(id): Promise<Notification> {
+    const { data } = await apiClient.post<Notification>(
       `/internal-notifications/${id}/read`,
     )
     return data
   },
 
-  async close(id): Promise<InternalNotification> {
-    const { data } = await apiClient.post<InternalNotification>(
+  async close(id): Promise<Notification> {
+    const { data } = await apiClient.post<Notification>(
       `/internal-notifications/${id}/close`,
     )
     return data

@@ -42,7 +42,7 @@ from .entity_comment import EntityComment, EntityType
 from .attachment import Attachment, AttachmentLink
 from .spg import StorageProductionGroup, SpgSection
 from .audit_log import AuditLog
-from .internal_notification import InternalNotification
+from .notification import Notification, UserNotificationState
 from .hrms_employee import HrmsEmployee
 from app.stock.models import (
     QualityState,
@@ -95,6 +95,8 @@ __all__ = [
     "InternalPlan",
     "InternalPlanStatus",
     "SectionPlanLine",
+    "Notification",
+    "UserNotificationState",
     "WorkTask",
     "WorkTaskStatus",
     "ImportTemplate",
@@ -118,7 +120,6 @@ __all__ = [
     "StorageProductionGroup",
     "SpgSection",
     "AuditLog",
-    "InternalNotification",
     "HrmsEmployee",
     "UserSession",
     "QualityState",

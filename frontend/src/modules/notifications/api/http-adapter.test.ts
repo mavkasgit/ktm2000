@@ -2,7 +2,7 @@
 
 import { describe, expect, it, vi } from "vitest"
 import { createHttpAdapter } from "./http-adapter"
-import type { InternalNotification } from "../types"
+import type { Notification } from "../types"
 
 function mockFetch() {
   const calls: { url: string; method: string; headers: Record<string, string> }[] = []
@@ -20,7 +20,7 @@ function mockFetch() {
   return { fetchImpl, calls }
 }
 
-const notif: InternalNotification = {
+const notif: Notification = {
   id: 1,
   user_id: null,
   notification_type: "hire",
