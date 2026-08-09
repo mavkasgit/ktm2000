@@ -10,6 +10,7 @@ import {
   manualByLength,
   normalizeLengths,
   primaryHangerValue,
+  primaryLength,
   productLengths,
 } from "./hangerQuantity";
 
@@ -92,7 +93,36 @@ describe("effectiveValue / entryForLength / effectiveForLength", () => {
   });
 });
 
+describe("primaryLength", () => {
+  it("явный primary_length_mm имеет приоритет", () => {
+    expect(primaryLength({ primary_length_mm: 3500, lengths_mm: [2780, 3500] })).toBe(3500);
+  });
+
+  it("без явного — первая по возрастанию", () => {
+    expect(primaryLength({ primary_length_mm: null, lengths_mm: [3500, 2780] })).toBe(2780);
+    expect(primaryLength({ primary_length_mm: null, lengths_mm: [], length_mm: 2780 })).toBe(2780);
+  });
+
+  it("без длин — null", () => {
+    expect(primaryLength({ primary_length_mm: null, lengths_mm: [] })).toBeNull();
+  });
+});
+
 describe("primaryHangerValue", () => {
+  it("значение явно выбранной основной длины с источником (#81)", () => {
+    const product = {
+      primary_length_mm: 3500,
+      lengths_mm: [3000, 2780, 3500],
+      length_mm: null,
+      quantity_per_hanger: {
+        "2780": { auto: 72, manual: null },
+        "3000": { auto: null, manual: 55 },
+        "3500": { auto: null, manual: 60 },
+      } as QuantityPerHangerDict,
+    };
+    expect(primaryHangerValue(product)).toEqual({ lengthMm: 3500, value: 60, source: "manual" });
+  });
+
   it("значение основной (минимальной) длины с источником", () => {
     const product = {
       lengths_mm: [3000, 2780],

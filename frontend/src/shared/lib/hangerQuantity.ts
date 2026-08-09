@@ -37,12 +37,29 @@ export function normalizeLengths(values: Array<number | null | undefined>): numb
     .sort((a, b) => a - b);
 }
 
-/** Длины артикула по возрастанию (lengths_mm + legacy length_mm); первая — основная. */
+/** Длины артикула по возрастанию (lengths_mm + legacy length_mm); первая — основная по умолчанию. */
 export function productLengths(product: {
   lengths_mm?: number[] | null;
   length_mm?: number | null;
 }): number[] {
   return normalizeLengths([...(product.lengths_mm ?? []), product.length_mm ?? undefined]);
+}
+
+/** Основная длина артикула (#81): явный выбор или первая по возрастанию. */
+export function primaryLength(product: {
+  primary_length_mm?: number | null;
+  lengths_mm?: number[] | null;
+  length_mm?: number | null;
+}): number | null {
+  if (
+    typeof product.primary_length_mm === "number" &&
+    Number.isFinite(product.primary_length_mm) &&
+    product.primary_length_mm > 0
+  ) {
+    return product.primary_length_mm;
+  }
+  const lengths = productLengths(product);
+  return lengths[0] ?? null;
 }
 
 export function entryForLength(
@@ -72,17 +89,17 @@ export function effectiveForLength(
 export type PrimaryHangerValue = EffectiveHangerValue & { lengthMm: number };
 
 /**
- * Значение для основной (минимальной) длины: приоритет авто > ручное.
+ * Значение для основной длины (#81): явный выбор или первая по возрастанию.
  * null — нет длин или нет ни одного значения.
  */
 export function primaryHangerValue(product: {
+  primary_length_mm?: number | null;
   lengths_mm?: number[] | null;
   length_mm?: number | null;
   quantity_per_hanger?: QuantityPerHangerDict | null;
 }): PrimaryHangerValue | null {
-  const lengths = productLengths(product);
-  if (lengths.length === 0) return null;
-  const lengthMm = lengths[0];
+  const lengthMm = primaryLength(product);
+  if (lengthMm == null) return null;
   const effective = effectiveForLength(product.quantity_per_hanger ?? null, lengthMm);
   if (effective.value == null) return null;
   return { lengthMm, ...effective };

@@ -46,6 +46,7 @@ export type Product = {
   is_catalog_item: boolean;
   is_paired_profile: boolean;
   dimension_state: DimensionState;
+  primary_length_mm: number | null;
   skip_shot_blast: boolean;
   aliases: string[];
   lengths_mm: number[];
@@ -79,6 +80,7 @@ export type CreateProductInput = {
   is_paired_profile?: boolean;
   skip_shot_blast?: boolean;
   dimension_state?: DimensionState;
+  primary_length_mm?: number | null;
   aliases?: string[];
   lengths_mm?: number[];
   processing_flag_codes?: string[];

@@ -13,8 +13,10 @@ import { uploadProductPhoto, getErrorMessage } from "@/shared/api/products";
 import { listDimensionTypes } from "../api";
 import { queryKeys } from "@/shared/api/queryKeys";
 import { calcHanger, type HangerCalcResult } from "@/shared/api/hangerCalc";
-import { isHangerAutoMode, lengthKey, manualByLength, normalizeLengths, productLengths } from "@/shared/lib/hangerQuantity";
+import { isHangerAutoMode, lengthKey, manualByLength, normalizeLengths, primaryLength, productLengths } from "@/shared/lib/hangerQuantity";
 import { parseNumericInput } from "@/shared/lib/parseNumericInput";
+import { isLengthState } from "@/shared/lib/dimensionState";
+import { RadioGroup, RadioGroupItem } from "@/shared/ui/radio-group";
 import { cn } from "@/shared/utils/cn";
 import type { Product, CreateProductInput, PatchProductInput, QuantityPerHangerDict, DimensionState } from "@/shared/api/products";
 
@@ -97,6 +99,7 @@ function buildInitialForm(product: Product | null, mode: DialogMode): CreateProd
     color: product?.color ?? null,
     anod_type: product?.anod_type ?? null,
     length_mm: lengths[0] ?? product?.length_mm ?? null,
+    primary_length_mm: product?.primary_length_mm ?? lengths[0] ?? null,
     weight_per_meter: product?.weight_per_meter ?? null,
     perimeter_mm: product?.perimeter_mm ?? null,
     mount_width_mm: product?.mount_width_mm ?? null,
@@ -138,6 +141,16 @@ function getChanges(form: CreateProductInput, product: Product | null, isCreate:
   if (!eq(form.skip_shot_blast, product.skip_shot_blast)) changes.push({ field: "skip_shot_blast", label: "Не дробеструится", from: product.skip_shot_blast ? "Да" : "Нет", to: form.skip_shot_blast ? "Да" : "Нет" });
   if (!eq(form.aliases ?? [], product.aliases ?? [])) changes.push({ field: "aliases", label: "Эквиваленты", from: (product.aliases ?? []).join(", ") || "—", to: (form.aliases ?? []).join(", ") || "—" });
   if (!eq(formLengths, productLens)) changes.push({ field: "lengths_mm", label: "Длины", from: productLens.join(", ") || "—", to: formLengths.join(", ") || "—" });
+  const formPrimary = form.primary_length_mm ?? null;
+  const productPrimary = product.primary_length_mm ?? productLengths(product)[0] ?? null;
+  if (!eq(formPrimary, productPrimary)) {
+    changes.push({
+      field: "primary_length_mm",
+      label: "Основная длина",
+      from: productPrimary != null ? `${productPrimary} мм` : "—",
+      to: formPrimary != null ? `${formPrimary} мм` : "—",
+    });
+  }
   if (!eq(form.is_laminated ?? false, product.is_laminated)) changes.push({ field: "is_laminated", label: "Ламинируется", from: product.is_laminated ? "Да" : "Нет", to: form.is_laminated ? "Да" : "Нет" });
   if (!eq(form.dimension_state ?? "length", product.dimension_state ?? "length")) changes.push({ field: "dimension_state", label: "Размерность", from: product.dimension_state ?? "length", to: form.dimension_state ?? "length" });
   return changes;
@@ -271,12 +284,20 @@ export const CatalogForm = forwardRef<CatalogFormRef, {
 
   const setLengths = useCallback((values: number[]) => {
     const normalized = normalizeLengths(values);
-    setForm((f) => ({
-      ...f,
-      lengths_mm: normalized,
-      // Keep legacy scalar field in sync with the first length.
-      length_mm: normalized[0] ?? null,
-    }));
+    setForm((f) => {
+      const currentPrimary = f.primary_length_mm;
+      const primary =
+        currentPrimary != null && normalized.includes(currentPrimary)
+          ? currentPrimary
+          : normalized[0] ?? null;
+      return {
+        ...f,
+        lengths_mm: normalized,
+        primary_length_mm: primary,
+        // Keep legacy scalar field in sync with the first length.
+        length_mm: normalized[0] ?? null,
+      };
+    });
   }, []);
 
   const commitLength = () => {
@@ -318,6 +339,9 @@ export const CatalogForm = forwardRef<CatalogFormRef, {
     if (!eq(form.skip_shot_blast, product.skip_shot_blast)) patch.skip_shot_blast = form.skip_shot_blast;
     if (!eq(form.aliases ?? [], product.aliases ?? [])) patch.aliases = form.aliases;
     if (!eq(formLengths, productLens)) patch.lengths_mm = formLengths;
+    const formPrimary = form.primary_length_mm ?? null;
+    const productPrimary = product.primary_length_mm ?? productLengths(product)[0] ?? null;
+    if (!eq(formPrimary, productPrimary)) patch.primary_length_mm = formPrimary;
     if (!eq(form.is_laminated ?? false, product.is_laminated)) patch.is_laminated = form.is_laminated;
     if (!eq(form.dimension_state ?? "length", product.dimension_state ?? "length")) patch.dimension_state = form.dimension_state;
     return patch;
@@ -575,7 +599,7 @@ export const CatalogForm = forwardRef<CatalogFormRef, {
                   dimensionTypes={dimensionTypes}
                   readOnly={readOnly}
                 />
-                {(form.dimension_state ?? "length") === "length" && (
+                {isLengthState(form.dimension_state) && (
                   <div className="flex gap-2 items-stretch">
                     <Input
                       type="number"
@@ -603,7 +627,7 @@ export const CatalogForm = forwardRef<CatalogFormRef, {
                   </div>
                 )}
               </div>
-              {(form.dimension_state ?? "length") === "length" && (
+              {isLengthState(form.dimension_state) && (
                 <>
                   <div className="space-y-1 shrink-0">
                     <label className="text-sm font-medium">Периметр, мм</label>
@@ -647,71 +671,85 @@ export const CatalogForm = forwardRef<CatalogFormRef, {
               )}
             </div>
 
-            {(form.dimension_state ?? "length") === "length" ? (
+            {isLengthState(form.dimension_state) ? (
               <>
                 <div className="flex items-start gap-4">
                   <div className="rounded-md border bg-background overflow-hidden inline-block min-w-0 shrink-0">
                     <table className="text-sm">
                       <thead>
                         <tr className="bg-muted/50 text-xs text-muted-foreground">
+                          <th className="text-left font-medium px-3 py-2">
+                            {readOnly ? "Основная" : "Основная (радио)"}
+                          </th>
                           <th className="text-left font-medium px-3 py-2">Кол-во на подвесе, шт</th>
                           <th className="text-left font-medium px-3 py-2">Длина, мм</th>
                         </tr>
                       </thead>
                       <tbody>
-                        {formLengths.map((len, idx) => {
-                          const rowManual = manualForLength(len);
-                          const rowInvalid = !autoMode && rowManual != null && !(rowManual > 0);
-                          return (
-                            <tr key={len} className="border-t">
-                              <td className="px-3 py-1.5">
-                                <div className="flex items-center gap-2">
-                                  <Input
-                                    type="number"
-                                    className={cn(
-                                      "h-9 w-28",
-                                      rowInvalid && "border-destructive focus-visible:ring-destructive",
-                                      !rowInvalid && autoMode && "bg-emerald-50 border-emerald-300",
-                                      !rowInvalid && !autoMode && "bg-amber-50 border-amber-300",
-                                    )}
-                                    value={autoMode ? autoQuantityFor(len) ?? "" : rowManual ?? ""}
-                                    placeholder={autoMode ? "—" : ""}
-                                    readOnly={autoMode}
-                                    onChange={(e) => {
-                                      const parsed = parseNumericInput(e.target.value);
-                                      updateManualForLength(len, parsed == null ? null : Math.trunc(parsed));
-                                    }}
-                                    disabled={readOnly}
-                                    title={autoMode ? "В авто-режиме значение считается из периметра и габарита" : undefined}
-                                  />
-                                  {autoMode && (
-                                    <span className="text-xs font-medium text-emerald-700 whitespace-nowrap">авто</span>
-                                  )}
-                                </div>
-                              </td>
-                              <td className="px-3 py-1.5">
-                                <div className="flex items-center gap-2">
-                                  <span>{len}</span>
-                                </div>
-                              </td>
-                              {!readOnly && (
-                                <td className="px-2 py-1.5 text-right">
-                                  <button
-                                    type="button"
-                                    onClick={() => {
-                                      const vals = (form.lengths_mm ?? []).filter((_, i) => i !== idx);
-                                      setLengths(vals);
-                                    }}
-                                    className="text-muted-foreground hover:text-destructive"
-                                    title="Удалить длину"
-                                  >
-                                    <Trash2 className="h-4 w-4" />
-                                  </button>
+                        <RadioGroup
+                          value={form.primary_length_mm != null ? String(form.primary_length_mm) : undefined}
+                          onValueChange={(val) => update("primary_length_mm", Number(val))}
+                          disabled={readOnly}
+                        >
+                          {formLengths.map((len, idx) => {
+                            const rowManual = manualForLength(len);
+                            const rowInvalid = !autoMode && rowManual != null && !(rowManual > 0);
+                            return (
+                              <tr key={len} className="border-t">
+                                <td className="px-3 py-1.5">
+                                  <RadioGroupItem value={String(len)} id={`primary-${len}`} />
                                 </td>
-                              )}
-                            </tr>
-                          );
-                        })}
+                                <td className="px-3 py-1.5">
+                                  <div className="flex items-center gap-2">
+                                    <Input
+                                      type="number"
+                                      className={cn(
+                                        "h-9 w-28",
+                                        rowInvalid && "border-destructive focus-visible:ring-destructive",
+                                        !rowInvalid && autoMode && "bg-emerald-50 border-emerald-300",
+                                        !rowInvalid && !autoMode && "bg-amber-50 border-amber-300",
+                                      )}
+                                      value={autoMode ? autoQuantityFor(len) ?? "" : rowManual ?? ""}
+                                      placeholder={autoMode ? "—" : ""}
+                                      readOnly={autoMode}
+                                      onChange={(e) => {
+                                        const parsed = parseNumericInput(e.target.value);
+                                        updateManualForLength(len, parsed == null ? null : Math.trunc(parsed));
+                                      }}
+                                      disabled={readOnly}
+                                      title={autoMode ? "В авто-режиме значение считается из периметра и габарита" : undefined}
+                                    />
+                                    {autoMode && (
+                                      <span className="text-xs font-medium text-emerald-700 whitespace-nowrap">авто</span>
+                                    )}
+                                  </div>
+                                </td>
+                                <td className="px-3 py-1.5">
+                                  <div className="flex items-center gap-2">
+                                    <label htmlFor={`primary-${len}`} className={cn("cursor-pointer", form.primary_length_mm === len && "font-semibold")}>
+                                      {len}
+                                    </label>
+                                  </div>
+                                </td>
+                                {!readOnly && (
+                                  <td className="px-2 py-1.5 text-right">
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        const vals = (form.lengths_mm ?? []).filter((_, i) => i !== idx);
+                                        setLengths(vals);
+                                      }}
+                                      className="text-muted-foreground hover:text-destructive"
+                                      title="Удалить длину"
+                                    >
+                                      <Trash2 className="h-4 w-4" />
+                                    </button>
+                                  </td>
+                                )}
+                              </tr>
+                            );
+                          })}
+                        </RadioGroup>
                       </tbody>
                     </table>
                     {formLengths.length === 0 && (
@@ -727,7 +765,7 @@ export const CatalogForm = forwardRef<CatalogFormRef, {
                 ) : autoMode && hangerPreview.status === "ready" ? (
                   <p className="text-xs text-muted-foreground">
                     Значения рассчитаны из периметра и габарита.
-                    {formLengths.length > 0 && ` Основная длина ${formLengths[0]} мм → ${autoQuantityFor(formLengths[0]) ?? "—"} шт.`}
+                    {formLengths.length > 0 && ` Основная длина ${form.primary_length_mm ?? formLengths[0]} мм → ${autoQuantityFor(form.primary_length_mm ?? formLengths[0]) ?? "—"} шт.`}
                   </p>
                 ) : autoMode ? (
                   <p className="text-xs text-muted-foreground">

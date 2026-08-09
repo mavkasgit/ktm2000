@@ -13,26 +13,10 @@ import {
 } from "../api";
 import { cn } from "@/shared/utils/cn";
 import { parseNumericInput } from "@/shared/lib/parseNumericInput";
+import { DIMENSION_FIELDS, DIMENSION_STATE_LABELS, DIMENSION_STATES, isLengthState } from "@/shared/lib/dimensionState";
 import type { DimensionState } from "@/shared/api/products";
 
-const MODES: { value: DimensionState; label: string }[] = [
-  { value: "length", label: "Длина" },
-  { value: "area", label: "2D" },
-  { value: "volume", label: "3D" },
-];
-
-const DIMENSION_FIELDS: Record<Exclude<DimensionState, "length">, { code: string; label: string }[]> = {
-  "area": [
-    { code: "length_mm", label: "Длина, мм" },
-    { code: "width_mm", label: "Ширина, мм" },
-    { code: "thickness_mm", label: "Толщина, мм" },
-  ],
-  "volume": [
-    { code: "length_mm", label: "Длина, мм" },
-    { code: "width_mm", label: "Ширина, мм" },
-    { code: "height_mm", label: "Высота, мм" },
-  ],
-};
+const MODES = DIMENSION_STATES.map((value) => ({ value, label: DIMENSION_STATE_LABELS[value] }));
 
 /**
  * Секция «Измерения» карточки продукта.
@@ -73,8 +57,8 @@ export const ProductDimensionsSection = forwardRef<
 
   // Синхронизация из server → local state (только для чистых полей)
   useEffect(() => {
-    if (dimensionState === "length") return;
-    const codes = DIMENSION_FIELDS[dimensionState].map((f) => f.code);
+    if (isLengthState(dimensionState)) return;
+    const codes = (DIMENSION_FIELDS[dimensionState as Exclude<DimensionState, "length">]).map((f) => f.code);
     setMultiValues((prev) => {
       let changed = false;
       const next = { ...prev };
@@ -114,8 +98,8 @@ export const ProductDimensionsSection = forwardRef<
   });
 
   const flushPending = async () => {
-    if (readOnly || !productId || dimensionState === "length") return;
-    const codes = DIMENSION_FIELDS[dimensionState].map((f) => f.code);
+    if (readOnly || !productId || isLengthState(dimensionState)) return;
+    const codes = (DIMENSION_FIELDS[dimensionState as Exclude<DimensionState, "length">]).map((f) => f.code);
     // Сохраняем ВСЕ поля текущей размерности (детерминированно): для кода,
     // который уже сохраняется по blur — ждём его промис, иначе сохраняем сейчас.
     const promises = codes.map((code) => pendingRef.current.get(code) ?? saveCode(code));
@@ -180,9 +164,9 @@ export const ProductDimensionsSection = forwardRef<
         </div>
       </div>
 
-      {dimensionState !== "length" && (
+      {!isLengthState(dimensionState) && (
         <div className="flex flex-wrap gap-3">
-          {DIMENSION_FIELDS[dimensionState].map((field) => {
+          {(DIMENSION_FIELDS[dimensionState as Exclude<DimensionState, "length">]).map((field) => {
             const value = multiValues[field.code] ?? "";
             const hasValue = value !== "";
             return (

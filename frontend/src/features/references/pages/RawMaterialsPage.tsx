@@ -25,6 +25,7 @@ import { useSortableColumnFilters } from "@/shared/hooks/useSortableColumnFilter
 import { skipShotBlastSectionLabel } from "../lib/skipShotBlastLabel";
 import { HangerCalcTable } from "../components/HangerCalcTable";
 import { primaryHangerValue, effectiveForLength, productLengths } from "@/shared/lib/hangerQuantity";
+import { isLengthState } from "@/shared/lib/dimensionState";
 import { cn } from "@/shared/utils/cn";
 
 type ViewMode = "grid" | "table" | "calc";
@@ -142,7 +143,7 @@ function buildRawMaterialsApiParams(
 
 const headerCellClass = `${DATA_TABLE_STYLES.headerRow} ${DATA_TABLE_STYLES.headerCell}`;
 
-/** Колонка «Кол-во на подвесе» в списке сырья (#65): значение основной длины, подпись, бейдж «авто». */
+/** Колонка «Кол-во на подвесе» в списке сырья (#65, #85): значение основной длины, подпись «при N мм», бейдж «авто/ручное». */
 function QuantityPerHangerCell({ product }: { product: Product }) {
   const primary = primaryHangerValue(product);
   const lengths = productLengths(product);
@@ -159,18 +160,26 @@ function QuantityPerHangerCell({ product }: { product: Product }) {
   return (
     <div className="flex flex-wrap gap-1">
       {[...groups.entries()].map(([value, groupEntries]) => {
-        const isPrimary = groupEntries.some(({ len }) => primary?.lengthMm === len);
+        const primaryEntry = groupEntries.find(({ len }) => primary?.lengthMm === len);
+        const isPrimary = primaryEntry != null;
+        const source = primaryEntry?.eff.source ?? groupEntries[0]?.eff.source ?? null;
         const multipleLengths = groupEntries.length > 1;
         return (
           <span
             key={value}
             className={cn(
               "inline-flex items-center gap-1 rounded bg-secondary px-1.5 py-0.5 text-xs text-secondary-foreground",
-              isPrimary && "font-medium",
+              isPrimary && "font-medium ring-1 ring-primary/40 bg-primary/10",
             )}
             title={groupEntries.map(({ len, eff }) => `${len} мм: ${eff.value} шт (${eff.source === "auto" ? "авто" : "ручное"})`).join("\n")}
           >
-            {value} шт{!multipleLengths && ` → ${groupEntries[0].len} мм`}
+            {value} шт{multipleLengths ? "" : ` при ${groupEntries[0].len} мм`}
+            {source === "auto" && (
+              <span className="rounded bg-emerald-100 px-1 text-[10px] font-semibold text-emerald-800">авто</span>
+            )}
+            {source === "manual" && (
+              <span className="rounded bg-amber-100 px-1 text-[10px] font-semibold text-amber-800">ручное</span>
+            )}
           </span>
         );
       })}
@@ -741,7 +750,7 @@ export function RawMaterialsPage() {
                   <td className="px-4 py-2 text-muted-foreground">
                     {(() => {
                       const state = product.dimension_state ?? "length";
-                      if (state === "length") {
+                      if (isLengthState(state)) {
                         const lengths = productLengths(product);
                         return lengths.length ? lengths.join(", ") + " мм" : "—";
                       }

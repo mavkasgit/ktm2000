@@ -8,6 +8,7 @@ import {
   entryForLength,
   isHangerAutoMode,
   lengthKey,
+  primaryLength,
   productLengths,
 } from "@/shared/lib/hangerQuantity";
 
@@ -101,8 +102,9 @@ export type HangerCalcRow = {
 };
 
 /**
- * Вьюмодели строк таблицы: разбивка — по основной длине (первая из
- * ProductLength по возрастанию), ручной артикул — без разбивки (#64, п. 14).
+ * Вьюмодели строк таблицы: разбивка — по основной длине (#81: выбранная
+ * is_primary, иначе первая из ProductLength по возрастанию), ручной
+ * артикул — без разбивки (#64, п. 14).
  */
 export function buildHangerCalcRows(
   products: Product[],
@@ -111,16 +113,16 @@ export function buildHangerCalcRows(
 ): HangerCalcRow[] {
   return products.map((product) => {
     const lengths = productLengths(product);
-    const primaryLength = lengths[0] ?? null;
+    const primaryLengthMm = primaryLength(product);
     const auto = isHangerAutoMode(product);
     const incompatibleReason = incompatible.get(product.id) ?? null;
     const byLength = calcMap.get(product.id);
     const primaryResult =
-      auto && primaryLength != null
-        ? byLength?.get(lengthKey(primaryLength)) ?? null
+      auto && primaryLengthMm != null
+        ? byLength?.get(lengthKey(primaryLengthMm)) ?? null
         : null;
-    const primaryEntry = primaryLength != null
-      ? entryForLength(product.quantity_per_hanger, primaryLength)
+    const primaryEntry = primaryLengthMm != null
+      ? entryForLength(product.quantity_per_hanger, primaryLengthMm)
       : null;
 
     let total: number | null = null;
@@ -135,7 +137,7 @@ export function buildHangerCalcRows(
     return {
       product,
       lengths,
-      primaryLength,
+      primaryLength: primaryLengthMm,
       auto,
       incompatibleReason,
       primaryResult,

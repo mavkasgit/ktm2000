@@ -177,6 +177,27 @@ describe("buildHangerCalcRows", () => {
     expect(row.incompatibleReason).toBeNull();
   });
 
+  it("авто-артикул: явная primary_length_mm задаёт разбивку (#81/#85)", () => {
+    const product = makeProduct({
+      id: 1,
+      perimeter_mm: 64.2,
+      mount_width_mm: 19.35,
+      primary_length_mm: 3000,
+      lengths_mm: [2780, 3000],
+      quantity_per_hanger: {
+        "2780": { auto: 72, manual: 60 },
+        "3000": { auto: 65, manual: null },
+      },
+    });
+    const calcMap: CalcMap = new Map([
+      [1, new Map([["3000", makeResult({ total: 65, limiter: "size" })]])],
+    ]);
+    const [row] = buildHangerCalcRows([product], calcMap, new Map());
+    expect(row.primaryLength).toBe(3000);
+    expect(row.total).toBe(65);
+    expect(row.limiter).toBe("size");
+  });
+
   it("ручной артикул: разбивки нет, итог — ручное значение основной длины", () => {
     const product = makeProduct({
       id: 2,
