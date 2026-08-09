@@ -1,22 +1,19 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Search, X, Check, Loader2 } from "lucide-react";
-import { Badge } from "@/shared/ui/badge";
+import { Search, X } from "lucide-react";
 import { Button } from "@/shared/ui/button";
 import { Input } from "@/shared/ui/input";
-import { Card } from "@/shared/ui/card";
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/shared/ui/tooltip";
+import { TooltipProvider } from "@/shared/ui/tooltip";
 import { toast } from "@/shared/ui/use-toast";
 import { SortableFilterHeader } from "@/shared/ui/SortableFilterHeader";
-import { TableCornerResetCell, TableCornerResetHeader, DATA_TABLE_STYLES } from "@/shared/ui";
+import { TableCornerResetHeader, DATA_TABLE_STYLES } from "@/shared/ui";
 import { useSortableColumnFilters } from "@/shared/hooks/useSortableColumnFilters";
 import { nextMultiSortConfigs } from "@/shared/lib/multiSort";
 import type { SortConfig } from "@/shared/hooks/useTableQueryEngine";
-import { cn } from "@/shared/utils/cn";
 import { listProductsPaginated, patchProduct, getErrorMessage } from "@/shared/api/products";
 import type { Product } from "@/shared/api/products";
 import { calcHanger } from "@/shared/api/hangerCalc";
 import type { HangerCalcResult, HangerSettings } from "@/shared/api/hangerCalc";
-import { entryForLength, isHangerAutoMode, lengthKey, productLengths } from "@/shared/lib/hangerQuantity";
+import { isHangerAutoMode, lengthKey, productLengths } from "@/shared/lib/hangerQuantity";
 import {
   buildCalcItems,
   buildHangerCalcRows,
@@ -26,208 +23,12 @@ import {
   type CalcMap,
   type HangerCalcRow,
 } from "../lib/hangerCalcRows";
+import { HangerConstantsPanel } from "./HangerConstantsPanel";
+import { HangerCalcRowView, type RowSaveState } from "./HangerCalcRowView";
 
 type CalcFilterField = "sku" | "total" | "limiter";
-type RowSaveState = { status: "saving" } | { status: "saved" } | { status: "error"; message: string };
 
 const headerCellClass = `${DATA_TABLE_STYLES.headerRow} ${DATA_TABLE_STYLES.headerCell}`;
-const chipClass = "inline-flex items-center rounded px-1.5 py-0.5 text-xs whitespace-nowrap";
-
-function parseFieldValue(text: string): { ok: true; value: number | null } | { ok: false } {
-  if (text.trim() === "") return { ok: true, value: null };
-  const num = Number(text.replace(",", "."));
-  if (!Number.isFinite(num) || num <= 0) return { ok: false };
-  return { ok: true, value: num };
-}
-
-/** Inline-инпут периметра/габарита: autosave c дебаунсом, валидация >0 (#64, п. 16). */
-function HangerFieldCell({
-  value,
-  disabled,
-  rowInvalid,
-  invalidReason,
-  onCommit,
-  ariaLabel,
-}: {
-  value: number | null;
-  disabled: boolean;
-  rowInvalid: boolean;
-  invalidReason: string | null;
-  onCommit: (next: number | null) => Promise<void>;
-  ariaLabel: string;
-}) {
-  const savedText = value == null ? "" : String(value);
-  const [draft, setDraft] = useState(savedText);
-  const [invalid, setInvalid] = useState(false);
-  const committing = useRef(false);
-
-  useEffect(() => {
-    setDraft(savedText);
-    setInvalid(false);
-  }, [savedText]);
-
-  const parsed = parseFieldValue(draft);
-  const dirty = draft !== savedText;
-
-  useEffect(() => {
-    if (!dirty) return;
-    if (!parsed.ok) {
-      setInvalid(true);
-      return;
-    }
-    setInvalid(false);
-    if ((parsed.value ?? null) === (value ?? null)) return;
-    const timer = window.setTimeout(() => {
-      if (committing.current) return;
-      committing.current = true;
-      void onCommit(parsed.value).finally(() => {
-        committing.current = false;
-      });
-    }, 700);
-    return () => window.clearTimeout(timer);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [draft, dirty, parsed.ok]);
-
-  const handleBlur = () => {
-    if (committing.current) return;
-    if (!dirty) return;
-    if (!parsed.ok) {
-      // Инвалидный draft (≤0) откатывается к сохранённому значению (#64).
-      setDraft(savedText);
-      setInvalid(false);
-      return;
-    }
-    committing.current = true;
-    void onCommit(parsed.value).finally(() => {
-      committing.current = false;
-    });
-  };
-
-  const highlighted = invalid || rowInvalid;
-  return (
-    <Input
-      type="number"
-      step="0.1"
-      inputMode="decimal"
-      aria-label={ariaLabel}
-      value={draft}
-      onChange={(e) => setDraft(e.target.value)}
-      onBlur={handleBlur}
-      onClick={(e) => e.stopPropagation()}
-      disabled={disabled}
-      className={cn(
-        "h-8 w-24 min-w-24 text-sm bg-background",
-        highlighted && "border-destructive focus-visible:ring-destructive",
-      )}
-      title={
-        invalid
-          ? "Значение должно быть больше 0 — сохранение заблокировано"
-          : rowInvalid
-            ? invalidReason ?? undefined
-            : undefined
-      }
-    />
-  );
-}
-
-function LengthChips({
-  row,
-  byLength,
-}: {
-  row: HangerCalcRow;
-  byLength: Map<string, HangerCalcResult> | undefined;
-}) {
-  if (row.lengths.length === 0) {
-    return <span className="text-muted-foreground">—</span>;
-  }
-  return (
-    <div className="flex flex-wrap gap-1">
-      {row.lengths.map((len) => {
-        const key = lengthKey(len);
-        if (!row.auto) {
-          const manual = entryForLength(row.product.quantity_per_hanger, len)?.manual ?? null;
-          return (
-            <span key={key} className={cn(chipClass, "bg-secondary text-secondary-foreground")}>
-              {len} мм → {manual ?? "—"} шт
-            </span>
-          );
-        }
-        if (row.incompatibleReason) {
-          return (
-            <Tooltip key={key}>
-              <TooltipTrigger asChild>
-                <span className={cn(chipClass, "bg-red-100 text-red-700")}>{len} мм → —</span>
-              </TooltipTrigger>
-              <TooltipContent>{row.incompatibleReason}</TooltipContent>
-            </Tooltip>
-          );
-        }
-        const result = byLength?.get(key);
-        if (!result || !result.is_calculable) {
-          return (
-            <Tooltip key={key}>
-              <TooltipTrigger asChild>
-                <span className={cn(chipClass, "bg-amber-100 text-amber-800")}>{len} мм → —</span>
-              </TooltipTrigger>
-              <TooltipContent>Расчёт невозможен: не хватает данных</TooltipContent>
-            </Tooltip>
-          );
-        }
-        const limiterNote = result.limiter ? ` · ${LIMITER_LABELS[result.limiter]}` : "";
-        return (
-          <Tooltip key={key}>
-            <TooltipTrigger asChild>
-              <span className={cn(chipClass, "bg-secondary text-secondary-foreground cursor-help")}>
-                {len} мм → {result.total ?? "—"} шт{limiterNote}
-              </span>
-            </TooltipTrigger>
-            <TooltipContent>
-              <div className="text-xs space-y-0.5">
-                <div className="font-medium">Длина {len} мм</div>
-                <div>По площади: {result.by_area ?? "—"}</div>
-                <div>По размеру: {result.by_size ?? "—"}</div>
-                <div>Итог: {result.total ?? "—"}</div>
-                <div>Лимитер: {result.limiter ? LIMITER_LABELS[result.limiter] : "—"}</div>
-                <div>Площадь: {result.area_m2 != null ? `${result.area_m2.toFixed(3)} м²` : "—"}</div>
-              </div>
-            </TooltipContent>
-          </Tooltip>
-        );
-      })}
-    </div>
-  );
-}
-
-function DashCell({ reason, danger }: { reason: string | null; danger?: boolean }) {
-  const dash = <span className={cn("text-muted-foreground", danger && "text-destructive")}>—</span>;
-  if (!reason) return dash;
-  return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <span className="cursor-help">{dash}</span>
-      </TooltipTrigger>
-      <TooltipContent>{reason}</TooltipContent>
-    </Tooltip>
-  );
-}
-
-function HangerConstantsPanel({ settings }: { settings: HangerSettings }) {
-  return (
-    <Card className="p-3 text-sm">
-      <div className="font-medium mb-1">Константы подвеса</div>
-      <div className="flex flex-wrap gap-x-6 gap-y-1 text-muted-foreground">
-        <span>Лимит площади: <b className="text-foreground">{settings.area_limit_m2} м²</b></span>
-        <span>Рабочая длина клюшки: <b className="text-foreground">{settings.rod_length_mm} мм</b></span>
-        <span>Зазор: <b className="text-foreground">{settings.gap_mm} мм</b></span>
-        <span>Клюшек на подвесе: <b className="text-foreground">×{settings.rod_count}</b></span>
-      </div>
-      <div className="text-xs text-muted-foreground mt-1.5">
-        По площади = ⌊{settings.area_limit_m2} / (периметр × длина / 10⁶)⌋ · По размеру = ⌊
-        {settings.rod_length_mm} / (габарит + {settings.gap_mm})⌋ × {settings.rod_count} · Итог = min
-      </div>
-    </Card>
-  );
-}
 
 /** Таблица «Расчёт подвесов» (#64): все артикулы сырья, batch-расчёт, inline-правка. */
 export function HangerCalcTable({
@@ -574,137 +375,4 @@ function sortAccessor(row: HangerCalcRow, field: CalcFilterField): string | numb
   if (field === "sku") return row.product.sku;
   if (field === "total") return row.total;
   return row.limiter ? LIMITER_LABELS[row.limiter] : null;
-}
-
-function HangerCalcRowView({
-  row,
-  byLength,
-  saveState,
-  readOnly,
-  onEdit,
-  onCommit,
-}: {
-  row: HangerCalcRow;
-  byLength: Map<string, HangerCalcResult> | undefined;
-  saveState: RowSaveState | undefined;
-  readOnly: boolean;
-  onEdit: (product: Product) => void;
-  onCommit: (product: Product, field: "perimeter_mm" | "mount_width_mm", value: number | null) => Promise<void>;
-}) {
-  const { product } = row;
-  const rowInvalid = row.incompatibleReason != null;
-  const primary = row.primaryResult;
-
-  const breakdownReason = row.incompatibleReason
-    ?? (!row.auto
-      ? "Ручной режим: периметр или габарит не заполнены, расчёт не запускался"
-      : row.primaryLength == null
-        ? "Расчёт невозможен: у артикула нет длин"
-        : !primary || !primary.is_calculable
-          ? "Расчёт невозможен: не хватает данных"
-          : null);
-
-  // Единый guard для ячеек разбивки: авто, не инвалид, есть расчёт (#64 — dedup).
-  const showBreakdown = row.auto && !rowInvalid && !!primary?.is_calculable;
-  const isZeroTotal = showBreakdown && primary!.total === 0;
-  const dashCell = <DashCell reason={breakdownReason} danger={rowInvalid} />;
-
-  const totalCell = (() => {
-    if (isZeroTotal) {
-      return (
-        <DashCell
-          reason="Итог 0: профиль не помещается по лимитам — проверьте периметр и габарит"
-          danger
-        />
-      );
-    }
-    if (showBreakdown) {
-      return <span className="font-medium">{primary!.total}</span>;
-    }
-    if (!row.auto) {
-      return row.total != null
-        ? <span className="text-muted-foreground">{row.total}</span>
-        : <DashCell reason={breakdownReason} />;
-    }
-    return dashCell;
-  })();
-
-  return (
-    <tr className={cn("hover:bg-muted/50", rowInvalid && "bg-red-50 hover:bg-red-100/60")}>
-      <td className="px-4 py-2">
-        <div className="flex items-center gap-1.5 flex-wrap">
-          <button
-            type="button"
-            className="font-medium hover:underline text-left"
-            onClick={() => onEdit(product)}
-          >
-            {product.sku}
-          </button>
-          {row.auto
-            ? <Badge variant="secondary" className="text-xs bg-emerald-100">авто</Badge>
-            : <Badge variant="secondary" className="text-xs">ручное</Badge>}
-          {product.is_paired_profile && (
-            <Badge variant="secondary" className="text-xs bg-purple-100">Парный</Badge>
-          )}
-        </div>
-        {saveState?.status === "saving" && (
-          <span className="flex items-center gap-1 text-xs text-muted-foreground mt-0.5">
-            <Loader2 className="h-3 w-3 animate-spin" /> сохраняется…
-          </span>
-        )}
-        {saveState?.status === "saved" && (
-          <span className="flex items-center gap-1 text-xs text-emerald-700 mt-0.5">
-            <Check className="h-3 w-3" /> сохранено
-          </span>
-        )}
-        {saveState?.status === "error" && (
-          <span className="block text-xs text-destructive mt-0.5 max-w-56" title={saveState.message}>
-            ошибка: {saveState.message}
-          </span>
-        )}
-      </td>
-      <td className="px-4 py-2">
-        <HangerFieldCell
-          value={product.perimeter_mm}
-          disabled={readOnly}
-          rowInvalid={rowInvalid}
-          invalidReason={row.incompatibleReason}
-          onCommit={(next) => onCommit(product, "perimeter_mm", next)}
-          ariaLabel={`Периметр для ${product.sku}`}
-        />
-      </td>
-      <td className="px-4 py-2">
-        <HangerFieldCell
-          value={product.mount_width_mm}
-          disabled={readOnly}
-          rowInvalid={rowInvalid}
-          invalidReason={row.incompatibleReason}
-          onCommit={(next) => onCommit(product, "mount_width_mm", next)}
-          ariaLabel={`Габарит для ${product.sku}`}
-        />
-      </td>
-      <td className="px-4 py-2">
-        <LengthChips row={row} byLength={byLength} />
-      </td>
-      <td className="px-4 py-2">
-        {showBreakdown ? primary!.by_area : dashCell}
-      </td>
-      <td className="px-4 py-2">
-        {showBreakdown ? primary!.by_size : dashCell}
-      </td>
-      <td className="px-4 py-2">{totalCell}</td>
-      <td className="px-4 py-2">
-        {/* Итог 0: лимитер не печатается — противоречиво (#64). */}
-        {showBreakdown && !isZeroTotal && primary!.limiter
-          ? LIMITER_LABELS[primary!.limiter]
-          : dashCell}
-      </td>
-      <td className="px-4 py-2">
-        {showBreakdown && !isZeroTotal && primary!.area_m2 != null
-          ? primary!.area_m2.toFixed(3)
-          : dashCell}
-      </td>
-      <TableCornerResetCell />
-    </tr>
-  );
 }

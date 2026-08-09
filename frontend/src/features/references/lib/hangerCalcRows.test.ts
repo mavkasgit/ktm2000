@@ -44,6 +44,7 @@ function makeProduct(overrides: Partial<Product>): Product {
     is_paired_profile: false,
     skip_shot_blast: false,
     dimension_state: "length",
+    primary_length_mm: null,
     aliases: [],
     lengths_mm: [],
     processing_flags: [],
