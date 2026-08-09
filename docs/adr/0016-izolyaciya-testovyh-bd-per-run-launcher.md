@@ -33,6 +33,10 @@ PostgreSQL-контейнер — **общая инфраструктура**, �
 
 - `conftest.py` избавлен от владения lifecycle (CREATE/DROP/cleanup ушли);
   там остались только module-schema изоляция и fixtures.
+- Схема модуля `t_<uuid8>` в launcher-owned run-DB **не дропается** per-module:
+  run-DB падает целиком в `finally` launcher'а, а per-module `DROP SCHEMA CASCADE`
+  (~0.25s × модуль) был чистым оверхедом. В ручном режиме на статичной
+  `ktm2000_test` схема дропается в teardown, чтобы не копилась.
 - При установленном `TEST_DATABASE_URL` имя БД обязано матчить regex launcher'а.
   Ручной serial `pytest` без env работает на статичной `ktm2000_test`;
   параллельный `pytest -n auto` без launcher — ошибка.

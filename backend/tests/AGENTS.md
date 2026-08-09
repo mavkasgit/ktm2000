@@ -22,7 +22,11 @@
 Внутри run-DB:
 
 1. **Схема на модуль**: одна схема `t_<uuid8>` на модуль,
-   `Base.metadata.create_all()` при старте модуля; схема дропается в teardown.
+   `Base.metadata.create_all()` при старте модуля. В launcher-режиме схема
+   **не дропается** (run-DB падает целиком в `finally` launcher'а;
+   per-module `DROP SCHEMA CASCADE` ≈ 0.25s × модуль — чистые расходы).
+   В ручном режиме на статичной `ktm2000_test` схема дропается в teardown,
+   чтобы не копилась.
 2. **Транзакция на тест** (`function scope`): каждый тест в SAVEPOINT;
    по завершении — `rollback`.
 3. **Сброс sequence users**: перед каждым тестом

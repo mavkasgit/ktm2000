@@ -253,8 +253,12 @@ async def engine(
     The run-DB is owned by the launcher and is deliberately NOT dropped here:
     dropping it in any single module's teardown would break the parallel
     xdist workers sharing it (the InvalidCatalogNameError this file used to
-    guard against). The module schema (t_<uuid8>) is dropped instead; the
-    run-DB itself is reaped by `npm run test:db:cleanup` if a run is killed.
+    guard against). The module schema (t_<uuid8>) is also left in place for
+    launcher-owned run-DBs: they are dropped whole by the launcher (or reaped
+    by `npm run test:db:cleanup` if a run is killed), so a per-module
+    DROP SCHEMA CASCADE (~0.25s × module) is pure overhead. The module schema
+    is dropped only in manual debug mode on the shared static DB, so it does
+    not accumulate there.
     """
     eng = create_async_engine(
         base_test_db_url.render_as_string(hide_password=False), poolclass=NullPool
@@ -267,12 +271,15 @@ async def engine(
     try:
         yield eng
     finally:
-        # Drop the module schema to keep the shared run-DB clean
-        try:
-            async with eng.begin() as conn:
-                await conn.execute(text(f"DROP SCHEMA IF EXISTS {_quote_ident(module_schema_name)} CASCADE"))
-        except Exception:
-            pass
+        db_name = (base_test_db_url.database or "").lower()
+        if not RUN_DB_RE.fullmatch(db_name):
+            # Manual debug on the shared static DB — drop the module schema so
+            # t_<uuid8> schemas do not accumulate in the persistent DB.
+            try:
+                async with eng.begin() as conn:
+                    await conn.execute(text(f"DROP SCHEMA IF EXISTS {_quote_ident(module_schema_name)} CASCADE"))
+            except Exception:
+                pass
         await eng.dispose()
 
 
