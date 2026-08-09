@@ -409,7 +409,7 @@ async def run_full_route_test(
 
     # Stop at after_release: position released, tasks created, no movements
     if payload.stage_preset == StagePreset.after_release:
-        section_urls = [f"/shopfloor-tasks/{row[3].id}" for row in task_rows]
+        section_urls = [f"/section-tasks/{row[3].id}" for row in task_rows]
         return FullRouteRunResponse(
             run_id=run_id,
             production_plan_id=position.production_plan_id,
@@ -505,7 +505,7 @@ async def run_full_route_test(
                 accounted_at=accounted_at.isoformat(),
             )
         )
-        section_urls.append(f"/shopfloor-tasks/{section.id}")
+        section_urls.append(f"/section-tasks/{section.id}")
 
         # For to_step_ready: don't transfer to the target step
         if payload.stage_preset == StagePreset.to_step_ready and (idx + 1) == target_step_index:

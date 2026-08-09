@@ -225,8 +225,8 @@ test.describe("@smoke Bulk operations workflow E2E", () => {
     await expect(bulkLaunchBtn).not.toBeVisible({ timeout: 20_000 });
     console.log("All selected positions launched in bulk mode");
 
-    // 7. Перейти на страницу /shopfloor-tasks/ID?bulk=1 (первый участок). Убедиться, что включен bulk-режим
-    await authenticatedPage.goto(`/shopfloor-tasks/${sectionWh.id}?bulk=1`);
+    // 7. Перейти на страницу /section-tasks/ID?bulk=1 (первый участок). Убедиться, что включен bulk-режим
+    await authenticatedPage.goto(`/section-tasks/${sectionWh.id}?bulk=1`);
     await expect(authenticatedPage).toHaveURL(/bulk=1/);
 
     const bulkModeToggle = authenticatedPage.getByRole("button", { name: "Групповые операции" });

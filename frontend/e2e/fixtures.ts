@@ -31,12 +31,23 @@ export async function stubOidcDisabled(page: Page) {
   );
 }
 
-/** Вход через Break Glass (пароль аварийного доступа). */
+/** Вход через Break Glass (пароль аварийного доступа), с ретраями на медленный backend. */
 export async function loginWithBreakGlass(page: Page) {
   await page.goto("/login");
   await page.getByPlaceholder("Пароль аварийного доступа").fill(BREAK_GLASS_PASSWORD);
-  await page.getByRole("button", { name: "Аварийный вход" }).click();
-  await page.waitForURL((url) => !url.pathname.includes("/login"), { timeout: 12_000 });
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    await page.getByRole("button", { name: "Аварийный вход" }).click();
+    try {
+      await page.waitForURL((url) => !url.pathname.includes("/login"), { timeout: 15_000 });
+      return;
+    } catch {
+      if (attempt === 3) {
+        throw new Error(`Login failed after ${attempt} attempts (backend timeout)`);
+      }
+      // Backend может быть занят (seed) — повторяем вход.
+      await page.getByPlaceholder("Пароль аварийного доступа").fill(BREAK_GLASS_PASSWORD);
+    }
+  }
 }
 
 /** Авторизация, если текущая страница /login (иначе — уже вошли). */

@@ -143,9 +143,9 @@ test.describe("@smoke Dimensions sawing E2E", () => {
     }
 
     // 3. Navigate to sawing board
-    await authenticatedPage.goto(`/shopfloor-tasks/${sawingSection.id}`);
+    await authenticatedPage.goto(`/section-tasks/${sawingSection.id}`);
     await expect(
-      authenticatedPage.getByRole("heading", { name: /пила|sawing/i }).first(),
+      authenticatedPage.getByRole("heading", { name: /участк|пила|sawing/i }).first(),
     ).toBeVisible({ timeout: 15_000 });
 
     // 4. Check if there are any task cards on the board
