@@ -120,7 +120,25 @@ async def validate_plan_position(
                 errors.append("active_techcard_has_no_lines")
 
     product = await db.get(Product, position.product_id) if position.product_id else None
-    
+
+    # Авторасчёт «количество на подвес» (#66): невозможный расчёт
+    # (total <= 0 или несовместимые габариты) блокирует позицию от
+    # утверждения/релиза. Приоритет: ручной override из payload > авто;
+    # при ручном override ошибка не выставляется.
+    from app.services.plan_position_hanger import (
+        payload_quantity_per_hanger,
+        position_length_mm,
+        resolve_position_hanger,
+    )
+
+    hanger_value = resolve_position_hanger(
+        product,
+        length_mm=position_length_mm(position),
+        payload_quantity_per_hanger=payload_quantity_per_hanger(position),
+    )
+    if hanger_value.calc_error:
+        errors.append("hanger_calc_zero")
+
     if route_resolve_cache is not None:
         from app.services.route_matcher import make_position_route_cache_key
         cache_key = make_position_route_cache_key(position)

@@ -45,13 +45,21 @@ export function PositionRow({ pos, onApprove, onDelete, selected, routes, onAssi
     ? (Number.isInteger(originalQtyNum) ? String(originalQtyNum) : String(originalQtyNum))
     : null
   const qtyAdjusted = originalQtyDisplay != null && originalQtyDisplay !== qtyStr
-  const quantityPerHanger = (pos.payload?.quantity_per_hanger as number | null | undefined) ?? null
+  // Авторасчёт (#66): значение и источник приходят контрактом с бэкенда,
+  // движок расчёта фронту не нужен.
+  const quantityPerHanger = pos.quantity_per_hanger ?? null
+  const quantityPerHangerSource = pos.quantity_per_hanger_source ?? null
   const hangerCount = quantityPerHanger && quantityPerHanger > 0
     ? qty / quantityPerHanger
     : null
   const hangerDisplay = hangerCount != null
     ? (Number.isInteger(hangerCount) ? String(hangerCount) : hangerCount.toFixed(1))
     : null
+  const hangerSourceLabel = quantityPerHangerSource === "auto"
+    ? "авто"
+    : quantityPerHangerSource === "manual"
+      ? "ручн."
+      : null
   const translatedErrors = hasErrors ? pos.errors.map((e) => translateLabel(e, errorLabels)) : []
   const translatedWarnings = hasWarnings ? pos.warnings.map((w) => translateLabel(w, warningLabels)) : []
   const rowNum = (() => {
@@ -241,6 +249,11 @@ export function PositionRow({ pos, onApprove, onDelete, selected, routes, onAssi
         ) : (
           <span>
             {qtyStr}{hangerDisplay ? ` (${hangerDisplay}П)` : ''}
+          </span>
+        )}
+        {hangerSourceLabel && hangerDisplay && (
+          <span className="ml-1 inline-flex items-center rounded bg-muted px-1 text-[10px] text-muted-foreground align-middle">
+            {hangerSourceLabel}
           </span>
         )}
         {pos.operation_summary && (

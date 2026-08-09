@@ -48,6 +48,7 @@ VALIDATION_ERROR_MESSAGES: dict[str, str] = {
     "manual_route_not_found": "Ручной маршрут не найден",
     "manual_route_inactive": "Ручной маршрут неактивен",
     "auto_fallback": "Маршрут скорректирован автоматически — проверьте корректность",
+    "hanger_calc_zero": "Авторасчёт количества на подвес невозможен — для этой длины получается 0 штук",
 }
 
 PAIRED_PROCESSING_VALUE: str = "paired_processing"

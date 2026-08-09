@@ -32,6 +32,7 @@ export const errorLabels: Record<string, string> = {
   "active_techcard_not_found": "Не найдена активная техкарта для продукта",
   "auto_fallback": "Маршрут скорректирован автоматически — проверьте корректность",
   "duplicate_sku_due_date": "Дубликат строки Excel: такая же строка уже есть в плане.",
+  "hanger_calc_zero": "Авторасчёт количества на подвес невозможен — для этой длины получается 0 штук",
   "manual_route_inactive": "Ручной маршрут неактивен",
   "manual_route_not_found": "Ручной маршрут не найден",
   "no_route_candidate": "Не найден маршрут, удовлетворяющий правилам выбора",

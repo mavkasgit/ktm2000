@@ -44,6 +44,7 @@ from app.services.route_matcher import resolve_position_route, ResolvedRouteInfo
 from app.services.route_selection import select_route_for_payload
 from app.services.route_validation import validate_route_match
 from app.services.plan_validation import format_validation_error
+from app.services.plan_position_hanger import resolve_positions_hanger
 
 router = APIRouter(prefix="/production-plans", tags=["production-plans"])
 
@@ -982,6 +983,9 @@ class PlanPositionOut(BaseModel):
     raw_excel_row: dict | None = None
     payload: dict | None = None
     available_remainder_quantity: float | None = None
+    # Авторасчёт «количество на подвес» (#66): расчёт на лету по длине позиции.
+    quantity_per_hanger: int | None = None
+    quantity_per_hanger_source: str | None = None  # "auto" | "manual" | null
     # Операция группы строк (ADR-0003): один вход, 1..N выходов.
     input_quantity: str | None = None
     input_dimensions: dict | None = None
@@ -1269,10 +1273,12 @@ async def _serialize_plan_positions(
     available_remainder_by_id = await _compute_available_remainder_for_positions(
         db, positions, route_info_by_id
     )
+    hanger_values = await resolve_positions_hanger(db, positions)
 
     result: list[PlanPositionOut] = []
     for p in positions:
         route_info = route_info_by_id[p.id]
+        hanger_value = hanger_values[p.id]
         result.append(
             PlanPositionOut(
                 id=p.id,
@@ -1303,6 +1309,8 @@ async def _serialize_plan_positions(
                 raw_excel_row=(p.source_payload or {}).get("raw_excel_row"),
                 payload=p.source_payload,
                 available_remainder_quantity=round(available_remainder_by_id.get(p.id, 0.0), 3),
+                quantity_per_hanger=hanger_value.quantity_per_hanger,
+                quantity_per_hanger_source=hanger_value.source,
                 **_position_operation_fields(p),
             )
         )
@@ -1425,10 +1433,12 @@ async def cancelled_positions(db: AsyncSession = Depends(get_db)) -> list[PlanPo
     available_remainder_by_id = await _compute_available_remainder_for_positions(
         db, positions, route_info_by_id
     )
+    hanger_values = await resolve_positions_hanger(db, positions)
 
     result = []
     for p in positions:
         route_info = route_info_by_id[p.id]
+        hanger_value = hanger_values[p.id]
         result.append(
             PlanPositionOut(
                 id=p.id,
@@ -1459,6 +1469,8 @@ async def cancelled_positions(db: AsyncSession = Depends(get_db)) -> list[PlanPo
                 raw_excel_row=(p.source_payload or {}).get("raw_excel_row"),
                 payload=p.source_payload,
                 available_remainder_quantity=round(available_remainder_by_id.get(p.id, 0.0), 3),
+                quantity_per_hanger=hanger_value.quantity_per_hanger,
+                quantity_per_hanger_source=hanger_value.source,
                 **_position_operation_fields(p),
             )
         )
@@ -1506,10 +1518,12 @@ async def all_positions(production_plan_id: int, db: AsyncSession = Depends(get_
     available_remainder_by_id = await _compute_available_remainder_for_positions(
         db, positions, route_info_by_id
     )
+    hanger_values = await resolve_positions_hanger(db, positions)
 
     result = []
     for p in positions:
         route_info = route_info_by_id[p.id]
+        hanger_value = hanger_values[p.id]
         result.append(
             PlanPositionOut(
                 id=p.id,
@@ -1540,6 +1554,8 @@ async def all_positions(production_plan_id: int, db: AsyncSession = Depends(get_
                 raw_excel_row=(p.source_payload or {}).get("raw_excel_row"),
                 payload=p.source_payload,
                 available_remainder_quantity=round(available_remainder_by_id.get(p.id, 0.0), 3),
+                quantity_per_hanger=hanger_value.quantity_per_hanger,
+                quantity_per_hanger_source=hanger_value.source,
                 **_position_operation_fields(p),
             )
         )
@@ -1904,6 +1920,7 @@ async def update_position_quantity(
     await db.refresh(position)
 
     route_info = await resolve_position_route(db, position)
+    hanger_value = (await resolve_positions_hanger(db, [position]))[position.id]
 
     return PlanPositionOut(
         id=position.id,
@@ -1933,5 +1950,8 @@ async def update_position_quantity(
         route_error=route_info.error,
         raw_excel_row=(position.source_payload or {}).get("raw_excel_row"),
         payload=position.source_payload,
+        available_remainder_quantity=None,
+        quantity_per_hanger=hanger_value.quantity_per_hanger,
+        quantity_per_hanger_source=hanger_value.source,
         **_position_operation_fields(position),
     )

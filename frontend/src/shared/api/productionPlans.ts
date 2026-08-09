@@ -144,6 +144,9 @@ export type PlanPositionOut = {
   raw_excel_row: Record<string, unknown> | null;
   payload?: Record<string, unknown> | null;
   available_remainder_quantity?: number | null;
+  // Авторасчёт «количество на подвес» (#66): расчёт на лету по длине позиции.
+  quantity_per_hanger?: number | null;
+  quantity_per_hanger_source?: "auto" | "manual" | null;
   // Операция группы строк (ADR-0003): один вход, 1..N выходов.
   input_quantity?: string | null;
   input_dimensions?: Record<string, unknown> | null;
