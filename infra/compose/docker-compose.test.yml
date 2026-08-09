@@ -10,8 +10,13 @@ services:
       POSTGRES_USER: ktm2000_user
       POSTGRES_PASSWORD: ktm2000_pass_test
       POSTGRES_DB: ktm2000_test
+    # Оба loopback-биндинга обязательны: asyncpg резолвит 'localhost' на ::1
+    # первым и виснет ~2с на [::1], если порт опубликован только на IPv4
+    # (Docker Desktop, Windows). С [::1] и 127.0.0.1 коннект мгновенный.
+    # Только loopback — порт не выходит за пределы машины.
     ports:
       - "127.0.0.1:5441:5432"
+      - "[::1]:5441:5432"
     tmpfs:
       - /var/lib/postgresql/data
     healthcheck:
