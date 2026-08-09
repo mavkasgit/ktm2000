@@ -56,8 +56,21 @@ describe("ImportUploadStep", () => {
       <ImportUploadStep onFileSelected={onFileSelected} onDownloadTemplate={vi.fn()} />,
     );
 
-    const input = container.querySelector('input[type="file"]');
-    fireEvent.change(input!, { target: { files: [] } });
+    const input = container.querySelector('input[type="file"]')!;
+    fireEvent.change(input, { target: { files: [] } });
+
+    expect(onFileSelected).not.toHaveBeenCalled();
+  });
+
+  it("rejects a file that is not .xlsx", () => {
+    const onFileSelected = vi.fn();
+    const { container } = render(
+      <ImportUploadStep onFileSelected={onFileSelected} onDownloadTemplate={vi.fn()} />,
+    );
+
+    const input = container.querySelector('input[type="file"]')!;
+    const file = new File(["x"], "catalog.xls", { type: "application/vnd.ms-excel" });
+    fireEvent.change(input, { target: { files: [file] } });
 
     expect(onFileSelected).not.toHaveBeenCalled();
   });

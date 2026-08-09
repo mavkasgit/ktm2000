@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/shared/ui/dialog";
 import { Button } from "@/shared/ui/button";
 import { toast } from "@/shared/ui/use-toast";
@@ -27,8 +27,11 @@ export function ImportWizardDialog({
   const [file, setFile] = useState<File | null>(null);
   const [preview, setPreview] = useState<CatalogPreview | null>(null);
   const [loading, setLoading] = useState(false);
+  // Инвалидирует незавершённые запросы при сбросе (закрытие/повторное открытие).
+  const requestIdRef = useRef(0);
 
   const reset = () => {
+    requestIdRef.current += 1;
     setStep("upload");
     setFile(null);
     setPreview(null);
@@ -41,20 +44,23 @@ export function ImportWizardDialog({
   };
 
   const handleFileSelected = async (selected: File) => {
+    const requestId = ++requestIdRef.current;
     setLoading(true);
     try {
       const result = await previewCatalogExcel(selected);
+      if (requestId !== requestIdRef.current) return;
       setFile(selected);
       setPreview(result);
       setStep("preview");
     } catch (err) {
+      if (requestId !== requestIdRef.current) return;
       toast({
         variant: "destructive",
         title: `Ошибка предпросмотра: ${selected.name}`,
         description: getErrorMessage(err),
       });
     } finally {
-      setLoading(false);
+      if (requestId === requestIdRef.current) setLoading(false);
     }
   };
 

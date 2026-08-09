@@ -46,6 +46,7 @@ export function ImportUploadStep({
     (files: FileList | null) => {
       const file = files?.[0];
       if (!file) return;
+      if (!/\.xlsx$/i.test(file.name)) return;
       onFileSelected(file);
     },
     [onFileSelected],
@@ -129,6 +130,7 @@ export function ImportUploadStep({
         type="file"
         accept=".xlsx"
         className="hidden"
+        disabled={loading}
         onChange={(e) => {
           handleFiles(e.target.files);
           e.target.value = "";
