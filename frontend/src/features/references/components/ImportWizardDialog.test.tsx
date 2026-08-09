@@ -88,7 +88,7 @@ describe("ImportWizardDialog", () => {
     expect(screen.queryByRole("button", { name: "Импортировать" })).toBeNull();
   });
 
-  it("applies the import and closes on «Импортировать»", async () => {
+  it("applies the import and moves to the result step on «Импортировать»", async () => {
     vi.mocked(previewCatalogExcel).mockResolvedValue(makePreview());
     vi.mocked(applyCatalogExcel).mockResolvedValue({
       imported: 1,
@@ -107,13 +107,98 @@ describe("ImportWizardDialog", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Импортировать" }));
 
-    await waitFor(() => expect(applyCatalogExcel).toHaveBeenCalledTimes(1));
+    await screen.findByRole("heading", { name: "Результат импорта" });
+    expect(applyCatalogExcel).toHaveBeenCalledTimes(1);
     expect(applyCatalogExcel).toHaveBeenCalledWith(file);
-    expect(onImported).toHaveBeenCalledTimes(1);
-    expect(onOpenChange).toHaveBeenCalledWith(false);
+    // Список ещё не перезагружается — ждём закрытия результата
+    expect(onImported).not.toHaveBeenCalled();
+    expect(onOpenChange).not.toHaveBeenCalledWith(false);
+    expect(screen.getByText("Создано: 1")).toBeTruthy();
+    expect(screen.getByTestId("import-result-close")).toBeTruthy();
     expect(toast).toHaveBeenCalledWith(
       expect.objectContaining({ title: "Импорт завершён" }),
     );
+  });
+
+  it("shows the row errors on the result step when some rows are skipped", async () => {
+    vi.mocked(previewCatalogExcel).mockResolvedValue(makePreview());
+    vi.mocked(applyCatalogExcel).mockResolvedValue({
+      imported: 1,
+      updated: 0,
+      skipped: 0,
+      errors: [{ row: 7, sku: "SKU-BAD", message: "нет длины" }],
+    });
+    const { container } = render(
+      <ImportWizardDialog open onOpenChange={vi.fn()} onImported={vi.fn()} />,
+    );
+
+    pickFile(container);
+    await screen.findByRole("heading", { name: "Предпросмотр импорта" });
+
+    fireEvent.click(screen.getByRole("button", { name: "Импортировать" }));
+
+    await screen.findByRole("heading", { name: "Результат импорта" });
+    expect(screen.getByText("Ошибки строк (строки пропущены):")).toBeTruthy();
+    expect(screen.getByText("Строка 7 — SKU-BAD: нет длины")).toBeTruthy();
+  });
+
+  it("closes the dialog and reloads the list on «Закрыть»", async () => {
+    vi.mocked(previewCatalogExcel).mockResolvedValue(makePreview());
+    vi.mocked(applyCatalogExcel).mockResolvedValue({
+      imported: 1,
+      updated: 0,
+      skipped: 0,
+      errors: [],
+    });
+    const onOpenChange = vi.fn();
+    const onImported = vi.fn();
+    const { container } = render(
+      <ImportWizardDialog open onOpenChange={onOpenChange} onImported={onImported} />,
+    );
+
+    pickFile(container);
+    await screen.findByRole("heading", { name: "Предпросмотр импорта" });
+
+    fireEvent.click(screen.getByRole("button", { name: "Импортировать" }));
+    await screen.findByRole("heading", { name: "Результат импорта" });
+
+    fireEvent.click(screen.getByTestId("import-result-close"));
+
+    expect(onOpenChange).toHaveBeenCalledWith(false);
+    expect(onImported).toHaveBeenCalledTimes(1);
+  });
+
+  it("stays on the preview step and toasts when the import fails", async () => {
+    vi.mocked(previewCatalogExcel).mockResolvedValue(makePreview());
+    vi.mocked(applyCatalogExcel).mockRejectedValue(new Error("network down"));
+    const onOpenChange = vi.fn();
+    const onImported = vi.fn();
+    const { container } = render(
+      <ImportWizardDialog open onOpenChange={onOpenChange} onImported={onImported} />,
+    );
+
+    pickFile(container);
+    await screen.findByRole("heading", { name: "Предпросмотр импорта" });
+
+    fireEvent.click(screen.getByRole("button", { name: "Импортировать" }));
+
+    await waitFor(() => expect(toast).toHaveBeenCalledTimes(1));
+    expect(toast).toHaveBeenCalledWith(
+      expect.objectContaining({
+        variant: "destructive",
+        title: "Ошибка импорта: catalog.xlsx",
+      }),
+    );
+    // Остаёмся на предпросмотре, загрузка не зависает — кнопка снова активна
+    expect(screen.getByRole("heading", { name: "Предпросмотр импорта" })).toBeTruthy();
+    await waitFor(() => {
+      const button = screen.getByRole("button", {
+        name: "Импортировать",
+      }) as HTMLButtonElement;
+      expect(button.disabled).toBe(false);
+    });
+    expect(onImported).not.toHaveBeenCalled();
+    expect(onOpenChange).not.toHaveBeenCalledWith(false);
   });
 
   it("closes the dialog on «Отмена»", () => {
