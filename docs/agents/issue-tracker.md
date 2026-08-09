@@ -25,6 +25,15 @@ When set to `yes`, PRs run through the same labels and states as issues, using t
 
 GitHub shares one number space across issues and PRs, so a bare `#42` may be either — resolve with `gh pr view 42` and fall back to `gh issue view 42`.
 
+## «НЕ на автокоммит»
+
+Задачи, помеченные в AC «НЕ на автокоммит» (обычно — реализация на
+показ/ревизию заказчику), требуют **отдельного коммита** и **подтверждения
+заказчика** до слияния в develop. Не объединяйте их с другими задачами в
+один коммит и не закрывайте issue без ревизии. Нарушение (пример: #65,
+влита в `cb8c36e` вместе с #64) фиксируется комментарием в issue и
+решается процессно — код при этом не откатывается.
+
 ## When a skill says "publish to the issue tracker"
 
 Create a GitHub issue.
