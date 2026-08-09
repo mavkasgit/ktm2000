@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Search, Image, X, Grid, List, Plus, Filter, FileUp, FileSpreadsheet, Download, Check, CheckCheck } from "lucide-react";
+import { Search, Image, X, Grid, List, Plus, Filter, FileUp, FileSpreadsheet, Check, CheckCheck } from "lucide-react";
 import * as API from "@/shared/api/products";
 import type { ProductFilters } from "@/shared/api/products";
 import { listRouteSelectionRules } from "@/shared/api/routes";
@@ -14,6 +14,7 @@ import { Dialog, DialogContent } from "@/shared/ui/dialog";
 import { AlertDialog, AlertDialogContent, AlertDialogHeader, AlertDialogTitle, AlertDialogDescription, AlertDialogFooter, AlertDialogAction, AlertDialogCancel } from "@/shared/ui/alert-dialog";
 import { toast } from "@/shared/ui/use-toast";
 import { ImportPreviewDialog } from "../ImportPreviewDialog";
+import { ImportWizardDialog } from "../components/ImportWizardDialog";
 import { CatalogForm, type CatalogFormRef, type FieldChange } from "../components/CatalogForm";
 import { CatalogCard } from "../components/CatalogCard";
 import { getPhotoUrl } from "../components/getPhotoUrl";
@@ -248,7 +249,7 @@ export function RawMaterialsPage() {
   const [previewData, setPreviewData] = useState<CatalogPreview | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
   const [pendingImportFile, setPendingImportFile] = useState<File | null>(null);
-  const [importMode, setImportMode] = useState<"zip" | "excel">("zip");
+  const [wizardOpen, setWizardOpen] = useState(false);
 
   // Подпись колонки флага skip_shot_blast — название пропускаемого участка
   // из правил выбора маршрута (БД), а не литерал в коде.
@@ -393,39 +394,11 @@ export function RawMaterialsPage() {
       const preview = await API.previewCatalogZip(file);
       setPreviewData(preview);
       setPendingImportFile(file);
-      setImportMode("zip");
       setPreviewOpen(true);
     } catch (err) {
       toast({ variant: "destructive", title: `Ошибка предпросмотра: ${file.name}`, description: API.getErrorMessage(err) });
     } finally {
       setPreviewLoading(false);
-    }
-  };
-
-  const handleImportExcel = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    e.target.value = "";
-    setError("");
-    setPreviewLoading(true);
-    try {
-      const preview = await API.previewCatalogExcel(file);
-      setPreviewData(preview);
-      setPendingImportFile(file);
-      setImportMode("excel");
-      setPreviewOpen(true);
-    } catch (err) {
-      toast({ variant: "destructive", title: `Ошибка предпросмотра: ${file.name}`, description: API.getErrorMessage(err) });
-    } finally {
-      setPreviewLoading(false);
-    }
-  };
-
-  const handleDownloadTemplate = async () => {
-    try {
-      await API.downloadCatalogTemplate();
-    } catch (err) {
-      toast({ variant: "destructive", title: "Ошибка скачивания шаблона", description: API.getErrorMessage(err) });
     }
   };
 
@@ -434,9 +407,7 @@ export function RawMaterialsPage() {
     const file = pendingImportFile;
     setPreviewLoading(true);
     try {
-      const result = importMode === "excel"
-        ? await API.applyCatalogExcel(file)
-        : await API.uploadCatalogZip(file);
+      const result = await API.uploadCatalogZip(file);
       setPreviewOpen(false);
       setPreviewData(null);
       setPendingImportFile(null);
@@ -543,15 +514,9 @@ export function RawMaterialsPage() {
                   <span><FileUp className="h-4 w-4 mr-1" />Импорт ZIP</span>
                 </Button>
               </label>
-              <label>
-                <input type="file" accept=".xlsx" className="hidden" onChange={handleImportExcel} disabled={isReadOnly} />
-                <Button variant="outline" size="sm" asChild>
-                  <span><FileSpreadsheet className="h-4 w-4 mr-1" />Импорт Excel</span>
-                </Button>
-              </label>
-              <Button variant="outline" size="sm" onClick={handleDownloadTemplate}>
-                <Download className="h-4 w-4 mr-1" />
-                Шаблон
+              <Button variant="outline" size="sm" onClick={() => setWizardOpen(true)}>
+                <FileSpreadsheet className="h-4 w-4 mr-1" />
+                Импорт
               </Button>
               <Button size="sm" onClick={openCreate}>
                 <Plus className="h-4 w-4 mr-1" />
@@ -914,6 +879,12 @@ export function RawMaterialsPage() {
         preview={previewData}
         loading={previewLoading}
         onImport={handleConfirmImport}
+      />
+
+      <ImportWizardDialog
+        open={wizardOpen}
+        onOpenChange={setWizardOpen}
+        onImported={load}
       />
     </section>
   );
