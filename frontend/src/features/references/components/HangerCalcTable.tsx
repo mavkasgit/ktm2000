@@ -10,7 +10,7 @@ import { useSortableColumnFilters } from "@/shared/hooks/useSortableColumnFilter
 import { nextMultiSortConfigs } from "@/shared/lib/multiSort";
 import type { SortConfig } from "@/shared/hooks/useTableQueryEngine";
 import { listProductsPaginated, patchProduct, getErrorMessage } from "@/shared/api/products";
-import type { Product } from "@/shared/api/products";
+import type { Product, ProductFilters } from "@/shared/api/products";
 import { calcHanger } from "@/shared/api/hangerCalc";
 import type { HangerCalcResult, HangerSettings } from "@/shared/api/hangerCalc";
 import { isHangerAutoMode, lengthKey, productLengths } from "@/shared/lib/hangerQuantity";
@@ -44,12 +44,11 @@ export function HangerCalcTable({
   const [incompatible, setIncompatible] = useState<Map<number, string>>(new Map());
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-  const [truncated, setTruncated] = useState(false);
-  const [totalCount, setTotalCount] = useState(0);
   const [rowStates, setRowStates] = useState<Record<number, RowSaveState | undefined>>({});
   const savedTimers = useRef<Map<number, number>>(new Map());
 
   const [search, setSearch] = useState("");
+  const [debouncedSearch, setDebouncedSearch] = useState("");
   const [sortConfigs, setSortConfigs] = useState<SortConfig<CalcFilterField>[]>([]);
   const {
     bindColumn,
@@ -58,20 +57,39 @@ export function HangerCalcTable({
     resetColumnFilters,
   } = useSortableColumnFilters<CalcFilterField>();
 
+  useEffect(() => {
+    const timer = window.setTimeout(() => setDebouncedSearch(search), 300);
+    return () => window.clearTimeout(timer);
+  }, [search]);
+
   const setRowState = useCallback((id: number, state: RowSaveState | undefined) => {
     setRowStates((prev) => ({ ...prev, [id]: state }));
   }, []);
+
+  // Серверный поиск и сортировка (ADR-0014): `q`/`sort` уходят на сервер,
+  // чтобы поиск находил артикул за пределами лимита выгрузки (#84).
+  const apiParams = useMemo(() => {
+    const params: ProductFilters = {
+      type: "component",
+      limit: 2000,
+    };
+    const query = debouncedSearch.trim();
+    if (query) params.q = query;
+    const activeSort = sortConfigs[0];
+    if (activeSort && activeSort.field === "sku") {
+      params.sort = `sku:${activeSort.order}`;
+    }
+    return params;
+  }, [debouncedSearch, sortConfigs]);
 
   const load = useCallback(async () => {
     setLoading(true);
     setError("");
     try {
       const [list, constants] = await Promise.all([
-        listProductsPaginated({ type: "component", limit: 2000 }),
+        listProductsPaginated(apiParams),
         calcHanger([]),
       ]);
-      setTruncated(list.total > list.items.length);
-      setTotalCount(list.total);
       const { items, refs, incompatible: incompatibles } = buildCalcItems(list.items, constants.hanger);
       let map: CalcMap = new Map();
       if (items.length > 0) {
@@ -87,7 +105,7 @@ export function HangerCalcTable({
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [apiParams]);
 
   useEffect(() => {
     void load();
@@ -230,15 +248,16 @@ export function HangerCalcTable({
   );
 
   const visibleRows = useMemo(() => {
-    const query = search.trim().toLowerCase();
-    const filtered = rows.filter((row) => {
-      if (query && !row.product.sku.toLowerCase().includes(query)) return false;
-      return predicate ? predicate(row) : true;
-    });
+    // Поиск (q) и сортировка sku — на сервере (#84); фильтры total/limiter —
+    // по вычисляемым полям расчёта (сервер их не знает, ADR-0014).
+    const filtered = predicate ? rows.filter(predicate) : rows;
     if (sortConfigs.length === 0) return filtered;
+    const hasServerSkuSort = sortConfigs.some((cfg) => cfg.field === "sku");
+    const clientSorts = sortConfigs.filter((cfg) => cfg.field !== "sku");
+    if (!hasServerSkuSort && clientSorts.length === 0) return filtered;
     const sorted = [...filtered];
     sorted.sort((a, b) => {
-      for (const cfg of sortConfigs) {
+      for (const cfg of clientSorts) {
         const av = sortAccessor(a, cfg.field);
         const bv = sortAccessor(b, cfg.field);
         let cmp = 0;
@@ -252,7 +271,7 @@ export function HangerCalcTable({
       return 0;
     });
     return sorted;
-  }, [rows, search, predicate, sortConfigs]);
+  }, [rows, predicate, sortConfigs]);
 
   const hasActiveFilters =
     search.trim().length > 0 || hasActiveColumnFilters || sortConfigs.length > 0;
@@ -291,12 +310,6 @@ export function HangerCalcTable({
         </div>
 
         {error && <div className="text-sm text-destructive bg-destructive/10 p-3 rounded-md">{error}</div>}
-
-        {truncated && (
-          <div className="text-sm text-amber-700 bg-amber-50 border border-amber-200 p-2 rounded-md">
-            Показано {products.length} из {totalCount} артикулов. Используйте поиск для фильтрации.
-          </div>
-        )}
 
         {loading ? (
           <div className="text-muted-foreground py-8 text-center">Загрузка...</div>
