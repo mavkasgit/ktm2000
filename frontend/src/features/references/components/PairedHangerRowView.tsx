@@ -58,14 +58,8 @@ export function PairedHangerRowView({
     return dashCell;
   })();
 
-  const perimeterSum =
-    row.productA.perimeter_mm != null && row.productB.perimeter_mm != null
-      ? Number((row.productA.perimeter_mm + row.productB.perimeter_mm).toFixed(2))
-      : null;
-  const widthSum =
-    row.productA.mount_width_mm != null && row.productB.mount_width_mm != null
-      ? Number((row.productA.mount_width_mm + row.productB.mount_width_mm).toFixed(2))
-      : null;
+  const perimeterSum = row.perimeterSum;
+  const widthSum = row.widthSum;
 
   return (
     <tr className={cn("hover:bg-muted/50", rowInvalid && "bg-red-50 hover:bg-red-100/60")}>

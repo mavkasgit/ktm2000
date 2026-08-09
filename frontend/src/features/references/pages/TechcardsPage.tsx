@@ -278,7 +278,8 @@ export function TechcardsPage() {
     try {
       if (viewDetail.product_id === null) {
         await api.patchTechcard(viewTechcardId, {
-          quantity_total: editQuantityTotal,
+          // Инвариант равенства N (#67): общее на подвес = N×2, не редактируется отдельно.
+          quantity_total: editQuantityAPerItem * 2,
           quantity_a_per_item: editQuantityAPerItem,
           quantity_b_per_item: editQuantityBPerItem,
         });
@@ -780,8 +781,8 @@ export function TechcardsPage() {
                       </div>
                       <div className="flex flex-wrap gap-3">
                         <div>
-                          <label className="text-sm font-medium">Общее кол-во</label>
-                          <Input className="w-48" type="number" min={1} value={editQuantityTotal} onChange={(e: any) => setEditQuantityTotal(Number(e.target.value || 1))} disabled={isReadOnly} />
+                          <label className="text-sm font-medium">Общее кол-во (N×2)</label>
+                          <div className="w-48 px-3 py-2 rounded-md border bg-muted text-sm">{editQuantityAPerItem * 2}</div>
                         </div>
                         <div>
                           <label className="text-sm font-medium">Кол-во каждого на подвес</label>

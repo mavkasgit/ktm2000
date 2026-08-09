@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from typing import Literal
+from typing import Literal, TypeGuard
 
 
 class HangerConfigError(ValueError):
@@ -47,6 +47,11 @@ class HangerSettings:
 DEFAULT_HANGER_SETTINGS = HangerSettings()
 
 
+def _is_valid(value: float | None) -> TypeGuard[float]:
+    """Расчётное значение: не None, конечное число > 0 (TypeGuard сужает тип)."""
+    return value is not None and math.isfinite(value) and value > 0
+
+
 @dataclass(frozen=True)
 class HangerCalcResult:
     """Разбивка расчёта количества на подвес.
@@ -61,6 +66,31 @@ class HangerCalcResult:
     limiter: Literal["area", "size"] | None
     area_m2: float | None
     is_calculable: bool
+
+
+def _non_calculable() -> HangerCalcResult:
+    """Результат нерасчётных данных: is_calculable=False, поля None."""
+    return HangerCalcResult(
+        by_area=None,
+        by_size=None,
+        total=None,
+        limiter=None,
+        area_m2=None,
+        is_calculable=False,
+    )
+
+
+def _finalize(area_m2: float, by_area: int, by_size: int) -> HangerCalcResult:
+    """Общий хвост расчёта: лимитер (по площади, если не больше по размеру) и итог = min."""
+    limiter: Literal["area", "size"] = "area" if by_area <= by_size else "size"
+    return HangerCalcResult(
+        by_area=by_area,
+        by_size=by_size,
+        total=min(by_area, by_size),
+        limiter=limiter,
+        area_m2=area_m2,
+        is_calculable=True,
+    )
 
 
 def compute_hanger_quantity(
@@ -90,24 +120,11 @@ def compute_hanger_quantity(
     settings.validate()
 
     if (
-        perimeter_mm is None
-        or not math.isfinite(perimeter_mm)
-        or perimeter_mm <= 0
-        or mount_width_mm is None
-        or not math.isfinite(mount_width_mm)
-        or mount_width_mm <= 0
-        or length_mm is None
-        or not math.isfinite(length_mm)
-        or length_mm <= 0
+        not _is_valid(perimeter_mm)
+        or not _is_valid(mount_width_mm)
+        or not _is_valid(length_mm)
     ):
-        return HangerCalcResult(
-            by_area=None,
-            by_size=None,
-            total=None,
-            limiter=None,
-            area_m2=None,
-            is_calculable=False,
-        )
+        return _non_calculable()
 
     if mount_width_mm + settings.gap_mm > settings.rod_length_mm:
         raise HangerConfigError(
@@ -119,19 +136,7 @@ def compute_hanger_quantity(
     by_area = math.floor(settings.area_limit_m2 / area_m2)
     by_size = math.floor(settings.rod_length_mm / (mount_width_mm + settings.gap_mm)) * settings.rod_count
 
-    if by_area <= by_size:
-        limiter: Literal["area", "size"] = "area"
-    else:
-        limiter = "size"
-
-    return HangerCalcResult(
-        by_area=by_area,
-        by_size=by_size,
-        total=min(by_area, by_size),
-        limiter=limiter,
-        area_m2=area_m2,
-        is_calculable=True,
-    )
+    return _finalize(area_m2, by_area, by_size)
 
 
 def compute_paired_hanger_quantity(
@@ -176,30 +181,13 @@ def compute_paired_hanger_quantity(
     settings.validate()
 
     if (
-        perimeter_a_mm is None
-        or not math.isfinite(perimeter_a_mm)
-        or perimeter_a_mm <= 0
-        or mount_width_a_mm is None
-        or not math.isfinite(mount_width_a_mm)
-        or mount_width_a_mm <= 0
-        or perimeter_b_mm is None
-        or not math.isfinite(perimeter_b_mm)
-        or perimeter_b_mm <= 0
-        or mount_width_b_mm is None
-        or not math.isfinite(mount_width_b_mm)
-        or mount_width_b_mm <= 0
-        or length_mm is None
-        or not math.isfinite(length_mm)
-        or length_mm <= 0
+        not _is_valid(perimeter_a_mm)
+        or not _is_valid(mount_width_a_mm)
+        or not _is_valid(perimeter_b_mm)
+        or not _is_valid(mount_width_b_mm)
+        or not _is_valid(length_mm)
     ):
-        return HangerCalcResult(
-            by_area=None,
-            by_size=None,
-            total=None,
-            limiter=None,
-            area_m2=None,
-            is_calculable=False,
-        )
+        return _non_calculable()
 
     if (
         mount_width_a_mm + mount_width_b_mm + settings.gap_mm * 2
@@ -221,16 +209,4 @@ def compute_paired_hanger_quantity(
         / (combined_width + settings.gap_mm * 2)
     )
 
-    if by_area <= by_size:
-        limiter: Literal["area", "size"] = "area"
-    else:
-        limiter = "size"
-
-    return HangerCalcResult(
-        by_area=by_area,
-        by_size=by_size,
-        total=min(by_area, by_size),
-        limiter=limiter,
-        area_m2=area_m2,
-        is_calculable=True,
-    )
+    return _finalize(area_m2, by_area, by_size)

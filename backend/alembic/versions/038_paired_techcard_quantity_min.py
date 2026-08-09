@@ -21,6 +21,9 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
+    # Общее N пары: min(оба), одиночное значение копируется в оба поля.
+    # quantity_total («общее на подвес» = N×2) приводится к N×2 для всех
+    # парных техкарт, где N известен — независимо от старого значения.
     op.execute(
         """
         UPDATE techcards
@@ -36,7 +39,11 @@ def upgrade() -> None:
                 quantity_b_per_item
             ),
             quantity_total = CASE
-                WHEN quantity_total = quantity_a_per_item + quantity_b_per_item
+                WHEN COALESCE(
+                    LEAST(quantity_a_per_item, quantity_b_per_item),
+                    quantity_a_per_item,
+                    quantity_b_per_item
+                ) IS NOT NULL
                 THEN COALESCE(
                     LEAST(quantity_a_per_item, quantity_b_per_item),
                     quantity_a_per_item,
@@ -45,7 +52,14 @@ def upgrade() -> None:
                 ELSE quantity_total
             END
         WHERE processing_type = 'paired_processing'
-          AND quantity_a_per_item IS DISTINCT FROM quantity_b_per_item
+          AND (
+              quantity_a_per_item IS DISTINCT FROM quantity_b_per_item
+              OR quantity_total IS DISTINCT FROM COALESCE(
+                  LEAST(quantity_a_per_item, quantity_b_per_item),
+                  quantity_a_per_item,
+                  quantity_b_per_item
+              ) * 2
+          )
         """
     )
 

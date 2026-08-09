@@ -713,7 +713,11 @@ async def _make_change_items(
                 # Инвариант равенства N (#67): пара — единая загрузка N×A + N×B,
                 # у парной техкарты одно общее кол-во на подвес. «Разное кол-во»
                 # убрано, поэтому quantity_a_per_item == quantity_b_per_item.
-                per_hanger = techcard.quantity_a_per_item or techcard.quantity_b_per_item
+                per_hanger = (
+                    techcard.quantity_a_per_item
+                    if techcard.quantity_a_per_item is not None
+                    else techcard.quantity_b_per_item
+                )
 
                 if per_hanger and per_hanger > 0:
                     hanger_count = math.ceil(row.quantity / per_hanger) if normalize_hanger_quantity else float(row.quantity / per_hanger)

@@ -151,6 +151,27 @@ async def test_create_paired_techcard_equal_quantities_ok(client) -> None:
 
 
 @pytest.mark.asyncio
+async def test_create_paired_techcard_normalizes_partial_quantity(client) -> None:
+    """Одиночное значение копируется в оба поля (как миграция 038, #67)."""
+    for a, b in ((8, None), (None, 8)):
+        response = await client.post(
+            "/api/techcards",
+            json={
+                "product_id": None,
+                "version": "A",
+                "processing_type": "paired_processing",
+                "is_active": True,
+                "quantity_a_per_item": a,
+                "quantity_b_per_item": b,
+            },
+        )
+        assert response.status_code == 201, response.text
+        body = response.json()
+        assert body["quantity_a_per_item"] == 8
+        assert body["quantity_b_per_item"] == 8
+
+
+@pytest.mark.asyncio
 async def test_patch_paired_techcard_rejects_different_quantities(client) -> None:
     """Patch парной техкарты на «разное кол-во» → 422 (#67)."""
     response = await client.post(

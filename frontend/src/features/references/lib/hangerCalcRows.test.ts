@@ -440,9 +440,12 @@ describe("buildPairedHangerCalcRows", () => {
     expect(row.total).toBe(30);
     expect(row.limiter).toBe("area");
     expect(row.primaryResult?.by_area).toBe(72);
+    // Суммы пары идут в формулы совместного расчёта (Feature Envy fix).
+    expect(row.perimeterSum).toBe(128.4);
+    expect(row.widthSum).toBe(38.7);
   });
 
-  it("ручная пара: разбивки нет, итог — ручное N техкарты", () => {
+  it("ручная пара: суммы null, итог — ручное N техкарты", () => {
     const pair = {
       techcardId: 7,
       productA: makeProduct({ id: 1, sku: "ЮП-A", lengths_mm: [2780] }),
@@ -453,6 +456,8 @@ describe("buildPairedHangerCalcRows", () => {
     expect(row.auto).toBe(false);
     expect(row.primaryResult).toBeNull();
     expect(row.total).toBe(40);
+    expect(row.perimeterSum).toBeNull();
+    expect(row.widthSum).toBeNull();
   });
 
   it("несовместимая пара помечается причиной, итоги не считаются", () => {

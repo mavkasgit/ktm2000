@@ -293,7 +293,7 @@ async def test_migration_038_paired_quantity_min():
         )
         assert result.returncode == 0, result.stderr or result.stdout
 
-        # 2. Парные техкарты с разным / равным / частичным кол-вом.
+        # 2. Парные техкарты с разным / равным / частичным / расходящимся кол-вом.
         engine = create_async_engine(target_url)
         async with engine.begin() as conn:
             await conn.execute(
@@ -303,7 +303,8 @@ async def test_migration_038_paired_quantity_min():
                     "(NULL, 'v1', 'paired_processing', true, 20, 8, 12),"
                     "(NULL, 'v2', 'paired_processing', true, 16, 8, 8),"
                     "(NULL, 'v3', 'paired_processing', true, NULL, 8, NULL),"
-                    "(NULL, 'v4', 'standart_processing', true, 20, 8, 12)"
+                    "(NULL, 'v4', 'standart_processing', true, 20, 8, 12),"
+                    "(NULL, 'v5', 'paired_processing', true, 99, 8, 8)"
                 )
             )
         await engine.dispose()
@@ -336,14 +337,18 @@ async def test_migration_038_paired_quantity_min():
         v1 = by_version["v1"]
         assert (v1.quantity_a_per_item, v1.quantity_b_per_item) == (8, 8)
         assert v1.quantity_total == 16
-        # Уже равные не трогаются.
+        # Уже равные и согласованные не трогаются.
         v2 = by_version["v2"]
         assert (v2.quantity_a_per_item, v2.quantity_b_per_item) == (8, 8)
         assert v2.quantity_total == 16
-        # Частичное значение копируется в оба поля; total без суммы остаётся.
+        # Частичное значение копируется в оба поля; total из NULL → N×2.
         v3 = by_version["v3"]
         assert (v3.quantity_a_per_item, v3.quantity_b_per_item) == (8, 8)
-        assert v3.quantity_total is None
+        assert v3.quantity_total == 16
+        # Равная пара с расходящимся общим кол-вом → общее приводится к N×2.
+        v5 = by_version["v5"]
+        assert (v5.quantity_a_per_item, v5.quantity_b_per_item) == (8, 8)
+        assert v5.quantity_total == 16
         # Стандартная техкарта не трогается.
         v4 = by_version["v4"]
         assert (v4.quantity_a_per_item, v4.quantity_b_per_item) == (8, 12)

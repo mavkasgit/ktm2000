@@ -94,20 +94,21 @@ async def _ensure_default_line(db: AsyncSession, techcard: Techcard) -> None:
     )
 
 
-def _validate_paired_hanger_invariant(
+def _normalize_paired_quantities(
     *,
     processing_type: str,
     quantity_a_per_item: int | None,
     quantity_b_per_item: int | None,
-) -> None:
-    """Равенство N — инвариант парной техкарты (#67).
+) -> tuple[int | None, int | None]:
+    """Привести кол-ва парной техкарты к инварианту равенства N (#67).
 
     Загрузка пары — единая ``N×A + N×B``, поэтому кол-во на подвес у обоих
-    компонентов обязано совпадать. «Разное кол-во» убрано; нарушение
-    инварианта на входе → 422.
+    компонентов обязано совпадать. Одиночное значение копируется в оба поля
+    (как делает миграция 038); одновременно заданные разные значения —
+    нарушение инварианта → 422. «Разное кол-во» убрано.
     """
     if processing_type != "paired_processing":
-        return
+        return quantity_a_per_item, quantity_b_per_item
     if (
         quantity_a_per_item is not None
         and quantity_b_per_item is not None
@@ -121,6 +122,11 @@ def _validate_paired_hanger_invariant(
                 f"quantity_b_per_item ({quantity_b_per_item})"
             ),
         )
+    if quantity_a_per_item is None and quantity_b_per_item is not None:
+        return quantity_b_per_item, quantity_b_per_item
+    if quantity_b_per_item is None and quantity_a_per_item is not None:
+        return quantity_a_per_item, quantity_a_per_item
+    return quantity_a_per_item, quantity_b_per_item
 
 
 @router.post("", response_model=TechcardOut, status_code=status.HTTP_201_CREATED)
@@ -131,12 +137,16 @@ async def create_techcard(payload: TechcardCreate, db: AsyncSession = Depends(ge
             raise HTTPException(status_code=404, detail="Product not found")
     if payload.processing_type == "standart_processing" and payload.product_id is None:
         raise HTTPException(status_code=400, detail="Для standart_processing нужен product_id")
-    _validate_paired_hanger_invariant(
+    data = payload.model_dump()
+    (
+        data["quantity_a_per_item"],
+        data["quantity_b_per_item"],
+    ) = _normalize_paired_quantities(
         processing_type=payload.processing_type,
         quantity_a_per_item=payload.quantity_a_per_item,
         quantity_b_per_item=payload.quantity_b_per_item,
     )
-    item = Techcard(**payload.model_dump())
+    item = Techcard(**data)
     db.add(item)
     await db.flush()
     await _ensure_default_line(db, item)
@@ -234,7 +244,10 @@ async def patch_techcard(techcard_id: int, payload: dict, db: AsyncSession = Dep
             setattr(item, key, value)
     if item.processing_type == "standart_processing" and item.product_id is None:
         raise HTTPException(status_code=400, detail="Для standart_processing нужен product_id")
-    _validate_paired_hanger_invariant(
+    (
+        item.quantity_a_per_item,
+        item.quantity_b_per_item,
+    ) = _normalize_paired_quantities(
         processing_type=item.processing_type,
         quantity_a_per_item=item.quantity_a_per_item,
         quantity_b_per_item=item.quantity_b_per_item,

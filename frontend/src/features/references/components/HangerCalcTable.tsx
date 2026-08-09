@@ -25,6 +25,7 @@ import {
   resolvePairs,
   resultsToCalcMap,
   resultsToPairedCalcMap,
+  rowSku,
   LIMITER_LABELS,
   type CalcMap,
   type HangerCalcRow,
@@ -61,6 +62,10 @@ export function HangerCalcTable({
   const savedTimers = useRef<Map<number, number>>(new Map());
   // Актуальные продукты для пересчёта пар после inline-правки одиночного артикула.
   const productsRef = useRef<Product[]>([]);
+  // Полный набор компонентов пар (#67): пары разрешаются даже при серверном
+  // поиске (q), который фильтрует одиночные строки.
+  const [pairProducts, setPairProducts] = useState<Product[]>([]);
+  const pairProductsRef = useRef<Product[]>([]);
 
   const [search, setSearch] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
@@ -101,11 +106,18 @@ export function HangerCalcTable({
     setLoading(true);
     setError("");
     try {
-      const [list, pairedList, constants] = await Promise.all([
+      // Полный набор компонентов нужен для пар, когда серверный поиск (q)
+      // сужает одиночные строки: парная строка A+B не должна пропадать (#67).
+      const [list, pairedList, constants, allComponents] = await Promise.all([
         listProductsPaginated(apiParams),
         fetchAllTechcards({ processing_type: "paired_processing", is_active: true }),
         calcHanger([]),
+        apiParams.q
+          ? listProductsPaginated({ type: "component", limit: 2000 })
+          : Promise.resolve(null),
       ]);
+      const pairProductsFull = allComponents?.items ?? list.items;
+
       const { items, refs, incompatible: incompatibles } = buildCalcItems(list.items, constants.hanger);
       let map: CalcMap = new Map();
       if (items.length > 0) {
@@ -114,7 +126,7 @@ export function HangerCalcTable({
       }
 
       // Парные строки A+B (#67): совместный расчёт по общим длинам пары.
-      const pairs = resolvePairs(pairedList, list.items);
+      const pairs = resolvePairs(pairedList, pairProductsFull);
       const pairedItems = buildPairedCalcItems(pairs, constants.hanger);
       let pairedMap: PairedCalcMap = new Map();
       if (pairedItems.items.length > 0) {
@@ -123,7 +135,9 @@ export function HangerCalcTable({
       }
 
       productsRef.current = list.items;
+      pairProductsRef.current = pairProductsFull;
       setProducts(list.items);
+      setPairProducts(pairProductsFull);
       setHanger(constants.hanger);
       setIncompatible(incompatibles);
       setCalcMap(map);
@@ -218,11 +232,14 @@ export function HangerCalcTable({
         const nextProducts = productsRef.current.map((p) => (p.id === data.id ? data : p));
         productsRef.current = nextProducts;
         setProducts(nextProducts);
+        const nextPairProducts = pairProductsRef.current.map((p) => (p.id === data.id ? data : p));
+        pairProductsRef.current = nextPairProducts;
+        setPairProducts(nextPairProducts);
         const settings = hanger;
         if (settings) {
           await recalcRow(data, settings);
           // Правка артикула влияет на парные строки, где он участвует (#67).
-          await recalcPairs(resolvePairs(pairedTechcards, nextProducts), settings);
+          await recalcPairs(resolvePairs(pairedTechcards, nextPairProducts), settings);
         }
         setRowState(product.id, { status: "saved" });
         const previous = savedTimers.current.get(product.id);
@@ -271,7 +288,10 @@ export function HangerCalcTable({
     [products, calcMap, incompatible],
   );
 
-  const pairs = useMemo(() => resolvePairs(pairedTechcards, products), [pairedTechcards, products]);
+  const pairs = useMemo(
+    () => resolvePairs(pairedTechcards, pairProducts),
+    [pairedTechcards, pairProducts],
+  );
 
   const pairedRows = useMemo(
     () => buildPairedHangerCalcRows(pairs, pairedCalcMap, pairedIncompatible),
@@ -284,7 +304,7 @@ export function HangerCalcTable({
     () => ({
       sku: [
         ...new Set(
-          allRows.map((r) => (r.kind === "paired" ? r.label : r.product.sku)),
+          allRows.map(rowSku),
         ),
       ].sort((a, b) => a.localeCompare(b, "ru")),
       total: [...new Set(allRows.map((r) => (r.total != null ? String(r.total) : "—")))].sort((a, b) => {
@@ -300,7 +320,7 @@ export function HangerCalcTable({
   const predicate = useMemo(
     () =>
       buildFilterPredicate<HangerCalcRow | PairedHangerCalcRow>((row, field) => {
-        if (field === "sku") return row.kind === "paired" ? row.label : row.product.sku;
+        if (field === "sku") return rowSku(row);
         if (field === "total") return row.total != null ? String(row.total) : "—";
         return row.limiter ? LIMITER_LABELS[row.limiter] : "—";
       }),
@@ -456,7 +476,7 @@ function sortAccessor(
   row: HangerCalcRow | PairedHangerCalcRow,
   field: CalcFilterField,
 ): string | number | null {
-  if (field === "sku") return row.kind === "paired" ? row.label : row.product.sku;
+  if (field === "sku") return rowSku(row);
   if (field === "total") return row.total;
   return row.limiter ? LIMITER_LABELS[row.limiter] : null;
 }

@@ -70,23 +70,36 @@ export function buildCalcItems(
   return { items, refs, incompatible };
 }
 
-/** Разложить результаты batch по productId → lengthKey (порядок = порядок items). */
-export function resultsToCalcMap(
-  refs: CalcItemRef[],
+/** Разложить результаты batch по {id} → lengthKey (порядок = порядок items). */
+function resultsToLengthMap(
+  refs: Array<{ id: number; lengthMm: number }>,
   results: HangerCalcResult[],
-): CalcMap {
-  const map: CalcMap = new Map();
+): Map<number, Map<string, HangerCalcResult>> {
+  const map = new Map<number, Map<string, HangerCalcResult>>();
   refs.forEach((ref, index) => {
     const result = results[index];
     if (!result) return;
-    let byLength = map.get(ref.productId);
+    let byLength = map.get(ref.id);
     if (!byLength) {
       byLength = new Map();
-      map.set(ref.productId, byLength);
+      map.set(ref.id, byLength);
     }
     byLength.set(lengthKey(ref.lengthMm), result);
   });
   return map;
+}
+
+/** Разложить результаты batch по productId → lengthKey (порядок = порядок items). */
+export function resultsToCalcMap(refs: CalcItemRef[], results: HangerCalcResult[]): CalcMap {
+  return resultsToLengthMap(
+    refs.map((ref) => ({ id: ref.productId, lengthMm: ref.lengthMm })),
+    results,
+  );
+}
+
+/** SKU строки таблицы: одиночный артикул или метка «A + B» парной строки. */
+export function rowSku(row: HangerCalcRow | PairedHangerCalcRow): string {
+  return row.kind === "paired" ? row.label : row.product.sku;
 }
 
 export type HangerCalcRow = {
@@ -270,18 +283,10 @@ export function resultsToPairedCalcMap(
   refs: PairedCalcItemRef[],
   results: HangerCalcResult[],
 ): PairedCalcMap {
-  const map: PairedCalcMap = new Map();
-  refs.forEach((ref, index) => {
-    const result = results[index];
-    if (!result) return;
-    let byLength = map.get(ref.techcardId);
-    if (!byLength) {
-      byLength = new Map();
-      map.set(ref.techcardId, byLength);
-    }
-    byLength.set(lengthKey(ref.lengthMm), result);
-  });
-  return map;
+  return resultsToLengthMap(
+    refs.map((ref) => ({ id: ref.techcardId, lengthMm: ref.lengthMm })),
+    results,
+  );
 }
 
 export type PairedHangerCalcRow = {
@@ -296,6 +301,9 @@ export type PairedHangerCalcRow = {
   auto: boolean;
   incompatibleReason: string | null;
   primaryResult: HangerCalcResult | null;
+  /** Суммы периметра/габарита пары (идут в формулы совместного расчёта). */
+  perimeterSum: number | null;
+  widthSum: number | null;
   total: number | null;
   limiter: "area" | "size" | null;
   areaM2: number | null;
@@ -320,6 +328,15 @@ export function buildPairedHangerCalcRows(
         ? calcMap.get(pair.techcardId)?.get(lengthKey(primaryLengthMm)) ?? null
         : null;
 
+    const perimeterSum =
+      pair.productA.perimeter_mm != null && pair.productB.perimeter_mm != null
+        ? Number((pair.productA.perimeter_mm + pair.productB.perimeter_mm).toFixed(2))
+        : null;
+    const widthSum =
+      pair.productA.mount_width_mm != null && pair.productB.mount_width_mm != null
+        ? Number((pair.productA.mount_width_mm + pair.productB.mount_width_mm).toFixed(2))
+        : null;
+
     let total: number | null = null;
     if (auto && primaryResult?.is_calculable) {
       total = primaryResult.total;
@@ -339,6 +356,8 @@ export function buildPairedHangerCalcRows(
       auto,
       incompatibleReason,
       primaryResult,
+      perimeterSum,
+      widthSum,
       total,
       limiter: primaryResult?.limiter ?? null,
       areaM2: primaryResult?.area_m2 ?? null,
