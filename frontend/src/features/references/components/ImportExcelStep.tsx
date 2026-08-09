@@ -30,7 +30,7 @@ const EXAMPLE_ROW = [
   "ЮП-1000А",
 ];
 
-export function ImportUploadStep({
+export function ImportExcelStep({
   onFileSelected,
   onDownloadTemplate,
   loading = false,

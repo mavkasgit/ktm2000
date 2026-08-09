@@ -9,7 +9,7 @@ import {
   previewCatalogExcel,
   type CatalogPreview,
 } from "@/shared/api/products";
-import { ImportUploadStep } from "./ImportUploadStep";
+import { ImportExcelStep } from "./ImportExcelStep";
 import { ImportPreviewContent } from "./ImportPreviewContent";
 
 type Step = "upload" | "preview";
@@ -109,7 +109,7 @@ export function ImportWizardDialog({
 
         {step === "upload" ? (
           <>
-            <ImportUploadStep
+            <ImportExcelStep
               onFileSelected={handleFileSelected}
               onDownloadTemplate={handleDownloadTemplate}
               loading={loading}
