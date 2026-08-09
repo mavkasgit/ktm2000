@@ -132,3 +132,105 @@ def compute_hanger_quantity(
         area_m2=area_m2,
         is_calculable=True,
     )
+
+
+def compute_paired_hanger_quantity(
+    *,
+    perimeter_a_mm: float | None,
+    mount_width_a_mm: float | None,
+    perimeter_b_mm: float | None,
+    mount_width_b_mm: float | None,
+    length_mm: float | None,
+    hanger: HangerSettings | None = None,
+) -> HangerCalcResult:
+    """Совместный расчёт количества на подвес для парной техкарты (#58/#67).
+
+    Пара висит на подвесе как единая загрузка ``N×A + N×B``, поэтому считаем
+    по сумме периметров и габаритов:
+
+        by_area = floor(area_limit_m2 / ((perimeter_A + perimeter_B) * length / 10**6))
+        by_size = floor(rod_length_mm * rod_count / ((width_A + width_B) + gap_mm * 2))
+        total   = min(by_area, by_size)
+
+    Константы — те же ``HangerSettings``, что и для одиночного расчёта
+    (единые константы, дефолты 13/1450/20/2): ``by_size`` при дефолтах
+    эквивалентен ``floor(2900 / (width_A + width_B + 40))``.
+
+    Args:
+        perimeter_a_mm / perimeter_b_mm: Периметры профилей A и B, мм.
+        mount_width_a_mm / mount_width_b_mm: Габариты профилей A и B, мм.
+        length_mm: Общая длина пары, мм.
+        hanger: Настройки подвеса; по умолчанию 13/1450/20/2.
+
+    Returns:
+        HangerCalcResult. ``is_calculable=False`` и поля ``None`` — если нет
+        общей длины или у одного из артикулов нет авто-поля (периметр/габарит).
+        Авто-режим пары возможен только когда оба артикула авто.
+
+    Raises:
+        HangerConfigError: некорректные константы или кросс-поле
+            ``width_A + width_B + gap*2 > rod_length * rod_count`` (пара не
+            влезает на подвес суммарно — ``by_size`` обратился бы в 0).
+    """
+    settings = hanger or DEFAULT_HANGER_SETTINGS
+    settings.validate()
+
+    if (
+        perimeter_a_mm is None
+        or not math.isfinite(perimeter_a_mm)
+        or perimeter_a_mm <= 0
+        or mount_width_a_mm is None
+        or not math.isfinite(mount_width_a_mm)
+        or mount_width_a_mm <= 0
+        or perimeter_b_mm is None
+        or not math.isfinite(perimeter_b_mm)
+        or perimeter_b_mm <= 0
+        or mount_width_b_mm is None
+        or not math.isfinite(mount_width_b_mm)
+        or mount_width_b_mm <= 0
+        or length_mm is None
+        or not math.isfinite(length_mm)
+        or length_mm <= 0
+    ):
+        return HangerCalcResult(
+            by_area=None,
+            by_size=None,
+            total=None,
+            limiter=None,
+            area_m2=None,
+            is_calculable=False,
+        )
+
+    if (
+        mount_width_a_mm + mount_width_b_mm + settings.gap_mm * 2
+        > settings.rod_length_mm * settings.rod_count
+    ):
+        raise HangerConfigError(
+            "Несовместимые данные: сумма габаритов пары + зазоры превышает "
+            "рабочую длину клюшек "
+            f"({mount_width_a_mm} + {mount_width_b_mm} + {settings.gap_mm * 2} "
+            f"> {settings.rod_length_mm * settings.rod_count})"
+        )
+
+    combined_perimeter = perimeter_a_mm + perimeter_b_mm
+    combined_width = mount_width_a_mm + mount_width_b_mm
+    area_m2 = combined_perimeter * length_mm / 1_000_000
+    by_area = math.floor(settings.area_limit_m2 / area_m2)
+    by_size = math.floor(
+        settings.rod_length_mm * settings.rod_count
+        / (combined_width + settings.gap_mm * 2)
+    )
+
+    if by_area <= by_size:
+        limiter: Literal["area", "size"] = "area"
+    else:
+        limiter = "size"
+
+    return HangerCalcResult(
+        by_area=by_area,
+        by_size=by_size,
+        total=min(by_area, by_size),
+        limiter=limiter,
+        area_m2=area_m2,
+        is_calculable=True,
+    )

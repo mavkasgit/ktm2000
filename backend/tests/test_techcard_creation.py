@@ -108,3 +108,96 @@ async def test_create_paired_techcard_no_auto_line(client, session) -> None:
     assert len(all_lines) == 2
     assert all_lines[0].component_product_id == comp_a.id
     assert all_lines[1].component_product_id == comp_b.id
+
+
+@pytest.mark.asyncio
+async def test_create_paired_techcard_rejects_different_quantities(client) -> None:
+    """«Разное кол-во» убрано: N×A + N×B — инвариант (#67), нарушение → 422."""
+    response = await client.post(
+        "/api/techcards",
+        json={
+            "product_id": None,
+            "version": "A",
+            "processing_type": "paired_processing",
+            "is_active": True,
+            "quantity_total": 20,
+            "quantity_a_per_item": 8,
+            "quantity_b_per_item": 12,
+        },
+    )
+    assert response.status_code == 422
+    assert "инвариант" in response.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_create_paired_techcard_equal_quantities_ok(client) -> None:
+    """Равные N создаются успешно."""
+    response = await client.post(
+        "/api/techcards",
+        json={
+            "product_id": None,
+            "version": "A",
+            "processing_type": "paired_processing",
+            "is_active": True,
+            "quantity_total": 16,
+            "quantity_a_per_item": 8,
+            "quantity_b_per_item": 8,
+        },
+    )
+    assert response.status_code == 201
+    body = response.json()
+    assert body["quantity_a_per_item"] == 8
+    assert body["quantity_b_per_item"] == 8
+
+
+@pytest.mark.asyncio
+async def test_patch_paired_techcard_rejects_different_quantities(client) -> None:
+    """Patch парной техкарты на «разное кол-во» → 422 (#67)."""
+    response = await client.post(
+        "/api/techcards",
+        json={
+            "product_id": None,
+            "version": "A",
+            "processing_type": "paired_processing",
+            "is_active": True,
+            "quantity_total": 16,
+            "quantity_a_per_item": 8,
+            "quantity_b_per_item": 8,
+        },
+    )
+    assert response.status_code == 201
+    techcard_id = response.json()["id"]
+
+    resp = await client.patch(
+        f"/api/techcards/{techcard_id}",
+        json={"quantity_a_per_item": 8, "quantity_b_per_item": 12},
+    )
+    assert resp.status_code == 422
+    assert "инвариант" in resp.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_patch_standard_techcard_different_quantities_is_allowed(client, session) -> None:
+    """Инвариант касается только парных техкарт — стандартные не блокируются."""
+    product = Product(
+        sku="TEST-STD-INVARIANT",
+        name="Standard",
+        type=ProductType.finished_good,
+        unit="pcs",
+        is_active=True,
+    )
+    session.add(product)
+    await session.commit()
+
+    response = await client.post(
+        "/api/techcards",
+        json={
+            "product_id": product.id,
+            "version": "A",
+            "processing_type": "standart_processing",
+            "is_active": True,
+            "quantity_a_per_item": 8,
+            "quantity_b_per_item": 12,
+        },
+    )
+    assert response.status_code == 201

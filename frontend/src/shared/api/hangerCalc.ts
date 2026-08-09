@@ -14,6 +14,15 @@ export type HangerCalcItem = {
   length_mm: number | null;
 };
 
+/** Item совместного расчёта парной техкарты (#67): габариты обоих артикулов. */
+export type PairedHangerCalcItem = {
+  perimeter_a_mm: number | null;
+  mount_width_a_mm: number | null;
+  perimeter_b_mm: number | null;
+  mount_width_b_mm: number | null;
+  length_mm: number | null;
+};
+
 export type HangerCalcResult = {
   by_area: number | null;
   by_size: number | null;
@@ -39,6 +48,23 @@ export async function calcHanger(
   hanger?: Partial<HangerSettings>,
 ): Promise<HangerCalcResponse> {
   const { data } = await apiClient.post<HangerCalcResponse>("/hanger-calc", {
+    items,
+    ...(hanger ? { hanger } : {}),
+  });
+  return data;
+}
+
+/**
+ * Совместный batch-расчёт для парных техкарт (#67, POST /api/hanger-calc/paired).
+ * Результаты приходят в порядке items. Авто возможен только когда оба артикула
+ * авто; иначе — is_calculable=false без исключений; невалидные константы /
+ * кросс-поле (сумма габаритов пары не влезает на подвес) → 422.
+ */
+export async function calcPairedHanger(
+  items: PairedHangerCalcItem[],
+  hanger?: Partial<HangerSettings>,
+): Promise<HangerCalcResponse> {
+  const { data } = await apiClient.post<HangerCalcResponse>("/hanger-calc/paired", {
     items,
     ...(hanger ? { hanger } : {}),
   });

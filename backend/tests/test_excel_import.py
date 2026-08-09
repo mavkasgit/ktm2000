@@ -1101,10 +1101,10 @@ def _workbook_paired() -> bytes:
 
 
 @pytest.mark.asyncio
-async def test_import_paired_techcard_rounds_by_quantity_a_b_per_item(
+async def test_import_paired_techcard_rounds_by_shared_quantity(
     client, session, tmp_path, monkeypatch
 ) -> None:
-    """Парная техкарта округляет каждый компонент по своему quantity_a/b_per_item."""
+    """Парная техкарта округляет оба компонента по общему N (#67: инвариант равенства)."""
     monkeypatch.setattr(settings, "IMPORT_STORAGE_DIR", str(tmp_path))
 
     from app.models.product import Product, ProductType
@@ -1115,14 +1115,14 @@ async def test_import_paired_techcard_rounds_by_quantity_a_b_per_item(
     session.add_all([comp_a, comp_b])
     await session.flush()
 
-    # Парная техкарта с quantity_a_per_item=8, quantity_b_per_item=12
+    # Парная техкарта с общим N = 8 (quantity_a_per_item == quantity_b_per_item).
     paired = Techcard(
         product_id=None,
         version="v1",
         is_active=True,
         processing_type="paired_processing",
         quantity_a_per_item=8,
-        quantity_b_per_item=12,
+        quantity_b_per_item=8,
     )
     session.add(paired)
     await session.flush()
@@ -1156,10 +1156,10 @@ async def test_import_paired_techcard_rounds_by_quantity_a_b_per_item(
 
     # Проверяем adjusted_quantities_by_component
     adjusted = paired_item["after_data"].get("adjusted_quantities_by_component", {})
-    # 10 → округляем по 8 = 16 для A
+    # 10 → округляем по N=8 = 16 для обоих компонентов пары
     assert "ЮП-PAIR-A" in adjusted
-    # 10 → округляем по 12 = 12 для B
     assert "ЮП-PAIR-B" in adjusted
+    assert adjusted["ЮП-PAIR-A"] == adjusted["ЮП-PAIR-B"] == "16"
 
     # Проверяем warnings
     assert any("paired_hanger_adjusted" in w for w in paired_item["warnings"])

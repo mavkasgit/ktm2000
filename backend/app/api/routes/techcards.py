@@ -94,6 +94,35 @@ async def _ensure_default_line(db: AsyncSession, techcard: Techcard) -> None:
     )
 
 
+def _validate_paired_hanger_invariant(
+    *,
+    processing_type: str,
+    quantity_a_per_item: int | None,
+    quantity_b_per_item: int | None,
+) -> None:
+    """Равенство N — инвариант парной техкарты (#67).
+
+    Загрузка пары — единая ``N×A + N×B``, поэтому кол-во на подвес у обоих
+    компонентов обязано совпадать. «Разное кол-во» убрано; нарушение
+    инварианта на входе → 422.
+    """
+    if processing_type != "paired_processing":
+        return
+    if (
+        quantity_a_per_item is not None
+        and quantity_b_per_item is not None
+        and quantity_a_per_item != quantity_b_per_item
+    ):
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "Равенство N — инвариант парной техкарты: "
+                f"quantity_a_per_item ({quantity_a_per_item}) != "
+                f"quantity_b_per_item ({quantity_b_per_item})"
+            ),
+        )
+
+
 @router.post("", response_model=TechcardOut, status_code=status.HTTP_201_CREATED)
 async def create_techcard(payload: TechcardCreate, db: AsyncSession = Depends(get_db)) -> TechcardOut:
     if payload.product_id is not None:
@@ -102,6 +131,11 @@ async def create_techcard(payload: TechcardCreate, db: AsyncSession = Depends(ge
             raise HTTPException(status_code=404, detail="Product not found")
     if payload.processing_type == "standart_processing" and payload.product_id is None:
         raise HTTPException(status_code=400, detail="Для standart_processing нужен product_id")
+    _validate_paired_hanger_invariant(
+        processing_type=payload.processing_type,
+        quantity_a_per_item=payload.quantity_a_per_item,
+        quantity_b_per_item=payload.quantity_b_per_item,
+    )
     item = Techcard(**payload.model_dump())
     db.add(item)
     await db.flush()
@@ -200,6 +234,11 @@ async def patch_techcard(techcard_id: int, payload: dict, db: AsyncSession = Dep
             setattr(item, key, value)
     if item.processing_type == "standart_processing" and item.product_id is None:
         raise HTTPException(status_code=400, detail="Для standart_processing нужен product_id")
+    _validate_paired_hanger_invariant(
+        processing_type=item.processing_type,
+        quantity_a_per_item=item.quantity_a_per_item,
+        quantity_b_per_item=item.quantity_b_per_item,
+    )
     await _ensure_default_line(db, item)
     await db.flush()
     await db.refresh(item)

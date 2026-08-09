@@ -19,6 +19,7 @@ from app.services.hanger_quantity_calc import (
     HangerConfigError,
     HangerSettings,
     compute_hanger_quantity,
+    compute_paired_hanger_quantity,
 )
 
 router = APIRouter(prefix="/hanger-calc", tags=["hanger-calc"])
@@ -52,8 +53,21 @@ class HangerCalcItemIn(BaseModel):
     length_mm: float | None = None
 
 
+class PairedHangerCalcItemIn(BaseModel):
+    perimeter_a_mm: float | None = None
+    mount_width_a_mm: float | None = None
+    perimeter_b_mm: float | None = None
+    mount_width_b_mm: float | None = None
+    length_mm: float | None = None
+
+
 class HangerCalcRequest(BaseModel):
     items: list[HangerCalcItemIn]
+    hanger: HangerSettingsIn = Field(default_factory=HangerSettingsIn)
+
+
+class PairedHangerCalcRequest(BaseModel):
+    items: list[PairedHangerCalcItemIn]
     hanger: HangerSettingsIn = Field(default_factory=HangerSettingsIn)
 
 
@@ -85,6 +99,40 @@ async def hanger_calc(payload: HangerCalcRequest) -> HangerCalcResponse:
             result = compute_hanger_quantity(
                 perimeter_mm=item.perimeter_mm,
                 mount_width_mm=item.mount_width_mm,
+                length_mm=item.length_mm,
+                hanger=settings,
+            )
+        except HangerConfigError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        results.append(HangerCalcResultOut(**asdict(result)))
+
+    return HangerCalcResponse(results=results, hanger=payload.hanger)
+
+
+@router.post("/paired", response_model=HangerCalcResponse)
+async def hanger_calc_paired(payload: PairedHangerCalcRequest) -> HangerCalcResponse:
+    """Совместный batch-расчёт для парных техкарт (#58/#67).
+
+    Вход — числа, не id: {items: [{perimeter_a_mm, mount_width_a_mm,
+    perimeter_b_mm, mount_width_b_mm, length_mm}], hanger}. Выход {results,
+    hanger} в порядке items. Авто возможен только когда оба артикула авто;
+    иначе — ``is_calculable=false`` без исключений. Невалидные константы и
+    кросс-поле (сумма габаритов пары не влезает на подвес) → 422.
+    """
+    settings = HangerSettings(**payload.hanger.model_dump())
+    try:
+        settings.validate()
+    except HangerConfigError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    results: list[HangerCalcResultOut] = []
+    for item in payload.items:
+        try:
+            result = compute_paired_hanger_quantity(
+                perimeter_a_mm=item.perimeter_a_mm,
+                mount_width_a_mm=item.mount_width_a_mm,
+                perimeter_b_mm=item.perimeter_b_mm,
+                mount_width_b_mm=item.mount_width_b_mm,
                 length_mm=item.length_mm,
                 hanger=settings,
             )

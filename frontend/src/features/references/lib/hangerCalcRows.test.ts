@@ -2,11 +2,18 @@ import { describe, expect, it } from "vitest";
 
 import type { Product } from "@/shared/api/products";
 import type { HangerCalcResult, HangerSettings } from "@/shared/api/hangerCalc";
+import type { Techcard } from "@/shared/api/techcards";
 import {
   buildCalcItems,
   buildHangerCalcRows,
+  buildPairedCalcItems,
+  buildPairedHangerCalcRows,
   incompatibilityReason,
+  intersectLengths,
+  pairedIncompatibilityReason,
+  resolvePairs,
   resultsToCalcMap,
+  resultsToPairedCalcMap,
   type CalcMap,
 } from "./hangerCalcRows";
 
@@ -61,6 +68,25 @@ function makeResult(overrides: Partial<HangerCalcResult>): HangerCalcResult {
     limiter: "area",
     area_m2: 0.17976,
     is_calculable: true,
+    ...overrides,
+  };
+}
+
+function makeTechcard(overrides: Partial<Techcard>): Techcard {
+  return {
+    id: 100,
+    product_id: null,
+    version: "A",
+    processing_type: "paired_processing",
+    is_active: true,
+    quantity_total: 2,
+    quantity_a_per_item: 1,
+    quantity_b_per_item: 1,
+    hangers_a: null,
+    hangers_b: null,
+    hangers_total: null,
+    product_sku: null,
+    techcard_lines: [],
     ...overrides,
   };
 }
@@ -258,5 +284,201 @@ describe("buildHangerCalcRows", () => {
     const [row] = buildHangerCalcRows([product], calcMap, new Map());
     expect(row.total).toBeNull();
     expect(row.primaryResult?.is_calculable).toBe(false);
+  });
+});
+
+// ─── Парные техкарты (#67) ──────────────────────────────────────────────────
+
+describe("intersectLengths", () => {
+  it("общие длины — пересечение по возрастанию", () => {
+    expect(intersectLengths([2780, 3000, 3500], [3000, 3500, 4000])).toEqual([3000, 3500]);
+  });
+
+  it("пустое пересечение — пустой список", () => {
+    expect(intersectLengths([2780], [3000])).toEqual([]);
+  });
+});
+
+describe("pairedIncompatibilityReason", () => {
+  it("сумма габаритов + зазоры > общая длина клюшек — причина", () => {
+    // 1500 + 1500 + 40 = 3040 > 2900
+    expect(pairedIncompatibilityReason(1500, 1500, SETTINGS)).toContain("2900");
+  });
+
+  it("влезает — null", () => {
+    expect(pairedIncompatibilityReason(19.35, 19.35, SETTINGS)).toBeNull();
+    // 1430 + 1430 + 40 = 2900 — не строго больше, допустимо
+    expect(pairedIncompatibilityReason(1430, 1430, SETTINGS)).toBeNull();
+  });
+
+  it("нет габаритов — null", () => {
+    expect(pairedIncompatibilityReason(null, 19.35, SETTINGS)).toBeNull();
+    expect(pairedIncompatibilityReason(null, null, SETTINGS)).toBeNull();
+  });
+});
+
+describe("resolvePairs", () => {
+  function product(id: number, sku: string): Product {
+    return makeProduct({ id, sku, lengths_mm: [2780, 3000] });
+  }
+
+  it("сопоставляет парную техкарту с двумя артикулами", () => {
+    const techcard = makeTechcard({
+      id: 7,
+      quantity_a_per_item: 36,
+      quantity_b_per_item: 36,
+      techcard_lines: [
+        { id: 1, component_product_id: 1, component_product_sku: "ЮП-A", quantity: 36, unit: "pcs" },
+        { id: 2, component_product_id: 2, component_product_sku: "ЮП-B", quantity: 36, unit: "pcs" },
+      ],
+    });
+    const pairs = resolvePairs([techcard], [product(1, "ЮП-A"), product(2, "ЮП-B")]);
+    expect(pairs).toHaveLength(1);
+    expect(pairs[0]).toMatchObject({
+      techcardId: 7,
+      perHanger: 36,
+    });
+    expect(pairs[0].productA.sku).toBe("ЮП-A");
+    expect(pairs[0].productB.sku).toBe("ЮП-B");
+  });
+
+  it("пропускает пару, чей компонент не в загруженном наборе", () => {
+    const techcard = makeTechcard({
+      id: 7,
+      techcard_lines: [
+        { id: 1, component_product_id: 1, quantity: 1, unit: "pcs" },
+        { id: 2, component_product_id: 99, quantity: 1, unit: "pcs" },
+      ],
+    });
+    expect(resolvePairs([techcard], [product(1, "ЮП-A")])).toHaveLength(0);
+  });
+
+  it("пропускает стандартные техкарты и пары без линий", () => {
+    const standard = makeTechcard({ id: 8, processing_type: "standart_processing" });
+    const noLines = makeTechcard({ id: 9, techcard_lines: [] });
+    expect(resolvePairs([standard, noLines], [product(1, "ЮП-A")])).toHaveLength(0);
+  });
+});
+
+describe("buildPairedCalcItems", () => {
+  const autoA = () => makeProduct({ id: 1, sku: "ЮП-A", perimeter_mm: 64.2, mount_width_mm: 19.35, lengths_mm: [2780, 3000] });
+  const autoB = () => makeProduct({ id: 2, sku: "ЮП-B", perimeter_mm: 64.2, mount_width_mm: 19.35, lengths_mm: [3000, 3500] });
+  const manualB = () => makeProduct({ id: 2, sku: "ЮП-B", lengths_mm: [3000, 3500] });
+  const pair = (a: Product, b: Product) => ({
+    techcardId: 7,
+    productA: a,
+    productB: b,
+    perHanger: 36,
+  });
+
+  it("авто-пара: item на каждую общую длину, refs в том же порядке", () => {
+    const { items, refs, incompatible } = buildPairedCalcItems([pair(autoA(), autoB())], SETTINGS);
+    // Общие длины A=[2780,3000] ∩ B=[3000,3500] = [3000]
+    expect(items).toEqual([{
+      perimeter_a_mm: 64.2,
+      mount_width_a_mm: 19.35,
+      perimeter_b_mm: 64.2,
+      mount_width_b_mm: 19.35,
+      length_mm: 3000,
+    }]);
+    expect(refs).toEqual([{ techcardId: 7, lengthMm: 3000 }]);
+    expect(incompatible.size).toBe(0);
+  });
+
+  it("ручная пара (не оба авто) не отправляется", () => {
+    const { items, incompatible } = buildPairedCalcItems([pair(autoA(), manualB())], SETTINGS);
+    expect(items).toEqual([]);
+    expect(incompatible.size).toBe(0);
+  });
+
+  it("несовместимая пара помечается и не рвёт batch", () => {
+    const wide = (id: number, sku: string) =>
+      makeProduct({ id, sku, perimeter_mm: 100, mount_width_mm: 1500, lengths_mm: [3000] });
+    const { items, refs, incompatible } = buildPairedCalcItems([
+      pair(wide(3, "ЮП-WIDE-A"), wide(4, "ЮП-WIDE-B")),
+      pair(autoA(), autoB()),
+    ], SETTINGS);
+    expect(incompatible.get(7)).toBeTruthy();
+    expect(items).toHaveLength(1);
+    expect(refs[0].lengthMm).toBe(3000);
+  });
+});
+
+describe("resultsToPairedCalcMap", () => {
+  it("раскладывает результаты по techcardId → lengthKey", () => {
+    const refs = [
+      { techcardId: 7, lengthMm: 2780 },
+      { techcardId: 7, lengthMm: 3000 },
+      { techcardId: 8, lengthMm: 2780 },
+    ];
+    const map = resultsToPairedCalcMap(refs, [
+      makeResult({ total: 36 }),
+      makeResult({ total: 30 }),
+      makeResult({ total: 40 }),
+    ]);
+    expect(map.get(7)?.get("2780")?.total).toBe(36);
+    expect(map.get(7)?.get("3000")?.total).toBe(30);
+    expect(map.get(8)?.get("2780")?.total).toBe(40);
+  });
+});
+
+describe("buildPairedHangerCalcRows", () => {
+  it("авто-пара: разбивка по первой общей длине, совместный итог", () => {
+    const pair = {
+      techcardId: 7,
+      productA: makeProduct({ id: 1, sku: "ЮП-A", perimeter_mm: 64.2, mount_width_mm: 19.35, lengths_mm: [2780, 3000] }),
+      productB: makeProduct({ id: 2, sku: "ЮП-B", perimeter_mm: 64.2, mount_width_mm: 19.35, lengths_mm: [3000, 3500] }),
+      perHanger: 36,
+    };
+    const calcMap = new Map([[7, new Map([["3000", makeResult({ total: 30, limiter: "area" })]])]]);
+    const [row] = buildPairedHangerCalcRows([pair], calcMap, new Map());
+    expect(row.kind).toBe("paired");
+    expect(row.label).toBe("ЮП-A + ЮП-B");
+    expect(row.auto).toBe(true);
+    expect(row.primaryLength).toBe(3000);
+    expect(row.lengths).toEqual([3000]);
+    expect(row.total).toBe(30);
+    expect(row.limiter).toBe("area");
+    expect(row.primaryResult?.by_area).toBe(72);
+  });
+
+  it("ручная пара: разбивки нет, итог — ручное N техкарты", () => {
+    const pair = {
+      techcardId: 7,
+      productA: makeProduct({ id: 1, sku: "ЮП-A", lengths_mm: [2780] }),
+      productB: makeProduct({ id: 2, sku: "ЮП-B", lengths_mm: [2780] }),
+      perHanger: 40,
+    };
+    const [row] = buildPairedHangerCalcRows([pair], new Map(), new Map());
+    expect(row.auto).toBe(false);
+    expect(row.primaryResult).toBeNull();
+    expect(row.total).toBe(40);
+  });
+
+  it("несовместимая пара помечается причиной, итоги не считаются", () => {
+    const pair = {
+      techcardId: 7,
+      productA: makeProduct({ id: 1, sku: "ЮП-A", perimeter_mm: 100, mount_width_mm: 1500, lengths_mm: [3000] }),
+      productB: makeProduct({ id: 2, sku: "ЮП-B", perimeter_mm: 100, mount_width_mm: 1500, lengths_mm: [3000] }),
+      perHanger: 10,
+    };
+    const incompatible = new Map([[7, "пара не влезает"]]);
+    const [row] = buildPairedHangerCalcRows([pair], new Map(), incompatible);
+    expect(row.auto).toBe(true);
+    expect(row.incompatibleReason).toBe("пара не влезает");
+    expect(row.total).toBeNull();
+  });
+
+  it("авто-пара без общих длин — итог null", () => {
+    const pair = {
+      techcardId: 7,
+      productA: makeProduct({ id: 1, sku: "ЮП-A", perimeter_mm: 64.2, mount_width_mm: 19.35, lengths_mm: [2780] }),
+      productB: makeProduct({ id: 2, sku: "ЮП-B", perimeter_mm: 64.2, mount_width_mm: 19.35, lengths_mm: [3500] }),
+      perHanger: 36,
+    };
+    const [row] = buildPairedHangerCalcRows([pair], new Map(), new Map());
+    expect(row.auto).toBe(true);
+    expect(row.primaryLength).toBeNull();
+    expect(row.total).toBeNull();
   });
 });

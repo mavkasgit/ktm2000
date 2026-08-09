@@ -261,3 +261,95 @@ async def test_migration_036_primary_length_backfill():
         async with admin_engine.connect() as conn:
             await conn.execute(text(f'DROP DATABASE IF EXISTS "{db_name}" WITH (FORCE)'))
         await admin_engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_migration_038_paired_quantity_min():
+    """#67: «разное кол-во» парной техкарты → общее N = min(оба).
+
+    quantity_a_per_item != quantity_b_per_item приводятся к min; если задано
+    только одно поле — оно копируется в оба; quantity_total, равный старой
+    сумме a+b, пересчитывается в N×2. Стандартные техкарты не трогаются.
+    """
+    db_name = f"ktm_mig_{uuid.uuid4().hex[:10]}"
+    admin_url = _test_db_url().rsplit("/", 1)[0] + "/postgres"
+    target_url = _test_db_url().rsplit("/", 1)[0] + f"/{db_name}"
+
+    admin_engine = create_async_engine(admin_url, isolation_level="AUTOCOMMIT")
+    async with admin_engine.connect() as conn:
+        await conn.execute(text(f'CREATE DATABASE "{db_name}"'))
+    await admin_engine.dispose()
+
+    env = {**os.environ, "DATABASE_URL": target_url}
+    try:
+        # 1. До 038 (037) — «разное кол-во» ещё возможно.
+        result = subprocess.run(
+            ["alembic", "upgrade", "037_notification_state"],
+            cwd=BACKEND_DIR,
+            env=env,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert result.returncode == 0, result.stderr or result.stdout
+
+        # 2. Парные техкарты с разным / равным / частичным кол-вом.
+        engine = create_async_engine(target_url)
+        async with engine.begin() as conn:
+            await conn.execute(
+                text(
+                    "INSERT INTO techcards "
+                    "(product_id, version, processing_type, is_active, quantity_total, quantity_a_per_item, quantity_b_per_item) VALUES "
+                    "(NULL, 'v1', 'paired_processing', true, 20, 8, 12),"
+                    "(NULL, 'v2', 'paired_processing', true, 16, 8, 8),"
+                    "(NULL, 'v3', 'paired_processing', true, NULL, 8, NULL),"
+                    "(NULL, 'v4', 'standart_processing', true, 20, 8, 12)"
+                )
+            )
+        await engine.dispose()
+
+        # 3. Upgrade до head → миграция 038 применяется.
+        result = subprocess.run(
+            ["alembic", "upgrade", "head"],
+            cwd=BACKEND_DIR,
+            env=env,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert result.returncode == 0, result.stderr or result.stdout
+
+        engine = create_async_engine(target_url)
+        async with engine.connect() as conn:
+            rows = (
+                await conn.execute(
+                    text(
+                        "SELECT version, quantity_total, quantity_a_per_item, quantity_b_per_item "
+                        "FROM techcards ORDER BY version"
+                    )
+                )
+            ).all()
+        await engine.dispose()
+
+        by_version = {r.version: r for r in rows}
+        # Разное кол-во (8/12) → min = 8; общее 20 = 8+12 → N×2 = 16.
+        v1 = by_version["v1"]
+        assert (v1.quantity_a_per_item, v1.quantity_b_per_item) == (8, 8)
+        assert v1.quantity_total == 16
+        # Уже равные не трогаются.
+        v2 = by_version["v2"]
+        assert (v2.quantity_a_per_item, v2.quantity_b_per_item) == (8, 8)
+        assert v2.quantity_total == 16
+        # Частичное значение копируется в оба поля; total без суммы остаётся.
+        v3 = by_version["v3"]
+        assert (v3.quantity_a_per_item, v3.quantity_b_per_item) == (8, 8)
+        assert v3.quantity_total is None
+        # Стандартная техкарта не трогается.
+        v4 = by_version["v4"]
+        assert (v4.quantity_a_per_item, v4.quantity_b_per_item) == (8, 12)
+        assert v4.quantity_total == 20
+    finally:
+        admin_engine = create_async_engine(admin_url, isolation_level="AUTOCOMMIT")
+        async with admin_engine.connect() as conn:
+            await conn.execute(text(f'DROP DATABASE IF EXISTS "{db_name}" WITH (FORCE)'))
+        await admin_engine.dispose()
