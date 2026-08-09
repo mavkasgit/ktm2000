@@ -39,6 +39,9 @@ PostgreSQL database.
 Every invocation creates its own test database. Multiple test runs may
 execute concurrently without sharing or dropping each other's databases.
 
+При нескольких параллельных агентах задавайте `PYTEST_NUM_WORKERS` (например `4`):
+иначе каждый `-n auto` захватит все ядра и машина перестанет отвечать.
+
 `npm run test:pytest:full` runs the same suite serially.
 
 Do not use `test:db:down` from test launchers.

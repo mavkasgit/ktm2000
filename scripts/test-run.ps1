@@ -21,6 +21,10 @@ $PostgresHost = if ($env:TEST_DB_HOST)     { $env:TEST_DB_HOST }     else { "loc
 $PostgresPort = if ($env:TEST_DB_PORT)     { $env:TEST_DB_PORT }     else { "5441" }
 $PostgresUser = if ($env:TEST_DB_USER)     { $env:TEST_DB_USER }     else { "ktm2000_user" }
 $PostgresPassword = if ($env:TEST_DB_PASSWORD) { $env:TEST_DB_PASSWORD } else { "ktm2000_pass_test" }
+# xdist worker cap for the parallel run. Default: -n auto (= all cores).
+# When several agents run tests concurrently, set PYTEST_NUM_WORKERS (e.g. 4),
+# otherwise every run grabs all cores and the machine becomes unresponsive.
+$NumWorkers = $env:PYTEST_NUM_WORKERS
 
 # ------------------------------------------------------------
 # Unique run identity
@@ -53,7 +57,10 @@ if ($Mon) { $PytestArgs += "--testmon" }
 if ($Lf) { $PytestArgs += "--lf" }
 
 if ($FullRun) { Write-Host "Mode   : FULL / SERIAL" }
-else          { Write-Host "Mode   : FAST / XDIST" }
+else {
+    if ($NumWorkers) { Write-Host "Mode   : FAST / XDIST (workers=$NumWorkers)" }
+    else             { Write-Host "Mode   : FAST / XDIST (auto)" }
+}
 Write-Host ""
 
 # ------------------------------------------------------------
@@ -63,13 +70,21 @@ $ExitCode = 1
 $DatabaseCreated = $false
 
 try {
-    Write-Host "[1/6] Starting PostgreSQL..."
-    & npm.cmd run test:db:up
-    if ($LASTEXITCODE -ne 0) { throw "test:db:up failed (exit $LASTEXITCODE)" }
+    # PostgreSQL is shared infrastructure. Only run up/wait when the container
+    # is not healthy yet: under concurrent agents redundant docker compose calls
+    # block on the compose lock and make the start look hung.
+    $health = docker inspect -f '{{.State.Health.Status}}' ktm2000-postgres-test 2>$null
+    if ($LASTEXITCODE -eq 0 -and $health -eq 'healthy') {
+        Write-Host "[1/6] PostgreSQL already healthy - skipping up/wait"
+    } else {
+        Write-Host "[1/6] Starting PostgreSQL..."
+        & npm.cmd run test:db:up
+        if ($LASTEXITCODE -ne 0) { throw "test:db:up failed (exit $LASTEXITCODE)" }
 
-    Write-Host "[2/6] Waiting for PostgreSQL..."
-    & npm.cmd run test:db:wait
-    if ($LASTEXITCODE -ne 0) { throw "test:db:wait failed (exit $LASTEXITCODE)" }
+        Write-Host "[2/6] Waiting for PostgreSQL..."
+        & npm.cmd run test:db:wait
+        if ($LASTEXITCODE -ne 0) { throw "test:db:wait failed (exit $LASTEXITCODE)" }
+    }
 
     Write-Host "[3/6] Creating isolated database..."
     & python scripts/test-db.py create $TestDbName
@@ -87,11 +102,22 @@ try {
         Write-Host "TEST_DATABASE_URL=$TestDatabaseUrl"
         Write-Host ""
         if ($FullRun) {
-            & python -m pytest @PytestArgs
+            $PytestOutput = & python -m pytest @PytestArgs 2>&1
         } else {
-            & python -m pytest -n auto @PytestArgs
+            if ($NumWorkers) {
+                $PytestOutput = & python -m pytest -n $NumWorkers @PytestArgs 2>&1
+            } else {
+                $PytestOutput = & python -m pytest -n auto @PytestArgs 2>&1
+            }
         }
         $ExitCode = $LASTEXITCODE
+        # pytest-xdist may report a worker crash as a successful (0) exit when the
+        # suite never actually ran. Detect that and force failure.
+        if ($ExitCode -eq 0 -and ($PytestOutput -match 'node down|maximum crashed workers')) {
+            Write-Warning "pytest-xdist workers crashed; forcing failure"
+            $ExitCode = 2
+        }
+        $PytestOutput | ForEach-Object { Write-Host $_ }
     }
     finally {
         Pop-Location
