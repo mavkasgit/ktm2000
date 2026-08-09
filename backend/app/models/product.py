@@ -2,9 +2,10 @@ import enum
 import re
 from typing import Any
 
-from sqlalchemy import Boolean, Enum, Float, Integer, String, text, BigInteger, Identity, ARRAY, ForeignKey, CheckConstraint
+from sqlalchemy import Boolean, Enum, Float, Integer, String, text, BigInteger, Identity, ARRAY, ForeignKey, CheckConstraint, Index
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.orm.attributes import instance_state
 
 from app.models.base import Base
 
@@ -142,14 +143,40 @@ class Product(Base):
         return d if isinstance(d, dict) else None
 
     def _primary_hanger_length_key(self) -> str | None:
-        """Min numeric length key of the per-length dict, or None for bare dicts."""
+        """Key длины для основной длины per-length dict, или None для bare dicts.
+
+        Bare-словарь {auto, manual} (legacy-скаляр) возвращает None — caller
+        фолбэчит на сам dict, и значение скаляра сохраняется.
+        """
         d = self._hanger_dict()
         if not d:
             return None
         numeric = [k for k in d if _is_numeric_key(k)]
         if not numeric:
             return None
+        primary = self.primary_length_mm
+        if primary is not None:
+            key = _length_key(primary)
+            if key in d:
+                return key
         return _length_key(min(float(k) for k in numeric))
+
+    @property
+    def primary_length_mm(self) -> float | None:
+        """Выбранная основная длина артикула (#81), или первая по возрастанию.
+
+        Безопасен в async без загрузки relationship: если ``lengths`` не
+        загружены — возвращает None (caller фолбэчит на dict-ключи).
+        """
+        if "lengths" in instance_state(self).unloaded:
+            return None
+        lengths = self.lengths or []
+        if not lengths:
+            return None
+        primary = [l.length_mm for l in lengths if l.is_primary]
+        if primary:
+            return min(primary)
+        return min(l.length_mm for l in lengths)
 
     @property
     def quantity_per_hanger(self) -> int | None:
@@ -204,10 +231,10 @@ class Product(Base):
         has_numeric_keys = any(_is_numeric_key(k) for k in d)
         if not has_numeric_keys:
             # Bare {auto, manual} (legacy-скаляр) — раскрываем под основную длину.
-            lengths = sorted([l.length_mm for l in self.lengths]) if self.lengths else []
-            if not lengths:
+            primary = self.primary_length_mm
+            if primary is None:
                 return None
-            return {_length_key(lengths[0]): _normalize_entry(d)}
+            return {_length_key(primary): _normalize_entry(d)}
         normalized = {
             _length_key(float(k)): _normalize_entry(v)
             for k, v in d.items()
@@ -239,10 +266,10 @@ class Product(Base):
     def main_quantity_per_hanger(self) -> int | None:
         """Скаляр для обратной совместимости: значение для основной длины.
 
-        Основная длина — минимальный числовой ключ per-length dict (первая
-        длина из ProductLength по возрастанию). Без обращения к relationship
-        (безопасно в async). Используется потребителями, которым нужен один
-        скаляр (например, план-импорт до интеграции #66).
+        Основная длина — выбранная пользователем (#81, is_primary), либо
+        первая длина из ProductLength по возрастанию. Без обязательного
+        обращения к relationship (для уже загруженных lengths). Используется
+        потребителями, которым нужен один скаляр (например, план-импорт).
         """
         return self.quantity_per_hanger
 
@@ -275,11 +302,20 @@ class ProductLength(Base):
     __tablename__ = "product_lengths"
     __table_args__ = (
         CheckConstraint("length_mm > 0", name="positive"),
+        Index(
+            "uq_product_lengths_one_primary_per_product",
+            "product_id",
+            unique=True,
+            postgresql_where=text("is_primary"),
+        ),
     )
 
     id: Mapped[int] = mapped_column(BigInteger, Identity(always=True), primary_key=True)
     product_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("products.id"), nullable=False)
     length_mm: Mapped[float] = mapped_column(Float, nullable=False)
+    is_primary: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("false"), default=False
+    )
 
     product: Mapped["Product"] = relationship("Product", back_populates="lengths")
 

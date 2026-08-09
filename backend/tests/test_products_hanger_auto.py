@@ -11,6 +11,7 @@
 import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.models.product import Product, ProductLength, ProductType
 
@@ -247,3 +248,190 @@ async def test_list_qty_filter_uses_auto_value(client, session) -> None:
     skus = {item["sku"] for item in resp.json()["items"]}
     assert "RAW-QTY-AUTO" in skus
     assert "RAW-QTY-MAN" not in skus
+
+
+# ─── Основная длина (#81) ───────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_create_primary_defaults_to_first_length(client, session) -> None:
+    """При создании без явного выбора основная — первая длина по возрастанию."""
+    resp = await client.post(
+        "/api/products",
+        json=_payload("RAW-PRIM-001", lengths_mm=[3500, 2780]),
+    )
+    assert resp.status_code == 201, resp.text
+    body = resp.json()
+    assert body["lengths_mm"] == [2780, 3500]
+    assert body["primary_length_mm"] == 2780
+
+
+@pytest.mark.asyncio
+async def test_create_primary_explicit(client, session) -> None:
+    """Явный primary_length_mm при создании сохраняется."""
+    resp = await client.post(
+        "/api/products",
+        json=_payload("RAW-PRIM-002", lengths_mm=[2780, 3500], primary_length_mm=3500),
+    )
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["primary_length_mm"] == 3500
+
+    pls = (await session.execute(
+        select(ProductLength).where(ProductLength.product_id == resp.json()["id"])
+    )).scalars().all()
+    primary = [pl for pl in pls if pl.is_primary]
+    assert len(primary) == 1
+    assert primary[0].length_mm == 3500
+
+
+@pytest.mark.asyncio
+async def test_patch_switch_primary(client, session) -> None:
+    """PATCH primary_length_mm переключает основную; legacy-скаляр следует за ней."""
+    resp = await client.post(
+        "/api/products",
+        json=_payload(
+            "RAW-PRIM-003",
+            lengths_mm=[2780, 3500],
+            quantity_per_hanger={"2780": {"manual": 40}, "3500": {"manual": 20}},
+        ),
+    )
+    assert resp.status_code == 201, resp.text
+    pid = resp.json()["id"]
+    assert resp.json()["primary_length_mm"] == 2780
+    assert resp.json()["quantity_per_hanger"]["2780"]["manual"] == 40
+
+    patched = await client.patch(f"/api/products/{pid}", json={"primary_length_mm": 3500})
+    assert patched.status_code == 200, patched.text
+    assert patched.json()["primary_length_mm"] == 3500
+
+    product = (await session.execute(
+        select(Product).options(selectinload(Product.lengths)).where(Product.id == pid)
+    )).scalar_one()
+    assert product.main_quantity_per_hanger() == 20
+
+
+@pytest.mark.asyncio
+async def test_patch_primary_not_a_length_is_422(client, session) -> None:
+    resp = await client.post(
+        "/api/products",
+        json=_payload("RAW-PRIM-004", lengths_mm=[2780]),
+    )
+    assert resp.status_code == 201
+    pid = resp.json()["id"]
+
+    resp = await client.patch(f"/api/products/{pid}", json={"primary_length_mm": 9999})
+    assert resp.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_sync_lengths_keeps_primary(client, session) -> None:
+    """Замена длин сохраняет основную, если она осталась в списке."""
+    resp = await client.post(
+        "/api/products",
+        json=_payload("RAW-PRIM-005", lengths_mm=[2780, 3500], primary_length_mm=3500),
+    )
+    assert resp.status_code == 201
+    pid = resp.json()["id"]
+
+    resp = await client.patch(f"/api/products/{pid}", json={"lengths_mm": [3500, 4000]})
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["primary_length_mm"] == 3500
+
+    resp = await client.patch(f"/api/products/{pid}", json={"lengths_mm": [2780, 4000]})
+    assert resp.status_code == 200
+    # Прежней основной нет — новая основная = первая по возрастанию.
+    assert resp.json()["primary_length_mm"] == 2780
+
+
+@pytest.mark.asyncio
+async def test_sort_by_quantity_per_hanger_uses_primary(client, session) -> None:
+    """Сортировка по кол-ву на подвесе использует выбранную основную (#81)."""
+    a = await client.post(
+        "/api/products",
+        json=_payload(
+            "RAW-PRIM-SORT-A",
+            lengths_mm=[2780, 3500],
+            quantity_per_hanger={"2780": {"manual": 10}, "3500": {"manual": 100}},
+            primary_length_mm=3500,
+        ),
+    )
+    assert a.status_code == 201
+
+    b = await client.post(
+        "/api/products",
+        json=_payload(
+            "RAW-PRIM-SORT-B",
+            lengths_mm=[2780, 3500],
+            quantity_per_hanger={"2780": {"manual": 50}, "3500": {"manual": 50}},
+        ),
+    )
+    assert b.status_code == 201
+
+    resp = await client.get("/api/products?sort=quantity_per_hanger:asc")
+    assert resp.status_code == 200
+    skus = [item["sku"] for item in resp.json()["items"] if item["sku"].startswith("RAW-PRIM-SORT")]
+    assert skus == ["RAW-PRIM-SORT-B", "RAW-PRIM-SORT-A"]
+
+
+@pytest.mark.asyncio
+async def test_legacy_scalar_preserved_with_loaded_lengths(client, session) -> None:
+    """Legacy bare-словарь не теряется, когда lengths загружены (#81 регрессия).
+
+    _primary_hanger_length_key для bare {auto, manual} должен вернуть None,
+    чтобы quantity_per_hanger/main_quantity_per_hanger отдали скаляр.
+    """
+    product = Product(
+        sku="RAW-LEGACY-LEN",
+        name="Legacy with lengths",
+        type=ProductType.component,
+        unit="pcs",
+    )
+    product.quantity_per_hanger = 40
+    session.add(product)
+    await session.flush()
+    session.add_all([
+        ProductLength(product_id=product.id, length_mm=2780, is_primary=True),
+        ProductLength(product_id=product.id, length_mm=3500),
+    ])
+    await session.commit()
+
+    loaded = (await session.execute(
+        select(Product).options(selectinload(Product.lengths)).where(Product.id == product.id)
+    )).scalar_one()
+    assert loaded.main_quantity_per_hanger() == 40
+    assert loaded.quantity_per_hanger == 40
+
+
+@pytest.mark.asyncio
+async def test_sort_legacy_scalar_dict_not_crash(client, session) -> None:
+    """Сортировка по кол-ву при bare-словаре не падает (регрессия #81)."""
+    product = Product(
+        sku="RAW-LEGACY-SORT",
+        name="Legacy sort",
+        type=ProductType.component,
+        unit="pcs",
+    )
+    product.quantity_per_hanger = 33
+    session.add(product)
+    await session.commit()
+
+    resp = await client.get("/api/products?sort=quantity_per_hanger:asc")
+    assert resp.status_code == 200
+    skus = {i["sku"] for i in resp.json()["items"]}
+    assert "RAW-LEGACY-SORT" in skus
+
+
+@pytest.mark.asyncio
+async def test_duplicate_lengths_rejected(client, session) -> None:
+    """Дубли длин → 400 (edge cases; иначе partial unique index ломается)."""
+    resp = await client.post(
+        "/api/products",
+        json=_payload("RAW-DUP-001", lengths_mm=[3500, 3500]),
+    )
+    assert resp.status_code == 400, resp.text
+
+    resp = await client.post(
+        "/api/products",
+        json=_payload("RAW-DUP-002", lengths_mm=[2780, -5]),
+    )
+    assert resp.status_code == 400, resp.text

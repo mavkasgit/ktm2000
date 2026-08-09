@@ -321,7 +321,10 @@ async def _get_or_create_import_file(
 
 async def _load_products_by_sku(db: AsyncSession) -> dict[str, Product]:
     products = (await db.execute(
-        select(Product).options(selectinload(Product.processing_flags))
+        select(Product).options(
+            selectinload(Product.processing_flags),
+            selectinload(Product.lengths),
+        )
     )).scalars().all()
     result: dict[str, Product] = {}
     for product in products:
@@ -364,7 +367,10 @@ async def _find_active_techcard_by_sku(db: AsyncSession, sku: str) -> tuple[Tech
                 "-",
             )
         )
-        product = await db.scalar(select(Product).where(normalized_product_sku == key).limit(1))
+        product = await db.scalar(
+            select(Product).options(selectinload(Product.lengths))
+            .where(normalized_product_sku == key).limit(1)
+        )
         if product is None:
             continue
         techcard = await db.scalar(

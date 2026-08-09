@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import List
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status, Response
 from pydantic import BaseModel, Field
-from sqlalchemy import cast, exists, func, or_, select, type_coerce, delete, Integer, Float
+from sqlalchemy import cast, exists, func, or_, select, type_coerce, delete, update, Integer, Float
 from sqlalchemy.types import ARRAY, String
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -76,6 +76,7 @@ class ProductIn(BaseModel):
     is_paired_profile: bool = False
     skip_shot_blast: bool = False
     dimension_state: DimensionState = DimensionState.length
+    primary_length_mm: float | None = None
     aliases: List[str] = []
     lengths_mm: List[float] = []
     processing_flag_codes: List[str] = []
@@ -107,6 +108,7 @@ class ProductPatch(BaseModel):
     is_paired_profile: bool | None = None
     skip_shot_blast: bool | None = None
     dimension_state: DimensionState | None = None
+    primary_length_mm: float | None = None
     aliases: List[str] | None = None
     lengths_mm: List[float] | None = None
     processing_flag_codes: List[str] | None = None
@@ -139,6 +141,7 @@ class ProductOut(BaseModel):
     is_paired_profile: bool
     skip_shot_blast: bool
     dimension_state: DimensionState
+    primary_length_mm: float | None
     aliases: List[str]
     lengths_mm: List[float]
     processing_flags: List[ProcessingFlagInfo]
@@ -185,17 +188,27 @@ def _quantity_effective_expr(entry_value):
 
 
 def _primary_length_quantity_expr():
-    """SQL-выражение: эффективное значение для основной (минимальной) длины per-length dict.
+    """SQL-выражение: эффективное значение для выбранной основной длины.
 
     quantity_per_hanger (#60) — dict {length_mm: {"auto", "manual"}}. Для
-    сортировки/фильтра берём значение основной длины (минимальный ключ)
-    с приоритетом авто > ручное.
+    сортировки/фильтра берём значение основной длины (#81: is_primary, либо
+    первая по возрастанию) с приоритетом авто > ручное. Bare-словари
+    (legacy-скаляр, ключи auto/manual) дают NULL — не валидный per-length.
     """
+    primary_len = (
+        select(ProductLength.length_mm)
+        .where(ProductLength.product_id == Product.id)
+        .order_by(ProductLength.is_primary.desc(), ProductLength.length_mm.asc())
+        .limit(1)
+        .correlate(Product)
+        .scalar_subquery()
+    )
     each = func.jsonb_each(Product.attributes["quantity_per_hanger"]).table_valued("key", "value")
+    numeric_key = each.c.key.op("~")("^-?[0-9]+(\\.[0-9]+)?$")
     return (
         select(_quantity_effective_expr(each.c.value))
         .select_from(each)
-        .order_by(cast(each.c.key, Float))
+        .where(numeric_key, cast(each.c.key, Float) == primary_len)
         .limit(1)
         .scalar_subquery()
     )
@@ -221,12 +234,50 @@ class ProductsListResponse(BaseModel):
 
 
 async def _sync_lengths(db: AsyncSession, product_id: int, lengths: list[float]) -> None:
-    """Replace all lengths for a product with the given list."""
+    """Replace all lengths for a product with the given list.
+
+    Основная длина (#81): сохраняется, если прежняя основная есть в новом
+    списке; иначе — первая по возрастанию. Ровно одна основная на продукт.
+    Дубли и неположительные длины отсекаются заранее (edge cases).
+    """
+    unique = sorted({l for l in lengths if l > 0})
+    if len(unique) != len(lengths):
+        raise HTTPException(status_code=400, detail="lengths_mm must be unique and > 0")
+    if not unique:
+        await db.execute(delete(ProductLength).where(ProductLength.product_id == product_id))
+        return
+    prev_primary = await db.scalar(
+        select(ProductLength.length_mm)
+        .where(ProductLength.product_id == product_id, ProductLength.is_primary.is_(True))
+    )
     await db.execute(delete(ProductLength).where(ProductLength.product_id == product_id))
-    for length in lengths:
-        if length <= 0:
-            raise HTTPException(status_code=400, detail=f"length_mm must be > 0, got {length}")
-        db.add(ProductLength(product_id=product_id, length_mm=length))
+    primary = prev_primary if prev_primary is not None and prev_primary in unique else min(unique)
+    for length in unique:
+        db.add(ProductLength(product_id=product_id, length_mm=length, is_primary=length == primary))
+
+
+async def _set_primary_length(db: AsyncSession, product_id: int, length_mm: float | None) -> None:
+    """Назначить основную длину артикула (#81): ровно одна основная на продукт."""
+    if length_mm is None:
+        return
+    await db.flush()
+    exists_len = await db.scalar(
+        select(ProductLength.id).where(
+            ProductLength.product_id == product_id, ProductLength.length_mm == length_mm
+        )
+    )
+    if exists_len is None:
+        raise HTTPException(status_code=422, detail=f"length_mm {length_mm} is not a length of the product")
+    await db.execute(
+        update(ProductLength)
+        .where(ProductLength.product_id == product_id)
+        .values(is_primary=False)
+    )
+    await db.execute(
+        update(ProductLength)
+        .where(ProductLength.product_id == product_id, ProductLength.length_mm == length_mm)
+        .values(is_primary=True)
+    )
 
 
 async def _sync_processing_flags(db: AsyncSession, product_id: int, codes: list[str]) -> None:
@@ -358,6 +409,7 @@ def _to_product_out(product: Product, has_std: bool = False, has_paired: bool = 
         is_paired_profile=product.is_paired_profile,
         skip_shot_blast="skip_shot_blast" in flag_codes,
         dimension_state=product.dimension_state,
+        primary_length_mm=product.primary_length_mm,
         aliases=product.aliases or [],
         lengths_mm=lengths,
         processing_flags=flags,
@@ -672,13 +724,15 @@ async def create_product(
         if existing_code:
             raise HTTPException(status_code=409, detail="Code already exists")
 
-    product_data = payload.model_dump(exclude={"lengths_mm", "processing_flag_codes", "skip_shot_blast", "is_laminated", "quantity_per_hanger"})
+    product_data = payload.model_dump(exclude={"lengths_mm", "processing_flag_codes", "skip_shot_blast", "is_laminated", "quantity_per_hanger", "primary_length_mm"})
     item = Product(**product_data)
     db.add(item)
     await db.flush()
 
     if payload.lengths_mm:
         await _sync_lengths(db, item.id, payload.lengths_mm)
+    if payload.primary_length_mm is not None and payload.lengths_mm:
+        await _set_primary_length(db, item.id, payload.primary_length_mm)
     # Sync boolean flags to M2M (#17)
     flag_codes = list(payload.processing_flag_codes)
     if payload.skip_shot_blast:
@@ -767,7 +821,7 @@ async def patch_product(
 
     old_aliases = item.aliases if payload.aliases is not None else None
 
-    patch_data = payload.model_dump(exclude_unset=True, exclude={"lengths_mm", "processing_flag_codes", "skip_shot_blast", "is_laminated", "quantity_per_hanger"})
+    patch_data = payload.model_dump(exclude_unset=True, exclude={"lengths_mm", "processing_flag_codes", "skip_shot_blast", "is_laminated", "quantity_per_hanger", "primary_length_mm"})
     new_code = patch_data.get("code")
     if new_code:
         duplicate_code = await db.scalar(
@@ -800,6 +854,8 @@ async def patch_product(
 
     if payload.lengths_mm is not None:
         await _sync_lengths(db, product_id, payload.lengths_mm)
+    if payload.primary_length_mm is not None:
+        await _set_primary_length(db, product_id, payload.primary_length_mm)
     if payload.processing_flag_codes is not None:
         await _sync_processing_flags(db, product_id, payload.processing_flag_codes)
     # Sync boolean flags to M2M (#17)

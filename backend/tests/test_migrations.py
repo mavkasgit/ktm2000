@@ -176,3 +176,88 @@ async def test_migration_032_scalar_quantity_per_hanger_to_per_length():
         async with admin_engine.connect() as conn:
             await conn.execute(text(f'DROP DATABASE IF EXISTS "{db_name}" WITH (FORCE)'))
         await admin_engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_migration_036_primary_length_backfill():
+    """#81: is_primary на product_lengths — основной становится первая длина по возрастанию."""
+    db_name = f"ktm_mig_{uuid.uuid4().hex[:10]}"
+    admin_url = _test_db_url().rsplit("/", 1)[0] + "/postgres"
+    target_url = _test_db_url().rsplit("/", 1)[0] + f"/{db_name}"
+
+    admin_engine = create_async_engine(admin_url, isolation_level="AUTOCOMMIT")
+    async with admin_engine.connect() as conn:
+        await conn.execute(text(f'CREATE DATABASE "{db_name}"'))
+    await admin_engine.dispose()
+
+    env = {**os.environ, "DATABASE_URL": target_url}
+    try:
+        # 1. До 036 (035) — колонки is_primary ещё нет.
+        result = subprocess.run(
+            ["alembic", "upgrade", "035_internal_notifications"],
+            cwd=BACKEND_DIR,
+            env=env,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert result.returncode == 0, result.stderr or result.stdout
+
+        # 2. Два продукта с длинами не по возрастанию вставки.
+        engine = create_async_engine(target_url)
+        async with engine.begin() as conn:
+            p1 = (
+                await conn.execute(
+                    text(
+                        "INSERT INTO products (sku, name, type, unit, is_active, attributes) "
+                        "VALUES ('RAW-PRIM-M1', 'P1', 'component', 'pcs', true, '{}'::jsonb) RETURNING id"
+                    )
+                )
+            ).scalar_one()
+            p2 = (
+                await conn.execute(
+                    text(
+                        "INSERT INTO products (sku, name, type, unit, is_active, attributes) "
+                        "VALUES ('RAW-PRIM-M2', 'P2', 'component', 'pcs', true, '{}'::jsonb) RETURNING id"
+                    )
+                )
+            ).scalar_one()
+            await conn.execute(
+                text(
+                    "INSERT INTO product_lengths (product_id, length_mm) VALUES "
+                    "(:p1, 3500), (:p1, 2800), (:p2, 3000), (:p2, 5000)"
+                ),
+                {"p1": p1, "p2": p2},
+            )
+        await engine.dispose()
+
+        # 3. Upgrade до head → основная = первая длина по возрастанию (2800, 3000).
+        result = subprocess.run(
+            ["alembic", "upgrade", "head"],
+            cwd=BACKEND_DIR,
+            env=env,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert result.returncode == 0, result.stderr or result.stdout
+
+        engine = create_async_engine(target_url)
+        async with engine.connect() as conn:
+            rows = (
+                await conn.execute(
+                    text(
+                        "SELECT product_id, length_mm FROM product_lengths "
+                        "WHERE is_primary = true ORDER BY product_id"
+                    )
+                )
+            ).all()
+            # Ровно по одной основной на продукт.
+            assert [r.product_id for r in rows] == [p1, p2]
+            assert [r.length_mm for r in rows] == [2800, 3000]
+        await engine.dispose()
+    finally:
+        admin_engine = create_async_engine(admin_url, isolation_level="AUTOCOMMIT")
+        async with admin_engine.connect() as conn:
+            await conn.execute(text(f'DROP DATABASE IF EXISTS "{db_name}" WITH (FORCE)'))
+        await admin_engine.dispose()
