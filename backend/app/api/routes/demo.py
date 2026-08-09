@@ -109,6 +109,7 @@ def _workbook_for_product(
 ) -> bytes:
     wb = Workbook()
     ws = wb.active
+    assert ws is not None
     ws.title = "План май 26 05"
     ws.append(["", "", "Комментарий"])
     ws.append(["Заявка № 05", "май"])
@@ -233,7 +234,7 @@ async def _collect_tasks_for_position(db: AsyncSession, plan_position_id: int) -
             .order_by(RouteStage.sequence, WorkTask.id)
         )
     ).all()
-    return rows
+    return [tuple(row) for row in rows]
 
 
 @router.post(
