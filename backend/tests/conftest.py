@@ -2,19 +2,11 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 import os
-import sys
-os.environ.setdefault("DEV_BYPASS_AUTH", "true")
-
-import tempfile
-
-# Тесты пишут только во временный каталог: не зависеть от env-переменных
-# окружения (в т.ч. линуксовых /app/* путей) и дефолтов конфига.
-_TEST_STORAGE_ROOT = os.path.join(tempfile.gettempdir(), "ktm2000_pytest_storage")
-os.environ["IMPORT_STORAGE_DIR"] = os.path.join(_TEST_STORAGE_ROOT, "imports")
-os.environ["PRODUCT_PHOTO_DIR"] = os.path.join(_TEST_STORAGE_ROOT, "products")
-os.environ["BACKUPS_PATH"] = os.path.join(_TEST_STORAGE_ROOT, "backups")
 import re
+import tempfile
 import uuid
+
+os.environ.setdefault("DEV_BYPASS_AUTH", "true")
 
 import pytest
 import pytest_asyncio
@@ -30,81 +22,31 @@ from app.main import app
 from app.models.base import Base
 
 
+# Тесты пишут только во временный каталог: не зависеть от env-переменных
+# окружения (в т.ч. линуксовых /app/* путей) и дефолтов конфига.
+_TEST_STORAGE_ROOT = os.path.join(tempfile.gettempdir(), "ktm2000_pytest_storage")
+os.environ["IMPORT_STORAGE_DIR"] = os.path.join(_TEST_STORAGE_ROOT, "imports")
+os.environ["PRODUCT_PHOTO_DIR"] = os.path.join(_TEST_STORAGE_ROOT, "products")
+os.environ["BACKUPS_PATH"] = os.path.join(_TEST_STORAGE_ROOT, "backups")
+
+
 DEFAULT_TEST_DATABASE_URL = "postgresql+asyncpg://ktm2000_user:ktm2000_pass_test@localhost:5441/ktm2000_test"
 DB_MODE_HYBRID = "hybrid"
-TEST_DB_PREFIX = "ktm_test_"
 TEST_SCHEMA_PREFIX = "t_"
 IDENT_RE = re.compile(r"^[a-zA-Z0-9_]+$")
-_RUN_ID_ENV = "KTM_PYTEST_RUN_ID"
+RUN_DB_RE = re.compile(r"^ktm2000_test_[0-9a-f]{12}$")
+_RUN_ID_ENV = "TEST_RUN_ID"
 
-
-def pytest_sessionstart(session: pytest.Session) -> None:
-    """Stamp one run_id in the master env so every xdist worker shares it.
-
-    The controller additionally runs the once-per-run DB hygiene — CREATEDB
-    privilege gate, sweep of leftover ktm_test_* databases and a fresh shared
-    run-DB (DROP IF EXISTS + CREATE) so a retried attempt with the same
-    run_id (e.g. CI pinning KTM_PYTEST_RUN_ID to a commit SHA) starts clean
-    instead of reusing a leftover. Only the controller runs this: it executes
-    before xdist spawns workers, so there is no create/drop race with workers.
-    """
-    os.environ.setdefault(_RUN_ID_ENV, uuid.uuid4().hex[:8])
-    if not hasattr(session.config, "workerinput"):
-        _controller_db_hygiene()
-
-
-def _controller_db_hygiene() -> None:
-    """Controller-only DB setup: privilege check, stale-DB sweep, fresh run-DB.
-
-    Runs once on the master before xdist spawns workers, so the once-per-run
-    work (CREATEDB gate, sweep of leftover ktm_test_* DBs, DROP+CREATE of the
-    shared run-DB) is not duplicated N times by every worker. The privilege
-    check is fatal — a misconfigured DB user aborts the run immediately with
-    a clear message instead of failing on the first CREATE DATABASE. The
-    sweep and reset stay best-effort so a leftover/hung DB never blocks the
-    session.
-    """
-    import asyncio
-
-    run_id = os.environ.get(_RUN_ID_ENV)
-    if not run_id:
-        return
-    db_name = f"{TEST_DB_PREFIX}w_{run_id}"
-    try:
-        _validate_ident(db_name, required_prefix=TEST_DB_PREFIX)
-        admin_url = _admin_db_url(_base_test_db_url())
-    except RuntimeError:
-        return
-
-    async def _hygiene() -> None:
-        await _ensure_createdb_privilege(admin_url)
-        try:
-            await _cleanup_stale_databases(admin_url, exclude=db_name)
-        except Exception as exc:
-            # Best-effort: a failed sweep must not abort the session before the
-            # first test. Stale DBs are hygiene, not correctness.
-            print(f"[conftest] stale run-DB sweep skipped: {exc}", file=sys.stderr)
-        try:
-            await _reset_run_database(admin_url, db_name)
-        except Exception as exc:
-            print(f"[conftest] best-effort reset of {db_name} skipped: {exc}", file=sys.stderr)
-
-    asyncio.run(_hygiene())
-
-
-async def _reset_run_database(admin_url: URL, db_name: str) -> None:
-    """Idempotent fresh start for the shared run-DB."""
-    await _drop_database(admin_url, db_name)
-    await _create_database(admin_url, db_name)
+# The test launcher (scripts/test-run.ps1) owns the lifecycle of the run
+# database: it creates ktm2000_test_<12 hex>, exports TEST_RUN_ID /
+# TEST_DB_NAME / TEST_DATABASE_URL, runs pytest and drops the DB in a
+# finally. This module never creates or drops databases — it only connects
+# to the run-DB the launcher provided and isolates per-module schemas
+# (t_<uuid8>) inside it.
 
 
 def _quote_ident(name: str) -> str:
     return '"' + name.replace('"', '""') + '"'
-
-
-def _normalize_token(value: str, *, fallback: str) -> str:
-    token = re.sub(r"[^a-zA-Z0-9_]+", "_", value).strip("_").lower()
-    return token or fallback
 
 
 def _validate_ident(name: str, *, required_prefix: str) -> None:
@@ -112,15 +54,6 @@ def _validate_ident(name: str, *, required_prefix: str) -> None:
         raise RuntimeError(f"Unsafe identifier '{name}': expected prefix '{required_prefix}'.")
     if not IDENT_RE.fullmatch(name):
         raise RuntimeError(f"Unsafe identifier '{name}': only [a-zA-Z0-9_] is allowed.")
-
-
-def _safe_module_db_name(module_name: str, run_id: str) -> str:
-    token = _normalize_token(module_name, fallback="module")
-    reserved = len(TEST_DB_PREFIX) + len(run_id) + 1
-    token = token[: max(1, 63 - reserved)]
-    db_name = f"{TEST_DB_PREFIX}{token}_{run_id}"
-    _validate_ident(db_name, required_prefix=TEST_DB_PREFIX)
-    return db_name
 
 
 def _safe_schema_name() -> str:
@@ -138,147 +71,68 @@ def _ensure_hybrid_mode() -> str:
     return mode
 
 
-def _base_test_db_url() -> URL:
-    raw = os.getenv("TEST_DATABASE_URL") or DEFAULT_TEST_DATABASE_URL
-    base = make_url(raw)
+def _resolve_test_db_url(config) -> URL:
+    """Resolve and validate the DB the suite runs against.
 
-    db_name = (base.database or "").lower()
-    if "test" not in db_name:
-        raise RuntimeError(
-            f"Unsafe TEST_DATABASE_URL database '{base.database}'. It must contain 'test'."
-        )
+    Launcher mode (TEST_DATABASE_URL set) requires a launcher-owned run-DB
+    name (ktm2000_test_<12 hex>). Manual debug mode (no env) allows raw
+    serial pytest on the shared static DB, but refuses parallel (-n) runs
+    that would race on it.
+    """
+    raw = os.getenv("TEST_DATABASE_URL")
+    if raw:
+        url = make_url(raw)
+        db_name = (url.database or "").lower()
+        if not RUN_DB_RE.fullmatch(db_name):
+            raise RuntimeError(
+                f"Unsafe TEST_DATABASE_URL database {url.database!r}: "
+                f"expected launcher-owned run-DB matching {RUN_DB_RE.pattern}. "
+                "Run through `npm run test:pytest`."
+            )
+    else:
+        numprocesses = getattr(config.option, "numprocesses", 0)
+        if numprocesses:
+            raise RuntimeError(
+                "Parallel pytest (-n) without TEST_DATABASE_URL is refused: it "
+                "would race on the shared static DB. Run through "
+                "`npm run test:pytest` to get an isolated per-run database."
+            )
+        url = make_url(DEFAULT_TEST_DATABASE_URL)
+        db_name = (url.database or "").lower()
+        if "test" not in db_name:
+            raise RuntimeError(
+                f"Unsafe TEST_DATABASE_URL database {url.database!r}. It must contain 'test'."
+            )
 
     app_db = make_url(settings.DATABASE_URL)
     if settings.ENV != "test":
         same_target = (
-            (base.host or "") == (app_db.host or "")
-            and (base.port or 0) == (app_db.port or 0)
-            and (base.database or "") == (app_db.database or "")
+            (url.host or "") == (app_db.host or "")
+            and (url.port or 0) == (app_db.port or 0)
+            and (url.database or "") == (app_db.database or "")
         )
         if same_target:
             raise RuntimeError(
                 "Unsafe DB target: TEST_DATABASE_URL points to active app DATABASE_URL in non-test ENV."
             )
-
-    return base
-
-
-def _admin_db_url(base_url: URL) -> URL:
-    admin_db = (os.getenv("PYTEST_DB_ADMIN_DB") or "postgres").strip() or "postgres"
-    admin_url = base_url.set(database=admin_db)
-    return admin_url
+    return url
 
 
-async def _open_autocommit_engine(url: URL) -> AsyncEngine:
-    return create_async_engine(
-        url.render_as_string(hide_password=False),
-        poolclass=NullPool,
-        isolation_level="AUTOCOMMIT",
-    )
+def pytest_sessionstart(session: pytest.Session) -> None:
+    """Validate the DB contract before xdist spawns workers.
 
-
-async def _drop_database(admin_url: URL, db_name: str) -> None:
-    _validate_ident(db_name, required_prefix=TEST_DB_PREFIX)
-    engine = await _open_autocommit_engine(admin_url)
-    try:
-        async with engine.connect() as conn:
-            await conn.execute(
-                text(
-                    "SELECT pg_terminate_backend(pid) "
-                    "FROM pg_stat_activity "
-                    "WHERE datname = :db_name AND pid <> pg_backend_pid()"
-                ),
-                {"db_name": db_name},
-            )
-            await conn.execute(text(f"DROP DATABASE IF EXISTS {_quote_ident(db_name)}"))
-    finally:
-        await engine.dispose()
-
-
-async def _create_database(admin_url: URL, db_name: str) -> None:
-    """Create a test database, tolerating 'already exists' from parallel workers."""
-    _validate_ident(db_name, required_prefix=TEST_DB_PREFIX)
-    engine = await _open_autocommit_engine(admin_url)
-    try:
-        async with engine.connect() as conn:
-            try:
-                await conn.execute(text(f"CREATE DATABASE {_quote_ident(db_name)}"))
-            except Exception as exc:
-                # asyncpg raises DuplicateDatabaseError (42P04) if another
-                # worker created it first — safe to ignore.
-                raw = getattr(exc, "sqlstate", None) or ""
-                if raw == "42P04" or "already exists" in str(exc).lower():
-                    pass
-                else:
-                    raise
-    finally:
-        await engine.dispose()
-
-
-async def _cleanup_stale_databases(admin_url: URL, *, exclude: str | None = None) -> None:
-    """Drop leftover test databases from previous runs.
-
-    ``exclude`` is the current run's shared worker DB name — without it,
-    parallel xdist workers would drop each other's freshly created databases
-    (their NullPool connections close between tests, making the DB look stale).
-
-    Skips databases with active connections to avoid racing with
-    freshly created DBs from parallel xdist workers.
+    Raising here aborts cleanly before any worker touches a database.
     """
-    engine = await _open_autocommit_engine(admin_url)
-    try:
-        async with engine.connect() as conn:
-            rows = (
-                await conn.execute(
-                    text(
-                        "SELECT d.datname "
-                        "FROM pg_database d "
-                        "WHERE d.datname LIKE :prefix "
-                        "AND NOT EXISTS ("
-                        "  SELECT 1 FROM pg_stat_activity a "
-                        "  WHERE a.datname = d.datname AND a.pid <> pg_backend_pid()"
-                        ") "
-                        "ORDER BY d.datname"
-                    ),
-                    {"prefix": f"{TEST_DB_PREFIX}%"},
-                )
-            ).fetchall()
-
-        for row in rows:
-            db_name = row[0]
-            if exclude and db_name == exclude:
-                continue
-            try:
-                _validate_ident(db_name, required_prefix=TEST_DB_PREFIX)
-            except RuntimeError:
-                continue
-            try:
-                await _drop_database(admin_url, db_name)
-            except Exception as exc:
-                # One bad DB must not abort the whole sweep.
-                print(f"[conftest] drop of stale DB {db_name} skipped: {exc}", file=sys.stderr)
-    finally:
-        await engine.dispose()
+    _resolve_test_db_url(session.config)
 
 
-async def _ensure_createdb_privilege(admin_url: URL) -> None:
-    engine = await _open_autocommit_engine(admin_url)
-    try:
-        async with engine.connect() as conn:
-            can_createdb = await conn.scalar(
-                text(
-                    "SELECT r.rolcreatedb "
-                    "FROM pg_roles r "
-                    "WHERE r.rolname = current_user"
-                )
-            )
-        if not bool(can_createdb):
-            raise RuntimeError(
-                "Hybrid DB mode requires CREATEDB privilege for current DB user. "
-                "Grant CREATEDB or switch test credentials."
-            )
-    finally:
-        await engine.dispose()
+def pytest_report_header(config: pytest.Config) -> list[str]:
+    run_id = os.getenv(_RUN_ID_ENV, "unknown")
+    db_name = os.getenv("TEST_DB_NAME", "unknown")
+    return [
+        f"TEST_RUN_ID: {run_id}",
+        f"TEST_DB_NAME: {db_name}",
+    ]
 
 
 # Mirrors alembic/versions/020_storage_vs_production.py trigger functions.
@@ -377,36 +231,9 @@ def run_id(db_mode: str) -> str:
 
 
 @pytest.fixture(scope="session")
-def base_test_db_url(db_mode: str) -> URL:
+def base_test_db_url(db_mode: str, request: pytest.FixtureRequest) -> URL:
     _ = db_mode
-    return _base_test_db_url()
-
-
-@pytest.fixture(scope="session")
-def admin_db_url(base_test_db_url: URL) -> URL:
-    return _admin_db_url(base_test_db_url)
-
-
-@pytest_asyncio.fixture(scope="session", loop_scope="session")
-async def worker_db_url(
-    run_id: str,
-    base_test_db_url: URL,
-    admin_db_url: URL,
-) -> AsyncIterator[str]:
-    """One shared run-DB for the whole run; every xdist worker points at it.
-
-    The DB is deliberately NOT dropped in this fixture's teardown: it is
-    shared by all workers, so the first worker to finish would drop it out
-    from under its still-running siblings (the InvalidCatalogNameError this
-    file exists to prevent). Per-module schemas are dropped by the ``engine``
-    fixture teardown (t_<uuid8>); the run-DB itself is reaped best-effort by
-    the next run's stale-DB sweep and by the controller's sessionstart hygiene
-    (which also gives retried runs with the same run_id a clean start).
-    """
-    db_name = f"{TEST_DB_PREFIX}w_{run_id}"
-    _validate_ident(db_name, required_prefix=TEST_DB_PREFIX)
-    await _create_database(admin_db_url, db_name)
-    yield base_test_db_url.set(database=db_name).render_as_string(hide_password=False)
+    return _resolve_test_db_url(request.config)
 
 
 @pytest.fixture(scope="module")
@@ -418,11 +245,20 @@ def module_schema_name() -> str:
 
 @pytest_asyncio.fixture(scope="module", loop_scope="module")
 async def engine(
-    worker_db_url: str,
+    base_test_db_url: URL,
     module_schema_name: str,
 ) -> AsyncIterator[AsyncEngine]:
-    """Create engine on the shared worker DB with a fresh schema per module."""
-    eng = create_async_engine(worker_db_url, poolclass=NullPool)
+    """Engine on the launcher-provided run-DB with a fresh schema per module.
+
+    The run-DB is owned by the launcher and is deliberately NOT dropped here:
+    dropping it in any single module's teardown would break the parallel
+    xdist workers sharing it (the InvalidCatalogNameError this file used to
+    guard against). The module schema (t_<uuid8>) is dropped instead; the
+    run-DB itself is reaped by `npm run test:db:cleanup` if a run is killed.
+    """
+    eng = create_async_engine(
+        base_test_db_url.render_as_string(hide_password=False), poolclass=NullPool
+    )
     async with eng.begin() as conn:
         await conn.execute(text(f"CREATE SCHEMA IF NOT EXISTS {_quote_ident(module_schema_name)}"))
         await conn.execute(text(f"SET search_path TO {_quote_ident(module_schema_name)}"))
@@ -431,7 +267,7 @@ async def engine(
     try:
         yield eng
     finally:
-        # Drop the module schema to keep the shared DB clean
+        # Drop the module schema to keep the shared run-DB clean
         try:
             async with eng.begin() as conn:
                 await conn.execute(text(f"DROP SCHEMA IF EXISTS {_quote_ident(module_schema_name)} CASCADE"))

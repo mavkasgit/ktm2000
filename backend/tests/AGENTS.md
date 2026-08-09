@@ -2,16 +2,43 @@
 
 Каноническое руководство по pytest в KTM-2000. Стек: **pytest**, **pytest-xdist**, **pytest-testmon**.
 
-## Изоляция базы данных (hybrid mode)
+## Изоляция базы данных (run-DB + module schema)
+
+Запуск всегда идёт через launcher `scripts/test-run.ps1`, который **владеет
+жизненным циклом run-DB**:
+
+1. Генерирует `RUN_ID` (12 hex), создаёт **`ktm2000_test_<runid>`**, выставляет
+   `TEST_RUN_ID` / `TEST_DB_NAME` / `TEST_DATABASE_URL`.
+2. Запускает pytest и в `finally` **гарантированно дропает только свою БД**.
+
+Каждый запуск получает собственную БД; параллельные прогоны не видят и не
+удаляют чужие БД. `conftest.py` run-DB **не создаёт и не удаляет** — только
+подключается к той, что дал launcher.
+
+Внутри run-DB:
+
+1. **Схема на модуль**: одна схема `t_<uuid8>` на модуль,
+   `Base.metadata.create_all()` при старте модуля; схема дропается в teardown.
+2. **Транзакция на тест** (`function scope`): каждый тест в SAVEPOINT;
+   по завершении — `rollback`.
+3. **Сброс sequence users**: перед каждым тестом
+   `ALTER TABLE users ALTER COLUMN id RESTART WITH 1` — `system_user` всегда `id = 1`.
 
 Режим: `PYTEST_DB_MODE=hybrid` (единственный поддерживаемый).
 
-1. **Временная БД на модуль** (`scope="module"`): `ktm_test_<module>_<runid>` — создаётся и удаляется вокруг каждого тестового модуля.
-2. **Схема на модуль**: одна схема `t_<uuid8>` на модуль, `Base.metadata.create_all()` при старте модуля.
-3. **Транзакция на тест** (`function scope`): каждый тест в SAVEPOINT; по завершении — `rollback`.
-4. **Сброс sequence users**: перед каждым тестом `ALTER TABLE users ALTER COLUMN id RESTART WITH 1` — `system_user` всегда `id = 1`.
+### Контракт `TEST_DATABASE_URL`
 
-Подробности реализации: [`conftest.py`](conftest.py).
+- **Установлен (launcher)**: имя БД обязано матчить `^ktm2000_test_[0-9a-f]{12}$`,
+  иначе pytest падает до старта.
+- **Не установлен (ручная отладка)**: разрешён только **serial** pytest на
+  статичной `ktm2000_test`; параллельный `pytest -n auto` без launcher — ошибка.
+
+### Orphan cleanup
+
+Run-DB, осиротевшая из-за убитого прогона, убирается отдельной командой
+(`npm run test:db:cleanup`, TTL 24h). В обычный прогон cleanup не встроен.
+
+Подробности реализации: [`conftest.py`](conftest.py), [`scripts/test-run.ps1`](../../scripts/test-run.ps1).
 
 ## Правила написания тестов
 
@@ -28,12 +55,17 @@
 
 | Команда | Назначение |
 |---------|------------|
-| `npm run test:pytest:fast` | Параллельный прогон (рекомендуется, ~3 мин) |
+| `npm run test:pytest` | Параллельный прогон (по умолчанию, ~3 мин) |
+| `npm run test:pytest:fast` | Алиас `test:pytest` |
+| `npm run test:pytest:full` | Полный прогон в один поток |
 | `npm run test:pytest:mon` | Только изменённые тесты (testmon) |
 | `npm run test:pytest:lf` | Только упавшие в прошлый раз |
-| `npm run test:pytest` | Полный прогон в один поток |
+| `npm run test:db:cleanup` | Уборка orphan run-DB по TTL (24h) |
 
-Отладка вручную:
+Отдельный тест через launcher (изолированная БД):
+`npm run test:pytest -- -k shopflow`
+
+Отладка вручную (serial, общая статичная БД, без изоляции):
 
 ```bash
 npm run test:db:up && npm run test:db:wait

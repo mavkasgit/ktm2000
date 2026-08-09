@@ -26,9 +26,27 @@ npm run db:seed                # Демо-данные
 npm run test:pytest:fast       # Тесты backend (параллельно, рекомендуется)
 npm run test:pytest:mon        # Только изменённые тесты
 npm run test:pytest:lf         # Только упавшие тесты
+npm run test:db:cleanup        # Уборка осиротевших тестовых БД (TTL 24h)
 ```
 
-Конкретный тест: `cd backend && python -m pytest tests/test_shopfloor_api.py::test_name -v`
+## Tests
+
+`npm run test:pytest` is the default parallel test command.
+
+It runs pytest with xdist (`-n auto`) against an isolated per-run
+PostgreSQL database.
+
+Every invocation creates its own test database. Multiple test runs may
+execute concurrently without sharing or dropping each other's databases.
+
+`npm run test:pytest:full` runs the same suite serially.
+
+Do not use `test:db:down` from test launchers.
+
+Отдельный тест — через launcher (изолированная БД):
+`npm run test:pytest -- -k shopflow`
+Отдельный тест без изоляции (serial, общая статичная БД, только отладка):
+`cd backend && python -m pytest tests/test_shopfloor_api.py::test_name -v`
 
 ## Разведка
 
