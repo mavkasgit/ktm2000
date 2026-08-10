@@ -33,7 +33,7 @@ import {
   isServerSortField,
   type TaskSortField,
 } from "../lib/boardQueryParams";
-import { groupTasksByProfile, groupStatus, sortGroupsByPriority } from "../lib/groupTasksByProfile";
+import { groupTasksByProfile, groupStatus, sortGroupsByPriority, taskGroupingDimensions } from "../lib/groupTasksByProfile";
 import type { GroupingProfile } from "../lib/groupingProfiles";
 import {
   getReadyStatusLabel,
@@ -171,7 +171,7 @@ function getTaskCellValue(task: SectionBoardTask, field: TaskSortField): string 
   switch (field) {
     case "sequence": return String(task.sequence);
     case "productSku": return task.product_sku;
-    case "dimensions": return formatDimensionsLabel(task.dimensions);
+    case "dimensions": return formatDimensionsLabel(taskGroupingDimensions(task));
     case "status": return getStatusLabel(task);
     case "plannedQty": return String(parseFloat(task.planned_quantity) || 0);
     case "issuedQty": return String(parseFloat(task.cache.issued_quantity) || 0);
@@ -245,7 +245,7 @@ function renderTaskRow(
         <StatusDot task={task} />
       </td>
       <td className="p-2 font-medium">{task.product_sku}</td>
-      <td className="p-2 text-xs text-muted-foreground">{formatDimensionsLabel(task.dimensions)}</td>
+      <td className="p-2 text-xs text-muted-foreground">{formatDimensionsLabel(taskGroupingDimensions(task))}</td>
       <td className="p-2">
         {task.operation_names && task.operation_names.length > 1 ? (
           <span className="text-xs font-medium">{task.operation_names.join(" + ")}</span>
@@ -333,7 +333,7 @@ function renderMobileCard(
 
       <div className="grid grid-cols-2 gap-2 text-sm">
         <div><span className="text-muted-foreground">План:</span> {fmtQty(task.planned_quantity)}</div>
-        <div><span className="text-muted-foreground">Размер:</span> {formatDimensionsLabel(task.dimensions)}</div>
+        <div><span className="text-muted-foreground">Размер:</span> {formatDimensionsLabel(taskGroupingDimensions(task))}</div>
         <div><span className="text-muted-foreground">Операция:</span> {task.operation_names && task.operation_names.length > 1 ? task.operation_names.join(" + ") : (task.operation_name || "—")}</div>
         <div><span className="text-muted-foreground">Выдано:</span> {fmtQty(task.cache.issued_quantity)}</div>
         <div><span className="text-muted-foreground">Годные:</span> {fmtQty(task.cache.completed_quantity)}</div>
@@ -428,7 +428,7 @@ function TableTaskGroupRow({
         {firstTask.product_sku}
       </td>
       <td className="p-2 text-xs text-slate-500 font-medium">
-        {formatDimensionsLabel(firstTask.dimensions)}
+        {formatDimensionsLabel(taskGroupingDimensions(firstTask))}
       </td>
       <td className="p-2 text-xs text-slate-500 font-medium">
         {firstTask.operation_name || "—"}
@@ -608,7 +608,7 @@ export function SectionTasksBoard({
   const uniqueValues = useMemo(() => ({
     sequence: [...new Set(visibleTasks.map((t) => String(t.sequence)))],
     productSku: [...new Set(visibleTasks.map((t) => t.product_sku))],
-    dimensions: [...new Set(visibleTasks.map((t) => JSON.stringify(t.dimensions ?? null)))].sort(
+    dimensions: [...new Set(visibleTasks.map((t) => JSON.stringify(taskGroupingDimensions(t) ?? null)))].sort(
       (a, b) => formatDimensionsFilterValue(a).localeCompare(formatDimensionsFilterValue(b), "ru"),
     ),
     status: [...new Set(visibleTasks.map((t) => getStatusLabel(t)))],

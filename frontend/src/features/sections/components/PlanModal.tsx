@@ -12,7 +12,8 @@
 
 import React, { useEffect, useMemo, useState } from "react";
 import type { SectionBoardTask, RouteHistoryOp, SectionOperation } from "@/shared/api/shopfloor";
-import { groupTasksByProfile } from "../lib/groupTasksByProfile";
+import { formatDimensionsLabel } from "@/shared/api/stock";
+import { groupTasksByProfile, taskGroupingDimensions } from "../lib/groupTasksByProfile";
 import { GroupingSettingsModal } from "./GroupingSettingsModal";
 import { PRESET_PROFILES, type GroupingProfile } from "../lib/groupingProfiles";
 import { PlanPrintPreviewModal, ALL_PRINT_COLUMNS, PRINT_COLUMN_LABELS, type PrintColumn, type PrintSettings, type TableMode } from "./PlanPrintPreviewModal";
@@ -146,7 +147,8 @@ function PlanTable({
   const totalDone = useMemo(() => groups.reduce((s, g) => s + g.totalQtyDone, 0), [groups]);
   const totalOrders = useMemo(() => groups.reduce((s, g) => s + g.tasks.length, 0), [groups]);
 
-  const colSpan = 1 +
+  const colSpan = 1 + // Размер (всегда)
+    (showSku ? 1 : 0) +
     (profile.criteria.includes("operationCode") ? 2 : 0) +
     (profile.criteria.includes("outputKind") ? 1 : 0) +
     (profile.criteria.includes("sourceRef") ? 1 : 0);
@@ -191,6 +193,7 @@ function PlanTable({
             {showSku && (
               <th className={`${headerCellClass} max-w-[120px] break-words`}>Артикул</th>
             )}
+            <th className={`${headerCellClass} whitespace-nowrap`}>Размер</th>
             {showOp && profile.criteria.includes("operationCode") && (
               <>
                 <th className={`${headerCellClass} w-[1px] whitespace-nowrap`}>Маршрут</th>
@@ -251,6 +254,11 @@ function PlanTable({
                     {renderSkuWithBreakHints(task.product_sku)}
                   </td>
                 )}
+
+                {/* Размер */}
+                <td className="px-2 py-2 text-sm whitespace-nowrap">
+                  {formatDimensionsLabel(taskGroupingDimensions(task))}
+                </td>
 
                 {/* Операция — split into Маршрут (chips) + Операция (text) */}
                 {showOp && profile.criteria.includes("operationCode") && (

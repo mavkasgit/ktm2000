@@ -3,6 +3,12 @@ import { AlertTriangle, Check } from "lucide-react";
 import { Button, Input, toast, Checkbox, DatePicker } from "@/shared/ui";
 import { cn } from "@/shared/utils/cn";
 import type { SectionBoardTask } from "@/shared/api/shopfloor";
+import { formatDimensionsLabel } from "@/shared/api/stock";
+import {
+  taskGroupingDimensions,
+  taskGroupingDimensionsKey,
+  taskSizeMm,
+} from "../lib/groupTasksByProfile";
 import {
   getReadyStatusLabel,
   getStatusLabel,
@@ -75,11 +81,11 @@ type BulkOpGroup = {
 };
 
 function buildGroupKey(task: SectionBoardTask): string {
-  return `${task.product_sku}__${task.operation_code || task.operation_name || "—"}`;
+  return `${task.product_sku}__${taskGroupingDimensionsKey(task)}__${task.operation_code || task.operation_name || "—"}`;
 }
 
 function buildGroupLabel(task: SectionBoardTask): string {
-  return task.product_sku;
+  return `${task.product_sku} · ${formatDimensionsLabel(taskGroupingDimensions(task))}`;
 }
 
 function getOperationName(task: SectionBoardTask): string {
@@ -179,7 +185,19 @@ function groupTasks(tasks: SectionBoardTask[]): BulkOpGroup[] {
     map.get(key)!.push(task);
   }
 
-  return Array.from(map.values()).map((groupTasks) => initGroup(groupTasks));
+  const groups = Array.from(map.values()).map((groupTasks) => initGroup(groupTasks));
+  // Сортировка строк: по количеству убыв.; при равных — размер убыв. (3 м → 1 м).
+  return groups.sort((a, b) => {
+    const qtyDiff = b.totalPlan - a.totalPlan;
+    if (qtyDiff !== 0) return qtyDiff;
+    const mmA = groupSizeMm(a);
+    const mmB = groupSizeMm(b);
+    return mmB - mmA;
+  });
+}
+
+function groupSizeMm(group: BulkOpGroup): number {
+  return taskSizeMm(group.tasks[0]);
 }
 
 function StatusDot({ task }: { task: SectionBoardTask }) {

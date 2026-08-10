@@ -15,8 +15,9 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import * as RadixDialog from "@radix-ui/react-dialog";
 import type { SectionBoardTask } from "@/shared/api/shopfloor";
+import { formatDimensionsLabel } from "@/shared/api/stock";
 import type { GroupingProfile } from "../lib/groupingProfiles";
-import { groupTasksByProfile } from "../lib/groupTasksByProfile";
+import { groupTasksByProfile, taskGroupingDimensions } from "../lib/groupTasksByProfile";
 import {
   getQtyPerHanger,
   getPairedHangerLabel,
@@ -135,11 +136,13 @@ function PrintPreviewTable({
 
           const parts: string[] = [];
           if (hasCol("productSku")) parts.push(task.product_sku);
-          if (
-            hasCol("operationName") &&
-            profile.criteria.includes("operationCode")
-          )
+          if (hasCol("operationName") && profile.criteria.includes("operationCode"))
             parts.push(getOpNames(task));
+          // Группировка принудительно разделяет по размеру, поэтому размер
+          // должен различать строки одного артикула (показывается вместе
+          // с артикулом; без колонки артикула размер строки не печатается).
+          if (hasCol("productSku"))
+            parts.push(formatDimensionsLabel(taskGroupingDimensions(task)));
 
           const qtyParts: string[] = [];
           if (hasCol("qtyPlan"))

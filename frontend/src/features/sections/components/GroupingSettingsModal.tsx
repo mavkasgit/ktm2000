@@ -267,6 +267,10 @@ function ProfileOption({ profile, isActive, onClick }: ProfileOptionProps) {
 
       {/* Критерии */}
       <div className="flex gap-1 mt-1 flex-wrap">
+        {/* Размер — принудительный критерий, не отключается профилем */}
+        <span className="inline-flex items-center rounded-md bg-blue-100 px-1.5 py-0.5 text-xs text-blue-700">
+          Размер (обязательно)
+        </span>
         {profile.id !== "custom" &&
           profile.criteria.map((c) => (
             <span key={c} className="inline-flex items-center rounded-md bg-gray-100 px-1.5 py-0.5 text-xs text-gray-600">
