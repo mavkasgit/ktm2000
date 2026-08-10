@@ -821,6 +821,8 @@ export type ProductWipRemainder = {
   completed_ops: string;
   spg_icon: string | null;
   spg_icon_color: string | null;
+  dimensions: Record<string, unknown> | null;
+  dimensions_label: string;
   quantity: number;
   max_completed_seq: number;
   stages_with_icons: {
@@ -839,6 +841,8 @@ export type ProductWipTask = {
   operation_name: string;
   section_icon: string | null;
   section_icon_color: string | null;
+  dimensions: Record<string, unknown> | null;
+  dimensions_label: string;
   planned_qty: number;
   completed_qty: number;
   issued_qty: number;

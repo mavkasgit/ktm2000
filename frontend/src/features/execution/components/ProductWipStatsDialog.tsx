@@ -1,6 +1,7 @@
 import { useEffect, useState, useMemo } from "react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, Badge, renderIcon, SortableFilterHeader, TableCornerResetCell, TableCornerResetHeader, DATA_TABLE_STYLES } from "@/shared/ui";
 import { getProductWipStats, ProductWipStats, type ProductWipRemainder } from "@/shared/api/productionPlans";
+import { formatDimensionsLabel } from "@/shared/api/stock";
 import { Loader2, Layers, Package, ClipboardList, AlertCircle } from "lucide-react";
 import type { SortConfig } from "@/shared/hooks/useTableQueryEngine";
 import { useFilterableTable } from "@/shared/hooks/useFilterableTable";
@@ -206,6 +207,7 @@ export function ProductWipStatsDialog({ sku, open, onOpenChange }: ProductWipSta
                             {...bindColumn("name")}
                           />
                         </th>
+                        <th className={`${headerCellClass} px-2 w-[100px]`}>Размер</th>
                         <th className={`${headerCellClass} p-0 w-[180px] text-right`}>
                           <SortableFilterHeader
                             field="qty"
@@ -225,7 +227,7 @@ export function ProductWipStatsDialog({ sku, open, onOpenChange }: ProductWipSta
                     </thead>
                     <tbody>
                       {sortedRemainders.map((rem) => (
-                        <tr key={`${rem.spg_id}-${rem.completed_ops}`} className="border-b last:border-0 hover:bg-muted/20">
+                        <tr key={`${rem.spg_id}-${rem.completed_ops}-${rem.dimensions_label}`} className="border-b last:border-0 hover:bg-muted/20">
                           <td className="px-3 py-2">
                             <div className="flex items-center gap-3">
                               {rem.spg_icon && rem.spg_icon_color ? (
@@ -274,6 +276,9 @@ export function ProductWipStatsDialog({ sku, open, onOpenChange }: ProductWipSta
                               </div>
                             </div>
                           </td>
+                          <td className="px-3 py-2 text-xs whitespace-nowrap text-muted-foreground">
+                            {formatDimensionsLabel(rem.dimensions, rem.dimensions_label)}
+                          </td>
                           <td className="px-3 py-2 text-right font-mono font-semibold text-emerald-600 dark:text-emerald-400">
                             {rem.quantity.toLocaleString("ru-RU")}
                           </td>
@@ -303,6 +308,7 @@ export function ProductWipStatsDialog({ sku, open, onOpenChange }: ProductWipSta
                     <thead className="bg-muted/50 border-b">
                       <tr>
                         <th className="text-left px-3 py-2 font-medium text-muted-foreground">Операция (участок)</th>
+                        <th className="text-left px-3 py-2 font-medium text-muted-foreground w-[90px]">Размер</th>
                         <th className="text-center px-3 py-2 font-medium text-muted-foreground w-[80px]">Задач в работе</th>
                         <th className="text-right px-3 py-2 font-medium text-muted-foreground w-[80px]">План</th>
                         <th className="text-right px-3 py-2 font-medium text-muted-foreground w-[80px]">Выдано</th>
@@ -311,7 +317,7 @@ export function ProductWipStatsDialog({ sku, open, onOpenChange }: ProductWipSta
                     </thead>
                     <tbody>
                       {data.in_work.map((task) => (
-                        <tr key={`${task.section_id}-${task.operation_name}`} className="border-b last:border-0 hover:bg-muted/20">
+                        <tr key={`${task.section_id}-${task.operation_name}-${task.dimensions_label}`} className="border-b last:border-0 hover:bg-muted/20">
                           <td className="px-3 py-2 flex items-center gap-3">
                             {task.section_icon && task.section_icon_color ? (
                               <div
@@ -331,6 +337,9 @@ export function ProductWipStatsDialog({ sku, open, onOpenChange }: ProductWipSta
                               <div className="font-medium text-xs">{task.operation_name}</div>
                               <div className="text-[10px] text-muted-foreground">{task.section_name}</div>
                             </div>
+                          </td>
+                          <td className="px-3 py-2 text-xs whitespace-nowrap text-muted-foreground">
+                            {formatDimensionsLabel(task.dimensions, task.dimensions_label)}
                           </td>
                           <td className="px-3 py-2 text-center">
                             <Badge variant="secondary" className="font-mono text-xs">
