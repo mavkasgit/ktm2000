@@ -38,6 +38,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.internal_plan import SectionPlanLine
+from app.models.production_plan import PlanPosition
 from app.models.section import Section
 from app.models.transfer import Transfer, TransferStatus
 from app.models.work_task import WorkTask, WorkTaskStatus
@@ -65,8 +66,13 @@ from app.services.shopfloor.common import (
 # на quantity. Отмена — компенсационные транзакции (append-only).
 # Коррекция — in-place изменение quantity активных транзакций.
 from app.domain.dimensions import canonicalize_dimensions
+from app.services.plan_position_hanger import position_dimensions_for_task
 from app.stock.models import Reason, StockTransaction
-from app.stock.services import StockCommand, StockCommandService
+from app.stock.services import (
+    StockCommand,
+    StockCommandService,
+    dimensions_match_clause,
+)
 
 _stock_command_service = StockCommandService()
 
@@ -150,17 +156,19 @@ async def compute_stock_section_transferable(
 
     plan_remaining = max(Decimal("0"), _to_decimal(planned_qty) - already_transferred)
 
-    physical_stock = (
-        await db.scalar(
-            select(func.coalesce(func.sum(StockBalance.balance_qty), 0)).where(
-                StockBalance.location_id == section.id,
-                StockBalance.product_id == task.product_id,
-                StockBalance.balance_qty > 0,
-                StockBalance.quality_state == QualityState.GOOD,
-            )
-        )
-        or Decimal("0")
+    physical_stock_q = select(func.coalesce(func.sum(StockBalance.balance_qty), 0)).where(
+        StockBalance.location_id == section.id,
+        StockBalance.product_id == task.product_id,
+        StockBalance.balance_qty > 0,
+        StockBalance.quality_state == QualityState.GOOD,
     )
+    # Задание несёт габарит (ADR-0001): остаток считается только по строке
+    # баланса этой размерности. Без длины — legacy-поведение (все группы).
+    if task.dimensions is not None:
+        physical_stock_q = physical_stock_q.where(
+            dimensions_match_clause(StockBalance.dimensions, task.dimensions)
+        )
+    physical_stock = (await db.scalar(physical_stock_q)) or Decimal("0")
 
     transferable = min(plan_remaining, physical_stock)
     return transferable, plan_remaining, physical_stock, already_transferred
@@ -451,6 +459,7 @@ async def transfer_send(
                 plan_position_id=next_line.plan_position_id,
                 task_quantity=lazy_planned_quantity,
             )
+            plan_position = await db.get(PlanPosition, next_line.plan_position_id)
             to_task = WorkTask(
                 section_plan_line_id=next_line.id,
                 section_id=next_line.section_id,
@@ -461,6 +470,11 @@ async def transfer_send(
                 planned_quantity=lazy_planned_quantity,
                 status=WorkTaskStatus.waiting_previous,
                 due_date=next_line.due_date,
+                dimensions=(
+                    position_dimensions_for_task(plan_position)
+                    if plan_position is not None
+                    else None
+                ),
                 **transform_fields,
             )
             db.add(to_task)
@@ -484,6 +498,10 @@ async def transfer_send(
     # Габарит (ADR-0001): каноническая форма один раз, обе проводки
     # (SEND/RECEIVE) несут одинаковый dims. Ошибки формата поднимаются
     # как DimensionsValidationError до создания Transfer.
+    # При пустом payload — fallback на габарит исходного задания (тикет #89):
+    # ready-строка и план несут длину, оператор передаёт «вслепую» нельзя.
+    if dimensions is None:
+        dimensions = from_task.dimensions
     dimensions = canonicalize_dimensions(dimensions)
     if not post_factum and not allow_over_plan:
         transferable = await _get_task_transferable(db, from_task)

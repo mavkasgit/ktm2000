@@ -118,7 +118,9 @@ class CreateTransferPayload(BaseModel):
     performed_at: datetime | None = None
     accounted_at: datetime | None = None
     post_factum: bool = False
+    allow_over_plan: bool = False
     physical_handover_at: datetime | None = None
+    dimensions: dict | None = None
 
 
 class FinalReleasePayload(BaseModel):
@@ -559,7 +561,9 @@ async def create_transfer(
             performed_at=payload.performed_at,
             accounted_at=payload.accounted_at,
             post_factum=payload.post_factum,
+            allow_over_plan=payload.allow_over_plan,
             physical_handover_at=payload.physical_handover_at,
+            dimensions=payload.dimensions,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

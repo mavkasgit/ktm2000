@@ -42,6 +42,8 @@ export type ReadyToTransferTask = {
   next_step_is_final: boolean | null;
   is_final: boolean;
   completion_comment: string | null;
+  dimensions: Record<string, number | string> | null;
+  dimensions_label: string | null;
 };
 
 export type ReadyToTransferResponse = {
@@ -117,6 +119,7 @@ export type CreateTransferInput = {
   post_factum?: boolean;
   allow_over_plan?: boolean;
   physical_handover_at?: string;
+  dimensions?: Record<string, number | string> | null;
 };
 
 export type CreateTransferResponse = {

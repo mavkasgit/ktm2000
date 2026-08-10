@@ -28,6 +28,7 @@ from app.services.production_planning_rows import (
 )
 from app.services.production_plan_service import _refresh_plan_status, restore_plan_position, soft_delete_cancelled_position
 from app.services.plan_generation import create_release_batch, release_batch
+from app.services.plan_position_hanger import position_dimensions_for_task
 from app.services.route_matcher import resolve_position_route, make_position_route_cache_key
 from app.services.route_storage_classifier import STOCK_TYPES
 from app.services.shopfloor_service import complete_task, final_release, transfer_send
@@ -631,6 +632,7 @@ async def _get_or_create_stock_fake_task(
     )
     if fake_task is None:
         planned_qty = stock_line.planned_quantity or Decimal("0")
+        plan_pos = await db.get(PlanPosition, stock_line.plan_position_id)
         fake_task = WorkTask(
             section_plan_line_id=stock_line.id,
             section_id=stock_section.id,
@@ -639,6 +641,9 @@ async def _get_or_create_stock_fake_task(
             planned_quantity=planned_qty,
             status=WorkTaskStatus.ready,
             due_date=stock_line.due_date,
+            dimensions=(
+                position_dimensions_for_task(plan_pos) if plan_pos is not None else None
+            ),
         )
         db.add(fake_task)
         await db.flush()

@@ -656,9 +656,16 @@ class StockCommandService:
             balance_row = balance_result.scalar_one_or_none()
             current_balance = balance_row.balance_qty if balance_row is not None else Decimal("0")
             if current_balance < cmd.quantity:
+                # Габарит в ошибке (тикет #89): «без указания длины» вместо
+                # прочерка — понятнее оператору, какую строку остатка искать.
+                dims_label = (
+                    format_dimensions(cmd.dimensions)
+                    if cmd.dimensions is not None
+                    else "без указания длины"
+                )
                 raise StockValidationError(
                     f"Insufficient stock for product_id={cmd.product_id} at location_id={cmd.from_location_id} "
-                    f"(quality={cmd.quality_state.value}, dimensions={format_dimensions(cmd.dimensions)}): "
+                    f"(quality={cmd.quality_state.value}, dimensions={dims_label}): "
                     f"required {cmd.quantity}, available {current_balance}"
                 )
 

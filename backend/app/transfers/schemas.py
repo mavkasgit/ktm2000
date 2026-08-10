@@ -120,6 +120,9 @@ class ReadyToTransferTaskOut(BaseModel):
     next_step_is_final: bool | None = None
     is_final: bool
     completion_comment: str | None = None
+    # Габарит задания (ADR-0001): из плана, готовые строки несут длину.
+    dimensions: dict | None = None
+    dimensions_label: str | None = None
 
 
 class CorrectTransferPayload(BaseModel):

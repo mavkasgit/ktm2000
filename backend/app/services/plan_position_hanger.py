@@ -62,6 +62,22 @@ def position_length_mm(position) -> float | None:
     return None
 
 
+def position_dimensions_for_task(position) -> dict | None:
+    """Габарит задания (``WorkTask.dimensions``) из позиции плана (ADR-0001).
+
+    ``{"length_mm": N}`` в канонической форме при конкретной длине;
+    ``None`` — позиция без длины (безразмерные штуки). Источник — та же
+    длина, что для подвеса (``position_length_mm``): вход трансформирующей
+    позиции или единственный выход.
+    """
+    from app.domain.dimensions import canonicalize_dimensions
+
+    length = position_length_mm(position)
+    if length is None:
+        return None
+    return canonicalize_dimensions({"length_mm": length})
+
+
 def payload_quantity_per_hanger(position) -> int | None:
     """Ручное override-значение позиции из source_payload (скаляр).
 

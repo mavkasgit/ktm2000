@@ -11,6 +11,7 @@ from app.models.defect import Defect, DefectItem, DefectStatus
 from app.models.internal_plan import SectionPlanLine
 from app.models.production_plan import PlanPosition, PlanPositionStatus
 from app.models.work_task import WorkTask, WorkTaskStatus
+from app.services.plan_position_hanger import position_dimensions_for_task
 from app.stock import QualityState, Reason, StockCommand, StockCommandService
 
 from .common import (
@@ -252,6 +253,9 @@ async def complete_task(
             quantity=good_quantity,
             reason=Reason.COMPLETE,
             quality_state=QualityState.GOOD,
+            # Габарит задания (ADR-0001): запись не движет баланс (net-zero),
+            # но несёт ту же размерную группу, что и полученный материал.
+            dimensions=task.dimensions,
             task_id=task.id,
             source_ref=source_ref,
             idempotency_key=idempotency_key,
@@ -291,8 +295,9 @@ async def complete_task(
             to_location_id=scrap_loc,
             quantity=defect_quantity,
             reason=Reason.SCRAP,
-            # Брак заготовок трансформации уходит с габаритом входа.
-            dimensions=consume_dims if spec is not None else None,
+            # Брак заготовок трансформации уходит с габаритом входа; на
+            # нетрансформирующих этапах — с габаритом задания (ADR-0001).
+            dimensions=consume_dims if spec is not None else task.dimensions,
             quality_state=QualityState.GOOD,
             to_quality_state=QualityState.SCRAP,
             task_id=task.id,
@@ -528,6 +533,7 @@ async def prepare_section_task(
         planned_quantity=quantity,
         status=WorkTaskStatus.ready,
         due_date=line.due_date,
+        dimensions=position_dimensions_for_task(pos),
         **transform_fields,
     )
     db.add(task)

@@ -37,6 +37,8 @@ from app.models.transfer import (
     TransferStatus,
 )
 from app.models.work_task import WorkTask, WorkTaskStatus
+from app.domain.dimensions import format_dimensions
+from app.services.plan_position_hanger import position_dimensions_for_task
 
 from app.services.shopfloor.common import _get_transfer, _to_decimal
 
@@ -309,6 +311,8 @@ def _hydrate_production_ready_row(row) -> dict:
         "next_step_is_final": bool(next_stg.is_final) if next_stg is not None else None,
         "is_final": False,
         "completion_comment": completion_comment,
+        "dimensions": task.dimensions,
+        "dimensions_label": format_dimensions(task.dimensions),
     }
 
 
@@ -738,6 +742,7 @@ async def _fetch_stock_ready_items(
                         product_id = plan_pos.product_id if plan_pos else None
                     if product_id is None:
                         continue
+                plan_pos = await db.get(PlanPosition, spl.plan_position_id)
                 fake_task = WorkTask(
                     section_plan_line_id=spl.id,
                     section_id=sec.id,
@@ -746,6 +751,11 @@ async def _fetch_stock_ready_items(
                     planned_quantity=planned_qty,
                     status=WorkTaskStatus.ready,
                     due_date=spl.due_date,
+                    dimensions=(
+                        position_dimensions_for_task(plan_pos)
+                        if plan_pos is not None
+                        else None
+                    ),
                 )
                 db.add(fake_task)
                 await db.flush()
@@ -797,6 +807,8 @@ async def _fetch_stock_ready_items(
                     "next_step_is_final": bool(next_stage.is_final),
                     "is_final": False,
                     "completion_comment": None,
+                    "dimensions": fake_task.dimensions,
+                    "dimensions_label": format_dimensions(fake_task.dimensions),
                 }
             if search and search.strip():
                 search_lower = search.strip().lower()

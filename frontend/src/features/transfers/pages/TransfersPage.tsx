@@ -368,6 +368,7 @@ function ReadyTransferRow({
         comment: undefined,
         idempotency_key: idempotencyKey,
         allow_over_plan: overLimit || isOverPlan,
+        dimensions: task.dimensions ?? undefined,
       }),
     onSuccess: () => {
       toast({
@@ -421,6 +422,11 @@ function ReadyTransferRow({
           <span className="text-[11px] text-muted-foreground">
             (план {fmtQty(task.planned_quantity)})
           </span>
+          {task.dimensions != null && task.dimensions_label && (
+            <span className="ml-1 text-[10px] text-muted-foreground" title="Габарит из плана">
+              · {task.dimensions_label}
+            </span>
+          )}
         </div>
         {task.completion_comment && (
           <div className="text-[10px] text-muted-foreground mt-0.5 leading-tight" title={task.completion_comment}>
@@ -866,6 +872,7 @@ export function TransfersPage() {
           performed_at: data.performedAt,
           physical_handover_at: data.physicalHandoverAt,
           post_factum: data.postFactum,
+          dimensions: task.dimensions ?? undefined,
         });
 
         completedCount++;
