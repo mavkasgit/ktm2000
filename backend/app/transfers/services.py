@@ -67,6 +67,7 @@ from app.stock.services import (
     dimensions_match_clause,
 )
 from app.stock.transfer_ledger import net_transferred
+from app.transfers import budget
 
 _stock_command_service = StockCommandService()
 
@@ -115,7 +116,7 @@ async def compute_stock_section_transferable(
         )
     physical_stock = (await db.scalar(physical_stock_q)) or Decimal("0")
 
-    transferable = min(plan_remaining, physical_stock)
+    transferable = budget.remaining_stock(plan_remaining, physical_stock)
     return transferable, plan_remaining, physical_stock, already_transferred
 
 
@@ -144,12 +145,6 @@ async def _get_task_transferable(
         )
         return transferable
 
-    pm = StockProjectionManager()
-    cache = await pm.get_task_cache(db, task.id)
-    transferred_by_size = await net_transferred(
-        db, task_id=task.id, dims=dimensions
-    )
-
     # Трансформирующий этап (ADR-0002): задание несёт спецификацию выходов
     # (WorkTask.outputs). Передавать можно не больше количества выхода этого
     # размера минус уже переданное — инвариант D2. Размер, которого нет в
@@ -158,30 +153,37 @@ async def _get_task_transferable(
     # уже переданное по этому размеру. Частичная порция не позволяет
     # передать больше, чем фактически раскроено (готовой баланс тоже
     # ограничивает, но кап здесь — бизнес-правило).
+    # Т6: write guard сведён к read-path гидрации (queries.py) — produced по
+    # строкам выхода считается через build_outputs_progress, чтобы write и
+    # read не расходились. Кап min(output_quantity, produced_by_group) живёт
+    # внутри build_outputs_progress; здесь остаётся только
+    # remaining_transform(produced_for_dims, transferred).
     if task.outputs:
         from app.domain.dimensions import canonicalize_dimensions, dimensions_equal
-        from app.services.shopfloor.operations_transform import get_transform_progress
-        from app.stock.services import _dimensions_hash_key
+        from app.services.shopfloor.operations_transform import (
+            build_outputs_progress,
+            get_transform_progress,
+        )
 
         dims = canonicalize_dimensions(dimensions)
-        output_quantity = Decimal("0")
-        for entry in task.outputs:
-            raw_qty = entry.get("quantity")
-            if raw_qty is None:
-                continue
-            if dimensions_equal(entry.get("dimensions"), dims):
-                output_quantity += Decimal(str(raw_qty))
         progress = await get_transform_progress(db, task.id)
-        produced = progress.produced_by_group.get(
-            _dimensions_hash_key(dims)
-        ) or Decimal("0")
-        return max(Decimal("0"), min(output_quantity, produced) - transferred_by_size)
+        produced_rows = build_outputs_progress(
+            task.outputs, progress.produced_by_group
+        )
+        produced_for_dims = Decimal("0")
+        for entry, produced_entry in zip(task.outputs, produced_rows):
+            if dimensions_equal(entry.get("dimensions"), dims):
+                produced_for_dims += produced_entry["produced_quantity"]
+        transferred = await net_transferred(db, task_id=task.id, dims=dims)
+        return budget.remaining_transform(produced_for_dims, transferred)
 
-    return (
-        cache["completed_quantity"]
-        + cache["received_quantity"]
-        - transferred_by_size
+    pm = StockProjectionManager()
+    cache = await pm.get_task_cache(db, task.id)
+    transferred_by_size = await net_transferred(
+        db, task_id=task.id, dims=dimensions
     )
+    # T6: received no longer contributes to plain transfer budget.
+    return budget.remaining_plain(cache["completed_quantity"], transferred_by_size)
 
 
 async def _record_transfer_send_stock_tx(
