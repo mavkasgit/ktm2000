@@ -464,3 +464,50 @@ async def test_auto_created_to_task_and_stock_fake_task_get_dimensions(client, s
     to_task = await session.get(WorkTask, result["to_task_id"])
     assert to_task is not None
     assert to_task.dimensions == {"length_mm": 2000}
+
+
+async def test_auto_created_to_task_carries_sent_dimensions(client, session) -> None:
+    """Auto-create: to_task несёт фактически переданный габарит (не план), ledger согласован."""
+    from app.api.routes.production_planning import _get_or_create_stock_fake_task
+
+    user = await _make_user(session, "dim-sent@test.local")
+    # План длины 2000, но оператор передаёт 3000 (другая строка остатка).
+    fx = await _make_dim_route_fixture(session, sku="DIMSENT", qty=Decimal("50"), length_mm=2000)
+    raw_sec = fx["sections"][0]
+    await _release_via_take_to_work(client, fx["position"].id)
+    await session.execute(delete(WorkTask))
+    await session.flush()
+    await _seed_balance(session, user_id=user.id, location_id=raw_sec.id,
+                        product_id=fx["product"].id, qty=Decimal("100"), dimensions={"length_mm": 3000})
+
+    raw_line = (await session.execute(
+        select(SectionPlanLine).where(SectionPlanLine.section_id == raw_sec.id)
+    )).scalar_one()
+    fake_task = await _get_or_create_stock_fake_task(
+        session,
+        stock_line=raw_line,
+        stock_section=raw_sec,
+        product_id=fx["product"].id,
+    )
+    assert fake_task.dimensions == {"length_mm": 2000}
+
+    result = await transfer_send(
+        session,
+        from_task_id=fake_task.id,
+        to_task_id=None,
+        quantity=Decimal("10"),
+        actor_id=user.id,
+        dimensions={"length_mm": 3000},
+        allow_over_plan=True,
+    )
+    await session.commit()
+    await assert_no_invariants_violations(session, context="sent-dims-transfer")
+
+    # to_task и проводки несут один и тот же габарит (3000), не план (2000).
+    to_task = await session.get(WorkTask, result["to_task_id"])
+    assert to_task is not None
+    assert to_task.dimensions == {"length_mm": 3000}
+    assert await _balance_qty(session, location_id=raw_sec.id, product_id=fx["product"].id,
+                              dimensions={"length_mm": 3000}) == Decimal("90")
+    assert await _balance_qty(session, location_id=raw_sec.id, product_id=fx["product"].id,
+                              dimensions={"length_mm": 2000}) == Decimal("0")

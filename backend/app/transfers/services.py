@@ -65,7 +65,6 @@ from app.services.shopfloor.common import (
 # на quantity. Отмена — компенсационные транзакции (append-only).
 # Коррекция — in-place изменение quantity активных транзакций.
 from app.domain.dimensions import canonicalize_dimensions
-from app.services.plan_position_hanger import task_dimensions_for_plan_line
 from app.stock.models import Reason, StockTransaction
 from app.stock.services import (
     StockCommand,
@@ -434,6 +433,16 @@ async def transfer_send(
     if next_line is None:
         raise ValueError("Next route step not found")
 
+    quantity = _to_decimal(quantity)
+    _ensure_positive(quantity, "quantity")
+    # Габарит (ADR-0001): одна каноническая форма для обеих проводок и для
+    # auto-created to_task (task и ledger не расходятся). При пустом payload —
+    # fallback на габарит исходного задания (тикет #89): ready-строка и план
+    # несут длину, передавать «вслепую» нельзя. Валидация до создания Task/Transfer.
+    dimensions = canonicalize_dimensions(
+        dimensions if dimensions is not None else from_task.dimensions
+    )
+
     # Find or create target task
     if to_task_id is not None:
         to_task = await _get_task(db, to_task_id)
@@ -468,7 +477,7 @@ async def transfer_send(
                 planned_quantity=lazy_planned_quantity,
                 status=WorkTaskStatus.waiting_previous,
                 due_date=next_line.due_date,
-                dimensions=await task_dimensions_for_plan_line(db, next_line.plan_position_id),
+                dimensions=dimensions,
                 **transform_fields,
             )
             db.add(to_task)
@@ -487,16 +496,6 @@ async def transfer_send(
     if to_stage.sequence <= from_stage.sequence:
         raise ValueError("Transfer target must be next route step")
 
-    quantity = _to_decimal(quantity)
-    _ensure_positive(quantity, "quantity")
-    # Габарит (ADR-0001): каноническая форма один раз, обе проводки
-    # (SEND/RECEIVE) несут одинаковый dims. Ошибки формата поднимаются
-    # как DimensionsValidationError до создания Transfer.
-    # При пустом payload — fallback на габарит исходного задания (тикет #89):
-    # ready-строка и план несут длину, оператор передаёт «вслепую» нельзя.
-    if dimensions is None:
-        dimensions = from_task.dimensions
-    dimensions = canonicalize_dimensions(dimensions)
     if not post_factum and not allow_over_plan:
         transferable = await _get_task_transferable(db, from_task)
         if quantity > transferable:

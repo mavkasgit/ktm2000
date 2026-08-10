@@ -38,19 +38,18 @@ from app.services.hanger_quantity_calc import (
 QuantityPerHangerSource = Literal["auto", "manual", None]
 
 
-def position_length_mm(position) -> float | None:
-    """Конкретная длина позиции из габаритов (канонический JSONB, ADR-0001).
-
-    Источник — ``input_dimensions["length_mm"]``; при отсутствии — длина
-    единственного выхода (``outputs[0].dimensions["length_mm"]``). ``None`` —
-    позиция без конкретной длины (безразмерные штуки или операция с
-    несколькими разными выходами).
-    """
+def _position_input_length_mm(position) -> float | None:
+    """Длина входа позиции из ``input_dimensions`` (канонический JSONB, ADR-0001)."""
     dims = position.input_dimensions or {}
     if isinstance(dims, dict):
         length = dims.get(LENGTH_MM)
         if isinstance(length, (int, float)) and length > 0:
             return float(length)
+    return None
+
+
+def _position_single_output_length_mm(position) -> float | None:
+    """Длина единственного выхода позиции (``outputs[0].dimensions``)."""
     outputs = position.outputs or []
     if len(outputs) == 1:
         out = outputs[0]
@@ -62,17 +61,35 @@ def position_length_mm(position) -> float | None:
     return None
 
 
+def position_length_mm(position) -> float | None:
+    """Конкретная длина позиции из габаритов (канонический JSONB, ADR-0001).
+
+    Источник — ``input_dimensions["length_mm"]``; при отсутствии — длина
+    единственного выхода (``outputs[0].dimensions["length_mm"]``). ``None`` —
+    позиция без конкретной длины (безразмерные штуки или операция с
+    несколькими разными выходами).
+    """
+    length = _position_input_length_mm(position)
+    if length is not None:
+        return length
+    return _position_single_output_length_mm(position)
+
+
 def position_dimensions_for_task(position) -> dict | None:
     """Габарит задания (``WorkTask.dimensions``) из позиции плана (ADR-0001).
 
     ``{"length_mm": N}`` в канонической форме при конкретной длине;
-    ``None`` — позиция без длины (безразмерные штуки). Источник — та же
-    длина, что для подвеса (``position_length_mm``): вход трансформирующей
-    позиции или единственный выход.
+    ``None`` — позиция без длины (безразмерные штуки). Источник — длина входа
+    позиции (``input_dimensions``); для нетрансформирующей позиции без входа —
+    длина единственного выхода (это и есть поток). Трансформирующая позиция
+    (объявляет ``input_quantity``, ADR-0002) — только длина входа: подставлять
+    выход вместо входа нельзя.
     """
     from app.domain.dimensions import canonicalize_dimensions
 
-    length = position_length_mm(position)
+    length = _position_input_length_mm(position)
+    if length is None and position.input_quantity is None:
+        length = _position_single_output_length_mm(position)
     if length is None:
         return None
     return canonicalize_dimensions({"length_mm": length})
