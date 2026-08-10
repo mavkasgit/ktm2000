@@ -23,6 +23,8 @@ export type PlanTableMode = "issue" | "handover";
 /** Строка таблицы плана после разбивки (по входу или по выходу). */
 export type PlanRow = {
   key: string;
+  /** Ключ группы, из которой разбита строка (для скрытия группы целиком). */
+  groupKey: string;
   /** Первая задача группы (для артикула/операции/маршрута). */
   task: SectionBoardTask;
   /** Габарит строки: вход для «Выдачи», выход для «Сдачи». */
@@ -46,9 +48,11 @@ function toQty(value: string | number | null | undefined): number {
   return Number.isFinite(n) ? n : 0;
 }
 
-/** Задание «дало выход», если у трансформации есть выходы, иначе — если выполнено. */
+/** Задание «дало выход», если по нему уже оприходован факт (завершение/выход). */
 function taskGivesOutput(task: SectionBoardTask): boolean {
-  if (task.transforms_dimensions) return Boolean(task.outputs?.length);
+  if (task.transforms_dimensions) {
+    return (task.outputs_progress ?? []).some((row) => toQty(row.produced_quantity) > 0);
+  }
   return toQty(task.cache.completed_quantity) > 0;
 }
 
@@ -77,6 +81,7 @@ function buildIssueRows(groups: TaskGroup[]): PlanRow[] {
     );
     rows.push({
       key: `${group.key}__issue`,
+      groupKey: group.key,
       task,
       dimensions: taskGroupingDimensions(task),
       planQty: group.totalQtyPlan,
@@ -107,6 +112,7 @@ function buildHandoverRows(groups: TaskGroup[]): PlanRow[] {
           const transferredQty = toQty(progress?.transferred_quantity);
           rows.push({
             key: `${group.key}__out${index}__${task.id}`,
+            groupKey: group.key,
             task,
             dimensions: out.dimensions ?? null,
             planQty,
@@ -122,6 +128,7 @@ function buildHandoverRows(groups: TaskGroup[]): PlanRow[] {
       const planQty = toQty(task.planned_quantity);
       rows.push({
         key: `${group.key}__${task.id}`,
+        groupKey: group.key,
         task,
         dimensions: taskGroupingDimensions(task),
         planQty,
@@ -142,9 +149,4 @@ export function buildPlanRows(
   mode: PlanTableMode,
 ): PlanRow[] {
   return mode === "issue" ? buildIssueRows(groups) : buildHandoverRows(groups);
-}
-
-/** «Заказов» по строке: число задач группы (выдача) / давших выход (сдача). */
-export function planRowOrdersLabel(row: PlanRow): number {
-  return row.ordersCount;
 }

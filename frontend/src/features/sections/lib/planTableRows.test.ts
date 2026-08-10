@@ -162,7 +162,7 @@ describe("buildPlanRows (сдача)", () => {
     expect(qty(rows[0])).toEqual({ plan: 100, done: 40, transferred: 30, balance: 60 });
   });
 
-  it("«Заказов» сдачи = число заданий, давших выход", () => {
+  it("«Заказов» сдачи = число заданий, давших выход (факт по ним оприходован)", () => {
     const done = makeTask({
       id: 1,
       transforms_dimensions: true,
@@ -183,8 +183,41 @@ describe("buildPlanRows (сдача)", () => {
       status: "pending",
     });
     const rows = buildPlanRows(groupTasks([done, pending]), "handover");
-    // обе задачи имеют выходы в спецификации → обе «дали выход»
+    // Обе строки на экране (план−сделано > 0), но выход дало только завершённое.
+    expect(rows).toHaveLength(2);
+    expect(rows[0].ordersCount).toBe(1);
+  });
+
+  it("«Заказов» сдачи считает все завершённые задания группы", () => {
+    const a = makeTask({
+      id: 1,
+      transforms_dimensions: true,
+      input_dimensions: { length_mm: 3000 },
+      planned_quantity: "100",
+      outputs: [{ row_number: 1, quantity: "100", dimensions: { length_mm: 900 } }],
+      outputs_progress: [
+        { row_number: 1, quantity: "100", produced_quantity: "60", transferred_quantity: "60" },
+      ],
+    });
+    const b = makeTask({
+      id: 2,
+      transforms_dimensions: true,
+      input_dimensions: { length_mm: 3000 },
+      planned_quantity: "100",
+      outputs: [{ row_number: 1, quantity: "100", dimensions: { length_mm: 900 } }],
+      outputs_progress: [
+        { row_number: 1, quantity: "100", produced_quantity: "100", transferred_quantity: "100" },
+      ],
+    });
+    const rows = buildPlanRows(groupTasks([a, b]), "handover");
     expect(rows).toHaveLength(2);
     expect(rows[0].ordersCount).toBe(2);
+  });
+
+  it("строка несёт ключ группы для скрытия", () => {
+    const task = makeTask({ id: 1, planned_quantity: "100" });
+    const groups = groupTasks([task]);
+    const rows = buildPlanRows(groups, "issue");
+    expect(rows[0].groupKey).toBe(groups[0].key);
   });
 });

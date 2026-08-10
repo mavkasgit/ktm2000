@@ -4,7 +4,7 @@ from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, ConfigDict
-from sqlalchemy import String, case, cast, exists, or_, select, text
+from sqlalchemy import String, cast, exists, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -1140,35 +1140,16 @@ ALL_POSITIONS_SORT_FIELDS = frozenset({
 })
 
 
+# Длина/габарит задания позиции в SQL — общий с execution-страницей:
+# источники — вход позиции, fallback — единственный выход (тикет #92, #95).
 def _position_task_length_mm_expr():
-    """SQL-выражение длины задания позиции (как ``position_dimensions_for_task``).
-
-    Источники: ``input_dimensions["length_mm"]``; при отсутствии у
-    нетрансформирующей позиции (``input_quantity`` NULL) — длина единственного
-    выхода ``outputs[0]["dimensions"]["length_mm"]``. ``NULL`` — безразмерные.
-    """
-    input_len = PlanPosition.input_dimensions["length_mm"].as_float()
-    output_len = PlanPosition.outputs[0]["dimensions"]["length_mm"].as_float()
-    return case(
-        (input_len.isnot(None), input_len),
-        (PlanPosition.input_quantity.is_(None), output_len),
-        else_=None,
-    )
+    from app.services.production_planning_rows import _position_task_length_mm_expr as _impl
+    return _impl()
 
 
 def _position_task_dimensions_expr():
-    """SQL-выражение габарита задания позиции (канонический JSONB) или NULL.
-
-    Для фильтра точного совпадения: ``dimensions_match_clause`` сравнивает
-    JSONB, поэтому оборачиваем длину в ``{"length_mm": N}``.
-    """
-    return case(
-        (
-            _position_task_length_mm_expr().isnot(None),
-            sa_func.jsonb_build_object("length_mm", _position_task_length_mm_expr()),
-        ),
-        else_=None,
-    )
+    from app.services.production_planning_rows import _position_task_dimensions_expr as _impl
+    return _impl()
 
 
 class AllPlanPositionsListResponse(BaseModel):
@@ -1283,9 +1264,15 @@ def _all_positions_order_columns(sort_by: str, sort_order: str):
     else:
         order_column = PlanPosition.source_row_number
 
+    # Безразмерные (NULL) — всегда в конец, независимо от направления сортировки.
+    if resolved_sort_by == "dimensions":
+        if sort_order == "asc":
+            return order_column.asc().nulls_last(), PlanPosition.id.asc()
+        return order_column.desc().nulls_last(), PlanPosition.id.desc()
+
     if sort_order == "asc":
-        return order_column.asc().nulls_last(), PlanPosition.id.asc()
-    return order_column.desc().nulls_last(), PlanPosition.id.desc()
+        return order_column.asc(), PlanPosition.id.asc()
+    return order_column.desc(), PlanPosition.id.desc()
 
 
 async def _serialize_plan_positions(

@@ -14,7 +14,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import type { SectionBoardTask, RouteHistoryOp, SectionOperation } from "@/shared/api/shopfloor";
 import { formatDimensionsLabel } from "@/shared/api/stock";
 import { groupTasksByProfile } from "../lib/groupTasksByProfile";
-import { buildPlanRows, type PlanRow, type PlanTableMode } from "../lib/planTableRows";
+import { buildPlanRows, type PlanTableMode } from "../lib/planTableRows";
 import { GroupingSettingsModal } from "./GroupingSettingsModal";
 import { PRESET_PROFILES, type GroupingProfile } from "../lib/groupingProfiles";
 import { PlanPrintPreviewModal, ALL_PRINT_COLUMNS, PRINT_COLUMN_LABELS, type PrintColumn, type PrintSettings, type TableMode } from "./PlanPrintPreviewModal";
@@ -353,7 +353,7 @@ function PlanTable({
                   <td className="px-1 py-2 text-center">
                     <button
                       type="button"
-                      onClick={() => onHideGroup(groupKeyForRow(row, groups))}
+                      onClick={() => onHideGroup(row.groupKey)}
                       className="text-muted-foreground hover:text-red-600 text-base leading-none w-6 h-6 inline-flex items-center justify-center rounded hover:bg-red-50"
                       title="Скрыть из плана"
                     >
@@ -388,11 +388,6 @@ function PlanTable({
       </div>
     </div>
   );
-}
-
-/** Ключ группы строки: строки «Сдачи» разбиты на выходы, скрываем группу целиком. */
-function groupKeyForRow(row: PlanRow, groups: ReturnType<typeof groupTasksByProfile>): string {
-  return groups.find((g) => g.tasks.includes(row.task))?.key ?? "";
 }
 
 
