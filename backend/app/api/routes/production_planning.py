@@ -32,7 +32,8 @@ from app.services.plan_generation import create_release_batch, release_batch
 from app.services.plan_position_hanger import task_dimensions_for_plan_line
 from app.services.route_matcher import resolve_position_route, make_position_route_cache_key
 from app.services.route_storage_classifier import STOCK_TYPES
-from app.services.shopfloor_service import complete_task, final_release, transfer_send
+from app.services.shopfloor_service import complete_task, final_release
+from app.transfers.services import transfer_send
 
 router = APIRouter(prefix="/production-planning", tags=["execution-control"])
 MANUAL_ROUTE_PASS_PREFIX = "manual_route_pass:"

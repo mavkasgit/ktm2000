@@ -37,7 +37,8 @@ from app.services.plan_generation import create_release_batch, release_batch
 from app.services.plan_import_service import create_excel_import_change_set
 from app.services.production_plan_service import apply_change_set, approve_plan_position
 from app.api.routes.production_planning import _ensure_task_issued_via_transfer
-from app.services.shopfloor_service import complete_task, transfer_send
+from app.services.shopfloor_service import complete_task
+from app.transfers.services import transfer_send
 
 router = APIRouter(prefix="/demo", tags=["demo"])
 

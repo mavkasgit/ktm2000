@@ -16,39 +16,14 @@ path: it creates the ``Transfer`` row, both ledger Movements
 ``WorkTask`` to ``ready``. There is no separate manual accept step.
 
 Public surface:
-  * ``services`` — write operations (``transfer_send``; ``transfer_receive``
-    and ``resolve_transfer_discrepancy_link`` are kept as legacy no-ops
-    for the few call sites that haven't migrated)
+
+  * ``services`` — write operations (``transfer_send``, ``correct_transfer``,
+    ``cancel_transfer``)
   * ``queries``  — read operations (details, incoming, ready-to-transfer)
   * ``schemas``  — Pydantic DTOs for the FastAPI router
   * ``api``      — FastAPI router mounted under ``/transfers``
 
-The DB schema lives in ``app.models.transfer`` (no schema migration
-required for this refactor).  Compatibility with the old
-``/shopfloor/transfers`` endpoints is preserved by thin proxies in
-``app.api.routes.shopfloor``.
+The DB schema lives in ``app.models.transfer``. Import from the concrete
+submodules (``app.transfers.services``, ``app.transfers.queries``, …)
+directly — this package is intentionally not a re-export barrel.
 """
-
-from app.transfers.queries import (
-    get_section_incoming_transfers,
-    get_transfer_details,
-    list_ready_to_transfer,
-)
-from app.transfers.services import (
-    cancel_transfer,
-    correct_transfer,
-    resolve_transfer_discrepancy_link,
-    transfer_receive,
-    transfer_send,
-)
-
-__all__ = [
-    "transfer_send",
-    "transfer_receive",
-    "cancel_transfer",
-    "correct_transfer",
-    "resolve_transfer_discrepancy_link",
-    "get_transfer_details",
-    "get_section_incoming_transfers",
-    "list_ready_to_transfer",
-]

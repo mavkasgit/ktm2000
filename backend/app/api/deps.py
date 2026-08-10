@@ -1,5 +1,5 @@
 from dataclasses import dataclass, field
-from fastapi import Depends, HTTPException, Request, status
+from fastapi import Depends, Header, HTTPException, Request, status
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from typing import Callable, Sequence
@@ -10,6 +10,7 @@ from app.core.database import get_db
 from app.core.security import decode_access_token, TokenError
 from app.models.user import User, UserRole
 from app.models.user_session import UserSession
+from app.models.work_task import WorkTask
 from app.services.session_service import SessionInactiveError, assert_session_active
 
 
@@ -263,3 +264,35 @@ async def _strict_regular_identity(
 
 def _make_break_glass_user() -> _BreakGlassUser:
     return _BreakGlassUser()
+
+
+# ─── Single-window lock (route-layer) ─────────────────────────────────────────
+
+
+LOCKED_SECTION_ERROR = "Section is locked to single-window context"
+
+
+def get_single_window_locked_section_id(
+    x_shopfloor_single_section_id: int | None = Header(default=None, alias="X-Shopfloor-Single-Section-Id"),
+) -> int | None:
+    return x_shopfloor_single_section_id
+
+
+def _ensure_section_lock(section_id: int | None, locked_section_id: int | None) -> None:
+    if locked_section_id is not None and section_id != locked_section_id:
+        raise HTTPException(status_code=403, detail=LOCKED_SECTION_ERROR)
+
+
+async def _ensure_task_lock(
+    db: AsyncSession,
+    task_id: int,
+    locked_section_id: int | None,
+    current_user: User | None = None,
+) -> None:
+    if current_user is not None and current_user.role == UserRole.transporter:
+        return
+    if locked_section_id is None:
+        return
+    task_section_id = await db.scalar(select(WorkTask.section_id).where(WorkTask.id == task_id))
+    if task_section_id is not None and task_section_id != locked_section_id:
+        raise HTTPException(status_code=403, detail=LOCKED_SECTION_ERROR)

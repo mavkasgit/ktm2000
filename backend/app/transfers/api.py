@@ -25,17 +25,21 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Header, Query
-from sqlalchemy import select
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import READER_ROLES, TRANSFER_WRITER_ROLES, require_role
-from app.api.deps import get_current_user
+from app.api.deps import (
+    READER_ROLES,
+    TRANSFER_WRITER_ROLES,
+    _ensure_section_lock,
+    _ensure_task_lock,
+    get_current_user,
+    get_single_window_locked_section_id,
+    require_role,
+)
 from app.core.database import get_db
 from app.domain.dimensions import DimensionsValidationError
-from app.models.transfer import Transfer
-from app.models.user import User, UserRole
-from app.models.work_task import WorkTask
+from app.models.user import User
 
 from app.transfers.queries import (
     get_section_incoming_transfers,
@@ -54,40 +58,6 @@ from app.transfers.services import (
 )
 
 router = APIRouter(prefix="/transfers", tags=["transfers"])
-
-LOCKED_SECTION_ERROR = "Section is locked to single-window context"
-
-
-def get_single_window_locked_section_id(
-    x_shopfloor_single_section_id: int | None = Header(default=None, alias="X-Shopfloor-Single-Section-Id"),
-) -> int | None:
-    return x_shopfloor_single_section_id
-
-
-async def _ensure_task_lock(db: AsyncSession, task_id: int, locked_section_id: int | None, current_user: User) -> None:
-    if current_user.role == UserRole.transporter:
-        return
-    if locked_section_id is None:
-        return
-    task_section_id = await db.scalar(
-        select(WorkTask.section_id).where(WorkTask.id == task_id)
-    )
-    if task_section_id is not None and task_section_id != locked_section_id:
-        raise HTTPException(status_code=403, detail=LOCKED_SECTION_ERROR)
-
-
-async def _ensure_transfer_target_lock(
-    db: AsyncSession, transfer_id: int, locked_section_id: int | None, current_user: User
-) -> None:
-    if current_user.role == UserRole.transporter:
-        return
-    if locked_section_id is None:
-        return
-    transfer_target_section_id = await db.scalar(
-        select(Transfer.to_section_id).where(Transfer.id == transfer_id)
-    )
-    if transfer_target_section_id is not None and transfer_target_section_id != locked_section_id:
-        raise HTTPException(status_code=403, detail=LOCKED_SECTION_ERROR)
 
 
 @router.post("", dependencies=[Depends(require_role(list(TRANSFER_WRITER_ROLES)))])
@@ -170,8 +140,7 @@ async def ready_to_transfer(
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     if locked_section_id is not None and section_id is None:
         section_id = locked_section_id
-    if locked_section_id is not None and section_id != locked_section_id:
-        raise HTTPException(status_code=403, detail=LOCKED_SECTION_ERROR)
+    _ensure_section_lock(section_id, locked_section_id)
     return await list_ready_to_transfer(
         db,
         section_id=section_id,
@@ -201,8 +170,7 @@ async def incoming_transfers(
     db: AsyncSession = Depends(get_db),
     locked_section_id: int | None = Depends(get_single_window_locked_section_id),
 ) -> dict:
-    if locked_section_id is not None and section_id != locked_section_id:
-        raise HTTPException(status_code=403, detail=LOCKED_SECTION_ERROR)
+    _ensure_section_lock(section_id, locked_section_id)
     return await get_section_incoming_transfers(db, section_id=section_id)
 
 
@@ -227,11 +195,9 @@ async def transfer_history_generic(
     db: AsyncSession = Depends(get_db),
     locked_section_id: int | None = Depends(get_single_window_locked_section_id),
 ) -> dict:
-    if locked_section_id is not None:
-        if section_id is None:
-            section_id = locked_section_id
-        if section_id != locked_section_id:
-            raise HTTPException(status_code=403, detail=LOCKED_SECTION_ERROR)
+    if locked_section_id is not None and section_id is None:
+        section_id = locked_section_id
+    _ensure_section_lock(section_id, locked_section_id)
     return await get_section_transfer_history(
         db,
         section_id=section_id,
@@ -318,8 +284,7 @@ async def transfer_history(
     db: AsyncSession = Depends(get_db),
     locked_section_id: int | None = Depends(get_single_window_locked_section_id),
 ) -> dict:
-    if locked_section_id is not None and section_id != locked_section_id:
-        raise HTTPException(status_code=403, detail=LOCKED_SECTION_ERROR)
+    _ensure_section_lock(section_id, locked_section_id)
     return await get_section_transfer_history(
         db,
         section_id=section_id,

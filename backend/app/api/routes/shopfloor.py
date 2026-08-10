@@ -3,7 +3,7 @@ from decimal import Decimal
 import enum
 from typing import Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Header, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -15,14 +15,21 @@ class ShortageStrategy(str, enum.Enum):
     negative_remainder = "negative_remainder"
 
 
-from app.api.deps import READER_ROLES, WRITER_ROLES, TRANSFER_WRITER_ROLES, require_role
-from app.api.deps import get_current_user
+from app.api.deps import (
+    TRANSFER_WRITER_ROLES,
+    WRITER_ROLES,
+    READER_ROLES,
+    _ensure_section_lock,
+    _ensure_task_lock,
+    get_current_user,
+    get_single_window_locked_section_id,
+    require_role,
+)
 from app.core.database import get_db
 from app.models.defect import DefectDecisionType
 from app.models.entity_comment import EntityType
 from app.models.route import SectionOperation
-from app.models.transfer import Transfer
-from app.models.user import User, UserRole
+from app.models.user import User
 from app.models.work_task import WorkTask
 from app.seeds.canon.dependencies import get_plant_config
 from app.seeds.canon.models import PlantConfig
@@ -47,6 +54,7 @@ from app.services.shopfloor_service import (
     rework_create,
 )
 from app.transfers.queries import get_section_incoming_transfers, get_transfer_details
+from app.transfers.schemas import CreateTransferPayload
 from app.transfers.services import transfer_send
 from app.services.shopfloor_service import (
     get_rework_details,
@@ -56,38 +64,6 @@ from app.services.shopfloor_service import (
 from app.services.audit_log_service import log_action
 
 router = APIRouter(prefix="/shopfloor", tags=["sections-operations"])
-LOCKED_SECTION_ERROR = "Section is locked to single-window context"
-
-
-def get_single_window_locked_section_id(
-    x_shopfloor_single_section_id: int | None = Header(default=None, alias="X-Shopfloor-Single-Section-Id"),
-) -> int | None:
-    return x_shopfloor_single_section_id
-
-
-def _ensure_section_lock(section_id: int, locked_section_id: int | None) -> None:
-    if locked_section_id is not None and section_id != locked_section_id:
-        raise HTTPException(status_code=403, detail=LOCKED_SECTION_ERROR)
-
-
-async def _ensure_task_lock(db: AsyncSession, task_id: int, locked_section_id: int | None, current_user: User | None = None) -> None:
-    if current_user is not None and current_user.role == UserRole.transporter:
-        return
-    if locked_section_id is None:
-        return
-    task_section_id = await db.scalar(select(WorkTask.section_id).where(WorkTask.id == task_id))
-    if task_section_id is not None and task_section_id != locked_section_id:
-        raise HTTPException(status_code=403, detail=LOCKED_SECTION_ERROR)
-
-
-async def _ensure_transfer_target_lock(db: AsyncSession, transfer_id: int, locked_section_id: int | None, current_user: User | None = None) -> None:
-    if current_user is not None and current_user.role == UserRole.transporter:
-        return
-    if locked_section_id is None:
-        return
-    transfer_target_section_id = await db.scalar(select(Transfer.to_section_id).where(Transfer.id == transfer_id))
-    if transfer_target_section_id is not None and transfer_target_section_id != locked_section_id:
-        raise HTTPException(status_code=403, detail=LOCKED_SECTION_ERROR)
 
 
 class PatchOperationPayload(BaseModel):
@@ -105,22 +81,6 @@ class CompletePayload(BaseModel):
     accounted_at: datetime | None = None
     shortage_strategy: ShortageStrategy = ShortageStrategy.negative_remainder
     auto_transfer_next: bool = False
-
-
-
-class CreateTransferPayload(BaseModel):
-    from_task_id: int
-    to_task_id: int | None = None
-    quantity: Decimal
-    comment: str | None = None
-    idempotency_key: str | None = None
-    executor_user_id: int | None = None
-    performed_at: datetime | None = None
-    accounted_at: datetime | None = None
-    post_factum: bool = False
-    allow_over_plan: bool = False
-    physical_handover_at: datetime | None = None
-    dimensions: dict | None = None
 
 
 class FinalReleasePayload(BaseModel):

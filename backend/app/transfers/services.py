@@ -22,11 +22,6 @@ legacy operations until Этап 3.
 Cancel creates compensating ``StockTransaction`` rows (append-only).
 Correct updates quantity in-place on active ``StockTransaction`` rows
 (controlled mutable exception — see ``_resync_transfer_stock_tx_quantity``).
-
-Legacy functions ``transfer_receive`` and
-``resolve_transfer_discrepancy_link`` are kept as no-ops so old call
-sites in ``app.api.routes.demo``, ``app.api.routes.production_planning``
-and a few tests don't break. They will be removed in a follow-up.
 """
 
 from __future__ import annotations
@@ -681,67 +676,6 @@ async def transfer_send(
         "transfer_no": transfer.transfer_no,
         "status": transfer.status.value,
         "to_task_id": to_task.id,
-    }
-
-
-async def transfer_receive(
-    db: AsyncSession,
-    *,
-    transfer_id: int,
-    accepted_quantity: Decimal | None = None,  # noqa: ARG001 — legacy arg
-    rejected_quantity: Decimal | None = None,  # noqa: ARG001 — legacy arg
-    actor_id: int | None = None,  # noqa: ARG001 — legacy arg
-    reason: str | None = None,  # noqa: ARG001 — legacy arg
-    comment: str | None = None,  # noqa: ARG001 — legacy arg
-    source_ref: str | None = None,  # noqa: ARG001 — legacy arg
-    idempotency_key: str | None = None,  # noqa: ARG001 — legacy arg
-    executor_user_id: int | None = None,  # noqa: ARG001 — legacy arg
-    performed_at: datetime | None = None,  # noqa: ARG001 — legacy arg
-    accounted_at: datetime | None = None,  # noqa: ARG001 — legacy arg
-) -> dict:
-    """Legacy no-op kept for backwards compatibility with old call sites.
-
-    Under the new explicit-transfer model, ``transfer_send`` itself
-    auto-accepts the transfer (status flips to ``accepted`` and the
-    ``transfer_receive`` Movement is written inline). A separate manual
-    accept step is no longer part of the UI contract. Calling
-    ``transfer_receive`` is a no-op that returns the current state of
-    the transfer for the rare legacy path that still reaches this
-    function.
-
-    See ``docs/superpowers/plans/2026-07-01-explicit-transfers-mandatory.md``
-    for the model description.
-    """
-    transfer = await _get_transfer(db, transfer_id)
-    return {
-        "transfer_id": transfer.id,
-        "status": transfer.status.value,
-        "discrepancy_id": None,
-    }
-
-
-async def resolve_transfer_discrepancy_link(
-    db: AsyncSession,
-    *,
-    transfer_id: int,
-    discrepancy_id: int,  # noqa: ARG001 — legacy arg
-    defect_item_id: int,  # noqa: ARG001 — legacy arg
-    quantity: Decimal,  # noqa: ARG001 — legacy arg
-    actor_id: int,  # noqa: ARG001 — legacy arg
-    comment: str | None = None,  # noqa: ARG001 — legacy arg
-) -> dict:
-    """Legacy no-op kept for backwards compatibility with old call sites.
-
-    Discrepancy linking is no longer part of the model — transfers are
-    either accepted in full on send or cancelled. Calling this function
-    returns a ``resolved``-looking result with zero quantities. New code
-    must not call it.
-    """
-    return {
-        "discrepancy_id": None,
-        "status": "resolved",
-        "resolved_quantity": "0",
-        "unresolved_quantity": "0",
     }
 
 
