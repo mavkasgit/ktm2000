@@ -55,8 +55,8 @@ test.describe("@smoke Total workflow E2E - Step 2: Seed & Verify Remainders", ()
     console.log("Found products: ЮП-3270 =", productYu.id, ", ЮП-2083 =", product2083.id);
 
     // 2. Убеждаемся, что у них есть техкарта
-    const techcardYu = await apiGetOrCreateTechcard(productYu.id);
-    const techcard2083 = await apiGetOrCreateTechcard(product2083.id);
+    const techcardYu = await apiGetOrCreateTechcard(productYu);
+    const techcard2083 = await apiGetOrCreateTechcard(product2083);
     console.log("Techcards ensured");
 
     // 3. Получаем SPG и секции
@@ -287,7 +287,7 @@ test.describe("@smoke Total workflow E2E - Step 2: Seed & Verify Remainders", ()
 
     // 1. Получаем продукты и настраиваем техкарты/маршруты
     const productYu = await apiGetProductBySku("ЮП-3270");
-    const techcardYu = await apiGetOrCreateTechcard(productYu.id);
+    const techcardYu = await apiGetOrCreateTechcard(productYu);
 
     const spgs = await apiGetSpgs();
     const sections = await apiGetSections();

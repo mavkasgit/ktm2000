@@ -50,8 +50,8 @@ test.describe("@smoke Bulk operations workflow E2E", () => {
     console.log(`Found products: ЮП-3270 = ${productYu.id}, ЮП-2083 = ${product2083.id}`);
 
     // Убеждаемся, что у них есть техкарта
-    await apiGetOrCreateTechcard(productYu.id);
-    await apiGetOrCreateTechcard(product2083.id);
+    await apiGetOrCreateTechcard(productYu);
+    await apiGetOrCreateTechcard(product2083);
 
     const spgs = await apiGetSpgs();
     const sections = await apiGetSections();

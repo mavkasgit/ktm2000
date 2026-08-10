@@ -59,7 +59,7 @@ test.describe("@smoke Explicit transfer — 2-step ritual (Send + Issue)", () =>
 
     // 1. Подготовка данных: продукт, техкарта, импорт Excel, применение, маршрут
     const product2083 = await apiGetProductBySku("ЮП-2083");
-    const techcard = await apiGetOrCreateTechcard(product2083.id);
+    const techcard = await apiGetOrCreateTechcard(product2083);
 
     const template = await apiGetActiveTemplate();
     const xlsPath = path.resolve(process.cwd(), "../Упаковочный план.xlsx");
@@ -132,7 +132,8 @@ test.describe("@smoke Explicit transfer — 2-step ritual (Send + Issue)", () =>
     // 4. Завершаем 10 годных на первом production-участке через TaskActionDrawer
     //    Берём первый production-section для этой позиции.
     const sectionsRes = await fetch(`${BACKEND_URL}/api/sections`);
-    const sections = (await sectionsRes.json()) as Array<{ id: number; type: string }>;
+    const sectionsBody = (await sectionsRes.json()) as Array<{ id: number; type: string }> | { items: Array<{ id: number; type: string }> };
+    const sections = Array.isArray(sectionsBody) ? sectionsBody : sectionsBody.items ?? [];
     const firstSection = sections.find((s) => s.type === "production");
     expect(firstSection).toBeDefined();
 

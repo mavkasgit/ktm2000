@@ -3,7 +3,7 @@ import path from "path";
 
 export const BACKEND_URL = process.env.E2E_API_URL
   ? process.env.E2E_API_URL.replace(/\/api$/, "")
-  : "http://localhost:8010";
+  : "http://localhost:8012";
 
 export function unwrapItems<T>(body: T[] | { items?: T[] }): T[] {
   return Array.isArray(body) ? body : body.items ?? [];
@@ -91,7 +91,7 @@ export async function apiEnsureTestProducts() {
 export async function apiEnsureTestTechcards() {
   for (const product of E2E_TEST_PRODUCTS) {
     const fg = await apiGetProductBySku(product.sku);
-    await apiGetOrCreateTechcard(fg.id);
+    await apiGetOrCreateTechcard(fg);
   }
 }
 
@@ -125,19 +125,21 @@ async function apiCreateTechcard(productId: number) {
   return res.json();
 }
 
-export async function apiGetOrCreateTechcard(productId: number) {
-  const res = await fetch(`${BACKEND_URL}/api/techcards`);
+export async function apiGetOrCreateTechcard(product: { id: number; sku: string }) {
+  const res = await fetch(
+    `${BACKEND_URL}/api/techcards?sku=${encodeURIComponent(product.sku)}&limit=50&is_active=true`,
+  );
   if (!res.ok) {
     throw new Error(`Get techcards failed: ${res.statusText} (${res.status})`);
   }
   const techcards = unwrapItems<{ id: number; product_id: number; is_active: boolean }>(
     await res.json(),
   );
-  const existing = techcards.find((t) => t.product_id === productId && t.is_active);
+  const existing = techcards.find((t) => t.product_id === product.id && t.is_active);
   if (existing) {
     return existing;
   }
-  return apiCreateTechcard(productId);
+  return apiCreateTechcard(product.id);
 }
 
 export async function apiGetSpgs() {
