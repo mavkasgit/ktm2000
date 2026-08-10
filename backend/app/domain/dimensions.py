@@ -163,6 +163,14 @@ def format_operation_summary(
     )
     if not entries or not has_dimensions:
         return None
+    # Сводка нужна только при реальном изменении размеров (ADR-0002):
+    # если вход и все выходы одной размерности — «150 шт × 2,7 м → 150 × 2,7 м»
+    # ничего не говорит о трансформации, писать нечего.
+    if input_dimensions is not None and all(
+        dimensions_equal(input_dimensions, entry.get("dimensions"))
+        for entry in entries
+    ):
+        return None
     input_parts: list[str] = []
     if input_quantity is not None:
         input_parts.append(f"{format_quantity(input_quantity)} шт")

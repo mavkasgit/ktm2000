@@ -310,7 +310,7 @@ export function StockBalancesPanel({
                         />
                       </th>
                       {/* Габаритная группа (ADR-0001): разные длины одного SKU — разные строки */}
-                      <th className={`${headerCellClass} px-2`}>Габарит</th>
+                      <th className={`${headerCellClass} px-2`}>Размеры</th>
                       <th className={`${headerCellClass} p-0 min-w-[140px]`}>
                         <SortableFilterHeader
                           field="operations"
