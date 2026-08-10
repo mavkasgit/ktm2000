@@ -73,7 +73,7 @@ router = APIRouter(prefix="/stock", tags=["stock-ledger"])
 async def _load_template_column_mapping(
     db: AsyncSession, template_id: int | None
 ) -> dict | None:
-    """column_mapping шаблона импорта или None (→ дефолт из сида «ostaki_ktm»)."""
+    """column_mapping шаблона импорта или None (→ дефолт «маппинг остатков» из JSON)."""
     if template_id is None:
         return None
     template = await db.get(ImportTemplate, template_id)

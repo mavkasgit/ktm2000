@@ -1,0 +1,73 @@
+{
+  "_config": {
+    "length_required": true
+  },
+  "sku": {
+    "column": "A",
+    "header": "Артикул",
+    "aliases": ["sku", "код", "продукт", "sku/артикул", "артикул / sku", "артикул/sku"]
+  },
+  "quantity": {
+    "column": "B",
+    "header": "Кол-во",
+    "aliases": [
+      "quantity",
+      "количество",
+      "кол-во",
+      "кол-во, шт",
+      "кол-во шт",
+      "кол-во шт.",
+      "кол-во,шт"
+    ]
+  },
+  "quality_state": {
+    "column": "C",
+    "header": "Статус качества",
+    "aliases": [
+      "quality_state",
+      "quality",
+      "качество",
+      "состояние качества",
+      "quality status"
+    ]
+  },
+  "completed_operations": {
+    "column": "D",
+    "header": "Операции",
+    "aliases": [
+      "выполненные операции",
+      "completed_operations",
+      "пройденные операции",
+      "этапы"
+    ]
+  },
+  "target_section": {
+    "column": "E",
+    "header": "Участок",
+    "aliases": [
+      "целевая секция",
+      "секция",
+      "target_section",
+      "целевой участок",
+      "целевая участок"
+    ]
+  },
+  "comment": {
+    "column": "F",
+    "header": "Комментарий",
+    "aliases": ["comment", "примечание"]
+  },
+  "length": {
+    "column": "G",
+    "header": "Длина",
+    "aliases": [
+      "длина, м",
+      "длина м",
+      "длина (м)",
+      "длина,м",
+      "length",
+      "length_m",
+      "length, m"
+    ]
+  }
+}

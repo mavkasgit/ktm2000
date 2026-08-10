@@ -3,7 +3,9 @@ from __future__ import annotations
 # column_mapping каждого шаблона хранит заголовки, псевдонимы (aliases),
 # позиции колонок (column) и служебный ключ ``_config`` (метаданные шаблона).
 # Резолвер колонок (app/services/import_column_resolver.py) — единый
-# потребитель этих данных для импорта плана и остатков.
+# потребитель этих данных для импорта плана.
+# Дефолтный маппинг остатков живёт отдельно — JSON-файл
+# ``app/stock/remainders_columns.json`` (не шаблон, см. ADR-0003 «Обновление»).
 IMPORT_TEMPLATES = [
     {
         "code": "upakovochnaya_karta_rp",
@@ -36,75 +38,6 @@ IMPORT_TEMPLATES = [
                 "column": "T",
                 "header": "Добавить",
                 "aliases": ["добавить"],
-            },
-        },
-    },
-    {
-        "code": "ostaki_ktm",
-        "name": "Остатки КТМ",
-        "is_active": True,
-        "sort_order": 1,
-        "column_mapping": {
-            "_config": {"length_required": True},
-            "sku": {
-                "column": "A",
-                "header": "Артикул",
-                "aliases": ["sku", "код", "продукт", "sku/артикул", "артикул / sku", "артикул/sku"],
-            },
-            "quantity": {
-                "column": "B",
-                "header": "Кол-во",
-                "aliases": [
-                    "quantity",
-                    "количество",
-                    "кол-во",
-                    "кол-во, шт",
-                    "кол-во шт",
-                    "кол-во шт.",
-                    "кол-во,шт",
-                ],
-            },
-            "quality_state": {
-                "column": "C",
-                "header": "Статус качества",
-                "aliases": [
-                    "quality_state",
-                    "quality",
-                    "качество",
-                    "состояние качества",
-                    "quality status",
-                ],
-            },
-            "completed_operations": {
-                "column": "D",
-                "header": "Операции",
-                "aliases": [
-                    "выполненные операции",
-                    "completed_operations",
-                    "пройденные операции",
-                    "этапы",
-                ],
-            },
-            "target_section": {
-                "column": "E",
-                "header": "Участок",
-                "aliases": [
-                    "целевая секция",
-                    "секция",
-                    "target_section",
-                    "целевой участок",
-                    "целевая участок",
-                ],
-            },
-            "comment": {
-                "column": "F",
-                "header": "Комментарий",
-                "aliases": ["comment", "примечание"],
-            },
-            "length": {
-                "column": "G",
-                "header": "Длина",
-                "aliases": ["длина, м", "длина м", "длина (м)", "длина,м", "length", "length_m", "length, m"],
             },
         },
     },

@@ -8,10 +8,13 @@
 """
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
+from functools import lru_cache
 from io import BytesIO
+from pathlib import Path
 from typing import Literal
 
 from sqlalchemy import select
@@ -38,17 +41,24 @@ from app.services.dimension_validation import (
 from app.services.excel_import import parse_row_selection
 from app.services.import_column_resolver import detect_header_row, resolve_columns
 from app.services.route_storage_classifier import is_production_section
-from app.seeds.import_templates import IMPORT_TEMPLATES
 
 _OPERATIONS_COMMENT_RE = re.compile(r"операции:\s*([^|]+)", re.IGNORECASE)
 
-# Дефолтный column_mapping остатков (шаблон «ostaki_ktm» из сида) — источник
-# заголовков, псевдонимов и позиций колонок (issue #15). Используется, когда
+# Дефолтный column_mapping остатков — источник заголовков, псевдонимов и
+# позиций колонок (issue #15). Живёт в JSON-файле ``remainders_columns.json``,
+# а не в таблице шаблонов импорта: это системный дефолт импорта остатков,
+# а не пользовательский шаблон (ADR-0003, «Обновление»). Используется, когда
 # вызывающий код не передал собственный mapping (старые прямые вызовы, тесты).
-_REMAINDERS_DEFAULT_MAPPING: dict = next(
-    (t["column_mapping"] for t in IMPORT_TEMPLATES if t["code"] == "ostaki_ktm"),
-    {},
-)
+
+
+@lru_cache(maxsize=1)
+def load_remainders_default_mapping() -> dict:
+    """Загружает дефолтный ``column_mapping`` импорта остатков из JSON."""
+    path = Path(__file__).with_name("remainders_columns.json")
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+_REMAINDERS_DEFAULT_MAPPING: dict = load_remainders_default_mapping()
 
 
 def parse_operations_from_comment(comment: str | None) -> list[str]:
@@ -237,7 +247,7 @@ def _parse_remainders_grid(
     """Parse a 2D grid of cells into remainder items.
 
     ``column_mapping`` — ``column_mapping`` шаблона (данные): заголовки,
-    псевдонимы и позиции колонок. ``None`` → дефолт из сида «ostaki_ktm».
+    псевдонимы и позиции колонок. ``None`` → дефолт из JSON «маппинг остатков».
     """
     cell_rows = _rows_to_cell_grid(rows)
     if not cell_rows:
@@ -532,7 +542,7 @@ async def parse_remainders_excel(
         sheet_index: 0-based sheet index.
         row_selection: Optional selection string like ``"2-10,12"``.
         column_mapping: ``column_mapping`` шаблона (заголовки/псевдонимы/
-            позиции колонок); ``None`` → дефолт из сида «ostaki_ktm».
+            позиции колонок); ``None`` → дефолт из JSON «маппинг остатков».
 
     Returns:
         ``(sheet_name, total_rows, items, summary)``.

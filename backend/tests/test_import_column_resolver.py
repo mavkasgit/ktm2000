@@ -12,13 +12,14 @@ from app.services.import_column_resolver import (
     is_reserved_key,
     resolve_columns,
 )
+from app.stock.import_service import load_remainders_default_mapping
 
 PLAN_MAPPING = next(
     t["column_mapping"] for t in IMPORT_TEMPLATES if t["code"] == "upakovochnaya_karta_rp"
 )
-OSTAKI_MAPPING = next(
-    t["column_mapping"] for t in IMPORT_TEMPLATES if t["code"] == "ostaki_ktm"
-)
+# Дефолтный маппинг остатков живёт в JSON-файле, а не в сиде шаблонов
+# (ADR-0003 «Обновление»).
+OSTAKI_MAPPING = load_remainders_default_mapping()
 
 
 # ─── Позиционный режим (header_row=None) ─────────────────────────────────────
