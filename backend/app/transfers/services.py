@@ -38,7 +38,6 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.internal_plan import SectionPlanLine
-from app.models.production_plan import PlanPosition
 from app.models.section import Section
 from app.models.transfer import Transfer, TransferStatus
 from app.models.work_task import WorkTask, WorkTaskStatus
@@ -66,7 +65,7 @@ from app.services.shopfloor.common import (
 # на quantity. Отмена — компенсационные транзакции (append-only).
 # Коррекция — in-place изменение quantity активных транзакций.
 from app.domain.dimensions import canonicalize_dimensions
-from app.services.plan_position_hanger import position_dimensions_for_task
+from app.services.plan_position_hanger import task_dimensions_for_plan_line
 from app.stock.models import Reason, StockTransaction
 from app.stock.services import (
     StockCommand,
@@ -459,7 +458,6 @@ async def transfer_send(
                 plan_position_id=next_line.plan_position_id,
                 task_quantity=lazy_planned_quantity,
             )
-            plan_position = await db.get(PlanPosition, next_line.plan_position_id)
             to_task = WorkTask(
                 section_plan_line_id=next_line.id,
                 section_id=next_line.section_id,
@@ -470,11 +468,7 @@ async def transfer_send(
                 planned_quantity=lazy_planned_quantity,
                 status=WorkTaskStatus.waiting_previous,
                 due_date=next_line.due_date,
-                dimensions=(
-                    position_dimensions_for_task(plan_position)
-                    if plan_position is not None
-                    else None
-                ),
+                dimensions=await task_dimensions_for_plan_line(db, next_line.plan_position_id),
                 **transform_fields,
             )
             db.add(to_task)

@@ -42,6 +42,7 @@ from app.stock.services import (
     dimensions_match_clause,
 )
 from app.transfers.services import transfer_send
+from tests.test_integrity_invariants import assert_no_invariants_violations
 
 pytestmark = pytest.mark.asyncio
 
@@ -256,6 +257,7 @@ async def _complete_prod1_task(session: AsyncSession, *, sku: str, task: WorkTas
         ),
     )
     await session.commit()
+    await assert_no_invariants_violations(session, context="complete-prod1")
 
 
 # ─── Seam 1: transfer_send (match / wrong length / fallback) ───────────────
@@ -284,6 +286,7 @@ async def test_transfer_send_matches_dimension_balance_row(client, session) -> N
         allow_over_plan=True,
     )
     await session.commit()
+    await assert_no_invariants_violations(session, context="match-dimension-transfer")
 
     assert await _balance_qty(session, location_id=raw_sec.id, product_id=fx["product"].id,
                               dimensions={"length_mm": 2000}) == Decimal("90")
@@ -333,6 +336,7 @@ async def test_transfer_send_falls_back_to_from_task_dimensions(client, session)
         actor_id=user.id,
     )
     await session.commit()
+    await assert_no_invariants_violations(session, context="fallback-transfer")
 
     assert await _balance_qty(session, location_id=raw_sec.id, product_id=fx["product"].id,
                               dimensions={"length_mm": 2000}) == Decimal("90")
@@ -360,6 +364,9 @@ async def test_stock_transferable_limited_to_task_dimension_group(client, sessio
     assert items[0]["dimensions_label"] == "2 м"
     # min(план 200, остаток 2000-группы 100) = 100, а не 1100 суммарно.
     assert items[0]["transferable_quantity"] == "100"
+    # Сайт queries.py:741 — складской fake_task несёт габарит из плана.
+    fake_task = await session.get(WorkTask, items[0]["task_id"])
+    assert fake_task is not None and fake_task.dimensions == {"length_mm": 2000}
 
 
 async def test_production_ready_row_carries_dimensions(client, session) -> None:
@@ -452,6 +459,7 @@ async def test_auto_created_to_task_and_stock_fake_task_get_dimensions(client, s
         allow_over_plan=True,
     )
     await session.commit()
+    await assert_no_invariants_violations(session, context="auto-create-transfer")
 
     to_task = await session.get(WorkTask, result["to_task_id"])
     assert to_task is not None

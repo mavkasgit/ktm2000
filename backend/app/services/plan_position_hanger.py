@@ -78,6 +78,22 @@ def position_dimensions_for_task(position) -> dict | None:
     return canonicalize_dimensions({"length_mm": length})
 
 
+async def task_dimensions_for_plan_line(db, plan_position_id: int | None) -> dict | None:
+    """Габарит задания по ``plan_position_id`` — для сайтов создания ``WorkTask``.
+
+    Обёртка над :func:`position_dimensions_for_task`: места создания заданий
+    имеют только ``SectionPlanLine.plan_position_id``, а не объект позиции.
+    """
+    from app.models.production_plan import PlanPosition
+
+    if plan_position_id is None:
+        return None
+    position = await db.get(PlanPosition, plan_position_id)
+    if position is None:
+        return None
+    return position_dimensions_for_task(position)
+
+
 def payload_quantity_per_hanger(position) -> int | None:
     """Ручное override-значение позиции из source_payload (скаляр).
 
