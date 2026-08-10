@@ -3,7 +3,11 @@ repomix-output.xml
 repomix-output.txt
 *.repomix.*
 
-# Environment files
+# Environment files — real .env* are local-only, never commit (keep .env.example tracked)
+.env
+.env.local
+.env.*
+!.env.example
 
 
 # Python
