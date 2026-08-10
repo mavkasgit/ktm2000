@@ -159,12 +159,10 @@ async def complete_task(
     transform_progress = None
     consume_dims: dict | None = None
     if spec is not None:
-        if auto_transfer_next:
-            raise ValueError(
-                "auto_transfer_next is not supported for dimension-transforming tasks"
-            )
         # Порция считается во входных заготовках: нельзя раскроить
         # больше, чем осталось нераскроенного входа по спецификации.
+        # auto_transfer_next на трансформирующем этапе создаёт по передаче
+        # на каждый выход — см. auto_create_transfer_after_complete (тикет #91).
         transform_progress = await get_transform_progress(db, task.id)
         remaining_input = (
             spec.input_quantity
@@ -397,11 +395,7 @@ async def final_release(
 
     from app.domain.dimensions import canonicalize_dimensions
     from app.stock.models import StockTransaction
-    from app.stock.services import (
-        StockProjectionManager,
-        _dimensions_hash_key,
-        dimensions_match_clause,
-    )
+    from app.stock.services import _dimensions_hash_key, dimensions_match_clause
     from app.services.shopfloor.operations_transform import (
         get_transform_progress,
         resolve_transform_spec,
@@ -412,7 +406,7 @@ async def final_release(
     spec = resolve_transform_spec(task, stage)
     if spec is not None:
         # Трансформирующий этап: выпускаемый размер — один из выходов
-        # спецификации. Releasable считается по паре (задача, размер).
+        # спецификации.
         output_dims = [group.dimensions for group in spec.output_groups]
         if eff_dims is None:
             if len(output_dims) == 1:
@@ -426,31 +420,37 @@ async def final_release(
             raise ValueError(
                 "Final release dimensions must match one of the task outputs"
             )
+        # Оприходовано выхода этого размера (COMPLETE по (задача, размер)).
         progress = await get_transform_progress(db, task.id)
-        produced = progress.produced_by_group.get(
+        completed_by_size = progress.produced_by_group.get(
             _dimensions_hash_key(eff_dims)
         ) or Decimal("0")
-        released_q = select(
-            func.coalesce(func.sum(StockTransaction.quantity), 0)
-        ).where(
-            StockTransaction.task_id == task.id,
-            StockTransaction.reason == Reason.FINAL_RELEASE,
-            dimensions_match_clause(StockTransaction.dimensions, eff_dims),
-        )
-        already_released_by_dim = (await db.scalar(released_q)) or Decimal("0")
-        releasable = produced - already_released_by_dim
     else:
         eff_dims = eff_dims if eff_dims is not None else task.dimensions
-        already_released = await db.scalar(
+        completed_by_size = (
+            await db.scalar(
+                select(func.coalesce(func.sum(StockTransaction.quantity), 0))
+                .where(
+                    StockTransaction.task_id == task.id,
+                    StockTransaction.reason == Reason.COMPLETE,
+                    dimensions_match_clause(StockTransaction.dimensions, eff_dims),
+                )
+            )
+        ) or Decimal("0")
+
+    # Releasable по (задача, размер): completed по размеру − уже released
+    # по размеру (тикет #91). Разные размеры одного задания не суммируются.
+    already_released_by_size = (
+        await db.scalar(
             select(func.coalesce(func.sum(StockTransaction.quantity), 0))
             .where(
                 StockTransaction.task_id == task.id,
                 StockTransaction.reason == Reason.FINAL_RELEASE,
+                dimensions_match_clause(StockTransaction.dimensions, eff_dims),
             )
-        ) or Decimal("0")
-        pm = StockProjectionManager()
-        cache = await pm.get_task_cache(db, task.id)
-        releasable = cache["completed_quantity"] - already_released
+        )
+    ) or Decimal("0")
+    releasable = completed_by_size - already_released_by_size
     if quantity > releasable:
         raise ValueError("Final release exceeds releasable quantity")
 

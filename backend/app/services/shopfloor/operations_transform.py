@@ -305,6 +305,31 @@ def build_outputs_progress(
     return result
 
 
+def distribute_output_quantities(
+    outputs: list[dict],
+    amounts_by_group: dict[str | None, Decimal],
+) -> list[Decimal]:
+    """Последовательно распределить количество (например, уже переданное)
+    по строкам выходов с тем же габаритом.
+
+    Зеркалит ``build_outputs_progress``: две строки одного размера не
+    делят один бюджет дважды (тикет #91). Возвращает список Decimal по
+    числу записей ``outputs`` — распределённую долю на каждую строку.
+    """
+    remaining = dict(amounts_by_group)
+    result: list[Decimal] = []
+    for entry in outputs or []:
+        raw_qty = entry.get("quantity")
+        total = Decimal(str(raw_qty)) if raw_qty is not None else Decimal("0")
+        dims = canonicalize_dimensions(entry.get("dimensions"))
+        key = _dimensions_hash_key(dims)
+        available = remaining.get(key) or Decimal("0")
+        distributed = min(total, available) if total > 0 else Decimal("0")
+        remaining[key] = available - distributed
+        result.append(distributed)
+    return result
+
+
 async def _group_balance(
     db: AsyncSession,
     product_id: int,

@@ -198,8 +198,14 @@ async def _get_task_transferable(
     # (WorkTask.outputs). Передавать можно не больше количества выхода этого
     # размера минус уже переданное — инвариант D2. Размер, которого нет в
     # спецификации (например, входной), передавать нельзя.
+    # Тикет #91: transferable выхода = min(выход, произведено по размеру) −
+    # уже переданное по этому размеру. Частичная порция не позволяет
+    # передать больше, чем фактически раскроено (готовой баланс тоже
+    # ограничивает, но кап здесь — бизнес-правило).
     if task.outputs:
         from app.domain.dimensions import canonicalize_dimensions, dimensions_equal
+        from app.services.shopfloor.operations_transform import get_transform_progress
+        from app.stock.services import _dimensions_hash_key
 
         dims = canonicalize_dimensions(dimensions)
         output_quantity = Decimal("0")
@@ -209,7 +215,11 @@ async def _get_task_transferable(
                 continue
             if dimensions_equal(entry.get("dimensions"), dims):
                 output_quantity += Decimal(str(raw_qty))
-        return max(Decimal("0"), output_quantity - transferred_by_size)
+        progress = await get_transform_progress(db, task.id)
+        produced = progress.produced_by_group.get(
+            _dimensions_hash_key(dims)
+        ) or Decimal("0")
+        return max(Decimal("0"), min(output_quantity, produced) - transferred_by_size)
 
     return (
         cache["completed_quantity"]
@@ -984,8 +994,11 @@ async def auto_create_transfer_after_complete(
     two production stages in different GHPs, a chain of transfers is
     created (production → transit → next production).
 
-    Returns the result of the **first** ``transfer_send`` (or ``None``
-    when the helper decides to skip).
+    Трансформирующее задание (резка, тикет #91): создаётся по передаче
+    **на каждый выход** спецификации — со своим размером и количеством
+    (произведённое по размеру, не больше выхода), а не одна передача на
+    задачу. Возвращает результат **первой** ``transfer_send`` (или ``None``,
+    когда хелпер решает пропустить).
     """
     from app.models.internal_plan import SectionPlanLine
     from app.models.route import RouteStage
@@ -996,6 +1009,58 @@ async def auto_create_transfer_after_complete(
         return None
 
     if good_quantity <= 0:
+        return None
+
+    # Пары (количество, размер) для передачи. Резка — по выходу на каждый
+    # размер: количество = произведённое по размеру (не больше выхода) минус
+    # уже переданное по этому размеру (инвариант D2). Произведённое и
+    # переданное распределяются по строкам одного размера последовательно
+    # (как в ready-строках) — иначе два выхода одного размера дважды
+    # использовали бы один бюджет. Обычный этап — одна передача на
+    # good_quantity с габаритом задания.
+    if from_task.outputs:
+        from app.domain.dimensions import canonicalize_dimensions
+        from app.services.shopfloor.operations_transform import (
+            build_outputs_progress,
+            distribute_output_quantities,
+            get_transform_progress,
+        )
+        from app.stock.services import _dimensions_hash_key
+
+        progress = await get_transform_progress(db, from_task.id)
+        produced_rows = build_outputs_progress(
+            from_task.outputs, progress.produced_by_group
+        )
+        transferred_by_dim: dict[str | None, Decimal] = {}
+        for entry in from_task.outputs:
+            dims = canonicalize_dimensions(entry.get("dimensions"))
+            key = _dimensions_hash_key(dims)
+            if key not in transferred_by_dim:
+                transferred_by_dim[key] = await _transferred_by_task_and_dimensions(
+                    db, task_id=from_task.id, dimensions=dims
+                )
+        transferred_rows = distribute_output_quantities(
+            from_task.outputs, transferred_by_dim
+        )
+
+        pairs: list[tuple[Decimal, dict | None]] = []
+        for entry, produced_entry, transferred in zip(
+            from_task.outputs, produced_rows, transferred_rows
+        ):
+            raw_qty = entry.get("quantity")
+            if raw_qty is None:
+                continue
+            planned = Decimal(str(raw_qty))
+            if planned <= 0:
+                continue
+            dims = canonicalize_dimensions(entry.get("dimensions"))
+            qty = max(Decimal("0"), produced_entry["produced_quantity"] - transferred)
+            if qty > 0:
+                pairs.append((qty, dims))
+    else:
+        pairs = [(_to_decimal(good_quantity), None)]
+
+    if not pairs:
         return None
 
     first_result = None
@@ -1042,25 +1107,27 @@ async def auto_create_transfer_after_complete(
             break
 
         step_idx = next_line.sequence - from_line.sequence
-        key = (
-            f"{idempotency_key}:auto-transfer-complete:{step_idx}"
-            if idempotency_key
-            else None
-        )
+        for pair_idx, (qty, dims) in enumerate(pairs):
+            key = (
+                f"{idempotency_key}:auto-transfer-complete:{step_idx}:{pair_idx}"
+                if idempotency_key
+                else None
+            )
 
-        result = await transfer_send(
-            db,
-            from_task_id=current_task.id,
-            to_task_id=next_task.id if next_task else None,
-            quantity=good_quantity,
-            actor_id=actor_id,
-            comment=comment or "Авто-перемещение после завершения",
-            idempotency_key=key,
-            post_factum=True,
-        )
+            result = await transfer_send(
+                db,
+                from_task_id=current_task.id,
+                to_task_id=next_task.id if next_task else None,
+                quantity=qty,
+                actor_id=actor_id,
+                comment=comment or "Авто-перемещение после завершения",
+                idempotency_key=key,
+                post_factum=True,
+                dimensions=dims,
+            )
 
-        if first_result is None:
-            first_result = result
+            if first_result is None:
+                first_result = result
 
         if not next_stage.is_transit:
             break

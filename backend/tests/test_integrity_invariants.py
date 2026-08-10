@@ -200,8 +200,12 @@ _STOCK_LEDGER_INVARIANT_QUERIES: list[tuple[str, str]] = [
               SELECT 1
               FROM jsonb_array_elements(wt.outputs) o
               WHERE o->'dimensions' IS NOT DISTINCT FROM g.dimensions
-                AND (o->>'quantity')::numeric >= g.net_transferred
           )
+          AND COALESCE((
+              SELECT SUM((o->>'quantity')::numeric)
+              FROM jsonb_array_elements(wt.outputs) o
+              WHERE o->'dimensions' IS NOT DISTINCT FROM g.dimensions
+          ), 0) < g.net_transferred
         """,
     ),
     (

@@ -631,13 +631,15 @@ async def _make_transform_route_fixture(
     input_dimensions: dict | None,
     outputs: list[dict],
     final_transform: bool = False,
+    separate_ghps: bool = False,
 ) -> dict:
     """raw → saw(transforms) → pack(final, если не final_transform).
 
     ``saw`` помечен ``transforms_dimensions=True``; позиция несёт вход и
     выходы. Для D2-тестов saw не финальный (дальше pack); для D3 — saw
     сам финальный этап. Секция ``fg`` (finished_stock) — приёмник
-    финального выпуска.
+    финального выпуска. ``separate_ghps`` — saw/pack в разных ГХП
+    (для авто-передачи по выходам, тикет #91).
     """
     raw = Section(code=f"{sku}-RAW", name="RAW", type="raw_stock", is_active=True, sort_order=0)
     saw = Section(code=f"{sku}-SAW", name="SAW", type="production", is_active=True, sort_order=1)
@@ -646,12 +648,21 @@ async def _make_transform_route_fixture(
     session.add_all([raw, saw, pack, fg])
     await session.flush()
 
-    spg = StorageProductionGroup(code=f"{sku}-GHP", name="GHP", is_active=True, sort_order=0)
-    session.add(spg)
-    await session.flush()
-    for sec in (raw, saw, pack, fg):
-        session.add(SpgSection(spg_id=spg.id, section_id=sec.id, sort_order=0))
-    await session.flush()
+    if separate_ghps:
+        spg_saw = StorageProductionGroup(code=f"{sku}-GHPSAW", name="GHP-SAW", is_active=True, sort_order=0)
+        spg_pack = StorageProductionGroup(code=f"{sku}-GHPPACK", name="GHP-PACK", is_active=True, sort_order=1)
+        session.add_all([spg_saw, spg_pack])
+        await session.flush()
+        for sec, spg in ((raw, spg_saw), (saw, spg_saw), (pack, spg_pack), (fg, spg_pack)):
+            session.add(SpgSection(spg_id=spg.id, section_id=sec.id, sort_order=0))
+        await session.flush()
+    else:
+        spg = StorageProductionGroup(code=f"{sku}-GHP", name="GHP", is_active=True, sort_order=0)
+        session.add(spg)
+        await session.flush()
+        for sec in (raw, saw, pack, fg):
+            session.add(SpgSection(spg_id=spg.id, section_id=sec.id, sort_order=0))
+        await session.flush()
 
     product = Product(sku=sku, name=sku, type=ProductType.finished_good, unit="pcs", is_active=True)
     session.add(product)
@@ -1078,3 +1089,271 @@ async def test_final_release_transforming_stage_multiple_outputs_require_dimensi
     assert tx is not None
     assert tx.dimensions == {"length_mm": 900}
     await assert_no_invariants_violations(session, context="final-release-multi")
+
+
+# ─── Seam 6 (#91): готово к передаче по (задача, размер) + авто-передача ────
+
+
+def _ready_by_length(items: list[dict]) -> dict[int, dict]:
+    """Ready-строки резки, сгруппированные по length_mm выхода."""
+    result: dict[int, dict] = {}
+    for item in items:
+        dims = item.get("dimensions")
+        length = dims.get("length_mm") if isinstance(dims, dict) else None
+        if length is not None:
+            result[int(length)] = item
+    return result
+
+
+async def test_ready_cutting_two_output_rows(client, session) -> None:
+    """Тикет #91: ready-строки резки — по строке на каждый выход (задача, размер)."""
+    user = await _make_user(session, "dim-sawready@test.local")
+    fx = await _make_transform_route_fixture(
+        session,
+        sku="SAWRDY",
+        qty=Decimal("100"),
+        input_quantity=Decimal("100"),
+        input_dimensions={"length_mm": 2700},
+        outputs=[
+            {"row_number": 1, "quantity": "100", "dimensions": {"length_mm": 900}},
+            {"row_number": 2, "quantity": "100", "dimensions": {"length_mm": 1800}},
+        ],
+    )
+    await _release_via_take_to_work(client, fx["position"].id)
+    saw_task = (await _tasks_for_position(session, fx["position"].id))[0]
+    await _complete_saw(session, saw_task=saw_task, user=user)
+
+    saw_sec = fx["sections"][1]
+    resp = await client.get(f"/api/transfers/ready?section_id={saw_sec.id}", headers=_auth_headers(user))
+    assert resp.status_code == 200, resp.text
+    items = resp.json()["items"]
+    assert len(items) == 2
+    by_len = _ready_by_length(items)
+    assert set(by_len) == {900, 1800}
+    assert by_len[900]["dimensions"] == {"length_mm": 900}
+    assert by_len[900]["dimensions_label"] == "0,9 м"
+    assert by_len[900]["planned_quantity"] == "100"
+    assert by_len[900]["transferable_quantity"] == "100"
+    assert by_len[1800]["dimensions"] == {"length_mm": 1800}
+    assert by_len[1800]["transferable_quantity"] == "100"
+
+
+async def test_ready_cutting_transferable_decreases_by_size(client, session) -> None:
+    """Тикет #91: transferable строки выхода падает на уже переданное по размеру."""
+    user = await _make_user(session, "dim-sawtrf@test.local")
+    fx = await _make_transform_route_fixture(
+        session,
+        sku="SAWTRF",
+        qty=Decimal("100"),
+        input_quantity=Decimal("100"),
+        input_dimensions={"length_mm": 2700},
+        outputs=[
+            {"row_number": 1, "quantity": "100", "dimensions": {"length_mm": 900}},
+            {"row_number": 2, "quantity": "100", "dimensions": {"length_mm": 1800}},
+        ],
+    )
+    await _release_via_take_to_work(client, fx["position"].id)
+    saw_task = (await _tasks_for_position(session, fx["position"].id))[0]
+    await _complete_saw(session, saw_task=saw_task, user=user)
+
+    await transfer_send(
+        session,
+        from_task_id=saw_task.id,
+        to_task_id=None,
+        quantity=Decimal("40"),
+        actor_id=user.id,
+        dimensions={"length_mm": 900},
+    )
+    await session.commit()
+
+    saw_sec = fx["sections"][1]
+    resp = await client.get(f"/api/transfers/ready?section_id={saw_sec.id}", headers=_auth_headers(user))
+    assert resp.status_code == 200, resp.text
+    items = resp.json()["items"]
+    assert len(items) == 2
+    by_len = _ready_by_length(items)
+    assert by_len[900]["transferable_quantity"] == "60"
+    assert by_len[900]["already_transferred_quantity"] == "40"
+    assert by_len[1800]["transferable_quantity"] == "100"
+
+
+async def test_ready_cutting_transferable_capped_by_produced(client, session) -> None:
+    """Тикет #91: частичная порция — transferable не больше фактически раскроенного."""
+    from app.services.shopfloor.operations_tasks import complete_task
+
+    user = await _make_user(session, "dim-sawpart@test.local")
+    fx = await _make_transform_route_fixture(
+        session,
+        sku="SAWPART",
+        qty=Decimal("100"),
+        input_quantity=Decimal("100"),
+        input_dimensions={"length_mm": 2700},
+        outputs=[
+            {"row_number": 1, "quantity": "100", "dimensions": {"length_mm": 900}},
+            {"row_number": 2, "quantity": "100", "dimensions": {"length_mm": 1800}},
+        ],
+    )
+    await _release_via_take_to_work(client, fx["position"].id)
+    saw_task = (await _tasks_for_position(session, fx["position"].id))[0]
+
+    svc = StockCommandService()
+    await svc.record(
+        session,
+        StockCommand(
+            product_id=saw_task.product_id,
+            from_location_id=None,
+            to_location_id=saw_task.section_id,
+            quantity=Decimal("100"),
+            reason=Reason.MANUAL_IN,
+            dimensions={"length_mm": 2700},
+            created_by=user.id,
+        ),
+    )
+    await session.commit()
+    await complete_task(
+        session,
+        task_id=saw_task.id,
+        good_quantity=Decimal("50"),
+        defect_quantity=Decimal("0"),
+        actor_id=user.id,
+    )
+    await session.commit()
+
+    saw_sec = fx["sections"][1]
+    resp = await client.get(f"/api/transfers/ready?section_id={saw_sec.id}", headers=_auth_headers(user))
+    assert resp.status_code == 200, resp.text
+    items = resp.json()["items"]
+    assert len(items) == 2
+    by_len = _ready_by_length(items)
+    assert by_len[900]["planned_quantity"] == "100"
+    assert by_len[900]["completed_quantity"] == "50"
+    assert by_len[900]["transferable_quantity"] == "50"
+    assert by_len[1800]["transferable_quantity"] == "50"
+    await assert_no_invariants_violations(session, context="ready-partial-cut")
+
+
+async def test_auto_transfer_next_creates_per_output_transfers(client, session) -> None:
+    """Тикет #91: авто-передача после завершения резки — по передаче на каждый выход."""
+    from app.models.transfer import Transfer
+    from app.services.shopfloor.operations_tasks import complete_task
+
+    user = await _make_user(session, "dim-sawauto@test.local")
+    fx = await _make_transform_route_fixture(
+        session,
+        sku="SAWAUTO",
+        qty=Decimal("100"),
+        input_quantity=Decimal("100"),
+        input_dimensions={"length_mm": 2700},
+        outputs=[
+            {"row_number": 1, "quantity": "100", "dimensions": {"length_mm": 900}},
+            {"row_number": 2, "quantity": "100", "dimensions": {"length_mm": 1800}},
+        ],
+        separate_ghps=True,
+    )
+    await _release_via_take_to_work(client, fx["position"].id)
+    saw_task = (await _tasks_for_position(session, fx["position"].id))[0]
+
+    svc = StockCommandService()
+    await svc.record(
+        session,
+        StockCommand(
+            product_id=saw_task.product_id,
+            from_location_id=None,
+            to_location_id=saw_task.section_id,
+            quantity=Decimal("100"),
+            reason=Reason.MANUAL_IN,
+            dimensions={"length_mm": 2700},
+            created_by=user.id,
+        ),
+    )
+    await session.commit()
+    await complete_task(
+        session,
+        task_id=saw_task.id,
+        good_quantity=Decimal("100"),
+        defect_quantity=Decimal("0"),
+        actor_id=user.id,
+        auto_transfer_next=True,
+        idempotency_key="auto-saw-per-output",
+    )
+    await session.commit()
+    await assert_no_invariants_violations(session, context="auto-per-output")
+
+    transfers = (
+        await session.execute(
+            select(Transfer)
+            .where(Transfer.from_task_id == saw_task.id)
+            .order_by(Transfer.id)
+        )
+    ).scalars().all()
+    assert len(transfers) == 2
+    by_len: dict[int, Transfer] = {}
+    for transfer in transfers:
+        dims = transfer.dimensions or {}
+        length = dims.get("length_mm")
+        if length is not None:
+            by_len[int(length)] = transfer
+    assert set(by_len) == {900, 1800}
+    assert by_len[900].sent_quantity == Decimal("100")
+    assert by_len[1800].sent_quantity == Decimal("100")
+
+
+async def test_auto_transfer_next_duplicate_output_size_does_not_overflow(client, session) -> None:
+    """Тикет #91: дублирующиеся выходы одного размера не удваивают бюджет авто-передачи."""
+    from app.models.transfer import Transfer
+    from app.services.shopfloor.operations_tasks import complete_task
+
+    user = await _make_user(session, "dim-sawdup@test.local")
+    fx = await _make_transform_route_fixture(
+        session,
+        sku="SAWDUP",
+        qty=Decimal("100"),
+        input_quantity=Decimal("100"),
+        input_dimensions={"length_mm": 2700},
+        outputs=[
+            {"row_number": 1, "quantity": "60", "dimensions": {"length_mm": 900}},
+            {"row_number": 2, "quantity": "40", "dimensions": {"length_mm": 900}},
+        ],
+        separate_ghps=True,
+    )
+    await _release_via_take_to_work(client, fx["position"].id)
+    saw_task = (await _tasks_for_position(session, fx["position"].id))[0]
+
+    svc = StockCommandService()
+    await svc.record(
+        session,
+        StockCommand(
+            product_id=saw_task.product_id,
+            from_location_id=None,
+            to_location_id=saw_task.section_id,
+            quantity=Decimal("100"),
+            reason=Reason.MANUAL_IN,
+            dimensions={"length_mm": 2700},
+            created_by=user.id,
+        ),
+    )
+    await session.commit()
+    # Частичная порция: раскроено 50 заготовок → произведено 50 × 900.
+    await complete_task(
+        session,
+        task_id=saw_task.id,
+        good_quantity=Decimal("50"),
+        defect_quantity=Decimal("0"),
+        actor_id=user.id,
+        auto_transfer_next=True,
+        idempotency_key="auto-saw-dup",
+    )
+    await session.commit()
+    await assert_no_invariants_violations(session, context="auto-dup-size")
+
+    transfers = (
+        await session.execute(
+            select(Transfer)
+            .where(Transfer.from_task_id == saw_task.id)
+            .order_by(Transfer.id)
+        )
+    ).scalars().all()
+    # Суммарно передано не больше фактически раскроенного размера (50).
+    assert sum(t.sent_quantity for t in transfers) == Decimal("50")
+    for transfer in transfers:
+        assert (transfer.dimensions or {}).get("length_mm") == 900
