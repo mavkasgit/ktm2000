@@ -93,17 +93,10 @@ async def compute_stock_section_transferable(
     # габарит плана). None = безразмерная legacy-группа.
     dims = dimensions if dimensions is not None else task.dimensions
 
-    already_transferred = (
-        await db.scalar(
-            select(func.coalesce(func.sum(Transfer.sent_quantity), 0))
-            .join(WorkTask, WorkTask.id == Transfer.from_task_id)
-            .where(
-                WorkTask.section_plan_line_id == task.section_plan_line_id,
-                Transfer.status.notin_([TransferStatus.cancelled]),
-                dimensions_match_clause(Transfer.dimensions, dims),
-            )
-        )
-        or Decimal("0")
+    already_transferred = await net_transferred(
+        db,
+        section_plan_line_id=task.section_plan_line_id,
+        dims=dims,
     )
 
     plan_remaining = max(Decimal("0"), _to_decimal(planned_qty) - already_transferred)
