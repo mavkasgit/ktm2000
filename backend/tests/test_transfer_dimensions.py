@@ -10,6 +10,7 @@
 """
 from __future__ import annotations
 
+from collections.abc import Sequence
 from datetime import date
 from decimal import Decimal
 
@@ -34,14 +35,14 @@ from app.models.spg import SpgSection, StorageProductionGroup
 from app.models.techcard import Techcard, TechcardLine
 from app.models.user import User, UserRole
 from app.models.work_task import WorkTask
-from app.stock.models import QualityState, Reason, StockBalance
+from app.stock.models import QualityState, Reason, StockBalance, StockTransaction
 from app.stock.services import (
     StockCommand,
     StockCommandService,
     StockValidationError,
     dimensions_match_clause,
 )
-from app.transfers.services import transfer_send
+from app.transfers.services import cancel_transfer, correct_transfer, transfer_send
 from tests.test_integrity_invariants import assert_no_invariants_violations
 
 pytestmark = pytest.mark.asyncio
@@ -616,3 +617,464 @@ async def test_ready_transferable_decreases_by_dimension_sent(client, session) -
     assert items[0]["dimensions"] == {"length_mm": 2000}
     # 100 план − 40 переданное = 60.
     assert items[0]["transferable_quantity"] == "60"
+
+
+# ─── Seam 5 (#8/#89/#90): трансформирующий этап — инварианты D2/D3 ─────────
+
+
+async def _make_transform_route_fixture(
+    session: AsyncSession,
+    *,
+    sku: str,
+    qty: Decimal,
+    input_quantity: Decimal | None,
+    input_dimensions: dict | None,
+    outputs: list[dict],
+    final_transform: bool = False,
+) -> dict:
+    """raw → saw(transforms) → pack(final, если не final_transform).
+
+    ``saw`` помечен ``transforms_dimensions=True``; позиция несёт вход и
+    выходы. Для D2-тестов saw не финальный (дальше pack); для D3 — saw
+    сам финальный этап. Секция ``fg`` (finished_stock) — приёмник
+    финального выпуска.
+    """
+    raw = Section(code=f"{sku}-RAW", name="RAW", type="raw_stock", is_active=True, sort_order=0)
+    saw = Section(code=f"{sku}-SAW", name="SAW", type="production", is_active=True, sort_order=1)
+    pack = Section(code=f"{sku}-PACK", name="PACK", type="production", is_active=True, sort_order=2)
+    fg = Section(code=f"{sku}-FG", name="FG", type="finished_stock", is_active=True, sort_order=3)
+    session.add_all([raw, saw, pack, fg])
+    await session.flush()
+
+    spg = StorageProductionGroup(code=f"{sku}-GHP", name="GHP", is_active=True, sort_order=0)
+    session.add(spg)
+    await session.flush()
+    for sec in (raw, saw, pack, fg):
+        session.add(SpgSection(spg_id=spg.id, section_id=sec.id, sort_order=0))
+    await session.flush()
+
+    product = Product(sku=sku, name=sku, type=ProductType.finished_good, unit="pcs", is_active=True)
+    session.add(product)
+    await session.flush()
+
+    route = ProductionRoute(name=f"R-{sku}", is_active=True)
+    session.add(route)
+    await session.flush()
+    stage_defs = [
+        (raw, "ISSUE_RAW", 1, False),
+        (saw, "SAW", 2, final_transform),
+    ]
+    if not final_transform:
+        stage_defs.append((pack, "PACK", 3, True))
+    for sec, code, seq, is_final in stage_defs:
+        st = RouteStage(
+            route_id=route.id,
+            sequence=seq,
+            section_id=sec.id,
+            is_final=is_final,
+            transforms_dimensions=(code == "SAW"),
+        )
+        session.add(st)
+        await session.flush()
+        session.add(RouteOperation(route_stage_id=st.id, sequence=1, operation_code=code, operation_name=code))
+
+    tech = Techcard(product_id=product.id, version="v1", is_active=True)
+    session.add(tech)
+    await session.flush()
+    session.add(
+        TechcardLine(techcard_id=tech.id, component_product_id=product.id, quantity=Decimal("1"), unit="pcs")
+    )
+
+    plan = ProductionPlan(
+        plan_no=f"P-{sku}",
+        name="p",
+        status=ProductionPlanStatus.approved,
+        period_start=date(2026, 5, 1),
+        period_end=date(2026, 5, 31),
+    )
+    session.add(plan)
+    await session.flush()
+
+    pos = PlanPosition(
+        production_plan_id=plan.id,
+        product_id=product.id,
+        source_type=PlanSourceType.manual,
+        source_sku=product.sku,
+        source_name=product.name,
+        quantity=qty,
+        input_quantity=input_quantity,
+        input_dimensions=input_dimensions,
+        outputs=outputs,
+        source_payload={},
+        status=PlanPositionStatus.approved,
+        validation_status=PlanPositionValidationStatus.valid,
+        validation_errors=[],
+        period_start=plan.period_start,
+        period_end=plan.period_end,
+        has_pack_ops=False,
+        route_id=route.id,
+        route_assigned_at=None,
+    )
+    session.add(pos)
+    await session.commit()
+    return {"product": product, "plan": plan, "position": pos, "sections": [raw, saw, pack, fg]}
+
+
+async def _tasks_for_position(session: AsyncSession, position_id: int) -> Sequence[WorkTask]:
+    return (
+        await session.execute(
+            select(WorkTask)
+            .join(SectionPlanLine, WorkTask.section_plan_line_id == SectionPlanLine.id)
+            .where(SectionPlanLine.plan_position_id == position_id)
+            .order_by(SectionPlanLine.sequence)
+        )
+    ).scalars().all()
+
+
+async def _complete_saw(session: AsyncSession, *, saw_task: WorkTask, user: User) -> None:
+    """Завести вход 100 × 2700 на пилу и полностью её раскроить (100 → 900+1800)."""
+    from app.services.shopfloor.operations_tasks import complete_task
+
+    svc = StockCommandService()
+    await svc.record(
+        session,
+        StockCommand(
+            product_id=saw_task.product_id,
+            from_location_id=None,
+            to_location_id=saw_task.section_id,
+            quantity=Decimal("100"),
+            reason=Reason.MANUAL_IN,
+            dimensions={"length_mm": 2700},
+            created_by=user.id,
+        ),
+    )
+    await session.commit()
+    await complete_task(
+        session,
+        task_id=saw_task.id,
+        good_quantity=Decimal("100"),
+        defect_quantity=Decimal("0"),
+        actor_id=user.id,
+    )
+    await session.commit()
+    await assert_no_invariants_violations(session, context="complete-saw")
+
+
+async def _task_transferable_by_dim(
+    session: AsyncSession, task: WorkTask, dims: dict | None
+) -> Decimal:
+    from app.transfers.services import _get_task_transferable
+
+    return await _get_task_transferable(session, task, dimensions=dims)
+
+
+async def test_transforming_task_multi_transfer_within_output_quantity(client, session) -> None:
+    """D2: с трансформирующего задания нельзя передать размера больше выхода;
+    несколько передач одного размера разрешены в пределах transferable."""
+    user = await _make_user(session, "dim-saw@test.local")
+    fx = await _make_transform_route_fixture(
+        session,
+        sku="SAW1",
+        qty=Decimal("100"),
+        input_quantity=Decimal("100"),
+        input_dimensions={"length_mm": 2700},
+        outputs=[
+            {"row_number": 1, "quantity": "100", "dimensions": {"length_mm": 900}},
+            {"row_number": 2, "quantity": "100", "dimensions": {"length_mm": 1800}},
+        ],
+    )
+    await _release_via_take_to_work(client, fx["position"].id)
+    saw_task = (await _tasks_for_position(session, fx["position"].id))[0]
+    assert saw_task.outputs, "saw task должен нести выходы"
+    await _complete_saw(session, saw_task=saw_task, user=user)
+
+    r1 = await transfer_send(
+        session,
+        from_task_id=saw_task.id,
+        to_task_id=None,
+        quantity=Decimal("40"),
+        actor_id=user.id,
+        dimensions={"length_mm": 900},
+    )
+    await session.commit()
+    assert r1["status"] == "accepted"
+
+    r2 = await transfer_send(
+        session,
+        from_task_id=saw_task.id,
+        to_task_id=None,
+        quantity=Decimal("30"),
+        actor_id=user.id,
+        dimensions={"length_mm": 900},
+    )
+    await session.commit()
+    assert r2["status"] == "accepted"
+
+    # Третья 31 → сумма 101 > выхода 100 → отказ (кап по outputs, D2).
+    with pytest.raises(ValueError, match="exceeds transferable"):
+        await transfer_send(
+            session,
+            from_task_id=saw_task.id,
+            to_task_id=None,
+            quantity=Decimal("31"),
+            actor_id=user.id,
+            dimensions={"length_mm": 900},
+        )
+    await session.commit()
+
+    # Другой размер (1800) не затронут — передаём весь выход.
+    r3 = await transfer_send(
+        session,
+        from_task_id=saw_task.id,
+        to_task_id=None,
+        quantity=Decimal("100"),
+        actor_id=user.id,
+        dimensions={"length_mm": 1800},
+    )
+    await session.commit()
+    assert r3["status"] == "accepted"
+
+    await assert_no_invariants_violations(session, context="saw-multi-transfer")
+
+
+async def test_transforming_task_cancel_isolation_between_sizes(client, session) -> None:
+    """Отмена передачи одного размера не трогает transferable другого (D1/D2)."""
+    user = await _make_user(session, "dim-sawcancel@test.local")
+    fx = await _make_transform_route_fixture(
+        session,
+        sku="SAWCL",
+        qty=Decimal("100"),
+        input_quantity=Decimal("100"),
+        input_dimensions={"length_mm": 2700},
+        outputs=[
+            {"row_number": 1, "quantity": "100", "dimensions": {"length_mm": 900}},
+            {"row_number": 2, "quantity": "100", "dimensions": {"length_mm": 1800}},
+        ],
+    )
+    await _release_via_take_to_work(client, fx["position"].id)
+    saw_task = (await _tasks_for_position(session, fx["position"].id))[0]
+    await _complete_saw(session, saw_task=saw_task, user=user)
+
+    t900 = await transfer_send(
+        session,
+        from_task_id=saw_task.id,
+        to_task_id=None,
+        quantity=Decimal("40"),
+        actor_id=user.id,
+        dimensions={"length_mm": 900},
+    )
+    await session.commit()
+    t1800 = await transfer_send(
+        session,
+        from_task_id=saw_task.id,
+        to_task_id=None,
+        quantity=Decimal("60"),
+        actor_id=user.id,
+        dimensions={"length_mm": 1800},
+    )
+    await session.commit()
+
+    await cancel_transfer(session, transfer_id=t900["transfer_id"], actor_id=user.id)
+    await session.commit()
+
+    # 900 — снова свободно; 1800 не затронут (60/100 передано).
+    assert await _task_transferable_by_dim(session, saw_task, {"length_mm": 900}) == Decimal("100")
+    assert await _task_transferable_by_dim(session, saw_task, {"length_mm": 1800}) == Decimal("40")
+
+    r = await transfer_send(
+        session,
+        from_task_id=saw_task.id,
+        to_task_id=None,
+        quantity=Decimal("40"),
+        actor_id=user.id,
+        dimensions={"length_mm": 1800},
+    )
+    await session.commit()
+    assert r["status"] == "accepted"
+    r2 = await transfer_send(
+        session,
+        from_task_id=saw_task.id,
+        to_task_id=None,
+        quantity=Decimal("100"),
+        actor_id=user.id,
+        dimensions={"length_mm": 900},
+    )
+    await session.commit()
+    assert r2["status"] == "accepted"
+    with pytest.raises(ValueError, match="exceeds transferable"):
+        await transfer_send(
+            session,
+            from_task_id=saw_task.id,
+            to_task_id=None,
+            quantity=Decimal("1"),
+            actor_id=user.id,
+            dimensions={"length_mm": 900},
+        )
+    await session.commit()
+
+    await assert_no_invariants_violations(session, context="saw-cancel-isolation")
+
+
+async def test_transforming_task_correct_isolation_between_sizes(client, session) -> None:
+    """Коррекция количества одного размера не влияет на transferable другого."""
+    user = await _make_user(session, "dim-sawcorrect@test.local")
+    fx = await _make_transform_route_fixture(
+        session,
+        sku="SAWCR",
+        qty=Decimal("100"),
+        input_quantity=Decimal("100"),
+        input_dimensions={"length_mm": 2700},
+        outputs=[
+            {"row_number": 1, "quantity": "100", "dimensions": {"length_mm": 900}},
+            {"row_number": 2, "quantity": "100", "dimensions": {"length_mm": 1800}},
+        ],
+    )
+    await _release_via_take_to_work(client, fx["position"].id)
+    saw_task = (await _tasks_for_position(session, fx["position"].id))[0]
+    await _complete_saw(session, saw_task=saw_task, user=user)
+
+    t900 = await transfer_send(
+        session,
+        from_task_id=saw_task.id,
+        to_task_id=None,
+        quantity=Decimal("40"),
+        actor_id=user.id,
+        dimensions={"length_mm": 900},
+    )
+    await session.commit()
+
+    await correct_transfer(
+        session,
+        transfer_id=t900["transfer_id"],
+        new_quantity=Decimal("10"),
+        actor_id=user.id,
+    )
+    await session.commit()
+
+    # 900: 10/100 передано → transferable 90; 1800 не затронут (100).
+    assert await _task_transferable_by_dim(session, saw_task, {"length_mm": 900}) == Decimal("90")
+    assert await _task_transferable_by_dim(session, saw_task, {"length_mm": 1800}) == Decimal("100")
+
+    r = await transfer_send(
+        session,
+        from_task_id=saw_task.id,
+        to_task_id=None,
+        quantity=Decimal("90"),
+        actor_id=user.id,
+        dimensions={"length_mm": 900},
+    )
+    await session.commit()
+    assert r["status"] == "accepted"
+    with pytest.raises(ValueError, match="exceeds transferable"):
+        await transfer_send(
+            session,
+            from_task_id=saw_task.id,
+            to_task_id=None,
+            quantity=Decimal("1"),
+            actor_id=user.id,
+            dimensions={"length_mm": 900},
+        )
+    await session.commit()
+
+    await assert_no_invariants_violations(session, context="saw-correct-isolation")
+
+
+async def test_final_release_transforming_stage_carries_output_dimensions(client, session) -> None:
+    """D3: FINAL_RELEASE на трансформирующем финальном этапе несёт выходной размер."""
+    from app.services.shopfloor.operations_tasks import final_release
+
+    user = await _make_user(session, "dim-final@test.local")
+    fx = await _make_transform_route_fixture(
+        session,
+        sku="SAWFIN",
+        qty=Decimal("100"),
+        input_quantity=Decimal("100"),
+        input_dimensions={"length_mm": 2700},
+        outputs=[{"row_number": 1, "quantity": "100", "dimensions": {"length_mm": 900}}],
+        final_transform=True,
+    )
+    await _release_via_take_to_work(client, fx["position"].id)
+    saw_task = (await _tasks_for_position(session, fx["position"].id))[0]
+    await _complete_saw(session, saw_task=saw_task, user=user)
+
+    # Один выход — габарит выводится из спецификации автоматически.
+    result = await final_release(
+        session,
+        task_id=saw_task.id,
+        quantity=Decimal("100"),
+        actor_id=user.id,
+    )
+    await session.commit()
+    assert result["transaction_id"]
+
+    tx = await session.scalar(
+        select(StockTransaction).where(
+            StockTransaction.task_id == saw_task.id,
+            StockTransaction.reason == Reason.FINAL_RELEASE,
+        )
+    )
+    assert tx is not None
+    assert tx.dimensions == {"length_mm": 900}
+    await assert_no_invariants_violations(session, context="final-release-dims")
+
+    # Чужой размер → отказ (не выход спецификации).
+    with pytest.raises(ValueError, match="must match one of the task outputs"):
+        await final_release(
+            session,
+            task_id=saw_task.id,
+            quantity=Decimal("1"),
+            actor_id=user.id,
+            dimensions={"length_mm": 1800},
+        )
+
+
+async def test_final_release_transforming_stage_multiple_outputs_require_dimensions(client, session) -> None:
+    """D3: несколько выходов — финальный выпуск требует явный dimensions."""
+    from app.services.shopfloor.operations_tasks import final_release
+
+    user = await _make_user(session, "dim-finalmulti@test.local")
+    fx = await _make_transform_route_fixture(
+        session,
+        sku="SAWFIN2",
+        qty=Decimal("100"),
+        input_quantity=Decimal("100"),
+        input_dimensions={"length_mm": 2700},
+        outputs=[
+            {"row_number": 1, "quantity": "100", "dimensions": {"length_mm": 900}},
+            {"row_number": 2, "quantity": "100", "dimensions": {"length_mm": 1800}},
+        ],
+        final_transform=True,
+    )
+    await _release_via_take_to_work(client, fx["position"].id)
+    saw_task = (await _tasks_for_position(session, fx["position"].id))[0]
+    await _complete_saw(session, saw_task=saw_task, user=user)
+
+    with pytest.raises(ValueError, match="requires dimensions"):
+        await final_release(
+            session,
+            task_id=saw_task.id,
+            quantity=Decimal("50"),
+            actor_id=user.id,
+        )
+
+    # Явный размер — выпуск проходит и несёт габарит.
+    result = await final_release(
+        session,
+        task_id=saw_task.id,
+        quantity=Decimal("50"),
+        actor_id=user.id,
+        dimensions={"length_mm": 900},
+    )
+    await session.commit()
+    assert result["transaction_id"]
+
+    tx = await session.scalar(
+        select(StockTransaction).where(
+            StockTransaction.task_id == saw_task.id,
+            StockTransaction.reason == Reason.FINAL_RELEASE,
+            dimensions_match_clause(StockTransaction.dimensions, {"length_mm": 900}),
+        )
+    )
+    assert tx is not None
+    assert tx.dimensions == {"length_mm": 900}
+    await assert_no_invariants_violations(session, context="final-release-multi")

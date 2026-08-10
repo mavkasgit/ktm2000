@@ -193,6 +193,24 @@ async def _get_task_transferable(
     transferred_by_size = await _transferred_by_task_and_dimensions(
         db, task_id=task.id, dimensions=dimensions
     )
+
+    # Трансформирующий этап (ADR-0002): задание несёт спецификацию выходов
+    # (WorkTask.outputs). Передавать можно не больше количества выхода этого
+    # размера минус уже переданное — инвариант D2. Размер, которого нет в
+    # спецификации (например, входной), передавать нельзя.
+    if task.outputs:
+        from app.domain.dimensions import canonicalize_dimensions, dimensions_equal
+
+        dims = canonicalize_dimensions(dimensions)
+        output_quantity = Decimal("0")
+        for entry in task.outputs:
+            raw_qty = entry.get("quantity")
+            if raw_qty is None:
+                continue
+            if dimensions_equal(entry.get("dimensions"), dims):
+                output_quantity += Decimal(str(raw_qty))
+        return max(Decimal("0"), output_quantity - transferred_by_size)
+
     return (
         cache["completed_quantity"]
         + cache["received_quantity"]
