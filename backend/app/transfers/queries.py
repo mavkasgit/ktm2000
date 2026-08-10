@@ -15,8 +15,9 @@ from __future__ import annotations
 
 from datetime import datetime
 from decimal import Decimal
+from typing import cast as tcast
 
-from sqlalchemy import String, case, cast, func, or_, select
+from sqlalchemy import String, Subquery, cast, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
@@ -41,6 +42,10 @@ from app.domain.dimensions import parse_dimensions_filter, format_dimensions
 from app.services.plan_position_hanger import task_dimensions_for_plan_line
 
 from app.services.shopfloor.common import _get_transfer, _to_decimal
+from app.stock.transfer_ledger import (
+    net_transferred_by_dimensions,
+    net_transferred_sq,
+)
 
 
 def _fmt_qty(value: Decimal | None) -> str:
@@ -228,28 +233,6 @@ def _completed_qty_subquery():
     )
 
 
-def _transferred_qty_subquery():
-    from app.stock.models import Reason, StockTransaction
-
-    return (
-        select(
-            StockTransaction.task_id,
-            func.coalesce(
-                func.sum(
-                    case(
-                        (StockTransaction.compensates_tx_id.is_(None), StockTransaction.quantity),
-                        else_=-StockTransaction.quantity,
-                    )
-                ),
-                0,
-            ).label("transferred_qty"),
-        )
-        .where(StockTransaction.reason == Reason.TRANSFER_SEND)
-        .group_by(StockTransaction.task_id)
-        .subquery("transferred_qty_sq")
-    )
-
-
 def _operation_names_subquery():
     return (
         select(
@@ -347,42 +330,6 @@ def _hydrate_plain_ready_row(row) -> dict | None:
     }
 
 
-async def _transferred_by_task_dimensions(
-    db: AsyncSession, task_id: int,
-) -> dict[str | None, Decimal]:
-    """Нетто-переданное по каждому габариту задачи (net TRANSFER_SEND).
-
-    Возвращает ``{hash_key(габарит): количество}`` — пары для строк выходов
-    трансформирующей задачи (тикет #91).
-    """
-    from app.stock.models import Reason, StockTransaction
-    from app.stock.services import _dimensions_hash_key
-
-    rows = await db.execute(
-        select(
-            StockTransaction.dimensions,
-            func.coalesce(
-                func.sum(
-                    case(
-                        (StockTransaction.compensates_tx_id.is_(None), StockTransaction.quantity),
-                        else_=-StockTransaction.quantity,
-                    )
-                ),
-                0,
-            ).label("net_qty"),
-        )
-        .where(
-            StockTransaction.task_id == task_id,
-            StockTransaction.reason == Reason.TRANSFER_SEND,
-        )
-        .group_by(StockTransaction.dimensions)
-    )
-    return {
-        _dimensions_hash_key(dims): _to_decimal(qty)
-        for dims, qty in rows
-    }
-
-
 async def _hydrate_production_ready_row(db: AsyncSession, row) -> list[dict]:
     """Ready-строки одной production-задачи.
 
@@ -406,12 +353,11 @@ async def _hydrate_production_ready_row(db: AsyncSession, row) -> list[dict]:
         distribute_output_quantities,
         get_transform_progress,
     )
-    from app.stock.services import _dimensions_hash_key
 
     common = _ready_row_common(row)
     progress = await get_transform_progress(db, task.id)
     produced_rows = build_outputs_progress(outputs, progress.produced_by_group)
-    transferred_by_dim = await _transferred_by_task_dimensions(db, task.id)
+    transferred_by_dim = await net_transferred_by_dimensions(db, task_id=task.id)
     transferred_rows = distribute_output_quantities(outputs, transferred_by_dim)
 
     items: list[dict] = []
@@ -527,10 +473,10 @@ def _build_production_ready_query(
     from app.stock.models import Reason, StockTransaction
 
     completed_sq = _completed_qty_subquery()
-    transferred_sq = _transferred_qty_subquery()
+    transferred_sq = tcast(Subquery, net_transferred_sq("transferred_qty_sq"))
     transferable_expr = (
         func.coalesce(completed_sq.c.completed_qty, 0)
-        - func.coalesce(transferred_sq.c.transferred_qty, 0)
+        - func.coalesce(transferred_sq.c.net_quantity, 0)
     )
 
     latest_complete = (
@@ -556,7 +502,7 @@ def _build_production_ready_query(
             next_section,
             StockTransaction.id.label("completion_tx_id"),
             func.coalesce(completed_sq.c.completed_qty, 0).label("completed_qty"),
-            func.coalesce(transferred_sq.c.transferred_qty, 0).label("transferred_qty"),
+            func.coalesce(transferred_sq.c.net_quantity, 0).label("transferred_qty"),
         )
         .join(from_line, from_line.id == WorkTask.section_plan_line_id)
         .join(from_stage, from_stage.id == WorkTask.route_stage_id)
