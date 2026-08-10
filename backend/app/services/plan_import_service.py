@@ -977,7 +977,13 @@ async def _make_change_items(
                                 )
                                 db.add(created_route)
                                 await db.flush()
-                                
+                                # Кэшируем маршрут по имени сразу после создания:
+                                # иначе следующая строка этого же импорта с тем же именем
+                                # маршрута (но другим ops_summary → иным cache_key) возьмёт
+                                # из existing_route_by_name_cache None и попытается создать
+                                # дубль → UniqueViolation uq_production_routes_name.
+                                existing_route_by_name_cache[built_route.name] = created_route
+
                                 # Create route stages and operations with savepoint protection
                                 steps_created_successfully = False
                                 try:
