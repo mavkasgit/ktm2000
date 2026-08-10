@@ -29,7 +29,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from decimal import Decimal
 
-from sqlalchemy import case, func, select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.internal_plan import SectionPlanLine
@@ -66,6 +66,7 @@ from app.stock.services import (
     StockCommandService,
     dimensions_match_clause,
 )
+from app.stock.transfer_ledger import net_transferred
 
 _stock_command_service = StockCommandService()
 
@@ -125,39 +126,6 @@ async def compute_stock_section_transferable(
     return transferable, plan_remaining, physical_stock, already_transferred
 
 
-async def _transferred_by_task_and_dimensions(
-    db: AsyncSession,
-    *,
-    task_id: int,
-    dimensions: dict | None,
-) -> Decimal:
-    """Нетто-переданное с задания по конкретному размеру (из ledger).
-
-    Суммирует net ``TRANSFER_SEND`` по ``(task_id, dimensions)`` с учётом
-    компенсаций (отмена). None — безразмерная группа.
-    """
-    return (
-        await db.scalar(
-            select(
-                func.coalesce(
-                    func.sum(
-                        case(
-                            (StockTransaction.compensates_tx_id.is_(None), StockTransaction.quantity),
-                            else_=-StockTransaction.quantity,
-                        )
-                    ),
-                    0,
-                )
-            ).where(
-                StockTransaction.task_id == task_id,
-                StockTransaction.reason == Reason.TRANSFER_SEND,
-                dimensions_match_clause(StockTransaction.dimensions, dimensions),
-            )
-        )
-        or Decimal("0")
-    )
-
-
 async def _get_task_transferable(
     db: AsyncSession,
     task: WorkTask,
@@ -185,8 +153,8 @@ async def _get_task_transferable(
 
     pm = StockProjectionManager()
     cache = await pm.get_task_cache(db, task.id)
-    transferred_by_size = await _transferred_by_task_and_dimensions(
-        db, task_id=task.id, dimensions=dimensions
+    transferred_by_size = await net_transferred(
+        db, task_id=task.id, dims=dimensions
     )
 
     # Трансформирующий этап (ADR-0002): задание несёт спецификацию выходов
@@ -970,8 +938,8 @@ async def auto_create_transfer_after_complete(
             dims = canonicalize_dimensions(entry.get("dimensions"))
             key = _dimensions_hash_key(dims)
             if key not in transferred_by_dim:
-                transferred_by_dim[key] = await _transferred_by_task_and_dimensions(
-                    db, task_id=from_task.id, dimensions=dims
+                transferred_by_dim[key] = await net_transferred(
+                    db, task_id=from_task.id, dims=dims
                 )
         transferred_rows = distribute_output_quantities(
             from_task.outputs, transferred_by_dim

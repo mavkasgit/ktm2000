@@ -13,9 +13,8 @@ RETURN_TO_STOCK и т.п.) не поддерживаются.
 - Builder/SQL-форма (``_transfer_net_subquery`` / ``net_*_sq``):
   ``dims=None`` — БЕЗ dimension-фильтра (не wildcard), ``dims=dict`` —
   JSONB-равенство. Обслуживает set-based потребителей (total по ключу).
-- Scalar-форма (``net_transferred`` / ``net_received``): та же семантика,
-  что у ``transfers.services._transferred_by_task_and_dimensions`` —
-  ``dims=None`` = безразмерная группа (строки без габарита), ``dims=dict`` =
+- Scalar-форма (``net_transferred`` / ``net_received``): ``dims=None`` =
+  безразмерная группа (строки без габарита), ``dims=dict`` =
   JSONB-равенство. Такой же сдвиг ожидает тест ``net_*_by_dimensions``.
 """
 from __future__ import annotations
@@ -121,8 +120,8 @@ def _net_scalar_query(
     """Scalar-select net по ровно одному ключу (общая логика SEND/RECEIVE).
 
     ``dims=None`` — безразмерная группа (строки без габарита), ``dims=dict`` —
-    JSONB-равенство: та же семантика, что у
-    ``transfers.services._transferred_by_task_and_dimensions``.
+    JSONB-равенство: та же семантика, что у скалярных форм
+    ``net_transferred`` / ``net_received``.
     """
     key_column, key_value = _resolve_key(task_id, section_plan_line_id)
     return select(func.coalesce(func.sum(_net_quantity_expr()), 0)).where(
