@@ -511,3 +511,108 @@ async def test_auto_created_to_task_carries_sent_dimensions(client, session) -> 
                               dimensions={"length_mm": 3000}) == Decimal("90")
     assert await _balance_qty(session, location_id=raw_sec.id, product_id=fx["product"].id,
                               dimensions={"length_mm": 2000}) == Decimal("0")
+
+
+# ─── Seam 4 (#90): Transfer.dimensions + guard по паре (задача, размер) ────
+
+
+async def test_transfer_send_writes_transfer_dimensions(client, session) -> None:
+    """transfer_send записывает Transfer.dimensions (канонический размер)."""
+    from app.models.transfer import Transfer
+
+    user = await _make_user(session, "dim-xferdims@test.local")
+    fx = await _make_dim_route_fixture(session, sku="DIMDIMS", qty=Decimal("50"), length_mm=2000)
+    raw_sec = fx["sections"][0]
+    await _seed_balance(session, user_id=user.id, location_id=raw_sec.id,
+                        product_id=fx["product"].id, qty=Decimal("100"), dimensions={"length_mm": 2000})
+    await _release_via_take_to_work(client, fx["position"].id)
+
+    fake_task_id = await _stock_ready_task(client, user, raw_sec.id)
+    result = await transfer_send(
+        session,
+        from_task_id=fake_task_id,
+        to_task_id=None,
+        quantity=Decimal("10"),
+        actor_id=user.id,
+        allow_over_plan=True,
+    )
+    await session.commit()
+
+    transfer = await session.get(Transfer, result["transfer_id"])
+    assert transfer is not None
+    assert transfer.dimensions == {"length_mm": 2000}
+    await assert_no_invariants_violations(session, context="transfer-dimensions")
+
+
+async def test_multiple_transfers_same_dimension_allowed_within_transferable(client, session) -> None:
+    """Несколько передач одного размера разрешены; суммарно ≤ transferable."""
+    user = await _make_user(session, "dim-multisend@test.local")
+    fx = await _make_dim_route_fixture(session, sku="DIMMULTI", qty=Decimal("100"), length_mm=2000)
+    raw_sec = fx["sections"][0]
+    await _seed_balance(session, user_id=user.id, location_id=raw_sec.id,
+                        product_id=fx["product"].id, qty=Decimal("100"), dimensions={"length_mm": 2000})
+    await _release_via_take_to_work(client, fx["position"].id)
+
+    fake_task_id = await _stock_ready_task(client, user, raw_sec.id)
+
+    # Первая передача 40 — укладывается в план (100).
+    r1 = await transfer_send(
+        session,
+        from_task_id=fake_task_id,
+        to_task_id=None,
+        quantity=Decimal("40"),
+        actor_id=user.id,
+    )
+    await session.commit()
+    assert r1["status"] == "accepted"
+
+    # Вторая передача 30 того же размера — разрешена (сумма 70 ≤ 100).
+    r2 = await transfer_send(
+        session,
+        from_task_id=fake_task_id,
+        to_task_id=None,
+        quantity=Decimal("30"),
+        actor_id=user.id,
+    )
+    await session.commit()
+    assert r2["status"] == "accepted"
+
+    # Третья 31 → превышение (сумма была бы 101 > 100).
+    with pytest.raises(ValueError, match="exceeds transferable"):
+        await transfer_send(
+            session,
+            from_task_id=fake_task_id,
+            to_task_id=None,
+            quantity=Decimal("31"),
+            actor_id=user.id,
+        )
+
+    await assert_no_invariants_violations(session, context="multi-send-dimension")
+
+
+async def test_ready_transferable_decreases_by_dimension_sent(client, session) -> None:
+    """ready: transferable по размеру уменьшается на уже переданное по нему."""
+    user = await _make_user(session, "dim-transferable@test.local")
+    fx = await _make_dim_route_fixture(session, sku="DIMTRF", qty=Decimal("100"), length_mm=2000)
+    raw_sec = fx["sections"][0]
+    await _seed_balance(session, user_id=user.id, location_id=raw_sec.id,
+                        product_id=fx["product"].id, qty=Decimal("100"), dimensions={"length_mm": 2000})
+    await _release_via_take_to_work(client, fx["position"].id)
+
+    fake_task_id = await _stock_ready_task(client, user, raw_sec.id)
+    await transfer_send(
+        session,
+        from_task_id=fake_task_id,
+        to_task_id=None,
+        quantity=Decimal("40"),
+        actor_id=user.id,
+    )
+    await session.commit()
+
+    resp = await client.get(f"/api/transfers/ready?section_id={raw_sec.id}", headers=_auth_headers(user))
+    assert resp.status_code == 200, resp.text
+    items = resp.json()["items"]
+    assert len(items) == 1
+    assert items[0]["dimensions"] == {"length_mm": 2000}
+    # 100 план − 40 переданное = 60.
+    assert items[0]["transferable_quantity"] == "60"

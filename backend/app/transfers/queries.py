@@ -16,7 +16,7 @@ from __future__ import annotations
 from datetime import datetime
 from decimal import Decimal
 
-from sqlalchemy import String, case, cast, exists, func, or_, select
+from sqlalchemy import String, case, cast, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
@@ -418,15 +418,6 @@ def _build_production_ready_query(
         .subquery()
     )
 
-    active_transfer_exists = (
-        select(Transfer.id)
-        .where(
-            Transfer.from_task_id == WorkTask.id,
-            Transfer.status.notin_([TransferStatus.cancelled]),
-        )
-        .correlate(WorkTask)
-    )
-
     query = (
         select(
             WorkTask,
@@ -470,7 +461,6 @@ def _build_production_ready_query(
             from_stage.is_final.is_(False),
             next_line.id.isnot(None),
             transferable_expr > 0,
-            ~exists(active_transfer_exists),
         )
     )
 
@@ -631,10 +621,7 @@ async def _fetch_stock_ready_items(
     transferable_qty: Decimal | None = None,
 ) -> list[dict]:
     from app.models.production_plan import PlanPosition
-    from app.transfers.services import (
-        compute_stock_section_transferable,
-        has_active_transfer_for_plan_line,
-    )
+    from app.transfers.services import compute_stock_section_transferable
 
     if spg_id is not None:
         sections = (
@@ -720,9 +707,6 @@ async def _fetch_stock_ready_items(
                 )
             )
             if next_task is None and not is_stock_section(next_sec):
-                continue
-
-            if await has_active_transfer_for_plan_line(db, spl.id):
                 continue
 
             fake_task = await db.scalar(

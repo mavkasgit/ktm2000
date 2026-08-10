@@ -34,7 +34,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from decimal import Decimal
 
-from sqlalchemy import func, select
+from sqlalchemy import case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.internal_plan import SectionPlanLine
@@ -75,70 +75,27 @@ from app.stock.services import (
 _stock_command_service = StockCommandService()
 
 
-async def count_active_transfers_from_task(db: AsyncSession, from_task_id: int) -> int:
-    """Количество неаннулированных передач с данного задания."""
-    return int(
-        await db.scalar(
-            select(func.count(Transfer.id)).where(
-                Transfer.from_task_id == from_task_id,
-                Transfer.status.notin_([TransferStatus.cancelled]),
-            )
-        )
-        or 0
-    )
-
-
-async def count_active_transfers_from_plan_line(
-    db: AsyncSession,
-    section_plan_line_id: int,
-) -> int:
-    """Количество неаннулированных передач со склада по строке плана.
-
-    Складской fake_task после полной передачи переходит в ``completed``,
-    а ``_fetch_stock_ready_items`` может создать новый WorkTask на ту же
-    ``section_plan_line``. Счётчик по ``from_task_id`` в таком случае
-    обнуляется — поэтому для складских строк плана считаем все передачи
-    с любого задания этой линии.
-    """
-    return int(
-        await db.scalar(
-            select(func.count(Transfer.id))
-            .join(WorkTask, WorkTask.id == Transfer.from_task_id)
-            .where(
-                WorkTask.section_plan_line_id == section_plan_line_id,
-                Transfer.status.notin_([TransferStatus.cancelled]),
-            )
-        )
-        or 0
-    )
-
-
-async def has_active_transfer_for_task(db: AsyncSession, from_task_id: int) -> bool:
-    """Есть ли уже активная (неаннулированная) передача с задания."""
-    return await count_active_transfers_from_task(db, from_task_id) > 0
-
-
-async def has_active_transfer_for_plan_line(
-    db: AsyncSession,
-    section_plan_line_id: int,
-) -> bool:
-    """Есть ли активная передача по складской строке плана (любой fake_task)."""
-    return await count_active_transfers_from_plan_line(db, section_plan_line_id) > 0
-
-
 async def compute_stock_section_transferable(
     db: AsyncSession,
     *,
     task: WorkTask,
     section: Section,
     planned_qty: Decimal,
+    dimensions: dict | None = None,
 ) -> tuple[Decimal, Decimal, Decimal, Decimal]:
-    """Остаток к передаче со склада, привязанный к плану позиции.
+    """Остаток к передаче со склада по паре (строка плана, размер).
 
     Возвращает ``(transferable, plan_remaining, physical_stock, already_transferred)``.
     Нельзя передать больше плана позиции и больше физического остатка на складе.
+    ``already_transferred`` учитывается по размеру (не по строке целиком):
+    несколько передач одного размера разрешены, сумма ограничена через
+    ``transferable``.
     """
     from app.stock.models import QualityState, StockBalance
+
+    # Размер группы: если явный не передан — берём из задания (канонический
+    # габарит плана). None = безразмерная legacy-группа.
+    dims = dimensions if dimensions is not None else task.dimensions
 
     already_transferred = (
         await db.scalar(
@@ -147,6 +104,7 @@ async def compute_stock_section_transferable(
             .where(
                 WorkTask.section_plan_line_id == task.section_plan_line_id,
                 Transfer.status.notin_([TransferStatus.cancelled]),
+                dimensions_match_clause(Transfer.dimensions, dims),
             )
         )
         or Decimal("0")
@@ -162,9 +120,9 @@ async def compute_stock_section_transferable(
     )
     # Задание несёт габарит (ADR-0001): остаток считается только по строке
     # баланса этой размерности. Без длины — legacy-поведение (все группы).
-    if task.dimensions is not None:
+    if dims is not None:
         physical_stock_q = physical_stock_q.where(
-            dimensions_match_clause(StockBalance.dimensions, task.dimensions)
+            dimensions_match_clause(StockBalance.dimensions, dims)
         )
     physical_stock = (await db.scalar(physical_stock_q)) or Decimal("0")
 
@@ -172,7 +130,45 @@ async def compute_stock_section_transferable(
     return transferable, plan_remaining, physical_stock, already_transferred
 
 
-async def _get_task_transferable(db: AsyncSession, task: WorkTask) -> Decimal:
+async def _transferred_by_task_and_dimensions(
+    db: AsyncSession,
+    *,
+    task_id: int,
+    dimensions: dict | None,
+) -> Decimal:
+    """Нетто-переданное с задания по конкретному размеру (из ledger).
+
+    Суммирует net ``TRANSFER_SEND`` по ``(task_id, dimensions)`` с учётом
+    компенсаций (отмена). None — безразмерная группа.
+    """
+    return (
+        await db.scalar(
+            select(
+                func.coalesce(
+                    func.sum(
+                        case(
+                            (StockTransaction.compensates_tx_id.is_(None), StockTransaction.quantity),
+                            else_=-StockTransaction.quantity,
+                        )
+                    ),
+                    0,
+                )
+            ).where(
+                StockTransaction.task_id == task_id,
+                StockTransaction.reason == Reason.TRANSFER_SEND,
+                dimensions_match_clause(StockTransaction.dimensions, dimensions),
+            )
+        )
+        or Decimal("0")
+    )
+
+
+async def _get_task_transferable(
+    db: AsyncSession,
+    task: WorkTask,
+    *,
+    dimensions: dict | None = None,
+) -> Decimal:
     from app.models.section import Section
     from app.services.route_storage_classifier import is_stock_section
     from app.stock.services import StockProjectionManager
@@ -188,12 +184,20 @@ async def _get_task_transferable(db: AsyncSession, task: WorkTask) -> Decimal:
             task=task,
             section=sec,
             planned_qty=planned_qty,
+            dimensions=dimensions,
         )
         return transferable
 
     pm = StockProjectionManager()
     cache = await pm.get_task_cache(db, task.id)
-    return cache["completed_quantity"] + cache["received_quantity"] - cache["transferred_quantity"]
+    transferred_by_size = await _transferred_by_task_and_dimensions(
+        db, task_id=task.id, dimensions=dimensions
+    )
+    return (
+        cache["completed_quantity"]
+        + cache["received_quantity"]
+        - transferred_by_size
+    )
 
 
 async def _record_transfer_send_stock_tx(
@@ -406,19 +410,6 @@ async def transfer_send(
             }
 
     from_task = await _get_task_for_update(db, from_task_id)
-    from app.services.route_storage_classifier import is_stock_section
-    source_section = await db.get(Section, from_task.section_id)
-    if is_stock_section(source_section):
-        has_active = await has_active_transfer_for_plan_line(
-            db, from_task.section_plan_line_id
-        )
-    else:
-        has_active = await has_active_transfer_for_task(db, from_task.id)
-    if has_active:
-        raise ValueError(
-            "По этому заданию уже есть активная передача. "
-            "Измените количество в журнале передач."
-        )
     from_line = await db.get(SectionPlanLine, from_task.section_plan_line_id)
     if from_line is None:
         raise ValueError("Source task plan line not found")
@@ -497,7 +488,7 @@ async def transfer_send(
         raise ValueError("Transfer target must be next route step")
 
     if not post_factum and not allow_over_plan:
-        transferable = await _get_task_transferable(db, from_task)
+        transferable = await _get_task_transferable(db, from_task, dimensions=dimensions)
         if quantity > transferable:
             raise ValueError("Transfer quantity exceeds transferable amount")
 
@@ -520,6 +511,7 @@ async def transfer_send(
         idempotency_key=idempotency_key,
         is_post_factum=post_factum,
         physical_handover_at=physical_handover_at,
+        dimensions=dimensions,
     )
     db.add(transfer)
     await db.flush()
@@ -752,7 +744,10 @@ async def correct_transfer(
     to_task = await _get_task(db, transfer.to_task_id)
     
     # 1. Validate source limit
-    transferable = await _get_task_transferable(db, from_task) + old_quantity
+    transferable = (
+        await _get_task_transferable(db, from_task, dimensions=transfer.dimensions)
+        + old_quantity
+    )
     if new_quantity > transferable:
         raise ValueError(
             f"Corrected quantity exceeds transferable amount of source task. "

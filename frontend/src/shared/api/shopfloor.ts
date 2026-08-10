@@ -100,6 +100,8 @@ export type SectionBoardTask = {
   input_dimensions?: Record<string, unknown> | null;
   outputs?: TaskOutputSpec[];
   operation_summary?: string | null;
+  // Размер нетрансформирующего этапа (ADR-0001): габарит задания из плана.
+  dimensions?: Record<string, unknown> | null;
   // Прогресс трансформации: оприходовано по каждому выходу + списано входа
   outputs_progress?: TaskOutputProgress[] | null;
   input_consumed_quantity?: string | null;

@@ -3,6 +3,7 @@ from datetime import datetime
 from decimal import Decimal
 
 from sqlalchemy import BigInteger, CheckConstraint, DateTime, Enum, ForeignKey, Identity, Numeric, String, Text, func, text
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base
@@ -54,6 +55,11 @@ class Transfer(Base):
     accepted_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
     accepted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     comment: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Габарит переданного материала (ADR-0001): каноническая форма как в
+    # WorkTask.dimensions / StockTransaction.dimensions. None — безразмерные.
+    # Передача несёт размер, как ledger; guard и transferable считаются по
+    # паре (задача, размер), а не по задаче целиком.
+    dimensions: Mapped[dict | None] = mapped_column(JSONB(none_as_null=True), nullable=True)
     is_post_factum: Mapped[bool] = mapped_column(
         nullable=False, server_default=text("false"), default=False
     )

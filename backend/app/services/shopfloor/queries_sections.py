@@ -520,6 +520,10 @@ async def get_section_board(
             "source_ref": source_ref,
             "source_payload": source_payload or {},
             "source_fingerprint": fingerprint,
+            # Размер задания (ADR-0001): габарит материала на этом этапе.
+            # У трансформирующих этапов вход/выходы уже несут input_dimensions
+            # и outputs — здесь только «размер» нетрансформирующего этапа.
+            "dimensions": task.dimensions,
             "input_sku": source_sku or "",
             "output_sku": output_sku or "",
             "display_sku": effective_display_sku,
