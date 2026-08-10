@@ -9,7 +9,11 @@ from sqlalchemy import String, case, cast, exists, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
-from app.domain.dimensions import format_operation_summary, format_quantity
+from app.domain.dimensions import (
+    format_operation_summary,
+    format_quantity,
+    parse_dimensions_filter,
+)
 from app.models.internal_plan import SectionPlanLine
 from app.models.production_plan import PlanPosition
 from app.models.product import Product
@@ -43,7 +47,7 @@ def _compute_fingerprint(
     return hashlib.sha256(canonical.encode()).hexdigest()[:16]
 
 
-BOARD_SORT_FIELDS = frozenset({"sequence", "task_id", "product_sku", "status", "due_date"})
+BOARD_SORT_FIELDS = frozenset({"sequence", "task_id", "product_sku", "status", "due_date", "dimensions"})
 DEFAULT_BOARD_LIMIT = 50
 MAX_BOARD_LIMIT = 500
 
@@ -56,6 +60,7 @@ def _build_section_board_query(
     status: str | None = None,
     search: str | None = None,
     product_sku: str | None = None,
+    dimensions: str | None = None,
 ):
     """Base board query with SQL-first filters (no pagination/sort)."""
     query = select(
@@ -97,6 +102,12 @@ def _build_section_board_query(
                 PlanPosition.output_sku.ilike(sku_like),
             )
         )
+    if dimensions:
+        from app.stock.services import dimensions_match_clause
+
+        dims_active, dims = parse_dimensions_filter(dimensions)
+        if dims_active:
+            query = query.where(dimensions_match_clause(WorkTask.dimensions, dims))
     if search:
         search_like = f"%{search}%"
         route_op_search = exists(
@@ -140,17 +151,20 @@ def _apply_board_sort(query, *, sort_by: str, sort_order: str):
         order_column = WorkTask.status
     elif resolved_sort_by == "due_date":
         order_column = WorkTask.due_date
+    elif resolved_sort_by == "dimensions":
+        order_column = WorkTask.dimensions["length_mm"].as_float()
     else:
         order_column = SectionPlanLine.sequence
 
+    nulls_last = resolved_sort_by in ("due_date", "dimensions")
     if sort_order == "asc":
         primary = order_column.asc()
-        if resolved_sort_by == "due_date":
+        if nulls_last:
             primary = primary.nulls_last()
         return query.order_by(primary, WorkTask.id.asc())
 
     primary = order_column.desc()
-    if resolved_sort_by == "due_date":
+    if nulls_last:
         primary = primary.nulls_last()
     return query.order_by(primary, WorkTask.id.desc())
 
@@ -164,6 +178,7 @@ async def get_section_board(
     status: str | None = None,
     search: str | None = None,
     product_sku: str | None = None,
+    dimensions: str | None = None,
     sort_by: str = "sequence",
     sort_order: str = "asc",
     limit: int = DEFAULT_BOARD_LIMIT,
@@ -180,6 +195,7 @@ async def get_section_board(
         status=status,
         search=search,
         product_sku=product_sku,
+        dimensions=dimensions,
     )
 
     count_stmt = select(func.count()).select_from(

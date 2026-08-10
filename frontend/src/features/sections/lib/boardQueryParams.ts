@@ -1,10 +1,11 @@
-import { pickColumnApiValue } from "@/shared/lib/columnFilterSearch";
+import { pickColumnApiValue, pickExactMatchColumnValue } from "@/shared/lib/columnFilterSearch";
 import type { SortConfig } from "@/shared/hooks/useTableQueryEngine";
 import type { SectionBoardQueryParams } from "@/shared/api/shopfloor";
 
 export type TaskSortField =
   | "sequence"
   | "productSku"
+  | "dimensions"
   | "plannedQty"
   | "issuedQty"
   | "completedQty"
@@ -13,7 +14,12 @@ export type TaskSortField =
   | "remainingQty"
   | "status";
 
-const SERVER_SORT_FIELDS = new Set<TaskSortField>(["sequence", "productSku", "status"]);
+const SERVER_SORT_FIELDS = new Set<TaskSortField>([
+  "sequence",
+  "productSku",
+  "status",
+  "dimensions",
+]);
 
 export function mapTaskSortFieldToApi(field: TaskSortField): string | undefined {
   switch (field) {
@@ -23,6 +29,8 @@ export function mapTaskSortFieldToApi(field: TaskSortField): string | undefined 
       return "product_sku";
     case "status":
       return "status";
+    case "dimensions":
+      return "dimensions";
     default:
       return undefined;
   }
@@ -35,9 +43,13 @@ export function isServerSortField(field: TaskSortField): boolean {
 export function buildBoardColumnApiParams(
   columnFilters: Partial<Record<TaskSortField, Set<string>>>,
   columnSearchQueries: Partial<Record<TaskSortField, string>>,
-): Pick<SectionBoardQueryParams, "product_sku"> {
+): Pick<SectionBoardQueryParams, "product_sku" | "dimensions"> {
   const productSku = pickColumnApiValue(columnFilters, columnSearchQueries, "productSku");
-  return productSku ? { product_sku: productSku } : {};
+  const dimensions = pickExactMatchColumnValue(columnFilters, "dimensions");
+  return {
+    ...(productSku ? { product_sku: productSku } : {}),
+    ...(dimensions ? { dimensions } : {}),
+  };
 }
 
 export function buildBoardServerQueryParams(opts: {
@@ -45,7 +57,7 @@ export function buildBoardServerQueryParams(opts: {
   columnFilters: Partial<Record<TaskSortField, Set<string>>>;
   columnSearchQueries: Partial<Record<TaskSortField, string>>;
   sortConfigs: SortConfig<TaskSortField>[];
-}): Pick<SectionBoardQueryParams, "search" | "product_sku" | "sort_by" | "sort_order"> {
+}): Pick<SectionBoardQueryParams, "search" | "product_sku" | "dimensions" | "sort_by" | "sort_order"> {
   const { search, columnFilters, columnSearchQueries, sortConfigs } = opts;
   const columnParams = buildBoardColumnApiParams(columnFilters, columnSearchQueries);
   const activeSort = sortConfigs[0];

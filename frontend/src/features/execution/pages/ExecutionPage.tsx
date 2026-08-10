@@ -21,7 +21,8 @@ import { RemainderAllocationDialog } from "../components/RemainderAllocationDial
 import { listSections } from "@/shared/api/sections";
 import { useFilterableTable } from "@/shared/hooks/useFilterableTable";
 import { usePaginatedTableQuery } from "@/shared/hooks/usePaginatedTableQuery";
-import { pickColumnApiValue } from "@/shared/lib/columnFilterSearch";
+import { pickColumnApiValue, pickExactMatchColumnValue } from "@/shared/lib/columnFilterSearch";
+import { formatDimensionsFilterValue } from "@/shared/api/stock";
 
 
 import { toast } from "@/shared/ui/use-toast";
@@ -71,6 +72,8 @@ function mapExecutionSortFieldToApi(field: ExecutionSortField): string | undefin
       return "planned_qty";
     case "stage":
       return "sequence";
+    case "dimensions":
+      return "dimensions";
     default:
       return undefined;
   }
@@ -90,6 +93,7 @@ function buildExecutionColumnApiParams(
   | "route_name"
   | "status"
   | "current_stage_section_name"
+  | "dimensions"
 > {
   const params: Pick<
     ListProductionPlanningRowsParams,
@@ -102,6 +106,7 @@ function buildExecutionColumnApiParams(
     | "route_name"
     | "status"
     | "current_stage_section_name"
+    | "dimensions"
   > = {};
 
   const planPositionId = pickColumnApiValue(columnFilters, columnSearchQueries, "id");
@@ -139,6 +144,9 @@ function buildExecutionColumnApiParams(
     v === "—" ? undefined : v,
   );
   if (stageName) params.current_stage_section_name = stageName;
+
+  const dimensions = pickExactMatchColumnValue(columnFilters, "dimensions");
+  if (dimensions) params.dimensions = dimensions;
 
   return params;
 }
@@ -759,6 +767,9 @@ export function ExecutionPage() {
       route: [...new Set(rows.map((r) => r.route_name || "Не назначен"))],
       status: [...new Set(rows.map((r) => (r.is_completed ? "completed" : r.position_status)))],
       stage: [...new Set(rows.map((r) => r.current_stage_section_name || "—"))],
+      dimensions: [...new Set(rows.map((r) => JSON.stringify(r.dimensions ?? null)))].sort(
+        (a, b) => formatDimensionsFilterValue(a).localeCompare(formatDimensionsFilterValue(b), "ru"),
+      ),
     };
   }, [rows, planNameById]);
 

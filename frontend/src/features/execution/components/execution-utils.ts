@@ -1,4 +1,5 @@
 import type { ProductionPlanningRow } from "@/shared/api/productionPlans";
+import { formatDimensionsLabel } from "@/shared/api/stock";
 import { fmtQty } from "@/shared/utils/fmtQty";
 import { statusLabels } from "@/shared/lib/generated-labels";
 
@@ -14,7 +15,7 @@ export const positionStatusColor: Record<string, string> = {
   completed: "bg-violet-100 text-violet-700",
 };
 
-export type ExecutionSortField = "id" | "row" | "plan" | "sku" | "name" | "qty" | "route" | "status" | "stage";
+export type ExecutionSortField = "id" | "row" | "plan" | "sku" | "name" | "qty" | "route" | "status" | "stage" | "dimensions";
 
 export type RouteMetaLike = Pick<
   ProductionPlanningRow,
@@ -117,6 +118,8 @@ export function getCellValue(row: ProductionPlanningRow, field: ExecutionSortFie
       return row.is_completed ? "completed" : row.position_status;
     case "stage":
       return row.current_stage_section_name || "—";
+    case "dimensions":
+      return row.dimensions_label ?? formatDimensionsLabel(row.dimensions);
     default:
       return "";
   }

@@ -12,6 +12,7 @@
 """
 from __future__ import annotations
 
+import json
 import math
 import re
 from collections.abc import Mapping
@@ -35,6 +36,34 @@ class DimensionsValidationError(ValueError):
     Поднимается на невалидном входе (нулевая/отрицательная длина,
     мусорная строка из Excel и т.п.) — никаких silent ``None``.
     """
+
+
+def parse_dimensions_filter(raw: str | None) -> tuple[bool, dict[str, Any] | None]:
+    """Разобрать query-параметр ``dimensions`` (JSON-строка) в канонический габарит.
+
+    Возвращает ``(active, dims)``:
+    - ``(False, None)`` — параметр отсутствует/пустой, фильтр не применять;
+    - ``(True, None)`` — ``"null"``, фильтр «безразмерные штуки»;
+    - ``(True, dict)`` — JSON-объект, фильтр точного совпадения по габариту.
+
+    Мусор (не JSON, не объект) → :class:`DimensionsValidationError` — вызывающий
+    превращает в HTTP 422.
+    """
+    if raw is None or not raw.strip():
+        return False, None
+    try:
+        value = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise DimensionsValidationError(
+            f"Некорректный dimensions, ожидался JSON-объект или null: {raw!r}"
+        ) from exc
+    if value is None:
+        return True, None
+    if not isinstance(value, Mapping):
+        raise DimensionsValidationError(
+            f"dimensions должен быть JSON-объектом или null, получено: {raw!r}"
+        )
+    return True, canonicalize_dimensions(value)
 
 
 def canonicalize_dimensions(raw: Mapping[str, Any] | None) -> dict[str, Any] | None:

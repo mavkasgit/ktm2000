@@ -130,6 +130,9 @@ class FinalReleasePayload(BaseModel):
     executor_user_id: int | None = None
     performed_at: datetime | None = None
     accounted_at: datetime | None = None
+    # Габарит выпуска (ADR-0001): на трансформирующем финальном этапе —
+    # один из выходных размеров задания. На обычном — опционален.
+    dimensions: dict | None = None
 
 
 class PrepareTaskPayload(BaseModel):
@@ -587,6 +590,7 @@ async def final_release_endpoint(
             executor_user_id=payload.executor_user_id,
             performed_at=payload.performed_at,
             accounted_at=payload.accounted_at,
+            dimensions=payload.dimensions,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -859,6 +863,7 @@ async def section_board(
     status: str | None = Query(None),
     search: str | None = Query(None, description="ILIKE: product_sku, task id, operation_name"),
     product_sku: str | None = Query(None, description="Column filter: ILIKE on product/source/output sku"),
+    dimensions: str | None = Query(None, description="Column filter: exact JSON match on task dimensions, e.g. {\"length_mm\":2700} or null"),
     sort_by: str = Query(default="sequence"),
     sort_order: str = Query(default="asc"),
     limit: int = Query(default=50, ge=1, le=500),
@@ -867,6 +872,12 @@ async def section_board(
     locked_section_id: int | None = Depends(get_single_window_locked_section_id),
 ) -> dict:
     _ensure_section_lock(section_id, locked_section_id)
+    from app.domain.dimensions import DimensionsValidationError, parse_dimensions_filter
+
+    try:
+        parse_dimensions_filter(dimensions)
+    except DimensionsValidationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     return await get_section_board(
         db,
         section_id=section_id,
@@ -875,6 +886,7 @@ async def section_board(
         status=status,
         search=search,
         product_sku=product_sku,
+        dimensions=dimensions,
         sort_by=sort_by,
         sort_order=sort_order,
         limit=limit,

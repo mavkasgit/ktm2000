@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from datetime import date
 from decimal import Decimal
+from urllib.parse import quote
 
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -229,3 +230,105 @@ async def test_rows_sort_by_product_sku(client, session: AsyncSession):
 async def test_rows_limit_max_validation(client):
     resp = await client.get("/api/production-planning/rows?limit=1000")
     assert resp.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_rows_sort_by_dimensions_desc(client, session: AsyncSession):
+    """sort_by=dimensions на странице плана: 3 м → 1 м → безразмерные в конце."""
+    product, route = await _make_route(session, "EXEC-DIMSORT")
+    plan = ProductionPlan(
+        plan_no="PLAN-DIMSORT",
+        name="Plan DIMSORT",
+        status=ProductionPlanStatus.approved,
+        period_start=date(2026, 5, 1),
+        period_end=date(2026, 5, 31),
+    )
+    session.add(plan)
+    await session.flush()
+
+    for row_no, dims in enumerate(
+        ({"length_mm": 1000}, {"length_mm": 3000}, None), start=1
+    ):
+        session.add(
+            PlanPosition(
+                production_plan_id=plan.id,
+                product_id=product.id,
+                source_type=PlanSourceType.manual,
+                source_sku=f"DIMSORT-{row_no:03d}",
+                source_name=product.name,
+                quantity=Decimal("10"),
+                input_dimensions=dims,
+                source_payload={},
+                status=PlanPositionStatus.approved,
+                validation_status=PlanPositionValidationStatus.valid,
+                validation_errors=[],
+                period_start=plan.period_start,
+                period_end=plan.period_end,
+                has_pack_ops=False,
+                route_id=route.id,
+                source_row_number=row_no,
+            )
+        )
+    await session.commit()
+
+    resp = await client.get(
+        "/api/production-planning/rows?sort_by=dimensions&sort_order=desc&limit=50"
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["total"] == 3
+    assert [row["dimensions"] for row in body["rows"]] == [
+        {"length_mm": 3000},
+        {"length_mm": 1000},
+        None,
+    ]
+    assert body["rows"][0]["dimensions_label"] == "3 м"
+
+
+@pytest.mark.asyncio
+async def test_rows_filter_by_dimensions_exact(client, session: AsyncSession):
+    """Фильтр dimensions='{"length_mm":2000}' на странице плана — точное совпадение."""
+    product, route = await _make_route(session, "EXEC-DIMFILT")
+    plan = ProductionPlan(
+        plan_no="PLAN-DIMFILT",
+        name="Plan DIMFILT",
+        status=ProductionPlanStatus.approved,
+        period_start=date(2026, 5, 1),
+        period_end=date(2026, 5, 31),
+    )
+    session.add(plan)
+    await session.flush()
+
+    for row_no, dims in enumerate(
+        ({"length_mm": 2000}, {"length_mm": 3500}, None), start=1
+    ):
+        session.add(
+            PlanPosition(
+                production_plan_id=plan.id,
+                product_id=product.id,
+                source_type=PlanSourceType.manual,
+                source_sku=f"DIMFILT-{row_no:03d}",
+                source_name=product.name,
+                quantity=Decimal("10"),
+                input_dimensions=dims,
+                source_payload={},
+                status=PlanPositionStatus.approved,
+                validation_status=PlanPositionValidationStatus.valid,
+                validation_errors=[],
+                period_start=plan.period_start,
+                period_end=plan.period_end,
+                has_pack_ops=False,
+                route_id=route.id,
+                source_row_number=row_no,
+            )
+        )
+    await session.commit()
+
+    resp = await client.get(
+        f"/api/production-planning/rows?dimensions={quote('{"length_mm":2000}')}"
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["total"] == 1
+    assert body["rows"][0]["source_sku"] == "DIMFILT-001"
+    assert body["rows"][0]["dimensions"] == {"length_mm": 2000}

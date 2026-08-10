@@ -10,7 +10,7 @@
 import { useMemo, useState, useCallback, useEffect, useRef } from "react";
 import { ChevronDown, ChevronRight } from "lucide-react";
 import type { SectionBoardQueryParams, SectionBoardTask, TaskGroup } from "@/shared/api/shopfloor";
-import { formatDimensionsLabel } from "@/shared/api/stock";
+import { formatDimensionsFilterValue, formatDimensionsLabel } from "@/shared/api/stock";
 import {
   Badge,
   Button,
@@ -171,6 +171,7 @@ function getTaskCellValue(task: SectionBoardTask, field: TaskSortField): string 
   switch (field) {
     case "sequence": return String(task.sequence);
     case "productSku": return task.product_sku;
+    case "dimensions": return formatDimensionsLabel(task.dimensions);
     case "status": return getStatusLabel(task);
     case "plannedQty": return String(parseFloat(task.planned_quantity) || 0);
     case "issuedQty": return String(parseFloat(task.cache.issued_quantity) || 0);
@@ -244,6 +245,7 @@ function renderTaskRow(
         <StatusDot task={task} />
       </td>
       <td className="p-2 font-medium">{task.product_sku}</td>
+      <td className="p-2 text-xs text-muted-foreground">{formatDimensionsLabel(task.dimensions)}</td>
       <td className="p-2">
         {task.operation_names && task.operation_names.length > 1 ? (
           <span className="text-xs font-medium">{task.operation_names.join(" + ")}</span>
@@ -331,6 +333,7 @@ function renderMobileCard(
 
       <div className="grid grid-cols-2 gap-2 text-sm">
         <div><span className="text-muted-foreground">План:</span> {fmtQty(task.planned_quantity)}</div>
+        <div><span className="text-muted-foreground">Размер:</span> {formatDimensionsLabel(task.dimensions)}</div>
         <div><span className="text-muted-foreground">Операция:</span> {task.operation_names && task.operation_names.length > 1 ? task.operation_names.join(" + ") : (task.operation_name || "—")}</div>
         <div><span className="text-muted-foreground">Выдано:</span> {fmtQty(task.cache.issued_quantity)}</div>
         <div><span className="text-muted-foreground">Годные:</span> {fmtQty(task.cache.completed_quantity)}</div>
@@ -423,6 +426,9 @@ function TableTaskGroupRow({
       </td>
       <td className="p-2 text-slate-900">
         {firstTask.product_sku}
+      </td>
+      <td className="p-2 text-xs text-slate-500 font-medium">
+        {formatDimensionsLabel(firstTask.dimensions)}
       </td>
       <td className="p-2 text-xs text-slate-500 font-medium">
         {firstTask.operation_name || "—"}
@@ -602,6 +608,9 @@ export function SectionTasksBoard({
   const uniqueValues = useMemo(() => ({
     sequence: [...new Set(visibleTasks.map((t) => String(t.sequence)))],
     productSku: [...new Set(visibleTasks.map((t) => t.product_sku))],
+    dimensions: [...new Set(visibleTasks.map((t) => JSON.stringify(t.dimensions ?? null)))].sort(
+      (a, b) => formatDimensionsFilterValue(a).localeCompare(formatDimensionsFilterValue(b), "ru"),
+    ),
     status: [...new Set(visibleTasks.map((t) => getStatusLabel(t)))],
     plannedQty: [...new Set(visibleTasks.map((t) => String(parseFloat(t.planned_quantity) || 0)))],
     issuedQty: [...new Set(visibleTasks.map((t) => String(parseFloat(t.cache.issued_quantity) || 0)))],
@@ -888,6 +897,18 @@ export function SectionTasksBoard({
                       {...bindColumn("productSku")}
                     />
                   </th>
+                  <th className={`${headerCellClass} p-0 text-left`}>
+                    <SortableFilterHeader
+                      field="dimensions"
+                      label="Размер"
+                      currentSorts={sortConfigs}
+                      onSortChange={handleSortChange}
+                      values={uniqueValues.dimensions}
+                      selectedValues={bindColumn("dimensions").selectedValues}
+                      onFilterChange={bindColumn("dimensions").onFilterChange}
+                      valueLabel={formatDimensionsFilterValue}
+                    />
+                  </th>
                   <th className={`${headerCellClass} text-left`}>
                     <span className="text-xs font-medium text-muted-foreground">Операция</span>
                   </th>
@@ -978,7 +999,7 @@ export function SectionTasksBoard({
               {sortedTasks.length === 0 ? (
                 <tbody>
                   <tr>
-                    <td colSpan={13} className="p-8 text-center text-sm text-muted-foreground">
+                    <td colSpan={14} className="p-8 text-center text-sm text-muted-foreground">
                       Нет задач, соответствующих фильтру
                     </td>
                   </tr>

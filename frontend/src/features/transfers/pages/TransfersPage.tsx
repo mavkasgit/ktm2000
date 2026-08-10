@@ -56,6 +56,8 @@ import {
 } from "@/shared/api/transfers";
 import { getErrorMessage } from "@/shared/api/client";
 import { queryKeys } from "@/shared/api/queryKeys";
+import { formatDimensionsFilterValue, formatDimensionsLabel } from "@/shared/api/stock";
+import { pickExactMatchColumnValue } from "@/shared/lib/columnFilterSearch";
 import { cn } from "@/shared/utils/cn";
 import {
   useBulkSelection,
@@ -119,7 +121,7 @@ function statusBadgeVariant(status: string): StatusBadgeVariant {
   return "outline";
 }
 
-type ReadySortField = "positionId" | "sku" | "stage" | "transferableQty" | "next";
+type ReadySortField = "positionId" | "sku" | "dimensions" | "stage" | "transferableQty" | "next";
 
 function getReadyCellValue(task: ReadyToTransferTask, field: ReadySortField): string {
   switch (field) {
@@ -127,6 +129,8 @@ function getReadyCellValue(task: ReadyToTransferTask, field: ReadySortField): st
       return String(task.plan_position_id);
     case "sku":
       return task.product_sku ?? "—";
+    case "dimensions":
+      return task.dimensions_label ?? formatDimensionsLabel(task.dimensions);
     case "stage":
       return task.operation_name ?? "—";
     case "transferableQty":
@@ -158,6 +162,8 @@ function mapReadySortFieldToApi(field: ReadySortField): string {
       return "plan_position_id";
     case "sku":
       return "product_sku";
+    case "dimensions":
+      return "dimensions";
     case "stage":
       return "operation_name";
     case "transferableQty":
@@ -270,6 +276,7 @@ function buildReadyColumnApiParams(
   | "next_section_name"
   | "plan_position_id"
   | "transferable_qty"
+  | "dimensions"
 > {
   const params: Pick<
     ReadyToTransferListParams,
@@ -279,6 +286,7 @@ function buildReadyColumnApiParams(
     | "next_section_name"
     | "plan_position_id"
     | "transferable_qty"
+    | "dimensions"
   > = {};
 
   const productSku = pickColumnApiValue(columnFilters, columnSearchQueries, "sku");
@@ -289,6 +297,9 @@ function buildReadyColumnApiParams(
 
   const transferableQty = pickColumnApiValue(columnFilters, columnSearchQueries, "transferableQty");
   if (transferableQty) params.transferable_qty = transferableQty;
+
+  const dimensions = pickExactMatchColumnValue(columnFilters, "dimensions");
+  if (dimensions) params.dimensions = dimensions;
 
   const positionIdStr = pickColumnApiValue(columnFilters, columnSearchQueries, "positionId");
   if (positionIdStr) {
@@ -410,6 +421,9 @@ function ReadyTransferRow({
       )}
       <TableCell className="font-mono text-xs text-muted-foreground">#{task.plan_position_id}</TableCell>
       <TableCell>{task.product_sku ?? "—"}</TableCell>
+      <TableCell className="text-xs text-muted-foreground whitespace-nowrap">
+        {task.dimensions_label ?? formatDimensionsLabel(task.dimensions)}
+      </TableCell>
       <TableCell>
         <div className="text-xs">
           <div className="font-medium">{task.operation_name ?? "—"}</div>
@@ -757,6 +771,9 @@ export function TransfersPage() {
         (a, b) => Number(a) - Number(b),
       ),
       sku: [...new Set(readyItems.map((t) => t.product_sku ?? "—"))].sort(),
+      dimensions: [...new Set(readyItems.map((t) => JSON.stringify(t.dimensions ?? null)))].sort(
+        (a, b) => formatDimensionsFilterValue(a).localeCompare(formatDimensionsFilterValue(b), "ru"),
+      ),
       stage: [...new Set(readyItems.map((t) => t.operation_name ?? "—"))].sort(),
       transferableQty: [...new Set(readyItems.map((t) => fmtQty(t.transferable_quantity)))].sort(
         (a, b) => parseFloat(a) - parseFloat(b),
@@ -1076,6 +1093,18 @@ export function TransfersPage() {
                     </TableHead>
                     <TableHead className={`${headerCellClass} p-0`}>
                       <SortableFilterHeader
+                        field="dimensions"
+                        label="Размер"
+                        currentSorts={readySortConfigs}
+                        onSortChange={handleReadySort}
+                        values={readyUniqueValues.dimensions}
+                        selectedValues={bindReadyColumn("dimensions").selectedValues}
+                        onFilterChange={bindReadyColumn("dimensions").onFilterChange}
+                        valueLabel={formatDimensionsFilterValue}
+                      />
+                    </TableHead>
+                    <TableHead className={`${headerCellClass} p-0`}>
+                      <SortableFilterHeader
                         field="stage"
                         label="Этап"
                         currentSorts={readySortConfigs}
@@ -1121,7 +1150,7 @@ export function TransfersPage() {
                   <TableBody>
                     <TableRow>
                       <TableCell
-                        colSpan={bulkMode ? 7 : 7}
+                        colSpan={bulkMode ? 8 : 8}
                         className="py-6 text-center text-sm text-muted-foreground"
                       >
                         Нет заданий, соответствующих фильтру
@@ -1132,7 +1161,7 @@ export function TransfersPage() {
                   <VirtualizedTableBody
                     rows={readyItems}
                     rowHeight={56}
-                    colSpan={bulkMode ? 7 : 7}
+                    colSpan={bulkMode ? 8 : 8}
                     scrollContainerRef={readyScrollRef}
                     renderRow={(t) => (
                       <ReadyTransferRow

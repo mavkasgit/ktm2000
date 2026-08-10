@@ -37,7 +37,7 @@ from app.models.transfer import (
     TransferStatus,
 )
 from app.models.work_task import WorkTask, WorkTaskStatus
-from app.domain.dimensions import format_dimensions
+from app.domain.dimensions import parse_dimensions_filter, format_dimensions
 from app.services.plan_position_hanger import task_dimensions_for_plan_line
 
 from app.services.shopfloor.common import _get_transfer, _to_decimal
@@ -331,6 +331,7 @@ READY_SORT_FIELDS = frozenset({
     "operation_name",
     "transferable_qty",
     "next_section_name",
+    "dimensions",
 })
 
 
@@ -370,10 +371,19 @@ def _apply_ready_production_order(
         order_column = transferable_expr
     elif sort_by == "next_section_name":
         order_column = next_section.name
+    elif sort_by == "dimensions":
+        order_column = WorkTask.dimensions["length_mm"].as_float()
 
+    nulls_last = sort_by == "dimensions"
     if sort_order == "asc":
-        return query.order_by(order_column.asc(), WorkTask.id.asc())
-    return query.order_by(order_column.desc(), WorkTask.id.desc())
+        primary = order_column.asc()
+        if nulls_last:
+            primary = primary.nulls_last()
+        return query.order_by(primary, WorkTask.id.asc())
+    primary = order_column.desc()
+    if nulls_last:
+        primary = primary.nulls_last()
+    return query.order_by(primary, WorkTask.id.desc())
 
 
 def _build_production_ready_query(
@@ -388,6 +398,7 @@ def _build_production_ready_query(
     task_id: int | None = None,
     plan_position_id: int | None = None,
     transferable_qty: Decimal | None = None,
+    dimensions: str | None = None,
     sort_by: str = "sequence",
     sort_order: str = "asc",
 ):
@@ -506,6 +517,12 @@ def _build_production_ready_query(
         query = query.where(from_line.plan_position_id == plan_position_id)
     if transferable_qty is not None:
         query = query.where(transferable_expr == transferable_qty)
+    if dimensions:
+        from app.stock.services import dimensions_match_clause
+
+        dims_active, dims = parse_dimensions_filter(dimensions)
+        if dims_active:
+            query = query.where(dimensions_match_clause(WorkTask.dimensions, dims))
 
     if sort_by not in READY_SORT_FIELDS:
         sort_by = "sequence"
@@ -557,6 +574,7 @@ def _ready_item_matches_column_filters(
     task_id: int | None,
     plan_position_id: int | None,
     transferable_qty: Decimal | None,
+    dimensions: str | None = None,
 ) -> bool:
     if task_id is not None and item.get("task_id") != task_id:
         return False
@@ -587,10 +605,19 @@ def _ready_item_matches_column_filters(
             return False
         if item_qty != transferable_qty:
             return False
+    if dimensions:
+        dims_active, dims = parse_dimensions_filter(dimensions)
+        if dims_active:
+            item_dims = item.get("dimensions")
+            if dims is None:
+                if item_dims is not None:
+                    return False
+            elif item_dims != dims:
+                return False
     return True
 
 
-def _ready_item_sort_key(item: dict, sort_by: str) -> tuple:
+def _ready_item_sort_key(item: dict, sort_by: str, sort_order: str = "asc") -> tuple:
     if sort_by == "task_id":
         return (item.get("task_id") or 0,)
     if sort_by == "plan_position_id":
@@ -603,7 +630,32 @@ def _ready_item_sort_key(item: dict, sort_by: str) -> tuple:
         return (_to_decimal(item.get("transferable_quantity") or "0"),)
     if sort_by == "next_section_name":
         return (item.get("next_section_name") or "",)
+    if sort_by == "dimensions":
+        return _ready_dimensions_sort_key(item, sort_order)
     return (item.get("sequence") or 0, item.get("task_id") or 0)
+
+
+def _ready_dimensions_sort_key(item: dict, sort_order: str) -> tuple:
+    """Сортировочный ключ размера: длина от большей к меньшей, безразмерные — в конец.
+
+    ``sort_order`` нужен, потому что общий путь (has_stock) сортирует через
+    ``reverse=sort_order == "desc"`` — инверсия «переворачивает» null-флаг.
+    """
+    dims = item.get("dimensions")
+    length = None
+    if isinstance(dims, dict):
+        raw = dims.get("length_mm")
+        if raw is not None:
+            try:
+                length = _to_decimal(raw)
+            except Exception:
+                length = None
+    has_length = length is not None
+    if sort_order == "desc":
+        # reverse=True: первый элемент — наибольший ключ. Безразмерные — наименьший ключ → последние.
+        return (1, float(length)) if has_length else (0, 0)
+    # reverse=False: безразмерные — наибольший ключ → последние.
+    return (0, float(length)) if has_length else (1, 0)
 
 
 async def _fetch_stock_ready_items(
@@ -619,6 +671,7 @@ async def _fetch_stock_ready_items(
     task_id: int | None = None,
     plan_position_id: int | None = None,
     transferable_qty: Decimal | None = None,
+    dimensions: str | None = None,
 ) -> list[dict]:
     from app.models.production_plan import PlanPosition
     from app.transfers.services import compute_stock_section_transferable
@@ -814,6 +867,7 @@ async def _fetch_stock_ready_items(
                 task_id=task_id,
                 plan_position_id=plan_position_id,
                 transferable_qty=transferable_qty,
+                dimensions=dimensions,
             ):
                 continue
             stock_items.append(candidate)
@@ -838,6 +892,7 @@ async def list_ready_to_transfer(
     task_id: int | None = None,
     plan_position_id: int | None = None,
     transferable_qty: str | None = None,
+    dimensions: str | None = None,
 ) -> dict:
     """List SectionTasks that have quantity ready to be transferred.
 
@@ -891,6 +946,7 @@ async def list_ready_to_transfer(
         task_id=task_id,
         plan_position_id=plan_position_id,
         transferable_qty=parsed_transferable_qty,
+        dimensions=dimensions,
         sort_by=sort_by,
         sort_order=sort_order,
     )
@@ -924,10 +980,11 @@ async def list_ready_to_transfer(
             task_id=task_id,
             plan_position_id=plan_position_id,
             transferable_qty=parsed_transferable_qty,
+            dimensions=dimensions,
         )
         items.extend(stock_items)
         reverse = sort_order == "desc"
-        items.sort(key=lambda item: _ready_item_sort_key(item, sort_by), reverse=reverse)
+        items.sort(key=lambda item: _ready_item_sort_key(item, sort_by, sort_order), reverse=reverse)
         total = len(items)
         items = items[offset : offset + limit]
 

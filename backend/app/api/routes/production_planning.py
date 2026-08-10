@@ -174,6 +174,8 @@ class PlanningRowOut(BaseModel):
     source_sku: str
     source_name: str | None
     quantity: float
+    dimensions: dict | None = None
+    dimensions_label: str | None = None
     position_status: str
     validation_status: str
     route_id: int | None
@@ -332,8 +334,18 @@ async def list_rows(
         default=None,
         description="Column filter: current stage section name",
     ),
+    dimensions: str | None = Query(
+        default=None,
+        description='Column filter: exact JSON match on position task dimensions, e.g. {"length_mm":2700} or null',
+    ),
     db: AsyncSession = Depends(get_db),
 ):
+    from app.domain.dimensions import DimensionsValidationError, parse_dimensions_filter
+
+    try:
+        parse_dimensions_filter(dimensions)
+    except DimensionsValidationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     params = PlanningRowsQueryParams(
         section_id=section_id,
         search=search,
@@ -351,6 +363,7 @@ async def list_rows(
         route_name=route_name,
         status=status,
         current_stage_section_name=current_stage_section_name,
+        dimensions=dimensions,
     )
     return await list_production_planning_rows(db, params=params)
 

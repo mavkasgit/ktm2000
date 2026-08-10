@@ -69,6 +69,8 @@ export type ReadyToTransferListParams = {
   task_id?: number;
   plan_position_id?: number;
   transferable_qty?: string;
+  /** Фильтр точного совпадения по габариту: JSON-строка (`{"length_mm":2700}`) или `null` для безразмерных. */
+  dimensions?: string;
 };
 
 export type IncomingTransfer = {
@@ -158,6 +160,7 @@ export async function listReadyToTransfer(
   if (params.next_section_name) search.set("next_section_name", params.next_section_name);
   if (params.task_id != null) search.set("task_id", String(params.task_id));
   if (params.transferable_qty) search.set("transferable_qty", params.transferable_qty);
+  if (params.dimensions) search.set("dimensions", params.dimensions);
   const qs = search.toString();
   const { data } = await apiClient.get<ReadyToTransferResponse>(
     `/transfers/ready${qs ? `?${qs}` : ""}`,

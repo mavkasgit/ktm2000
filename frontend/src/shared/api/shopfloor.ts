@@ -117,6 +117,8 @@ export type SectionBoardQueryParams = {
   status?: string;
   search?: string;
   product_sku?: string;
+  /** Фильтр точного совпадения по габариту: JSON-строка (`{"length_mm":2700}`) или `null` для безразмерных. */
+  dimensions?: string;
   sort_by?: string;
   sort_order?: "asc" | "desc";
   limit?: number;
@@ -237,6 +239,7 @@ export async function getSectionBoard(
   if (params?.status) search.set("status", params.status);
   if (params?.search) search.set("search", params.search);
   if (params?.product_sku) search.set("product_sku", params.product_sku);
+  if (params?.dimensions) search.set("dimensions", params.dimensions);
   if (params?.sort_by) search.set("sort_by", params.sort_by);
   if (params?.sort_order) search.set("sort_order", params.sort_order);
   if (params?.limit != null) search.set("limit", String(params.limit));

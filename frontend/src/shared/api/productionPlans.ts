@@ -348,6 +348,10 @@ export type ProductionPlanningRow = {
   source_sku: string;
   source_name: string | null;
   quantity: number;
+  /** Габарит задания позиции (ADR-0001), например `{"length_mm": 2700}`; null — безразмерные. */
+  dimensions?: Record<string, unknown> | null;
+  /** Готовая подпись размера («2,7 м» / «—»). */
+  dimensions_label?: string | null;
   position_status: string;
   validation_status: string;
   route_id: number | null;
@@ -495,6 +499,8 @@ export type ListProductionPlanningRowsParams = {
   route_name?: string;
   status?: string;
   current_stage_section_name?: string;
+  /** Фильтр точного совпадения по габариту: JSON-строка (`{"length_mm":2700}`) или `null` для безразмерных. */
+  dimensions?: string;
 };
 
 export type ProductionPlanningRowsListResponse = {

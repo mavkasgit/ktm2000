@@ -149,6 +149,10 @@ async def ready_to_transfer(
     task_id: int | None = Query(default=None),
     plan_position_id: int | None = Query(default=None),
     transferable_qty: str | None = Query(default=None),
+    dimensions: str | None = Query(
+        default=None,
+        description='Column filter: exact JSON match on task dimensions, e.g. {"length_mm":2700} or null',
+    ),
     db: AsyncSession = Depends(get_db),
     locked_section_id: int | None = Depends(get_single_window_locked_section_id),
 ) -> dict:
@@ -158,6 +162,12 @@ async def ready_to_transfer(
     both are given.  Honours single-window locking when ``section_id``
     is given.
     """
+    from app.domain.dimensions import DimensionsValidationError, parse_dimensions_filter
+
+    try:
+        parse_dimensions_filter(dimensions)
+    except DimensionsValidationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     if locked_section_id is not None and section_id is None:
         section_id = locked_section_id
     if locked_section_id is not None and section_id != locked_section_id:
@@ -178,6 +188,7 @@ async def ready_to_transfer(
         task_id=task_id,
         plan_position_id=plan_position_id,
         transferable_qty=transferable_qty,
+        dimensions=dimensions,
     )
 
 

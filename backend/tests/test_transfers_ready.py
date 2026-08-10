@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from decimal import Decimal
+from urllib.parse import quote
 
 import pytest
 from sqlalchemy import select
@@ -313,3 +314,157 @@ async def test_ready_sort_by_task_id(client, session) -> None:
     desc_body = desc_response.json()
     desc_ids = [item["task_id"] for item in desc_body["items"]]
     assert desc_ids == list(reversed(task_ids))
+
+
+async def _seed_dimensioned_ready_tasks(session, client, dims_list: list[dict | None]) -> dict:
+    """Create one plan position per entry (None = dimensionless) on a shared route.
+
+    Releases every position and completes source-section tasks, so each
+    position produces a ready-to-transfer row on the first section.
+    """
+    setup = await _make_two_ghp_setup(session, sku="RDY-DIM", qty=Decimal("1"))
+    plan = setup["plan"]
+    route = setup["route"]
+    setup["position"].input_dimensions = dims_list[0]
+
+    for i in range(1, len(dims_list)):
+        sku = f"RDY-DIM-{i:03d}"
+        product = Product(
+            sku=sku, name=sku, type=ProductType.finished_good, unit="pcs", is_active=True
+        )
+        session.add(product)
+        await session.flush()
+        tech = Techcard(product_id=product.id, version="v1", is_active=True)
+        session.add(tech)
+        await session.flush()
+        session.add(
+            TechcardLine(
+                techcard_id=tech.id, component_product_id=product.id,
+                quantity=Decimal("1"), unit="pcs",
+            )
+        )
+        session.add(
+            PlanPosition(
+                production_plan_id=plan.id,
+                product_id=product.id,
+                source_type=PlanSourceType.manual,
+                source_sku=product.sku,
+                source_name=product.name,
+                quantity=Decimal("1"),
+                input_dimensions=dims_list[i],
+                source_payload={},
+                status=PlanPositionStatus.approved,
+                validation_status=PlanPositionValidationStatus.valid,
+                validation_errors=[],
+                period_start=plan.period_start,
+                period_end=plan.period_end,
+                has_pack_ops=False,
+                route_id=route.id,
+                route_assigned_at=None,
+            )
+        )
+    await session.commit()
+
+    positions = (
+        await session.execute(
+            select(PlanPosition)
+            .where(PlanPosition.production_plan_id == plan.id)
+            .order_by(PlanPosition.id)
+        )
+    ).scalars().all()
+    for position in positions:
+        await _release_via_take_to_work(client, position.id)
+
+    await _complete_source_tasks(session, setup)
+    return setup
+
+
+@pytest.mark.asyncio
+async def test_ready_sort_by_dimensions_desc(client, session) -> None:
+    """sort_by=dimensions (SQL-path): 3 м → 1 м → безразмерные в конце."""
+    setup = await _seed_dimensioned_ready_tasks(
+        session, client, dims_list=[
+            {"length_mm": 1000},
+            {"length_mm": 3000},
+            None,
+        ]
+    )
+    sec1 = setup["sections"][0]
+
+    resp = await client.get(
+        f"/api/transfers/ready?section_id={sec1.id}&sort_by=dimensions&sort_order=desc&limit=50"
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["total"] == 3
+    assert [item["dimensions"] for item in body["items"]] == [
+        {"length_mm": 3000},
+        {"length_mm": 1000},
+        None,
+    ]
+
+
+@pytest.mark.asyncio
+async def test_ready_sort_by_dimensions_combined_path(client, session) -> None:
+    """sort_by=dimensions без section_id — комбинированный Python-sort (has_stock)."""
+    await _seed_dimensioned_ready_tasks(
+        session, client, dims_list=[
+            {"length_mm": 1000},
+            {"length_mm": 3000},
+            None,
+        ]
+    )
+
+    resp = await client.get(
+        "/api/transfers/ready?sort_by=dimensions&sort_order=desc&limit=50"
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["total"] == 3
+    assert [item["dimensions"] for item in body["items"]] == [
+        {"length_mm": 3000},
+        {"length_mm": 1000},
+        None,
+    ]
+
+
+@pytest.mark.asyncio
+async def test_ready_filter_by_dimensions_exact(client, session) -> None:
+    """Фильтр dimensions='{"length_mm":1000}' — точное совпадение."""
+    setup = await _seed_dimensioned_ready_tasks(
+        session, client, dims_list=[
+            {"length_mm": 1000},
+            {"length_mm": 3000},
+            None,
+        ]
+    )
+    sec1 = setup["sections"][0]
+
+    resp = await client.get(
+        f"/api/transfers/ready?section_id={sec1.id}&dimensions={quote('{"length_mm":1000}')}"
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["total"] == 1
+    assert body["items"][0]["dimensions"] == {"length_mm": 1000}
+
+
+@pytest.mark.asyncio
+async def test_ready_filter_dimensionless(client, session) -> None:
+    """Фильтр dimensions=null — только безразмерные строки."""
+    setup = await _seed_dimensioned_ready_tasks(
+        session, client, dims_list=[
+            {"length_mm": 1000},
+            {"length_mm": 3000},
+            None,
+        ]
+    )
+    sec1 = setup["sections"][0]
+
+    resp = await client.get(
+        f"/api/transfers/ready?section_id={sec1.id}&dimensions=null"
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["total"] == 1
+    assert body["items"][0]["dimensions"] is None

@@ -62,6 +62,19 @@ export function pickColumnApiValue<T extends string>(
   return mapValue(value);
 }
 
+/**
+ * Single selected value for exact-match columns (dimensions): search query is
+ * ignored — the popover search only narrows the value list, it is not a live filter.
+ */
+export function pickExactMatchColumnValue<T extends string>(
+  columnFilters: Partial<Record<T, Set<string>>>,
+  field: T,
+): string | undefined {
+  const selected = columnFilters[field];
+  if (!selected || selected.size !== 1) return undefined;
+  return [...selected][0];
+}
+
 export function buildColumnFilterPredicate<T, Field extends string>(opts: {
   columnFilters: Partial<Record<Field, Set<string>>>;
   columnSearchQueries: Partial<Record<Field, string>>;

@@ -23,7 +23,7 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Any
 
-from sqlalchemy import case, cast, delete, func, select, update
+from sqlalchemy import case, cast, delete, func, or_, select, text, update
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -60,9 +60,13 @@ def dimensions_match_clause(column, dims: dict | None):
 
     ``dims`` ожидается в канонической форме (canonicalize_dimensions);
     jsonb-равенство в PostgreSQL не зависит от порядка ключей.
+
+    ``None`` (безразмерные штуки) — матчит и SQL ``NULL``, и JSON ``null``:
+    asyncpg при явном ``None`` в JSONB-колонке может сохранить ``'null'::jsonb``
+    вместо SQL ``NULL``, поэтому только ``IS NULL`` пропускал бы такие строки.
     """
     if dims is None:
-        return column.is_(None)
+        return or_(column.is_(None), column == text("'null'::jsonb"))
     return column == cast(dims, JSONB)
 
 

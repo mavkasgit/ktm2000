@@ -61,6 +61,15 @@ export const executionTableColumns: ExecutionTableColumn[] = [
     sortField: "qty",
   },
   {
+    id: "dimensions",
+    label: "Размер",
+    width: "88px",
+    sortField: "dimensions",
+    colClassName: "hidden min-[600px]:table-column",
+    headerClassName: "hidden min-[600px]:table-cell",
+    cellClassName: "hidden min-[600px]:table-cell",
+  },
+  {
     id: "name",
     label: "Наименование",
     width: "auto",
