@@ -7,6 +7,7 @@ import { buildActiveFilterSummary } from "@/shared/ui/buildActiveFilterSummary"
 import { usePaginatedTableQuery } from "@/shared/hooks/usePaginatedTableQuery"
 import { useFilterableTable } from "@/shared/hooks/useFilterableTable"
 import { buildColumnFilterPredicate, pickColumnApiValue } from "@/shared/lib/columnFilterSearch"
+import { formatDimensionsFilterValue, formatDimensionsLabel } from "@/shared/api/stock"
 import { PLAN_POSITIONS_GRID } from "../lib/gridTemplates"
 import { toast } from "@/shared/ui"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
@@ -458,6 +459,7 @@ export function PlanPage() {
       case "name": return row.source_name ?? ""
       case "qty": return String(Number(row.quantity || 0))
       case "route": return row.route_name ?? "Не назначен"
+      case "dimensions": return row.dimensions_label ?? formatDimensionsLabel(row.dimensions)
       case "errors": return String(row.errors?.length ?? 0)
       case "warnings": return String(row.warnings?.length ?? 0)
       default: return ""
@@ -529,6 +531,7 @@ export function PlanPage() {
           name: "Наименование",
           qty: "Кол-во",
           route: "Маршрут",
+          dimensions: "Размер",
           status: "Статус",
           validation: "Валидация",
           errors: "Ошибки",
@@ -552,6 +555,9 @@ export function PlanPage() {
       name: [...new Set(allRows.map((p) => p.source_name ?? "").filter(Boolean))],
       qty: [...new Set(allRows.map((p) => String(Number(p.quantity || 0))))],
       route: [...new Set(allRows.map((p) => p.route_name ?? "Не назначен"))],
+      dimensions: [...new Set(allRows.map((p) => JSON.stringify(p.dimensions ?? null)))].sort(
+        (a, b) => formatDimensionsFilterValue(a).localeCompare(formatDimensionsFilterValue(b), "ru"),
+      ),
       errors: [...new Set(allRows.map((p) => String(p.errors?.length ?? 0)))],
       warnings: [...new Set(allRows.map((p) => String(p.warnings?.length ?? 0)))],
     }
@@ -847,6 +853,18 @@ export function PlanPage() {
                         values={uniqueValuesByField.qty}
                         {...bindColumn("qty")}
                         valueLabel={(v) => v}
+                      />
+                    </div>
+                    <div className={DATA_TABLE_STYLES.headerCell}>
+                      <SortableFilterHeader
+                        field="dimensions"
+                        label="Размер"
+                        currentSorts={sortConfigs}
+                        onSortChange={handleSortChange}
+                        values={uniqueValuesByField.dimensions}
+                        selectedValues={bindColumn("dimensions").selectedValues}
+                        onFilterChange={bindColumn("dimensions").onFilterChange}
+                        valueLabel={formatDimensionsFilterValue}
                       />
                     </div>
                     <div className={DATA_TABLE_STYLES.headerCell}>

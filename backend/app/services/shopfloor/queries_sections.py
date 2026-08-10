@@ -311,12 +311,23 @@ async def get_section_board(
 
     # Прогресс трансформации (ADR-0002) для карточек трансформирующих
     # этапов: списано входа и оприходовано по каждому выходу.
-    from .operations_transform import build_outputs_progress, get_transform_progress_bulk
+    from .operations_transform import (
+        build_outputs_progress,
+        distribute_output_quantities,
+        get_transferred_by_task_dimensions_bulk,
+        get_transform_progress_bulk,
+    )
     transform_task_ids = [
         row[0].id for row in rows
         if row[2].transforms_dimensions and (row[0].outputs or [])
     ]
     transform_progress_map = await get_transform_progress_bulk(db, transform_task_ids)
+
+    # Нетто-переданное по каждому габариту трансформирующих заданий —
+    # для учётной колонки «Передано» строки «Сдачи» плана (тикет #95).
+    transferred_by_task = await get_transferred_by_task_dimensions_bulk(
+        db, transform_task_ids,
+    )
 
     from .task_status import sync_work_tasks_status_bulk
 
@@ -491,14 +502,22 @@ async def get_section_board(
         if task.id in transform_progress_map or (stage.transforms_dimensions and task_outputs):
             progress = transform_progress_map.get(task.id)
             produced_by_group = progress.produced_by_group if progress else {}
+            produced_entries = build_outputs_progress(task_outputs, produced_by_group)
+            transferred_rows = distribute_output_quantities(
+                task_outputs,
+                transferred_by_task.get(task.id) or {},
+            )
             outputs_progress = [
                 {
                     "row_number": entry["row_number"],
                     "dimensions": entry["dimensions"],
                     "quantity": format_quantity(entry["quantity"]),
                     "produced_quantity": format_quantity(entry["produced_quantity"]),
+                    # Нетто-переданное по (задача, размер выхода) из ledger —
+                    # учётная колонка «Передано» строки «Сдачи» плана.
+                    "transferred_quantity": format_quantity(transferred),
                 }
-                for entry in build_outputs_progress(task_outputs, produced_by_group)
+                for entry, transferred in zip(produced_entries, transferred_rows)
             ]
             input_consumed_quantity = format_quantity(
                 progress.consumed_quantity if progress else Decimal("0")
@@ -679,23 +698,6 @@ async def get_sections_summary(db: AsyncSession) -> dict:
             for section in sections
         ]
     }
-
-
-async def get_section_incoming_transfers(
-    db: AsyncSession,
-    *,
-    section_id: int,
-) -> dict:
-    """Return incoming open transfers for a section.
-
-    Moved to :mod:`app.transfers.queries`.  Kept here as a thin
-    re-export for backward compatibility with the legacy
-    ``from app.services.shopfloor.queries_sections import
-    get_section_incoming_transfers`` import path.
-    """
-    from app.transfers.queries import get_section_incoming_transfers as _impl
-
-    return await _impl(db, section_id=section_id)
 
 
 async def get_section_daily_stats(

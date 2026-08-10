@@ -73,7 +73,7 @@ export function isRiskyForApprove(pos: PlanPositionOut, duplicateConflict?: Dupl
   return hasRouteProblems || Boolean(duplicateConflict && duplicateConflict.conflictIds.length > 0)
 }
 
-export type PlanSortField = "id" | "rowNum" | "sku" | "name" | "qty" | "route" | "status" | "validation" | "errors" | "warnings"
+export type PlanSortField = "id" | "rowNum" | "sku" | "name" | "qty" | "route" | "dimensions" | "status" | "validation" | "errors" | "warnings"
 
 export interface PlanFiltersState {
   status: "all" | "draft" | "valid" | "invalid"

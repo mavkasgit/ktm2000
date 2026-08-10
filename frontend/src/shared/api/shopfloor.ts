@@ -34,6 +34,8 @@ export interface TaskOutputProgress {
   dimensions?: Record<string, unknown> | null;
   quantity: string;
   produced_quantity: string;
+  /** Нетто-переданное по (задача, размер выхода) из ledger (тикет #95). */
+  transferred_quantity?: string;
 }
 
 export type TaskStatus = "pending" | "in_work" | "done" | "partially" | "blocked";
@@ -193,6 +195,8 @@ export type IncomingTransfer = {
   from_line_id: number;
   from_line_sequence: number;
   plan_position_id: number;
+  /** Габарит переданного (тикет #95): колонка «Размер» в UI. */
+  dimensions?: Record<string, unknown> | null;
 };
 
 export type IncomingTransfersResponse = {

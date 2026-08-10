@@ -3,6 +3,7 @@ import { useMemo, useState } from "react"
 import { AlertTriangle, Route } from "lucide-react"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { Button, AlertDialog, AlertDialogContent, AlertDialogHeader, AlertDialogTitle, AlertDialogDescription, AlertDialogFooter, AlertDialogAction, AlertDialogCancel, Combobox, PositionSkuCell } from "@/shared/ui"
+import { formatDimensionsLabel } from "@/shared/api/stock"
 import { cn } from "@/shared/utils/cn"
 import { TABLE_ROW_STYLES } from "@/shared/lib/tableRowStyles"
 import { PlanPositionOut } from "@/shared/api/productionPlans"
@@ -250,6 +251,9 @@ export function PositionRow({ pos, onApprove, onDelete, selected, routes, onAssi
             {pos.operation_summary}
           </span>
         )}
+      </div>
+      <div className="p-2 text-sm whitespace-nowrap text-muted-foreground" title={pos.dimensions_label ?? undefined}>
+        {pos.dimensions_label ?? formatDimensionsLabel(pos.dimensions)}
       </div>
       <div className="p-2 text-sm truncate whitespace-nowrap" title={pos.source_name ?? undefined}>{pos.source_name ?? "—"}</div>
       <div className="p-2 text-sm truncate overflow-hidden">

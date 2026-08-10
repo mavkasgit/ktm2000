@@ -23,7 +23,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from decimal import ROUND_HALF_UP, Decimal
 
-from sqlalchemy import func, select
+from sqlalchemy import case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domain.dimensions import canonicalize_dimensions
@@ -168,6 +168,44 @@ async def get_transform_progress(db: AsyncSession, task_id: int) -> TransformPro
             produced_by_group={},
         )
     return progress
+
+
+async def get_transferred_by_task_dimensions_bulk(
+    db: AsyncSession, task_ids: list[int],
+) -> dict[int, dict[str | None, Decimal]]:
+    """Нетто-переданное по каждому габариту задания (net TRANSFER_SEND).
+
+    Возвращает ``{task_id: {hash_key(габарит): количество}}`` — для строки
+    «Передано» выхода трансформирующего задания в «Сдаче» плана (тикет #95).
+    """
+    if not task_ids:
+        return {}
+    rows = await db.execute(
+        select(
+            StockTransaction.task_id,
+            StockTransaction.dimensions,
+            func.coalesce(
+                func.sum(
+                    case(
+                        (StockTransaction.compensates_tx_id.is_(None), StockTransaction.quantity),
+                        else_=-StockTransaction.quantity,
+                    )
+                ),
+                0,
+            ).label("net_qty"),
+        )
+        .where(
+            StockTransaction.task_id.in_(task_ids),
+            StockTransaction.reason == Reason.TRANSFER_SEND,
+        )
+        .group_by(StockTransaction.task_id, StockTransaction.dimensions)
+    )
+    result: dict[int, dict[str | None, Decimal]] = {}
+    for task_id, dims, qty in rows:
+        per_task = result.setdefault(task_id, {})
+        key = _dimensions_hash_key(dims)
+        per_task[key] = (per_task.get(key) or Decimal("0")) + (qty or Decimal("0"))
+    return result
 
 
 async def resolve_consume_dimensions(

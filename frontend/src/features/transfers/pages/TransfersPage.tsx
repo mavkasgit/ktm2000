@@ -1270,6 +1270,9 @@ export function TransfersPage() {
                             {...bindHistoryColumn("sku")}
                           />
                         </TableHead>
+                        <TableHead className={`${headerCellClass} p-0`}>
+                          <span className="text-xs font-medium text-muted-foreground">Размер</span>
+                        </TableHead>
                         <TableHead className={`${headerCellClass} p-0 text-right`}>
                           <SortableFilterHeader
                             field="quantity"
@@ -1301,7 +1304,7 @@ export function TransfersPage() {
                     {historyItems.length === 0 ? (
                       <TableBody>
                         <TableRow>
-                          <TableCell colSpan={8} className="py-6 text-center text-sm text-muted-foreground">
+                          <TableCell colSpan={9} className="py-6 text-center text-sm text-muted-foreground">
                             Нет записей, соответствующих фильтру
                           </TableCell>
                         </TableRow>
@@ -1310,7 +1313,7 @@ export function TransfersPage() {
                       <VirtualizedTableBody
                         rows={historyItems}
                         rowHeight={56}
-                        colSpan={8}
+                        colSpan={9}
                         scrollContainerRef={historyScrollRef}
                         renderRow={(t) => {
                           const isIncoming = historySectionIds.has(t.to_section_id);
@@ -1344,6 +1347,9 @@ export function TransfersPage() {
                                 </div>
                               </TableCell>
                               <TableCell className="text-xs font-medium">{t.product_sku}</TableCell>
+                              <TableCell className="text-xs text-muted-foreground whitespace-nowrap">
+                                {formatDimensionsLabel(t.dimensions)}
+                              </TableCell>
                               <TableCell className="text-right tabular-nums font-semibold whitespace-nowrap">
                                 {fmtQty(t.sent_quantity)}
                               </TableCell>

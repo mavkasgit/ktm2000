@@ -1357,3 +1357,94 @@ async def test_auto_transfer_next_duplicate_output_size_does_not_overflow(client
     assert sum(t.sent_quantity for t in transfers) == Decimal("50")
     for transfer in transfers:
         assert (transfer.dimensions or {}).get("length_mm") == 900
+
+
+# ─── Seam 7 (#95): доска несёт transferred_quantity по выходу; журнал/входящие — dimensions ─
+
+
+async def _saw_board_task(client, user: User, saw_sec: Section, task_id: int) -> dict:
+    resp = await client.get(
+        f"/api/shopfloor/sections/{saw_sec.id}/board?limit=500",
+        headers=_auth_headers(user),
+    )
+    assert resp.status_code == 200, resp.text
+    tasks = resp.json()["tasks"]
+    match = [t for t in tasks if t["id"] == task_id]
+    assert len(match) == 1, f"задание {task_id} не найдено на доске пилы"
+    return match[0]
+
+
+async def test_board_outputs_progress_carries_transferred_by_output(client, session) -> None:
+    """Тикет #95: outputs_progress доски несёт «Передано» по (задача, размер выхода)."""
+    user = await _make_user(session, "dim-boardtf@test.local")
+    fx = await _make_transform_route_fixture(
+        session,
+        sku="SAWBTF",
+        qty=Decimal("100"),
+        input_quantity=Decimal("100"),
+        input_dimensions={"length_mm": 2700},
+        outputs=[
+            {"row_number": 1, "quantity": "100", "dimensions": {"length_mm": 900}},
+            {"row_number": 2, "quantity": "100", "dimensions": {"length_mm": 1800}},
+        ],
+    )
+    await _release_via_take_to_work(client, fx["position"].id)
+    saw_task = (await _tasks_for_position(session, fx["position"].id))[0]
+    await _complete_saw(session, saw_task=saw_task, user=user)
+
+    # Передали часть одного выхода — «Передано» строки 900 = 40, 1800 = 0.
+    await transfer_send(
+        session,
+        from_task_id=saw_task.id,
+        to_task_id=None,
+        quantity=Decimal("40"),
+        actor_id=user.id,
+        dimensions={"length_mm": 900},
+    )
+    await session.commit()
+
+    saw_sec = fx["sections"][1]
+    board_task = await _saw_board_task(client, user, saw_sec, saw_task.id)
+    assert board_task["transforms_dimensions"] is True
+    progress = board_task["outputs_progress"]
+    assert progress is not None and len(progress) == 2
+    by_len = {entry["dimensions"]["length_mm"]: entry for entry in progress}
+    assert by_len[900]["quantity"] == "100"
+    assert by_len[900]["produced_quantity"] == "100"
+    assert by_len[900]["transferred_quantity"] == "40"
+    assert by_len[1800]["quantity"] == "100"
+    assert by_len[1800]["produced_quantity"] == "100"
+    assert by_len[1800]["transferred_quantity"] == "0"
+    await assert_no_invariants_violations(session, context="board-outputs-transferred")
+
+
+async def test_transfer_history_carries_dimensions(client, session) -> None:
+    """Тикет #95: журнал передач несёт dimensions (колонка «Размер»)."""
+    from app.models.transfer import Transfer
+
+    user = await _make_user(session, "dim-hxdim@test.local")
+    fx = await _make_dim_route_fixture(session, sku="HXDIM", qty=Decimal("50"), length_mm=2000)
+    raw_sec = fx["sections"][0]
+    await _seed_balance(session, user_id=user.id, location_id=raw_sec.id,
+                        product_id=fx["product"].id, qty=Decimal("100"), dimensions={"length_mm": 2000})
+    await _release_via_take_to_work(client, fx["position"].id)
+
+    fake_task_id = await _stock_ready_task(client, user, raw_sec.id)
+    result = await transfer_send(
+        session,
+        from_task_id=fake_task_id,
+        to_task_id=None,
+        quantity=Decimal("10"),
+        actor_id=user.id,
+        dimensions={"length_mm": 2000},
+        allow_over_plan=True,
+    )
+    await session.commit()
+    transfer = await session.get(Transfer, result["transfer_id"])
+    assert transfer is not None and transfer.dimensions == {"length_mm": 2000}
+
+    resp = await client.get("/api/transfers/history", headers=_auth_headers(user))
+    assert resp.status_code == 200, resp.text
+    item = next(t for t in resp.json()["transfers"] if t["transfer_id"] == result["transfer_id"])
+    assert item["dimensions"] == {"length_mm": 2000}
+    await assert_no_invariants_violations(session, context="history-dimensions")

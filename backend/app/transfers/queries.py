@@ -200,6 +200,8 @@ async def get_section_incoming_transfers(
                 "from_line_id": src_line.id,
                 "from_line_sequence": src_line.sequence,
                 "plan_position_id": src_line.plan_position_id,
+                # Габарит переданного (тикет #95): колонка «Размер» в UI.
+                "dimensions": transfer.dimensions,
             }
         )
 
@@ -1302,6 +1304,8 @@ async def get_section_transfer_history(
                 "from_line_id": src_line.id,
                 "from_line_sequence": src_line.sequence,
                 "plan_position_id": src_line.plan_position_id,
+                # Габарит переданного (тикет #95): колонка «Размер» в UI.
+                "dimensions": transfer.dimensions,
             }
         )
 

@@ -13,7 +13,8 @@
 import React, { useEffect, useMemo, useState } from "react";
 import type { SectionBoardTask, RouteHistoryOp, SectionOperation } from "@/shared/api/shopfloor";
 import { formatDimensionsLabel } from "@/shared/api/stock";
-import { groupTasksByProfile, taskGroupingDimensions } from "../lib/groupTasksByProfile";
+import { groupTasksByProfile } from "../lib/groupTasksByProfile";
+import { buildPlanRows, type PlanRow, type PlanTableMode } from "../lib/planTableRows";
 import { GroupingSettingsModal } from "./GroupingSettingsModal";
 import { PRESET_PROFILES, type GroupingProfile } from "../lib/groupingProfiles";
 import { PlanPrintPreviewModal, ALL_PRINT_COLUMNS, PRINT_COLUMN_LABELS, type PrintColumn, type PrintSettings, type TableMode } from "./PlanPrintPreviewModal";
@@ -70,16 +71,6 @@ function saveProfile(key: string, profile: GroupingProfile) {
   } catch {}
 }
 
-function sumCache(
-  groups: ReturnType<typeof groupTasksByProfile>,
-  accessor: (t: SectionBoardTask) => number,
-): number {
-  return groups.reduce(
-    (s, g) => s + g.tasks.reduce((ss, t) => ss + accessor(t), 0),
-    0,
-  );
-}
-
 /** Insert zero-width spaces after '+' so line breaks happen after the plus, not mid-SKU. Also strip trailing arrow. */
 function renderSkuWithBreakHints(sku: string): React.ReactNode {
   const cleaned = sku.replace(/\s*→\s*$/, '');
@@ -99,6 +90,7 @@ interface PlanTableProps {
   title: string;
   tasks: SectionBoardTask[];
   profile: GroupingProfile;
+  mode: PlanTableMode;
   onSettingsClick: () => void;
   emptyMessage?: string;
   printSettings?: PrintSettings;
@@ -110,6 +102,7 @@ function PlanTable({
   title,
   tasks,
   profile,
+  mode,
   onSettingsClick,
   emptyMessage,
   printSettings,
@@ -120,7 +113,6 @@ function PlanTable({
 
   const groups = useMemo(() => {
     return allGroups
-      .filter((g) => g.totalQtyPlan - g.totalQtyDone > 0)
       .filter((g) => {
         if (!printSettings) return true;
         if (printSettings.minQty !== null && g.totalQtyPlan < printSettings.minQty) return false;
@@ -130,7 +122,15 @@ function PlanTable({
       .filter((g) => !isHidden?.(g.key));
   }, [allGroups, printSettings, isHidden]);
 
+  // Разбивка «Выдачи» по входу (одна строка на группу) и «Сдачи» по
+  // выходам (строка на каждый outputs[i], тикет #95).
+  const rows = useMemo(
+    () => buildPlanRows(groups, mode).filter((row) => row.planQty - row.doneQty > 0),
+    [groups, mode],
+  );
+
   const showSku = !printSettings || printSettings.columns.includes("productSku");
+  const showDimensions = !printSettings || printSettings.columns.includes("dimensions");
   const showOp = !printSettings || printSettings.columns.includes("operationName");
   const showQtyPlan = !printSettings || printSettings.columns.includes("qtyPlan");
   const showQtyRemaining = !printSettings || printSettings.columns.includes("qtyRemaining");
@@ -138,20 +138,22 @@ function PlanTable({
   const showQtyBalance = !printSettings || printSettings.columns.includes("qtyBalance");
 
   const totalQtyPlan = useMemo(
-    () => groups.reduce((sum, g) => sum + g.totalQtyPlan, 0),
-    [groups],
+    () => rows.reduce((sum, row) => sum + row.planQty, 0),
+    [rows],
   );
+  const totalIssued = useMemo(() => rows.reduce((s, row) => s + row.issuedQty, 0), [rows]);
+  const totalTransferred = useMemo(() => rows.reduce((s, row) => s + row.transferredQty, 0), [rows]);
+  const totalDone = useMemo(() => rows.reduce((s, row) => s + row.doneQty, 0), [rows]);
+  const totalOrders = useMemo(() => rows.reduce((s, row) => s + row.ordersCount, 0), [rows]);
 
-  const totalIssued = useMemo(() => sumCache(groups, (t) => parseFloat(t.cache.issued_quantity)), [groups]);
-  const totalTransferred = useMemo(() => sumCache(groups, (t) => parseFloat(t.cache.transferred_quantity)), [groups]);
-  const totalDone = useMemo(() => groups.reduce((s, g) => s + g.totalQtyDone, 0), [groups]);
-  const totalOrders = useMemo(() => groups.reduce((s, g) => s + g.tasks.length, 0), [groups]);
-
-  const colSpan = 1 + // Размер (всегда)
-    (showSku ? 1 : 0) +
-    (profile.criteria.includes("operationCode") ? 2 : 0) +
+  const colSpan = (showSku ? 1 : 0) +
+    (showDimensions ? 1 : 0) +
+    (showOp && profile.criteria.includes("operationCode") ? 2 : 0) +
     (profile.criteria.includes("outputKind") ? 1 : 0) +
     (profile.criteria.includes("sourceRef") ? 1 : 0);
+
+  // «Выдача»: колонка «Осталось выдать»; «Сдача»: «Сделано».
+  const remainingTotal = mode === "issue" ? totalQtyPlan - totalIssued : totalDone;
 
   const headerCellClass = `${DATA_TABLE_STYLES.headerRow} ${DATA_TABLE_STYLES.headerCell}`;
 
@@ -193,7 +195,9 @@ function PlanTable({
             {showSku && (
               <th className={`${headerCellClass} max-w-[120px] break-words`}>Артикул</th>
             )}
-            <th className={`${headerCellClass} whitespace-nowrap`}>Размер</th>
+            {showDimensions && (
+              <th className={`${headerCellClass} whitespace-nowrap`}>Размер</th>
+            )}
             {showOp && profile.criteria.includes("operationCode") && (
               <>
                 <th className={`${headerCellClass} w-[1px] whitespace-nowrap`}>Маршрут</th>
@@ -210,7 +214,17 @@ function PlanTable({
               <th className={`${headerCellClass} text-right whitespace-nowrap`}>План</th>
             )}
             {showQtyRemaining && (
-              <th className={`${headerCellClass} text-right whitespace-nowrap`} style={{ minWidth: "60px" }}>Осталось<br/>выдать</th>
+              <th className={`${headerCellClass} text-right whitespace-nowrap`} style={{ minWidth: "60px" }}>
+                {mode === "issue" ? (
+                  <>
+                    <span>Осталось</span>
+                    <br />
+                    <span>выдать</span>
+                  </>
+                ) : (
+                  "Сделано"
+                )}
+              </th>
             )}
             {showQtyTransferred && (
               <th className={`${headerCellClass} text-right whitespace-nowrap`}>Передано</th>
@@ -223,8 +237,8 @@ function PlanTable({
           </tr>
         </thead>
         <tbody>
-          {groups.map((group) => {
-            const task = group.tasks[0];
+          {rows.map((row) => {
+            const task = row.task;
 
             // Build the full sequence of significant operations for display.
             // For routeHistory profile ("До"): ONLY route_history (previous sections, NOT including current)
@@ -247,7 +261,7 @@ function PlanTable({
             }
 
             return (
-              <tr key={group.key} className="border-b hover:bg-gray-50">
+              <tr key={row.key} className="border-b hover:bg-gray-50">
                 {/* Артикул */}
                 {showSku && (
                   <td className="px-2 py-2 max-w-[120px] break-words">
@@ -256,9 +270,11 @@ function PlanTable({
                 )}
 
                 {/* Размер */}
-                <td className="px-2 py-2 text-sm whitespace-nowrap">
-                  {formatDimensionsLabel(taskGroupingDimensions(task))}
-                </td>
+                {showDimensions && (
+                  <td className="px-2 py-2 text-sm whitespace-nowrap">
+                    {formatDimensionsLabel(row.dimensions)}
+                  </td>
+                )}
 
                 {/* Операция — split into Маршрут (chips) + Операция (text) */}
                 {showOp && profile.criteria.includes("operationCode") && (
@@ -306,28 +322,30 @@ function PlanTable({
                 {/* Количество */}
                 {showQtyPlan && (
                   <td className="px-2 py-2 text-right font-medium">
-                    {group.totalQtyPlan.toFixed(0)}
+                    {row.planQty.toFixed(0)}
                   </td>
                 )}
                 {showQtyRemaining && (
                   <td className="px-2 py-2 text-right">
-                    {(group.totalQtyPlan - totalIssued >= 0 ? group.totalQtyPlan - sumCache([group], (t) => parseFloat(t.cache.issued_quantity)) : 0).toFixed(0)}
+                    {mode === "issue"
+                      ? (row.planQty - row.issuedQty >= 0 ? row.planQty - row.issuedQty : 0).toFixed(0)
+                      : row.doneQty.toFixed(0)}
                   </td>
                 )}
                 {showQtyTransferred && (
                   <td className="px-2 py-2 text-right">
-                    {sumCache([group], (t) => parseFloat(t.cache.transferred_quantity)).toFixed(0)}
+                    {row.transferredQty.toFixed(0)}
                   </td>
                 )}
                 {showQtyBalance && (
                   <td className="px-2 py-2 text-right text-blue-700 font-semibold">
-                    {(group.totalQtyPlan - group.totalQtyDone).toFixed(0)}
+                    {row.balanceQty.toFixed(0)}
                   </td>
                 )}
 
                 {/* Кол-во заказов */}
                 <td className="px-2 py-2 text-right text-muted-foreground">
-                  {group.tasks.length}
+                  {row.ordersCount}
                 </td>
 
                 {/* Кнопка скрытия */}
@@ -335,7 +353,7 @@ function PlanTable({
                   <td className="px-1 py-2 text-center">
                     <button
                       type="button"
-                      onClick={() => onHideGroup(group.key)}
+                      onClick={() => onHideGroup(groupKeyForRow(row, groups))}
                       className="text-muted-foreground hover:text-red-600 text-base leading-none w-6 h-6 inline-flex items-center justify-center rounded hover:bg-red-50"
                       title="Скрыть из плана"
                     >
@@ -347,14 +365,14 @@ function PlanTable({
             );
           })}
 
-          {/* Итого */}
+          {/* Итого — суммирует только плановые строки; избыток не входит */}
           <tr className="border-t font-semibold bg-gray-50">
             <td colSpan={colSpan} className="px-2 py-2">Итого</td>
             {showQtyPlan && (
               <td className="px-2 py-2 text-right">{totalQtyPlan.toFixed(0)}</td>
             )}
             {showQtyRemaining && (
-              <td className="px-2 py-2 text-right">{(totalQtyPlan - totalIssued >= 0 ? totalQtyPlan - totalIssued : 0).toFixed(0)}</td>
+              <td className="px-2 py-2 text-right">{(remainingTotal >= 0 ? remainingTotal : 0).toFixed(0)}</td>
             )}
             {showQtyTransferred && (
               <td className="px-2 py-2 text-right">{totalTransferred.toFixed(0)}</td>
@@ -370,6 +388,11 @@ function PlanTable({
       </div>
     </div>
   );
+}
+
+/** Ключ группы строки: строки «Сдачи» разбиты на выходы, скрываем группу целиком. */
+function groupKeyForRow(row: PlanRow, groups: ReturnType<typeof groupTasksByProfile>): string {
+  return groups.find((g) => g.tasks.includes(row.task))?.key ?? "";
 }
 
 
@@ -838,6 +861,7 @@ export function PlanModal({
                 title="План"
                 tasks={filteredTasks}
                 profile={singleProfile!}
+                mode="issue"
                 onSettingsClick={() => setBeforeSettingsOpen(true)}
                 emptyMessage="Нет данных"
                 printSettings={printSettings}
@@ -852,6 +876,7 @@ export function PlanModal({
                   title="План выдачи на участок"
                   tasks={filteredTasks}
                   profile={beforeProfile}
+                  mode="issue"
                   onSettingsClick={() => setBeforeSettingsOpen(true)}
                   emptyMessage="Нет данных"
                   printSettings={printSettings}
@@ -864,6 +889,7 @@ export function PlanModal({
                   title="План сдачи с участка"
                   tasks={filteredTasks}
                   profile={afterProfile}
+                  mode="handover"
                   onSettingsClick={() => setAfterSettingsOpen(true)}
                   emptyMessage="Нет данных"
                   printSettings={printSettings}
@@ -878,6 +904,7 @@ export function PlanModal({
                 title="План выдачи на участок"
                 tasks={filteredTasks}
                 profile={beforeProfile}
+                mode="issue"
                 onSettingsClick={() => setBeforeSettingsOpen(true)}
                 emptyMessage="Нет данных"
                 printSettings={printSettings}
@@ -891,6 +918,7 @@ export function PlanModal({
                 title="План сдачи с участка"
                 tasks={filteredTasks}
                 profile={afterProfile}
+                mode="handover"
                 onSettingsClick={() => setAfterSettingsOpen(true)}
                 emptyMessage="Нет данных"
                 printSettings={printSettings}

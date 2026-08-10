@@ -152,6 +152,9 @@ export type PlanPositionOut = {
   input_dimensions?: Record<string, unknown> | null;
   outputs?: { row_number?: number; quantity: string; dimensions: Record<string, unknown> | null }[] | null;
   operation_summary?: string | null;
+  // Габарит задания позиции (тикет #95): колонка «Размер» на странице плана.
+  dimensions?: Record<string, unknown> | null;
+  dimensions_label?: string | null;
 };
 
 export async function planFiles(planId: number) {
@@ -177,6 +180,8 @@ export type AllPlanPositionsParams = {
   has_route?: string;
   has_errors?: string;
   has_warnings?: string;
+  /** Фильтр точного совпадения по габариту: JSON-строка (`{"length_mm":2700}`) или `null` для безразмерных. */
+  dimensions?: string;
 };
 
 export type AllPlanPositionsListResponse = {
