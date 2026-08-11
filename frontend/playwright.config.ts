@@ -1,7 +1,7 @@
 import { defineConfig, devices } from "@playwright/test";
 
 const PORT = 5172;
-const BACKEND_PORT = 8010;
+const BACKEND_PORT = 8012;
 
 export default defineConfig({
   testDir: "./e2e",

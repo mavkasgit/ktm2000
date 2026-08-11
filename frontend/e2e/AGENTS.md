@@ -53,10 +53,10 @@ npm --prefix frontend run test:e2e:report
 | Переменная | По умолчанию | Назначение |
 |------------|--------------|------------|
 | `PLAYWRIGHT_TEST_BASE_URL` | `http://localhost:5172` | UI (baseURL в config) |
-| `E2E_API_URL` | — | Только для `@smoke`; fallback в `api-helpers.ts`: `http://localhost:8010` |
+| `E2E_API_URL` | — | Только для `@smoke`; fallback в `api-helpers.ts`: `http://localhost:8012` |
 
 ```cmd
-set E2E_API_URL=http://localhost:8010/api
+set E2E_API_URL=http://localhost:8012/api
 set PLAYWRIGHT_TEST_BASE_URL=http://localhost:5172
 ```
 
