@@ -886,10 +886,11 @@ async def auto_create_transfer_after_complete(
     """Create automatic cross-GHP Transfers for the completed ``good_quantity``.
 
     Walks the route forward from the completed task's SectionPlanLine.
-    For each cross-GHP boundary a ``transfer_send`` with
-    ``post_factum=True`` is emitted.  When a transit stage sits between
-    two production stages in different GHPs, a chain of transfers is
-    created (production → transit → next production).
+    For each cross-GHP boundary a ``transfer_send`` is emitted as a
+    regular (non post-factum) transfer: it is created atomically at
+    completion time with current timestamps.  When a transit stage sits
+    between two production stages in different GHPs, a chain of transfers
+    is created (production → transit → next production).
 
     Трансформирующее задание (резка, тикет #91): создаётся по передаче
     **на каждый выход** спецификации — со своим размером и количеством
@@ -1019,7 +1020,6 @@ async def auto_create_transfer_after_complete(
                 actor_id=actor_id,
                 comment=comment or "Авто-перемещение после завершения",
                 idempotency_key=key,
-                post_factum=True,
                 dimensions=dims,
             )
 
