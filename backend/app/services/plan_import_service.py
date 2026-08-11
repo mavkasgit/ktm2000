@@ -673,11 +673,12 @@ async def _make_change_items(
                 errors.append("active_route_has_no_steps")
             else:
                 for stage in stages:
-                    if stage.section_id in sections_by_id_cache:
-                        section = sections_by_id_cache[stage.section_id]
+                    effective_section_id = stage.effective_section_id
+                    if effective_section_id in sections_by_id_cache:
+                        section = sections_by_id_cache[effective_section_id]
                     else:
-                        section = await db.get(Section, stage.section_id)
-                        sections_by_id_cache[stage.section_id] = section
+                        section = await db.get(Section, effective_section_id)
+                        sections_by_id_cache[effective_section_id] = section
                     if section is None or not section.is_active:
                         errors.append("route_contains_inactive_section")
                         break
