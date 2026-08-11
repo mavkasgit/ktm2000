@@ -44,6 +44,8 @@ from .spg import StorageProductionGroup, SpgSection
 from .audit_log import AuditLog
 from .notification import Notification, UserNotificationState
 from .hrms_employee import HrmsEmployee
+from .user_login_event import UserLoginEvent
+from .logout_jti import UsedLogoutJti
 from app.stock.models import (
     QualityState,
     Reason,
@@ -121,6 +123,8 @@ __all__ = [
     "SpgSection",
     "AuditLog",
     "HrmsEmployee",
+    "UserLoginEvent",
+    "UsedLogoutJti",
     "UserSession",
     "QualityState",
     "Reason",

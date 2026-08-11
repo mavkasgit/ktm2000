@@ -1,7 +1,7 @@
 import enum
 from datetime import datetime
 
-from sqlalchemy import BigInteger, DateTime, Enum, ForeignKey, Identity, String, text, Table, Column
+from sqlalchemy import BigInteger, DateTime, Enum, ForeignKey, Identity, Index, String, text, Table, Column
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base
@@ -26,6 +26,16 @@ user_sections = Table(
 
 class User(Base):
     __tablename__ = "users"
+    __table_args__ = (
+        # Partial unique: at most one active user per Authentik sub (OIDC link key).
+        # Mirrors migration 013_users_authentik_sub — code does scalar() lookups by sub.
+        Index(
+            "ix_users_authentik_sub_active",
+            "authentik_sub",
+            unique=True,
+            postgresql_where=text("is_active = true AND authentik_sub IS NOT NULL"),
+        ),
+    )
 
     id: Mapped[int] = mapped_column(
         BigInteger, Identity(always=True), primary_key=True, autoincrement=True
