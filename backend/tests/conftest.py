@@ -8,6 +8,15 @@ import uuid
 
 os.environ.setdefault("DEV_BYPASS_AUTH", "true")
 
+# Тесты пишут только во временный каталог: не зависеть от env-переменных
+# окружения (в т.ч. линуксовых /app/* путей) и дефолтов конфига.
+# Должно быть ДО импорта app.main / app.core.config — иначе import-time
+# mkdir(settings.PRODUCT_PHOTO_DIR.parent) на runner-е упрётся в /app.
+_TEST_STORAGE_ROOT = os.path.join(tempfile.gettempdir(), "ktm2000_pytest_storage")
+os.environ["IMPORT_STORAGE_DIR"] = os.path.join(_TEST_STORAGE_ROOT, "imports")
+os.environ["PRODUCT_PHOTO_DIR"] = os.path.join(_TEST_STORAGE_ROOT, "products")
+os.environ["BACKUPS_PATH"] = os.path.join(_TEST_STORAGE_ROOT, "backups")
+
 import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
@@ -20,14 +29,6 @@ from app.core.config import settings
 from app.core.database import get_db
 from app.main import app
 from app.models.base import Base
-
-
-# Тесты пишут только во временный каталог: не зависеть от env-переменных
-# окружения (в т.ч. линуксовых /app/* путей) и дефолтов конфига.
-_TEST_STORAGE_ROOT = os.path.join(tempfile.gettempdir(), "ktm2000_pytest_storage")
-os.environ["IMPORT_STORAGE_DIR"] = os.path.join(_TEST_STORAGE_ROOT, "imports")
-os.environ["PRODUCT_PHOTO_DIR"] = os.path.join(_TEST_STORAGE_ROOT, "products")
-os.environ["BACKUPS_PATH"] = os.path.join(_TEST_STORAGE_ROOT, "backups")
 
 
 DEFAULT_TEST_DATABASE_URL = "postgresql+asyncpg://ktm2000_user:ktm2000_pass_test@localhost:5441/ktm2000_test"
