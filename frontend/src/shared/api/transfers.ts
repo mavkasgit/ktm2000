@@ -137,6 +137,24 @@ export type CreateTransferResponse = {
   idempotent_replay?: boolean;
 };
 
+export type FinalReleaseInput = {
+  quantity: number | string;
+  comment?: string;
+  idempotency_key?: string;
+  executor_user_id?: number;
+  performed_at?: string;
+  accounted_at?: string;
+  // Габарит выпуска (ADR-0001): на трансформирующем финальном этапе —
+  // один из выходных размеров задания; на обычном — опционален.
+  dimensions?: Record<string, number | string> | null;
+};
+
+export type FinalReleaseResponse = {
+  transaction_id: number;
+  task_id: number;
+  idempotent_replay?: boolean;
+};
+
 // ---------------------------------------------------------------------------
 // API — /transfers endpoints. Under the explicit-transfer model there is
 // no separate /accept step: transfer_send auto-accepts the transfer
@@ -188,6 +206,19 @@ export async function createTransfer(
 ): Promise<CreateTransferResponse> {
   const { data } = await apiClient.post<CreateTransferResponse>(
     "/transfers",
+    payload,
+    makeRequestConfig(options),
+  );
+  return data;
+}
+
+export async function finalReleaseTask(
+  taskId: number,
+  payload: FinalReleaseInput,
+  options?: ShopfloorRequestOptions,
+): Promise<FinalReleaseResponse> {
+  const { data } = await apiClient.post<FinalReleaseResponse>(
+    `/shopfloor/tasks/${taskId}/final-release`,
     payload,
     makeRequestConfig(options),
   );

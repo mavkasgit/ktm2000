@@ -47,6 +47,7 @@ import {
   cancelTransfer,
   correctTransfer,
   createTransfer,
+  finalReleaseTask,
   listReadyToTransfer,
   listTransferHistory,
   type ReadyToTransferListParams,
@@ -95,6 +96,12 @@ function conflictHintFromTransferError(message: string): string | null {
   }
   if (n.includes("уже есть активная передача")) {
     return "По этому заданию передача уже создана — измените количество в журнале.";
+  }
+  if (n.includes("exceeds releasable quantity")) {
+    return "Количество больше доступного к выпуску.";
+  }
+  if (n.includes("only for final route stage")) {
+    return "Финальный выпуск доступен только на финальном этапе маршрута.";
   }
   return null;
 }
@@ -401,6 +408,35 @@ function ReadyTransferRow({
     },
   });
 
+  const isFinalRow = task.is_final === true || !task.has_next_step;
+  const releaseMutation = useMutation({
+    mutationFn: (idempotencyKey: string) =>
+      finalReleaseTask(task.task_id, {
+        quantity,
+        comment: undefined,
+        idempotency_key: idempotencyKey,
+        dimensions: task.dimensions ?? undefined,
+      }),
+    onSuccess: () => {
+      toast({
+        variant: "success",
+        title: "Финальный выпуск",
+        description: `Позиция #${task.plan_position_id} выпущена`,
+      });
+      invalidateShopfloorCaches(task.section_id, task.next_section_id);
+      invalidateTransfersCaches();
+    },
+    onError: (err: unknown) => {
+      const message = getErrorMessage(err);
+      const hint = conflictHintFromTransferError(message);
+      toast({
+        variant: "destructive",
+        title: "Ошибка выпуска",
+        description: hint ?? message,
+      });
+    },
+  });
+
   const maxQty = parseFloat(task.transferable_quantity);
   const qtyNum = parseFloat(quantity || "0");
   const overLimit = qtyNum > maxQty;
@@ -415,7 +451,9 @@ function ReadyTransferRow({
         <TableCell className="w-[40px] p-2" onClick={(e) => e.stopPropagation()}>
           <Checkbox
             checked={isSelected}
+            disabled={task.is_final === true}
             onCheckedChange={onSelect}
+            title={task.is_final === true ? "Финальный выпуск недоступен в групповой передаче" : undefined}
           />
         </TableCell>
       )}
@@ -481,24 +519,46 @@ function ReadyTransferRow({
                 </Badge>
               )}
             </div>
-            <Button
-              size="sm"
-              disabled={!task.has_next_step || isSubmitting || mutation.isPending || qtyNum <= 0}
-              onClick={() => {
-                if (submittingRef.current || isSubmitting || mutation.isPending) return;
-                if (!tryAcquire()) return;
-                submittingRef.current = true;
-                const key = makeIdempotencyKey(`transfer-send-${task.task_id}`);
-                mutation.mutate(key, {
-                  onSettled: () => {
-                    submittingRef.current = false;
-                    release();
-                  },
-                });
-              }}
-            >
-              {mutation.isPending || isSubmitting ? "Отправка..." : "Передать"}
-            </Button>
+            {isFinalRow ? (
+              <Button
+                size="sm"
+                disabled={isSubmitting || releaseMutation.isPending || qtyNum <= 0}
+                title="Финальный выпуск готовой продукции"
+                onClick={() => {
+                  if (submittingRef.current || isSubmitting || releaseMutation.isPending) return;
+                  if (!tryAcquire()) return;
+                  submittingRef.current = true;
+                  const key = makeIdempotencyKey(`final-release-${task.task_id}`);
+                  releaseMutation.mutate(key, {
+                    onSettled: () => {
+                      submittingRef.current = false;
+                      release();
+                    },
+                  });
+                }}
+              >
+                {releaseMutation.isPending || isSubmitting ? "Отправка..." : "Отправить"}
+              </Button>
+            ) : (
+              <Button
+                size="sm"
+                disabled={!task.has_next_step || isSubmitting || mutation.isPending || qtyNum <= 0}
+                onClick={() => {
+                  if (submittingRef.current || isSubmitting || mutation.isPending) return;
+                  if (!tryAcquire()) return;
+                  submittingRef.current = true;
+                  const key = makeIdempotencyKey(`transfer-send-${task.task_id}`);
+                  mutation.mutate(key, {
+                    onSettled: () => {
+                      submittingRef.current = false;
+                      release();
+                    },
+                  });
+                }}
+              >
+                {mutation.isPending || isSubmitting ? "Отправка..." : "Передать"}
+              </Button>
+            )}
           </div>
         </TableCell>
       )}
@@ -862,12 +922,14 @@ export function TransfersPage() {
   }, [bulkSelection]);
 
   const selectedReadyTasks = useMemo(
-    () => readyItems.filter((t) => bulkSelection.isSelected(t.task_id)),
+    // Финальные строки (тикет #96) исключаются из групповой передачи:
+    // для них действие — «Отправить» (final release), не createTransfer.
+    () => readyItems.filter((t) => !t.is_final && bulkSelection.isSelected(t.task_id)),
     [readyItems, bulkSelection],
   );
 
   const handleBulkTransferSubmit = useCallback(async (data: BulkTransferSubmitData) => {
-    const selectedTasks = readyItems.filter(t => bulkSelection.isSelected(t.task_id));
+    const selectedTasks = readyItems.filter(t => !t.is_final && bulkSelection.isSelected(t.task_id));
     if (selectedTasks.length === 0) return;
 
     setBulkSubmitting(true);
@@ -1059,10 +1121,14 @@ export function TransfersPage() {
                     {bulkMode && (
                       <TableHead className={`${headerCellClass} w-[40px]`}>
                         <Checkbox
-                          checked={bulkSelection.isAllSelected(readyItems.map((t) => t.task_id))}
+                          checked={bulkSelection.isAllSelected(
+                            readyItems.filter((t) => !t.is_final).map((t) => t.task_id),
+                          )}
                           onCheckedChange={(checked) => {
                             if (checked) {
-                              bulkSelection.selectAll(readyItems.map((t) => t.task_id));
+                              bulkSelection.selectAll(
+                                readyItems.filter((t) => !t.is_final).map((t) => t.task_id),
+                              );
                             } else {
                               bulkSelection.clear();
                             }
