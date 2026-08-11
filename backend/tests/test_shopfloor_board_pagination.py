@@ -4,6 +4,7 @@ from __future__ import annotations
 import uuid
 from datetime import date
 from decimal import Decimal
+from urllib.parse import quote
 
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -82,6 +83,7 @@ async def _seed_board_tasks(
     sku_prefix: str = "BOARD-SKU",
     operation_name: str = "Прессование",
     plan_no: str | None = None,
+    dimensions: dict | None = None,
 ) -> None:
     plan = ProductionPlan(
         plan_no=plan_no or f"BOARD-PAGINATION-{uuid.uuid4().hex[:8]}",
@@ -156,6 +158,7 @@ async def _seed_board_tasks(
                 planned_quantity=Decimal("10"),
                 status=WorkTaskStatus.ready,
                 due_date=target_line.due_date,
+                dimensions=dimensions,
             ),
         ])
     await session.commit()
@@ -317,6 +320,103 @@ async def test_board_sort_by_product_sku(client, session: AsyncSession):
     )
     skus = [task["product_sku"] for task in board["tasks"]]
     assert skus == sorted(skus)
+
+
+@pytest.mark.asyncio
+async def test_board_sort_by_dimensions_desc(session: AsyncSession):
+    """sort_by=dimensions: от большей длины к меньшей, безразмерные (null) — в конец."""
+    _, target_section, route, raw_stage, target_stage = await _setup_two_stage_route(session)
+
+    await _seed_board_tasks(
+        session, target_section=target_section, route=route,
+        raw_stage=raw_stage, target_stage=target_stage, count=1,
+        sku_prefix="DIM-1M", plan_no=f"BOARD-DIM-{uuid.uuid4().hex[:8]}",
+        dimensions={"length_mm": 1000},
+    )
+    await _seed_board_tasks(
+        session, target_section=target_section, route=route,
+        raw_stage=raw_stage, target_stage=target_stage, count=1,
+        sku_prefix="DIM-3M", plan_no=f"BOARD-DIM-{uuid.uuid4().hex[:8]}",
+        dimensions={"length_mm": 3000},
+    )
+    await _seed_board_tasks(
+        session, target_section=target_section, route=route,
+        raw_stage=raw_stage, target_stage=target_stage, count=1,
+        sku_prefix="DIM-NONE", plan_no=f"BOARD-DIM-{uuid.uuid4().hex[:8]}",
+        dimensions=None,
+    )
+
+    board = await get_section_board(
+        session,
+        section_id=target_section.id,
+        sort_by="dimensions",
+        sort_order="desc",
+        limit=50,
+    )
+    dims = [task["dimensions"] for task in board["tasks"]]
+    assert dims == [{"length_mm": 3000}, {"length_mm": 1000}, None]
+
+
+@pytest.mark.asyncio
+async def test_board_filter_by_dimensions_exact(client, session: AsyncSession):
+    """Фильтр dimensions='{"length_mm":2000}' — точное совпадение."""
+    user = await _make_user(session)
+    token = create_access_token(subject=user.email)
+    client.headers["Authorization"] = f"Bearer {token}"
+
+    _, target_section, route, raw_stage, target_stage = await _setup_two_stage_route(session)
+    await _seed_board_tasks(
+        session, target_section=target_section, route=route,
+        raw_stage=raw_stage, target_stage=target_stage, count=1,
+        sku_prefix="DIM-2M", plan_no=f"BOARD-FILT-{uuid.uuid4().hex[:8]}",
+        dimensions={"length_mm": 2000},
+    )
+    await _seed_board_tasks(
+        session, target_section=target_section, route=route,
+        raw_stage=raw_stage, target_stage=target_stage, count=1,
+        sku_prefix="DIM-OTHER", plan_no=f"BOARD-FILT-{uuid.uuid4().hex[:8]}",
+        dimensions={"length_mm": 3500},
+    )
+
+    resp = await client.get(
+        f"/api/shopfloor/sections/{target_section.id}/board?dimensions={quote('{"length_mm":2000}')}"
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["total"] == 1
+    assert body["tasks"][0]["product_sku"] == "DIM-2M-0000"
+    assert body["tasks"][0]["dimensions"] == {"length_mm": 2000}
+
+
+@pytest.mark.asyncio
+async def test_board_filter_dimensionless(client, session: AsyncSession):
+    """Фильтр dimensions=null — только безразмерные задачи."""
+    user = await _make_user(session)
+    token = create_access_token(subject=user.email)
+    client.headers["Authorization"] = f"Bearer {token}"
+
+    _, target_section, route, raw_stage, target_stage = await _setup_two_stage_route(session)
+    await _seed_board_tasks(
+        session, target_section=target_section, route=route,
+        raw_stage=raw_stage, target_stage=target_stage, count=1,
+        sku_prefix="DIM-SIZED", plan_no=f"BOARD-NULL-{uuid.uuid4().hex[:8]}",
+        dimensions={"length_mm": 2000},
+    )
+    await _seed_board_tasks(
+        session, target_section=target_section, route=route,
+        raw_stage=raw_stage, target_stage=target_stage, count=1,
+        sku_prefix="DIM-DIMLESS", plan_no=f"BOARD-NULL-{uuid.uuid4().hex[:8]}",
+        dimensions=None,
+    )
+
+    resp = await client.get(
+        f"/api/shopfloor/sections/{target_section.id}/board?dimensions=null"
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["total"] == 1, f"expected 1, got {body['total']}: {resp.text}"
+    assert body["tasks"][0]["product_sku"] == "DIM-DIMLESS-0000"
+    assert body["tasks"][0]["dimensions"] is None
 
 
 @pytest.mark.asyncio

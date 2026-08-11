@@ -13,6 +13,7 @@ from app.domain.dimensions import (
     canonicalize_dimensions,
     dimensions_equal,
     format_dimensions,
+    format_operation_summary,
     parse_length_m_to_mm,
 )
 
@@ -194,3 +195,59 @@ class TestFormatDimensions:
     def test_invalid_dimensions_raise(self):
         with pytest.raises(DimensionsValidationError):
             format_dimensions({LENGTH_MM: 0})
+
+
+# ---------------------------------------------------------------------------
+# format_operation_summary
+# ---------------------------------------------------------------------------
+
+
+class TestFormatOperationSummary:
+    def test_no_outputs_is_none(self):
+        assert format_operation_summary(150, {"length_mm": 2700}, []) is None
+
+    def test_fully_dimensionless_is_none(self):
+        assert format_operation_summary(None, None, [{"quantity": "150"}]) is None
+
+    def test_transform_shows_input_and_outputs(self):
+        result = format_operation_summary(
+            150,
+            {"length_mm": 2700},
+            [
+                {"quantity": "150", "dimensions": {"length_mm": 900}},
+                {"quantity": "150", "dimensions": {"length_mm": 1800}},
+            ],
+        )
+        assert result == "150 шт × 2,7 м → 150 × 0,9 м + 150 × 1,8 м"
+
+    def test_same_length_is_none(self):
+        assert format_operation_summary(
+            150,
+            {"length_mm": 2700},
+            [{"quantity": "150", "dimensions": {"length_mm": 2700}}],
+        ) is None
+
+    def test_same_length_multiple_outputs_is_none(self):
+        assert format_operation_summary(
+            300,
+            {"length_mm": 2700},
+            [
+                {"quantity": "150", "dimensions": {"length_mm": 2700}},
+                {"quantity": "150", "dimensions": {"length_mm": 2700}},
+            ],
+        ) is None
+
+    def test_float_length_normalized_still_equal(self):
+        assert format_operation_summary(
+            150,
+            {"length_mm": 2700.0},
+            [{"quantity": "150", "dimensions": {"length_mm": 2700}}],
+        ) is None
+
+    def test_dimensionless_input_to_dimensioned_output_shows(self):
+        result = format_operation_summary(
+            150,
+            None,
+            [{"quantity": "150", "dimensions": {"length_mm": 2700}}],
+        )
+        assert result == "150 шт → 150 × 2,7 м"

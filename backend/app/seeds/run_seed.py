@@ -64,8 +64,9 @@ async def run_full_seed(
     result["dimension_types"] = dimensions_result["dimension_types"]
     result["product_dimensions"] = dimensions_result["product_dimensions"]
 
-    # 1.3. ImportTemplate (needed by profile); сеем все шаблоны (#15):
-    # план «Упаковочная карта РП» + остатки «Остатки КТМ».
+    # 1.3. ImportTemplate (needed by profile); сеем шаблоны плана (#15).
+    # Дефолтный маппинг остатков в таблицу не попадает — он живёт в
+    # app/stock/remainders_columns.json (см. ADR-0003 «Обновление»).
     templates_by_code: dict[str, object] = {}
     for template_data in IMPORT_TEMPLATES:
         tpl = await seed_import_template(db, template_data)

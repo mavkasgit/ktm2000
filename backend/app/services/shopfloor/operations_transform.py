@@ -23,7 +23,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from decimal import ROUND_HALF_UP, Decimal
 
-from sqlalchemy import func, select
+from sqlalchemy import case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domain.dimensions import canonicalize_dimensions
@@ -170,6 +170,44 @@ async def get_transform_progress(db: AsyncSession, task_id: int) -> TransformPro
     return progress
 
 
+async def get_transferred_by_task_dimensions_bulk(
+    db: AsyncSession, task_ids: list[int],
+) -> dict[int, dict[str | None, Decimal]]:
+    """Нетто-переданное по каждому габариту задания (net TRANSFER_SEND).
+
+    Возвращает ``{task_id: {hash_key(габарит): количество}}`` — для строки
+    «Передано» выхода трансформирующего задания в «Сдаче» плана (тикет #95).
+    """
+    if not task_ids:
+        return {}
+    rows = await db.execute(
+        select(
+            StockTransaction.task_id,
+            StockTransaction.dimensions,
+            func.coalesce(
+                func.sum(
+                    case(
+                        (StockTransaction.compensates_tx_id.is_(None), StockTransaction.quantity),
+                        else_=-StockTransaction.quantity,
+                    )
+                ),
+                0,
+            ).label("net_qty"),
+        )
+        .where(
+            StockTransaction.task_id.in_(task_ids),
+            StockTransaction.reason == Reason.TRANSFER_SEND,
+        )
+        .group_by(StockTransaction.task_id, StockTransaction.dimensions)
+    )
+    result: dict[int, dict[str | None, Decimal]] = {}
+    for task_id, dims, qty in rows:
+        per_task = result.setdefault(task_id, {})
+        key = _dimensions_hash_key(dims)
+        per_task[key] = (per_task.get(key) or Decimal("0")) + (qty or Decimal("0"))
+    return result
+
+
 async def resolve_consume_dimensions(
     db: AsyncSession,
     *,
@@ -302,6 +340,31 @@ def build_outputs_progress(
             "quantity": total,
             "produced_quantity": produced,
         })
+    return result
+
+
+def distribute_output_quantities(
+    outputs: list[dict],
+    amounts_by_group: dict[str | None, Decimal],
+) -> list[Decimal]:
+    """Последовательно распределить количество (например, уже переданное)
+    по строкам выходов с тем же габаритом.
+
+    Зеркалит ``build_outputs_progress``: две строки одного размера не
+    делят один бюджет дважды (тикет #91). Возвращает список Decimal по
+    числу записей ``outputs`` — распределённую долю на каждую строку.
+    """
+    remaining = dict(amounts_by_group)
+    result: list[Decimal] = []
+    for entry in outputs or []:
+        raw_qty = entry.get("quantity")
+        total = Decimal(str(raw_qty)) if raw_qty is not None else Decimal("0")
+        dims = canonicalize_dimensions(entry.get("dimensions"))
+        key = _dimensions_hash_key(dims)
+        available = remaining.get(key) or Decimal("0")
+        distributed = min(total, available) if total > 0 else Decimal("0")
+        remaining[key] = available - distributed
+        result.append(distributed)
     return result
 
 

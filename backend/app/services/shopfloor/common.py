@@ -44,22 +44,6 @@ async def _get_task_for_update(db: AsyncSession, task_id: int) -> WorkTask:
         raise ValueError("Task not found")
     return task
 
-async def _get_transfer_for_update(db: AsyncSession, transfer_id: int) -> Transfer:
-    """Load a Transfer with a row-level lock (SELECT ... FOR UPDATE).
-
-    Serialises concurrent accept/correct/cancel on the same transfer so
-    that ``accepted + rejected <= sent`` cannot be violated by parallel
-    writes.
-    """
-    transfer = (
-        await db.scalar(
-            select(Transfer).where(Transfer.id == transfer_id).with_for_update()
-        )
-    )
-    if transfer is None:
-        raise ValueError("Transfer not found")
-    return transfer
-
 
 async def _get_transfer(db: AsyncSession, transfer_id: int) -> Transfer:
     transfer = await db.get(Transfer, transfer_id)

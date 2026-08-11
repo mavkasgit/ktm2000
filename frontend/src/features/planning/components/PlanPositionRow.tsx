@@ -3,6 +3,7 @@ import { useMemo, useState } from "react"
 import { AlertTriangle, Route } from "lucide-react"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { Button, AlertDialog, AlertDialogContent, AlertDialogHeader, AlertDialogTitle, AlertDialogDescription, AlertDialogFooter, AlertDialogAction, AlertDialogCancel, Combobox, PositionSkuCell } from "@/shared/ui"
+import { formatDimensionsLabel } from "@/shared/api/stock"
 import { cn } from "@/shared/utils/cn"
 import { TABLE_ROW_STYLES } from "@/shared/lib/tableRowStyles"
 import { PlanPositionOut } from "@/shared/api/productionPlans"
@@ -48,18 +49,12 @@ export function PositionRow({ pos, onApprove, onDelete, selected, routes, onAssi
   // Авторасчёт (#66): значение и источник приходят контрактом с бэкенда,
   // движок расчёта фронту не нужен.
   const quantityPerHanger = pos.quantity_per_hanger ?? null
-  const quantityPerHangerSource = pos.quantity_per_hanger_source ?? null
   const hangerCount = quantityPerHanger && quantityPerHanger > 0
     ? qty / quantityPerHanger
     : null
   const hangerDisplay = hangerCount != null
     ? (Number.isInteger(hangerCount) ? String(hangerCount) : hangerCount.toFixed(1))
     : null
-  const hangerSourceLabel = quantityPerHangerSource === "auto"
-    ? "авто"
-    : quantityPerHangerSource === "manual"
-      ? "ручн."
-      : null
   const translatedErrors = hasErrors ? pos.errors.map((e) => translateLabel(e, errorLabels)) : []
   const translatedWarnings = hasWarnings ? pos.warnings.map((w) => translateLabel(w, warningLabels)) : []
   const rowNum = (() => {
@@ -251,16 +246,14 @@ export function PositionRow({ pos, onApprove, onDelete, selected, routes, onAssi
             {qtyStr}{hangerDisplay ? ` (${hangerDisplay}П)` : ''}
           </span>
         )}
-        {hangerSourceLabel && hangerDisplay && (
-          <span className="ml-1 inline-flex items-center rounded bg-muted px-1 text-[10px] text-muted-foreground align-middle">
-            {hangerSourceLabel}
-          </span>
-        )}
         {pos.operation_summary && (
           <span className="block text-xs text-muted-foreground" title={pos.operation_summary}>
             {pos.operation_summary}
           </span>
         )}
+      </div>
+      <div className="p-2 text-sm whitespace-nowrap text-muted-foreground" title={pos.dimensions_label ?? undefined}>
+        {pos.dimensions_label ?? formatDimensionsLabel(pos.dimensions)}
       </div>
       <div className="p-2 text-sm truncate whitespace-nowrap" title={pos.source_name ?? undefined}>{pos.source_name ?? "—"}</div>
       <div className="p-2 text-sm truncate overflow-hidden">

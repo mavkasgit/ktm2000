@@ -1,6 +1,7 @@
 import { useMemo, useRef } from "react";
 import { ListChecks } from "lucide-react";
 import { ProductionPlanningRow } from "@/shared/api/productionPlans";
+import { formatDimensionsFilterValue } from "@/shared/api/stock";
 import {
   Button,
   FiltersPanel,
@@ -51,6 +52,7 @@ interface ExecutionTableProps {
     route: string[];
     status: string[];
     stage: string[];
+    dimensions: string[];
   };
   hideColumnIds: boolean;
   // bulk
@@ -306,8 +308,19 @@ export function ExecutionTable({
                           currentSorts={sortConfigs}
                           onSortChange={handleSortChange}
                           values={uniqueValuesByField[column.sortField]}
-                          {...bindColumn(column.sortField)}
-                          valueLabel={column.sortField === "status" ? (v) => positionStatusLabels[v] ?? v : undefined}
+                          {...(column.sortField === "dimensions"
+                            ? {
+                                selectedValues: bindColumn("dimensions").selectedValues,
+                                onFilterChange: bindColumn("dimensions").onFilterChange,
+                              }
+                            : bindColumn(column.sortField))}
+                          valueLabel={
+                            column.sortField === "status"
+                              ? (v) => positionStatusLabels[v] ?? v
+                              : column.sortField === "dimensions"
+                                ? formatDimensionsFilterValue
+                                : undefined
+                          }
                         />
                       ) : column.id === "actions" ? (
                         <span className="block truncate">{column.label}</span>

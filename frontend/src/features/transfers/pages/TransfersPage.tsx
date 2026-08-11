@@ -47,6 +47,7 @@ import {
   cancelTransfer,
   correctTransfer,
   createTransfer,
+  finalReleaseTask,
   listReadyToTransfer,
   listTransferHistory,
   type ReadyToTransferListParams,
@@ -56,6 +57,8 @@ import {
 } from "@/shared/api/transfers";
 import { getErrorMessage } from "@/shared/api/client";
 import { queryKeys } from "@/shared/api/queryKeys";
+import { formatDimensionsFilterValue, formatDimensionsLabel } from "@/shared/api/stock";
+import { pickExactMatchColumnValue } from "@/shared/lib/columnFilterSearch";
 import { cn } from "@/shared/utils/cn";
 import {
   useBulkSelection,
@@ -94,6 +97,12 @@ function conflictHintFromTransferError(message: string): string | null {
   if (n.includes("уже есть активная передача")) {
     return "По этому заданию передача уже создана — измените количество в журнале.";
   }
+  if (n.includes("exceeds releasable quantity")) {
+    return "Количество больше доступного к выпуску.";
+  }
+  if (n.includes("only for final route stage")) {
+    return "Финальный выпуск доступен только на финальном этапе маршрута.";
+  }
   return null;
 }
 
@@ -119,7 +128,7 @@ function statusBadgeVariant(status: string): StatusBadgeVariant {
   return "outline";
 }
 
-type ReadySortField = "positionId" | "sku" | "stage" | "transferableQty" | "next";
+type ReadySortField = "positionId" | "sku" | "dimensions" | "stage" | "transferableQty" | "next";
 
 function getReadyCellValue(task: ReadyToTransferTask, field: ReadySortField): string {
   switch (field) {
@@ -127,6 +136,8 @@ function getReadyCellValue(task: ReadyToTransferTask, field: ReadySortField): st
       return String(task.plan_position_id);
     case "sku":
       return task.product_sku ?? "—";
+    case "dimensions":
+      return task.dimensions_label ?? formatDimensionsLabel(task.dimensions);
     case "stage":
       return task.operation_name ?? "—";
     case "transferableQty":
@@ -158,6 +169,8 @@ function mapReadySortFieldToApi(field: ReadySortField): string {
       return "plan_position_id";
     case "sku":
       return "product_sku";
+    case "dimensions":
+      return "dimensions";
     case "stage":
       return "operation_name";
     case "transferableQty":
@@ -270,6 +283,7 @@ function buildReadyColumnApiParams(
   | "next_section_name"
   | "plan_position_id"
   | "transferable_qty"
+  | "dimensions"
 > {
   const params: Pick<
     ReadyToTransferListParams,
@@ -279,6 +293,7 @@ function buildReadyColumnApiParams(
     | "next_section_name"
     | "plan_position_id"
     | "transferable_qty"
+    | "dimensions"
   > = {};
 
   const productSku = pickColumnApiValue(columnFilters, columnSearchQueries, "sku");
@@ -289,6 +304,9 @@ function buildReadyColumnApiParams(
 
   const transferableQty = pickColumnApiValue(columnFilters, columnSearchQueries, "transferableQty");
   if (transferableQty) params.transferable_qty = transferableQty;
+
+  const dimensions = pickExactMatchColumnValue(columnFilters, "dimensions");
+  if (dimensions) params.dimensions = dimensions;
 
   const positionIdStr = pickColumnApiValue(columnFilters, columnSearchQueries, "positionId");
   if (positionIdStr) {
@@ -368,6 +386,7 @@ function ReadyTransferRow({
         comment: undefined,
         idempotency_key: idempotencyKey,
         allow_over_plan: overLimit || isOverPlan,
+        dimensions: task.dimensions ?? undefined,
       }),
     onSuccess: () => {
       toast({
@@ -389,6 +408,35 @@ function ReadyTransferRow({
     },
   });
 
+  const isFinalRow = task.is_final === true || !task.has_next_step;
+  const releaseMutation = useMutation({
+    mutationFn: (idempotencyKey: string) =>
+      finalReleaseTask(task.task_id, {
+        quantity,
+        comment: undefined,
+        idempotency_key: idempotencyKey,
+        dimensions: task.dimensions ?? undefined,
+      }),
+    onSuccess: () => {
+      toast({
+        variant: "success",
+        title: "Финальный выпуск",
+        description: `Позиция #${task.plan_position_id} выпущена`,
+      });
+      invalidateShopfloorCaches(task.section_id, task.next_section_id);
+      invalidateTransfersCaches();
+    },
+    onError: (err: unknown) => {
+      const message = getErrorMessage(err);
+      const hint = conflictHintFromTransferError(message);
+      toast({
+        variant: "destructive",
+        title: "Ошибка выпуска",
+        description: hint ?? message,
+      });
+    },
+  });
+
   const maxQty = parseFloat(task.transferable_quantity);
   const qtyNum = parseFloat(quantity || "0");
   const overLimit = qtyNum > maxQty;
@@ -403,12 +451,17 @@ function ReadyTransferRow({
         <TableCell className="w-[40px] p-2" onClick={(e) => e.stopPropagation()}>
           <Checkbox
             checked={isSelected}
+            disabled={task.is_final === true}
             onCheckedChange={onSelect}
+            title={task.is_final === true ? "Финальный выпуск недоступен в групповой передаче" : undefined}
           />
         </TableCell>
       )}
       <TableCell className="font-mono text-xs text-muted-foreground">#{task.plan_position_id}</TableCell>
       <TableCell>{task.product_sku ?? "—"}</TableCell>
+      <TableCell className="text-xs text-muted-foreground whitespace-nowrap">
+        {task.dimensions_label ?? formatDimensionsLabel(task.dimensions)}
+      </TableCell>
       <TableCell>
         <div className="text-xs">
           <div className="font-medium">{task.operation_name ?? "—"}</div>
@@ -421,6 +474,11 @@ function ReadyTransferRow({
           <span className="text-[11px] text-muted-foreground">
             (план {fmtQty(task.planned_quantity)})
           </span>
+          {task.dimensions != null && task.dimensions_label && (
+            <span className="ml-1 text-[10px] text-muted-foreground" title="Габарит из плана">
+              · {task.dimensions_label}
+            </span>
+          )}
         </div>
         {task.completion_comment && (
           <div className="text-[10px] text-muted-foreground mt-0.5 leading-tight" title={task.completion_comment}>
@@ -461,24 +519,46 @@ function ReadyTransferRow({
                 </Badge>
               )}
             </div>
-            <Button
-              size="sm"
-              disabled={!task.has_next_step || isSubmitting || mutation.isPending || qtyNum <= 0}
-              onClick={() => {
-                if (submittingRef.current || isSubmitting || mutation.isPending) return;
-                if (!tryAcquire()) return;
-                submittingRef.current = true;
-                const key = makeIdempotencyKey(`transfer-send-${task.task_id}`);
-                mutation.mutate(key, {
-                  onSettled: () => {
-                    submittingRef.current = false;
-                    release();
-                  },
-                });
-              }}
-            >
-              {mutation.isPending || isSubmitting ? "Отправка..." : "Передать"}
-            </Button>
+            {isFinalRow ? (
+              <Button
+                size="sm"
+                disabled={isSubmitting || releaseMutation.isPending || qtyNum <= 0}
+                title="Финальный выпуск готовой продукции"
+                onClick={() => {
+                  if (submittingRef.current || isSubmitting || releaseMutation.isPending) return;
+                  if (!tryAcquire()) return;
+                  submittingRef.current = true;
+                  const key = makeIdempotencyKey(`final-release-${task.task_id}`);
+                  releaseMutation.mutate(key, {
+                    onSettled: () => {
+                      submittingRef.current = false;
+                      release();
+                    },
+                  });
+                }}
+              >
+                {releaseMutation.isPending || isSubmitting ? "Отправка..." : "Отправить"}
+              </Button>
+            ) : (
+              <Button
+                size="sm"
+                disabled={!task.has_next_step || isSubmitting || mutation.isPending || qtyNum <= 0}
+                onClick={() => {
+                  if (submittingRef.current || isSubmitting || mutation.isPending) return;
+                  if (!tryAcquire()) return;
+                  submittingRef.current = true;
+                  const key = makeIdempotencyKey(`transfer-send-${task.task_id}`);
+                  mutation.mutate(key, {
+                    onSettled: () => {
+                      submittingRef.current = false;
+                      release();
+                    },
+                  });
+                }}
+              >
+                {mutation.isPending || isSubmitting ? "Отправка..." : "Передать"}
+              </Button>
+            )}
           </div>
         </TableCell>
       )}
@@ -751,6 +831,9 @@ export function TransfersPage() {
         (a, b) => Number(a) - Number(b),
       ),
       sku: [...new Set(readyItems.map((t) => t.product_sku ?? "—"))].sort(),
+      dimensions: [...new Set(readyItems.map((t) => JSON.stringify(t.dimensions ?? null)))].sort(
+        (a, b) => formatDimensionsFilterValue(a).localeCompare(formatDimensionsFilterValue(b), "ru"),
+      ),
       stage: [...new Set(readyItems.map((t) => t.operation_name ?? "—"))].sort(),
       transferableQty: [...new Set(readyItems.map((t) => fmtQty(t.transferable_quantity)))].sort(
         (a, b) => parseFloat(a) - parseFloat(b),
@@ -839,12 +922,14 @@ export function TransfersPage() {
   }, [bulkSelection]);
 
   const selectedReadyTasks = useMemo(
-    () => readyItems.filter((t) => bulkSelection.isSelected(t.task_id)),
+    // Финальные строки (тикет #96) исключаются из групповой передачи:
+    // для них действие — «Отправить» (final release), не createTransfer.
+    () => readyItems.filter((t) => !t.is_final && bulkSelection.isSelected(t.task_id)),
     [readyItems, bulkSelection],
   );
 
   const handleBulkTransferSubmit = useCallback(async (data: BulkTransferSubmitData) => {
-    const selectedTasks = readyItems.filter(t => bulkSelection.isSelected(t.task_id));
+    const selectedTasks = readyItems.filter(t => !t.is_final && bulkSelection.isSelected(t.task_id));
     if (selectedTasks.length === 0) return;
 
     setBulkSubmitting(true);
@@ -866,6 +951,7 @@ export function TransfersPage() {
           performed_at: data.performedAt,
           physical_handover_at: data.physicalHandoverAt,
           post_factum: data.postFactum,
+          dimensions: task.dimensions ?? undefined,
         });
 
         completedCount++;
@@ -1035,10 +1121,14 @@ export function TransfersPage() {
                     {bulkMode && (
                       <TableHead className={`${headerCellClass} w-[40px]`}>
                         <Checkbox
-                          checked={bulkSelection.isAllSelected(readyItems.map((t) => t.task_id))}
+                          checked={bulkSelection.isAllSelected(
+                            readyItems.filter((t) => !t.is_final).map((t) => t.task_id),
+                          )}
                           onCheckedChange={(checked) => {
                             if (checked) {
-                              bulkSelection.selectAll(readyItems.map((t) => t.task_id));
+                              bulkSelection.selectAll(
+                                readyItems.filter((t) => !t.is_final).map((t) => t.task_id),
+                              );
                             } else {
                               bulkSelection.clear();
                             }
@@ -1065,6 +1155,18 @@ export function TransfersPage() {
                         onSortChange={handleReadySort}
                         values={readyUniqueValues.sku}
                         {...bindReadyColumn("sku")}
+                      />
+                    </TableHead>
+                    <TableHead className={`${headerCellClass} p-0`}>
+                      <SortableFilterHeader
+                        field="dimensions"
+                        label="Размер"
+                        currentSorts={readySortConfigs}
+                        onSortChange={handleReadySort}
+                        values={readyUniqueValues.dimensions}
+                        selectedValues={bindReadyColumn("dimensions").selectedValues}
+                        onFilterChange={bindReadyColumn("dimensions").onFilterChange}
+                        valueLabel={formatDimensionsFilterValue}
                       />
                     </TableHead>
                     <TableHead className={`${headerCellClass} p-0`}>
@@ -1114,7 +1216,7 @@ export function TransfersPage() {
                   <TableBody>
                     <TableRow>
                       <TableCell
-                        colSpan={bulkMode ? 7 : 7}
+                        colSpan={bulkMode ? 8 : 8}
                         className="py-6 text-center text-sm text-muted-foreground"
                       >
                         Нет заданий, соответствующих фильтру
@@ -1125,7 +1227,7 @@ export function TransfersPage() {
                   <VirtualizedTableBody
                     rows={readyItems}
                     rowHeight={56}
-                    colSpan={bulkMode ? 7 : 7}
+                    colSpan={bulkMode ? 8 : 8}
                     scrollContainerRef={readyScrollRef}
                     renderRow={(t) => (
                       <ReadyTransferRow
@@ -1234,6 +1336,9 @@ export function TransfersPage() {
                             {...bindHistoryColumn("sku")}
                           />
                         </TableHead>
+                        <TableHead className={`${headerCellClass} p-0`}>
+                          <span className="text-xs font-medium text-muted-foreground">Размер</span>
+                        </TableHead>
                         <TableHead className={`${headerCellClass} p-0 text-right`}>
                           <SortableFilterHeader
                             field="quantity"
@@ -1265,7 +1370,7 @@ export function TransfersPage() {
                     {historyItems.length === 0 ? (
                       <TableBody>
                         <TableRow>
-                          <TableCell colSpan={8} className="py-6 text-center text-sm text-muted-foreground">
+                          <TableCell colSpan={9} className="py-6 text-center text-sm text-muted-foreground">
                             Нет записей, соответствующих фильтру
                           </TableCell>
                         </TableRow>
@@ -1274,7 +1379,7 @@ export function TransfersPage() {
                       <VirtualizedTableBody
                         rows={historyItems}
                         rowHeight={56}
-                        colSpan={8}
+                        colSpan={9}
                         scrollContainerRef={historyScrollRef}
                         renderRow={(t) => {
                           const isIncoming = historySectionIds.has(t.to_section_id);
@@ -1308,6 +1413,9 @@ export function TransfersPage() {
                                 </div>
                               </TableCell>
                               <TableCell className="text-xs font-medium">{t.product_sku}</TableCell>
+                              <TableCell className="text-xs text-muted-foreground whitespace-nowrap">
+                                {formatDimensionsLabel(t.dimensions)}
+                              </TableCell>
                               <TableCell className="text-right tabular-nums font-semibold whitespace-nowrap">
                                 {fmtQty(t.sent_quantity)}
                               </TableCell>

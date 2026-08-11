@@ -67,7 +67,10 @@ async def _make_demo_route(session, code_prefix: str, step_defs: list[tuple[str,
     return route
 
 
-async def _seed_demo_stock(session, product_id: int, section_id: int, quantity: Decimal = Decimal("100")) -> None:
+async def _seed_demo_stock(
+    session, product_id: int, section_id: int, quantity: Decimal = Decimal("100"),
+    dimensions: dict | None = None,
+) -> None:
     """Seed initial stock for demo tests using StockCommandService."""
     from app.stock import StockCommand, StockCommandService, Reason, QualityState
     svc = StockCommandService()
@@ -77,6 +80,7 @@ async def _seed_demo_stock(session, product_id: int, section_id: int, quantity: 
         reason=Reason.MANUAL_IN,
         to_location_id=section_id,
         quality_state=QualityState.GOOD,
+        dimensions=dimensions,
         created_by=1,
         comment="Demo stock seed",
     ))
@@ -118,7 +122,8 @@ async def test_demo_full_route_run_and_replay(client, session) -> None:
     raw_section = await session.scalar(
         select(Section).where(Section.code == "DEMO-001-ISSUE")
     )
-    await _seed_demo_stock(session, product.id, raw_section.id, Decimal("200"))
+    await _seed_demo_stock(session, product.id, raw_section.id, Decimal("200"),
+                           dimensions={"length_mm": 2700})
 
     run_id = "demo-run-001"
     response = await client.post(
@@ -202,7 +207,8 @@ async def test_demo_full_route_forks_when_target_plan_released(client, session) 
     raw_section = await session.scalar(
         select(Section).where(Section.code == "DEMO-002-ISSUE")
     )
-    await _seed_demo_stock(session, product.id, raw_section.id, Decimal("200"))
+    await _seed_demo_stock(session, product.id, raw_section.id, Decimal("200"),
+                           dimensions={"length_mm": 2700})
 
     response = await client.post(
         "/api/demo/test-runs/full-route",
@@ -505,7 +511,8 @@ async def test_demo_stage_preset_to_step_ready_middle_step(client, session) -> N
     raw_section = await session.scalar(
         select(Section).where(Section.code == "DEMO-TSRM-ISSUE")
     )
-    await _seed_demo_stock(session, product.id, raw_section.id, Decimal("200"))
+    await _seed_demo_stock(session, product.id, raw_section.id, Decimal("200"),
+                           dimensions={"length_mm": 2700})
 
     # Target 3rd production step (SAWING): execute SHOT_BLAST + ANODIZING, leave SAWING ready.
     # Route stages: ISSUE (raw_stock), SHOT, ANOD, WIP (wip_stock), SAW, PACK, FG (finished_stock).

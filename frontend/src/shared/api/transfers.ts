@@ -42,6 +42,8 @@ export type ReadyToTransferTask = {
   next_step_is_final: boolean | null;
   is_final: boolean;
   completion_comment: string | null;
+  dimensions: Record<string, number | string> | null;
+  dimensions_label: string | null;
 };
 
 export type ReadyToTransferResponse = {
@@ -67,6 +69,8 @@ export type ReadyToTransferListParams = {
   task_id?: number;
   plan_position_id?: number;
   transferable_qty?: string;
+  /** Фильтр точного совпадения по габариту: JSON-строка (`{"length_mm":2700}`) или `null` для безразмерных. */
+  dimensions?: string;
 };
 
 export type IncomingTransfer = {
@@ -98,6 +102,8 @@ export type IncomingTransfer = {
   from_line_id: number;
   from_line_sequence: number;
   plan_position_id: number;
+  /** Габарит переданного (тикет #95): колонка «Размер» в UI. */
+  dimensions?: Record<string, unknown> | null;
 };
 
 export type IncomingTransfersResponse = {
@@ -117,6 +123,7 @@ export type CreateTransferInput = {
   post_factum?: boolean;
   allow_over_plan?: boolean;
   physical_handover_at?: string;
+  dimensions?: Record<string, number | string> | null;
 };
 
 export type CreateTransferResponse = {
@@ -127,6 +134,24 @@ export type CreateTransferResponse = {
   // received on the destination by the time the API returns).
   status: string;
   to_task_id: number;
+  idempotent_replay?: boolean;
+};
+
+export type FinalReleaseInput = {
+  quantity: number | string;
+  comment?: string;
+  idempotency_key?: string;
+  executor_user_id?: number;
+  performed_at?: string;
+  accounted_at?: string;
+  // Габарит выпуска (ADR-0001): на трансформирующем финальном этапе —
+  // один из выходных размеров задания; на обычном — опционален.
+  dimensions?: Record<string, number | string> | null;
+};
+
+export type FinalReleaseResponse = {
+  transaction_id: number;
+  task_id: number;
   idempotent_replay?: boolean;
 };
 
@@ -155,6 +180,7 @@ export async function listReadyToTransfer(
   if (params.next_section_name) search.set("next_section_name", params.next_section_name);
   if (params.task_id != null) search.set("task_id", String(params.task_id));
   if (params.transferable_qty) search.set("transferable_qty", params.transferable_qty);
+  if (params.dimensions) search.set("dimensions", params.dimensions);
   const qs = search.toString();
   const { data } = await apiClient.get<ReadyToTransferResponse>(
     `/transfers/ready${qs ? `?${qs}` : ""}`,
@@ -180,6 +206,19 @@ export async function createTransfer(
 ): Promise<CreateTransferResponse> {
   const { data } = await apiClient.post<CreateTransferResponse>(
     "/transfers",
+    payload,
+    makeRequestConfig(options),
+  );
+  return data;
+}
+
+export async function finalReleaseTask(
+  taskId: number,
+  payload: FinalReleaseInput,
+  options?: ShopfloorRequestOptions,
+): Promise<FinalReleaseResponse> {
+  const { data } = await apiClient.post<FinalReleaseResponse>(
+    `/shopfloor/tasks/${taskId}/final-release`,
     payload,
     makeRequestConfig(options),
   );

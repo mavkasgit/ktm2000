@@ -11,6 +11,7 @@ from app.models.defect import Defect, DefectItem, DefectStatus
 from app.models.internal_plan import SectionPlanLine
 from app.models.production_plan import PlanPosition, PlanPositionStatus
 from app.models.work_task import WorkTask, WorkTaskStatus
+from app.services.plan_position_hanger import position_dimensions_for_task
 from app.stock import QualityState, Reason, StockCommand, StockCommandService
 
 from .common import (
@@ -158,12 +159,10 @@ async def complete_task(
     transform_progress = None
     consume_dims: dict | None = None
     if spec is not None:
-        if auto_transfer_next:
-            raise ValueError(
-                "auto_transfer_next is not supported for dimension-transforming tasks"
-            )
         # Порция считается во входных заготовках: нельзя раскроить
         # больше, чем осталось нераскроенного входа по спецификации.
+        # auto_transfer_next на трансформирующем этапе создаёт по передаче
+        # на каждый выход — см. auto_create_transfer_after_complete (тикет #91).
         transform_progress = await get_transform_progress(db, task.id)
         remaining_input = (
             spec.input_quantity
@@ -252,6 +251,9 @@ async def complete_task(
             quantity=good_quantity,
             reason=Reason.COMPLETE,
             quality_state=QualityState.GOOD,
+            # Габарит задания (ADR-0001): запись не движет баланс (net-zero),
+            # но несёт ту же размерную группу, что и полученный материал.
+            dimensions=task.dimensions,
             task_id=task.id,
             source_ref=source_ref,
             idempotency_key=idempotency_key,
@@ -291,8 +293,9 @@ async def complete_task(
             to_location_id=scrap_loc,
             quantity=defect_quantity,
             reason=Reason.SCRAP,
-            # Брак заготовок трансформации уходит с габаритом входа.
-            dimensions=consume_dims if spec is not None else None,
+            # Брак заготовок трансформации уходит с габаритом входа; на
+            # нетрансформирующих этапах — с габаритом задания (ADR-0001).
+            dimensions=consume_dims if spec is not None else task.dimensions,
             quality_state=QualityState.GOOD,
             to_quality_state=QualityState.SCRAP,
             task_id=task.id,
@@ -363,11 +366,18 @@ async def final_release(
     executor_user_id: int | None = None,
     performed_at: datetime | None = None,
     accounted_at: datetime | None = None,
+    dimensions: dict | None = None,
 ) -> dict:
     """Final release of finished goods to finished stock.
 
     Writes StockTransaction(FINAL_RELEASE). No SpgRemainder or
     compensate_spg_remainders.
+
+    Трансформирующий финальный этап (ADR-0002): выпуск несёт один из
+    выходных размеров задания (инвариант D3). При одном выходе габарит
+    выводится из спецификации; при нескольких — обязателен явный
+    ``dimensions``. На нетрансформирующих этапах ``dimensions``
+    опционален (по умолчанию — габарит задания).
     """
     if idempotency_key:
         from app.stock.models import StockTransaction
@@ -383,20 +393,64 @@ async def final_release(
     quantity = _to_decimal(quantity)
     _ensure_positive(quantity, "quantity")
 
-    # Releasable = completed - already final_released
+    from app.domain.dimensions import canonicalize_dimensions
     from app.stock.models import StockTransaction
-    already_released = await db.scalar(
-        select(func.coalesce(func.sum(StockTransaction.quantity), 0))
-        .where(
-            StockTransaction.task_id == task.id,
-            StockTransaction.reason == Reason.FINAL_RELEASE,
+    from app.stock.services import _dimensions_hash_key, dimensions_match_clause
+    from app.services.shopfloor.operations_transform import (
+        get_transform_progress,
+        resolve_transform_spec,
+    )
+
+    eff_dims = canonicalize_dimensions(dimensions)
+
+    spec = resolve_transform_spec(task, stage)
+    if spec is not None:
+        # Трансформирующий этап: выпускаемый размер — один из выходов
+        # спецификации.
+        output_dims = [group.dimensions for group in spec.output_groups]
+        if eff_dims is None:
+            if len(output_dims) == 1:
+                eff_dims = output_dims[0]
+            else:
+                raise ValueError(
+                    "Final release on transforming stage requires dimensions "
+                    "(task has multiple output sizes)"
+                )
+        if eff_dims not in output_dims:
+            raise ValueError(
+                "Final release dimensions must match one of the task outputs"
+            )
+        # Оприходовано выхода этого размера (COMPLETE по (задача, размер)).
+        progress = await get_transform_progress(db, task.id)
+        completed_by_size = progress.produced_by_group.get(
+            _dimensions_hash_key(eff_dims)
+        ) or Decimal("0")
+    else:
+        eff_dims = eff_dims if eff_dims is not None else task.dimensions
+        completed_by_size = (
+            await db.scalar(
+                select(func.coalesce(func.sum(StockTransaction.quantity), 0))
+                .where(
+                    StockTransaction.task_id == task.id,
+                    StockTransaction.reason == Reason.COMPLETE,
+                    dimensions_match_clause(StockTransaction.dimensions, eff_dims),
+                )
+            )
+        ) or Decimal("0")
+
+    # Releasable по (задача, размер): completed по размеру − уже released
+    # по размеру (тикет #91). Разные размеры одного задания не суммируются.
+    already_released_by_size = (
+        await db.scalar(
+            select(func.coalesce(func.sum(StockTransaction.quantity), 0))
+            .where(
+                StockTransaction.task_id == task.id,
+                StockTransaction.reason == Reason.FINAL_RELEASE,
+                dimensions_match_clause(StockTransaction.dimensions, eff_dims),
+            )
         )
     ) or Decimal("0")
-
-    from app.stock.services import StockProjectionManager
-    pm = StockProjectionManager()
-    cache = await pm.get_task_cache(db, task.id)
-    releasable = cache["completed_quantity"] - already_released
+    releasable = completed_by_size - already_released_by_size
     if quantity > releasable:
         raise ValueError("Final release exceeds releasable quantity")
 
@@ -417,6 +471,9 @@ async def final_release(
         to_location_id=finished_stock,
         quantity=quantity,
         reason=Reason.FINAL_RELEASE,
+        # Габарит выпуска (ADR-0001): на трансформирующем финальном этапе —
+        # выходной размер задания (инвариант D3); на обычном — габарит задания.
+        dimensions=eff_dims,
         task_id=task.id,
         source_ref=None,
         idempotency_key=idempotency_key,
@@ -528,6 +585,7 @@ async def prepare_section_task(
         planned_quantity=quantity,
         status=WorkTaskStatus.ready,
         due_date=line.due_date,
+        dimensions=position_dimensions_for_task(pos),
         **transform_fields,
     )
     db.add(task)

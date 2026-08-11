@@ -171,12 +171,13 @@ async def validate_plan_position(
                 break
             previous = step.sequence
             
-            if sections_cache is not None and step.section_id in sections_cache:
-                section = sections_cache[step.section_id]
+            effective_section_id = step.effective_section_id
+            if sections_cache is not None and effective_section_id in sections_cache:
+                section = sections_cache[effective_section_id]
             else:
-                section = await db.get(Section, step.section_id)
+                section = await db.get(Section, effective_section_id)
                 if sections_cache is not None and section is not None:
-                    sections_cache[step.section_id] = section
+                    sections_cache[effective_section_id] = section
 
             if section is None or not section.is_active:
                 errors.append("route_contains_inactive_section")

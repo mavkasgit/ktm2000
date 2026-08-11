@@ -108,6 +108,25 @@ export async function apiGetProductBySku(sku: string) {
   return product;
 }
 
+/** @smoke — свежий продукт без lengths (как в demo-фикстурах) для кастомного роута. */
+export async function apiCreateBareProduct(sku: string) {
+  const res = await fetch(`${BACKEND_URL}/api/products`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      sku,
+      name: `Bare ${sku}`,
+      type: "finished_good",
+      unit: "pcs",
+      is_active: true,
+    }),
+  });
+  if (!res.ok) {
+    throw new Error(`Create bare product failed: ${res.status} ${await res.text()}`);
+  }
+  return res.json();
+}
+
 async function apiCreateTechcard(productId: number) {
   const res = await fetch(`${BACKEND_URL}/api/techcards`, {
     method: "POST",
@@ -289,6 +308,7 @@ export async function apiAddRemainder(
   sectionId: number,
   quantity: number,
   comment: string,
+  dimensions?: Record<string, number> | null,
 ) {
   const res = await fetch(`${BACKEND_URL}/api/stock/adjustment`, {
     method: "POST",
@@ -298,6 +318,7 @@ export async function apiAddRemainder(
       location_id: sectionId,
       quantity,
       reason: "manual_in",
+      dimensions: dimensions ?? null,
       comment,
     }),
   });
@@ -306,4 +327,95 @@ export async function apiAddRemainder(
     throw new Error(`Add remainder failed: ${res.statusText} (${res.status}) - ${errText}`);
   }
   return res.json();
+}
+
+// ─── Тикет #96: кастомный роут с финальной production-стадией ───────────────
+
+export async function apiCreateRoute(name: string) {
+  const res = await fetch(`${BACKEND_URL}/api/routes`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name, description: "E2E final-release", is_active: true }),
+  });
+  if (!res.ok) {
+    throw new Error(`Create route failed: ${res.status} ${await res.text()}`);
+  }
+  return res.json();
+}
+
+export async function apiAddRouteStep(
+  routeId: number,
+  step: {
+    sequence: number;
+    section_id: number;
+    operation_code?: string | null;
+    operation_name: string;
+    is_final?: boolean;
+    stage_kind?: "production" | "transit";
+    storage_section_id?: number | null;
+  },
+) {
+  const res = await fetch(`${BACKEND_URL}/api/routes/${routeId}/steps`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      sequence: step.sequence,
+      section_id: step.section_id,
+      operation_code: step.operation_code ?? null,
+      operation_name: step.operation_name,
+      is_final: step.is_final ?? false,
+      stage_kind: step.stage_kind ?? "production",
+      storage_section_id: step.storage_section_id ?? null,
+      requires_acceptance: true,
+      allow_parallel: false,
+    }),
+  });
+  if (!res.ok) {
+    throw new Error(`Add route step failed: ${res.status} ${await res.text()}`);
+  }
+  return res.json();
+}
+
+/** @smoke — прогнать позицию по роуту до состояния «задачи завершены, не выпущены». */
+export async function apiRunDemoFullRoute(
+  token: string,
+  payload: {
+    initial_quantity: string;
+    route_id: number;
+    techcard_id: number;
+    run_id: string;
+  },
+) {
+  const res = await fetch(`${BACKEND_URL}/api/demo/test-runs/full-route`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({
+      initial_quantity: payload.initial_quantity,
+      route_id: payload.route_id,
+      techcard_id: payload.techcard_id,
+      run_id: payload.run_id,
+      stage_preset: "full_route",
+    }),
+  });
+  if (!res.ok) {
+    throw new Error(`Demo full-route failed: ${res.status} ${await res.text()}`);
+  }
+  return res.json();
+}
+
+/** @smoke — токен доступа authenticatedPage (localStorage `ktm2000_token` → cookie fallback). */
+export async function apiAccessTokenFromPage(page: {
+  evaluate: (fn: () => string) => Promise<string>;
+  context: () => { cookies: () => Promise<Array<{ name: string; value: string }>> };
+}): Promise<string> {
+  const fromStorage = await page.evaluate(() => localStorage.getItem("ktm2000_token") ?? "");
+  if (fromStorage) return fromStorage;
+  const cookies = await page.context().cookies();
+  const byCookie = cookies.find(
+    (c) => c.name === "ktm2000_token" || c.name === "access_token",
+  );
+  return byCookie?.value ?? "";
 }

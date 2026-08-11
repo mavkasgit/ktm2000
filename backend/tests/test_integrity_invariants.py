@@ -153,21 +153,91 @@ _STOCK_LEDGER_INVARIANT_QUERIES: list[tuple[str, str]] = [
             SELECT transfer_id,
                    SUM(CASE WHEN compensates_tx_id IS NULL THEN quantity
                              ELSE -quantity END) AS net_send
-            FROM stock_transactions WHERE reason = 'TRANSFER_SEND'
+            FROM stock_transactions WHERE reason = 'transfer_send'
             GROUP BY transfer_id
         ) s ON s.transfer_id = t.id
         WHERE t.status NOT IN ('cancelled', 'rejected')
           AND t.sent_quantity != COALESCE(s.net_send, 0)
         """,
     ),
+    # ─── Dimension invariants (D1-D3, тикеты #89/#90/#8) ─────────────────────
+    # Габарит (ADR-0001) — вторая ось учёта; Transfer, StockTransaction и
+    # спецификация выходов задания не должны расходиться.
+    # D1: обе проводки передачи (SEND + RECEIVE) несут тот же размер, что и
+    #     Transfer.dimensions (канон пишется одним вызовом transfer_send).
+    # D2: суммарно переданное с трансформирующего задания по паре
+    #     (задача, размер) не превышает количество выхода спецификации
+    #     (WorkTask.outputs) этого размера — иначе «пила» может передать
+    #     больше, чем раскроила.
+    # D3: финальный выпуск на трансформирующем финальном этапе несёт один из
+    #     выходных размеров задания (не вход).
+    (
+        "D1_transfer_dimensions_match_stock_tx",
+        """
+        SELECT st.id AS tx_id, st.transfer_id,
+               st.dimensions AS tx_dims, t.dimensions AS transfer_dims
+        FROM stock_transactions st
+        JOIN transfers t ON t.id = st.transfer_id
+        WHERE st.reason IN ('transfer_send', 'transfer_receive')
+          AND NOT (st.dimensions IS NOT DISTINCT FROM t.dimensions)
+        """,
+    ),
+    (
+        "D2_transfer_sent_within_output_quantity",
+        """
+        SELECT g.task_id, g.dimensions AS dims, g.net_transferred
+        FROM (
+            SELECT task_id, dimensions,
+                   SUM(CASE WHEN compensates_tx_id IS NULL
+                            THEN quantity ELSE -quantity END) AS net_transferred
+            FROM stock_transactions
+            WHERE reason = 'transfer_send'
+            GROUP BY task_id, dimensions
+        ) g
+        JOIN work_tasks wt ON wt.id = g.task_id
+        WHERE jsonb_array_length(wt.outputs) > 0
+          AND NOT EXISTS (
+              SELECT 1
+              FROM jsonb_array_elements(wt.outputs) o
+              WHERE o->'dimensions' IS NOT DISTINCT FROM g.dimensions
+          )
+          AND COALESCE((
+              SELECT SUM((o->>'quantity')::numeric)
+              FROM jsonb_array_elements(wt.outputs) o
+              WHERE o->'dimensions' IS NOT DISTINCT FROM g.dimensions
+          ), 0) < g.net_transferred
+        """,
+    ),
+    (
+        "D3_final_release_carries_output_dimensions",
+        """
+        SELECT st.id AS tx_id, st.task_id, st.dimensions AS dims
+        FROM stock_transactions st
+        JOIN work_tasks wt ON wt.id = st.task_id
+        JOIN route_stages rs ON rs.id = wt.route_stage_id
+        WHERE st.reason = 'final_release'
+          AND rs.transforms_dimensions = true
+          AND jsonb_array_length(wt.outputs) > 0
+          AND NOT EXISTS (
+              SELECT 1
+              FROM jsonb_array_elements(wt.outputs) o
+              WHERE o->'dimensions' IS NOT DISTINCT FROM st.dimensions
+          )
+        """,
+    ),
 ]
 
 
 async def _stock_ledger_tables_exist(session: AsyncSession) -> bool:
-    """True если таблицы нового домена уже созданы миграцией Этапа 1."""
+    """True если таблицы stock-ledger домена есть в текущей схеме.
+
+    Тесты живут в per-module схеме ``t_<uuid8>`` (search_path выставлен на
+    неё), поэтому таблицы ищем по search_path, а не в ``public`` — иначе
+    канон молча проходил бы как no-op.
+    """
     result = await session.execute(text(
-        "SELECT to_regclass('public.stock_transactions') IS NOT NULL "
-        "AND to_regclass('public.stock_balances') IS NOT NULL AS exists"
+        "SELECT to_regclass('stock_transactions') IS NOT NULL "
+        "AND to_regclass('stock_balances') IS NOT NULL AS exists"
     ))
     return bool(result.scalar())
 
@@ -206,7 +276,7 @@ async def assert_no_invariants_violations(
     *,
     context: str | None = None,
 ) -> None:
-    """Run the StockTransaction invariant queries (S1-S6) and raise
+    """Run the StockTransaction invariant queries (S1-S6 + D1-D3) and raise
     AssertionError on the first violation.  Movement invariants were
     removed in Stage 7 (table deleted).
     """

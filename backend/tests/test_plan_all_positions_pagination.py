@@ -247,3 +247,70 @@ async def test_all_positions_excludes_non_planning_statuses(client, session: Asy
     body = resp.json()
     assert body["total"] == 1
     assert body["positions"][0]["status"] == "draft"
+
+
+@pytest.mark.asyncio
+async def test_all_positions_filter_sort_by_dimensions(client, session: AsyncSession):
+    """Тикет #95: колонка «Размер» на странице плана — серверные фильтр и сортировка."""
+    plan = await _make_plan(session, plan_no="PLAN-DIMS")
+    for idx, (sku, length) in enumerate(
+        [("DIMS-3000", 3000), ("DIMS-2700", 2700), ("DIMS-1000", 1000), ("DIMS-NONE", None)],
+        start=1,
+    ):
+        product = await _make_product(session, sku)
+        session.add(
+            PlanPosition(
+                production_plan_id=plan.id,
+                product_id=product.id,
+                source_type=PlanSourceType.manual,
+                source_sku=sku,
+                source_name=sku,
+                quantity=Decimal("10"),
+                input_dimensions={"length_mm": length} if length is not None else None,
+                source_payload={},
+                status=PlanPositionStatus.draft,
+                validation_status=PlanPositionValidationStatus.valid,
+                validation_errors=[],
+                source_row_number=idx,
+                period_start=plan.period_start,
+                period_end=plan.period_end,
+                has_pack_ops=False,
+            )
+        )
+    await session.commit()
+
+    # Сериализация: позиции несут dimensions + dimensions_label.
+    all_resp = await client.get("/api/production-plans/all-positions?limit=50")
+    assert all_resp.status_code == 200, all_resp.text
+    all_positions = all_resp.json()["positions"]
+    by_sku = {p["source_sku"]: p for p in all_positions}
+    assert by_sku["DIMS-3000"]["dimensions"] == {"length_mm": 3000}
+    assert by_sku["DIMS-3000"]["dimensions_label"] == "3 м"
+    assert by_sku["DIMS-NONE"]["dimensions"] is None
+    assert by_sku["DIMS-NONE"]["dimensions_label"] == "—"
+
+    # Фильтр точного совпадения: только 2700.
+    from urllib.parse import quote
+
+    filt = await client.get(
+        f"/api/production-plans/all-positions?dimensions={quote('{"length_mm":2700}')}"
+    )
+    assert filt.status_code == 200, filt.text
+    assert [p["source_sku"] for p in filt.json()["positions"]] == ["DIMS-2700"]
+
+    # Фильтр безразмерных.
+    none_filt = await client.get("/api/production-plans/all-positions?dimensions=null")
+    assert none_filt.status_code == 200, none_filt.text
+    assert [p["source_sku"] for p in none_filt.json()["positions"]] == ["DIMS-NONE"]
+
+    # Сортировка по размеру убыв.: 3000 → 2700 → 1000 → безразмерные в конце.
+    sort_resp = await client.get(
+        "/api/production-plans/all-positions?sort_by=dimensions&sort_order=desc"
+    )
+    assert sort_resp.status_code == 200, sort_resp.text
+    skus = [p["source_sku"] for p in sort_resp.json()["positions"]]
+    assert skus == ["DIMS-3000", "DIMS-2700", "DIMS-1000", "DIMS-NONE"]
+
+    # Мусор в dimensions → 422.
+    bad = await client.get("/api/production-plans/all-positions?dimensions=not-json")
+    assert bad.status_code == 422

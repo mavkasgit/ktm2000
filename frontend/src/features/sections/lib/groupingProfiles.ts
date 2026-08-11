@@ -8,8 +8,9 @@
  *   по каким полям сигнатуры группировать задачи.
  *
  *   Каждый профиль — набор критериев в порядке приоритета.
- *   Ключ группы строится конкатенацией значений всех критериев:
- *   ["productSku", "operationCode"] → "ЮП-460__press_window"
+ *   Ключ группы строится из принудительных критериев «артикул + размер»
+ *   и значений остальных критериев профиля:
+ *   ["productSku", "operationCode"] → "ЮП-460__2,7 м__press_window"
  *
  * ХРАНЕНИЕ:
  *   localStorage — намеренный выбор вместо sessionStorage.
@@ -77,7 +78,7 @@ export interface GroupingProfile {
 export const PRESET_PROFILES: GroupingProfile[] = [
   {
     id: "sku",
-    name: "Только артикул",
+    name: "Артикул + размер",
     criteria: ["productSku"],
   },
   {
@@ -183,11 +184,12 @@ export { groupingCriterionLabels as CRITERION_LABELS } from "@/shared/lib/genera
 
 
 export function getProfilePreview(profile: GroupingProfile): string {
+  // Примеры учитывают принудительный критерий «размер»: «артикул · 2,7 м».
   const examples: Record<string, string> = {
-    "sku":           "ЮП-460",
-    "sku+routeHistory": "ЮП-460 · ISSUE_RAW",
-    "sku+routeHistoryAfter": "ЮП-460 · ISSUE_RAW→PRESS_WINDOW",
-    "custom":        `ЮП-460 · ${(profile.customFields ?? []).join(" · ") || "..."}`,
+    "sku":           "ЮП-460 · 2,7 м",
+    "sku+routeHistory": "ЮП-460 · 2,7 м · ISSUE_RAW",
+    "sku+routeHistoryAfter": "ЮП-460 · 2,7 м · ISSUE_RAW→PRESS_WINDOW",
+    "custom":        `ЮП-460 · 2,7 м · ${(profile.customFields ?? []).join(" · ") || "..."}`,
   };
   return examples[profile.id] ?? "—";
 }

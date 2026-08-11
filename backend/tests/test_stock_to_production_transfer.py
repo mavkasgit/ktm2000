@@ -198,8 +198,9 @@ async def test_take_to_work_does_not_create_task_on_raw_stock(client, session) -
 
 
 @pytest.mark.asyncio
-async def test_manual_stock_transfer_one_per_task_and_plan_cap(client, session) -> None:
-    """Со склада: transferable = min(план, остаток); одна передача на задание."""
+async def test_manual_stock_transfer_multiple_sends_limited_by_plan_cap(client, session) -> None:
+    """Со склада: transferable = min(план, остаток); несколько передач разрешены,
+    суммарно ограничены transferable по размеру."""
     user = await _make_user(session, "manual-xfer@test.local")
     headers = _auth_headers(user)
     plan_qty = Decimal("100")
@@ -237,10 +238,14 @@ async def test_manual_stock_transfer_one_per_task_and_plan_cap(client, session) 
     assert send_resp.status_code == 200
     assert send_resp.json()["status"] == "accepted"
 
+    # После частичной передачи строка остаётся готовой с остатком 60.
     resp = await client.get(f"/api/transfers/ready?section_id={raw_sec.id}", headers=headers)
     assert resp.status_code == 200
-    assert resp.json()["items"] == []
+    items = resp.json()["items"]
+    assert len(items) == 1
+    assert items[0]["transferable_quantity"] == "60"
 
+    # Вторая передача того же размера разрешена (отдельный факт отправки).
     dup_resp = await client.post(
         "/api/transfers",
         json={
@@ -250,8 +255,21 @@ async def test_manual_stock_transfer_one_per_task_and_plan_cap(client, session) 
         },
         headers=headers,
     )
-    assert dup_resp.status_code == 400
-    assert "активная передача" in dup_resp.json()["detail"].lower()
+    assert dup_resp.status_code == 200
+    assert dup_resp.json()["status"] == "accepted"
+
+    # Суммарно нельзя превысить план: ещё 51 → 400.
+    over_resp = await client.post(
+        "/api/transfers",
+        json={
+            "from_task_id": task_id,
+            "quantity": "51",
+            "idempotency_key": "manual-xfer:send-over",
+        },
+        headers=headers,
+    )
+    assert over_resp.status_code == 400
+    assert "transferable" in over_resp.json()["detail"].lower()
 
     bal = await _stock_balance_qty(
         session,
@@ -259,7 +277,7 @@ async def test_manual_stock_transfer_one_per_task_and_plan_cap(client, session) 
         product_id=fx["product"].id,
     )
     # TRANSFER_SEND списывает со склада; TRANSFER_RECEIVE не дублирует движение.
-    assert bal == warehouse_qty - Decimal("40")
+    assert bal == warehouse_qty - Decimal("50")
 
 
 @pytest.mark.asyncio
@@ -323,7 +341,7 @@ async def test_full_stock_transfer_does_not_reappear_in_ready_list(client, sessi
         headers=headers,
     )
     assert dup_resp.status_code == 400
-    assert "активная передача" in dup_resp.json()["detail"].lower()
+    assert "transferable" in dup_resp.json()["detail"].lower()
 
     tasks = (
         await session.execute(

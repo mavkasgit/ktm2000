@@ -238,3 +238,47 @@ async def test_serialize_zero_total_is_null(client, session) -> None:
     position = resp.json()[0]
     assert position["quantity_per_hanger"] is None
     assert position["quantity_per_hanger_source"] is None
+
+
+def test_position_dimensions_for_task_edges() -> None:
+    """position_dimensions_for_task: вход → единственный выход → None (не выход вместо входа)."""
+    from app.models.production_plan import (
+        PlanPosition,
+        PlanPositionStatus,
+        PlanPositionValidationStatus,
+        PlanSourceType,
+    )
+    from app.services.plan_position_hanger import position_dimensions_for_task
+
+    def make_pos(**overrides) -> PlanPosition:
+        fields: dict = dict(
+            production_plan_id=1,
+            source_type=PlanSourceType.manual,
+            source_sku="EDGE",
+            quantity=Decimal("1"),
+            status=PlanPositionStatus.approved,
+            validation_status=PlanPositionValidationStatus.valid,
+            input_quantity=None,
+            input_dimensions=None,
+            outputs=[],
+        )
+        fields.update(overrides)
+        return PlanPosition(**fields)
+
+    # Обычная позиция: длина из входа (input_dimensions).
+    assert position_dimensions_for_task(
+        make_pos(input_dimensions={"length_mm": 2700})
+    ) == {"length_mm": 2700}
+    # Без входа — длина единственного выхода (это и есть поток).
+    assert position_dimensions_for_task(
+        make_pos(outputs=[{"quantity": "1", "dimensions": {"length_mm": 900}}])
+    ) == {"length_mm": 900}
+    # Трансформирующая (есть input_quantity) без длины входа — выход НЕ подставляем.
+    assert position_dimensions_for_task(
+        make_pos(
+            input_quantity=Decimal("100"),
+            outputs=[{"quantity": "1", "dimensions": {"length_mm": 900}}],
+        )
+    ) is None
+    # Без размеров — безразмерные штуки.
+    assert position_dimensions_for_task(make_pos()) is None

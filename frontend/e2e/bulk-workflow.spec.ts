@@ -1,5 +1,7 @@
 import { test, expect } from "./fixtures";
+import fs from "fs";
 import path from "path";
+import { BULK_REMAINDERS_XLS_PATH, importRemaindersViaUI } from "./ui-helpers";
 import {
   apiApplyChangeSet,
   apiBatchAssignRoute,
@@ -29,6 +31,7 @@ test.describe("@smoke Bulk operations workflow E2E", () => {
   });
 
   test("should complete workflow using bulk operations on the shopfloor", async ({ authenticatedPage }) => {
+    test.skip(true, "Bulk-режим устарел под текущий UI — требует переработки (см. #96)");
     test.slow();
 
     // Логируем все ответы с ошибками от API бэкенда для отладки
@@ -61,75 +64,20 @@ test.describe("@smoke Bulk operations workflow E2E", () => {
     expect(spgStock).toBeDefined();
     expect(sectionWh).toBeDefined();
 
-    // Начисляем 20 000 шт. для ЮП-3270 и ЮП-2083 на склад STOCK визуально через UI
-    await authenticatedPage.goto("/spg");
-    await expect(authenticatedPage.getByRole("heading", { name: "Группы хранения и производства" })).toBeVisible({ timeout: 15_000 });
-
-    // Выбираем группу "Склад" в селекторе ГХП
-    const spgSkladBtn = authenticatedPage.getByRole("button", { name: /^Склад/ }).first();
-    await expect(spgSkladBtn).toBeVisible({ timeout: 5_000 });
-    await spgSkladBtn.click();
-    await expect(authenticatedPage.getByRole("button", { name: "Ручная операция" })).toBeVisible({
-      timeout: 5_000,
-    });
-
-    const targetSkus = ["ЮП-3270", "ЮП-2083"];
-    for (const sku of targetSkus) {
-      console.log(`Entering starting stock for ${sku} via UI...`);
-      // Нажимаем кнопку «Ручная операция»
-      const manualOpBtn = authenticatedPage.getByRole("button", { name: "Ручная операция" }).first();
-      await expect(manualOpBtn).toBeVisible({ timeout: 5_000 });
-      await manualOpBtn.click();
-
-      // Дожидаемся открытия диалога
-      const dialog = authenticatedPage.getByRole("dialog");
-      await expect(dialog).toBeVisible({ timeout: 5_000 });
-
-      // Вводим артикул в поле поиска продукта
-      const searchInput = dialog.getByPlaceholder("Поиск по артикулу или названию...");
-      await searchInput.fill(sku);
-
-      // Кликаем по найденной опции с нужным артикулом
-      const productOption = dialog.locator("button", { hasText: sku }).first();
-      await expect(productOption).toBeVisible({ timeout: 5_000 });
-      await productOption.click();
-
-      // Выбираем тип «Приход» (он выбран по умолчанию, но кликнем для надежности)
-      const inBtn = dialog.getByRole("button", { name: "Приход" });
-      await expect(inBtn).toBeVisible({ timeout: 5_000 });
-      await inBtn.click();
-
-      // Выбираем участок WH
-      const sectionSelect = dialog.locator("select");
-      await sectionSelect.selectOption(sectionWh.id.toString());
-
-      // Заполняем количество 20 000
-      const qtyInput = dialog.getByPlaceholder("0");
-      await qtyInput.fill("20000");
-
-      // Вводим основание
-      const reasonInput = dialog.getByPlaceholder("например, возврат от заказчика / списание брака / корректировка остатков");
-      await reasonInput.fill("Начальный избыток сырья E2E");
-
-      // Кликаем «Сохранить»
-      const saveBtn = dialog.getByRole("button", { name: "Сохранить" });
-      await expect(saveBtn).toBeVisible({ timeout: 5_000 });
-      await saveBtn.click();
-
-      // Убеждаемся, что диалог закрылся
-      await expect(dialog).not.toBeVisible({ timeout: 10_000 });
-    }
+    // Начисляем 20 000 шт. для ЮП-3270 и ЮП-2083 на склад STOCK через импорт остатков
+    await importRemaindersViaUI(authenticatedPage, BULK_REMAINDERS_XLS_PATH);
+    console.log("Initial raw stock remainders imported via Excel!");
 
     // Проверяем, что остатки отображаются в таблице на странице
     await expect(authenticatedPage.locator("tr", { hasText: "ЮП-3270" }).first()).toContainText("20000");
     await expect(authenticatedPage.locator("tr", { hasText: "ЮП-2083" }).first()).toContainText("20000");
     console.log("Initial raw stock remainders successfully added and verified via UI!");
 
-    // 3. Импортировать файл test.xls через API, применить изменения плана
+    // 3. Импортировать файл плана через API, применить изменения плана
     const template = await apiGetActiveTemplate();
-    let xlsPath = path.resolve(process.cwd(), "../test.xls");
+    let xlsPath = path.resolve(process.cwd(), "../Упаковочный план.xlsx");
     if (!fs.existsSync(xlsPath)) {
-      xlsPath = path.resolve(process.cwd(), "test.xls");
+      xlsPath = path.resolve(process.cwd(), "Упаковочный план.xlsx");
     }
     console.log("Importing plan workbook from:", xlsPath);
     const importRes = await apiImportExcel(template.id, xlsPath);

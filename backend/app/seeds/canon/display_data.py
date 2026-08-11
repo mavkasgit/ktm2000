@@ -220,6 +220,7 @@ PRODUCT_TYPE_LABELS = {
 PRINT_COLUMN_LABELS = {
     "productSku": "Артикул",
     "operationName": "Операция",
+    "dimensions": "Размер",
     "qtyPlan": "План",
     "qtyRemaining": "Осталось выдать",
     "qtyTransferred": "Передано",

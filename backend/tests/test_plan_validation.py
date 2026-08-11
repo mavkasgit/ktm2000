@@ -358,3 +358,83 @@ async def test_validate_position_detects_inactive_section(session) -> None:
 
     errors = await validate_plan_position(session, position)
     assert "route_contains_inactive_section" in errors
+
+
+@pytest.mark.asyncio
+async def test_validate_position_accepts_transit_stage_with_active_storage_section(session) -> None:
+    """Transit-шаг (section_id=NULL, storage_section_id задан) не должен
+    считаться неактивным: валидация использует effective_section_id."""
+    product = Product(sku="FG-TRANSIT", name="Transit", type=ProductType.finished_good, unit="pcs")
+    component = Product(sku="FG-TRANSIT-RAW", name="Raw", type=ProductType.component, unit="pcs")
+    storage = Section(code="RAW_STOCK", name="Склад сырья", is_active=True, type="raw_stock")
+    production = Section(code="PACK", name="Упаковка", is_active=True)
+    session.add_all([product, component, storage, production])
+    await session.flush()
+
+    techcard = Techcard(product_id=product.id, version="v1", is_active=True)
+    session.add(techcard)
+    await session.flush()
+    session.add(TechcardLine(techcard_id=techcard.id, component_product_id=component.id, quantity=1, unit="pcs"))
+
+    route = ProductionRoute(name="Main", is_active=True)
+    session.add(route)
+    await session.flush()
+    stage = RouteStage(
+        route_id=route.id,
+        sequence=1,
+        section_id=None,
+        stage_kind="transit",
+        storage_section_id=storage.id,
+        is_final=False,
+    )
+    session.add(stage)
+    await session.flush()
+    stage2 = RouteStage(
+        route_id=route.id,
+        sequence=2,
+        section_id=production.id,
+        is_final=True,
+    )
+    session.add(stage2)
+    await session.flush()
+
+    plan, position = await _make_plan_position(session, product, route_id=route.id)
+    await session.flush()
+
+    errors = await validate_plan_position(session, position)
+    assert "route_contains_inactive_section" not in errors
+
+
+@pytest.mark.asyncio
+async def test_validate_position_rejects_transit_stage_with_inactive_storage_section(session) -> None:
+    """Неактивная storage-секция transit-шага должна давать ошибку."""
+    product = Product(sku="FG-TRANSIT-2", name="Transit2", type=ProductType.finished_good, unit="pcs")
+    component = Product(sku="FG-TRANSIT-2-RAW", name="Raw2", type=ProductType.component, unit="pcs")
+    storage = Section(code="RAW_STOCK_2", name="Склад сырья", is_active=False, type="raw_stock")
+    session.add_all([product, component, storage])
+    await session.flush()
+
+    techcard = Techcard(product_id=product.id, version="v1", is_active=True)
+    session.add(techcard)
+    await session.flush()
+    session.add(TechcardLine(techcard_id=techcard.id, component_product_id=component.id, quantity=1, unit="pcs"))
+
+    route = ProductionRoute(name="Main", is_active=True)
+    session.add(route)
+    await session.flush()
+    stage = RouteStage(
+        route_id=route.id,
+        sequence=1,
+        section_id=None,
+        stage_kind="transit",
+        storage_section_id=storage.id,
+        is_final=True,
+    )
+    session.add(stage)
+    await session.flush()
+
+    plan, position = await _make_plan_position(session, product, route_id=route.id)
+    await session.flush()
+
+    errors = await validate_plan_position(session, position)
+    assert "route_contains_inactive_section" in errors

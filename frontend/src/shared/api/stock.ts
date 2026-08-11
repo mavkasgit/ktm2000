@@ -62,6 +62,24 @@ export function formatDimensionsLabel(
     .join(", ");
 }
 
+/**
+ * Подпись значения фильтра по размеру: JSON-строка канонического габарита
+ * (`{"length_mm":2700}`) или `"null"` → человекочитаемая метка («2,7 м» / «—»).
+ * Невалидная строка возвращается как есть.
+ */
+export function formatDimensionsFilterValue(value: string): string {
+  if (value === "null") return "—";
+  try {
+    const parsed: unknown = JSON.parse(value);
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      return formatDimensionsLabel(parsed as Record<string, unknown>);
+    }
+  } catch {
+    // невалидная строка — показываем как есть
+  }
+  return value;
+}
+
 export type StockReason =
   | "ISSUE_TO_WORK"
   | "COMPLETE"

@@ -468,6 +468,7 @@ export const productTypeLabels: Record<string, string> = {
 
 // Лейблы колонок печати плана
 export const printColumnLabels: Record<string, string> = {
+  "dimensions": "Размер",
   "operationName": "Операция",
   "productSku": "Артикул",
   "qtyBalance": "Остаток",

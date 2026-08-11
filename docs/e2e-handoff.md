@@ -2,8 +2,8 @@
 
 Документ для передачи задачи исполнителю/агенту. Канон запуска → [`frontend/e2e/AGENTS.md`](../frontend/e2e/AGENTS.md).
 
-**Дата последнего прогона:** 2026-07-05  
-**Результат:** 1 passed, 3 skipped, 4 failed (35.7s)
+**Дата последнего прогона:** 2026-08-11  
+**Результат:** `full-cycle.spec.ts` (@ui) — **passed** (~53s); `final-release.spec.ts` (#96, @smoke) — **passed**; backend transfer-тесты — 44 passed; `bulk-workflow.spec.ts` — skipped (сырой, устарел под текущий UI).
 
 ---
 
@@ -26,13 +26,13 @@
 Playwright **не поднимает** серверы сам (`webServer` закомментирован в config). Перед прогоном:
 
 ```bash
-npm run dev   # из корня: Postgres + backend :8010 + frontend :5172
+npm run dev   # из корня: Postgres + backend :8012 + frontend :5172
 ```
 
 Запуск (Windows cmd):
 
 ```cmd
-set E2E_API_URL=http://localhost:8010/api
+set E2E_API_URL=http://localhost:8012/api
 set PLAYWRIGHT_TEST_BASE_URL=http://localhost:5172
 cd frontend
 npx playwright test
@@ -110,9 +110,9 @@ const techcards = Array.isArray(body) ? body : body.items ?? [];
 | `bulk-workflow.spec.ts` | `http://localhost:8082` (prod nginx) |
 | `route-workflow.spec.ts` | `http://localhost:8082` |
 | `transfers-auto-accept.spec.ts` | `http://localhost:8082` |
-| `total-workflow.spec.ts` | `http://localhost:8010` (dev) |
+| `total-workflow.spec.ts` | `http://localhost:8012` (dev) |
 
-Для локальной разработки канон — **`:8010`**. Рекомендация: единый fallback `http://localhost:8010` во всех спеках (или только через `api-helpers.ts`).
+Для локальной разработки канон — **`:8012`** (актуальный dev-порт backend, см. `package.json` и vite-proxy). Рекомендация: единый fallback `http://localhost:8012` во всех спеках (или только через `api-helpers.ts`).
 
 ---
 
@@ -157,7 +157,7 @@ Approvable positions: 0
 
 1. Создать `frontend/e2e/api-helpers.ts` с `BACKEND_URL`, `unwrapItems`, `apiGetProductBySku`, `apiSeedData`.
 2. Заменить дубли в 3 спеках на импорт из helpers.
-3. Унифицировать fallback URL → `:8010`.
+3. Унифицировать fallback URL → `:8012`.
 4. Прогон: 4 ранее failed теста — должны пройти setup или упасть на следующем шаге (не на `.find`).
 
 ### PR-2: Починить route-workflow skips (желательно)
@@ -168,14 +168,14 @@ Approvable positions: 0
 
 ### PR-3: Документация
 
-1. Обновить `frontend/e2e/AGENTS.md` — fallback `:8010`, ссылка на этот handoff.
+1. Обновить `frontend/e2e/AGENTS.md` — fallback `:8012`, ссылка на этот handoff.
 2. После фикса — удалить или архивировать `docs/e2e-handoff.md` (или обновить статус).
 
 ---
 
 ## DoD (Definition of Done)
 
-- [ ] `npx playwright test` с `E2E_API_URL=http://localhost:8010/api`: **0 failed**
+- [x] `npx playwright test` с `E2E_API_URL=http://localhost:8012/api`: `full-cycle.spec.ts` (@ui) passed
 - [ ] Минимум 5 passed (допустимы skip только с явной причиной в комментарии)
 - [ ] `apiGetProductBySku` не дублируется в 3 файлах — один `api-helpers.ts`
 - [ ] Fallback `BACKEND_URL` единый во всех спеках
@@ -184,7 +184,7 @@ Approvable positions: 0
 **Команда проверки:**
 
 ```cmd
-set E2E_API_URL=http://localhost:8010/api
+set E2E_API_URL=http://localhost:8012/api
 set PLAYWRIGHT_TEST_BASE_URL=http://localhost:5172
 cd frontend && npx playwright test
 ```

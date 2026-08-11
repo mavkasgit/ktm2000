@@ -22,11 +22,6 @@ legacy operations until Этап 3.
 Cancel creates compensating ``StockTransaction`` rows (append-only).
 Correct updates quantity in-place on active ``StockTransaction`` rows
 (controlled mutable exception — see ``_resync_transfer_stock_tx_quantity``).
-
-Legacy functions ``transfer_receive`` and
-``resolve_transfer_discrepancy_link`` are kept as no-ops so old call
-sites in ``app.api.routes.demo``, ``app.api.routes.production_planning``
-and a few tests don't break. They will be removed in a follow-up.
 """
 
 from __future__ import annotations
@@ -66,60 +61,15 @@ from app.services.shopfloor.common import (
 # Коррекция — in-place изменение quantity активных транзакций.
 from app.domain.dimensions import canonicalize_dimensions
 from app.stock.models import Reason, StockTransaction
-from app.stock.services import StockCommand, StockCommandService
+from app.stock.services import (
+    StockCommand,
+    StockCommandService,
+    dimensions_match_clause,
+)
+from app.stock.transfer_ledger import net_transferred
+from app.transfers import budget
 
 _stock_command_service = StockCommandService()
-
-
-async def count_active_transfers_from_task(db: AsyncSession, from_task_id: int) -> int:
-    """Количество неаннулированных передач с данного задания."""
-    return int(
-        await db.scalar(
-            select(func.count(Transfer.id)).where(
-                Transfer.from_task_id == from_task_id,
-                Transfer.status.notin_([TransferStatus.cancelled]),
-            )
-        )
-        or 0
-    )
-
-
-async def count_active_transfers_from_plan_line(
-    db: AsyncSession,
-    section_plan_line_id: int,
-) -> int:
-    """Количество неаннулированных передач со склада по строке плана.
-
-    Складской fake_task после полной передачи переходит в ``completed``,
-    а ``_fetch_stock_ready_items`` может создать новый WorkTask на ту же
-    ``section_plan_line``. Счётчик по ``from_task_id`` в таком случае
-    обнуляется — поэтому для складских строк плана считаем все передачи
-    с любого задания этой линии.
-    """
-    return int(
-        await db.scalar(
-            select(func.count(Transfer.id))
-            .join(WorkTask, WorkTask.id == Transfer.from_task_id)
-            .where(
-                WorkTask.section_plan_line_id == section_plan_line_id,
-                Transfer.status.notin_([TransferStatus.cancelled]),
-            )
-        )
-        or 0
-    )
-
-
-async def has_active_transfer_for_task(db: AsyncSession, from_task_id: int) -> bool:
-    """Есть ли уже активная (неаннулированная) передача с задания."""
-    return await count_active_transfers_from_task(db, from_task_id) > 0
-
-
-async def has_active_transfer_for_plan_line(
-    db: AsyncSession,
-    section_plan_line_id: int,
-) -> bool:
-    """Есть ли активная передача по складской строке плана (любой fake_task)."""
-    return await count_active_transfers_from_plan_line(db, section_plan_line_id) > 0
 
 
 async def compute_stock_section_transferable(
@@ -128,45 +78,54 @@ async def compute_stock_section_transferable(
     task: WorkTask,
     section: Section,
     planned_qty: Decimal,
+    dimensions: dict | None = None,
 ) -> tuple[Decimal, Decimal, Decimal, Decimal]:
-    """Остаток к передаче со склада, привязанный к плану позиции.
+    """Остаток к передаче со склада по паре (строка плана, размер).
 
     Возвращает ``(transferable, plan_remaining, physical_stock, already_transferred)``.
     Нельзя передать больше плана позиции и больше физического остатка на складе.
+    ``already_transferred`` учитывается по размеру (не по строке целиком):
+    несколько передач одного размера разрешены, сумма ограничена через
+    ``transferable``.
     """
     from app.stock.models import QualityState, StockBalance
 
-    already_transferred = (
-        await db.scalar(
-            select(func.coalesce(func.sum(Transfer.sent_quantity), 0))
-            .join(WorkTask, WorkTask.id == Transfer.from_task_id)
-            .where(
-                WorkTask.section_plan_line_id == task.section_plan_line_id,
-                Transfer.status.notin_([TransferStatus.cancelled]),
-            )
-        )
-        or Decimal("0")
+    # Размер группы: если явный не передан — берём из задания (канонический
+    # габарит плана). None = безразмерная legacy-группа.
+    dims = dimensions if dimensions is not None else task.dimensions
+
+    already_transferred = await net_transferred(
+        db,
+        section_plan_line_id=task.section_plan_line_id,
+        dims=dims,
     )
 
     plan_remaining = max(Decimal("0"), _to_decimal(planned_qty) - already_transferred)
 
-    physical_stock = (
-        await db.scalar(
-            select(func.coalesce(func.sum(StockBalance.balance_qty), 0)).where(
-                StockBalance.location_id == section.id,
-                StockBalance.product_id == task.product_id,
-                StockBalance.balance_qty > 0,
-                StockBalance.quality_state == QualityState.GOOD,
-            )
-        )
-        or Decimal("0")
+    physical_stock_q = select(func.coalesce(func.sum(StockBalance.balance_qty), 0)).where(
+        StockBalance.location_id == section.id,
+        StockBalance.product_id == task.product_id,
+        StockBalance.balance_qty > 0,
+        StockBalance.quality_state == QualityState.GOOD,
     )
+    # Задание несёт габарит (ADR-0001): остаток считается только по строке
+    # баланса этой размерности. Без длины — legacy-поведение (все группы).
+    if dims is not None:
+        physical_stock_q = physical_stock_q.where(
+            dimensions_match_clause(StockBalance.dimensions, dims)
+        )
+    physical_stock = (await db.scalar(physical_stock_q)) or Decimal("0")
 
-    transferable = min(plan_remaining, physical_stock)
+    transferable = budget.remaining_stock(plan_remaining, physical_stock)
     return transferable, plan_remaining, physical_stock, already_transferred
 
 
-async def _get_task_transferable(db: AsyncSession, task: WorkTask) -> Decimal:
+async def _get_task_transferable(
+    db: AsyncSession,
+    task: WorkTask,
+    *,
+    dimensions: dict | None = None,
+) -> Decimal:
     from app.models.section import Section
     from app.services.route_storage_classifier import is_stock_section
     from app.stock.services import StockProjectionManager
@@ -182,12 +141,49 @@ async def _get_task_transferable(db: AsyncSession, task: WorkTask) -> Decimal:
             task=task,
             section=sec,
             planned_qty=planned_qty,
+            dimensions=dimensions,
         )
         return transferable
 
+    # Трансформирующий этап (ADR-0002): задание несёт спецификацию выходов
+    # (WorkTask.outputs). Передавать можно не больше количества выхода этого
+    # размера минус уже переданное — инвариант D2. Размер, которого нет в
+    # спецификации (например, входной), передавать нельзя.
+    # Тикет #91: transferable выхода = min(выход, произведено по размеру) −
+    # уже переданное по этому размеру. Частичная порция не позволяет
+    # передать больше, чем фактически раскроено (готовой баланс тоже
+    # ограничивает, но кап здесь — бизнес-правило).
+    # Т6: write guard сведён к read-path гидрации (queries.py) — produced по
+    # строкам выхода считается через build_outputs_progress, чтобы write и
+    # read не расходились. Кап min(output_quantity, produced_by_group) живёт
+    # внутри build_outputs_progress; здесь остаётся только
+    # remaining_transform(produced_for_dims, transferred).
+    if task.outputs:
+        from app.domain.dimensions import canonicalize_dimensions, dimensions_equal
+        from app.services.shopfloor.operations_transform import (
+            build_outputs_progress,
+            get_transform_progress,
+        )
+
+        dims = canonicalize_dimensions(dimensions)
+        progress = await get_transform_progress(db, task.id)
+        produced_rows = build_outputs_progress(
+            task.outputs, progress.produced_by_group
+        )
+        produced_for_dims = Decimal("0")
+        for entry, produced_entry in zip(task.outputs, produced_rows):
+            if dimensions_equal(entry.get("dimensions"), dims):
+                produced_for_dims += produced_entry["produced_quantity"]
+        transferred = await net_transferred(db, task_id=task.id, dims=dims)
+        return budget.remaining_transform(produced_for_dims, transferred)
+
     pm = StockProjectionManager()
     cache = await pm.get_task_cache(db, task.id)
-    return cache["completed_quantity"] + cache["received_quantity"] - cache["transferred_quantity"]
+    transferred_by_size = await net_transferred(
+        db, task_id=task.id, dims=dimensions
+    )
+    # T6: received no longer contributes to plain transfer budget.
+    return budget.remaining_plain(cache["completed_quantity"], transferred_by_size)
 
 
 async def _record_transfer_send_stock_tx(
@@ -400,19 +396,6 @@ async def transfer_send(
             }
 
     from_task = await _get_task_for_update(db, from_task_id)
-    from app.services.route_storage_classifier import is_stock_section
-    source_section = await db.get(Section, from_task.section_id)
-    if is_stock_section(source_section):
-        has_active = await has_active_transfer_for_plan_line(
-            db, from_task.section_plan_line_id
-        )
-    else:
-        has_active = await has_active_transfer_for_task(db, from_task.id)
-    if has_active:
-        raise ValueError(
-            "По этому заданию уже есть активная передача. "
-            "Измените количество в журнале передач."
-        )
     from_line = await db.get(SectionPlanLine, from_task.section_plan_line_id)
     if from_line is None:
         raise ValueError("Source task plan line not found")
@@ -426,6 +409,16 @@ async def transfer_send(
     )
     if next_line is None:
         raise ValueError("Next route step not found")
+
+    quantity = _to_decimal(quantity)
+    _ensure_positive(quantity, "quantity")
+    # Габарит (ADR-0001): одна каноническая форма для обеих проводок и для
+    # auto-created to_task (task и ledger не расходятся). При пустом payload —
+    # fallback на габарит исходного задания (тикет #89): ready-строка и план
+    # несут длину, передавать «вслепую» нельзя. Валидация до создания Task/Transfer.
+    dimensions = canonicalize_dimensions(
+        dimensions if dimensions is not None else from_task.dimensions
+    )
 
     # Find or create target task
     if to_task_id is not None:
@@ -461,6 +454,7 @@ async def transfer_send(
                 planned_quantity=lazy_planned_quantity,
                 status=WorkTaskStatus.waiting_previous,
                 due_date=next_line.due_date,
+                dimensions=dimensions,
                 **transform_fields,
             )
             db.add(to_task)
@@ -479,14 +473,8 @@ async def transfer_send(
     if to_stage.sequence <= from_stage.sequence:
         raise ValueError("Transfer target must be next route step")
 
-    quantity = _to_decimal(quantity)
-    _ensure_positive(quantity, "quantity")
-    # Габарит (ADR-0001): каноническая форма один раз, обе проводки
-    # (SEND/RECEIVE) несут одинаковый dims. Ошибки формата поднимаются
-    # как DimensionsValidationError до создания Transfer.
-    dimensions = canonicalize_dimensions(dimensions)
     if not post_factum and not allow_over_plan:
-        transferable = await _get_task_transferable(db, from_task)
+        transferable = await _get_task_transferable(db, from_task, dimensions=dimensions)
         if quantity > transferable:
             raise ValueError("Transfer quantity exceeds transferable amount")
 
@@ -509,6 +497,7 @@ async def transfer_send(
         idempotency_key=idempotency_key,
         is_post_factum=post_factum,
         physical_handover_at=physical_handover_at,
+        dimensions=dimensions,
     )
     db.add(transfer)
     await db.flush()
@@ -653,67 +642,6 @@ async def transfer_send(
     }
 
 
-async def transfer_receive(
-    db: AsyncSession,
-    *,
-    transfer_id: int,
-    accepted_quantity: Decimal | None = None,  # noqa: ARG001 — legacy arg
-    rejected_quantity: Decimal | None = None,  # noqa: ARG001 — legacy arg
-    actor_id: int | None = None,  # noqa: ARG001 — legacy arg
-    reason: str | None = None,  # noqa: ARG001 — legacy arg
-    comment: str | None = None,  # noqa: ARG001 — legacy arg
-    source_ref: str | None = None,  # noqa: ARG001 — legacy arg
-    idempotency_key: str | None = None,  # noqa: ARG001 — legacy arg
-    executor_user_id: int | None = None,  # noqa: ARG001 — legacy arg
-    performed_at: datetime | None = None,  # noqa: ARG001 — legacy arg
-    accounted_at: datetime | None = None,  # noqa: ARG001 — legacy arg
-) -> dict:
-    """Legacy no-op kept for backwards compatibility with old call sites.
-
-    Under the new explicit-transfer model, ``transfer_send`` itself
-    auto-accepts the transfer (status flips to ``accepted`` and the
-    ``transfer_receive`` Movement is written inline). A separate manual
-    accept step is no longer part of the UI contract. Calling
-    ``transfer_receive`` is a no-op that returns the current state of
-    the transfer for the rare legacy path that still reaches this
-    function.
-
-    See ``docs/superpowers/plans/2026-07-01-explicit-transfers-mandatory.md``
-    for the model description.
-    """
-    transfer = await _get_transfer(db, transfer_id)
-    return {
-        "transfer_id": transfer.id,
-        "status": transfer.status.value,
-        "discrepancy_id": None,
-    }
-
-
-async def resolve_transfer_discrepancy_link(
-    db: AsyncSession,
-    *,
-    transfer_id: int,
-    discrepancy_id: int,  # noqa: ARG001 — legacy arg
-    defect_item_id: int,  # noqa: ARG001 — legacy arg
-    quantity: Decimal,  # noqa: ARG001 — legacy arg
-    actor_id: int,  # noqa: ARG001 — legacy arg
-    comment: str | None = None,  # noqa: ARG001 — legacy arg
-) -> dict:
-    """Legacy no-op kept for backwards compatibility with old call sites.
-
-    Discrepancy linking is no longer part of the model — transfers are
-    either accepted in full on send or cancelled. Calling this function
-    returns a ``resolved``-looking result with zero quantities. New code
-    must not call it.
-    """
-    return {
-        "discrepancy_id": None,
-        "status": "resolved",
-        "resolved_quantity": "0",
-        "unresolved_quantity": "0",
-    }
-
-
 async def correct_transfer(
     db: AsyncSession,
     *,
@@ -741,7 +669,10 @@ async def correct_transfer(
     to_task = await _get_task(db, transfer.to_task_id)
     
     # 1. Validate source limit
-    transferable = await _get_task_transferable(db, from_task) + old_quantity
+    transferable = (
+        await _get_task_transferable(db, from_task, dimensions=transfer.dimensions)
+        + old_quantity
+    )
     if new_quantity > transferable:
         raise ValueError(
             f"Corrected quantity exceeds transferable amount of source task. "
@@ -955,13 +886,17 @@ async def auto_create_transfer_after_complete(
     """Create automatic cross-GHP Transfers for the completed ``good_quantity``.
 
     Walks the route forward from the completed task's SectionPlanLine.
-    For each cross-GHP boundary a ``transfer_send`` with
-    ``post_factum=True`` is emitted.  When a transit stage sits between
-    two production stages in different GHPs, a chain of transfers is
-    created (production → transit → next production).
+    For each cross-GHP boundary a ``transfer_send`` is emitted as a
+    regular (non post-factum) transfer: it is created atomically at
+    completion time with current timestamps.  When a transit stage sits
+    between two production stages in different GHPs, a chain of transfers
+    is created (production → transit → next production).
 
-    Returns the result of the **first** ``transfer_send`` (or ``None``
-    when the helper decides to skip).
+    Трансформирующее задание (резка, тикет #91): создаётся по передаче
+    **на каждый выход** спецификации — со своим размером и количеством
+    (произведённое по размеру, не больше выхода), а не одна передача на
+    задачу. Возвращает результат **первой** ``transfer_send`` (или ``None``,
+    когда хелпер решает пропустить).
     """
     from app.models.internal_plan import SectionPlanLine
     from app.models.route import RouteStage
@@ -972,6 +907,58 @@ async def auto_create_transfer_after_complete(
         return None
 
     if good_quantity <= 0:
+        return None
+
+    # Пары (количество, размер) для передачи. Резка — по выходу на каждый
+    # размер: количество = произведённое по размеру (не больше выхода) минус
+    # уже переданное по этому размеру (инвариант D2). Произведённое и
+    # переданное распределяются по строкам одного размера последовательно
+    # (как в ready-строках) — иначе два выхода одного размера дважды
+    # использовали бы один бюджет. Обычный этап — одна передача на
+    # good_quantity с габаритом задания.
+    if from_task.outputs:
+        from app.domain.dimensions import canonicalize_dimensions
+        from app.services.shopfloor.operations_transform import (
+            build_outputs_progress,
+            distribute_output_quantities,
+            get_transform_progress,
+        )
+        from app.stock.services import _dimensions_hash_key
+
+        progress = await get_transform_progress(db, from_task.id)
+        produced_rows = build_outputs_progress(
+            from_task.outputs, progress.produced_by_group
+        )
+        transferred_by_dim: dict[str | None, Decimal] = {}
+        for entry in from_task.outputs:
+            dims = canonicalize_dimensions(entry.get("dimensions"))
+            key = _dimensions_hash_key(dims)
+            if key not in transferred_by_dim:
+                transferred_by_dim[key] = await net_transferred(
+                    db, task_id=from_task.id, dims=dims
+                )
+        transferred_rows = distribute_output_quantities(
+            from_task.outputs, transferred_by_dim
+        )
+
+        pairs: list[tuple[Decimal, dict | None]] = []
+        for entry, produced_entry, transferred in zip(
+            from_task.outputs, produced_rows, transferred_rows
+        ):
+            raw_qty = entry.get("quantity")
+            if raw_qty is None:
+                continue
+            planned = Decimal(str(raw_qty))
+            if planned <= 0:
+                continue
+            dims = canonicalize_dimensions(entry.get("dimensions"))
+            qty = max(Decimal("0"), produced_entry["produced_quantity"] - transferred)
+            if qty > 0:
+                pairs.append((qty, dims))
+    else:
+        pairs = [(_to_decimal(good_quantity), None)]
+
+    if not pairs:
         return None
 
     first_result = None
@@ -1018,25 +1005,26 @@ async def auto_create_transfer_after_complete(
             break
 
         step_idx = next_line.sequence - from_line.sequence
-        key = (
-            f"{idempotency_key}:auto-transfer-complete:{step_idx}"
-            if idempotency_key
-            else None
-        )
+        for pair_idx, (qty, dims) in enumerate(pairs):
+            key = (
+                f"{idempotency_key}:auto-transfer-complete:{step_idx}:{pair_idx}"
+                if idempotency_key
+                else None
+            )
 
-        result = await transfer_send(
-            db,
-            from_task_id=current_task.id,
-            to_task_id=next_task.id if next_task else None,
-            quantity=good_quantity,
-            actor_id=actor_id,
-            comment=comment or "Авто-перемещение после завершения",
-            idempotency_key=key,
-            post_factum=True,
-        )
+            result = await transfer_send(
+                db,
+                from_task_id=current_task.id,
+                to_task_id=next_task.id if next_task else None,
+                quantity=qty,
+                actor_id=actor_id,
+                comment=comment or "Авто-перемещение после завершения",
+                idempotency_key=key,
+                dimensions=dims,
+            )
 
-        if first_result is None:
-            first_result = result
+            if first_result is None:
+                first_result = result
 
         if not next_stage.is_transit:
             break

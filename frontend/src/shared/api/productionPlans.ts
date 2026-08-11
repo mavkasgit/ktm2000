@@ -152,6 +152,9 @@ export type PlanPositionOut = {
   input_dimensions?: Record<string, unknown> | null;
   outputs?: { row_number?: number; quantity: string; dimensions: Record<string, unknown> | null }[] | null;
   operation_summary?: string | null;
+  // Габарит задания позиции (тикет #95): колонка «Размер» на странице плана.
+  dimensions?: Record<string, unknown> | null;
+  dimensions_label?: string | null;
 };
 
 export async function planFiles(planId: number) {
@@ -177,6 +180,8 @@ export type AllPlanPositionsParams = {
   has_route?: string;
   has_errors?: string;
   has_warnings?: string;
+  /** Фильтр точного совпадения по габариту: JSON-строка (`{"length_mm":2700}`) или `null` для безразмерных. */
+  dimensions?: string;
 };
 
 export type AllPlanPositionsListResponse = {
@@ -348,6 +353,10 @@ export type ProductionPlanningRow = {
   source_sku: string;
   source_name: string | null;
   quantity: number;
+  /** Габарит задания позиции (ADR-0001), например `{"length_mm": 2700}`; null — безразмерные. */
+  dimensions?: Record<string, unknown> | null;
+  /** Готовая подпись размера («2,7 м» / «—»). */
+  dimensions_label?: string | null;
   position_status: string;
   validation_status: string;
   route_id: number | null;
@@ -495,6 +504,8 @@ export type ListProductionPlanningRowsParams = {
   route_name?: string;
   status?: string;
   current_stage_section_name?: string;
+  /** Фильтр точного совпадения по габариту: JSON-строка (`{"length_mm":2700}`) или `null` для безразмерных. */
+  dimensions?: string;
 };
 
 export type ProductionPlanningRowsListResponse = {
@@ -815,6 +826,8 @@ export type ProductWipRemainder = {
   completed_ops: string;
   spg_icon: string | null;
   spg_icon_color: string | null;
+  dimensions: Record<string, unknown> | null;
+  dimensions_label: string;
   quantity: number;
   max_completed_seq: number;
   stages_with_icons: {
@@ -833,6 +846,8 @@ export type ProductWipTask = {
   operation_name: string;
   section_icon: string | null;
   section_icon_color: string | null;
+  dimensions: Record<string, unknown> | null;
+  dimensions_label: string;
   planned_qty: number;
   completed_qty: number;
   issued_qty: number;

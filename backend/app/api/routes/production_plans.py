@@ -991,6 +991,9 @@ class PlanPositionOut(BaseModel):
     input_dimensions: dict | None = None
     outputs: list | None = None
     operation_summary: str | None = None
+    # Габарит задания позиции (тикет #95): колонка «Размер» на странице плана.
+    dimensions: dict | None = None
+    dimensions_label: str | None = None
 
 
 def _format_position_quantity(value) -> str:
@@ -1133,7 +1136,20 @@ ALL_POSITIONS_SORT_FIELDS = frozenset({
     "quantity",
     "status",
     "validation_status",
+    "dimensions",
 })
+
+
+# Длина/габарит задания позиции в SQL — общий с execution-страницей:
+# источники — вход позиции, fallback — единственный выход (тикет #92, #95).
+def _position_task_length_mm_expr():
+    from app.services.production_planning_rows import _position_task_length_mm_expr as _impl
+    return _impl()
+
+
+def _position_task_dimensions_expr():
+    from app.services.production_planning_rows import _position_task_dimensions_expr as _impl
+    return _impl()
 
 
 class AllPlanPositionsListResponse(BaseModel):
@@ -1154,6 +1170,7 @@ def _apply_all_positions_filters(
     has_route: str | None,
     has_errors: str | None,
     has_warnings: str | None,
+    dimensions: str | None = None,
 ):
     stmt = stmt.where(
         PlanPosition.status.in_(ALL_POSITIONS_PLANNING_STATUSES),
@@ -1180,6 +1197,16 @@ def _apply_all_positions_filters(
         stmt = stmt.where(PlanPosition.source_sku.ilike(f"%{source_sku}%"))
     if source_name:
         stmt = stmt.where(PlanPosition.source_name.ilike(f"%{source_name}%"))
+
+    if dimensions:
+        from app.domain.dimensions import parse_dimensions_filter
+        from app.stock.services import dimensions_match_clause
+
+        dims_active, dims = parse_dimensions_filter(dimensions)
+        if dims_active:
+            stmt = stmt.where(
+                dimensions_match_clause(_position_task_dimensions_expr(), dims)
+            )
 
     if has_route == "yes":
         stmt = stmt.where(PlanPosition.route_id.is_not(None))
@@ -1232,8 +1259,16 @@ def _all_positions_order_columns(sort_by: str, sort_order: str):
         order_column = cast(PlanPosition.status, String)
     elif resolved_sort_by == "validation_status":
         order_column = cast(PlanPosition.validation_status, String)
+    elif resolved_sort_by == "dimensions":
+        order_column = _position_task_length_mm_expr()
     else:
         order_column = PlanPosition.source_row_number
+
+    # Безразмерные (NULL) — всегда в конец, независимо от направления сортировки.
+    if resolved_sort_by == "dimensions":
+        if sort_order == "asc":
+            return order_column.asc().nulls_last(), PlanPosition.id.asc()
+        return order_column.desc().nulls_last(), PlanPosition.id.desc()
 
     if sort_order == "asc":
         return order_column.asc(), PlanPosition.id.asc()
@@ -1275,10 +1310,14 @@ async def _serialize_plan_positions(
     )
     hanger_values = await resolve_positions_hanger(db, positions)
 
+    from app.domain.dimensions import format_dimensions
+    from app.services.plan_position_hanger import position_dimensions_for_task
+
     result: list[PlanPositionOut] = []
     for p in positions:
         route_info = route_info_by_id[p.id]
         hanger_value = hanger_values[p.id]
+        task_dims = position_dimensions_for_task(p)
         result.append(
             PlanPositionOut(
                 id=p.id,
@@ -1311,6 +1350,8 @@ async def _serialize_plan_positions(
                 available_remainder_quantity=round(available_remainder_by_id.get(p.id, 0.0), 3),
                 quantity_per_hanger=hanger_value.quantity_per_hanger,
                 quantity_per_hanger_source=hanger_value.source,
+                dimensions=task_dims,
+                dimensions_label=format_dimensions(task_dims),
                 **_position_operation_fields(p),
             )
         )
@@ -1356,6 +1397,10 @@ async def all_plan_positions(
     has_route: str | None = Query(default=None, description="Фильтр маршрута: yes | no"),
     has_errors: str | None = Query(default=None, description="Фильтр ошибок валидации: yes | no"),
     has_warnings: str | None = Query(default=None, description="Фильтр предупреждений импорта: yes | no"),
+    dimensions: str | None = Query(
+        default=None,
+        description='Column filter: exact JSON match on position task dimensions, e.g. {"length_mm":2700} or null',
+    ),
     sort_by: str = Query(default="source_row_number"),
     sort_order: str = Query(default="asc"),
     limit: int = Query(default=50, ge=1, le=500),
@@ -1363,6 +1408,12 @@ async def all_plan_positions(
     db: AsyncSession = Depends(get_db),
 ) -> AllPlanPositionsListResponse:
     """Return paginated positions from all production plans in planning stage (draft/invalid/valid)."""
+    from app.domain.dimensions import DimensionsValidationError, parse_dimensions_filter
+
+    try:
+        parse_dimensions_filter(dimensions)
+    except DimensionsValidationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     stmt = select(PlanPosition)
     stmt = _apply_all_positions_filters(
         stmt,
@@ -1374,6 +1425,7 @@ async def all_plan_positions(
         has_route=has_route,
         has_errors=has_errors,
         has_warnings=has_warnings,
+        dimensions=dimensions,
     )
 
     count_stmt = select(sa_func.count()).select_from(stmt.subquery())

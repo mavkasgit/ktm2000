@@ -1,5 +1,5 @@
 import type { AllPlanPositionsParams } from "@/shared/api/productionPlans";
-import { pickColumnApiValue } from "@/shared/lib/columnFilterSearch";
+import { pickColumnApiValue, pickExactMatchColumnValue } from "@/shared/lib/columnFilterSearch";
 import type { PlanSortField } from "./plan-labels";
 
 export function mapPlanSortFieldToApi(field: PlanSortField): string {
@@ -10,6 +10,8 @@ export function mapPlanSortFieldToApi(field: PlanSortField): string {
       return "source_sku";
     case "qty":
       return "quantity";
+    case "dimensions":
+      return "dimensions";
     case "status":
       return "status";
     case "validation":
@@ -24,11 +26,11 @@ export function buildPlanColumnApiParams(
   columnSearchQueries: Partial<Record<PlanSortField, string>>,
 ): Pick<
   AllPlanPositionsParams,
-  "source_sku" | "source_name" | "has_route" | "has_errors" | "has_warnings"
+  "source_sku" | "source_name" | "has_route" | "has_errors" | "has_warnings" | "dimensions"
 > {
   const params: Pick<
     AllPlanPositionsParams,
-    "source_sku" | "source_name" | "has_route" | "has_errors" | "has_warnings"
+    "source_sku" | "source_name" | "has_route" | "has_errors" | "has_warnings" | "dimensions"
   > = {};
 
   const sourceSku = pickColumnApiValue(columnFilters, columnSearchQueries, "sku");
@@ -57,6 +59,9 @@ export function buildPlanColumnApiParams(
   } else if (warningsValue) {
     params.has_warnings = "yes";
   }
+
+  const dimensions = pickExactMatchColumnValue(columnFilters, "dimensions");
+  if (dimensions) params.dimensions = dimensions;
 
   return params;
 }

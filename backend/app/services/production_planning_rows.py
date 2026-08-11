@@ -7,6 +7,7 @@ from sqlalchemy import String, and_, case, cast, exists, func, or_, select
 from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.domain.dimensions import format_dimensions, parse_dimensions_filter
 from app.models.internal_plan import SectionPlanLine
 from app.models.product import Product
 from app.models.production_plan import PlanPosition, PlanPositionStatus, PositionStatusHistory
@@ -16,6 +17,7 @@ from app.models.section import Section
 from app.models.transfer import Transfer
 from app.models.work_task import WorkTask, WorkTaskStatus
 from app.stock.models import Reason, StockTransaction
+from app.services.plan_position_hanger import position_dimensions_for_task
 from app.services.route_matcher import ResolvedRouteInfo, resolve_position_route, make_position_route_cache_key
 
 MANUAL_ROUTE_PASS_PREFIX = "manual_route_pass:"
@@ -28,6 +30,7 @@ ROWS_SORT_FIELDS = frozenset({
     "completed_qty",
     "due_date",
     "sequence",
+    "dimensions",
 })
 
 _ACTIVE_POSITION_STATUSES = (
@@ -55,6 +58,7 @@ class PlanningRowsQueryParams:
     route_name: str | None = None
     status: str | None = None
     current_stage_section_name: str | None = None
+    dimensions: str | None = None
 
 
 def _active_positions_stmt():
@@ -161,6 +165,34 @@ def _current_sequence_subquery():
     )
 
 
+def _position_task_length_mm_expr():
+    """SQL-выражение длины задания позиции (как ``position_dimensions_for_task``).
+
+    Источники: ``input_dimensions["length_mm"]``; при отсутствии у
+    нетрансформирующей позиции (``input_quantity`` NULL) — длина единственного
+    выхода ``outputs[0]["dimensions"]["length_mm"]``. ``NULL`` — безразмерные.
+    """
+    input_len = PlanPosition.input_dimensions["length_mm"].as_float()
+    output_len = PlanPosition.outputs[0]["dimensions"]["length_mm"].as_float()
+    return case(
+        (input_len.isnot(None), input_len),
+        (PlanPosition.input_quantity.is_(None), output_len),
+        else_=None,
+    )
+
+
+def _position_task_dimensions_expr():
+    """SQL-выражение габарита задания позиции (канонический JSONB) или NULL.
+
+    Для фильтра точного совпадения: ``dimensions_match_clause`` сравнивает
+    JSONB, поэтому оборачиваем длину в ``{"length_mm": N}``.
+    """
+    return case(
+        (_position_task_length_mm_expr().isnot(None), func.jsonb_build_object("length_mm", _position_task_length_mm_expr())),
+        else_=None,
+    )
+
+
 def _apply_planning_rows_filters(stmt, params: PlanningRowsQueryParams, *, product: Product | None = None, route: ProductionRoute | None = None):
     if product is None:
         product = Product
@@ -204,6 +236,15 @@ def _apply_planning_rows_filters(stmt, params: PlanningRowsQueryParams, *, produ
 
     if params.current_stage_section_name:
         stmt = stmt.where(_current_stage_section_name_exists(f"%{params.current_stage_section_name}%"))
+
+    if params.dimensions:
+        from app.stock.services import dimensions_match_clause
+
+        dims_active, dims = parse_dimensions_filter(params.dimensions)
+        if dims_active:
+            stmt = stmt.where(
+                dimensions_match_clause(_position_task_dimensions_expr(), dims)
+            )
 
     if params.status:
         if params.status == "completed":
@@ -262,6 +303,8 @@ def _apply_planning_rows_order(stmt, params: PlanningRowsQueryParams, *, product
         order_column = PlanPosition.due_date
     elif resolved_sort_by == "sequence":
         order_column = _current_sequence_subquery()
+    elif resolved_sort_by == "dimensions":
+        order_column = _position_task_length_mm_expr()
 
     if sort_order == "asc":
         return stmt.order_by(order_column.asc().nulls_last(), PlanPosition.id.asc())
@@ -649,6 +692,7 @@ async def _build_planning_rows_for_positions(db: AsyncSession, positions: list[P
     result: list[dict] = []
     for pos in positions:
         route_info = route_cache[make_position_route_cache_key(pos)]
+        task_dims = position_dimensions_for_task(pos)
 
         has_tasks = pos.id in has_tasks_set
         is_completed = pos.id in completed_set
@@ -663,6 +707,8 @@ async def _build_planning_rows_for_positions(db: AsyncSession, positions: list[P
                 "source_sku": pos.source_sku,
                 "source_name": pos.source_name,
                 "quantity": _to_float(pos.quantity),
+                "dimensions": task_dims,
+                "dimensions_label": format_dimensions(task_dims),
                 "position_status": pos.status.value if hasattr(pos.status, "value") else str(pos.status),
                 "validation_status": pos.validation_status.value
                 if hasattr(pos.validation_status, "value")

@@ -36,6 +36,10 @@ class WorkTask(Base):
     input_quantity: Mapped[Decimal | None] = mapped_column(Numeric(14, 3), nullable=True)
     input_dimensions: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     outputs: Mapped[list] = mapped_column(JSONB, nullable=False, server_default=text("'[]'::jsonb"), default=list)
+    # Габарит передаваемого материала (ADR-0001): заполняется из плана
+    # ({"length_mm": N}) во всех точках создания задания. None — безразмерные
+    # штуки. Источник для transfer_send, когда payload не несёт dimensions.
+    dimensions: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     status: Mapped[WorkTaskStatus] = mapped_column(Enum(WorkTaskStatus, name="work_task_status"), nullable=False)
     due_date: Mapped[date | None] = mapped_column(Date, nullable=True)
     assigned_to: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)

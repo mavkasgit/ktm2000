@@ -9,7 +9,11 @@ from sqlalchemy import String, case, cast, exists, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
-from app.domain.dimensions import format_operation_summary, format_quantity
+from app.domain.dimensions import (
+    format_operation_summary,
+    format_quantity,
+    parse_dimensions_filter,
+)
 from app.models.internal_plan import SectionPlanLine
 from app.models.production_plan import PlanPosition
 from app.models.product import Product
@@ -43,7 +47,7 @@ def _compute_fingerprint(
     return hashlib.sha256(canonical.encode()).hexdigest()[:16]
 
 
-BOARD_SORT_FIELDS = frozenset({"sequence", "task_id", "product_sku", "status", "due_date"})
+BOARD_SORT_FIELDS = frozenset({"sequence", "task_id", "product_sku", "status", "due_date", "dimensions"})
 DEFAULT_BOARD_LIMIT = 50
 MAX_BOARD_LIMIT = 500
 
@@ -56,6 +60,7 @@ def _build_section_board_query(
     status: str | None = None,
     search: str | None = None,
     product_sku: str | None = None,
+    dimensions: str | None = None,
 ):
     """Base board query with SQL-first filters (no pagination/sort)."""
     query = select(
@@ -97,6 +102,12 @@ def _build_section_board_query(
                 PlanPosition.output_sku.ilike(sku_like),
             )
         )
+    if dimensions:
+        from app.stock.services import dimensions_match_clause
+
+        dims_active, dims = parse_dimensions_filter(dimensions)
+        if dims_active:
+            query = query.where(dimensions_match_clause(WorkTask.dimensions, dims))
     if search:
         search_like = f"%{search}%"
         route_op_search = exists(
@@ -140,17 +151,20 @@ def _apply_board_sort(query, *, sort_by: str, sort_order: str):
         order_column = WorkTask.status
     elif resolved_sort_by == "due_date":
         order_column = WorkTask.due_date
+    elif resolved_sort_by == "dimensions":
+        order_column = WorkTask.dimensions["length_mm"].as_float()
     else:
         order_column = SectionPlanLine.sequence
 
+    nulls_last = resolved_sort_by in ("due_date", "dimensions")
     if sort_order == "asc":
         primary = order_column.asc()
-        if resolved_sort_by == "due_date":
+        if nulls_last:
             primary = primary.nulls_last()
         return query.order_by(primary, WorkTask.id.asc())
 
     primary = order_column.desc()
-    if resolved_sort_by == "due_date":
+    if nulls_last:
         primary = primary.nulls_last()
     return query.order_by(primary, WorkTask.id.desc())
 
@@ -164,6 +178,7 @@ async def get_section_board(
     status: str | None = None,
     search: str | None = None,
     product_sku: str | None = None,
+    dimensions: str | None = None,
     sort_by: str = "sequence",
     sort_order: str = "asc",
     limit: int = DEFAULT_BOARD_LIMIT,
@@ -180,6 +195,7 @@ async def get_section_board(
         status=status,
         search=search,
         product_sku=product_sku,
+        dimensions=dimensions,
     )
 
     count_stmt = select(func.count()).select_from(
@@ -295,12 +311,23 @@ async def get_section_board(
 
     # Прогресс трансформации (ADR-0002) для карточек трансформирующих
     # этапов: списано входа и оприходовано по каждому выходу.
-    from .operations_transform import build_outputs_progress, get_transform_progress_bulk
+    from .operations_transform import (
+        build_outputs_progress,
+        distribute_output_quantities,
+        get_transferred_by_task_dimensions_bulk,
+        get_transform_progress_bulk,
+    )
     transform_task_ids = [
         row[0].id for row in rows
         if row[2].transforms_dimensions and (row[0].outputs or [])
     ]
     transform_progress_map = await get_transform_progress_bulk(db, transform_task_ids)
+
+    # Нетто-переданное по каждому габариту трансформирующих заданий —
+    # для учётной колонки «Передано» строки «Сдачи» плана (тикет #95).
+    transferred_by_task = await get_transferred_by_task_dimensions_bulk(
+        db, transform_task_ids,
+    )
 
     from .task_status import sync_work_tasks_status_bulk
 
@@ -475,14 +502,22 @@ async def get_section_board(
         if task.id in transform_progress_map or (stage.transforms_dimensions and task_outputs):
             progress = transform_progress_map.get(task.id)
             produced_by_group = progress.produced_by_group if progress else {}
+            produced_entries = build_outputs_progress(task_outputs, produced_by_group)
+            transferred_rows = distribute_output_quantities(
+                task_outputs,
+                transferred_by_task.get(task.id) or {},
+            )
             outputs_progress = [
                 {
                     "row_number": entry["row_number"],
                     "dimensions": entry["dimensions"],
                     "quantity": format_quantity(entry["quantity"]),
                     "produced_quantity": format_quantity(entry["produced_quantity"]),
+                    # Нетто-переданное по (задача, размер выхода) из ledger —
+                    # учётная колонка «Передано» строки «Сдачи» плана.
+                    "transferred_quantity": format_quantity(transferred),
                 }
-                for entry in build_outputs_progress(task_outputs, produced_by_group)
+                for entry, transferred in zip(produced_entries, transferred_rows)
             ]
             input_consumed_quantity = format_quantity(
                 progress.consumed_quantity if progress else Decimal("0")
@@ -520,6 +555,10 @@ async def get_section_board(
             "source_ref": source_ref,
             "source_payload": source_payload or {},
             "source_fingerprint": fingerprint,
+            # Размер задания (ADR-0001): габарит материала на этом этапе.
+            # У трансформирующих этапов вход/выходы уже несут input_dimensions
+            # и outputs — здесь только «размер» нетрансформирующего этапа.
+            "dimensions": task.dimensions,
             "input_sku": source_sku or "",
             "output_sku": output_sku or "",
             "display_sku": effective_display_sku,
@@ -659,23 +698,6 @@ async def get_sections_summary(db: AsyncSession) -> dict:
             for section in sections
         ]
     }
-
-
-async def get_section_incoming_transfers(
-    db: AsyncSession,
-    *,
-    section_id: int,
-) -> dict:
-    """Return incoming open transfers for a section.
-
-    Moved to :mod:`app.transfers.queries`.  Kept here as a thin
-    re-export for backward compatibility with the legacy
-    ``from app.services.shopfloor.queries_sections import
-    get_section_incoming_transfers`` import path.
-    """
-    from app.transfers.queries import get_section_incoming_transfers as _impl
-
-    return await _impl(db, section_id=section_id)
 
 
 async def get_section_daily_stats(

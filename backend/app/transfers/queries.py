@@ -15,8 +15,9 @@ from __future__ import annotations
 
 from datetime import datetime
 from decimal import Decimal
+from typing import cast as tcast
 
-from sqlalchemy import String, case, cast, exists, func, or_, select
+from sqlalchemy import String, Subquery, and_, cast, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
@@ -37,8 +38,14 @@ from app.models.transfer import (
     TransferStatus,
 )
 from app.models.work_task import WorkTask, WorkTaskStatus
+from app.domain.dimensions import parse_dimensions_filter, format_dimensions
+from app.services.plan_position_hanger import task_dimensions_for_plan_line
 
 from app.services.shopfloor.common import _get_transfer, _to_decimal
+from app.stock.transfer_ledger import (
+    net_transferred_by_dimensions,
+    net_transferred_sq,
+)
 
 
 def _fmt_qty(value: Decimal | None) -> str:
@@ -198,6 +205,8 @@ async def get_section_incoming_transfers(
                 "from_line_id": src_line.id,
                 "from_line_sequence": src_line.sequence,
                 "plan_position_id": src_line.plan_position_id,
+                # Габарит переданного (тикет #95): колонка «Размер» в UI.
+                "dimensions": transfer.dimensions,
             }
         )
 
@@ -224,25 +233,17 @@ def _completed_qty_subquery():
     )
 
 
-def _transferred_qty_subquery():
+def _released_qty_subquery():
     from app.stock.models import Reason, StockTransaction
 
     return (
         select(
             StockTransaction.task_id,
-            func.coalesce(
-                func.sum(
-                    case(
-                        (StockTransaction.compensates_tx_id.is_(None), StockTransaction.quantity),
-                        else_=-StockTransaction.quantity,
-                    )
-                ),
-                0,
-            ).label("transferred_qty"),
+            func.coalesce(func.sum(StockTransaction.quantity), 0).label("released_qty"),
         )
-        .where(StockTransaction.reason == Reason.TRANSFER_SEND)
+        .where(StockTransaction.reason == Reason.FINAL_RELEASE)
         .group_by(StockTransaction.task_id)
-        .subquery("transferred_qty_sq")
+        .subquery("released_qty_sq")
     )
 
 
@@ -257,7 +258,17 @@ def _operation_names_subquery():
     )
 
 
-def _hydrate_production_ready_row(row) -> dict:
+def _ready_dimensions_fields(dims: dict | None) -> dict:
+    """Пара полей готовой строки: габарит + его UI-подпись (ADR-0001)."""
+    return {
+        "dimensions": dims,
+        "dimensions_label": format_dimensions(dims),
+    }
+
+
+def _ready_row_common(row) -> dict:
+    """Общие поля ready-строки (без количеств и габарита) — основа для
+    обычной строки и строк выходов трансформирующей задачи (тикет #91)."""
     (
         task,
         line,
@@ -268,16 +279,17 @@ def _hydrate_production_ready_row(row) -> dict:
         next_stg,
         next_sec,
         completion_comment,
-        completed,
-        transferred,
+        _completed,
+        _transferred,
+        _released,
     ) = row
-    completed = _to_decimal(completed)
-    transferred = _to_decimal(transferred)
-    transferable = completed - transferred
+    # Текущий этап финальный (тикет #96): строка получает «Отправить»
+    # (final release) вместо «Передать»; следующего шага у неё нет.
+    is_final = bool(stage.is_final)
     has_next = (
         next_l is not None
         and next_stg is not None
-        and not bool(next_stg.is_final)
+        and not is_final
     )
 
     op_code = stage.operations[0].operation_code if stage and stage.operations else None
@@ -296,10 +308,6 @@ def _hydrate_production_ready_row(row) -> dict:
         "operation_name": op_name,
         "product_id": task.product_id,
         "product_sku": product_sku,
-        "planned_quantity": _fmt_qty(task.planned_quantity),
-        "completed_quantity": _fmt_qty(completed),
-        "already_transferred_quantity": _fmt_qty(transferred),
-        "transferable_quantity": _fmt_qty(transferable),
         "has_next_step": has_next,
         "next_section_id": next_sec.id if next_sec is not None else None,
         "next_section_code": next_sec.code if next_sec is not None else None,
@@ -307,9 +315,140 @@ def _hydrate_production_ready_row(row) -> dict:
         "next_operation_name": next_op_name,
         "next_step_sequence": next_stg.sequence if next_stg is not None else None,
         "next_step_is_final": bool(next_stg.is_final) if next_stg is not None else None,
-        "is_final": False,
+        "is_final": is_final,
         "completion_comment": completion_comment,
     }
+
+
+def _hydrate_plain_ready_row(row) -> dict | None:
+    """Обычная (нетрансформирующая) задача: одна ready-строка."""
+    (
+        task,
+        _line,
+        stage,
+        _section,
+        _product_sku,
+        _next_l,
+        _next_stg,
+        _next_sec,
+        _completion_comment,
+        completed,
+        transferred,
+        released,
+    ) = row
+    # Финальный этап (тикет #96): «отдано» = уже выпущено (FINAL_RELEASE),
+    # а не переданное на следующий участок; transferable = releasable.
+    if bool(stage.is_final):
+        used = _to_decimal(released)
+    else:
+        used = _to_decimal(transferred)
+    transferable = _to_decimal(completed) - used
+    if transferable <= 0:
+        return None
+    return {
+        **_ready_row_common(row),
+        "planned_quantity": _fmt_qty(task.planned_quantity),
+        "completed_quantity": _fmt_qty(completed),
+        "already_transferred_quantity": _fmt_qty(used),
+        "transferable_quantity": _fmt_qty(transferable),
+        **_ready_dimensions_fields(task.dimensions),
+    }
+
+
+async def _net_released_by_dimensions(
+    db: AsyncSession,
+    *,
+    task_id: int,
+) -> dict[str | None, Decimal]:
+    """Grouped net FINAL_RELEASE по габаритам задачи (тикет #96).
+
+    Зеркалит ``net_transferred_by_dimensions`` (ledger-примитив ограничен
+    TRANSFER_SEND/RECEIVE), поэтому net FINAL_RELEASE считается здесь —
+    так же comp-aware: компенсации вычитаются.
+    """
+    from app.stock.models import Reason, StockTransaction
+    from app.stock.services import _dimensions_hash_key
+
+    rows = await db.execute(
+        select(
+            StockTransaction.dimensions,
+            func.coalesce(func.sum(StockTransaction.quantity), 0).label("net_released"),
+        )
+        .where(
+            StockTransaction.task_id == task_id,
+            StockTransaction.reason == Reason.FINAL_RELEASE,
+            StockTransaction.compensates_tx_id.is_(None),
+        )
+        .group_by(StockTransaction.dimensions)
+    )
+    result: dict[str | None, Decimal] = {}
+    for dims, net in rows:
+        key = _dimensions_hash_key(dims)
+        result[key] = (result.get(key) or Decimal("0")) + (net or Decimal("0"))
+    return result
+
+
+async def _hydrate_production_ready_row(db: AsyncSession, row) -> list[dict]:
+    """Ready-строки одной production-задачи.
+
+    Обычная задача — одна строка ``dimensions = task.dimensions``.
+    Трансформирующая (резка, тикет #91) — строка на каждый выход
+    спецификации: ``dimensions = outputs[i].dimensions``,
+    ``planned_quantity = outputs[i].quantity``; transferable выхода =
+    ``min(outputs[i].quantity, произведено по размеру) − уже переданное
+    по этому размеру`` (инвариант D2). Строки с transferable <= 0
+    отбрасываются.
+
+    Финальный этап (тикет #96): «уже отданное» по размеру — net
+    FINAL_RELEASE (released), а не TRANSFER_SEND; transferable выхода =
+    releasable = произведено по размеру − уже выпущено по размеру.
+    """
+    task = row[0]
+    stage = row[2]
+    is_final = bool(stage.is_final)
+    outputs = task.outputs or []
+    if not outputs:
+        item = _hydrate_plain_ready_row(row)
+        return [item] if item is not None else []
+
+    from app.domain.dimensions import canonicalize_dimensions
+    from app.services.shopfloor.operations_transform import (
+        build_outputs_progress,
+        distribute_output_quantities,
+        get_transform_progress,
+    )
+
+    common = _ready_row_common(row)
+    progress = await get_transform_progress(db, task.id)
+    produced_rows = build_outputs_progress(outputs, progress.produced_by_group)
+    if is_final:
+        used_by_dim = await _net_released_by_dimensions(db, task_id=task.id)
+    else:
+        used_by_dim = await net_transferred_by_dimensions(db, task_id=task.id)
+    used_rows = distribute_output_quantities(outputs, used_by_dim)
+
+    items: list[dict] = []
+    for entry, produced_entry, used in zip(outputs, produced_rows, used_rows):
+        raw_qty = entry.get("quantity")
+        if raw_qty is None:
+            continue
+        planned = Decimal(str(raw_qty))
+        if planned <= 0:
+            continue
+        dims = canonicalize_dimensions(entry.get("dimensions"))
+        produced = produced_entry["produced_quantity"]
+        transferable = produced - used
+        if transferable <= 0:
+            continue
+        items.append({
+            **common,
+            "planned_quantity": _fmt_qty(planned),
+            "completed_quantity": _fmt_qty(produced),
+            "already_transferred_quantity": _fmt_qty(used),
+            "transferable_quantity": _fmt_qty(transferable),
+            **_ready_dimensions_fields(dims),
+        })
+    return items
 
 
 READY_SORT_FIELDS = frozenset({
@@ -320,6 +459,7 @@ READY_SORT_FIELDS = frozenset({
     "operation_name",
     "transferable_qty",
     "next_section_name",
+    "dimensions",
 })
 
 
@@ -359,10 +499,19 @@ def _apply_ready_production_order(
         order_column = transferable_expr
     elif sort_by == "next_section_name":
         order_column = next_section.name
+    elif sort_by == "dimensions":
+        order_column = WorkTask.dimensions["length_mm"].as_float()
 
+    nulls_last = sort_by == "dimensions"
     if sort_order == "asc":
-        return query.order_by(order_column.asc(), WorkTask.id.asc())
-    return query.order_by(order_column.desc(), WorkTask.id.desc())
+        primary = order_column.asc()
+        if nulls_last:
+            primary = primary.nulls_last()
+        return query.order_by(primary, WorkTask.id.asc())
+    primary = order_column.desc()
+    if nulls_last:
+        primary = primary.nulls_last()
+    return query.order_by(primary, WorkTask.id.desc())
 
 
 def _build_production_ready_query(
@@ -377,6 +526,7 @@ def _build_production_ready_query(
     task_id: int | None = None,
     plan_position_id: int | None = None,
     transferable_qty: Decimal | None = None,
+    dimensions: str | None = None,
     sort_by: str = "sequence",
     sort_order: str = "asc",
 ):
@@ -390,10 +540,12 @@ def _build_production_ready_query(
     from app.stock.models import Reason, StockTransaction
 
     completed_sq = _completed_qty_subquery()
-    transferred_sq = _transferred_qty_subquery()
+    transferred_sq = tcast(Subquery, net_transferred_sq("transferred_qty_sq"))
+    released_sq = _released_qty_subquery()
     transferable_expr = (
         func.coalesce(completed_sq.c.completed_qty, 0)
-        - func.coalesce(transferred_sq.c.transferred_qty, 0)
+        - func.coalesce(transferred_sq.c.net_quantity, 0)
+        - func.coalesce(released_sq.c.released_qty, 0)
     )
 
     latest_complete = (
@@ -405,15 +557,6 @@ def _build_production_ready_query(
         .distinct(StockTransaction.task_id)
         .order_by(StockTransaction.task_id, StockTransaction.id.desc())
         .subquery()
-    )
-
-    active_transfer_exists = (
-        select(Transfer.id)
-        .where(
-            Transfer.from_task_id == WorkTask.id,
-            Transfer.status.notin_([TransferStatus.cancelled]),
-        )
-        .correlate(WorkTask)
     )
 
     query = (
@@ -428,7 +571,8 @@ def _build_production_ready_query(
             next_section,
             StockTransaction.id.label("completion_tx_id"),
             func.coalesce(completed_sq.c.completed_qty, 0).label("completed_qty"),
-            func.coalesce(transferred_sq.c.transferred_qty, 0).label("transferred_qty"),
+            func.coalesce(transferred_sq.c.net_quantity, 0).label("transferred_qty"),
+            func.coalesce(released_sq.c.released_qty, 0).label("released_qty"),
         )
         .join(from_line, from_line.id == WorkTask.section_plan_line_id)
         .join(from_stage, from_stage.id == WorkTask.route_stage_id)
@@ -436,6 +580,7 @@ def _build_production_ready_query(
         .join(Product, Product.id == WorkTask.product_id)
         .outerjoin(completed_sq, completed_sq.c.task_id == WorkTask.id)
         .outerjoin(transferred_sq, transferred_sq.c.task_id == WorkTask.id)
+        .outerjoin(released_sq, released_sq.c.task_id == WorkTask.id)
         .outerjoin(
             next_line,
             (next_line.plan_position_id == from_line.plan_position_id)
@@ -456,10 +601,16 @@ def _build_production_ready_query(
                 [WorkTaskStatus.cancelled, WorkTaskStatus.waiting_previous]
             ),
             from_section.type == SECTION_TYPE_PRODUCTION,
-            from_stage.is_final.is_(False),
-            next_line.id.isnot(None),
+            # Финальный этап (тикет #96) попадает в ready-список без
+            # следующего шага: для него «отправить» = final release.
+            or_(
+                from_stage.is_final.is_(True),
+                and_(
+                    from_stage.is_final.is_(False),
+                    next_line.id.isnot(None),
+                ),
+            ),
             transferable_expr > 0,
-            ~exists(active_transfer_exists),
         )
     )
 
@@ -505,6 +656,12 @@ def _build_production_ready_query(
         query = query.where(from_line.plan_position_id == plan_position_id)
     if transferable_qty is not None:
         query = query.where(transferable_expr == transferable_qty)
+    if dimensions:
+        from app.stock.services import dimensions_match_clause
+
+        dims_active, dims = parse_dimensions_filter(dimensions)
+        if dims_active:
+            query = query.where(dimensions_match_clause(WorkTask.dimensions, dims))
 
     if sort_by not in READY_SORT_FIELDS:
         sort_by = "sequence"
@@ -556,6 +713,7 @@ def _ready_item_matches_column_filters(
     task_id: int | None,
     plan_position_id: int | None,
     transferable_qty: Decimal | None,
+    dimensions: str | None = None,
 ) -> bool:
     if task_id is not None and item.get("task_id") != task_id:
         return False
@@ -586,10 +744,19 @@ def _ready_item_matches_column_filters(
             return False
         if item_qty != transferable_qty:
             return False
+    if dimensions:
+        dims_active, dims = parse_dimensions_filter(dimensions)
+        if dims_active:
+            item_dims = item.get("dimensions")
+            if dims is None:
+                if item_dims is not None:
+                    return False
+            elif item_dims != dims:
+                return False
     return True
 
 
-def _ready_item_sort_key(item: dict, sort_by: str) -> tuple:
+def _ready_item_sort_key(item: dict, sort_by: str, sort_order: str = "asc") -> tuple:
     if sort_by == "task_id":
         return (item.get("task_id") or 0,)
     if sort_by == "plan_position_id":
@@ -602,7 +769,32 @@ def _ready_item_sort_key(item: dict, sort_by: str) -> tuple:
         return (_to_decimal(item.get("transferable_quantity") or "0"),)
     if sort_by == "next_section_name":
         return (item.get("next_section_name") or "",)
+    if sort_by == "dimensions":
+        return _ready_dimensions_sort_key(item, sort_order)
     return (item.get("sequence") or 0, item.get("task_id") or 0)
+
+
+def _ready_dimensions_sort_key(item: dict, sort_order: str) -> tuple:
+    """Сортировочный ключ размера: длина от большей к меньшей, безразмерные — в конец.
+
+    ``sort_order`` нужен, потому что общий путь (has_stock) сортирует через
+    ``reverse=sort_order == "desc"`` — инверсия «переворачивает» null-флаг.
+    """
+    dims = item.get("dimensions")
+    length = None
+    if isinstance(dims, dict):
+        raw = dims.get("length_mm")
+        if raw is not None:
+            try:
+                length = _to_decimal(raw)
+            except Exception:
+                length = None
+    has_length = length is not None
+    if sort_order == "desc":
+        # reverse=True: первый элемент — наибольший ключ. Безразмерные — наименьший ключ → последние.
+        return (1, float(length)) if has_length else (0, 0)
+    # reverse=False: безразмерные — наибольший ключ → последние.
+    return (0, float(length)) if has_length else (1, 0)
 
 
 async def _fetch_stock_ready_items(
@@ -618,12 +810,10 @@ async def _fetch_stock_ready_items(
     task_id: int | None = None,
     plan_position_id: int | None = None,
     transferable_qty: Decimal | None = None,
+    dimensions: str | None = None,
 ) -> list[dict]:
     from app.models.production_plan import PlanPosition
-    from app.transfers.services import (
-        compute_stock_section_transferable,
-        has_active_transfer_for_plan_line,
-    )
+    from app.transfers.services import compute_stock_section_transferable
 
     if spg_id is not None:
         sections = (
@@ -711,9 +901,6 @@ async def _fetch_stock_ready_items(
             if next_task is None and not is_stock_section(next_sec):
                 continue
 
-            if await has_active_transfer_for_plan_line(db, spl.id):
-                continue
-
             fake_task = await db.scalar(
                 select(WorkTask)
                 .where(
@@ -746,6 +933,7 @@ async def _fetch_stock_ready_items(
                     planned_quantity=planned_qty,
                     status=WorkTaskStatus.ready,
                     due_date=spl.due_date,
+                    dimensions=await task_dimensions_for_plan_line(db, spl.plan_position_id),
                 )
                 db.add(fake_task)
                 await db.flush()
@@ -797,6 +985,7 @@ async def _fetch_stock_ready_items(
                     "next_step_is_final": bool(next_stage.is_final),
                     "is_final": False,
                     "completion_comment": None,
+                    **_ready_dimensions_fields(fake_task.dimensions),
                 }
             if search and search.strip():
                 search_lower = search.strip().lower()
@@ -817,6 +1006,7 @@ async def _fetch_stock_ready_items(
                 task_id=task_id,
                 plan_position_id=plan_position_id,
                 transferable_qty=transferable_qty,
+                dimensions=dimensions,
             ):
                 continue
             stock_items.append(candidate)
@@ -841,14 +1031,17 @@ async def list_ready_to_transfer(
     task_id: int | None = None,
     plan_position_id: int | None = None,
     transferable_qty: str | None = None,
+    dimensions: str | None = None,
 ) -> dict:
     """List SectionTasks that have quantity ready to be transferred.
 
     A task is "ready to transfer" when:
       * it has a next route step (``SectionPlanLine.sequence + 1``
-        exists),
-      * the next step is not final,
-      * ``completed_qty - transferred_qty > 0`` (ledger aggregates).
+        exists), or it sits on the final route stage (тикет #96 —
+        такой задаче доступен final release),
+      * the next step is not final (для межучастковых передач),
+      * ``completed_qty - transferred_qty - released_qty > 0`` (ledger
+        aggregates; на финальном этапе released = FINAL_RELEASE).
 
     Filters:
       * ``section_id`` — restrict to a single section.
@@ -883,6 +1076,10 @@ async def list_ready_to_transfer(
     if sort_order not in ("asc", "desc"):
         sort_order = "asc"
 
+    # transferable_qty/dimensions применяются по строке в Python (тикет #91):
+    # трансформирующая задача разворачивается в строки выходов, и эти фильтры
+    # на уровне SQL-задачи неверны. Остальные фильтры (task-level атрибуты)
+    # остаются в SQL.
     production_query = _build_production_ready_query(
         section_ids=spg_section_ids,
         section_id=section_id if spg_id is None else None,
@@ -893,28 +1090,38 @@ async def list_ready_to_transfer(
         next_section_name=next_section_name,
         task_id=task_id,
         plan_position_id=plan_position_id,
-        transferable_qty=parsed_transferable_qty,
+        transferable_qty=None,
+        dimensions=None,
         sort_by=sort_by,
         sort_order=sort_order,
     )
 
     has_stock = await _scope_has_stock_sections(db, section_id=section_id, spg_id=spg_id)
 
-    if not has_stock:
-        total = (
-            await db.execute(
-                select(func.count()).select_from(production_query.order_by(None).subquery())
-            )
-        ).scalar() or 0
+    # Все production-строки гидратируются сразу (обычная задача → 1 строка,
+    # трансформирующая → N строк выходов); пагинация идёт по готовым строкам.
+    rows = (await db.execute(production_query)).all()
+    items: list[dict] = []
+    for row in rows:
+        items.extend(await _hydrate_production_ready_row(db, row))
 
-        rows = (
-            await db.execute(production_query.offset(offset).limit(limit))
-        ).all()
-        items = [_hydrate_production_ready_row(row) for row in rows]
-    else:
-        rows = (await db.execute(production_query)).all()
-        items = [_hydrate_production_ready_row(row) for row in rows]
+    items = [
+        item
+        for item in items
+        if _ready_item_matches_column_filters(
+            item,
+            product_sku=product_sku,
+            operation_name=operation_name,
+            next_operation_name=next_operation_name,
+            next_section_name=next_section_name,
+            task_id=task_id,
+            plan_position_id=plan_position_id,
+            transferable_qty=parsed_transferable_qty,
+            dimensions=dimensions,
+        )
+    ]
 
+    if has_stock:
         stock_items = await _fetch_stock_ready_items(
             db,
             section_id=section_id,
@@ -927,12 +1134,14 @@ async def list_ready_to_transfer(
             task_id=task_id,
             plan_position_id=plan_position_id,
             transferable_qty=parsed_transferable_qty,
+            dimensions=dimensions,
         )
         items.extend(stock_items)
-        reverse = sort_order == "desc"
-        items.sort(key=lambda item: _ready_item_sort_key(item, sort_by), reverse=reverse)
-        total = len(items)
-        items = items[offset : offset + limit]
+
+    reverse = sort_order == "desc"
+    items.sort(key=lambda item: _ready_item_sort_key(item, sort_by, sort_order), reverse=reverse)
+    total = len(items)
+    items = items[offset : offset + limit]
 
     return {
         "items": items,
@@ -1121,6 +1330,8 @@ async def get_section_transfer_history(
                 "from_line_id": src_line.id,
                 "from_line_sequence": src_line.sequence,
                 "plan_position_id": src_line.plan_position_id,
+                # Габарит переданного (тикет #95): колонка «Размер» в UI.
+                "dimensions": transfer.dimensions,
             }
         )
 

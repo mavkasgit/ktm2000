@@ -21,9 +21,9 @@ import json
 from dataclasses import dataclass, field
 from datetime import datetime
 from decimal import Decimal
-from typing import Any
+from typing import Any, cast as tcast
 
-from sqlalchemy import case, cast, delete, func, select, update
+from sqlalchemy import Select, cast, delete, func, or_, select, text, update
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -39,6 +39,7 @@ from app.stock.task_cache import (
     compute_task_available,
     effective_issued_quantity,
 )
+from app.stock.transfer_ledger import net_received_sq, net_transferred_sq
 from app.stock.models import (
     QualityState,
     Reason,
@@ -60,9 +61,13 @@ def dimensions_match_clause(column, dims: dict | None):
 
     ``dims`` ожидается в канонической форме (canonicalize_dimensions);
     jsonb-равенство в PostgreSQL не зависит от порядка ключей.
+
+    ``None`` (безразмерные штуки) — матчит и SQL ``NULL``, и JSON ``null``:
+    asyncpg при явном ``None`` в JSONB-колонке может сохранить ``'null'::jsonb``
+    вместо SQL ``NULL``, поэтому только ``IS NULL`` пропускал бы такие строки.
     """
     if dims is None:
-        return column.is_(None)
+        return or_(column.is_(None), column == text("'null'::jsonb"))
     return column == cast(dims, JSONB)
 
 
@@ -302,32 +307,24 @@ class StockProjectionManager:
         def _sum_reason(reason: Reason) -> Decimal:
             return sums.get(reason.value) or Decimal("0")
 
-        # Net transfer_send/receive с учётом компенсаций
-        net_rows = await session.execute(
-            select(
-                StockTransaction.reason,
-                func.sum(
-                    case(
-                        (StockTransaction.compensates_tx_id.is_(None), StockTransaction.quantity),
-                        else_=-StockTransaction.quantity,
-                    )
-                ).label("net"),
+        # Net transfer_send/receive с учётом компенсаций — примитив transfer_ledger.
+        # TOTAL по задаче (dims=None → без dimension-фильтра), как было в кэше.
+        send_sq = net_transferred_sq(alias="task_cache_send_sq")
+        recv_sq = net_received_sq(alias="task_cache_recv_sq")
+        transferred = (
+            await session.scalar(
+                select(send_sq.c.net_quantity).where(send_sq.c.task_id == task_id)
             )
-            .where(
-                StockTransaction.task_id == task_id,
-                StockTransaction.reason.in_([Reason.TRANSFER_SEND, Reason.TRANSFER_RECEIVE]),
+        ) or Decimal("0")
+        received = (
+            await session.scalar(
+                select(recv_sq.c.net_quantity).where(recv_sq.c.task_id == task_id)
             )
-            .group_by(StockTransaction.reason)
-        )
-        net_sums: dict[str, Decimal] = {}
-        for reason_val, net in net_rows:
-            net_sums[reason_val] = net or Decimal("0")
+        ) or Decimal("0")
 
         completed = _sum_reason(Reason.COMPLETE)
         scrapped = _sum_reason(Reason.SCRAP)
         returned = _sum_reason(Reason.RETURN_TO_STOCK)
-        transferred = net_sums.get(Reason.TRANSFER_SEND.value) or Decimal("0")
-        received = net_sums.get(Reason.TRANSFER_RECEIVE.value) or Decimal("0")
         rejected = scrapped  # DefectDecision на Этапе 5
         issued = effective_issued_quantity(received=received)
 
@@ -410,29 +407,28 @@ class StockProjectionManager:
                 sums[tid] = {}
             sums[tid][reason_val] = (sums[tid].get(reason_val) or Decimal("0")) + qty
 
-        # Net для transfer_send/receive с compensations
+        # Net для transfer_send/receive с compensations — примитив transfer_ledger.
+        # TOTAL по задачам (dims=None → без dimension-фильтра), один запрос.
+        send_sq = tcast(Select, net_transferred_sq()).where(
+            StockTransaction.task_id.in_(task_ids)
+        ).subquery("bulk_send_sq")
+        recv_sq = tcast(Select, net_received_sq()).where(
+            StockTransaction.task_id.in_(task_ids)
+        ).subquery("bulk_recv_sq")
         net_rows = await session.execute(
             select(
-                StockTransaction.task_id,
-                StockTransaction.reason,
-                func.sum(
-                    case(
-                        (StockTransaction.compensates_tx_id.is_(None), StockTransaction.quantity),
-                        else_=-StockTransaction.quantity,
-                    )
-                ).label("net"),
+                func.coalesce(send_sq.c.task_id, recv_sq.c.task_id).label("task_id"),
+                func.coalesce(send_sq.c.net_quantity, 0).label("send_net"),
+                func.coalesce(recv_sq.c.net_quantity, 0).label("recv_net"),
             )
-            .where(
-                StockTransaction.task_id.in_(task_ids),
-                StockTransaction.reason.in_([Reason.TRANSFER_SEND, Reason.TRANSFER_RECEIVE]),
-            )
-            .group_by(StockTransaction.task_id, StockTransaction.reason)
+            .select_from(send_sq)
+            .outerjoin(recv_sq, recv_sq.c.task_id == send_sq.c.task_id, full=True)
         )
-        net_sums: dict[int, dict[str, Decimal]] = {}
-        for tid, reason_val, net_qty in net_rows:
-            if tid not in net_sums:
-                net_sums[tid] = {}
-            net_sums[tid][reason_val] = net_qty or Decimal("0")
+        send_net_by_task: dict[int, Decimal] = {}
+        recv_net_by_task: dict[int, Decimal] = {}
+        for tid, send_net, recv_net in net_rows:
+            send_net_by_task[tid] = send_net
+            recv_net_by_task[tid] = recv_net
 
         result: dict[int, dict] = {}
         for tid in task_ids:
@@ -452,7 +448,6 @@ class StockProjectionManager:
             line = line_map.get(task.section_plan_line_id)
             is_first_stage = (line is not None and line.sequence == 1)
             t_sums = sums.get(tid, {})
-            t_net = net_sums.get(tid, {})
 
             def _val(s: dict, key: Reason) -> Decimal:
                 return s.get(key.value) or Decimal("0")
@@ -460,8 +455,8 @@ class StockProjectionManager:
             completed = _val(t_sums, Reason.COMPLETE)
             scrapped = _val(t_sums, Reason.SCRAP)
             returned = _val(t_sums, Reason.RETURN_TO_STOCK)
-            transferred = _val(t_net, Reason.TRANSFER_SEND)
-            received = _val(t_net, Reason.TRANSFER_RECEIVE)
+            transferred = send_net_by_task.get(tid, Decimal("0"))
+            received = recv_net_by_task.get(tid, Decimal("0"))
             rejected = scrapped
             issued = effective_issued_quantity(received=received)
 
@@ -656,9 +651,16 @@ class StockCommandService:
             balance_row = balance_result.scalar_one_or_none()
             current_balance = balance_row.balance_qty if balance_row is not None else Decimal("0")
             if current_balance < cmd.quantity:
+                # Габарит в ошибке (тикет #89): «без указания длины» вместо
+                # прочерка — понятнее оператору, какую строку остатка искать.
+                dims_label = (
+                    format_dimensions(cmd.dimensions)
+                    if cmd.dimensions is not None
+                    else "без указания длины"
+                )
                 raise StockValidationError(
                     f"Insufficient stock for product_id={cmd.product_id} at location_id={cmd.from_location_id} "
-                    f"(quality={cmd.quality_state.value}, dimensions={format_dimensions(cmd.dimensions)}): "
+                    f"(quality={cmd.quality_state.value}, dimensions={dims_label}): "
                     f"required {cmd.quantity}, available {current_balance}"
                 )
 

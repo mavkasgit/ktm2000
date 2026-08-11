@@ -16,6 +16,7 @@ from app.models.route import ProductionRoute, RouteOperation, RouteStage, Sectio
 from app.models.section import Section
 from app.models.work_task import WorkTask, WorkTaskStatus
 from app.services.plan_validation import _find_paired_techcard, _paired_component_skus
+from app.services.plan_position_hanger import position_dimensions_for_task
 from app.services.production_plan_service import refresh_plan_status
 from app.services.route_transform import build_transform_spec
 
@@ -253,6 +254,7 @@ async def release_batch(
                 planned_quantity=planned_qty,
                 status=task_status,
                 due_date=line.due_date,
+                dimensions=position_dimensions_for_task(position),
                 **transform_fields,
             )
             db.add(task)

@@ -1,4 +1,5 @@
 import { ProductionPlanningRow } from "@/shared/api/productionPlans";
+import { formatDimensionsLabel } from "@/shared/api/stock";
 import { Badge, Button, PositionSkuCell, TableCornerResetCell } from "@/shared/ui";
 import { fmtQty } from "@/shared/utils/fmtQty";
 import { ArrowRight, RotateCcw, Trash2, XCircle } from "lucide-react";
@@ -104,6 +105,12 @@ export function ExecutionRow({
         );
       case "qty":
         return fmtQty(row.quantity);
+      case "dimensions":
+        return (
+          <span className="block truncate whitespace-nowrap text-xs text-muted-foreground" title={row.dimensions_label ?? undefined}>
+            {row.dimensions_label ?? formatDimensionsLabel(row.dimensions)}
+          </span>
+        );
       case "route":
         return <RowRouteCell row={row} />;
       case "status":

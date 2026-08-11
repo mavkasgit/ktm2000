@@ -26,11 +26,14 @@ from app.services.production_planning_rows import (
     get_production_planning_row_detail,
     list_production_planning_rows,
 )
+from app.domain.dimensions import DIMENSIONLESS_LABEL, canonicalize_dimensions, format_dimensions
 from app.services.production_plan_service import _refresh_plan_status, restore_plan_position, soft_delete_cancelled_position
 from app.services.plan_generation import create_release_batch, release_batch
+from app.services.plan_position_hanger import task_dimensions_for_plan_line
 from app.services.route_matcher import resolve_position_route, make_position_route_cache_key
 from app.services.route_storage_classifier import STOCK_TYPES
-from app.services.shopfloor_service import complete_task, final_release, transfer_send
+from app.services.shopfloor_service import complete_task, final_release
+from app.transfers.services import transfer_send
 
 router = APIRouter(prefix="/production-planning", tags=["execution-control"])
 MANUAL_ROUTE_PASS_PREFIX = "manual_route_pass:"
@@ -173,6 +176,8 @@ class PlanningRowOut(BaseModel):
     source_sku: str
     source_name: str | None
     quantity: float
+    dimensions: dict | None = None
+    dimensions_label: str | None = None
     position_status: str
     validation_status: str
     route_id: int | None
@@ -331,8 +336,18 @@ async def list_rows(
         default=None,
         description="Column filter: current stage section name",
     ),
+    dimensions: str | None = Query(
+        default=None,
+        description='Column filter: exact JSON match on position task dimensions, e.g. {"length_mm":2700} or null',
+    ),
     db: AsyncSession = Depends(get_db),
 ):
+    from app.domain.dimensions import DimensionsValidationError, parse_dimensions_filter
+
+    try:
+        parse_dimensions_filter(dimensions)
+    except DimensionsValidationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     params = PlanningRowsQueryParams(
         section_id=section_id,
         search=search,
@@ -350,6 +365,7 @@ async def list_rows(
         route_name=route_name,
         status=status,
         current_stage_section_name=current_stage_section_name,
+        dimensions=dimensions,
     )
     return await list_production_planning_rows(db, params=params)
 
@@ -639,6 +655,7 @@ async def _get_or_create_stock_fake_task(
             planned_quantity=planned_qty,
             status=WorkTaskStatus.ready,
             due_date=stock_line.due_date,
+            dimensions=await task_dimensions_for_plan_line(db, stock_line.plan_position_id),
         )
         db.add(fake_task)
         await db.flush()
@@ -1786,6 +1803,8 @@ class ProductWipRemainderOut(BaseModel):
     completed_ops: str
     spg_icon: str | None = None
     spg_icon_color: str | None = None
+    dimensions: dict | None = None
+    dimensions_label: str = DIMENSIONLESS_LABEL
     quantity: float
     max_completed_seq: int = 0
     stages_with_icons: list[dict] = []
@@ -1797,6 +1816,8 @@ class ProductWipTaskOut(BaseModel):
     operation_name: str
     section_icon: str | None = None
     section_icon_color: str | None = None
+    dimensions: dict | None = None
+    dimensions_label: str = DIMENSIONLESS_LABEL
     planned_qty: float
     completed_qty: float
     issued_qty: float
@@ -1825,6 +1846,7 @@ async def get_product_wip_stats(
 
     # 2. Поиск остатков на складах через StockBalance
     from app.stock.models import QualityState, StockBalance
+    from app.stock.services import _dimensions_hash_key
     balances = (await db.execute(
         select(StockBalance, Section)
         .join(Section, Section.id == StockBalance.location_id)
@@ -1836,8 +1858,9 @@ async def get_product_wip_stats(
         .order_by(StockBalance.refreshed_at)
     )).all()
 
-    # Group by location/SPG
-    rem_grouped: dict[tuple[int, str], dict] = {}
+    # Group by location/SPG + dimensions (ADR-0001): разные размеры одного
+    # SKU на одной секции — разные строки, в общий «котёл» не сводятся.
+    rem_grouped: dict[tuple[int, str, str | None], dict] = {}
     for bal, section in balances:
         spg_section = await db.scalar(
             select(SpgSection).where(SpgSection.section_id == bal.location_id).limit(1)
@@ -1850,7 +1873,9 @@ async def get_product_wip_stats(
         spg_icon_color = spg.icon_color if spg else section.icon_color
 
         ops_str = section.name or "Склад"
-        key = (spg_id, ops_str)
+        dims = canonicalize_dimensions(bal.dimensions)
+        dims_key = _dimensions_hash_key(dims)
+        key = (spg_id, ops_str, dims_key)
         if key not in rem_grouped:
             rem_grouped[key] = {
                 "spg_id": spg_id,
@@ -1861,6 +1886,8 @@ async def get_product_wip_stats(
                 "completed_ops": ops_str,
                 "stages_with_icons": [],
                 "max_completed_seq": 0,
+                "dimensions": dims,
+                "dimensions_label": format_dimensions(dims),
                 "quantity": 0.0,
             }
         rem_grouped[key]["quantity"] += float(bal.balance_qty or 0)
@@ -1874,6 +1901,8 @@ async def get_product_wip_stats(
                 completed_ops=val["completed_ops"],
                 spg_icon=val["spg_icon"],
                 spg_icon_color=val["spg_icon_color"],
+                dimensions=val["dimensions"],
+                dimensions_label=val["dimensions_label"],
                 stages_with_icons=val["stages_with_icons"],
                 max_completed_seq=val["max_completed_seq"],
                 quantity=val["quantity"],
@@ -1899,13 +1928,14 @@ async def get_product_wip_stats(
     )
     work_rows = (await db.execute(work_q)).all()
 
-    # Группируем задачи по секциям и операциям в Python-коде
+    # Группируем задачи по секциям, операциям и размерам в Python-коде
+    # (ADR-0001): задания одного артикула разных размеров — разные строки.
     from app.stock.services import StockProjectionManager
     pm = StockProjectionManager()
     all_wt_ids = [wt.id for wt, _, _ in work_rows]
     tasks_cache_bulk = await pm.get_tasks_cache_bulk(db, all_wt_ids)
 
-    grouped: dict[tuple[int, str], dict] = {}
+    grouped: dict[tuple[int, str, str | None], dict] = {}
     for wt, sec, stage in work_rows:
         op_name = "Неизвестная операция"
         if wt.selected_operation_code and stage.operations:
@@ -1918,7 +1948,8 @@ async def get_product_wip_stats(
         elif stage.operations:
             op_name = stage.operations[0].operation_name
 
-        key = (sec.id, op_name)
+        dims = canonicalize_dimensions(wt.dimensions)
+        key = (sec.id, op_name, _dimensions_hash_key(dims))
         if key not in grouped:
             grouped[key] = {
                 "section_id": sec.id,
@@ -1927,6 +1958,8 @@ async def get_product_wip_stats(
                 "section_icon": sec.icon,
                 "section_icon_color": sec.icon_color,
                 "operation_name": op_name,
+                "dimensions": dims,
+                "dimensions_label": format_dimensions(dims),
                 "planned_qty": 0.0,
                 "completed_qty": 0.0,
                 "issued_qty": 0.0,
@@ -1947,6 +1980,8 @@ async def get_product_wip_stats(
             operation_name=val["operation_name"],
             section_icon=val["section_icon"],
             section_icon_color=val["section_icon_color"],
+            dimensions=val["dimensions"],
+            dimensions_label=val["dimensions_label"],
             planned_qty=val["planned_qty"],
             completed_qty=val["completed_qty"],
             issued_qty=val["issued_qty"],

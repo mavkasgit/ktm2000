@@ -63,6 +63,24 @@ Do not use `test:db:down` from test launchers.
 > Не используйте `list_dir` / `grep` для поиска символов — только CodeGraph.
 > После значимых правок кода: `npx @colbymchenry/codegraph sync`
 
+## MCP-инструменты и плагин lazy-load
+
+В этом окружении включён плагин **lazy-load** (`~/.opencode/plugins/lazy-load.ts`,
+подключается через `~/.opencode/opencode.jsonc`). Он убирает из LLM-запросов все
+инструменты, кроме шлюза `load_tool`. Любой инструмент (встроенный или MCP) вызывается так:
+
+1. `load_tool({ name: "<tool>" })` — получить инструкции и JSON-схему параметров;
+2. на следующем ходу вызвать реальный инструмент напрямую.
+
+MCP-серверы настроены в `~/.config/opencode/opencode.json` (секция `mcp`). Проверить
+статус подключения: `opencode mcp list`. MCP-тулзы НЕ попадают в pointer list
+`load_tool`, но зарегистрированы и вызываются напрямую.
+
+Chrome DevTools (браузерная автоматизация) — префикс `chrome-devtools_*`
+(например `chrome-devtools_navigate_page`, `chrome-devtools_take_snapshot`,
+`chrome-devtools_click`). Порядок: сначала `load_tool({ name: "chrome-devtools_<tool>" })`,
+затем прямой вызов.
+
 ## Документация (указатели)
 
 | Файл | Содержание |
