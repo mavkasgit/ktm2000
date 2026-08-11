@@ -17,7 +17,7 @@ from datetime import datetime
 from decimal import Decimal
 from typing import cast as tcast
 
-from sqlalchemy import String, Subquery, cast, func, or_, select
+from sqlalchemy import String, Subquery, and_, cast, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
@@ -233,6 +233,20 @@ def _completed_qty_subquery():
     )
 
 
+def _released_qty_subquery():
+    from app.stock.models import Reason, StockTransaction
+
+    return (
+        select(
+            StockTransaction.task_id,
+            func.coalesce(func.sum(StockTransaction.quantity), 0).label("released_qty"),
+        )
+        .where(StockTransaction.reason == Reason.FINAL_RELEASE)
+        .group_by(StockTransaction.task_id)
+        .subquery("released_qty_sq")
+    )
+
+
 def _operation_names_subquery():
     return (
         select(
@@ -267,11 +281,15 @@ def _ready_row_common(row) -> dict:
         completion_comment,
         _completed,
         _transferred,
+        _released,
     ) = row
+    # Текущий этап финальный (тикет #96): строка получает «Отправить»
+    # (final release) вместо «Передать»; следующего шага у неё нет.
+    is_final = bool(stage.is_final)
     has_next = (
         next_l is not None
         and next_stg is not None
-        and not bool(next_stg.is_final)
+        and not is_final
     )
 
     op_code = stage.operations[0].operation_code if stage and stage.operations else None
@@ -297,7 +315,7 @@ def _ready_row_common(row) -> dict:
         "next_operation_name": next_op_name,
         "next_step_sequence": next_stg.sequence if next_stg is not None else None,
         "next_step_is_final": bool(next_stg.is_final) if next_stg is not None else None,
-        "is_final": False,
+        "is_final": is_final,
         "completion_comment": completion_comment,
     }
 
@@ -307,7 +325,7 @@ def _hydrate_plain_ready_row(row) -> dict | None:
     (
         task,
         _line,
-        _stage,
+        stage,
         _section,
         _product_sku,
         _next_l,
@@ -316,18 +334,58 @@ def _hydrate_plain_ready_row(row) -> dict | None:
         _completion_comment,
         completed,
         transferred,
+        released,
     ) = row
-    transferable = _to_decimal(completed) - _to_decimal(transferred)
+    # Финальный этап (тикет #96): «отдано» = уже выпущено (FINAL_RELEASE),
+    # а не переданное на следующий участок; transferable = releasable.
+    if bool(stage.is_final):
+        used = _to_decimal(released)
+    else:
+        used = _to_decimal(transferred)
+    transferable = _to_decimal(completed) - used
     if transferable <= 0:
         return None
     return {
         **_ready_row_common(row),
         "planned_quantity": _fmt_qty(task.planned_quantity),
         "completed_quantity": _fmt_qty(completed),
-        "already_transferred_quantity": _fmt_qty(transferred),
+        "already_transferred_quantity": _fmt_qty(used),
         "transferable_quantity": _fmt_qty(transferable),
         **_ready_dimensions_fields(task.dimensions),
     }
+
+
+async def _net_released_by_dimensions(
+    db: AsyncSession,
+    *,
+    task_id: int,
+) -> dict[str | None, Decimal]:
+    """Grouped net FINAL_RELEASE по габаритам задачи (тикет #96).
+
+    Зеркалит ``net_transferred_by_dimensions`` (ledger-примитив ограничен
+    TRANSFER_SEND/RECEIVE), поэтому net FINAL_RELEASE считается здесь —
+    так же comp-aware: компенсации вычитаются.
+    """
+    from app.stock.models import Reason, StockTransaction
+    from app.stock.services import _dimensions_hash_key
+
+    rows = await db.execute(
+        select(
+            StockTransaction.dimensions,
+            func.coalesce(func.sum(StockTransaction.quantity), 0).label("net_released"),
+        )
+        .where(
+            StockTransaction.task_id == task_id,
+            StockTransaction.reason == Reason.FINAL_RELEASE,
+            StockTransaction.compensates_tx_id.is_(None),
+        )
+        .group_by(StockTransaction.dimensions)
+    )
+    result: dict[str | None, Decimal] = {}
+    for dims, net in rows:
+        key = _dimensions_hash_key(dims)
+        result[key] = (result.get(key) or Decimal("0")) + (net or Decimal("0"))
+    return result
 
 
 async def _hydrate_production_ready_row(db: AsyncSession, row) -> list[dict]:
@@ -340,8 +398,14 @@ async def _hydrate_production_ready_row(db: AsyncSession, row) -> list[dict]:
     ``min(outputs[i].quantity, произведено по размеру) − уже переданное
     по этому размеру`` (инвариант D2). Строки с transferable <= 0
     отбрасываются.
+
+    Финальный этап (тикет #96): «уже отданное» по размеру — net
+    FINAL_RELEASE (released), а не TRANSFER_SEND; transferable выхода =
+    releasable = произведено по размеру − уже выпущено по размеру.
     """
     task = row[0]
+    stage = row[2]
+    is_final = bool(stage.is_final)
     outputs = task.outputs or []
     if not outputs:
         item = _hydrate_plain_ready_row(row)
@@ -357,11 +421,14 @@ async def _hydrate_production_ready_row(db: AsyncSession, row) -> list[dict]:
     common = _ready_row_common(row)
     progress = await get_transform_progress(db, task.id)
     produced_rows = build_outputs_progress(outputs, progress.produced_by_group)
-    transferred_by_dim = await net_transferred_by_dimensions(db, task_id=task.id)
-    transferred_rows = distribute_output_quantities(outputs, transferred_by_dim)
+    if is_final:
+        used_by_dim = await _net_released_by_dimensions(db, task_id=task.id)
+    else:
+        used_by_dim = await net_transferred_by_dimensions(db, task_id=task.id)
+    used_rows = distribute_output_quantities(outputs, used_by_dim)
 
     items: list[dict] = []
-    for entry, produced_entry, transferred in zip(outputs, produced_rows, transferred_rows):
+    for entry, produced_entry, used in zip(outputs, produced_rows, used_rows):
         raw_qty = entry.get("quantity")
         if raw_qty is None:
             continue
@@ -370,14 +437,14 @@ async def _hydrate_production_ready_row(db: AsyncSession, row) -> list[dict]:
             continue
         dims = canonicalize_dimensions(entry.get("dimensions"))
         produced = produced_entry["produced_quantity"]
-        transferable = produced - transferred
+        transferable = produced - used
         if transferable <= 0:
             continue
         items.append({
             **common,
             "planned_quantity": _fmt_qty(planned),
             "completed_quantity": _fmt_qty(produced),
-            "already_transferred_quantity": _fmt_qty(transferred),
+            "already_transferred_quantity": _fmt_qty(used),
             "transferable_quantity": _fmt_qty(transferable),
             **_ready_dimensions_fields(dims),
         })
@@ -474,9 +541,11 @@ def _build_production_ready_query(
 
     completed_sq = _completed_qty_subquery()
     transferred_sq = tcast(Subquery, net_transferred_sq("transferred_qty_sq"))
+    released_sq = _released_qty_subquery()
     transferable_expr = (
         func.coalesce(completed_sq.c.completed_qty, 0)
         - func.coalesce(transferred_sq.c.net_quantity, 0)
+        - func.coalesce(released_sq.c.released_qty, 0)
     )
 
     latest_complete = (
@@ -503,6 +572,7 @@ def _build_production_ready_query(
             StockTransaction.id.label("completion_tx_id"),
             func.coalesce(completed_sq.c.completed_qty, 0).label("completed_qty"),
             func.coalesce(transferred_sq.c.net_quantity, 0).label("transferred_qty"),
+            func.coalesce(released_sq.c.released_qty, 0).label("released_qty"),
         )
         .join(from_line, from_line.id == WorkTask.section_plan_line_id)
         .join(from_stage, from_stage.id == WorkTask.route_stage_id)
@@ -510,6 +580,7 @@ def _build_production_ready_query(
         .join(Product, Product.id == WorkTask.product_id)
         .outerjoin(completed_sq, completed_sq.c.task_id == WorkTask.id)
         .outerjoin(transferred_sq, transferred_sq.c.task_id == WorkTask.id)
+        .outerjoin(released_sq, released_sq.c.task_id == WorkTask.id)
         .outerjoin(
             next_line,
             (next_line.plan_position_id == from_line.plan_position_id)
@@ -530,8 +601,15 @@ def _build_production_ready_query(
                 [WorkTaskStatus.cancelled, WorkTaskStatus.waiting_previous]
             ),
             from_section.type == SECTION_TYPE_PRODUCTION,
-            from_stage.is_final.is_(False),
-            next_line.id.isnot(None),
+            # Финальный этап (тикет #96) попадает в ready-список без
+            # следующего шага: для него «отправить» = final release.
+            or_(
+                from_stage.is_final.is_(True),
+                and_(
+                    from_stage.is_final.is_(False),
+                    next_line.id.isnot(None),
+                ),
+            ),
             transferable_expr > 0,
         )
     )
@@ -959,9 +1037,11 @@ async def list_ready_to_transfer(
 
     A task is "ready to transfer" when:
       * it has a next route step (``SectionPlanLine.sequence + 1``
-        exists),
-      * the next step is not final,
-      * ``completed_qty - transferred_qty > 0`` (ledger aggregates).
+        exists), or it sits on the final route stage (тикет #96 —
+        такой задаче доступен final release),
+      * the next step is not final (для межучастковых передач),
+      * ``completed_qty - transferred_qty - released_qty > 0`` (ledger
+        aggregates; на финальном этапе released = FINAL_RELEASE).
 
     Filters:
       * ``section_id`` — restrict to a single section.

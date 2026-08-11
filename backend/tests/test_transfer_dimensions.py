@@ -1447,4 +1447,159 @@ async def test_transfer_history_carries_dimensions(client, session) -> None:
     assert resp.status_code == 200, resp.text
     item = next(t for t in resp.json()["transfers"] if t["transfer_id"] == result["transfer_id"])
     assert item["dimensions"] == {"length_mm": 2000}
+
+
+# ─── Seam 8 (#96): финальные строки в ready-list — is_final, releasable ─────
+
+
+async def _complete_task_generic(session: AsyncSession, *, task: WorkTask, user: User) -> None:
+    """Выдать материал на задачу и завершить её (как _complete_prod1_task)."""
+    from app.models.work_task import WorkTaskStatus
+    from app.stock.services import StockCommand, StockCommandService
+
+    svc = StockCommandService()
+    await svc.record(
+        session,
+        StockCommand(
+            product_id=task.product_id,
+            from_location_id=None,
+            to_location_id=task.section_id,
+            quantity=task.planned_quantity,
+            reason=Reason.MANUAL_IN,
+            created_by=user.id,
+            # Габарит материала (ADR-0001): физический остаток по размеру.
+            dimensions=task.dimensions,
+        ),
+    )
+    await svc.record(
+        session,
+        StockCommand(
+            product_id=task.product_id,
+            from_location_id=task.section_id,
+            to_location_id=task.section_id,
+            quantity=task.planned_quantity,
+            reason=Reason.COMPLETE,
+            task_id=task.id,
+            source_ref="test_seed",
+            created_by=user.id,
+            # Габарит задания (ADR-0001): releasable считается по (задача, размер).
+            dimensions=task.dimensions,
+        ),
+    )
+    # Снятие статуса ожидания: материал фактически выдан и завершён —
+    # ready-список исключает только waiting_previous/cancelled.
+    task.status = WorkTaskStatus.completed
+    await session.commit()
+    await assert_no_invariants_violations(session, context="complete-final-task")
+
+
+async def test_ready_final_plain_row_is_final_with_releasable(client, session) -> None:
+    """Тикет #96: финальный этап — ready-строка несёт is_final и releasable.
+
+    prod2 — финальный production-этап; его задача попадает в ready-список
+    без следующего шага: has_next_step=False, is_final=True, transferable =
+    releasable (completed − already released).
+    """
+    user = await _make_user(session, "dim-finalready@test.local")
+    fx = await _make_dim_route_fixture(session, sku="DIMFRD", qty=Decimal("50"), length_mm=2000)
+    await _release_via_take_to_work(client, fx["position"].id)
+
+    tasks = (await session.execute(select(WorkTask).order_by(WorkTask.id))).scalars().all()
+    assert len(tasks) == 2
+    prod1_task, prod2_task = tasks
+    await _complete_task_generic(session, task=prod2_task, user=user)
+
+    prod2_sec = fx["sections"][2]
+    resp = await client.get(f"/api/transfers/ready?section_id={prod2_sec.id}", headers=_auth_headers(user))
+    assert resp.status_code == 200, resp.text
+    items = resp.json()["items"]
+    assert len(items) == 1
+    row = items[0]
+    assert row["task_id"] == prod2_task.id
+    assert row["is_final"] is True
+    assert row["has_next_step"] is False
+    assert row["next_section_id"] is None
+    assert row["dimensions"] == {"length_mm": 2000}
+    assert row["transferable_quantity"] == "50"
+
+    # Частичный выпуск уменьшает releasable.
+    from app.services.shopfloor.operations_tasks import final_release
+
+    await final_release(
+        session,
+        task_id=prod2_task.id,
+        quantity=Decimal("30"),
+        actor_id=user.id,
+        dimensions={"length_mm": 2000},
+    )
+    await session.commit()
+
+    resp = await client.get(f"/api/transfers/ready?section_id={prod2_sec.id}", headers=_auth_headers(user))
+    assert resp.status_code == 200, resp.text
+    items = resp.json()["items"]
+    assert len(items) == 1
+    assert items[0]["transferable_quantity"] == "20"
+    assert items[0]["already_transferred_quantity"] == "30"
+    await assert_no_invariants_violations(session, context="final-plain-ready")
+
+
+async def test_ready_final_transform_rows_are_final_with_releasable_per_size(client, session) -> None:
+    """Тикет #96: финальный трансформирующий этап — по строке на размер.
+
+    Резка (final_transform=True): две ready-строки (0,9 / 1,8), каждая
+    is_final=True, has_next_step=False; transferable = releasable по размеру.
+    После частичного выпуска одного размера падает только его строка.
+    """
+    from app.services.shopfloor.operations_tasks import final_release
+
+    user = await _make_user(session, "dim-finaltrans@test.local")
+    fx = await _make_transform_route_fixture(
+        session,
+        sku="SAWFINRD",
+        qty=Decimal("100"),
+        input_quantity=Decimal("100"),
+        input_dimensions={"length_mm": 2700},
+        outputs=[
+            {"row_number": 1, "quantity": "100", "dimensions": {"length_mm": 900}},
+            {"row_number": 2, "quantity": "100", "dimensions": {"length_mm": 1800}},
+        ],
+        final_transform=True,
+    )
+    await _release_via_take_to_work(client, fx["position"].id)
+    saw_task = (await _tasks_for_position(session, fx["position"].id))[0]
+    assert saw_task.outputs, "saw task должен нести выходы"
+    await _complete_saw(session, saw_task=saw_task, user=user)
+
+    saw_sec = fx["sections"][1]
+    resp = await client.get(f"/api/transfers/ready?section_id={saw_sec.id}", headers=_auth_headers(user))
+    assert resp.status_code == 200, resp.text
+    items = resp.json()["items"]
+    assert len(items) == 2
+    by_len = _ready_by_length(items)
+    assert set(by_len) == {900, 1800}
+    for length in (900, 1800):
+        assert by_len[length]["is_final"] is True
+        assert by_len[length]["has_next_step"] is False
+        assert by_len[length]["next_section_id"] is None
+        assert by_len[length]["transferable_quantity"] == "100"
+
+    # Частичный выпуск размера 900 — releasable падает только у него.
+    await final_release(
+        session,
+        task_id=saw_task.id,
+        quantity=Decimal("40"),
+        actor_id=user.id,
+        dimensions={"length_mm": 900},
+    )
+    await session.commit()
+
+    resp = await client.get(f"/api/transfers/ready?section_id={saw_sec.id}", headers=_auth_headers(user))
+    assert resp.status_code == 200, resp.text
+    items = resp.json()["items"]
+    assert len(items) == 2
+    by_len = _ready_by_length(items)
+    assert by_len[900]["transferable_quantity"] == "60"
+    assert by_len[900]["already_transferred_quantity"] == "40"
+    assert by_len[1800]["transferable_quantity"] == "100"
+    await assert_no_invariants_violations(session, context="final-transform-ready")
     await assert_no_invariants_violations(session, context="history-dimensions")
