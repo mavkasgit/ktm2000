@@ -106,7 +106,7 @@
   }
 
   .sidebar-close-btn {
-    @apply flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground;
+    @apply flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground md:hidden;
   }
 
   .brand {

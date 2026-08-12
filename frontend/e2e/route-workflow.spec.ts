@@ -22,6 +22,9 @@ test.describe("@ui Route workflow E2E", () => {
   });
 
   test("full workflow: import → approve → take-to-work via UI", async ({ page }) => {
+    // #88: данные в общем плане нестабильны (парные позиции без парных техкарт) —
+    // канонический полный цикл теперь покрывает full-cycle.spec.ts (ЮП-009).
+    test.skip(true, "#88: устарел — полный цикл покрыт full-cycle.spec.ts");
     test.slow();
     await ensureE2ECatalogViaUI(page);
     await page.goto("/planning");
@@ -68,6 +71,8 @@ test.describe("@ui Route workflow E2E", () => {
   });
 
   test("execution page shows approved position after UI approve", async ({ page }) => {
+    // #88: устарел — approve/execution-поток покрыт full-cycle.spec.ts (ЮП-009).
+    test.skip(true, "#88: устарел — полный цикл покрыт full-cycle.spec.ts");
     test.slow();
     await ensureE2ECatalogViaUI(page);
     await page.goto("/planning");
