@@ -1,25 +1,36 @@
-"""Comp-aware ledger-примитив net-агрегации TRANSFER_SEND / TRANSFER_RECEIVE.
+"""Ledger-примитив нетто-агрегации по причине (ADR-0017, срез — ADR-0018).
 
 Чистый примитив поверх ``StockTransaction``: не знает ни о ``Transfer``,
-ни о ``app.transfers`` (никаких циклов). Reason-параметризация ограничена
-``TRANSFER_SEND`` и ``TRANSFER_RECEIVE``; прочие причины (COMPLETE, SCRAP,
-RETURN_TO_STOCK и т.п.) не поддерживаются.
+ни о ``app.transfers`` (никаких циклов).
 
-Все формы (scalar / grouped-by-dimensions / SQL-подзапрос) построены на
-одном приватном comp-aware builder'е ``_net_quantity_expr()``:
-``case(compensates_tx_id IS NULL → quantity, else_ -quantity)``.
+Семантика нетто (contract):
+  net(reason) = Σ активных транзакций причины − Σ компенсирующих транзакций.
+Компенсация = запись с ``compensates_tx_id`` → исходная; из net ВЫЧИТАЕТСЯ
+компенсирующая запись, а не исключается скомпенсированная.
+
+Единственный источник компенсационной арифметики — ``net_quantity_expr()``
+(row-level). ``net_by_reason*`` — его публичные query-композиции (scalar /
+grouped-by-dimensions / SQL-подзапрос); thin wrappers (``net_transferred`` и
+т.п.) — специализированные причины для удобства потребителей. Потребители
+строят свои GROUP BY / JOIN над ``net_quantity_expr()`` и не интерпретируют
+``compensates_tx_id`` для вычисления net самостоятельно.
+
+Capability и policy разделены (ADR-0017): ledger умеет вычислять net для
+ЛЮБОЙ причины; какие причины бизнес-операция вправе компенсировать — решение
+операции, не этого модуля. COMPLETE/SCRAP читаются gross не из-за
+ограничения ledger, а из-за отсутствия доменного требования компенсационного
+поведения (ADR-0018).
 
 Семантика ``dims``:
-- Builder/SQL-форма (``_transfer_net_subquery`` / ``net_*_sq``):
+- Builder/SQL-форма (``_transfer_net_subquery`` / ``net_by_reason_sq``):
   ``dims=None`` — БЕЗ dimension-фильтра (не wildcard), ``dims=dict`` —
   JSONB-равенство. Обслуживает set-based потребителей (total по ключу).
-- Scalar-форма (``net_transferred`` / ``net_received``): ``dims=None`` =
+- Scalar-форма (``net_by_reason`` / thin wrappers): ``dims=None`` =
   безразмерная группа (строки без габарита), ``dims=dict`` =
-  JSONB-равенство. Такой же сдвиг ожидает тест ``net_*_by_dimensions``.
+  JSONB-равенство.
 """
 from __future__ import annotations
 
-import json
 from decimal import Decimal
 
 from sqlalchemy import Select, Subquery, case, cast, func, or_, select, text
@@ -29,18 +40,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.stock.models import Reason, StockTransaction
 
 _NET_LABEL = "net_quantity"
-
-
-def _dimensions_hash_key(dims: dict | None) -> str | None:
-    """Хешируемый ключ grouping для dict-габарита (in-memory агрегации).
-
-    Реплика конвенции ``app.stock.services._dimensions_hash_key``
-    (``json.dumps(dims, sort_keys=True, ensure_ascii=False)``) — словарь из
-    grouped-форм обязан совпадать с ключами существующих потребителей.
-    """
-    if dims is None:
-        return None
-    return json.dumps(dims, sort_keys=True, ensure_ascii=False)
 
 
 def _dimensions_match_clause(column, dims: dict | None):
@@ -55,12 +54,13 @@ def _dimensions_match_clause(column, dims: dict | None):
     return column == cast(dims, JSONB)
 
 
-def _net_quantity_expr():
-    """Net-количество одной строки ledger: компенсация вычитается.
+def net_quantity_expr():
+    """Row-level net-количество одной строки ledger: компенсация вычитается.
 
     ``case(compensates_tx_id IS NULL → quantity, else_ -quantity)`` — единая
-    нетто-формула TRANSFER_SEND/TRANSFER_RECEIVE (см. transfers/services.py,
-    transfers/queries.py, stock/services.py).
+    нетто-формула для ЛЮБОЙ причины (ADR-0017). Единственное место, где
+    ``compensates_tx_id`` интерпретируется для вычисления net; всё остальное
+    строится поверх этого выражения.
     """
     return case(
         (StockTransaction.compensates_tx_id.is_(None), StockTransaction.quantity),
@@ -83,7 +83,7 @@ def _transfer_net_subquery(
     """
     stmt = select(
         key_column,
-        func.coalesce(func.sum(_net_quantity_expr()), 0).label(_NET_LABEL),
+        func.coalesce(func.sum(net_quantity_expr()), 0).label(_NET_LABEL),
     ).where(StockTransaction.reason == reason)
     if dims is not None:
         stmt = stmt.where(_dimensions_match_clause(StockTransaction.dimensions, dims))
@@ -117,18 +117,39 @@ def _net_scalar_query(
     section_plan_line_id: int | None,
     dims: dict | None,
 ) -> Select:
-    """Scalar-select net по ровно одному ключу (общая логика SEND/RECEIVE).
+    """Scalar-select net по причине и ровно одному ключу.
 
     ``dims=None`` — безразмерная группа (строки без габарита), ``dims=dict`` —
-    JSONB-равенство: та же семантика, что у скалярных форм
-    ``net_transferred`` / ``net_received``.
+    JSONB-равенство.
     """
     key_column, key_value = _resolve_key(task_id, section_plan_line_id)
-    return select(func.coalesce(func.sum(_net_quantity_expr()), 0)).where(
+    return select(func.coalesce(func.sum(net_quantity_expr()), 0)).where(
         StockTransaction.reason == reason,
         _dimensions_match_clause(StockTransaction.dimensions, dims),
         key_column == key_value,
     )
+
+
+async def net_by_reason(
+    db: AsyncSession,
+    *,
+    reason: Reason,
+    task_id: int | None = None,
+    section_plan_line_id: int | None = None,
+    dims: dict | None = None,
+) -> Decimal:
+    """Скалярный net по произвольной причине и ровно одному ключу.
+
+    ``dims=None`` — безразмерная группа (строки без габарита);
+    ``dims=dict`` — только строки этого габарита. Пусто → ``Decimal("0")``.
+    """
+    stmt = _net_scalar_query(
+        reason=reason,
+        task_id=task_id,
+        section_plan_line_id=section_plan_line_id,
+        dims=dims,
+    )
+    return (await db.scalar(stmt)) or Decimal("0")
 
 
 async def net_transferred(
@@ -138,18 +159,11 @@ async def net_transferred(
     section_plan_line_id: int | None = None,
     dims: dict | None = None,
 ) -> Decimal:
-    """Скалярный net TRANSFER_SEND по ровно одному ключу.
-
-    ``dims=None`` — безразмерная группа (строки без габарита);
-    ``dims=dict`` — только строки этого габарита. Пусто → ``Decimal("0")``.
-    """
-    stmt = _net_scalar_query(
-        reason=Reason.TRANSFER_SEND,
-        task_id=task_id,
-        section_plan_line_id=section_plan_line_id,
-        dims=dims,
+    """Скалярный net TRANSFER_SEND — thin wrapper над ``net_by_reason``."""
+    return await net_by_reason(
+        db, reason=Reason.TRANSFER_SEND,
+        task_id=task_id, section_plan_line_id=section_plan_line_id, dims=dims,
     )
-    return (await db.scalar(stmt)) or Decimal("0")
 
 
 async def net_received(
@@ -159,29 +173,34 @@ async def net_received(
     section_plan_line_id: int | None = None,
     dims: dict | None = None,
 ) -> Decimal:
-    """Скалярный net TRANSFER_RECEIVE — аналогично ``net_transferred``."""
-    stmt = _net_scalar_query(
-        reason=Reason.TRANSFER_RECEIVE,
-        task_id=task_id,
-        section_plan_line_id=section_plan_line_id,
-        dims=dims,
+    """Скалярный net TRANSFER_RECEIVE — thin wrapper над ``net_by_reason``."""
+    return await net_by_reason(
+        db, reason=Reason.TRANSFER_RECEIVE,
+        task_id=task_id, section_plan_line_id=section_plan_line_id, dims=dims,
     )
-    return (await db.scalar(stmt)) or Decimal("0")
 
 
-async def _net_by_dimensions(
+async def net_by_reason_by_dimensions(
     db: AsyncSession,
     *,
     reason: Reason,
-    task_id: int | None,
-    section_plan_line_id: int | None,
+    task_id: int | None = None,
+    section_plan_line_id: int | None = None,
 ) -> dict[str | None, Decimal]:
-    """Grouped net по габаритам задачи/строки (все группы, включая NULL)."""
+    """Grouped net по причине и габаритам задачи/строки (все группы, включая NULL).
+
+    Ключи — ``hash_key`` габарита (``json.dumps sort_keys``); строки без
+    габарита — под ключом ``None``.
+    """
+    # Lazy-импорт: ledger↔stock.services — цикл на уровне модулей (services
+    # импортирует ledger). Канон живёт в stock.services до к.3 (дом размера).
+    from app.stock.services import _dimensions_hash_key
+
     key_column, key_value = _resolve_key(task_id, section_plan_line_id)
     rows = await db.execute(
         select(
             StockTransaction.dimensions,
-            func.coalesce(func.sum(_net_quantity_expr()), 0).label(_NET_LABEL),
+            func.coalesce(func.sum(net_quantity_expr()), 0).label(_NET_LABEL),
         )
         .where(StockTransaction.reason == reason, key_column == key_value)
         .group_by(StockTransaction.dimensions)
@@ -199,12 +218,8 @@ async def net_transferred_by_dimensions(
     task_id: int | None = None,
     section_plan_line_id: int | None = None,
 ) -> dict[str | None, Decimal]:
-    """Grouped net TRANSFER_SEND по габаритам.
-
-    Ключи — ``hash_key`` габарита (``json.dumps sort_keys``); строки без
-    габарита — под ключом ``None``.
-    """
-    return await _net_by_dimensions(
+    """Grouped net TRANSFER_SEND — thin wrapper над ``net_by_reason_by_dimensions``."""
+    return await net_by_reason_by_dimensions(
         db, reason=Reason.TRANSFER_SEND,
         task_id=task_id, section_plan_line_id=section_plan_line_id,
     )
@@ -216,25 +231,25 @@ async def net_received_by_dimensions(
     task_id: int | None = None,
     section_plan_line_id: int | None = None,
 ) -> dict[str | None, Decimal]:
-    """Grouped net TRANSFER_RECEIVE по габаритам — аналогично SEND."""
-    return await _net_by_dimensions(
+    """Grouped net TRANSFER_RECEIVE — thin wrapper над ``net_by_reason_by_dimensions``."""
+    return await net_by_reason_by_dimensions(
         db, reason=Reason.TRANSFER_RECEIVE,
         task_id=task_id, section_plan_line_id=section_plan_line_id,
     )
 
 
-def net_transferred_sq(
+def net_by_reason_sq(
+    reason: Reason,
     alias: str | None = None,
     *,
     task_id: bool = True,
     section_plan_line_id: bool = False,
     dims: dict | None = None,
 ) -> Select | Subquery:
-    """SQL-форма net TRANSFER_SEND для set-based потребителей.
+    """SQL-форма net по произвольной причине для set-based потребителей.
 
-    Тот же comp-aware builder, что у scalar-формы. Возвращает групповой
-    подзапрос ``select(key, net_quantity) group by key`` — пригодный для
-    JOIN (по ``key``), WHERE и ORDER BY (по ``net_quantity``); корреляция
+    Групповой подзапрос ``select(key, net_quantity) group by key`` — пригодный
+    для JOIN (по ``key``), WHERE и ORDER BY (по ``net_quantity``); корреляция
     с внешним запросом — по ключевой колонке (``task_id`` по умолчанию).
     ``dims=None`` — без dimension-фильтра (total по ключу).
 
@@ -245,11 +260,25 @@ def net_transferred_sq(
         task_id=task_id, section_plan_line_id=section_plan_line_id
     )
     stmt = _transfer_net_subquery(
-        reason=Reason.TRANSFER_SEND, key_column=key_column, dims=dims
+        reason=reason, key_column=key_column, dims=dims
     )
     if alias is not None:
         return stmt.subquery(alias)
     return stmt
+
+
+def net_transferred_sq(
+    alias: str | None = None,
+    *,
+    task_id: bool = True,
+    section_plan_line_id: bool = False,
+    dims: dict | None = None,
+) -> Select | Subquery:
+    """SQL-форма net TRANSFER_SEND — thin wrapper над ``net_by_reason_sq``."""
+    return net_by_reason_sq(
+        Reason.TRANSFER_SEND, alias,
+        task_id=task_id, section_plan_line_id=section_plan_line_id, dims=dims,
+    )
 
 
 def net_received_sq(
@@ -259,13 +288,8 @@ def net_received_sq(
     section_plan_line_id: bool = False,
     dims: dict | None = None,
 ) -> Select | Subquery:
-    """SQL-форма net TRANSFER_RECEIVE — аналогично ``net_transferred_sq``."""
-    key_column = _resolve_key_column(
-        task_id=task_id, section_plan_line_id=section_plan_line_id
+    """SQL-форма net TRANSFER_RECEIVE — thin wrapper над ``net_by_reason_sq``."""
+    return net_by_reason_sq(
+        Reason.TRANSFER_RECEIVE, alias,
+        task_id=task_id, section_plan_line_id=section_plan_line_id, dims=dims,
     )
-    stmt = _transfer_net_subquery(
-        reason=Reason.TRANSFER_RECEIVE, key_column=key_column, dims=dims
-    )
-    if alias is not None:
-        return stmt.subquery(alias)
-    return stmt

@@ -42,7 +42,7 @@ from app.domain.dimensions import parse_dimensions_filter, format_dimensions
 from app.services.plan_position_hanger import task_dimensions_for_plan_line
 
 from app.services.shopfloor.common import _get_transfer, _to_decimal
-from app.stock.transfer_ledger import (
+from app.stock.ledger import (
     net_transferred_by_dimensions,
     net_transferred_sq,
 )
@@ -233,20 +233,6 @@ def _completed_qty_subquery():
     )
 
 
-def _released_qty_subquery():
-    from app.stock.models import Reason, StockTransaction
-
-    return (
-        select(
-            StockTransaction.task_id,
-            func.coalesce(func.sum(StockTransaction.quantity), 0).label("released_qty"),
-        )
-        .where(StockTransaction.reason == Reason.FINAL_RELEASE)
-        .group_by(StockTransaction.task_id)
-        .subquery("released_qty_sq")
-    )
-
-
 def _operation_names_subquery():
     return (
         select(
@@ -355,39 +341,6 @@ def _hydrate_plain_ready_row(row) -> dict | None:
     }
 
 
-async def _net_released_by_dimensions(
-    db: AsyncSession,
-    *,
-    task_id: int,
-) -> dict[str | None, Decimal]:
-    """Grouped net FINAL_RELEASE по габаритам задачи (тикет #96).
-
-    Зеркалит ``net_transferred_by_dimensions`` (ledger-примитив ограничен
-    TRANSFER_SEND/RECEIVE), поэтому net FINAL_RELEASE считается здесь —
-    так же comp-aware: компенсации вычитаются.
-    """
-    from app.stock.models import Reason, StockTransaction
-    from app.stock.services import _dimensions_hash_key
-
-    rows = await db.execute(
-        select(
-            StockTransaction.dimensions,
-            func.coalesce(func.sum(StockTransaction.quantity), 0).label("net_released"),
-        )
-        .where(
-            StockTransaction.task_id == task_id,
-            StockTransaction.reason == Reason.FINAL_RELEASE,
-            StockTransaction.compensates_tx_id.is_(None),
-        )
-        .group_by(StockTransaction.dimensions)
-    )
-    result: dict[str | None, Decimal] = {}
-    for dims, net in rows:
-        key = _dimensions_hash_key(dims)
-        result[key] = (result.get(key) or Decimal("0")) + (net or Decimal("0"))
-    return result
-
-
 async def _hydrate_production_ready_row(db: AsyncSession, row) -> list[dict]:
     """Ready-строки одной production-задачи.
 
@@ -422,7 +375,12 @@ async def _hydrate_production_ready_row(db: AsyncSession, row) -> list[dict]:
     progress = await get_transform_progress(db, task.id)
     produced_rows = build_outputs_progress(outputs, progress.produced_by_group)
     if is_final:
-        used_by_dim = await _net_released_by_dimensions(db, task_id=task.id)
+        from app.stock.ledger import net_by_reason_by_dimensions
+        from app.stock.models import Reason
+
+        used_by_dim = await net_by_reason_by_dimensions(
+            db, reason=Reason.FINAL_RELEASE, task_id=task.id
+        )
     else:
         used_by_dim = await net_transferred_by_dimensions(db, task_id=task.id)
     used_rows = distribute_output_quantities(outputs, used_by_dim)
@@ -537,15 +495,16 @@ def _build_production_ready_query(
     from_line = aliased(SectionPlanLine, name="from_line")
     next_line = aliased(SectionPlanLine, name="next_line")
 
+    from app.stock.ledger import net_by_reason_sq
     from app.stock.models import Reason, StockTransaction
 
     completed_sq = _completed_qty_subquery()
     transferred_sq = tcast(Subquery, net_transferred_sq("transferred_qty_sq"))
-    released_sq = _released_qty_subquery()
+    released_sq = tcast(Subquery, net_by_reason_sq(Reason.FINAL_RELEASE, "released_qty_sq"))
     transferable_expr = (
         func.coalesce(completed_sq.c.completed_qty, 0)
         - func.coalesce(transferred_sq.c.net_quantity, 0)
-        - func.coalesce(released_sq.c.released_qty, 0)
+        - func.coalesce(released_sq.c.net_quantity, 0)
     )
 
     latest_complete = (
@@ -572,7 +531,7 @@ def _build_production_ready_query(
             StockTransaction.id.label("completion_tx_id"),
             func.coalesce(completed_sq.c.completed_qty, 0).label("completed_qty"),
             func.coalesce(transferred_sq.c.net_quantity, 0).label("transferred_qty"),
-            func.coalesce(released_sq.c.released_qty, 0).label("released_qty"),
+            func.coalesce(released_sq.c.net_quantity, 0).label("released_qty"),
         )
         .join(from_line, from_line.id == WorkTask.section_plan_line_id)
         .join(from_stage, from_stage.id == WorkTask.route_stage_id)

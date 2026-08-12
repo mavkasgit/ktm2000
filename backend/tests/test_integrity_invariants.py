@@ -225,6 +225,33 @@ _STOCK_LEDGER_INVARIANT_QUERIES: list[tuple[str, str]] = [
           )
         """,
     ),
+    # D4 (ADR-0018): нетто FINAL_RELEASE по (задача, размер) не превышает
+    # произведённое (COMPLETE) по (задача, размер). Net = компенсации
+    # вычитаются (compensates_tx_id). Write-guard final_release читает тот же
+    # канонический net, поэтому факт не может выйти за границы производства.
+    (
+        "D4_final_release_net_within_produced",
+        """
+        SELECT r.task_id, r.dimensions AS dims, r.net_released,
+               COALESCE(p.produced, 0) AS produced
+        FROM (
+            SELECT task_id, dimensions,
+                   SUM(CASE WHEN compensates_tx_id IS NULL THEN quantity
+                            ELSE -quantity END) AS net_released
+            FROM stock_transactions
+            WHERE reason = 'final_release'
+            GROUP BY task_id, dimensions
+        ) r
+        LEFT JOIN (
+            SELECT task_id, dimensions, SUM(quantity) AS produced
+            FROM stock_transactions
+            WHERE reason = 'complete'
+            GROUP BY task_id, dimensions
+        ) p ON p.task_id = r.task_id
+           AND p.dimensions IS NOT DISTINCT FROM r.dimensions
+        WHERE r.net_released > COALESCE(p.produced, 0)
+        """,
+    ),
 ]
 
 
@@ -276,7 +303,7 @@ async def assert_no_invariants_violations(
     *,
     context: str | None = None,
 ) -> None:
-    """Run the StockTransaction invariant queries (S1-S6 + D1-D3) and raise
+    """Run the StockTransaction invariant queries (S1-S6 + D1-D4) and raise
     AssertionError on the first violation.  Movement invariants were
     removed in Stage 7 (table deleted).
     """

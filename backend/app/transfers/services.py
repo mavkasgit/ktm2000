@@ -66,7 +66,7 @@ from app.stock.services import (
     StockCommandService,
     dimensions_match_clause,
 )
-from app.stock.transfer_ledger import net_transferred
+from app.stock.ledger import net_transferred
 from app.transfers import budget
 
 _stock_command_service = StockCommandService()

@@ -23,13 +23,14 @@ from dataclasses import dataclass
 from datetime import datetime
 from decimal import ROUND_HALF_UP, Decimal
 
-from sqlalchemy import case, func, select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domain.dimensions import canonicalize_dimensions
 from app.models.route import RouteStage
 from app.models.work_task import WorkTask
 from app.stock import QualityState, Reason, StockCommand, StockCommandService
+from app.stock.ledger import net_quantity_expr
 from app.stock.models import StockBalance, StockTransaction
 from app.stock.services import _dimensions_hash_key, dimensions_match_clause
 
@@ -184,15 +185,7 @@ async def get_transferred_by_task_dimensions_bulk(
         select(
             StockTransaction.task_id,
             StockTransaction.dimensions,
-            func.coalesce(
-                func.sum(
-                    case(
-                        (StockTransaction.compensates_tx_id.is_(None), StockTransaction.quantity),
-                        else_=-StockTransaction.quantity,
-                    )
-                ),
-                0,
-            ).label("net_qty"),
+            func.coalesce(func.sum(net_quantity_expr()), 0).label("net_qty"),
         )
         .where(
             StockTransaction.task_id.in_(task_ids),

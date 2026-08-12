@@ -16,6 +16,7 @@ from app.models.route import ProductionRoute, RouteOperation, RouteStage, Sectio
 from app.models.section import Section
 from app.models.transfer import Transfer
 from app.models.work_task import WorkTask, WorkTaskStatus
+from app.stock.ledger import net_quantity_expr
 from app.stock.models import Reason, StockTransaction
 from app.services.plan_position_hanger import position_dimensions_for_task
 from app.services.route_matcher import ResolvedRouteInfo, resolve_position_route, make_position_route_cache_key
@@ -905,17 +906,13 @@ async def get_production_planning_row_detail(db: AsyncSession, position_id: int)
             .group_by(StockTransaction.task_id, StockTransaction.reason)
         )).all()
 
-        # Net for transfer_send/receive with compensations
+        # Net for transfer_send/receive with compensations — canonical net
+        # ledger-выражение (ADR-0018).
         net_rows = (await db.execute(
             select(
                 StockTransaction.task_id,
                 StockTransaction.reason,
-                func.sum(
-                    case(
-                        (StockTransaction.compensates_tx_id.is_(None), StockTransaction.quantity),
-                        else_=-StockTransaction.quantity,
-                    )
-                ).label("net"),
+                func.sum(net_quantity_expr()).label("net"),
             )
             .where(
                 StockTransaction.task_id.in_([r.id for r in task_in_pos]),

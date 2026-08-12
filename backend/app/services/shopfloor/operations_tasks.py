@@ -13,6 +13,7 @@ from app.models.production_plan import PlanPosition, PlanPositionStatus
 from app.models.work_task import WorkTask, WorkTaskStatus
 from app.services.plan_position_hanger import position_dimensions_for_task
 from app.stock import QualityState, Reason, StockCommand, StockCommandService
+from app.stock.ledger import net_by_reason
 
 from .common import (
     _check_idempotency,
@@ -439,17 +440,11 @@ async def final_release(
         ) or Decimal("0")
 
     # Releasable по (задача, размер): completed по размеру − уже released
-    # по размеру (тикет #91). Разные размеры одного задания не суммируются.
-    already_released_by_size = (
-        await db.scalar(
-            select(func.coalesce(func.sum(StockTransaction.quantity), 0))
-            .where(
-                StockTransaction.task_id == task.id,
-                StockTransaction.reason == Reason.FINAL_RELEASE,
-                dimensions_match_clause(StockTransaction.dimensions, eff_dims),
-            )
-        )
-    ) or Decimal("0")
+    # по размеру (тикет #91). «Уже выпущено» — canonical net FINAL_RELEASE
+    # через ledger-примитив (ADR-0018), а не локальная gross-сумма.
+    already_released_by_size = await net_by_reason(
+        db, reason=Reason.FINAL_RELEASE, task_id=task.id, dims=eff_dims
+    )
     releasable = completed_by_size - already_released_by_size
     if quantity > releasable:
         raise ValueError("Final release exceeds releasable quantity")

@@ -39,7 +39,7 @@ from app.stock.task_cache import (
     compute_task_available,
     effective_issued_quantity,
 )
-from app.stock.transfer_ledger import net_received_sq, net_transferred_sq
+from app.stock.ledger import net_received_sq, net_transferred_sq
 from app.stock.models import (
     QualityState,
     Reason,
@@ -307,7 +307,7 @@ class StockProjectionManager:
         def _sum_reason(reason: Reason) -> Decimal:
             return sums.get(reason.value) or Decimal("0")
 
-        # Net transfer_send/receive с учётом компенсаций — примитив transfer_ledger.
+        # Net transfer_send/receive с учётом компенсаций — примитив stock/ledger.
         # TOTAL по задаче (dims=None → без dimension-фильтра), как было в кэше.
         send_sq = net_transferred_sq(alias="task_cache_send_sq")
         recv_sq = net_received_sq(alias="task_cache_recv_sq")
@@ -407,7 +407,7 @@ class StockProjectionManager:
                 sums[tid] = {}
             sums[tid][reason_val] = (sums[tid].get(reason_val) or Decimal("0")) + qty
 
-        # Net для transfer_send/receive с compensations — примитив transfer_ledger.
+        # Net для transfer_send/receive с compensations — примитив stock/ledger.
         # TOTAL по задачам (dims=None → без dimension-фильтра), один запрос.
         send_sq = tcast(Select, net_transferred_sq()).where(
             StockTransaction.task_id.in_(task_ids)

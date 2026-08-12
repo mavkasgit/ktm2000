@@ -2,11 +2,12 @@ from __future__ import annotations
 
 from decimal import Decimal
 
-from sqlalchemy import case, func, select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.internal_plan import SectionPlanLine
 from app.models.work_task import WorkTask
+from app.stock.ledger import net_quantity_expr
 from app.stock.models import Reason, StockTransaction
 
 from app.stock.task_cache import (
@@ -76,16 +77,12 @@ async def _refresh_section_plan_line_cache(db: AsyncSession, section_plan_line_i
     for reason_val, qty in tx_rows:
         sums[reason_val] = qty or Decimal("0")
 
-    # Net для transfer_send/receive с компенсациями
+    # Net для transfer_send/receive с компенсациями — canonical net-выражение
+    # ledger (ADR-0018), единая компенсационная семантика.
     net_rows = await db.execute(
         select(
             StockTransaction.reason,
-            func.sum(
-                case(
-                    (StockTransaction.compensates_tx_id.is_(None), StockTransaction.quantity),
-                    else_=-StockTransaction.quantity,
-                )
-            ).label("net"),
+            func.sum(net_quantity_expr()).label("net"),
         )
         .where(
             StockTransaction.task_id.in_(task_ids),

@@ -1,9 +1,12 @@
-"""Consistency-тесты ledger-примитива stock/transfer_ledger (T1, #101).
+"""Consistency-тесты ledger-примитива stock/ledger (T1, #101; п.2 арх-ревью).
 
 Проверяют, что все формы (scalar / grouped-by-dimensions / SQL-подзапрос)
-построены на одном comp-aware builder'е: net TRANSFER_SEND/RECEIVE с учётом
-компенсаций (``compensates_tx_id``), ключи task_id / section_plan_line_id,
-hash_key-конвенция dimension-grouping (как у ``app.stock.services``).
+построены на одном comp-aware builder'е ``net_quantity_expr()``: net по ЛЮБОЙ
+причине с учётом компенсаций (``compensates_tx_id``), ключи task_id /
+section_plan_line_id, hash_key-конвенция dimension-grouping (как у
+``app.stock.services``). Reason-параметризация (net_by_reason* / thin
+wrappers) — публичные query-композиции над единственным семантическим
+primitive (ADR-0017, ADR-0018).
 """
 
 from __future__ import annotations
@@ -31,7 +34,7 @@ from app.models.section import Section
 from app.models.user import User, UserRole
 from app.models.work_task import WorkTask, WorkTaskStatus
 from app.stock import Reason, StockCommand, StockCommandService
-from app.stock import transfer_ledger as tl
+from app.stock import ledger as tl
 from app.stock.services import _dimensions_hash_key
 from tests.test_integrity_invariants import assert_no_invariants_violations
 
@@ -353,3 +356,97 @@ async def test_exactly_one_key_required(session: AsyncSession, ledger_fx: dict) 
         tl.net_transferred_sq(task_id=True, section_plan_line_id=True)
     with pytest.raises(ValueError):
         tl.net_received_sq(task_id=False, section_plan_line_id=False)
+
+
+async def test_net_by_reason_final_release_compensation(session: AsyncSession) -> None:
+    """net_by_reason(FINAL_RELEASE): net == gross без компенсаций; компенсация
+    ВЫЧИТАЕТСЯ (не исключается) → net = 0. Reason-agnostic контракт (ADR-0017)."""
+    fx = await _make_fixture(session)
+    task2 = fx["tasks"][1]  # финальный этап (stage2.is_final=True)
+    line2 = fx["lines"][1]
+    sec2 = fx["sections"][1]
+    user_id = fx["user"].id
+    product_id = fx["product"].id
+
+    # скаляр dims=None = безразмерная группа (не total), поэтому dims явный
+    assert await tl.net_by_reason(
+        session, reason=Reason.FINAL_RELEASE, task_id=task2.id, dims=DIMS_2700
+    ) == Decimal("0")
+
+    rel1 = await _record(
+        session, user_id=user_id, product_id=product_id, reason=Reason.FINAL_RELEASE,
+        quantity=Decimal("10"), task_id=task2.id, line_id=line2.id,
+        location_id=sec2.id, dims=DIMS_2700,
+    )
+    assert await tl.net_by_reason(
+        session, reason=Reason.FINAL_RELEASE, task_id=task2.id, dims=DIMS_2700
+    ) == Decimal("10")
+
+    await _record(
+        session, user_id=user_id, product_id=product_id, reason=Reason.FINAL_RELEASE,
+        quantity=Decimal("10"), task_id=task2.id, line_id=line2.id,
+        location_id=sec2.id, dims=DIMS_2700, compensates_tx_id=rel1.id,
+    )
+    await session.commit()
+    # вычитается, а не исключается: 10 - 10 == 0 (не 10)
+    assert await tl.net_by_reason(
+        session, reason=Reason.FINAL_RELEASE, task_id=task2.id, dims=DIMS_2700
+    ) == Decimal("0")
+
+
+async def test_net_by_reason_by_dimensions_final_release(session: AsyncSession) -> None:
+    """net_by_reason_by_dimensions(FINAL_RELEASE): группировка по габаритам, NULL-группа,
+    сумма групп == total по ключу."""
+    fx = await _make_fixture(session)
+    task2 = fx["tasks"][1]
+    line2 = fx["lines"][1]
+    sec2 = fx["sections"][1]
+    user_id = fx["user"].id
+    product_id = fx["product"].id
+
+    await _record(
+        session, user_id=user_id, product_id=product_id, reason=Reason.FINAL_RELEASE,
+        quantity=Decimal("10"), task_id=task2.id, line_id=line2.id,
+        location_id=sec2.id, dims=DIMS_2700,
+    )
+    await _record(
+        session, user_id=user_id, product_id=product_id, reason=Reason.FINAL_RELEASE,
+        quantity=Decimal("3"), task_id=task2.id, line_id=line2.id,
+        location_id=sec2.id, dims=None,
+    )
+    await session.commit()
+
+    grouped = await tl.net_by_reason_by_dimensions(
+        session, reason=Reason.FINAL_RELEASE, task_id=task2.id
+    )
+    assert grouped == {
+        _dimensions_hash_key(DIMS_2700): Decimal("10"),
+        None: Decimal("3"),
+    }
+    assert sum(grouped.values(), Decimal("0")) == Decimal("13")
+
+
+async def test_net_by_reason_reason_separation(session: AsyncSession, ledger_fx: dict) -> None:
+    """FINAL_RELEASE не попадает в net SEND/RECEIVE и наоборот (причина — фильтр, а
+    не семантика)."""
+    task2 = ledger_fx["tasks"][1]
+    line2 = ledger_fx["lines"][1]
+    sec2 = ledger_fx["sections"][1]
+    user_id = ledger_fx["user"].id
+    product_id = ledger_fx["product"].id
+
+    before = await tl.net_transferred(session, task_id=task2.id, dims=DIMS_2700)
+    before_recv = await tl.net_received(session, task_id=task2.id, dims=DIMS_900)
+
+    await _record(
+        session, user_id=user_id, product_id=product_id, reason=Reason.FINAL_RELEASE,
+        quantity=Decimal("7"), task_id=task2.id, line_id=line2.id,
+        location_id=sec2.id, dims=DIMS_2700,
+    )
+    await session.commit()
+
+    assert await tl.net_transferred(session, task_id=task2.id, dims=DIMS_2700) == before
+    assert await tl.net_received(session, task_id=task2.id, dims=DIMS_900) == before_recv
+    assert await tl.net_by_reason(
+        session, reason=Reason.FINAL_RELEASE, task_id=task2.id, dims=DIMS_2700
+    ) == Decimal("7")
