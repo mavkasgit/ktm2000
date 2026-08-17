@@ -2,25 +2,25 @@ import { test, expect } from "./fixtures";
 import path from "path";
 
 /**
- * E2E test for the explicit-transfer 2-step ritual:
+ * E2E test for the explicit-transfer ritual under the auto-issue model:
  *
- *   1. **Send** (UI on /transfers) — auto-accepts inline, material
- *      arrives on the destination as ``cached_received_quantity``;
- *      the destination task flips ``waiting_previous → ready``.
- *   2. **Issue** (API on /shopfloor/tasks/{id}/issue) — material
- *      moves from ``cached_received_quantity`` to
- *      ``cached_in_work_quantity``; task status ``ready → in_progress``.
+ *   1. **Send** (UI on /transfers) — auto-accepts inline: material arrives
+ *      on the destination, the destination task flips
+ *      `waiting_previous → ready → in_progress` and the received material
+ *      is immediately issued to work (`issued == received`), because the
+ *      section-tasks page has no dedicated «Выдать в работу» button.
+ *   2. The spec sends raw stock from the storage stage (ready-row in
+ *      «Готово к передаче») onto the first production stage: the receiving
+ *      stage's board must then show the task `in_progress` with
+ *      `received == issued == 10`. The destination is resolved from the
+ *      ready API (`next_section_id`), not from route-stage kinds.
  *
  * Reject/partial-accept were removed from the model — see
  * ``docs/superpowers/plans/2026-07-01-explicit-transfers-mandatory.md``.
- *
- * The Issue step is driven through the API because the section-tasks
- * page exposes only a «Завершить» action — the dedicated
- * «Выдать в работу» button is on the roadmap. Once it lands, the
- * Issue step in this test can be promoted to a UI assertion.
  */
 
 import {
+  apiAccessTokenFromPage,
   apiAddRemainder,
   apiApplyChangeSet,
   apiBatchAssignRoute,
@@ -37,6 +37,7 @@ import {
   apiSeedData,
   BACKEND_URL,
   E2E_SECTION,
+  unwrapItems,
 } from "./api-helpers";
 import { confirmProductionLaunchViaUI } from "./ui-helpers";
 
@@ -80,6 +81,10 @@ test.describe("@smoke Explicit transfer — 2-step ritual (Send + Issue)", () =>
 
     // 1a. Пополняем остатки на STOCK (Склад сырья) — иначе диалог
     //     «Запуск в производство» покажет пустое обеспечение сырьём.
+    //     Габарит обязателен: складская ready-строка (`compute_stock_section_transferable`)
+    //     фильтрует StockBalance по размеру плана ({length_mm:2700} для ЮП-2083),
+    //     безразмерный остаток (dimensions=None) дал бы physical_stock=0 и строку бы
+    //     скрыл — передача «не сработала бы» (сырьё не видно к отправке).
     const sectionWh = await apiGetSectionByCode(E2E_SECTION.RAW_STOCK);
     const planQty = Math.round(parseFloat(pos2083.quantity));
     await apiAddRemainder(
@@ -87,6 +92,7 @@ test.describe("@smoke Explicit transfer — 2-step ritual (Send + Issue)", () =>
       sectionWh.id,
       planQty,
       "E2E: начальный остаток сырья для transfers-auto-accept",
+      { length_mm: 2700 },
     );
 
     // 2. Утверждаем позицию на странице /planning (с обработкой диалога «Утвердить всё равно»)
@@ -129,43 +135,27 @@ test.describe("@smoke Explicit transfer — 2-step ritual (Send + Issue)", () =>
       timeout: 15_000,
     });
 
-    // 4. Завершаем 10 годных на первом production-участке через TaskActionDrawer
-    //    Берём первый production-section для этой позиции.
-    const sectionsRes = await fetch(`${BACKEND_URL}/api/sections`);
-    const sectionsBody = (await sectionsRes.json()) as Array<{ id: number; type: string }> | { items: Array<{ id: number; type: string }> };
-    const sections = Array.isArray(sectionsBody) ? sectionsBody : sectionsBody.items ?? [];
-    const firstSection = sections.find((s) => s.type === "production");
-    expect(firstSection).toBeDefined();
+    // Достаём токен админа для API-запросов (localStorage ktm2000_token).
+    const userToken = await apiAccessTokenFromPage(authenticatedPage);
 
-    await authenticatedPage.goto(`/section-tasks/${firstSection!.id}`);
-    const firstRow = authenticatedPage.locator("tr", { hasText: "ЮП-2083" }).first();
-    await expect(firstRow).toBeVisible({ timeout: 15_000 });
-    const completeBtn = firstRow.getByRole("button", { name: "Завершить" }).first();
-    await expect(completeBtn).toBeVisible({ timeout: 5_000 });
-    await completeBtn.click();
-
-    const drawer = authenticatedPage.getByRole("dialog");
-    await expect(drawer).toBeVisible({ timeout: 5_000 });
-    const goodInput = drawer.locator('input[type="number"]').first();
-    await goodInput.fill("10");
-    await drawer.getByRole("button", { name: "Сохранить" }).click();
-    await expect(drawer).not.toBeVisible({ timeout: 10_000 });
-
-    // 5. SEND на /transfers — auto-accepts по новой модели
+    // 4. SEND на /transfers — auto-accepts по новой модели
     await authenticatedPage.goto("/transfers");
     await expect(
       authenticatedPage.getByRole("heading", { name: "Передачи между ГХП" }),
     ).toBeVisible({ timeout: 10_000 });
 
-    const readyRow = authenticatedPage
-      .locator("tr", { hasText: "ЮП-2083" })
-      .filter({ hasText: "Готово к передаче" })
+    // «Готово к передаче» и «Журнал передач» — две таблицы. Различаем по
+    // колонке-признаку: ready имеет «К передаче», журнал — «Статус».
+    // (hasText на div матчит и родительский контейнер страницы — нельзя.)
+    const readyTable = authenticatedPage
+      .locator("table")
+      .filter({ has: authenticatedPage.getByRole("columnheader").filter({ hasText: "К передаче" }) })
       .first();
-    // «Готово к передаче» — текст в шапке, не в строке. Ищем строку с ЮП-2083 в таблице «ready».
-    const readyRowBySku = authenticatedPage
-      .locator("table", { hasText: "Готово к передаче" })
-      .locator("tr", { hasText: "ЮП-2083" })
+    const journalTable = authenticatedPage
+      .locator("table")
+      .filter({ has: authenticatedPage.getByRole("columnheader").filter({ hasText: "Статус" }) })
       .first();
+    const readyRowBySku = readyTable.locator("tr", { hasText: "ЮП-2083" }).first();
     await expect(readyRowBySku).toBeVisible({ timeout: 10_000 });
 
     // Найдём инпут «qty» и кнопку «Передать» в этой строке
@@ -175,49 +165,56 @@ test.describe("@smoke Explicit transfer — 2-step ritual (Send + Issue)", () =>
     await expect(sendBtn).toBeVisible({ timeout: 5_000 });
     await sendBtn.click();
 
-    // После успешной отправки строка должна исчезнуть из «Готово к передаче»
-    await expect(readyRowBySku).not.toBeVisible({ timeout: 15_000 });
+    // После успешной отправки строка остаётся (отправлено 10 из planQty),
+    // но доступное количество уменьшилось: planQty − 10.
+    const qtyAfter = readyTable.locator("tr", { hasText: "ЮП-2083" }).locator('input[type="number"]').first();
+    await expect(qtyAfter).toHaveValue(String(planQty - 10), { timeout: 15_000 });
 
-    // 6. Проверяем, что в «Истории» (правая колонка) появилась запись со статусом «Принята»
+    // 5. Проверяем, что в «Журнале передач» появилась запись со статусом «Принята»
     //    — auto-accept произошёл inline внутри transfer_send.
-    const historyRow = authenticatedPage
-      .locator("table", { hasText: "История" })
-      .locator("tr", { hasText: "ЮП-2083" })
-      .first();
-    await expect(historyRow).toBeVisible({ timeout: 10_000 });
+    const historyRow = journalTable.locator("tr", { hasText: "ЮП-2083" }).first();
+    await expect(historyRow).toBeVisible({ timeout: 15_000 });
     await expect(historyRow.locator("td").filter({ hasText: "Принята" })).toBeVisible({
-      timeout: 5_000,
+      timeout: 10_000,
     });
 
-    // 7. Достаём токен админа из cookies для API-запросов
-    const cookies = await authenticatedPage.context().cookies();
-    const accessCookie = cookies.find((c) => c.name === "access_token");
-    const token = accessCookie?.value ?? "";
+    // 6. Цель передачи берём из ready-API: после отправки складская строка
+    //    остаётся (planQty−10) и несёт next_section_id получателя.
+    const readyAfter = await fetch(`${BACKEND_URL}/api/transfers/ready`, {
+      headers: { Authorization: `Bearer ${userToken}` },
+    }).then((r) => r.json());
+    const readyRows = unwrapItems<{ product_sku?: string; next_section_id?: number | null }>(readyAfter);
+    const targetRow = readyRows.find(
+      (r) => String(r.product_sku ?? "").includes("ЮП-2083") && r.next_section_id != null,
+    );
+    expect(targetRow).toBeDefined();
 
-    // 8. Находим задачу-получатель на втором production-участке
-    const secondSection = sections.filter((s) => s.type === "production")[1];
-    expect(secondSection).toBeDefined();
-
-    // 8. Достаём board второго участка — там должна быть наша задача в in_progress
-    //    (auto-issue после transfer_send)
+    // 7. Достаём board участка-получателя — там должна быть наша задача
+    //    в in_progress (auto-issue после transfer_send).
     const boardRes = await fetch(
-      `${BACKEND_URL}/api/shopfloor/sections/${secondSection!.id}/board`,
-      { headers: { Authorization: `Bearer ${token}` } },
+      `${BACKEND_URL}/api/shopfloor/sections/${targetRow!.next_section_id}/board`,
+      { headers: { Authorization: `Bearer ${userToken}` } },
     );
     if (!boardRes.ok) {
       throw new Error(`Get board failed: ${boardRes.statusText} (${boardRes.status})`);
     }
     const board = (await boardRes.json()) as {
-      tasks: Array<{ id: number; product_sku: string; status: string; cache: { received_quantity: string } }>;
+      tasks: Array<{
+        id: number;
+        product_sku: string;
+        status: string;
+        cache: { received_quantity: string; issued_quantity: string };
+      }>;
     };
     const destinationTask = board.tasks.find(
       (t) => t.product_sku === "ЮП-2083" && t.cache.received_quantity !== "0",
     );
     expect(destinationTask).toBeDefined();
-    // After transfer_send, auto-issue puts the task into in_progress directly
+    // After transfer_send: материал принят и сразу выдан в работу (received == issued).
     expect(destinationTask!.status).toBe("in_progress");
-    expect(destinationTask!.cache.in_work_quantity).toBe("10");
+    expect(Number(destinationTask!.cache.received_quantity)).toBe(10);
+    expect(Number(destinationTask!.cache.issued_quantity)).toBe(10);
 
-    // Тест завершён: после transfer_send задача уже in_progress с in_work=10
+    // Тест завершён: после transfer_send задача in_progress, 10 в работе.
   });
 });

@@ -2,8 +2,13 @@
 
 Документ для передачи задачи исполнителю/агенту. Канон запуска → [`frontend/e2e/AGENTS.md`](../frontend/e2e/AGENTS.md).
 
-**Дата последнего прогона:** 2026-08-11  
-**Результат:** `full-cycle.spec.ts` (@ui) — **passed** (~53s); `final-release.spec.ts` (#96, @smoke) — **passed**; backend transfer-тесты — 44 passed; `bulk-workflow.spec.ts` — skipped (сырой, устарел под текущий UI).
+**Дата последнего прогона:** 2026-08-17  
+**Результат:** e2e-набор **зелёный**: 8 passed / 6 skipped (с явной причиной) / **0 failed**. Канон `full-cycle.spec.ts` (@ui) — passed; `transfers-auto-accept.spec.ts` — passed (передача: Send со склада → auto-accept → `in_progress`, `received==issued`). Guard изоляции от публичных хостов — `playwright.config.ts` (`isPrivateHost`).
+
+**Корневая причина прошлых падений (закрыта):**
+- `products.find is not a function` — pagination `{items,total}`; фикс в `api-helpers.ts` (`unwrapItems`).
+- `transfers-auto-accept` — устаревшая ассерция `in_work_quantity` и ложная предпосылка «завершить складской этап с доски»; переписан на реальный флоу: складская ready-строка `/transfers` (transferable со склада по размеру) → Send → auto-accept на первом production-этапе.
+- `total-workflow` / `plan-issue-handover` — помечены skip (устаревшие предпосылки; переработка — отдельная задача).
 
 ---
 

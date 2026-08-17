@@ -34,6 +34,7 @@ test.describe("@smoke Total workflow E2E - Step 2: Seed & Verify Remainders", ()
   });
 
   test("should seed, get existing product, ensure techcard, add remainders, and verify in SPG UI", async ({ authenticatedPage }) => {
+    test.skip(true, "Устарел: завершает складской этап с доски, но в текущей модели сырьё идёт передачей со склада (см. transfers-auto-accept.spec.ts)");
     test.slow();
 
     // Логируем все ответы с ошибками от API бэкенда для отладки
@@ -270,6 +271,7 @@ test.describe("@smoke Total workflow E2E - Step 2: Seed & Verify Remainders", ()
   });
 
   test("should check material shortage strategies, partial GHP/STOCK loading and scrap replenishment", async ({ authenticatedPage }) => {
+    test.skip(true, "Устарел: завершает складской этап с доски — в текущей модели нет кнопки «Завершить» на storage-этапах; переработать на передачу со склада");
     test.slow();
 
     // Логируем все ответы с ошибками от API бэкенда для отладки

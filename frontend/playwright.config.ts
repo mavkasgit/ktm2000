@@ -1,7 +1,22 @@
 import { defineConfig, devices } from "@playwright/test";
+import { isPrivateHost } from "./src/shared/lib/hostGuard";
 
 const PORT = 5172;
 const BACKEND_PORT = 8012;
+
+const baseURL = process.env.PLAYWRIGHT_TEST_BASE_URL || `http://localhost:${PORT}`;
+const e2eApiUrl = process.env.E2E_API_URL;
+
+for (const [name, value] of [
+  ["PLAYWRIGHT_TEST_BASE_URL", baseURL],
+  ["E2E_API_URL", e2eApiUrl ?? ""],
+]) {
+  if (value && !isPrivateHost(value)) {
+    throw new Error(
+      `${name}=${value} указывает на публичный (боевой) хост. E2E запрещено гонять против прод-окружения.`,
+    );
+  }
+}
 
 export default defineConfig({
   testDir: "./e2e",
@@ -11,7 +26,7 @@ export default defineConfig({
   workers: 1,
   reporter: [["html", { outputFolder: "playwright-report" }], ["list"]],
   use: {
-    baseURL: process.env.PLAYWRIGHT_TEST_BASE_URL || `http://localhost:5172`,
+    baseURL,
     trace: "on-first-retry",
     screenshot: "only-on-failure",
     video: "retain-on-failure",
