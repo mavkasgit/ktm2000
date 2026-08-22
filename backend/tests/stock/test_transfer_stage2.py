@@ -40,6 +40,7 @@ from tests.test_integrity_invariants import (
     _auth_headers,
     _make_user,
     _release_via_take_to_work,
+    assert_no_invariants_violations,
 )
 
 
@@ -400,7 +401,8 @@ async def test_cancel_transfer_idempotent(session: AsyncSession, client) -> None
 
 @_py_test_mark
 async def test_correct_transfer_quantity(session: AsyncSession, client) -> None:
-    """После correct_transfer() StockTransaction.quantity соответствует новому."""
+    """correct_transfer больше не мутирует проводки: старая пара неизменна,
+    появляются 2 компенсации (reverses_id) + новая пара с новым quantity."""
     setup = await _make_two_ghp_setup(session, sku="T2COR", qty=Decimal("10"))
     ctx = await _make_tasks_transferable(session, client, setup)
 
@@ -411,6 +413,22 @@ async def test_correct_transfer_quantity(session: AsyncSession, client) -> None:
         quantity=Decimal("5"),
         actor_id=ctx["user"].id,
     )
+    await session.commit()
+    await assert_no_invariants_violations(session, context="t2cor-send")
+
+    originals = sorted(
+        (
+            await session.execute(
+                select(StockTransaction).where(
+                    StockTransaction.transfer_id == send["transfer_id"],
+                    StockTransaction.reverses_id.is_(None),
+                )
+            )
+        ).scalars().all(),
+        key=lambda t: t.id,
+    )
+    assert len(originals) == 2
+
     await correct_transfer(
         session,
         transfer_id=send["transfer_id"],
@@ -418,15 +436,33 @@ async def test_correct_transfer_quantity(session: AsyncSession, client) -> None:
         actor_id=ctx["user"].id,
     )
     await session.commit()
+    await assert_no_invariants_violations(session, context="t2cor-correct")
 
     txs = (await session.execute(
         select(StockTransaction).where(
-            StockTransaction.transfer_id == send["transfer_id"],
-            StockTransaction.reverses_id.is_(None),
-        )
+            StockTransaction.transfer_id == send["transfer_id"]
+        ).order_by(StockTransaction.id)
     )).scalars().all()
-    for tx in txs:
-        assert tx.quantity == Decimal("3")
+    # 2 исходных (нетронутых) + 2 компенсации + 2 новых = 6.
+    assert len(txs) == 6
+
+    by_id = {tx.id: tx for tx in txs}
+    # Старые проводки неизменны: quantity и все поля как до коррекции.
+    for orig in originals:
+        assert by_id[orig.id].quantity == Decimal("5")
+        assert by_id[orig.id].from_location_id == orig.from_location_id
+        assert by_id[orig.id].to_location_id == orig.to_location_id
+
+    compensations = [tx for tx in txs if tx.reverses_id is not None]
+    assert {tx.reverses_id for tx in compensations} == {orig.id for orig in originals}
+    assert all(tx.quantity == Decimal("5") for tx in compensations)
+
+    fresh = [
+        tx for tx in txs
+        if tx.reverses_id is None and tx.id not in {o.id for o in originals}
+    ]
+    assert len(fresh) == 2
+    assert all(tx.quantity == Decimal("3") for tx in fresh)
 
 
 @_py_test_mark

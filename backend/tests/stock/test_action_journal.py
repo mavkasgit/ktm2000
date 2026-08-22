@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.action_journal import Action
 from app.stock.models import Reason, StockTransaction
 from app.transfers.services import cancel_transfer, transfer_send
+from tests.test_integrity_invariants import assert_no_invariants_violations
 from tests.stock.test_transfer_stage2 import _make_two_ghp_setup, _make_tasks_transferable
 
 _py_test_mark = pytest.mark.asyncio
@@ -34,6 +35,7 @@ async def test_transfer_send_creates_action(session: AsyncSession, client) -> No
         idempotency_key="ajt1:send",
     )
     await session.commit()
+    await assert_no_invariants_violations(session, context="aj-transfer-send")
 
     actions = (await session.execute(
         select(Action).where(
@@ -78,6 +80,7 @@ async def test_cancel_transfer_creates_action(session: AsyncSession, client) -> 
         actor_id=ctx["user"].id,
     )
     await session.commit()
+    await assert_no_invariants_violations(session, context="aj-cancel-transfer")
 
     actions = (await session.execute(
         select(Action).where(

@@ -29,6 +29,7 @@ from app.api.routes.spg import router as spg_router
 from app.api.routes.demo import router as demo_router
 from app.api.backups import router as backups_router
 from app.transfers.api import router as transfers_router
+from app.reversal.api import router as reversal_router
 from app.stock.api import router as stock_router
 from contextlib import asynccontextmanager
 import asyncio
@@ -111,6 +112,7 @@ app.include_router(demo_router, prefix="/api")
 app.include_router(backups_router, prefix="/api")
 app.include_router(transfers_router, prefix="/api")
 app.include_router(stock_router, prefix="/api")
+app.include_router(reversal_router, prefix="/api")
 app.include_router(audit_logs_router, prefix="/api")
 app.include_router(notifications_router, prefix="/api")
 app.include_router(users_router, prefix="/api")

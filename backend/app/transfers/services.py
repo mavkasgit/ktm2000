@@ -20,8 +20,8 @@ non-transfer ``cached_*`` columns from the ``Movement`` table for
 legacy operations until Этап 3.
 
 Cancel creates compensating ``StockTransaction`` rows (append-only).
-Correct updates quantity in-place on active ``StockTransaction`` rows
-(controlled mutable exception — see ``_resync_transfer_stock_tx_quantity``).
+Correct likewise rewrites quantity via compensation + new pair
+(``_correct_transfer_stock_tx``) — the ledger is append-only.
 """
 
 from __future__ import annotations
@@ -308,21 +308,22 @@ async def _compensate_transfer_stock_tx(
         )
 
 
-async def _resync_transfer_stock_tx_quantity(
+async def _correct_transfer_stock_tx(
     db: AsyncSession,
     *,
     transfer: Transfer,
     new_quantity: Decimal,
+    actor_id: int,
+    action_id: int,
+    comment: str | None,
 ) -> None:
-    """Синхронизация quantity активных StockTransaction transfer'а.
+    """Коррекция количества = компенсирующая проводка + новая проводка.
 
-    ``correct_transfer`` меняет ``sent_quantity`` у Transfer и quantity у
-    активных StockTransaction (непогашенных, без ``reverses_id``)
-    in-place. После чего баланс пересчитывается через ``refresh_balance``.
-
-    Это контролируемое mutable-исключение из append-only принципа — оно
-    касается только коррекции количества, но не отмены (cancel идёт через
-    компенсации). См. PLAN_stock_ledger.md → принцип 4.
+    ADR-0019: ledger append-only, никаких in-place UPDATE quantity по
+    активным проводкам. Активная пара (TRANSFER_SEND + TRANSFER_RECEIVE)
+    гасится зеркальными записями (``reverses_id`` → исходная), затем
+    записывается новая пара с новым количеством. Net-арифметика
+    (``net_quantity_expr``) даёт корректный итог без мутаций.
     """
     res = await db.execute(
         select(StockTransaction)
@@ -333,15 +334,75 @@ async def _resync_transfer_stock_tx_quantity(
                 [Reason.TRANSFER_SEND, Reason.TRANSFER_RECEIVE]
             ),
         )
+        .order_by(StockTransaction.id.asc())
     )
     originals = res.scalars().all()
-    for orig in originals:
-        orig.quantity = new_quantity
-    await db.flush()
-    # Пересчёт затронутых балансов: для каждой tx — её from и to локации.
-    for orig in originals:
-        await _stock_command_service._projection_manager.refresh_balance(db, orig)
 
+    # 1. Компенсации старого поколения (зеркало 1:1, локации перевёрнуты).
+    for orig in originals:
+        comp_from = orig.to_location_id
+        comp_to = orig.from_location_id
+        await _stock_command_service.record(
+            db,
+            StockCommand(
+                product_id=orig.product_id,
+                quantity=orig.quantity,
+                reason=orig.reason,
+                from_location_id=comp_from,
+                to_location_id=comp_to,
+                dimensions=orig.dimensions,
+                task_id=orig.task_id,
+                transfer_id=transfer.id,
+                section_plan_line_id=orig.section_plan_line_id,
+                reverses_id=orig.id,
+                action_id=action_id,
+                created_by=actor_id,
+                comment=(
+                    f"correct transfer #{transfer.transfer_no}: "
+                    f"revoke {orig.quantity} [{orig.id}]"
+                ),
+                idempotency_key=f"transfer-correct:{action_id}:revoke:{orig.id}",
+                is_post_factum=orig.is_post_factum,
+            ),
+        )
+
+    # 2. Новая пара SEND + RECEIVE с новым количеством — каждая по образцу
+    # своей исходной проводки (task_id / plan_line / dimensions сохраняются).
+    templates: dict[Reason, StockTransaction] = {}
+    for orig in originals:
+        templates.setdefault(orig.reason, orig)
+    for reason in (Reason.TRANSFER_SEND, Reason.TRANSFER_RECEIVE):
+        tpl = templates.get(reason)
+        if tpl is None:
+            raise ValueError(
+                f"Transfer #{transfer.id}: нет активной проводки {reason.value} для коррекции"
+            )
+        is_send = reason == Reason.TRANSFER_SEND
+        await _stock_command_service.record(
+            db,
+            StockCommand(
+                product_id=tpl.product_id,
+                quantity=new_quantity,
+                reason=reason,
+                from_location_id=transfer.from_section_id if is_send else None,
+                to_location_id=transfer.to_section_id if is_send else None,
+                dimensions=tpl.dimensions,
+                task_id=tpl.task_id,
+                transfer_id=transfer.id,
+                section_plan_line_id=tpl.section_plan_line_id,
+                action_id=action_id,
+                created_by=actor_id,
+                comment=(
+                    f"correct transfer #{transfer.transfer_no} → {new_quantity}: "
+                    f"{comment or ''}"
+                ).strip(),
+                idempotency_key=(
+                    f"transfer-correct:{action_id}:"
+                    + ("send" if is_send else "receive")
+                ),
+                is_post_factum=tpl.is_post_factum,
+            ),
+        )
 
 async def transfer_send(
     db: AsyncSession,
@@ -722,29 +783,26 @@ async def correct_transfer(
     if comment:
         transfer.comment = comment
 
-    # Movement-строк больше нет (Этап 2) — quantity синхронизируется
-    # только в StockTransaction ниже.
+    # Movement-строк больше нет (Этап 2) — баланс двигается только ledger.
     await db.flush()
 
-    # ─── StockTransaction quantity resync (in-place, controlled) ────────
-    # Активные StockTransaction синхронизируются in-place с новым quantity.
-    # Контролируемое исключение из append-only; cancel идёт через
-    # компенсации, а не через этот путь.
-    await _resync_transfer_stock_tx_quantity(
-        db, transfer=transfer, new_quantity=new_quantity
+    # ─── StockTransaction correction (append-only, ADR-0019) ─────────────
+    # Коррекция количества = компенсирующая проводка + новая проводка.
+    # Никаких in-place UPDATE quantity по активным проводкам.
+    actor_name = await _get_user_snapshot_name(db, actor_id)
+    action = await action_journal_service.log(
+        db, action_type="transfer_correct", ref_id=transfer.id, actor=actor_name
+    )
+    await _correct_transfer_stock_tx(
+        db,
+        transfer=transfer,
+        new_quantity=new_quantity,
+        actor_id=actor_id,
+        action_id=action.id,
+        comment=comment,
     )
 
-    # 5. Refresh cache (projections updated via StockTransaction)
-    active_txs = (await db.execute(
-        select(StockTransaction)
-        .where(
-            StockTransaction.transfer_id == transfer.id,
-            StockTransaction.reverses_id.is_(None),
-        )
-        .limit(1)
-    )).scalars().all()
-    for atx in active_txs:
-        await _stock_command_service._projection_manager.refresh_task_projection(db, atx)
+    # 5. Refresh plan-line caches (баланс/проекции обновлены через record()).
     await _refresh_section_plan_line_cache(db, from_task.section_plan_line_id)
     await _refresh_section_plan_line_cache(db, to_task.section_plan_line_id)
 
