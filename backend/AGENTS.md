@@ -28,7 +28,7 @@ backend/app/
 Единый источник правды — `StockTransaction` (append-only). Legacy `SpgRemainder`, `Movement` удалены.
 
 - `Transfer` → 2 транзакции (`TRANSFER_SEND` + `TRANSFER_RECEIVE`) через `StockCommandService.record()`.
-- Отмена = компенсационная транзакция с `compensates_tx_id`.
+- Отмена = компенсационная транзакция с `reverses_id` (журнал действий — `action_journal`, ADR-0019).
 - Детали домена → [`docs/project-overview.md`](../docs/project-overview.md).
 
 ## Тесты

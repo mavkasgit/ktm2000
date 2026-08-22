@@ -130,7 +130,7 @@ async def _sql_net_transactions(session: AsyncSession, task_id: int, reason: Rea
     net = await session.scalar(
         select(func.coalesce(func.sum(
             case(
-                (StockTransaction.compensates_tx_id.is_(None), StockTransaction.quantity),
+                (StockTransaction.reverses_id.is_(None), StockTransaction.quantity),
                 else_=-StockTransaction.quantity,
             )
         ), 0))

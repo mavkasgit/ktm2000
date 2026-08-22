@@ -184,7 +184,7 @@ class StockTransactionOut(BaseModel):
     task_id: int | None
     transfer_id: int | None
     section_plan_line_id: int | None
-    compensates_tx_id: int | None
+    reverses_id: int | None
     source_ref: str | None
     idempotency_key: str | None
     comment: str | None
@@ -244,7 +244,7 @@ def _latest_manual_in_comment_expr():
         select(StockTransaction.comment)
         .where(
             StockTransaction.reason == Reason.MANUAL_IN,
-            StockTransaction.compensates_tx_id.is_(None),
+            StockTransaction.reverses_id.is_(None),
             StockTransaction.product_id == StockBalance.product_id,
             StockTransaction.to_location_id == StockBalance.location_id,
             StockTransaction.to_quality_state == StockBalance.quality_state,
@@ -385,7 +385,7 @@ async def _serialize_balances_with_operations(
         select(StockTransaction)
         .where(
             StockTransaction.reason.in_(_OPERATION_COMMENT_REASONS),
-            StockTransaction.compensates_tx_id.is_(None),
+            StockTransaction.reverses_id.is_(None),
             StockTransaction.product_id.in_(product_ids),
         )
         .order_by(StockTransaction.created_at.desc())
@@ -567,7 +567,7 @@ def _serialize_transaction(
         task_id=tx.task_id,
         transfer_id=tx.transfer_id,
         section_plan_line_id=tx.section_plan_line_id,
-        compensates_tx_id=tx.compensates_tx_id,
+        reverses_id=tx.reverses_id,
         source_ref=tx.source_ref,
         idempotency_key=tx.idempotency_key,
         comment=tx.comment,
@@ -678,9 +678,9 @@ async def list_transactions(
             | (StockTransaction.to_location_id == location_id)
         )
     if compensating is True:
-        stmt = stmt.where(StockTransaction.compensates_tx_id.is_not(None))
+        stmt = stmt.where(StockTransaction.reverses_id.is_not(None))
     elif compensating is False:
-        stmt = stmt.where(StockTransaction.compensates_tx_id.is_(None))
+        stmt = stmt.where(StockTransaction.reverses_id.is_(None))
     if date_from is not None:
         stmt = stmt.where(
             StockTransaction.created_at >= datetime.combine(date_from, time.min),

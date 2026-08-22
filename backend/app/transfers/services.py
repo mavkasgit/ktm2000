@@ -60,6 +60,7 @@ from app.services.shopfloor.common import (
 # на quantity. Отмена — компенсационные транзакции (append-only).
 # Коррекция — in-place изменение quantity активных транзакций.
 from app.domain.dimensions import canonicalize_dimensions
+from app.services.action_journal_service import action_journal_service
 from app.stock.models import Reason, StockTransaction
 from app.stock.services import (
     StockCommand,
@@ -203,6 +204,7 @@ async def _record_transfer_send_stock_tx(
     idempotency_key: str | None,
     performed_at: datetime | None,
     accounted_at: datetime | None,
+    action_id: int | None,
     is_post_factum: bool,
 ) -> StockTransaction:
     """Запись TRANSFER_SEND в StockTransaction ledger.
@@ -228,6 +230,7 @@ async def _record_transfer_send_stock_tx(
             task_id=from_task.id,
             transfer_id=transfer.id,
             section_plan_line_id=from_task.section_plan_line_id,
+            action_id=action_id,
             created_by=actor_id,
             executor_user_id=executor_user_id,
             created_by_user_name=actor_name,
@@ -247,13 +250,14 @@ async def _compensate_transfer_stock_tx(
     *,
     transfer: Transfer,
     actor_id: int,
+    action_id: int,
     comment: str | None,
 ) -> None:
     """Компенсация всех активных StockTransaction transfer'а (append-only).
 
-    Для каждой непогашенной транзакции (``compensates_tx_id IS NULL``) с
+    Для каждой непогашенной транзакции (``reverses_id IS NULL``) с
     reason ``TRANSFER_SEND`` / ``TRANSFER_RECEIVE`` создаётся встречная
-    запись с перевёрнутыми локациями и ``compensates_tx_id`` → исходная.
+    запись с перевёрнутыми локациями и ``reverses_id`` → исходная.
     Суммарный баланс по transfer возвращается к нулю (инвариант S6 для
     cancelled transfer'ов исключён, S1 баланс сходится).
 
@@ -264,8 +268,8 @@ async def _compensate_transfer_stock_tx(
     res = await db.execute(
         select(StockTransaction)
         .where(
+            StockTransaction.reverses_id.is_(None),
             StockTransaction.transfer_id == transfer.id,
-            StockTransaction.compensates_tx_id.is_(None),
             StockTransaction.reason.in_(
                 [Reason.TRANSFER_SEND, Reason.TRANSFER_RECEIVE]
             ),
@@ -290,7 +294,8 @@ async def _compensate_transfer_stock_tx(
                 task_id=orig.task_id,
                 transfer_id=transfer.id,
                 section_plan_line_id=orig.section_plan_line_id,
-                compensates_tx_id=orig.id,
+                reverses_id=orig.id,
+                action_id=action_id,
                 created_by=actor_id,
                 comment=f"cancel transfer #{transfer.transfer_no}: {comment or ''}".strip(),
                 # Безусловный ключ: protects даже если у исходной tx не было
@@ -312,7 +317,7 @@ async def _resync_transfer_stock_tx_quantity(
     """Синхронизация quantity активных StockTransaction transfer'а.
 
     ``correct_transfer`` меняет ``sent_quantity`` у Transfer и quantity у
-    активных StockTransaction (непогашенных, без ``compensates_tx_id``)
+    активных StockTransaction (непогашенных, без ``reverses_id``)
     in-place. После чего баланс пересчитывается через ``refresh_balance``.
 
     Это контролируемое mutable-исключение из append-only принципа — оно
@@ -323,7 +328,7 @@ async def _resync_transfer_stock_tx_quantity(
         select(StockTransaction)
         .where(
             StockTransaction.transfer_id == transfer.id,
-            StockTransaction.compensates_tx_id.is_(None),
+            StockTransaction.reverses_id.is_(None),
             StockTransaction.reason.in_(
                 [Reason.TRANSFER_SEND, Reason.TRANSFER_RECEIVE]
             ),
@@ -506,6 +511,12 @@ async def transfer_send(
     actor_name = await _get_user_snapshot_name(db, actor_id)
     executor_name = await _get_user_snapshot_name(db, eff_executor)
 
+    # Журнал действий (ADR-0019, #113): одна операция = одна запись Action;
+    # обе проводки ledger ссылаются на неё через action_id.
+    action = await action_journal_service.log(
+        db, action_type="transfer_send", ref_id=transfer.id, actor=actor_name
+    )
+
     # Auto-accept: since the operator confirms the transfer on the
     # /transfers page, the material is considered immediately received
     # on the destination. The destination task transitions
@@ -542,6 +553,7 @@ async def transfer_send(
         performed_at=eff_performed,
         accounted_at=eff_accounted,
         is_post_factum=post_factum,
+        action_id=action.id,
     )
     # TRANSFER_RECEIVE на приёмную задачу (только task-level; без локаций)
     receive_comment = await enrich_comment_with_route_operations(
@@ -572,6 +584,7 @@ async def transfer_send(
             performed_at=eff_performed,
             accounted_at=eff_accounted,
             is_post_factum=post_factum,
+            action_id=action.id,
         ),
     )
 
@@ -726,7 +739,7 @@ async def correct_transfer(
         select(StockTransaction)
         .where(
             StockTransaction.transfer_id == transfer.id,
-            StockTransaction.compensates_tx_id.is_(None),
+            StockTransaction.reverses_id.is_(None),
         )
         .limit(1)
     )).scalars().all()
@@ -820,10 +833,14 @@ async def cancel_transfer(
 
     # ─── StockTransaction compensation (append-only) ─────────────────────
     # Создаём встречные компенсационные записи с перевёрнутыми локациями
-    # и compensates_tx_id → исходная. Баланс возвращается к нулю.
+    # и reverses_id → исходная. Баланс возвращается к нулю.
     # Компенсация вызывает stock_changed → refresh_task_projection (net = 0).
+    actor_name = await _get_user_snapshot_name(db, actor_id)
+    action = await action_journal_service.log(
+        db, action_type="transfer_cancel", ref_id=transfer.id, actor=actor_name
+    )
     await _compensate_transfer_stock_tx(
-        db, transfer=transfer, actor_id=actor_id, comment=comment
+        db, transfer=transfer, actor_id=actor_id, action_id=action.id, comment=comment
     )
     # Refresh projections (net = 0 после компенсации — обновлено через StockTransaction)
     comp_txs = (await db.execute(

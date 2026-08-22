@@ -104,7 +104,9 @@ class StockCommand:
     task_id: int | None = None
     transfer_id: int | None = None
     section_plan_line_id: int | None = None
-    compensates_tx_id: int | None = None
+    reverses_id: int | None = None
+    # Журнал действий (ADR-0019): проводки одной операции — один action_id.
+    action_id: int | None = None
     created_by: int | None = None
     executor_user_id: int | None = None
     created_by_user_name: str | None = None
@@ -550,7 +552,8 @@ class StockCommandService:
             task_id=cmd.task_id,
             transfer_id=cmd.transfer_id,
             section_plan_line_id=cmd.section_plan_line_id,
-            compensates_tx_id=cmd.compensates_tx_id,
+            reverses_id=cmd.reverses_id,
+            action_id=cmd.action_id,
             source_ref=cmd.source_ref,
             idempotency_key=cmd.idempotency_key,
             comment=cmd.comment,
@@ -563,7 +566,7 @@ class StockCommandService:
             is_post_factum=cmd.is_post_factum,
         )
         session.add(tx)
-        await session.flush()  # получить tx.id для compensates_tx_id и projection
+        await session.flush()  # получить tx.id для reverses_id и projection
 
         await self._projection_manager.stock_changed(session, tx)
         return tx
@@ -639,7 +642,7 @@ class StockCommandService:
             and cmd.from_location_id == cmd.to_location_id
             and cmd.quality_state == to_qs_net
         )
-        if cmd.from_location_id is not None and cmd.compensates_tx_id is None and not is_net_zero:
+        if cmd.from_location_id is not None and cmd.reverses_id is None and not is_net_zero:
             balance_result = await session.execute(
                 select(StockBalance).where(
                     StockBalance.product_id == cmd.product_id,

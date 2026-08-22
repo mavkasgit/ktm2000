@@ -39,7 +39,7 @@ async def main():
                             func.sum(
                                 case(
                                     (
-                                        StockTransaction.compensates_tx_id.is_(None),
+                                        StockTransaction.reverses_id.is_(None),
                                         StockTransaction.quantity,
                                     ),
                                     else_=-StockTransaction.quantity,

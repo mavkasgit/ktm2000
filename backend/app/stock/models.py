@@ -158,9 +158,14 @@ class StockTransaction(Base):
     section_plan_line_id: Mapped[int | None] = mapped_column(
         ForeignKey("section_plan_lines.id"), nullable=True
     )
-    # Compensates: id исходной транзакции, если эта — компенсационная (cancel/correct)
-    compensates_tx_id: Mapped[int | None] = mapped_column(
+    # Reverses (ADR-0019): id исходной транзакции, если эта — компенсационная
+    # (cancel/correct).
+    reverses_id: Mapped[int | None] = mapped_column(
         ForeignKey("stock_transactions.id"), nullable=True
+    )
+    # Журнал действий (ADR-0019): действие, породившее эту проводку.
+    action_id: Mapped[int | None] = mapped_column(
+        ForeignKey("action_journal.id"), nullable=True, index=True
     )
     source_ref: Mapped[str | None] = mapped_column(String(255), nullable=True)
     idempotency_key: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)

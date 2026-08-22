@@ -46,6 +46,7 @@ from .notification import Notification, UserNotificationState
 from .hrms_employee import HrmsEmployee
 from .user_login_event import UserLoginEvent
 from .logout_jti import UsedLogoutJti
+from .action_journal import Action
 from app.stock.models import (
     QualityState,
     Reason,
@@ -124,8 +125,9 @@ __all__ = [
     "AuditLog",
     "HrmsEmployee",
     "UserLoginEvent",
-    "UsedLogoutJti",
     "UserSession",
+    "UsedLogoutJti",
+    "Action",
     "QualityState",
     "Reason",
     "StockBalance",

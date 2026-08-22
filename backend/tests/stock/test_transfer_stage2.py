@@ -361,7 +361,7 @@ async def test_cancel_transfer_creates_compensation(session: AsyncSession, clien
     comps = (await session.execute(
         select(StockTransaction).where(
             StockTransaction.transfer_id == send["transfer_id"],
-            StockTransaction.compensates_tx_id.isnot(None),
+            StockTransaction.reverses_id.isnot(None),
         )
     )).scalars().all()
     assert len(comps) == 2  # SEND + RECEIVE
@@ -422,7 +422,7 @@ async def test_correct_transfer_quantity(session: AsyncSession, client) -> None:
     txs = (await session.execute(
         select(StockTransaction).where(
             StockTransaction.transfer_id == send["transfer_id"],
-            StockTransaction.compensates_tx_id.is_(None),
+            StockTransaction.reverses_id.is_(None),
         )
     )).scalars().all()
     for tx in txs:

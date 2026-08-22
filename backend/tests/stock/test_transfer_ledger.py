@@ -2,7 +2,7 @@
 
 Проверяют, что все формы (scalar / grouped-by-dimensions / SQL-подзапрос)
 построены на одном comp-aware builder'е ``net_quantity_expr()``: net по ЛЮБОЙ
-причине с учётом компенсаций (``compensates_tx_id``), ключи task_id /
+причине с учётом компенсаций (``reverses_id``), ключи task_id /
 section_plan_line_id, hash_key-конвенция dimension-grouping (как у
 ``app.stock.services``). Reason-параметризация (net_by_reason* / thin
 wrappers) — публичные query-композиции над единственным семантическим
@@ -130,7 +130,7 @@ async def _record(
     line_id: int,
     location_id: int,
     dims: dict | None,
-    compensates_tx_id: int | None = None,
+    reverses_id: int | None = None,
 ):
     """Одна запись ledger через StockCommandService (проекции обновляются).
 
@@ -138,7 +138,7 @@ async def _record(
     чтобы баланс оставался консистентным (инвариант S1).
     """
     svc = StockCommandService()
-    if compensates_tx_id is not None:
+    if reverses_id is not None:
         from_location_id, to_location_id = location_id, None
     else:
         from_location_id, to_location_id = None, location_id
@@ -153,7 +153,7 @@ async def _record(
             dimensions=dims,
             task_id=task_id,
             section_plan_line_id=line_id,
-            compensates_tx_id=compensates_tx_id,
+            reverses_id=reverses_id,
             created_by=user_id,
         ),
     )
@@ -180,7 +180,7 @@ async def _seed_ledger(session: AsyncSession, fx: dict) -> None:
     await _record(
         session, user_id=user_id, product_id=product_id, reason=Reason.TRANSFER_SEND,
         quantity=Decimal("10"), task_id=task1.id, line_id=line1.id,
-        location_id=sec1.id, dims=DIMS_2700, compensates_tx_id=send1.id,
+        location_id=sec1.id, dims=DIMS_2700, reverses_id=send1.id,
     )
     await _record(
         session, user_id=user_id, product_id=product_id, reason=Reason.TRANSFER_SEND,
@@ -206,7 +206,7 @@ async def _seed_ledger(session: AsyncSession, fx: dict) -> None:
     await _record(
         session, user_id=user_id, product_id=product_id, reason=Reason.TRANSFER_RECEIVE,
         quantity=Decimal("12"), task_id=task1.id, line_id=line1.id,
-        location_id=sec1.id, dims=DIMS_2700, compensates_tx_id=recv1.id,
+        location_id=sec1.id, dims=DIMS_2700, reverses_id=recv1.id,
     )
     await _record(
         session, user_id=user_id, product_id=product_id, reason=Reason.TRANSFER_RECEIVE,
@@ -385,7 +385,7 @@ async def test_net_by_reason_final_release_compensation(session: AsyncSession) -
     await _record(
         session, user_id=user_id, product_id=product_id, reason=Reason.FINAL_RELEASE,
         quantity=Decimal("10"), task_id=task2.id, line_id=line2.id,
-        location_id=sec2.id, dims=DIMS_2700, compensates_tx_id=rel1.id,
+        location_id=sec2.id, dims=DIMS_2700, reverses_id=rel1.id,
     )
     await session.commit()
     # вычитается, а не исключается: 10 - 10 == 0 (не 10)

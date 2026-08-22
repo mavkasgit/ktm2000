@@ -172,14 +172,14 @@ async def test_compensation_bypasses_balance_check(session: AsyncSession):
 
     # Баланс на raw стал 0.
     # Компенсационная транзакция списания с raw, где баланс сейчас равен 0.
-    # Так как это компенсация (compensates_tx_id = tx_in.id), она должна пройти успешно.
+    # Так как это компенсация (reverses_id = tx_in.id), она должна пройти успешно.
     tx_comp = await svc.record(session, StockCommand(
         product_id=product.id,
         from_location_id=raw.id,
         to_location_id=laser.id,
         quantity=Decimal("10"),
         reason=Reason.TRANSFER_SEND,
-        compensates_tx_id=tx_in.id,
+        reverses_id=tx_in.id,
         created_by=user.id,
     ))
     await session.commit()

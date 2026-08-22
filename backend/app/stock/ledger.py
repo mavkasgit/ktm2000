@@ -5,7 +5,7 @@
 
 Семантика нетто (contract):
   net(reason) = Σ активных транзакций причины − Σ компенсирующих транзакций.
-Компенсация = запись с ``compensates_tx_id`` → исходная; из net ВЫЧИТАЕТСЯ
+Компенсация = запись с ``reverses_id`` → исходная; из net ВЫЧИТАЕТСЯ
 компенсирующая запись, а не исключается скомпенсированная.
 
 Единственный источник компенсационной арифметики — ``net_quantity_expr()``
@@ -13,7 +13,7 @@
 grouped-by-dimensions / SQL-подзапрос); thin wrappers (``net_transferred`` и
 т.п.) — специализированные причины для удобства потребителей. Потребители
 строят свои GROUP BY / JOIN над ``net_quantity_expr()`` и не интерпретируют
-``compensates_tx_id`` для вычисления net самостоятельно.
+``reverses_id`` для вычисления net самостоятельно.
 
 Capability и policy разделены (ADR-0017): ledger умеет вычислять net для
 ЛЮБОЙ причины; какие причины бизнес-операция вправе компенсировать — решение
@@ -57,13 +57,13 @@ def _dimensions_match_clause(column, dims: dict | None):
 def net_quantity_expr():
     """Row-level net-количество одной строки ledger: компенсация вычитается.
 
-    ``case(compensates_tx_id IS NULL → quantity, else_ -quantity)`` — единая
+    ``case(reverses_id IS NULL → quantity, else_ -quantity)`` — единая
     нетто-формула для ЛЮБОЙ причины (ADR-0017). Единственное место, где
-    ``compensates_tx_id`` интерпретируется для вычисления net; всё остальное
+    ``reverses_id`` интерпретируется для вычисления net; всё остальное
     строится поверх этого выражения.
     """
     return case(
-        (StockTransaction.compensates_tx_id.is_(None), StockTransaction.quantity),
+        (StockTransaction.reverses_id.is_(None), StockTransaction.quantity),
         else_=-StockTransaction.quantity,
     )
 

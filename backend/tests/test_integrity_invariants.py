@@ -151,7 +151,7 @@ _STOCK_LEDGER_INVARIANT_QUERIES: list[tuple[str, str]] = [
         FROM transfers t
         LEFT JOIN (
             SELECT transfer_id,
-                   SUM(CASE WHEN compensates_tx_id IS NULL THEN quantity
+                   SUM(CASE WHEN reverses_id IS NULL THEN quantity
                              ELSE -quantity END) AS net_send
             FROM stock_transactions WHERE reason = 'transfer_send'
             GROUP BY transfer_id
@@ -188,7 +188,7 @@ _STOCK_LEDGER_INVARIANT_QUERIES: list[tuple[str, str]] = [
         SELECT g.task_id, g.dimensions AS dims, g.net_transferred
         FROM (
             SELECT task_id, dimensions,
-                   SUM(CASE WHEN compensates_tx_id IS NULL
+                   SUM(CASE WHEN reverses_id IS NULL
                             THEN quantity ELSE -quantity END) AS net_transferred
             FROM stock_transactions
             WHERE reason = 'transfer_send'
@@ -227,7 +227,7 @@ _STOCK_LEDGER_INVARIANT_QUERIES: list[tuple[str, str]] = [
     ),
     # D4 (ADR-0018): нетто FINAL_RELEASE по (задача, размер) не превышает
     # произведённое (COMPLETE) по (задача, размер). Net = компенсации
-    # вычитаются (compensates_tx_id). Write-guard final_release читает тот же
+    # вычитаются (reverses_id). Write-guard final_release читает тот же
     # канонический net, поэтому факт не может выйти за границы производства.
     (
         "D4_final_release_net_within_produced",
@@ -236,7 +236,7 @@ _STOCK_LEDGER_INVARIANT_QUERIES: list[tuple[str, str]] = [
                COALESCE(p.produced, 0) AS produced
         FROM (
             SELECT task_id, dimensions,
-                   SUM(CASE WHEN compensates_tx_id IS NULL THEN quantity
+                   SUM(CASE WHEN reverses_id IS NULL THEN quantity
                             ELSE -quantity END) AS net_released
             FROM stock_transactions
             WHERE reason = 'final_release'

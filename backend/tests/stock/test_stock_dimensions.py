@@ -441,7 +441,7 @@ async def test_transfer_send_preserves_dimensions(session: AsyncSession, client)
     comp_txs = (await session.execute(
         select(StockTransaction).where(
             StockTransaction.transfer_id == result["transfer_id"],
-            StockTransaction.compensates_tx_id.is_not(None),
+            StockTransaction.reverses_id.is_not(None),
         )
     )).scalars().all()
     assert len(comp_txs) == 2

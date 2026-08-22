@@ -54,7 +54,7 @@ async def _release_and_compensate(
             reason=Reason.FINAL_RELEASE,
             task_id=task_id,
             dimensions=dims,
-            compensates_tx_id=release_tx_id,
+            reverses_id=release_tx_id,
             created_by=user_id,
         ),
     )

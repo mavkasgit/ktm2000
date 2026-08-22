@@ -267,7 +267,7 @@ async def cleanup_endpoint(
             ],
             "stock_transactions": [
                 ("defects", "stock_transaction_id"),
-                ("stock_transactions", "compensates_tx_id"),
+                ("stock_transactions", "reverses_id"),
             ],
             "work_tasks": [
                 ("defects", "task_id"),
