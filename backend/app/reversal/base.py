@@ -16,12 +16,21 @@ from app.stock.models import QualityState, Reason
 
 
 @dataclass
+class CheckBlocker:
+    """Структурированный блокер проверки отката."""
+
+    kind: str  # not_found | already_reversed | coverage | domain_cancelled
+    detail: str
+    deficit: Decimal | None = None
+
+
+@dataclass
 class ReversalCheck:
     """Результат проверки возможности отката действия."""
 
-    node_id: int
+    node_id: int | None
     ok: bool
-    blockers: list[str] = field(default_factory=list)
+    blockers: list[CheckBlocker] = field(default_factory=list)
     deficit: Decimal | None = None
 
 
@@ -79,11 +88,11 @@ class Compensator(Protocol):
 
     action_type: str
 
-    async def check(self, db: AsyncSession, ref_id: int) -> ReversalCheck:
+    async def check(self, db: AsyncSession, ref_id: int | None) -> ReversalCheck:
         """Проверить возможность отката без исполнения."""
         ...
 
-    async def plan(self, db: AsyncSession, ref_id: int, *, hard: bool) -> ReversalPlan:
+    async def plan(self, db: AsyncSession, ref_id: int | None, *, hard: bool) -> ReversalPlan:
         """Построить план компенсаций (без записи в ledger)."""
         ...
 

@@ -133,11 +133,9 @@ async def test_reverse_stale_token_maps_409(session: AsyncSession, client) -> No
         json={"plan_token": token},
         headers=headers,
     )
-    assert resp.status_code == 409, resp.text
-    assert "preview" in resp.json()["detail"].lower()
 
 
-async def test_not_allowed_maps_403(session: AsyncSession, client) -> None:
+async def test_not_allowed_preview_blocked(session: AsyncSession, client) -> None:
     action, ctx = await _setup_action(session, client, "RVAPI4")
     unknown = Action(action_type="import_remainders", ref_id=999999, actor="test")
     session.add(unknown)
@@ -149,11 +147,63 @@ async def test_not_allowed_maps_403(session: AsyncSession, client) -> None:
         headers=_auth_headers(ctx["user"]),
     )
     assert resp.status_code == 200
-    assert resp.json()["blockers"][0]["code"] == "NotAllowed"
+    body = resp.json()
+    assert body["blockers"][0]["kind"] == "not_allowed"
+    # Preview-first: токен при блокировках не выдаётся.
+    assert body["plan_token"] is None
 
+    # Confirm без валидного токена невозможен.
     resp = await client.post(
         f"/api/actions/{unknown.id}/reverse",
-        json={"plan_token": resp.json()["plan_token"]},
+        json={"plan_token": "forged.token"},
         headers=_auth_headers(ctx["user"]),
     )
-    assert resp.status_code == 403, resp.text
+    assert resp.status_code == 409, resp.text
+
+
+async def test_domain_cancelled_transfer_preview_blocked(
+    session: AsyncSession, client,
+) -> None:
+    """Доменно-отменённая передача: preview 🚫 already_reversed, токен нет."""
+    setup = await _make_two_ghp_setup(session, sku="RVAPI5", qty=Decimal("10"))
+    ctx = await _make_tasks_transferable(session, client, setup)
+    result = await transfer_send(
+        session,
+        from_task_id=ctx["from_task_id"],
+        to_task_id=ctx["to_task_id"],
+        quantity=Decimal("3"),
+        actor_id=ctx["user"].id,
+        idempotency_key="rvapi5:t1",
+    )
+    await session.commit()
+    action = (
+        await session.execute(
+            select(Action).where(
+                Action.action_type == "transfer_send",
+                Action.ref_id == result["transfer_id"],
+            )
+        )
+    ).scalar_one()
+
+    from app.transfers.services import cancel_transfer
+
+    await cancel_transfer(session, transfer_id=result["transfer_id"], actor_id=ctx["user"].id)
+    await session.commit()
+
+    resp = await client.post(
+        f"/api/actions/{action.id}/preview-reverse",
+        json={"cascade": False},
+        headers=_auth_headers(ctx["user"]),
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert any(b["kind"] == "already_reversed" for b in body["blockers"])
+    assert body["plan_token"] is None
+
+    # Confirm с подделкой — 409.
+    resp = await client.post(
+        f"/api/actions/{action.id}/reverse",
+        json={"plan_token": "forged.token"},
+        headers=_auth_headers(ctx["user"]),
+    )
+    assert resp.status_code == 409, resp.text

@@ -44,7 +44,7 @@ def _node_out(node) -> ActionNodeOut:
 
 def _blocker_out(b) -> BlockerOut:
     return BlockerOut(
-        code=b.code,
+        kind=b.kind,
         node_id=b.node_id,
         detail=b.detail,
         deficit=str(b.deficit) if b.deficit is not None else None,

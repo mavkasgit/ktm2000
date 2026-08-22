@@ -31,7 +31,7 @@ class TreeOut(BaseModel):
 
 
 class BlockerOut(BaseModel):
-    code: str
+    kind: str
     node_id: int | None = None
     detail: str
     deficit: str | None = None
@@ -46,7 +46,7 @@ class PreviewOut(BaseModel):
     revert: list[ActionNodeOut]
     stays: list[ActionNodeOut]
     blockers: list[BlockerOut]
-    plan_token: str
+    plan_token: str | None = None  # None при блокировках
 
 
 class ReverseResultOut(BaseModel):

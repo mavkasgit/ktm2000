@@ -70,11 +70,11 @@ class ActionTree:
 
 @dataclass
 class Blocker:
-    code: str  # HasDependentActions | CoverageShortfall | NotAllowed | AlreadyReversed
+    kind: str  # has_dependents | coverage | not_allowed | already_reversed | not_found
     node_id: int | None
     detail: str
     deficit: Decimal | None = None
-    chain: list[int] | None = None  # для HasDependentActions
+    chain: list[int] | None = None  # для has_dependents
 
 
 @dataclass
@@ -84,7 +84,7 @@ class ReversalPreview:
     revert: list[ActionNode]   # 🔴 отменится
     stays: list[ActionNode]    # ⚪ останется (уже отменённые — пропускаются)
     blockers: list[Blocker]    # 🚫 блокировки
-    plan_token: str
+    plan_token: str | None  # None при блокировках: confirm невозможен без повторного preview
 
 
 def _sign_payload(payload: dict) -> str:
@@ -167,28 +167,37 @@ class ReversalService:
 
     async def _cascade_set(
         self, db: AsyncSession, target: Action, *, cascade: bool
-    ) -> tuple[list[Action], list[Action]]:
-        """(активный каскад, уже отменённые dependents)."""
+    ) -> tuple[list[Action], list[Action], list[Action]]:
+        """(активный каскад, отменённые dependents, активные потомки
+        отменённого). Цепочка собирается полностью — без break; при
+        cascade=True обходится и поддерево уже отменённого dependent,
+        чтобы ни один узел не потерялся из трёх зон."""
         dependents = await self._dependents_map(db)
         active: list[Action] = []
         reverted: list[Action] = []
-        queue = [target.id]
+        orphan_active: list[Action] = []  # активные потомки отменённого узла
+        queue: list[tuple[int, bool]] = [(target.id, False)]  # (id, ниже_отменённого)
         seen: set[int] = {target.id}
         while queue:
-            aid = queue.pop(0)
+            aid, below_reverted = queue.pop(0)
             for dep in dependents.get(aid, []):
                 if dep.id in seen:
                     continue
                 seen.add(dep.id)
-                if dep.status == ActionStatus.ACTIVE and cascade:
-                    active.append(dep)
-                    queue.append(dep.id)
-                    continue
-                if not cascade:
-                    active.append(dep)  # для блокировки HasDependentActions
-                    break
-                reverted.append(dep)
-        return active, reverted
+                if dep.status == ActionStatus.ACTIVE:
+                    if below_reverted and cascade:
+                        orphan_active.append(dep)
+                        queue.append((dep.id, True))
+                    else:
+                        active.append(dep)  # полная цепочка для блокировки/каскада
+                        queue.append((dep.id, False))
+                else:
+                    reverted.append(dep)
+                    if cascade:
+                        # Поддерево отменённого не теряем: его активные
+                        # потомки попадают в блокировки.
+                        queue.append((dep.id, True))
+        return active, reverted, orphan_active
 
     async def _fingerprint(self, db: AsyncSession, node_ids: list[int]) -> str:
         max_tx = await db.scalar(select(func.max(StockTransaction.id))) or 0
@@ -214,7 +223,7 @@ class ReversalService:
         if target.status != ActionStatus.ACTIVE:
             raise AlreadyReversed(action_id)
 
-        cascade_actions, reverted_dependents = await self._cascade_set(
+        cascade_actions, reverted_dependents, orphan_active = await self._cascade_set(
             db, target, cascade=cascade
         )
         # 🔴 отменяется цель + активный каскад (только при cascade=True);
@@ -225,10 +234,23 @@ class ReversalService:
         if not cascade and cascade_actions:
             blockers.append(
                 Blocker(
-                    code="HasDependentActions",
+                    kind="has_dependents",
                     node_id=target.id,
                     detail="Есть зависимые действия; включите cascade",
                     chain=[a.id for a in cascade_actions],
+                )
+            )
+
+        # Активные потомки уже отменённого узла — не теряются из зон: 🚫.
+        for orphan in orphan_active:
+            blockers.append(
+                Blocker(
+                    kind="already_reversed",
+                    node_id=orphan.id,
+                    detail=(
+                        f"Действие #{orphan.id} активно, но построено поверх "
+                        f"уже отменённого — сначала пересмотрите его состояние"
+                    ),
                 )
             )
 
@@ -237,30 +259,31 @@ class ReversalService:
             if comp is None:
                 blockers.append(
                     Blocker(
-                        code="NotAllowed",
+                        kind="not_allowed",
                         node_id=node.id,
                         detail=f"нет компенсатора для action_type={node.action_type}",
                     )
                 )
                 continue
-            check = await comp.check(db, node.ref_id if node.ref_id is not None else -1)
+            check = await comp.check(db, node.ref_id)
             if not check.ok:
-                for detail in check.blockers:
+                for cb in check.blockers:
                     blockers.append(
-                        Blocker(
-                            code="CoverageShortfall" if check.deficit else "AlreadyReversed",
-                            node_id=node.id,
-                            detail=detail,
-                            deficit=check.deficit,
-                        )
+                        Blocker(kind=cb.kind, node_id=node.id, detail=cb.detail, deficit=cb.deficit)
                     )
 
-        token = _sign_payload(
-            {
-                "action_id": action_id,
-                "cascade": cascade,
-                "fp": await self._fingerprint(db, [n.id for n in revert_nodes]),
-            }
+        # Preview-first: при блокировках план-токен не выдаётся —
+        # confirm невозможен до повторного preview.
+        token = (
+            _sign_payload(
+                {
+                    "action_id": action_id,
+                    "cascade": cascade,
+                    "fp": await self._fingerprint(db, [n.id for n in revert_nodes]),
+                }
+            )
+            if not blockers
+            else None
         )
         return ReversalPreview(
             action_id=action_id,
@@ -298,8 +321,12 @@ class ReversalService:
         if fresh_preview.blockers:
             self._raise_blockers(fresh_preview.blockers)
 
-        order = self._reverse_topological_order([n.id for n in fresh_preview.revert],
-                                                await self._deps_index(db))
+        if not fresh_preview.revert:
+            # Пустой набор к откату: все узлы уже отменены, блокеров нет.
+            raise AlreadyReversed(action_id)
+        order = self._reverse_topological_order(
+            [n.id for n in fresh_preview.revert], await self._deps_index(db)
+        )
         compensated_tx_ids: list[int] = []
         reversal_action_ids: list[int] = []
         reversed_action_ids: list[int] = []
@@ -312,12 +339,10 @@ class ReversalService:
             comp = self._compensator(node.action_type)
             if comp is None:
                 raise NotAllowed(f"нет компенсатора для action_type={node.action_type}")
-            check = await comp.check(db, node.ref_id if node.ref_id is not None else -1)
+            check = await comp.check(db, node.ref_id)
             if not check.ok and check.deficit:
                 raise CoverageShortfall(node=node.id, deficit=check.deficit)
-            plan: ReversalPlan = await comp.plan(
-                db, node.ref_id if node.ref_id is not None else -1, hard=False
-            )
+            plan: ReversalPlan = await comp.plan(db, node.ref_id, hard=False)
             if not plan.entries:
                 raise AlreadyReversed(node.id)
 
@@ -347,7 +372,7 @@ class ReversalService:
 
         return ReversalResult(
             action_id=action_id,
-            reversal_action_id=reversal_action_ids[-1] if reversal_action_ids else 0,
+            reversal_action_id=reversal_action_ids[-1],
             compensated_tx_ids=compensated_tx_ids,
             reversed_action_ids=reversed_action_ids,
         )
@@ -356,14 +381,17 @@ class ReversalService:
 
     @staticmethod
     def _raise_blockers(blockers: list[Blocker]) -> None:
+        """Диспетч по kind блокера (не по наличию deficit)."""
         for b in blockers:
-            if b.code == "HasDependentActions":
+            if b.kind == "has_dependents":
                 raise HasDependentActions(chain=list(b.chain or []))
-            if b.code == "CoverageShortfall":
+            if b.kind == "coverage":
                 raise CoverageShortfall(node=b.node_id or -1, deficit=b.deficit or Decimal("0"))
-            if b.code == "NotAllowed":
+            if b.kind == "not_allowed":
                 raise NotAllowed(b.detail)
-            if b.code == "AlreadyReversed":
+            if b.kind == "not_found":
+                raise ValueError(b.detail)
+            if b.kind == "already_reversed":
                 raise AlreadyReversed(b.node_id or -1)
 
     async def _deps_index(self, db: AsyncSession) -> dict[int, list[int]]:

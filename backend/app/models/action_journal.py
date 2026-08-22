@@ -58,8 +58,8 @@ class Action(Base):
     id: Mapped[int] = mapped_column(
         BigInteger, Identity(always=True), primary_key=True, autoincrement=True
     )
-    action_type: Mapped[str] = mapped_column(String(50), nullable=False)
-    ref_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    action_type: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
+    ref_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True, index=True)
     actor: Mapped[str | None] = mapped_column(String(120), nullable=True)
     status: Mapped[ActionStatus] = mapped_column(
         Enum(

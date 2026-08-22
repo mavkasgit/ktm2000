@@ -14,7 +14,9 @@ from sqlalchemy.orm import aliased
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.action_journal import Action, ActionStatus
+from app.models.transfer import Transfer, TransferStatus
 from app.reversal.base import (
+    CheckBlocker,
     PlannedEntry,
     ReversalCheck,
     ReversalPlan,
@@ -63,13 +65,50 @@ class StockCompensator:
             )
         ).scalars().all()
 
-    async def check(self, db: AsyncSession, ref_id: int) -> ReversalCheck:
+    async def check(self, db: AsyncSession, ref_id: int | None) -> ReversalCheck:
+        if ref_id is None:
+            return ReversalCheck(
+                node_id=None,
+                ok=False,
+                blockers=[CheckBlocker(kind="not_found", detail="у действия нет ref_id")],
+            )
         action = await self._get_action(db, ref_id)
         if action is None:
-            return ReversalCheck(node_id=-1, ok=False, blockers=["действие не найдено в журнале"])
+            return ReversalCheck(
+                node_id=None,
+                ok=False,
+                blockers=[
+                    CheckBlocker(
+                        kind="not_found",
+                        detail=f"{self.action_type}: действие с ref_id={ref_id} не найдено",
+                    )
+                ],
+            )
         if action.status != ActionStatus.ACTIVE:
             return ReversalCheck(
-                node_id=action.id, ok=False, blockers=[f"действие уже в статусе {action.status.value}"]
+                node_id=action.id,
+                ok=False,
+                blockers=[
+                    CheckBlocker(
+                        kind="already_reversed",
+                        detail=f"действие уже в статусе {action.status.value}",
+                    )
+                ],
+            )
+        # Доменно-отменённое действие: Transfer отменён через cancel_transfer
+        # (запись журнала при этом остаётся active). Preview-first: блокер
+        # already_reversed, confirm невозможен до повторного preview.
+        transfer = await db.get(Transfer, ref_id)
+        if transfer is not None and transfer.status == TransferStatus.cancelled:
+            return ReversalCheck(
+                node_id=action.id,
+                ok=False,
+                blockers=[
+                    CheckBlocker(
+                        kind="already_reversed",
+                        detail=f"передача #{ref_id} уже отменена в домене (status=cancelled)",
+                    )
+                ],
             )
         entries = await self._plan_entries(db, action)
         deficit = await self._coverage_deficit(db, entries)
@@ -77,12 +116,20 @@ class StockCompensator:
             return ReversalCheck(
                 node_id=action.id,
                 ok=False,
-                blockers=["недостаточно покрытия на складе для отката"],
+                blockers=[
+                    CheckBlocker(
+                        kind="coverage",
+                        detail="недостаточно покрытия на складе для отката",
+                        deficit=deficit,
+                    )
+                ],
                 deficit=deficit,
             )
         return ReversalCheck(node_id=action.id, ok=True)
 
-    async def plan(self, db: AsyncSession, ref_id: int, *, hard: bool) -> ReversalPlan:
+    async def plan(self, db: AsyncSession, ref_id: int | None, *, hard: bool) -> ReversalPlan:
+        if ref_id is None:
+            raise ValueError(f"{self.action_type}: у действия нет ref_id")
         action = await self._get_action(db, ref_id)
         if action is None:
             raise ValueError(f"{self.action_type}: действие с ref_id={ref_id} не найдено")
@@ -114,6 +161,7 @@ class StockCompensator:
                     quality_state=orig.from_quality_state,
                     to_quality_state=orig.to_quality_state,
                     task_id=orig.task_id,
+                    transfer_id=orig.transfer_id,
                     section_plan_line_id=orig.section_plan_line_id,
                     is_post_factum=orig.is_post_factum,
                     created_by=orig.created_by,
@@ -185,12 +233,19 @@ class StockCompensator:
                 ),
             )
             compensated.append(tx.id)
+        # Полная компенсация проводок передачи эквивалентна доменной отмене:
+        # Transfer уходит в cancelled, иначе S6 (accepted ⇔ net == sent)
+        # нарушается, а повторный preview честно блокируется по п.2.
+        if plan.ref_id is not None:
+            transfer = await db.get(Transfer, plan.ref_id)
+            if transfer is not None and transfer.status == TransferStatus.accepted:
+                transfer.status = TransferStatus.cancelled
+                transfer.accepted_quantity = Decimal("0")
         return ReversalResult(
             action_id=plan.action_id,
             reversal_action_id=plan.reversal_action_id,
             compensated_tx_ids=compensated,
         )
-
 
 def _dims_key(dims: dict | None) -> tuple | None:
     if dims is None:
