@@ -16,9 +16,9 @@
    обратимых действий; домены ссылаются на него (+depends_on,
    reversed_by, amends_id).
 2. **Откат — только компенсирующими записями.** Ledger append-only;
-   исключение из текущего кода устраняется: correct_transfer больше не
-   мутирует quantity активных tx in-place (transfers/services.py:716-722),
-   а переводится на компенсации.
+   последнее известное нарушение append-only — in-place мутация quantity
+   в correct_transfer (transfers/services.py) — устраняется этапом ядра
+   (#114): correct_transfer переводится на компенсации.
 3. **Единая связь отката в ledger — reverses_id.** Существующее поле
    compensates_tx_id (stock/models.py:127-129, миграция 008) переименовывается
    в reverses_id; net-арифметика (net_quantity_expr) сохраняется.
