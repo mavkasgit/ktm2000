@@ -16,6 +16,7 @@ from app.models.route import ProductionRoute, RouteOperation, RouteStage, Sectio
 from app.models.section import Section
 from app.models.work_task import WorkTask, WorkTaskStatus
 from app.services.plan_validation import _find_paired_techcard, _paired_component_skus
+from app.services.action_journal_service import action_journal_service
 from app.services.plan_position_hanger import position_dimensions_for_task
 from app.services.production_plan_service import refresh_plan_status
 from app.services.route_transform import build_transform_spec
@@ -268,8 +269,6 @@ async def release_batch(
                 actor_name = await _get_user_snapshot_name(db, actor_id)
                 # Журнал действий (#116): автозавершение = Action по
                 # цепочке задачи (ref_id=task.id).
-                from app.services.action_journal_service import action_journal_service
-
                 action = await action_journal_service.log_task_action(
                     db,
                     action_type="plan_auto_release",

@@ -34,6 +34,7 @@ from app.models.section import Section
 from app.models.user import User
 from app.stock.models import QualityState, Reason, StockBalance
 from app.stock.services import StockCommand, StockCommandService
+from app.services.action_journal_service import action_journal_service
 from app.services.dimension_validation import (
     MissingDimensionsError,
     resolve_product_dimensions,
@@ -125,7 +126,7 @@ class ImportResult:
     errors: list[str]
     transaction_ids: list[int]
     # Id журнального действия (Action.import_remainders), покрывающего батч.
-    id: int | None = None
+    action_id: int | None = None
 
 
 # ─── Quality value aliases (не относятся к разрешению колонок) ────────────────
@@ -871,8 +872,6 @@ async def apply_remainders_import(
     # (очистка + заливка) несут его action_id и общий source_ref
     # (решение 5 спеки). ref_id = id самого действия (у батча нет другой
     # естественной сущности).
-    from app.services.action_journal_service import action_journal_service
-
     action = await action_journal_service.log(db, action_type="import_remainders")
     action.ref_id = action.id
     batch_source_ref = f"import_remainders:{action.id}"
@@ -965,7 +964,7 @@ async def apply_remainders_import(
         imported_count=imported_count,
         errors=errors,
         transaction_ids=transaction_ids,
-        id=action.id,
+        action_id=action.id,
     )
 
 

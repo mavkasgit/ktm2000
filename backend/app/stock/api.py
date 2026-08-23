@@ -48,6 +48,7 @@ from app.stock.models import (
     StockTransaction,
 )
 from app.stock.services import StockCommand, StockCommandService, StockValidationError
+from app.services.action_journal_service import action_journal_service
 from app.stock.import_service import (
     ImportResult,
     RemainderItem,
@@ -766,8 +767,6 @@ async def create_adjustment(
             detail=f"reason must be one of {[r.value for r in _ADJUSTMENT_REASONS]}, got {payload.reason.value}",
         )
     # Журнал действий (#116): ручная корректировка = Action без ref_id.
-    from app.services.action_journal_service import action_journal_service
-
     action = await action_journal_service.log(
         db,
         action_type="manual_adjustment",

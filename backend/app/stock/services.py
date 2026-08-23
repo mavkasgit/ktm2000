@@ -613,20 +613,24 @@ class StockCommandService:
             loc = await session.get(Section, loc_id)
             if loc is None:
                 raise StockValidationError(f"{label}={loc_id} not found")
-        # Reason ↔ quality_state consistency
+        # Reason ↔ quality_state consistency — только для прямых операций:
+        # компенсация (reverses_id) зеркалит исходную проводку 1:1, включая
+        # обратный переход качества (напр. scrap → good при отмене, #116).
         to_qs = cmd.to_quality_state or cmd.quality_state
-        if cmd.reason == Reason.SCRAP:
+        if cmd.reverses_id is not None:
+            pass  # зеркало исходной проводки: доменные reason-правила не применяются
+        elif cmd.reason == Reason.SCRAP:
             if cmd.quality_state != QualityState.GOOD or to_qs != QualityState.SCRAP:
                 raise StockValidationError(
                     f"reason=scrap requires from_quality=good, to_quality=scrap; "
                     f"got from={cmd.quality_state.value}, to={to_qs.value}"
                 )
-        if cmd.reason == Reason.REWORK:
+        elif cmd.reason == Reason.REWORK:
             if to_qs != QualityState.REWORK:
                 raise StockValidationError(
                     f"reason=rework requires to_quality=rework, got {to_qs.value}"
                 )
-        if cmd.reason == Reason.COMPLETE and to_qs != QualityState.GOOD:
+        elif cmd.reason == Reason.COMPLETE and to_qs != QualityState.GOOD:
             raise StockValidationError(
                 f"reason=complete requires to_quality=good, got {to_qs.value}"
             )

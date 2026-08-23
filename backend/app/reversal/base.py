@@ -92,11 +92,25 @@ class Compensator(Protocol):
 
     action_type: str
 
-    async def check(self, db: AsyncSession, ref_id: int | None) -> ReversalCheck:
-        """Проверить возможность отката без исполнения."""
+    async def check(
+        self, db: AsyncSession, ref_id: int | None, *, action_id: int | None = None
+    ) -> ReversalCheck:
+        """Проверить возможность отката без исполнения.
+
+        ``action_id`` — id узла журнала (тикет #116): для действий без
+        уникального ref_id (напр. manual_adjustment) пара
+        (action_type, ref_id) неоднозначна.
+        """
         ...
 
-    async def plan(self, db: AsyncSession, ref_id: int | None, *, hard: bool) -> ReversalPlan:
+    async def plan(
+        self,
+        db: AsyncSession,
+        ref_id: int | None,
+        *,
+        hard: bool,
+        action_id: int | None = None,
+    ) -> ReversalPlan:
         """Построить план компенсаций (без записи в ledger)."""
         ...
 

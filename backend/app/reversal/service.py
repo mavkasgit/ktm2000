@@ -21,7 +21,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.models.action_journal import Action, ActionStatus
-from app.reversal.base import Compensator, ReversalPlan, ReversalResult
 from app.reversal.errors import (
     AlreadyReversed,
     CoverageShortfall,
@@ -29,6 +28,8 @@ from app.reversal.errors import (
     NotAllowed,
     StalePlanToken,
 )
+from app.reversal.action_compensator import StockActionCompensator
+from app.reversal.base import Compensator, ReversalPlan, ReversalResult
 from app.reversal.stock_compensator import StockCompensator
 from app.stock.models import StockTransaction
 
@@ -144,6 +145,10 @@ class ReversalService:
         self._compensators: dict[str, Compensator] = {}
         for at in ("transfer_send", "transfer_cancel"):
             self.register(at, StockCompensator(at))
+        # Универсальный компенсатор доменных действий (#116 волна B):
+        # shopfloor/план/импорт; seed_demo без компенсатора (решение 7).
+        for at in sorted(StockActionCompensator.ACTION_TYPES):
+            self.register(at, StockActionCompensator(at))
 
     def register(self, action_type: str, compensator: Compensator) -> None:
         self._compensators[action_type] = compensator
@@ -289,7 +294,7 @@ class ReversalService:
                     )
                 )
                 continue
-            check = await comp.check(db, node.ref_id)
+            check = await comp.check(db, node.ref_id, action_id=node.id)
             if not check.ok:
                 for cb in check.blockers:
                     blockers.append(
@@ -364,10 +369,10 @@ class ReversalService:
             comp = self._compensator(node.action_type)
             if comp is None:
                 raise NotAllowed(f"нет компенсатора для action_type={node.action_type}")
-            check = await comp.check(db, node.ref_id)
+            check = await comp.check(db, node.ref_id, action_id=node.id)
             if not check.ok and check.deficit:
                 raise CoverageShortfall(node=node.id, deficit=check.deficit)
-            plan: ReversalPlan = await comp.plan(db, node.ref_id, hard=False)
+            plan: ReversalPlan = await comp.plan(db, node.ref_id, hard=False, action_id=node.id)
             if not plan.entries:
                 raise AlreadyReversed(node.id)
 
@@ -483,7 +488,7 @@ class ReversalService:
             if node.id == target.id:
                 check = await node_comp.check_amend(db, node.ref_id, changes)
             else:
-                check = await node_comp.check(db, node.ref_id)
+                check = await node_comp.check(db, node.ref_id, action_id=node.id)
             if not check.ok:
                 for cb in check.blockers:
                     blockers.append(
@@ -574,10 +579,10 @@ class ReversalService:
             )
             if node_comp is None:
                 raise NotAllowed(f"нет компенсатора для action_type={node.action_type}")
-            check = await node_comp.check(db, node.ref_id)
+            check = await node_comp.check(db, node.ref_id, action_id=node.id)
             if not check.ok and check.deficit:
                 raise CoverageShortfall(node=node.id, deficit=check.deficit)
-            plan: ReversalPlan = await node_comp.plan(db, node.ref_id, hard=False)
+            plan: ReversalPlan = await node_comp.plan(db, node.ref_id, hard=False, action_id=node.id)
             if not plan.entries:
                 raise AlreadyReversed(node.id)
             # Компенсации внутри amend отличимы от reverse-компенсаций того

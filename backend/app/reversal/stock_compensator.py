@@ -1,9 +1,13 @@
-"""StockCompensator — первый доменный компенсатор (ADR-0019, тикет #114).
+"""StockCompensator — компенсатор стоковых действий (ADR-0019, тикет #114).
 
 Покрывает стоковые действия ``transfer_send`` и ``transfer_cancel``
 (``ref_id`` = id Transfer). Откат — зеркальные проводки 1:1 (те же
 product/from/to/dimensions/quantity, локации перевёрнуты,
 ``reverses_id`` = исходная проводка), без партионности (ADR-0001).
+
+Зеркальная механика (план/покрытие/исполнение) выделена в
+``MirrorLedgerMixin`` и переиспользуется универсальным
+``StockActionCompensator`` (тикет #116).
 """
 from __future__ import annotations
 
@@ -28,27 +32,15 @@ from app.stock.services import StockCommand, StockCommandService, dimensions_mat
 _STOCK_ACTION_TYPES = ("transfer_send", "transfer_cancel")
 
 
-class StockCompensator:
-    """Компенсатор стоковых действий: план зеркальных проводок + исполнение."""
+class MirrorLedgerMixin:
+    """Зеркальная механика компенсации проводок 1:1 (ADR-0019 п.4).
 
-    def __init__(self, action_type: str, command_service: StockCommandService | None = None):
-        if action_type not in _STOCK_ACTION_TYPES:
-            raise ValueError(f"StockCompensator не покрывает action_type={action_type!r}")
-        self.action_type = action_type
-        self._commands = command_service or StockCommandService()
-
-    async def _get_action(self, db: AsyncSession, ref_id: int) -> Action | None:
-        return (
-            await db.execute(
-                select(Action)
-                .where(
-                    Action.action_type == self.action_type,
-                    Action.ref_id == ref_id,
-                )
-                .order_by(Action.id.asc())
-                .limit(1)
-            )
-        ).scalar_one_or_none()
+    Общая часть ``StockCompensator`` и ``StockActionCompensator`` (#116):
+    план зеркальных записей по проводкам одного Action (локации
+    перевёрнуты, ``reverses_id`` = исходная проводка), расчёт дефицита
+    покрытия и исполнение через StockCommandService. Требует атрибут
+    ``self._commands: StockCommandService``.
+    """
 
     @staticmethod
     async def _generation(db: AsyncSession, action: Action):
@@ -65,90 +57,15 @@ class StockCompensator:
             )
         ).scalars().all()
 
-    async def check(self, db: AsyncSession, ref_id: int | None) -> ReversalCheck:
-        if ref_id is None:
-            return ReversalCheck(
-                node_id=None,
-                ok=False,
-                blockers=[CheckBlocker(kind="not_found", detail="у действия нет ref_id")],
-            )
-        action = await self._get_action(db, ref_id)
-        if action is None:
-            return ReversalCheck(
-                node_id=None,
-                ok=False,
-                blockers=[
-                    CheckBlocker(
-                        kind="not_found",
-                        detail=f"{self.action_type}: действие с ref_id={ref_id} не найдено",
-                    )
-                ],
-            )
-        if action.status != ActionStatus.ACTIVE:
-            return ReversalCheck(
-                node_id=action.id,
-                ok=False,
-                blockers=[
-                    CheckBlocker(
-                        kind="already_reversed",
-                        detail=f"действие уже в статусе {action.status.value}",
-                    )
-                ],
-            )
-        # Доменно-отменённое действие: Transfer отменён через cancel_transfer
-        # (запись журнала при этом остаётся active). Preview-first: блокер
-        # already_reversed, confirm невозможен до повторного preview.
-        transfer = await db.get(Transfer, ref_id)
-        if transfer is not None and transfer.status == TransferStatus.cancelled:
-            return ReversalCheck(
-                node_id=action.id,
-                ok=False,
-                blockers=[
-                    CheckBlocker(
-                        kind="already_reversed",
-                        detail=f"передача #{ref_id} уже отменена в домене (status=cancelled)",
-                    )
-                ],
-            )
-        entries = await self._plan_entries(db, action)
-        deficit = await self._coverage_deficit(db, entries)
-        if deficit > 0:
-            return ReversalCheck(
-                node_id=action.id,
-                ok=False,
-                blockers=[
-                    CheckBlocker(
-                        kind="coverage",
-                        detail="недостаточно покрытия на складе для отката",
-                        deficit=deficit,
-                    )
-                ],
-                deficit=deficit,
-            )
-        return ReversalCheck(node_id=action.id, ok=True)
-
-    async def plan(self, db: AsyncSession, ref_id: int | None, *, hard: bool) -> ReversalPlan:
-        if ref_id is None:
-            raise ValueError(f"{self.action_type}: у действия нет ref_id")
-        action = await self._get_action(db, ref_id)
-        if action is None:
-            raise ValueError(f"{self.action_type}: действие с ref_id={ref_id} не найдено")
-        entries = await self._plan_entries(db, action)
-        return ReversalPlan(
-            action_id=action.id,
-            action_type=self.action_type,
-            ref_id=ref_id,
-            hard=hard,
-            entries=entries,
-        )
-
     async def _plan_entries(
         self, db: AsyncSession, action: Action
     ) -> list[PlannedEntry]:
         originals = await self._generation(db, action)
         entries: list[PlannedEntry] = []
         for orig in originals:
-            # Переворот локаций: исходная приёмная сторона становится источником.
+            # Переворот локаций И качества: компенсация забирает материал
+            # с целевой стороны в том состоянии, в котором он туда пришёл
+            # (to_quality_state), и возвращает исходное состояние (#116).
             entries.append(
                 PlannedEntry(
                     source_tx_id=orig.id,
@@ -158,8 +75,8 @@ class StockCompensator:
                     quantity=orig.quantity,
                     dimensions=orig.dimensions,
                     reason=orig.reason,
-                    quality_state=orig.from_quality_state,
-                    to_quality_state=orig.to_quality_state,
+                    quality_state=orig.to_quality_state or orig.from_quality_state,
+                    to_quality_state=orig.from_quality_state,
                     task_id=orig.task_id,
                     transfer_id=orig.transfer_id,
                     section_plan_line_id=orig.section_plan_line_id,
@@ -224,7 +141,9 @@ class StockCompensator:
         need, dims_by_key = self._coverage_needs(entries)
         return await self._deficit_for(db, need, dims_by_key)
 
-    async def apply(self, db: AsyncSession, plan: ReversalPlan, actor: str) -> ReversalResult:
+    async def _apply_entries(self, db: AsyncSession, plan: ReversalPlan, actor: str) -> list[int]:
+        """Исполнить план: зеркальная проводка на каждую запись плана с
+        ``reverses_id`` = исходная проводка. Возвращает ids созданных tx."""
         if plan.reversal_action_id is None:
             raise ValueError("plan.reversal_action_id не проставлен ReversalService")
         comment = plan.comment or f"reversal of action #{plan.action_id}"
@@ -256,6 +175,123 @@ class StockCompensator:
                 ),
             )
             compensated.append(tx.id)
+        return compensated
+
+
+class StockCompensator(MirrorLedgerMixin):
+    """Компенсатор стоковых действий: план зеркальных проводок + исполнение."""
+
+    def __init__(self, action_type: str, command_service: StockCommandService | None = None):
+        if action_type not in _STOCK_ACTION_TYPES:
+            raise ValueError(f"StockCompensator не покрывает action_type={action_type!r}")
+        self.action_type = action_type
+        self._commands = command_service or StockCommandService()
+
+    async def _get_action(self, db: AsyncSession, ref_id: int) -> Action | None:
+        return (
+            await db.execute(
+                select(Action)
+                .where(
+                    Action.action_type == self.action_type,
+                    Action.ref_id == ref_id,
+                )
+                .order_by(Action.id.asc())
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+
+    async def check(
+        self, db: AsyncSession, ref_id: int | None, *, action_id: int | None = None
+    ) -> ReversalCheck:
+        # action_id игнорируется: у transfer ref_id уникален и сам идентифицирует
+        # действие; параметр принят ради единого контракта Compensator (#116).
+        del action_id
+        if ref_id is None:
+            return ReversalCheck(
+                node_id=None,
+                ok=False,
+                blockers=[CheckBlocker(kind="not_found", detail="у действия нет ref_id")],
+            )
+        action = await self._get_action(db, ref_id)
+        if action is None:
+            return ReversalCheck(
+                node_id=None,
+                ok=False,
+                blockers=[
+                    CheckBlocker(
+                        kind="not_found",
+                        detail=f"{self.action_type}: действие с ref_id={ref_id} не найдено",
+                    )
+                ],
+            )
+        if action.status != ActionStatus.ACTIVE:
+            return ReversalCheck(
+                node_id=action.id,
+                ok=False,
+                blockers=[
+                    CheckBlocker(
+                        kind="already_reversed",
+                        detail=f"действие уже в статусе {action.status.value}",
+                    )
+                ],
+            )
+        # Доменно-отменённое действие: Transfer отменён через cancel_transfer
+        # (запись журнала при этом остаётся active). Preview-first: блокер
+        # already_reversed, confirm невозможен до повторного preview.
+        transfer = await db.get(Transfer, ref_id)
+        if transfer is not None and transfer.status == TransferStatus.cancelled:
+            return ReversalCheck(
+                node_id=action.id,
+                ok=False,
+                blockers=[
+                    CheckBlocker(
+                        kind="already_reversed",
+                        detail=f"передача #{ref_id} уже отменена в домене (status=cancelled)",
+                    )
+                ],
+            )
+        entries = await self._plan_entries(db, action)
+        deficit = await self._coverage_deficit(db, entries)
+        if deficit > 0:
+            return ReversalCheck(
+                node_id=action.id,
+                ok=False,
+                blockers=[
+                    CheckBlocker(
+                        kind="coverage",
+                        detail="недостаточно покрытия на складе для отката",
+                        deficit=deficit,
+                    )
+                ],
+                deficit=deficit,
+            )
+        return ReversalCheck(node_id=action.id, ok=True)
+
+    async def plan(
+        self,
+        db: AsyncSession,
+        ref_id: int | None,
+        *,
+        hard: bool,
+        action_id: int | None = None,
+    ) -> ReversalPlan:
+        del action_id  # см. check(): ref_id для transfer уникален
+        if ref_id is None:
+            raise ValueError(f"{self.action_type}: у действия нет ref_id")
+        action = await self._get_action(db, ref_id)
+        if action is None:
+            raise ValueError(f"{self.action_type}: действие с ref_id={ref_id} не найдено")
+        entries = await self._plan_entries(db, action)
+        return ReversalPlan(
+            action_id=action.id,
+            action_type=self.action_type,
+            ref_id=ref_id,
+            hard=hard,
+            entries=entries,
+        )
+
+    async def apply(self, db: AsyncSession, plan: ReversalPlan, actor: str) -> ReversalResult:
+        compensated = await self._apply_entries(db, plan, actor)
         # Полная компенсация проводок передачи эквивалентна доменной отмене:
         # Transfer уходит в cancelled, иначе S6 (accepted ⇔ net == sent)
         # нарушается, а повторный preview честно блокируется по п.2.
@@ -469,6 +505,7 @@ class StockCompensator:
             idempotency_key=f"amend:{action.id}",
             action=action,
         )
+
 
 def _dims_key(dims: dict | None) -> tuple | None:
     if dims is None:

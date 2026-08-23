@@ -33,6 +33,8 @@ from app.models.user import User
 from app.models.work_task import WorkTask
 from app.seeds.canon.dependencies import get_plant_config
 from app.seeds.canon.models import PlantConfig
+from app.services.action_journal_service import action_journal_service
+from app.services.shopfloor.common import _get_user_snapshot_name
 from app.services.shopfloor_service import (
     add_defect_item,
     complete_task,
@@ -975,14 +977,13 @@ async def return_remainder(
 
         now = datetime.now(UTC)
         svc = StockCommandService()
-        # Журнал действий (#116): Action по цепочке задачи.
-        from app.services.action_journal_service import action_journal_service
-
+        # Журнал действий (#116): Action по цепочке задачи; actor —
+        # снимок имени пользователя, как в complete_task/defect_decide.
         action = await action_journal_service.log_task_action(
             db,
             action_type="return_to_stock",
             ref_id=task.id,
-            actor=current_user.full_name or current_user.username,
+            actor=await _get_user_snapshot_name(db, current_user.id),
         )
         # return_to_stock: material removed from section (to_location=None for now)
         tx = await svc.record(db, StockCommand(

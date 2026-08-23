@@ -137,7 +137,7 @@ async def test_reverse_stale_token_maps_409(session: AsyncSession, client) -> No
 
 async def test_not_allowed_preview_blocked(session: AsyncSession, client) -> None:
     action, ctx = await _setup_action(session, client, "RVAPI4")
-    unknown = Action(action_type="import_remainders", ref_id=999999, actor="test")
+    unknown = Action(action_type="nonexistent_type", ref_id=999999, actor="test")
     session.add(unknown)
     await session.commit()
 

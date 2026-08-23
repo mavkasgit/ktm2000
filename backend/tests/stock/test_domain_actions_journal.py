@@ -284,7 +284,7 @@ async def test_import_remainders_single_action(session: AsyncSession) -> None:
     await assert_no_invariants_violations(session, context="aj-import")
 
     assert result.success is True
-    assert result.id is not None
+    assert result.action_id is not None
     assert len(result.transaction_ids) == 2  # ADJUSTMENT_OUT + MANUAL_IN
 
     actions = (await session.execute(
@@ -292,7 +292,7 @@ async def test_import_remainders_single_action(session: AsyncSession) -> None:
     )).scalars().all()
     assert len(actions) == 1
     action = actions[0]
-    assert action.id == result.id
+    assert action.id == result.action_id
     assert action.ref_id == action.id
 
     txs = (await session.execute(
@@ -301,7 +301,7 @@ async def test_import_remainders_single_action(session: AsyncSession) -> None:
     assert len(txs) == 2
     assert {tx.reason for tx in txs} == {Reason.ADJUSTMENT_OUT, Reason.MANUAL_IN}
     assert all(tx.action_id == action.id for tx in txs)
-    assert all(tx.source_ref == f"import_remainders:{result.id}" for tx in txs)
+    assert all(tx.source_ref == f"import_remainders:{result.action_id}" for tx in txs)
 
 
 async def test_seed_demo_creates_one_action(session: AsyncSession, monkeypatch) -> None:
@@ -362,4 +362,60 @@ async def test_seed_demo_creates_one_action(session: AsyncSession, monkeypatch) 
     )).scalars().all()
     assert len(seed_txs) == stats["remainders"]
 
+
+async def test_plan_auto_release_creates_action(session: AsyncSession) -> None:
+    """plan_auto_release входит в семейство цепочки задачи (TASK_ACTION_FAMILY):
+    Action по ref_id=task.id, depends_on от последнего действия задачи;
+    проводка COMPLETE с его action_id и source_ref='auto_release_remainder'.
+
+    Ветка planned_qty<=0 в plan_generation.py недостижима тестом
+    (MRP-аллокация остатков удалена, covered_qty≡0), поэтому действие
+    создаётся так же, как это делает сама ветка (plan_generation.py:269-293).
+    """
+    from app.services.action_journal_service import action_journal_service
+    from app.services.shopfloor.operations_tasks import complete_task
+
+    fx = await _setup_minimal_route(session)
+    await _issue_material(session, fx)
+    task = fx["task"]
+
+    await complete_task(
+        session,
+        task_id=task.id,
+        good_quantity=Decimal("7"),
+        defect_quantity=Decimal("0"),
+        actor_id=fx["user"].id,
+        **FAKE_SCRAP_KWARGS,
+    )
+    await session.commit()
+    complete_action = (await session.execute(
+        select(Action).where(Action.action_type == "task_complete")
+    )).scalar_one()
+
+    # Синтетический вызов ветки автозавершения из plan_generation.
+    action = await action_journal_service.log_task_action(
+        session,
+        action_type="plan_auto_release",
+        ref_id=task.id,
+        actor="AJ Plan Auto",
+    )
+    svc = StockCommandService()
+    tx = await svc.record(session, StockCommand(
+        product_id=task.product_id,
+        from_location_id=None,
+        to_location_id=task.section_id,
+        quantity=Decimal("3"),
+        reason=Reason.COMPLETE,
+        task_id=task.id,
+        source_ref="auto_release_remainder",
+        created_by=fx["user"].id,
+        action_id=action.id,
+    ))
+    await session.commit()
+    await assert_no_invariants_violations(session, context="aj-plan-auto-release")
+
+    assert action.ref_id == task.id
+    assert action.depends_on == [complete_action.id]
+    assert tx.action_id == action.id
+    assert tx.source_ref == "auto_release_remainder"
 

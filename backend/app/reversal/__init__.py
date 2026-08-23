@@ -2,8 +2,10 @@
 
 * ``base`` — контракт Compensator и структуры плана/результата;
 * ``errors`` — типизированные ошибки отката;
-* ``stock_compensator`` — компенсатор стоковых действий;
-* ``service`` — ReversalService: tree / preview_reverse / reverse.
+* ``stock_compensator`` — компенсатор стоковых действий (+ общий
+  ``MirrorLedgerMixin``);
+* ``action_compensator`` — универсальный компенсатор доменных действий
+  (shopfloor/план/импорт, тикет #116);
 """
 from app.reversal.base import (
     Compensator,

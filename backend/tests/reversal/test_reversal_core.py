@@ -392,7 +392,7 @@ async def test_not_allowed_for_unknown_action_type(
 ) -> None:
     setup = await _make_two_ghp_setup(session, sku="RVNA", qty=Decimal("10"))
     await _make_tasks_transferable(session, client, setup)
-    action = Action(action_type="import_remainders", ref_id=999999, actor="test")
+    action = Action(action_type="nonexistent_type", ref_id=999999, actor="test")
     session.add(action)
     await session.commit()
 
