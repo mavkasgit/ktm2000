@@ -1,3 +1,4 @@
+import { execFileSync } from "child_process";
 import fs from "fs";
 import path from "path";
 
@@ -7,6 +8,59 @@ export const BACKEND_URL = process.env.E2E_API_URL
 
 export function unwrapItems<T>(body: T[] | { items?: T[] }): T[] {
   return Array.isArray(body) ? body : body.items ?? [];
+}
+
+
+/**
+ * Проверить тестовую БД и при необходимости бутстрапнуть её (единое поведение
+ * для всех e2e-тестов). Перезапись — ТОЛЬКО если БД пуста: миграции + базовый
+ * сид через backend/.venv. Инициализированная БД не трогается.
+ */
+export async function ensureDbBootstrapped(): Promise<void> {
+  let sections: unknown[] = [];
+  try {
+    const res = await fetch(`${BACKEND_URL}/api/sections`);
+    sections = res.ok ? unwrapItems<unknown>(await res.json()) : [];
+  } catch {
+    throw new Error(
+      `Тест-стек недоступен на ${BACKEND_URL}. Поднимите его: ` +
+        `EXTERNAL_PORT=8100 docker compose --env-file .env.test -f infra/compose/docker-compose.test.yml up -d --build`,
+    );
+  }
+  if (sections.length > 0) {
+    return; // БД инициализирована — ничего не перезаписываем
+  }
+
+  const dbUrl =
+    process.env.E2E_TEST_DATABASE_URL ??
+    readEnvTestVar("TEST_DATABASE_URL") ??
+    process.env.DATABASE_URL;
+  if (!dbUrl) {
+    throw new Error(
+      "БД пуста, но URL не задан: установите E2E_TEST_DATABASE_URL или TEST_DATABASE_URL в .env.test",
+    );
+  }
+  const backendDir = path.resolve(process.cwd(), "../backend");
+  const py =
+    process.env.BACKEND_PYTHON ??
+    [".venv/Scripts/python.exe", ".venv/bin/python"].map((p) => path.join(backendDir, p)).find((p) =>
+      fs.existsSync(p),
+    ) ??
+    "python";
+  const env = { ...process.env, DATABASE_URL: dbUrl };
+  console.log("[ensureDbBootstrapped] БД пуста — миграции + базовый сид…");
+  execFileSync(py, ["-m", "alembic", "upgrade", "head"], { cwd: backendDir, env, stdio: "inherit" });
+  execFileSync(py, ["scripts/seed_all.py"], { cwd: backendDir, env, stdio: "inherit" });
+}
+
+/** Прочитать KEY=VALUE из корневого .env.test (без зависимости от dotenv). */
+function readEnvTestVar(key: string): string | undefined {
+  try {
+    const text = fs.readFileSync(path.resolve(process.cwd(), "../.env.test"), "utf8");
+    return text.match(new RegExp(`^${key}=(.*)$`, "m"))?.[1]?.trim();
+  } catch {
+    return undefined;
+  }
 }
 
 export async function apiSeedData() {

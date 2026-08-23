@@ -96,6 +96,7 @@ set PLAYWRIGHT_TEST_BASE_URL=http://localhost:5172
 |------|-----|----------|--------|
 | `full-cycle.spec.ts` | `@ui` | Полный цикл ЮП-009: каталог → остатки → план → approve → запуск → маршрут → отгрузка | ✅ канон |
 | `route-workflow.spec.ts` | `@ui` | Импорт-wizard диалог; legacy-кейсы полного цикла | ⚠️ частично skip (#88) |
+| `sawing-multi-length-split.spec.ts` | `@ui` | Пила: распил одной задачи на несколько разных длин (2,7 м → 0,9 м + 1,8 м) порциями через доску; ledger + остатки по длинам. Сетап — API (быстро), в кадре только действие участка | ✅ |
 | `transfers-auto-accept.spec.ts` | `@smoke` | Передача: Send со склада → auto-accept → `in_progress` (`received==issued`) | ✅ |
 | `final-release.spec.ts` | `@smoke` | Финальный выпуск кнопкой «Отправить» (#96) | ✅ |
 | `catalog-dimensions.spec.ts` | `@smoke` | Сохранение 2D/3D размеров в каталоге | ✅ |

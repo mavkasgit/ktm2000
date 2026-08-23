@@ -1,5 +1,7 @@
 import { test as base, expect, type Page } from "@playwright/test";
 
+import { ensureDbBootstrapped } from "./api-helpers";
+
 /**
  * Shared fixtures for E2E tests.
  * Provides authenticated page context and helpers for the KTM2000 workflow.
@@ -52,6 +54,7 @@ export async function loginWithBreakGlass(page: Page) {
 
 /** Авторизация, если текущая страница /login (иначе — уже вошли). */
 async function ensureAuthenticated(page: Page) {
+  await ensureDbBootstrapped();
   await stubOidcDisabled(page);
   await page.goto("/");
   await page.waitForTimeout(500);

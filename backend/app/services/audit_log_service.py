@@ -61,8 +61,10 @@ async def log_action(
     if task_ids:
         task_ids_str = ",".join(map(str, task_ids))
 
-    u_id = user.id if user else user_id
-    u_name = user.full_name if user else user_name
+    # Виртуальный break-glass пользователь не хранится в users (ADR-0006,
+    # id=0): пишем аудит с user_id=NULL, сохраняя имя, чтобы не нарушать FK.
+    u_id = user.id if user is not None and user.id else user_id
+    u_name = (user.full_name if user is not None else None) or user_name
 
     # Преобразуем енамы в строки для бд, если переданы енамы
     action_val = action.value if isinstance(action, AuditAction) else action
