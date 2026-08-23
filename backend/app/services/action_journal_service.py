@@ -22,9 +22,22 @@ class ActionJournalService:
         action_type: str,
         ref_id: int | None = None,
         actor: str | None = None,
+        depends_on: list[int] | None = None,
+        amends_action_id: int | None = None,
     ) -> Action:
-        """Создать одну запись журнала действий и вернуть её."""
-        action = Action(action_type=action_type, ref_id=ref_id, actor=actor)
+        """Создать одну запись журнала действий и вернуть её.
+
+        ``depends_on`` — зависимости (топологический порядок каскада);
+        ``amends_action_id`` — связь «изменение → исходное действие»
+        (ADR-0019, тикет #115): новое действие заменяет старое за один шаг.
+        """
+        action = Action(
+            action_type=action_type,
+            ref_id=ref_id,
+            actor=actor,
+            depends_on=list(depends_on or []),
+            amends_action_id=amends_action_id,
+        )
         db.add(action)
         await db.flush()  # получить action.id для проводок операции
         return action

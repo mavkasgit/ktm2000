@@ -13,6 +13,17 @@ class ReverseIn(BaseModel):
     reason: str | None = None
 
 
+class PreviewAmendIn(BaseModel):
+    """Изменения домена (валидует компенсатор) + флаг каскада."""
+
+    changes: dict
+    cascade: bool = False
+
+
+class AmendIn(BaseModel):
+    plan_token: str  # изменения уже подписаны в токене preview_amend
+    reason: str | None = None
+
 class ActionNodeOut(BaseModel):
     id: int
     action_type: str
@@ -43,6 +54,7 @@ class PreviewOut(BaseModel):
 
     action_id: int
     cascade: bool
+
     revert: list[ActionNodeOut]
     stays: list[ActionNodeOut]
     blockers: list[BlockerOut]
@@ -54,6 +66,15 @@ class ReverseResultOut(BaseModel):
     reversal_action_id: int
     reversed_action_ids: list[int]
     compensated_tx_ids: list[int]
+
+
+class AmendResultOut(BaseModel):
+    action_id: int
+    new_action_id: int
+    new_ref_id: int | None = None
+    compensated_tx_ids: list[int]
+    amended_action_ids: list[int]
+    reversed_action_ids: list[int]
 
 
 TreeNodeOut.model_rebuild()

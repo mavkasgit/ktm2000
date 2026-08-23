@@ -67,6 +67,10 @@ class ReversalPlan:
     # Проставляется ReversalService перед apply: проводки отката
     # ссылаются на запись Action типа reversal.
     reversal_action_id: int | None = None
+    # Префикс idempotency_key компенсационных проводок: "reversal" (откат)
+    # или "amend" (изменение, тикет #115) — различает компенсации одного
+    # и того же действия в разных операциях.
+    idem_prefix: str = "reversal"
     actor_id: int | None = None
     actor_name: str | None = None
     comment: str | None = None
@@ -99,3 +103,5 @@ class Compensator(Protocol):
     async def apply(self, db: AsyncSession, plan: ReversalPlan, actor: str) -> ReversalResult:
         """Исполнить план атомарно (в текущей транзакции сессии)."""
         ...
+
+

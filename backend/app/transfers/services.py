@@ -425,6 +425,7 @@ async def transfer_send(
     allow_over_plan: bool = False,
     physical_handover_at: datetime | None = None,
     dimensions: dict | None = None,
+    action: "Action | None" = None,
 ) -> dict:
     """Send ``quantity`` from a completed SectionTask to the next route step.
 
@@ -577,10 +578,17 @@ async def transfer_send(
     executor_name = await _get_user_snapshot_name(db, eff_executor)
 
     # Журнал действий (ADR-0019, #113): одна операция = одна запись Action;
-    # обе проводки ledger ссылаются на неё через action_id.
-    action = await action_journal_service.log(
-        db, action_type="transfer_send", ref_id=transfer.id, actor=actor_name
-    )
+    # обе проводки ledger ссылаются на неё через action_id. При amend
+    # (#115) запись уже создана ReversalService — реюзируем её, чтобы
+    # компенсации старого действия и новая пара проводок делили один
+    # action_id; иначе создаём новую запись журнала.
+    if action is None:
+        action = await action_journal_service.log(
+            db,
+            action_type="transfer_send",
+            ref_id=transfer.id,
+            actor=actor_name,
+        )
 
     # Auto-accept: since the operator confirms the transfer on the
     # /transfers page, the material is considered immediately received

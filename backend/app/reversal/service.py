@@ -87,6 +87,18 @@ class ReversalPreview:
     plan_token: str | None  # None при блокировках: confirm невозможен без повторного preview
 
 
+@dataclass
+class AmendResult:
+    """Результат amend: компенсация старого + новое действие (#115)."""
+
+    action_id: int                    # исходное (изменённое) действие
+    new_action_id: int                # новое действие (amends_action_id → action_id)
+    new_ref_id: int | None            # новый доменный объект (Transfer)
+    compensated_tx_ids: list[int] = field(default_factory=list)
+    amended_action_ids: list[int] = field(default_factory=list)   # статус → 'amended'
+    reversed_action_ids: list[int] = field(default_factory=list)  # каскадные dependents → 'reversed'
+
+
 def _sign_payload(payload: dict) -> str:
     raw = base64.urlsafe_b64encode(
         json.dumps(payload, sort_keys=True, ensure_ascii=False).encode()
@@ -95,7 +107,7 @@ def _sign_payload(payload: dict) -> str:
     return f"{raw}.{sig}"
 
 
-def _verify_token(token: str) -> dict:
+def _verify_raw_token(token: str) -> dict:
     try:
         raw, sig = token.rsplit(".", 1)
         expected = hmac.new(settings.SECRET_KEY.encode(), raw.encode(), hashlib.sha256).hexdigest()
@@ -106,8 +118,20 @@ def _verify_token(token: str) -> dict:
         if not isinstance(payload, dict):
             raise ValueError("not a dict")
         return payload
+
     except Exception as exc:  # noqa: BLE001 — любая порча токена = stale
         raise StalePlanToken("plan_token недействителен") from exc
+
+
+def _verify_token(token: str, *, kind: str = "reverse") -> dict:
+    """Распаковать и проверить plan_token; ``kind`` различает операции
+    (reverse/amend): токен preview_amend не годится для reverse и наоборот."""
+    payload = _verify_raw_token(token)
+    if payload.get("kind", "reverse") != kind:
+        raise StalePlanToken(
+            f"plan_token выдан для другой операции ({payload.get('kind')} ≠ {kind})"
+        )
+    return payload
 
 
 # ─── Сервис ──────────────────────────────────────────────────────────────────
@@ -279,6 +303,7 @@ class ReversalService:
                 {
                     "action_id": action_id,
                     "cascade": cascade,
+                    "kind": "reverse",
                     "fp": await self._fingerprint(db, [n.id for n in revert_nodes]),
                 }
             )
@@ -374,6 +399,268 @@ class ReversalService:
             action_id=action_id,
             reversal_action_id=reversal_action_ids[-1],
             compensated_tx_ids=compensated_tx_ids,
+            reversed_action_ids=reversed_action_ids,
+        )
+
+    # ── amend (тикет #115) ───────────────────────────────────────────────
+
+    @staticmethod
+    def amend_changes_from_token(plan_token: str) -> dict:
+        """Подписанные изменения из токена preview_amend (для REST-confirm)."""
+        payload = _verify_token(plan_token, kind="amend")
+        changes = payload.get("changes")
+        return dict(changes) if isinstance(changes, dict) else {}
+
+
+    def _amend_compensator(self, action_type: str):
+        """Компенсатор с поддержкой amend (duck-typing по check_amend)."""
+        comp = self._compensator(action_type)
+        return comp if comp is not None and hasattr(comp, "check_amend") else None
+
+    async def preview_amend(
+        self,
+        db: AsyncSession,
+        action_id: int,
+        changes: dict,
+        *,
+        cascade: bool = False,
+    ) -> ReversalPreview:
+        """Preview «изменить действие»: 🔴 компенсируется (+новая запись),
+        ⚪ уже отменённые dependents, 🚫 блокировки; plan_token kind='amend'.
+
+        Ограничение v1: при cascade=True зависимые действия компенсируются
+        (как в reverse), их эффекты заново НЕ воспроизводятся.
+        """
+        target = await db.get(Action, action_id)
+        if target is None:
+            raise ValueError(f"Action #{action_id} не найден")
+        if target.status != ActionStatus.ACTIVE:
+            raise AlreadyReversed(action_id)
+        comp = self._amend_compensator(target.action_type)
+        if comp is None:
+            raise NotAllowed(f"amend не поддерживается для action_type={target.action_type}")
+
+        cascade_actions, reverted_dependents, orphan_active = await self._cascade_set(
+            db, target, cascade=cascade
+        )
+        revert_nodes = [target] + (cascade_actions if cascade else [])
+        blockers: list[Blocker] = []
+
+        if not cascade and cascade_actions:
+            blockers.append(
+                Blocker(
+                    kind="has_dependents",
+                    node_id=target.id,
+                    detail="Есть зависимые действия; включите cascade",
+                    chain=[a.id for a in cascade_actions],
+                )
+            )
+        for orphan in orphan_active:
+            blockers.append(
+                Blocker(
+                    kind="already_reversed",
+                    node_id=orphan.id,
+                    detail=(
+                        f"Действие #{orphan.id} активно, но построено поверх "
+                        f"уже отменённого — сначала пересмотрите его состояние"
+                    ),
+                )
+            )
+
+        for node in revert_nodes:
+            node_comp = (
+                comp if node.id == target.id else self._compensator(node.action_type)
+            )
+            if node_comp is None:
+                blockers.append(
+                    Blocker(
+                        kind="not_allowed",
+                        node_id=node.id,
+                        detail=f"нет компенсатора для action_type={node.action_type}",
+                    )
+                )
+                continue
+            if node.id == target.id:
+                check = await node_comp.check_amend(db, node.ref_id, changes)
+            else:
+                check = await node_comp.check(db, node.ref_id)
+            if not check.ok:
+                for cb in check.blockers:
+                    blockers.append(
+                        Blocker(kind=cb.kind, node_id=node.id, detail=cb.detail, deficit=cb.deficit)
+                    )
+
+        token = (
+            _sign_payload(
+                {
+                    "action_id": action_id,
+                    "cascade": cascade,
+                    "kind": "amend",
+                    "changes": changes,
+                    "fp": await self._fingerprint(db, [n.id for n in revert_nodes]),
+                }
+            )
+            if not blockers
+            else None
+        )
+        return ReversalPreview(
+            action_id=action_id,
+            cascade=cascade,
+            revert=[ActionNode.of(n) for n in revert_nodes],
+            stays=[ActionNode.of(a) for a in reverted_dependents],
+            blockers=blockers,
+            plan_token=token,
+        )
+
+    async def amend(
+        self,
+        db: AsyncSession,
+        action_id: int,
+        *,
+        changes: dict,
+        plan_token: str,
+        reason: str | None = None,
+        actor: str = "system",
+        actor_id: int | None = None,
+    ) -> AmendResult:
+        """Атомарно: компенсировать старое действие (и каскад зависимых)
+        + применить новое с ``amends_action_id``; старое получает статус
+        ``'amended'`` (``reversed_by`` НЕ заполняется). Вся операция — одна
+        транзакция сессии: любое исключение откатывает всё (D7-A).
+        """
+        from app.stock.services import StockValidationError
+
+        target = await db.get(Action, action_id)
+        if target is None:
+            raise ValueError(f"Action #{action_id} не найден")
+
+        payload = _verify_token(plan_token, kind="amend")
+        if int(payload.get("action_id", -1)) != action_id:
+            raise StalePlanToken("plan_token выдан для другого действия")
+        if payload.get("changes") != changes:
+            raise StalePlanToken("изменения не совпадают с preview — пересмотрите preview_amend")
+        cascade = bool(payload.get("cascade", False))
+
+        fresh_preview = await self.preview_amend(
+            db, action_id, changes, cascade=cascade
+        )
+        current_fp = await self._fingerprint(db, [n.id for n in fresh_preview.revert])
+        if payload.get("fp") != current_fp:
+            raise StalePlanToken("мир изменился после preview — пересмотрите preview_amend")
+        if fresh_preview.blockers:
+            self._raise_blockers(fresh_preview.blockers)
+        if not fresh_preview.revert:
+            raise AlreadyReversed(action_id)
+
+        comp = self._amend_compensator(target.action_type)
+        assert comp is not None  # preview_amend уже проверил
+        order = self._reverse_topological_order(
+            [n.id for n in fresh_preview.revert], await self._deps_index(db)
+        )
+
+        compensated_tx_ids: list[int] = []
+        amended_action_ids: list[int] = []
+        reversed_action_ids: list[int] = []
+        new_action_id: int | None = None
+        new_ref_id: int | None = None
+
+        for node_id in order:
+            node = await db.get(Action, node_id)
+            assert node is not None
+            if node.status != ActionStatus.ACTIVE:
+                continue  # уже отменён — пропуск
+            node_comp = (
+                comp if node.id == target.id else self._compensator(node.action_type)
+            )
+            if node_comp is None:
+                raise NotAllowed(f"нет компенсатора для action_type={node.action_type}")
+            check = await node_comp.check(db, node.ref_id)
+            if not check.ok and check.deficit:
+                raise CoverageShortfall(node=node.id, deficit=check.deficit)
+            plan: ReversalPlan = await node_comp.plan(db, node.ref_id, hard=False)
+            if not plan.entries:
+                raise AlreadyReversed(node.id)
+            # Компенсации внутри amend отличимы от reverse-компенсаций того
+            # же действия (idempotency_key префикс `amend:`).
+            plan.idem_prefix = "amend"
+
+            if node.id == target.id:
+                # Новое действие создаётся ПЕРЕД проводками: компенсации
+                # старого и новая пара SEND/RECEIVE делят один action_id.
+                new_action = Action(
+                    action_type=node.action_type,
+                    ref_id=None,
+                    actor=actor,
+                    reason=reason,
+                    depends_on=list(node.depends_on or []),
+                    amends_action_id=node.id,
+                )
+                db.add(new_action)
+                await db.flush()
+
+            plan.reversal_action_id = (
+                new_action.id if node.id == target.id else plan.reversal_action_id
+            )
+            if node.id != target.id:
+                rev_action = Action(
+                    action_type="reversal",
+                    ref_id=node.ref_id,
+                    actor=actor,
+                    reason=reason,
+                    depends_on=list(node.depends_on or []),
+                )
+                db.add(rev_action)
+                await db.flush()
+                plan.reversal_action_id = rev_action.id
+
+            plan.actor_id = actor_id
+            plan.actor_name = actor
+            op = "amend" if node.id == target.id else "reversal"
+            plan.comment = f"{op} of action #{node.id}" + (f": {reason}" if reason else "")
+            result = await node_comp.apply(db, plan, actor)
+
+            if node.id == target.id:
+                try:
+                    fwd = await comp.apply_forward(
+                        db,
+                        action=new_action,
+                        ref_id=node.ref_id,
+                        changes=changes,
+                        actor=actor,
+                        actor_id=actor_id,
+                    )
+                except StockValidationError as exc:
+                    # D7-A: честный дефицит — пересчёт forward-покрытия
+                    # затронутого узла по фактическим остаткам (компенсации
+                    # уже применены; StockValidationError поднимается до
+                    # любых INSERT новой записи, транзакция чиста).
+                    deficit = await comp.forward_coverage_deficit(
+                        db, node.ref_id, changes
+                    )
+                    raise CoverageShortfall(node=node.id, deficit=deficit) from exc
+                except ValueError as exc:
+                    # Доменные guard'ы transfer_send (маршрут/план/лимиты):
+                    # preview проверяет склад, но не маршрут — честный 403.
+                    raise NotAllowed(f"amend отклонён доменом: {exc}") from exc
+                new_action.ref_id = fwd["transfer_id"]
+                new_action_id = new_action.id
+                new_ref_id = fwd["transfer_id"]
+                node.status = ActionStatus.AMENDED  # не reversed_by: это не откат
+                amended_action_ids.append(node.id)
+            else:
+                node.reversed_by_action_id = plan.reversal_action_id
+                node.status = ActionStatus.REVERSED
+                reversed_action_ids.append(node.id)
+            await db.flush()
+            compensated_tx_ids.extend(result.compensated_tx_ids)
+
+        assert new_action_id is not None
+        return AmendResult(
+            action_id=action_id,
+            new_action_id=new_action_id,
+            new_ref_id=new_ref_id,
+            compensated_tx_ids=compensated_tx_ids,
+            amended_action_ids=amended_action_ids,
             reversed_action_ids=reversed_action_ids,
         )
 
