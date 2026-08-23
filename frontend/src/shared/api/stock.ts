@@ -131,7 +131,7 @@ export type StockTransactionEntry = {
   task_id: number | null;
   transfer_id: number | null;
   section_plan_line_id: number | null;
-  compensates_tx_id: number | null;
+  reverses_id: number | null;
   source_ref: string | null;
   idempotency_key: string | null;
   comment: string | null;

@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from "react"
 import { NavLink, Outlet, useLocation } from "react-router-dom"
-import { Boxes, ClipboardList, Gauge, Factory, Cog, Wrench, Layers, Menu, X, ArrowRightLeft, History, LogOut, Terminal } from "lucide-react"
+import { Boxes, ClipboardList, Gauge, Factory, Cog, Wrench, Layers, Menu, X, ArrowRightLeft, History, LogOut, Terminal, Undo2 } from "lucide-react"
 import { useAuth } from "@/features/auth/hooks/useAuth"
 import { toast } from "@/shared/ui"
 import { UserAvatar, getUserSeed } from "@user/ui"
@@ -16,6 +16,7 @@ const navItems = [
   { to: "/transfers", label: "Передачи", icon: ArrowRightLeft },
   { to: "/spg", label: "ГХП", icon: Layers },
   { to: "/audit-logs", label: "Журнал действий", icon: History },
+  { to: "/reversal", label: "Отмена действий", icon: Undo2 },
   { to: "/settings", label: "Настройки", icon: Cog },
   ...(import.meta.env.DEV ? [{ to: "/dev", label: "Разработка (Dev)", icon: Terminal }] : []),
 ]

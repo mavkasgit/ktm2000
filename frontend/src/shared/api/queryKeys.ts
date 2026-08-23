@@ -158,6 +158,11 @@ export const queryKeys = {
   auditLogs: {
     list: (params?: GetAuditLogsQueryKeyParams) => ["auditLogs", params ?? {}] as const,
   },
+  actions: {
+    all: ["actions"] as const,
+    list: (params?: Record<string, unknown>) => ["actions", params ?? {}] as const,
+    tree: (actionId: number) => ["actions", "tree", actionId] as const,
+  },
   users: {
     list: (params?: UsersListQueryKeyParams) => ["users", "list", params ?? {}] as const,
   },

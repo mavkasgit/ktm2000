@@ -503,10 +503,10 @@ export const filterShortLabels: Record<string, string> = {
 // Каталог ролей: code -> (label, sections)
 export interface RoleDef { code: string; label: string; sections: string[] }
 export const roles: RoleDef[] = [
-  { code: "admin", label: "Администратор", sections: ["/", "/references", "/planning", "/execution", "/section-tasks", "/transfers", "/spg", "/audit-logs", "/settings", "/settings/dev", "/dev"] },
-  { code: "planner", label: "Планировщик", sections: ["/", "/references", "/planning", "/execution", "/section-tasks", "/transfers", "/spg", "/audit-logs", "/settings", "/dev"] },
-  { code: "section_manager", label: "Начальник участка", sections: ["/", "/references", "/execution", "/section-tasks", "/transfers", "/spg", "/audit-logs", "/settings", "/dev"] },
-  { code: "operator", label: "Оператор", sections: ["/", "/references", "/section-tasks", "/transfers", "/spg", "/audit-logs", "/settings", "/dev"] },
-  { code: "viewer", label: "Наблюдатель", sections: ["/", "/references", "/section-tasks", "/spg", "/audit-logs", "/settings", "/dev"] },
-  { code: "transporter", label: "Транспортировщик", sections: ["/", "/references", "/section-tasks", "/transfers", "/spg", "/audit-logs", "/settings", "/dev"] },
+  { code: "admin", label: "Администратор", sections: ["/", "/references", "/planning", "/execution", "/section-tasks", "/transfers", "/spg", "/audit-logs", "/reversal", "/settings", "/settings/dev", "/dev"] },
+  { code: "planner", label: "Планировщик", sections: ["/", "/references", "/planning", "/execution", "/section-tasks", "/transfers", "/spg", "/audit-logs", "/reversal", "/settings", "/dev"] },
+  { code: "section_manager", label: "Начальник участка", sections: ["/", "/references", "/execution", "/section-tasks", "/transfers", "/spg", "/audit-logs", "/reversal", "/settings", "/dev"] },
+  { code: "operator", label: "Оператор", sections: ["/", "/references", "/section-tasks", "/transfers", "/spg", "/audit-logs", "/reversal", "/settings", "/dev"] },
+  { code: "viewer", label: "Наблюдатель", sections: ["/", "/references", "/section-tasks", "/spg", "/audit-logs", "/reversal", "/settings", "/dev"] },
+  { code: "transporter", label: "Транспортировщик", sections: ["/", "/references", "/section-tasks", "/transfers", "/spg", "/audit-logs", "/reversal", "/settings", "/dev"] },
 ]

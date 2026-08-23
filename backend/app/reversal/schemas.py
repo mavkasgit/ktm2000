@@ -61,6 +61,25 @@ class PreviewOut(BaseModel):
     plan_token: str | None = None  # None при блокировках
 
 
+class ActionOut(BaseModel):
+    """Строка журнала действий (list-endpoint, тикет #117)."""
+
+    id: int
+    action_type: str
+    ref_id: int | None = None
+    actor: str | None = None
+    status: str
+    depends_on: list[int] = Field(default_factory=list)
+    created_at: str | None = None
+
+
+class ActionsListOut(BaseModel):
+    items: list[ActionOut]
+    total: int
+    page: int
+    page_size: int
+
+
 class ReverseResultOut(BaseModel):
     action_id: int
     reversal_action_id: int

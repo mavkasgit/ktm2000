@@ -8,12 +8,14 @@
 """
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import READER_ROLES, WRITER_ROLES, get_current_user, require_role
 from app.core.database import get_db
 from app.models.user import User
+from app.models.action_journal import Action, ActionStatus
 from app.reversal import errors
 from app.reversal.schemas import (
     ActionNodeOut,
@@ -22,6 +24,8 @@ from app.reversal.schemas import (
     BlockerOut,
     PreviewAmendIn,
     PreviewIn,
+    ActionOut,
+    ActionsListOut,
     PreviewOut,
     ReverseIn,
     ReverseResultOut,
@@ -50,6 +54,66 @@ def _blocker_out(b) -> BlockerOut:
         detail=b.detail,
         deficit=str(b.deficit) if b.deficit is not None else None,
         chain=list(b.chain) if b.chain is not None else None,
+    )
+
+
+@router.get(
+    "",
+    response_model=ActionsListOut,
+    dependencies=[Depends(require_role(list(READER_ROLES)))],
+)
+async def list_actions(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(50, ge=1, le=500),
+    action_type: str | None = Query(None),
+    status: str | None = Query(None),
+    db: AsyncSession = Depends(get_db),
+) -> ActionsListOut:
+    """Список журнала действий (тикет #117): пагинация page/page_size,
+    фильтры action_type/status."""
+    stmt = select(Action)
+    count_stmt = select(func.count()).select_from(Action)
+    if action_type:
+        stmt = stmt.where(Action.action_type == action_type)
+        count_stmt = count_stmt.where(Action.action_type == action_type)
+    if status:
+        try:
+            status_value = ActionStatus(status)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=422, detail=f"Неизвестный статус: {status}"
+            ) from exc
+        stmt = stmt.where(Action.status == status_value)
+        count_stmt = count_stmt.where(Action.status == status_value)
+
+    total = (await db.execute(count_stmt)).scalar_one()
+    rows = (
+        (
+            await db.execute(
+                stmt.order_by(Action.id.desc())
+                .offset((page - 1) * page_size)
+                .limit(page_size)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    return ActionsListOut(
+        items=[
+            ActionOut(
+                id=row.id,
+                action_type=row.action_type,
+                ref_id=row.ref_id,
+                actor=row.actor,
+                status=row.status.value if hasattr(row.status, "value") else str(row.status),
+                depends_on=list(row.depends_on or []),
+                created_at=row.created_at.isoformat() if row.created_at else None,
+            )
+            for row in rows
+        ],
+        total=total,
+        page=page,
+        page_size=page_size,
     )
 
 

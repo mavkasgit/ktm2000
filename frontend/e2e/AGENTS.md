@@ -104,6 +104,7 @@ set PLAYWRIGHT_TEST_BASE_URL=http://localhost:5172
 | `bulk-workflow.spec.ts` | `@smoke` | Bulk-операции shopfloor | ⚠️ skip (устарел, #96) |
 | `total-workflow.spec.ts` | `@smoke` | Остатки, shortage strategies | ⚠️ skip (завершал складской этап с доски — переработать на передачу со склада) |
 | `plan-issue-handover.spec.ts` | `@smoke` | Колонка «Размер» в плане выдачи/сдачи | ⚠️ skip (setup устарел) |
+| `reversal-journal.spec.ts` | `@smoke` | Отмена действий (#117): страница `/reversal`, журнал и дерево цепочки | ✅ |
 
 ## Отладка
 
