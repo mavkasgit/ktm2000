@@ -12,6 +12,7 @@ from app.models.internal_plan import SectionPlanLine
 from app.models.production_plan import PlanPosition, PlanPositionStatus
 from app.models.work_task import WorkTask, WorkTaskStatus
 from app.services.plan_position_hanger import position_dimensions_for_task
+from app.services.action_journal_service import action_journal_service
 from app.stock import QualityState, Reason, StockCommand, StockCommandService
 from app.stock.ledger import net_by_reason
 
@@ -193,6 +194,12 @@ async def complete_task(
     eff_executor = executor_user_id or actor_id
 
     svc = StockCommandService()
+    # Журнал действий (ADR-0019, #116): одна операция = один Action
+    # (good + scrap + transform-порция вместе); depends_on — цепочка задачи.
+    actor_name = await _get_user_snapshot_name(db, actor_id)
+    action = await action_journal_service.log_task_action(
+        db, action_type="task_complete", ref_id=task.id, actor=actor_name,
+    )
     tx_ids: list[int] = []
     defect_id: int | None = None
 
@@ -223,6 +230,7 @@ async def complete_task(
             idempotency_key=idempotency_key,
             performed_at=eff_performed,
             accounted_at=eff_accounted,
+            action_id=action.id,
         ))
     elif good_quantity > 0:
         # Material already on section (issued_quantity > 0): net-zero COMPLETE
@@ -263,6 +271,7 @@ async def complete_task(
             executor_user_id=eff_executor,
             performed_at=eff_performed,
             accounted_at=eff_accounted,
+            action_id=action.id,
         ))
         tx_ids.append(tx_good.id)
 
@@ -307,6 +316,7 @@ async def complete_task(
             executor_user_id=eff_executor,
             performed_at=eff_performed,
             accounted_at=eff_accounted,
+            action_id=action.id,
         ))
         tx_ids.append(tx_scrap.id)
 
@@ -458,6 +468,14 @@ async def final_release(
         .limit(1)
     )
 
+    # Журнал действий (#116): final_release = Action по цепочке задачи.
+    action = await action_journal_service.log_task_action(
+        db,
+        action_type="final_release",
+        ref_id=task.id,
+        actor=await _get_user_snapshot_name(db, actor_id),
+    )
+
     svc = StockCommandService()
     # final_release: from production section to finished stock (or None if not found)
     tx = await svc.record(db, StockCommand(
@@ -466,8 +484,6 @@ async def final_release(
         to_location_id=finished_stock,
         quantity=quantity,
         reason=Reason.FINAL_RELEASE,
-        # Габарит выпуска (ADR-0001): на трансформирующем финальном этапе —
-        # выходной размер задания (инвариант D3); на обычном — габарит задания.
         dimensions=eff_dims,
         task_id=task.id,
         source_ref=None,
@@ -477,6 +493,7 @@ async def final_release(
         executor_user_id=executor_user_id or actor_id,
         performed_at=performed_at or datetime.now(UTC),
         accounted_at=accounted_at or datetime.now(UTC),
+        action_id=action.id,
     ))
 
     await _refresh_section_plan_line_cache(db, task.section_plan_line_id)

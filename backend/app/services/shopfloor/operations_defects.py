@@ -11,8 +11,15 @@ from app.seeds.canon.models import DefectDecisionDef
 from app.stock import QualityState, Reason, StockCommand, StockCommandService
 
 from .cache import _refresh_section_plan_line_cache
-from .common import _check_idempotency, _ensure_positive, _get_defect, _get_task, _to_decimal
-
+from .common import (
+    _check_idempotency,
+    _ensure_positive,
+    _get_defect,
+    _get_task,
+    _get_user_snapshot_name,
+    _to_decimal,
+)
+from app.services.action_journal_service import action_journal_service
 
 def resolve_defect_status(
     decision: DefectDecisionType, defect_decision_map: dict[str, DefectDecisionDef] | None
@@ -222,6 +229,22 @@ async def defect_decide(
         _decision_status = DefectStatus.decision_required
         _decision_reason = None
 
+    # Журнал действий (#116): одно решение = один Action (ref_id=defect.id);
+    # создаём только если решение порождает проводку ledger.
+    records_stock = decision_type in {
+        DefectDecisionType.scrap,
+        DefectDecisionType.rework_current,
+        DefectDecisionType.return_previous,
+    } or (decision_type == DefectDecisionType.accept_with_deviation and task is not None)
+    action = None
+    if records_stock:
+        action = await action_journal_service.log(
+            db,
+            action_type="defect_decision",
+            ref_id=defect.id,
+            actor=await _get_user_snapshot_name(db, actor_id),
+        )
+
     if decision_type == DefectDecisionType.scrap:
         # ADR-0007: данные SCRAP-секции из composition root
         if scrap_section_type is None or scrap_code is None or scrap_name is None or scrap_sort_order is None:
@@ -252,6 +275,7 @@ async def defect_decide(
             task_id=task.id if task else None,
             source_ref=f"defect:{defect.id}:decision:scrap",
             idempotency_key=idempotency_key,
+            action_id=action.id,
             comment=comment,
             created_by=actor_id,
         ))
@@ -289,6 +313,7 @@ async def defect_decide(
                 task_id=task.id,
                 source_ref=f"defect:{defect.id}:decision:rework",
                 idempotency_key=f"{idempotency_key}:rework" if idempotency_key else None,
+                action_id=action.id,
                 comment=comment,
                 created_by=actor_id,
             ))
@@ -325,6 +350,7 @@ async def defect_decide(
                 task_id=task.id,
                 source_ref=f"defect:{defect.id}:decision:return_previous",
                 idempotency_key=f"{idempotency_key}:return" if idempotency_key else None,
+                action_id=action.id,
                 comment=comment,
                 created_by=actor_id,
             ))
@@ -343,6 +369,7 @@ async def defect_decide(
                 quality_state=QualityState.GOOD,
                 task_id=task.id,
                 source_ref=f"defect:{defect.id}:decision:accept_deviation",
+                action_id=action.id,
                 idempotency_key=f"{idempotency_key}:complete" if idempotency_key else None,
                 comment=comment,
                 created_by=actor_id,

@@ -765,6 +765,15 @@ async def create_adjustment(
             status_code=422,
             detail=f"reason must be one of {[r.value for r in _ADJUSTMENT_REASONS]}, got {payload.reason.value}",
         )
+    # Журнал действий (#116): ручная корректировка = Action без ref_id.
+    from app.services.action_journal_service import action_journal_service
+
+    action = await action_journal_service.log(
+        db,
+        action_type="manual_adjustment",
+        ref_id=None,
+        actor=user.full_name or user.username,
+    )
 
     if payload.reason in (Reason.ADJUSTMENT_IN, Reason.MANUAL_IN):
         from_location_id = None
@@ -784,6 +793,7 @@ async def create_adjustment(
         comment=payload.comment,
         created_by=user.id,
         created_by_user_name=user.full_name or user.username,
+        action_id=action.id,
     )
     service = StockCommandService()
     try:

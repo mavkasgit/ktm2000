@@ -243,6 +243,7 @@ async def record_transform_portion(
     idempotency_key: str | None,
     performed_at: datetime | None,
     accounted_at: datetime | None,
+    action_id: int | None = None,
 ) -> list[int]:
     """Записать порцию трансформации в ledger: списание входа + все выходы.
 
@@ -269,6 +270,7 @@ async def record_transform_portion(
         executor_user_id=executor_user_id,
         performed_at=performed_at,
         accounted_at=accounted_at,
+        action_id=action_id,
     ))
     tx_ids.append(tx_consume.id)
 
@@ -300,6 +302,7 @@ async def record_transform_portion(
             executor_user_id=executor_user_id,
             performed_at=performed_at,
             accounted_at=accounted_at,
+            action_id=action_id,
         ))
         tx_ids.append(tx_out.id)
 

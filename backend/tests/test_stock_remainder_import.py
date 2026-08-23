@@ -387,7 +387,7 @@ async def test_import_remainders_excel_creates_manual_in_transactions(
     assert tx.from_location_id is None
     assert tx.reason == Reason.MANUAL_IN
     assert float(tx.quantity) == 100.0
-    assert tx.source_ref == "import_remainders_excel"
+    assert tx.source_ref.startswith("import_remainders:")
 
     # Проверяем баланс
     balance = await session.execute(
@@ -522,7 +522,10 @@ async def test_import_remainders_excel_clear_existing(
 
     manual_txs = [tx for tx in txs if tx.reason == Reason.MANUAL_IN]
     assert len(manual_txs) == 2  # 1 from _make_stock_balance + 1 from import
-    import_manual = next(tx for tx in manual_txs if tx.source_ref == "import_remainders_excel")
+    import_manual = next(
+        tx for tx in manual_txs
+        if tx.source_ref and tx.source_ref.startswith("import_remainders:")
+    )
     assert float(import_manual.quantity) == 50.0
 
     # Финальный баланс = 50

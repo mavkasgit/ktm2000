@@ -266,6 +266,16 @@ async def release_batch(
                 from app.stock import StockCommand, StockCommandService, Reason
                 actor_id = batch.released_by or batch.created_by or 1
                 actor_name = await _get_user_snapshot_name(db, actor_id)
+                # Журнал действий (#116): автозавершение = Action по
+                # цепочке задачи (ref_id=task.id).
+                from app.services.action_journal_service import action_journal_service
+
+                action = await action_journal_service.log_task_action(
+                    db,
+                    action_type="plan_auto_release",
+                    ref_id=task.id,
+                    actor=actor_name,
+                )
                 svc = StockCommandService()
                 await svc.record(db, StockCommand(
                     product_id=task.product_id,
@@ -279,6 +289,7 @@ async def release_batch(
                     created_by=actor_id,
                     performed_at=datetime.now(UTC),
                     accounted_at=datetime.now(UTC),
+                    action_id=action.id,
                 ))
                 await _refresh_section_plan_line_cache(db, task.section_plan_line_id)
             

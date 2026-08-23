@@ -187,7 +187,12 @@ async def seed_demo_production(db: AsyncSession) -> dict:
             select(Section).where(Section.is_active == True).limit(1)
         )
 
-    tx1 = None
+    # Журнал действий (#116): один Action('seed_demo') на весь сид,
+    # компенсатора нет (решения 2 и 7 спеки). Создаётся лениво — только
+    # если сид реально порождает новые проводки.
+    from app.services.action_journal_service import action_journal_service
+
+    seed_action = None
     if target_sec is not None:
         existing_tx1 = await db.scalar(
             select(StockTransaction)
@@ -201,6 +206,10 @@ async def seed_demo_production(db: AsyncSession) -> dict:
         if existing_tx1:
             tx1 = existing_tx1
         else:
+            if seed_action is None:
+                seed_action = await action_journal_service.log(
+                    db, action_type="seed_demo",
+                )
             tx1 = await stock_service.record(db, StockCommand(
                 product_id=rem1_prod.id,
                 quantity=Decimal("150.000"),
@@ -209,6 +218,7 @@ async def seed_demo_production(db: AsyncSession) -> dict:
                 quality_state=QualityState.GOOD,
                 created_by=actor_id,
                 comment="Demo stock for remainder 1",
+                action_id=seed_action.id,
             ))
             stats["remainders"] += 1
 
@@ -240,6 +250,10 @@ async def seed_demo_production(db: AsyncSession) -> dict:
         if existing_tx2:
             tx2 = existing_tx2
         else:
+            if seed_action is None:
+                seed_action = await action_journal_service.log(
+                    db, action_type="seed_demo",
+                )
             tx2 = await stock_service.record(db, StockCommand(
                 product_id=rem2_prod.id,
                 quantity=Decimal("80.000"),
@@ -248,6 +262,7 @@ async def seed_demo_production(db: AsyncSession) -> dict:
                 quality_state=QualityState.GOOD,
                 created_by=actor_id,
                 comment="Demo stock for remainder 2",
+                action_id=seed_action.id,
             ))
             stats["remainders"] += 1
 

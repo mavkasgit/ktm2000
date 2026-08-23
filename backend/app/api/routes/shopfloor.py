@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import UTC, datetime
 from decimal import Decimal
 import enum
 from typing import Literal
@@ -975,6 +975,15 @@ async def return_remainder(
 
         now = datetime.now(UTC)
         svc = StockCommandService()
+        # Журнал действий (#116): Action по цепочке задачи.
+        from app.services.action_journal_service import action_journal_service
+
+        action = await action_journal_service.log_task_action(
+            db,
+            action_type="return_to_stock",
+            ref_id=task.id,
+            actor=current_user.full_name or current_user.username,
+        )
         # return_to_stock: material removed from section (to_location=None for now)
         tx = await svc.record(db, StockCommand(
             product_id=task.product_id,
@@ -989,6 +998,7 @@ async def return_remainder(
             executor_user_id=payload.executor_user_id or current_user.id,
             performed_at=payload.performed_at or now,
             accounted_at=payload.accounted_at or now,
+            action_id=action.id,
         ))
 
         return {"transaction_id": tx.id, "task_id": task.id}

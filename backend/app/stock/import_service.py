@@ -124,6 +124,8 @@ class ImportResult:
     imported_count: int
     errors: list[str]
     transaction_ids: list[int]
+    # Id журнального действия (Action.import_remainders), покрывающего батч.
+    id: int | None = None
 
 
 # ─── Quality value aliases (не относятся к разрешению колонок) ────────────────
@@ -863,8 +865,17 @@ async def apply_remainders_import(
             errors=["clear_existing не поддерживается при построчном указании участков"],
             transaction_ids=[],
         )
-
     svc = StockCommandService()
+
+    # Журнал действий (#116): импорт-батч = одно действие; обе фазы
+    # (очистка + заливка) несут его action_id и общий source_ref
+    # (решение 5 спеки). ref_id = id самого действия (у батча нет другой
+    # естественной сущности).
+    from app.services.action_journal_service import action_journal_service
+
+    action = await action_journal_service.log(db, action_type="import_remainders")
+    action.ref_id = action.id
+    batch_source_ref = f"import_remainders:{action.id}"
 
     # --- Clear existing balances if requested --------------------------------
     if clear_existing:
@@ -889,13 +900,14 @@ async def apply_remainders_import(
                     reason=Reason.ADJUSTMENT_OUT,
                     quality_state=bal.quality_state,
                     comment="Очистка перед импортом остатков",
-                    source_ref="import_remainders_excel",
+                    source_ref=batch_source_ref,
                     created_by=user.id if user else 1,
                     created_by_user_name=(
                         user.full_name
                         if (user and user.full_name)
                         else (user.username if user else "system")
                     ),
+                    action_id=action.id,
                 )
                 tx = await svc.record(db, cmd)
                 transaction_ids.append(tx.id)
@@ -933,13 +945,14 @@ async def apply_remainders_import(
             reason=Reason.MANUAL_IN,
             quality_state=row_quality,
             comment=final_comment or "Импорт остатков из Excel",
-            source_ref="import_remainders_excel",
+            source_ref=batch_source_ref,
             created_by=user.id if user else 1,
             created_by_user_name=(
                 user.full_name
                 if (user and user.full_name)
                 else (user.username if user else "system")
             ),
+            action_id=action.id,
         )
         tx = await svc.record(db, cmd)
         transaction_ids.append(tx.id)
@@ -952,6 +965,7 @@ async def apply_remainders_import(
         imported_count=imported_count,
         errors=errors,
         transaction_ids=transaction_ids,
+        id=action.id,
     )
 
 
