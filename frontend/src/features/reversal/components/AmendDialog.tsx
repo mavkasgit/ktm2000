@@ -24,8 +24,9 @@ import {
   STALE_TOKEN_TOAST_TITLE,
 } from "../lib/reversalConflicts";
 
-/** Изменение действия transfer_send (тикет #115 amend, UI #117).
- *  Поля — по _AMEND_FIELDS компенсатора: quantity/from_task_id/to_task_id/dimensions. */
+/** Изменение действия с preview-first и каскадным реплеем (#115/#123).
+ *  Поля — по _AMEND_FIELDS компенсатора: quantity/from_task_id/to_task_id/dimensions.
+ *  Каскад включает репелей зависимых действий (🟢 will_replay зона). */
 export function AmendDialog({
   action,
   open,
@@ -42,6 +43,7 @@ export function AmendDialog({
   const [fromTaskId, setFromTaskId] = useState("");
   const [toTaskId, setToTaskId] = useState("");
   const [dimensions, setDimensions] = useState("");
+  const [cascade, setCascade] = useState(false);
   const [preview, setPreview] = useState<PreviewResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [confirming, setConfirming] = useState(false);
@@ -52,6 +54,7 @@ export function AmendDialog({
       setFromTaskId("");
       setToTaskId("");
       setDimensions("");
+      setCascade(false);
       setPreview(null);
       setConfirming(false);
     }
@@ -77,7 +80,7 @@ export function AmendDialog({
   const handlePreview = async () => {
     setLoading(true);
     try {
-      const data = await previewAmend(action.id, buildChanges(), false);
+      const data = await previewAmend(action.id, buildChanges(), cascade);
       setPreview(data);
     } catch (err) {
       toast({
@@ -112,6 +115,13 @@ export function AmendDialog({
           title: STALE_TOKEN_TOAST_TITLE,
         });
         void handlePreview();
+      } else if (classifyReversalConflict(info) === "dependent-actions" && !cascade) {
+        toast({
+          variant: "destructive",
+          title: "Есть зависимые действия",
+          description: `Включите каскад для реплея: ${info.chain!.map((id) => `#${id}`).join(", ")}`,
+        });
+        setCascade(true);
       } else {
         toast({ variant: "destructive", title: info.message || "Ошибка изменения" });
       }
@@ -179,12 +189,26 @@ export function AmendDialog({
           </div>
         </div>
 
+        <label className="mt-2 flex items-center gap-2 text-sm text-slate-700">
+          <input
+            type="checkbox"
+            checked={cascade}
+            onChange={(e) => {
+              setCascade(e.target.checked);
+              setPreview(null);
+            }}
+            data-testid="amend-cascade"
+          />
+          Каскад: воспроизвести зависимые действия
+        </label>
+
         {preview && (
           <div className="mt-2">
             <PreviewZones
               revert={preview.revert}
               stays={preview.stays}
               blockers={preview.blockers}
+              will_replay={preview.will_replay}
             />
           </div>
         )}

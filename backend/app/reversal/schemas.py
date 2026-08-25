@@ -60,7 +60,7 @@ class WillReplayOut(BaseModel):
 
 
 class PreviewOut(BaseModel):
-    """Три зоны: revert 🔴 / stays ⚪ / blockers 🚫 + plan_token."""
+    """Четыре зоны: revert 🔴 / stays ⚪ / blockers 🚫 / will_replay 🟢 + plan_token."""
 
     action_id: int
     cascade: bool

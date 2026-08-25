@@ -538,3 +538,61 @@ async def test_ref_fallback_ambiguous_returns_not_found(session: AsyncSession) -
     ambiguous = await comp.check(session, ref)
     assert not ambiguous.ok
     assert [b.kind for b in ambiguous.blockers] == ["not_found"]
+
+
+# ─── #122: build_replay_payload доменных типов ─────────────────────────────
+
+
+async def test_replay_payload_task_complete(session: AsyncSession) -> None:
+    """build_replay_payload(task_complete): координаты из прямых проводок
+    действия — product/from/to/quantity/reason/dimensions."""
+    from app.reversal.action_compensator import StockActionCompensator
+
+    fx = await _setup_minimal_route(session)
+    await _issue_material(session, fx, qty=Decimal("20"))
+    action = await _complete_task(session, fx, good=Decimal("7"), scrap=Decimal("3"))
+
+    comp = StockActionCompensator("task_complete")
+    payload = await comp.build_replay_payload(session, action)
+    assert payload is not None
+    entries = payload["entries"]
+    assert len(entries) == 2
+    reasons = {e["reason"] for e in entries}
+    assert reasons == {"complete", "scrap"}
+    for e in entries:
+        assert e["product_id"] == fx["product"].id
+        assert Decimal(e["quantity"]) > 0
+        assert "from_quality_state" in e
+        assert "to_quality_state" in e
+
+
+async def test_replay_payload_chain_all_types(session: AsyncSession) -> None:
+    """build_replay_payload для каждого типа цепочки задачи
+    (complete → final_release → return_to_stock): payload не None,
+    entries непустой."""
+    from app.reversal.action_compensator import StockActionCompensator
+
+    fx = await _setup_minimal_route(session)
+    await _issue_material(session, fx, qty=Decimal("30"))
+    chain = await _task_chain(session, fx)
+
+    for action_type, action in chain.items():
+        comp = StockActionCompensator(action.action_type)
+        payload = await comp.build_replay_payload(session, action)
+        assert payload is not None, f"{action.action_type}: payload is None"
+        assert payload["entries"], f"{action.action_type}: пустой entries"
+
+
+async def test_replay_payload_no_transactions_returns_none(
+    session: AsyncSession,
+) -> None:
+    """Действие без проводок → build_replay_payload возвращает None."""
+    from app.reversal.action_compensator import StockActionCompensator
+    from app.services.action_journal_service import action_journal_service
+
+    comp = StockActionCompensator("task_complete")
+    action = await action_journal_service.log(
+        session, action_type="task_complete", ref_id=99999,
+    )
+    payload = await comp.build_replay_payload(session, action)
+    assert payload is None

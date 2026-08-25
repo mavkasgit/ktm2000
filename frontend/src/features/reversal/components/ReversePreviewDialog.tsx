@@ -140,6 +140,7 @@ export function ReversePreviewDialog({
             revert={preview.revert}
             stays={preview.stays}
             blockers={preview.blockers}
+            will_replay={preview.will_replay}
           />
         ) : null}
 

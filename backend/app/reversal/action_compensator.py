@@ -15,6 +15,10 @@
 (coverage) и статусы обеспечивает ReversalService. Цепочка задачи v1
 строится только по ref_id=task.id (TASK_ACTION_FAMILY); между задачами
 связей нет.
+
+Реплей (#121): ``build_replay_payload`` извлекает координаты прямых
+проводок действия (ledger) — payload для будущего слепого повтора
+через доменные сервисы (отдельный тикет apply_forward).
 """
 from __future__ import annotations
 
@@ -42,6 +46,11 @@ ACTION_COMPENSABLE_TYPES: frozenset[str] = frozenset({
     "import_remainders",
     "plan_auto_release",
 })
+
+
+def _enum_str(val: object) -> str:
+    """Извлечь .value у Enum или str() для прочего (JSON-safe сериализация)."""
+    return val.value if hasattr(val, "value") else str(val)
 
 
 class StockActionCompensator(MirrorLedgerMixin):
@@ -154,3 +163,43 @@ class StockActionCompensator(MirrorLedgerMixin):
             reversal_action_id=plan.reversal_action_id,
             compensated_tx_ids=compensated,
         )
+
+    # ─── Replay (тикет #122): payload из координат проводок ──────────────
+
+    async def build_replay_payload(
+        self, db: AsyncSession, action: Action
+    ) -> dict | None:
+        """Payload реплея доменного действия (#122) из координат проводок.
+
+        Возвращает список транзакций-координат действия — данные для
+        будущего слепого повтора через доменные сервисы (отдельный
+        тикет apply_forward). Компенсации предшественника под тем же
+        action_id (amend #115) координатами не являются.
+
+        Структура payload: ``{"entries": [<tx_coord>, …]}`` — каждая
+        запись содержит product/from/to/quantity/reason/dimensions/quality
+        и опциональные task_id, section_plan_line_id, is_post_factum.
+        """
+        txs = await self._generation(db, action)
+        if not txs:
+            return None
+        entries: list[dict] = []
+        for tx in txs:
+            entry: dict = {
+                "product_id": int(tx.product_id),
+                "from_location_id": int(tx.from_location_id) if tx.from_location_id else None,
+                "to_location_id": int(tx.to_location_id) if tx.to_location_id else None,
+                "quantity": str(tx.quantity),
+                "reason": _enum_str(tx.reason),
+                "from_quality_state": _enum_str(tx.from_quality_state),
+                "to_quality_state": _enum_str(tx.to_quality_state),
+                "dimensions": dict(tx.dimensions) if tx.dimensions is not None else None,
+            }
+            if tx.task_id is not None:
+                entry["task_id"] = int(tx.task_id)
+            if tx.section_plan_line_id is not None:
+                entry["section_plan_line_id"] = int(tx.section_plan_line_id)
+            if tx.is_post_factum:
+                entry["is_post_factum"] = True
+            entries.append(entry)
+        return {"entries": entries}

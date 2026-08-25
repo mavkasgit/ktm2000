@@ -64,6 +64,15 @@ export type PreviewBlocker = {
   chain: number[] | null;
 };
 
+/** Узел плана реплея (#121/#123): order — позиция в прямом топологическом. */
+export type WillReplayItem = {
+  action_id: number;
+  champion_id: number;
+  action_type: string;
+  ref_id: number | null;
+  order: number;
+};
+
 export type PreviewResponse = {
   action_id: number;
   cascade: boolean;
@@ -74,6 +83,8 @@ export type PreviewResponse = {
   /** 🚫 блокировки */
   blockers: PreviewBlocker[];
   plan_token: string | null; // None при блокировках
+  /** 🟢 воспроизведётся после компенсации (#121) */
+  will_replay: WillReplayItem[];
 };
 
 export type ReverseResult = {
@@ -90,6 +101,8 @@ export type AmendResult = {
   compensated_tx_ids: number[];
   amended_action_ids: number[];
   reversed_action_ids: number[];
+  /** ID действий, созданных при реплее (#121) */
+  replayed_action_ids: number[];
 };
 
 export async function getActions(params: GetActionsParams) {

@@ -34,6 +34,7 @@ const makePreview = (overrides: Partial<PreviewResponse> = {}): PreviewResponse 
   stays: [{ id: 9, action_type: "task_complete", ref_id: 12, status: "active", depends_on: [5] }],
   blockers: [],
   plan_token: "tok-1",
+  will_replay: [],
   ...overrides,
 });
 
@@ -70,13 +71,14 @@ async function clickConfirmWhenEnabled() {
 }
 
 describe("ReversePreviewDialog", () => {
-  it("показывает три зоны предпросмотра 🔴/⚪/🚫", async () => {
+  it("показывает четыре зоны предпросмотра 🔴/⚪/🚫/🟢", async () => {
     renderDialog();
 
     await screen.findByTestId("preview-zone-revert");
     expect(screen.getByText("🔴 Отменится (1)")).toBeTruthy();
     expect(screen.getByText("⚪ Останется (1)")).toBeTruthy();
     expect(screen.getByText("🚫 Блокировки (0)")).toBeTruthy();
+    expect(screen.getByText("🟢 Воспроизведётся (0)")).toBeTruthy();
     expect(previewReverse).toHaveBeenCalledWith(5, false);
   });
 
