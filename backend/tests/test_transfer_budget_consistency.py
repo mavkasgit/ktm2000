@@ -13,16 +13,20 @@
 3. **stock** — ``compute_stock_section_transferable`` (→ ``remaining_stock``):
    складская строка (section_plan_line_id) по плану и физическому остатку.
 
-Сценарии построены на существующих helpers и не затрагивают финальные этапы /
-final-release (параллельный тикет #96): обычные production-задачи не на
+Сценарии построены на существующих helpers: обычные production-задачи не на
 финальном этапе, трансформирующая задача с выходами, stock-секции.
+
+Тикет #119: оракул расширен до трёхсторонней сверки
+write-guard ≡ read-SQL (фабрики ``app.transfers.budget`` поверх
+ledger-подзапросов) ≡ чистые Decimal-функции — включая финальный участок,
+где смысл бюджета — отправка (``remaining_send``, FINAL_RELEASE).
 """
 from __future__ import annotations
 
 from decimal import Decimal
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.section import Section
@@ -52,6 +56,40 @@ _UNSET = object()
 
 
 # ─── helpers ────────────────────────────────────────────────────────────────
+
+
+async def _read_sql_budgets(session: AsyncSession, task: WorkTask) -> dict[str, Decimal]:
+    """Read-SQL путь бюджета: фабрики ``app.transfers.budget`` поверх
+    ledger-подзапросов (``net_*_sq``) для одной задачи — та же сборка,
+    что в ready-запросе, но без скрытых копий формулы."""
+    from app.stock.ledger import net_by_reason_sq, net_transferred_sq
+    from app.stock.models import Reason
+    from app.transfers.budget import sendable_qty_sql, transferable_qty_sql
+    from app.transfers.queries import _completed_qty_subquery
+
+    completed_sq = _completed_qty_subquery()
+    transferred_sq = net_transferred_sq(alias="oracle_transferred_sq")
+    released_sq = net_by_reason_sq(Reason.FINAL_RELEASE, alias="oracle_released_sq")
+    completed_col = func.coalesce(completed_sq.c.completed_qty, 0)
+    stmt = (
+        select(
+            transferable_qty_sql(
+                completed_col,
+                func.coalesce(transferred_sq.c.net_quantity, 0),
+            ).label("transferable_qty"),
+            sendable_qty_sql(
+                completed_col,
+                func.coalesce(released_sq.c.net_quantity, 0),
+            ).label("sendable_qty"),
+        )
+        .outerjoin(transferred_sq, transferred_sq.c.task_id == task.id)
+        .outerjoin(released_sq, released_sq.c.task_id == task.id)
+        .where(completed_sq.c.task_id == task.id)
+    )
+    row = (await session.execute(stmt)).one_or_none()
+    if row is None:
+        return {"transferable": Decimal("0"), "sendable": Decimal("0")}
+    return {"transferable": row.transferable_qty, "sendable": row.sendable_qty}
 
 
 async def _task_transferable(
@@ -185,6 +223,16 @@ async def test_plain_ready_list_and_write_guard_agree_on_transferable(
     transferable = await _task_transferable(session, from_task)
     assert transferable == Decimal("3")
 
+    # Трёхсторонняя сверка (#119): write-guard ≡ read-SQL ≡ pure.
+    from app.transfers.budget import remaining_plain
+
+    sql_budgets = await _read_sql_budgets(session, from_task)
+    assert sql_budgets["transferable"] == remaining_plain(Decimal("5"), Decimal("2"))
+    assert sql_budgets["transferable"] == transferable
+    # Бюджет отправки — отдельный столбец: release у нефинальной задачи
+    # не вычитается из transferable (read-SQL больше не смешивает семантики).
+    assert sql_budgets["sendable"] == Decimal("5")
+
 
 # ─── 2. transform: строка выхода резки ───────────────────────────────────────
 
@@ -301,3 +349,60 @@ async def test_stock_ready_list_and_write_guard_agree_on_transferable(
     fake_task = await session.get(WorkTask, fake_task_id)
     assert fake_task is not None
     assert await _task_transferable(session, fake_task) == Decimal("60")
+
+
+# ─── 4. финальный участок: бюджет отправки (sendable) ────────────────────────
+
+
+async def test_final_section_three_way_agrees_on_sendable(client, session) -> None:
+    """Финальный участок (#119): pure ≡ read-SQL ≡ ready-строка на ``sendable``.
+
+    produced=100 по выходу 900, выпущено (FINAL_RELEASE) 40 →
+    ``remaining_send(100, 40) = 60``; готовая строка показывает те же 60
+    («Отправить»), а бюджет передачи остаётся отдельным столбцом.
+    """
+    from app.services.shopfloor.operations_tasks import final_release
+    from app.transfers.budget import remaining_send
+
+    user = await _make_user(session, "tbc-final@local")
+    fx = await _make_transform_route_fixture(
+        session,
+        sku="TBCFIN",
+        qty=Decimal("100"),
+        input_quantity=Decimal("100"),
+        input_dimensions={"length_mm": 2700},
+        outputs=[{"row_number": 1, "quantity": "100", "dimensions": {"length_mm": 900}}],
+        final_transform=True,
+    )
+    await _release_via_take_to_work(client, fx["position"].id)
+    saw_task = (await _tasks_for_position(session, fx["position"].id))[0]
+    await _complete_saw(session, saw_task=saw_task, user=user)
+
+    result = await final_release(
+        session,
+        task_id=saw_task.id,
+        quantity=Decimal("40"),
+        actor_id=user.id,
+    )
+    await session.commit()
+    assert result["transaction_id"]
+    await assert_no_invariants_violations(session, context="final-send")
+
+    # 1. pure: remaining_send клампит в ноль и считает остаток.
+    produced = Decimal("100")
+    released = Decimal("40")
+    expected = remaining_send(produced, released)
+    assert expected == Decimal("60")
+
+    # 2. read-SQL: фабрика budget поверх ledger-подзапросов.
+    budgets = await _read_sql_budgets(session, saw_task)
+    assert budgets["sendable"] == expected
+    assert budgets["sendable"] >= 0
+
+    # 3. hydration ready-строки: смысл на финальном участке — отправка.
+    saw_sec = fx["sections"][1]
+    row_900 = await _ready_row(
+        client, user, saw_sec.id, task_id=saw_task.id, dims={"length_mm": 900}
+    )
+    assert row_900["is_final"] is True
+    assert row_900["transferable_quantity"] == "60"

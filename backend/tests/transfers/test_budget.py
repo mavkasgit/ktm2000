@@ -17,6 +17,7 @@ from app.models.work_task import WorkTask
 from app.stock import Reason, StockCommand, StockCommandService
 from app.transfers.budget import (
     remaining_plain,
+    remaining_send,
     remaining_stock,
     remaining_transform,
 )
@@ -56,6 +57,22 @@ def test_remaining_transform_partial() -> None:
 
 def test_remaining_transform_clamped_at_zero() -> None:
     assert remaining_transform(Decimal("5"), Decimal("7")) == Decimal("0")
+
+
+def test_remaining_send_full_budget() -> None:
+    assert remaining_send(Decimal("100"), Decimal("0")) == Decimal("100")
+
+
+def test_remaining_send_partial_released() -> None:
+    assert remaining_send(Decimal("100"), Decimal("40")) == Decimal("60")
+
+
+def test_remaining_send_clamped_at_zero() -> None:
+    assert remaining_send(Decimal("5"), Decimal("7")) == Decimal("0")
+
+
+def test_remaining_send_zero_produced() -> None:
+    assert remaining_send(Decimal("0"), Decimal("0")) == Decimal("0")
 
 
 def test_remaining_stock_limited_by_physical_stock() -> None:
