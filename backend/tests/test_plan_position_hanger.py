@@ -240,6 +240,54 @@ async def test_serialize_zero_total_is_null(client, session) -> None:
     assert position["quantity_per_hanger_source"] is None
 
 
+# ─── #127: source соответствует режиму артикула, а не наличию данных ──────
+
+
+@pytest.mark.asyncio
+async def test_serialize_manual_mode_with_fields_uses_manual(client, session) -> None:
+    """Режим manual + заполненные периметр/габарит → ручное значение, не расчёт."""
+    product = await _make_ready_product(session, "FG-MODE-MAN", auto=True)
+    product.hanger_mode = "manual"
+    product.quantity_per_hanger = {"2800": {"auto": None, "manual": 25}}
+    plan, _ = await _make_plan_position(session, product, length_mm=2800)
+    await session.flush()
+
+    resp = await client.get(f"/api/production-plans/{plan.id}/all-positions")
+    assert resp.status_code == 200, resp.text
+    position = resp.json()[0]
+    assert position["quantity_per_hanger"] == 25
+    assert position["quantity_per_hanger_source"] == "manual"
+
+
+@pytest.mark.asyncio
+async def test_serialize_auto_mode_without_fields_is_null(client, session) -> None:
+    """Режим auto без периметра/габарита → null (наличие данных не решает)."""
+    product = await _make_ready_product(session, "FG-MODE-AUTO", auto=False)
+    product.hanger_mode = "auto"
+    plan, _ = await _make_plan_position(session, product, length_mm=2800)
+    await session.flush()
+
+    resp = await client.get(f"/api/production-plans/{plan.id}/all-positions")
+    assert resp.status_code == 200, resp.text
+    position = resp.json()[0]
+    assert position["quantity_per_hanger"] is None
+    assert position["quantity_per_hanger_source"] is None
+
+
+@pytest.mark.asyncio
+async def test_validate_manual_mode_skips_auto_calc(session) -> None:
+    """Режим manual не запускает авто-проверку даже при несовместимом габарите."""
+    product = await _make_ready_product(session, "FG-MODE-SKIP", auto=True)
+    product.hanger_mode = "manual"
+    product.mount_width_mm = 2000  # для авто — несовместимый габарит
+    product.quantity_per_hanger = {"2800": {"auto": None, "manual": 12}}
+    _, position = await _make_plan_position(session, product, length_mm=2800)
+    await session.flush()
+
+    errors = await validate_plan_position(session, position)
+    assert "hanger_calc_zero" not in errors
+
+
 def test_position_dimensions_for_task_edges() -> None:
     """position_dimensions_for_task: вход → единственный выход → None (не выход вместо входа)."""
     from app.models.production_plan import (

@@ -257,9 +257,10 @@ export const CatalogForm = forwardRef<CatalogFormRef, {
   }, [product?.id, mode]);
 
   const formLengths = useMemo(() => normalizeLengths(form.lengths_mm ?? []), [form.lengths_mm]);
-  const autoMode = isHangerAutoMode(form);
+  // Явный режим подвеса (#127): единый для 1D/2D/3D, без data-driven вывода.
+  const autoMode = (form.hanger_mode ?? "auto") === "auto";
+  const sheetMode: HangerMode = form.hanger_mode ?? "auto"; // подпись режима для радио
   const isSheet = isSheetState(form.dimension_state);
-  const sheetMode: HangerMode = form.hanger_mode ?? "auto";
 
   // Длина полотна: из осей формы (create/edit) или сохранённых dimensions.
   const sheetLen = useMemo(() => {
@@ -750,6 +751,24 @@ export const CatalogForm = forwardRef<CatalogFormRef, {
 
             {isLengthState(form.dimension_state) ? (
               <>
+                <div className="flex items-center gap-2">
+                  <span className="text-sm font-medium">Режим подвеса:</span>
+                  <RadioGroup
+                    value={autoMode ? "auto" : "manual"}
+                    onValueChange={(val) => update("hanger_mode", val as HangerMode)}
+                    disabled={readOnly}
+                    className="flex items-center gap-4"
+                  >
+                    <div className="flex items-center gap-1.5">
+                      <RadioGroupItem value="auto" id="hanger-mode-auto" />
+                      <label htmlFor="hanger-mode-auto" className={cn("text-sm cursor-pointer", autoMode && "font-semibold")}>Авто</label>
+                    </div>
+                    <div className="flex items-center gap-1.5">
+                      <RadioGroupItem value="manual" id="hanger-mode-manual" />
+                      <label htmlFor="hanger-mode-manual" className={cn("text-sm cursor-pointer", !autoMode && "font-semibold")}>Вручную</label>
+                    </div>
+                  </RadioGroup>
+                </div>
                 <div className="flex items-start gap-4">
                   <div className="rounded-md border bg-background overflow-hidden inline-block min-w-0 shrink-0">
                     <table className="text-sm">

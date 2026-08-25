@@ -1,4 +1,4 @@
-"""Интеграция авторасчёта «количество на подвес» с планированием (#66, спек #59 п. 57).
+"""Интеграция авторасчёта «количество на подвес» с планированием (#66, #127).
 
 Две точки вызова: отображение (``PlanPositionOut``) и валидация
 (``validate_plan_position``). Расчёт на лету, кэша в позиции нет — позиция
@@ -10,10 +10,12 @@
     quantity_per_hanger: int | null
     quantity_per_hanger_source: "auto" | "manual" | null
 
-Приоритет: ручной override из payload > авто > null. Позиция с конкретной
-длиной берёт значение для своей длины (``input_dimensions["length_mm"]``);
-без длины / артикул без данных — текущее поведение (payload-значение или
-null). ``total <= 0`` (или несовместимые габариты) — расчёт невозможен:
+Приоритет (#127): ручной override из payload > режим артикула
+(``hanger_mode``), а не наличие данных. source соответствует режиму:
+manual → ручное значение per-length dict, auto → расчёт из периметра/
+габарита. Позиция с конкретной длиной берёт значение для своей длины
+(``input_dimensions["length_mm"]``); без длины / без значения — null.
+``total <= 0`` (или несовместимые габариты) — расчёт невозможен:
 ``calc_error``, вызывающий выставляет ``hanger_calc_zero``.
 
 Парные техкарты — вне рамок (#58): позиция без ``product_id`` всегда
@@ -29,7 +31,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domain.dimensions import LENGTH_MM
-from app.models.product import Product
+from app.models.product import HANGER_MODE_MANUAL, Product, _length_key
 from app.services.hanger_quantity_calc import (
     HangerConfigError,
     compute_hanger_quantity,
@@ -135,6 +137,17 @@ class PositionHangerValue:
     calc_error: bool = False
 
 
+def _manual_value_for_length(product: Product, length_mm: float) -> int | None:
+    """Ручное значение per-length dict для длины (bare-словарь раскрывается
+    по основной длине, как в :attr:`Product.quantity_per_hanger_by_length`)."""
+    by_length = product.quantity_per_hanger_by_length or {}
+    entry = by_length.get(_length_key(length_mm))
+    if not isinstance(entry, dict):
+        return None
+    manual = entry.get("manual")
+    return int(manual) if manual is not None else None
+
+
 def resolve_position_hanger(
     product: Product | None,
     *,
@@ -143,21 +156,35 @@ def resolve_position_hanger(
 ) -> PositionHangerValue:
     """Разрешить (quantity_per_hanger, source) для позиции плана.
 
-    Приоритет (#66): ручной override из payload > авто > null.
+    Приоритет (#127): ручной override из payload > режим артикула
+    (``hanger_mode``). source соответствует режиму, а не наличию данных.
 
     - Ручной override (payload-скаляр) → source="manual", всегда побеждает;
-    - артикул авто (заполнены периметр И габарит) + конкретная длина →
+    - режим manual + конкретная длина → ручное значение этой длины,
+      source="manual" (авто-расчёт не запускается даже при заполненных
+      периметре/габарите);
+    - режим auto + конкретная длина + заполнены периметр И габарит →
       авто-расчёт этой длины, source="auto"; ``total <= 0`` или несовместимые
       габариты (``mount_width + gap > rod_length``) → ``calc_error=True``
       (значение null, вызывающий ставит ``hanger_calc_zero``);
-    - иначе (нет длины / артикул без данных) → null.
+    - иначе (нет длины / нет значения выбранного режима) → null.
     """
     if payload_quantity_per_hanger is not None:
         return PositionHangerValue(payload_quantity_per_hanger, "manual")
 
+    if product is None:
+        return PositionHangerValue(None, None)
+
+    if product.hanger_mode == HANGER_MODE_MANUAL:
+        if length_mm is None:
+            return PositionHangerValue(None, None)
+        manual = _manual_value_for_length(product, length_mm)
+        if manual is not None and manual > 0:
+            return PositionHangerValue(manual, "manual")
+        return PositionHangerValue(None, None)
+
     if (
-        product is not None
-        and product.perimeter_mm
+        product.perimeter_mm
         and product.mount_width_mm
         and length_mm is not None
     ):

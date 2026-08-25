@@ -2,8 +2,9 @@
 
 Поведение через API-контракт create/patch/out products:
 - quantity_per_hanger — словарь по длинам {length_mm: {auto, manual}}, авто и ручное раздельно.
-- Авто-режим data-driven: оба поля perimeter_mm И mount_width_mm → авто для всех длин.
-- Ручное значение не затирается при авто — остаётся fallback.
+- Режим подвеса явный (#127): hanger_mode хранится в attributes; при
+  создании без режима выводится из данных (периметр И габарит → auto).
+- Используется значение выбранного режима; ручное никогда не затирается.
 - Валидация perimeter_mm/mount_width_mm >0 → 422.
 - Скаляр в attributes (миграция) → {первая_длина: {auto: null, manual: значение}}.
 """
@@ -229,7 +230,7 @@ async def test_legacy_scalar_without_lengths_not_crash(client, session) -> None:
 
 @pytest.mark.asyncio
 async def test_list_qty_filter_uses_auto_value(client, session) -> None:
-    """Фильтр qty_from/qty_to работает по авто-значению (приоритет авто > ручное)."""
+    """Фильтр qty_from/qty_to работает по значению режима артикула (#127)."""
     auto = await client.post(
         "/api/products",
         json=_payload("RAW-QTY-AUTO", perimeter_mm=64.2, mount_width_mm=19.35, lengths_mm=[2800]),
@@ -248,6 +249,108 @@ async def test_list_qty_filter_uses_auto_value(client, session) -> None:
     skus = {item["sku"] for item in resp.json()["items"]}
     assert "RAW-QTY-AUTO" in skus
     assert "RAW-QTY-MAN" not in skus
+
+
+# ─── Явный режим подвеса (#127) ──────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_create_derives_hanger_mode_from_fields(client, session) -> None:
+    """Создание без явного режима: периметр И габарит → auto, иначе manual."""
+    auto = await client.post(
+        "/api/products",
+        json=_payload("RAW-MODE-AUTO", perimeter_mm=64.2, mount_width_mm=19.35, lengths_mm=[2800]),
+    )
+    assert auto.status_code == 201, auto.text
+    assert auto.json()["hanger_mode"] == "auto"
+
+    manual = await client.post(
+        "/api/products",
+        json=_payload("RAW-MODE-MAN", lengths_mm=[2800], quantity_per_hanger={"2800": {"manual": 10}}),
+    )
+    assert manual.status_code == 201, manual.text
+    assert manual.json()["hanger_mode"] == "manual"
+
+    # Явный режим важнее данных: поля заполнены, но режим manual.
+    explicit = await client.post(
+        "/api/products",
+        json=_payload(
+            "RAW-MODE-EXPL",
+            perimeter_mm=64.2,
+            mount_width_mm=19.35,
+            lengths_mm=[2800],
+            hanger_mode="manual",
+        ),
+    )
+    assert explicit.status_code == 201, explicit.text
+    assert explicit.json()["hanger_mode"] == "manual"
+
+
+@pytest.mark.asyncio
+async def test_mode_switch_changes_effective_value(client, session) -> None:
+    """Значение следует за режимом; авто не затирает ручное и наоборот."""
+    resp = await client.post(
+        "/api/products",
+        json=_payload(
+            "RAW-MODE-SWITCH",
+            perimeter_mm=64.2,
+            mount_width_mm=19.35,
+            lengths_mm=[2800],
+            quantity_per_hanger={"2800": {"manual": 55}},
+        ),
+    )
+    assert resp.status_code == 201, resp.text
+    pid = resp.json()["id"]
+    assert resp.json()["hanger_mode"] == "auto"
+
+    async def _scalar() -> int | None:
+        product = (await session.execute(
+            select(Product).options(selectinload(Product.lengths)).where(Product.id == pid)
+        )).scalar_one()
+        return product.main_quantity_per_hanger()
+
+    # Режим auto → авто-значение (72), ручное 55 хранится отдельно.
+    assert await _scalar() == 72
+
+    patched = await client.patch(f"/api/products/{pid}", json={"hanger_mode": "manual"})
+    assert patched.status_code == 200, patched.text
+    assert patched.json()["hanger_mode"] == "manual"
+    qph = patched.json()["quantity_per_hanger"]
+    assert qph["2800"]["auto"] == 72  # авто не затёрлось сменой режима
+    assert qph["2800"]["manual"] == 55
+    assert await _scalar() == 55
+
+    # Обратно в auto — снова авто-значение.
+    patched = await client.patch(f"/api/products/{pid}", json={"hanger_mode": "auto"})
+    assert patched.status_code == 200, patched.text
+    assert await _scalar() == 72
+
+
+@pytest.mark.asyncio
+async def test_list_qty_filter_follows_mode(client, session) -> None:
+    """Фильтр списка берёт значение выбранного режима, не «авто > ручное» (#127)."""
+    # Поля заполнены, но режим явно manual → в фильтре участвует ручное.
+    resp = await client.post(
+        "/api/products",
+        json=_payload(
+            "RAW-QTY-MODE",
+            perimeter_mm=64.2,
+            mount_width_mm=19.35,
+            lengths_mm=[2800],
+            quantity_per_hanger={"2800": {"manual": 60}},
+            hanger_mode="manual",
+        ),
+    )
+    assert resp.status_code == 201, resp.text
+
+    # Авто-значение было бы 72 — диапазон 65..80 его ловил бы, ручное 60 — нет.
+    hit = await client.get("/api/products?qty_from=65&qty_to=80")
+    assert hit.status_code == 200
+    assert "RAW-QTY-MODE" not in {i["sku"] for i in hit.json()["items"]}
+
+    hit = await client.get("/api/products?qty_from=55&qty_to=65")
+    assert hit.status_code == 200
+    assert "RAW-QTY-MODE" in {i["sku"] for i in hit.json()["items"]}
 
 
 # ─── Основная длина (#81) ───────────────────────────────────────────────────
