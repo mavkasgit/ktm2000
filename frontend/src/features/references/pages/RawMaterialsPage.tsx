@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Search, Image, X, Grid, List, Plus, Filter, FileUp, FileSpreadsheet, Check, CheckCheck } from "lucide-react";
+import { Search, Image, X, Grid, List, Plus, Filter, FileUp, FileSpreadsheet, Check, CheckCheck, ChevronDown } from "lucide-react";
 import * as API from "@/shared/api/products";
 import type { ProductFilters } from "@/shared/api/products";
 import { listRouteSelectionRules } from "@/shared/api/routes";
@@ -21,10 +21,11 @@ import { getPhotoUrl } from "../components/getPhotoUrl";
 import type { Product, CreateProductInput, PatchProductInput, CatalogPreview } from "@/shared/api/products";
 import { usePermission } from "@/features/auth/hooks/usePermission";
 import { SortableFilterHeader } from "@/shared/ui/SortableFilterHeader";
-import { TableCornerResetCell, TableCornerResetHeader, DATA_TABLE_STYLES } from "@/shared/ui";
+import { TableCornerResetCell, TableCornerResetHeader, DATA_TABLE_STYLES, PositionSkuCell, DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem } from "@/shared/ui";
 import { useSortableColumnFilters } from "@/shared/hooks/useSortableColumnFilters";
 import { skipShotBlastSectionLabel } from "../lib/skipShotBlastLabel";
 import { HangerCalcTable } from "../components/HangerCalcTable";
+import { ProductWipStatsDialog } from "@/features/execution/components/ProductWipStatsDialog";
 import { primaryHangerValue, effectiveForLength, productLengths } from "@/shared/lib/hangerQuantity";
 import { isLengthState } from "@/shared/lib/dimensionState";
 import { cn } from "@/shared/utils/cn";
@@ -34,6 +35,22 @@ type DialogMode = "create" | "edit";
 type SortField = "sku" | "name" | "length_mm" | "quantity_per_hanger" | "id" | "is_paired_profile" | "skip_shot_blast" | "is_laminated";
 type ColumnFilterField = "sku" | "quantity_per_hanger" | "length_mm" | "is_paired_profile" | "skip_shot_blast" | "is_laminated";
 type SortOrder = "asc" | "desc";
+
+type GridDensity = "large" | "medium" | "small";
+
+const GRID_DENSITY_STORAGE_KEY = "raw-materials-grid-density";
+
+const GRID_DENSITY_OPTIONS: { value: GridDensity; label: string }[] = [
+  { value: "large", label: "Крупно" },
+  { value: "medium", label: "Средне" },
+  { value: "small", label: "Мелко" },
+];
+
+const GRID_DENSITY_CLASSES: Record<GridDensity, string> = {
+  large: "grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4",
+  medium: "grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6",
+  small: "grid-cols-3 sm:grid-cols-4 lg:grid-cols-6 xl:grid-cols-8",
+};
 
 interface SortConfig {
   field: SortField;
@@ -195,6 +212,14 @@ export function RawMaterialsPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [viewMode, setViewMode] = useState<ViewMode>("table");
+  const [gridDensity, setGridDensity] = useState<GridDensity>(() => {
+    try {
+      const raw = localStorage.getItem(GRID_DENSITY_STORAGE_KEY);
+      return raw === "medium" || raw === "small" ? raw : "large";
+    } catch {
+      return "large";
+    }
+  });
   const [search, setSearch] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
   const [filtersOpen, setFiltersOpen] = useState(false);
@@ -210,7 +235,6 @@ export function RawMaterialsPage() {
     hasActiveColumnFilters: hasColumnFiltersActive,
     resetColumnFilters,
   } = useSortableColumnFilters<ColumnFilterField>();
-  const [groupByAliases, setGroupByAliases] = useState(false);
 
   const [dialogOpen, setDialogOpen] = useState(false);
   const [dialogMode, setDialogMode] = useState<DialogMode>("create");
@@ -218,6 +242,8 @@ export function RawMaterialsPage() {
   const [formDirty, setFormDirty] = useState(false);
   const [pendingChanges, setPendingChanges] = useState<FieldChange[]>([]);
   const formRef = useRef<CatalogFormRef>(null);
+  const zipInputRef = useRef<HTMLInputElement>(null);
+  const [statsSku, setStatsSku] = useState<string | null>(null);
 
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [confirmAction, setConfirmAction] = useState<(() => void) | null>(null);
@@ -450,14 +476,6 @@ export function RawMaterialsPage() {
     };
   }, [items]);
 
-  const displayedItems = useMemo(() => {
-    if (!groupByAliases) return items;
-
-    const withAliases = items.filter((p) => (p.aliases?.length ?? 0) > 0);
-    const withoutAliases = items.filter((p) => (p.aliases?.length ?? 0) === 0);
-    return [...withAliases, ...withoutAliases];
-  }, [items, groupByAliases]);
-
   const activeFiltersCount = [lengthFrom, lengthTo, qtyFrom, qtyTo].filter(Boolean).length +
     Object.values(columnFilters).reduce((acc, set) => acc + (set?.size ?? 0), 0) +
     Object.values(columnSearchQueries).filter((q) => q?.trim()).length;
@@ -506,18 +524,55 @@ export function RawMaterialsPage() {
               </button>
             ))}
           </div>
+          {viewMode === "grid" && (
+            <div className="inline-flex items-center rounded-lg border overflow-hidden">
+              {GRID_DENSITY_OPTIONS.map(({ value, label }) => (
+                <button
+                  key={value}
+                  type="button"
+                  title={`Размер фото: ${label.toLowerCase()}`}
+                  onClick={() => {
+                    setGridDensity(value);
+                    try {
+                      localStorage.setItem(GRID_DENSITY_STORAGE_KEY, value);
+                    } catch {
+                      // приватный режим — просто не запоминаем
+                    }
+                  }}
+                  className={cn(
+                    "inline-flex items-center px-3 h-9 text-sm transition-colors",
+                    gridDensity === value
+                      ? "bg-primary text-primary-foreground"
+                      : "hover:bg-muted text-foreground",
+                  )}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          )}
           {!isReadOnly && (
             <>
-              <label>
-                <input type="file" accept=".zip" className="hidden" onChange={handleImportZip} disabled={isReadOnly} />
-                <Button variant="outline" size="sm" asChild>
-                  <span><FileUp className="h-4 w-4 mr-1" />Импорт ZIP</span>
-                </Button>
-              </label>
-              <Button variant="outline" size="sm" onClick={() => setWizardOpen(true)}>
-                <FileSpreadsheet className="h-4 w-4 mr-1" />
-                Импорт
-              </Button>
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button variant="outline" size="sm">
+                    <FileUp className="h-4 w-4 mr-1" />
+                    Импорт
+                    <ChevronDown className="h-4 w-4 ml-1" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end">
+                  <DropdownMenuItem onSelect={() => setWizardOpen(true)}>
+                    <FileSpreadsheet />
+                    Excel — справочник сырья
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onSelect={() => zipInputRef.current?.click()}>
+                    <Image />
+                    Фотографии (ZIP)
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+              <input ref={zipInputRef} type="file" accept=".zip" className="hidden" onChange={handleImportZip} />
               <Button size="sm" onClick={openCreate}>
                 <Plus className="h-4 w-4 mr-1" />
                 Добавить
@@ -545,9 +600,6 @@ export function RawMaterialsPage() {
               {activeFiltersCount > 0 && (
                 <Badge variant="secondary" className="ml-1 h-5 min-w-[1.25rem] px-1 text-xs">{activeFiltersCount}</Badge>
               )}
-            </Button>
-            <Button variant={groupByAliases ? "default" : "outline"} size="sm" onClick={() => setGroupByAliases(!groupByAliases)}>
-              Сгруппировать одинаковые
             </Button>
           </div>
 
@@ -585,9 +637,9 @@ export function RawMaterialsPage() {
       ) : viewMode === "grid" && items.length === 0 ? (
         <div className="text-muted-foreground py-8 text-center">Ничего не найдено</div>
       ) : viewMode === "grid" ? (
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-          {displayedItems.map((product) => (
-            <CatalogCard key={product.id} product={product} onClick={() => openEdit(product)} />
+        <div className={cn("grid gap-4", GRID_DENSITY_CLASSES[gridDensity])}>
+          {items.map((product) => (
+            <CatalogCard key={product.id} product={product} onClick={() => openEdit(product)} onSkuClick={setStatsSku} />
           ))}
         </div>
       ) : (
@@ -689,7 +741,7 @@ export function RawMaterialsPage() {
                   <td className="px-4 py-2">
                     <div className="flex flex-col gap-1">
                       <div className="flex items-center gap-1.5">
-                        <span className="font-medium">{product.sku}</span>
+                        <PositionSkuCell sku={product.sku} onClick={setStatsSku} />
                         {product.has_standard_techcard && (
                           <span title="Есть стандартная техкарта">
                             <Check
@@ -896,6 +948,14 @@ export function RawMaterialsPage() {
         open={wizardOpen}
         onOpenChange={setWizardOpen}
         onImported={load}
+      />
+
+      <ProductWipStatsDialog
+        sku={statsSku}
+        open={statsSku !== null}
+        onOpenChange={(open) => {
+          if (!open) setStatsSku(null);
+        }}
       />
     </section>
   );

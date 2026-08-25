@@ -14,9 +14,12 @@ function getProductLengths(product: Product): number[] {
 export function CatalogCard({
   product,
   onClick,
+  onSkuClick,
 }: {
   product: Product;
   onClick: () => void;
+  /** Если передан — артикул кликабелен (сводная информация), клик по карточке не срабатывает. */
+  onSkuClick?: (sku: string) => void;
 }) {
   const photoUrl = getPhotoUrl(product.photo_thumb);
 
@@ -34,7 +37,21 @@ export function CatalogCard({
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-1.5 justify-between">
               <div className="flex items-center gap-1.5 min-w-0">
-                <h3 className="font-medium truncate text-sm">{product.sku}</h3>
+                {onSkuClick ? (
+                  <button
+                    type="button"
+                    className="font-medium truncate text-sm text-blue-700 hover:underline focus:outline-none"
+                    title="Показать сводную информацию по артикулу"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onSkuClick(product.sku);
+                    }}
+                  >
+                    {product.sku}
+                  </button>
+                ) : (
+                  <h3 className="font-medium truncate text-sm">{product.sku}</h3>
+                )}
                 {product.code && (
                   <span className="text-xs text-muted-foreground bg-muted rounded px-1.5 py-0.5 shrink-0" title="Уникальный код">
                     {product.code}
