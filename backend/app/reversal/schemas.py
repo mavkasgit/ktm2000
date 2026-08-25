@@ -87,6 +87,30 @@ class ReverseResultOut(BaseModel):
     compensated_tx_ids: list[int]
 
 
+class HardPurgeIn(BaseModel):
+    """dry_run=True → отчёт + plan_token kind='purge'; False → confirm (#118)."""
+
+    dry_run: bool = True
+    plan_token: str | None = None
+
+
+class PurgePairOut(BaseModel):
+    source_tx_id: int
+    reverse_tx_id: int
+    product_id: int
+    quantity: str
+
+
+class HardPurgeOut(BaseModel):
+    """Отчёт hard-purge: пары «исходная+компенсация» + итог."""
+
+    action_id: int
+    total_pairs: int
+    pairs: list[PurgePairOut]
+    plan_token: str | None = None  # только dry_run
+    deleted_tx_ids: list[int] = Field(default_factory=list)  # после confirm
+
+
 class AmendResultOut(BaseModel):
     action_id: int
     new_action_id: int

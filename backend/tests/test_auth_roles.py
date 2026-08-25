@@ -9,6 +9,7 @@ ALL_SECTIONS = [
     "/transfers",
     "/spg",
     "/audit-logs",
+    "/reversal",
     "/settings",
     "/settings/dev",
     "/dev",

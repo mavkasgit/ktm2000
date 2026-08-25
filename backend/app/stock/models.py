@@ -161,7 +161,7 @@ class StockTransaction(Base):
     # Reverses (ADR-0019): id исходной транзакции, если эта — компенсационная
     # (cancel/correct).
     reverses_id: Mapped[int | None] = mapped_column(
-        ForeignKey("stock_transactions.id"), nullable=True
+        ForeignKey("stock_transactions.id"), nullable=True, index=True
     )
     # Журнал действий (ADR-0019): действие, породившее эту проводку.
     action_id: Mapped[int | None] = mapped_column(

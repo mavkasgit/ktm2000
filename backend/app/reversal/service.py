@@ -16,7 +16,7 @@ import json
 from dataclasses import dataclass, field
 from decimal import Decimal
 
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
@@ -98,6 +98,26 @@ class AmendResult:
     compensated_tx_ids: list[int] = field(default_factory=list)
     amended_action_ids: list[int] = field(default_factory=list)   # статус → 'amended'
     reversed_action_ids: list[int] = field(default_factory=list)  # каскадные dependents → 'reversed'
+
+
+@dataclass
+class PurgePair:
+    """Пара «исходная проводка + её компенсация» (hard-чистка, #118)."""
+
+    source_tx_id: int
+    reverse_tx_id: int
+    product_id: int
+    quantity: Decimal
+
+
+@dataclass
+class PurgePlan:
+    """Отчёт hard-purge: пары к удалению; plan_token — только в dry_run."""
+
+    action_id: int
+    pairs: list[PurgePair] = field(default_factory=list)
+    plan_token: str | None = None
+    deleted_tx_ids: list[int] = field(default_factory=list)  # заполнено после confirm
 
 
 def _sign_payload(payload: dict) -> str:
@@ -667,6 +687,128 @@ class ReversalService:
             compensated_tx_ids=compensated_tx_ids,
             amended_action_ids=amended_action_ids,
             reversed_action_ids=reversed_action_ids,
+        )
+
+    # ── hard-purge (тикет #118, ADR-0019 п.7) ────────────────────────────
+
+    async def _purge_pairs(self, db: AsyncSession, target: Action) -> list[PurgePair]:
+        """Пары «исходная+компенсация» действия с проверкой условий п.3
+        спеки #118; любое нарушение — NotAllowed с причиной.
+        """
+        if target.status != ActionStatus.REVERSED:
+            raise NotAllowed(
+                f"hard-purge доступен только для действий в статусе "
+                f"'reversed' (текущий: '{target.status.value}')"
+            )
+
+        # Живые зависимые блокируют чистку: вся цепочка reversed/purged.
+        # Транзитивный обход (реюз _cascade_set, как в preview_reverse):
+        # активные узлы цепочки и «сироты» глубже уже отменённых звеньев.
+        active_chain, _reverted, orphan_active = await self._cascade_set(
+            db, target, cascade=True
+        )
+        live = active_chain + orphan_active
+        if live:
+            raise NotAllowed(
+                "Есть живые зависимые действия: "
+                + ", ".join(f"#{d.id}" for d in live)
+            )
+
+        originals = (
+            await db.execute(
+                select(StockTransaction)
+                .where(StockTransaction.action_id == target.id)
+                .order_by(StockTransaction.id.asc())
+            )
+        ).scalars().all()
+        if not originals:
+            raise NotAllowed(f"У действия #{target.id} нет проводок в ledger")
+
+        comps = (
+            await db.execute(
+                select(StockTransaction)
+                .where(
+                    StockTransaction.reverses_id.in_([o.id for o in originals])
+                )
+                .order_by(StockTransaction.reverses_id.asc(), StockTransaction.id.asc())
+            )
+        ).scalars().all()
+
+        by_source: dict[int, list] = {}
+        for c in comps:
+            by_source.setdefault(int(c.reverses_id), []).append(c)
+
+        pairs: list[PurgePair] = []
+        for orig in originals:
+            matched = by_source.get(int(orig.id), [])
+            if len(matched) != 1:
+                raise NotAllowed(
+                    f"Проводка #{orig.id} имеет {len(matched)} компенсаций — "
+                    "hard-purge требует парность 1:1"
+                )
+            pairs.append(
+                PurgePair(
+                    source_tx_id=int(orig.id),
+                    reverse_tx_id=int(matched[0].id),
+                    product_id=int(orig.product_id),
+                    quantity=orig.quantity,
+                )
+            )
+        return pairs
+
+    async def hard_purge(
+        self,
+        db: AsyncSession,
+        action_id: int,
+        *,
+        dry_run: bool = True,
+        plan_token: str | None = None,
+    ) -> PurgePlan:
+        """Hard-чистка полностью скомпенсированного действия (#118).
+
+        dry_run=True: отчёт по парам без изменений + plan_token kind='purge'.
+        dry_run=False: подтверждение по токену — удаление компенсаций,
+        затем исходных проводок (FK reverses_id → источник) и смена статуса
+        на 'purged' в одной транзакции сессии. Записи action_journal не
+        удаляются (аудит).
+        """
+        target = await db.get(Action, action_id)
+        if target is None:
+            raise ValueError(f"Action #{action_id} не найден")
+        pairs = await self._purge_pairs(db, target)
+
+        if dry_run:
+            return PurgePlan(
+                action_id=action_id,
+                pairs=pairs,
+                plan_token=_sign_payload(
+                    {
+                        "action_id": action_id,
+                        "kind": "purge",
+                        "fp": await self._fingerprint(db, [action_id]),
+                    }
+                ),
+            )
+
+        payload = _verify_token(plan_token or "", kind="purge")
+        if int(payload.get("action_id", -1)) != action_id:
+            raise StalePlanToken("plan_token выдан для другого действия")
+        current_fp = await self._fingerprint(db, [action_id])
+        if payload.get("fp") != current_fp:
+            raise StalePlanToken("мир изменился после dry_run — повторите hard-purge")
+
+        comp_ids = [p.reverse_tx_id for p in pairs]
+        source_ids = [p.source_tx_id for p in pairs]
+        # Порядок п.4 спеки: сначала компенсации (их reverses_id ссылается
+        # на исходные), затем исходные. Одна транзакция со сменой статуса.
+        await db.execute(delete(StockTransaction).where(StockTransaction.id.in_(comp_ids)))
+        await db.execute(delete(StockTransaction).where(StockTransaction.id.in_(source_ids)))
+        target.status = ActionStatus.PURGED
+        await db.flush()
+        return PurgePlan(
+            action_id=action_id,
+            pairs=pairs,
+            deleted_tx_ids=sorted(comp_ids + source_ids),
         )
 
     # ── вспомогательное ──────────────────────────────────────────────────

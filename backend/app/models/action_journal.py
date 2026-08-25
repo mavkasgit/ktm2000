@@ -36,6 +36,7 @@ class ActionStatus(str, enum.Enum):
     ACTIVE = "active"
     REVERSED = "reversed"
     AMENDED = "amended"
+    PURGED = "purged"  # hard-чистка скомпенсированных пар (#118)
 
 
 class Action(Base):
@@ -50,7 +51,7 @@ class Action(Base):
     __tablename__ = "action_journal"
     __table_args__ = (
         CheckConstraint(
-            "status IN ('active', 'reversed', 'amended')",
+            "status IN ('active', 'reversed', 'amended', 'purged')",
             name="ck_action_journal_status",
         ),
     )

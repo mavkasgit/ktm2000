@@ -5,6 +5,7 @@
   * POST /actions/{id}/reverse {plan_token, reason?} → ReversalResult
   * POST /actions/{id}/preview-amend {changes, cascade} → Preview + plan_token
   * POST /actions/{id}/amend {plan_token, reason?} → AmendResult   (#115)
+  * POST /actions/{id}/hard-purge {dry_run, plan_token?} → HardPurgeOut (#118, admin)
 """
 from __future__ import annotations
 
@@ -14,7 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import READER_ROLES, WRITER_ROLES, get_current_user, require_role
 from app.core.database import get_db
-from app.models.user import User
+from app.models.user import User, UserRole
 from app.models.action_journal import Action, ActionStatus
 from app.reversal import errors
 from app.reversal.schemas import (
@@ -29,6 +30,9 @@ from app.reversal.schemas import (
     PreviewOut,
     ReverseIn,
     ReverseResultOut,
+    HardPurgeIn,
+    HardPurgeOut,
+    PurgePairOut,
     TreeNodeOut,
     TreeOut,
 )
@@ -297,4 +301,49 @@ async def amend_action(
         compensated_tx_ids=list(result.compensated_tx_ids),
         amended_action_ids=list(result.amended_action_ids),
         reversed_action_ids=list(result.reversed_action_ids),
+    )
+
+
+@router.post(
+    "/{action_id}/hard-purge",
+    response_model=HardPurgeOut,
+    dependencies=[Depends(require_role([UserRole.admin]))],  # отдельное право (ADR-0019 п.7)
+)
+async def hard_purge_action(
+    action_id: int,
+    payload: HardPurgeIn,
+    db: AsyncSession = Depends(get_db),
+) -> HardPurgeOut:
+    """Hard-чистка скомпенсированного действия (#118): dry_run → отчёт +
+    plan_token; confirm — физическое удаление пар и статус 'purged'."""
+    try:
+        result = await reversal_service.hard_purge(
+            db,
+            action_id,
+            dry_run=payload.dry_run,
+            plan_token=payload.plan_token,
+        )
+    except errors.StalePlanToken as exc:
+        raise HTTPException(
+            status_code=409,
+            detail="Мир изменился с момента dry_run — повторите hard-purge",
+        ) from exc
+    except errors.NotAllowed as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return HardPurgeOut(
+        action_id=result.action_id,
+        total_pairs=len(result.pairs),
+        pairs=[
+            PurgePairOut(
+                source_tx_id=p.source_tx_id,
+                reverse_tx_id=p.reverse_tx_id,
+                product_id=p.product_id,
+                quantity=str(p.quantity),
+            )
+            for p in result.pairs
+        ],
+        plan_token=result.plan_token,
+        deleted_tx_ids=list(result.deleted_tx_ids),
     )
