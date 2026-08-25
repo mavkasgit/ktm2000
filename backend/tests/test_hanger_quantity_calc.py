@@ -13,6 +13,7 @@ from app.services.hanger_quantity_calc import (
     HangerSettings,
     compute_hanger_quantity,
     compute_paired_hanger_quantity,
+    compute_sheet_hanger_quantity,
 )
 
 
@@ -452,3 +453,96 @@ class TestPairedBoundaries:
                 length_mm=2800,
                 hanger=hanger,
             )
+
+
+class TestSheetFormula:
+    """Формула листов (#126): total = floor(9 м² / (длина × ширина)), две стороны."""
+
+    def test_sheet_fits(self):
+        result = compute_sheet_hanger_quantity(length_mm=1000, width_mm=500)
+        # total = floor(9_000_000 / 500_000) = 18; area_m2 = 1000*500*2/1e6 = 1.0
+        assert result.by_area == 18
+        assert result.by_size is None
+        assert result.total == 18
+        assert result.limiter == "area"
+        assert result.is_calculable is True
+        assert result.area_m2 == pytest.approx(1.0)
+        assert result.reason is None
+
+    def test_floor_truncates(self):
+        # 9_000_000 / (700*400) = 32.14 → 32
+        result = compute_sheet_hanger_quantity(length_mm=700, width_mm=400)
+        assert result.total == 32
+
+    def test_exact_frame_3000x1500_allowed(self):
+        # Границы поля подвеса включительно: ровно 3000×1500 допустимо.
+        result = compute_sheet_hanger_quantity(length_mm=3000, width_mm=1500)
+        assert result.is_calculable is True
+        assert result.total == 2  # floor(9_000_000 / 4_500_000)
+
+    @pytest.mark.parametrize(
+        ("length_mm", "width_mm"),
+        [
+            (3001, 1000),
+            (1000, 1501),
+            (4000, 2000),
+        ],
+    )
+    def test_over_frame_not_calculable(self, length_mm, width_mm):
+        result = compute_sheet_hanger_quantity(length_mm=length_mm, width_mm=width_mm)
+        assert result.is_calculable is False
+        assert result.total is None
+        assert result.reason is not None
+        assert "превышает поле подвеса" in result.reason
+
+    def test_volume_edge_300_inclusive_allowed(self):
+        # Ребро навески 300 включительно допустимо.
+        result = compute_sheet_hanger_quantity(length_mm=1000, width_mm=500, height_mm=300)
+        assert result.is_calculable is True
+        assert result.total == 18
+
+    def test_volume_smallest_edge_hangs(self):
+        # Навеска за любое минимальное ребро: 200 ≤ 300 → расчёт возможен.
+        result = compute_sheet_hanger_quantity(length_mm=1000, width_mm=200, height_mm=900)
+        assert result.is_calculable is True
+        assert result.total == 45  # floor(9_000_000 / 200_000)
+
+    @pytest.mark.parametrize(
+        ("length_mm", "width_mm", "height_mm"),
+        [
+            (1000, 500, 301),
+            (1000, 500, 400),
+            (400, 350, 320),
+        ],
+    )
+    def test_volume_no_hanging_edge_not_calculable(self, length_mm, width_mm, height_mm):
+        result = compute_sheet_hanger_quantity(
+            length_mm=length_mm, width_mm=width_mm, height_mm=height_mm
+        )
+        assert result.is_calculable is False
+        assert result.total is None
+        assert result.reason is not None
+        assert "нет ребра для навески" in result.reason
+
+    @pytest.mark.parametrize(
+        ("length_mm", "width_mm"),
+        [
+            (None, 500),
+            (1000, None),
+            (0, 500),
+            (1000, -5),
+            (None, None),
+        ],
+    )
+    def test_missing_axes_not_calculable(self, length_mm, width_mm):
+        result = compute_sheet_hanger_quantity(length_mm=length_mm, width_mm=width_mm)
+        assert result.is_calculable is False
+        assert result.total is None
+        assert result.reason is not None
+        assert "не заполнены" in result.reason
+
+    def test_2d_ignores_height_check(self):
+        # 2D (height не задан): проверка ребра навески не применяется.
+        result = compute_sheet_hanger_quantity(length_mm=1000, width_mm=500, height_mm=None)
+        assert result.is_calculable is True
+        assert result.total == 18

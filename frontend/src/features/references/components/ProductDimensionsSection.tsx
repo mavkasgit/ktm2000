@@ -36,9 +36,11 @@ export const ProductDimensionsSection = forwardRef<
     onDimensionStateChange: (state: DimensionState) => void;
     dimensionTypes: { id: number; code: string }[];
     readOnly?: boolean;
+    /** Значения осей 2D/3D (code → строка input) наружу (#126: превью подвеса листа). */
+    onValuesChange?: (values: Record<string, string>) => void;
   }
 >(function ProductDimensionsSection(
-  { productId, dimensionState, onDimensionStateChange, dimensionTypes, readOnly = false },
+  { productId, dimensionState, onDimensionStateChange, dimensionTypes, readOnly = false, onValuesChange },
   ref,
 ) {
   const queryClient = useQueryClient();
@@ -74,6 +76,11 @@ export const ProductDimensionsSection = forwardRef<
       return changed ? next : prev;
     });
   }, [links, dimensionState]);
+
+  // Наружу для превью подвеса листа (#126): любое изменение осей.
+  useEffect(() => {
+    onValuesChange?.(multiValues);
+  }, [multiValues, onValuesChange]);
 
   const invalidate = () => {
     if (productId) queryClient.invalidateQueries({ queryKey: queryKeys.dimensions.product(productId) });

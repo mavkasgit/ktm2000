@@ -4,6 +4,10 @@
 Single = batch из одного item. Вход — числа, не id. Нерасчётные данные →
 ``is_calculable=false`` без исключений. Невалидные константы/кросс-поле → 422.
 Константы (read-only) отдаются в ответе, чтобы фронт не дублировал их в TS.
+
+Item поддерживает ``kind`` (#126): ``'profile'`` (по умолчанию, формулы #59)
+или ``'sheet'`` (листы 2D/3D — length_mm/width_mm/height_mm, периметр/габарит
+игнорируются); нерасчётный лист несёт ``reason``.
 """
 
 from __future__ import annotations
@@ -20,6 +24,7 @@ from app.services.hanger_quantity_calc import (
     HangerSettings,
     compute_hanger_quantity,
     compute_paired_hanger_quantity,
+    compute_sheet_hanger_quantity,
 )
 
 router = APIRouter(prefix="/hanger-calc", tags=["hanger-calc"])
@@ -48,9 +53,13 @@ class HangerSettingsIn(BaseModel):
 
 
 class HangerCalcItemIn(BaseModel):
+    kind: Literal["profile", "sheet"] = "profile"
     perimeter_mm: float | None = None
     mount_width_mm: float | None = None
     length_mm: float | None = None
+    # Поля листа (#126): используются только при kind='sheet'.
+    width_mm: float | None = None
+    height_mm: float | None = None
 
 
 class PairedHangerCalcItemIn(BaseModel):
@@ -78,6 +87,7 @@ class HangerCalcResultOut(BaseModel):
     limiter: Literal["area", "size"] | None
     area_m2: float | None
     is_calculable: bool
+    reason: str | None = None
 
 
 class HangerCalcResponse(BaseModel):
@@ -96,12 +106,21 @@ async def hanger_calc(payload: HangerCalcRequest) -> HangerCalcResponse:
     results: list[HangerCalcResultOut] = []
     for item in payload.items:
         try:
-            result = compute_hanger_quantity(
-                perimeter_mm=item.perimeter_mm,
-                mount_width_mm=item.mount_width_mm,
-                length_mm=item.length_mm,
-                hanger=settings,
-            )
+            if item.kind == "sheet":
+                # Лист (#126): периметр/габарит игнорируются, константы
+                # подвеса профилей не применяются — формула площади поля.
+                result = compute_sheet_hanger_quantity(
+                    length_mm=item.length_mm,
+                    width_mm=item.width_mm,
+                    height_mm=item.height_mm,
+                )
+            else:
+                result = compute_hanger_quantity(
+                    perimeter_mm=item.perimeter_mm,
+                    mount_width_mm=item.mount_width_mm,
+                    length_mm=item.length_mm,
+                    hanger=settings,
+                )
         except HangerConfigError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         results.append(HangerCalcResultOut(**asdict(result)))

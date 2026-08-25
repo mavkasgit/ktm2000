@@ -15,7 +15,7 @@ import { calcHanger, calcPairedHanger } from "@/shared/api/hangerCalc";
 import type { HangerCalcResult, HangerSettings } from "@/shared/api/hangerCalc";
 import { fetchAllTechcards } from "@/shared/api/techcards";
 import type { Techcard } from "@/shared/api/techcards";
-import { isHangerAutoMode, lengthKey, productLengths } from "@/shared/lib/hangerQuantity";
+import { isHangerAutoMode, isSheetState, lengthKey, productLengths, sheetDims } from "@/shared/lib/hangerQuantity";
 import {
   buildCalcItems,
   buildHangerCalcRows,
@@ -174,7 +174,39 @@ export function HangerCalcTable({
       return next;
     };
 
-    if (!isHangerAutoMode(product)) {
+    if (isSheetState(product.dimension_state)) {
+      // Лист (#126): пересчёт по осям полотна; ручной режим — без расчёта.
+      if ((product.hanger_mode ?? "auto") !== "auto") {
+        setCalcMap(removeFromCalc);
+        setIncompatible(removeFromIncompatible);
+        return;
+      }
+      const { lengthMm, widthMm, heightMm } = sheetDims(product);
+      if (lengthMm == null) {
+        setCalcMap(removeFromCalc);
+        setIncompatible(removeFromIncompatible);
+        return;
+      }
+      setIncompatible(removeFromIncompatible);
+      const resp = await calcHanger([{
+        kind: "sheet",
+        perimeter_mm: null,
+        mount_width_mm: null,
+        length_mm: lengthMm,
+        width_mm: widthMm,
+        height_mm: product.dimension_state === "volume" ? heightMm : null,
+      }]);
+      const byLength = new Map<string, HangerCalcResult>();
+      if (resp.results[0]) byLength.set(lengthKey(lengthMm), resp.results[0]);
+      setCalcMap((prev) => {
+        const next = new Map(prev);
+        next.set(product.id, byLength);
+        return next;
+      });
+      return;
+    }
+
+    if ((product.hanger_mode ?? "auto") !== "auto" || !isHangerAutoMode(product)) {
       setCalcMap(removeFromCalc);
       setIncompatible(removeFromIncompatible);
       return;

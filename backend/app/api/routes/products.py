@@ -1,10 +1,10 @@
 import base64
 from pathlib import Path
 
-from typing import List
+from typing import List, Literal
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status, Response
 from pydantic import BaseModel, Field
-from sqlalchemy import cast, exists, func, or_, select, type_coerce, delete, update, Integer, Float
+from sqlalchemy import case, cast, exists, func, or_, select, type_coerce, delete, update, Integer, Float
 from sqlalchemy.types import ARRAY, String
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -27,6 +27,7 @@ from app.services.hanger_quantity_calc import (
     DEFAULT_HANGER_SETTINGS,
     HangerConfigError,
     compute_hanger_quantity,
+    compute_sheet_hanger_quantity,
 )
 
 router = APIRouter(prefix="/products", tags=["products"])
@@ -122,6 +123,7 @@ class ProductIn(BaseModel):
     perimeter_mm: float | None = Field(default=None, gt=0, description="Периметр сечения, мм (>0)")
     mount_width_mm: float | None = Field(default=None, gt=0, description="Габарит профиля, мм (>0)")
     quantity_per_hanger: dict[str, HangerQuantityValue] | None = None
+    hanger_mode: Literal["auto", "manual"] | None = None
     cross_section: str | None = None
     photo_thumb: str | None = None
     photo_full: str | None = None
@@ -154,6 +156,7 @@ class ProductPatch(BaseModel):
     perimeter_mm: float | None = Field(default=None, gt=0, description="Периметр сечения, мм (>0)")
     mount_width_mm: float | None = Field(default=None, gt=0, description="Габарит профиля, мм (>0)")
     quantity_per_hanger: dict[str, HangerQuantityValue] | None = None
+    hanger_mode: Literal["auto", "manual"] | None = None
     cross_section: str | None = None
     photo_thumb: str | None = None
     photo_full: str | None = None
@@ -187,6 +190,7 @@ class ProductOut(BaseModel):
     perimeter_mm: float | None
     mount_width_mm: float | None
     quantity_per_hanger: dict[str, HangerQuantityValue] | None
+    hanger_mode: str = "auto"
     cross_section: str | None
     photo_thumb: str | None
     photo_full: str | None
@@ -235,18 +239,24 @@ VALID_SORT_FIELDS = (
 
 
 def _quantity_effective_expr(entry_value):
-    """Эффективное значение длины: COALESCE(auto, manual) — приоритет авто > ручное (#60)."""
+    """Значение длины по hanger_mode (#127): manual → manual, иначе auto.
+
+    Режим берётся из ``attributes->>'hanger_mode'``; отсутствие ключа —
+    режим 'auto' (дефолт геттера). Приоритета «авто > ручное» больше нет:
+    используется значение строго выбранного режима.
+    """
     auto = entry_value.op("->>")("auto")
     manual = entry_value.op("->>")("manual")
-    return cast(func.coalesce(auto, manual), Integer)
+    mode = Product.attributes.op("->>")("hanger_mode")
+    return cast(case((mode == "manual", manual), else_=auto), Integer)
 
 
 def _primary_length_quantity_expr():
-    """SQL-выражение: эффективное значение для выбранной основной длины.
+    """SQL-выражение: значение для выбранной основной длины по режиму (#127).
 
     quantity_per_hanger (#60) — dict {length_mm: {"auto", "manual"}}. Для
     сортировки/фильтра берём значение основной длины (#81: is_primary, либо
-    первая по возрастанию) с приоритетом авто > ручное. Bare-словари
+    первая по возрастанию) строго по hanger_mode артикула. Bare-словари
     (legacy-скаляр, ключи auto/manual) дают NULL — не валидный per-length.
     """
     primary_len = (
@@ -269,7 +279,7 @@ def _primary_length_quantity_expr():
 
 
 def _any_quantity_in_range(qty_from: int | None, qty_to: int | None):
-    """exists-подзапрос: хоть одна длина в per-length dict имеет эффективное значение в диапазоне."""
+    """exists-подзапрос: хоть одна длина в per-length dict имеет значение режима в диапазоне (#127)."""
     each = func.jsonb_each(Product.attributes["quantity_per_hanger"]).table_valued("key", "value")
     value_expr = _quantity_effective_expr(each.c.value)
     conds = []
@@ -358,11 +368,12 @@ def _build_hanger_quantity_dict(
 ) -> dict[str, dict[str, int | None]]:
     """Построить per-length dict {length: {auto, manual}} для артикула (#60).
 
-    Авто-режим data-driven: оба поля ``perimeter_mm`` И ``mount_width_mm``
-    заполнены → для каждой длины считается ``auto`` через движок (#62),
-    ``manual`` сохраняется отдельно и не затирается. Если поле стёрто
-    (None) — авто-режим выключен, ``auto`` уходит в None, ручное остаётся
-    fallback'ом. Несовместимость ``mount_width + gap > rod_length`` → 422.
+    Оба поля ``perimeter_mm`` И ``mount_width_mm`` заполнены → для каждой
+    длины считается ``auto`` через движок (#62); ``manual`` сохраняется
+    отдельно и никогда не затирается. Если поле стёрто (None) — ``auto``
+    уходит в None, ручное остаётся. Какое значение используется — решает
+    явный ``hanger_mode`` артикула (#127), словарь хранит оба. Несовместимость
+    ``mount_width + gap > rod_length`` → 422.
     """
     auto_mode = perimeter_mm is not None and mount_width_mm is not None
     existing = existing or {}
@@ -388,6 +399,93 @@ def _build_hanger_quantity_dict(
             auto = calc.total if calc.is_calculable else None
         result[key] = {"auto": auto, "manual": manual}
     return result
+
+
+async def _sheet_dimension_values(db: AsyncSession, product_id: int) -> dict[str, float]:
+    """Значения осей листа из product_dimensions (код → default_value), только заполненные (#126)."""
+    links = (
+        await db.execute(
+            select(ProductDimension)
+            .options(selectinload(ProductDimension.dimension_type))
+            .where(ProductDimension.product_id == product_id)
+        )
+    ).scalars().all()
+    return {
+        link.dimension_type.code: link.default_value
+        for link in links
+        if link.default_value is not None
+    }
+
+
+def _sheet_auto_value(dims: dict[str, float] | None, state: DimensionState) -> int | None:
+    """Авто-значение листа (#126): формула листов по осям из product_dimensions.
+
+    Толщина (2D) в расчёте не участвует; высота (3D) передаётся только для
+    проверки ребра навески. Недостающие оси → None (not calculable).
+    """
+    dims = dims or {}
+    calc = compute_sheet_hanger_quantity(
+        length_mm=dims.get("length_mm"),
+        width_mm=dims.get("width_mm"),
+        height_mm=dims.get("height_mm") if state == DimensionState.volume else None,
+    )
+    return calc.total if calc.is_calculable else None
+
+
+def _build_sheet_hanger_quantity_dict(
+    dims: dict[str, float] | None,
+    state: DimensionState,
+    manual_by_length: dict[str, int | None] | None,
+    existing: dict[str, dict[str, int | None]] | None = None,
+) -> dict[str, dict[str, int | None]]:
+    """Словарь «кол-во на подвес» листа (#126): ровно одна запись по длине полотна.
+
+    Ключ — ``length_mm`` типового набора из product_dimensions; ``auto``
+    считается формулой листов (недостающие ширина/высота → ``auto=None``).
+    Ручное значение сохраняется по тому же ключу; при смене длины полотна
+    подхватывается из единственной прежней записи, чтобы не терять его.
+    Без длины — пустой словарь (запись появится после заведения осей).
+    """
+    dims = dims or {}
+    existing = existing or {}
+    length = dims.get("length_mm")
+    if length is None:
+        return {}
+    key = _length_key(length)
+    manual = manual_by_length.get(key) if manual_by_length else None
+    if manual is None:
+        prev = existing.get(key)
+        if isinstance(prev, dict):
+            manual = prev.get("manual")
+        elif len(existing) == 1:
+            only = next(iter(existing.values()))
+            if isinstance(only, dict):
+                manual = only.get("manual")
+    return {key: {"auto": _sheet_auto_value(dims, state), "manual": manual}}
+
+
+def _sheet_hanger_quantity_out(
+    product: Product,
+    dimensions: dict[str, float],
+) -> dict[str, HangerQuantityValue] | None:
+    """quantity_per_hanger листа для вывода (#126): одна запись, auto живьём.
+
+    ``auto`` пересчитывается из текущих осей (значения ведутся через
+    product_dimensions, а не через роуты продукта — сохранённый auto мог
+    устареть). Manual берётся из сохранённой записи: по точному ключу либо
+    из единственной записи (длина полотна сменилась — ручное не теряем).
+    """
+    length = dimensions.get("length_mm")
+    if length is None:
+        return None
+    key = _length_key(length)
+    by_length = product.quantity_per_hanger_by_length or {}
+    entry = by_length.get(key)
+    if not isinstance(entry, dict) and len(by_length) == 1:
+        entry = next(iter(by_length.values()))
+    manual = entry.get("manual") if isinstance(entry, dict) else None
+    auto = _sheet_auto_value(dimensions, product.dimension_state)
+    return {key: HangerQuantityValue(auto=auto, manual=manual)}
 
 
 def _manual_by_length_from_payload(
@@ -427,16 +525,21 @@ def _to_product_out(product: Product, has_std: bool = False, has_paired: bool = 
         for f in product.processing_flags
     ]
     flag_codes = {f.code for f in product.processing_flags}
-    by_length = product.quantity_per_hanger_by_length
     quantity_per_hanger = None
-    if by_length:
-        quantity_per_hanger = {
-            length: HangerQuantityValue(
-                auto=entry.get("auto"),
-                manual=entry.get("manual"),
-            )
-            for length, entry in by_length.items()
-        }
+    if product.dimension_state in (DimensionState.area, DimensionState.volume) and dimensions:
+        # Лист (#126): одна запись по длине полотна, auto — формула листов
+        # живьём из dimensions (значения осей ведутся через product_dimensions).
+        quantity_per_hanger = _sheet_hanger_quantity_out(product, dimensions)
+    else:
+        by_length = product.quantity_per_hanger_by_length
+        if by_length:
+            quantity_per_hanger = {
+                length: HangerQuantityValue(
+                    auto=entry.get("auto"),
+                    manual=entry.get("manual"),
+                )
+                for length, entry in by_length.items()
+            }
     return ProductOut(
         id=product.id,
         sku=product.sku,
@@ -455,6 +558,7 @@ def _to_product_out(product: Product, has_std: bool = False, has_paired: bool = 
         perimeter_mm=product.perimeter_mm,
         mount_width_mm=product.mount_width_mm,
         quantity_per_hanger=quantity_per_hanger,
+        hanger_mode=product.hanger_mode,
         cross_section=product.cross_section,
         photo_thumb=product.photo_thumb,
         photo_full=product.photo_full,
@@ -783,6 +887,16 @@ async def create_product(
     db.add(item)
     await db.flush()
 
+    # Режим подвеса (#127): при создании 1D-артикула без явного режима —
+    # вывести из данных (периметр И габарит → auto, иначе manual), как в
+    # миграции существующих данных. Листы и явный режим не трогаем.
+    if payload.hanger_mode is None and payload.dimension_state == DimensionState.length:
+        item.hanger_mode = (
+            "auto"
+            if payload.perimeter_mm is not None and payload.mount_width_mm is not None
+            else "manual"
+        )
+
     if payload.lengths_mm:
         await _sync_lengths(db, item.id, payload.lengths_mm)
     if payload.primary_length_mm is not None and payload.lengths_mm:
@@ -798,13 +912,20 @@ async def create_product(
 
     # Авто-расчёт per-length dict (#60): auto из движка при заполненных
     # perimeter_mm И mount_width_mm, manual из payload — раздельно.
+    # Для листов (#126) — одна запись по длине полотна (осей при создании
+    # ещё нет — словарь пустой до заведения product_dimensions).
     manual_by_length = _manual_by_length_from_payload(payload.quantity_per_hanger)
-    item.quantity_per_hanger = _build_hanger_quantity_dict(
-        payload.lengths_mm or [],
-        payload.perimeter_mm,
-        payload.mount_width_mm,
-        manual_by_length,
-    )
+    if payload.dimension_state in (DimensionState.area, DimensionState.volume):
+        item.quantity_per_hanger = _build_sheet_hanger_quantity_dict(
+            {}, payload.dimension_state, manual_by_length
+        )
+    else:
+        item.quantity_per_hanger = _build_hanger_quantity_dict(
+            payload.lengths_mm or [],
+            payload.perimeter_mm,
+            payload.mount_width_mm,
+            manual_by_length,
+        )
 
     if payload.aliases:
         activated = await _enforce_bidirectional_aliases(db, item.id, payload.aliases, old_aliases=[])
@@ -859,7 +980,10 @@ async def get_product(product_id: int, db: AsyncSession = Depends(get_db)) -> Pr
     if item is None:
         raise HTTPException(status_code=404, detail="Product not found")
     has_std, has_paired = await _check_product_techcards(db, product_id)
-    return _to_product_out(item, has_std, has_paired)
+    dimensions = None
+    if item.dimension_state in (DimensionState.area, DimensionState.volume):
+        dimensions = await _sheet_dimension_values(db, product_id) or None
+    return _to_product_out(item, has_std, has_paired, dimensions)
 
 
 @router.patch("/{product_id}", response_model=ProductOut)
@@ -926,21 +1050,29 @@ async def patch_product(
 
     # Авто-расчёт per-length dict (#60): авто из движка при заполненных
     # perimeter_mm И mount_width_mm; manual из payload (или сохранённый).
-    current_lengths = (
-        await db.scalars(
-            select(ProductLength.length_mm).where(ProductLength.product_id == product_id)
-        )
-    ).all()
-    lengths_mm = sorted(current_lengths)
+    # Для листов (#126) — одна запись по длине полотна из product_dimensions.
     manual_by_length = _manual_by_length_from_payload(payload.quantity_per_hanger)
     existing = item.quantity_per_hanger_by_length or {}
-    item.quantity_per_hanger = _build_hanger_quantity_dict(
-        lengths_mm,
-        item.perimeter_mm,
-        item.mount_width_mm,
-        manual_by_length,
-        existing,
-    )
+    sheet_dims: dict[str, float] | None = None
+    if item.dimension_state in (DimensionState.area, DimensionState.volume):
+        sheet_dims = await _sheet_dimension_values(db, product_id) or None
+        item.quantity_per_hanger = _build_sheet_hanger_quantity_dict(
+            sheet_dims, item.dimension_state, manual_by_length, existing
+        )
+    else:
+        current_lengths = (
+            await db.scalars(
+                select(ProductLength.length_mm).where(ProductLength.product_id == product_id)
+            )
+        ).all()
+        lengths_mm = sorted(current_lengths)
+        item.quantity_per_hanger = _build_hanger_quantity_dict(
+            lengths_mm,
+            item.perimeter_mm,
+            item.mount_width_mm,
+            manual_by_length,
+            existing,
+        )
 
     await db.flush()
 
@@ -953,7 +1085,7 @@ async def patch_product(
 
     await db.refresh(item, attribute_names=["lengths", "processing_flags"])
     has_std, has_paired = await _check_product_techcards(db, product_id)
-    return _to_product_out(item, has_std, has_paired)
+    return _to_product_out(item, has_std, has_paired, sheet_dims)
 
 
 @router.delete("/{product_id}", status_code=status.HTTP_204_NO_CONTENT)

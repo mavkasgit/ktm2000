@@ -13,12 +13,12 @@ import { uploadProductPhoto, getErrorMessage } from "@/shared/api/products";
 import { listDimensionTypes } from "../api";
 import { queryKeys } from "@/shared/api/queryKeys";
 import { calcHanger, type HangerCalcResult } from "@/shared/api/hangerCalc";
-import { isHangerAutoMode, lengthKey, manualByLength, normalizeLengths, primaryLength, productLengths } from "@/shared/lib/hangerQuantity";
+import { isHangerAutoMode, isSheetState, lengthKey, manualByLength, normalizeLengths, primaryLength, productLengths } from "@/shared/lib/hangerQuantity";
 import { parseNumericInput } from "@/shared/lib/parseNumericInput";
 import { isLengthState } from "@/shared/lib/dimensionState";
 import { RadioGroup, RadioGroupItem } from "@/shared/ui/radio-group";
 import { cn } from "@/shared/utils/cn";
-import type { Product, CreateProductInput, PatchProductInput, QuantityPerHangerDict, DimensionState } from "@/shared/api/products";
+import type { Product, CreateProductInput, PatchProductInput, QuantityPerHangerDict, DimensionState, HangerMode } from "@/shared/api/products";
 
 export type DialogMode = "create" | "edit";
 
@@ -84,6 +84,12 @@ function buildManualPayloadDict(
   return dict;
 }
 
+/** Подписи режима подвеса (#126) для списка изменений. */
+const HANGER_MODE_LABELS: Record<HangerMode, string> = {
+  auto: "Авто",
+  manual: "Вручную",
+};
+
 function buildInitialForm(product: Product | null, mode: DialogMode): CreateProductInput {
   const lengths = productLengths(product ?? {});
   return {
@@ -104,6 +110,7 @@ function buildInitialForm(product: Product | null, mode: DialogMode): CreateProd
     perimeter_mm: product?.perimeter_mm ?? null,
     mount_width_mm: product?.mount_width_mm ?? null,
     quantity_per_hanger: manualDictFromProduct(product),
+    hanger_mode: product?.hanger_mode ?? "auto",
     cross_section: product?.cross_section ?? null,
     is_paired_profile: product?.is_paired_profile ?? false,
     skip_shot_blast: product?.skip_shot_blast ?? false,
@@ -136,6 +143,14 @@ function getChanges(form: CreateProductInput, product: Product | null, isCreate:
   if (!eq(form.mount_width_mm ?? null, product.mount_width_mm ?? null)) changes.push({ field: "mount_width_mm", label: "Габарит, мм", from: product.mount_width_mm ?? "—", to: form.mount_width_mm ?? "—" });
   const manualDiff = manualChangeTexts(form.quantity_per_hanger ?? null, product.quantity_per_hanger ?? null);
   if (manualDiff) changes.push({ field: "quantity_per_hanger", label: "Кол-во на подвесе", from: manualDiff.from, to: manualDiff.to });
+  if (!eq(form.hanger_mode ?? "auto", product.hanger_mode ?? "auto")) {
+    changes.push({
+      field: "hanger_mode",
+      label: "Режим подвеса",
+      from: HANGER_MODE_LABELS[product.hanger_mode ?? "auto"],
+      to: HANGER_MODE_LABELS[form.hanger_mode ?? "auto"],
+    });
+  }
   if (!eq(form.cross_section, product.cross_section)) changes.push({ field: "cross_section", label: "Сечение", from: product.cross_section ?? "—", to: form.cross_section ?? "—" });
   if (!eq(form.is_paired_profile, product.is_paired_profile)) changes.push({ field: "is_paired_profile", label: "Парный профиль", from: product.is_paired_profile ? "Да" : "Нет", to: form.is_paired_profile ? "Да" : "Нет" });
   if (!eq(form.skip_shot_blast, product.skip_shot_blast)) changes.push({ field: "skip_shot_blast", label: "Не дробеструится", from: product.skip_shot_blast ? "Да" : "Нет", to: form.skip_shot_blast ? "Да" : "Нет" });
@@ -164,6 +179,13 @@ type HangerPreviewState =
   | { status: "idle" }
   | { status: "loading" }
   | { status: "ready"; results: HangerCalcResult[] | null }
+  | { status: "error"; message: string };
+
+/** Превью расчёта листа (#126): один item kind='sheet'. */
+type HangerSheetPreviewState =
+  | { status: "idle" }
+  | { status: "loading" }
+  | { status: "ready"; result: HangerCalcResult | null }
   | { status: "error"; message: string };
 
 export const CatalogForm = forwardRef<CatalogFormRef, {
@@ -201,6 +223,9 @@ export const CatalogForm = forwardRef<CatalogFormRef, {
   const [newLength, setNewLength] = useState("");
   const [form, setForm] = useState<CreateProductInput>(() => buildInitialForm(product, mode));
   const [hangerPreview, setHangerPreview] = useState<HangerPreviewState>({ status: "idle" });
+  // Листы 2D/3D (#126): значения осей из секции измерений + live-превью расчёта.
+  const [dimValues, setDimValues] = useState<Record<string, string>>({});
+  const [sheetPreview, setSheetPreview] = useState<HangerSheetPreviewState>({ status: "idle" });
   const [changesOpen, setChangesOpen] = useState(false);
   const notesRef = useRef<HTMLTextAreaElement | null>(null);
   const dimsRef = useRef<ProductDimensionsSectionHandle>(null);
@@ -226,11 +251,56 @@ export const CatalogForm = forwardRef<CatalogFormRef, {
     setPhotoVersion(0);
     setNewLength("");
     setHangerPreview({ status: "idle" });
+    setSheetPreview({ status: "idle" });
+    setDimValues({});
     setChangesOpen(false);
   }, [product?.id, mode]);
 
   const formLengths = useMemo(() => normalizeLengths(form.lengths_mm ?? []), [form.lengths_mm]);
   const autoMode = isHangerAutoMode(form);
+  const isSheet = isSheetState(form.dimension_state);
+  const sheetMode: HangerMode = form.hanger_mode ?? "auto";
+
+  // Длина полотна: из осей формы (create/edit) или сохранённых dimensions.
+  const sheetLen = useMemo(() => {
+    const parsed = Number(dimValues.length_mm);
+    // Без Math.trunc: ключ словаря должен совпадать с бэкендом и для дробных
+    // длин ('1000.5'), _length_key сохраняет точное значение (#126, ревью).
+    if (Number.isFinite(parsed) && parsed > 0) return parsed;
+    return product?.dimensions?.length_mm ?? null;
+  }, [dimValues.length_mm, product?.dimensions?.length_mm]);
+
+  useEffect(() => {
+    if (!isSheet || sheetMode !== "auto") {
+      setSheetPreview({ status: "idle" });
+      return;
+    }
+    const lengthMm = sheetLen;
+    const widthRaw = Number(dimValues.width_mm);
+    if (!lengthMm || !Number.isFinite(widthRaw) || widthRaw <= 0) {
+      setSheetPreview({ status: "idle" });
+      return;
+    }
+    const heightRaw = form.dimension_state === "volume" ? Number(dimValues.height_mm) : NaN;
+    const heightMm = Number.isFinite(heightRaw) && heightRaw > 0 ? heightRaw : null;
+    let cancelled = false;
+    const timer = window.setTimeout(() => {
+      setSheetPreview({ status: "loading" });
+      calcHanger([
+        { kind: "sheet", perimeter_mm: null, mount_width_mm: null, length_mm: lengthMm, width_mm: widthRaw, height_mm: heightMm },
+      ])
+        .then((resp) => {
+          if (!cancelled) setSheetPreview({ status: "ready", result: resp.results[0] ?? null });
+        })
+        .catch((e) => {
+          if (!cancelled) setSheetPreview({ status: "error", message: getErrorMessage(e) });
+        });
+    }, 400);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [isSheet, sheetMode, sheetLen, dimValues.width_mm, dimValues.height_mm, form.dimension_state]);
 
   useEffect(() => {
     if (!autoMode || formLengths.length === 0) {
@@ -332,7 +402,9 @@ export const CatalogForm = forwardRef<CatalogFormRef, {
     if (!eq(form.mount_width_mm ?? null, product.mount_width_mm ?? null)) patch.mount_width_mm = form.mount_width_mm ?? null;
     const merged = mergedManuals(form.quantity_per_hanger ?? null, product.quantity_per_hanger ?? null);
     if (!eq(merged, manualByLength(product.quantity_per_hanger ?? null))) {
-      patch.quantity_per_hanger = buildManualPayloadDict(formLengths, merged);
+      // Лист (#126): ключ словаря — длина полотна из осей, не список длин профиля.
+      const payloadLengths = !isSheet && formLengths.length > 0 ? formLengths : sheetLen != null ? [sheetLen] : [];
+      patch.quantity_per_hanger = buildManualPayloadDict(payloadLengths, merged);
     }
     if (!eq(form.cross_section, product.cross_section)) patch.cross_section = form.cross_section;
     if (!eq(form.is_paired_profile, product.is_paired_profile)) patch.is_paired_profile = form.is_paired_profile;
@@ -344,8 +416,9 @@ export const CatalogForm = forwardRef<CatalogFormRef, {
     if (!eq(formPrimary, productPrimary)) patch.primary_length_mm = formPrimary;
     if (!eq(form.is_laminated ?? false, product.is_laminated)) patch.is_laminated = form.is_laminated;
     if (!eq(form.dimension_state ?? "length", product.dimension_state ?? "length")) patch.dimension_state = form.dimension_state;
+    if (!eq(form.hanger_mode ?? "auto", product.hanger_mode ?? "auto")) patch.hanger_mode = form.hanger_mode ?? "auto";
     return patch;
-  }, [form, product]);
+  }, [form, product, isSheet, sheetLen]);
 
   const doSave = async () => {
     await dimsRef.current?.flushPending();
@@ -379,7 +452,10 @@ export const CatalogForm = forwardRef<CatalogFormRef, {
       const m = manualForLength(len);
       return m != null && !(m > 0);
     });
-  const hasValidationErrors = perimeterInvalid || mountWidthInvalid || quantityInvalid;
+  // Лист (#126): в ручном режиме значение должно быть положительным.
+  const sheetManual = sheetLen != null ? manualForLength(sheetLen) : null;
+  const sheetManualInvalid = isSheet && sheetMode === "manual" && sheetManual != null && !(sheetManual > 0);
+  const hasValidationErrors = perimeterInvalid || mountWidthInvalid || quantityInvalid || sheetManualInvalid;
 
   useEffect(() => {
     onDirtyChange?.(isDirty);
@@ -598,6 +674,7 @@ export const CatalogForm = forwardRef<CatalogFormRef, {
                   onDimensionStateChange={(state: DimensionState) => update("dimension_state", state)}
                   dimensionTypes={dimensionTypes}
                   readOnly={readOnly}
+                  onValuesChange={setDimValues}
                 />
                 {isLengthState(form.dimension_state) && (
                   <div className="flex gap-2 items-stretch">
@@ -777,9 +854,78 @@ export const CatalogForm = forwardRef<CatalogFormRef, {
                 )}
               </>
             ) : (
-              <p className="text-xs text-muted-foreground">
-                Кол-во на подвесе не настраивается для 2D/3D-размерности.
-              </p>
+              <div className="space-y-2">
+                <div className="flex items-center gap-2">
+                  <span className="text-sm font-medium">Режим подвеса:</span>
+                  <RadioGroup
+                    value={sheetMode}
+                    onValueChange={(val) => update("hanger_mode", val as HangerMode)}
+                    disabled={readOnly}
+                    className="flex items-center gap-4"
+                  >
+                    <div className="flex items-center gap-1.5">
+                      <RadioGroupItem value="auto" id="hanger-mode-auto" />
+                      <label htmlFor="hanger-mode-auto" className={cn("text-sm cursor-pointer", sheetMode === "auto" && "font-semibold")}>Авто</label>
+                    </div>
+                    <div className="flex items-center gap-1.5">
+                      <RadioGroupItem value="manual" id="hanger-mode-manual" />
+                      <label htmlFor="hanger-mode-manual" className={cn("text-sm cursor-pointer", sheetMode === "manual" && "font-semibold")}>Вручную</label>
+                    </div>
+                  </RadioGroup>
+                </div>
+
+                {sheetMode === "auto" ? (
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="text-sm">Кол-во на подвесе:</span>
+                    {sheetPreview.status === "loading" ? (
+                      <span className="text-sm text-muted-foreground">Расчёт…</span>
+                    ) : sheetPreview.status === "ready" && sheetPreview.result ? (
+                      sheetPreview.result.is_calculable ? (
+                        <>
+                          <span className="text-sm font-medium">{sheetPreview.result.total} шт</span>
+                          <span className="rounded bg-emerald-100 px-1 text-[10px] font-semibold text-emerald-800">авто</span>
+                        </>
+                      ) : (
+                        <span className="text-xs text-destructive">{sheetPreview.result.reason ?? "Расчёт невозможен"}</span>
+                      )
+                    ) : sheetPreview.status === "error" ? (
+                      <span className="text-xs text-destructive">{sheetPreview.message}</span>
+                    ) : (
+                      <span className="text-sm text-muted-foreground">— заполните длину и ширину полотна в измерениях</span>
+                    )}
+                  </div>
+                ) : (
+                  <div className="flex flex-wrap items-center gap-2">
+                    <label htmlFor="sheet-manual-qty" className="text-sm">Кол-во на подвесе:</label>
+                    <Input
+                      id="sheet-manual-qty"
+                      type="number"
+                      className={cn(
+                        "h-9 w-28",
+                        sheetManualInvalid && "border-destructive focus-visible:ring-destructive",
+                        !sheetManualInvalid && "bg-amber-50 border-amber-300",
+                      )}
+                      value={sheetLen != null ? manualForLength(sheetLen) ?? "" : ""}
+                      onChange={(e) => {
+                        const parsed = parseNumericInput(e.target.value);
+                        if (sheetLen != null) updateManualForLength(sheetLen, parsed == null ? null : Math.trunc(parsed));
+                      }}
+                      disabled={readOnly || isCreate || sheetLen == null}
+                    />
+                    {isCreate && (
+                      <span className="text-xs text-muted-foreground">
+                        Ручное значение вводится после создания артикула и заведения измерений.
+                      </span>
+                    )}
+                    {!isCreate && sheetLen == null && (
+                      <span className="text-xs text-muted-foreground">Сначала укажите длину полотна в измерениях выше.</span>
+                    )}
+                    {sheetManualInvalid && (
+                      <span className="text-xs text-destructive">Значение должно быть больше 0</span>
+                    )}
+                  </div>
+                )}
+              </div>
             )}
           </div>
 

@@ -1,8 +1,10 @@
 /**
  * Хелперы per-length словаря «кол-во на подвес» (#60, #64, #65).
- * Чистые функции без side effects: приоритет авто > ручное, ключи — длины в мм.
+ * Чистые функции без side effects, ключи — длины в мм.
+ * Режим auto/manual (#126, #127): отображается и используется значение
+ * выбранного режима — никакого data-driven приоритета «авто > ручное».
  */
-import type { HangerQuantityValue, QuantityPerHangerDict } from "@/shared/api/products";
+import type { DimensionState, HangerMode, HangerQuantityValue, QuantityPerHangerDict } from "@/shared/api/products";
 
 export type HangerValueSource = "auto" | "manual";
 
@@ -26,6 +28,51 @@ export function isHangerAutoMode(fields: {
     typeof perimeter === "number" && Number.isFinite(perimeter) && perimeter > 0 &&
     typeof mountWidth === "number" && Number.isFinite(mountWidth) && mountWidth > 0
   );
+}
+
+/** Артикул-лист (2D/3D) (#126): подвес считается по площади полотна. */
+export function isSheetState(state: DimensionState | null | undefined): boolean {
+  return state === "area" || state === "volume";
+}
+
+export type SheetDims = {
+  lengthMm: number | null;
+  widthMm: number | null;
+  heightMm: number | null;
+};
+
+/** Оси полотна листа из типового набора product_dimensions (ProductOut.dimensions). */
+export function sheetDims(product: {
+  dimensions?: Record<string, number> | null;
+}): SheetDims {
+  const dims = product.dimensions ?? {};
+  return {
+    lengthMm: dims.length_mm ?? null,
+    widthMm: dims.width_mm ?? null,
+    heightMm: dims.height_mm ?? null,
+  };
+}
+
+/** Длины полотна листа (ноль или одна запись) — зеркалит ключ словаря бэкенда. */
+export function sheetLengths(product: {
+  dimensions?: Record<string, number> | null;
+}): number[] {
+  const { lengthMm } = sheetDims(product);
+  return lengthMm != null ? [lengthMm] : [];
+}
+
+/**
+ * Эффективное значение записи по явному режиму (#126): режим выбирает,
+ * какое из двух хранимых значений показывать; после ручной смены флага
+ * приоритет у ручного.
+ */
+export function effectiveForMode(
+  entry: HangerQuantityValue | null | undefined,
+  mode: HangerMode | null | undefined,
+): EffectiveHangerValue {
+  const resolved: HangerMode = mode === "manual" ? "manual" : "auto";
+  const value = resolved === "manual" ? entry?.manual ?? null : entry?.auto ?? null;
+  return { value, source: resolved };
 }
 
 /**
@@ -71,36 +118,47 @@ export function entryForLength(
   return entry ?? null;
 }
 
-/** Эффективное значение записи: приоритет авто > ручное (#60). */
-export function effectiveValue(entry: HangerQuantityValue | null): EffectiveHangerValue {
-  if (!entry) return { value: null, source: null };
-  if (entry.auto != null) return { value: entry.auto, source: "auto" };
-  if (entry.manual != null) return { value: entry.manual, source: "manual" };
-  return { value: null, source: null };
-}
-
+/**
+ * Эффективное значение записи для длины: строго по режиму (#127).
+ * Режим выбирает, какое из двух хранимых значений брать — без fallback.
+ */
 export function effectiveForLength(
   dict: QuantityPerHangerDict | null | undefined,
   lengthMm: number,
+  mode: HangerMode | null | undefined,
 ): EffectiveHangerValue {
-  return effectiveValue(entryForLength(dict, lengthMm));
+  return effectiveForMode(entryForLength(dict, lengthMm), mode);
+}
+
+/**
+ * Единственная запись словаря листа (#126): у листов ровно одна запись
+ * под ключом длины полотна. Пусто/нет словаря — null.
+ */
+export function sheetHangerEntry(
+  dict: QuantityPerHangerDict | null | undefined,
+): HangerQuantityValue | null {
+  if (!dict) return null;
+  const keys = Object.keys(dict);
+  if (keys.length === 0) return null;
+  return dict[keys[0]] ?? null;
 }
 
 export type PrimaryHangerValue = EffectiveHangerValue & { lengthMm: number };
 
 /**
  * Значение для основной длины (#81): явный выбор или первая по возрастанию.
- * null — нет длин или нет ни одного значения.
+ * Источник — по режиму подвеса (#127). null — нет длин или нет значения.
  */
 export function primaryHangerValue(product: {
   primary_length_mm?: number | null;
   lengths_mm?: number[] | null;
   length_mm?: number | null;
   quantity_per_hanger?: QuantityPerHangerDict | null;
+  hanger_mode?: HangerMode | null;
 }): PrimaryHangerValue | null {
   const lengthMm = primaryLength(product);
   if (lengthMm == null) return null;
-  const effective = effectiveForLength(product.quantity_per_hanger ?? null, lengthMm);
+  const effective = effectiveForLength(product.quantity_per_hanger ?? null, lengthMm, product.hanger_mode);
   if (effective.value == null) return null;
   return { lengthMm, ...effective };
 }

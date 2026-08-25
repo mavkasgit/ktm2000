@@ -8,9 +8,13 @@ import type { Techcard } from "@/shared/api/techcards";
 import {
   entryForLength,
   isHangerAutoMode,
+  isSheetState,
   lengthKey,
   primaryLength,
   productLengths,
+  sheetDims,
+  sheetHangerEntry,
+  sheetLengths,
 } from "@/shared/lib/hangerQuantity";
 
 /** productId → lengthKey → результат расчёта. */
@@ -52,6 +56,23 @@ export function buildCalcItems(
   const incompatible = new Map<number, string>();
 
   for (const product of products) {
+    if (isSheetState(product.dimension_state)) {
+      // Лист (#126): расчёт по осям полотна, периметр/габарит не нужны.
+      if ((product.hanger_mode ?? "auto") !== "auto") continue;
+      const { lengthMm, widthMm, heightMm } = sheetDims(product);
+      if (lengthMm == null) continue; // запись появится после заведения осей
+      items.push({
+        kind: "sheet",
+        perimeter_mm: null,
+        mount_width_mm: null,
+        length_mm: lengthMm,
+        width_mm: widthMm,
+        height_mm: product.dimension_state === "volume" ? heightMm : null,
+      });
+      refs.push({ productId: product.id, lengthMm });
+      continue;
+    }
+    if ((product.hanger_mode ?? "auto") !== "auto") continue; // ручной режим (#127) не считается
     if (!isHangerAutoMode(product)) continue;
     const reason = incompatibilityReason(product.mount_width_mm, settings);
     if (reason) {
@@ -127,18 +148,25 @@ export function buildHangerCalcRows(
   incompatible: Map<number, string>,
 ): HangerCalcRow[] {
   return products.map((product) => {
-    const lengths = productLengths(product);
-    const primaryLengthMm = primaryLength(product);
-    const auto = isHangerAutoMode(product);
+    const sheet = isSheetState(product.dimension_state);
+    // Режим строки — явный hanger_mode (#126 листы, #127 профили): значение
+    // следует выбранному режиму, а не наличию периметра/габарита.
+    const auto = (product.hanger_mode ?? "auto") === "auto";
+    const lengths = sheet ? sheetLengths(product) : productLengths(product);
+    const primaryLengthMm = sheet
+      ? sheetDims(product).lengthMm ?? lengths[0] ?? null
+      : primaryLength(product);
     const incompatibleReason = incompatible.get(product.id) ?? null;
     const byLength = calcMap.get(product.id);
     const primaryResult =
       auto && primaryLengthMm != null
         ? byLength?.get(lengthKey(primaryLengthMm)) ?? null
         : null;
-    const primaryEntry = primaryLengthMm != null
-      ? entryForLength(product.quantity_per_hanger, primaryLengthMm)
-      : null;
+    const primaryEntry = sheet
+      ? sheetHangerEntry(product.quantity_per_hanger)
+      : primaryLengthMm != null
+        ? entryForLength(product.quantity_per_hanger, primaryLengthMm)
+        : null;
 
     let total: number | null = null;
     if (auto && primaryResult?.is_calculable) {

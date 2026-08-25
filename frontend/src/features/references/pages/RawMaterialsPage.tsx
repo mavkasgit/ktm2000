@@ -26,7 +26,7 @@ import { useSortableColumnFilters } from "@/shared/hooks/useSortableColumnFilter
 import { skipShotBlastSectionLabel } from "../lib/skipShotBlastLabel";
 import { HangerCalcTable } from "../components/HangerCalcTable";
 import { ProductWipStatsDialog } from "@/features/execution/components/ProductWipStatsDialog";
-import { primaryHangerValue, effectiveForLength, productLengths } from "@/shared/lib/hangerQuantity";
+import { primaryHangerValue, effectiveForLength, effectiveForMode, productLengths, sheetHangerEntry } from "@/shared/lib/hangerQuantity";
 import { isLengthState } from "@/shared/lib/dimensionState";
 import { cn } from "@/shared/utils/cn";
 
@@ -163,10 +163,28 @@ const headerCellClass = `${DATA_TABLE_STYLES.headerRow} ${DATA_TABLE_STYLES.head
 
 /** Колонка «Кол-во на подвесе» в списке сырья (#65, #85): значение основной длины, подпись «при N мм», бейдж «авто/ручное». */
 function QuantityPerHangerCell({ product }: { product: Product }) {
+  if (!isLengthState(product.dimension_state)) {
+    // Лист (#126): одна запись, отображаемое значение выбирает hanger_mode.
+    const eff = effectiveForMode(sheetHangerEntry(product.quantity_per_hanger), product.hanger_mode ?? "auto");
+    if (eff.value == null) return <span className="text-muted-foreground">—</span>;
+    return (
+      <span
+        className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-xs font-medium ring-1 ring-primary/40 bg-primary/10 text-secondary-foreground"
+        title={`${eff.value} шт (${eff.source === "auto" ? "авто" : "ручное"})`}
+      >
+        {eff.value} шт
+        {eff.source === "auto" ? (
+          <span className="rounded bg-emerald-100 px-1 text-[10px] font-semibold text-emerald-800">авто</span>
+        ) : (
+          <span className="rounded bg-amber-100 px-1 text-[10px] font-semibold text-amber-800">ручное</span>
+        )}
+      </span>
+    );
+  }
   const primary = primaryHangerValue(product);
   const lengths = productLengths(product);
   const entries = lengths
-    .map((len) => ({ len, eff: effectiveForLength(product.quantity_per_hanger, len) }))
+    .map((len) => ({ len, eff: effectiveForLength(product.quantity_per_hanger, len, product.hanger_mode) }))
     .filter(({ eff }) => eff.value != null);
   if (entries.length === 0) return <span className="text-muted-foreground">—</span>;
   const groups = new Map<number, typeof entries>();

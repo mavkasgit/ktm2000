@@ -21,6 +21,9 @@ export type HangerQuantityValue = {
 /** Per-length словарь: ключ — длина в мм ("2780"), значение — {auto, manual} (#60). */
 export type QuantityPerHangerDict = Record<string, HangerQuantityValue>;
 
+/** Режим подвеса (#126): 'auto' — считается сервером, 'manual' — ручное значение. */
+export type HangerMode = "auto" | "manual";
+
 export type Product = {
   id: number;
   sku: string;
@@ -39,6 +42,7 @@ export type Product = {
   perimeter_mm: number | null;
   mount_width_mm: number | null;
   quantity_per_hanger: QuantityPerHangerDict | null;
+  hanger_mode: HangerMode;
   cross_section: string | null;
   photo_thumb: string | null;
   photo_full: string | null;
@@ -74,6 +78,7 @@ export type CreateProductInput = {
   perimeter_mm?: number | null;
   mount_width_mm?: number | null;
   quantity_per_hanger?: QuantityPerHangerDict | null;
+  hanger_mode?: HangerMode;
   cross_section?: string | null;
   source?: string | null;
   is_catalog_item?: boolean;

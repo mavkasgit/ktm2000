@@ -126,6 +126,7 @@ async def test_non_calculable_items_return_null_fields_without_exception(client)
             "limiter": None,
             "area_m2": None,
             "is_calculable": False,
+            "reason": None,
         }
 
 
@@ -243,6 +244,7 @@ async def test_paired_batch_preserves_request_order(client):
         "limiter": None,
         "area_m2": None,
         "is_calculable": False,
+        "reason": None,
     }
 
 
@@ -311,3 +313,90 @@ async def test_paired_empty_items_returns_default_constants(client):
     body = resp.json()
     assert body["results"] == []
     assert body["hanger"] == {"area_limit_m2": 13.0, "rod_length_mm": 1450.0, "gap_mm": 20.0, "rod_count": 2}
+
+
+# ─── Листы (#126): kind='sheet' — формула площади поля подвеса ───────────────
+
+
+@pytest.mark.asyncio
+async def test_sheet_item_calculable(client):
+    resp = await client.post(
+        "/api/hanger-calc",
+        json={"items": [{"kind": "sheet", "length_mm": 1000, "width_mm": 500}]},
+    )
+    assert resp.status_code == 200
+    (result,) = resp.json()["results"]
+    assert result["is_calculable"] is True
+    assert result["total"] == 18  # floor(9_000_000 / 500_000)
+    assert result["limiter"] == "area"
+    assert result["by_size"] is None
+    assert result["area_m2"] == pytest.approx(1.0)
+    assert result["reason"] is None
+
+
+@pytest.mark.asyncio
+async def test_sheet_item_ignores_perimeter_and_mount_width(client):
+    # Периметр/габарит в sheet-item игнорируются — константы профилей не применяются.
+    resp = await client.post(
+        "/api/hanger-calc",
+        json={"items": [{
+            "kind": "sheet",
+            "length_mm": 1000,
+            "width_mm": 500,
+            "perimeter_mm": 64.2,
+            "mount_width_mm": 2000,  # для профиля было бы кросс-поле 422
+        }]},
+    )
+    assert resp.status_code == 200
+    (result,) = resp.json()["results"]
+    assert result["is_calculable"] is True
+    assert result["total"] == 18
+
+
+@pytest.mark.asyncio
+async def test_sheet_item_over_frame_returns_reason(client):
+    resp = await client.post(
+        "/api/hanger-calc",
+        json={"items": [{"kind": "sheet", "length_mm": 3001, "width_mm": 1000}]},
+    )
+    assert resp.status_code == 200
+    (result,) = resp.json()["results"]
+    assert result["is_calculable"] is False
+    assert result["total"] is None
+    assert result["reason"] is not None
+    assert "превышает поле подвеса" in result["reason"]
+
+
+@pytest.mark.asyncio
+async def test_sheet_volume_item_no_hanging_edge_returns_reason(client):
+    resp = await client.post(
+        "/api/hanger-calc",
+        json={"items": [{"kind": "sheet", "length_mm": 1000, "width_mm": 500, "height_mm": 400}]},
+    )
+    assert resp.status_code == 200
+    (result,) = resp.json()["results"]
+    assert result["is_calculable"] is False
+    assert "нет ребра для навески" in result["reason"]
+
+
+@pytest.mark.asyncio
+async def test_sheet_and_profile_kinds_mixed_batch(client):
+    items = [
+        {"kind": "sheet", "length_mm": 1000, "width_mm": 500},
+        {"perimeter_mm": 64.2, "mount_width_mm": 19.35, "length_mm": 2800},
+    ]
+    resp = await client.post("/api/hanger-calc", json={"items": items})
+    assert resp.status_code == 200
+    results = resp.json()["results"]
+    assert [r["total"] for r in results] == [18, 72]
+    assert results[0]["reason"] is None
+    assert results[1]["reason"] is None
+
+
+@pytest.mark.asyncio
+async def test_unknown_kind_returns_422(client):
+    resp = await client.post(
+        "/api/hanger-calc",
+        json={"items": [{"kind": "coil", "length_mm": 1000, "width_mm": 500}]},
+    )
+    assert resp.status_code == 422

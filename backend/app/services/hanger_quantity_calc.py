@@ -46,6 +46,15 @@ class HangerSettings:
 
 DEFAULT_HANGER_SETTINGS = HangerSettings()
 
+# Константы подвеса листов (2D/3D, тикет #126): поле подвеса 3000×1500 мм,
+# лист висит двумя сторонами → лимит площади 9 м²; навеска возможна только
+# за ребро ≤ 300 мм (проверка для volume). Сущности «настройки» не создаём.
+SHEET_FRAME_LENGTH_MM = 3000.0
+SHEET_FRAME_WIDTH_MM = 1500.0
+SHEET_SIDES = 2
+SHEET_AREA_LIMIT_MM2 = SHEET_FRAME_LENGTH_MM * SHEET_FRAME_WIDTH_MM * SHEET_SIDES
+SHEET_MIN_HANGING_EDGE_MM = 300.0
+
 
 def _is_valid(value: float | None) -> TypeGuard[float]:
     """Расчётное значение: не None, конечное число > 0 (TypeGuard сужает тип)."""
@@ -57,7 +66,9 @@ class HangerCalcResult:
     """Разбивка расчёта количества на подвес.
 
     При нерасчётных данных (нет длины / нет авто-полей) ``is_calculable=False``,
-    остальные поля ``None``. Исключения при этом не бросаются.
+    остальные поля ``None``. Исключения при этом не бросаются. ``reason`` —
+    человекочитаемая причина невозможности расчёта (#126, листы); у профилей
+    остаётся ``None`` (обратная совместимость frozen-dataclass).
     """
 
     by_area: int | None
@@ -66,9 +77,10 @@ class HangerCalcResult:
     limiter: Literal["area", "size"] | None
     area_m2: float | None
     is_calculable: bool
+    reason: str | None = None
 
 
-def _non_calculable() -> HangerCalcResult:
+def _non_calculable(reason: str | None = None) -> HangerCalcResult:
     """Результат нерасчётных данных: is_calculable=False, поля None."""
     return HangerCalcResult(
         by_area=None,
@@ -77,6 +89,7 @@ def _non_calculable() -> HangerCalcResult:
         limiter=None,
         area_m2=None,
         is_calculable=False,
+        reason=reason,
     )
 
 
@@ -137,6 +150,59 @@ def compute_hanger_quantity(
     by_size = math.floor(settings.rod_length_mm / (mount_width_mm + settings.gap_mm)) * settings.rod_count
 
     return _finalize(area_m2, by_area, by_size)
+
+
+def compute_sheet_hanger_quantity(
+    *,
+    length_mm: float | None,
+    width_mm: float | None,
+    height_mm: float | None = None,
+) -> HangerCalcResult:
+    """Посчитать количество на подвес для листа (2D/3D, тикет #126).
+
+    Методика: лист висит на поле подвеса 3000×1500 мм двумя сторонами
+    (лимит 9 м²): ``total = floor(SHEET_AREA_LIMIT_MM2 / (length × width))``.
+    Толщина (2D) в площади не участвует; высота (3D) проверяется только на
+    навеску — хотя бы одно ребро должно быть ≤ 300 мм.
+
+    Args:
+        length_mm: Длина полотна, мм (>0 для расчёта).
+        width_mm: Ширина полотна, мм (>0 для расчёта).
+        height_mm: Высота (только volume), мм; ``None`` для 2D.
+
+    Returns:
+        HangerCalcResult. ``is_calculable=False`` + ``reason`` — если оси
+        отсутствуют, полотно превышает поле подвеса (границы 3000/1500
+        включительно допустимы) или у volume нет ребра ≤ 300 мм (300
+        включительно допустимо). Исключения не бросаются.
+    """
+    if not _is_valid(length_mm) or not _is_valid(width_mm):
+        return _non_calculable("Расчёт невозможен: не заполнены длина или ширина полотна")
+
+    if length_mm > SHEET_FRAME_LENGTH_MM or width_mm > SHEET_FRAME_WIDTH_MM:
+        return _non_calculable(
+            "Расчёт невозможен: полотно превышает поле подвеса "
+            f"{SHEET_FRAME_LENGTH_MM:.0f}×{SHEET_FRAME_WIDTH_MM:.0f} мм"
+        )
+
+    if height_mm is not None:
+        edges = [length_mm, width_mm] + ([height_mm] if _is_valid(height_mm) else [])
+        if min(edges) > SHEET_MIN_HANGING_EDGE_MM:
+            return _non_calculable(
+                "Расчёт невозможен: нет ребра для навески — хотя бы одна сторона "
+                f"должна быть ≤ {SHEET_MIN_HANGING_EDGE_MM:.0f} мм"
+            )
+
+    total = math.floor(SHEET_AREA_LIMIT_MM2 / (length_mm * width_mm))
+    area_m2 = length_mm * width_mm * SHEET_SIDES / 1_000_000
+    return HangerCalcResult(
+        by_area=total,
+        by_size=None,
+        total=total,
+        limiter="area",
+        area_m2=area_m2,
+        is_calculable=True,
+    )
 
 
 def compute_paired_hanger_quantity(

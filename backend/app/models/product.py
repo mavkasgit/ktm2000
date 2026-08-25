@@ -11,6 +11,11 @@ from app.models.base import Base
 
 _NUMERIC_KEY_RE = re.compile(r"^-?\d+(\.\d+)?$")
 
+# Режим подвеса (#126): явное поле auto|manual, хранение в attributes.
+HANGER_MODE_AUTO = "auto"
+HANGER_MODE_MANUAL = "manual"
+HANGER_MODES = (HANGER_MODE_AUTO, HANGER_MODE_MANUAL)
+
 
 def _length_key(length_mm: float) -> str:
     """Canonical JSONB dict key for a length in mm (whole numbers without .0)."""
@@ -125,6 +130,23 @@ class Product(Base):
         self.attributes = attrs
 
     @property
+    def hanger_mode(self) -> str:
+        """Режим подвеса (#126): 'auto' | 'manual', по умолчанию 'auto'."""
+        value = (self.attributes or {}).get("hanger_mode")
+        return value if value in HANGER_MODES else HANGER_MODE_AUTO
+
+    @hanger_mode.setter
+    def hanger_mode(self, value: str | None) -> None:
+        attrs = dict(self.attributes or {})
+        if value is None:
+            attrs.pop("hanger_mode", None)
+        else:
+            if value not in HANGER_MODES:
+                raise ValueError(f"hanger_mode должен быть одним из {HANGER_MODES}, получено {value!r}")
+            attrs["hanger_mode"] = value
+        self.attributes = attrs
+
+    @property
     def weight_per_meter(self) -> float | None:
         return (self.attributes or {}).get("weight_per_meter")
 
@@ -178,27 +200,41 @@ class Product(Base):
             return min(primary)
         return min(l.length_mm for l in lengths)
 
+    def _value_for_mode(self, entry: dict) -> int | None:
+        """Значение per-length записи строго по hanger_mode (#127).
+
+        Отображается и используется значение выбранного режима: auto →
+        ``auto``, manual → ``manual``. Приоритета «авто > ручное» больше
+        нет; ручное значение никогда не затирается автоматикой.
+        """
+        if self.hanger_mode == HANGER_MODE_MANUAL:
+            manual = entry.get("manual")
+            return int(manual) if manual is not None else None
+        auto = entry.get("auto")
+        return int(auto) if auto is not None else None
+
     @property
     def quantity_per_hanger(self) -> int | None:
-        """Эффективное значение для основной длины: авто > ручное, legacy-скаляр.
+        """Эффективное значение для основной длины по hanger_mode (#127).
 
         Обратная совместимость для потребителей, которым нужен один скаляр
         (план-импорт, ZIP-импорт, старые тесты). Каноническое per-length
-        представление — :attr:`quantity_per_hanger_by_length`.
+        представление — :attr:`quantity_per_hanger_by_length`. Bare-словарь
+        (legacy-скаляр) всегда отдаёт manual — скаляр хранился в manual.
         """
         d = self._hanger_dict()
         if d is None:
             raw = (self.attributes or {}).get("quantity_per_hanger")
             return raw if isinstance(raw, int) else None
         key = self._primary_hanger_length_key()
-        entry = d.get(key) if key is not None else d
+        if key is None:
+            # Bare dict {auto, manual} (legacy-скаляр) — всегда manual.
+            manual = d.get("manual")
+            return int(manual) if manual is not None else None
+        entry = d.get(key)
         if not isinstance(entry, dict):
             return None
-        auto = entry.get("auto")
-        manual = entry.get("manual")
-        if auto is not None:
-            return int(auto)
-        return int(manual) if manual is not None else None
+        return self._value_for_mode(entry)
 
     @quantity_per_hanger.setter
     def quantity_per_hanger(self, value: int | dict | None) -> None:
@@ -243,25 +279,19 @@ class Product(Base):
         return normalized or None
 
     def quantity_per_hanger_for_length(self, length_mm: float) -> int | None:
-        """Эффективное значение на подвес для конкретной длины: авто > ручное."""
+        """Значение на подвес для конкретной длины строго по hanger_mode (#127)."""
         d = self._hanger_dict()
         if d is None:
             raw = (self.attributes or {}).get("quantity_per_hanger")
             return raw if isinstance(raw, int) else None
         entry = d.get(_length_key(length_mm))
         if not isinstance(entry, dict):
-            # Bare dict без ключа длины (legacy-скаляр) — берём manual.
+            # Bare dict без ключа длины (legacy-скаляр) — всегда manual.
             if not _is_numeric_key(next(iter(d), "")):
-                entry = d
-            else:
-                return None
-        if not isinstance(entry, dict):
+                manual = d.get("manual")
+                return int(manual) if manual is not None else None
             return None
-        auto = entry.get("auto")
-        manual = entry.get("manual")
-        if auto is not None:
-            return int(auto)
-        return int(manual) if manual is not None else None
+        return self._value_for_mode(entry)
 
     def main_quantity_per_hanger(self) -> int | None:
         """Скаляр для обратной совместимости: значение для основной длины.

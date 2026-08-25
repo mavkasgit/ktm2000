@@ -9,9 +9,14 @@ export type HangerSettings = {
 };
 
 export type HangerCalcItem = {
+  /** 'profile' (по умолчанию, формулы #59) или 'sheet' — листы 2D/3D (#126). */
+  kind?: "profile" | "sheet";
   perimeter_mm: number | null;
   mount_width_mm: number | null;
   length_mm: number | null;
+  /** Поля листа (#126): используются только при kind='sheet'. */
+  width_mm?: number | null;
+  height_mm?: number | null;
 };
 
 /** Item совместного расчёта парной техкарты (#67): габариты обоих артикулов. */
@@ -30,6 +35,8 @@ export type HangerCalcResult = {
   limiter: "area" | "size" | null;
   area_m2: number | null;
   is_calculable: boolean;
+  /** Человекочитаемая причина невозможности расчёта (#126, листы). */
+  reason?: string | null;
 };
 
 export type HangerCalcResponse = {
