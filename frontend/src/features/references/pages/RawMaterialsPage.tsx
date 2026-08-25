@@ -582,7 +582,7 @@ export function RawMaterialsPage() {
         <HangerCalcTable readOnly={isReadOnly} onEdit={openEdit} />
       ) : loading ? (
         <div className="text-muted-foreground py-8 text-center">Загрузка...</div>
-      ) : items.length === 0 ? (
+      ) : viewMode === "grid" && items.length === 0 ? (
         <div className="text-muted-foreground py-8 text-center">Ничего не найдено</div>
       ) : viewMode === "grid" ? (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
@@ -665,7 +665,17 @@ export function RawMaterialsPage() {
               </tr>
             </thead>
             <tbody className="divide-y">
-              {displayedItems.map((product) => (
+              {items.length === 0 ? (
+                <tr>
+                  <td colSpan={8} className="px-4 py-10 text-center text-muted-foreground">
+                    Ничего не найдено по текущим фильтрам
+                    <Button variant="outline" size="sm" className="ml-2" onClick={resetTableFilters}>
+                      Сбросить
+                    </Button>
+                  </td>
+                </tr>
+              ) : (
+                items.map((product) => (
                 <tr key={product.id} className="hover:bg-muted/50 cursor-pointer" onClick={() => openEdit(product)}>
                   <td className="px-4 py-2">
                     <div className="w-10 h-10 bg-muted rounded flex items-center justify-center overflow-hidden">
@@ -759,7 +769,8 @@ export function RawMaterialsPage() {
                   </td>
                   <TableCornerResetCell />
                 </tr>
-              ))}
+                ))
+              )}
             </tbody>
           </table>
         </div>
