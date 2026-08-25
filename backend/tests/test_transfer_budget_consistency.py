@@ -355,11 +355,14 @@ async def test_stock_ready_list_and_write_guard_agree_on_transferable(
 
 
 async def test_final_section_three_way_agrees_on_sendable(client, session) -> None:
-    """Финальный участок (#119): pure ≡ read-SQL ≡ ready-строка на ``sendable``.
+    """Финальный участок (#119, #128): pure ≡ read-SQL ≡ ready ≡ write-guard.
 
     produced=100 по выходу 900, выпущено (FINAL_RELEASE) 40 →
     ``remaining_send(100, 40) = 60``; готовая строка показывает те же 60
     («Отправить»), а бюджет передачи остаётся отдельным столбцом.
+    Write-guard (#128): сверх-отправка отклоняется с доменным сообщением
+    «доступно к отправке», модуль ``send_budget`` возвращает клампнутый
+    остаток, совпадающий с pure-ожиданием.
     """
     from app.services.shopfloor.operations_tasks import final_release
     from app.transfers.budget import remaining_send
@@ -406,3 +409,21 @@ async def test_final_section_three_way_agrees_on_sendable(client, session) -> No
     )
     assert row_900["is_final"] is True
     assert row_900["transferable_quantity"] == "60"
+
+    # 4. write-guard (#128): сверх-отправка отклоняется доменным сообщением,
+    #    модуль-владелец чтения возвращает клампнутый остаток = pure.
+    from app.services.shopfloor import send_budget
+
+    with pytest.raises(ValueError, match="доступно к отправке"):
+        await final_release(
+            session,
+            task_id=saw_task.id,
+            quantity=Decimal("61"),
+            actor_id=user.id,
+        )
+    assert (
+        await send_budget.remaining_send(
+            session, task=saw_task, dims={"length_mm": 900}
+        )
+        == expected
+    )

@@ -14,7 +14,6 @@ from app.models.work_task import WorkTask, WorkTaskStatus
 from app.services.plan_position_hanger import position_dimensions_for_task
 from app.services.action_journal_service import action_journal_service
 from app.stock import QualityState, Reason, StockCommand, StockCommandService
-from app.stock.ledger import net_by_reason
 
 from .common import (
     _check_idempotency,
@@ -26,6 +25,7 @@ from .common import (
     enrich_comment_with_route_operations,
 )
 from .cache import _refresh_section_plan_line_cache
+from . import send_budget
 from .operations_transform import (
     get_transform_progress,
     record_transform_portion,
@@ -405,12 +405,6 @@ async def final_release(
     _ensure_positive(quantity, "quantity")
 
     from app.domain.dimensions import canonicalize_dimensions
-    from app.stock.models import StockTransaction
-    from app.stock.services import _dimensions_hash_key, dimensions_match_clause
-    from app.services.shopfloor.operations_transform import (
-        get_transform_progress,
-        resolve_transform_spec,
-    )
 
     eff_dims = canonicalize_dimensions(dimensions)
 
@@ -431,33 +425,18 @@ async def final_release(
             raise ValueError(
                 "Final release dimensions must match one of the task outputs"
             )
-        # Оприходовано выхода этого размера (COMPLETE по (задача, размер)).
-        progress = await get_transform_progress(db, task.id)
-        completed_by_size = progress.produced_by_group.get(
-            _dimensions_hash_key(eff_dims)
-        ) or Decimal("0")
     else:
         eff_dims = eff_dims if eff_dims is not None else task.dimensions
-        completed_by_size = (
-            await db.scalar(
-                select(func.coalesce(func.sum(StockTransaction.quantity), 0))
-                .where(
-                    StockTransaction.task_id == task.id,
-                    StockTransaction.reason == Reason.COMPLETE,
-                    dimensions_match_clause(StockTransaction.dimensions, eff_dims),
-                )
-            )
-        ) or Decimal("0")
 
-    # Releasable по (задача, размер): completed по размеру − уже released
-    # по размеру (тикет #91). «Уже выпущено» — canonical net FINAL_RELEASE
-    # через ledger-примитив (ADR-0018), а не локальная gross-сумма.
-    already_released_by_size = await net_by_reason(
-        db, reason=Reason.FINAL_RELEASE, task_id=task.id, dims=eff_dims
-    )
-    releasable = completed_by_size - already_released_by_size
-    if quantity > releasable:
-        raise ValueError("Final release exceeds releasable quantity")
+    # Бюджет отправки по (задача, размер) — единственный владелец чтения —
+    # send_budget.remaining_send (тикет #128); «уже выпущено» — canonical
+    # net FINAL_RELEASE через ledger-примитив (ADR-0018), формула и кламп —
+    # чистый ярус app.transfers.budget.
+    remaining = await send_budget.remaining_send(db, task=task, dims=eff_dims)
+    if quantity > remaining:
+        raise ValueError(
+            f"Нельзя отправить {quantity}: доступно к отправке {remaining} шт."
+        )
 
     # Find finished stock location
     from app.models.section import Section as _FinSection
