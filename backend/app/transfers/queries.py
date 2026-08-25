@@ -17,7 +17,7 @@ from datetime import datetime
 from decimal import Decimal
 from typing import cast as tcast
 
-from sqlalchemy import String, Subquery, and_, cast, func, or_, select
+from sqlalchemy import String, Subquery, and_, case, cast, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
@@ -45,6 +45,12 @@ from app.services.shopfloor.common import _get_transfer, _to_decimal
 from app.stock.ledger import (
     net_transferred_by_dimensions,
     net_transferred_sq,
+)
+from app.transfers.budget import (
+    remaining_plain,
+    remaining_send,
+    sendable_qty_sql,
+    transferable_qty_sql,
 )
 
 
@@ -268,6 +274,8 @@ def _ready_row_common(row) -> dict:
         _completed,
         _transferred,
         _released,
+        _transferable_qty,
+        _sendable_qty,
     ) = row
     # Текущий этап финальный (тикет #96): строка получает «Отправить»
     # (final release) вместо «Передать»; следующего шага у неё нет.
@@ -307,7 +315,6 @@ def _ready_row_common(row) -> dict:
 
 
 def _hydrate_plain_ready_row(row) -> dict | None:
-    """Обычная (нетрансформирующая) задача: одна ready-строка."""
     (
         task,
         _line,
@@ -321,14 +328,19 @@ def _hydrate_plain_ready_row(row) -> dict | None:
         completed,
         transferred,
         released,
+        _transferable_qty,
+        _sendable_qty,
     ) = row
     # Финальный этап (тикет #96): «отдано» = уже выпущено (FINAL_RELEASE),
-    # а не переданное на следующий участок; transferable = releasable.
+    # а не переданное на следующий участок; смысл бюджета — отправка
+    # (``remaining_send``, тикет #119). Нефинальный — передача
+    # (``remaining_plain``).
     if bool(stage.is_final):
         used = _to_decimal(released)
+        transferable = remaining_send(_to_decimal(completed), used)
     else:
         used = _to_decimal(transferred)
-    transferable = _to_decimal(completed) - used
+        transferable = remaining_plain(_to_decimal(completed), used)
     if transferable <= 0:
         return None
     return {
@@ -497,14 +509,23 @@ def _build_production_ready_query(
 
     from app.stock.ledger import net_by_reason_sq
     from app.stock.models import Reason, StockTransaction
-
     completed_sq = _completed_qty_subquery()
     transferred_sq = tcast(Subquery, net_transferred_sq("transferred_qty_sq"))
     released_sq = tcast(Subquery, net_by_reason_sq(Reason.FINAL_RELEASE, "released_qty_sq"))
-    transferable_expr = (
-        func.coalesce(completed_sq.c.completed_qty, 0)
-        - func.coalesce(transferred_sq.c.net_quantity, 0)
-        - func.coalesce(released_sq.c.net_quantity, 0)
+    # Единственный владелец формулы — transfers/budget (#119): ready-запрос
+    # отдаёт ДВА именованных столбца (передача / отправка); семантику по
+    # финальности участка выбирает потребитель, фабрика CASE не строит.
+    completed_col = func.coalesce(completed_sq.c.completed_qty, 0)
+    transferable_expr = transferable_qty_sql(
+        completed_col,
+        func.coalesce(transferred_sq.c.net_quantity, 0),
+    ).label("transferable_qty")
+    sendable_expr = sendable_qty_sql(
+        completed_col,
+        func.coalesce(released_sq.c.net_quantity, 0),
+    ).label("sendable_qty")
+    stage_qty_expr = case(
+        (from_stage.is_final.is_(True), sendable_expr), else_=transferable_expr
     )
 
     latest_complete = (
@@ -532,6 +553,8 @@ def _build_production_ready_query(
             func.coalesce(completed_sq.c.completed_qty, 0).label("completed_qty"),
             func.coalesce(transferred_sq.c.net_quantity, 0).label("transferred_qty"),
             func.coalesce(released_sq.c.net_quantity, 0).label("released_qty"),
+            transferable_expr,
+            sendable_expr,
         )
         .join(from_line, from_line.id == WorkTask.section_plan_line_id)
         .join(from_stage, from_stage.id == WorkTask.route_stage_id)
@@ -569,7 +592,7 @@ def _build_production_ready_query(
                     next_line.id.isnot(None),
                 ),
             ),
-            transferable_expr > 0,
+            stage_qty_expr > 0,
         )
     )
 
@@ -614,7 +637,7 @@ def _build_production_ready_query(
     if plan_position_id is not None:
         query = query.where(from_line.plan_position_id == plan_position_id)
     if transferable_qty is not None:
-        query = query.where(transferable_expr == transferable_qty)
+        query = query.where(stage_qty_expr == transferable_qty)
     if dimensions:
         from app.stock.services import dimensions_match_clause
 
@@ -631,7 +654,7 @@ def _build_production_ready_query(
         query,
         sort_by=sort_by,
         sort_order=sort_order,
-        transferable_expr=transferable_expr,
+        transferable_expr=stage_qty_expr,
         from_line=from_line,
         from_stage=from_stage,
         next_section=next_section,
@@ -999,8 +1022,10 @@ async def list_ready_to_transfer(
         exists), or it sits on the final route stage (тикет #96 —
         такой задаче доступен final release),
       * the next step is not final (для межучастковых передач),
-      * ``completed_qty - transferred_qty - released_qty > 0`` (ledger
-        aggregates; на финальном этапе released = FINAL_RELEASE).
+      * бюджет по финальности участка > 0 (фабрики ``app.transfers.budget``
+        поверх ledger-агрегатов, тикет #119): финальный этап —
+        ``sendable_qty`` (produced − released), остальные —
+        ``transferable_qty`` (completed − transferred).
 
     Filters:
       * ``section_id`` — restrict to a single section.
