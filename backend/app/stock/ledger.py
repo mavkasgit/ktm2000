@@ -166,20 +166,6 @@ async def net_transferred(
     )
 
 
-async def net_received(
-    db: AsyncSession,
-    *,
-    task_id: int | None = None,
-    section_plan_line_id: int | None = None,
-    dims: dict | None = None,
-) -> Decimal:
-    """Скалярный net TRANSFER_RECEIVE — thin wrapper над ``net_by_reason``."""
-    return await net_by_reason(
-        db, reason=Reason.TRANSFER_RECEIVE,
-        task_id=task_id, section_plan_line_id=section_plan_line_id, dims=dims,
-    )
-
-
 async def net_by_reason_by_dimensions(
     db: AsyncSession,
     *,
@@ -221,19 +207,6 @@ async def net_transferred_by_dimensions(
     """Grouped net TRANSFER_SEND — thin wrapper над ``net_by_reason_by_dimensions``."""
     return await net_by_reason_by_dimensions(
         db, reason=Reason.TRANSFER_SEND,
-        task_id=task_id, section_plan_line_id=section_plan_line_id,
-    )
-
-
-async def net_received_by_dimensions(
-    db: AsyncSession,
-    *,
-    task_id: int | None = None,
-    section_plan_line_id: int | None = None,
-) -> dict[str | None, Decimal]:
-    """Grouped net TRANSFER_RECEIVE — thin wrapper над ``net_by_reason_by_dimensions``."""
-    return await net_by_reason_by_dimensions(
-        db, reason=Reason.TRANSFER_RECEIVE,
         task_id=task_id, section_plan_line_id=section_plan_line_id,
     )
 

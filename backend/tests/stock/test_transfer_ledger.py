@@ -300,32 +300,6 @@ async def test_grouped_matches_scalars_per_dimension(
     assert sum(grouped.values(), Decimal("0")) == Decimal("8")
 
 
-async def test_net_received_and_dimensions(session: AsyncSession, ledger_fx: dict) -> None:
-    """net_received отделён от SEND; RECEIVE-группы и ключ по линии корректны."""
-    task1, task2 = ledger_fx["tasks"]
-    line1, line2 = ledger_fx["lines"]
-
-    assert await tl.net_received(session, task_id=task1.id, dims=DIMS_2700) == Decimal("0")
-    assert await tl.net_received(session, task_id=task1.id, dims=None) == Decimal("4")
-    # SEND-строки не попадают в RECEIVE: total RECEIVE == сумма RECEIVE-групп
-    recv_total = sum(
-        (await tl.net_received_by_dimensions(session, task_id=task1.id)).values(),
-        Decimal("0"),
-    )
-    assert recv_total == Decimal("4")
-
-    grouped_r = await tl.net_received_by_dimensions(session, task_id=task1.id)
-    assert grouped_r == {
-        _dimensions_hash_key(DIMS_2700): Decimal("0"),
-        None: Decimal("4"),
-    }
-
-    assert await tl.net_received(session, task_id=task2.id, dims=DIMS_900) == Decimal("6")
-    assert await tl.net_received(session, section_plan_line_id=line1.id, dims=None) == Decimal("4")
-    assert await tl.net_received(session, section_plan_line_id=line2.id, dims=DIMS_900) == Decimal("6")
-    assert await tl.net_transferred(session, task_id=task2.id, dims=DIMS_2700) == Decimal("7")
-
-
 async def test_empty_returns_zero(session: AsyncSession) -> None:
     """Пусто (нет транзакций) → Decimal("0") / пустой dict."""
     fx = await _make_fixture(session)
@@ -333,13 +307,19 @@ async def test_empty_returns_zero(session: AsyncSession) -> None:
     line1, line2 = fx["lines"]
 
     assert await tl.net_transferred(session, task_id=task1.id) == Decimal("0")
-    assert await tl.net_received(session, task_id=task1.id, dims=None) == Decimal("0")
+    assert await tl.net_by_reason(
+        session, reason=Reason.TRANSFER_RECEIVE, task_id=task1.id, dims=None
+    ) == Decimal("0")
     assert await tl.net_transferred(
         session, section_plan_line_id=line1.id, dims=DIMS_2700
     ) == Decimal("0")
-    assert await tl.net_received(session, task_id=task2.id, dims=DIMS_900) == Decimal("0")
+    assert await tl.net_by_reason(
+        session, reason=Reason.TRANSFER_RECEIVE, task_id=task2.id, dims=DIMS_900
+    ) == Decimal("0")
     assert await tl.net_transferred_by_dimensions(session, task_id=task1.id) == {}
-    assert await tl.net_received_by_dimensions(session, task_id=task1.id) == {}
+    assert await tl.net_by_reason_by_dimensions(
+        session, reason=Reason.TRANSFER_RECEIVE, task_id=task1.id
+    ) == {}
 
 
 async def test_exactly_one_key_required(session: AsyncSession, ledger_fx: dict) -> None:
@@ -349,7 +329,7 @@ async def test_exactly_one_key_required(session: AsyncSession, ledger_fx: dict) 
     with pytest.raises(ValueError):
         await tl.net_transferred(session, task_id=1, section_plan_line_id=1)
     with pytest.raises(ValueError):
-        await tl.net_received(session)
+        await tl.net_by_reason(session, reason=Reason.TRANSFER_RECEIVE)
     with pytest.raises(ValueError):
         await tl.net_transferred_by_dimensions(session)
     with pytest.raises(ValueError):
@@ -436,7 +416,9 @@ async def test_net_by_reason_reason_separation(session: AsyncSession, ledger_fx:
     product_id = ledger_fx["product"].id
 
     before = await tl.net_transferred(session, task_id=task2.id, dims=DIMS_2700)
-    before_recv = await tl.net_received(session, task_id=task2.id, dims=DIMS_900)
+    before_recv = await tl.net_by_reason(
+        session, reason=Reason.TRANSFER_RECEIVE, task_id=task2.id, dims=DIMS_900
+    )
 
     await _record(
         session, user_id=user_id, product_id=product_id, reason=Reason.FINAL_RELEASE,
@@ -446,7 +428,9 @@ async def test_net_by_reason_reason_separation(session: AsyncSession, ledger_fx:
     await session.commit()
 
     assert await tl.net_transferred(session, task_id=task2.id, dims=DIMS_2700) == before
-    assert await tl.net_received(session, task_id=task2.id, dims=DIMS_900) == before_recv
+    assert await tl.net_by_reason(
+        session, reason=Reason.TRANSFER_RECEIVE, task_id=task2.id, dims=DIMS_900
+    ) == before_recv
     assert await tl.net_by_reason(
         session, reason=Reason.FINAL_RELEASE, task_id=task2.id, dims=DIMS_2700
     ) == Decimal("7")
