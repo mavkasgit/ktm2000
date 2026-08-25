@@ -118,4 +118,16 @@ class Compensator(Protocol):
         """Исполнить план атомарно (в текущей транзакции сессии)."""
         ...
 
+    async def build_replay_payload(
+        self, db: AsyncSession, action: "Action"
+    ) -> dict | None:
+        """Payload реплея действия (#121, опционально).
+
+        Отсутствие метода на компенсаторе = тип не реплеится: amend
+        с такими dependents → NotAllowed. ``None`` в ответе — тот же
+        смысл для конкретного экземпляра. Payload собирается из
+        координат проводок действия (ledger), а не из доменной строки.
+        """
+        ...
+
 

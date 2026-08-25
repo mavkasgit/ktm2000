@@ -245,10 +245,11 @@ async def test_amend_without_cascade_blocked_by_dependents(
     assert preview.plan_token is None  # preview-first: confirm невозможен
 
 
-async def test_amend_cascade_compensates_dependents_without_replay(
+async def test_amend_cascade_replays_dependents(
     session: AsyncSession, client
 ) -> None:
-    a1, a2, ctx = await _chain_of_two(session, client, "AMDCAS")
+    """#121: amend с cascade компенсирует зависимых И воспроизводит их."""
+    a1, a2, ctx = await _chain_of_two(session, client, "AMDREP")
     src_sec, dst_sec = await _sections(session, ctx)
     product_id = (await session.get(WorkTask, ctx["from_task_id"])).product_id
 
@@ -258,6 +259,11 @@ async def test_amend_cascade_compensates_dependents_without_replay(
     assert preview.blockers == []
     reverted_ids = {n.id for n in preview.revert}
     assert reverted_ids == {a1.id, a2.id}
+    # План реплея виден до подтверждения: чемпион a2 — он сам.
+    assert [(w.node_id, w.champion_id, w.order) for w in preview.will_replay] == [
+        (a2.id, a2.id, 0)
+    ]
+    assert preview.will_replay[0].action_type == "transfer_send"
 
     result = await reversal_service.amend(
         session,
@@ -267,20 +273,30 @@ async def test_amend_cascade_compensates_dependents_without_replay(
         actor_id=ctx["user"].id,
     )
     await session.commit()
-    await assert_no_invariants_violations(session, context="amd-cas")
+    await assert_no_invariants_violations(session, context="amd-rep")
 
     await session.refresh(a1)
     await session.refresh(a2)
     assert a1.status == ActionStatus.AMENDED
-    assert a2.status == ActionStatus.REVERSED
+    assert a2.status == ActionStatus.REVERSED  # старый узел остался reversed
     assert a2.reversed_by_action_id is not None
-    # Эффекты зависимого НЕ воспроизводятся: только одно новое действие
     assert result.reversed_action_ids == [a2.id]
     assert result.amended_action_ids == [a1.id]
 
-    # Нетто: обе передачи погашены, применена одна новая на 2 шт.
-    assert await _balance(session, src_sec, product_id) == Decimal("8")
-    assert await _balance(session, dst_sec, product_id) == Decimal("2")
+    # Реплей: новое живое действие с replay_of_action_id → чемпион.
+    assert len(result.replayed_action_ids) == 1
+    rep = await session.get(Action, result.replayed_action_ids[0])
+    assert rep.status == ActionStatus.ACTIVE
+    assert rep.replay_of_action_id == a2.id
+    assert rep.action_type == "transfer_send"
+    assert rep.ref_id is not None  # новый Transfer создан
+    new_transfer = await session.get(Transfer, rep.ref_id)
+    assert new_transfer is not None
+    assert new_transfer.sent_quantity == Decimal("5")  # координаты из проводок
+
+    # Нетто: погашены обе старые передачи; применены новая на 2 и реплей на 5.
+    assert await _balance(session, src_sec, product_id) == Decimal("3")
+    assert await _balance(session, dst_sec, product_id) == Decimal("7")
 
 
 # ─── токены и статусы ────────────────────────────────────────────────────────

@@ -44,7 +44,13 @@ class MirrorLedgerMixin:
 
     @staticmethod
     async def _generation(db: AsyncSession, action: Action):
-        """Проводки действия, ещё не погашенные компенсациями."""
+        """Прямые проводки действия, ещё не погашенные компенсациями.
+
+        Компенсирующие записи под тем же action_id (amend #115 делит
+        один id между компенсациями старого действия и новой парой)
+        эффектом действия НЕ считаются (#121): иначе повторное
+        зеркалирование чемпиона amend-цепочки дважды откатывает его.
+        """
         comp = aliased(StockTransaction, name="comp")
         not_reversed = ~exists(
             select(comp.id).where(comp.reverses_id == StockTransaction.id)
@@ -52,7 +58,11 @@ class MirrorLedgerMixin:
         return (
             await db.execute(
                 select(StockTransaction)
-                .where(StockTransaction.action_id == action.id, not_reversed)
+                .where(
+                    StockTransaction.action_id == action.id,
+                    StockTransaction.reverses_id.is_(None),
+                    not_reversed,
+                )
                 .order_by(StockTransaction.id.asc())
             )
         ).scalars().all()
@@ -483,13 +493,16 @@ class StockCompensator(MirrorLedgerMixin):
         создаёт Transfer, пару SEND/RECEIVE и проекции; проводки ссылаются
         на переданное действие журнала. Задачи по умолчанию наследуются от
         исходного Transfer (changes может переопределить). Идемпотентность
-        по ключу ``amend:{action.id}`` (отличать от повторов отправки).
+        по ключу ``amend:{action.id}`` / ``replay:{action.id}`` (отличать
+        от повторов отправки). Для реплея (#121) changes — полный payload
+        от ``build_replay_payload``; fallback'и не срабатывают.
         """
         from app.transfers.services import transfer_send
 
         old_transfer = await db.get(Transfer, ref_id) if ref_id is not None else None
         if old_transfer is None:
             raise ValueError(f"{self.action_type}: Transfer с ref_id={ref_id} не найден")
+        is_replay = getattr(action, "replay_of_action_id", None) is not None
         return await transfer_send(
             db,
             from_task_id=int(
@@ -501,10 +514,63 @@ class StockCompensator(MirrorLedgerMixin):
             quantity=Decimal(str(changes.get("quantity", old_transfer.sent_quantity))),
             dimensions=changes.get("dimensions"),
             actor_id=actor_id,
-            comment=f"amend of action #{action.amends_action_id}",
-            idempotency_key=f"amend:{action.id}",
+            comment=(
+                f"replay of action #{action.replay_of_action_id}"
+                if is_replay
+                else f"amend of action #{action.amends_action_id}"
+            ),
+            idempotency_key=(
+                f"replay:{action.id}" if is_replay else f"amend:{action.id}"
+            ),
             action=action,
         )
+    # ─── Replay (тикет #121): payload из координат проводок ──────────────
+
+    async def build_replay_payload(
+        self, db: AsyncSession, action: Action
+    ) -> dict | None:
+        """Payload реплея transfer_send из координат исходных проводок.
+
+        from/to-задачи, quantity и габарит берутся из прямых
+        StockTransaction действия (НЕ из Transfer-строки) — работает и
+        после мутаций домена. Компенсации предшественника под тем же
+        action_id (amend #115) координатами не являются. transfer_cancel
+        не реплеится → ``None``.
+        """
+        if self.action_type != "transfer_send":
+            return None
+        txs = (
+            await db.execute(
+                select(StockTransaction)
+                .where(
+                    StockTransaction.action_id == action.id,
+                    StockTransaction.reverses_id.is_(None),
+                )
+                .order_by(StockTransaction.id.asc())
+            )
+        ).scalars().all()
+        send = next(
+            (t for t in txs if t.reason == Reason.TRANSFER_SEND), None
+        )
+        receive = next(
+            (t for t in txs if t.reason == Reason.TRANSFER_RECEIVE), None
+        )
+        if (
+            send is None
+            or send.task_id is None
+            or receive is None
+            or receive.task_id is None
+        ):
+            return None
+        return {
+            "from_task_id": int(send.task_id),
+            "to_task_id": int(receive.task_id),
+            "quantity": Decimal(send.quantity),
+            "dimensions": (
+                dict(send.dimensions) if send.dimensions is not None else None
+            ),
+        }
+
 
 
 def _dims_key(dims: dict | None) -> tuple | None:

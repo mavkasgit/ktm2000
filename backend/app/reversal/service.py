@@ -86,18 +86,26 @@ class ReversalPreview:
     stays: list[ActionNode]    # ⚪ останется (уже отменённые — пропускаются)
     blockers: list[Blocker]    # 🚫 блокировки
     plan_token: str | None  # None при блокировках: confirm невозможен без повторного preview
+    will_replay: list[ReplayPlanItem] = field(default_factory=list)  # план реплея (#121)
 
 
 @dataclass
-class AmendResult:
-    """Результат amend: компенсация старого + новое действие (#115)."""
+class ReplayPlanItem:
+    """Узел плана реплея (#121): активный dependent ветки amend.
 
-    action_id: int                    # исходное (изменённое) действие
-    new_action_id: int                # новое действие (amends_action_id → action_id)
-    new_ref_id: int | None            # новый доменный объект (Transfer)
-    compensated_tx_ids: list[int] = field(default_factory=list)
-    amended_action_ids: list[int] = field(default_factory=list)   # статус → 'amended'
-    reversed_action_ids: list[int] = field(default_factory=list)  # каскадные dependents → 'reversed'
+    ``champion_id`` — голова его amend-цепочки (решение 7 эпика);
+    ``payload`` — данные для доменного сервиса от ``build_replay_payload``
+    (в REST не сериализуется); ``order`` — позиция в прямом
+    топологическом порядке исполнения.
+    """
+
+    node_id: int
+    champion_id: int
+    action_type: str
+    ref_id: int | None
+    order: int
+    champion_status: str = "active"
+    payload: dict | None = None
 
 
 @dataclass
@@ -118,6 +126,19 @@ class PurgePlan:
     pairs: list[PurgePair] = field(default_factory=list)
     plan_token: str | None = None
     deleted_tx_ids: list[int] = field(default_factory=list)  # заполнено после confirm
+
+
+@dataclass
+class AmendResult:
+    """Результат amend: компенсация старого + новое действие (#115)."""
+
+    action_id: int                    # исходное (изменённое) действие
+    new_action_id: int                # новое действие (amends_action_id → action_id)
+    new_ref_id: int | None            # новый доменный объект (Transfer)
+    compensated_tx_ids: list[int] = field(default_factory=list)
+    amended_action_ids: list[int] = field(default_factory=list)   # статус → 'amended'
+    reversed_action_ids: list[int] = field(default_factory=list)  # каскадные dependents → 'reversed'
+    replayed_action_ids: list[int] = field(default_factory=list)  # реплей ветки (#121)
 
 
 def _sign_payload(payload: dict) -> str:
@@ -442,6 +463,113 @@ class ReversalService:
         comp = self._compensator(action_type)
         return comp if comp is not None and hasattr(comp, "check_amend") else None
 
+    async def _champion(self, db: AsyncSession, action: Action) -> Action:
+        """Голова amend-цепочки узла (решение 7 эпика #121).
+
+        Пока у текущего действия есть активный amend-потомок — движемся
+        к нему; возвращаем последнее живое звено.
+        """
+        current = action
+        seen = {current.id}
+        while True:
+            candidates = (
+                (
+                    await db.execute(
+                        select(Action)
+                        .where(Action.amends_action_id == current.id)
+                        .order_by(Action.id.desc())
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            head = next(
+                (a for a in candidates if a.status == ActionStatus.ACTIVE and a.id not in seen),
+                None,
+            )
+            if head is None:
+                return current
+            seen.add(head.id)
+            current = head
+
+    async def _build_replay_plan(
+        self, db: AsyncSession, cascade_actions: list[Action]
+    ) -> tuple[list[ReplayPlanItem], list[Blocker]]:
+        """План реплея ветки (#121, решения 1/7): чемпионы активных
+        dependents, payload'ы заранее (до компенсации), прямой
+        топологический порядок. Не-реплеяемые типы → блокер not_allowed
+        (NotAllowed до начала изменений — решение 3).
+        """
+        items: list[ReplayPlanItem] = []
+        blockers: list[Blocker] = []
+        seen_champions: set[int] = set()
+        for node in sorted(cascade_actions, key=lambda a: a.id):
+            champ = await self._champion(db, node)
+            if champ.status != ActionStatus.ACTIVE or champ.id in seen_champions:
+                continue
+            seen_champions.add(champ.id)
+            comp = self._compensator(champ.action_type)
+            payload: dict | None = None
+            if comp is None or not hasattr(comp, "build_replay_payload"):
+                blockers.append(
+                    Blocker(
+                        kind="not_allowed",
+                        node_id=champ.id,
+                        detail=(
+                            f"нет компенсатора для action_type={champ.action_type}"
+                            if comp is None
+                            else f"тип {champ.action_type} не реплеится (#121)"
+                        ),
+                    )
+                )
+                continue
+            payload = await comp.build_replay_payload(db, champ)
+            if payload is None:
+                blockers.append(
+                    Blocker(
+                        kind="not_allowed",
+                        node_id=champ.id,
+                        detail=f"тип {champ.action_type} не реплеится (#121)",
+                    )
+                )
+                continue
+            items.append(
+                ReplayPlanItem(
+                    node_id=node.id,
+                    champion_id=champ.id,
+                    action_type=champ.action_type,
+                    ref_id=champ.ref_id,
+                    order=0,
+                    champion_status=(
+                        champ.status.value
+                        if isinstance(champ.status, ActionStatus)
+                        else str(champ.status)
+                    ),
+                    payload=payload,
+                )
+            )
+        if items:
+            deps = await self._deps_index(db)
+            direct = list(
+                reversed(
+                    self._reverse_topological_order([i.champion_id for i in items], deps)
+                )
+            )
+            by_champ = {i.champion_id: i for i in items}
+            for pos, cid in enumerate(direct):
+                by_champ[cid].order = pos
+            items.sort(key=lambda i: i.order)
+        return items, blockers
+
+    @staticmethod
+    def _replay_fingerprint_part(items: list[ReplayPlanItem]) -> str:
+        """Хэш-компонента плана реплея для fingerprint токена (решение 5)."""
+        if not items:
+            return ""
+        return ";replay:" + ",".join(
+            sorted(f"{i.node_id}:{i.champion_id}:{i.champion_status}" for i in items)
+        )
+
     async def preview_amend(
         self,
         db: AsyncSession,
@@ -453,8 +581,10 @@ class ReversalService:
         """Preview «изменить действие»: 🔴 компенсируется (+новая запись),
         ⚪ уже отменённые dependents, 🚫 блокировки; plan_token kind='amend'.
 
-        Ограничение v1: при cascade=True зависимые действия компенсируются
-        (как в reverse), их эффекты заново НЕ воспроизводятся.
+        #121: при cascade=True зависимые действия компенсируются И
+        воспроизводятся заново (реплей в прямом топологическом порядке);
+        ``will_replay`` — план до подтверждения, fingerprint включает
+        хэш плана реплея.
         """
         target = await db.get(Action, action_id)
         if target is None:
@@ -515,6 +645,14 @@ class ReversalService:
                         Blocker(kind=cb.kind, node_id=node.id, detail=cb.detail, deficit=cb.deficit)
                     )
 
+        will_replay: list[ReplayPlanItem] = []
+        if not blockers and cascade:
+            will_replay, replay_blockers = await self._build_replay_plan(
+                db, [a for a in cascade_actions]
+            )
+            blockers.extend(replay_blockers)
+
+        fp = await self._fingerprint(db, [n.id for n in revert_nodes])
         token = (
             _sign_payload(
                 {
@@ -522,7 +660,7 @@ class ReversalService:
                     "cascade": cascade,
                     "kind": "amend",
                     "changes": changes,
-                    "fp": await self._fingerprint(db, [n.id for n in revert_nodes]),
+                    "fp": fp + self._replay_fingerprint_part(will_replay),
                 }
             )
             if not blockers
@@ -535,6 +673,7 @@ class ReversalService:
             stays=[ActionNode.of(a) for a in reverted_dependents],
             blockers=blockers,
             plan_token=token,
+            will_replay=will_replay,
         )
 
     async def amend(
@@ -570,7 +709,9 @@ class ReversalService:
             db, action_id, changes, cascade=cascade
         )
         current_fp = await self._fingerprint(db, [n.id for n in fresh_preview.revert])
-        if payload.get("fp") != current_fp:
+        if payload.get("fp") != (
+            current_fp + self._replay_fingerprint_part(fresh_preview.will_replay)
+        ):
             raise StalePlanToken("мир изменился после preview — пересмотрите preview_amend")
         if fresh_preview.blockers:
             self._raise_blockers(fresh_preview.blockers)
@@ -679,6 +820,56 @@ class ReversalService:
             await db.flush()
             compensated_tx_ids.extend(result.compensated_tx_ids)
 
+        # ── Реплей ветки (#121, решения 1/2/7): прямой топологический
+        # порядок, каждый узел — новое Action c replay_of_action_id и
+        # вызов доменного сервиса с payload от компенсатора. Любой сбой —
+        # исключение вверх → полный откат TX (get_db), без компенсаций
+        # отката (решение 4).
+        replayed_action_ids: list[int] = []
+        for item in sorted(fresh_preview.will_replay, key=lambda i: i.order):
+            champ = await db.get(Action, item.champion_id)
+            assert champ is not None
+            rep_comp = self._compensator(item.action_type)
+            if (
+                rep_comp is None
+                or not hasattr(rep_comp, "build_replay_payload")
+                or item.payload is None
+            ):
+                raise NotAllowed(
+                    f"тип {item.action_type} не реплеится (#121)"
+                )
+            rep_action = Action(
+                action_type=item.action_type,
+                ref_id=None,
+                actor=actor,
+                reason=reason,
+                depends_on=list(champ.depends_on or []),
+                replay_of_action_id=item.champion_id,
+            )
+            db.add(rep_action)
+            await db.flush()
+            try:
+                fwd = await rep_comp.apply_forward(
+                    db,
+                    action=rep_action,
+                    ref_id=item.ref_id,
+                    changes=item.payload,
+                    actor=actor,
+                    actor_id=actor_id,
+                )
+            except StockValidationError as exc:
+                # Решение 4: известная ошибка покрытия → CoverageShortfall
+                # узла плана; дефицит вычислим по фактическим остаткам.
+                deficit = await rep_comp.forward_coverage_deficit(
+                    db, item.ref_id, item.payload
+                )
+                raise CoverageShortfall(node=item.node_id, deficit=deficit) from exc
+            except ValueError as exc:
+                raise NotAllowed(f"реплей отклонён доменом: {exc}") from exc
+            rep_action.ref_id = fwd["transfer_id"]
+            replayed_action_ids.append(rep_action.id)
+        await db.flush()
+
         assert new_action_id is not None
         return AmendResult(
             action_id=action_id,
@@ -687,6 +878,7 @@ class ReversalService:
             compensated_tx_ids=compensated_tx_ids,
             amended_action_ids=amended_action_ids,
             reversed_action_ids=reversed_action_ids,
+            replayed_action_ids=replayed_action_ids,
         )
 
     # ── hard-purge (тикет #118, ADR-0019 п.7) ────────────────────────────

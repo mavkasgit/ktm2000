@@ -358,3 +358,76 @@ async def test_migration_038_paired_quantity_min():
         async with admin_engine.connect() as conn:
             await conn.execute(text(f'DROP DATABASE IF EXISTS "{db_name}" WITH (FORCE)'))
         await admin_engine.dispose()
+
+@pytest.mark.asyncio
+async def test_migration_046_replay_of_action_id_roundtrip():
+    """#121: replay_of_action_id + индекс; downgrade снимает их чисто."""
+    db_name = f"ktm_mig_{uuid.uuid4().hex[:10]}"
+    admin_url = _test_db_url().rsplit("/", 1)[0] + "/postgres"
+    target_url = _test_db_url().rsplit("/", 1)[0] + f"/{db_name}"
+
+    admin_engine = create_async_engine(admin_url, isolation_level="AUTOCOMMIT")
+    async with admin_engine.connect() as conn:
+        await conn.execute(text(f'CREATE DATABASE "{db_name}"'))
+    await admin_engine.dispose()
+
+    env = {**os.environ, "DATABASE_URL": target_url}
+
+    async def _columns_and_indexes(engine):
+        async with engine.connect() as conn:
+            cols = await conn.run_sync(
+                lambda c: [col["name"] for col in inspect(c).get_columns("action_journal")]
+            )
+            idx = await conn.run_sync(
+                lambda c: inspect(c).get_indexes("action_journal")
+            )
+        return cols, {i["name"] for i in idx}
+
+    engine = create_async_engine(target_url)
+    try:
+        result = subprocess.run(
+            ["alembic", "upgrade", "head"],
+            cwd=BACKEND_DIR,
+            env=env,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert result.returncode == 0, result.stderr or result.stdout
+        cols, indexes = await _columns_and_indexes(engine)
+        assert "replay_of_action_id" in cols
+        assert "ix_action_journal_replay_of_action_id" in indexes
+
+        # downgrade до 045: колонки и индекс быть не должно.
+        result = subprocess.run(
+            ["alembic", "downgrade", "045_hard_purge_status_index"],
+            cwd=BACKEND_DIR,
+            env=env,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert result.returncode == 0, result.stderr or result.stdout
+        cols, indexes = await _columns_and_indexes(engine)
+        assert "replay_of_action_id" not in cols
+        assert "ix_action_journal_replay_of_action_id" not in indexes
+
+        # повторный upgrade: колонка и индекс возвращаются.
+        result = subprocess.run(
+            ["alembic", "upgrade", "head"],
+            cwd=BACKEND_DIR,
+            env=env,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert result.returncode == 0, result.stderr or result.stdout
+        cols, indexes = await _columns_and_indexes(engine)
+        assert "replay_of_action_id" in cols
+        assert "ix_action_journal_replay_of_action_id" in indexes
+    finally:
+        await engine.dispose()
+        admin_engine = create_async_engine(admin_url, isolation_level="AUTOCOMMIT")
+        async with admin_engine.connect() as conn:
+            await conn.execute(text(f'DROP DATABASE IF EXISTS "{db_name}" WITH (FORCE)'))
+        await admin_engine.dispose()

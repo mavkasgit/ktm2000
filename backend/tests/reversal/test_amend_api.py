@@ -281,3 +281,76 @@ async def test_amend_confirm_shortfall_reports_real_deficit(
     # Источник: было 10−3(отгрузка)=7, гонка −7 → 0; компенсации вернут 3;
     # нужно 9 → реальный дефицит 6.
     assert Decimal(detail["deficit"]) == Decimal("6")
+
+
+async def test_preview_amend_shows_will_replay_and_amend_reports_ids(
+    session: AsyncSession, client
+) -> None:
+    """#121: preview-amend cascade отдаёт план реплея (will_replay),
+    confirm — replayed_action_ids; новое действие несёт
+    replay_of_action_id → чемпион."""
+    from app.models.action_journal import ActionStatus
+    from app.transfers.services import transfer_send
+
+    setup = await _make_two_ghp_setup(session, sku="AMDAP8", qty=Decimal("10"))
+    ctx = await _make_tasks_transferable(session, client, setup)
+
+    async def send(qty: Decimal, key: str) -> tuple[Action, int]:
+        result = await transfer_send(
+            session,
+            from_task_id=ctx["from_task_id"],
+            to_task_id=ctx["to_task_id"],
+            quantity=qty,
+            actor_id=ctx["user"].id,
+            idempotency_key=key,
+        )
+        action = (
+            await session.execute(
+                select(Action).where(
+                    Action.action_type == "transfer_send",
+                    Action.ref_id == result["transfer_id"],
+                )
+            )
+        ).scalar_one()
+        return action, result["transfer_id"]
+
+    a1, _t1 = await send(Decimal("5"), "amdap8:t1")
+    a2, _t2 = await send(Decimal("5"), "amdap8:t2")
+    a2.depends_on = [a1.id]
+    await session.commit()
+    headers = _auth_headers(ctx["user"])
+
+    resp = await client.post(
+        f"/api/actions/{a1.id}/preview-amend",
+        json={"changes": {"quantity": "2"}, "cascade": True},
+        headers=headers,
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["blockers"] == []
+    assert body["will_replay"] == [
+        {
+            "action_id": a2.id,
+            "champion_id": a2.id,
+            "action_type": "transfer_send",
+            "ref_id": a2.ref_id,
+            "order": 0,
+        }
+    ]
+
+    resp = await client.post(
+        f"/api/actions/{a1.id}/amend",
+        json={"plan_token": body["plan_token"], "reason": "реплей через API"},
+        headers=headers,
+    )
+    assert resp.status_code == 200, resp.text
+    result = resp.json()
+    assert result["reversed_action_ids"] == [a2.id]
+    assert len(result["replayed_action_ids"]) == 1
+
+    rep = await session.get(Action, result["replayed_action_ids"][0])
+    assert rep is not None
+    assert rep.replay_of_action_id == a2.id
+    assert rep.status == ActionStatus.ACTIVE
+    await session.commit()
+    await assert_no_invariants_violations(session, context="amdapi-replay")

@@ -35,6 +35,7 @@ from app.reversal.schemas import (
     PurgePairOut,
     TreeNodeOut,
     TreeOut,
+    WillReplayOut,
 )
 from app.reversal.service import reversal_service
 
@@ -248,6 +249,16 @@ async def preview_amend(
         stays=[_node_out(n) for n in preview.stays],
         blockers=[_blocker_out(b) for b in preview.blockers],
         plan_token=preview.plan_token,
+        will_replay=[
+            WillReplayOut(
+                action_id=i.node_id,
+                champion_id=i.champion_id,
+                action_type=i.action_type,
+                ref_id=i.ref_id,
+                order=i.order,
+            )
+            for i in preview.will_replay
+        ],
     )
 
 
@@ -301,6 +312,7 @@ async def amend_action(
         compensated_tx_ids=list(result.compensated_tx_ids),
         amended_action_ids=list(result.amended_action_ids),
         reversed_action_ids=list(result.reversed_action_ids),
+        replayed_action_ids=list(result.replayed_action_ids),
     )
 
 

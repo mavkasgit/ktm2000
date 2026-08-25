@@ -49,16 +49,26 @@ class BlockerOut(BaseModel):
     chain: list[int] | None = None
 
 
+class WillReplayOut(BaseModel):
+    """Узел плана реплея (#121): order — позиция в прямом топологическом."""
+
+    action_id: int
+    champion_id: int
+    action_type: str
+    ref_id: int | None = None
+    order: int
+
+
 class PreviewOut(BaseModel):
     """Три зоны: revert 🔴 / stays ⚪ / blockers 🚫 + plan_token."""
 
     action_id: int
     cascade: bool
-
     revert: list[ActionNodeOut]
     stays: list[ActionNodeOut]
     blockers: list[BlockerOut]
     plan_token: str | None = None  # None при блокировках
+    will_replay: list[WillReplayOut] = Field(default_factory=list)  # план реплея (#121)
 
 
 class ActionOut(BaseModel):
@@ -118,6 +128,7 @@ class AmendResultOut(BaseModel):
     compensated_tx_ids: list[int]
     amended_action_ids: list[int]
     reversed_action_ids: list[int]
+    replayed_action_ids: list[int] = Field(default_factory=list)  # #121
 
 
 TreeNodeOut.model_rebuild()

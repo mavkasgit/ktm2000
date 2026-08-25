@@ -45,7 +45,8 @@ class Action(Base):
     Одна доменная операция = одна запись. ``depends_on`` — JSON-массив id
     действий, от которых зависит данное (топологический порядок каскада).
     ``reversed_by_action_id`` / ``amends_action_id`` — связи отката и
-    поправки внутри самого журнала.
+    поправки внутри самого журнала; ``replay_of_action_id`` — связь
+    реплея (#121): действие воспроизводит эффект указанного.
     """
 
     __tablename__ = "action_journal"
@@ -81,6 +82,9 @@ class Action(Base):
     )
     amends_action_id: Mapped[int | None] = mapped_column(
         ForeignKey("action_journal.id"), nullable=True
+    )
+    replay_of_action_id: Mapped[int | None] = mapped_column(
+        ForeignKey("action_journal.id"), nullable=True, index=True
     )
     reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
