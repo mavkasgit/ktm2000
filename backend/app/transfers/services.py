@@ -59,7 +59,7 @@ from app.services.shopfloor.common import (
 # ``from=from_section → to=to_section``: каждая двигает баланс обеих локаций
 # на quantity. Отмена — компенсационные транзакции (append-only).
 # Коррекция — in-place изменение quantity активных транзакций.
-from app.domain.dimensions import canonicalize_dimensions
+from app.domain.dimensions import canonicalize_dimensions, dimensions_equal
 from app.services.action_journal_service import action_journal_service
 from app.stock.models import Reason, StockTransaction
 from app.stock.services import (
@@ -68,6 +68,12 @@ from app.stock.services import (
     dimensions_match_clause,
 )
 from app.stock.ledger import net_transferred
+from app.services.shopfloor.operations_transform import get_transform_progress
+from app.services.shopfloor.output_rows import (
+    UsedSource,
+    build_output_rows,
+    build_task_output_rows,
+)
 from app.transfers import budget
 
 _stock_command_service = StockCommandService()
@@ -155,26 +161,22 @@ async def _get_task_transferable(
     # передать больше, чем фактически раскроено (готовой баланс тоже
     # ограничивает, но кап здесь — бизнес-правило).
     # Т6: write guard сведён к read-path гидрации (queries.py) — produced по
-    # строкам выхода считается через build_outputs_progress, чтобы write и
+    # строкам выхода считается через build_output_rows, чтобы write и
     # read не расходились. Кап min(output_quantity, produced_by_group) живёт
-    # внутри build_outputs_progress; здесь остаётся только
+    # внутри build_output_rows; здесь остаётся только
     # remaining_transform(produced_for_dims, transferred).
     if task.outputs:
-        from app.domain.dimensions import canonicalize_dimensions, dimensions_equal
-        from app.services.shopfloor.operations_transform import (
-            build_outputs_progress,
-            get_transform_progress,
-        )
-
         dims = canonicalize_dimensions(dimensions)
         progress = await get_transform_progress(db, task.id)
-        produced_rows = build_outputs_progress(
-            task.outputs, progress.produced_by_group
+        rows = build_output_rows(task.outputs, progress.produced_by_group, {})
+        produced_for_dims = sum(
+            (
+                row_out.produced_quantity
+                for row_out in rows
+                if dimensions_equal(row_out.dimensions, dims)
+            ),
+            Decimal("0"),
         )
-        produced_for_dims = Decimal("0")
-        for entry, produced_entry in zip(task.outputs, produced_rows):
-            if dimensions_equal(entry.get("dimensions"), dims):
-                produced_for_dims += produced_entry["produced_quantity"]
         transferred = await net_transferred(db, task_id=task.id, dims=dims)
         return budget.remaining_transform(produced_for_dims, transferred)
 
@@ -1004,44 +1006,17 @@ async def auto_create_transfer_after_complete(
     # использовали бы один бюджет. Обычный этап — одна передача на
     # good_quantity с габаритом задания.
     if from_task.outputs:
-        from app.domain.dimensions import canonicalize_dimensions
-        from app.services.shopfloor.operations_transform import (
-            build_outputs_progress,
-            distribute_output_quantities,
-            get_transform_progress,
+        rows = await build_task_output_rows(
+            db,
+            task_id=from_task.id,
+            outputs=from_task.outputs,
+            used_source=UsedSource.NET_TRANSFERRED,
         )
-        from app.stock.services import _dimensions_hash_key
-
-        progress = await get_transform_progress(db, from_task.id)
-        produced_rows = build_outputs_progress(
-            from_task.outputs, progress.produced_by_group
-        )
-        transferred_by_dim: dict[str | None, Decimal] = {}
-        for entry in from_task.outputs:
-            dims = canonicalize_dimensions(entry.get("dimensions"))
-            key = _dimensions_hash_key(dims)
-            if key not in transferred_by_dim:
-                transferred_by_dim[key] = await net_transferred(
-                    db, task_id=from_task.id, dims=dims
-                )
-        transferred_rows = distribute_output_quantities(
-            from_task.outputs, transferred_by_dim
-        )
-
-        pairs: list[tuple[Decimal, dict | None]] = []
-        for entry, produced_entry, transferred in zip(
-            from_task.outputs, produced_rows, transferred_rows
-        ):
-            raw_qty = entry.get("quantity")
-            if raw_qty is None:
-                continue
-            planned = Decimal(str(raw_qty))
-            if planned <= 0:
-                continue
-            dims = canonicalize_dimensions(entry.get("dimensions"))
-            qty = max(Decimal("0"), produced_entry["produced_quantity"] - transferred)
-            if qty > 0:
-                pairs.append((qty, dims))
+        pairs: list[tuple[Decimal, dict | None]] = [
+            (row_out.remaining_quantity, row_out.dimensions)
+            for row_out in rows
+            if row_out.remaining_quantity > 0
+        ]
     else:
         pairs = [(_to_decimal(good_quantity), None)]
 

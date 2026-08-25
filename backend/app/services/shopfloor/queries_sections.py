@@ -312,11 +312,10 @@ async def get_section_board(
     # Прогресс трансформации (ADR-0002) для карточек трансформирующих
     # этапов: списано входа и оприходовано по каждому выходу.
     from .operations_transform import (
-        build_outputs_progress,
-        distribute_output_quantities,
         get_transferred_by_task_dimensions_bulk,
         get_transform_progress_bulk,
     )
+    from .output_rows import build_output_rows
     transform_task_ids = [
         row[0].id for row in rows
         if row[2].transforms_dimensions and (row[0].outputs or [])
@@ -502,22 +501,22 @@ async def get_section_board(
         if task.id in transform_progress_map or (stage.transforms_dimensions and task_outputs):
             progress = transform_progress_map.get(task.id)
             produced_by_group = progress.produced_by_group if progress else {}
-            produced_entries = build_outputs_progress(task_outputs, produced_by_group)
-            transferred_rows = distribute_output_quantities(
+            rows_by_output = build_output_rows(
                 task_outputs,
+                produced_by_group,
                 transferred_by_task.get(task.id) or {},
             )
             outputs_progress = [
                 {
-                    "row_number": entry["row_number"],
-                    "dimensions": entry["dimensions"],
-                    "quantity": format_quantity(entry["quantity"]),
-                    "produced_quantity": format_quantity(entry["produced_quantity"]),
+                    "row_number": row.row_number,
+                    "dimensions": row.dimensions,
+                    "quantity": format_quantity(row.quantity),
+                    "produced_quantity": format_quantity(row.produced_quantity),
                     # Нетто-переданное по (задача, размер выхода) из ledger —
                     # учётная колонка «Передано» строки «Сдачи» плана.
-                    "transferred_quantity": format_quantity(transferred),
+                    "transferred_quantity": format_quantity(row.used_quantity),
                 }
-                for entry, transferred in zip(produced_entries, transferred_rows)
+                for row in rows_by_output
             ]
             input_consumed_quantity = format_quantity(
                 progress.consumed_quantity if progress else Decimal("0")

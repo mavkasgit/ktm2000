@@ -42,10 +42,8 @@ from app.domain.dimensions import parse_dimensions_filter, format_dimensions
 from app.services.plan_position_hanger import task_dimensions_for_plan_line
 
 from app.services.shopfloor.common import _get_transfer, _to_decimal
-from app.stock.ledger import (
-    net_transferred_by_dimensions,
-    net_transferred_sq,
-)
+from app.stock.ledger import net_transferred_sq
+from app.services.shopfloor.output_rows import UsedSource, build_task_output_rows
 from app.transfers.budget import (
     remaining_plain,
     remaining_send,
@@ -377,56 +375,43 @@ async def _hydrate_production_ready_row(db: AsyncSession, row) -> list[dict]:
         item = _hydrate_plain_ready_row(row)
         return [item] if item is not None else []
 
-    from app.domain.dimensions import canonicalize_dimensions
-    from app.services.shopfloor.operations_transform import (
-        build_outputs_progress,
-        distribute_output_quantities,
-        get_transform_progress,
+    common = _ready_row_common(row)
+    rows = await build_task_output_rows(
+        db,
+        task_id=task.id,
+        outputs=outputs,
+        used_source=(
+            UsedSource.NET_FINAL_RELEASE if is_final else UsedSource.NET_TRANSFERRED
+        ),
     )
 
-    common = _ready_row_common(row)
-    progress = await get_transform_progress(db, task.id)
-    produced_rows = build_outputs_progress(outputs, progress.produced_by_group)
-    if is_final:
-        from app.stock.ledger import net_by_reason_by_dimensions
-        from app.stock.models import Reason
-
-        used_by_dim = await net_by_reason_by_dimensions(
-            db, reason=Reason.FINAL_RELEASE, task_id=task.id
-        )
-    else:
-        used_by_dim = await net_transferred_by_dimensions(db, task_id=task.id)
-    used_rows = distribute_output_quantities(outputs, used_by_dim)
-
     items: list[dict] = []
-    for entry, produced_entry, used in zip(outputs, produced_rows, used_rows):
-        raw_qty = entry.get("quantity")
-        if raw_qty is None:
-            continue
-        planned = Decimal(str(raw_qty))
+    for output in rows:
+        planned = output.quantity
         if planned <= 0:
             continue
-        dims = canonicalize_dimensions(entry.get("dimensions"))
-        produced = produced_entry["produced_quantity"]
         # Смысл бюджета выбирает потребитель по финальности участка (#119):
         # финальный — отправка (``remaining_send``), остальные — передача
         # (``remaining_transform``).
         if is_final:
-            transferable = remaining_send(produced, used)
+            transferable = remaining_send(
+                output.produced_quantity, output.used_quantity,
+            )
         else:
-            transferable = remaining_transform(produced, used)
+            transferable = remaining_transform(
+                output.produced_quantity, output.used_quantity,
+            )
         if transferable <= 0:
             continue
         items.append({
             **common,
             "planned_quantity": _fmt_qty(planned),
-            "completed_quantity": _fmt_qty(produced),
-            "already_transferred_quantity": _fmt_qty(used),
+            "completed_quantity": _fmt_qty(output.produced_quantity),
+            "already_transferred_quantity": _fmt_qty(output.used_quantity),
             "transferable_quantity": _fmt_qty(transferable),
-            **_ready_dimensions_fields(dims),
+            **_ready_dimensions_fields(output.dimensions),
         })
     return items
-
 
 READY_SORT_FIELDS = frozenset({
     "sequence",
