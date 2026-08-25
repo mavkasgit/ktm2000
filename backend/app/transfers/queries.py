@@ -49,6 +49,7 @@ from app.stock.ledger import (
 from app.transfers.budget import (
     remaining_plain,
     remaining_send,
+    remaining_transform,
     sendable_qty_sql,
     transferable_qty_sql,
 )
@@ -407,7 +408,13 @@ async def _hydrate_production_ready_row(db: AsyncSession, row) -> list[dict]:
             continue
         dims = canonicalize_dimensions(entry.get("dimensions"))
         produced = produced_entry["produced_quantity"]
-        transferable = produced - used
+        # Смысл бюджета выбирает потребитель по финальности участка (#119):
+        # финальный — отправка (``remaining_send``), остальные — передача
+        # (``remaining_transform``).
+        if is_final:
+            transferable = remaining_send(produced, used)
+        else:
+            transferable = remaining_transform(produced, used)
         if transferable <= 0:
             continue
         items.append({
