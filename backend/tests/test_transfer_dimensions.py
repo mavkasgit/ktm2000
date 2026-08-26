@@ -44,6 +44,15 @@ from app.stock.services import (
 )
 from app.transfers.services import cancel_transfer, correct_transfer, transfer_send
 from tests.test_integrity_invariants import assert_no_invariants_violations
+# Канонические определения фабрик живут в tests/helpers/transfers.py
+# (#131 follow-up); реэкспорт сохраняет старый путь импорта для потребителей.
+from tests.helpers.transfers import (
+    _complete_saw,
+    _make_dim_route_fixture,
+    _make_transform_route_fixture,
+    _seed_balance,
+    _tasks_for_position,
+)
 
 pytestmark = pytest.mark.asyncio
 
@@ -68,125 +77,12 @@ def _auth_headers(user: User) -> dict[str, str]:
     return {"Authorization": f"Bearer {token}"}
 
 
-async def _make_dim_route_fixture(
-    session: AsyncSession,
-    *,
-    sku: str,
-    qty: Decimal,
-    length_mm: float | None = None,
-) -> dict:
-    """raw_stock(SPG A) → prod1(SPG B) → prod2(SPG C, final).
-
-    Все секции в разных ГХП: stock→prod1 и prod1→prod2 — кросс-ГХП передачи,
-    обе видны в ready-списке. Позиция несёт ``input_dimensions`` (длину).
-    """
-    raw = Section(code=f"{sku}-RAW", name="RAW", type="raw_stock", is_active=True, sort_order=0)
-    prod1 = Section(code=f"{sku}-P1", name="P1", type="production", is_active=True, sort_order=1)
-    prod2 = Section(code=f"{sku}-P2", name="P2", type="production", is_active=True, sort_order=2)
-    session.add_all([raw, prod1, prod2])
-    await session.flush()
-
-    spgs: list[StorageProductionGroup] = []
-    for idx, (sec, code) in enumerate(
-        [(raw, f"{sku}-A"), (prod1, f"{sku}-B"), (prod2, f"{sku}-C")]
-    ):
-        spg = StorageProductionGroup(code=code, name=code, is_active=True, sort_order=idx)
-        session.add(spg)
-        await session.flush()
-        session.add(SpgSection(spg_id=spg.id, section_id=sec.id, sort_order=0))
-        spgs.append(spg)
-
-    product = Product(sku=sku, name=sku, type=ProductType.finished_good, unit="pcs", is_active=True)
-    session.add(product)
-    await session.flush()
-
-    route = ProductionRoute(name=f"R-{sku}", is_active=True)
-    session.add(route)
-    await session.flush()
-    for idx, (sec, code) in enumerate(
-        [(raw, "ISSUE_RAW"), (prod1, "P1_OP"), (prod2, "P2_OP")], start=1
-    ):
-        st = RouteStage(route_id=route.id, sequence=idx, section_id=sec.id, is_final=(idx == 3))
-        session.add(st)
-        await session.flush()
-        session.add(RouteOperation(route_stage_id=st.id, sequence=1, operation_code=code, operation_name=code))
-
-    tech = Techcard(product_id=product.id, version="v1", is_active=True)
-    session.add(tech)
-    await session.flush()
-    session.add(
-        TechcardLine(techcard_id=tech.id, component_product_id=product.id, quantity=Decimal("1"), unit="pcs")
-    )
-
-    plan = ProductionPlan(
-        plan_no=f"P-{sku}",
-        name="p",
-        status=ProductionPlanStatus.approved,
-        period_start=date(2026, 5, 1),
-        period_end=date(2026, 5, 31),
-    )
-    session.add(plan)
-    await session.flush()
-
-    pos = PlanPosition(
-        production_plan_id=plan.id,
-        product_id=product.id,
-        source_type=PlanSourceType.manual,
-        source_sku=product.sku,
-        source_name=product.name,
-        quantity=qty,
-        input_dimensions={"length_mm": int(length_mm)} if length_mm is not None else None,
-        source_payload={},
-        status=PlanPositionStatus.approved,
-        validation_status=PlanPositionValidationStatus.valid,
-        validation_errors=[],
-        period_start=plan.period_start,
-        period_end=plan.period_end,
-        has_pack_ops=False,
-        route_id=route.id,
-        route_assigned_at=None,
-    )
-    session.add(pos)
-    await session.commit()
-    return {
-        "product": product,
-        "plan": plan,
-        "position": pos,
-        "sections": [raw, prod1, prod2],
-        "spgs": spgs,
-    }
-
-
 async def _release_via_take_to_work(client, position_id: int) -> None:
     resp = await client.post(
         "/api/production-planning/rows/take-to-work",
         json={"position_ids": [position_id]},
     )
     assert resp.status_code == 200, resp.text
-
-
-async def _seed_balance(
-    session: AsyncSession,
-    *,
-    user_id: int,
-    location_id: int,
-    product_id: int,
-    qty: Decimal,
-    dimensions: dict | None = None,
-) -> None:
-    svc = StockCommandService()
-    await svc.record(
-        session,
-        StockCommand(
-            product_id=product_id,
-            to_location_id=location_id,
-            quantity=qty,
-            reason=Reason.MANUAL_IN,
-            dimensions=dimensions,
-            created_by=user_id,
-        ),
-    )
-    await session.commit()
 
 
 async def _balance_qty(
@@ -620,155 +516,6 @@ async def test_ready_transferable_decreases_by_dimension_sent(client, session) -
 
 
 # ─── Seam 5 (#8/#89/#90): трансформирующий этап — инварианты D2/D3 ─────────
-
-
-async def _make_transform_route_fixture(
-    session: AsyncSession,
-    *,
-    sku: str,
-    qty: Decimal,
-    input_quantity: Decimal | None,
-    input_dimensions: dict | None,
-    outputs: list[dict],
-    final_transform: bool = False,
-    separate_ghps: bool = False,
-) -> dict:
-    """raw → saw(transforms) → pack(final, если не final_transform).
-
-    ``saw`` помечен ``transforms_dimensions=True``; позиция несёт вход и
-    выходы. Для D2-тестов saw не финальный (дальше pack); для D3 — saw
-    сам финальный этап. Секция ``fg`` (finished_stock) — приёмник
-    финального выпуска. ``separate_ghps`` — saw/pack в разных ГХП
-    (для авто-передачи по выходам, тикет #91).
-    """
-    raw = Section(code=f"{sku}-RAW", name="RAW", type="raw_stock", is_active=True, sort_order=0)
-    saw = Section(code=f"{sku}-SAW", name="SAW", type="production", is_active=True, sort_order=1)
-    pack = Section(code=f"{sku}-PACK", name="PACK", type="production", is_active=True, sort_order=2)
-    fg = Section(code=f"{sku}-FG", name="FG", type="finished_stock", is_active=True, sort_order=3)
-    session.add_all([raw, saw, pack, fg])
-    await session.flush()
-
-    if separate_ghps:
-        spg_saw = StorageProductionGroup(code=f"{sku}-GHPSAW", name="GHP-SAW", is_active=True, sort_order=0)
-        spg_pack = StorageProductionGroup(code=f"{sku}-GHPPACK", name="GHP-PACK", is_active=True, sort_order=1)
-        session.add_all([spg_saw, spg_pack])
-        await session.flush()
-        for sec, spg in ((raw, spg_saw), (saw, spg_saw), (pack, spg_pack), (fg, spg_pack)):
-            session.add(SpgSection(spg_id=spg.id, section_id=sec.id, sort_order=0))
-        await session.flush()
-    else:
-        spg = StorageProductionGroup(code=f"{sku}-GHP", name="GHP", is_active=True, sort_order=0)
-        session.add(spg)
-        await session.flush()
-        for sec in (raw, saw, pack, fg):
-            session.add(SpgSection(spg_id=spg.id, section_id=sec.id, sort_order=0))
-        await session.flush()
-
-    product = Product(sku=sku, name=sku, type=ProductType.finished_good, unit="pcs", is_active=True)
-    session.add(product)
-    await session.flush()
-
-    route = ProductionRoute(name=f"R-{sku}", is_active=True)
-    session.add(route)
-    await session.flush()
-    stage_defs = [
-        (raw, "ISSUE_RAW", 1, False),
-        (saw, "SAW", 2, final_transform),
-    ]
-    if not final_transform:
-        stage_defs.append((pack, "PACK", 3, True))
-    for sec, code, seq, is_final in stage_defs:
-        st = RouteStage(
-            route_id=route.id,
-            sequence=seq,
-            section_id=sec.id,
-            is_final=is_final,
-            transforms_dimensions=(code == "SAW"),
-        )
-        session.add(st)
-        await session.flush()
-        session.add(RouteOperation(route_stage_id=st.id, sequence=1, operation_code=code, operation_name=code))
-
-    tech = Techcard(product_id=product.id, version="v1", is_active=True)
-    session.add(tech)
-    await session.flush()
-    session.add(
-        TechcardLine(techcard_id=tech.id, component_product_id=product.id, quantity=Decimal("1"), unit="pcs")
-    )
-
-    plan = ProductionPlan(
-        plan_no=f"P-{sku}",
-        name="p",
-        status=ProductionPlanStatus.approved,
-        period_start=date(2026, 5, 1),
-        period_end=date(2026, 5, 31),
-    )
-    session.add(plan)
-    await session.flush()
-
-    pos = PlanPosition(
-        production_plan_id=plan.id,
-        product_id=product.id,
-        source_type=PlanSourceType.manual,
-        source_sku=product.sku,
-        source_name=product.name,
-        quantity=qty,
-        input_quantity=input_quantity,
-        input_dimensions=input_dimensions,
-        outputs=outputs,
-        source_payload={},
-        status=PlanPositionStatus.approved,
-        validation_status=PlanPositionValidationStatus.valid,
-        validation_errors=[],
-        period_start=plan.period_start,
-        period_end=plan.period_end,
-        has_pack_ops=False,
-        route_id=route.id,
-        route_assigned_at=None,
-    )
-    session.add(pos)
-    await session.commit()
-    return {"product": product, "plan": plan, "position": pos, "sections": [raw, saw, pack, fg]}
-
-
-async def _tasks_for_position(session: AsyncSession, position_id: int) -> Sequence[WorkTask]:
-    return (
-        await session.execute(
-            select(WorkTask)
-            .join(SectionPlanLine, WorkTask.section_plan_line_id == SectionPlanLine.id)
-            .where(SectionPlanLine.plan_position_id == position_id)
-            .order_by(SectionPlanLine.sequence)
-        )
-    ).scalars().all()
-
-
-async def _complete_saw(session: AsyncSession, *, saw_task: WorkTask, user: User) -> None:
-    """Завести вход 100 × 2700 на пилу и полностью её раскроить (100 → 900+1800)."""
-    from app.services.shopfloor.operations_tasks import complete_task
-
-    svc = StockCommandService()
-    await svc.record(
-        session,
-        StockCommand(
-            product_id=saw_task.product_id,
-            from_location_id=None,
-            to_location_id=saw_task.section_id,
-            quantity=Decimal("100"),
-            reason=Reason.MANUAL_IN,
-            dimensions={"length_mm": 2700},
-            created_by=user.id,
-        ),
-    )
-    await session.commit()
-    await complete_task(
-        session,
-        task_id=saw_task.id,
-        good_quantity=Decimal("100"),
-        defect_quantity=Decimal("0"),
-        actor_id=user.id,
-    )
-    await session.commit()
-    await assert_no_invariants_violations(session, context="complete-saw")
 
 
 async def _task_transferable_by_dim(

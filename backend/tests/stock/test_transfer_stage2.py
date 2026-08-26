@@ -42,6 +42,9 @@ from tests.test_integrity_invariants import (
     _release_via_take_to_work,
     assert_no_invariants_violations,
 )
+# Канонические определения фабрик живут в tests/helpers/transfers.py
+# (#131 follow-up); реэкспорт сохраняет старый путь импорта для потребителей.
+from tests.helpers.transfers import _make_tasks_transferable, _make_two_ghp_setup
 
 
 # ─── helpers ────────────────────────────────────────────────────────────────
@@ -85,145 +88,8 @@ async def _balance(
     return bal.balance_qty if bal else Decimal("0")
 
 
-async def _make_two_ghp_setup(
-    session: AsyncSession,
-    *,
-    sku: str = "STG2",
-    qty: Decimal = Decimal("10"),
-) -> dict:
-    """Две production-секции в разных GHP с маршрутом из двух этапов.
-
-    Возвращает user, product, from_task, to_task, sections, transfer_id=None.
-    """
-    user = await _make_user(session, f"{sku}@local")
-
-    sec1 = Section(code=f"{sku}-S1", name="S1", type="production", is_active=True, sort_order=0)
-    sec2 = Section(code=f"{sku}-S2", name="S2", type="production", is_active=True, sort_order=1)
-    session.add_all([sec1, sec2])
-    await session.flush()
-
-    spg_a = StorageProductionGroup(code=f"{sku}-A", name="A", is_active=True, sort_order=0)
-    spg_b = StorageProductionGroup(code=f"{sku}-B", name="B", is_active=True, sort_order=1)
-    session.add_all([spg_a, spg_b])
-    await session.flush()
-    session.add_all([
-        SpgSection(spg_id=spg_a.id, section_id=sec1.id, sort_order=0),
-        SpgSection(spg_id=spg_b.id, section_id=sec2.id, sort_order=0),
-    ])
-
-    product = Product(sku=sku, name=sku, type=ProductType.finished_good, unit="pcs", is_active=True)
-    session.add(product)
-    await session.flush()
-
-    route = ProductionRoute(name=f"R-{sku}", is_active=True)
-    session.add(route)
-    await session.flush()
-    for idx, (sec, code) in enumerate([(sec1, "OP1"), (sec2, "OP2")], start=1):
-        st = RouteStage(route_id=route.id, sequence=idx, section_id=sec.id, is_final=(idx == 2))
-        session.add(st)
-        await session.flush()
-        session.add(RouteOperation(route_stage_id=st.id, sequence=1, operation_code=code, operation_name=code))
-
-    tech = Techcard(product_id=product.id, version="v1", is_active=True)
-    session.add(tech)
-    await session.flush()
-    session.add(TechcardLine(techcard_id=tech.id, component_product_id=product.id, quantity=Decimal("1"), unit="pcs"))
-
-    plan = ProductionPlan(
-        plan_no=f"P-{sku}", name="p", status=ProductionPlanStatus.approved,
-        period_start=datetime(2026, 5, 1), period_end=datetime(2026, 5, 31),
-    )
-    session.add(plan)
-    await session.flush()
-
-    pos = PlanPosition(
-        production_plan_id=plan.id, product_id=product.id,
-        source_type=PlanSourceType.manual, source_sku=product.sku, source_name=product.name,
-        quantity=qty, source_payload={}, status=PlanPositionStatus.approved,
-        validation_status=PlanPositionValidationStatus.valid, validation_errors=[],
-        period_start=plan.period_start, period_end=plan.period_end,
-        has_pack_ops=False, route_id=route.id, route_assigned_at=None,
-    )
-    session.add(pos)
-    await session.flush()
-    await session.commit()
-
-    return {
-        "user": user,
-        "product": product,
-        "plan": plan,
-        "position": pos,
-        "sections": [sec1, sec2],
-        "route": route,
-    }
-
-
-async def _make_tasks_transferable(
-    session: AsyncSession,
-    client,
-    setup: dict,
-) -> dict:
-    """Take-to-work → issue → complete on source task.
-
-    Returns {from_task_id, to_task_id, user}.
-    """
-    await _release_via_take_to_work(client, setup["position"].id)
-    tasks = (await session.execute(
-        select(WorkTask).order_by(WorkTask.id)
-    )).scalars().all()
-    assert len(tasks) >= 2
-    src = tasks[0]
-    dst = tasks[1]
-
-    # Create a stock section for transfer_receive seed
-    from app.stock import StockCommand, StockCommandService, Reason
-    from app.models.section import Section
-    stock = Section(code="T2-STK", name="Stock", type="raw_stock",
-                    is_active=True, sort_order=0)
-    session.add(stock)
-    await session.flush()
-    stock_id = stock.id
-
-    svc = StockCommandService()
-    # Seed stock balance
-    await svc.record(session, StockCommand(
-        product_id=src.product_id,
-        from_location_id=None,
-        to_location_id=stock_id,
-        quantity=src.planned_quantity,
-        reason=Reason.MANUAL_IN,
-        created_by=setup["user"].id,
-    ))
-    # TRANSFER_RECEIVE: material received on source section (issued)
-    await svc.record(session, StockCommand(
-        product_id=src.product_id,
-        from_location_id=stock_id,
-        to_location_id=src.section_id,
-        quantity=src.planned_quantity,
-        reason=Reason.TRANSFER_RECEIVE,
-        task_id=src.id,
-        created_by=setup["user"].id,
-    ))
-    # complete: net-zero when material already issued on section
-    await svc.record(session, StockCommand(
-        product_id=src.product_id,
-        from_location_id=src.section_id,
-        to_location_id=src.section_id,
-        quantity=src.planned_quantity,
-        reason=Reason.COMPLETE,
-        task_id=src.id,
-        source_ref="test_seed",
-        created_by=setup["user"].id,
-    ))
-    await session.flush()
-
-    # Verify source is transferable (check via ledger)
-    from app.stock.services import StockProjectionManager
-    pm = StockProjectionManager()
-    cache = await pm.get_task_cache(session, src.id)
-    assert cache["completed_quantity"] >= Decimal("0")
-
-    return {"from_task_id": src.id, "to_task_id": dst.id, "user": setup["user"]}
+# _make_two_ghp_setup / _make_tasks_transferable переехали в канонический
+# tests/helpers/transfers.py (#131 follow-up) — см. реэкспорт в шапке модуля.
 
 
 _py_test_mark = pytest.mark.asyncio

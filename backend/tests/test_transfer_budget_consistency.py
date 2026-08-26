@@ -53,10 +53,12 @@ from tests.test_transfer_dimensions import (
     _seed_balance,
     _tasks_for_position,
 )
+# Каноническое определение _ready_row (и её сантинела _UNSET) живёт в
+# tests/helpers/transfers.py (#131 follow-up); реэкспорт сохраняет старый
+# путь импорта для потребителей.
+from tests.helpers.transfers import _ready_row
 
 pytestmark = pytest.mark.asyncio
-
-_UNSET = object()
 
 
 # ─── helpers ────────────────────────────────────────────────────────────────
@@ -108,32 +110,8 @@ async def _task_transferable(
     return await task_transferable(session, task, dimensions=dims)
 
 
-async def _ready_row(
-    client,
-    user: User,
-    section_id: int,
-    *,
-    task_id: int | None = None,
-    dims: object = _UNSET,
-) -> dict:
-    """Ровно одна ready-строка ``/api/transfers/ready`` по (задача, размер).
-
-    ``dims=_UNSET`` — без фильтра по габариту; ``dims=None`` — искать
-    безразмерную строку (габарит равен NULL).
-    """
-    resp = await client.get(
-        f"/api/transfers/ready?section_id={section_id}", headers=_auth_headers(user)
-    )
-    assert resp.status_code == 200, resp.text
-    items = resp.json()["items"]
-    matches = [
-        item
-        for item in items
-        if (task_id is None or item["task_id"] == task_id)
-        and (dims is _UNSET or item.get("dimensions") == dims)
-    ]
-    assert len(matches) == 1, f"ожидал ровно одну ready-строку, получил: {items}"
-    return matches[0]
+# _ready_row переехала в tests/helpers/transfers.py (#131 follow-up) —
+# см. реэкспорт в шапке модуля.
 
 
 # ─── 1. plain: received не участвует в бюджете ───────────────────────────────
