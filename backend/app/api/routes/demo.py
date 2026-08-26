@@ -472,7 +472,6 @@ async def run_full_route_test(
                 performed_at=performed_at,
                 accounted_at=accounted_at,
             )
-            scrap = plant_config.production.scrap_policy
             await complete_task(
                 db,
                 task_id=task.id,
@@ -485,10 +484,7 @@ async def run_full_route_test(
                 executor_user_id=current_user.id,
                 performed_at=performed_at,
                 accounted_at=accounted_at,
-                scrap_section_type=scrap.section_type,
-                scrap_code=scrap.code,
-                scrap_name=scrap.name,
-                scrap_sort_order=scrap.sort_order,
+                scrap_policy=plant_config.production.scrap_policy,
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=f"Task execution failed at step {step.sequence}: {exc}") from exc

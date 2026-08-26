@@ -209,7 +209,6 @@ async def complete_task_endpoint(
 ) -> dict:
     await _ensure_task_lock(db, task_id, locked_section_id)
     try:
-        scrap = plant_config.production.scrap_policy
         res = await complete_task(
             db,
             task_id=task_id,
@@ -224,10 +223,7 @@ async def complete_task_endpoint(
             accounted_at=payload.accounted_at,
             shortage_strategy=payload.shortage_strategy,
             auto_transfer_next=payload.auto_transfer_next,
-            scrap_section_type=scrap.section_type,
-            scrap_code=scrap.code,
-            scrap_name=scrap.name,
-            scrap_sort_order=scrap.sort_order,
+            scrap_policy=plant_config.production.scrap_policy,
         )
 
         # Запись лога аудита
@@ -342,7 +338,6 @@ async def bulk_complete_tasks(
         try:
             async with db.begin_nested():
                 await _ensure_task_lock(db, entry.task_id, locked_section_id)
-                scrap = plant_config.production.scrap_policy
                 await complete_task(
                     db,
                     task_id=entry.task_id,
@@ -357,10 +352,7 @@ async def bulk_complete_tasks(
                     accounted_at=entry.accounted_at,
                     shortage_strategy=entry.shortage_strategy,
                     auto_transfer_next=entry.auto_transfer_next,
-                    scrap_section_type=scrap.section_type,
-                    scrap_code=scrap.code,
-                    scrap_name=scrap.name,
-                    scrap_sort_order=scrap.sort_order,
+                    scrap_policy=plant_config.production.scrap_policy,
                 )
             results.append(BulkActionResultItem(id=entry.task_id, status="success"))
         except HTTPException as exc:
@@ -612,7 +604,6 @@ async def defect_decision_endpoint(
     plant_config: PlantConfig = Depends(get_plant_config),
 ) -> dict:
     try:
-        scrap = plant_config.production.scrap_policy
         return await defect_decide(
             db,
             defect_id=defect_id,
@@ -624,10 +615,7 @@ async def defect_decision_endpoint(
             comment=payload.comment,
             idempotency_key=payload.idempotency_key,
             defect_decision_map=plant_config.quality.defect_decision_map.mapping,
-            scrap_section_type=scrap.section_type,
-            scrap_code=scrap.code,
-            scrap_name=scrap.name,
-            scrap_sort_order=scrap.sort_order,
+            scrap_policy=plant_config.production.scrap_policy,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

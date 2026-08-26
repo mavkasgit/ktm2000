@@ -6,18 +6,15 @@ from decimal import Decimal
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.seeds.canon.models import DefectDecisionDef
+from app.seeds.canon.models import DefectDecisionDef, ScrapPolicy
 from app.stock import Reason, StockCommand, StockCommandService
 
 
 # Fake canon data (ADR-0007): сервис не резолвит PlantConfig, данные приходят
 # из composition root. Здесь — подмена для прямых вызовов в тестах.
-FAKE_SCRAP_KWARGS: dict = {
-    "scrap_section_type": "scrap",
-    "scrap_code": "SCRAP",
-    "scrap_name": "Scrap",
-    "scrap_sort_order": 999,
-}
+# Тикет #132: политика брака передаётся одним объектом канона (не квартетом
+# распакованных kwarg'ов scrap_*); find-or-create секции — scrap_policy.py.
+FAKE_SCRAP_KWARGS: dict = {"scrap_policy": ScrapPolicy()}
 
 FAKE_DEFECT_DECISION_MAP: dict[str, DefectDecisionDef] = {
     "scrap": DefectDecisionDef(status="scrapped", reason="scrap"),

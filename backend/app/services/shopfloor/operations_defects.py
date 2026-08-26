@@ -7,7 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.defect import Defect, DefectDecision, DefectDecisionType, DefectItem, DefectStatus, DefectType
 from app.models.rework_task import ReworkTask, ReworkTaskStatus
-from app.seeds.canon.models import DefectDecisionDef
+from app.seeds.canon.models import DefectDecisionDef, ScrapPolicy
 from app.stock import QualityState, Reason, StockCommand, StockCommandService
 
 from .cache import _refresh_section_plan_line_cache
@@ -19,6 +19,7 @@ from .common import (
     _get_user_snapshot_name,
     _to_decimal,
 )
+from .scrap_policy import find_or_create_scrap_section_id
 from app.services.action_journal_service import action_journal_service
 
 def resolve_defect_status(
@@ -174,10 +175,10 @@ async def defect_decide(
     comment: str | None = None,
     idempotency_key: str | None = None,
     defect_decision_map: dict[str, DefectDecisionDef] | None = None,
-    scrap_section_type: str | None = None,
-    scrap_code: str | None = None,
-    scrap_name: str | None = None,
-    scrap_sort_order: int | None = None,
+    # Объект канона plant_config.production.scrap_policy (ADR-0007): вместо
+    # распакованного квартета scrap_* — один параметр; find-or-create —
+    # общий шов scrap_policy.py с complete_task (тикет #132).
+    scrap_policy: ScrapPolicy | None = None,
 ) -> dict:
     defect = await _get_defect(db, defect_id)
     task = await _get_task(db, defect.task_id) if defect.task_id is not None else None
@@ -217,7 +218,6 @@ async def defect_decide(
 
     svc = StockCommandService()
     rework_task_id: int | None = None
-    from app.models.section import Section as _Section
 
     # ADR-0004/0007: карта решений (status, reason) — данные канона, передаются
     # из composition root; сервис не резолвит PlantConfig сам.
@@ -246,23 +246,10 @@ async def defect_decide(
         )
 
     if decision_type == DefectDecisionType.scrap:
-        # ADR-0007: данные SCRAP-секции из composition root
-        if scrap_section_type is None or scrap_code is None or scrap_name is None or scrap_sort_order is None:
-            raise ValueError("scrap policy data is required for scrap decision")
+        # ADR-0007: данные SCRAP-секции из composition root; find-or-create —
+        # общий шов с complete_task (scrap_policy.py, тикет #132).
         from_sec_id = task.section_id if task else defect.section_id
-        # Find or auto-create scrap location
-        scrap_loc = await db.scalar(
-            select(_Section.id).where(_Section.type == scrap_section_type).limit(1)
-        )
-        if scrap_loc is None:
-            scrap_sec = _Section(
-                code=scrap_code, name=scrap_name,
-                type=scrap_section_type, is_active=True, sort_order=scrap_sort_order,
-            )
-            db.add(scrap_sec)
-            await db.flush()
-            scrap_loc = scrap_sec.id
-        to_sec_id = scrap_loc
+        to_sec_id = await find_or_create_scrap_section_id(db, scrap_policy=scrap_policy)
 
         tx = await svc.record(db, StockCommand(
             product_id=task.product_id if task else defect.product_id,

@@ -941,7 +941,6 @@ async def _do_manual_pass(
                 completed_qty = task_cache["completed_quantity"] + task_cache["rejected_quantity"]
                 to_complete = quantity - completed_qty
                 if to_complete > 0:
-                    scrap = plant_config.production.scrap_policy
                     await complete_task(
                         db,
                         task_id=task.id,
@@ -954,10 +953,7 @@ async def _do_manual_pass(
                         executor_user_id=current_user.id,
                         performed_at=now,
                         accounted_at=now,
-                        scrap_section_type=scrap.section_type,
-                        scrap_code=scrap.code,
-                        scrap_name=scrap.name,
-                        scrap_sort_order=scrap.sort_order,
+                        scrap_policy=plant_config.production.scrap_policy,
                     )
                 if next_task is not None:
                     from app.services.shopfloor.common import sections_share_spg
