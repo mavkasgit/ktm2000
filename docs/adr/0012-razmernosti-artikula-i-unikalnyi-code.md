@@ -42,3 +42,9 @@
 - Смел-находки ревью, связанные с размерностями (ветвление
   `dimension_state` в трёх местах), не откатываются, а решаются
   рефакторингом в рамках плана закрытия findings.
+- Режим подвеса пары (#129) — data-driven по режимам обоих артикулов:
+  пара считается авто только когда оба компонента `hanger_mode='auto'`,
+  иначе пара ручная (N из `techcard.quantity_a/b_per_item`). Источник —
+  `frontend/src/features/references/lib/hangerCalcRows.ts`
+  (`buildPairedCalcItems` / `buildPairedHangerCalcRows`); серверный
+  `/api/hanger-calc/paired` режим не перепроверяет — это осознанно.
