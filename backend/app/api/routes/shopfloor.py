@@ -81,7 +81,9 @@ class CompletePayload(BaseModel):
     executor_user_id: int | None = None
     performed_at: datetime | None = None
     accounted_at: datetime | None = None
-    shortage_strategy: ShortageStrategy = ShortageStrategy.negative_remainder
+    # Дефолт fail (#133): оператор, нажавший «Завершить» не глядя, получает
+    # внятную ошибку с доступным количеством, а не тихий уход участка в минус.
+    shortage_strategy: ShortageStrategy = ShortageStrategy.fail
     auto_transfer_next: bool = False
 
 
@@ -290,7 +292,8 @@ class BulkCompleteEntry(BaseModel):
     executor_user_id: int | None = None
     performed_at: datetime | None = None
     accounted_at: datetime | None = None
-    shortage_strategy: ShortageStrategy = ShortageStrategy.negative_remainder
+    # Дефолт fail (#133) — как в одиночном CompletePayload.
+    shortage_strategy: ShortageStrategy = ShortageStrategy.fail
     auto_transfer_next: bool = False
 
 

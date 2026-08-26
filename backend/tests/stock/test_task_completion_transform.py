@@ -73,11 +73,14 @@ async def _make_transform_setup(
     input_quantity: Decimal = Decimal("100"),
     input_dimensions: dict | None = None,
     outputs: list[dict] | None = None,
+    spg_requires_lot: bool = False,
 ) -> dict:
     """Минимальная топология: raw_stock → трансформирующий участок (пила).
 
     Этап помечен ``transforms_dimensions=True`` (эквивалент сида),
     задание несёт вход и выходы позиции (ADR-0002).
+    ``spg_requires_lot`` — СПГ участка с lot-учётом (правило «lot-required
+    блокирует минус», #133).
     """
     if input_dimensions is None:
         input_dimensions = dict(DIMS_IN)
@@ -99,7 +102,10 @@ async def _make_transform_setup(
     session.add_all([raw, saw, scrap])
     await session.flush()
 
-    spg = StorageProductionGroup(code=f"{sku}-SPG", name="SPG", is_active=True, sort_order=0)
+    spg = StorageProductionGroup(
+        code=f"{sku}-SPG", name="SPG", is_active=True, sort_order=0,
+        requires_lot=spg_requires_lot,
+    )
     session.add(spg)
     await session.flush()
     session.add(SpgSection(spg_id=spg.id, section_id=saw.id, sort_order=0))
@@ -428,12 +434,13 @@ async def test_portion_over_remaining_input_rejected(session: AsyncSession) -> N
 
 
 async def test_portion_over_physical_balance_writes_nothing(session: AsyncSession) -> None:
-    """Не хватает физического остатка входной группы — атомарный отказ,
+    """Не хватает физического остатка входной группы — дефолтная стратегия
+    ``fail`` (#133) отклоняет операцию целиком, называя доступное количество;
     ledger без частичных записей."""
     fx = await _make_transform_setup(session, sku="TRC-PHYS")
     await _receive_input(session, fx, quantity=Decimal("50"))
 
-    with pytest.raises(StockValidationError, match="Insufficient stock"):
+    with pytest.raises(ValueError, match="доступно 50"):
         await complete_task(
             session,
             task_id=fx["task"].id,
@@ -505,3 +512,150 @@ async def test_legacy_material_without_dimensions_consumed_from_null_group(
     assert await _balance(session, product_id, saw_id, DIMS_OUT_A) == Decimal("100")
     assert await _balance(session, product_id, saw_id, DIMS_OUT_B) == Decimal("100")
     await assert_no_stock_ledger_invariants_violations(session, context="transform-legacy")
+
+
+# ─── стратегии недостачи (#133): fail / partial / negative_remainder ─────────
+
+
+async def test_shortage_fail_rejects_operation_and_names_available(session: AsyncSession) -> None:
+    """fail: ввод 100 / на складе 80 — отказ целиком, ошибка называет «доступно 80»."""
+    fx = await _make_transform_setup(session, sku="TRC-SFAIL")
+    await _receive_input(session, fx, quantity=Decimal("80"))
+
+    with pytest.raises(ValueError, match="введено 100, доступно 80"):
+        await complete_task(
+            session,
+            task_id=fx["task"].id,
+            good_quantity=Decimal("100"),
+            defect_quantity=Decimal("0"),
+            actor_id=fx["user"].id,
+            shortage_strategy="fail",
+        )
+
+    # Отказ в _resolve_shortage происходит до любых записей — rollback не нужен.
+    assert await _tx_sum(
+        session, fx["task"].id, Reason.TRANSFORM_CONSUME, any_dims=True,
+    ) == Decimal("0")
+    assert await _balance(session, fx["product"].id, fx["saw"].id, DIMS_IN) == Decimal("80")
+
+
+async def test_shortage_partial_clamps_to_available_balance(session: AsyncSession) -> None:
+    """partial: проведено 80 из введённых 100; задача частично выполнена,
+    ответ содержит факт проведения (completed_quantity)."""
+    fx = await _make_transform_setup(session, sku="TRC-SPART")
+    await _receive_input(session, fx, quantity=Decimal("80"))
+
+    result = await complete_task(
+        session,
+        task_id=fx["task"].id,
+        good_quantity=Decimal("100"),
+        defect_quantity=Decimal("0"),
+        actor_id=fx["user"].id,
+        shortage_strategy="partial",
+    )
+    await session.commit()
+
+    product_id, saw_id = fx["product"].id, fx["saw"].id
+    assert await _tx_sum(session, fx["task"].id, Reason.TRANSFORM_CONSUME, DIMS_IN) == Decimal("80")
+    assert await _balance(session, product_id, saw_id, DIMS_IN) == Decimal("0")
+    assert await _tx_sum(session, fx["task"].id, Reason.COMPLETE, DIMS_OUT_A) == Decimal("80")
+    assert await _tx_sum(session, fx["task"].id, Reason.COMPLETE, DIMS_OUT_B) == Decimal("80")
+
+    task = await session.get(WorkTask, fx["task"].id)
+    assert task.status == WorkTaskStatus.partially_completed
+    assert result["status"] == "partially_completed"
+    assert result["completed_quantity"] == Decimal("80")
+
+    await assert_no_stock_ledger_invariants_violations(session, context="shortage-partial")
+
+
+async def test_shortage_negative_remainder_drives_input_balance_minus(session: AsyncSession) -> None:
+    """negative_remainder: полная порция 100 при остатке 80 — баланс входа −20."""
+    fx = await _make_transform_setup(session, sku="TRC-SNEG")
+    await _receive_input(session, fx, quantity=Decimal("80"))
+
+    result = await complete_task(
+        session,
+        task_id=fx["task"].id,
+        good_quantity=Decimal("100"),
+        defect_quantity=Decimal("0"),
+        actor_id=fx["user"].id,
+        shortage_strategy="negative_remainder",
+    )
+    await session.commit()
+
+    product_id, saw_id = fx["product"].id, fx["saw"].id
+    assert await _tx_sum(session, fx["task"].id, Reason.TRANSFORM_CONSUME, DIMS_IN) == Decimal("100")
+    assert await _balance(session, product_id, saw_id, DIMS_IN) == Decimal("-20")
+    # Выходы приходуются полностью по спецификации.
+    assert await _tx_sum(session, fx["task"].id, Reason.COMPLETE, DIMS_OUT_A) == Decimal("100")
+    assert await _tx_sum(session, fx["task"].id, Reason.COMPLETE, DIMS_OUT_B) == Decimal("100")
+    assert result["completed_quantity"] == Decimal("100")
+
+    await assert_no_stock_ledger_invariants_violations(session, context="shortage-negative")
+
+
+async def test_default_strategy_is_fail(session: AsyncSession) -> None:
+    """Дефолт (#133): вызов complete без явной стратегии ведёт себя как fail."""
+    fx = await _make_transform_setup(session, sku="TRC-SDEF")
+    await _receive_input(session, fx, quantity=Decimal("80"))
+
+    with pytest.raises(ValueError, match="доступно 80"):
+        await complete_task(
+            session,
+            task_id=fx["task"].id,
+            good_quantity=Decimal("100"),
+            defect_quantity=Decimal("0"),
+            actor_id=fx["user"].id,
+        )
+
+    assert await _tx_sum(
+        session, fx["task"].id, Reason.TRANSFORM_CONSUME, any_dims=True,
+    ) == Decimal("0")
+
+
+@pytest.mark.parametrize("strategy", ["fail", "partial", "negative_remainder"])
+async def test_remaining_input_limit_hard_for_every_strategy(
+    session: AsyncSession, strategy: str,
+) -> None:
+    """Плановый лимит remaining_input жёсткий при любой стратегии: физического
+    входа хватает с запасом, но раскроить больше плана нельзя."""
+    fx = await _make_transform_setup(session, sku=f"TRC-LIM-{strategy[:4]}")
+    await _receive_input(session, fx, quantity=Decimal("500"))
+
+    with pytest.raises(ValueError, match="remaining input"):
+        await complete_task(
+            session,
+            task_id=fx["task"].id,
+            good_quantity=Decimal("150"),
+            defect_quantity=Decimal("0"),
+            actor_id=fx["user"].id,
+            shortage_strategy=strategy,
+        )
+
+    assert await _tx_sum(
+        session, fx["task"].id, Reason.TRANSFORM_CONSUME, any_dims=True,
+    ) == Decimal("0")
+
+
+async def test_requires_lot_spg_blocks_negative_remainder_in_complete(session: AsyncSession) -> None:
+    """СПГ с lot-учётом: negative_remainder отклоняется самим ledger-service,
+    минус входной группы не создаётся."""
+    fx = await _make_transform_setup(session, sku="TRC-SLOT", spg_requires_lot=True)
+    await _receive_input(session, fx, quantity=Decimal("80"))
+
+    with pytest.raises(StockValidationError, match="requires_lot"):
+        await complete_task(
+            session,
+            task_id=fx["task"].id,
+            good_quantity=Decimal("100"),
+            defect_quantity=Decimal("0"),
+            actor_id=fx["user"].id,
+            shortage_strategy="negative_remainder",
+        )
+
+    # Минус не создан, ledger без записей порции.
+    assert await _balance(session, fx["product"].id, fx["saw"].id, DIMS_IN) == Decimal("80")
+    assert await _tx_sum(
+        session, fx["task"].id, Reason.TRANSFORM_CONSUME, any_dims=True,
+    ) == Decimal("0")

@@ -140,7 +140,7 @@ export function SectionsTasksPage() {
   const [performedDate, setPerformedDate] = useState("");
   const [performedShift, setPerformedShift] = useState<"1" | "2">("1");
   const [actionComment, setActionComment] = useState("");
-  const [shortageStrategy, setShortageStrategy] = useState<ShortageStrategy>("negative_remainder");
+  const [shortageStrategy, setShortageStrategy] = useState<ShortageStrategy>("fail");
   const [autoTransferNext, setAutoTransferNext] = useState(false);
   const [planModalOpen, setPlanModalOpen] = useState(false);
 
@@ -410,7 +410,7 @@ export function SectionsTasksPage() {
 
   const closeActionDrawer = useCallback(() => {
     setActionDialog({ open: false, type: "complete", task: null, tasks: null });
-    setShortageStrategy("negative_remainder");
+    setShortageStrategy("fail");
   }, []);
 
   const groupCompleteMutation = useMutation({

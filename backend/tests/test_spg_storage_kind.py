@@ -79,5 +79,62 @@ async def test_spg_with_requires_lot_blocks_negative_remainder(client, session):
     assert bal.balance_qty == 5
 
     # The requires_lot logic was formerly enforced at the old manual-operation
-    # endpoint (deleted in Stage 7). StockCommandService handles negative
-    # balance prevention via StockValidationError.
+    # endpoint (deleted in Stage 7). Now it lives in StockCommandService._validate:
+    # allow_negative (#133, negative_remainder) не пробивает lot-учёт.
+
+    from app.stock import StockValidationError
+
+    # Осознанный минус на участке с requires_lot блокируется даже с флагом.
+    with pytest.raises(StockValidationError, match="requires_lot"):
+        await svc.record(session, StockCommand(
+            product_id=product.id,
+            from_location_id=section.id,
+            to_location_id=None,
+            quantity=10,
+            reason=Reason.TRANSFORM_CONSUME,
+            created_by=admin_user.id if admin_user else 1,
+            allow_negative=True,
+        ))
+
+    # Контроль: участок без requires_lot уходит в минус осознанно (#133).
+    free_section = Section(code="LOT-FREE", name="No-lot section")
+    session.add(free_section)
+    await session.flush()
+    await svc.record(session, StockCommand(
+        product_id=product.id,
+        to_location_id=free_section.id,
+        quantity=5,
+        reason=Reason.MANUAL_IN,
+        created_by=admin_user.id if admin_user else 1,
+    ))
+    await svc.record(session, StockCommand(
+        product_id=product.id,
+        from_location_id=free_section.id,
+        to_location_id=None,
+        quantity=10,
+        reason=Reason.TRANSFORM_CONSUME,
+        created_by=admin_user.id if admin_user else 1,
+        allow_negative=True,
+    ))
+    await session.commit()
+
+    free_bal = await session.scalar(
+        select(StockBalance).where(
+            StockBalance.product_id == product.id,
+            StockBalance.location_id == free_section.id,
+            StockBalance.quality_state == QualityState.GOOD,
+        )
+    )
+    assert free_bal is not None
+    assert free_bal.balance_qty == -5
+
+    # Лотковый участок не тронут: попытка минуса ничего не записала.
+    bal_after = await session.scalar(
+        select(StockBalance).where(
+            StockBalance.product_id == product.id,
+            StockBalance.location_id == section.id,
+            StockBalance.quality_state == QualityState.GOOD,
+        )
+    )
+    assert bal_after is not None
+    assert bal_after.balance_qty == 5

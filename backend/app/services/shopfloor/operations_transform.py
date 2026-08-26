@@ -271,12 +271,17 @@ async def record_transform_portion(
     performed_at: datetime | None,
     accounted_at: datetime | None,
     action_id: int | None = None,
+    allow_negative: bool = False,
 ) -> list[int]:
     """Записать порцию трансформации в ledger: списание входа + все выходы.
 
     Все команды идут через StockCommandService в текущей транзакции БД —
     отказ любой из них (например, недостача входа) не оставляет частичных
     записей. Возвращает ids созданных транзакций.
+
+    ``allow_negative`` (#133, стратегия negative_remainder): списание входа
+    проводится даже при нехватке заготовок — баланс участка уходит в минус;
+    для СПГ с lot-учётом минус по-прежнему блокирует сам сервис ledger.
     """
     tx_ids: list[int] = []
 
@@ -289,6 +294,7 @@ async def record_transform_portion(
         reason=Reason.TRANSFORM_CONSUME,
         dimensions=consume_dims,
         quality_state=QualityState.GOOD,
+        allow_negative=allow_negative,
         task_id=task.id,
         source_ref=source_ref,
         idempotency_key=idempotency_key,

@@ -120,6 +120,11 @@ class StockCommand:
     # Подтверждённое пользователем перевыполнение (см. принцип 2 AGENTS.md):
     # если fact > plan, операция явная, фиксируется в журнале.
     overcomplete_acknowledged: bool = False
+    # Осознанный уход баланса в минус (#133, стратегия недостачи
+    # negative_remainder): недостаток заготовок проводится полностью, баланс
+    # участка закрывается последующей выдачей. Для СПГ с lot-учётом
+    # (requires_lot) минус по-прежнему запрещён — см. StockCommandService._validate.
+    allow_negative: bool = False
     extra: dict[str, Any] = field(default_factory=dict)
 
 
@@ -571,6 +576,26 @@ class StockCommandService:
         await self._projection_manager.stock_changed(session, tx)
         return tx
 
+    async def _location_requires_lot(self, session: AsyncSession, location_id: int) -> bool:
+        """Относится ли локация к СПГ с lot-учётом (``requires_lot=True``).
+
+        Правило «lot-required блокирует минус» (#133): для участков таких
+        СПГ ``allow_negative`` не действует — отрицательный остаток сделал бы
+        лотковый учёт бессмысленным.
+        """
+        from app.models.spg import SpgSection, StorageProductionGroup
+
+        found = await session.execute(
+            select(StorageProductionGroup.id)
+            .join(SpgSection, SpgSection.spg_id == StorageProductionGroup.id)
+            .where(
+                SpgSection.section_id == location_id,
+                StorageProductionGroup.requires_lot.is_(True),
+            )
+            .limit(1)
+        )
+        return found.scalar_one_or_none() is not None
+
     async def _validate(self, session: AsyncSession, cmd: StockCommand) -> None:
         if cmd.reason == Reason.ISSUE_TO_WORK:
             raise StockValidationError(
@@ -658,18 +683,32 @@ class StockCommandService:
             balance_row = balance_result.scalar_one_or_none()
             current_balance = balance_row.balance_qty if balance_row is not None else Decimal("0")
             if current_balance < cmd.quantity:
-                # Габарит в ошибке (тикет #89): «без указания длины» вместо
-                # прочерка — понятнее оператору, какую строку остатка искать.
-                dims_label = (
-                    format_dimensions(cmd.dimensions)
-                    if cmd.dimensions is not None
-                    else "без указания длины"
-                )
-                raise StockValidationError(
-                    f"Insufficient stock for product_id={cmd.product_id} at location_id={cmd.from_location_id} "
-                    f"(quality={cmd.quality_state.value}, dimensions={dims_label}): "
-                    f"required {cmd.quantity}, available {current_balance}"
-                )
+                # Осознанный минус (#133, negative_remainder): разрешён явным
+                # флагом команды, кроме участков СПГ с lot-учётом — там минус
+                # блокируется всегда (правило «lot-required блокирует минус»).
+                if cmd.allow_negative:
+                    if await self._location_requires_lot(session, cmd.from_location_id):
+                        raise StockValidationError(
+                            f"Negative remainder blocked for product_id={cmd.product_id} "
+                            f"at location_id={cmd.from_location_id}: storage group "
+                            f"requires lot accounting (requires_lot): "
+                            f"required {cmd.quantity}, available {current_balance}"
+                        )
+                    # Иначе — осознанный минус: баланс уходит в минус до
+                    # закрытия последующей выдачей.
+                else:
+                    # Габарит в ошибке (тикет #89): «без указания длины» вместо
+                    # прочерка — понятнее оператору, какую строку остатка искать.
+                    dims_label = (
+                        format_dimensions(cmd.dimensions)
+                        if cmd.dimensions is not None
+                        else "без указания длины"
+                    )
+                    raise StockValidationError(
+                        f"Insufficient stock for product_id={cmd.product_id} at location_id={cmd.from_location_id} "
+                        f"(quality={cmd.quality_state.value}, dimensions={dims_label}): "
+                        f"required {cmd.quantity}, available {current_balance}"
+                    )
 
         # created_by mandatory at DB level — пока не enforced здесь (тесты могут
         # передавать 0/null); будет tightened когда все call sites подключатся.

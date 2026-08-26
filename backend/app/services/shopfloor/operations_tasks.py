@@ -16,6 +16,8 @@ from app.seeds.canon.models import ScrapPolicy
 from app.services.plan_position_hanger import position_dimensions_for_task
 from app.services.action_journal_service import action_journal_service
 from app.stock import QualityState, Reason, StockCommand, StockCommandService
+from app.stock.models import StockBalance
+from app.stock.services import dimensions_match_clause
 
 from .common import (
     _check_idempotency,
@@ -158,6 +160,8 @@ async def _replay_existing_completion(
         "transaction_ids": [existing.id],
         "defect_id": existing_defect.id if existing_defect else None,
         "status": task.status.value,
+        # Replay не пересчитывает порцию — факт уже в ledger (#133).
+        "completed_quantity": None,
         "idempotent_replay": True,
     }
 
@@ -210,6 +214,78 @@ async def _resolve_transform_plan(
     return _TransformPlan(stage=stage, spec=spec, progress=progress, consume_dims=consume_dims)
 
 
+async def _good_input_balance(
+    db: AsyncSession, *, product_id: int, location_id: int, consume_dims: dict | None,
+) -> Decimal:
+    """Доступный GOOD-баланс входной габаритной группы на участке.
+
+    Ключ тот же, по которому ``record_transform_portion`` будет списывать
+    вход порции: ``(product, section, GOOD, consume_dims)`` через
+    ``dimensions_match_clause`` (NULL-группа матчится явно).
+    """
+    total = await db.scalar(
+        select(func.coalesce(func.sum(StockBalance.balance_qty), 0)).where(
+            StockBalance.product_id == product_id,
+            StockBalance.location_id == location_id,
+            StockBalance.quality_state == QualityState.GOOD,
+            dimensions_match_clause(StockBalance.dimensions, consume_dims),
+        )
+    )
+    return Decimal(total)
+
+
+async def _resolve_shortage(
+    db: AsyncSession,
+    *,
+    task: WorkTask,
+    plan: _TransformPlan,
+    good_quantity: Decimal,
+    defect_quantity: Decimal,
+    shortage_strategy: Literal["fail", "partial", "negative_remainder"],
+) -> tuple[Decimal, Decimal, bool]:
+    """Стратегия недостачи (#133) — применяется только к расходу входа
+    трансформации; обычный этап недостач не имеет по построению.
+
+    Возвращает ``(good, defect, allow_negative)`` — порцию к проводке и флаг
+    осознанного минуса для ledger. Плановый лимит ``remaining_input`` жёсткий
+    при любой стратегии (проверен ранее в ``_resolve_transform_plan``);
+    стратегия — про физику склада:
+
+    - ``fail`` — отказ всей операции; текст ошибки называет доступное
+      количество («введено 100, доступно 80»);
+    - ``partial`` — кламп порции до доступного баланса заготовок: провести
+      сколько есть (годные приоритетнее брака), задача остаётся частично
+      выполненной;
+    - ``negative_remainder`` — полная порция, баланс заготовок участка уходит
+      в минус до закрытия последующей выдачей (для СПГ с lot-учётом минус
+      блокирует сам StockCommandService).
+    """
+    if plan.spec is None:
+        return good_quantity, defect_quantity, False
+
+    available = await _good_input_balance(
+        db,
+        product_id=task.product_id,
+        location_id=task.section_id,
+        consume_dims=plan.consume_dims,
+    )
+    if good_quantity + defect_quantity <= available:
+        return good_quantity, defect_quantity, False
+
+    if shortage_strategy == "fail":
+        raise ValueError(
+            f"Недостаточно заготовок на участке: введено {good_quantity + defect_quantity}, "
+            f"доступно {available}"
+        )
+    if shortage_strategy == "partial":
+        clamped_good = min(good_quantity, available)
+        clamped_defect = min(defect_quantity, max(Decimal("0"), available - clamped_good))
+        return clamped_good, clamped_defect, False
+    if shortage_strategy == "negative_remainder":
+        return good_quantity, defect_quantity, True
+    raise ValueError(f"Unknown shortage strategy: {shortage_strategy}")
+
+
 async def _post_good_portion(
     db: AsyncSession,
     svc: StockCommandService,
@@ -219,6 +295,7 @@ async def _post_good_portion(
     *,
     cache_issued: Decimal,
     good_quantity: Decimal,
+    allow_negative: bool = False,
 ) -> list[int]:
     """Проводки годной части порции; возвращает ids созданных транзакций.
 
@@ -226,6 +303,8 @@ async def _post_good_portion(
     (record_transform_portion); обычный этап — net-zero COMPLETE при уже
     выданном материале либо выпуск «из ниоткуда» (legacy).
     ``cache_issued`` — issued_quantity из task-cache, прочитанного ДО проводок.
+    ``allow_negative`` (#133) — осознанный минус входной группы, действует
+    только на трансформирующем этапе.
     """
     if good_quantity <= 0:
         return []
@@ -259,6 +338,7 @@ async def _post_good_portion(
             performed_at=ctx.eff_performed,
             accounted_at=ctx.eff_accounted,
             action_id=ctx.action_id,
+            allow_negative=allow_negative,
         ))
         return tx_ids
 
@@ -316,13 +396,16 @@ async def _register_scrap_and_defect(
     defect_quantity: Decimal,
     defect_reason: str | None,
     scrap_policy: ScrapPolicy | None,
+    allow_negative: bool = False,
 ) -> tuple[list[int], int | None]:
     """Брак порции: SCRAP-проводка на SCRAP-секцию + Defect/DefectItem.
 
     Find-or-create SCRAP-секции — общий шов ``scrap_policy`` (тикет #132),
     тот же модуль использует defect_decide. Брак заготовок трансформации
     уходит с габаритом входа; на нетрансформирующих этапах — с габаритом
-    задания (ADR-0001).
+    задания (ADR-0001). ``allow_negative`` (#133) наследует стратегию
+    negative_remainder: брак списывается вслед за годными, когда входная
+    группа уже уведена в минус.
     """
     if defect_quantity <= 0:
         return [], None
@@ -340,6 +423,7 @@ async def _register_scrap_and_defect(
         dimensions=plan.consume_dims if plan.spec is not None else task.dimensions,
         quality_state=QualityState.GOOD,
         to_quality_state=QualityState.SCRAP,
+        allow_negative=allow_negative,
         task_id=task.id,
         source_ref=ctx.source_ref,
         idempotency_key=f"{ctx.idempotency_key}:reject" if ctx.idempotency_key else None,
@@ -391,7 +475,7 @@ async def complete_task(
     executor_user_id: int | None = None,
     performed_at: datetime | None = None,
     accounted_at: datetime | None = None,
-    shortage_strategy: Literal["fail", "partial"] = "partial",
+    shortage_strategy: Literal["fail", "partial", "negative_remainder"] = "fail",
     auto_transfer_next: bool = False,
     # Объект канона plant_config.production.scrap_policy (ADR-0004 §5,
     # ADR-0007): вместо распакованного квартета scrap_* — один параметр;
@@ -410,6 +494,14 @@ async def complete_task(
     спецификации (COMPLETE × выходной габарит каждого) пропорционально
     доле входа; брак заготовок — SCRAP с габаритом входа.
     Здесь good_quantity/defect_quantity считаются во входных заготовках.
+
+    Стратегия недостачи (#133) — только расход входа трансформации,
+    дефолт ``fail``: при нехватке GOOD-баланса входной группы операция
+    отклоняется с указанием доступного количества; ``partial`` клампит
+    порцию до доступного; ``negative_remainder`` проводит полностью и
+    уводит баланс участка в минус. Плановый лимит remaining_input жёсткий
+    при любой стратегии. Ответ дополняется ``completed_quantity`` —
+    фактически проведённой порцией во входных заготовках.
     """
     task = await _get_task(db, task_id)
 
@@ -430,6 +522,17 @@ async def complete_task(
     cache = await pm.get_task_cache(db, task.id)
 
     plan = await _resolve_transform_plan(db, task=task, cache=cache, total=total)
+
+    # Стратегия недостачи (#133): решение по GOOD-балансу входной группы —
+    # ДО проводок; кламп/минус/отказ применяются к порции целиком.
+    post_good, post_defect, allow_negative = await _resolve_shortage(
+        db,
+        task=task,
+        plan=plan,
+        good_quantity=good_quantity,
+        defect_quantity=defect_quantity,
+        shortage_strategy=shortage_strategy,
+    )
 
     now = datetime.now(UTC)
     eff_performed = performed_at or now
@@ -459,13 +562,15 @@ async def complete_task(
     tx_ids = list(await _post_good_portion(
         db, svc, task, plan, ctx,
         cache_issued=cache["issued_quantity"],
-        good_quantity=good_quantity,
+        good_quantity=post_good,
+        allow_negative=allow_negative,
     ))
     scrap_tx_ids, defect_id = await _register_scrap_and_defect(
         db, svc, task, plan, ctx,
-        defect_quantity=defect_quantity,
+        defect_quantity=post_defect,
         defect_reason=defect_reason,
         scrap_policy=scrap_policy,
+        allow_negative=allow_negative,
     )
     tx_ids.extend(scrap_tx_ids)
 
@@ -478,18 +583,30 @@ async def complete_task(
     cache_after = await pm.get_task_cache(db, task.id)
     await sync_work_task_status(db, task, cache=cache_after)
 
-    if auto_transfer_next and good_quantity > 0:
+    # Авто-передача следует за фактом: передаётся только реально проведённая
+    # годная часть порции (#133), а не запрошенная оператором.
+    if auto_transfer_next and post_good > 0:
         from app.transfers.services import auto_create_transfer_after_complete
         await auto_create_transfer_after_complete(
             db,
             from_task=task,
-            good_quantity=good_quantity,
+            good_quantity=post_good,
             actor_id=actor_id,
             idempotency_key=idempotency_key,
             comment=comment or "Авто-перемещение после завершения",
         )
 
-    return {"task_id": task.id, "transaction_ids": tx_ids, "defect_id": defect_id, "status": task.status.value}
+    return {
+        "task_id": task.id,
+        "transaction_ids": tx_ids,
+        "defect_id": defect_id,
+        "status": task.status.value,
+        # Фактически проведённая порция во входных заготовках (#133): при
+        # клампе partial меньше запрошенной; присутствует всегда — стабильный
+        # контракт для клиента, расхождение с введённым количеством и есть
+        # признак частичного проведения.
+        "completed_quantity": post_good + post_defect,
+    }
 
 
 async def final_release(
