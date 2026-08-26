@@ -323,7 +323,14 @@ def diff_catalog_row(product: Product, row: ParsedCatalogRow) -> dict[str, Any]:
     if quantities is not None:
         base = lengths if lengths is not None else sorted(length.length_mm for length in product.lengths)
         new_dict = build_quantity_dict(base, quantities)
-        if new_dict != (product.quantity_per_hanger_by_length or {}):
+        current = product.quantity_per_hanger_by_length or {}
+        # Импорт пишет только ручные значения (#127): вычисленное авто
+        # сохраняем по совпадающим длинам, чтобы не обнулять его режимом.
+        for key, entry in new_dict.items():
+            prev = current.get(key)
+            if isinstance(prev, dict):
+                entry["auto"] = prev.get("auto")
+        if new_dict != current:
             changes["quantity_per_hanger"] = new_dict
 
     if fields.get("is_paired_profile") is not None and bool(fields["is_paired_profile"]) != product.is_paired_profile:

@@ -290,9 +290,12 @@ async def test_apply_excel_creates_component_active(
     assert product.perimeter_mm == pytest.approx(64.2)
     assert product.mount_width_mm == pytest.approx(19.35)
     assert await _product_lengths(session, product.id) == [2780.0, 3000.0]
+    # Импорт пишет ручные значения; периметр И габарит в строке → режим auto,
+    # авто досчитано движком (#127), ручное сохранено отдельно.
+    assert product.hanger_mode == "auto"
     assert product.quantity_per_hanger_by_length == {
-        "2780": {"auto": None, "manual": 72},
-        "3000": {"auto": None, "manual": 65},
+        "2780": {"auto": 72, "manual": 72},
+        "3000": {"auto": 67, "manual": 65},
     }
     assert sorted(product.aliases) == ["ЭВ-1", "ЭВ-2"]
     # Эквиваленты двунаправленные

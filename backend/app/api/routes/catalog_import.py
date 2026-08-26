@@ -20,7 +20,7 @@ from app.api.routes.products import (
 )
 from app.core.config import settings
 from app.core.database import get_db
-from app.models.product import Product, ProductLength, ProductType
+from app.models.product import Product, ProductLength, ProductType, _length_key
 from app.services.catalog_excel_import import (
     TEMPLATE_HEADERS,
     ParsedCatalogRow,
@@ -29,6 +29,11 @@ from app.services.catalog_excel_import import (
     effective_lengths,
     parse_catalog_excel,
     validate_row_counts,
+)
+from app.services.hanger_quantity_calc import (
+    DEFAULT_HANGER_SETTINGS,
+    HangerConfigError,
+    compute_hanger_quantity,
 )
 
 router = APIRouter(prefix="/catalog-import", tags=["catalog-import"])
@@ -351,8 +356,34 @@ async def _create_product_from_row(db: AsyncSession, row: ParsedCatalogRow) -> N
         product.perimeter_mm = fields["perimeter_mm"]
     if fields.get("mount_width_mm") is not None:
         product.mount_width_mm = fields["mount_width_mm"]
+    # Режим подвеса (#127): новый артикул получает режим по данным строки
+    # (периметр И габарит → auto, иначе manual) — то же правило, что в
+    # миграции существующих данных. Импорт пишет только ручные значения;
+    # режим существующих артикулов при обновлении не меняется.
+    product.hanger_mode = (
+        "auto"
+        if fields.get("perimeter_mm") is not None and fields.get("mount_width_mm") is not None
+        else "manual"
+    )
     if lengths and quantities is not None:
-        product.quantity_per_hanger = build_quantity_dict(lengths, quantities)
+        qph = build_quantity_dict(lengths, quantities)
+        if product.hanger_mode == "auto":
+            # В авто-режиме значение должно существовать сразу — считаем
+            # движком, как в products API. Несовместимые габариты — auto
+            # остаётся null (ошибку покажет валидация планирования).
+            for length in lengths:
+                try:
+                    calc = compute_hanger_quantity(
+                        perimeter_mm=fields["perimeter_mm"],
+                        mount_width_mm=fields["mount_width_mm"],
+                        length_mm=length,
+                        hanger=DEFAULT_HANGER_SETTINGS,
+                    )
+                except HangerConfigError:
+                    continue
+                if calc.is_calculable:
+                    qph[_length_key(length)]["auto"] = calc.total
+        product.quantity_per_hanger = qph
     db.add(product)
     await db.flush()
 
