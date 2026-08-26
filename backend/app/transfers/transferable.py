@@ -12,6 +12,9 @@
   Вызывают ``transfer_send``/``correct_transfer``;
 - :func:`task_transferable_lines` — read-эквивалент: разворачивание задачи в
   строки бюджета по размерам. Вызывают гидраторы ready-page;
+- :func:`task_transferable_lines_bulk` — то же для СПИСКА задач одним
+  bulk-проходом (гидраторы ready-page без N+1); одиночная версия — тонкая
+  делегация к ней;
 - :func:`completed_qty_sq` — SQL-форма «произведено/завершено» для set-based
   потребителей (ready-запрос, оракул консистентности);
 - :func:`compute_stock_section_transferable` — складская ветка (переехала из
@@ -51,11 +54,13 @@ write-guard в transform/plain-ветках вычитает net передан�
 """
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass
 from decimal import Decimal
 from enum import Enum
+from typing import cast as tcast
 
-from sqlalchemy import func, select
+from sqlalchemy import Subquery, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domain.dimensions import canonicalize_dimensions, dimensions_equal
@@ -64,7 +69,12 @@ from app.models.route import RouteStage
 from app.models.section import Section
 from app.models.work_task import WorkTask
 from app.services.route_storage_classifier import is_stock_section
-from app.services.shopfloor.operations_transform import get_transform_progress
+from app.services.shopfloor.operations_transform import (
+    get_released_by_task_dimensions_bulk,
+    get_transform_progress,
+    get_transform_progress_bulk,
+    get_transferred_by_task_dimensions_bulk,
+)
 from app.services.shopfloor.output_rows import (
     UsedSource,
     build_output_rows,
@@ -86,6 +96,7 @@ __all__ = [
     "stock_line",
     "task_transferable",
     "task_transferable_lines",
+    "task_transferable_lines_bulk",
     "transform_lines",
     "transform_point_budget",
 ]
@@ -394,28 +405,191 @@ async def task_transferable_lines(
 
     Смысл бюджета по финальности участка выбран внутри: финальный этап —
     отправка (FINAL_RELEASE как «использовано», формула ``remaining_send``).
+
+    Тонкая делегация к :func:`task_transferable_lines_bulk` — сборка строк
+    живёт в одном месте (follow-up #131).
     """
-    kind, sec = await resolve_budget_kind(db, task, section=section)
+    lines_by_task = await task_transferable_lines_bulk(
+        db,
+        [task],
+        sections={task.section_id: section} if section is not None else None,
+        stages={task.route_stage_id: stage} if stage is not None else None,
+    )
+    return lines_by_task.get(task.id, [])
 
-    if kind is BudgetKind.STOCK:
-        # Со склада передача всегда «не финальная»: final release со склада
-        # не существует, бюджет считается от переданного.
-        return [await stock_line(db, task=task, section=sec)]
 
-    stg = stage if stage is not None else await db.get(RouteStage, task.route_stage_id)
-    is_final = bool(stg.is_final) if stg is not None else False
+async def task_transferable_lines_bulk(
+    db: AsyncSession,
+    tasks: Iterable[WorkTask],
+    *,
+    sections: dict[int, Section] | None = None,
+    stages: dict[int, RouteStage] | None = None,
+) -> dict[int, list[TransferableLine]]:
+    """Строки бюджета для СПИСКА задач одним bulk-проходом (follow-up #131).
 
-    if kind is BudgetKind.TRANSFORM:
-        return await transform_lines(
-            db,
-            task,
-            used_source=(
-                UsedSource.NET_FINAL_RELEASE if is_final else UsedSource.NET_TRANSFERRED
-            ),
-            is_final=is_final,
+    Read-эквивалент :func:`task_transferable_lines` без N+1 гидрации
+    ready-page:
+
+    - transform — прогресс трансформации (:func:`get_transform_progress_bulk`)
+      и net по (задача, размер) для TRANSFER_SEND /
+      FINAL_RELEASE — групповыми запросами по всем задачам сразу;
+    - plain — gross COMPLETE + net total одним-двумя SQL с ``WHERE IN``
+      поверх тех же sq-примитивов (:func:`completed_qty_sq`,
+      ``net_by_reason_sq``), что читает read-SQL ready-запроса.
+
+    Формулы не копируются: строки собирает тот же :class:`TransferableLine`
+    с выбором формулы в его ``budget``; классификация задач — тот же
+    :func:`resolve_budget_kind`, что у write-guard'а.
+
+    ``sections``/``stages`` — подсказки вызывающего ``{id: объект}``: у
+    гидратора ready-page объекты уже загружены основным запросом. Чего не
+    хватает — добирается точечным ``db.get`` один раз на РАЗНЫЙ id.
+    Складская ветка остаётся построчной (:func:`stock_line`): готовый
+    production-запрос ready-page складские секции не выбирает, ветка
+    сохранена как safety-net без дублирования формул.
+
+    Возвращает словарь с записью на КАЖДУЮ входную задачу (возможно, пустой
+    список) — вызывающему не нужна проверка наличия ключа.
+    """
+    task_list = list(tasks)
+    if not task_list:
+        return {}
+
+    sec_hints: dict[int, Section | None] = dict(sections) if sections else {}
+    stg_hints: dict[int, RouteStage | None] = dict(stages) if stages else {}
+
+    # Классификация — тот же resolve_budget_kind, что у одиночного пути и
+    # write-guard'а; недостающие секции добираются один раз на РАЗНЫЙ id.
+    missing_sec_ids = {t.section_id for t in task_list} - set(sec_hints)
+    for sec_id in missing_sec_ids:
+        sec_hints[sec_id] = await db.get(Section, sec_id)
+
+    kind_by_task: dict[int, BudgetKind] = {}
+    stock_tasks: list[WorkTask] = []
+    transform_tasks: list[WorkTask] = []
+    plain_tasks: list[WorkTask] = []
+    for task in task_list:
+        if task.id in kind_by_task:  # защита от дублей во входном списке
+            continue
+        kind, _sec = await resolve_budget_kind(
+            db, task, section=sec_hints.get(task.section_id),
         )
+        kind_by_task[task.id] = kind
+        if kind is BudgetKind.STOCK:
+            stock_tasks.append(task)
+        elif kind is BudgetKind.TRANSFORM:
+            transform_tasks.append(task)
+        else:
+            plain_tasks.append(task)
 
-    return [await plain_line(db, task, is_final=is_final)]
+    # Финальность нужна только не-складским веткам (как в одиночном пути:
+    # со склада передача всегда «не финальная»).
+    missing_stage_ids = {
+        t.route_stage_id
+        for t in transform_tasks + plain_tasks
+    } - set(stg_hints)
+    for stg_id in missing_stage_ids:
+        stg_hints[stg_id] = await db.get(RouteStage, stg_id)
+
+    def _is_final(task: WorkTask) -> bool:
+        stg = stg_hints.get(task.route_stage_id)
+        return bool(stg.is_final) if stg is not None else False
+
+    result: dict[int, list[TransferableLine]] = {t.id: [] for t in task_list}
+
+    # ── stock: построчный fallback (см. докстринг) ──────────────────────────
+    for task in stock_tasks:
+        result[task.id] = [
+            await stock_line(db, task=task, section=sec_hints.get(task.section_id)),
+        ]
+
+    # ── transform: два bulk-прохода + чистая сборка строк ───────────────────
+    final_transform = [t for t in transform_tasks if _is_final(t)]
+    open_transform = [t for t in transform_tasks if not _is_final(t)]
+    progress_by_task = await get_transform_progress_bulk(
+        db, [t.id for t in transform_tasks],
+    )
+    used_by_task: dict[int, dict[str | None, Decimal]] = {}
+    if open_transform:
+        used_by_task.update(await get_transferred_by_task_dimensions_bulk(
+            db, [t.id for t in open_transform],
+        ))
+    if final_transform:
+        used_by_task.update(await get_released_by_task_dimensions_bulk(
+            db, [t.id for t in final_transform],
+        ))
+    for task in transform_tasks:
+        progress = progress_by_task.get(task.id)
+        rows = build_output_rows(
+            task.outputs or [],
+            progress.produced_by_group if progress is not None else {},
+            used_by_task.get(task.id) or {},
+        )
+        is_final = _is_final(task)
+        result[task.id] = [
+            TransferableLine(
+                kind=BudgetKind.TRANSFORM,
+                dims=row.dimensions,
+                planned=row.quantity,
+                produced=row.produced_quantity,
+                used=row.used_quantity,
+                is_final=is_final,
+            )
+            for row in rows
+        ]
+
+    # ── plain: gross COMPLETE + net total — WHERE IN поверх sq-примитивов ───
+    final_plain = [t for t in plain_tasks if _is_final(t)]
+    open_plain = [t for t in plain_tasks if not _is_final(t)]
+
+    completed_total: dict[int, Decimal] = {}
+    if plain_tasks:
+        completed_sq = completed_qty_sq()
+        rows = await db.execute(
+            select(completed_sq.c.task_id, completed_sq.c.completed_qty)
+            .where(completed_sq.c.task_id.in_([t.id for t in plain_tasks]))
+        )
+        completed_total = {tid: _dec(qty) for tid, qty in rows}
+
+    sent_total: dict[int, Decimal] = {}
+    if open_plain:
+        sent_sq = tcast(
+            Subquery,
+            net_by_reason_sq(Reason.TRANSFER_SEND, alias="transferable_plain_sent_sq"),
+        )
+        rows = await db.execute(
+            select(sent_sq.c.task_id, sent_sq.c.net_quantity)
+            .where(sent_sq.c.task_id.in_([t.id for t in open_plain]))
+        )
+        sent_total = {tid: _dec(qty) for tid, qty in rows}
+
+    released_total: dict[int, Decimal] = {}
+    if final_plain:
+        released_sq = tcast(
+            Subquery,
+            net_by_reason_sq(Reason.FINAL_RELEASE, alias="transferable_plain_released_sq"),
+        )
+        rows = await db.execute(
+            select(released_sq.c.task_id, released_sq.c.net_quantity)
+            .where(released_sq.c.task_id.in_([t.id for t in final_plain]))
+        )
+        released_total = {tid: _dec(qty) for tid, qty in rows}
+
+    for task in plain_tasks:
+        is_final = _is_final(task)
+        used = (released_total if is_final else sent_total).get(task.id, Decimal("0"))
+        result[task.id] = [
+            TransferableLine(
+                kind=BudgetKind.PLAIN,
+                dims=task.dimensions,
+                planned=_dec(task.planned_quantity),
+                produced=completed_total.get(task.id, Decimal("0")),
+                used=used,
+                is_final=is_final,
+            ),
+        ]
+
+    return result
 
 
 async def task_transferable(

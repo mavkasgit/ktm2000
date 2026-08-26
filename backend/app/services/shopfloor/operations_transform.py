@@ -171,13 +171,14 @@ async def get_transform_progress(db: AsyncSession, task_id: int) -> TransformPro
     return progress
 
 
-async def get_transferred_by_task_dimensions_bulk(
-    db: AsyncSession, task_ids: list[int],
+async def _net_reason_by_task_dimensions_bulk(
+    db: AsyncSession, task_ids: list[int], reason: Reason,
 ) -> dict[int, dict[str | None, Decimal]]:
-    """Нетто-переданное по каждому габариту задания (net TRANSFER_SEND).
+    """Net заданной причины по каждому габариту списка заданий — один GROUP BY.
 
-    Возвращает ``{task_id: {hash_key(габарит): количество}}`` — для строки
-    «Передано» выхода трансформирующего задания в «Сдаче» плана (тикет #95).
+    Общая сборка bulk-обёрток ``get_transferred_by_task_dimensions_bulk`` /
+    ``get_released_by_task_dimensions_bulk``: та же формула
+    ``net_quantity_expr()``, что и у скалярных примитивов ledger.
     """
     if not task_ids:
         return {}
@@ -189,7 +190,7 @@ async def get_transferred_by_task_dimensions_bulk(
         )
         .where(
             StockTransaction.task_id.in_(task_ids),
-            StockTransaction.reason == Reason.TRANSFER_SEND,
+            StockTransaction.reason == reason,
         )
         .group_by(StockTransaction.task_id, StockTransaction.dimensions)
     )
@@ -199,6 +200,32 @@ async def get_transferred_by_task_dimensions_bulk(
         key = _dimensions_hash_key(dims)
         per_task[key] = (per_task.get(key) or Decimal("0")) + (qty or Decimal("0"))
     return result
+
+
+async def get_transferred_by_task_dimensions_bulk(
+    db: AsyncSession, task_ids: list[int],
+) -> dict[int, dict[str | None, Decimal]]:
+    """Нетто-переданное по каждому габариту задания (net TRANSFER_SEND).
+
+    Возвращает ``{task_id: {hash_key(габарит): количество}}`` — для строки
+    «Передано» выхода трансформирующего задания в «Сдаче» плана (тикет #95).
+    """
+    return await _net_reason_by_task_dimensions_bulk(
+        db, task_ids, Reason.TRANSFER_SEND,
+    )
+
+
+async def get_released_by_task_dimensions_bulk(
+    db: AsyncSession, task_ids: list[int],
+) -> dict[int, dict[str | None, Decimal]]:
+    """Нетто-выпущенное по каждому габариту задания (net FINAL_RELEASE).
+
+    Bulk-эквивалент ``output_rows.get_used_by_group(NET_FINAL_RELEASE)`` —
+    для гидрации ready-строк финальных участков одним запросом (#131).
+    """
+    return await _net_reason_by_task_dimensions_bulk(
+        db, task_ids, Reason.FINAL_RELEASE,
+    )
 
 
 async def resolve_consume_dimensions(

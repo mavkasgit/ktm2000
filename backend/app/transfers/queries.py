@@ -49,8 +49,9 @@ from app.transfers.budget import (
 )
 from app.transfers.transferable import (
     BudgetKind,
+    TransferableLine,
     completed_qty_sq,
-    task_transferable_lines,
+    task_transferable_lines_bulk,
 )
 
 
@@ -300,13 +301,19 @@ def _ready_row_common(row) -> dict:
     }
 
 
-async def _hydrate_production_ready_row(db: AsyncSession, row) -> list[dict]:
+def _hydrate_production_ready_row(
+    row,
+    *,
+    lines_by_task: dict[int, list[TransferableLine]],
+) -> list[dict]:
     """Ready-строки одной production-задачи.
 
     Бюджет собирает глубокий модуль ``transferable`` (#131): трёхветочный
     dispatch (обычная задача / трансформация / склад) и выбор формулы по
     финальности участка живут там; гидратор только разворачивает строки
-    бюджета в JSON готовой страницы.
+    бюджета в JSON готовой страницы. Строки приходят готовыми из
+    bulk-словаря ``task_transferable_lines_bulk`` (follow-up #131: один
+    bulk-проход на всю страницу вместо запроса на задачу).
 
     Обычная задача — одна строка ``dimensions = task.dimensions``.
     Трансформирующая (резка, тикет #91) — строка на каждый выход
@@ -315,13 +322,11 @@ async def _hydrate_production_ready_row(db: AsyncSession, row) -> list[dict]:
 
     Финальный этап (тикет #96): «уже отданное» по размеру — net
     FINAL_RELEASE (released), а не TRANSFER_SEND; смысл бюджета — отправка
-    (``remaining_send``, тикет #119).
+    (``remaining_send``, тикет #119) — выбран внутри модуля ``transferable``.
     """
     task = row[0]
-    stage = row[2]
-    section = row[3]
     common = _ready_row_common(row)
-    lines = await task_transferable_lines(db, task, section=section, stage=stage)
+    lines = lines_by_task.get(task.id, [])
 
     items: list[dict] = []
     for line in lines:
@@ -1010,10 +1015,18 @@ async def list_ready_to_transfer(
 
     # Все production-строки гидратируются сразу (обычная задача → 1 строка,
     # трансформирующая → N строк выходов); пагинация идёт по готовым строкам.
+    # Бюджеты строк — один bulk-проход transferable на всю страницу
+    # (follow-up #131): секции/этапы уже в руках основного запроса.
     rows = (await db.execute(production_query)).all()
+    lines_by_task = await task_transferable_lines_bulk(
+        db,
+        [row[0] for row in rows],
+        sections={row[3].id: row[3] for row in rows},
+        stages={row[2].id: row[2] for row in rows},
+    )
     items: list[dict] = []
     for row in rows:
-        items.extend(await _hydrate_production_ready_row(db, row))
+        items.extend(_hydrate_production_ready_row(row, lines_by_task=lines_by_task))
 
     items = [
         item
