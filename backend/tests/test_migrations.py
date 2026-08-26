@@ -14,6 +14,10 @@ from sqlalchemy import inspect, text
 from sqlalchemy.ext.asyncio import create_async_engine
 
 from app.models.base import Base
+from app.services.hanger_quantity_calc import (
+    HangerConfigError,
+    compute_hanger_quantity,
+)
 import app.models  # noqa: F401
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
@@ -427,6 +431,227 @@ async def test_migration_046_replay_of_action_id_roundtrip():
         assert "ix_action_journal_replay_of_action_id" in indexes
     finally:
         await engine.dispose()
+        admin_engine = create_async_engine(admin_url, isolation_level="AUTOCOMMIT")
+        async with admin_engine.connect() as conn:
+            await conn.execute(text(f'DROP DATABASE IF EXISTS "{db_name}" WITH (FORCE)'))
+        await admin_engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_migration_048_product_hanger_mode_backfill():
+    """#129: backfill hanger_mode — досчёт словаря и границы формулы движка.
+
+    Покрывает: (1) SQL-формула 048 совпадает с ``compute_hanger_quantity``
+    на границах — периметр×длина/1e6 > 13 м² → auto=0; mount_width+20 == 1450
+    ровно → расчёт возможен (by_size=2); mount_width+20 > 1450 → auto=null
+    (движок бросает HangerConfigError); (2) дыра backfill: артикул с
+    заполненными auto-полями, но БЕЗ per-length dict, получает словарь из
+    product_lengths (auto по формуле, manual=null); legacy-числовой скаляр
+    сохраняется в manual первой длины по возрастанию (семантика 032);
+    (3) bare-``{auto, manual}``-словарь legacy-скаляра шагом 1 переносится
+    как есть (не-числовые ключи не трогаются); (4) повторный запуск 048
+    идемпотентен — шаги защищены отсутствием ключа ``hanger_mode``.
+    """
+    db_name = f"ktm_mig_{uuid.uuid4().hex[:10]}"
+    admin_url = _test_db_url().rsplit("/", 1)[0] + "/postgres"
+    target_url = _test_db_url().rsplit("/", 1)[0] + f"/{db_name}"
+
+    admin_engine = create_async_engine(admin_url, isolation_level="AUTOCOMMIT")
+    async with admin_engine.connect() as conn:
+        await conn.execute(text(f'CREATE DATABASE "{db_name}"'))
+    await admin_engine.dispose()
+
+    env = {**os.environ, "DATABASE_URL": target_url}
+
+    def _expected_auto(perimeter_mm: float, mount_width_mm: float, length_mm: float):
+        """Ожидаемый auto по независимому движку (#62): total или None.
+
+        Несовместимые габариты (mount_width+20 > 1450) движок отвергает
+        исключением — миграция в этом случае оставляет auto=null.
+        """
+        try:
+            calc = compute_hanger_quantity(
+                perimeter_mm=perimeter_mm,
+                mount_width_mm=mount_width_mm,
+                length_mm=length_mm,
+            )
+        except HangerConfigError:
+            return None
+        return calc.total if calc.is_calculable else None
+
+    async def _fetch_attrs(sku_prefix: str) -> dict:
+        engine = create_async_engine(target_url)
+        try:
+            async with engine.connect() as conn:
+                rows = (
+                    await conn.execute(
+                        text(
+                            "SELECT sku, attributes FROM products "
+                            "WHERE sku LIKE :prefix ORDER BY sku"
+                        ),
+                        {"prefix": sku_prefix},
+                    )
+                ).all()
+            return {r.sku: r.attributes for r in rows}
+        finally:
+            await engine.dispose()
+
+    try:
+        # 1. До 048 (047) — ключа hanger_mode ещё нет в цепочке.
+        result = subprocess.run(
+            ["alembic", "upgrade", "047_transfer_status_amended"],
+            cwd=BACKEND_DIR,
+            env=env,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert result.returncode == 0, result.stderr or result.stdout
+
+        # 2. Фикстуры: границы формулы + варианты отсутствия per-length dict.
+        engine = create_async_engine(target_url)
+        async with engine.begin() as conn:
+            await conn.execute(
+                text(
+                    "INSERT INTO products (sku, name, type, unit, is_active, attributes) VALUES "
+                    # Граница площади: 1000×13500/1e6 = 13.5 м² > 13 → by_area = 0.
+                    "('MIG048-AREA-OVER', 'A', 'component', 'pcs', true, "
+                    "'{\"perimeter_mm\": 1000, \"mount_width_mm\": 50}'::jsonb), "
+                    # Граница размера: 1430+20 == 1450 ровно → by_size = 2, расчёт возможен.
+                    "('MIG048-SIZE-BOUNDARY', 'S', 'component', 'pcs', true, "
+                    "'{\"perimeter_mm\": 20, \"mount_width_mm\": 1430}'::jsonb), "
+                    # Дыра backfill: поля заполнены, quantity_per_hanger отсутствует.
+                    "('MIG048-NO-DICT', 'N', 'component', 'pcs', true, "
+                    "'{\"perimeter_mm\": 60, \"mount_width_mm\": 15}'::jsonb), "
+                    # Несовместимый габарит: 1500+20 > 1450 → auto = null.
+                    "('MIG048-INCOMPATIBLE', 'I', 'component', 'pcs', true, "
+                    "'{\"perimeter_mm\": 60, \"mount_width_mm\": 1500}'::jsonb), "
+                    # Legacy-скаляр числом: сохранить в manual первой длины (032).
+                    "('MIG048-SCALAR', 'L', 'component', 'pcs', true, "
+                    "'{\"perimeter_mm\": 60, \"mount_width_mm\": 15, "
+                    "\"quantity_per_hanger\": 71}'::jsonb), "
+                    # Bare-{auto,manual} legacy-скаляра — шагом 1 не трогается.
+                    "('MIG048-BARE', 'B', 'component', 'pcs', true, "
+                    "'{\"perimeter_mm\": 60, \"mount_width_mm\": 15, "
+                    "\"quantity_per_hanger\": {\"auto\": null, \"manual\": 71}}'::jsonb), "
+                    # Неполные поля → manual, без словаря.
+                    "('MIG048-MANUAL-PARTIAL', 'P', 'component', 'pcs', true, "
+                    "'{\"perimeter_mm\": 60}'::jsonb)"
+                )
+            )
+            # NO-DICT и SCALAR — две длины вставкой не по возрастанию;
+            # остальным авто-кейсам — по одной длине; MANUAL-PARTIAL — ни одной.
+            await conn.execute(
+                text(
+                    "INSERT INTO product_lengths (product_id, length_mm) "
+                    "SELECT p.id, l.length_mm FROM products p "
+                    "JOIN (VALUES ('MIG048-NO-DICT', 3500.0::float8), "
+                    "      ('MIG048-NO-DICT', 2800.0), "
+                    "      ('MIG048-SCALAR', 3500.0), "
+                    "      ('MIG048-SCALAR', 2800.0), "
+                    "      ('MIG048-AREA-OVER', 13500.0), "
+                    "      ('MIG048-SIZE-BOUNDARY', 2000.0), "
+                    "      ('MIG048-INCOMPATIBLE', 3000.0), "
+                    "      ('MIG048-BARE', 2800.0)) AS l(sku, length_mm) "
+                    "ON l.sku = p.sku"
+                )
+            )
+        await engine.dispose()
+
+        # 3. Upgrade до head → 048 проставляет режимы и досчитывает словари.
+        result = subprocess.run(
+            ["alembic", "upgrade", "head"],
+            cwd=BACKEND_DIR,
+            env=env,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert result.returncode == 0, result.stderr or result.stdout
+
+        attrs_by_sku = await _fetch_attrs("MIG048-%")
+        assert len(attrs_by_sku) == 7
+
+        # Граница площади: 13.5 м² > 13 → by_area = 0, итог 0 (SQL и движок).
+        area_over = attrs_by_sku["MIG048-AREA-OVER"]
+        assert area_over["hanger_mode"] == "auto"
+        assert _expected_auto(1000, 50, 13500) == 0
+        assert area_over["quantity_per_hanger"]["13500"] == {"auto": 0, "manual": None}
+
+        # Граница размера: 1430+20 == 1450 ровно → by_size = 2, лимитер size.
+        size_boundary = attrs_by_sku["MIG048-SIZE-BOUNDARY"]
+        assert size_boundary["hanger_mode"] == "auto"
+        calc = compute_hanger_quantity(perimeter_mm=20, mount_width_mm=1430, length_mm=2000)
+        assert calc.is_calculable and calc.limiter == "size" and calc.total == 2
+        assert size_boundary["quantity_per_hanger"]["2000"] == {"auto": 2, "manual": None}
+
+        # Дыра backfill: dict создан из product_lengths, auto по движку,
+        # ручных значений не было → manual=null у обеих длин.
+        no_dict = attrs_by_sku["MIG048-NO-DICT"]
+        assert no_dict["hanger_mode"] == "auto"
+        qph = no_dict["quantity_per_hanger"]
+        assert set(qph) == {"2800", "3500"}
+        for length in (2800, 3500):
+            assert qph[str(length)] == {
+                "auto": _expected_auto(60, 15, length),
+                "manual": None,
+            }
+
+        # Несовместимый габарит: движок отказ, миграция ставит auto=null.
+        incompatible = attrs_by_sku["MIG048-INCOMPATIBLE"]
+        assert incompatible["hanger_mode"] == "auto"
+        with pytest.raises(HangerConfigError):
+            compute_hanger_quantity(perimeter_mm=60, mount_width_mm=1500, length_mm=3000)
+        assert incompatible["quantity_per_hanger"]["3000"] == {"auto": None, "manual": None}
+
+        # Legacy-скаляр числом: dict из длин, скаляр 71 → manual первой
+        # длины по возрастанию (2800, семантика 032), остальные manual=null.
+        scalar = attrs_by_sku["MIG048-SCALAR"]
+        assert scalar["hanger_mode"] == "auto"
+        assert scalar["quantity_per_hanger"]["2800"] == {
+            "auto": _expected_auto(60, 15, 2800),
+            "manual": 71,
+        }
+        assert scalar["quantity_per_hanger"]["3500"] == {
+            "auto": _expected_auto(60, 15, 3500),
+            "manual": None,
+        }
+
+        # Bare-{auto,manual} legacy-скаляра: перенесён как есть, режим auto.
+        bare = attrs_by_sku["MIG048-BARE"]
+        assert bare["hanger_mode"] == "auto"
+        assert bare["quantity_per_hanger"] == {"auto": None, "manual": 71}
+
+        # Неполные поля → manual; словарь не создаётся.
+        manual_partial = attrs_by_sku["MIG048-MANUAL-PARTIAL"]
+        assert manual_partial["hanger_mode"] == "manual"
+        assert "quantity_per_hanger" not in manual_partial
+
+        # 4. Идемпотентность: повторный запуск 048 ничего не меняет
+        # (шаги защищены отсутствием ключа hanger_mode).
+        snapshot_before = attrs_by_sku
+        result = subprocess.run(
+            ["alembic", "stamp", "047_transfer_status_amended"],
+            cwd=BACKEND_DIR,
+            env=env,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert result.returncode == 0, result.stderr or result.stdout
+        result = subprocess.run(
+            ["alembic", "upgrade", "head"],
+            cwd=BACKEND_DIR,
+            env=env,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert result.returncode == 0, result.stderr or result.stdout
+
+        attrs_after_rerun = await _fetch_attrs("MIG048-%")
+        assert attrs_after_rerun == snapshot_before
+    finally:
         admin_engine = create_async_engine(admin_url, isolation_level="AUTOCOMMIT")
         async with admin_engine.connect() as conn:
             await conn.execute(text(f'DROP DATABASE IF EXISTS "{db_name}" WITH (FORCE)'))
