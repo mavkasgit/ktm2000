@@ -14,11 +14,22 @@
 (``mount_width + 20 > 1450``) auto остаётся null (ошибку покажет
 валидация планирования). Ручные значения не затираются.
 
+Дыра backfill (#129): шаг 1 обрабатывал только готовые object-словари,
+а шаг 2 ставил ``auto`` всем 1D с заполненными полями — артикул без
+словаря получал ``auto`` без значений («—» в каталоге при живом
+авторасчёте планирования). Шаг 1b достраивает dict из ``product_lengths``
+(auto по той же формуле, manual=null); legacy-числовой скаляр при этом
+сохраняется в manual первой длины по возрастанию (семантика 032);
+прочие не-объектные значения (строка/массив и т.п.) заменяются свежим
+dict'ом. Артикулы вовсе без product_lengths пропускаются — значения
+неоткуда взять (режим им выставит шаг 2/3 как раньше).
+
 Идемпотентна: все шаги защищены отсутствием ключа ``hanger_mode``.
 
 Irreversible: partially — downgrade убирает ключ hanger_mode у 1D
 (возврат к data-driven поведению старого кода); досчитанные авто-значения
-остаются (старый COALESCE использует их так же, как после PATCH).
+и созданные шагом 1b словари остаются (старый COALESCE использует их так
+же, как после PATCH).
 
 Revises: 047_transfer_status_amended
 """
@@ -75,6 +86,55 @@ def upgrade() -> None:
         )
         WHERE {_AUTO_FIELDS_COND}
             AND jsonb_typeof(p.attributes->'quantity_per_hanger') = 'object'
+        """
+    )
+
+    # 1b. Дыра backfill (#129): auto-поля заполнены, но per-length dict нет
+    # (ключ отсутствует или не объект) — достроить dict из product_lengths.
+    # auto — по формуле движка (#62), manual=null; legacy-числовой скаляр
+    # сохраняется в manual первой длины по возрастанию (семантика 032).
+    op.execute(
+        f"""
+        UPDATE products p
+        SET attributes = jsonb_set(
+            p.attributes,
+            '{{quantity_per_hanger}}',
+            (
+                SELECT COALESCE(jsonb_object_agg(
+                    pl.length_mm::text,
+                    CASE
+                        WHEN (p.attributes->>'mount_width_mm')::float8 + 20.0 > 1450.0 THEN
+                            jsonb_build_object('auto', NULL, 'manual', s.manual_value)
+                        ELSE jsonb_build_object(
+                            'auto',
+                            LEAST(
+                                FLOOR(13.0 / ((p.attributes->>'perimeter_mm')::float8 * pl.length_mm::float8 / 1000000.0)),
+                                FLOOR(1450.0 / ((p.attributes->>'mount_width_mm')::float8 + 20.0)) * 2
+                            )::bigint,
+                            'manual', s.manual_value
+                        )
+                    END
+                ), '{{}}'::jsonb)
+                FROM product_lengths pl
+                CROSS JOIN LATERAL (
+                    SELECT CASE
+                        WHEN pl.length_mm = (
+                                 SELECT min(l2.length_mm) FROM product_lengths l2
+                                 WHERE l2.product_id = p.id
+                             )
+                             AND jsonb_typeof(p.attributes->'quantity_per_hanger') = 'number'
+                        THEN p.attributes->'quantity_per_hanger'
+                    END AS manual_value
+                ) s
+                WHERE pl.product_id = p.id
+            )
+        )
+        WHERE {_AUTO_FIELDS_COND}
+            AND (p.attributes->'quantity_per_hanger' IS NULL
+                 OR jsonb_typeof(p.attributes->'quantity_per_hanger') <> 'object')
+            AND EXISTS (
+                SELECT 1 FROM product_lengths pl3 WHERE pl3.product_id = p.id
+            )
         """
     )
 
