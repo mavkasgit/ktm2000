@@ -27,7 +27,7 @@ from app.stock import Reason, StockCommand, StockCommandService
 from app.stock.import_service import RemainderItem, apply_remainders_import
 from app.stock.models import StockTransaction
 from app.seeds.seeders.spgs_seeder import seed_spgs
-from tests.stock.helpers import FAKE_DEFECT_DECISION_MAP, FAKE_SCRAP_KWARGS, record_transfer_receive
+from tests.stock.helpers import FAKE_DEFECT_DECISION_MAP, FAKE_SCRAP_POLICY, record_transfer_receive
 from tests.stock.test_shopfloor_stage3 import _setup_minimal_route
 from tests.test_integrity_invariants import assert_no_invariants_violations
 
@@ -81,7 +81,7 @@ async def test_complete_task_creates_action(session: AsyncSession) -> None:
         defect_quantity=Decimal("3"),
         actor_id=fx["user"].id,
         defect_reason="test_scrap",
-        **FAKE_SCRAP_KWARGS,
+        **FAKE_SCRAP_POLICY,
     )
     await session.commit()
     await assert_no_invariants_violations(session, context="aj-complete")
@@ -185,7 +185,7 @@ async def test_defect_decision_creates_action(session: AsyncSession) -> None:
         quantity=Decimal("2"),
         actor_id=fx["user"].id,
         defect_decision_map=FAKE_DEFECT_DECISION_MAP,
-        **FAKE_SCRAP_KWARGS,
+        **FAKE_SCRAP_POLICY,
     )
     await session.commit()
     await assert_no_invariants_violations(session, context="aj-defect-decision")
@@ -385,7 +385,7 @@ async def test_plan_auto_release_creates_action(session: AsyncSession) -> None:
         good_quantity=Decimal("7"),
         defect_quantity=Decimal("0"),
         actor_id=fx["user"].id,
-        **FAKE_SCRAP_KWARGS,
+        **FAKE_SCRAP_POLICY,
     )
     await session.commit()
     complete_action = (await session.execute(

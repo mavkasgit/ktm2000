@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.defect import Defect, DefectDecision, DefectDecisionType, DefectItem, DefectStatus, DefectType
 from app.models.rework_task import ReworkTask, ReworkTaskStatus
 from app.seeds.canon.models import DefectDecisionDef, ScrapPolicy
+from app.services.action_journal_service import action_journal_service
 from app.stock import QualityState, Reason, StockCommand, StockCommandService
 
 from .cache import _refresh_section_plan_line_cache
@@ -20,7 +21,6 @@ from .common import (
     _to_decimal,
 )
 from .scrap_policy import find_or_create_scrap_section_id
-from app.services.action_journal_service import action_journal_service
 
 def resolve_defect_status(
     decision: DefectDecisionType, defect_decision_map: dict[str, DefectDecisionDef] | None

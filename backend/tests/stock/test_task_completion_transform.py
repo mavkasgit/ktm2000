@@ -336,7 +336,7 @@ async def test_defect_written_with_input_dimensions(session: AsyncSession) -> No
     fx = await _make_transform_setup(session, sku="TRC-DEF")
     await _receive_input(session, fx)
 
-    from tests.stock.helpers import FAKE_SCRAP_KWARGS
+    from tests.stock.helpers import FAKE_SCRAP_POLICY
     result = await complete_task(
         session,
         task_id=fx["task"].id,
@@ -344,7 +344,7 @@ async def test_defect_written_with_input_dimensions(session: AsyncSession) -> No
         defect_quantity=Decimal("10"),
         actor_id=fx["user"].id,
         defect_reason="saw_jam",
-        **FAKE_SCRAP_KWARGS,
+        **FAKE_SCRAP_POLICY,
     )
     await session.commit()
 

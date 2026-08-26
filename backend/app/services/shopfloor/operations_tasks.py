@@ -100,6 +100,24 @@ class _TransformPlan(NamedTuple):
     consume_dims: dict | None
 
 
+class _CompletionCtx(NamedTuple):
+    """Общий контекст порции завершения для этапов проводок (ADR-0019).
+
+    Актёр, комментарии/ссылки, идемпотентность, эффективные исполнитель и
+    моменты времени, id Action журнала. Один объект вместо пучка kwarg'ов,
+    дублирующегося в сигнатурах этапов.
+    """
+
+    actor_id: int
+    comment: str | None
+    source_ref: str | None
+    idempotency_key: str | None
+    eff_executor: int
+    eff_performed: datetime
+    eff_accounted: datetime
+    action_id: int
+
+
 def _ensure_task_completable(task: WorkTask) -> None:
     """Статус-guard: завершать можно только активные задания."""
     if task.status not in {WorkTaskStatus.in_progress, WorkTaskStatus.partially_completed, WorkTaskStatus.ready}:
@@ -197,17 +215,10 @@ async def _post_good_portion(
     svc: StockCommandService,
     task: WorkTask,
     plan: _TransformPlan,
+    ctx: _CompletionCtx,
     *,
     cache_issued: Decimal,
     good_quantity: Decimal,
-    actor_id: int,
-    comment: str | None,
-    source_ref: str | None,
-    idempotency_key: str | None,
-    eff_executor: int,
-    eff_performed: datetime,
-    eff_accounted: datetime,
-    action_id: int,
 ) -> list[int]:
     """Проводки годной части порции; возвращает ids созданных транзакций.
 
@@ -223,12 +234,12 @@ async def _post_good_portion(
     if plan.spec is not None:
         # Порция трансформации: списание входа + приход всех выходов
         # (включая годный остаток) в текущей транзакции БД.
-        complete_comment = comment
+        complete_comment = ctx.comment
         line = await db.get(SectionPlanLine, task.section_plan_line_id)
         if line is not None and plan.stage is not None:
             complete_comment = await enrich_comment_with_route_operations(
                 db,
-                comment,
+                ctx.comment,
                 route_id=line.route_id,
                 through_sequence=plan.stage.sequence,
             )
@@ -240,14 +251,14 @@ async def _post_good_portion(
             progress=plan.progress,
             good_quantity=good_quantity,
             consume_dims=plan.consume_dims,
-            actor_id=actor_id,
-            executor_user_id=eff_executor,
+            actor_id=ctx.actor_id,
+            executor_user_id=ctx.eff_executor,
             comment=complete_comment,
-            source_ref=source_ref,
-            idempotency_key=idempotency_key,
-            performed_at=eff_performed,
-            accounted_at=eff_accounted,
-            action_id=action_id,
+            source_ref=ctx.source_ref,
+            idempotency_key=ctx.idempotency_key,
+            performed_at=ctx.eff_performed,
+            accounted_at=ctx.eff_accounted,
+            action_id=ctx.action_id,
         ))
         return tx_ids
 
@@ -260,14 +271,14 @@ async def _post_good_portion(
     else:
         complete_from = None
         complete_to = task.section_id
-    complete_comment = comment
+    complete_comment = ctx.comment
     if complete_to == task.section_id:
         line = await db.get(SectionPlanLine, task.section_plan_line_id)
         legacy_stage = await _get_route_stage(db, task.route_stage_id)
         if line is not None:
             complete_comment = await enrich_comment_with_route_operations(
                 db,
-                comment,
+                ctx.comment,
                 route_id=line.route_id,
                 through_sequence=legacy_stage.sequence,
             )
@@ -282,14 +293,14 @@ async def _post_good_portion(
         # но несёт ту же размерную группу, что и полученный материал.
         dimensions=task.dimensions,
         task_id=task.id,
-        source_ref=source_ref,
-        idempotency_key=idempotency_key,
+        source_ref=ctx.source_ref,
+        idempotency_key=ctx.idempotency_key,
         comment=complete_comment,
-        created_by=actor_id,
-        executor_user_id=eff_executor,
-        performed_at=eff_performed,
-        accounted_at=eff_accounted,
-        action_id=action_id,
+        created_by=ctx.actor_id,
+        executor_user_id=ctx.eff_executor,
+        performed_at=ctx.eff_performed,
+        accounted_at=ctx.eff_accounted,
+        action_id=ctx.action_id,
     ))
     tx_ids.append(tx_good.id)
     return tx_ids
@@ -300,18 +311,11 @@ async def _register_scrap_and_defect(
     svc: StockCommandService,
     task: WorkTask,
     plan: _TransformPlan,
+    ctx: _CompletionCtx,
     *,
     defect_quantity: Decimal,
     defect_reason: str | None,
     scrap_policy: ScrapPolicy | None,
-    actor_id: int,
-    comment: str | None,
-    source_ref: str | None,
-    idempotency_key: str | None,
-    eff_executor: int,
-    eff_performed: datetime,
-    eff_accounted: datetime,
-    action_id: int,
 ) -> tuple[list[int], int | None]:
     """Брак порции: SCRAP-проводка на SCRAP-секцию + Defect/DefectItem.
 
@@ -337,14 +341,14 @@ async def _register_scrap_and_defect(
         quality_state=QualityState.GOOD,
         to_quality_state=QualityState.SCRAP,
         task_id=task.id,
-        source_ref=source_ref,
-        idempotency_key=f"{idempotency_key}:reject" if idempotency_key else None,
-        comment=comment,
-        created_by=actor_id,
-        executor_user_id=eff_executor,
-        performed_at=eff_performed,
-        accounted_at=eff_accounted,
-        action_id=action_id,
+        source_ref=ctx.source_ref,
+        idempotency_key=f"{ctx.idempotency_key}:reject" if ctx.idempotency_key else None,
+        comment=ctx.comment,
+        created_by=ctx.actor_id,
+        executor_user_id=ctx.eff_executor,
+        performed_at=ctx.eff_performed,
+        accounted_at=ctx.eff_accounted,
+        action_id=ctx.action_id,
     ))
 
     defect = Defect(
@@ -353,9 +357,9 @@ async def _register_scrap_and_defect(
         task_id=task.id,
         stock_transaction_id=tx_scrap.id,
         status=DefectStatus.decision_required,
-        comment=comment,
-        created_by=actor_id,
-        idempotency_key=f"{idempotency_key}:defect" if idempotency_key else None,
+        comment=ctx.comment,
+        created_by=ctx.actor_id,
+        idempotency_key=f"{ctx.idempotency_key}:defect" if ctx.idempotency_key else None,
     )
     db.add(defect)
     await db.flush()
@@ -366,8 +370,8 @@ async def _register_scrap_and_defect(
         defect_type_code_snapshot=defect_reason,
         defect_type_name_snapshot=defect_reason,
         quantity=defect_quantity,
-        description=comment,
-        created_by=actor_id,
+        description=ctx.comment,
+        created_by=ctx.actor_id,
     )
     db.add(defect_item)
     return [tx_scrap.id], defect.id
@@ -440,10 +444,8 @@ async def complete_task(
         db, action_type="task_complete", ref_id=task.id, actor=actor_name,
     )
 
-    tx_ids = list(await _post_good_portion(
-        db, svc, task, plan,
-        cache_issued=cache["issued_quantity"],
-        good_quantity=good_quantity,
+    # Общий контекст порции для обоих этапов проводок.
+    ctx = _CompletionCtx(
         actor_id=actor_id,
         comment=comment,
         source_ref=source_ref,
@@ -452,20 +454,18 @@ async def complete_task(
         eff_performed=eff_performed,
         eff_accounted=eff_accounted,
         action_id=action.id,
+    )
+
+    tx_ids = list(await _post_good_portion(
+        db, svc, task, plan, ctx,
+        cache_issued=cache["issued_quantity"],
+        good_quantity=good_quantity,
     ))
     scrap_tx_ids, defect_id = await _register_scrap_and_defect(
-        db, svc, task, plan,
+        db, svc, task, plan, ctx,
         defect_quantity=defect_quantity,
         defect_reason=defect_reason,
         scrap_policy=scrap_policy,
-        actor_id=actor_id,
-        comment=comment,
-        source_ref=source_ref,
-        idempotency_key=idempotency_key,
-        eff_executor=eff_executor,
-        eff_performed=eff_performed,
-        eff_accounted=eff_accounted,
-        action_id=action.id,
     )
     tx_ids.extend(scrap_tx_ids)
 

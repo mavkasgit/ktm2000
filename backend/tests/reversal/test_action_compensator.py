@@ -24,7 +24,7 @@ from app.reversal.service import _sign_payload, reversal_service
 from app.stock.import_service import RemainderItem, apply_remainders_import
 from app.stock.models import Reason, StockBalance, StockTransaction
 from app.stock.services import StockCommand, StockCommandService
-from tests.stock.helpers import FAKE_DEFECT_DECISION_MAP, FAKE_SCRAP_KWARGS, record_transfer_receive
+from tests.stock.helpers import FAKE_DEFECT_DECISION_MAP, FAKE_SCRAP_POLICY, record_transfer_receive
 from tests.stock.test_domain_actions_journal import _issue_material
 from tests.stock.test_shopfloor_stage3 import _setup_minimal_route
 from tests.test_integrity_invariants import assert_no_invariants_violations
@@ -60,7 +60,7 @@ async def _complete_task(
         defect_quantity=scrap,
         actor_id=fx["user"].id,
         defect_reason="test_scrap" if scrap > 0 else None,
-        **FAKE_SCRAP_KWARGS,
+        **FAKE_SCRAP_POLICY,
     )
     await session.commit()
     return (await session.execute(
@@ -260,7 +260,7 @@ async def test_defect_decision_reverse(session: AsyncSession) -> None:
     await defect_decide(
         session, defect_id=defect_id, decision_type=DefectDecisionType.scrap,
         quantity=Decimal("2"), actor_id=fx["user"].id,
-        defect_decision_map=FAKE_DEFECT_DECISION_MAP, **FAKE_SCRAP_KWARGS,
+        defect_decision_map=FAKE_DEFECT_DECISION_MAP, **FAKE_SCRAP_POLICY,
     )
     await session.commit()
 

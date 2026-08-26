@@ -34,7 +34,7 @@ from app.seeds.canon.models import ScrapPolicy
 from app.stock import Reason, StockCommand, StockCommandService, StockTransaction
 from app.services.shopfloor.operations_defects import create_defect, defect_decide
 from app.services.shopfloor.operations_tasks import complete_task
-from tests.stock.helpers import FAKE_DEFECT_DECISION_MAP, FAKE_SCRAP_KWARGS, record_transfer_receive
+from tests.stock.helpers import FAKE_DEFECT_DECISION_MAP, FAKE_SCRAP_POLICY, record_transfer_receive
 from tests.test_integrity_invariants import assert_no_invariants_violations
 
 pytestmark = pytest.mark.asyncio
@@ -183,7 +183,7 @@ async def test_complete_task_auto_creates_scrap_section_from_canon(session: Asyn
         defect_quantity=Decimal("3"),
         actor_id=fx["user"].id,
         defect_reason="test_scrap",
-        **FAKE_SCRAP_KWARGS,
+        **FAKE_SCRAP_POLICY,
     )
     await session.commit()
 
@@ -215,7 +215,7 @@ async def test_repeated_completion_reuses_created_scrap_section(session: AsyncSe
         good_quantity=Decimal("8"),
         defect_quantity=Decimal("2"),
         actor_id=fx["user"].id,
-        **FAKE_SCRAP_KWARGS,
+        **FAKE_SCRAP_POLICY,
     )
     await complete_task(
         session,
@@ -223,7 +223,7 @@ async def test_repeated_completion_reuses_created_scrap_section(session: AsyncSe
         good_quantity=Decimal("1"),
         defect_quantity=Decimal("1"),
         actor_id=fx["user"].id,
-        **FAKE_SCRAP_KWARGS,
+        **FAKE_SCRAP_POLICY,
     )
     await session.commit()
 
@@ -266,7 +266,7 @@ async def test_defect_decide_scrap_auto_creates_section(session: AsyncSession):
         quantity=Decimal("2"),
         actor_id=fx["user"].id,
         defect_decision_map=FAKE_DEFECT_DECISION_MAP,
-        **FAKE_SCRAP_KWARGS,
+        **FAKE_SCRAP_POLICY,
     )
     await session.commit()
 
