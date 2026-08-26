@@ -16,6 +16,9 @@ class TransferStatus(str, enum.Enum):
     partially_accepted = "partially_accepted"
     rejected = "rejected"
     cancelled = "cancelled"
+    # Тикет #124 (ADR-0019): Transfer скорректирован через amend исходного
+    # ``transfer_send``; новая пара SEND/RECEIVE живёт под новым Transfer.
+    amended = "amended"
 
 
 class TransferDiscrepancyStatus(str, enum.Enum):

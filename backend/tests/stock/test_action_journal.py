@@ -3,7 +3,8 @@
 Покрывают:
 - transfer_send создаёт одну запись Action (transfer_send, ref_id=transfer.id)
 - обе проводки ledger ссылаются на неё через StockTransaction.action_id
-- cancel_transfer создаёт Action (transfer_cancel), компенсации ссылаются на него
+- cancel_transfer через ReversalService.reverse создаёт Action (reversal),
+  компенсационные проводки ссылаются на него
 """
 from decimal import Decimal
 
@@ -60,7 +61,8 @@ async def test_transfer_send_creates_action(session: AsyncSession, client) -> No
 
 @_py_test_mark
 async def test_cancel_transfer_creates_action(session: AsyncSession, client) -> None:
-    """cancel_transfer создаёт Action; компенсационные проводки ссылаются на него."""
+    """cancel_transfer через ReversalService создаёт Action (reversal);
+    компенсационные проводки ссылаются на него."""
     setup = await _make_two_ghp_setup(session, sku="AJT2", qty=Decimal("10"))
     ctx = await _make_tasks_transferable(session, client, setup)
 
@@ -82,14 +84,16 @@ async def test_cancel_transfer_creates_action(session: AsyncSession, client) -> 
     await session.commit()
     await assert_no_invariants_violations(session, context="aj-cancel-transfer")
 
+    # ReversalService.reverse создаёт Action с action_type="reversal"
+    # (ref_id = transfer_id, как у исходного transfer_send).
     actions = (await session.execute(
         select(Action).where(
-            Action.action_type == "transfer_cancel",
+            Action.action_type == "reversal",
             Action.ref_id == send["transfer_id"],
         )
     )).scalars().all()
     assert len(actions) == 1
-    cancel_action = actions[0]
+    reversal_action = actions[0]
 
     comp_txs = (await session.execute(
         select(StockTransaction).where(
@@ -98,4 +102,4 @@ async def test_cancel_transfer_creates_action(session: AsyncSession, client) -> 
         )
     )).scalars().all()
     assert len(comp_txs) == 2  # SEND + RECEIVE
-    assert all(tx.action_id == cancel_action.id for tx in comp_txs)
+    assert all(tx.action_id == reversal_action.id for tx in comp_txs)

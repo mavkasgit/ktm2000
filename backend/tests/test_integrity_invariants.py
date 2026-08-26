@@ -156,7 +156,7 @@ _STOCK_LEDGER_INVARIANT_QUERIES: list[tuple[str, str]] = [
             FROM stock_transactions WHERE reason = 'transfer_send'
             GROUP BY transfer_id
         ) s ON s.transfer_id = t.id
-        WHERE t.status NOT IN ('cancelled', 'rejected')
+        WHERE t.status NOT IN ('cancelled', 'rejected', 'amended')
           AND t.sent_quantity != COALESCE(s.net_send, 0)
         """,
     ),

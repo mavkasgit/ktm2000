@@ -496,6 +496,10 @@ class StockCompensator(MirrorLedgerMixin):
         по ключу ``amend:{action.id}`` / ``replay:{action.id}`` (отличать
         от повторов отправки). Для реплея (#121) changes — полный payload
         от ``build_replay_payload``; fallback'и не срабатывают.
+
+        Тикет #124: ``quality_state`` наследуется из исходных проводок
+        действия, которое корректируется/реплеится (``amends_action_id``
+        или ``replay_of_action_id``). Если исходных проводок нет — GOOD.
         """
         from app.transfers.services import transfer_send
 
@@ -503,6 +507,40 @@ class StockCompensator(MirrorLedgerMixin):
         if old_transfer is None:
             raise ValueError(f"{self.action_type}: Transfer с ref_id={ref_id} не найден")
         is_replay = getattr(action, "replay_of_action_id", None) is not None
+
+        # Качество и габарит — из исходных проводок (amends_action_id для
+        # amend, replay_of_action_id для replay). Fallback качества — GOOD.
+        # Тикет #124: габарит amend без явного ``dimensions`` в changes
+        # наследует габарит исходной SEND-проводки, а НЕ ``from_task
+        # .dimensions``: у трансформирующих этапов вход задачи (напр. 2700)
+        # ≠ габарит передачи (900), fallback на задачу даёт проводку по
+        # чужой строке баланса → ложный «Insufficient stock».
+        original_action_id = (
+            getattr(action, "amends_action_id", None)
+            or getattr(action, "replay_of_action_id", None)
+        )
+        quality_state = QualityState.GOOD
+        dimensions = changes.get("dimensions")
+        if original_action_id is not None:
+            original_send_tx = (
+                await db.execute(
+                    select(StockTransaction)
+                    .where(
+                        StockTransaction.action_id == original_action_id,
+                        StockTransaction.reverses_id.is_(None),
+                        StockTransaction.reason == Reason.TRANSFER_SEND,
+                    )
+                    # Детерминированный выбор: первая (старейшая) активная
+                    # SEND-проводка действия — источник quality_state/габарита.
+                    .order_by(StockTransaction.id.asc())
+                    .limit(1)
+                )
+            ).scalar_one_or_none()
+            if original_send_tx is not None:
+                quality_state = original_send_tx.from_quality_state
+                if dimensions is None:
+                    dimensions = original_send_tx.dimensions
+
         return await transfer_send(
             db,
             from_task_id=int(
@@ -512,7 +550,7 @@ class StockCompensator(MirrorLedgerMixin):
                 int(changes.get("to_task_id", old_transfer.to_task_id))
             ),
             quantity=Decimal(str(changes.get("quantity", old_transfer.sent_quantity))),
-            dimensions=changes.get("dimensions"),
+            dimensions=dimensions,
             actor_id=actor_id,
             comment=(
                 f"replay of action #{action.replay_of_action_id}"
@@ -523,6 +561,12 @@ class StockCompensator(MirrorLedgerMixin):
                 f"replay:{action.id}" if is_replay else f"amend:{action.id}"
             ),
             action=action,
+            quality_state=quality_state,
+            # Тикет #124: preview уже проверил покрытие через
+            # StockCompensator.forward_coverage_deficit; повторный domain-guard
+            # transfer_send даёт ложный отказ (transforming-task уже списал
+            # старое количество в produced, transferable < new_quantity).
+            allow_over_plan=True,
         )
     # ─── Replay (тикет #121): payload из координат проводок ──────────────
 

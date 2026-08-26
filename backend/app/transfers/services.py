@@ -19,9 +19,11 @@ shared cache (``app.services.shopfloor.cache``) continues to refresh
 non-transfer ``cached_*`` columns from the ``Movement`` table for
 legacy operations until Этап 3.
 
-Cancel creates compensating ``StockTransaction`` rows (append-only).
-Correct likewise rewrites quantity via compensation + new pair
-(``_correct_transfer_stock_tx``) — the ledger is append-only.
+Cancel/correct идут через домен отката (тикет #124, ADR-0019):
+``cancel_transfer`` → ``ReversalService.reverse``, ``correct_transfer``
+→ ``ReversalService.amend`` исходного ``transfer_send``. Зеркальные
+проводки строит только ``MirrorLedgerMixin`` за реестром
+``ReversalService`` — здесь ручных построений нет.
 """
 
 from __future__ import annotations
@@ -61,7 +63,7 @@ from app.services.shopfloor.common import (
 # Коррекция — in-place изменение quantity активных транзакций.
 from app.domain.dimensions import canonicalize_dimensions, dimensions_equal
 from app.services.action_journal_service import action_journal_service
-from app.stock.models import Reason, StockTransaction
+from app.stock.models import QualityState, Reason, StockTransaction
 from app.stock.services import (
     StockCommand,
     StockCommandService,
@@ -208,6 +210,7 @@ async def _record_transfer_send_stock_tx(
     accounted_at: datetime | None,
     action_id: int | None,
     is_post_factum: bool,
+    quality_state: QualityState = QualityState.GOOD,
 ) -> StockTransaction:
     """Запись TRANSFER_SEND в StockTransaction ledger.
 
@@ -229,6 +232,7 @@ async def _record_transfer_send_stock_tx(
             from_location_id=transfer.from_section_id,
             to_location_id=transfer.to_section_id,
             dimensions=dimensions,
+            quality_state=quality_state,
             task_id=from_task.id,
             transfer_id=transfer.id,
             section_plan_line_id=from_task.section_plan_line_id,
@@ -247,168 +251,31 @@ async def _record_transfer_send_stock_tx(
     )
 
 
-async def _compensate_transfer_stock_tx(
-    db: AsyncSession,
-    *,
-    transfer: Transfer,
-    actor_id: int,
-    action_id: int,
-    comment: str | None,
-) -> None:
-    """Компенсация всех активных StockTransaction transfer'а (append-only).
+async def _find_transfer_send_action(
+    db: AsyncSession, transfer_id: int,
+) -> "Action | None":
+    """Актуальный активный ``transfer_send`` Action для Transfer.
 
-    Для каждой непогашенной транзакции (``reverses_id IS NULL``) с
-    reason ``TRANSFER_SEND`` / ``TRANSFER_RECEIVE`` создаётся встречная
-    запись с перевёрнутыми локациями и ``reverses_id`` → исходная.
-    Суммарный баланс по transfer возвращается к нулю (инвариант S6 для
-    cancelled transfer'ов исключён, S1 баланс сходится).
-
-    Идемпотентность: если компенсация уже была записана (повторный
-    cancel — no-op по status guard в ``cancel_transfer``), дубликаты не
-    создаются благодаря суффиксу ``:stock-cancel``.
+    У живого Transfer запись одна; ``order_by(id desc)`` — защита на
+    случай будущих повторных отправок по тому же ref_id (берём последнюю
+    ACTIVE). ``None`` = записи нет (legacy-данные до журнала) или она уже
+    отменена/amend'нута.
     """
-    res = await db.execute(
-        select(StockTransaction)
-        .where(
-            StockTransaction.reverses_id.is_(None),
-            StockTransaction.transfer_id == transfer.id,
-            StockTransaction.reason.in_(
-                [Reason.TRANSFER_SEND, Reason.TRANSFER_RECEIVE]
-            ),
-        )
-        .order_by(StockTransaction.id.asc())
-    )
-    originals = res.scalars().all()
-    for orig in originals:
-        # Переворот локаций: исходящая сторона становится входящей.
-        comp_from = orig.to_location_id  # была приёмной → теперь источник
-        comp_to = orig.from_location_id  # была источником → теперь приёмная
-        await _stock_command_service.record(
-            db,
-            StockCommand(
-                product_id=orig.product_id,
-                quantity=orig.quantity,
-                reason=orig.reason,
-                from_location_id=comp_from,
-                to_location_id=comp_to,
-                # Компенсация гасит остаток той же габаритной группы.
-                dimensions=orig.dimensions,
-                task_id=orig.task_id,
-                transfer_id=transfer.id,
-                section_plan_line_id=orig.section_plan_line_id,
-                reverses_id=orig.id,
-                action_id=action_id,
-                created_by=actor_id,
-                comment=f"cancel transfer #{transfer.transfer_no}: {comment or ''}".strip(),
-                # Безусловный ключ: protects даже если у исходной tx не было
-                # idempotency_key (auto-transfers могут не иметь своего).
-                # Status-guard в cancel_transfer короткозамыкает повторный
-                # cancel, но при будущих partial-cancel это убережёт от дублей.
-                idempotency_key=f"transfer-cancel:{transfer.id}:tx:{orig.id}",
-                is_post_factum=orig.is_post_factum,
-            ),
-        )
+    from app.models.action_journal import Action, ActionStatus
 
-
-async def _correct_transfer_stock_tx(
-    db: AsyncSession,
-    *,
-    transfer: Transfer,
-    new_quantity: Decimal,
-    actor_id: int,
-    action_id: int,
-    comment: str | None,
-) -> None:
-    """Коррекция количества = компенсирующая проводка + новая проводка.
-
-    ADR-0019: ledger append-only, никаких in-place UPDATE quantity по
-    активным проводкам. Активная пара (TRANSFER_SEND + TRANSFER_RECEIVE)
-    гасится зеркальными записями (``reverses_id`` → исходная), затем
-    записывается новая пара с новым количеством. Net-арифметика
-    (``net_quantity_expr``) даёт корректный итог без мутаций.
-    """
-    res = await db.execute(
-        select(StockTransaction)
-        .where(
-            StockTransaction.transfer_id == transfer.id,
-            StockTransaction.reverses_id.is_(None),
-            StockTransaction.reason.in_(
-                [Reason.TRANSFER_SEND, Reason.TRANSFER_RECEIVE]
-            ),
-        )
-        .order_by(StockTransaction.id.asc())
-    )
-    originals = res.scalars().all()
-
-    # 1. Компенсации старого поколения (зеркало 1:1, локации перевёрнуты).
-    for orig in originals:
-        comp_from = orig.to_location_id
-        comp_to = orig.from_location_id
-        await _stock_command_service.record(
-            db,
-            StockCommand(
-                product_id=orig.product_id,
-                quantity=orig.quantity,
-                reason=orig.reason,
-                from_location_id=comp_from,
-                to_location_id=comp_to,
-                dimensions=orig.dimensions,
-                quality_state=orig.from_quality_state,
-                to_quality_state=orig.to_quality_state,
-                task_id=orig.task_id,
-                transfer_id=transfer.id,
-                section_plan_line_id=orig.section_plan_line_id,
-                reverses_id=orig.id,
-                action_id=action_id,
-                created_by=actor_id,
-                comment=(
-                    f"correct transfer #{transfer.transfer_no}: "
-                    f"revoke {orig.quantity} [{orig.id}]"
-                ),
-                idempotency_key=f"transfer-correct:{action_id}:revoke:{orig.id}",
-                is_post_factum=orig.is_post_factum,
-            ),
-        )
-
-    # 2. Новая пара SEND + RECEIVE с новым количеством — каждая по образцу
-    # своей исходной проводки (task_id / plan_line / dimensions сохраняются).
-    templates: dict[Reason, StockTransaction] = {}
-    for orig in originals:
-        templates.setdefault(orig.reason, orig)
-    for reason in (Reason.TRANSFER_SEND, Reason.TRANSFER_RECEIVE):
-        tpl = templates.get(reason)
-        if tpl is None:
-            raise ValueError(
-                f"Transfer #{transfer.id}: нет активной проводки {reason.value} для коррекции"
+    return (
+        await db.execute(
+            select(Action)
+            .where(
+                Action.action_type == "transfer_send",
+                Action.ref_id == transfer_id,
+                Action.status == ActionStatus.ACTIVE,
             )
-        is_send = reason == Reason.TRANSFER_SEND
-        await _stock_command_service.record(
-            db,
-            StockCommand(
-                product_id=tpl.product_id,
-                quantity=new_quantity,
-                reason=reason,
-                from_location_id=transfer.from_section_id if is_send else None,
-                to_location_id=transfer.to_section_id if is_send else None,
-                dimensions=tpl.dimensions,
-                quality_state=tpl.from_quality_state,
-                to_quality_state=tpl.to_quality_state,
-                task_id=tpl.task_id,
-                transfer_id=transfer.id,
-                section_plan_line_id=tpl.section_plan_line_id,
-                action_id=action_id,
-                created_by=actor_id,
-                comment=(
-                    f"correct transfer #{transfer.transfer_no} → {new_quantity}: "
-                    f"{comment or ''}"
-                ).strip(),
-                idempotency_key=(
-                    f"transfer-correct:{action_id}:"
-                    + ("send" if is_send else "receive")
-                ),
-                is_post_factum=tpl.is_post_factum,
-            ),
+            .order_by(Action.id.desc())
+            .limit(1)
         )
+    ).scalar_one_or_none()
+
 
 async def transfer_send(
     db: AsyncSession,
@@ -428,6 +295,7 @@ async def transfer_send(
     physical_handover_at: datetime | None = None,
     dimensions: dict | None = None,
     action: "Action | None" = None,
+    quality_state: QualityState = QualityState.GOOD,
 ) -> dict:
     """Send ``quantity`` from a completed SectionTask to the next route step.
 
@@ -629,6 +497,7 @@ async def transfer_send(
         accounted_at=eff_accounted,
         is_post_factum=post_factum,
         action_id=action.id,
+        quality_state=quality_state,
     )
     # TRANSFER_RECEIVE на приёмную задачу (только task-level; без локаций)
     receive_comment = await enrich_comment_with_route_operations(
@@ -646,6 +515,7 @@ async def transfer_send(
             from_location_id=None,
             to_location_id=None,
             dimensions=dimensions,
+            quality_state=quality_state,
             task_id=to_task.id,
             transfer_id=transfer.id,
             section_plan_line_id=to_task.section_plan_line_id,
@@ -738,25 +608,45 @@ async def correct_transfer(
     actor_id: int,
     comment: str | None = None,
 ) -> dict:
+    """Коррекция количества передачи через ``ReversalService.amend`` (тикет #124).
+
+    ADR-0019: ledger append-only. Старый ``Transfer`` получает статус
+    ``amended`` (без мутации ``sent_quantity``); новая пара SEND/RECEIVE
+    создаётся под новым ``Transfer`` через ``StockCompensator.apply_forward``
+    (``transfer_send``). Доменные guard'ы (source/target лимиты)
+    остаются в caller.
+
+    API-контракт (breaking, тикет #124): возвращает ``new_transfer_id``
+    (голова amend-цепочки) и ``amended_transfer_id`` (списанный Transfer).
+    """
+    from app.reversal.errors import AlreadyReversed, CoverageShortfall, NotAllowed, StalePlanToken
+    from app.reversal.service import ReversalService
+
     transfer = await _get_transfer(db, transfer_id)
+    if transfer.status == TransferStatus.amended:
+        raise ValueError(
+            "This transfer was superseded by an amend; operate on the new transfer"
+        )
     if transfer.status != TransferStatus.accepted:
         raise ValueError("Only accepted transfers can be corrected")
 
     new_quantity = _to_decimal(new_quantity)
     _ensure_positive(new_quantity, "quantity")
-    
+
     old_quantity = transfer.sent_quantity
     if new_quantity == old_quantity:
         return {
-            "transfer_id": transfer.id,
+            "new_transfer_id": transfer.id,
+            "amended_transfer_id": None,
             "status": transfer.status.value,
             "quantity": str(transfer.sent_quantity),
         }
 
     from_task = await _get_task(db, transfer.from_task_id)
     to_task = await _get_task(db, transfer.to_task_id)
-    
-    # 1. Validate source limit
+
+    # 1. Domain-guard: источник имеет достаточно transferable (с учётом
+    # возврата старого количества после компенсации).
     transferable = (
         await _get_task_transferable(db, from_task, dimensions=transfer.dimensions)
         + old_quantity
@@ -767,14 +657,8 @@ async def correct_transfer(
             f"Available to transfer: {transferable}"
         )
 
-    # 2. Validate target limit. With auto-issue on receive, the
-    # destination's ``cached_available_quantity`` is 0 by design (received
-    # is fully issued on the same transaction). The right guard for a
-    # reduce is therefore the in-work balance: how much of the
-    # previously-issued quantity has not yet been completed or
-    # rejected. If the operator already completed or rejected more
-    # than the new sent quantity, reducing the transfer would create
-    # a phantom drain.
+    # 2. Domain-guard: приёмная сторона. При reduce (diff < 0) — in_work
+    # баланс защищает от «фантомного» слива уже завершённого/отклонённого.
     from app.stock.services import StockProjectionManager
     pm = StockProjectionManager()
     to_cache = await pm.get_task_cache(db, to_task.id)
@@ -791,50 +675,63 @@ async def correct_transfer(
                 f"Cannot reduce transfer by {abs(diff)} as target task only has {in_work} in work"
             )
 
-    # 3. Update Transfer
-    transfer.sent_quantity = new_quantity
-    transfer.accepted_quantity = new_quantity
+    # 3. Найти исходный transfer_send Action; без него amend невозможен.
+    send_action = await _find_transfer_send_action(db, transfer.id)
+    if send_action is None:
+        raise ValueError(
+            f"Transfer #{transfer.id}: исходное действие transfer_send не найдено или уже отменено"
+        )
+
+    # 4. Preview → amend (одна транзакция, preview-first ADR-0019).
+    actor_name = await _get_user_snapshot_name(db, actor_id)
+    svc = ReversalService()
+    changes = {"quantity": str(new_quantity)}
+    preview = await svc.preview_amend(db, send_action.id, changes, cascade=True)
+    if preview.blockers:
+        detail = "; ".join(b.detail for b in preview.blockers)
+        raise ValueError(f"correct_transfer blocked: {detail}")
+    assert preview.plan_token is not None  # блокеров нет → токен выдан
+    try:
+        amend_result = await svc.amend(
+            db,
+            send_action.id,
+            changes=changes,
+            plan_token=preview.plan_token,
+            reason=comment,
+            actor=actor_name,
+            actor_id=actor_id,
+        )
+    except (CoverageShortfall, NotAllowed, StalePlanToken, AlreadyReversed) as exc:
+        # Маппинг reversal-исключений → ValueError для API-слоя (400).
+        raise ValueError(str(exc)) from exc
+
+    # 5. Append-only: старый Transfer → ``amended`` (без мутации sent_quantity).
+    transfer.status = TransferStatus.amended
     if comment:
         transfer.comment = comment
-
-    # Movement-строк больше нет (Этап 2) — баланс двигается только ledger.
     await db.flush()
 
-    # ─── StockTransaction correction (append-only, ADR-0019) ─────────────
-    # Коррекция количества = компенсирующая проводка + новая проводка.
-    # Никаких in-place UPDATE quantity по активным проводкам.
-    actor_name = await _get_user_snapshot_name(db, actor_id)
-    action = await action_journal_service.log(
-        db, action_type="transfer_correct", ref_id=transfer.id, actor=actor_name
-    )
-    await _correct_transfer_stock_tx(
-        db,
-        transfer=transfer,
-        new_quantity=new_quantity,
-        actor_id=actor_id,
-        action_id=action.id,
-        comment=comment,
-    )
-
-    # 5. Refresh plan-line caches (баланс/проекции обновлены через record()).
+    # 6. Refresh проекций/кэшей для обеих сторон (отправка + приём).
     await _refresh_section_plan_line_cache(db, from_task.section_plan_line_id)
     await _refresh_section_plan_line_cache(db, to_task.section_plan_line_id)
 
-    # Запись лога аудита (корректировка передачи)
+    # 7. Audit log.
     from app.services.audit_log_service import log_action
     from app.models.audit_log import AuditAction, AuditEntityType
-    from app.models.section import Section
     from app.models.product import Product
-    
+    from app.models.section import Section
+
     from_section = await db.get(Section, transfer.from_section_id)
     to_section = await db.get(Section, transfer.to_section_id)
     product = await db.get(Product, transfer.product_id)
-    
     await log_action(
         db,
         status="success",
-        title="Корректировка передачи",
-        message=f"Передача #{transfer.transfer_no} скорректирована. Количество изменено с {old_quantity} на {new_quantity} шт.",
+        title="Корректировка передачи (amend)",
+        message=(
+            f"Передача #{transfer.transfer_no} скорректирована (amend). "
+            f"Количество изменено с {old_quantity} на {new_quantity} шт."
+        ),
         user_id=actor_id,
         section_id=transfer.from_section_id,
         section_name=from_section.name if from_section else None,
@@ -846,13 +743,17 @@ async def correct_transfer(
         action=AuditAction.CORRECT,
         entity_type=AuditEntityType.TRANSFER,
         entity_id=transfer.id,
-        changes={"before": {"quantity": str(old_quantity)}, "after": {"quantity": str(new_quantity)}},
+        changes={
+            "before": {"quantity": str(old_quantity)},
+            "after": {"quantity": str(new_quantity), "new_transfer_id": amend_result.new_ref_id},
+        },
     )
 
     return {
-        "transfer_id": transfer.id,
-        "status": transfer.status.value,
-        "quantity": str(transfer.sent_quantity),
+        "new_transfer_id": amend_result.new_ref_id,
+        "amended_transfer_id": transfer.id,
+        "status": "amended",
+        "quantity": str(new_quantity),
     }
 
 
@@ -863,23 +764,35 @@ async def cancel_transfer(
     actor_id: int,
     comment: str | None = None,
 ) -> dict:
+    """Отмена передачи через ``ReversalService.reverse`` (тикет #124).
+
+    Зеркальные проводки создаёт ``StockCompensator`` (``MirrorLedgerMixin``);
+    ``transfer.status=cancelled`` и ``accepted_quantity=0`` ставит его
+    ``apply`` — caller здесь их не пишет. Domain-guard ``in_work``
+    (приёмная сторона уже завершила часть) — предварительная проверка
+    до вызова reverse.
+    """
+    from app.reversal.errors import AlreadyReversed, CoverageShortfall, NotAllowed, StalePlanToken
+    from app.reversal.service import ReversalService
+
     transfer = await _get_transfer(db, transfer_id)
     if transfer.status == TransferStatus.cancelled:
         return {
             "transfer_id": transfer.id,
             "status": transfer.status.value,
         }
+    if transfer.status == TransferStatus.amended:
+        raise ValueError(
+            "This transfer was superseded by an amend; cancel the new transfer instead"
+        )
     if transfer.status != TransferStatus.accepted:
         raise ValueError("Only accepted transfers can be cancelled")
 
     from_task = await _get_task(db, transfer.from_task_id)
     to_task = await _get_task(db, transfer.to_task_id)
 
-    # Validate target in-work quantity before cancellation.
-    # Target has received material via transfer_receive which is effectively
-    # material available for work (on-section balance). Use received_quantity
-    # as the guard since issued_quantity is no longer auto-incremented
-    # after cached_* columns were removed (Этап 4).
+    # Domain-guard: приёмная сторона не должна иметь завершённых/отклонённых
+    # частей сверх sent_quantity; иначе cancel создал бы отрицательный баланс.
     from app.stock.services import StockProjectionManager
     pm = StockProjectionManager()
     to_cache = await pm.get_task_cache(db, to_task.id)
@@ -894,50 +807,60 @@ async def cancel_transfer(
             f"Cannot cancel transfer as target task only has {in_work} in work"
         )
 
-    # Update Transfer
-    transfer.status = TransferStatus.cancelled
-    transfer.accepted_quantity = Decimal("0")
+    # Найти исходный transfer_send Action; без него reverse невозможен.
+    send_action = await _find_transfer_send_action(db, transfer.id)
+    if send_action is None:
+        # Transfer принят, но активного действия нет: legacy-запись до
+        # журнала действий либо гонка с другой транзакцией. Тихий no-op
+        # здесь солгал бы об успехе — требуем явного разбора.
+        raise ValueError(
+            f"Transfer #{transfer.id}: исходное действие transfer_send не найдено "
+            f"(уже отменено или запись до внедрения журнала действий)"
+        )
+
+    # Preview → reverse (preview-first ADR-0019).
+    actor_name = await _get_user_snapshot_name(db, actor_id)
+    svc = ReversalService()
+    preview = await svc.preview_reverse(db, send_action.id, cascade=True)
+    if preview.blockers:
+        detail = "; ".join(b.detail for b in preview.blockers)
+        raise ValueError(f"cancel_transfer blocked: {detail}")
+    assert preview.plan_token is not None
+    try:
+        await svc.reverse(
+            db,
+            send_action.id,
+            plan_token=preview.plan_token,
+            reason=comment,
+            actor=actor_name,
+            actor_id=actor_id,
+        )
+    except AlreadyReversed:
+        # Идемпотентность: другой транзакцией уже отменено.
+        pass
+    except (CoverageShortfall, NotAllowed, StalePlanToken) as exc:
+        raise ValueError(str(exc)) from exc
+
+    # Обновить комментарий после компенсации (status/accepted_quantity
+    # выставил StockCompensator.apply).
+    await db.refresh(transfer)
     if comment:
         transfer.comment = comment
-
-    # SpgRemainder restoration removed — table no longer exists.
     await db.flush()
 
-    # ─── StockTransaction compensation (append-only) ─────────────────────
-    # Создаём встречные компенсационные записи с перевёрнутыми локациями
-    # и reverses_id → исходная. Баланс возвращается к нулю.
-    # Компенсация вызывает stock_changed → refresh_task_projection (net = 0).
-    actor_name = await _get_user_snapshot_name(db, actor_id)
-    action = await action_journal_service.log(
-        db, action_type="transfer_cancel", ref_id=transfer.id, actor=actor_name
-    )
-    await _compensate_transfer_stock_tx(
-        db, transfer=transfer, actor_id=actor_id, action_id=action.id, comment=comment
-    )
-    # Refresh projections (net = 0 после компенсации — обновлено через StockTransaction)
-    comp_txs = (await db.execute(
-        select(StockTransaction)
-        .where(
-            StockTransaction.transfer_id == transfer.id,
-            StockTransaction.reason.in_([Reason.TRANSFER_SEND, Reason.TRANSFER_RECEIVE]),
-        )
-        .limit(2)
-    )).scalars().all()
-    for ctx in comp_txs:
-        await _stock_command_service._projection_manager.refresh_task_projection(db, ctx)
+    # Refresh проекций/кэшей после компенсации (net=0).
     await _refresh_section_plan_line_cache(db, from_task.section_plan_line_id)
     await _refresh_section_plan_line_cache(db, to_task.section_plan_line_id)
 
-    # Запись лога аудита (отмена передачи)
+    # Audit log (отмена передачи).
     from app.services.audit_log_service import log_action
     from app.models.audit_log import AuditAction, AuditEntityType
-    from app.models.section import Section
     from app.models.product import Product
-    
+    from app.models.section import Section
+
     from_section = await db.get(Section, transfer.from_section_id)
     to_section = await db.get(Section, transfer.to_section_id)
     product = await db.get(Product, transfer.product_id)
-    
     await log_action(
         db,
         status="success",

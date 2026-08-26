@@ -401,8 +401,8 @@ async def test_cancel_transfer_idempotent(session: AsyncSession, client) -> None
 
 @_py_test_mark
 async def test_correct_transfer_quantity(session: AsyncSession, client) -> None:
-    """correct_transfer больше не мутирует проводки: старая пара неизменна,
-    появляются 2 компенсации (reverses_id) + новая пара с новым quantity."""
+    """correct_transfer через ReversalService.amend: старая пара неизменна,
+    компенсации под старым Transfer, новая пара — под новым Transfer."""
     setup = await _make_two_ghp_setup(session, sku="T2COR", qty=Decimal("10"))
     ctx = await _make_tasks_transferable(session, client, setup)
 
@@ -429,7 +429,7 @@ async def test_correct_transfer_quantity(session: AsyncSession, client) -> None:
     )
     assert len(originals) == 2
 
-    await correct_transfer(
+    correct_result = await correct_transfer(
         session,
         transfer_id=send["transfer_id"],
         new_quantity=Decimal("3"),
@@ -438,31 +438,40 @@ async def test_correct_transfer_quantity(session: AsyncSession, client) -> None:
     await session.commit()
     await assert_no_invariants_violations(session, context="t2cor-correct")
 
-    txs = (await session.execute(
+    new_transfer_id = correct_result["new_transfer_id"]
+    assert correct_result["amended_transfer_id"] == send["transfer_id"]
+    assert correct_result["status"] == "amended"
+
+    # Старый Transfer: 2 исходных (нетронутых) + 2 компенсации = 4.
+    old_txs = (await session.execute(
         select(StockTransaction).where(
             StockTransaction.transfer_id == send["transfer_id"]
         ).order_by(StockTransaction.id)
     )).scalars().all()
-    # 2 исходных (нетронутых) + 2 компенсации + 2 новых = 6.
-    assert len(txs) == 6
+    assert len(old_txs) == 4
 
-    by_id = {tx.id: tx for tx in txs}
-    # Старые проводки неизменны: quantity и все поля как до коррекции.
+    by_id = {tx.id: tx for tx in old_txs}
     for orig in originals:
         assert by_id[orig.id].quantity == Decimal("5")
         assert by_id[orig.id].from_location_id == orig.from_location_id
         assert by_id[orig.id].to_location_id == orig.to_location_id
 
-    compensations = [tx for tx in txs if tx.reverses_id is not None]
+    compensations = [tx for tx in old_txs if tx.reverses_id is not None]
     assert {tx.reverses_id for tx in compensations} == {orig.id for orig in originals}
     assert all(tx.quantity == Decimal("5") for tx in compensations)
 
-    fresh = [
-        tx for tx in txs
-        if tx.reverses_id is None and tx.id not in {o.id for o in originals}
-    ]
-    assert len(fresh) == 2
-    assert all(tx.quantity == Decimal("3") for tx in fresh)
+    # Новый Transfer: 2 проводки с новым quantity.
+    new_txs = (await session.execute(
+        select(StockTransaction).where(
+            StockTransaction.transfer_id == new_transfer_id
+        ).order_by(StockTransaction.id)
+    )).scalars().all()
+    assert len(new_txs) == 2
+    assert all(tx.quantity == Decimal("3") for tx in new_txs)
+
+    # Старый Transfer в статусе amended.
+    old_transfer = await session.get(Transfer, send["transfer_id"])
+    assert old_transfer.status == TransferStatus.amended
 
 
 @_py_test_mark
@@ -580,3 +589,222 @@ async def test_complete_after_transfer_balance_not_doubled(session: AsyncSession
     cache = await pm.get_task_cache(session, to_task.id)
     assert cache["issued_quantity"] == xfer_qty
     assert cache["completed_quantity"] == xfer_qty
+
+
+@_py_test_mark
+async def test_correct_then_reverse_balance_restored(
+    session: AsyncSession, client,
+) -> None:
+    """DoD тикет #124: correct → reverse → баланс восстановлен (net=0).
+
+    Сценарий: send(5) → correct(3) → cancel(new_transfer).
+    Оба Transfer (старый и новый) компенсируются, net по обеим секциям = 0.
+    """
+    from app.models.action_journal import Action
+
+    setup = await _make_two_ghp_setup(session, sku="T2CRV", qty=Decimal("10"))
+    ctx = await _make_tasks_transferable(session, client, setup)
+    from_task = await session.get(WorkTask, ctx["from_task_id"])
+    to_task = await session.get(WorkTask, ctx["to_task_id"])
+
+    # 1. Send 5
+    send = await transfer_send(
+        session,
+        from_task_id=ctx["from_task_id"],
+        to_task_id=ctx["to_task_id"],
+        quantity=Decimal("5"),
+        actor_id=ctx["user"].id,
+        idempotency_key="t2crv:send",
+    )
+    await session.commit()
+
+    # 2. Correct 5 → 3 (amend)
+    correct_result = await correct_transfer(
+        session,
+        transfer_id=send["transfer_id"],
+        new_quantity=Decimal("3"),
+        actor_id=ctx["user"].id,
+    )
+    await session.commit()
+    await assert_no_invariants_violations(session, context="t2crv-correct")
+
+    new_transfer_id = correct_result["new_transfer_id"]
+
+    # После correct: net по источнику = -3 (отправлено 3),
+    # net по приёмнику = +3 (получено 3).
+    assert (await _balance(
+        session, from_task.product_id, from_task.section_id,
+    )) == Decimal("7")  # 10 - 3
+    assert (await _balance(
+        session, to_task.product_id, to_task.section_id,
+    )) == Decimal("3")
+
+    # 3. Reverse (cancel) нового Transfer
+    cancel_result = await cancel_transfer(
+        session,
+        transfer_id=new_transfer_id,
+        actor_id=ctx["user"].id,
+    )
+    await session.commit()
+    await assert_no_invariants_violations(session, context="t2crv-cancel")
+
+    assert cancel_result["status"] == "cancelled"
+
+    # Баланс восстановлен: net=0 по обеим секциям.
+    assert (await _balance(
+        session, from_task.product_id, from_task.section_id,
+    )) == Decimal("10")  # исходный баланс возвращён
+    assert (await _balance(
+        session, to_task.product_id, to_task.section_id,
+    )) == Decimal("0")
+
+    # Старый Transfer = amended, новый = cancelled.
+    old_transfer = await session.get(Transfer, send["transfer_id"])
+    assert old_transfer.status == TransferStatus.amended
+    new_transfer = await session.get(Transfer, new_transfer_id)
+    assert new_transfer.status == TransferStatus.cancelled
+
+    # Под новым Transfer'ом есть reversal Action (от cancel).
+    # Старый Transfer корректируется через amend: компенсации делят
+    # новый Action с action_type="transfer_send" (amends_action_id ≠ None).
+    from app.models.action_journal import ActionStatus
+    from sqlalchemy import select as sa_select
+
+    # Исходный Action перешёл в AMENDED (не REVERSED).
+    old_send_action = (await session.execute(
+        sa_select(Action).where(
+            Action.action_type == "transfer_send",
+            Action.ref_id == send["transfer_id"],
+        )
+    )).scalar_one_or_none()
+    assert old_send_action is not None
+    assert old_send_action.status == ActionStatus.AMENDED
+
+    # Новый Action: transfer_send с amends_action_id → новый Transfer.
+    amend_action = (await session.execute(
+        sa_select(Action).where(
+            Action.action_type == "transfer_send",
+            Action.amends_action_id == old_send_action.id,
+        )
+    )).scalar_one_or_none()
+    assert amend_action is not None
+    assert amend_action.ref_id == new_transfer_id
+
+    # Под новым Transfer: reversal Action (от cancel).
+    new_reversals = (await session.execute(
+        sa_select(Action).where(
+            Action.action_type == "reversal",
+            Action.ref_id == new_transfer_id,
+        )
+    )).scalars().all()
+    assert len(new_reversals) == 1  # от cancel
+
+
+@_py_test_mark
+async def test_cancel_transfer_blocked_when_target_completed_parts(
+    session: AsyncSession, client,
+) -> None:
+    """Guard-паритет #124: предварительная доменная валидация сохранена.
+
+    Приёмная сторона завершила часть количества (in_work < sent_quantity) —
+    cancel_transfer отклоняется ДО вызова reverse, компенсаций нет.
+    """
+    setup = await _make_two_ghp_setup(session, sku="T2CNG", qty=Decimal("10"))
+    ctx = await _make_tasks_transferable(session, client, setup)
+
+    send = await transfer_send(
+        session,
+        from_task_id=ctx["from_task_id"],
+        to_task_id=ctx["to_task_id"],
+        quantity=Decimal("5"),
+        actor_id=ctx["user"].id,
+        idempotency_key="t2cng:send",
+    )
+    await session.commit()
+
+    # Приёмник завершил 2 из 5 → in_work = 3 < 5.
+    from app.services.shopfloor.operations_tasks import complete_task
+
+    await complete_task(
+        session,
+        task_id=ctx["to_task_id"],
+        good_quantity=Decimal("2"),
+        defect_quantity=Decimal("0"),
+        actor_id=ctx["user"].id,
+    )
+    await session.commit()
+
+    with pytest.raises(ValueError, match="Cannot cancel transfer"):
+        await cancel_transfer(
+            session,
+            transfer_id=send["transfer_id"],
+            actor_id=ctx["user"].id,
+        )
+    await assert_no_invariants_violations(session, context="t2cng-cancel-guard")
+
+    # Ничего не изменилось: Transfer остался accepted, компенсаций нет.
+    transfer = await session.get(Transfer, send["transfer_id"])
+    assert transfer is not None
+    assert transfer.status == TransferStatus.accepted
+    comps = (await session.execute(
+        select(StockTransaction).where(
+            StockTransaction.transfer_id == transfer.id,
+            StockTransaction.reverses_id.is_not(None),
+        )
+    )).scalars().all()
+    assert comps == []
+
+
+@_py_test_mark
+async def test_correct_transfer_reduce_blocked_by_target_in_work(
+    session: AsyncSession, client,
+) -> None:
+    """Guard-паритет #124: reduce ниже in_work баланса приёмника отклоняется.
+
+    Приёмник завершил 3 из 5 (in_work = 2); коррекция 5 → 1 (diff=-4)
+    создала бы «фантомный» слив — ValueError до amend, без побочных эффектов.
+    """
+    setup = await _make_two_ghp_setup(session, sku="T2CRG", qty=Decimal("10"))
+    ctx = await _make_tasks_transferable(session, client, setup)
+
+    send = await transfer_send(
+        session,
+        from_task_id=ctx["from_task_id"],
+        to_task_id=ctx["to_task_id"],
+        quantity=Decimal("5"),
+        actor_id=ctx["user"].id,
+        idempotency_key="t2crg:send",
+    )
+    await session.commit()
+
+    from app.services.shopfloor.operations_tasks import complete_task
+
+    await complete_task(
+        session,
+        task_id=ctx["to_task_id"],
+        good_quantity=Decimal("3"),
+        defect_quantity=Decimal("0"),
+        actor_id=ctx["user"].id,
+    )
+    await session.commit()
+
+    with pytest.raises(ValueError, match="Cannot reduce transfer"):
+        await correct_transfer(
+            session,
+            transfer_id=send["transfer_id"],
+            new_quantity=Decimal("1"),
+            actor_id=ctx["user"].id,
+        )
+    await assert_no_invariants_violations(session, context="t2crg-correct-guard")
+
+    # Ничего не изменилось: Transfer остался accepted (не amended).
+    transfer = await session.get(Transfer, send["transfer_id"])
+    assert transfer is not None
+    assert transfer.status == TransferStatus.accepted
+    comps = (await session.execute(
+        select(StockTransaction).where(
+            StockTransaction.transfer_id == transfer.id,
+            StockTransaction.reverses_id.is_not(None),
+        )
+    )).scalars().all()
+    assert comps == []

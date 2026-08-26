@@ -164,7 +164,8 @@ async def test_not_allowed_preview_blocked(session: AsyncSession, client) -> Non
 async def test_domain_cancelled_transfer_preview_blocked(
     session: AsyncSession, client,
 ) -> None:
-    """Доменно-отменённая передача: preview 🚫 already_reversed, токен нет."""
+    """Отменённая через cancel_transfer передача: Action уже reversed,
+    preview-reverse → 409 AlreadyReversed; confirm с подделкой — тоже 409."""
     setup = await _make_two_ghp_setup(session, sku="RVAPI5", qty=Decimal("10"))
     ctx = await _make_tasks_transferable(session, client, setup)
     result = await transfer_send(
@@ -187,20 +188,20 @@ async def test_domain_cancelled_transfer_preview_blocked(
 
     from app.transfers.services import cancel_transfer
 
+    # cancel_transfer через ReversalService.reverse: исходный Action
+    # переходит в REVERSED (а не просто domain-cancelled, как раньше).
     await cancel_transfer(session, transfer_id=result["transfer_id"], actor_id=ctx["user"].id)
     await session.commit()
 
+    # preview-reverse на уже reversed Action → 409 AlreadyReversed.
     resp = await client.post(
         f"/api/actions/{action.id}/preview-reverse",
         json={"cascade": False},
         headers=_auth_headers(ctx["user"]),
     )
-    assert resp.status_code == 200, resp.text
-    body = resp.json()
-    assert any(b["kind"] == "already_reversed" for b in body["blockers"])
-    assert body["plan_token"] is None
+    assert resp.status_code == 409, resp.text
 
-    # Confirm с подделкой — 409.
+    # Confirm с подделкой — тоже 409.
     resp = await client.post(
         f"/api/actions/{action.id}/reverse",
         json={"plan_token": "forged.token"},

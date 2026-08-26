@@ -118,13 +118,16 @@ type StatusBadgeVariant = "default" | "destructive" | "outline" | "secondary";
 function statusBadgeLabel(status: string): string {
   // Under the explicit-transfer model, transfer_send auto-accepts the
   // transfer inline. By the time the operator sees the history list,
-  // every transfer is either "Принята" or "Аннулирована".
+  // every transfer is either "Принята", "Аннулирована" or "Скорректирована"
+  // (amended, тикет #124 — живёт новая пара SEND/RECEIVE).
   if (status === "cancelled") return "Аннулирована";
+  if (status === "amended") return "Скорректирована";
   return "Принята";
 }
 
 function statusBadgeVariant(status: string): StatusBadgeVariant {
   if (status === "cancelled") return "destructive";
+  if (status === "amended") return "secondary";
   return "outline";
 }
 
@@ -158,6 +161,7 @@ function getHistoryStatusLabel(
   const isIncoming = sectionIdsInSpg.has(transfer.to_section_id);
   const direction = isIncoming ? "Входящая" : "Исходящая";
   if (transfer.status === "cancelled") return `${direction} / Аннулирована`;
+  if (transfer.status === "amended") return `${direction} / Скорректирована`;
   if (transfer.status === "sent") return `${direction} / Отправлена`;
   if (transfer.status === "partially_accepted") return `${direction} / Частично принята`;
   return `${direction} / Принята`;
@@ -1386,6 +1390,7 @@ export function TransfersPage() {
                           const isCancelled = t.status === "cancelled";
                           const statusBadge = (() => {
                             if (isCancelled) return { label: "Аннулирована", variant: "destructive" as const };
+                            if (t.status === "amended") return { label: "Скорректирована", variant: "secondary" as const };
                             if (t.status === "sent") return { label: "Отправлена", variant: "outline" as const };
                             if (t.status === "partially_accepted")
                               return { label: "Частично принята", variant: "outline" as const };

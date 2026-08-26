@@ -362,8 +362,8 @@ async def test_already_reversed(session: AsyncSession, client) -> None:
 async def test_preview_domain_cancelled_transfer_blocked(
     session: AsyncSession, client,
 ) -> None:
-    """Доменно-отменённая передача: preview 🚫 already_reversed,
-    plan_token не выдаётся, confirm невозможен."""
+    """Отменённая через cancel_transfer передача: ReversalService.reverse
+    переводит Action в REVERSED; повторный preview → AlreadyReversed."""
     setup = await _make_two_ghp_setup(session, sku="RVDOMC", qty=Decimal("10"))
     ctx = await _make_tasks_transferable(session, client, setup)
     action = await _send_transfer(session, ctx, qty=Decimal("3"), key="rvdomc:t1")
@@ -375,15 +375,16 @@ async def test_preview_domain_cancelled_transfer_blocked(
     await session.commit()
     await assert_no_invariants_violations(session, context="rvdomc-cancel")
 
-    preview = await reversal_service.preview_reverse(session, action.id)
-    kinds = {b.kind for b in preview.blockers}
-    assert "already_reversed" in kinds
-    assert preview.plan_token is None
-    # Запись журнала при доменной отмене остаётся active — блокер даёт
-    # именно доменное состояние Transfer.
-    assert action.status == ActionStatus.ACTIVE
+    # cancel_transfer через ReversalService.reverse: Action в REVERSED.
+    await session.refresh(action)
+    assert action.status == ActionStatus.REVERSED
 
-    with pytest.raises(errors.StalePlanToken):
+    # Повторный preview → AlreadyReversed.
+    with pytest.raises(errors.AlreadyReversed):
+        await reversal_service.preview_reverse(session, action.id)
+
+    # Confirm с подделкой — тоже AlreadyReversed (или StalePlanToken).
+    with pytest.raises((errors.AlreadyReversed, errors.StalePlanToken)):
         await reversal_service.reverse(session, action.id, plan_token="forged.token")
 
 
@@ -423,7 +424,8 @@ async def test_correct_transfer_preserves_quality_state(
     session: AsyncSession, client,
 ) -> None:
     """Коррекция количества сохраняет quality_state исходных проводок:
-    баланс ключуется по (product, location, quality_state, dimensions)."""
+    баланс ключуется по (product, location, quality_state, dimensions).
+    Тикет #124: amend — компенсации под старым Transfer, новая пара под новым."""
     from app.models.transfer import Transfer, TransferStatus
     from app.stock.models import QualityState
 
@@ -462,6 +464,13 @@ async def test_correct_transfer_preserves_quality_state(
     )
     session.add(transfer)
     await session.flush()
+    # Action создаётся ДО проводок, чтобы StockTransaction.action_id ссылался
+    # на него (требование ReversalService для amend/plan_entries).
+    action = Action(
+        action_type="transfer_send", ref_id=transfer.id, actor="test"
+    )
+    session.add(action)
+    await session.flush()
     send_tx = await svc.record(
         session,
         StockCommand(
@@ -474,6 +483,7 @@ async def test_correct_transfer_preserves_quality_state(
             transfer_id=transfer.id,
             quality_state=QualityState.SCRAP,
             created_by=user.id,
+            action_id=action.id,
         ),
     )
     await svc.record(
@@ -486,15 +496,12 @@ async def test_correct_transfer_preserves_quality_state(
             transfer_id=transfer.id,
             quality_state=QualityState.SCRAP,
             created_by=user.id,
+            action_id=action.id,
         ),
     )
-    action = Action(
-        action_type="transfer_send", ref_id=transfer.id, actor="test"
-    )
-    session.add(action)
     await session.commit()
 
-    await correct_transfer(
+    correct_result = await correct_transfer(
         session,
         transfer_id=transfer.id,
         new_quantity=Decimal("1"),
@@ -503,20 +510,37 @@ async def test_correct_transfer_preserves_quality_state(
     await session.commit()
     await assert_no_invariants_violations(session, context="rvq-correct")
 
-    txs = (
+    new_transfer_id = correct_result["new_transfer_id"]
+
+    # Старый Transfer: 2 исходных + 2 компенсации = 4.
+    old_txs = (
         await session.execute(
             select(StockTransaction)
             .where(StockTransaction.transfer_id == transfer.id)
             .order_by(StockTransaction.id)
         )
     ).scalars().all()
-    # 2 исходных + 2 компенсации + 2 новых = 6; компенсации и новая пара
-    # наследуют scrap-качество исходных (баланс ключуется по качеству).
-    assert len(txs) == 6
-    for tx in txs:
-        if tx.reverses_id is not None or tx.quantity == Decimal("1"):
-            assert tx.from_quality_state == QualityState.SCRAP
-            assert tx.to_quality_state == QualityState.SCRAP
+    assert len(old_txs) == 4
+    # Компенсации наследуют scrap-качество.
+    comp_txs = [tx for tx in old_txs if tx.reverses_id is not None]
+    for tx in comp_txs:
+        assert tx.from_quality_state == QualityState.SCRAP
+        assert tx.to_quality_state == QualityState.SCRAP
+
+    # Новый Transfer: 2 проводки с quantity=1, тоже scrap.
+    new_txs = (
+        await session.execute(
+            select(StockTransaction)
+            .where(StockTransaction.transfer_id == new_transfer_id)
+            .order_by(StockTransaction.id)
+        )
+    ).scalars().all()
+    assert len(new_txs) == 2
+    assert all(tx.quantity == Decimal("1") for tx in new_txs)
+    for tx in new_txs:
+        assert tx.from_quality_state == QualityState.SCRAP
+        assert tx.to_quality_state == QualityState.SCRAP
+
     # Исходные проводки нетронуты.
     orig = await session.get(StockTransaction, send_tx.id)
     assert orig.quantity == Decimal("3")

@@ -253,7 +253,14 @@ export async function correctTransfer(
   transferId: number,
   payload: { quantity: number | string; comment?: string },
   options?: ShopfloorRequestOptions,
-): Promise<{ transfer_id: number; status: string; quantity: string }> {
+): Promise<{
+  /** Голова amend-цепочки — новый Transfer (или тот же, если количество не изменилось). */
+  new_transfer_id: number;
+  /** Списанный Transfer со статусом amended (null, если коррекция не потребовалась). */
+  amended_transfer_id: number | null;
+  status: string;
+  quantity: string;
+}> {
   const { data } = await apiClient.put(
     `/transfers/${transferId}`,
     payload,
