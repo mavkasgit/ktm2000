@@ -774,9 +774,9 @@ async def _complete_saw(session: AsyncSession, *, saw_task: WorkTask, user: User
 async def _task_transferable_by_dim(
     session: AsyncSession, task: WorkTask, dims: dict | None
 ) -> Decimal:
-    from app.transfers.services import _get_task_transferable
+    from app.transfers.transferable import task_transferable
 
-    return await _get_task_transferable(session, task, dimensions=dims)
+    return await task_transferable(session, task, dimensions=dims)
 
 
 async def test_transforming_task_multi_transfer_within_output_quantity(client, session) -> None:

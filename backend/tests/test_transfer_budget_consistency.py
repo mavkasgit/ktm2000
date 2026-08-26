@@ -2,7 +2,7 @@
 
 Регрессионный тест против formula drift между read-path
 (``GET /api/transfers/ready`` → ``app.transfers.queries.list_ready_to_transfer``)
-и write-path (``app.transfers.services._get_task_transferable``): для одного и
+и write-path (``app.transfers.transferable.task_transferable``): для одного и
 того же сценария оба источника возвращают один и тот же transferable.
 
 Три пути бюджета (тикет #106, ``app.transfers.budget``):
@@ -20,6 +20,10 @@
 write-guard ≡ read-SQL (фабрики ``app.transfers.budget`` поверх
 ledger-подзапросов) ≡ чистые Decimal-функции — включая финальный участок,
 где смысл бюджета — отправка (``remaining_send``, FINAL_RELEASE).
+
+Тикет #131: оракул бьёт в публичный шов глубокого модуля
+``app.transfers.transferable`` (write-guard ``task_transferable``, SQL-форма
+``completed_qty_sq``) — не в приватные функции services/queries.
 """
 from __future__ import annotations
 
@@ -61,13 +65,14 @@ _UNSET = object()
 async def _read_sql_budgets(session: AsyncSession, task: WorkTask) -> dict[str, Decimal]:
     """Read-SQL путь бюджета: фабрики ``app.transfers.budget`` поверх
     ledger-подзапросов (``net_*_sq``) для одной задачи — та же сборка,
-    что в ready-запросе, но без скрытых копий формулы."""
+    что в ready-запросе; «произведено» — публичная SQL-форма модуля
+    ``transferable`` (#131), без скрытых копий формулы."""
     from app.stock.ledger import net_by_reason_sq, net_transferred_sq
     from app.stock.models import Reason
     from app.transfers.budget import sendable_qty_sql, transferable_qty_sql
-    from app.transfers.queries import _completed_qty_subquery
+    from app.transfers.transferable import completed_qty_sq
 
-    completed_sq = _completed_qty_subquery()
+    completed_sq = completed_qty_sq()
     transferred_sq = net_transferred_sq(alias="oracle_transferred_sq")
     released_sq = net_by_reason_sq(Reason.FINAL_RELEASE, alias="oracle_released_sq")
     completed_col = func.coalesce(completed_sq.c.completed_qty, 0)
@@ -97,10 +102,10 @@ async def _task_transferable(
     task: WorkTask,
     dims: dict | None = None,
 ) -> Decimal:
-    """Write guard: ``_get_task_transferable`` (тест_transfer_dimensions.py:774-779)."""
-    from app.transfers.services import _get_task_transferable
+    """Write-guard через публичный шов модуля transferable (#131)."""
+    from app.transfers.transferable import task_transferable
 
-    return await _get_task_transferable(session, task, dimensions=dims)
+    return await task_transferable(session, task, dimensions=dims)
 
 
 async def _ready_row(

@@ -43,13 +43,14 @@ from app.services.plan_position_hanger import task_dimensions_for_plan_line
 
 from app.services.shopfloor.common import _get_transfer, _to_decimal
 from app.stock.ledger import net_transferred_sq
-from app.services.shopfloor.output_rows import UsedSource, build_task_output_rows
 from app.transfers.budget import (
-    remaining_plain,
-    remaining_send,
-    remaining_transform,
     sendable_qty_sql,
     transferable_qty_sql,
+)
+from app.transfers.transferable import (
+    BudgetKind,
+    completed_qty_sq,
+    task_transferable_lines,
 )
 
 
@@ -224,20 +225,6 @@ async def get_section_incoming_transfers(
 STOCK_SECTION_TYPES = STOCK_TYPES
 
 
-def _completed_qty_subquery():
-    from app.stock.models import Reason, StockTransaction
-
-    return (
-        select(
-            StockTransaction.task_id,
-            func.coalesce(func.sum(StockTransaction.quantity), 0).label("completed_qty"),
-        )
-        .where(StockTransaction.reason == Reason.COMPLETE)
-        .group_by(StockTransaction.task_id)
-        .subquery("completed_qty_sq")
-    )
-
-
 def _operation_names_subquery():
     return (
         select(
@@ -313,103 +300,44 @@ def _ready_row_common(row) -> dict:
     }
 
 
-def _hydrate_plain_ready_row(row) -> dict | None:
-    (
-        task,
-        _line,
-        stage,
-        _section,
-        _product_sku,
-        _next_l,
-        _next_stg,
-        _next_sec,
-        _completion_comment,
-        completed,
-        transferred,
-        released,
-        _transferable_qty,
-        _sendable_qty,
-    ) = row
-    # Финальный этап (тикет #96): «отдано» = уже выпущено (FINAL_RELEASE),
-    # а не переданное на следующий участок; смысл бюджета — отправка
-    # (``remaining_send``, тикет #119). Нефинальный — передача
-    # (``remaining_plain``).
-    if bool(stage.is_final):
-        used = _to_decimal(released)
-        transferable = remaining_send(_to_decimal(completed), used)
-    else:
-        used = _to_decimal(transferred)
-        transferable = remaining_plain(_to_decimal(completed), used)
-    if transferable <= 0:
-        return None
-    return {
-        **_ready_row_common(row),
-        "planned_quantity": _fmt_qty(task.planned_quantity),
-        "completed_quantity": _fmt_qty(completed),
-        "already_transferred_quantity": _fmt_qty(used),
-        "transferable_quantity": _fmt_qty(transferable),
-        **_ready_dimensions_fields(task.dimensions),
-    }
-
-
 async def _hydrate_production_ready_row(db: AsyncSession, row) -> list[dict]:
     """Ready-строки одной production-задачи.
 
+    Бюджет собирает глубокий модуль ``transferable`` (#131): трёхветочный
+    dispatch (обычная задача / трансформация / склад) и выбор формулы по
+    финальности участка живут там; гидратор только разворачивает строки
+    бюджета в JSON готовой страницы.
+
     Обычная задача — одна строка ``dimensions = task.dimensions``.
     Трансформирующая (резка, тикет #91) — строка на каждый выход
-    спецификации: ``dimensions = outputs[i].dimensions``,
-    ``planned_quantity = outputs[i].quantity``; transferable выхода =
-    ``min(outputs[i].quantity, произведено по размеру) − уже переданное
-    по этому размеру`` (инвариант D2). Строки с transferable <= 0
+    спецификации. Строки с бюджетом <= 0 (и выходы с планом <= 0)
     отбрасываются.
 
     Финальный этап (тикет #96): «уже отданное» по размеру — net
-    FINAL_RELEASE (released), а не TRANSFER_SEND; transferable выхода =
-    releasable = произведено по размеру − уже выпущено по размеру.
+    FINAL_RELEASE (released), а не TRANSFER_SEND; смысл бюджета — отправка
+    (``remaining_send``, тикет #119).
     """
     task = row[0]
     stage = row[2]
-    is_final = bool(stage.is_final)
-    outputs = task.outputs or []
-    if not outputs:
-        item = _hydrate_plain_ready_row(row)
-        return [item] if item is not None else []
-
+    section = row[3]
     common = _ready_row_common(row)
-    rows = await build_task_output_rows(
-        db,
-        task_id=task.id,
-        outputs=outputs,
-        used_source=(
-            UsedSource.NET_FINAL_RELEASE if is_final else UsedSource.NET_TRANSFERRED
-        ),
-    )
+    lines = await task_transferable_lines(db, task, section=section, stage=stage)
 
     items: list[dict] = []
-    for output in rows:
-        planned = output.quantity
-        if planned <= 0:
+    for line in lines:
+        # Выход трансформации с неположительным планом не показываем;
+        # обычная задача видна, пока положителен её бюджет.
+        if line.kind is BudgetKind.TRANSFORM and line.planned <= 0:
             continue
-        # Смысл бюджета выбирает потребитель по финальности участка (#119):
-        # финальный — отправка (``remaining_send``), остальные — передача
-        # (``remaining_transform``).
-        if is_final:
-            transferable = remaining_send(
-                output.produced_quantity, output.used_quantity,
-            )
-        else:
-            transferable = remaining_transform(
-                output.produced_quantity, output.used_quantity,
-            )
-        if transferable <= 0:
+        if line.budget <= 0:
             continue
         items.append({
             **common,
-            "planned_quantity": _fmt_qty(planned),
-            "completed_quantity": _fmt_qty(output.produced_quantity),
-            "already_transferred_quantity": _fmt_qty(output.used_quantity),
-            "transferable_quantity": _fmt_qty(transferable),
-            **_ready_dimensions_fields(output.dimensions),
+            "planned_quantity": _fmt_qty(line.planned),
+            "completed_quantity": _fmt_qty(line.produced),
+            "already_transferred_quantity": _fmt_qty(line.used),
+            "transferable_quantity": _fmt_qty(line.budget),
+            **_ready_dimensions_fields(line.dims),
         })
     return items
 
@@ -501,12 +429,17 @@ def _build_production_ready_query(
 
     from app.stock.ledger import net_by_reason_sq
     from app.stock.models import Reason, StockTransaction
-    completed_sq = _completed_qty_subquery()
+    # «Произведено/завершено» — публичная SQL-форма модуля transferable (#131).
+    completed_sq = completed_qty_sq()
     transferred_sq = tcast(Subquery, net_transferred_sq("transferred_qty_sq"))
     released_sq = tcast(Subquery, net_by_reason_sq(Reason.FINAL_RELEASE, "released_qty_sq"))
     # Единственный владелец формулы — transfers/budget (#119): ready-запрос
     # отдаёт ДВА именованных столбца (передача / отправка); семантику по
     # финальности участка выбирает потребитель, фабрика CASE не строит.
+    # (#131) Выражения ниже — грубый set-based ПРЕДФИЛЬТР по задачным
+    # агрегатам: выходы трансформации живут в JSON и в SQL не
+    # разворачиваются. Точные бюджеты готовых строк считает модуль
+    # app.transfers.transferable при гидрации — формулы тут не копируются.
     completed_col = func.coalesce(completed_sq.c.completed_qty, 0)
     transferable_expr = transferable_qty_sql(
         completed_col,
@@ -787,7 +720,7 @@ async def _fetch_stock_ready_items(
     dimensions: str | None = None,
 ) -> list[dict]:
     from app.models.production_plan import PlanPosition
-    from app.transfers.services import compute_stock_section_transferable
+    from app.transfers.transferable import stock_line
 
     if spg_id is not None:
         sections = (
@@ -912,14 +845,15 @@ async def _fetch_stock_ready_items(
                 db.add(fake_task)
                 await db.flush()
 
-            transferable, _plan_remaining, physical_stock, transferred = (
-                await compute_stock_section_transferable(
-                    db,
-                    task=fake_task,
-                    section=sec,
-                    planned_qty=planned_qty,
-                )
+            # Бюджет складской строки — из модуля transferable (#131): тот же
+            # stock_line, что читает write-guard; здесь только выбор
+            # кандидатов (план-строк склада) и отображение.
+            line = await stock_line(
+                db, task=fake_task, section=sec, planned_qty=planned_qty,
             )
+            transferable = line.budget
+            physical_stock = line.produced
+            transferred = line.used
             if transferable <= 0:
                 continue
 

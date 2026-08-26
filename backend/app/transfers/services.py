@@ -31,7 +31,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from decimal import Decimal
 
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.internal_plan import SectionPlanLine
@@ -61,134 +61,20 @@ from app.services.shopfloor.common import (
 # ``from=from_section → to=to_section``: каждая двигает баланс обеих локаций
 # на quantity. Отмена — компенсационные транзакции (append-only).
 # Коррекция — in-place изменение quantity активных транзакций.
-from app.domain.dimensions import canonicalize_dimensions, dimensions_equal
+from app.domain.dimensions import canonicalize_dimensions
 from app.services.action_journal_service import action_journal_service
 from app.stock.models import QualityState, Reason, StockTransaction
 from app.stock.services import (
     StockCommand,
     StockCommandService,
-    dimensions_match_clause,
 )
-from app.stock.ledger import net_transferred
-from app.services.shopfloor.operations_transform import get_transform_progress
 from app.services.shopfloor.output_rows import (
     UsedSource,
-    build_output_rows,
     build_task_output_rows,
 )
-from app.transfers import budget
+from app.transfers.transferable import task_transferable
 
 _stock_command_service = StockCommandService()
-
-
-async def compute_stock_section_transferable(
-    db: AsyncSession,
-    *,
-    task: WorkTask,
-    section: Section,
-    planned_qty: Decimal,
-    dimensions: dict | None = None,
-) -> tuple[Decimal, Decimal, Decimal, Decimal]:
-    """Остаток к передаче со склада по паре (строка плана, размер).
-
-    Возвращает ``(transferable, plan_remaining, physical_stock, already_transferred)``.
-    Нельзя передать больше плана позиции и больше физического остатка на складе.
-    ``already_transferred`` учитывается по размеру (не по строке целиком):
-    несколько передач одного размера разрешены, сумма ограничена через
-    ``transferable``.
-    """
-    from app.stock.models import QualityState, StockBalance
-
-    # Размер группы: если явный не передан — берём из задания (канонический
-    # габарит плана). None = безразмерная legacy-группа.
-    dims = dimensions if dimensions is not None else task.dimensions
-
-    already_transferred = await net_transferred(
-        db,
-        section_plan_line_id=task.section_plan_line_id,
-        dims=dims,
-    )
-
-    plan_remaining = max(Decimal("0"), _to_decimal(planned_qty) - already_transferred)
-
-    physical_stock_q = select(func.coalesce(func.sum(StockBalance.balance_qty), 0)).where(
-        StockBalance.location_id == section.id,
-        StockBalance.product_id == task.product_id,
-        StockBalance.balance_qty > 0,
-        StockBalance.quality_state == QualityState.GOOD,
-    )
-    # Задание несёт габарит (ADR-0001): остаток считается только по строке
-    # баланса этой размерности. Без длины — legacy-поведение (все группы).
-    if dims is not None:
-        physical_stock_q = physical_stock_q.where(
-            dimensions_match_clause(StockBalance.dimensions, dims)
-        )
-    physical_stock = (await db.scalar(physical_stock_q)) or Decimal("0")
-
-    transferable = budget.remaining_stock(plan_remaining, physical_stock)
-    return transferable, plan_remaining, physical_stock, already_transferred
-
-
-async def _get_task_transferable(
-    db: AsyncSession,
-    task: WorkTask,
-    *,
-    dimensions: dict | None = None,
-) -> Decimal:
-    from app.models.section import Section
-    from app.services.route_storage_classifier import is_stock_section
-    from app.stock.services import StockProjectionManager
-
-    sec = await db.get(Section, task.section_id)
-    if is_stock_section(sec):
-        line = await db.get(SectionPlanLine, task.section_plan_line_id)
-        planned_qty = task.planned_quantity
-        if line is not None and line.planned_quantity:
-            planned_qty = line.planned_quantity
-        transferable, _, _, _ = await compute_stock_section_transferable(
-            db,
-            task=task,
-            section=sec,
-            planned_qty=planned_qty,
-            dimensions=dimensions,
-        )
-        return transferable
-
-    # Трансформирующий этап (ADR-0002): задание несёт спецификацию выходов
-    # (WorkTask.outputs). Передавать можно не больше количества выхода этого
-    # размера минус уже переданное — инвариант D2. Размер, которого нет в
-    # спецификации (например, входной), передавать нельзя.
-    # Тикет #91: transferable выхода = min(выход, произведено по размеру) −
-    # уже переданное по этому размеру. Частичная порция не позволяет
-    # передать больше, чем фактически раскроено (готовой баланс тоже
-    # ограничивает, но кап здесь — бизнес-правило).
-    # Т6: write guard сведён к read-path гидрации (queries.py) — produced по
-    # строкам выхода считается через build_output_rows, чтобы write и
-    # read не расходились. Кап min(output_quantity, produced_by_group) живёт
-    # внутри build_output_rows; здесь остаётся только
-    # remaining_transform(produced_for_dims, transferred).
-    if task.outputs:
-        dims = canonicalize_dimensions(dimensions)
-        progress = await get_transform_progress(db, task.id)
-        rows = build_output_rows(task.outputs, progress.produced_by_group, {})
-        produced_for_dims = sum(
-            (
-                row_out.produced_quantity
-                for row_out in rows
-                if dimensions_equal(row_out.dimensions, dims)
-            ),
-            Decimal("0"),
-        )
-        transferred = await net_transferred(db, task_id=task.id, dims=dims)
-        return budget.remaining_transform(produced_for_dims, transferred)
-
-    pm = StockProjectionManager()
-    cache = await pm.get_task_cache(db, task.id)
-    transferred_by_size = await net_transferred(
-        db, task_id=task.id, dims=dimensions
-    )
-    # T6: received no longer contributes to plain transfer budget.
-    return budget.remaining_plain(cache["completed_quantity"], transferred_by_size)
 
 
 async def _record_transfer_send_stock_tx(
@@ -415,7 +301,9 @@ async def transfer_send(
         raise ValueError("Transfer target must be next route step")
 
     if not post_factum and not allow_over_plan:
-        transferable = await _get_task_transferable(db, from_task, dimensions=dimensions)
+        # Лимит источника — публичный шов глубокого модуля transferable (#131):
+        # тот же интерфейс, что читают гидраторы ready-page.
+        transferable = await task_transferable(db, from_task, dimensions=dimensions)
         if quantity > transferable:
             raise ValueError("Transfer quantity exceeds transferable amount")
 
@@ -646,9 +534,10 @@ async def correct_transfer(
     to_task = await _get_task(db, transfer.to_task_id)
 
     # 1. Domain-guard: источник имеет достаточно transferable (с учётом
-    # возврата старого количества после компенсации).
+    # возврата старого количества после компенсации). Лимит — через модуль
+    # transferable (#131), как и в transfer_send.
     transferable = (
-        await _get_task_transferable(db, from_task, dimensions=transfer.dimensions)
+        await task_transferable(db, from_task, dimensions=transfer.dimensions)
         + old_quantity
     )
     if new_quantity > transferable:
