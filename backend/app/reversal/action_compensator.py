@@ -22,7 +22,6 @@
 """
 from __future__ import annotations
 
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.action_journal import Action, ActionStatus
@@ -31,6 +30,11 @@ from app.reversal.base import (
     ReversalCheck,
     ReversalPlan,
     ReversalResult,
+)
+from app.reversal.resolver import (
+    require_resolved,
+    resolution_blockers,
+    resolve_action,
 )
 from app.reversal.stock_compensator import MirrorLedgerMixin
 from app.stock.services import StockCommandService
@@ -56,10 +60,12 @@ def _enum_str(val: object) -> str:
 class StockActionCompensator(MirrorLedgerMixin):
     """Компенсатор доменных действий журнала: план зеркальных проводок.
 
-    Один экземпляр на action_type; действие разрешается по id узла
-    (``action_id``, передаётся ядром) либо по паре (action_type, ref_id)
-    при прямых вызовах. Для действий без ref_id (manual_adjustment) пара
-    неоднозначна — ядро всегда передаёт action_id.
+    Один экземпляр на action_type; узел действия резолвится единой
+    политикой (ADR-0021, ``reversal/resolver.py``): id узла старше пары
+    (action_type, ref_id); фолбэк — строгая трихотомия по активным
+    (0 → NotFound, 1 → Resolved, >1 → блокер ambiguous). Для действий
+    без ref_id (manual_adjustment) пара невозможна по построению — ядро
+    всегда передаёт action_id.
     """
 
     ACTION_TYPES = ACTION_COMPENSABLE_TYPES
@@ -72,42 +78,18 @@ class StockActionCompensator(MirrorLedgerMixin):
         self.action_type = action_type
         self._commands = command_service or StockCommandService()
 
-    async def _get_action(
-        self, db: AsyncSession, ref_id: int | None, action_id: int | None = None
-    ) -> Action | None:
-        if action_id is not None:
-            action = await db.get(Action, action_id)
-            if action is not None and action.action_type != self.action_type:
-                return None
-            return action
-        if ref_id is None:
-            # Без action_id действия с ref_id=NULL (manual_adjustment)
-            # неоднозначны — честный not_found вместо угадывания.
-            return None
-        matches = (await db.execute(
-            select(Action).where(
-                Action.action_type == self.action_type,
-                Action.ref_id == ref_id,
-            )
-        )).scalars().all()
-        active = [a for a in matches if a.status == ActionStatus.ACTIVE]
-        # Без action_id узел выбирается по (action_type, ref_id) только если
-        # активное действие ровно одно; иначе неоднозначно — not_found
-        # вместо тихой выборки order_by(id).limit(1).
-        return active[0] if len(active) == 1 else None
-
     async def check(
         self, db: AsyncSession, ref_id: int | None, *, action_id: int | None = None
     ) -> ReversalCheck:
-        action = await self._get_action(db, ref_id, action_id)
-        if action is None:
-            detail = (
-                f"{self.action_type}: действие не найдено"
-                + (f" по ref_id={ref_id}" if ref_id is not None else "")
-            )
-            return ReversalCheck(
-                node_id=None, ok=False, blockers=[CheckBlocker(kind="not_found", detail=detail)]
-            )
+        res = await resolve_action(
+            db, action_type=self.action_type, ref_id=ref_id, action_id=action_id
+        )
+        blockers = resolution_blockers(
+            res, action_type=self.action_type, ref_id=ref_id, action_id=action_id
+        )
+        if blockers is not None:
+            return ReversalCheck(node_id=None, ok=False, blockers=blockers)
+        action = res.action
         if action.status != ActionStatus.ACTIVE:
             return ReversalCheck(
                 node_id=action.id,
@@ -144,9 +126,12 @@ class StockActionCompensator(MirrorLedgerMixin):
         hard: bool,
         action_id: int | None = None,
     ) -> ReversalPlan:
-        action = await self._get_action(db, ref_id, action_id)
-        if action is None:
-            raise ValueError(f"{self.action_type}: действие для плана отката не найдено")
+        res = await resolve_action(
+            db, action_type=self.action_type, ref_id=ref_id, action_id=action_id
+        )
+        action = require_resolved(
+            res, action_type=self.action_type, ref_id=ref_id, action_id=action_id
+        )
         entries = await self._plan_entries(db, action)
         return ReversalPlan(
             action_id=action.id,

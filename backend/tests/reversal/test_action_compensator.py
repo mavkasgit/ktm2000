@@ -517,10 +517,11 @@ async def test_plan_auto_release_tree_preview_reverse(session: AsyncSession) -> 
     assert await _balance(session, section_id, product_id) == pre_section
 
 
-async def test_ref_fallback_ambiguous_returns_not_found(session: AsyncSession) -> None:
-    """Fallback по (action_type, ref_id) без action_id: узел возвращается
-    только если активное действие ровно одно; при двух активных — not_found
-    вместо тихой выборки первой записи."""
+async def test_ref_fallback_ambiguous_returns_ambiguous(session: AsyncSession) -> None:
+    """Fallback по (action_type, ref_id) без action_id (ADR-0021): ровно
+    одно активное действие резолвится; при двух активных — типизированный
+    блокер ambiguous с перечнем id-кандидатов (не not_found и не тихая
+    выборка первой записи)."""
     from app.reversal.action_compensator import StockActionCompensator
     from app.services.action_journal_service import action_journal_service
 
@@ -532,12 +533,14 @@ async def test_ref_fallback_ambiguous_returns_not_found(session: AsyncSession) -
     single = await comp.check(session, ref)
     assert single.ok and single.node_id == j1.id
 
-    await action_journal_service.log(
+    j2 = await action_journal_service.log(
         session, action_type="task_complete", ref_id=ref,
     )
     ambiguous = await comp.check(session, ref)
     assert not ambiguous.ok
-    assert [b.kind for b in ambiguous.blockers] == ["not_found"]
+    [blocker] = ambiguous.blockers
+    assert blocker.kind == "ambiguous"
+    assert str(j1.id) in blocker.detail and str(j2.id) in blocker.detail
 
 
 # ─── #122: build_replay_payload доменных типов ─────────────────────────────

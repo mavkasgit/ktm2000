@@ -71,7 +71,7 @@ class ActionTree:
 
 @dataclass
 class Blocker:
-    kind: str  # has_dependents | coverage | not_allowed | already_reversed | not_found
+    kind: str  # has_dependents | coverage | not_allowed | already_reversed | not_found | ambiguous
     node_id: int | None
     detail: str
     deficit: Decimal | None = None
@@ -636,7 +636,11 @@ class ReversalService:
                 )
                 continue
             if node.id == target.id:
-                check = await node_comp.check_amend(db, node.ref_id, changes)
+                # ADR-0021: target-узел передаётся в резолв — проверка
+                # строго по этому узлу, а не по «первому» по паре.
+                check = await node_comp.check_amend(
+                    db, node.ref_id, changes, action_id=node.id
+                )
             else:
                 check = await node_comp.check(db, node.ref_id, action_id=node.id)
             if not check.ok:
@@ -1019,6 +1023,10 @@ class ReversalService:
                 raise ValueError(b.detail)
             if b.kind == "already_reversed":
                 raise AlreadyReversed(b.node_id or -1)
+            if b.kind == "ambiguous":
+                # ADR-0021: неоднозначная пара нереферсибельна до ручного
+                # разбора — confirm невозможен (403).
+                raise NotAllowed(f"Неоднозначный узел действия: {b.detail}")
 
     async def _deps_index(self, db: AsyncSession) -> dict[int, list[int]]:
         actions = (await db.execute(select(Action.id, Action.depends_on))).all()

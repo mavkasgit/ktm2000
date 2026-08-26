@@ -19,7 +19,7 @@ from app.stock.models import QualityState, Reason
 class CheckBlocker:
     """Структурированный блокер проверки отката."""
 
-    kind: str  # not_found | already_reversed | coverage | domain_cancelled
+    kind: str  # not_found | already_reversed | coverage | ambiguous
     detail: str
     deficit: Decimal | None = None
 

@@ -26,6 +26,11 @@ from app.reversal.base import (
     ReversalPlan,
     ReversalResult,
 )
+from app.reversal.resolver import (
+    require_resolved,
+    resolution_blockers,
+    resolve_action,
+)
 from app.stock.models import QualityState, Reason, StockBalance, StockTransaction
 from app.stock.services import StockCommand, StockCommandService, dimensions_match_clause
 
@@ -197,43 +202,20 @@ class StockCompensator(MirrorLedgerMixin):
         self.action_type = action_type
         self._commands = command_service or StockCommandService()
 
-    async def _get_action(self, db: AsyncSession, ref_id: int) -> Action | None:
-        return (
-            await db.execute(
-                select(Action)
-                .where(
-                    Action.action_type == self.action_type,
-                    Action.ref_id == ref_id,
-                )
-                .order_by(Action.id.asc())
-                .limit(1)
-            )
-        ).scalar_one_or_none()
-
     async def check(
         self, db: AsyncSession, ref_id: int | None, *, action_id: int | None = None
     ) -> ReversalCheck:
-        # action_id игнорируется: у transfer ref_id уникален и сам идентифицирует
-        # действие; параметр принят ради единого контракта Compensator (#116).
-        del action_id
-        if ref_id is None:
-            return ReversalCheck(
-                node_id=None,
-                ok=False,
-                blockers=[CheckBlocker(kind="not_found", detail="у действия нет ref_id")],
-            )
-        action = await self._get_action(db, ref_id)
-        if action is None:
-            return ReversalCheck(
-                node_id=None,
-                ok=False,
-                blockers=[
-                    CheckBlocker(
-                        kind="not_found",
-                        detail=f"{self.action_type}: действие с ref_id={ref_id} не найдено",
-                    )
-                ],
-            )
+        # Единая политика резолва узла (ADR-0021): id старше пары,
+        # угадывание («первый попавшийся») запрещено.
+        res = await resolve_action(
+            db, action_type=self.action_type, ref_id=ref_id, action_id=action_id
+        )
+        blockers = resolution_blockers(
+            res, action_type=self.action_type, ref_id=ref_id, action_id=action_id
+        )
+        if blockers is not None:
+            return ReversalCheck(node_id=None, ok=False, blockers=blockers)
+        action = res.action
         if action.status != ActionStatus.ACTIVE:
             return ReversalCheck(
                 node_id=action.id,
@@ -285,12 +267,12 @@ class StockCompensator(MirrorLedgerMixin):
         hard: bool,
         action_id: int | None = None,
     ) -> ReversalPlan:
-        del action_id  # см. check(): ref_id для transfer уникален
-        if ref_id is None:
-            raise ValueError(f"{self.action_type}: у действия нет ref_id")
-        action = await self._get_action(db, ref_id)
-        if action is None:
-            raise ValueError(f"{self.action_type}: действие с ref_id={ref_id} не найдено")
+        res = await resolve_action(
+            db, action_type=self.action_type, ref_id=ref_id, action_id=action_id
+        )
+        action = require_resolved(
+            res, action_type=self.action_type, ref_id=ref_id, action_id=action_id
+        )
         entries = await self._plan_entries(db, action)
         return ReversalPlan(
             action_id=action.id,
@@ -451,16 +433,34 @@ class StockCompensator(MirrorLedgerMixin):
         return await self._deficit_for(db, need, dims_by_key, adjustments=adjustments)
 
     async def check_amend(
-        self, db: AsyncSession, ref_id: int | None, changes: dict
+        self,
+        db: AsyncSession,
+        ref_id: int | None,
+        changes: dict,
+        *,
+        action_id: int | None = None,
     ) -> ReversalCheck:
         """Полная preflight-проверка amend: базовый check отката + валидация
-        payload + покрытие новой прямой записи (с учётом компенсаций)."""
-        base = await self.check(db, ref_id)
+        payload + покрытие новой прямой записи (с учётом компенсаций).
+
+        ADR-0021: ``action_id`` (target-узел) пробрасывается в резолв —
+        проверка ведётся строго по указанному узлу, а не по «первому».
+        """
+        base = await self.check(db, ref_id, action_id=action_id)
         if not base.ok:
             return base
         blockers = await self.validate_amend_changes(db, ref_id, changes)
-        action = await self._get_action(db, ref_id)
-        assert action is not None  # check() уже отфильтровал отсутствие
+        res = await resolve_action(
+            db, action_type=self.action_type, ref_id=ref_id, action_id=action_id
+        )
+        # Гонка между двумя запросами резолва маловероятна, но честный
+        # блокер лучше assert'а (и не вырезается python -O).
+        fallback_blockers = resolution_blockers(
+            res, action_type=self.action_type, ref_id=ref_id, action_id=action_id
+        )
+        if fallback_blockers is not None:
+            return ReversalCheck(node_id=None, ok=False, blockers=fallback_blockers)
+        action = res.action
         comp_entries = await self._plan_entries(db, action)
         deficit = await self.forward_coverage_deficit(
             db, ref_id, changes, comp_entries=comp_entries
