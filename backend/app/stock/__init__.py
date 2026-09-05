@@ -14,6 +14,7 @@ from app.stock.models import (
 from app.stock.services import (
     StockCommand,
     StockCommandService,
+    StockIdempotencyConflict,
     StockProjectionManager,
     StockValidationError,
 )
@@ -25,6 +26,7 @@ __all__ = [
     "StockTransaction",
     "StockCommand",
     "StockCommandService",
+    "StockIdempotencyConflict",
     "StockProjectionManager",
     "StockValidationError",
 ]

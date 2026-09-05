@@ -25,8 +25,10 @@ from typing import Any, cast as tcast
 
 from sqlalchemy import Select, cast, delete, func, or_, select, text, update
 from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.exceptions import KTMException
 from app.domain.dimensions import (
     DimensionsValidationError,
     canonicalize_dimensions,
@@ -54,6 +56,45 @@ class StockValidationError(ValueError):
     Поднимается до любых INSERT — транзакция остаётся чистой, никаких
     частичных записей.
     """
+
+
+_IDEMPOTENCY_UQ_NAME = "uq_stock_transactions_idempotency_key"
+
+
+def _is_idempotency_violation(exc: IntegrityError) -> bool:
+    """IntegrityError именно от unique-индекса идемпотентности (ADR-0022),
+    а не от чужого констрейнта (FK и т.п.)."""
+    orig = exc.orig
+    constraint = getattr(orig, "constraint_name", None) or getattr(
+        orig, "constraint", None
+    )
+    return _IDEMPOTENCY_UQ_NAME in str(constraint or orig)
+
+
+class StockIdempotencyConflict(KTMException):
+    """Гонка идемпотентности: конкурент уже записал проводку с этим ключом.
+
+    Поднимается на flush (unique-бэкстоп, ADR-0022), когда две подачи
+    одного ключа прошли предварительную проверку параллельно. Проигравшая
+    подача отклоняется ЦЕЛИКОМ — внешний request-transaction откатывается
+    вместе с side effects вызывающего (состояние задачи, Transfer) — и
+    клиент повторяет операцию с тем же ключом, попадая в replay-ветку.
+    Replay здесь запрещён: он защищал бы только ledger, оставив внешние
+    мутации задвоенными.
+
+    Наследует KTMException, а не ValueError: shopfloor-роуты переводят
+    ValueError в 400, а конфликт должен доезжать до клиента как 409.
+    """
+
+    def __init__(self, idempotency_key: str) -> None:
+        super().__init__(
+            message=(
+                f"Операция с idempotency_key={idempotency_key!r} уже проведена "
+                "конкурентным запросом; повторите запрос с тем же ключом."
+            ),
+            error_code="stock_idempotency_conflict",
+            status_code=409,
+        )
 
 
 def dimensions_match_clause(column, dims: dict | None):
@@ -519,7 +560,11 @@ class StockCommandService:
            с таким ключом, вернуть её (не создавать дубль).
         2. Валидация (product exists, quantity > 0, locations differ, reason
            consistent with quality_state).
-        3. INSERT StockTransaction.
+        3. INSERT StockTransaction. При гонке (конкурент закоммитил тот же
+           ключ между шагом 1 и flush) unique-бэкстоп ловится и подача
+           отклоняется ``StockIdempotencyConflict`` (409, ADR-0022) —
+           replay на этом уровне запрещён: side effects вызывающего в
+           текущей транзакции откатываются вместе с ней.
         4. ``projection_manager.stock_changed(tx)`` — синхронно в той же
            транзакции.
 
@@ -527,12 +572,7 @@ class StockCommandService:
         транзакцию.
         """
         if cmd.idempotency_key is not None:
-            existing = await session.execute(
-                select(StockTransaction).where(
-                    StockTransaction.idempotency_key == cmd.idempotency_key
-                )
-            )
-            prior = existing.scalar_one_or_none()
+            prior = await self._find_by_idempotency_key(session, cmd.idempotency_key)
             if prior is not None:
                 return prior
 
@@ -571,10 +611,38 @@ class StockCommandService:
             is_post_factum=cmd.is_post_factum,
         )
         session.add(tx)
-        await session.flush()  # получить tx.id для reverses_id и projection
+        if cmd.idempotency_key is None:
+            await session.flush()  # получить tx.id для reverses_id и projection
+        else:
+            try:
+                await session.flush()  # получить tx.id для reverses_id и projection
+            except IntegrityError as exc:
+                if not _is_idempotency_violation(exc):
+                    raise
+                # Гонка (READ COMMITTED): конкурент закоммитил проводку с тем
+                # же ключом между нашей replay-проверкой и flush. Отклоняем
+                # подачу целиком (ADR-0022).
+                raise StockIdempotencyConflict(cmd.idempotency_key) from exc
 
         await self._projection_manager.stock_changed(session, tx)
         return tx
+
+    async def _find_by_idempotency_key(
+        self, session: AsyncSession, key: str
+    ) -> StockTransaction | None:
+        """Проводка по ключу или None.
+
+        ``order_by(id).limit(1)``, а не ``scalar_one_or_none()``: legacy-
+        дубликаты ключа (возможные до миграции 049) не должны превращать
+        повтор операции в MultipleResultsFound (ADR-0022).
+        """
+        res = await session.execute(
+            select(StockTransaction)
+            .where(StockTransaction.idempotency_key == key)
+            .order_by(StockTransaction.id)
+            .limit(1)
+        )
+        return res.scalar_one_or_none()
 
     async def _location_requires_lot(self, session: AsyncSession, location_id: int) -> bool:
         """Относится ли локация к СПГ с lot-учётом (``requires_lot=True``).

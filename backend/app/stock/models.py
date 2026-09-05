@@ -34,6 +34,7 @@ from sqlalchemy import (
     Enum,
     ForeignKey,
     Identity,
+    Index,
     Numeric,
     String,
     Text,
@@ -108,6 +109,16 @@ class StockTransaction(Base):
             "OR reason = 'complete'",
             name="locations_differ",
         ),
+        # Идемпотентность ledger (ADR-0022): unique-бэкстоп на гонку
+        # SELECT-then-INSERT в record(). Partial — записи без ключа
+        # остаются неидемпотентными. Объявлен в модели, потому что тестовая
+        # схема строится create_all, минуя миграции.
+        Index(
+            "uq_stock_transactions_idempotency_key",
+            "idempotency_key",
+            unique=True,
+            postgresql_where=text("idempotency_key IS NOT NULL"),
+        ),
     )
 
     id: Mapped[int] = mapped_column(
@@ -168,7 +179,10 @@ class StockTransaction(Base):
         ForeignKey("action_journal.id"), nullable=True, index=True
     )
     source_ref: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    idempotency_key: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
+    # Идемпотентность (ADR-0022): unique-бэкстоп — Index в __table_args__
+    # выше (partial, NULL-ключи не конфликтуют). Обычный ix_ дропнут
+    # миграцией 049.
+    idempotency_key: Mapped[str | None] = mapped_column(String(128), nullable=True)
     comment: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_by: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
     executor_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
