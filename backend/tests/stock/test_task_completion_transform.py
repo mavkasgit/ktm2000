@@ -36,6 +36,7 @@ from app.models.spg import SpgSection, StorageProductionGroup
 from app.models.techcard import Techcard, TechcardLine
 from app.models.work_task import WorkTask, WorkTaskStatus
 from app.services.shopfloor.operations_tasks import complete_task
+from tests.stock.helpers import canon_scrap_section_id
 from app.stock import (
     QualityState,
     Reason,
@@ -363,8 +364,12 @@ async def test_defect_written_with_input_dimensions(session: AsyncSession) -> No
     assert await _tx_sum(session, fx["task"].id, Reason.COMPLETE, DIMS_OUT_B) == Decimal("90")
 
     assert await _balance(session, product_id, saw_id, DIMS_IN) == Decimal("0")
+    # Брак уходит на каноническую SCRAP-секцию по коду политики (#134):
+    # find по code+type, секция чужого кода из фикстуры его не подменяет.
+    canon_scrap_id = await canon_scrap_section_id(session)
+    assert canon_scrap_id != fx["scrap"].id
     assert await _balance(
-        session, product_id, fx["scrap"].id, DIMS_IN, QualityState.SCRAP,
+        session, product_id, canon_scrap_id, DIMS_IN, QualityState.SCRAP,
     ) == Decimal("10")
 
     assert result["defect_id"] is not None
@@ -696,4 +701,42 @@ async def test_requires_lot_spg_blocks_negative_remainder_in_complete(session: A
     assert await _balance(session, fx["product"].id, fx["saw"].id, DIMS_IN) == Decimal("80")
     assert await _tx_sum(
         session, fx["task"].id, Reason.TRANSFORM_CONSUME, any_dims=True,
+    ) == Decimal("0")
+
+
+async def test_shortage_strategy_enum_dict_is_single_source(session: AsyncSession) -> None:
+    """Единый словарь стратегий (#134): enum из app.domain.shortage проходит
+    через complete_task так же, как wire-строка; неизвестная строка — отказ."""
+    from app.domain.shortage import ShortageStrategy
+
+    # enum — тот же результат, что строка negative_remainder.
+    fx_enum = await _make_transform_setup(session, sku="TRC-SENUM")
+    await _receive_input(session, fx_enum, quantity=Decimal("80"))
+    await complete_task(
+        session,
+        task_id=fx_enum["task"].id,
+        good_quantity=Decimal("100"),
+        defect_quantity=Decimal("0"),
+        actor_id=fx_enum["user"].id,
+        shortage_strategy=ShortageStrategy.negative_remainder,
+    )
+    await session.commit()
+    assert await _balance(
+        session, fx_enum["product"].id, fx_enum["saw"].id, DIMS_IN,
+    ) == Decimal("-20")
+
+    # Неизвестная стратегия отклоняется до проводок.
+    fx_bad = await _make_transform_setup(session, sku="TRC-SBAD")
+    await _receive_input(session, fx_bad, quantity=Decimal("80"))
+    with pytest.raises(ValueError, match="bogus"):
+        await complete_task(
+            session,
+            task_id=fx_bad["task"].id,
+            good_quantity=Decimal("100"),
+            defect_quantity=Decimal("0"),
+            actor_id=fx_bad["user"].id,
+            shortage_strategy="bogus",
+        )
+    assert await _tx_sum(
+        session, fx_bad["task"].id, Reason.TRANSFORM_CONSUME, any_dims=True,
     ) == Decimal("0")

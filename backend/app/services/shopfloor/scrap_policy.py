@@ -24,7 +24,15 @@ async def find_or_create_scrap_section_id(
     *,
     scrap_policy: ScrapPolicy | None,
 ) -> int:
-    """Найти SCRAP-секцию по типу из политики; при отсутствии — создать.
+    """Найти SCRAP-секцию по канону политики; при отсутствии — создать.
+
+    Find — по ``code`` И ``type`` (ревью #132): по одному только ``type``
+    ``LIMIT 1`` выбирал произвольную секцию, как только в каталоге
+    появлялась вторая секция того же типа. ``is_active`` в find НЕ
+    участвует сознательно: ``code`` уникален, find детерминирован, а
+    деактивация SCRAP-секции в каталоге не должна ломать операционный
+    путь — иначе create упал бы на unique(code) вместо осмысленной
+    проводки брака.
 
     Args:
         db: Асинхронная сессия БД.
@@ -41,7 +49,10 @@ async def find_or_create_scrap_section_id(
         raise ValueError("scrap policy data is required when registering scrap")
 
     scrap_loc = await db.scalar(
-        select(Section.id).where(Section.type == scrap_policy.section_type).limit(1)
+        select(Section.id).where(
+            Section.code == scrap_policy.code,
+            Section.type == scrap_policy.section_type,
+        )
     )
     if scrap_loc is not None:
         return scrap_loc

@@ -10,10 +10,10 @@
 
 Единственный источник компенсационной арифметики — ``net_quantity_expr()``
 (row-level). ``net_by_reason*`` — его публичные query-композиции (scalar /
-grouped-by-dimensions / SQL-подзапрос); thin wrappers (``net_transferred`` и
-т.п.) — специализированные причины для удобства потребителей. Потребители
-строят свои GROUP BY / JOIN над ``net_quantity_expr()`` и не интерпретируют
-``reverses_id`` для вычисления net самостоятельно.
+grouped-by-dimensions / SQL-подзапрос); причина передаётся параметром
+``reason`` — reason-специализированных wrapper'ов больше нет (К6, тикет
+#134). Потребители строят свои GROUP BY / JOIN над ``net_quantity_expr()``
+и не интерпретируют ``reverses_id`` для вычисления net самостоятельно.
 
 Capability и policy разделены (ADR-0017): ledger умеет вычислять net для
 ЛЮБОЙ причины; какие причины бизнес-операция вправе компенсировать — решение
@@ -25,7 +25,7 @@ Capability и policy разделены (ADR-0017): ledger умеет вычис
 - Builder/SQL-форма (``_transfer_net_subquery`` / ``net_by_reason_sq``):
   ``dims=None`` — БЕЗ dimension-фильтра (не wildcard), ``dims=dict`` —
   JSONB-равенство. Обслуживает set-based потребителей (total по ключу).
-- Scalar-форма (``net_by_reason`` / thin wrappers): ``dims=None`` =
+- Scalar-форма (``net_by_reason``): ``dims=None`` =
   безразмерная группа (строки без габарита), ``dims=dict`` =
   JSONB-равенство.
 """
@@ -152,20 +152,6 @@ async def net_by_reason(
     return (await db.scalar(stmt)) or Decimal("0")
 
 
-async def net_transferred(
-    db: AsyncSession,
-    *,
-    task_id: int | None = None,
-    section_plan_line_id: int | None = None,
-    dims: dict | None = None,
-) -> Decimal:
-    """Скалярный net TRANSFER_SEND — thin wrapper над ``net_by_reason``."""
-    return await net_by_reason(
-        db, reason=Reason.TRANSFER_SEND,
-        task_id=task_id, section_plan_line_id=section_plan_line_id, dims=dims,
-    )
-
-
 async def net_by_reason_by_dimensions(
     db: AsyncSession,
     *,
@@ -198,19 +184,6 @@ async def net_by_reason_by_dimensions(
     return result
 
 
-async def net_transferred_by_dimensions(
-    db: AsyncSession,
-    *,
-    task_id: int | None = None,
-    section_plan_line_id: int | None = None,
-) -> dict[str | None, Decimal]:
-    """Grouped net TRANSFER_SEND — thin wrapper над ``net_by_reason_by_dimensions``."""
-    return await net_by_reason_by_dimensions(
-        db, reason=Reason.TRANSFER_SEND,
-        task_id=task_id, section_plan_line_id=section_plan_line_id,
-    )
-
-
 def net_by_reason_sq(
     reason: Reason,
     alias: str | None = None,
@@ -238,31 +211,3 @@ def net_by_reason_sq(
     if alias is not None:
         return stmt.subquery(alias)
     return stmt
-
-
-def net_transferred_sq(
-    alias: str | None = None,
-    *,
-    task_id: bool = True,
-    section_plan_line_id: bool = False,
-    dims: dict | None = None,
-) -> Select | Subquery:
-    """SQL-форма net TRANSFER_SEND — thin wrapper над ``net_by_reason_sq``."""
-    return net_by_reason_sq(
-        Reason.TRANSFER_SEND, alias,
-        task_id=task_id, section_plan_line_id=section_plan_line_id, dims=dims,
-    )
-
-
-def net_received_sq(
-    alias: str | None = None,
-    *,
-    task_id: bool = True,
-    section_plan_line_id: bool = False,
-    dims: dict | None = None,
-) -> Select | Subquery:
-    """SQL-форма net TRANSFER_RECEIVE — thin wrapper над ``net_by_reason_sq``."""
-    return net_by_reason_sq(
-        Reason.TRANSFER_RECEIVE, alias,
-        task_id=task_id, section_plan_line_id=section_plan_line_id, dims=dims,
-    )

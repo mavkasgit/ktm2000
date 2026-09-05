@@ -1,6 +1,5 @@
 from datetime import UTC, datetime
 from decimal import Decimal
-import enum
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -8,11 +7,9 @@ from pydantic import BaseModel, ConfigDict
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-
-class ShortageStrategy(str, enum.Enum):
-    fail = "fail"
-    partial = "partial"
-    negative_remainder = "negative_remainder"
+# Единый словарь стратегий недостачи (#134) — канон в домене, route-enum
+# удалён; FastAPI декодирует wire-строку прямо в ShortageStrategy.
+from app.domain.shortage import DEFAULT_SHORTAGE_STRATEGY, ShortageStrategy
 
 
 from app.api.deps import (
@@ -83,7 +80,7 @@ class CompletePayload(BaseModel):
     accounted_at: datetime | None = None
     # Дефолт fail (#133): оператор, нажавший «Завершить» не глядя, получает
     # внятную ошибку с доступным количеством, а не тихий уход участка в минус.
-    shortage_strategy: ShortageStrategy = ShortageStrategy.fail
+    shortage_strategy: ShortageStrategy = DEFAULT_SHORTAGE_STRATEGY
     auto_transfer_next: bool = False
 
 
@@ -293,7 +290,7 @@ class BulkCompleteEntry(BaseModel):
     performed_at: datetime | None = None
     accounted_at: datetime | None = None
     # Дефолт fail (#133) — как в одиночном CompletePayload.
-    shortage_strategy: ShortageStrategy = ShortageStrategy.fail
+    shortage_strategy: ShortageStrategy = DEFAULT_SHORTAGE_STRATEGY
     auto_transfer_next: bool = False
 
 

@@ -37,7 +37,7 @@ from app.stock import (
     StockCommandService,
     StockTransaction,
 )
-from tests.stock.helpers import record_transfer_receive
+from tests.stock.helpers import canon_scrap_section_id, record_transfer_receive
 from tests.test_integrity_invariants import assert_no_stock_ledger_invariants_violations
 
 pytestmark = pytest.mark.asyncio
@@ -311,8 +311,10 @@ async def test_defect_decide_scrap_creates_stock_tx(session: AsyncSession):
     assert tx.task_id == task.id
     assert tx.product_id == product.id
 
-    # Check StockBalance on scrap location
-    scrap_bal = await _balance(session, product.id, fx["scrap"].id, QualityState.SCRAP)
+    # Check StockBalance on scrap location — каноническая SCRAP-секция
+    # по коду политики (#134), секция фикстуры чужого кода её не подменяет.
+    canon_scrap_id = await canon_scrap_section_id(session)
+    scrap_bal = await _balance(session, product.id, canon_scrap_id, QualityState.SCRAP)
     assert scrap_bal == Decimal("5")
 
     await assert_no_stock_ledger_invariants_violations(session, context="after-defect-scrap")

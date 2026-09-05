@@ -238,22 +238,30 @@ async def _sq_value(session: AsyncSession, sq, where_col, key: int) -> Decimal:
 
 
 async def test_scalar_equals_sql_by_task_id(session: AsyncSession, ledger_fx: dict) -> None:
-    """scalar net_transferred(task_id, dims) == grouped SQL-подзапрос (компенсация!)."""
+    """scalar net_by_reason(SEND, task_id, dims) == SQL-подзапрос (компенсация!)."""
     task1 = ledger_fx["tasks"][0]
 
-    scalar = await tl.net_transferred(session, task_id=task1.id, dims=DIMS_2700)
-    sq = tl.net_transferred_sq(alias="ledger_send_2700", dims=DIMS_2700)
+    scalar = await tl.net_by_reason(
+        session, reason=Reason.TRANSFER_SEND, task_id=task1.id, dims=DIMS_2700
+    )
+    sq = tl.net_by_reason_sq(
+        Reason.TRANSFER_SEND, alias="ledger_send_2700", dims=DIMS_2700
+    )
     sql_value = await _sq_value(session, sq, sq.c.task_id, task1.id)
     # компенсированная строка вычитается: 10 - 10 == 0
     assert scalar == sql_value == Decimal("0")
 
-    scalar_900 = await tl.net_transferred(session, task_id=task1.id, dims=DIMS_900)
-    sq_900 = tl.net_transferred_sq(alias="ledger_send_900", dims=DIMS_900)
+    scalar_900 = await tl.net_by_reason(
+        session, reason=Reason.TRANSFER_SEND, task_id=task1.id, dims=DIMS_900
+    )
+    sq_900 = tl.net_by_reason_sq(
+        Reason.TRANSFER_SEND, alias="ledger_send_900", dims=DIMS_900
+    )
     sql_900 = await _sq_value(session, sq_900, sq_900.c.task_id, task1.id)
     assert scalar_900 == sql_900 == Decimal("5")
 
     # SQL-форма без dims = total по ключу (dims=None → без dimension-фильтра)
-    sq_all = tl.net_transferred_sq(alias="ledger_send_all")
+    sq_all = tl.net_by_reason_sq(Reason.TRANSFER_SEND, alias="ledger_send_all")
     sql_all = await _sq_value(session, sq_all, sq_all.c.task_id, task1.id)
     assert sql_all == Decimal("8")
 
@@ -261,18 +269,21 @@ async def test_scalar_equals_sql_by_task_id(session: AsyncSession, ledger_fx: di
 async def test_scalar_equals_sql_by_section_plan_line_id(
     session: AsyncSession, ledger_fx: dict
 ) -> None:
-    """scalar net_transferred(section_plan_line_id, dims) == SQL-подзапрос по линии."""
+    """scalar net_by_reason(SEND, line, dims) == SQL-подзапрос по линии."""
     line1, line2 = ledger_fx["lines"]
 
-    scalar = await tl.net_transferred(session, section_plan_line_id=line1.id, dims=DIMS_2700)
-    sq = tl.net_transferred_sq(
-        alias="ledger_line", task_id=False, section_plan_line_id=True, dims=DIMS_2700
+    scalar = await tl.net_by_reason(
+        session, reason=Reason.TRANSFER_SEND, section_plan_line_id=line1.id, dims=DIMS_2700
+    )
+    sq = tl.net_by_reason_sq(
+        Reason.TRANSFER_SEND,
+        alias="ledger_line", task_id=False, section_plan_line_id=True, dims=DIMS_2700,
     )
     sql_value = await _sq_value(session, sq, sq.c.section_plan_line_id, line1.id)
     assert scalar == sql_value == Decimal("0")
 
-    sq_all = tl.net_transferred_sq(
-        alias="ledger_line_all", task_id=False, section_plan_line_id=True
+    sq_all = tl.net_by_reason_sq(
+        Reason.TRANSFER_SEND, alias="ledger_line_all", task_id=False, section_plan_line_id=True
     )
     sql_line1 = await _sq_value(session, sq_all, sq_all.c.section_plan_line_id, line1.id)
     sql_line2 = await _sq_value(session, sq_all, sq_all.c.section_plan_line_id, line2.id)
@@ -283,15 +294,17 @@ async def test_scalar_equals_sql_by_section_plan_line_id(
 async def test_grouped_matches_scalars_per_dimension(
     session: AsyncSession, ledger_fx: dict
 ) -> None:
-    """net_transferred_by_dimensions == {hash_key: scalar} для всех групп,
+    """net_by_reason_by_dimensions(SEND) == {hash_key: scalar} для всех групп,
     включая безразмерную (ключ None)."""
     task1 = ledger_fx["tasks"][0]
 
-    grouped = await tl.net_transferred_by_dimensions(session, task_id=task1.id)
+    grouped = await tl.net_by_reason_by_dimensions(
+        session, reason=Reason.TRANSFER_SEND, task_id=task1.id
+    )
     expected = {}
     for dims in [DIMS_2700, DIMS_900, None]:
-        expected[_dimensions_hash_key(dims)] = await tl.net_transferred(
-            session, task_id=task1.id, dims=dims
+        expected[_dimensions_hash_key(dims)] = await tl.net_by_reason(
+            session, reason=Reason.TRANSFER_SEND, task_id=task1.id, dims=dims
         )
     assert grouped == expected
     # NULL-группа (строки без dimensions) представлена ключом None
@@ -306,17 +319,21 @@ async def test_empty_returns_zero(session: AsyncSession) -> None:
     task1, task2 = fx["tasks"]
     line1, line2 = fx["lines"]
 
-    assert await tl.net_transferred(session, task_id=task1.id) == Decimal("0")
+    assert await tl.net_by_reason(
+        session, reason=Reason.TRANSFER_SEND, task_id=task1.id
+    ) == Decimal("0")
     assert await tl.net_by_reason(
         session, reason=Reason.TRANSFER_RECEIVE, task_id=task1.id, dims=None
     ) == Decimal("0")
-    assert await tl.net_transferred(
-        session, section_plan_line_id=line1.id, dims=DIMS_2700
+    assert await tl.net_by_reason(
+        session, reason=Reason.TRANSFER_SEND, section_plan_line_id=line1.id, dims=DIMS_2700
     ) == Decimal("0")
     assert await tl.net_by_reason(
         session, reason=Reason.TRANSFER_RECEIVE, task_id=task2.id, dims=DIMS_900
     ) == Decimal("0")
-    assert await tl.net_transferred_by_dimensions(session, task_id=task1.id) == {}
+    assert await tl.net_by_reason_by_dimensions(
+        session, reason=Reason.TRANSFER_SEND, task_id=task1.id
+    ) == {}
     assert await tl.net_by_reason_by_dimensions(
         session, reason=Reason.TRANSFER_RECEIVE, task_id=task1.id
     ) == {}
@@ -325,17 +342,19 @@ async def test_empty_returns_zero(session: AsyncSession) -> None:
 async def test_exactly_one_key_required(session: AsyncSession, ledger_fx: dict) -> None:
     """Ровно один ключ (task_id XOR section_plan_line_id) обязателен."""
     with pytest.raises(ValueError):
-        await tl.net_transferred(session)
+        await tl.net_by_reason(session, reason=Reason.TRANSFER_SEND)
     with pytest.raises(ValueError):
-        await tl.net_transferred(session, task_id=1, section_plan_line_id=1)
+        await tl.net_by_reason(
+            session, reason=Reason.TRANSFER_SEND, task_id=1, section_plan_line_id=1
+        )
     with pytest.raises(ValueError):
         await tl.net_by_reason(session, reason=Reason.TRANSFER_RECEIVE)
     with pytest.raises(ValueError):
-        await tl.net_transferred_by_dimensions(session)
+        await tl.net_by_reason_by_dimensions(session, reason=Reason.TRANSFER_SEND)
     with pytest.raises(ValueError):
-        tl.net_transferred_sq(task_id=True, section_plan_line_id=True)
+        tl.net_by_reason_sq(Reason.TRANSFER_SEND, task_id=True, section_plan_line_id=True)
     with pytest.raises(ValueError):
-        tl.net_received_sq(task_id=False, section_plan_line_id=False)
+        tl.net_by_reason_sq(Reason.TRANSFER_RECEIVE, task_id=False, section_plan_line_id=False)
 
 
 async def test_net_by_reason_final_release_compensation(session: AsyncSession) -> None:
@@ -415,7 +434,9 @@ async def test_net_by_reason_reason_separation(session: AsyncSession, ledger_fx:
     user_id = ledger_fx["user"].id
     product_id = ledger_fx["product"].id
 
-    before = await tl.net_transferred(session, task_id=task2.id, dims=DIMS_2700)
+    before = await tl.net_by_reason(
+        session, reason=Reason.TRANSFER_SEND, task_id=task2.id, dims=DIMS_2700
+    )
     before_recv = await tl.net_by_reason(
         session, reason=Reason.TRANSFER_RECEIVE, task_id=task2.id, dims=DIMS_900
     )
@@ -427,7 +448,9 @@ async def test_net_by_reason_reason_separation(session: AsyncSession, ledger_fx:
     )
     await session.commit()
 
-    assert await tl.net_transferred(session, task_id=task2.id, dims=DIMS_2700) == before
+    assert await tl.net_by_reason(
+        session, reason=Reason.TRANSFER_SEND, task_id=task2.id, dims=DIMS_2700
+    ) == before
     assert await tl.net_by_reason(
         session, reason=Reason.TRANSFER_RECEIVE, task_id=task2.id, dims=DIMS_900
     ) == before_recv

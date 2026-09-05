@@ -42,7 +42,6 @@ from app.domain.dimensions import parse_dimensions_filter, format_dimensions
 from app.services.plan_position_hanger import task_dimensions_for_plan_line
 
 from app.services.shopfloor.common import _get_transfer, _to_decimal
-from app.stock.ledger import net_transferred_sq
 from app.transfers.budget import (
     sendable_qty_sql,
     transferable_qty_sql,
@@ -436,7 +435,9 @@ def _build_production_ready_query(
     from app.stock.models import Reason, StockTransaction
     # «Произведено/завершено» — публичная SQL-форма модуля transferable (#131).
     completed_sq = completed_qty_sq()
-    transferred_sq = tcast(Subquery, net_transferred_sq("transferred_qty_sq"))
+    transferred_sq = tcast(
+        Subquery, net_by_reason_sq(Reason.TRANSFER_SEND, "transferred_qty_sq")
+    )
     released_sq = tcast(Subquery, net_by_reason_sq(Reason.FINAL_RELEASE, "released_qty_sq"))
     # Единственный владелец формулы — transfers/budget (#119): ready-запрос
     # отдаёт ДВА именованных столбца (передача / отправка); семантику по

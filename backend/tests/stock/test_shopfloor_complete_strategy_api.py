@@ -23,6 +23,7 @@ from app.models.defect import Defect
 from app.models.work_task import WorkTask, WorkTaskStatus
 from app.stock import QualityState, Reason
 
+from tests.stock.helpers import canon_scrap_section_id
 from tests.stock.test_task_completion_transform import (
     DIMS_IN,
     _balance,
@@ -189,9 +190,10 @@ async def test_api_negative_with_defect_both_postings_go_minus(
     assert await _tx_sum(session, fx["task"].id, Reason.SCRAP, DIMS_IN) == Decimal("10")
     # Обе проводки легли на одну GOOD-группу входа: 80 − 90 − 10 = −20.
     assert await _balance(session, product_id, saw_id, DIMS_IN) == Decimal("-20")
-    # Брак дошёл до SCRAP-секции со своим качеством.
+    # Брак дошёл до канонической SCRAP-секции (код политики, #134).
+    canon_scrap_id = await canon_scrap_section_id(session)
     assert await _balance(
-        session, product_id, fx["scrap"].id, DIMS_IN, QualityState.SCRAP,
+        session, product_id, canon_scrap_id, DIMS_IN, QualityState.SCRAP,
     ) == Decimal("10")
 
 

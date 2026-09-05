@@ -70,7 +70,7 @@ def build_output_rows(
 class UsedSource(Enum):
     """Смысл «использованного» бюджета по размерам (выбирает потребитель)."""
 
-    NET_TRANSFERRED = Reason.TRANSFER_SEND   # net_transferred_by_dimensions (нефинальный участок)
+    NET_TRANSFERRED = Reason.TRANSFER_SEND   # net_by_reason_by_dimensions (нефинальный участок)
     NET_FINAL_RELEASE = Reason.FINAL_RELEASE # net_by_reason_by_dimensions(FINAL_RELEASE)
 
 

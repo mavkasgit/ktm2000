@@ -69,13 +69,15 @@ async def _read_sql_budgets(session: AsyncSession, task: WorkTask) -> dict[str, 
     ledger-подзапросов (``net_*_sq``) для одной задачи — та же сборка,
     что в ready-запросе; «произведено» — публичная SQL-форма модуля
     ``transferable`` (#131), без скрытых копий формулы."""
-    from app.stock.ledger import net_by_reason_sq, net_transferred_sq
+    from app.stock.ledger import net_by_reason_sq
     from app.stock.models import Reason
     from app.transfers.budget import sendable_qty_sql, transferable_qty_sql
     from app.transfers.transferable import completed_qty_sq
 
     completed_sq = completed_qty_sq()
-    transferred_sq = net_transferred_sq(alias="oracle_transferred_sq")
+    transferred_sq = net_by_reason_sq(
+        Reason.TRANSFER_SEND, alias="oracle_transferred_sq"
+    )
     released_sq = net_by_reason_sq(Reason.FINAL_RELEASE, alias="oracle_released_sq")
     completed_col = func.coalesce(completed_sq.c.completed_qty, 0)
     stmt = (

@@ -2,11 +2,12 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from decimal import Decimal
-from typing import Literal, NamedTuple
+from typing import NamedTuple
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.domain.shortage import ShortageStrategy
 from app.models.defect import Defect, DefectItem, DefectStatus
 from app.models.internal_plan import SectionPlanLine
 from app.models.production_plan import PlanPosition, PlanPositionStatus
@@ -249,16 +250,44 @@ async def _good_input_balance(
     Ключ тот же, по которому ``record_transform_portion`` будет списывать
     вход порции: ``(product, section, GOOD, consume_dims)`` через
     ``dimensions_match_clause`` (NULL-группа матчится явно).
+
+    Строки баланса читаются ``FOR UPDATE`` (тикет #134): две конкурентные
+    порции otherwise читают один и тот же доступный остаток и обе проходят
+    резолв стратегии, а расхождение всплывает только на втором рубеже —
+    в ledger. Блокировка серилизует порции одной группы до конца
+    транзакции: второй конкурент ждёт и видит уже списанный баланс
+    (актуальный кламп ``partial``/текст отказа ``fail``). Ledger остаётся
+    вторым рубежом — гонка за пределами этой пары (передачи, выпуски)
+    по-прежнему отклоняется проверкой ``StockCommandService``.
     """
-    total = await db.scalar(
-        select(func.coalesce(func.sum(StockBalance.balance_qty), 0)).where(
+    balance_rows = (
+        select(StockBalance.balance_qty)
+        .where(
             StockBalance.product_id == product_id,
             StockBalance.location_id == location_id,
             StockBalance.quality_state == QualityState.GOOD,
             dimensions_match_clause(StockBalance.dimensions, consume_dims),
         )
+        .with_for_update()
+        .subquery()
+    )
+    total = await db.scalar(
+        select(func.coalesce(func.sum(balance_rows.c.balance_qty), 0))
     )
     return Decimal(total)
+
+
+class _ShortageResolution(NamedTuple):
+    """Результат резолва недостачи (#134): порция к проводке + флаг минуса.
+
+    ``(good, defect, allow_negative)`` — тип вместо позиционного кортежа:
+    именованные поля читаются у мест потребления, а не расшифровываются
+    по сигнатуре ``_resolve_shortage``.
+    """
+
+    good: Decimal
+    defect: Decimal
+    allow_negative: bool
 
 
 async def _resolve_shortage(
@@ -268,15 +297,15 @@ async def _resolve_shortage(
     plan: _TransformPlan,
     good_quantity: Decimal,
     defect_quantity: Decimal,
-    shortage_strategy: Literal["fail", "partial", "negative_remainder"],
-) -> tuple[Decimal, Decimal, bool]:
+    shortage_strategy: ShortageStrategy,
+) -> _ShortageResolution:
     """Стратегия недостачи (#133) — применяется только к расходу входа
     трансформации; обычный этап недостач не имеет по построению.
 
-    Возвращает ``(good, defect, allow_negative)`` — порцию к проводке и флаг
-    осознанного минуса для ledger. Плановый лимит ``remaining_input`` жёсткий
-    при любой стратегии (проверен ранее в ``_resolve_transform_plan``);
-    стратегия — про физику склада:
+    Возвращает ``_ShortageResolution`` — порцию к проводке и флаг
+    осознанного минуса для ledger. Плановый лимит ``remaining_input``
+    жёсткий при любой стратегии (проверен ранее в
+    ``_resolve_transform_plan``); стратегия — про физику склада:
 
     - ``fail`` — отказ всей операции; текст ошибки называет доступное
       количество («введено 100, доступно 80»);
@@ -288,7 +317,7 @@ async def _resolve_shortage(
       блокирует сам StockCommandService).
     """
     if plan.spec is None:
-        return good_quantity, defect_quantity, False
+        return _ShortageResolution(good_quantity, defect_quantity, False)
 
     available = await _good_input_balance(
         db,
@@ -297,19 +326,19 @@ async def _resolve_shortage(
         consume_dims=plan.consume_dims,
     )
     if good_quantity + defect_quantity <= available:
-        return good_quantity, defect_quantity, False
+        return _ShortageResolution(good_quantity, defect_quantity, False)
 
-    if shortage_strategy == "fail":
+    if shortage_strategy is ShortageStrategy.fail:
         raise ValueError(
             f"Недостаточно заготовок на участке: введено {good_quantity + defect_quantity}, "
             f"доступно {available}"
         )
-    if shortage_strategy == "partial":
+    if shortage_strategy is ShortageStrategy.partial:
         clamped_good = min(good_quantity, available)
         clamped_defect = min(defect_quantity, max(Decimal("0"), available - clamped_good))
-        return clamped_good, clamped_defect, False
-    if shortage_strategy == "negative_remainder":
-        return good_quantity, defect_quantity, True
+        return _ShortageResolution(clamped_good, clamped_defect, False)
+    if shortage_strategy is ShortageStrategy.negative_remainder:
+        return _ShortageResolution(good_quantity, defect_quantity, True)
     raise ValueError(f"Unknown shortage strategy: {shortage_strategy}")
 
 
@@ -502,7 +531,7 @@ async def complete_task(
     executor_user_id: int | None = None,
     performed_at: datetime | None = None,
     accounted_at: datetime | None = None,
-    shortage_strategy: Literal["fail", "partial", "negative_remainder"] = "fail",
+    shortage_strategy: ShortageStrategy | str = ShortageStrategy.fail,
     auto_transfer_next: bool = False,
     # Объект канона plant_config.production.scrap_policy (ADR-0004 §5,
     # ADR-0007): вместо распакованного квартета scrap_* — один параметр;
@@ -550,18 +579,38 @@ async def complete_task(
     pm = StockProjectionManager()
     cache = await pm.get_task_cache(db, task.id)
 
-    plan = await _resolve_transform_plan(db, task=task, cache=cache, total=total)
-
     # Стратегия недостачи (#133): решение по GOOD-балансу входной группы —
     # ДО проводок; кламп/минус/отказ применяются к порции целиком.
-    post_good, post_defect, allow_negative = await _resolve_shortage(
-        db,
-        task=task,
-        plan=plan,
-        good_quantity=good_quantity,
-        defect_quantity=defect_quantity,
-        shortage_strategy=shortage_strategy,
-    )
+    # Единый словарь (#134): строка wire-формата приводится к канону домена.
+    try:
+        strategy = (
+            shortage_strategy
+            if isinstance(shortage_strategy, ShortageStrategy)
+            else ShortageStrategy(shortage_strategy)
+        )
+        plan = await _resolve_transform_plan(db, task=task, cache=cache, total=total)
+        resolution = await _resolve_shortage(
+            db,
+            task=task,
+            plan=plan,
+            good_quantity=good_quantity,
+            defect_quantity=defect_quantity,
+            shortage_strategy=strategy,
+        )
+    except ValueError:
+        # Гонка double-click (#134): баланс входной группы читается FOR UPDATE,
+        # поэтому конкурент с тем же ключом идемпотентности, закоммитивший
+        # порцию между нашей replay-проверкой и блокирующим чтением, уводит
+        # лимиты в отказ. Если факт уже в ledger — это replay, а не недостача.
+        replay = (
+            await _replay_existing_completion(db, task=task, idempotency_key=idempotency_key)
+            if idempotency_key
+            else None
+        )
+        if replay is not None:
+            return replay
+        raise
+    post_good, post_defect, allow_negative = resolution
 
     now = datetime.now(UTC)
     eff_performed = performed_at or now
@@ -704,6 +753,50 @@ async def resolve_final_release_destination(
     return default
 
 
+async def _log_final_release_audit(
+    db: AsyncSession,
+    *,
+    task: WorkTask,
+    quantity: Decimal,
+    actor_id: int,
+    comment: str | None,
+) -> None:
+    """Аудит-запись финального выпуска (К5, тикет #134).
+
+    Извлечена из тела ``final_release``: оркестратор читается как каскад
+    стражей и проводок, человекочитаемый аудит — отдельный шаг. Живёт в
+    сервисе сознательно, а не в роуте как у complete_task: сервис зовут из
+    двух мест (shopfloor-endpoint и bulk-путь production_planning), и оба
+    обязаны логировать — вынос в роут либо задвоил бы вызов, либо потерял
+    audit у планировочного пути.
+    """
+    from app.services.audit_log_service import log_action
+    from app.models.audit_log import AuditAction, AuditEntityType
+    from app.models.product import Product
+
+    section = await db.get(Section, task.section_id)
+    product = await db.get(Product, task.product_id)
+
+    await log_action(
+        db,
+        status="success",
+        title="Финальный выпуск",
+        message=f"Выполнен финальный выпуск готовой продукции на участке \"{section.name if section else ''}\" (арт. {product.sku if product else ''}). Количество: {quantity} шт.",
+        user_id=actor_id,
+        section_id=task.section_id,
+        section_name=section.name if section else None,
+        section_code=section.code if section else None,
+        task_ids=[task.id],
+        product_sku=product.sku if product else None,
+        qty_text=str(quantity),
+        comment=comment,
+        action=AuditAction.RELEASE,
+        entity_type=AuditEntityType.WORK_TASK,
+        entity_id=task.id,
+        changes={"before": None, "after": {"status": "released", "quantity": str(quantity)}},
+    )
+
+
 async def final_release(
     db: AsyncSession,
     *,
@@ -814,32 +907,10 @@ async def final_release(
 
     await _refresh_section_plan_line_cache(db, task.section_plan_line_id)
 
-    # Запись лога аудита (финальный выпуск)
-    from app.services.audit_log_service import log_action
-    from app.models.audit_log import AuditAction, AuditEntityType
-
-    from app.models.section import Section as _SecAudit
-    section = await db.get(_SecAudit, task.section_id)
-    from app.models.product import Product
-    product = await db.get(Product, task.product_id)
-
-    await log_action(
-        db,
-        status="success",
-        title="Финальный выпуск",
-        message=f"Выполнен финальный выпуск готовой продукции на участке \"{section.name if section else ''}\" (арт. {product.sku if product else ''}). Количество: {quantity} шт.",
-        user_id=actor_id,
-        section_id=task.section_id,
-        section_name=section.name if section else None,
-        section_code=section.code if section else None,
-        task_ids=[task.id],
-        product_sku=product.sku if product else None,
-        qty_text=str(quantity),
-        comment=comment,
-        action=AuditAction.RELEASE,
-        entity_type=AuditEntityType.WORK_TASK,
-        entity_id=task.id,
-        changes={"before": None, "after": {"status": "released", "quantity": str(quantity)}},
+    # Аудит-запись — хелпер _log_final_release_audit (К5, #134): живёт в
+    # сервисе, чтобы покрыть оба call-site (shopfloor и production_planning).
+    await _log_final_release_audit(
+        db, task=task, quantity=quantity, actor_id=actor_id, comment=comment,
     )
 
     return {"transaction_id": tx.id, "task_id": task.id}

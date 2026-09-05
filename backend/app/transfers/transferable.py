@@ -81,7 +81,7 @@ from app.services.shopfloor.output_rows import (
     build_task_output_rows,
 )
 from app.stock import Reason
-from app.stock.ledger import net_by_reason_sq, net_transferred
+from app.stock.ledger import net_by_reason, net_by_reason_sq
 from app.stock.models import StockTransaction
 from app.transfers import budget
 
@@ -233,8 +233,9 @@ async def compute_stock_section_transferable(
     # габарит плана). None = безразмерная legacy-группа.
     dims = dimensions if dimensions is not None else task.dimensions
 
-    already_transferred = await net_transferred(
+    already_transferred = await net_by_reason(
         db,
+        reason=Reason.TRANSFER_SEND,
         section_plan_line_id=task.section_plan_line_id,
         dims=dims,
     )
@@ -382,7 +383,9 @@ async def transform_point_budget(
         ),
         Decimal("0"),
     )
-    transferred = await net_transferred(db, task_id=task.id, dims=dims)
+    transferred = await net_by_reason(
+        db, reason=Reason.TRANSFER_SEND, task_id=task.id, dims=dims
+    )
     return budget.remaining_transform(produced_for_dims, transferred)
 
 
@@ -632,5 +635,7 @@ async def task_transferable(
         )
 
     produced = await plain_produced(db, task)
-    transferred_by_size = await net_transferred(db, task_id=task.id, dims=dimensions)
+    transferred_by_size = await net_by_reason(
+        db, reason=Reason.TRANSFER_SEND, task_id=task.id, dims=dimensions
+    )
     return budget.remaining_plain(produced, transferred_by_size)

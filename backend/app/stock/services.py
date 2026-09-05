@@ -42,7 +42,7 @@ from app.stock.task_cache import (
     compute_task_available,
     effective_issued_quantity,
 )
-from app.stock.ledger import net_received_sq, net_transferred_sq
+from app.stock.ledger import net_by_reason_sq
 from app.stock.models import (
     QualityState,
     Reason,
@@ -388,8 +388,8 @@ class StockProjectionManager:
 
         # Net transfer_send/receive с учётом компенсаций — примитив stock/ledger.
         # TOTAL по задаче (dims=None → без dimension-фильтра), как было в кэше.
-        send_sq = net_transferred_sq(alias="task_cache_send_sq")
-        recv_sq = net_received_sq(alias="task_cache_recv_sq")
+        send_sq = net_by_reason_sq(Reason.TRANSFER_SEND, alias="task_cache_send_sq")
+        recv_sq = net_by_reason_sq(Reason.TRANSFER_RECEIVE, alias="task_cache_recv_sq")
         transferred = (
             await session.scalar(
                 select(send_sq.c.net_quantity).where(send_sq.c.task_id == task_id)
@@ -488,12 +488,14 @@ class StockProjectionManager:
 
         # Net для transfer_send/receive с compensations — примитив stock/ledger.
         # TOTAL по задачам (dims=None → без dimension-фильтра), один запрос.
-        send_sq = tcast(Select, net_transferred_sq()).where(
-            StockTransaction.task_id.in_(task_ids)
-        ).subquery("bulk_send_sq")
-        recv_sq = tcast(Select, net_received_sq()).where(
-            StockTransaction.task_id.in_(task_ids)
-        ).subquery("bulk_recv_sq")
+        send_sq = tcast(
+            Select,
+            net_by_reason_sq(Reason.TRANSFER_SEND),
+        ).where(StockTransaction.task_id.in_(task_ids)).subquery("bulk_send_sq")
+        recv_sq = tcast(
+            Select,
+            net_by_reason_sq(Reason.TRANSFER_RECEIVE),
+        ).where(StockTransaction.task_id.in_(task_ids)).subquery("bulk_recv_sq")
         net_rows = await session.execute(
             select(
                 func.coalesce(send_sq.c.task_id, recv_sq.c.task_id).label("task_id"),
@@ -695,6 +697,70 @@ class StockCommandService:
         )
         return found.scalar_one_or_none() is not None
 
+    async def _ensure_sufficient_balance(
+        self, session: AsyncSession, cmd: StockCommand
+    ) -> None:
+        """Проверка отрицательного остатка расходной стороны (#134).
+
+        Извлечена из ``_validate``: чтение строки баланса по
+        (product, location, quality, dims) и вся политика минуса —
+        осознанный флаг ``allow_negative`` (#133) и правило
+        «lot-required блокирует минус» — живут в одном хелпере.
+        Net-zero-операции (from == to, качество не меняется) не двигают
+        баланс: одна транзакция даёт +qty (to) и −qty (from) в одну строку,
+        поэтому проверка для них избыточна. Компенсация (reverses_id)
+        зеркалит исходную проводку — проверка не применяется.
+        """
+        if cmd.from_location_id is None or cmd.reverses_id is not None:
+            return
+        to_qs_net = cmd.to_quality_state or cmd.quality_state
+        if (
+            cmd.from_location_id == cmd.to_location_id
+            and cmd.quality_state == to_qs_net
+        ):
+            return
+
+        balance_result = await session.execute(
+            select(StockBalance).where(
+                StockBalance.product_id == cmd.product_id,
+                StockBalance.location_id == cmd.from_location_id,
+                StockBalance.quality_state == cmd.quality_state,
+                dimensions_match_clause(StockBalance.dimensions, cmd.dimensions),
+            )
+        )
+        balance_row = balance_result.scalar_one_or_none()
+        current_balance = balance_row.balance_qty if balance_row is not None else Decimal("0")
+        if current_balance >= cmd.quantity:
+            return
+
+        # Осознанный минус (#133, negative_remainder): разрешён явным
+        # флагом команды, кроме участков СПГ с lot-учётом — там минус
+        # блокируется всегда (правило «lot-required блокирует минус»).
+        if cmd.allow_negative:
+            if await self._location_requires_lot(session, cmd.from_location_id):
+                raise StockValidationError(
+                    f"Negative remainder blocked for product_id={cmd.product_id} "
+                    f"at location_id={cmd.from_location_id}: storage group "
+                    f"requires lot accounting (requires_lot): "
+                    f"required {cmd.quantity}, available {current_balance}"
+                )
+            # Иначе — осознанный минус: баланс уходит в минус до
+            # закрытия последующей выдачей.
+            return
+
+        # Габарит в ошибке (тикет #89): «без указания длины» вместо
+        # прочерка — понятнее оператору, какую строку остатка искать.
+        dims_label = (
+            format_dimensions(cmd.dimensions)
+            if cmd.dimensions is not None
+            else "без указания длины"
+        )
+        raise StockValidationError(
+            f"Insufficient stock for product_id={cmd.product_id} at location_id={cmd.from_location_id} "
+            f"(quality={cmd.quality_state.value}, dimensions={dims_label}): "
+            f"required {cmd.quantity}, available {current_balance}"
+        )
+
     async def _validate(self, session: AsyncSession, cmd: StockCommand) -> None:
         if cmd.reason == Reason.ISSUE_TO_WORK:
             raise StockValidationError(
@@ -759,55 +825,9 @@ class StockCommandService:
                 f"reason=complete requires to_quality=good, got {to_qs.value}"
             )
 
-        # Net-zero operations (from == to AND качество не меняется, напр.
-        # COMPLETE на нетрансформирующем этапе) не двигают баланс: одна
-        # транзакция даёт +qty (to) и -qty (from) в одну строку баланса,
-        # поэтому negative-check для них избыточен. Если качество меняется
-        # (SCRAP/REWORK с from == to) — операция НЕ net-zero, проверка нужна.
-        to_qs_net = cmd.to_quality_state or cmd.quality_state
-        is_net_zero = (
-            cmd.from_location_id is not None
-            and cmd.from_location_id == cmd.to_location_id
-            and cmd.quality_state == to_qs_net
-        )
-        if cmd.from_location_id is not None and cmd.reverses_id is None and not is_net_zero:
-            balance_result = await session.execute(
-                select(StockBalance).where(
-                    StockBalance.product_id == cmd.product_id,
-                    StockBalance.location_id == cmd.from_location_id,
-                    StockBalance.quality_state == cmd.quality_state,
-                    dimensions_match_clause(StockBalance.dimensions, cmd.dimensions),
-                )
-            )
-            balance_row = balance_result.scalar_one_or_none()
-            current_balance = balance_row.balance_qty if balance_row is not None else Decimal("0")
-            if current_balance < cmd.quantity:
-                # Осознанный минус (#133, negative_remainder): разрешён явным
-                # флагом команды, кроме участков СПГ с lot-учётом — там минус
-                # блокируется всегда (правило «lot-required блокирует минус»).
-                if cmd.allow_negative:
-                    if await self._location_requires_lot(session, cmd.from_location_id):
-                        raise StockValidationError(
-                            f"Negative remainder blocked for product_id={cmd.product_id} "
-                            f"at location_id={cmd.from_location_id}: storage group "
-                            f"requires lot accounting (requires_lot): "
-                            f"required {cmd.quantity}, available {current_balance}"
-                        )
-                    # Иначе — осознанный минус: баланс уходит в минус до
-                    # закрытия последующей выдачей.
-                else:
-                    # Габарит в ошибке (тикет #89): «без указания длины» вместо
-                    # прочерка — понятнее оператору, какую строку остатка искать.
-                    dims_label = (
-                        format_dimensions(cmd.dimensions)
-                        if cmd.dimensions is not None
-                        else "без указания длины"
-                    )
-                    raise StockValidationError(
-                        f"Insufficient stock for product_id={cmd.product_id} at location_id={cmd.from_location_id} "
-                        f"(quality={cmd.quality_state.value}, dimensions={dims_label}): "
-                        f"required {cmd.quantity}, available {current_balance}"
-                    )
+        # Отрицательный остаток — единый хелпер (#134): политика минуса
+        # (allow_negative, lot-required) и текст ошибки живут в одном месте.
+        await self._ensure_sufficient_balance(session, cmd)
 
         # created_by mandatory at DB level — пока не enforced здесь (тесты могут
         # передавать 0/null); будет tightened когда все call sites подключатся.

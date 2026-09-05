@@ -4,9 +4,11 @@ from __future__ import annotations
 
 from decimal import Decimal
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.seeds.canon.models import DefectDecisionDef, ScrapPolicy
+from app.models.section import Section
 from app.stock import Reason, StockCommand, StockCommandService
 
 
@@ -50,3 +52,15 @@ async def record_transfer_receive(
             created_by=created_by,
         ),
     )
+
+async def canon_scrap_section_id(session: AsyncSession) -> int:
+    """Id канонической SCRAP-секции по коду политики (#134).
+
+    Харденинг find (code+type) означает: брак уходит на секцию канона,
+    а не на первую попавшуюся SCRAP-секцию чужого кода из фикстуры.
+    """
+    scrap_id = await session.scalar(
+        select(Section.id).where(Section.code == ScrapPolicy().code)
+    )
+    assert scrap_id is not None, "SCRAP-секция канона не найдена в тестовой БД"
+    return scrap_id

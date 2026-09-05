@@ -68,7 +68,7 @@ def transferable_qty_sql(
     """SQL-форма бюджета передачи: ``greatest(completed - transferred, 0)``.
 
     Аргументы — уже coalesce'нутые колонки подзапросов ledger
-    (``net_transferred_sq`` / completed-aggregate). Одна формула с
+    (``net_by_reason_sq(TRANSFER_SEND)`` / completed-aggregate). Одна формула с
     ``remaining_plain``/``remaining_transform``; семантику выбирает
     потребитель, фабрика CASE не строит.
     """

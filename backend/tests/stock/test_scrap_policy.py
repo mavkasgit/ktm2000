@@ -297,3 +297,38 @@ async def test_complete_task_requires_scrap_policy(session: AsyncSession):
     # Ни проводки брака, ни записи в справочнике не появилось.
     assert await _scrap_sections(session) == []
     assert await _scrap_sum_to(session, 0, fx["task"].id) == Decimal("0")
+
+
+async def test_scrap_section_of_other_code_does_not_shadow_canon(session: AsyncSession):
+    """Харденинг find (#134): SCRAP-секция чужого кода того же типа не
+    подменяет канон — шов создаёт секцию по коду политики, а не берёт
+    первую по ``type``."""
+    fx = await _make_route_without_scrap(session, sku="SCRPOL-DRIFT")
+    # «Дрейф конфигурации»: в каталоге уже есть SCRAP-секция другого кода.
+    drifted = Section(
+        code=f"{fx['prod'].code}-SCRAP-OLD", name="Old Scrap",
+        type=ScrapPolicy().section_type, is_active=True, sort_order=0,
+    )
+    session.add(drifted)
+    await session.commit()
+
+    await _issue_material(session, fx, quantity=Decimal("10"))
+    result = await complete_task(
+        session,
+        task_id=fx["task"].id,
+        good_quantity=Decimal("7"),
+        defect_quantity=Decimal("3"),
+        actor_id=fx["user"].id,
+        defect_reason="test_scrap",
+        **FAKE_SCRAP_POLICY,
+    )
+    await session.commit()
+
+    sections = await _scrap_sections(session)
+    codes = sorted(s.code for s in sections)
+    assert ScrapPolicy().code in codes, "Каноническая SCRAP-секция создана"
+    assert len(sections) == 2, "Чужая секция не переименована и не задублирована"
+    canon = next(s for s in sections if s.code == ScrapPolicy().code)
+    assert await _scrap_sum_to(session, canon.id, fx["task"].id) == Decimal("3")
+    assert await _scrap_sum_to(session, drifted.id, fx["task"].id) == Decimal("0")
+    assert result["defect_id"] is not None
