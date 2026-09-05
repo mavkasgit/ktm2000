@@ -16,7 +16,7 @@ from app.seeds.canon.models import ScrapPolicy
 from app.services.plan_position_hanger import position_dimensions_for_task
 from app.services.action_journal_service import action_journal_service
 from app.stock import QualityState, Reason, StockCommand, StockCommandService
-from app.stock.models import StockBalance
+from app.stock.models import StockBalance, StockTransaction
 from app.stock.services import dimensions_match_clause
 
 from .common import (
@@ -39,6 +39,16 @@ from .operations_transform import (
     resolve_transform_spec,
 )
 from .scrap_policy import find_or_create_scrap_section_id
+
+
+def _scrap_tx_key(idempotency_key: str) -> str:
+    """Ключ SCRAP-проводки брака (суффикс :reject живёт в БД — не переименовывать)."""
+    return f"{idempotency_key}:reject"
+
+
+def _defect_key(idempotency_key: str) -> str:
+    """Ключ Defect, созданного вместе с браком порции (см. _register_scrap_and_defect)."""
+    return f"{idempotency_key}:defect"
 
 
 async def _get_stock_location(session: AsyncSession, section_id: int) -> int | None:
@@ -147,17 +157,28 @@ async def _replay_existing_completion(
     """Идемпотентность-replay: проводка по ключу уже есть — дубли в ledger не пишутся."""
     if not idempotency_key:
         return None
-    from app.stock.models import StockTransaction as _ST
-    existing = await _check_idempotency(db, idempotency_key=idempotency_key, entity_type=_ST)
+    existing = await _check_idempotency(db, idempotency_key=idempotency_key, entity_type=StockTransaction)
     if existing is None:
         return None
-    reject_movement_key = f"{idempotency_key}:reject"
     existing_defect = await db.scalar(
-        select(Defect).where(Defect.idempotency_key == reject_movement_key)
+        select(Defect).where(Defect.idempotency_key == _defect_key(idempotency_key))
     )
+    # Порция — пучок проводок с общим префиксом: bare-ключ (списание входа),
+    # :out{N} (выходы трансформации), :reject (SCRAP брака). Собираем весь
+    # пучок, иначе replay-ответ теряет ссылки на созданные проводки.
+    portion_txs = (
+        await db.scalars(
+            select(StockTransaction)
+            .where(
+                (StockTransaction.idempotency_key == idempotency_key)
+                | StockTransaction.idempotency_key.startswith(f"{idempotency_key}:")
+            )
+            .order_by(StockTransaction.id)
+        )
+    ).all()
     return {
         "task_id": task.id,
-        "transaction_ids": [existing.id],
+        "transaction_ids": [tx.id for tx in portion_txs],
         "defect_id": existing_defect.id if existing_defect else None,
         "status": task.status.value,
         # Replay не пересчитывает порцию — факт уже в ledger (#133).
@@ -426,7 +447,7 @@ async def _register_scrap_and_defect(
         allow_negative=allow_negative,
         task_id=task.id,
         source_ref=ctx.source_ref,
-        idempotency_key=f"{ctx.idempotency_key}:reject" if ctx.idempotency_key else None,
+        idempotency_key=_scrap_tx_key(ctx.idempotency_key) if ctx.idempotency_key else None,
         comment=ctx.comment,
         created_by=ctx.actor_id,
         executor_user_id=ctx.eff_executor,
@@ -443,7 +464,7 @@ async def _register_scrap_and_defect(
         status=DefectStatus.decision_required,
         comment=ctx.comment,
         created_by=ctx.actor_id,
-        idempotency_key=f"{ctx.idempotency_key}:defect" if ctx.idempotency_key else None,
+        idempotency_key=_defect_key(ctx.idempotency_key) if ctx.idempotency_key else None,
     )
     db.add(defect)
     await db.flush()
@@ -637,7 +658,6 @@ async def final_release(
     опционален (по умолчанию — габарит задания).
     """
     if idempotency_key:
-        from app.stock.models import StockTransaction
         existing = await _check_idempotency(db, idempotency_key=idempotency_key, entity_type=StockTransaction)
         if existing is not None:
             return {"transaction_id": existing.id, "task_id": task_id, "idempotent_replay": True}

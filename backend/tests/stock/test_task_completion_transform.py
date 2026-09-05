@@ -489,6 +489,44 @@ async def test_idempotent_replay_does_not_duplicate_ledger(session: AsyncSession
     await assert_no_stock_ledger_invariants_violations(session, context="transform-idem")
 
 
+async def test_idempotent_replay_keeps_defect_and_scrap_tx(session: AsyncSession) -> None:
+    """Replay порции с браком возвращает тот же defect_id и SCRAP-проводку.
+
+    Раньше replay искал Defect по суффиксу SCRAP-проводки (:reject) вместо
+    (:defect) — ответ всегда содержал defect_id=None и терял SCRAP-проводку.
+    """
+    fx = await _make_transform_setup(session, sku="TRC-IDEM-DEF")
+    await _receive_input(session, fx)
+
+    from tests.stock.helpers import FAKE_SCRAP_POLICY
+    kwargs = dict(
+        task_id=fx["task"].id,
+        good_quantity=Decimal("50"),
+        defect_quantity=Decimal("10"),
+        actor_id=fx["user"].id,
+        defect_reason="saw_jam",
+        idempotency_key="trc-idem-def:1",
+        **FAKE_SCRAP_POLICY,
+    )
+    first = await complete_task(session, **kwargs)
+    await session.commit()
+
+    replay = await complete_task(session, **kwargs)
+    await session.commit()
+
+    assert replay.get("idempotent_replay") is True
+    assert first["defect_id"] is not None
+    assert replay["defect_id"] == first["defect_id"]
+    # SCRAP-проводка брака не потеряна: состав проводок совпадает с первым ответом.
+    assert set(replay["transaction_ids"]) == set(first["transaction_ids"])
+    assert len(replay["transaction_ids"]) > 1
+    # Дублей в ledger нет.
+    assert await _tx_sum(session, fx["task"].id, Reason.TRANSFORM_CONSUME, DIMS_IN) == Decimal("50")
+    assert await _tx_sum(session, fx["task"].id, Reason.SCRAP, DIMS_IN) == Decimal("10")
+    assert await _tx_sum(session, fx["task"].id, Reason.COMPLETE, DIMS_OUT_A) == Decimal("50")
+    await assert_no_stock_ledger_invariants_violations(session, context="transform-idem-defect")
+
+
 async def test_legacy_material_without_dimensions_consumed_from_null_group(
     session: AsyncSession,
 ) -> None:
