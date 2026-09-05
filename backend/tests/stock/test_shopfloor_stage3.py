@@ -14,7 +14,7 @@ from datetime import date
 from decimal import Decimal
 
 import pytest
-from sqlalchemy import func, select, text
+from sqlalchemy import func, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Product, ProductType, Section, User, UserRole
@@ -107,6 +107,8 @@ async def _setup_minimal_route(session: AsyncSession, *, sku: str = "S3", qty: D
     raw = await _make_location(session, code=f"{sku}-RAW", name="Raw", loc_type="raw_stock")
     prod = await _make_location(session, code=f"{sku}-PROD", name="Production", loc_type="laser")
     scrap_loc = await _make_location(session, code=f"{sku}-SCR", name="Scrap", loc_type="scrap")
+    # Адресат FINAL_RELEASE: без секции ГП финальный выпуск отклоняется.
+    fg = await _make_location(session, code=f"{sku}-FG", name="Склад ГП", loc_type="finished_stock")
 
     spg = StorageProductionGroup(code=f"{sku}-SPG", name="SPG", is_active=True, sort_order=0)
     session.add(spg)
@@ -467,6 +469,85 @@ async def test_final_release_creates_stock_tx(session: AsyncSession):
     assert tx_count == 1, "Expected 1 StockTransaction(FINAL_RELEASE)"
 
     await assert_no_stock_ledger_invariants_violations(session, context="after-final-release")
+
+
+async def test_final_release_without_finished_stock_rejected(session: AsyncSession):
+    """Нет секции склада ГП → final_release отклоняется: проводки
+    «участок → None» нет (продукция исчезла бы с баланса участка),
+    Action в журнале не остаётся."""
+    fx = await _setup_minimal_route(session)
+    task = fx["task"]
+
+    # Убираем адресат выпуска: единственную секцию finished_stock переводим
+    # в другой тип.
+    await session.execute(
+        update(Section)
+        .where(Section.type == "finished_stock")
+        .values(type="raw_stock")
+    )
+    await session.commit()
+
+    # Setup: issue + complete (иначе не пройдёт проверка бюджета отправки,
+    # стоящая до стража адресата).
+    svc = StockCommandService()
+    await svc.record(session, StockCommand(
+        product_id=fx["product"].id,
+        from_location_id=None,
+        to_location_id=fx["raw"].id,
+        quantity=Decimal("100"),
+        reason=Reason.MANUAL_IN,
+        created_by=fx["user"].id,
+    ))
+    await record_transfer_receive(
+        session,
+        product_id=fx["product"].id,
+        from_location_id=fx["raw"].id,
+        to_location_id=task.section_id,
+        quantity=Decimal("10"),
+        task_id=task.id,
+        created_by=fx["user"].id,
+    )
+    task.status = WorkTaskStatus.in_progress
+    await svc.record(session, StockCommand(
+        product_id=fx["product"].id,
+        from_location_id=None,
+        to_location_id=task.section_id,
+        quantity=Decimal("8"),
+        reason=Reason.COMPLETE,
+        task_id=task.id,
+        created_by=fx["user"].id,
+    ))
+    await session.commit()
+
+    from app.services.shopfloor.operations_tasks import final_release
+    from app.models.action_journal import Action
+
+    with pytest.raises(ValueError, match="finished_stock"):
+        await final_release(
+            session,
+            task_id=task.id,
+            quantity=Decimal("8"),
+            actor_id=fx["user"].id,
+        )
+    await session.commit()
+
+    tx_count = await session.scalar(
+        select(func.count(StockTransaction.id))
+        .where(
+            StockTransaction.task_id == task.id,
+            StockTransaction.reason == Reason.FINAL_RELEASE,
+        )
+    )
+    assert tx_count == 0, "Проводка FINAL_RELEASE не должна создаваться"
+
+    action_count = await session.scalar(
+        select(func.count(Action.id))
+        .where(
+            Action.action_type == "final_release",
+            Action.ref_id == task.id,
+        )
+    )
+    assert action_count == 0, "Action final_release не должен оставаться в журнале"
 
 
 async def test_return_to_stock_endpoint(session: AsyncSession):

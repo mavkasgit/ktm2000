@@ -704,16 +704,25 @@ async def final_release(
             f"Нельзя отправить {quantity}: доступно к отправке {remaining} шт."
         )
 
-    # Find finished stock location
+    # Адресат финального выпуска — секция склада ГП (первая по sort_order).
+    # Без неё проводка «в никуда» запрещена: продукция списалась бы с баланса
+    # участка, не придя никуда (проекция пересчитывает только from-сторону).
     from app.models.section import Section as _FinSection
     from app.services.route_storage_classifier import SECTION_TYPE_FINISHED_STOCK
     finished_stock = await db.scalar(
         select(_FinSection.id)
         .where(_FinSection.type == SECTION_TYPE_FINISHED_STOCK)
+        .order_by(_FinSection.sort_order)
         .limit(1)
     )
+    if finished_stock is None:
+        raise ValueError(
+            "Не найдена секция склада готовой продукции (тип finished_stock): "
+            "финальный выпуск невозможен"
+        )
 
     # Журнал действий (#116): final_release = Action по цепочке задачи.
+    # Пишется после стража адресата — отказ не оставляет сироту в журнале.
     action = await action_journal_service.log_task_action(
         db,
         action_type="final_release",
@@ -722,10 +731,9 @@ async def final_release(
     )
 
     svc = StockCommandService()
-    # final_release: from production section to finished stock (or None if not found)
     tx = await svc.record(db, StockCommand(
         product_id=task.product_id,
-        from_location_id=task.section_id if finished_stock else task.section_id,
+        from_location_id=task.section_id,
         to_location_id=finished_stock,
         quantity=quantity,
         reason=Reason.FINAL_RELEASE,

@@ -223,7 +223,9 @@ async def _make_dim_route_fixture(
     raw = Section(code=f"{sku}-RAW", name="RAW", type="raw_stock", is_active=True, sort_order=0)
     prod1 = Section(code=f"{sku}-P1", name="P1", type="production", is_active=True, sort_order=1)
     prod2 = Section(code=f"{sku}-P2", name="P2", type="production", is_active=True, sort_order=2)
-    session.add_all([raw, prod1, prod2])
+    # Адресат FINAL_RELEASE: без секции ГП финальный выпуск отклоняется.
+    fg = Section(code=f"{sku}-FG", name="Склад ГП", type="finished_stock", is_active=True, sort_order=90)
+    session.add_all([raw, prod1, prod2, fg])
     await session.flush()
 
     spgs: list[StorageProductionGroup] = []
