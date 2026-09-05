@@ -48,28 +48,26 @@ SECTION_TYPE_FINISHED_STOCK = "finished_stock"
 SECTION_TYPE_SCRAP = "scrap"
 SECTION_TYPE_TERMINAL = "terminal"
 
-# Все склады-хранилища (raw/wip/finished/scrap): участки, где остаток лежит «на
-# полке», а не обрабатывается. Это же множество проверяют db-триггеры (вместе
-# с TERMINAL_TYPES, см. ниже).
+# Все склады-хранилища (raw/wip/finished/scrap) + терминал (#136): участки,
+# где материал «лежит», а не обрабатывается. Это же множество проверяют
+# db-триггеры (transport-операция на секции, транзитный этап маршрута).
 STORAGE_TYPES = frozenset({
     SECTION_TYPE_RAW_STOCK,
     SECTION_TYPE_WIP_STOCK,
     SECTION_TYPE_FINISHED_STOCK,
     SECTION_TYPE_SCRAP,
+    SECTION_TYPE_TERMINAL,
 })
 
 # Терминальная секция (#136): полный след в ledger, но вне оперативных
-# остатков — аналог Customer-локации Odoo / движения 601 в SAP. Участвует в
-# db-триггерах (transport-операции, транзитные этапы) наравне со storage.
+# остатков — аналог Customer-локации Odoo / движения 601 в SAP.
 TERMINAL_TYPES = frozenset({SECTION_TYPE_TERMINAL})
 
-# Типы, допускаемые db-триггерами для «складской» геометрии: transport-операция
-# на секции, транзитный этап маршрута. STORAGE + терминал.
-TRIGGER_STORAGE_TYPES = STORAGE_TYPES | TERMINAL_TYPES
-
-# Типы с оперативными остатками: оборачиваемые склады + брак. Терминал
-# (#136) вне остатков — остатки там не материализуются.
-OPERATIONAL_STOCK_TYPES = STORAGE_TYPES
+# Типы с оперативными остатками: склады-хранилища без терминала. Терминал
+# (#136) вне остатков — баланс там не материализуется
+# (StockProjectionManager.refresh_balance), поэтому в отчётах остатков
+# участвует только это множество.
+OPERATIONAL_STOCK_TYPES = STORAGE_TYPES - TERMINAL_TYPES
 
 # Склады оборачиваемого запаса (без scrap): откуда сырьё/полуфабрикат реально
 # перетекает по маршруту через Transfer. Брак (scrap) — тупик, его сюда не включаем.
@@ -88,11 +86,11 @@ def is_storage_section(section: Section | None) -> bool:
     Терминал (#136) — тоже «хранение, а не работа»: маршруты через него
     строятся как транзитные этапы, transport-операции допустимы. Отличие от
     ``is_stock_section``: сюда входят scrap и terminal, но оба вне
-    оборачиваемых остатков.
+    оборачиваемых остатков (см. ``OPERATIONAL_STOCK_TYPES``).
     """
     if section is None:
         return False
-    return section.type in TRIGGER_STORAGE_TYPES
+    return section.type in STORAGE_TYPES
 
 
 def is_stock_section(section: Section | None) -> bool:
@@ -222,7 +220,6 @@ __all__ = [
     "SECTION_TYPE_TERMINAL",
     "STORAGE_TYPES",
     "TERMINAL_TYPES",
-    "TRIGGER_STORAGE_TYPES",
     "OPERATIONAL_STOCK_TYPES",
     "STOCK_TYPES",
     "is_storage_section",

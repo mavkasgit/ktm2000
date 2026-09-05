@@ -26,6 +26,7 @@ from app.models import Product, ProductType, Section, User, UserRole
 from app.models.route import SectionOperation
 from app.seeds.sections import SECTIONS_DATA
 from app.services.route_storage_classifier import (
+    OPERATIONAL_STOCK_TYPES,
     SECTION_TYPE_TERMINAL,
     STORAGE_TYPES,
     STOCK_TYPES,
@@ -108,12 +109,14 @@ def test_terminal_section_outside_stock_classifiers() -> None:
     assert SECTION_TYPE_TERMINAL == "terminal"
     assert TERMINAL_TYPES == frozenset({"terminal"})
     assert "terminal" not in STOCK_TYPES
-    assert "terminal" not in STORAGE_TYPES
+    # «хранение, а не работа»: терминал в storage-наборе,
+    # но вне оперативных остатков
+    assert "terminal" in STORAGE_TYPES
+    assert "terminal" not in OPERATIONAL_STOCK_TYPES
 
     terminal = Section(code="T", name="Т", type="terminal", is_active=True)
     assert is_terminal_section(terminal)
     assert not is_stock_section(terminal)
-    # «хранение, а не работа»: маршруты/транспорт как у склада
     assert is_storage_section(terminal)
     assert not is_stock_section(None)
     assert not is_terminal_section(None)
