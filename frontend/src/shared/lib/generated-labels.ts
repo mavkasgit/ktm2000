@@ -382,6 +382,7 @@ export const sectionTypeLabels: Record<string, string> = {
   "raw_stock": "Склад сырья",
   "scrap": "Брак",
   "wip_stock": "Склад полуфабриката",
+  "terminal": "Терминальная секция",
 }
 
 // Лейблы фаз правил выбора маршрута

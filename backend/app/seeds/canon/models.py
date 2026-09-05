@@ -200,12 +200,13 @@ class ScrapPolicy(BaseModel):
 
 
 class StockLocationTypes(BaseModel):
-    """Типы складских секций (тикет #25)."""
+    """Типы складских секций (тикет #25, #136 — терминал вне остатков)."""
 
     raw_stock: str = "raw_stock"
     wip_stock: str = "wip_stock"
     finished_stock: str = "finished_stock"
     scrap: str = "scrap"
+    terminal: str = "terminal"
 
 
 class ProductionCanon(BaseModel):

@@ -142,6 +142,7 @@ SECTION_TYPE_LABELS = {
     "wip_stock": "Склад полуфабриката",
     "finished_stock": "Склад готовой продукции",
     "scrap": "Брак",
+    "terminal": "Терминальная секция",
 }
 
 RULE_PHASE_LABELS = {

@@ -9,7 +9,7 @@ TRIGGER_STATEMENTS: list[str] = [
     BEGIN
         IF NEW.operation_type = 'transport' THEN
             SELECT type INTO sec_type FROM sections WHERE id = NEW.section_id;
-            IF sec_type IS NULL OR NOT (sec_type IN ('raw_stock', 'wip_stock', 'finished_stock', 'scrap')) THEN
+            IF sec_type IS NULL OR NOT (sec_type IN ('raw_stock', 'wip_stock', 'finished_stock', 'scrap', 'terminal')) THEN
                 RAISE EXCEPTION
                     'SectionOperation.operation_type=transport requires storage type; got type=%, section_id=%',
                     sec_type, NEW.section_id
@@ -46,7 +46,7 @@ TRIGGER_STATEMENTS: list[str] = [
                     USING ERRCODE = 'check_violation';
             END IF;
             SELECT type INTO sec_type FROM sections WHERE id = NEW.storage_section_id;
-            IF sec_type IS NULL OR NOT (sec_type IN ('raw_stock', 'wip_stock', 'finished_stock', 'scrap')) THEN
+            IF sec_type IS NULL OR NOT (sec_type IN ('raw_stock', 'wip_stock', 'finished_stock', 'scrap', 'terminal')) THEN
                 RAISE EXCEPTION
                     'RouteStage.storage_section_id must reference a storage section; got type=%, storage_section_id=%',
                     sec_type, NEW.storage_section_id

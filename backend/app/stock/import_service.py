@@ -41,7 +41,7 @@ from app.services.dimension_validation import (
 )
 from app.services.excel_import import parse_row_selection
 from app.services.import_column_resolver import detect_header_row, resolve_columns
-from app.services.route_storage_classifier import is_production_section
+from app.services.route_storage_classifier import is_production_section, is_terminal_section
 
 _OPERATIONS_COMMENT_RE = re.compile(r"операции:\s*([^|]+)", re.IGNORECASE)
 
@@ -735,12 +735,12 @@ async def resolve_target_section(
 ) -> tuple[int | None, str | None]:
     """Resolve a section name to ``(section_id, section_name)``.
 
-    Match is case-insensitive, trimmed.  ``production``-type sections are rejected
-    (remainders cannot be imported there).  Allowed types:
+    Match is case-insensitive, trimmed.  ``production``-type and ``terminal``
+    sections are rejected (remainders cannot be imported there).  Allowed types:
     ``raw_stock, wip_stock, finished_stock, scrap``.
 
-    Returns ``(None, None)`` if not found or type is ``production``, with
-    a warning appended to ``item_errors`` (if provided).
+    Returns ``(None, None)`` if not found or type is ``production``/``terminal``,
+    with a warning appended to ``item_errors`` (if provided).
     """
     if not name or name.strip() in ("", "—", "-"):
         return (None, None)
@@ -761,6 +761,16 @@ async def resolve_target_section(
             item_errors.append(
                 f"Участок '{norm_name}' имеет тип production, "
                 f"нельзя использовать как цель импорта"
+            )
+        return (None, None)
+
+    if is_terminal_section(section):
+        # #136: терминальная секция вне оперативных остатков — импорт туда
+        # создал бы проводки без баланса.
+        if item_errors is not None:
+            item_errors.append(
+                f"Участок '{norm_name}' имеет тип terminal, "
+                f"нельзя использовать как цель импорта остатков"
             )
         return (None, None)
 

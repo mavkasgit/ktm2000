@@ -21,6 +21,8 @@ import type { OperationGroup, SectionOperationInfo } from "shared/api/sections";
 import { fetchAllSections } from "shared/api/sections";
 import { queryKeys } from "@/shared/api/queryKeys";
 import { sectionTypeLabels } from "@/shared/lib/generated-labels";
+import { STOCK_SECTION_TYPES } from "@/shared/lib/sectionTypes";
+import type { SectionType } from "shared/api/sections";
 
 type Section = {
   id?: string | number;
@@ -50,6 +52,7 @@ const TYPE_OPTIONS = [
   { value: "wip_stock", label: "Склад полуфабриката" },
   { value: "finished_stock", label: "Склад готовой продукции" },
   { value: "scrap", label: "Брак" },
+  { value: "terminal", label: "Терминальная секция" },
 ];
 
 const ui = UI as unknown as Record<string, React.ComponentType<any>>;
@@ -719,7 +722,7 @@ export function SectionsPage() {
     };
 
     items.forEach((item) => {
-      const isStock = ["raw_stock", "wip_stock", "finished_stock", "scrap"].includes(item.type || "");
+      const isStock = STOCK_SECTION_TYPES.includes((item.type || "") as SectionType);
       
       if (item.spg_links && item.spg_links.length > 0) {
         item.spg_links.forEach((link) => {

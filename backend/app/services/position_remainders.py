@@ -9,7 +9,7 @@ from app.models.internal_plan import SectionPlanLine
 from app.models.production_plan import PlanPosition, PlanPositionStatus
 from app.models.section import Section
 from app.models.work_task import WorkTask, WorkTaskStatus
-from app.services.route_storage_classifier import STORAGE_TYPES
+from app.services.route_storage_classifier import OPERATIONAL_STOCK_TYPES
 from app.stock.models import QualityState, StockBalance
 
 
@@ -30,7 +30,7 @@ async def _physical_stock_by_product_ids(
             StockBalance.product_id.in_(product_ids),
             StockBalance.balance_qty > 0,
             StockBalance.quality_state == QualityState.GOOD,
-            Section.type.in_(STORAGE_TYPES),
+            Section.type.in_(OPERATIONAL_STOCK_TYPES),
         )
         .group_by(StockBalance.product_id)
     )

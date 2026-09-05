@@ -22,15 +22,20 @@ describe("isProductionSection", () => {
     expect(isProductionSection("scrap")).toBe(false);
   });
 
+  it("returns false for terminal", () => {
+    expect(isProductionSection("terminal")).toBe(false);
+  });
+
 });
 
 describe("STOCK_SECTION_TYPES", () => {
-  it("contains exactly four stock types", () => {
+  it("contains exactly five stock types", () => {
     expect(STOCK_SECTION_TYPES).toEqual([
       "raw_stock",
       "wip_stock",
       "finished_stock",
       "scrap",
+      "terminal",
     ]);
   });
 });

@@ -36,6 +36,7 @@ from app.domain.dimensions import (
 )
 from app.models import Product, Section
 from app.models.work_task import WorkTask
+from app.services.route_storage_classifier import TERMINAL_TYPES
 from app.stock.task_cache import (
     compute_remaining,
     compute_task_available,
@@ -195,19 +196,40 @@ class StockProjectionManager:
         описывает состояние материала до перехода (на исходной локации),
         to_quality_state — после (на целевой). Если баланс стал 0 —
         строка удаляется (инкубатор: ck_stock_balances_nonzero).
+
+        Терминальные секции (#136, «Отправлено») пропускаются: проводки в
+        ledger пишутся, но оперативный баланс для них не материализуется.
         """
+        terminal = await self._terminal_location_ids(
+            session, tx.from_location_id, tx.to_location_id,
+        )
         # from_location: исходящий материал в from_quality_state
-        if tx.from_location_id is not None:
+        if tx.from_location_id is not None and tx.from_location_id not in terminal:
             await self._recompute_balance(
                 session, tx.product_id, tx.from_location_id, tx.from_quality_state,
                 tx.dimensions,
             )
         # to_location: входящий материал в to_quality_state
-        if tx.to_location_id is not None:
+        if tx.to_location_id is not None and tx.to_location_id not in terminal:
             await self._recompute_balance(
                 session, tx.product_id, tx.to_location_id, tx.to_quality_state,
                 tx.dimensions,
             )
+
+    async def _terminal_location_ids(
+        self, session: AsyncSession, *location_ids: int | None,
+    ) -> set[int]:
+        """Среди перечисленных локаций вернуть те, что терминальные (#136)."""
+        ids = {i for i in location_ids if i is not None}
+        if not ids:
+            return set()
+        rows = await session.execute(
+            select(Section.id).where(
+                Section.id.in_(ids),
+                Section.type.in_(TERMINAL_TYPES),
+            )
+        )
+        return {r[0] for r in rows}
 
     async def _recompute_balance(
         self,
@@ -276,11 +298,17 @@ class StockProjectionManager:
         """Полный пересчёт всех строк StockBalance из ledger.
 
         Используется в diagnostics/миграциях для сверки. Возвращает
-        количество строк баланса после пересчёта.
+        количество строк баланса после пересчёта. Терминальные секции
+        (#136) в балансы не попадают — legacy-строки выметаются.
         """
         # ORM-delete: autoflush доносит незаписанные изменения проекции,
         # а объекты в identity map синхронизируются с удалением (wipe).
         await session.execute(delete(StockBalance))
+        terminal_ids = set(
+            (await session.execute(
+                select(Section.id).where(Section.type.in_(TERMINAL_TYPES))
+            )).scalars()
+        )
         result = await session.execute(
             select(
                 StockTransaction.product_id,
@@ -305,20 +333,23 @@ class StockProjectionManager:
             if from_loc is not None:
                 key = (product_id, from_loc, from_qs, dims_key)
                 agg[key] = agg.get(key, Decimal("0")) - qty
-        for (product_id, location_id, qs, dims_key), balance in agg.items():
-            if balance == 0:
-                continue
+        rows = [
+            (product_id, location_id, qs, dims_by_key.get(dims_key), balance)
+            for (product_id, location_id, qs, dims_key), balance in agg.items()
+            if balance != 0 and location_id not in terminal_ids
+        ]
+        for product_id, location_id, qs, dims, balance in rows:
             session.add(
                 StockBalance(
                     product_id=product_id,
                     location_id=location_id,
                     quality_state=qs,
-                    dimensions=dims_by_key.get(dims_key),
+                    dimensions=dims,
                     balance_qty=balance,
                     refreshed_at=datetime.now(),
                 )
             )
-        return len(agg)
+        return len(rows)
 
     async def refresh_task_projection(self, session: AsyncSession, tx: StockTransaction) -> None:
         """No-op — cached_* колонки удалены, используйте get_task_cache()."""

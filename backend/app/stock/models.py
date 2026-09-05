@@ -1,7 +1,7 @@
 """Модели домена Stock Ledger.
 
 Локации — это секции (``Section``) с единым классификатором ``Section.type``
-(String(20), 5 значений: ``production | raw_stock | wip_stock | finished_stock | scrap``).
+(String(20), 6 значений: ``production | raw_stock | wip_stock | finished_stock | scrap | terminal``; ``terminal`` (#136) — «Отправлено», вне оперативных остатков).
 Отдельной таблицы Location нет: станки и склады — это Section, различаются по ``type``.
 Поле ``kind`` и enum ``LocationType`` удалены в эпике section-cleanup (миграция 027).
 

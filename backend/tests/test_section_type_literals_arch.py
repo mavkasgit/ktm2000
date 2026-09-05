@@ -30,7 +30,7 @@ import app.services.route_storage_classifier as classifier
 
 # Полный словарь литералов типа участка.
 SECTION_TYPE_LITERALS = frozenset(
-    {"production", "raw_stock", "wip_stock", "finished_stock", "scrap", "quarantine"}
+    {"production", "raw_stock", "wip_stock", "finished_stock", "scrap", "quarantine", "terminal"}
 )
 # «Складские» литералы (без ``production``): их совместное появление в одной
 # коллекции почти наверняка означает ad-hoc классификатор участков.
@@ -137,7 +137,11 @@ def test_no_direct_section_type_literals_outside_classifier():
 
 def test_classifier_still_owns_the_literals():
     """Санити-проверка: классификатор действительно содержит все литералы."""
-    owned = classifier.STORAGE_TYPES | {classifier.SECTION_TYPE_PRODUCTION}
+    owned = (
+        classifier.STORAGE_TYPES
+        | classifier.TERMINAL_TYPES
+        | {classifier.SECTION_TYPE_PRODUCTION}
+    )
     assert owned == SECTION_TYPE_LITERALS - {"quarantine"}
     # ``quarantine`` осознанно удалён — не должен вернуться в наборы.
     assert "quarantine" not in classifier.STORAGE_TYPES

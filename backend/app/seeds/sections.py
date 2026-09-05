@@ -16,7 +16,7 @@ SECTIONS_DATA = [
     {"code": "PACKING", "name": "Упаковка", "sort_order": 80, "type": "production", "icon": "Package", "icon_color": "#10B981"},
     {"code": "FINISHED_STOCK", "name": "Склад готовой продукции", "sort_order": 90, "type": "finished_stock", "icon": "Container", "icon_color": "#065F46"},
     {"code": "SHIPMENT", "name": "К отгрузке", "sort_order": 100, "type": "finished_stock", "icon": "Truck", "icon_color": "#7C3AED"},
-    {"code": "SHIPPED", "name": "Отправлено", "sort_order": 110, "type": "finished_stock", "icon": "CheckCircle", "icon_color": "#059669"},
+    {"code": "SHIPPED", "name": "Отправлено", "sort_order": 110, "type": "terminal", "icon": "CheckCircle", "icon_color": "#059669"},
 ]
 
 # Operations for each section: (group_code, group_name, sort_order, op_code, op_name, is_significant, icon, icon_color, resolver_type, resolver_config, operation_type)
