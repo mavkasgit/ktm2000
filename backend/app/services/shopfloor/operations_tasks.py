@@ -11,10 +11,16 @@ from app.models.defect import Defect, DefectItem, DefectStatus
 from app.models.internal_plan import SectionPlanLine
 from app.models.production_plan import PlanPosition, PlanPositionStatus
 from app.models.route import RouteStage
+from app.models.section import Section
 from app.models.work_task import WorkTask, WorkTaskStatus
 from app.seeds.canon.models import ScrapPolicy
 from app.services.plan_position_hanger import position_dimensions_for_task
 from app.services.action_journal_service import action_journal_service
+from app.services.route_storage_classifier import (
+    SECTION_TYPE_FINISHED_STOCK,
+    STAGE_KIND_TRANSIT,
+    is_storage_section,
+)
 from app.stock import QualityState, Reason, StockCommand, StockCommandService
 from app.stock.models import StockBalance, StockTransaction
 from app.stock.services import dimensions_match_clause
@@ -633,6 +639,71 @@ async def complete_task(
     }
 
 
+async def resolve_final_release_destination(
+    db: AsyncSession,
+    stage: RouteStage,
+) -> Section:
+    """Адресат FINAL_RELEASE — каскад (#137), вместо «первой по sort_order».
+
+    1. Складский (transit) хоп маршрута, следующий за финальным этапом:
+       контекст маршрута приоритетнее глобального дефолта (SAP: production
+       version → material master; Odoo: выходная локация маршрута).
+    2. Глобальный дефолт «склад выпуска» — секция с ``is_output_default``.
+    3. Неоднозначность/отсутствие адресата → ``ValueError`` (отказ операции,
+       не молчаливый выбор).
+    """
+    next_stage = await db.scalar(
+        select(RouteStage)
+        .where(
+            RouteStage.route_id == stage.route_id,
+            RouteStage.sequence > stage.sequence,
+        )
+        .order_by(RouteStage.sequence)
+        .limit(1)
+    )
+    if (
+        next_stage is not None
+        and next_stage.stage_kind == STAGE_KIND_TRANSIT
+        and next_stage.storage_section_id is not None
+    ):
+        hop = await db.get(Section, next_stage.storage_section_id)
+        if hop is None or not is_storage_section(hop):
+            # Сломанный маршрут: транзитный хоп без склада. Молча
+            # подменять его глобальным дефолтом нельзя — отказ.
+            raise ValueError(
+                f"Транзитный хоп маршрута (stage_id={next_stage.id}) "
+                f"ссылается на несуществующую или не-складскую секцию "
+                f"(storage_section_id={next_stage.storage_section_id})"
+            )
+        return hop
+
+    defaults = (await db.execute(
+        select(Section).where(Section.is_output_default.is_(True))
+    )).scalars().all()
+    if not defaults:
+        raise ValueError(
+            "Не найден склад выпуска: задайте транзитный хоп после финального "
+            "этапа маршрута или пометьте склад ГП как «склад выпуска» "
+            "(is_output_default)"
+        )
+    if len(defaults) > 1:
+        codes = ", ".join(sorted(s.code for s in defaults))
+        raise ValueError(
+            f"Неоднозначный склад выпуска: is_output_default у нескольких "
+            f"секций ({codes}); оставьте флаг у одной"
+        )
+    default = defaults[0]
+    if default.type != SECTION_TYPE_FINISHED_STOCK:
+        # Каталог сломан вручную: «склад выпуска» перестал быть складом ГП —
+        # молча выпускать готовую продукцию туда нельзя.
+        raise ValueError(
+            f"Секция «склад выпуска» {default.code} имеет тип "
+            f"{default.type}: is_output_default допустим только на "
+            f"складе готовой продукции ({SECTION_TYPE_FINISHED_STOCK})"
+        )
+    return default
+
+
 async def final_release(
     db: AsyncSession,
     *,
@@ -704,22 +775,14 @@ async def final_release(
             f"Нельзя отправить {quantity}: доступно к отправке {remaining} шт."
         )
 
-    # Адресат финального выпуска — секция склада ГП (первая по sort_order).
-    # Без неё проводка «в никуда» запрещена: продукция списалась бы с баланса
-    # участка, не придя никуда (проекция пересчитывает только from-сторону).
-    from app.models.section import Section as _FinSection
-    from app.services.route_storage_classifier import SECTION_TYPE_FINISHED_STOCK
-    finished_stock = await db.scalar(
-        select(_FinSection.id)
-        .where(_FinSection.type == SECTION_TYPE_FINISHED_STOCK)
-        .order_by(_FinSection.sort_order)
-        .limit(1)
-    )
-    if finished_stock is None:
-        raise ValueError(
-            "Не найдена секция склада готовой продукции (тип finished_stock): "
-            "финальный выпуск невозможен"
-        )
+    # Адресат финального выпуска — каскад (#137): транзитный хоп маршрута
+    # после финального этапа → дефолт «склад выпуска» → отказ (ValueError)
+    # при отсутствии/неоднозначности. Отказ происходит до записи в журнал
+    # действий. Без адресата проводка «в никуда» запрещена: продукция
+    # списалась бы с баланса участка, не придя никуда (проекция
+    # пересчитывает только from-сторону).
+    destination = await resolve_final_release_destination(db, stage)
+    finished_stock = destination.id
 
     # Журнал действий (#116): final_release = Action по цепочке задачи.
     # Пишется после стража адресата — отказ не оставляет сироту в журнале.

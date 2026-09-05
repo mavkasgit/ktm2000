@@ -25,6 +25,12 @@ class Section(Base):
     )
     icon: Mapped[str | None] = mapped_column(String(50), nullable=True)
     icon_color: Mapped[str | None] = mapped_column(String(7), nullable=True)
+    # «Склад выпуска» (#137): адресат FINAL_RELEASE по умолчанию, когда
+    # за финальным этапом маршрута не следует транзитный хоп. Ровно одна
+    # секция в каталоге; несколько → резолв отказывает (не молчаливый выбор).
+    is_output_default: Mapped[bool] = mapped_column(
+        nullable=False, default=False, server_default=text("false")
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=text("now()")
     )

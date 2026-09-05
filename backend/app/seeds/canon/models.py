@@ -153,6 +153,8 @@ class SectionDef(BaseModel):
     icon: str | None = None
     icon_color: str | None = None
     is_active: bool = True
+    # «Склад выпуска» (#137): адресат FINAL_RELEASE по умолчанию.
+    is_output_default: bool = False
 
 
 class OperationDef(BaseModel):

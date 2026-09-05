@@ -108,7 +108,9 @@ async def _setup_minimal_route(session: AsyncSession, *, sku: str = "S3", qty: D
     prod = await _make_location(session, code=f"{sku}-PROD", name="Production", loc_type="laser")
     scrap_loc = await _make_location(session, code=f"{sku}-SCR", name="Scrap", loc_type="scrap")
     # Адресат FINAL_RELEASE: без секции ГП финальный выпуск отклоняется.
+    # Флаг «склад выпуска» (#137) — как в сид-каталоге (FINISHED_STOCK).
     fg = await _make_location(session, code=f"{sku}-FG", name="Склад ГП", loc_type="finished_stock")
+    fg.is_output_default = True
 
     spg = StorageProductionGroup(code=f"{sku}-SPG", name="SPG", is_active=True, sort_order=0)
     session.add(spg)
@@ -173,7 +175,7 @@ async def _setup_minimal_route(session: AsyncSession, *, sku: str = "S3", qty: D
 
     return {
         "user": user, "product": product, "task": task,
-        "raw": raw, "prod": prod, "scrap": scrap_loc,
+        "raw": raw, "prod": prod, "scrap": scrap_loc, "fg": fg,
     }
 
 
@@ -472,9 +474,10 @@ async def test_final_release_creates_stock_tx(session: AsyncSession):
 
 
 async def test_final_release_without_finished_stock_rejected(session: AsyncSession):
-    """Нет секции склада ГП → final_release отклоняется: проводки
-    «участок → None» нет (продукция исчезла бы с баланса участка),
-    Action в журнале не остаётся."""
+    """«Склад выпуска» перестал быть складом → final_release отклоняется:
+    проводки «участок → не-склад» нет (продукция исчезла бы с баланса
+    участка), Action в журнале не остаётся (#137: резолв адресата
+    отказывает на сломанном каталоге)."""
     fx = await _setup_minimal_route(session)
     task = fx["task"]
 
@@ -522,7 +525,7 @@ async def test_final_release_without_finished_stock_rejected(session: AsyncSessi
     from app.services.shopfloor.operations_tasks import final_release
     from app.models.action_journal import Action
 
-    with pytest.raises(ValueError, match="finished_stock"):
+    with pytest.raises(ValueError, match="склад выпуска"):
         await final_release(
             session,
             task_id=task.id,

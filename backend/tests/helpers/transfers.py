@@ -224,7 +224,8 @@ async def _make_dim_route_fixture(
     prod1 = Section(code=f"{sku}-P1", name="P1", type="production", is_active=True, sort_order=1)
     prod2 = Section(code=f"{sku}-P2", name="P2", type="production", is_active=True, sort_order=2)
     # Адресат FINAL_RELEASE: без секции ГП финальный выпуск отклоняется.
-    fg = Section(code=f"{sku}-FG", name="Склад ГП", type="finished_stock", is_active=True, sort_order=90)
+    fg = Section(code=f"{sku}-FG", name="Склад ГП", type="finished_stock", is_active=True, sort_order=90,
+             is_output_default=True)  # адресат FINAL_RELEASE по умолчанию (#137)
     session.add_all([raw, prod1, prod2, fg])
     await session.flush()
 
@@ -345,7 +346,8 @@ async def _make_transform_route_fixture(
     raw = Section(code=f"{sku}-RAW", name="RAW", type="raw_stock", is_active=True, sort_order=0)
     saw = Section(code=f"{sku}-SAW", name="SAW", type="production", is_active=True, sort_order=1)
     pack = Section(code=f"{sku}-PACK", name="PACK", type="production", is_active=True, sort_order=2)
-    fg = Section(code=f"{sku}-FG", name="FG", type="finished_stock", is_active=True, sort_order=3)
+    fg = Section(code=f"{sku}-FG", name="FG", type="finished_stock", is_active=True, sort_order=3,
+             is_output_default=True)  # адресат FINAL_RELEASE по умолчанию (#137)
     session.add_all([raw, saw, pack, fg])
     await session.flush()
 

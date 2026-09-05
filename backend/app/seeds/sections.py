@@ -5,18 +5,18 @@ from __future__ import annotations
 # Сырые dict'ы/кортежи живут здесь (authoring-модуль), а не в седерах.
 
 SECTIONS_DATA = [
-    {"code": "RAW_STOCK", "name": "Склад сырья", "sort_order": 10, "type": "raw_stock", "icon": "Warehouse", "icon_color": "#F59E0B"},
-    {"code": "DRILLING", "name": "Сверловка", "sort_order": 20, "type": "production", "icon": "Drill", "icon_color": "#3B82F6"},
-    {"code": "PRESSING", "name": "Пресс", "sort_order": 30, "type": "production", "icon": "Anvil", "icon_color": "#EF4444"},
-    {"code": "SHOT_BLAST", "name": "Дробеструй", "sort_order": 40, "type": "production", "icon": "SprayCan", "icon_color": "#6B7280"},
-    {"code": "PREP_STOCK", "name": "Склад подготовки", "sort_order": 45, "type": "wip_stock", "icon": "PackageX", "icon_color": "#7C3AED"},
-    {"code": "ANODIZING", "name": "Анодирование", "sort_order": 50, "type": "production", "icon": "FlaskConical", "icon_color": "#06B6D4"},
-    {"code": "WIP_STOCK", "name": "Склад полуфабриката", "sort_order": 60, "type": "wip_stock", "icon": "Boxes", "icon_color": "#84CC16"},
-    {"code": "SAWING", "name": "Пила", "sort_order": 70, "type": "production", "icon": "Fan", "icon_color": "#F97316"},
-    {"code": "PACKING", "name": "Упаковка", "sort_order": 80, "type": "production", "icon": "Package", "icon_color": "#10B981"},
-    {"code": "FINISHED_STOCK", "name": "Склад готовой продукции", "sort_order": 90, "type": "finished_stock", "icon": "Container", "icon_color": "#065F46"},
-    {"code": "SHIPMENT", "name": "К отгрузке", "sort_order": 100, "type": "finished_stock", "icon": "Truck", "icon_color": "#7C3AED"},
-    {"code": "SHIPPED", "name": "Отправлено", "sort_order": 110, "type": "terminal", "icon": "CheckCircle", "icon_color": "#059669"},
+    {"code": "RAW_STOCK", "is_output_default": False, "name": "Склад сырья", "sort_order": 10, "type": "raw_stock", "icon": "Warehouse", "icon_color": "#F59E0B"},
+    {"code": "DRILLING", "is_output_default": False, "name": "Сверловка", "sort_order": 20, "type": "production", "icon": "Drill", "icon_color": "#3B82F6"},
+    {"code": "PRESSING", "is_output_default": False, "name": "Пресс", "sort_order": 30, "type": "production", "icon": "Anvil", "icon_color": "#EF4444"},
+    {"code": "SHOT_BLAST", "is_output_default": False, "name": "Дробеструй", "sort_order": 40, "type": "production", "icon": "SprayCan", "icon_color": "#6B7280"},
+    {"code": "PREP_STOCK", "is_output_default": False, "name": "Склад подготовки", "sort_order": 45, "type": "wip_stock", "icon": "PackageX", "icon_color": "#7C3AED"},
+    {"code": "ANODIZING", "is_output_default": False, "name": "Анодирование", "sort_order": 50, "type": "production", "icon": "FlaskConical", "icon_color": "#06B6D4"},
+    {"code": "WIP_STOCK", "is_output_default": False, "name": "Склад полуфабриката", "sort_order": 60, "type": "wip_stock", "icon": "Boxes", "icon_color": "#84CC16"},
+    {"code": "SAWING", "is_output_default": False, "name": "Пила", "sort_order": 70, "type": "production", "icon": "Fan", "icon_color": "#F97316"},
+    {"code": "PACKING", "is_output_default": False, "name": "Упаковка", "sort_order": 80, "type": "production", "icon": "Package", "icon_color": "#10B981"},
+    {"code": "FINISHED_STOCK", "is_output_default": True, "name": "Склад готовой продукции", "sort_order": 90, "type": "finished_stock", "icon": "Container", "icon_color": "#065F46"},
+    {"code": "SHIPMENT", "is_output_default": False, "name": "К отгрузке", "sort_order": 100, "type": "finished_stock", "icon": "Truck", "icon_color": "#7C3AED"},
+    {"code": "SHIPPED", "is_output_default": False, "name": "Отправлено", "sort_order": 110, "type": "terminal", "icon": "CheckCircle", "icon_color": "#059669"},
 ]
 
 # Operations for each section: (group_code, group_name, sort_order, op_code, op_name, is_significant, icon, icon_color, resolver_type, resolver_config, operation_type)
@@ -85,6 +85,7 @@ TRANSFORMING_SECTION_OPS: set[tuple[str, str]] = {
 # которые описывают. ORM-атрибут → ключ в строке данных.
 SECTIONS_FIELD_MAP = {
     "code": "code",
+    "is_output_default": "is_output_default",
     "name": "name",
     "sort_order": "sort_order",
     "type": "type",
