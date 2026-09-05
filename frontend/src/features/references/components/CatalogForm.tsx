@@ -773,20 +773,25 @@ export const CatalogForm = forwardRef<CatalogFormRef, {
                   <div className="rounded-md border bg-background overflow-hidden inline-block min-w-0 shrink-0">
                     <table className="text-sm">
                       <thead>
-                        <tr className="bg-muted/50 text-xs text-muted-foreground">
+                        <tr className="bg-muted/50 text-xs text-muted-foreground border-b">
                           <th className="text-left font-medium px-3 py-2">
                             {readOnly ? "Основная" : "Основная (радио)"}
                           </th>
                           <th className="text-left font-medium px-3 py-2">Кол-во на подвесе, шт</th>
                           <th className="text-left font-medium px-3 py-2">Длина, мм</th>
+                          {!readOnly && <th className="px-2 py-2" aria-label="Действия" />}
                         </tr>
                       </thead>
-                      <tbody>
-                        <RadioGroup
-                          value={form.primary_length_mm != null ? String(form.primary_length_mm) : undefined}
-                          onValueChange={(val) => update("primary_length_mm", Number(val))}
-                          disabled={readOnly}
-                        >
+                      {/* asChild вместо div-обёртки: div внутри tbody ломает раскладку таблицы,
+                          строки разъезжаются с шапкой; table-row-group перекрывает grid из обёртки */}
+                      <RadioGroup
+                        asChild
+                        className="table-row-group"
+                        value={form.primary_length_mm != null ? String(form.primary_length_mm) : undefined}
+                        onValueChange={(val) => update("primary_length_mm", Number(val))}
+                        disabled={readOnly}
+                      >
+                        <tbody>
                           {formLengths.map((len, idx) => {
                             const rowManual = manualForLength(len);
                             const rowInvalid = !autoMode && rowManual != null && !(rowManual > 0);
@@ -845,9 +850,9 @@ export const CatalogForm = forwardRef<CatalogFormRef, {
                               </tr>
                             );
                           })}
+                          </tbody>
                         </RadioGroup>
-                      </tbody>
-                    </table>
+                      </table>
                     {formLengths.length === 0 && (
                       <p className="px-3 py-2 text-xs text-muted-foreground">Добавьте хотя бы одну длину.</p>
                     )}
