@@ -3,8 +3,10 @@ from __future__ import annotations
 from decimal import Decimal
 
 from sqlalchemy import select, func
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.idempotency import raise_idempotency_conflict_on_violation
 from app.models.defect import Defect, DefectDecision, DefectDecisionType, DefectItem, DefectStatus, DefectType
 from app.models.rework_task import ReworkTask, ReworkTaskStatus
 from app.seeds.canon.models import DefectDecisionDef, ScrapPolicy
@@ -90,7 +92,17 @@ async def create_defect(
         idempotency_key=idempotency_key,
     )
     db.add(defect)
-    await db.flush()
+    try:
+        await db.flush()
+    except IntegrityError as exc:
+        # Гонка идемпотентности (ADR-0022, тикет #135): конкурент создал
+        # дефект с тем же ключом между replay-SELECT и flush. 409 целиком —
+        # DefectItem и аудит-лог этой же транзакции откатываются; повтор
+        # с тем же ключом попадает в replay-ветку выше.
+        raise_idempotency_conflict_on_violation(
+            exc, index_name="uq_defects_idempotency_key",
+            entity="defect", idempotency_key=idempotency_key,
+        )
     item = DefectItem(
         defect_id=defect.id,
         quantity=quantity,
@@ -214,7 +226,16 @@ async def defect_decide(
         decided_by=actor_id,
     )
     db.add(decision)
-    await db.flush()
+    try:
+        await db.flush()
+    except IntegrityError as exc:
+        # Гонка идемпотентности (ADR-0022, тикет #135): проводка ledger и
+        # мутация defect.status в этой же транзакции откатываются вместе с
+        # решением; повтор с тем же ключом попадает в replay-ветку выше.
+        raise_idempotency_conflict_on_violation(
+            exc, index_name="uq_defect_decisions_idempotency_key",
+            entity="defect_decision", idempotency_key=idempotency_key,
+        )
 
     svc = StockCommandService()
     rework_task_id: int | None = None
@@ -430,7 +451,15 @@ async def rework_create(
         idempotency_key=idempotency_key,
     )
     db.add(rework)
-    await db.flush()
+    try:
+        await db.flush()
+    except IntegrityError as exc:
+        # Гонка идемпотентности (ADR-0022, тикет #135): мутация
+        # defect.status в этой же транзакции откатывается вместе с задачей.
+        raise_idempotency_conflict_on_violation(
+            exc, index_name="uq_rework_tasks_idempotency_key",
+            entity="rework_task", idempotency_key=idempotency_key,
+        )
     defect.status = DefectStatus.rework_task_created
     await db.flush()
 

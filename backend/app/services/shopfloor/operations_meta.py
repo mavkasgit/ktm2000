@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.idempotency import raise_idempotency_conflict_on_violation
 from app.models.attachment import Attachment, AttachmentLink
 from app.models.entity_comment import EntityComment, EntityType
+
+from .common import _check_idempotency
 
 async def create_comment(
     db: AsyncSession,
@@ -18,6 +22,12 @@ async def create_comment(
 ) -> dict:
     if not body.strip():
         raise ValueError("Comment body must not be empty")
+    if idempotency_key:
+        existing = await _check_idempotency(
+            db, idempotency_key=idempotency_key, entity_type=EntityComment
+        )
+        if existing is not None:
+            return {"comment_id": existing.id, "idempotent_replay": True}
     comment = EntityComment(
         entity_type=entity_type,
         entity_id=entity_id,
@@ -28,7 +38,15 @@ async def create_comment(
         author_id=actor_id,
     )
     db.add(comment)
-    await db.flush()
+    try:
+        await db.flush()
+    except IntegrityError as exc:
+        # Гонка идемпотентности (ADR-0022, тикет #135); повтор с тем же
+        # ключом попадает в replay-ветку выше.
+        raise_idempotency_conflict_on_violation(
+            exc, index_name="uq_entity_comments_idempotency_key",
+            entity="entity_comment", idempotency_key=idempotency_key,
+        )
     return {"comment_id": comment.id}
 
 async def create_attachment(
@@ -47,6 +65,12 @@ async def create_attachment(
         raise ValueError("original_filename is required")
     if size_bytes <= 0:
         raise ValueError("size_bytes must be > 0")
+    if idempotency_key:
+        existing = await _check_idempotency(
+            db, idempotency_key=idempotency_key, entity_type=Attachment
+        )
+        if existing is not None:
+            return {"attachment_id": existing.id, "idempotent_replay": True}
     attachment = Attachment(
         original_filename=original_filename,
         stored_path=stored_path,
@@ -58,7 +82,15 @@ async def create_attachment(
         created_by=actor_id,
     )
     db.add(attachment)
-    await db.flush()
+    try:
+        await db.flush()
+    except IntegrityError as exc:
+        # Гонка идемпотентности (ADR-0022, тикет #135); повтор с тем же
+        # ключом попадает в replay-ветку выше.
+        raise_idempotency_conflict_on_violation(
+            exc, index_name="uq_attachments_idempotency_key",
+            entity="attachment", idempotency_key=idempotency_key,
+        )
     return {"attachment_id": attachment.id}
 
 async def link_attachment(

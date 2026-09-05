@@ -5,8 +5,10 @@ from decimal import Decimal
 from typing import NamedTuple
 
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.idempotency import raise_idempotency_conflict_on_violation
 from app.domain.shortage import ShortageStrategy
 from app.models.defect import Defect, DefectItem, DefectStatus
 from app.models.internal_plan import SectionPlanLine
@@ -491,6 +493,7 @@ async def _register_scrap_and_defect(
         action_id=ctx.action_id,
     ))
 
+    defect_key = _defect_key(ctx.idempotency_key) if ctx.idempotency_key else None
     defect = Defect(
         product_id=task.product_id,
         section_id=task.section_id,
@@ -499,10 +502,20 @@ async def _register_scrap_and_defect(
         status=DefectStatus.decision_required,
         comment=ctx.comment,
         created_by=ctx.actor_id,
-        idempotency_key=_defect_key(ctx.idempotency_key) if ctx.idempotency_key else None,
+        idempotency_key=defect_key,
     )
     db.add(defect)
-    await db.flush()
+    try:
+        await db.flush()
+    except IntegrityError as exc:
+        # Гонка идемпотентности (ADR-0022, тикет #135). На практике здесь
+        # раньше стрельнёт ledger-бэкстоп на SCRAP-проводке (тот же base
+        # key), но защищаемся и от прямого конфликта дефекта: 409, не
+        # ValueError — shopfloor-роуты переводят ValueError в 400.
+        raise_idempotency_conflict_on_violation(
+            exc, index_name="uq_defects_idempotency_key",
+            entity="defect", idempotency_key=defect_key,
+        )
 
     defect_item = DefectItem(
         defect_id=defect.id,

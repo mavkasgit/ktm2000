@@ -29,6 +29,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import KTMException
+from app.core.idempotency import is_idempotency_violation
 from app.domain.dimensions import (
     DimensionsValidationError,
     canonicalize_dimensions,
@@ -60,16 +61,6 @@ class StockValidationError(ValueError):
 
 
 _IDEMPOTENCY_UQ_NAME = "uq_stock_transactions_idempotency_key"
-
-
-def _is_idempotency_violation(exc: IntegrityError) -> bool:
-    """IntegrityError именно от unique-индекса идемпотентности (ADR-0022),
-    а не от чужого констрейнта (FK и т.п.)."""
-    orig = exc.orig
-    constraint = getattr(orig, "constraint_name", None) or getattr(
-        orig, "constraint", None
-    )
-    return _IDEMPOTENCY_UQ_NAME in str(constraint or orig)
 
 
 class StockIdempotencyConflict(KTMException):
@@ -650,7 +641,7 @@ class StockCommandService:
             try:
                 await session.flush()  # получить tx.id для reverses_id и projection
             except IntegrityError as exc:
-                if not _is_idempotency_violation(exc):
+                if not is_idempotency_violation(exc, _IDEMPOTENCY_UQ_NAME):
                     raise
                 # Гонка (READ COMMITTED): конкурент закоммитил проводку с тем
                 # же ключом между нашей replay-проверкой и flush. Отклоняем

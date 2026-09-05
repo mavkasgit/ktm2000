@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import BigInteger, DateTime, Enum, ForeignKey, Identity, String, Text, UniqueConstraint, func, text
+from sqlalchemy import BigInteger, DateTime, Enum, ForeignKey, Identity, Index, String, Text, UniqueConstraint, func, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -10,6 +10,18 @@ from app.models.entity_comment import EntityType
 
 class Attachment(Base):
     __tablename__ = "attachments"
+    __table_args__ = (
+        # Идемпотентность (ADR-0022, тикет #135): unique-бэкстоп на гонку
+        # SELECT-then-INSERT в create_attachment. Partial — безключевые
+        # вложения остаются неидемпотентными. В модели — тестовая схема
+        # строится create_all, минуя миграции.
+        Index(
+            "uq_attachments_idempotency_key",
+            "idempotency_key",
+            unique=True,
+            postgresql_where=text("idempotency_key IS NOT NULL"),
+        ),
+    )
 
     id: Mapped[int] = mapped_column(BigInteger, Identity(always=True), primary_key=True)
     original_filename: Mapped[str] = mapped_column(String(500), nullable=False)

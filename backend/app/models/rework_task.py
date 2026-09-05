@@ -2,7 +2,7 @@ import enum
 from datetime import datetime
 from decimal import Decimal
 
-from sqlalchemy import BigInteger, CheckConstraint, DateTime, Enum, ForeignKey, Identity, Numeric, String, func, text
+from sqlalchemy import BigInteger, CheckConstraint, DateTime, Enum, ForeignKey, Identity, Index, Numeric, String, func, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base
@@ -19,6 +19,14 @@ class ReworkTask(Base):
     __tablename__ = "rework_tasks"
     __table_args__ = (
         CheckConstraint("quantity > 0", name="qty_positive"),
+        # Идемпотентность (ADR-0022, тикет #135): unique-бэкстоп на гонку
+        # SELECT-then-INSERT в rework_create.
+        Index(
+            "uq_rework_tasks_idempotency_key",
+            "idempotency_key",
+            unique=True,
+            postgresql_where=text("idempotency_key IS NOT NULL"),
+        ),
     )
 
     id: Mapped[int] = mapped_column(BigInteger, Identity(always=True), primary_key=True)

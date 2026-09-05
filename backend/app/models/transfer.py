@@ -2,7 +2,7 @@ import enum
 from datetime import datetime
 from decimal import Decimal
 
-from sqlalchemy import BigInteger, CheckConstraint, DateTime, Enum, ForeignKey, Identity, Numeric, String, Text, func, text
+from sqlalchemy import BigInteger, CheckConstraint, DateTime, Enum, ForeignKey, Identity, Index, Numeric, String, Text, func, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -34,6 +34,16 @@ class Transfer(Base):
         CheckConstraint("sent_quantity > 0", name="sent_quantity_positive"),
         CheckConstraint("accepted_quantity IS NULL OR accepted_quantity >= 0", name="accepted_quantity_non_negative"),
         CheckConstraint("rejected_quantity IS NULL OR rejected_quantity >= 0", name="rejected_quantity_non_negative"),
+        # Идемпотентность (ADR-0022, тикет #135): unique-бэкстоп на гонку
+        # SELECT-then-INSERT в transfer_send. Partial — безключевые передачи
+        # остаются неидемпотентными. В модели — тестовая схема строится
+        # create_all, минуя миграции.
+        Index(
+            "uq_transfers_idempotency_key",
+            "idempotency_key",
+            unique=True,
+            postgresql_where=text("idempotency_key IS NOT NULL"),
+        ),
     )
 
     id: Mapped[int] = mapped_column(BigInteger, Identity(always=True), primary_key=True)

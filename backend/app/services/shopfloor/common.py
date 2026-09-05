@@ -63,12 +63,21 @@ async def _check_idempotency(
     idempotency_key: str | None,
     entity_type: type,
 ) -> object | None:
-    """Return existing entity if idempotency_key was already used, else None."""
+    """Return existing entity if idempotency_key was already used, else None.
+
+    ``order_by(id).limit(1)``, а не ``db.scalar()``: legacy-дубликаты ключа
+    (возможные до миграции 052) не должны превращать replay в
+    MultipleResultsFound (ADR-0022 §3, тикет #135).
+    """
     if not idempotency_key:
         return None
-    return await db.scalar(
-        select(entity_type).where(entity_type.idempotency_key == idempotency_key)
+    res = await db.execute(
+        select(entity_type)
+        .where(entity_type.idempotency_key == idempotency_key)
+        .order_by(entity_type.id)
+        .limit(1)
     )
+    return res.scalar_one_or_none()
 
 async def _get_route_stage(db: AsyncSession, route_stage_id: int) -> RouteStage:
     stage = await db.get(RouteStage, route_stage_id)

@@ -32,8 +32,10 @@ from datetime import UTC, datetime
 from decimal import Decimal
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.idempotency import raise_idempotency_conflict_on_violation
 from app.models.internal_plan import SectionPlanLine
 from app.models.section import Section
 from app.models.transfer import Transfer, TransferStatus
@@ -329,7 +331,18 @@ async def transfer_send(
         dimensions=dimensions,
     )
     db.add(transfer)
-    await db.flush()
+    try:
+        await db.flush()
+    except IntegrityError as exc:
+        # Гонка идемпотентности (ADR-0022, тикет #135): конкурент провёл
+        # transfer_send с тем же ключом между нашим replay-SELECT и flush.
+        # Отклоняем подачу целиком (409): задача/ledger/кэши в этой же
+        # внешней транзакции откатываются вместе с ней; повтор с тем же
+        # ключом попадает в replay-ветку выше.
+        raise_idempotency_conflict_on_violation(
+            exc, index_name="uq_transfers_idempotency_key",
+            entity="transfer", idempotency_key=idempotency_key,
+        )
 
     eff_executor = executor_user_id or actor_id
     actor_name = await _get_user_snapshot_name(db, actor_id)

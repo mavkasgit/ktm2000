@@ -1,7 +1,7 @@
 import enum
 from datetime import datetime
 
-from sqlalchemy import BigInteger, Boolean, DateTime, Enum, ForeignKey, Identity, String, Text, func, text
+from sqlalchemy import BigInteger, Boolean, DateTime, Enum, ForeignKey, Identity, Index, String, Text, func, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base
@@ -21,6 +21,16 @@ class EntityType(str, enum.Enum):
 
 class EntityComment(Base):
     __tablename__ = "entity_comments"
+    __table_args__ = (
+        # Идемпотентность (ADR-0022, тикет #135): unique-бэкстоп на гонку
+        # SELECT-then-INSERT в create_comment.
+        Index(
+            "uq_entity_comments_idempotency_key",
+            "idempotency_key",
+            unique=True,
+            postgresql_where=text("idempotency_key IS NOT NULL"),
+        ),
+    )
 
     id: Mapped[int] = mapped_column(BigInteger, Identity(always=True), primary_key=True)
     entity_type: Mapped[EntityType] = mapped_column(Enum(EntityType, name="entity_type"), nullable=False)

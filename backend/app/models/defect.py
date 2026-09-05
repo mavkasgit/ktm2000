@@ -3,7 +3,7 @@ from datetime import datetime
 from decimal import Decimal
 
 import sqlalchemy as sa
-from sqlalchemy import BigInteger, Boolean, CheckConstraint, DateTime, Enum, ForeignKey, Identity, Numeric, String, Text, func, text
+from sqlalchemy import BigInteger, Boolean, CheckConstraint, DateTime, Enum, ForeignKey, Identity, Index, Numeric, String, Text, func, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base
@@ -44,6 +44,18 @@ class DefectType(Base):
 
 class Defect(Base):
     __tablename__ = "defects"
+    __table_args__ = (
+        # Идемпотентность (ADR-0022, тикет #135): unique-бэкстоп на гонку
+        # SELECT-then-INSERT в create_defect. Partial — безключевые дефекты
+        # остаются неидемпотентными. В модели — тестовая схема строится
+        # create_all, минуя миграции.
+        Index(
+            "uq_defects_idempotency_key",
+            "idempotency_key",
+            unique=True,
+            postgresql_where=text("idempotency_key IS NOT NULL"),
+        ),
+    )
 
     id: Mapped[int] = mapped_column(BigInteger, Identity(always=True), primary_key=True)
     product_id: Mapped[int] = mapped_column(ForeignKey("products.id"), nullable=False)
@@ -89,6 +101,14 @@ class DefectDecision(Base):
     __tablename__ = "defect_decisions"
     __table_args__ = (
         CheckConstraint("quantity > 0", name="qty_positive"),
+        # Идемпотентность (ADR-0022, тикет #135): unique-бэкстоп на гонку
+        # SELECT-then-INSERT в defect_decide.
+        Index(
+            "uq_defect_decisions_idempotency_key",
+            "idempotency_key",
+            unique=True,
+            postgresql_where=text("idempotency_key IS NOT NULL"),
+        ),
     )
 
     id: Mapped[int] = mapped_column(BigInteger, Identity(always=True), primary_key=True)
