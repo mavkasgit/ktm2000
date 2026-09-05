@@ -47,9 +47,9 @@ const GRID_DENSITY_OPTIONS: { value: GridDensity; label: string }[] = [
 ];
 
 const GRID_DENSITY_CLASSES: Record<GridDensity, string> = {
-  large: "grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4",
-  medium: "grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6",
-  small: "grid-cols-3 sm:grid-cols-4 lg:grid-cols-6 xl:grid-cols-8",
+  large: "grid-cols-2 sm:grid-cols-3 lg:grid-cols-4",
+  medium: "grid-cols-3 sm:grid-cols-4 lg:grid-cols-6",
+  small: "grid-cols-4 sm:grid-cols-6 lg:grid-cols-8 xl:grid-cols-10",
 };
 
 interface SortConfig {
@@ -230,6 +230,7 @@ export function RawMaterialsPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [viewMode, setViewMode] = useState<ViewMode>("table");
+  const [gridMenuOpen, setGridMenuOpen] = useState(false);
   const [gridDensity, setGridDensity] = useState<GridDensity>(() => {
     try {
       const raw = localStorage.getItem(GRID_DENSITY_STORAGE_KEY);
@@ -521,11 +522,71 @@ export function RawMaterialsPage() {
         <h2 className="text-xl font-semibold">Справочник сырья</h2>
         <div className="flex items-center gap-2">
           <div className="inline-flex items-center rounded-lg border overflow-hidden">
+            {/* Клик по кнопке всегда включает сетку; меню открывается только если
+                размер ещё не выбран (пустая память) или сетка уже активна (сменить размер).
+                Управляемое open: Radix отменяет click после pointerdown, поэтому
+                решение принимаем в onOpenChange */}
+            <DropdownMenu
+              open={gridMenuOpen}
+              onOpenChange={(nextOpen) => {
+                if (!nextOpen) {
+                  setGridMenuOpen(false);
+                  return;
+                }
+                let saved: string | null = null;
+                try {
+                  saved = localStorage.getItem(GRID_DENSITY_STORAGE_KEY);
+                } catch {
+                  // приватный режим — считаем память пустой
+                }
+                if (saved == null || viewMode === "grid") setGridMenuOpen(true);
+                setViewMode("grid");
+              }}
+            >
+              <DropdownMenuTrigger asChild>
+                <button
+                  type="button"
+                  className={cn(
+                    "inline-flex items-center gap-1 px-3 h-9 text-sm transition-colors",
+                    viewMode === "grid"
+                      ? "bg-primary text-primary-foreground"
+                      : "hover:bg-muted text-foreground",
+                  )}
+                >
+                  <Grid className="h-4 w-4" />
+                  Сетка
+                  {viewMode === "grid" && (
+                    <span className="text-xs opacity-80">
+                      · {GRID_DENSITY_OPTIONS.find(({ value }) => value === gridDensity)?.label.toLowerCase()}
+                    </span>
+                  )}
+                  <ChevronDown className="h-3.5 w-3.5" />
+                </button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="start">
+                {GRID_DENSITY_OPTIONS.map(({ value, label }) => (
+                  <DropdownMenuItem
+                    key={value}
+                    onClick={() => {
+                      setViewMode("grid");
+                      setGridDensity(value);
+                      try {
+                        localStorage.setItem(GRID_DENSITY_STORAGE_KEY, value);
+                      } catch {
+                        // приватный режим — просто не запоминаем
+                      }
+                    }}
+                  >
+                    <Check className={gridDensity === value ? "opacity-100" : "opacity-0"} />
+                    {label}
+                  </DropdownMenuItem>
+                ))}
+              </DropdownMenuContent>
+            </DropdownMenu>
             {([
-              ["grid", "Сетка", Grid],
               ["table", "Список", List],
               ["calc", "Расчёт подвесов", null],
-            ] as [ViewMode, string, typeof Grid | null][]).map(([mode, label, Icon]) => (
+            ] as [ViewMode, string, typeof List | null][]).map(([mode, label, Icon]) => (
               <button
                 key={mode}
                 type="button"
@@ -542,33 +603,6 @@ export function RawMaterialsPage() {
               </button>
             ))}
           </div>
-          {viewMode === "grid" && (
-            <div className="inline-flex items-center rounded-lg border overflow-hidden">
-              {GRID_DENSITY_OPTIONS.map(({ value, label }) => (
-                <button
-                  key={value}
-                  type="button"
-                  title={`Размер фото: ${label.toLowerCase()}`}
-                  onClick={() => {
-                    setGridDensity(value);
-                    try {
-                      localStorage.setItem(GRID_DENSITY_STORAGE_KEY, value);
-                    } catch {
-                      // приватный режим — просто не запоминаем
-                    }
-                  }}
-                  className={cn(
-                    "inline-flex items-center px-3 h-9 text-sm transition-colors",
-                    gridDensity === value
-                      ? "bg-primary text-primary-foreground"
-                      : "hover:bg-muted text-foreground",
-                  )}
-                >
-                  {label}
-                </button>
-              ))}
-            </div>
-          )}
           {!isReadOnly && (
             <>
               <DropdownMenu>
