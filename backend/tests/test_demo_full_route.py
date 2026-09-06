@@ -574,6 +574,24 @@ async def test_demo_paired_profile_scenario_imports_as_paired_row(client, sessio
         )
     )
 
+    # Пара резолвится из product_pairs (#148): сырьевые артикулы сценария
+    # + ручная N на общей длине 2700 мм.
+    from app.models.product import ProductLength, ProductPair
+
+    raw_a = Product(sku="ЮП-2616", name="Raw 2616", type=ProductType.component, unit="pcs", is_active=True)
+    raw_b = Product(sku="ЮП-2604", name="Raw 2604", type=ProductType.component, unit="pcs", is_active=True)
+    session.add_all([raw_a, raw_b])
+    await session.flush()
+    session.add_all([
+        ProductLength(product_id=raw_a.id, length_mm=2700),
+        ProductLength(product_id=raw_b.id, length_mm=2700),
+    ])
+    session.add(ProductPair(
+        product_a_id=min(raw_a.id, raw_b.id),
+        product_b_id=max(raw_a.id, raw_b.id),
+        quantity_per_hanger={"2700": {"auto": None, "manual": 8}},
+    ))
+
     section = Section(code="DEMO-PAIR-A", name="Demo Pair A", type="production", is_active=True)
     session.add(section)
     await session.flush()

@@ -28,8 +28,6 @@ export const outputKindLabels: Record<string, string> = {
 export const errorLabels: Record<string, string> = {
   "active_route_has_no_steps": "Маршрут не содержит этапов",
   "active_route_not_found": "Не найден активный маршрут",
-  "active_techcard_has_no_lines": "Техкарта не содержит операций",
-  "active_techcard_not_found": "Не найдена активная техкарта для продукта",
   "auto_fallback": "Маршрут скорректирован автоматически — проверьте корректность",
   "duplicate_sku_due_date": "Дубликат строки Excel: такая же строка уже есть в плане.",
   "hanger_calc_zero": "Авторасчёт количества на подвес невозможен — для этой длины получается 0 штук",
@@ -38,6 +36,7 @@ export const errorLabels: Record<string, string> = {
   "no_route_candidate": "Не найден маршрут, удовлетворяющий правилам выбора",
   "product_inactive": "Продукт неактивен",
   "product_not_found": "Продукт не найден",
+  "product_pair_not_found": "Пара таких профилей не создана в справочнике сырья",
   "quantity_must_be_positive": "Количество должно быть положительным",
   "route_contains_excluded_step": "Маршрут содержит запрещенный правилами участок",
   "route_contains_inactive_section": "Маршрут содержит неактивный участок",
@@ -195,8 +194,7 @@ export const errorPhraseTranslations: Record<string, string> = {
   "Plan position must be released": "Позиция плана должна быть выпущена",
   "Plan position not found": "Позиция плана не найдена",
   "Position #{0} has no route assigned": "Для позиции #{0} не назначен маршрут",
-  "Position #{0}: no paired techcard found for product resolution": "Позиция #{0}: не найдена парная техкарта для резолюции продукта",
-  "Position #{0}: paired techcard has no component products": "Позиция #{0}: парная техкарта не содержит компонентов",
+  "Position #{0}: product pair not found in product_pairs": "Позиция #{0}: пара компонентов не найдена в product_pairs",
   "Position already has execution facts; manual route pass is allowed only before execution starts": "По позиции уже есть факты выполнения; ручной пропуск маршрута разрешён только до начала выполнения",
   "Position does not belong to production plan": "Позиция не относится к плану производства",
   "Position has no route tasks": "У позиции нет задач маршрута",
@@ -381,8 +379,8 @@ export const sectionTypeLabels: Record<string, string> = {
   "production": "Производство",
   "raw_stock": "Склад сырья",
   "scrap": "Брак",
-  "wip_stock": "Склад полуфабриката",
   "terminal": "Терминальная секция",
+  "wip_stock": "Склад полуфабриката",
 }
 
 // Лейблы фаз правил выбора маршрута

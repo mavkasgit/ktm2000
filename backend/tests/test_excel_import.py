@@ -192,8 +192,10 @@ async def test_import_excel_creates_batch_and_change_set(client, session, tmp_pa
     assert body["items"][0]["after_data"]["source_sku"] == "ЮП-2616+ЮП-2604"
     assert body["items"][0]["after_data"]["has_pack_ops"] is False
     assert body["items"][0]["warnings"] == ["paired_profile_product_unmapped"]
+    # Пара ЮП-2616+ЮП-2604 не создана в справочнике сырья
+    assert "product_pair_not_found" in body["items"][0]["errors"]
     # ЮП-2083 not seeded in tests, so product_not_found is expected
-    assert "product_not_found" in body["items"][1]["errors"] or "active_techcard_has_no_lines" in body["items"][1]["errors"]
+    assert "product_not_found" in body["items"][1]["errors"]
 
     assert await session.get(ImportFile, body["import_file_id"]) is not None
     assert await session.get(ImportBatch, body["import_batch_id"]) is not None
@@ -205,29 +207,14 @@ async def test_import_excel_creates_batch_and_change_set(client, session, tmp_pa
 
 
 @pytest.mark.asyncio
-async def test_preview_excel_resolves_paired_profile_warning_when_pair_techcard_exists(
+async def test_preview_excel_resolves_paired_profile_when_pair_exists(
     client, session, tmp_path, monkeypatch
 ) -> None:
     monkeypatch.setattr(settings, "IMPORT_STORAGE_DIR", str(tmp_path))
 
-    from app.models.product import Product, ProductType
-    from app.models.techcard import Techcard, TechcardLine
-
     template = await _create_template(session, name="Preview Pair Template", code="preview-pair-template")
-
-    comp_a = Product(sku="ЮП-2616", name="Comp A", type=ProductType.component, unit="pcs", is_active=True)
-    comp_b = Product(sku="ЮП-2604", name="Comp B", type=ProductType.component, unit="pcs", is_active=True)
-    session.add_all([comp_a, comp_b])
-    await session.flush()
-
-    paired = Techcard(product_id=None, version="v1", is_active=True, processing_type="paired_processing")
-    session.add(paired)
-    await session.flush()
-    session.add_all(
-        [
-            TechcardLine(techcard_id=paired.id, component_product_id=comp_a.id, quantity=1, unit="pcs"),
-            TechcardLine(techcard_id=paired.id, component_product_id=comp_b.id, quantity=1, unit="pcs"),
-        ]
+    await _make_product_pair(
+        session, "ЮП-2616", "ЮП-2604", manual_n=8, length_mm=2700
     )
     await session.commit()
 
@@ -247,6 +234,10 @@ async def test_preview_excel_resolves_paired_profile_warning_when_pair_techcard_
     paired_item = body["items"][0]
     assert paired_item["source_sku"] == "ЮП-2616+ЮП-2604"
     assert "paired_profile_product_unmapped" not in paired_item["warnings"]
+    snapshot = paired_item["after_data"]["source_payload"]["techcard_pair"]
+    assert snapshot["resolved"] is True
+    assert [entry["sku"] for entry in snapshot["inputs"]] == ["ЮП-2616", "ЮП-2604"]
+    assert snapshot["inputs"][0]["techcard_quantity"] == "8"
 
 
 @pytest.mark.asyncio
@@ -1100,38 +1091,42 @@ def _workbook_paired() -> bytes:
     return out.getvalue()
 
 
-@pytest.mark.asyncio
-async def test_import_paired_techcard_rounds_by_shared_quantity(
-    client, session, tmp_path, monkeypatch
+async def _make_product_pair(
+    session,
+    sku_a: str,
+    sku_b: str,
+    *,
+    manual_n: int | None = None,
+    length_mm: float = 2700,
 ) -> None:
-    """Парная техкарта округляет оба компонента по общему N (#67: инвариант равенства)."""
-    monkeypatch.setattr(settings, "IMPORT_STORAGE_DIR", str(tmp_path))
+    """Пара сырьевых артикулов в product_pairs с общей длиной."""
+    from app.models.product import Product, ProductLength, ProductPair, ProductType
 
-    from app.models.product import Product, ProductType
-    from app.models.techcard import Techcard, TechcardLine
-
-    comp_a = Product(sku="ЮП-PAIR-A", name="Pair A", type=ProductType.component, unit="pcs")
-    comp_b = Product(sku="ЮП-PAIR-B", name="Pair B", type=ProductType.component, unit="pcs")
+    comp_a = Product(sku=sku_a, name=f"Pair {sku_a}", type=ProductType.component, unit="pcs")
+    comp_b = Product(sku=sku_b, name=f"Pair {sku_b}", type=ProductType.component, unit="pcs")
     session.add_all([comp_a, comp_b])
     await session.flush()
-
-    # Парная техкарта с общим N = 8 (quantity_a_per_item == quantity_b_per_item).
-    paired = Techcard(
-        product_id=None,
-        version="v1",
-        is_active=True,
-        processing_type="paired_processing",
-        quantity_a_per_item=8,
-        quantity_b_per_item=8,
-    )
-    session.add(paired)
+    session.add_all([
+        ProductLength(product_id=comp_a.id, length_mm=length_mm),
+        ProductLength(product_id=comp_b.id, length_mm=length_mm),
+    ])
+    quantity = {f"{int(length_mm)}": {"auto": None, "manual": manual_n}} if manual_n is not None else {}
+    session.add(ProductPair(
+        product_a_id=min(comp_a.id, comp_b.id),
+        product_b_id=max(comp_a.id, comp_b.id),
+        quantity_per_hanger=quantity,
+    ))
     await session.flush()
-    session.add_all(
-        [
-            TechcardLine(techcard_id=paired.id, component_product_id=comp_a.id, quantity=1, unit="pcs"),
-            TechcardLine(techcard_id=paired.id, component_product_id=comp_b.id, quantity=1, unit="pcs"),
-        ]
-    )
+
+
+@pytest.mark.asyncio
+async def test_import_paired_profile_rounds_by_pair_manual_n(
+    client, session, tmp_path, monkeypatch
+) -> None:
+    """N пары из ручной нормы product_pairs округляет оба компонента (#67: инвариант равенства)."""
+    monkeypatch.setattr(settings, "IMPORT_STORAGE_DIR", str(tmp_path))
+
+    await _make_product_pair(session, "ЮП-PAIR-A", "ЮП-PAIR-B", manual_n=8)
     await session.commit()
 
     template = await _create_template(session, name="Paired Hanger Template", code="paired-hanger-template")
@@ -1166,35 +1161,13 @@ async def test_import_paired_techcard_rounds_by_shared_quantity(
 
 
 @pytest.mark.asyncio
-async def test_import_paired_techcard_without_quantity_a_b_per_item_shows_warning(
+async def test_import_paired_profile_without_pair_n_reports_hanger_calc_zero(
     client, session, tmp_path, monkeypatch
 ) -> None:
-    """Парная техкарта без quantity_a/b_per_item показывает warning."""
+    """Пара есть, но N невозможна (ручной нет, авто не считается) → hanger_calc_zero."""
     monkeypatch.setattr(settings, "IMPORT_STORAGE_DIR", str(tmp_path))
 
-    from app.models.product import Product, ProductType
-    from app.models.techcard import Techcard, TechcardLine
-
-    comp_a = Product(sku="ЮП-PAIR-A", name="Pair A", type=ProductType.component, unit="pcs")
-    comp_b = Product(sku="ЮП-PAIR-B", name="Pair B", type=ProductType.component, unit="pcs")
-    session.add_all([comp_a, comp_b])
-    await session.flush()
-
-    # Парная техкарта БЕЗ quantity_a/b_per_item
-    paired = Techcard(
-        product_id=None,
-        version="v1",
-        is_active=True,
-        processing_type="paired_processing",
-    )
-    session.add(paired)
-    await session.flush()
-    session.add_all(
-        [
-            TechcardLine(techcard_id=paired.id, component_product_id=comp_a.id, quantity=1, unit="pcs"),
-            TechcardLine(techcard_id=paired.id, component_product_id=comp_b.id, quantity=1, unit="pcs"),
-        ]
-    )
+    await _make_product_pair(session, "ЮП-PAIR-A", "ЮП-PAIR-B")
     await session.commit()
 
     template = await _create_template(session, name="Paired No Hanger Template", code="paired-no-hanger-template")
@@ -1217,3 +1190,7 @@ async def test_import_paired_techcard_without_quantity_a_b_per_item_shows_warnin
 
     # Нет adjusted_quantities_by_component
     assert "adjusted_quantities_by_component" not in paired_item["after_data"]
+
+    # Пара резолвится, но N невозможна → блокирующая ошибка
+    assert "hanger_calc_zero" in paired_item["errors"]
+    assert paired_item["after_data"]["source_payload"]["techcard_pair"]["resolved"] is True

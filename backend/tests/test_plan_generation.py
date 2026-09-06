@@ -4,7 +4,6 @@ from decimal import Decimal
 import pytest
 from sqlalchemy import select
 
-from app.models.techcard import Techcard, TechcardLine
 from app.models.imports import ImportBatch, ImportBatchMode, ImportFile
 from app.models.internal_plan import SectionPlanLine
 from app.models.product import Product, ProductType
@@ -29,7 +28,6 @@ from app.models.work_task import WorkTask, WorkTaskStatus
 
 async def _make_ready_product(session, sku: str = "FG-1") -> tuple[Product, list[Section], ProductionRoute]:
     product = Product(sku=sku, name=f"Finished {sku}", type=ProductType.finished_good, unit="pcs")
-    component = Product(sku=f"{sku}-RAW", name=f"Raw {sku}", type=ProductType.component, unit="pcs")
     sections = [
         Section(code=f"{sku}-ISSUE", name="Issue", type="production"),
         Section(code=f"{sku}-DRILL", name="Drill", type="production"),
@@ -38,14 +36,10 @@ async def _make_ready_product(session, sku: str = "FG-1") -> tuple[Product, list
         Section(code=f"{sku}-WIP", name="WIP", type="production"),
         Section(code=f"{sku}-FINAL", name="Final", type="production"),
     ]
-    session.add_all([product, component, *sections])
+    session.add_all([product, *sections])
     await session.flush()
 
-    techcard = Techcard(product_id=product.id, version="v1", is_active=True)
-    session.add(techcard)
-    await session.flush()
-    session.add(TechcardLine(techcard_id=techcard.id, component_product_id=component.id, quantity=1, unit="pcs"))
-
+    # Техкарты не создаются: gate упразднён (#148), релиз живёт без них.
     route = ProductionRoute(name="Main", is_active=True)
     session.add(route)
     await session.flush()
@@ -351,6 +345,164 @@ async def test_release_batch_generates_tasks_and_is_idempotent(client, session) 
 
 
 @pytest.mark.asyncio
+async def test_release_resolves_paired_position_effective_product_as_product_a(client, session) -> None:
+    """Эффективный продукт парной позиции — product_a пары (#148, детерминизм)."""
+    from datetime import UTC, datetime
+
+    from app.models.product import ProductLength, ProductPair
+    from app.models.production_plan import PlanPositionRouteOrigin
+
+    raw_a = Product(sku="PAIR-EFF-A", name="Raw Pair A", type=ProductType.component, unit="pcs")
+    raw_b = Product(sku="PAIR-EFF-B", name="Raw Pair B", type=ProductType.component, unit="pcs")
+    session.add_all([raw_a, raw_b])
+    await session.flush()
+    session.add_all([
+        ProductLength(product_id=raw_a.id, length_mm=2700),
+        ProductLength(product_id=raw_b.id, length_mm=2700),
+    ])
+    pair = ProductPair(
+        product_a_id=min(raw_a.id, raw_b.id),
+        product_b_id=max(raw_a.id, raw_b.id),
+        quantity_per_hanger={"2700": {"auto": None, "manual": 8}},
+    )
+    session.add(pair)
+
+    product, sections, route = await _make_ready_product(session, "FG-PAIR-EFF")
+    plan = ProductionPlan(
+        plan_no="PLAN-PAIR-EFF",
+        name="Plan Pair Eff",
+        status=ProductionPlanStatus.approved,
+        period_start=date(2026, 5, 1),
+        period_end=date(2026, 5, 31),
+    )
+    session.add(plan)
+    await session.flush()
+    position = PlanPosition(
+        production_plan_id=plan.id,
+        product_id=None,
+        source_type=PlanSourceType.excel_import,
+        source_sku="PAIR-EFF-B+PAIR-EFF-A",
+        quantity=Decimal("100"),
+        source_payload={
+            "paired_profile": True,
+            # Компоненты намеренно в обратном порядке — резолв неупорядоченный.
+            "components": [{"sku": "PAIR-EFF-B"}, {"sku": "PAIR-EFF-A"}],
+        },
+        status=PlanPositionStatus.approved,
+        validation_status=PlanPositionValidationStatus.valid,
+        validation_errors=[],
+        route_id=route.id,
+        route_origin=PlanPositionRouteOrigin.manual_confirmed,
+        route_assigned_at=datetime.now(UTC),
+        route_manual_confirmed_at=datetime.now(UTC),
+    )
+    session.add(position)
+    await session.commit()
+
+    create_response = await client.post(
+        f"/api/production-plans/{plan.id}/release-batches",
+        json={"positions": [{"plan_position_id": position.id, "release_quantity": "100"}]},
+    )
+    assert create_response.status_code == 201
+
+    release_response = await client.post(f"/api/release-batches/{create_response.json()['id']}/release")
+    assert release_response.status_code == 200
+    assert release_response.json()["tasks_created"] == 6
+
+    expected_product_id = min(raw_a.id, raw_b.id)
+    lines = (
+        await session.execute(
+            select(SectionPlanLine).where(SectionPlanLine.plan_position_id == position.id)
+        )
+    ).scalars().all()
+    assert lines
+    assert all(line.product_id == expected_product_id for line in lines)
+
+    from tests.test_integrity_invariants import assert_no_invariants_violations
+
+    await assert_no_invariants_violations(session, context="after-paired-release")
+
+
+@pytest.mark.asyncio
+async def test_release_uses_pair_snapshot_without_revalidating_pair(client, session) -> None:
+    """Снапшот = норматив позиции (#142): пара удалена из справочника —
+    эффективный продукт берётся из снапшота, а не переинтерпретируется."""
+    from datetime import UTC, datetime
+
+    from app.models.production_plan import PlanPositionRouteOrigin
+
+    raw_a = Product(sku="PAIR-SNAP-A", name="Raw Snap A", type=ProductType.component, unit="pcs")
+    raw_b = Product(sku="PAIR-SNAP-B", name="Raw Snap B", type=ProductType.component, unit="pcs")
+    session.add_all([raw_a, raw_b])
+
+    product, sections, route = await _make_ready_product(session, "FG-PAIR-SNAP")
+    plan = ProductionPlan(
+        plan_no="PLAN-PAIR-SNAP",
+        name="Plan Pair Snap",
+        status=ProductionPlanStatus.approved,
+        period_start=date(2026, 5, 1),
+        period_end=date(2026, 5, 31),
+    )
+    session.add(plan)
+    await session.flush()
+    position = PlanPosition(
+        production_plan_id=plan.id,
+        product_id=None,
+        source_type=PlanSourceType.excel_import,
+        source_sku="PAIR-SNAP-A+PAIR-SNAP-B",
+        quantity=Decimal("100"),
+        source_payload={
+            "paired_profile": True,
+            "components": [{"sku": "PAIR-SNAP-A"}, {"sku": "PAIR-SNAP-B"}],
+            "techcard_pair": {
+                "resolved": True,
+                "reason": None,
+                "inputs": [
+                    {"product_id": None, "sku": "PAIR-SNAP-A", "techcard_quantity": "8", "available_quantity": "100", "unit": "pcs"},
+                    {"product_id": None, "sku": "PAIR-SNAP-B", "techcard_quantity": "8", "available_quantity": "100", "unit": "pcs"},
+                ],
+            },
+        },
+        status=PlanPositionStatus.approved,
+        validation_status=PlanPositionValidationStatus.valid,
+        validation_errors=[],
+        route_id=route.id,
+        route_origin=PlanPositionRouteOrigin.manual_confirmed,
+        route_assigned_at=datetime.now(UTC),
+        route_manual_confirmed_at=datetime.now(UTC),
+    )
+    session.add(position)
+    await session.commit()
+    # Продукты в снапшоте «пустые» (чистый лист — снапшот без id): записываем
+    # реальные id после flush, как это делает импорт.
+    snapshot = position.source_payload["techcard_pair"]
+    snapshot["inputs"][0]["product_id"] = min(raw_a.id, raw_b.id)
+    snapshot["inputs"][1]["product_id"] = max(raw_a.id, raw_b.id)
+    from sqlalchemy.orm.attributes import flag_modified
+
+    flag_modified(position, "source_payload")
+    await session.commit()
+
+    create_response = await client.post(
+        f"/api/production-plans/{plan.id}/release-batches",
+        json={"positions": [{"plan_position_id": position.id, "release_quantity": "100"}]},
+    )
+    assert create_response.status_code == 201
+
+    release_response = await client.post(f"/api/release-batches/{create_response.json()['id']}/release")
+    assert release_response.status_code == 200
+
+    expected_product_id = min(raw_a.id, raw_b.id)
+    lines = (
+        await session.execute(
+            select(SectionPlanLine).where(SectionPlanLine.plan_position_id == position.id)
+        )
+    ).scalars().all()
+    assert lines
+    assert all(line.product_id == expected_product_id for line in lines)
+
+
+@pytest.mark.asyncio
 async def test_release_quantity_cannot_exceed_approved_quantity(client, session) -> None:
     product, _, route = await _make_ready_product(session, "FG-LIMIT")
     plan, position = await _make_plan_position(session, product, Decimal("50"), route_id=route.id)
@@ -388,60 +540,4 @@ async def test_route_check_endpoint(client, session) -> None:
     assert len(data["active_route_snapshot"]["steps"]) == len(sections)
 
 
-@pytest.mark.asyncio
-async def test_release_blocked_on_route_mismatch(client, session) -> None:
-    # Create a product with a route that lacks SHOT, ANOD, PACK, etc.
-    product = Product(sku="FG-ROUTE-MISMATCH", name="Finished FG-ROUTE-MISMATCH", type=ProductType.finished_good, unit="pcs")
-    sections = [
-        Section(code="FG-ROUTE-MISMATCH-ISSUE", name="Issue", type="raw_stock"),
-        Section(code="FG-ROUTE-MISMATCH-DRILL", name="Drill", type="production"),
-        Section(code="FG-ROUTE-MISMATCH-FINAL", name="Final", type="finished_stock"),
-    ]
-    session.add_all([product, *sections])
-    await session.flush()
 
-    route = ProductionRoute(name="Route No Pack", is_active=True)
-    session.add(route)
-    await session.flush()
-    step_ops = ["ISSUE_RAW", "DRILL", "ACCEPT_FINISHED"]
-    for index, (section, op_code) in enumerate(zip(sections, step_ops, strict=True), start=1):
-        stage = RouteStage(
-            route_id=route.id,
-            sequence=index,
-            section_id=section.id,
-            is_final=index == len(sections),
-        )
-        session.add(stage)
-        await session.flush()
-        session.add(
-            RouteOperation(
-                route_stage_id=stage.id,
-                sequence=1,
-                operation_code=op_code,
-                operation_name=op_code,
-            )
-        )
-    await session.flush()
-
-    # Don't set route_id on position — let auto-resolution find this route,
-    # then validation should fail because the route lacks required steps.
-    plan, position = await _make_plan_position(
-        session, product,
-        has_pack_ops=True,
-    )
-    # Still need to assign route_id for release_batch check, but set it
-    # after create_release_batch resolves and validates.
-    position.route_id = route.id
-    position.source_payload = {
-        "output_kind": "finished_good",
-        "additional_pack_operations": [{"operation_code": "PACK_GLUE"}],
-    }
-    await session.commit()
-
-    response = await client.post(
-        f"/api/production-plans/{plan.id}/release-batches",
-        json={"positions": [{"plan_position_id": position.id, "release_quantity": "100"}]},
-    )
-    assert response.status_code == 400
-    # The error indicates route validation failed (mismatch or missing steps)
-    assert len(response.json()["detail"]) > 0

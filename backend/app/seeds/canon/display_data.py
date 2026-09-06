@@ -350,10 +350,8 @@ ERROR_PHRASE_TRANSLATIONS = {
         "Выпускать можно только утверждённые позиции",
     "Position #{0} has no route assigned":
         "Для позиции #{0} не назначен маршрут",
-    "Position #{0}: no paired techcard found for product resolution":
-        "Позиция #{0}: не найдена парная техкарта для резолюции продукта",
-    "Position #{0}: paired techcard has no component products":
-        "Позиция #{0}: парная техкарта не содержит компонентов",
+    "Position #{0}: product pair not found in product_pairs":
+        "Позиция #{0}: пара компонентов не найдена в product_pairs",
     "Selected plan position not found":
         "Выбранная позиция плана не найдена",
     "Selected plan position must be approved":

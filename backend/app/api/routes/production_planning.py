@@ -1107,16 +1107,10 @@ async def get_remainders_preview(
     effective_product_id = pos.product_id
 
     if effective_product_id is None:
-        from app.services.plan_generation import _find_paired_techcard, _paired_component_skus
-        paired_techcard = await _find_paired_techcard(db, _paired_component_skus(pos))
-        if paired_techcard is not None:
-            from app.models.techcard import TechcardLine
-            first_component = await db.scalar(
-                select(TechcardLine.component_product_id)
-                .where(TechcardLine.techcard_id == paired_techcard.id)
-                .limit(1)
-            )
-            effective_product_id = first_component
+        # Эффективный продукт парной позиции (#148): снапшот → пара → product_a.
+        from app.services import product_pair_resolver
+
+        effective_product_id = await product_pair_resolver.resolve_effective_product_id(db, pos)
 
     available_remainders = []
     if effective_product_id is not None:

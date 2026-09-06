@@ -3,19 +3,18 @@ from __future__ import annotations
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.techcard import Techcard, TechcardLine
 from app.models.product import Product
 from app.models.production_plan import PlanPosition, PlanPositionStatus
 from app.models.route import ProductionRoute, RouteStage
 from app.models.section import Section
-from app.services.import_normalization import normalize_sku as _normalize_sku
+from app.services import product_pair_resolver
+from app.services.product_pair_resolver import paired_component_skus
 from app.services.route_matcher import resolve_position_route
 
 # Типизированные данные из канона (ADR-0004). Сервис не импортирует plant_policies.
 from app.seeds.canon.registry import build_plant_config as _build
 
 _config = _build()
-_PAIRED_PROCESSING_VALUE: str = _config.production.processing_flags.paired
 _ERROR_MESSAGES: dict[str, str] = _config.display.labels.error_messages
 
 
@@ -39,44 +38,6 @@ def format_validation_error(
     return messages.get(error_code, error_code)
 
 
-def _paired_component_skus(position: PlanPosition) -> list[str]:
-    payload = position.source_payload or {}
-    components = payload.get("components") or []
-    if not isinstance(components, list):
-        return []
-    return [str(item.get("sku") or "").strip() for item in components if str(item.get("sku") or "").strip()]
-
-
-async def _find_paired_techcard(db: AsyncSession, component_skus: list[str]) -> Techcard | None:
-    if not component_skus:
-        return None
-    normalized_keys = {_normalize_sku(sku) for sku in component_skus if _normalize_sku(sku)}
-    if not normalized_keys:
-        return None
-
-    techcards = (
-        await db.execute(
-            select(Techcard).where(
-                Techcard.is_active.is_(True),
-                Techcard.processing_type == _PAIRED_PROCESSING_VALUE,
-            )
-        )
-    ).scalars().all()
-
-    for techcard in techcards:
-        rows = (
-            await db.execute(
-                select(TechcardLine, Product)
-                .join(Product, Product.id == TechcardLine.component_product_id)
-                .where(TechcardLine.techcard_id == techcard.id)
-            )
-        ).all()
-        line_skus = {_normalize_sku(product.sku) for _, product in rows if product and product.sku}
-        if normalized_keys.issubset(line_skus):
-            return techcard
-    return None
-
-
 async def validate_plan_position(
     db: AsyncSession,
     position: PlanPosition,
@@ -89,55 +50,55 @@ async def validate_plan_position(
     existing_row_hashes: set[str] | None = None,
 ) -> list[str]:
     errors: list[str] = []
-    is_paired_profile = bool((position.source_payload or {}).get("paired_profile"))
+    payload = position.source_payload or {}
+    is_paired_profile = bool(payload.get("paired_profile"))
     if position.product_id is None and not is_paired_profile:
         errors.append("product_not_found")
         return errors
     if position.quantity <= 0:
         errors.append("quantity_must_be_positive")
 
+    # Gate «активная техкарта» упразднён (ADR-0023, #148): валидация
+    # одиночной позиции = SKU найден, активен, маршрут разрешён и валиден.
+    product = await db.get(Product, position.product_id) if position.product_id else None
     if position.product_id is not None:
-        product = await db.get(Product, position.product_id)
         if product is None or not product.is_active:
             errors.append("product_inactive")
 
-        techcard = await db.scalar(
-            select(Techcard).where(Techcard.product_id == position.product_id, Techcard.is_active.is_(True))
-        )
-        if techcard is None:
-            errors.append("active_techcard_not_found")
-        else:
-            line = await db.scalar(select(TechcardLine.id).where(TechcardLine.techcard_id == techcard.id).limit(1))
-            if line is None:
-                errors.append("active_techcard_has_no_lines")
-    else:
-        techcard = await _find_paired_techcard(db, _paired_component_skus(position))
-        if techcard is None:
-            errors.append("active_techcard_not_found")
-        else:
-            line = await db.scalar(select(TechcardLine.id).where(TechcardLine.techcard_id == techcard.id).limit(1))
-            if line is None:
-                errors.append("active_techcard_has_no_lines")
-
-    product = await db.get(Product, position.product_id) if position.product_id else None
-
-    # Авторасчёт «количество на подвес» (#66): невозможный расчёт
-    # (total <= 0 или несовместимые габариты) блокирует позицию от
-    # утверждения/релиза. Приоритет: ручной override из payload > авто;
-    # при ручном override ошибка не выставляется.
+    # Парная позиция резолвится из product_pairs (#148). Позиция с непустым
+    # снапшотом (techcard_pair.resolved) — норматив позиции: пара и нормы
+    # не ревалидируются (#142).
     from app.services.plan_position_hanger import (
         payload_quantity_per_hanger,
         position_length_mm,
         resolve_position_hanger,
     )
 
-    hanger_value = resolve_position_hanger(
-        product,
-        length_mm=position_length_mm(position),
-        payload_quantity_per_hanger=payload_quantity_per_hanger(position),
-    )
-    if hanger_value.calc_error:
-        errors.append("hanger_calc_zero")
+    if is_paired_profile:
+        if not product_pair_resolver.has_pair_snapshot(position):
+            resolved_pair = await product_pair_resolver.resolve_pair_by_component_skus(
+                db, paired_component_skus(position)
+            )
+            if resolved_pair is None:
+                errors.append("product_pair_not_found")
+            else:
+                n_value = await product_pair_resolver.resolve_pair_n(
+                    db, resolved_pair, length_mm=position_length_mm(position)
+                )
+                if n_value.calc_error:
+                    errors.append("hanger_calc_zero")
+    else:
+        # Авторасчёт «количество на подвес» (#66): невозможный расчёт
+        # (total <= 0 или несовместимые габариты) блокирует позицию от
+        # утверждения/релиза. Приоритет: ручной override из payload > авто;
+        # при ручном override ошибка не выставляется.
+        hanger_value = resolve_position_hanger(
+            product,
+            length_mm=position_length_mm(position),
+            payload_quantity_per_hanger=payload_quantity_per_hanger(position),
+        )
+        if hanger_value.calc_error:
+            errors.append("hanger_calc_zero")
 
     if route_resolve_cache is not None:
         from app.services.route_matcher import make_position_route_cache_key
@@ -170,7 +131,7 @@ async def validate_plan_position(
                 errors.append("route_sequence_invalid")
                 break
             previous = step.sequence
-            
+
             effective_section_id = step.effective_section_id
             if sections_cache is not None and effective_section_id in sections_cache:
                 section = sections_cache[effective_section_id]

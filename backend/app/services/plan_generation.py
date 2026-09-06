@@ -7,7 +7,6 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.techcard import Techcard, TechcardLine
 from app.models.internal_plan import InternalPlan, SectionPlanLine
 from app.models.production_plan import PlanPosition, PlanPositionStatus, ProductionPlan, ProductionPlanStatus
 from app.models.product import Product
@@ -15,7 +14,7 @@ from app.models.release_batch import ReleaseBatch, ReleaseBatchPosition, Release
 from app.models.route import ProductionRoute, RouteOperation, RouteStage, SectionOperation
 from app.models.section import Section
 from app.models.work_task import WorkTask, WorkTaskStatus
-from app.services.plan_validation import _find_paired_techcard, _paired_component_skus
+from app.services import product_pair_resolver
 from app.services.action_journal_service import action_journal_service
 from app.services.plan_position_hanger import position_dimensions_for_task
 from app.services.production_plan_service import refresh_plan_status
@@ -52,15 +51,12 @@ async def create_release_batch(
     await db.flush()
 
     # Локальные кэши для устранения N+1 при выпуске позиций в работу
-    techcard_cache = {}
     route_stages_cache = {}
     released_qty_cache = {}
     sections_cache = {}
     section_operations_cache = {}
 
     for position, release_quantity in selected_positions:
-        await _validate_active_techcard(db, position, techcard_cache)
-
         # Position must have a persisted route_id (from import)
         if position.route_id is None:
             raise ValueError(f"Position {position.id} has no route assigned - cannot release without route")
@@ -145,21 +141,11 @@ async def release_batch(
         if position.route_id is None:
             raise ValueError(f"Position #{position.id} has no route assigned")
 
-        # Resolve product_id for paired profile positions
-        effective_product_id = position.product_id
+        # Resolve product_id for paired profile positions (#148): снапшот —
+        # норматив позиции, иначе пара из product_pairs → product_a.
+        effective_product_id = await product_pair_resolver.resolve_effective_product_id(db, position)
         if effective_product_id is None:
-            paired_techcard = await _find_paired_techcard(db, _paired_component_skus(position))
-            if paired_techcard is None:
-                raise ValueError(f"Position #{position.id}: no paired techcard found for product resolution")
-            # Get the first component product from the paired techcard
-            first_component = await db.scalar(
-                select(TechcardLine.component_product_id)
-                .where(TechcardLine.techcard_id == paired_techcard.id)
-                .limit(1)
-            )
-            if first_component is None:
-                raise ValueError(f"Position #{position.id}: paired techcard has no component products")
-            effective_product_id = first_component
+            raise ValueError(f"Position #{position.id}: product pair not found in product_pairs")
 
         steps = sorted(batch_position.route_snapshot.get("steps", []), key=lambda step: step["sequence"])
 
@@ -387,27 +373,6 @@ async def _select_release_positions(
         )
     ).scalars().all()
     return [(position, position.quantity) for position in positions]
-
-
-async def _validate_active_techcard(db: AsyncSession, position: PlanPosition, cache: dict | None = None) -> None:
-    if cache is not None and position.product_id in cache:
-        if not cache[position.product_id]:
-            raise ValueError("Активная техкарта не найдена или не содержит строк")
-        return
-
-    techcard = await db.scalar(select(Techcard).where(Techcard.product_id == position.product_id, Techcard.is_active.is_(True)))
-    if techcard is None:
-        if cache is not None:
-            cache[position.product_id] = False
-        raise ValueError("Активная техкарта не найдена")
-    line = await db.scalar(select(TechcardLine).where(TechcardLine.techcard_id == techcard.id).limit(1))
-    if line is None:
-        if cache is not None:
-            cache[position.product_id] = False
-        raise ValueError("Активная техкарта не содержит строк")
-    
-    if cache is not None:
-        cache[position.product_id] = True
 
 
 async def _get_route_stages_with_sections(

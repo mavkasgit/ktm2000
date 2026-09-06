@@ -384,28 +384,14 @@ def _is_manual_route_pass(value: str | None) -> bool:
 async def _resolve_effective_product_id(
     db: AsyncSession, position: PlanPosition
 ) -> int | None:
-    """Резолвит effective_product_id для позиции плана.
+    """Резолвит effective_product_id для позиции плана (#148).
 
-    Возвращает position.product_id, если он задан. Иначе пытается найти
-    парный техкарту и взять первый компонент из неё (как в release_batch).
-    Возвращает None, если продукт не резолвится.
+    Владелец логики — :mod:`product_pair_resolver` (снапшот → пара →
+    product_a). Возвращает None, если продукт не резолвится.
     """
-    if position.product_id is not None:
-        return position.product_id
-    try:
-        from app.services.plan_generation import _find_paired_techcard, _paired_component_skus
-    except ImportError:
-        return None
-    paired_techcard = await _find_paired_techcard(db, _paired_component_skus(position))
-    if paired_techcard is None:
-        return None
-    from app.models.techcard import TechcardLine
-    first_component = await db.scalar(
-        select(TechcardLine.component_product_id)
-        .where(TechcardLine.techcard_id == paired_techcard.id)
-        .limit(1)
-    )
-    return first_component
+    from app.services import product_pair_resolver
+
+    return await product_pair_resolver.resolve_effective_product_id(db, position)
 
 
 async def _fetch_paginated_positions(

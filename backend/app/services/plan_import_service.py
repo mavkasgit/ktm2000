@@ -12,9 +12,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.core.config import settings
-from app.models.techcard import Techcard, TechcardLine
 from app.models.imports import ImportBatch, ImportBatchMode, ImportFile
-from app.models.product import Product
+from app.models.product import Product, _length_key
+from app.services import product_pair_resolver
+from app.services.product_pair_resolver import PairHangerValue, ResolvedPair
 from app.models.production_plan import (
     PlanChangeAction,
     PlanChangeItem,
@@ -42,12 +43,8 @@ from app.domain.dimensions import DimensionsValidationError, canonicalize_dimens
 from app.services.dimension_validation import MissingDimensionsError, resolve_product_dimensions
 from app.services.hanger_quantity import adjust_quantity_to_hanger
 from app.services.import_normalization import normalize_sku as _normalize_sku
+from app.services.plan_position_hanger import position_length_mm
 from app.services.route_builder import build_route_from_profile
-
-# Типизированные данные из канона (ADR-0004). Сервис не импортирует plant_policies.
-from app.seeds.canon.registry import build_plant_config as _build
-
-_PAIRED_PROCESSING_VALUE: str = _build().production.processing_flags.paired
 
 
 async def preview_excel_sheet(
@@ -350,79 +347,6 @@ def _sku_lookup_keys(sku: str) -> set[str]:
     return {k for k in keys if k}
 
 
-async def _find_active_techcard_by_sku(db: AsyncSession, sku: str) -> tuple[Techcard | None, Product | None]:
-    for key in _sku_lookup_keys(sku):
-        normalized_product_sku = func.lower(
-            func.replace(
-                func.replace(
-                    func.replace(
-                        Product.sku,
-                        " ",
-                        "",
-                    ),
-                    "\u00A0",
-                    "",
-                ),
-                "—",
-                "-",
-            )
-        )
-        product = await db.scalar(
-            select(Product).options(selectinload(Product.lengths))
-            .where(normalized_product_sku == key).limit(1)
-        )
-        if product is None:
-            continue
-        techcard = await db.scalar(
-            select(Techcard).where(Techcard.product_id == product.id, Techcard.is_active.is_(True)).limit(1)
-        )
-        if techcard is not None:
-            return techcard, product
-    return None, None
-
-
-async def _find_paired_techcard(
-    db: AsyncSession, component_skus: list[str]
-) -> Techcard | None:
-    """Find an active paired_processing techcard that contains all given component SKUs."""
-    if not component_skus:
-        return None
-
-    normalized_keys = [
-        key.lower().replace(" ", "").replace("\u00A0", "").replace("\u2014", "-")
-        for key in component_skus
-    ]
-
-    stmt = (
-        select(Techcard)
-        .where(
-            Techcard.is_active.is_(True),
-            Techcard.processing_type == _PAIRED_PROCESSING_VALUE,
-        )
-    )
-    techcards = await db.execute(stmt)
-
-    seen: set[int] = set()
-    for tc in techcards.scalars().all():
-        if tc.id in seen:
-            continue
-        seen.add(tc.id)
-
-        lines = await db.execute(
-            select(TechcardLine, Product)
-            .join(Product, Product.id == TechcardLine.component_product_id)
-            .where(TechcardLine.techcard_id == tc.id)
-        )
-        line_skus = {
-            lp[1].sku.lower().replace(" ", "").replace("\u00A0", "").replace("\u2014", "-")
-            for lp in lines.all()
-        }
-        if all(sku in line_skus for sku in normalized_keys):
-            return tc
-
-    return None
-
-
 async def _make_change_items(
     db: AsyncSession,
     change_set_id: int,
@@ -466,15 +390,14 @@ async def _make_change_items(
     # Cache for already created/found routes by route_name -> route_id
     route_cache: dict[str, int] = {}
 
-    # Локальные кэши для устранения N+1 запросов при сопоставлении маршрутов и техкарт
-    paired_techcard_cache = {}        # tuple(component_skus) -> Techcard
-    active_techcard_by_sku_cache = {}  # source_sku -> tuple(Techcard, Product)
-    techcard_by_product_id_cache = {}  # product.id -> Techcard
+    # Локальные кэши для устранения N+1 запросов при сопоставлении маршрутов и пар
+    pair_cache = {}                   # tuple(component_skus) -> ResolvedPair | None
+    pair_n_cache = {}                 # (pair.id, length_key) -> PairHangerValue
+    profile_cache = {}                # "profile_{id}" -> RouteRuleProfile
     select_route_cache = {}           # tuple_key -> RouteSelectionResult
     route_stages_cache = {}           # route.id -> list[RouteStage]
     sections_by_id_cache = {}         # section_id -> Section
     sections_by_code_cache = {}       # section_code -> Section
-    techcard_lines_cache = {}         # techcard.id -> list[tuple[TechcardLine, Product]]
     built_route_cache = {}            # (profile.id, make_hashable(payload)) -> built_route
     existing_route_by_name_cache = {} # built_route.name -> ProductionRoute
     typical_dimensions_cache: dict[int, dict | None] = {}  # product.id -> типовой размер либо None
@@ -500,142 +423,79 @@ async def _make_change_items(
             if product is not None:
                 break
 
+        resolved_pair: ResolvedPair | None = None
+        pair_n: PairHangerValue | None = None
+
         if product is None:
-            route = None
-            if row.payload.get("paired_profile"):
-                components = row.payload.get("components") or []
-                component_skus = [c.get("sku", "") for c in components if c.get("sku")]
-                if component_skus:
-                    component_skus_key = tuple(sorted(component_skus))
-                    if component_skus_key in paired_techcard_cache:
-                        techcard = paired_techcard_cache[component_skus_key]
-                    else:
-                        techcard = await _find_paired_techcard(db, component_skus)
-                        paired_techcard_cache[component_skus_key] = techcard
-                else:
-                    if row.source_sku in active_techcard_by_sku_cache:
-                        techcard, product = active_techcard_by_sku_cache[row.source_sku]
-                    else:
-                        techcard, matched_product = await _find_active_techcard_by_sku(db, row.source_sku)
-                        if matched_product is not None:
-                            product = matched_product
-                        active_techcard_by_sku_cache[row.source_sku] = (techcard, product)
-                if techcard is not None:
-                    line = await db.scalar(select(TechcardLine.id).where(TechcardLine.techcard_id == techcard.id).limit(1))
-                    if line is None:
-                        errors.append("active_techcard_has_no_lines")
-                    else:
-                        if techcard.id in techcard_lines_cache:
-                            lines = techcard_lines_cache[techcard.id]
-                        else:
-                            lines = (
-                                await db.execute(
-                                    select(TechcardLine, Product)
-                                    .join(Product, Product.id == TechcardLine.component_product_id)
-                                    .where(TechcardLine.techcard_id == techcard.id)
-                                    .order_by(TechcardLine.id)
-                                )
-                            ).all()
-                            techcard_lines_cache[techcard.id] = lines
-                        resolved_inputs = []
-                        for tc_line, comp_product in lines:
-                            sku_key = comp_product.sku.lower()
-                            available = available_by_sku.get(sku_key, Decimal("0"))
-                            resolved_inputs.append({
-                                "product_id": comp_product.id,
-                                "sku": comp_product.sku,
-                                "techcard_quantity": str(tc_line.quantity),
-                                "available_quantity": str(available),
-                                "unit": tc_line.unit,
-                            })
-                        row.payload["techcard_pair"] = {
-                            "resolved": len(resolved_inputs) > 0,
-                            "reason": None,
-                            "inputs": resolved_inputs,
-                        }
-                        warnings = [w for w in warnings if w != "paired_profile_product_unmapped"]
-                else:
-                    if "paired_profile_product_unmapped" not in warnings:
-                        warnings.append("paired_profile_product_unmapped")
-            else:
-                if row.source_sku in active_techcard_by_sku_cache:
-                    techcard, product = active_techcard_by_sku_cache[row.source_sku]
-                else:
-                    techcard, matched_product = await _find_active_techcard_by_sku(db, row.source_sku)
-                    if matched_product is not None:
-                        product = matched_product
-                    active_techcard_by_sku_cache[row.source_sku] = (techcard, product)
-                if techcard is None or product is None:
-                    errors.append("product_not_found")
+            if not row.payload.get("paired_profile"):
+                errors.append("product_not_found")
         else:
             # Use cached value to avoid triggering autoflush
             is_active = product_is_active_cache.get(product.id, False)
             if not is_active:
                 errors.append("product_inactive")
 
-            if row.payload.get("paired_profile"):
-                components = row.payload.get("components") or []
-                component_skus = [c.get("sku", "") for c in components if c.get("sku")]
-                component_skus_key = tuple(sorted(component_skus))
-                if component_skus_key in paired_techcard_cache:
-                    techcard = paired_techcard_cache[component_skus_key]
-                else:
-                    techcard = await _find_paired_techcard(db, component_skus) if component_skus else None
-                    paired_techcard_cache[component_skus_key] = techcard
-                if techcard is None:
-                    if product.id in techcard_by_product_id_cache:
-                        techcard = techcard_by_product_id_cache[product.id]
-                    else:
-                        techcard = await db.scalar(
-                            select(Techcard).where(Techcard.product_id == product.id, Techcard.is_active.is_(True))
-                        )
-                        techcard_by_product_id_cache[product.id] = techcard
+        if row.payload.get("paired_profile"):
+            # Пара резолвится из product_pairs (#148, ADR-0023) через
+            # единственный модуль-владелец: точное неупорядоченное
+            # совпадение двух SKU-компонентов.
+            components = row.payload.get("components") or []
+            component_skus = [c.get("sku", "") for c in components if c.get("sku")]
+            # Ключ кэша по нормализованным SKU — вариантам с пробелами/NBSP
+            # не нужен отдельный запрос резолва.
+            component_skus_key = tuple(sorted(_normalize_sku(sku) for sku in component_skus))
+            if component_skus_key in pair_cache:
+                resolved_pair = pair_cache[component_skus_key]
             else:
-                if product.id in techcard_by_product_id_cache:
-                    techcard = techcard_by_product_id_cache[product.id]
-                else:
-                    techcard = await db.scalar(
-                        select(Techcard).where(Techcard.product_id == product.id, Techcard.is_active.is_(True))
-                    )
-                    techcard_by_product_id_cache[product.id] = techcard
+                resolved_pair = await product_pair_resolver.resolve_pair_by_component_skus(db, component_skus)
+                pair_cache[component_skus_key] = resolved_pair
 
-            if techcard is None:
-                errors.append("active_techcard_not_found")
+            if resolved_pair is None:
+                errors.append("product_pair_not_found")
+                row.payload["techcard_pair"] = {
+                    "resolved": False,
+                    "reason": "product_pair_not_found",
+                    "inputs": [],
+                }
+                if "paired_profile_product_unmapped" not in warnings:
+                    warnings.append("paired_profile_product_unmapped")
             else:
-                line = await db.scalar(select(TechcardLine.id).where(TechcardLine.techcard_id == techcard.id).limit(1))
-                if line is None:
-                    errors.append("active_techcard_has_no_lines")
+                # N пары — единая механика с одиночными: ручная из словаря
+                # пары / авто-расчёт; невозможна → hanger_calc_zero.
+                length_mm = position_length_mm(row)
+                length_key = _length_key(length_mm) if length_mm is not None else None
+                n_cache_key = (resolved_pair.pair.id, length_key)
+                if n_cache_key in pair_n_cache:
+                    pair_n = pair_n_cache[n_cache_key]
+                else:
+                    pair_n = await product_pair_resolver.resolve_pair_n(db, resolved_pair, length_mm=length_mm)
+                    pair_n_cache[n_cache_key] = pair_n
+                if pair_n.calc_error:
+                    errors.append("hanger_calc_zero")
 
-                if techcard.processing_type == _PAIRED_PROCESSING_VALUE:
-                    if techcard.id in techcard_lines_cache:
-                        lines = techcard_lines_cache[techcard.id]
-                    else:
-                        lines = (
-                            await db.execute(
-                                select(TechcardLine, Product)
-                                .join(Product, Product.id == TechcardLine.component_product_id)
-                                .where(TechcardLine.techcard_id == techcard.id)
-                                .order_by(TechcardLine.id)
-                            )
-                        ).all()
-                        techcard_lines_cache[techcard.id] = lines
-                    resolved_inputs = []
-                    for tc_line, comp_product in lines:
-                        sku_key = comp_product.sku.lower()
-                        available = available_by_sku.get(sku_key, Decimal("0"))
-                        resolved_inputs.append({
-                            "product_id": comp_product.id,
-                            "sku": comp_product.sku,
-                            "techcard_quantity": str(tc_line.quantity),
-                            "available_quantity": str(available),
-                            "unit": tc_line.unit,
-                        })
-                    row.payload["techcard_pair"] = {
-                        "resolved": len(resolved_inputs) > 0,
-                        "reason": None,
-                        "inputs": resolved_inputs,
-                    }
-                    warnings = [w for w in warnings if w != "paired_profile_product_unmapped"]
+                inputs = []
+                for comp_product in (resolved_pair.product_a, resolved_pair.product_b):
+                    sku_key = comp_product.sku.lower()
+                    available = available_by_sku.get(sku_key, Decimal("0"))
+                    inputs.append({
+                        "product_id": comp_product.id,
+                        "sku": comp_product.sku,
+                        "techcard_quantity": (
+                            str(pair_n.quantity_per_hanger) if pair_n.quantity_per_hanger is not None else "0"
+                        ),
+                        "available_quantity": str(available),
+                        "unit": comp_product.unit,
+                    })
+                # Снапшот пары (payload-ключ legacy, структура сохранена —
+                # фронтовые читатели ImportDiffTable/PlanHangerDisplay не меняются).
+                row.payload["techcard_pair"] = {
+                    "resolved": True,
+                    "reason": None,
+                    "pair_id": resolved_pair.pair.id,
+                    "pair_name": f"{resolved_pair.product_a.sku}+{resolved_pair.product_b.sku}",
+                    "inputs": inputs,
+                }
+                warnings = [w for w in warnings if w != "paired_profile_product_unmapped"]
 
         payload_has_pack_ops = bool(row.payload.get("additional_pack_operations"))
 
@@ -699,59 +559,34 @@ async def _make_change_items(
         hanger_count: int | None = None
 
         if row.payload.get("paired_profile"):
-            # Парная техкарта — берём подвесы из техкарты
-            components = row.payload.get("components") or []
-            component_skus = [c.get("sku", "") for c in components if c.get("sku")]
-            component_skus_key = tuple(sorted(component_skus))
-            if component_skus_key in paired_techcard_cache:
-                techcard = paired_techcard_cache[component_skus_key]
-            else:
-                techcard = await _find_paired_techcard(db, component_skus) if component_skus else None
-                paired_techcard_cache[component_skus_key] = techcard
+            # N пары (#148): единая механика с одиночными — ручная из
+            # словаря пары / авто-расчёт. Инвариант равенства N (#67):
+            # пара — единая загрузка N×A + N×B, поэтому quantity_a == quantity_b.
+            per_hanger = pair_n.quantity_per_hanger if pair_n is not None else None
 
+            if per_hanger and per_hanger > 0:
+                hanger_count = math.ceil(row.quantity / per_hanger) if normalize_hanger_quantity else float(row.quantity / per_hanger)
 
-            if techcard:
-                # Инвариант равенства N (#67): пара — единая загрузка N×A + N×B,
-                # у парной техкарты одно общее кол-во на подвес. «Разное кол-во»
-                # убрано, поэтому quantity_a_per_item == quantity_b_per_item.
-                per_hanger = (
-                    techcard.quantity_a_per_item
-                    if techcard.quantity_a_per_item is not None
-                    else techcard.quantity_b_per_item
-                )
-
-                if per_hanger and per_hanger > 0:
-                    hanger_count = math.ceil(row.quantity / per_hanger) if normalize_hanger_quantity else float(row.quantity / per_hanger)
-
-                if normalize_hanger_quantity:
-                    lines = (
-                        await db.execute(
-                            select(TechcardLine, Product)
-                            .join(Product, Product.id == TechcardLine.component_product_id)
-                            .where(TechcardLine.techcard_id == techcard.id)
-                            .order_by(TechcardLine.id)
+            if normalize_hanger_quantity and resolved_pair is not None and per_hanger and per_hanger > 0:
+                adjusted_quantities = {}
+                for comp_product in (resolved_pair.product_a, resolved_pair.product_b):
+                    adjusted = adjust_quantity_to_hanger(row.quantity, per_hanger)
+                    if adjusted is not None:
+                        adjusted_quantities[comp_product.sku] = adjusted
+                        warnings.append(
+                            f"paired_hanger_adjusted:{comp_product.sku} "
+                            f"{row.quantity}->{adjusted} "
+                            f"(per_hanger={per_hanger})"
                         )
-                    ).all()
 
-                    adjusted_quantities = {}
-                    for _, (tc_line, comp_product) in enumerate(lines):
-                        sku = comp_product.sku
-
-                        if per_hanger and per_hanger > 0:
-                            adjusted = adjust_quantity_to_hanger(row.quantity, per_hanger)
-                            if adjusted is not None:
-                                adjusted_quantities[sku] = adjusted
-                                warnings.append(
-                                    f"paired_hanger_adjusted:{sku} "
-                                    f"{row.quantity}->{adjusted} "
-                                    f"(per_hanger={per_hanger})"
-                                )
-
-                    if adjusted_quantities:
-                        row.payload["adjusted_quantities_by_component"] = adjusted_quantities
-                        adjusted_quantities_by_component = {
-                            sku: str(qty) for sku, qty in adjusted_quantities.items()
-                        }
+                if adjusted_quantities:
+                    # Строки, а не Decimal: payload уходит в JSONB
+                    # (source_payload / after_data позиций).
+                    adjusted_quantities = {
+                        sku: str(qty) for sku, qty in adjusted_quantities.items()
+                    }
+                    row.payload["adjusted_quantities_by_component"] = adjusted_quantities
+                    adjusted_quantities_by_component = adjusted_quantities
         else:
             # Стандартная техкарта — берём quantity_per_hanger из каталога продукта.
             # Per-length dict (#60): используем значение для основной длины.
@@ -854,14 +689,14 @@ async def _make_change_items(
             try:
                 # Получаем профиль из кэша, если он там есть
                 profile_key = f"profile_{rule_profile_id}"
-                if profile_key in paired_techcard_cache:
-                    profile = paired_techcard_cache[profile_key]
+                if profile_key in profile_cache:
+                    profile = profile_cache[profile_key]
                 else:
                     profile = await db.get(
                         __import__("app.models.route", fromlist=["RouteRuleProfile"]).RouteRuleProfile,
                         rule_profile_id,
                     )
-                    paired_techcard_cache[profile_key] = profile
+                    profile_cache[profile_key] = profile
 
                 if profile is not None:
                     # Include product_id in payload for preview so product-based rules work
@@ -909,11 +744,11 @@ async def _make_change_items(
             try:
                 logger.info(f"Building dynamic route for product {product.id if product else 'None'}")
                 profile_key = f"profile_{rule_profile_id}"
-                if profile_key in paired_techcard_cache:
-                    profile = paired_techcard_cache[profile_key]
+                if profile_key in profile_cache:
+                    profile = profile_cache[profile_key]
                 else:
                     profile = await db.get(RouteRuleProfile, rule_profile_id)
-                    paired_techcard_cache[profile_key] = profile
+                    profile_cache[profile_key] = profile
 
                 logger.info(f"Profile found: {profile is not None}")
                 if profile is not None:
