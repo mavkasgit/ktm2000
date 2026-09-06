@@ -1,5 +1,5 @@
 export { RawMaterialsPage } from "./pages/RawMaterialsPage";
-export { FinishedGoodsPage } from "./pages/FinishedGoodsPage";
+export { ProductsPage } from "./pages/ProductsPage";
 export { SectionsPage } from "./pages/SectionsPage";
 export { RoutesPage } from "./pages/RoutesPage";
 export { ImportTemplatesPage } from "./pages/ImportTemplatesPage";

@@ -170,6 +170,34 @@ class ProductPatch(BaseModel):
     is_laminated: bool | None = None
 
 
+# ─── Состав ГП (#147, #152): нормативные компоненты продукта ────────────────
+# Связь «компонент (сырьё type=component) + количество», 1–2 компонента,
+# по образцу BoM. Норматив/справочник — без факта и остатков (ADR-0001).
+# Права (спека #145): чтение — все роли раздела /references, запись — editReferences.
+
+class CompositionItemIn(BaseModel):
+    component_product_id: int
+    quantity: float = Field(gt=0, description="Количество компонента на единицу продукта")
+    unit: str | None = Field(default=None, max_length=50, description="Единица измерения; по умолчанию — единица компонента")
+
+
+class CompositionReplaceIn(BaseModel):
+    items: list[CompositionItemIn] = Field(default_factory=list, max_length=2)
+
+
+class CompositionItemOut(BaseModel):
+    component_product_id: int
+    sku: str
+    name: str
+    is_active: bool
+    quantity: float
+    unit: str
+
+
+class CompositionOut(BaseModel):
+    items: list[CompositionItemOut]
+
+
 class ProductOut(BaseModel):
     id: int
     sku: str
@@ -204,6 +232,8 @@ class ProductOut(BaseModel):
     processing_flags: List[ProcessingFlagInfo]
     is_laminated: bool
     dimensions: dict[str, float] | None = None
+    # Состав ГП (#152): заполняется только при include_composition=1 в списке.
+    composition: List[CompositionItemOut] | None = None
 
 
 # Курируемый набор полей сортировки справочника сырья (#76): прямые колонки,
@@ -515,7 +545,26 @@ async def _sync_boolean_flag(db: AsyncSession, product_id: int, code: str, value
         await db.delete(existing)
 
 
-def _to_product_out(product: Product, dimensions: dict[str, float] | None = None) -> ProductOut:
+def _composition_out_items(product: Product) -> list[CompositionItemOut]:
+    """Состав загруженного продукта (#152): требует selectinload composition.component."""
+    return [
+        CompositionItemOut(
+            component_product_id=row.component_product_id,
+            sku=row.component.sku,
+            name=row.component.name,
+            is_active=row.component.is_active,
+            quantity=float(row.quantity),
+            unit=row.unit,
+        )
+        for row in product.composition
+    ]
+
+
+def _to_product_out(
+    product: Product,
+    dimensions: dict[str, float] | None = None,
+    composition: list[CompositionItemOut] | None = None,
+) -> ProductOut:
     lengths = sorted([l.length_mm for l in product.lengths]) if product.lengths else []
     flags = [
         ProcessingFlagInfo(code=f.code, name=f.name, section_scope=f.section_scope)
@@ -570,6 +619,7 @@ def _to_product_out(product: Product, dimensions: dict[str, float] | None = None
         processing_flags=flags,
         is_laminated="is_laminated" in flag_codes,
         dimensions=dimensions,
+        composition=composition,
     )
 
 
@@ -677,11 +727,17 @@ async def list_products(
     sort: str = Query("sku:asc", description="Comma-separated sort rules: field:asc|desc, e.g. sku:asc,length_mm:desc"),
     limit: int = Query(50, ge=1, le=2000),
     offset: int = Query(0, ge=0),
+    include_composition: bool = Query(False, description="Include product composition (состав ГП) in each item (#152)"),
 ) -> ProductsListResponse:
-    stmt = select(Product).options(
+    load_options = [
         selectinload(Product.lengths),
         selectinload(Product.processing_flags),
-    )
+    ]
+    if include_composition:
+        load_options.append(
+            selectinload(Product.composition).selectinload(ProductComposition.component)
+        )
+    stmt = select(Product).options(*load_options)
 
     if q:
         search = f"%{q}%"
@@ -759,7 +815,14 @@ async def list_products(
                 dims_by_product.setdefault(link.product_id, {})[link.dimension_type.code] = link.default_value
 
     return ProductsListResponse(
-        items=[_to_product_out(i, dims_by_product.get(i.id) or None) for i in items],
+        items=[
+            _to_product_out(
+                i,
+                dims_by_product.get(i.id) or None,
+                _composition_out_items(i) if include_composition else None,
+            )
+            for i in items
+        ],
         total=total,
     )
 
@@ -1108,33 +1171,7 @@ async def delete_product(product_id: int, db: AsyncSession = Depends(get_db)):
     await db.flush()
 
 
-# ─── Состав ГП (#147): нормативные компоненты продукта ─────────────────────
-# Связь «компонент (сырьё type=component) + количество», 1–2 компонента,
-# по образцу BoM. Норматив/справочник — без факта и остатков (ADR-0001).
-# Права (спека #145): чтение — все роли раздела /references, запись — editReferences.
-
-class CompositionItemIn(BaseModel):
-    component_product_id: int
-    quantity: float = Field(gt=0, description="Количество компонента на единицу продукта")
-    unit: str | None = Field(default=None, max_length=50, description="Единица измерения; по умолчанию — единица компонента")
-
-
-class CompositionReplaceIn(BaseModel):
-    items: list[CompositionItemIn] = Field(default_factory=list, max_length=2)
-
-
-class CompositionItemOut(BaseModel):
-    component_product_id: int
-    sku: str
-    name: str
-    is_active: bool
-    quantity: float
-    unit: str
-
-
-class CompositionOut(BaseModel):
-    items: list[CompositionItemOut]
-
+# ─── Состав ГП (#147): нормативные компоненты — чтение/замена ───────────────
 
 async def _load_composition(db: AsyncSession, product_id: int) -> list[CompositionItemOut]:
     rows = (

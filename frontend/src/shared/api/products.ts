@@ -57,6 +57,24 @@ export type Product = {
   processing_flags: ProcessingFlag[];
   is_laminated: boolean;
   dimensions?: Record<string, number> | null;
+  /** Состав ГП (#152): заполняется только при include_composition в запросе списка. */
+  composition?: CompositionItem[] | null;
+};
+
+/** Компонент состава ГП (#152): нормативная связь «сырьё × количество». */
+export type CompositionItem = {
+  component_product_id: number;
+  sku: string;
+  name: string;
+  is_active: boolean;
+  quantity: number;
+  unit: string;
+};
+
+export type CompositionItemInput = {
+  component_product_id: number;
+  quantity: number;
+  unit?: string | null;
 };
 
 export type CreateProductInput = {
@@ -111,6 +129,8 @@ export type ProductFilters = {
   sort?: string;
   limit?: number;
   offset?: number;
+  /** Включить состав ГП в элементы списка (#152). */
+  include_composition?: boolean;
 };
 
 export type ProductsListBody = {
@@ -198,6 +218,24 @@ export async function patchProduct(productId: number, payload: PatchProductInput
 
 export async function deleteProduct(productId: number) {
   await apiClient.delete(`/products/${productId}`);
+}
+
+/** Состав ГП (#152): чтение — роли раздела «Справочники», замена — editReferences. */
+export async function getProductComposition(productId: number) {
+  const { data } = await apiClient.get<{ items: CompositionItem[] }>(`/products/${productId}/composition`);
+  return data.items;
+}
+
+/** Заменить состав целиком (максимум 2 компонента — валидация на сервере). */
+export async function replaceProductComposition(
+  productId: number,
+  items: CompositionItemInput[],
+) {
+  const { data } = await apiClient.put<{ items: CompositionItem[] }>(
+    `/products/${productId}/composition`,
+    { items },
+  );
+  return data.items;
 }
 
 /** Пара сырьевых артикулов (ADR-0023, #146): A+B, ручная N по длинам пересечения. */

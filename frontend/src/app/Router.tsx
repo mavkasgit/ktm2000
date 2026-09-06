@@ -1,6 +1,6 @@
 import { Navigate, createBrowserRouter } from "react-router-dom"
 import { Layout, DashboardPage } from "./Layout"
-import { ReferencesPage, RawMaterialsPage, FinishedGoodsPage, SectionsPage, RoutesPage } from "../features/references"
+import { ReferencesPage, RawMaterialsPage, ProductsPage, SectionsPage, RoutesPage } from "../features/references"
 import { DevPage } from "../features/references/pages/DevPage"
 import { PlanPage } from "../features/planning/pages/PlanPage"
 import { PlanPreviewPage } from "../features/planning/pages/PlanPreviewPage"
@@ -38,7 +38,7 @@ export const router = createBrowserRouter([
         children: [
           { index: true, element: <Navigate to="/references/raw-materials" replace /> },
           { path: "raw-materials", element: <RawMaterialsPage /> },
-          { path: "products", element: <FinishedGoodsPage /> },
+          { path: "products", element: <ProductsPage /> },
           { path: "spg", element: <SectionsPage /> },
           { path: "routes", element: <RoutesPage /> },
         ],

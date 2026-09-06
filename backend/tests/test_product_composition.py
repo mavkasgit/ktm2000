@@ -302,3 +302,78 @@ async def test_delete_owner_cascades_composition(client, session) -> None:
     assert (await client.delete(f"/api/products/{owner.id}")).status_code == 204
     remaining = await session.execute(text("SELECT count(*) FROM product_compositions"))
     assert remaining.scalar() == 0
+
+
+@pytest.mark.asyncio
+async def test_list_include_composition_returns_items(client, session) -> None:
+    """include_composition=1 (#152): состав в элементах списка; без флага — None."""
+    owner = await _make_product(session, sku="CMP-OWNER-13", type=ProductType.finished_good)
+    comp_a = await _make_product(session, sku="CMP-RAW-A13", name="Профиль А")
+    comp_b = await _make_product(session, sku="CMP-RAW-B13", name="Профиль Б")
+    await session.commit()
+
+    put = await client.put(
+        f"/api/products/{owner.id}/composition",
+        json=_composition_payload(
+            {"component_product_id": comp_a.id, "quantity": 2.5},
+            {"component_product_id": comp_b.id, "quantity": 1},
+        ),
+    )
+    assert put.status_code == 200
+
+    listed = await client.get(
+        "/api/products",
+        params={"include_composition": "true", "type": "finished_good", "sku": "CMP-OWNER-13"},
+    )
+    assert listed.status_code == 200
+    items = listed.json()["items"]
+    assert len(items) == 1
+    composition = items[0]["composition"]
+    assert composition is not None
+    assert [i["sku"] for i in composition] == ["CMP-RAW-A13", "CMP-RAW-B13"]
+    assert composition[0]["quantity"] == 2.5
+
+    # Без флага состав не отдаётся (нагрузка списка не растёт).
+    plain = await client.get("/api/products", params={"sku": "CMP-OWNER-13"})
+    assert plain.status_code == 200
+    assert plain.json()["items"][0]["composition"] is None
+
+
+@pytest.mark.asyncio
+async def test_list_include_composition_empty_and_stale_component(client, session) -> None:
+    """Пустой состав → пустой список; деактивированный компонент остаётся в составе."""
+    owner = await _make_product(session, sku="CMP-OWNER-14", type=ProductType.finished_good)
+    comp_a = await _make_product(session, sku="CMP-RAW-A14")
+    await session.commit()
+
+    put = await client.put(
+        f"/api/products/{owner.id}/composition",
+        json=_composition_payload({"component_product_id": comp_a.id, "quantity": 1}),
+    )
+    assert put.status_code == 200
+
+    comp_a.is_active = False
+    await session.commit()
+
+    listed = await client.get(
+        "/api/products", params={"include_composition": "true", "sku": "CMP-OWNER-14"}
+    )
+    assert listed.status_code == 200
+    composition = listed.json()["items"][0]["composition"]
+    assert composition == [
+        {
+            "component_product_id": comp_a.id,
+            "sku": "CMP-RAW-A14",
+            "name": "Test Product",
+            "is_active": False,
+            "quantity": 1.0,
+            "unit": "pcs",
+        }
+    ]
+
+    cleared_owner = await _make_product(session, sku="CMP-OWNER-15", type=ProductType.finished_good)
+    await session.commit()
+    empty = await client.get(
+        "/api/products", params={"include_composition": "true", "sku": "CMP-OWNER-15"}
+    )
+    assert empty.json()["items"][0]["composition"] == []
