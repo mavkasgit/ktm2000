@@ -232,6 +232,22 @@ export type PatchProductPairInput = {
   quantity_per_hanger: Record<string, PairHangerManual>;
 };
 
+/** Элемент каталога всех пар (#150): источник парных строк расчёта подвесов. */
+export type ProductPairCatalogEntry = {
+  id: number;
+  product_a_id: number;
+  product_b_id: number;
+  /** Длины пары — пересечение длин A и B; пусто — пара «не существует на длине». */
+  lengths: number[];
+  /** Ключ — длина в мм ("2500"); auto считается сервером, вводится только manual. */
+  quantity_per_hanger: Record<string, HangerQuantityValue>;
+};
+
+export async function listProductPairCatalog() {
+  const { data } = await apiClient.get<ProductPairCatalogEntry[]>("/product-pairs");
+  return data;
+}
+
 export async function listProductPairs(productId: number) {
   const { data } = await apiClient.get<ProductPair[]>(`/products/${productId}/pairs`);
   return data;

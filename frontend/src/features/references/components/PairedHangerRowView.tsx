@@ -27,7 +27,7 @@ export function PairedHangerRowView({
 
   const breakdownReason = row.incompatibleReason
     ?? (!row.auto
-      ? "Ручной режим: не оба артикула авто (нет периметра/габарита)"
+      ? "Ручной режим: не оба артикула в режиме авто"
       : row.primaryLength == null
         ? "Расчёт невозможен: у пары нет общих длин"
         : !primary || !primary.is_calculable
@@ -139,9 +139,11 @@ function PairedLengthChips({
           </span>
         ) : null;
         if (!row.auto) {
+          // Ручная N пары — из словаря пары на каждую длину (#150).
+          const manual = row.manualPerLength[key] ?? null;
           return (
             <span key={key} className={cn(chipClass, isPrimary ? "bg-primary/10 ring-1 ring-primary/40" : "bg-secondary text-secondary-foreground")}>
-              {len} мм → {row.perHanger ?? "—"} шт
+              {len} мм → {manual ?? "—"} шт
               {primaryMark}
             </span>
           );

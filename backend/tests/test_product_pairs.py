@@ -348,3 +348,74 @@ async def test_create_product_accepts_no_paired_flag(client, session: AsyncSessi
     )
     assert resp.status_code == 201, resp.text
     assert resp.json()["is_paired_profile"] is False
+
+
+# ─── Каталог всех пар — источник витрины расчёта подвесов (#150) ────────────
+
+
+@pytest.mark.asyncio
+async def test_product_pairs_catalog_lists_all(client, session: AsyncSession) -> None:
+    """GET /product-pairs: все пары одним списком, без привязки к артикулу."""
+    a = await _make_product(
+        session, sku="PAIR-CAT-A", lengths_mm=[2500.0, 2780.0],
+        perimeter_mm=64.2, mount_width_mm=19.35,
+    )
+    b = await _make_product(
+        session, sku="PAIR-CAT-B", lengths_mm=[2500.0],
+        perimeter_mm=68.0, mount_width_mm=20.0,
+    )
+    c = await _make_product(session, sku="PAIR-CAT-C", lengths_mm=[2780.0])
+    await _make_pair(session, a, b, {"2500": {"auto": None, "manual": 5}})
+    await _make_pair(session, a, c)
+    await session.commit()
+
+    resp = await client.get("/api/product-pairs")
+    assert resp.status_code == 200, resp.text
+    items = {(item["product_a_id"], item["product_b_id"]): item for item in resp.json()}
+    assert len(items) == 2
+
+    ab = items[(min(a.id, b.id), max(a.id, b.id))]
+    assert (ab["product_a_id"], ab["product_b_id"]) == (min(a.id, b.id), max(a.id, b.id))
+    assert ab["lengths"] == [2500.0]
+    # auto живьём (оба auto): движок по сумме периметров/габаритов; ручное из словаря
+    assert ab["quantity_per_hanger"]["2500"]["auto"] == 36
+    assert ab["quantity_per_hanger"]["2500"]["manual"] == 5
+
+    ac = items[(min(a.id, c.id), max(a.id, c.id))]
+    assert ac["lengths"] == [2780.0]
+    # у C нет периметра/габарита — авто не считается
+    assert ac["quantity_per_hanger"]["2780"]["auto"] is None
+
+
+@pytest.mark.asyncio
+async def test_product_pairs_catalog_pair_without_common_lengths(client, session: AsyncSession) -> None:
+    """Пара вне пересечения длин видна с lengths: [] и без N (#150, нюанс #146)."""
+    a = await _make_product(session, sku="PAIR-EMPTY-A", lengths_mm=[2500.0])
+    b = await _make_product(session, sku="PAIR-EMPTY-B", lengths_mm=[3000.0])
+    await _make_pair(session, a, b, {"2500": {"auto": None, "manual": 5}})
+    await session.commit()
+
+    resp = await client.get("/api/product-pairs")
+    assert resp.status_code == 200
+    (item,) = resp.json()
+    assert item["lengths"] == []
+    assert item["quantity_per_hanger"] == {}
+
+
+@pytest.mark.asyncio
+async def test_product_pairs_catalog_auto_only_when_both_mode_auto(client, session: AsyncSession) -> None:
+    """Режим пары выведенный: авто в каталоге — только при auto у обоих."""
+    a = await _make_product(
+        session, sku="PAIR-MODE-A", lengths_mm=[2500.0],
+        perimeter_mm=64.2, mount_width_mm=19.35,
+    )
+    b = await _make_product(
+        session, sku="PAIR-MODE-B", lengths_mm=[2500.0],
+        perimeter_mm=68.0, mount_width_mm=20.0, hanger_mode="manual",
+    )
+    await _make_pair(session, a, b)
+    await session.commit()
+
+    resp = await client.get("/api/product-pairs")
+    (item,) = resp.json()
+    assert item["quantity_per_hanger"]["2500"]["auto"] is None

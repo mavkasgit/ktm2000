@@ -1,20 +1,19 @@
 import { describe, expect, it } from "vitest";
 
-import type { Product } from "@/shared/api/products";
+import type { Product, ProductPairCatalogEntry } from "@/shared/api/products";
 import type { HangerCalcResult, HangerSettings } from "@/shared/api/hangerCalc";
-import type { Techcard } from "@/shared/api/techcards";
 import {
   buildCalcItems,
   buildHangerCalcRows,
   buildPairedCalcItems,
   buildPairedHangerCalcRows,
   incompatibilityReason,
-  intersectLengths,
   pairedIncompatibilityReason,
   resolvePairs,
   resultsToCalcMap,
   resultsToPairedCalcMap,
   type CalcMap,
+  type PairedPair,
 } from "./hangerCalcRows";
 
 const SETTINGS: HangerSettings = {
@@ -73,21 +72,26 @@ function makeResult(overrides: Partial<HangerCalcResult>): HangerCalcResult {
   };
 }
 
-function makeTechcard(overrides: Partial<Techcard>): Techcard {
+/** Элемент pairs-API (каталог всех пар) для resolvePairs. */
+function makePairEntry(overrides: Partial<ProductPairCatalogEntry>): ProductPairCatalogEntry {
   return {
-    id: 100,
-    product_id: null,
-    version: "A",
-    processing_type: "paired_processing",
-    is_active: true,
-    quantity_total: 2,
-    quantity_a_per_item: 1,
-    quantity_b_per_item: 1,
-    hangers_a: null,
-    hangers_b: null,
-    hangers_total: null,
-    product_sku: null,
-    techcard_lines: [],
+    id: 7,
+    product_a_id: 1,
+    product_b_id: 2,
+    lengths: [3000],
+    quantity_per_hanger: {},
+    ...overrides,
+  };
+}
+
+/** Разрешённая пара для build*-функций. */
+function makePair(
+  overrides: Partial<PairedPair> & Pick<PairedPair, "productA" | "productB">,
+): PairedPair {
+  return {
+    pairId: 7,
+    lengths: [3000],
+    manualPerLength: {},
     ...overrides,
   };
 }
@@ -423,17 +427,7 @@ describe("buildHangerCalcRows", () => {
   });
 });
 
-// ─── Парные техкарты (#67) ──────────────────────────────────────────────────
-
-describe("intersectLengths", () => {
-  it("общие длины — пересечение по возрастанию", () => {
-    expect(intersectLengths([2780, 3000, 3500], [3000, 3500, 4000])).toEqual([3000, 3500]);
-  });
-
-  it("пустое пересечение — пустой список", () => {
-    expect(intersectLengths([2780], [3000])).toEqual([]);
-  });
-});
+// ─── Пары из pairs-API (#150) ────────────────────────────────────────────────
 
 describe("pairedIncompatibilityReason", () => {
   it("сумма габаритов + зазоры > общая длина клюшек — причина", () => {
@@ -458,73 +452,81 @@ describe("resolvePairs", () => {
     return makeProduct({ id, sku, lengths_mm: [2780, 3000] });
   }
 
-  it("сопоставляет парную техкарту с двумя артикулами", () => {
-    const techcard = makeTechcard({
+  it("сопоставляет пару из pairs-API с двумя артикулами", () => {
+    const entry = makePairEntry({
       id: 7,
-      quantity_a_per_item: 36,
-      quantity_b_per_item: 36,
-      techcard_lines: [
-        { id: 1, component_product_id: 1, component_product_sku: "ЮП-A", quantity: 36, unit: "pcs" },
-        { id: 2, component_product_id: 2, component_product_sku: "ЮП-B", quantity: 36, unit: "pcs" },
-      ],
+      lengths: [3000],
+      quantity_per_hanger: { "3000": { auto: 30, manual: 25 } },
     });
-    const pairs = resolvePairs([techcard], [product(1, "ЮП-A"), product(2, "ЮП-B")]);
+    const pairs = resolvePairs([entry], [product(1, "ЮП-A"), product(2, "ЮП-B")]);
     expect(pairs).toHaveLength(1);
     expect(pairs[0]).toMatchObject({
-      techcardId: 7,
-      perHanger: 36,
+      pairId: 7,
+      lengths: [3000],
+      manualPerLength: { "3000": 25 },
     });
     expect(pairs[0].productA.sku).toBe("ЮП-A");
     expect(pairs[0].productB.sku).toBe("ЮП-B");
   });
 
-  it("пропускает пару, чей компонент не в загруженном наборе", () => {
-    const techcard = makeTechcard({
-      id: 7,
-      techcard_lines: [
-        { id: 1, component_product_id: 1, quantity: 1, unit: "pcs" },
-        { id: 2, component_product_id: 99, quantity: 1, unit: "pcs" },
-      ],
-    });
-    expect(resolvePairs([techcard], [product(1, "ЮП-A")])).toHaveLength(0);
+  it("пропускает пару, чей артикул не в загруженном наборе", () => {
+    const entry = makePairEntry({ product_b_id: 99 });
+    expect(resolvePairs([entry], [product(1, "ЮП-A")])).toHaveLength(0);
   });
 
-  it("пропускает стандартные техкарты и пары без линий", () => {
-    const standard = makeTechcard({ id: 8, processing_type: "standart_processing" });
-    const noLines = makeTechcard({ id: 9, techcard_lines: [] });
-    expect(resolvePairs([standard, noLines], [product(1, "ЮП-A")])).toHaveLength(0);
+  it("пара с пустым пересечением длин (lengths: []) не даёт строку и не роняет список", () => {
+    const entry = makePairEntry({
+      lengths: [],
+      quantity_per_hanger: {},
+    });
+    expect(resolvePairs([entry], [product(1, "ЮП-A"), product(2, "ЮП-B")])).toHaveLength(0);
   });
 });
 
 describe("buildPairedCalcItems", () => {
   const autoA = () => makeProduct({ id: 1, sku: "ЮП-A", perimeter_mm: 64.2, mount_width_mm: 19.35, lengths_mm: [2780, 3000] });
   const autoB = () => makeProduct({ id: 2, sku: "ЮП-B", perimeter_mm: 64.2, mount_width_mm: 19.35, lengths_mm: [3000, 3500] });
-  const manualB = () => makeProduct({ id: 2, sku: "ЮП-B", lengths_mm: [3000, 3500] });
-  const pair = (a: Product, b: Product) => ({
-    techcardId: 7,
-    productA: a,
-    productB: b,
-    perHanger: 36,
-  });
+  const manualModeB = () => makeProduct({ id: 2, sku: "ЮП-B", hanger_mode: "manual", perimeter_mm: 64.2, mount_width_mm: 19.35, lengths_mm: [3000, 3500] });
+  const noDataB = () => makeProduct({ id: 2, sku: "ЮП-B", lengths_mm: [3000, 3500] });
+  const pair = (a: Product, b: Product, lengths = [3000]) => makePair({ productA: a, productB: b, lengths });
 
-  it("авто-пара: item на каждую общую длину, refs в том же порядке", () => {
-    const { items, refs, incompatible } = buildPairedCalcItems([pair(autoA(), autoB())], SETTINGS);
-    // Общие длины A=[2780,3000] ∩ B=[3000,3500] = [3000]
-    expect(items).toEqual([{
-      perimeter_a_mm: 64.2,
-      mount_width_a_mm: 19.35,
-      perimeter_b_mm: 64.2,
-      mount_width_b_mm: 19.35,
-      length_mm: 3000,
-    }]);
-    expect(refs).toEqual([{ techcardId: 7, lengthMm: 3000 }]);
+  it("авто-пара: item на каждую длину пары (сервер), refs в том же порядке", () => {
+    const { items, refs, incompatible } = buildPairedCalcItems(
+      [pair(autoA(), autoB(), [2780, 3000])],
+      SETTINGS,
+    );
+    expect(items).toEqual([
+      {
+        perimeter_a_mm: 64.2,
+        mount_width_a_mm: 19.35,
+        perimeter_b_mm: 64.2,
+        mount_width_b_mm: 19.35,
+        length_mm: 2780,
+      },
+      {
+        perimeter_a_mm: 64.2,
+        mount_width_a_mm: 19.35,
+        perimeter_b_mm: 64.2,
+        mount_width_b_mm: 19.35,
+        length_mm: 3000,
+      },
+    ]);
+    expect(refs).toEqual([
+      { pairId: 7, lengthMm: 2780 },
+      { pairId: 7, lengthMm: 3000 },
+    ]);
     expect(incompatible.size).toBe(0);
   });
 
-  it("ручная пара (не оба авто) не отправляется", () => {
-    const { items, incompatible } = buildPairedCalcItems([pair(autoA(), manualB())], SETTINGS);
+  it("пара с одним ручным артикулом (hanger_mode=manual) не считается — режим пары ручной", () => {
+    const { items, incompatible } = buildPairedCalcItems([pair(autoA(), manualModeB())], SETTINGS);
     expect(items).toEqual([]);
     expect(incompatible.size).toBe(0);
+  });
+
+  it("пара без данных движка (нет периметра/габарита) не отправляется", () => {
+    const { items } = buildPairedCalcItems([pair(autoA(), noDataB())], SETTINGS);
+    expect(items).toEqual([]);
   });
 
   it("несовместимая пара помечается и не рвёт batch", () => {
@@ -541,11 +543,11 @@ describe("buildPairedCalcItems", () => {
 });
 
 describe("resultsToPairedCalcMap", () => {
-  it("раскладывает результаты по techcardId → lengthKey", () => {
+  it("раскладывает результаты по pairId → lengthKey", () => {
     const refs = [
-      { techcardId: 7, lengthMm: 2780 },
-      { techcardId: 7, lengthMm: 3000 },
-      { techcardId: 8, lengthMm: 2780 },
+      { pairId: 7, lengthMm: 2780 },
+      { pairId: 7, lengthMm: 3000 },
+      { pairId: 8, lengthMm: 2780 },
     ];
     const map = resultsToPairedCalcMap(refs, [
       makeResult({ total: 36 }),
@@ -559,13 +561,12 @@ describe("resultsToPairedCalcMap", () => {
 });
 
 describe("buildPairedHangerCalcRows", () => {
-  it("авто-пара: разбивка по первой общей длине, совместный итог", () => {
-    const pair = {
-      techcardId: 7,
+  it("авто-пара: разбивка по первой длине пары, совместный итог", () => {
+    const pair = makePair({
       productA: makeProduct({ id: 1, sku: "ЮП-A", perimeter_mm: 64.2, mount_width_mm: 19.35, lengths_mm: [2780, 3000] }),
       productB: makeProduct({ id: 2, sku: "ЮП-B", perimeter_mm: 64.2, mount_width_mm: 19.35, lengths_mm: [3000, 3500] }),
-      perHanger: 36,
-    };
+      lengths: [3000],
+    });
     const calcMap = new Map([[7, new Map([["3000", makeResult({ total: 30, limiter: "area" })]])]]);
     const [row] = buildPairedHangerCalcRows([pair], calcMap, new Map());
     expect(row.kind).toBe("paired");
@@ -581,13 +582,13 @@ describe("buildPairedHangerCalcRows", () => {
     expect(row.widthSum).toBe(38.7);
   });
 
-  it("ручная пара: суммы null, итог — ручное N техкарты", () => {
-    const pair = {
-      techcardId: 7,
+  it("ручная пара: итог — ручное N из словаря пары на основной длине", () => {
+    const pair = makePair({
       productA: makeProduct({ id: 1, sku: "ЮП-A", lengths_mm: [2780] }),
-      productB: makeProduct({ id: 2, sku: "ЮП-B", lengths_mm: [2780] }),
-      perHanger: 40,
-    };
+      productB: makeProduct({ id: 2, sku: "ЮП-B", hanger_mode: "manual", lengths_mm: [2780] }),
+      lengths: [2780],
+      manualPerLength: { "2780": 40 },
+    });
     const [row] = buildPairedHangerCalcRows([pair], new Map(), new Map());
     expect(row.auto).toBe(false);
     expect(row.primaryResult).toBeNull();
@@ -596,13 +597,25 @@ describe("buildPairedHangerCalcRows", () => {
     expect(row.widthSum).toBeNull();
   });
 
+  it("ручная пара без ручного N на длине — итог null", () => {
+    const pair = makePair({
+      productA: makeProduct({ id: 1, sku: "ЮП-A", lengths_mm: [2780] }),
+      productB: makeProduct({ id: 2, sku: "ЮП-B", hanger_mode: "manual", lengths_mm: [2780] }),
+      lengths: [2780],
+      manualPerLength: {},
+    });
+    const [row] = buildPairedHangerCalcRows([pair], new Map(), new Map());
+    expect(row.auto).toBe(false);
+    expect(row.total).toBeNull();
+  });
+
   it("несовместимая пара помечается причиной, итоги не считаются", () => {
-    const pair = {
-      techcardId: 7,
+    const pair = makePair({
       productA: makeProduct({ id: 1, sku: "ЮП-A", perimeter_mm: 100, mount_width_mm: 1500, lengths_mm: [3000] }),
       productB: makeProduct({ id: 2, sku: "ЮП-B", perimeter_mm: 100, mount_width_mm: 1500, lengths_mm: [3000] }),
-      perHanger: 10,
-    };
+      lengths: [3000],
+      manualPerLength: { "3000": 10 },
+    });
     const incompatible = new Map([[7, "пара не влезает"]]);
     const [row] = buildPairedHangerCalcRows([pair], new Map(), incompatible);
     expect(row.auto).toBe(true);
@@ -610,13 +623,12 @@ describe("buildPairedHangerCalcRows", () => {
     expect(row.total).toBeNull();
   });
 
-  it("авто-пара без общих длин — итог null", () => {
-    const pair = {
-      techcardId: 7,
-      productA: makeProduct({ id: 1, sku: "ЮП-A", perimeter_mm: 64.2, mount_width_mm: 19.35, lengths_mm: [2780] }),
-      productB: makeProduct({ id: 2, sku: "ЮП-B", perimeter_mm: 64.2, mount_width_mm: 19.35, lengths_mm: [3500] }),
-      perHanger: 36,
-    };
+  it("авто-пара без длин пары — итог null", () => {
+    const pair = makePair({
+      productA: makeProduct({ id: 1, sku: "ЮП-A", perimeter_mm: 64.2, mount_width_mm: 19.35 }),
+      productB: makeProduct({ id: 2, sku: "ЮП-B", perimeter_mm: 64.2, mount_width_mm: 19.35 }),
+      lengths: [],
+    });
     const [row] = buildPairedHangerCalcRows([pair], new Map(), new Map());
     expect(row.auto).toBe(true);
     expect(row.primaryLength).toBeNull();

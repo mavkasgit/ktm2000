@@ -144,12 +144,13 @@ def _manual_by_length(
     return result
 
 
-def _pair_out(
+def _quantity_out(
     pair: ProductPair,
-    product: Product,
-    partner: Product,
+    a: Product,
+    b: Product,
     lengths: list[float],
-) -> ProductPairOut:
+) -> dict[str, PairHangerValue]:
+    """N пары по длине на выходе API (#146/#150): авто движком живьём + ручное из словаря пары."""
     stored = pair.quantity_per_hanger if isinstance(pair.quantity_per_hanger, dict) else {}
     quantity: dict[str, PairHangerValue] = {}
     for length in lengths:
@@ -157,9 +158,19 @@ def _pair_out(
         entry = stored.get(key)
         manual = entry.get("manual") if isinstance(entry, dict) else None
         quantity[key] = PairHangerValue(
-            auto=_pair_auto_value(product, partner, length),
+            auto=_pair_auto_value(a, b, length),
             manual=manual,
         )
+    return quantity
+
+
+def _pair_out(
+    pair: ProductPair,
+    product: Product,
+    partner: Product,
+    lengths: list[float],
+) -> ProductPairOut:
+    quantity = _quantity_out(pair, product, partner, lengths)
     return ProductPairOut(
         id=pair.id,
         product_a_id=pair.product_a_id,
@@ -308,3 +319,61 @@ async def delete_product_pair(
     pair = await _get_pair_or_404(db, product_id, pair_id)
     await db.delete(pair)
     await db.flush()
+
+
+class ProductPairCatalogOut(BaseModel):
+    """Элемент каталога всех пар — источник парных строк расчёта подвесов (#150)."""
+
+    id: int
+    product_a_id: int
+    product_b_id: int
+    # Пустой список — пара вне пересечения длин («не существует на длине»),
+    # но запись видна: она держит удаление артикула до разрыва пары.
+    lengths: list[float]
+    quantity_per_hanger: dict[str, PairHangerValue]
+
+
+# Отдельный роутер без префикса /products: путь /products/pairs занял бы
+# GET /products/{product_id} (product_id: int → 422 до rows пар).
+catalog_router = APIRouter(tags=["products"])
+
+
+@catalog_router.get("/product-pairs", response_model=list[ProductPairCatalogOut])
+async def list_all_product_pairs(
+    db: AsyncSession = Depends(get_db),
+) -> list[ProductPairCatalogOut]:
+    """Все пары одним списком (#150): витрина расчёта подвесов показывает
+    парные строки «N×A + N×B» рядом с одиночными; резолв пар по техкартам
+    удалён. Пустое пересечение длин возвращается как есть — витрина сама
+    решает, что с такой парой не показывать строку."""
+    pairs = (await db.execute(select(ProductPair))).scalars().all()
+    if not pairs:
+        return []
+
+    product_ids = sorted({p.product_a_id for p in pairs} | {p.product_b_id for p in pairs})
+    products = (
+        await db.execute(
+            select(Product).options(selectinload(Product.lengths)).where(Product.id.in_(product_ids))
+        )
+    ).scalars().all()
+    by_id = {p.id: p for p in products}
+
+    out: list[ProductPairCatalogOut] = []
+    for pair in pairs:
+        a = by_id.get(pair.product_a_id)
+        b = by_id.get(pair.product_b_id)
+        if a is None or b is None:
+            continue
+        lengths = _intersection_lengths(
+            {l.length_mm for l in a.lengths}, {l.length_mm for l in b.lengths}
+        )
+        out.append(
+            ProductPairCatalogOut(
+                id=pair.id,
+                product_a_id=pair.product_a_id,
+                product_b_id=pair.product_b_id,
+                lengths=lengths,
+                quantity_per_hanger=_quantity_out(pair, a, b, lengths),
+            )
+        )
+    return out

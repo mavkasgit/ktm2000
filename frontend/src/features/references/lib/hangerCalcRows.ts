@@ -2,9 +2,8 @@
  * Pure-логика таблицы «Расчёт подвесов» (#64): построение batch-запроса
  * и строк-вьюмоделей. Без React и side effects — покрыто vitest.
  */
-import type { Product } from "@/shared/api/products";
+import type { Product, ProductPairCatalogEntry } from "@/shared/api/products";
 import type { HangerCalcItem, HangerCalcResult, HangerSettings, PairedHangerCalcItem } from "@/shared/api/hangerCalc";
-import type { Techcard } from "@/shared/api/techcards";
 import {
   entryForLength,
   isHangerAutoMode,
@@ -197,51 +196,54 @@ export const LIMITER_LABELS: Record<"area" | "size", string> = {
   size: "размер",
 };
 
-// ─── Парные техкарты (#58/#67) ──────────────────────────────────────────────
+// ─── Пары сырьевых артикулов (pairs-API, #150) ───────────────────────────────
 
-/** Общие длины пары: пересечение списков длин артикулов A и B (#67). */
-export function intersectLengths(a: number[], b: number[]): number[] {
-  const setB = new Set(b);
-  return a.filter((len) => setB.has(len));
-}
-
-/** techcardId → lengthKey → результат совместного расчёта. */
+/** pairId → lengthKey → результат совместного расчёта. */
 export type PairedCalcMap = Map<number, Map<string, HangerCalcResult>>;
 
-/** Разрешённая пара: парная техкарта + её два артикула-компонента. */
+/** Разрешённая пара из pairs-API + её два артикула. */
 export type PairedPair = {
-  techcardId: number;
+  pairId: number;
   productA: Product;
   productB: Product;
-  /** Ручное N пары — инвариант равенства (#67): a == b, храним одно значение. */
-  perHanger: number | null;
+  /** Длины пары — пересечение длин A и B (считает сервер, по возрастанию). */
+  lengths: number[];
+  /** Ручная N пары по длине (lengthKey → N), из словаря пары. */
+  manualPerLength: Record<string, number | null>;
 };
 
+/** Режим пары выведенный (#150): авто — только если оба артикула в режиме auto. */
+export function pairModeAuto(a: Product, b: Product): boolean {
+  return (a.hanger_mode ?? "auto") === "auto" && (b.hanger_mode ?? "auto") === "auto";
+}
+
 /**
- * Сопоставить парные техкарты с артикулами из загруженного набора. Пары, у
- * которых хотя бы один компонент отсутствует в наборе, пропускаются — парная
- * строка показывается только когда оба артикула видны рядом с одиночными.
+ * Сопоставить пары из pairs-API с артикулами из загруженного набора. Пропускаются:
+ * пары, у которых хотя бы один артикул не в наборе (строка показывается, только
+ * когда оба артикула видны рядом с одиночными), и пары с пустым пересечением
+ * длин — на длине, где существует N, нет (#150: lengths: [] не роняет список).
  */
-export function resolvePairs(techcards: Techcard[], products: Product[]): PairedPair[] {
+export function resolvePairs(pairs: ProductPairCatalogEntry[], products: Product[]): PairedPair[] {
   const byId = new Map(products.map((p) => [Number(p.id), p]));
-  const pairs: PairedPair[] = [];
-  for (const tc of techcards) {
-    if (tc.processing_type !== "paired_processing") continue;
-    const componentIds = (tc.techcard_lines ?? [])
-      .map((line) => Number(line.component_product_id))
-      .filter((id) => Number.isFinite(id));
-    if (componentIds.length < 2) continue;
-    const productA = byId.get(componentIds[0]);
-    const productB = byId.get(componentIds[1]);
+  const resolved: PairedPair[] = [];
+  for (const pair of pairs) {
+    if (pair.lengths.length === 0) continue;
+    const productA = byId.get(Number(pair.product_a_id));
+    const productB = byId.get(Number(pair.product_b_id));
     if (!productA || !productB) continue;
-    pairs.push({
-      techcardId: Number(tc.id),
+    const manualPerLength: Record<string, number | null> = {};
+    for (const [key, value] of Object.entries(pair.quantity_per_hanger ?? {})) {
+      manualPerLength[key] = value?.manual ?? null;
+    }
+    resolved.push({
+      pairId: Number(pair.id),
       productA,
       productB,
-      perHanger: tc.quantity_a_per_item ?? tc.quantity_b_per_item ?? null,
+      lengths: pair.lengths,
+      manualPerLength,
     });
   }
-  return pairs;
+  return resolved;
 }
 
 /** Причина несовместимости пары с константами подвеса, либо null (#67). */
@@ -259,18 +261,19 @@ export function pairedIncompatibilityReason(
   return null;
 }
 
-export type PairedCalcItemRef = { techcardId: number; lengthMm: number };
+export type PairedCalcItemRef = { pairId: number; lengthMm: number };
 
 export type BuildPairedCalcItemsResult = {
   items: PairedHangerCalcItem[];
   refs: PairedCalcItemRef[];
-  /** techcardId → причина несовместимости пары. */
+  /** pairId → причина несовместимости пары. */
   incompatible: Map<number, string>;
 };
 
 /**
- * Items для POST /hanger-calc/paired: каждая авто-пара × общая длина.
- * Авто только когда оба артикула авто; иначе пара не отправляется (ручная).
+ * Items для POST /hanger-calc/paired: каждая авто-пара × длина пары.
+ * Авто только когда оба артикула в режиме auto И у движка есть данные
+ * (периметр/габарит); иначе пара ручная — N берётся из словаря пары.
  * Несовместимые помечаются локально, чтобы один плохой не рвал весь batch.
  */
 export function buildPairedCalcItems(
@@ -282,6 +285,9 @@ export function buildPairedCalcItems(
   const incompatible = new Map<number, string>();
 
   for (const pair of pairs) {
+    // Режим пары — hanger_mode обоих артикулов; движку, кроме того, нужны
+    // данные (периметр/габарит) — без них пара ведёт себя как ручная.
+    if (!pairModeAuto(pair.productA, pair.productB)) continue;
     if (!isHangerAutoMode(pair.productA) || !isHangerAutoMode(pair.productB)) continue;
     const reason = pairedIncompatibilityReason(
       pair.productA.mount_width_mm,
@@ -289,10 +295,10 @@ export function buildPairedCalcItems(
       settings,
     );
     if (reason) {
-      incompatible.set(pair.techcardId, reason);
+      incompatible.set(pair.pairId, reason);
       continue;
     }
-    for (const lengthMm of intersectLengths(productLengths(pair.productA), productLengths(pair.productB))) {
+    for (const lengthMm of pair.lengths) {
       items.push({
         perimeter_a_mm: pair.productA.perimeter_mm,
         mount_width_a_mm: pair.productA.mount_width_mm,
@@ -300,35 +306,36 @@ export function buildPairedCalcItems(
         mount_width_b_mm: pair.productB.mount_width_mm,
         length_mm: lengthMm,
       });
-      refs.push({ techcardId: pair.techcardId, lengthMm });
+      refs.push({ pairId: pair.pairId, lengthMm });
     }
   }
   return { items, refs, incompatible };
 }
 
-/** Разложить результаты совместного batch по techcardId → lengthKey. */
+/** Разложить результаты совместного batch по pairId → lengthKey. */
 export function resultsToPairedCalcMap(
   refs: PairedCalcItemRef[],
   results: HangerCalcResult[],
 ): PairedCalcMap {
   return resultsToLengthMap(
-    refs.map((ref) => ({ id: ref.techcardId, lengthMm: ref.lengthMm })),
+    refs.map((ref) => ({ id: ref.pairId, lengthMm: ref.lengthMm })),
     results,
   );
 }
 
 export type PairedHangerCalcRow = {
   kind: "paired";
-  techcardId: number;
+  pairId: number;
   productA: Product;
   productB: Product;
   label: string;
-  perHanger: number | null;
   lengths: number[];
   primaryLength: number | null;
   auto: boolean;
   incompatibleReason: string | null;
   primaryResult: HangerCalcResult | null;
+  /** Ручная N пары по длине (lengthKey → N); режим авто — не используется. */
+  manualPerLength: Record<string, number | null>;
   /** Суммы периметра/габарита пары (идут в формулы совместного расчёта). */
   perimeterSum: number | null;
   widthSum: number | null;
@@ -338,8 +345,9 @@ export type PairedHangerCalcRow = {
 };
 
 /**
- * Вьюмодели парных строк: разбивка — по первой общей длине (по возрастанию).
- * Авто-пара — совместный расчёт; ручная (не оба авто) — только ручное N.
+ * Вьюмодели парных строк: разбивка — по первой длине пары (по возрастанию).
+ * Режим пары выведенный (#150): авто (совместный расчёт) — только если оба
+ * артикула в режиме auto; иначе ручное N из словаря пары на каждую длину.
  */
 export function buildPairedHangerCalcRows(
   pairs: PairedPair[],
@@ -347,13 +355,13 @@ export function buildPairedHangerCalcRows(
   incompatible: Map<number, string>,
 ): PairedHangerCalcRow[] {
   return pairs.map((pair) => {
-    const lengths = intersectLengths(productLengths(pair.productA), productLengths(pair.productB));
+    const lengths = pair.lengths;
     const primaryLengthMm = lengths[0] ?? null;
-    const auto = isHangerAutoMode(pair.productA) && isHangerAutoMode(pair.productB);
-    const incompatibleReason = incompatible.get(pair.techcardId) ?? null;
+    const auto = pairModeAuto(pair.productA, pair.productB);
+    const incompatibleReason = incompatible.get(pair.pairId) ?? null;
     const primaryResult =
       auto && primaryLengthMm != null
-        ? calcMap.get(pair.techcardId)?.get(lengthKey(primaryLengthMm)) ?? null
+        ? calcMap.get(pair.pairId)?.get(lengthKey(primaryLengthMm)) ?? null
         : null;
 
     const perimeterSum =
@@ -369,21 +377,23 @@ export function buildPairedHangerCalcRows(
     if (auto && primaryResult?.is_calculable) {
       total = primaryResult.total;
     } else if (!auto) {
-      total = pair.perHanger;
+      // Ручной режим: итог — ручное N основной длины (без авто-приоритета).
+      total =
+        (primaryLengthMm != null ? pair.manualPerLength[lengthKey(primaryLengthMm)] : null) ?? null;
     }
 
     return {
       kind: "paired",
-      techcardId: pair.techcardId,
+      pairId: pair.pairId,
       productA: pair.productA,
       productB: pair.productB,
       label: `${pair.productA.sku} + ${pair.productB.sku}`,
-      perHanger: pair.perHanger,
       lengths,
       primaryLength: primaryLengthMm,
       auto,
       incompatibleReason,
       primaryResult,
+      manualPerLength: pair.manualPerLength,
       perimeterSum,
       widthSum,
       total,
